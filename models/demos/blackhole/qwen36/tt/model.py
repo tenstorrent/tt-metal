@@ -3433,7 +3433,7 @@ class Qwen36Model:
             if self._vfy_mk.fallback_reason:
                 logger.warning(f"megakernel: {self._vfy_mk.fallback_reason}")
         self._vfy_mk1 = None
-        if megakernel_mode() == "stage1":
+        if megakernel_mode() in ("stage1", "1"):
             from models.demos.blackhole.qwen36.tt.megakernel.integ.stage1 import Stage1Verify
 
             self._vfy_mk1 = Stage1Verify(self)

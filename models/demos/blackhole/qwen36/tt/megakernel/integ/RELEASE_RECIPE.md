@@ -26,7 +26,7 @@ the step harness adds only `QWEN36_FABRIC_RING=1`). KV stays BFP8 (no `QWEN36_R1
 
 | var | value | where it acts | in RC tree? |
 |---|---|---|---|
-| `QWEN36_R16_MEGAKERNEL` | `stage1` + `QWEN36_R16_MK_ENGINE_KIND=mk` (until the flag value `1` is wired to kind mk) | traced verify layer loop | yes (integ2) |
+| `QWEN36_R16_MEGAKERNEL` | `1` (Stage1Verify, engine kind mk, no probe) | traced verify layer loop | yes (integ2) |
 | `QWEN36_MTP_LAYER_BFP4` | `1` | drafter (always active) | yes (r13) |
 | `QWEN36_DRAFT_VOCAB_TOPK` | `131072` | drafter (always active) | yes (r13) |
 | `QWEN36_MTP_SDPA_WINDOW` | `8192` | drafter (always active) | yes (r13) |

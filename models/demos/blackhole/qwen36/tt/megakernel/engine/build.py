@@ -28,7 +28,9 @@ _KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")
 
 
 def engine_kind():
-    return os.environ.get("QWEN36_R16_MK_ENGINE_KIND", "identity").strip().lower()
+    """QWEN36_R16_MK_ENGINE_KIND; default identity under QWEN36_R16_MEGAKERNEL=stage1, mk under the release value 1."""
+    dflt = "mk" if os.environ.get("QWEN36_R16_MEGAKERNEL", "").strip() == "1" else "identity"
+    return os.environ.get("QWEN36_R16_MK_ENGINE_KIND", dflt).strip().lower()
 
 
 def rows_R(n_users):

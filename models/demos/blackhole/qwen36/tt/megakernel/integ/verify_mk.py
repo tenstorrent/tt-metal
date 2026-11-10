@@ -3,7 +3,9 @@
   "stage0"    : plumbing probe. The verify trace also launches a one-core-per-device generic_op that reads this
                 bucket's phase table and writes a checksum. The layer loop still runs op-by-op, so outputs are
                 bit-identical to off.
-  "1"         : the real megakernel replaces the layer loop (not implemented yet; falls back op-by-op with a reason).
+  "stage1"    : Stage1Verify runs the engine of QWEN36_R16_MK_ENGINE_KIND (default identity) + the stage0 probe.
+  "1"         : release mode: Stage1Verify with the real engine (kind mk by default), no probe. Falls back op-by-op with
+                a logged reason while engine/program.py is missing.
 """
 
 import os
@@ -39,7 +41,7 @@ class MegakernelVerify:
         self.capturing = False
         self.eager = {}
         self.replays = {}
-        if self.mode not in ("stage0", "stage1"):
+        if self.mode not in ("stage0", "stage1", "1"):
             self.fallback_reason = f"QWEN36_R16_MEGAKERNEL={self.mode}: unknown mode; layer loop op-by-op"
 
     # ---- tables -------------------------------------------------------------------------------------------------
