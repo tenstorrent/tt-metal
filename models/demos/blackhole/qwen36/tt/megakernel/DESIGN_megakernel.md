@@ -437,3 +437,16 @@ silicon, down stage and persistence by the -mk-v12 agent; sim by the coordinator
   last), against 21.7 µs for the AR alone. Replication adds ~20-35 µs on the path even when pipelined, and landing order
   ≠ K order makes it worse. **≤15-23 µs is not reachable with replication; split-K (v0.6) is required.** The rstd
   partial multicasts also contend with x. In split-K they go to only the 10 column roots, sent after x.
+
+**v0.5 step 1 stand-in result (attention track, 1d559f26341; 5-layer middle mean, 32K BFP8 KV, GUPRE, NBB 1, 16 KB):**
+- u1 attention layer **239.8 µs** with STREAM_EXT, vs 256.7 µs on 80 cores. u8 370.0 vs 374.5.
+- **Bench fix:** the wo/extra stand-in reads all hit DRAM bank 0 (that was the "column skew"). MKA_WOBANK=1 spreads
+  them (core i reads bank i%8) and took u1 from 270 to 257 µs. **The mixed engine (-mk-mixed @183d9b41350, off
+  efe85cf56ca) has the same hotspot**, so its 382 µs attention and GDN layer timings are pessimistic. Rebase onto
+  1d559f26341 and re-measure.
+- With EXT, u1 is DRAM-bound in the SDPA window (~400 GB/s, 64.5 MB in ~160 µs) plus a ~74 µs chain (wo + S_WO 10 +
+  2 × 18 AR + MLP).
+- **u1 pass** (GDN non-AR 77 assumed): base 7.46 ms → AR 15 µs: **9.38** (gate 9.4, 0.02 margin); AR 13: 9.12;
+  AR 12: 8.99. Break-even 15.2 µs per AR. With split-K (v0.6) removing the x gather, the on-path AR should approach
+  the 21.7 µs AR-alone or below, so u1 also needs the AR itself ≤~13 µs, or a shorter post-SDPA chain (fold wo into
+  the tree tail, overlap the attention AR with the MLP's gate|up K-stream).
