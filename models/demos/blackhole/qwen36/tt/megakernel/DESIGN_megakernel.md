@@ -646,3 +646,7 @@ Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
 - At 20.8 µs: u8 **13.36 ms** ✓ (0.34 margin); u1 + STEP_U1 (21 µs/op) **9.50 ms ✗**.
 - **Plan:** the AR track builds a chain RS: two 1-hop chains per chunk (4 + 3 devices) with partial-sum forwarding, so link bytes per direction drop from ~200 KB to ~75 KB. The estimate is RS 6-7 + reduce 1 + AG 4 + delivery 3.2 ≈ **15 µs**. Target **≤15 µs, ideally ≤14**, including delivery. Possible hybrid: chain for far devices, direct sends for near ones.
 - Equally valuable: every µs cut from the non-AR chain counts 1:1, e.g. STEP_U1 and attention qkv/wo.
+
+**Joint u1 constraint (v0.7.5):** the u1 margin is shared between the AR and STEP_U1 (48 GDN layers, 128 ARs).
+- STEP_U1 silicon budget by on-path AR: AR 14 µs → ≤37 µs; AR 15 µs → ≤34 µs; AR 18 µs → ≤26 µs; AR 20.8 µs → nothing passes.
+- So the chain RS is the must-have. STEP_U1's ~21 µs sim estimate clears ≤34 µs even at 1.5× sim optimism.
