@@ -47,8 +47,10 @@ rows and builds the attention mask from it on device. :meth:`DeepSeekV41DSpark.a
 round's accept rule over those logits and the last draft, and drafts on from its result without the host:
 its packet carries the round's start, and the accepted count shifts it on device.
 
-Each mHC takes the block's ``T`` rows in one multi-token ``fused_hyperconnection`` (one token per core,
-the token's ``[hc, D]`` slab staged whole): the drafter's stage has no decode model's L1 buffers beside it.
+Each mHC is the decode block's (:class:`DeepSeekV4HyperConnection`): its ``fn`` cuts the ``hc * D`` K over
+cores and folds the unweighted norm in, where a plain matmul runs the one-tile output on one core; then
+the block's ``T`` rows go through one multi-token ``fused_hyperconnection`` (one token per core, the token's
+``[hc, D]`` slab staged whole): the drafter's stage has no decode model's L1 buffers beside it.
 
 A round writes every row it verified, the rejected ones too: the ring is ``window + main_rows - 1`` rows
 or more, so a rejected row (at most ``main_rows - 1`` past the frontier) never shares a slot with one of
@@ -78,6 +80,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     ring_prefetch,
     tp_gate_up_layout,
 )
+from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import DeepSeekV4HyperConnection
 from models.experimental.deepseek_v4_flash.tt.decode.moe import _tp_all_reduce
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
 from models.experimental.deepseek_v4_flash.tt.layers import Linear, LinearDecode
@@ -87,10 +90,7 @@ from models.experimental.deepseek_v4_flash.tt.prefill.decoder_layer import (
     rows_from_tokens,
     tokens_from_rows,
 )
-from models.experimental.deepseek_v4_flash.tt.prefill.hyperconnection import (
-    DeepSeekV4PrefillHyperConnection,
-    wide_rms_norm,
-)
+from models.experimental.deepseek_v4_flash.tt.prefill.hyperconnection import wide_rms_norm
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache, _load_weight, _materialize, _memo
 
 # Column width of one stash buffer. paged_update_cache double-buffers whole rows on one core, so a
@@ -361,13 +361,13 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
 
         self.attn_norm = gamma("attn_norm")
         self.ffn_norm = gamma("ffn_norm")
-        self.attn_hc = DeepSeekV4PrefillHyperConnection(
+        self.attn_hc = DeepSeekV4HyperConnection(
             config,
             {"fn": weights["hc_attn_fn"], "base": weights["hc_attn_base"], "scale": weights["hc_attn_scale"]},
             device,
             cache=cache.sub("hc_attn"),
         )
-        self.ffn_hc = DeepSeekV4PrefillHyperConnection(
+        self.ffn_hc = DeepSeekV4HyperConnection(
             config,
             {"fn": weights["hc_ffn_fn"], "base": weights["hc_ffn_base"], "scale": weights["hc_ffn_scale"]},
             device,
