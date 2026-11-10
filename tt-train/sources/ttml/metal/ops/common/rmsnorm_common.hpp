@@ -50,8 +50,7 @@ constexpr uint32_t kRowSliceExchangeCostTiles = 4U;
 // How rmsnorm_fw and rmsnorm_bw split tile-rows over the cores: each row is cut into num_slices column slices of
 // slice_tiles tiles, and num_slices = 1 keeps whole rows. Core i of the walk {i / num_cores_y, i % num_cores_y} handles
 // slice i % num_slices of row-group i / num_slices. Row-groups [0, num_groups_1) take rows_per_group_1 rows, the rest
-// rows_per_group_2. Plain arithmetic, so override_runtime_arguments() can recompute it on every cache hit; the core
-// ranges come from row_slice_cores().
+// rows_per_group_2. The core ranges come from row_slice_cores().
 struct RowSlicePlan {
     uint32_t num_slices = 1U;
     uint32_t slice_tiles = 0U;
@@ -166,6 +165,19 @@ inline RowSliceCores row_slice_cores(const RowSlicePlan& plan, const tt::tt_meta
             /* row_wise */ false);
     }
     return cores;
+}
+
+// Calls fn(core) for each core a kernel holds runtime args on. On a cache hit these are the cores create_descriptor()
+// planned, so override_runtime_arguments() finds them without running the planner again.
+template <typename KernelRuntimeArgs, typename Fn>
+inline void for_each_core_with_runtime_args(const KernelRuntimeArgs& runtime_args, Fn&& fn) {
+    for (size_t x = 0; x < runtime_args.size(); ++x) {
+        for (size_t y = 0; y < runtime_args[x].size(); ++y) {
+            if (runtime_args[x][y].size() > 0U) {
+                fn(tt::tt_metal::CoreCoord{x, y});
+            }
+        }
+    }
 }
 
 // One core's share of a RowSlicePlan, as handed out by for_each_row_slice_core.

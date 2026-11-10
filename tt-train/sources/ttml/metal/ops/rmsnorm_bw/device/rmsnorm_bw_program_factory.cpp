@@ -390,11 +390,10 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
 
 void RMSNormBackwardProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const auto plan = make_plan(operation_attributes, tensor_args);
     const auto buffers = get_buffers(tensor_args, output);
 
     const uint32_t input_addr = buffers.input->address();
@@ -408,9 +407,8 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
-    rmsnorm::for_each_row_slice_core(plan, [&](const rmsnorm::RowSliceWork& work) {
-        const auto& core = work.core;
-
+    // The reader and the writer run on the same cores.
+    rmsnorm::for_each_core_with_runtime_args(writer_runtime_args, [&](const tt::tt_metal::CoreCoord& core) {
         auto& reader_args = reader_runtime_args[core.x][core.y];
         reader_args[kInputAddrIdx] = input_addr;
         reader_args[kGammaAddrIdx] = gamma_addr;
