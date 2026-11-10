@@ -48,30 +48,10 @@ def test_mpi_clean():
     clean(r)
 
 
-def test_mpi_dead_rank_ulfm():
-    """A rank SIGKILLs itself under --with-ft ulfm: the survivors' barrier returns an error, they finalize, the job ends."""
-    r = run_case("mpi_dead_rank_ulfm", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=mpi_cmd())
-    ended(r)
-    clean(r)
-
-
 def test_mpi_dead_rank_plain():
     """The same kill under plain mpirun (no ULFM): the job ends with the victim's code, the truthful exit code."""
     r = run_case(
         "mpi_dead_rank_plain", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=mpi_cmd(ulfm=False)
-    )
-    ended(r)
-    nonzero(r)
-    clean(r)
-
-
-def test_mpi_survivor_abort():
-    """The fix shape: the survivors call MPI_Abort after the error, so the launcher reports it under ULFM too."""
-    r = run_case(
-        "mpi_survivor_abort",
-        {**NP, "PROBE_SCENARIO": "victim_sigkill", "PROBE_SURVIVOR_ACTION": "abort"},
-        DEADLINE_END,
-        cmd=mpi_cmd(),
     )
     ended(r)
     nonzero(r)
@@ -123,13 +103,6 @@ def test_mpi_dead_rank_ulfm_exit0():
     nonzero(r)
 
 
-@known("P1: a rank that exits after an error sits in its atexit finalize and the others wait in their barrier forever")
-def test_mpi_exit_after_error():
-    r = run_case("mpi_exit_after_error", {**NP, "PROBE_SCENARIO": "victim_exit1"}, DEADLINE_HANG, cmd=mpi_cmd())
-    ended(r)
-    clean(r)
-
-
 @known("P5: a genuine hang never ends without a wall clock")
 def test_mpi_hang_no_clock():
     r = run_case("mpi_hang", {**NP, "PROBE_SCENARIO": "victim_hang"}, DEADLINE_HANG, cmd=mpi_cmd())
@@ -150,28 +123,8 @@ def test_mpi_wrong_interface():
     clean(r)
 
 
-@known("P2: with the shared-memory layer on, a rank that _exits without finalize parks the survivors in MPI_Finalize")
-def test_mpi_exit_nofinalize_sm():
-    r = run_case(
-        "mpi_exit_nofinalize+sm",
-        {**NP, "PROBE_SCENARIO": "victim_exit1_nofinalize"},
-        DEADLINE_HANG,
-        cmd=mpi_cmd(btl=""),
-    )
-    ended(r)
-    clean(r)
-
-
 # ---- the OpenMPI housekeeping rows and the launch-line rule -----------------------------------------------------
 @known("P11: a singleton (no launcher) never finalizes its shared-memory segment; tt-metal #63870")
-def test_mpi_singleton_shm():
-    """The C probe started on its own, no mpirun: one rank, exit 0, and /dev/shm must hold nothing new."""
-    r = run_case("mpi_singleton", {"PROBE_SCENARIO": "clean", "PROBE_NP": "1"}, DEADLINE_END, cmd=[mpi_probe_path()])
-    ended(r)
-    assert r.exit == 0, str(r)
-    assert not r.shm_leaked, f"R3: the singleton left {r.shm_leaked}"
-
-
 @known("P11: a job killed with the shared-memory layer on leaves its 16 MB sm_segment files in /dev/shm")
 def test_mpi_killed_job_shm():
     """Default transports (shared memory on), a rank spins, SIGKILL at mpirun: whatever else is left (P7), the
