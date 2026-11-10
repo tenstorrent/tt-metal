@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <hostdevcommon/fabric_common.h>
+#include <tt_stl/assert.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 
@@ -188,8 +189,19 @@ std::optional<uint32_t> find_path_erisc(std::string_view path) {
 }
 
 InterpretContext make_interpret_context(
-    const manifest::Arch& arch, const manifest::Router& router, std::string_view path) {
-    return InterpretContext{.arch = arch, .router = router, .path = path, .erisc = find_path_erisc(path)};
+    const manifest::ManifestFacts& facts,
+    const manifest::RouterRef& ref,
+    const manifest::Router& router,
+    std::string_view path) {
+    const manifest::Mesh* mesh = manifest::find_mesh(facts, ref.node.mesh_id);
+    TT_FATAL(mesh != nullptr, "Fabric decode: the manifest has no mesh {} for router {}", *ref.node.mesh_id, path);
+    return InterpretContext{
+        .arch = facts.arch,
+        .fabric = facts.fabric,
+        .mesh = *mesh,
+        .router = router,
+        .path = path,
+        .erisc = find_path_erisc(path)};
 }
 
 bool is_handshake_complete(const erisc::datamover::handshake::handshake_info_t& info) {
@@ -308,9 +320,12 @@ json Interpreter<FabricTelemetry>::make_json(const FabricTelemetry& value, const
     return out;
 }
 
-json Interpreter<routing_l1_info_t>::make_json(
-    const routing_l1_info_t& /*value*/, const InterpretContext& /*context*/) {
-    return json::object();
+// Only what is the router core's own: the rest of the table is the chip's, written by make_chip_routing_table_json.
+json Interpreter<routing_l1_info_t>::make_json(const routing_l1_info_t& value, const InterpretContext& /*context*/) {
+    json out;
+    out["state"] = make_enum_json(value.state_manager.state);
+    out["command"] = make_enum_json(value.state_manager.command);
+    return out;
 }
 
 namespace detail {

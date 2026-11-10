@@ -169,7 +169,12 @@ FindingSeverity get_finding_severity(FindingCode code) {
         case FindingCode::TYPE_LARGER_THAN_ELEMENT: return FindingSeverity::ERROR;
         case FindingCode::ROUND_READ_FAILED:
         case FindingCode::CORE_MISMATCH:
-        case FindingCode::UNKNOWN_ENUMERATOR: return FindingSeverity::WARNING;
+        case FindingCode::UNKNOWN_ENUMERATOR:
+        case FindingCode::ROUTING_TABLE_COPIES_DIFFER:
+        case FindingCode::ROUTING_TABLE_SHAPE_MISMATCH:
+        case FindingCode::ROUTING_TABLE_MESH_MEMBERS_DIFFER: return FindingSeverity::WARNING;
+        case FindingCode::ROUTING_TABLE_IDENTITY_MISMATCH:
+        case FindingCode::ROUTING_TABLE_SHAPE_INVALID: return FindingSeverity::ERROR;
         // Both differences happen on a correct router (decision 20): a corner chip is live toward a missing sibling.
         case FindingCode::CONNECTED_NOT_LIVE:
         case FindingCode::LIVE_NOT_CONNECTED: return FindingSeverity::INFO;
@@ -190,7 +195,12 @@ FindingOrigin get_finding_origin(FindingCode code) {
         case FindingCode::TYPE_LARGER_THAN_ELEMENT:
         case FindingCode::UNKNOWN_ENUMERATOR:
         case FindingCode::CONNECTED_NOT_LIVE:
-        case FindingCode::LIVE_NOT_CONNECTED: return FindingOrigin::DECODE;
+        case FindingCode::LIVE_NOT_CONNECTED:
+        case FindingCode::ROUTING_TABLE_COPIES_DIFFER:
+        case FindingCode::ROUTING_TABLE_IDENTITY_MISMATCH:
+        case FindingCode::ROUTING_TABLE_SHAPE_MISMATCH:
+        case FindingCode::ROUTING_TABLE_SHAPE_INVALID:
+        case FindingCode::ROUTING_TABLE_MESH_MEMBERS_DIFFER: return FindingOrigin::DECODE;
     }
     TT_THROW("Fabric decode: unknown finding code {}", static_cast<int>(code));
 }

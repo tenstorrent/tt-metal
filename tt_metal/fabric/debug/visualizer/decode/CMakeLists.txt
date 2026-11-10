@@ -14,6 +14,8 @@ target_sources(
         fabric_decode_rank.cpp
         fabric_decode_region_json.cpp
         fabric_decode_router_analysis.cpp
+        fabric_decode_routing.cpp
+        fabric_decode_routing_table.cpp
         fabric_decode_snapshot.cpp
         fabric_decode_values.cpp
 )

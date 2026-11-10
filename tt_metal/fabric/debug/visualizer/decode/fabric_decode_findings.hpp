@@ -49,11 +49,22 @@ enum class FindingCode : uint8_t {
     TYPE_LARGER_THAN_ELEMENT,
     // An enum region holds a value that names no enumerator.
     UNKNOWN_ENUMERATOR,
-    // A VC is connected to a sibling it never forwards to (decision 20): expected on an E/W router that can't turn.
+    // A VC is connected to a sibling it never forwards to: expected on an E/W router that can't turn.
     CONNECTED_NOT_LIVE,
-    // A VC forwards to a direction it has no sibling for (decision 20): expected on a corner chip, since a correct
+    // A VC forwards to a direction it has no sibling for: expected on a corner chip, since a correct
     // route never asks for it; a packet routed there blocks.
     LIVE_NOT_CONNECTED,
+    // A chip's routers hold routing tables that differ beyond state_manager, the router's own. One per chip.
+    ROUTING_TABLE_COPIES_DIFFER,
+    // A routing table's mesh id, device id or, in 2D, coordinates aren't the manifest chip's. One per group of routers
+    // with the same table.
+    ROUTING_TABLE_IDENTITY_MISMATCH,
+    // A 2D routing table's mesh shape isn't the manifest mesh's.
+    ROUTING_TABLE_SHAPE_MISMATCH,
+    // A 2D routing table's mesh shape can't be a 2D route table's, so its action vectors and trees aren't shown.
+    ROUTING_TABLE_SHAPE_INVALID,
+    // Chips of one mesh whose 2D action vectors or 1D path table differ from the mesh's first chip's. One per mesh.
+    ROUTING_TABLE_MESH_MEMBERS_DIFFER,
 };
 
 // How much a finding matters. Written by lower_enum_name.

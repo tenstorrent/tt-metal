@@ -20,6 +20,7 @@
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_inputs.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_interpret.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_router_analysis.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_routing.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 
 namespace tt::tt_fabric::decode {
@@ -74,6 +75,8 @@ struct DecodedRouter {
     manifest::RouterRef ref;
     // Such as "M0/C7/E0".
     std::string path;
+    // The router's manifest entry, in the facts the rank was decoded from.
+    const manifest::Router* router = nullptr;
     // In for_each_router_region's order.
     std::vector<DecodedRegion> regions;
     // In for_each_arch_area's order.
@@ -83,12 +86,17 @@ struct DecodedRouter {
     std::optional<RouterActivityVerdict> activity;
     // Null in 1D.
     std::optional<std::vector<VcDirections>> directions;
+    // The index of the copy of its chip's routing table (in DecodedRank::routing) that holds its own. Null when capture
+    // has no full read of the router's routing table.
+    std::optional<uint32_t> routing_table_copy;
 };
 
 struct DecodedRank {
     DecodeProvenance provenance;
     // In the manifest's order.
     std::vector<DecodedRouter> routers;
+    // Each chip's routing table copies, in the order the chips' first routers appear.
+    std::vector<ChipRouting> routing;
     std::vector<Finding> findings;
 
     // Whether every router was read in full, every region decoded, and nothing found that's an error: the tool's

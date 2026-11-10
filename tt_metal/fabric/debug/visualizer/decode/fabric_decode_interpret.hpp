@@ -36,6 +36,10 @@ using json = nlohmann::ordered_json;
 struct InterpretContext {
     // The architecture's facts: heartbeat_protocol, fabric_telemetry_version, the core registers' reset masks.
     const manifest::Arch& arch;
+    // The run's fabric: is_2d_routing and routing_1d_extension_words pick and size routing_l1_info_t's union member.
+    const manifest::FabricInfo& fabric;
+    // The router's mesh: its shape gives how many intra-mesh direction entries are its chips.
+    const manifest::Mesh& mesh;
     // The router the value is from, for its fields, such as each ERISC's telemetry_enabled and telemetry_stats_mask.
     const manifest::Router& router;
     // The region's path below the router's node, such as "fields/erisc0/edm_status" or "l1_areas/fabric_telemetry".
@@ -52,9 +56,13 @@ struct InterpretContext {
 // region's path. Null for any other path.
 std::optional<uint32_t> find_path_erisc(std::string_view path);
 
-// The context for the region at `path` of `router`, its ERISC from the path (find_path_erisc), at element 0.
+// The context for the region at `path` of the router `ref` names, its ERISC from the path (find_path_erisc), at
+// element 0. The router's mesh is found in `facts` by `ref`; `router` must be from `facts`.
 InterpretContext make_interpret_context(
-    const manifest::Arch& arch, const manifest::Router& router, std::string_view path);
+    const manifest::ManifestFacts& facts,
+    const manifest::RouterRef& ref,
+    const manifest::Router& router,
+    std::string_view path);
 
 // -- Named functions: meaning analysis needs as well, as typed results. The interpreters call them, and so does
 // analysis, which never reads JSON. Each takes its meaning from where the kernel does.
@@ -159,8 +167,8 @@ struct Interpreter<FabricTelemetry> {
     static json make_json(const FabricTelemetry& value, const InterpretContext& context);
 };
 
-// A placeholder: what the table holds means something only through the routing table analysis. Its bytes are still
-// at the region's .bin offset.
+// The router's own part of the routing table, its state_manager: the router's state and the host's command. The rest
+// is the chip's, written once per chip by make_chip_routing_table_json (fabric_decode_routing_table.hpp).
 template <>
 struct Interpreter<routing_l1_info_t> {
     static json make_json(const routing_l1_info_t& value, const InterpretContext& context);
