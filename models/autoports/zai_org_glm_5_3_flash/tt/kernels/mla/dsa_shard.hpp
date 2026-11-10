@@ -190,6 +190,36 @@ constexpr uint32_t RS1_PPC = RS2_PPC;
 constexpr uint32_t RS2B_PPC = 4;
 inline uint32_t rs1_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T + t) * RS1_PPC; }
 inline uint32_t rs2b_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T + t) * RS2B_PPC; }
+// rev 65, THE FOLD COMBINE (MLA_DSA_SHARD_COMB, tt/mk_mla.py GLM53_DSA_SHARD_COMB; the 8x4 only, unset: every build of
+// rev 64 unchanged). The lane root combines each round's slices in ONE pass instead of a chain of pairwise combines
+// (round 1: own + 7 = 7 combines of 32 fp32 matmul tiles each on full 32-row tiles; round 2: 3 + the finalise).
+// Round 1: the 8 column slices (8 rows each) land ROW-PACKED in CB_ARXO messages of COMB_MSG pages -- O tile d of
+// source s = 4 p + k at rows 8 k .. of page p (4 O tiles per message); their stats as 4 ROTATIONS x 2 pages per stats
+// tile (page 2 j + p, rows 8 k .. = source 4 p + (k + j) % 4: every row block of the 8 pages holds all 8 sources, so
+// the joint max M and l = sum exp(m - M) l are exact elementwise fp32 ops). Then c = exp(m - M) per page, F_p = FOLD1
+// diag(c_p) (FOLD1[8 j1 + r][8 k + r] = 1: the destination's rows gather the 4 row blocks) and the column-combined O
+// rows 8 j1 .. = F_0 P_0 + F_1 P_1 (2 matmuls per O tile; every operand rounded to tf32 once, not once per chain
+// step). Round 2: the 4 row slices (2 rows) in sub-blocks 8 j1 + 2 k of one page per O tile (stats: 4 rotations of m
+// and of l, one message), G = FOLD2 diag(c_0) (FOLD2[2 j2 + r][8 j1 + 2 k + r] = 1), G' = diag(1 / L) G and o = G' P
+// (one matmul per O tile: combine + finalise). FOLD1 / FOLD2 (fp32 0 / 1 tiles): the root NCRISC writes them into
+// CB_ARX once per launch.
+// (Both rev-65 blocks declare nothing without their define: the rev-64 builds keep their instructions.)
+#if defined(MLA_DSA_SHARD_COMB)
+constexpr uint32_t COMB_MSG = 8;  // pages per CB_ARXO message of the fold combine (2 per 16-page CB: double-buffered)
+static_assert(PAIR == 8 && LINE == 4 && RS1_ROWS == 8 && RS2_ROWS == 2, "the fold combine: the 8x4 slices");
+// word of element (row, col) of a 32x32 fp32 tile (4 faces of 16 x 16, row-major within a face): the FOLD tiles
+inline uint32_t tile_word(uint32_t row, uint32_t col) {
+    return ((row / 16) * 2 + col / 16) * 256 + (row % 16) * 16 + col % 16;
+}
+#endif
+// rev 65, RS1 EARLY (MLA_DSA_SHARD_RS1_EARLY, GLM53_DSA_SHARD_RS1_EARLY; the 8x4 only): the root signals the RS1
+// scatter lane after pass 0 too (2 increments per lane token). Pass 0's slices go to the OTHER half of the column --
+// all of the traffic across the column's middle link -- so the lane streams those destinations after the first t
+// increments, while pass 1 computes, and the own half's after 2 t (fs_read.cpp FS_WAIT2; tt/fabric_stream.py
+// FabricStreamScatter first= / wait2=)
+#if defined(MLA_DSA_SHARD_RS1_EARLY)
+static_assert(PAIR == 8 && LINE == 4, "RS1 early: the 8x4 column scatter");
+#endif
 // rev 59, TP8: q_asm [2 x T x 32, 512] bf16 -- head tile g of token t assembled ONCE per chip (the index core's NCRISC,
 // behind the global merge) from the 4 pieces in y_ag; the owners read 16 whole pages per push
 inline uint32_t qasm_page(uint32_t T, uint32_t tile, uint32_t t, uint32_t d) { return (tile * T + t) * PPC + d; }

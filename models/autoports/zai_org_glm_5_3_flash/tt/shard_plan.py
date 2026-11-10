@@ -221,10 +221,12 @@ class Geometry:
                               y_blocks=self.L, x_blocks=self.L)  # fmt: skip
         return out
 
-    def block(self, name: str, t: int, r: int, c: int) -> dict:
+    def block(self, name: str, t: int, r: int, c: int, rs1_early: bool = False) -> dict:
         """chip (r, c)'s block of stream `name`: src chunk base in x, dst chunk base in y (on the receivers: the same
         address on every chip), local copy, up / down multicast ranges (the scatter: the chips above / below), and the
-        scatter's destinations [(position q, src chunk base, direction 0 up / 1 down, hops)]"""
+        scatter's destinations [(position q, src chunk base, direction 0 up / 1 down, hops)]; rev 65 rs1_early (the
+        8x4 column scatter): the other half's destinations first (rs1_early_first), then the own half's"""
+        assert not rs1_early or self.P > 2, "RS1 early: the 8x4 column scatter"
         sp = self.streams(t)[name]
         p, line = self.axis_pos(r, c, sp["axis"])
         n = self.axis_len(sp["axis"])
@@ -238,6 +240,9 @@ class Geometry:
             return dict(p=p, src=(1 - p) * ch, dst=0, local=False, up=up, dn=dn, dsts=[])
         if name in ("rs1", "rs2"):  # per-destination unicast: x block q -> peer q's y block p
             dsts = [(q, q * ch, 0 if q > p else 1, abs(q - p)) for q in range(n) if q != p]
+            if rs1_early and name == "rs1":
+                first = set(rs1_early_first(p, self.P))
+                dsts = [d for d in dsts if d[0] in first] + [d for d in dsts if d[0] not in first]
             return dict(p=p, src=None, dst=p * ch, local=False, up=up, dn=dn, dsts=dsts)
         raise KeyError(name)
 
@@ -512,18 +517,173 @@ def land_slice(dst_faces, j: int, runs):
 
 
 # ------------------------------------------------------------------ the exchange, emulated in fp32 (torch)
-def combine(a, b):
-    """kernels/mla/att_c.cpp combine (M = max, exp-weighted l / O), fp32; a, b = (m [rows], l [rows], O [rows, D])"""
+def tf32(x):
+    """an fp32 tensor as the FPU's matmul operand (tf32: 10 explicit mantissa bits, round to nearest even), as fp32 --
+    the rescales of att_c.cpp run every O / coefficient tile through srcA / srcB this way (an approximation of the
+    hardware rounding; finite inputs)"""
+    import torch
+
+    b = x.contiguous().float().view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+    b = (b + 0xFFF + ((b >> 13) & 1)) & 0xFFFFE000
+    b = torch.where(b >= 1 << 31, b - (1 << 32), b)
+    return b.to(torch.int32).view(torch.float32)
+
+
+def combine(a, b, *, tf32_ops: bool = False):
+    """kernels/mla/att_c.cpp combine (M = max, exp-weighted l / O), fp32; a, b = (m [rows], l [rows], O [rows, D]);
+    tf32_ops: the O rescale's operands (coefficients, O tiles) rounded as the FPU's matmul operands"""
     import torch
 
     m1, l1, o1 = a
     m2, l2, o2 = b
     M = torch.maximum(m1, m2)
     ea, eb = torch.exp(m1 - M), torch.exp(m2 - M)
-    return M, ea * l1 + eb * l2, ea[:, None] * o1 + eb[:, None] * o2
+    r = tf32 if tf32_ops else (lambda v: v)
+    return M, ea * l1 + eb * l2, r(ea)[:, None] * r(o1) + r(eb)[:, None] * r(o2)
 
 
-def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None):
+def combine_chain(parts: list, *, tf32_ops: bool = False):
+    """rev 64's pairwise chain of one round (take parts[0], combine the others in order) -- the reference of the fold"""
+    cur = tuple(v.clone() for v in parts[0])
+    for p in parts[1:]:
+        cur = combine(cur, p, tf32_ops=tf32_ops)
+    return cur
+
+
+def fold_combine(parts: list, *, l_order=None, tf32_ops: bool = False):
+    """rev 65, the fold combine of one round, per head: M = max_i m_i, c_i = exp(m_i - M), L = sum_i c_i l_i (in
+    l_order: the kernel's sum order at the destination's rows, default the list order), O = sum_i c_i O_i (every operand
+    rounded once with tf32_ops; the device accumulates in fp32 DST in its own order)"""
+    import torch
+
+    M = parts[0][0].clone()
+    for m, _, _ in parts[1:]:
+        M = torch.maximum(M, m)
+    c = [torch.exp(m - M) for m, _, _ in parts]
+    order = list(range(len(parts))) if l_order is None else list(l_order)
+    assert sorted(order) == list(range(len(parts))), order
+    L = c[order[0]] * parts[order[0]][1]
+    for i in order[1:]:
+        L = L + c[i] * parts[i][1]
+    r = tf32 if tf32_ops else (lambda v: v)
+    O = sum(r(ci)[:, None] * r(p[2]) for ci, p in zip(c, parts))
+    return M, L, O
+
+
+def fold1_l_order(j1: int, P: int = 8) -> list:
+    """the source order of att_c.cpp fold1's l sum at the destination's row block j1: page q = 2 j + p of the l
+    rotations holds source P/2 p + (j1 + j) % (P/2) there"""
+    h = P // 2
+    return [h * p + (j1 + j) % h for j in range(h) for p in range(2)]
+
+
+def fold2_l_order(lpos: int, L: int = 4) -> list:
+    """att_c.cpp fold2's l sum order at the destination's sub-block lpos: rotation j = source (lpos + j) % L"""
+    return [(lpos + j) % L for j in range(L)]
+
+
+def fold1_tile(j1: int):
+    """FOLD1 [32, 32] (att_dsa_shard_dm1.cpp): row 8 j1 + r gathers rows 8 k + r, k < 4"""
+    import torch
+
+    f = torch.zeros(32, 32)
+    for k in range(4):
+        for r in range(8):
+            f[8 * j1 + r, 8 * k + r] = 1.0
+    return f
+
+
+def fold2_tile(j1: int, lpos: int):
+    """FOLD2 [32, 32]: row 2 j2 + r (j2 = 4 j1 + lpos) gathers rows 8 j1 + 2 k + r, k < 4"""
+    import torch
+
+    f = torch.zeros(32, 32)
+    for k in range(4):
+        for r in range(2):
+            f[8 * j1 + 2 * lpos + r, 8 * j1 + 2 * k + r] = 1.0
+    return f
+
+
+def _land(dst_tile, rows: int, j: int, src_tile, js: int, both: bool = True):
+    """rows `rows` js .. of src_tile [32, 32] -> rows `rows` j .. of dst_tile, through the face-major byte runs of
+    dsa_shard.hpp slice_off_rows (run A only: columns 0..15, the stats' column 0 -- run B keeps dst's junk)"""
+    df, sf = tile_to_faces(dst_tile), tile_to_faces(src_tile)
+    a, b = slice_runs_rows(sf, rows, js)
+    if not both:
+        b = slice_runs_rows(df, rows, j)[1]
+    return faces_to_tile(land_slice_rows(df.clone(), rows, j, (a, b)))
+
+
+def fold1_tiles(src: list, j1: int, junk, *, tf32_ops: bool = False):
+    """att_dsa_shard_dm1.cpp land_fold1 + att_c.cpp fold1 on whole tiles: src[s] = source s's shipped partial as tiles
+    (m [32, 32], l [32, 32], O [16, 32, 32]; rows 8 j1 .. = its slice for this destination), junk() a fresh tile of
+    the receive CB's stale content. -> (M, L, O [16, 32, 32]) = the send CBs: rows 8 j1 .. carry the column-combined
+    slice, O's other rows are 0"""
+    import torch
+
+    r = tf32 if tf32_ops else (lambda v: v)
+    rot = {}  # (stats tile i, page q = 2 j + p) -> the rotation page
+    for i in range(2):
+        for j in range(4):
+            for p in range(2):
+                pg = junk()
+                for k in range(4):
+                    pg = _land(pg, 8, k, src[4 * p + (k + j) % 4][i], j1, both=False)
+                rot[i, 2 * j + p] = pg
+    M = rot[0, 0]
+    for q in range(1, 8):
+        M = torch.maximum(M, rot[0, q])
+    c = [torch.exp(rot[0, q] - M) for q in range(8)]
+    L = c[0] * rot[1, 0]
+    for q in range(1, 8):
+        L = L + c[q] * rot[1, q]
+    F = [fold1_tile(j1) @ torch.diag(r(c[p][:, 0])) for p in range(2)]
+    O = torch.zeros(16, 32, 32)
+    for d in range(16):
+        P = []
+        for p in range(2):
+            pg = junk()
+            for k in range(4):
+                pg = _land(pg, 8, k, src[4 * p + k][2][d], j1)
+            P.append(pg)
+        O[d] = r(F[0]) @ r(P[0]) + r(F[1]) @ r(P[1])
+    return M, L, O
+
+
+def fold2_tiles(src: list, j1: int, lpos: int, junk, *, tf32_ops: bool = False):
+    """att_dsa_shard_dm1.cpp land_fold2 + att_c.cpp fold2: src[s] = row source s's column-combined send tiles (M, L,
+    O [16, 32, 32]; rows 8 j1 + 2 lpos .. = its slice for this destination) -> the finalised o [16, 32, 32] (rows
+    2 j2 .. = this chip's heads, j2 = 4 j1 + lpos)"""
+    import torch
+
+    r = tf32 if tf32_ops else (lambda v: v)
+    j2 = 4 * j1 + lpos
+    rot = {}
+    for i in range(2):
+        for j in range(4):
+            pg = junk()
+            for k in range(4):
+                pg = _land(pg, 2, 4 * j1 + k, src[(k + j) % 4][i], j2, both=False)
+            rot[i, j] = pg
+    M = rot[0, 0]
+    for j in range(1, 4):
+        M = torch.maximum(M, rot[0, j])
+    c = [torch.exp(rot[0, j] - M) for j in range(4)]
+    L = c[0] * rot[1, 0]
+    for j in range(1, 4):
+        L = L + c[j] * rot[1, j]
+    G = fold2_tile(j1, lpos) @ torch.diag(r(c[0][:, 0]))
+    G2 = torch.diag(r(1.0 / L[:, 0])) @ r(G)
+    o = torch.zeros(16, 32, 32)
+    for d in range(16):
+        pg = junk()
+        for k in range(4):
+            pg = _land(pg, 2, 4 * j1 + k, src[k][2][d], j2)
+        o[d] = r(G2) @ r(pg)
+    return o
+
+
+def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None, comb: str = "pair"):
     """The TP8 (or pair) exchange of one token, emulated per chip with the kernels' data movement:
       q: [64 heads, D] fp32 (head h on chip h // 8 at TP8, its q piece rows h % 8; the pair: 32 heads per chip);
       parts_fn(rank, q_tile [32, D]) -> the chip's partial (m [32], l [32], O [32, D]) of its OWN selected rows for the
@@ -533,9 +693,12 @@ def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None):
     (own tile) in the kernel's order combine(own, landed). TP8 round 2: each chip lands rows 8 j .. of its line peers'
     column-combined partials (+ its own slice from x_rs2) into the receive tile (junk rows = the previous message's
     rows: `junk` fills them, default the round-1 landing) and combines own, then the peers in column order.
+    comb="fold" (rev 65, the 8x4 only): each round is the fold combine (fold_combine, in the kernel's l order).
     -> {rank: o [heads of the chip, D]} (o = O / l)."""
     import torch
 
+    assert comb in ("pair", "fold"), comb
+    assert comb == "pair" or geo.P > 2, "the fold combine: the 8x4"
     n, L = geo.n, geo.L
     hpc = 64 // n
     pieces = {r: q[hpc * r : hpc * (r + 1)] for r in range(n)}
@@ -552,6 +715,10 @@ def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None):
         for r in range(n):
             i = geo.pair_pos(r)
             rows = slice(geo.rs1_rows * i, geo.rs1_rows * (i + 1))
+            if comb == "fold":  # the sources in column position order (the fold's pages), the kernel's l order
+                srcs = [tuple(v[rows] for v in full[geo.line_pos(r) + geo.L * s]) for s in range(geo.P)]
+                col[r] = fold_combine(srcs, l_order=fold1_l_order(i % (geo.P // 2), geo.P))
+                continue
             cur = None
             for src in [r] + geo.column_peers(r):
                 sl = tuple(v[rows] for v in full[src])
@@ -561,6 +728,12 @@ def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None):
         for r in range(n):
             j = geo.line_pos(r)
             rows = slice(geo.rs2_rows * j, geo.rs2_rows * (j + 1))
+            if comb == "fold":
+                g0 = geo.pair_pos(r) * geo.L
+                srcs = [tuple(v[rows] for v in col[g0 + s]) for s in range(geo.L)]
+                m, l_, O = fold_combine(srcs, l_order=fold2_l_order(j, geo.L))
+                out[r] = O / l_[:, None]
+                continue
             cur = None
             for src in [r] + sorted(geo.line_peers(r), key=geo.line_pos):
                 sl = tuple(v[rows] for v in col[src])
@@ -651,6 +824,33 @@ def shard_kph_reserve(nchips: int, pair: int, knob="1") -> int:
     if str(knob).strip().lower() == "auto":
         return KPH_MAX if nchips % KPH_MAX == 0 else 1
     return shard_kph(nchips, 1, 1, pair, knob)
+
+
+def _flag(name: str) -> bool:
+    v = os.environ.get(name, "0").strip()
+    if v not in ("0", "1"):
+        raise ValueError(f"{name}={v}: 0 or 1")
+    return v == "1"
+
+
+def shard_comb(pair: int) -> bool:
+    """rev 65 GLM53_DSA_SHARD_COMB (default 0 = rev 64's pairwise chains): the fold combine of the 8x4 reduce-scatter
+    rounds on the lane roots (dsa_shard.hpp COMB, MLA_DSA_SHARD_COMB; emulated by fold1_tiles / fold2_tiles); the pair /
+    the 2x4 never take it"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_COMB")
+
+
+def shard_rs1_early(pair: int) -> bool:
+    """rev 65 GLM53_DSA_SHARD_RS1_EARLY (default 0): the 8x4 roots signal the RS1 scatter lane after pass 0 too and the
+    lane streams the other half's destinations (pass 0's slices) during pass 1 (dsa_shard.hpp RS1_EARLY, fs_read.cpp
+    FS_WAIT2); the pair / the 2x4 never take it"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_RS1_EARLY")
+
+
+def rs1_early_first(p: int, P: int) -> list:
+    """the column positions chip p's pass-0 slices go to (the other half of the column: pass 0 attends with the other
+    head tile, Geometry.pass_tile): the RS1 scatter's first destinations under RS1 early, in position order"""
+    return [q for q in range(P) if q // (P // 2) != p // (P // 2)]
 
 
 def shard_tl(t: int, lanes: int = 1, kph: int = 1) -> int:

@@ -38,8 +38,21 @@ void kernel_main() {
     constexpr uint32_t SC0 = 4;
 #endif
     const uint32_t n_dst = get_arg_val<uint32_t>(SC0);
+#if defined(FS_WAIT2)  // tt/fabric_stream.py FabricStreamScatter first= / wait2= (rev 65, the shard's RS1 early): after
+    // the bases, (k_split, wait2) -- destinations k >= k_split are streamed only once FS_WAIT reached wait2
+#if !defined(FS_WAIT)
+#error "FS_WAIT2 needs FS_WAIT"
+#endif
+    const uint32_t k_split = get_arg_val<uint32_t>(SC0 + 1 + n_dst);
+    const uint32_t wait2 = get_arg_val<uint32_t>(SC0 + 2 + n_dst);
+#endif
     for (uint32_t k = 0; k < n_dst; k++) {
         const uint32_t base = get_arg_val<uint32_t>(SC0 + 1 + k);
+#if defined(FS_WAIT2)
+        if (k == k_split) {
+            noc_semaphore_wait_min(wsem, wait2);
+        }
+#endif
 #else
     {
         const uint32_t base = src_base;

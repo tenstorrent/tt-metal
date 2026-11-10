@@ -200,8 +200,13 @@ class TPMlaShard(TPM.TPMla):
                                     wait=ag_wait, cons=(MK.SEM_FSW, [ag2_noc]), link_base=0, after=MK.SEM_FSA)  # fmt: skip
             ag2 = FS.FabricStreamAG(mesh, self.P * t * 32, W32, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
                                     y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA)  # fmt: skip
+            # rev 65 (GLM53_DSA_SHARD_RS1_EARLY, dsa_shard.hpp RS1_EARLY): the roots signal after each pass (2 per lane
+            # token); the lane streams the other half's destinations (pass 0's slices) once t landed, the own half's
+            # at 2 t. GLM53_DSA_SHARD_COMB: the fold combine on the roots (the kernels' define only; same streams)
+            comb, early = SP.shard_comb(self.P), SP.shard_rs1_early(self.P)
+            split = dict(first=lambda p: SP.rs1_early_first(p, self.P), wait2=2 * rs_wait[1]) if early else {}
             rs1 = FS.FabricStreamScatter(mesh, t * 32, W8, axis=geo.pair_axis, lanes=lane("rs1"), **sy("rs1"), wait=rs_wait,
-                                         cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
+                                         cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA, **split)  # fmt: skip
             # both scatters signal the roots' SEM_RSC and the root reads it ordinally (wait_min 1 = round 1 landed,
             # 2 = round 2 landed): sound because rs2's waiter is its own lane BRISC, which signals after that lane's
             # sends, and those sends wait on rs2_sem, which the root raises only past its round-1 wait -- the second
@@ -211,7 +216,8 @@ class TPMlaShard(TPM.TPMla):
                                          cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
             assert int(ag1.y.shape[-2]) == geo.n * t * 32 and int(rs1.y.shape[-2]) == self.P * t * 32
             assert int(rs2.y.shape[-2]) == self.L * t * 32
-            return dict(C=self.n, line=self.L, pair=self.P, kph=kph, x_ag=x_ag, y_ag=ag1.y, x_rs=x_rs, y_rs=x_rs,
+            return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, x_ag=x_ag, y_ag=ag1.y,
+                        x_rs=x_rs, y_rs=x_rs,
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],
                         ag2_lane=ag2_noc, rs2_lane=rs2.lane_noc()[0], t=t, lanes=nl, ag_wait=ag_wait[1],
@@ -259,7 +265,7 @@ class TPMlaShard(TPM.TPMla):
         for name, o in objs.items():
             p_, line = o._pos(r, c)
             src, dst, local, up, dn = o._block(p_, line)
-            want = geo.block(name, st["t"], r, c)
+            want = geo.block(name, st["t"], r, c, rs1_early=bool(st.get("rs1_early")))
             got = dict(p=p_, src=src if not o.scatter else None, dst=dst, local=bool(local), up=up, dn=dn,
                        dsts=list(o._dsts(p_)))  # fmt: skip
             if got != {k: want[k] for k in got}:

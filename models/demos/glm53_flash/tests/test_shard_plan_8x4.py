@@ -10,10 +10,12 @@ over 32 candidate lists against the serial reference. The 2x4 plan is regression
 
 from __future__ import annotations
 
+import contextlib
 import sys
 
 import pytest
 import torch
+from loguru import logger
 
 from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
 
@@ -315,6 +317,216 @@ def test_kph_stays_1_on_the_2x4():
         assert SP.lanes_reasons(t, lanes, 64, 4, 1, nchips=8, kph=2) == ["kph > 1: the 8x4 only"]
         assert SP.shard_tl(t, lanes, 1) == 8  # rev 60's slots
     assert SP.shard_kph_reserve(8, 2, "auto") == 1
+
+
+# ------------------------------------------------------------------ rev 65: the fold combine + RS1 early (the 8x4)
+@contextlib.contextmanager
+def expect_error(error, message):
+    """The root conftest's ``expect_error`` fixture (the CI triager's [EXPECTED_ERROR] markers), local to this module:
+    the host suite runs with ``--noconftest`` because the root conftest imports ttnn at collection."""
+    logger.info(f'[EXPECTED_ERROR BEGIN] {error.__name__} message="{message}"')
+    try:
+        with pytest.raises(error, match=message) as exc_info:  # allow-pytest.raises: the fixture body, no conftest here
+            yield exc_info
+    finally:
+        logger.info(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
+
+
+NEG = -1.0e30  # att_c.cpp partial(): an empty partial's m (l = 0, O = 0)
+
+
+def _slices(gen, n: int, rows: int, *, empty=(), neg_inf=(), d: int = D) -> list:
+    """n random partials of `rows` heads (m, l > 0, O); sources in `empty` are the device's empty partial, in
+    `neg_inf` the -inf form (torch only: the device never produces it)"""
+    out = []
+    for s in range(n):
+        m = torch.randn(rows, generator=gen) * 4.0
+        l_ = torch.rand(rows, generator=gen) * 30.0 + 0.5
+        O = torch.randn(rows, d, generator=gen) * l_[:, None]
+        if s in empty:
+            m, l_, O = torch.full((rows,), NEG), torch.zeros(rows), torch.zeros(rows, d)
+        if s in neg_inf:
+            m, l_, O = torch.full((rows,), float("-inf")), torch.zeros(rows), torch.zeros(rows, d)
+        out.append((m, l_, O))
+    return out
+
+
+@pytest.mark.parametrize("n,rows", [(8, 8), (4, 2), (2, 8)])
+@pytest.mark.parametrize("case", ["random", "empty", "neg_inf"])
+def test_fold_combine_matches_pairwise(n, rows, case):
+    """the fold combine (one joint max, one pass) vs rev 64's pairwise chain (take + n - 1 combines): M bit-equal (max
+    is order-free), L / O within fp32 rounding; n = 2 is the same expression -> bit-equal throughout"""
+    gen = torch.Generator().manual_seed(65 + n + rows)
+    kw = dict(empty=(1, n - 1)) if case == "empty" else dict(neg_inf=(0,)) if case == "neg_inf" else {}
+    parts = _slices(gen, n, rows, **kw)
+    M, L, O = SP.fold_combine(parts)
+    Mc, Lc, Oc = SP.combine_chain(parts)
+    assert torch.equal(M, Mc)
+    if n == 2:
+        assert torch.equal(L, Lc) and torch.equal(O, Oc)
+    torch.testing.assert_close(L, Lc, rtol=2e-6, atol=0)
+    torch.testing.assert_close(O, Oc, rtol=2e-6, atol=2e-6 * float(Oc.abs().max()))
+    assert torch.isfinite(L).all() and torch.isfinite(O).all()
+    if case != "random":  # an empty / -inf source contributes exactly nothing
+        live = [p for i, p in enumerate(parts) if i not in kw.get("empty", ()) + kw.get("neg_inf", ())]
+        M2, L2, O2 = SP.fold_combine(live)
+        assert torch.equal(M, M2)
+        torch.testing.assert_close(L, L2, rtol=2e-6, atol=0)
+    # the kernel's l order (any permutation) keeps L within fp32 rounding
+    Lp = SP.fold_combine(parts, l_order=list(reversed(range(n))))[1]
+    torch.testing.assert_close(Lp, L, rtol=2e-6, atol=0)
+
+
+def _rel_err(O, L, o_ref) -> float:
+    """mean |O / L - o_ref| / mean |o_ref| (f64)"""
+    return float(((O.double() / L.double()[:, None]) - o_ref).abs().mean() / o_ref.abs().mean())
+
+
+def test_fold_combine_tf32_error_vs_chain():
+    """with the FPU's tf32 operands the fold rounds every operand once; the chain re-rounds its accumulator at every
+    step: against the f64 reference the fold's error is no larger than the chain's (both well inside bf16's o)"""
+    gen = torch.Generator().manual_seed(6565)
+    for n, rows in ((8, 8), (4, 2)):
+        parts = _slices(gen, n, rows, empty=(3,))
+        ref = SP.fold_combine([tuple(v.double() for v in p) for p in parts])
+        o_ref = ref[2] / ref[1][:, None]
+        M, L, O = SP.fold_combine(parts, tf32_ops=True)
+        Mc, Lc, Oc = SP.combine_chain(parts, tf32_ops=True)
+        e_fold, e_chain = _rel_err(O, L, o_ref), _rel_err(Oc, Lc, o_ref)
+        assert e_fold < 1e-3 and e_chain < 1e-3, (n, e_fold, e_chain)
+        assert e_fold <= e_chain * 1.05, (n, e_fold, e_chain)
+
+
+def _send_tiles(gen, rows_fill=None):
+    """a source's send CBs as whole tiles: m, l [32, 32] (column 0 the stats, the other columns finite junk), O
+    [16, 32, 32] -- every row finite (the device's send CBs hold whole partials)"""
+    m = torch.randn(32, 32, generator=gen) * 4.0
+    l_ = torch.rand(32, 32, generator=gen) * 30.0 + 0.5
+    O = torch.randn(16, 32, 32, generator=gen) * 50.0
+    if rows_fill == "empty":
+        m, l_, O = torch.full((32, 32), NEG), torch.zeros(32, 32), torch.zeros(16, 32, 32)
+    return m, l_, O
+
+
+def _junk(gen):
+    return lambda: torch.randn(32, 32, generator=gen) * 1e3  # noqa: E731  (the receive CB's stale, finite content)
+
+
+def _rows_of(tiles_O, r0: int, rows: int):
+    """rows r0 .. r0 + rows of the 16 O tiles -> [rows, 512]"""
+    return torch.cat([tiles_O[d][r0 : r0 + rows] for d in range(16)], dim=1)
+
+
+@pytest.mark.parametrize("j1", [0, 1, 2, 3])
+def test_fold1_tiles_layout(j1):
+    """att_dsa_shard_dm1.cpp land_fold1 + att_c.cpp fold1, emulated on whole face-major tiles (the rotation pages, the
+    row-packed O pages, FOLD1): rows 8 j1 .. of the send CBs = the fold combine of the 8 sources' slices (M, L
+    bit-equal in the kernel's l order; O within fp32 rounding); O's other rows exactly 0 (the RS2 ship never reads
+    them)"""
+    gen = torch.Generator().manual_seed(100 + j1)
+    src = [_send_tiles(gen, "empty" if s == 5 else None) for s in range(8)]
+    M, L, O = SP.fold1_tiles(src, j1, _junk(gen))
+    rows = slice(8 * j1, 8 * j1 + 8)
+    parts = [(m[rows, 0], l_[rows, 0], _rows_of(o, 8 * j1, 8)) for m, l_, o in src]
+    Mf, Lf, Of = SP.fold_combine(parts, l_order=SP.fold1_l_order(j1))
+    assert torch.equal(M[rows, 0], Mf) and torch.equal(L[rows, 0], Lf)
+    torch.testing.assert_close(_rows_of(O, 8 * j1, 8), Of, rtol=1e-5, atol=1e-5 * float(Of.abs().max()))
+    other = torch.ones(32, dtype=torch.bool)
+    other[rows] = False
+    assert torch.equal(O[:, other], torch.zeros_like(O[:, other]))
+    # the pairwise chain of rev 64 (own slice first, then the column peers in position order) agrees within fp32
+    for own in (j1, 4 + j1):
+        order = [own] + [s for s in range(8) if s != own]
+        Mc, Lc, Oc = SP.combine_chain([parts[s] for s in order])
+        assert torch.equal(Mc, Mf)
+        torch.testing.assert_close(Lf, Lc, rtol=2e-6, atol=0)
+        torch.testing.assert_close(Of, Oc, rtol=1e-5, atol=1e-5 * float(Oc.abs().max()))
+
+
+@pytest.mark.parametrize("j1,lpos", [(0, 0), (1, 3), (2, 1), (3, 2)])
+def test_fold2_tiles_layout(j1, lpos):
+    """att_dsa_shard_dm1.cpp land_fold2 + att_c.cpp fold2 (round 2 + the finalise): rows 2 j2 .. of the bf16-bound o
+    tiles = the fold of the 4 row sources' 2-row slices / L, against rev 64's chain + finalise within fp32 rounding"""
+    gen = torch.Generator().manual_seed(200 + 4 * j1 + lpos)
+    src = [_send_tiles(gen) for _ in range(4)]
+    o = SP.fold2_tiles(src, j1, lpos, _junk(gen))
+    j2 = 4 * j1 + lpos
+    rows = slice(2 * j2, 2 * j2 + 2)
+    parts = [(m[rows, 0], l_[rows, 0], _rows_of(O, 2 * j2, 2)) for m, l_, O in src]
+    Mf, Lf, Of = SP.fold_combine(parts, l_order=SP.fold2_l_order(lpos))
+    want = Of / Lf[:, None]
+    got = _rows_of(o, 2 * j2, 2)
+    torch.testing.assert_close(got, want, rtol=1e-5, atol=1e-5 * float(want.abs().max()))
+    order = [lpos] + [s for s in range(4) if s != lpos]
+    Mc, Lc, Oc = SP.combine_chain([parts[s] for s in order])
+    torch.testing.assert_close(got, Oc / Lc[:, None], rtol=1e-5, atol=1e-5 * float(want.abs().max()))
+
+
+def test_fold_tiles_tf32_close():
+    """the whole-tile emulation with tf32 operands (FOLD / diag coefficients exact in tf32, O rounded once) stays
+    within tf32 rounding of the fp32 fold"""
+    gen = torch.Generator().manual_seed(303)
+    src = [_send_tiles(gen) for _ in range(8)]
+    M, L, O = SP.fold1_tiles(src, 2, _junk(gen))
+    gen = torch.Generator().manual_seed(303)
+    src = [_send_tiles(gen) for _ in range(8)]
+    Mt, Lt, Ot = SP.fold1_tiles(src, 2, _junk(gen), tf32_ops=True)
+    assert torch.equal(M, Mt) and torch.equal(L, Lt)  # the stats never pass the FPU
+    torch.testing.assert_close(Ot, O, rtol=3e-3, atol=3e-3 * float(O.abs().max()))
+
+
+def test_exchange_fold_matches_direct_and_pairwise():
+    """the whole 8x4 exchange with the fold combine in both rounds: = the direct 32-chip attention (the tolerance of
+    test_exchange_matches_direct) and = rev 64's pairwise exchange within fp32 rounding"""
+    gen = torch.Generator().manual_seed(1234 + 65)
+    g = SP.Geometry(8, 4)
+    parts, exact = _direct_parts(gen, g.n)
+    q = torch.randn(64, D, generator=gen)
+    fold = SP.emulate_exchange(g, q, parts, comb="fold")
+    pair = SP.emulate_exchange(g, q, parts)
+    ref = exact(q)
+    for r in range(g.n):
+        torch.testing.assert_close(fold[r], ref[g.hpc * r : g.hpc * (r + 1)], atol=2e-4, rtol=1e-4)
+        torch.testing.assert_close(fold[r], pair[r], atol=1e-5, rtol=1e-5)
+    with expect_error(AssertionError, "the fold combine: the 8x4"):
+        SP.emulate_exchange(SP.Geometry(2, 4), q, parts, comb="fold")
+
+
+@pytest.mark.parametrize("t", [1, 4, 16])
+def test_rs1_early_plan(t):
+    """RS1 early: every 8x4 chip's column scatter sends the other half first (pass 0's destinations: the tile pass 0
+    attends with), then its own half -- the same destinations, hops and directions as rev 64's order"""
+    g = SP.Geometry(8, 4)
+    for r in range(8):
+        for c in range(4):
+            rank = g.rank(r, c)
+            base = g.block("rs1", t, r, c)
+            early = g.block("rs1", t, r, c, rs1_early=True)
+            assert sorted(early["dsts"]) == sorted(base["dsts"])
+            first = SP.rs1_early_first(r, 8)
+            assert [d[0] for d in early["dsts"][: len(first)]] == first and len(first) == 4
+            assert all(q // 4 == g.pass_tile(rank, 0) for q in first)  # = pass 0's slices
+            assert all(q // 4 == g.tile(rank) for q, _, _, _ in early["dsts"][4:])  # = pass 1's (own half, not self)
+            assert {k: v for k, v in early.items() if k != "dsts"} == {k: v for k, v in base.items() if k != "dsts"}
+            assert g.block("rs2", t, r, c, rs1_early=True) == g.block("rs2", t, r, c)
+    with expect_error(AssertionError, "RS1 early: the 8x4 column scatter"):
+        SP.Geometry(2, 4).block("rs1", 4, 0, 0, rs1_early=True)
+
+
+def test_rev65_knobs(monkeypatch):
+    """GLM53_DSA_SHARD_COMB / GLM53_DSA_SHARD_RS1_EARLY: default off, the 8x4 only, 0 / 1 only; the fold's message
+    size is the header's"""
+    for k in ("GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_RS1_EARLY"):
+        monkeypatch.delenv(k, raising=False)
+    assert not SP.shard_comb(8) and not SP.shard_rs1_early(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_COMB", "1")
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_EARLY", "1")
+    assert SP.shard_comb(8) and SP.shard_rs1_early(8)
+    assert not SP.shard_comb(2) and not SP.shard_rs1_early(2)  # the pair / the 2x4 keep rev 64's kernels
+    monkeypatch.setenv("GLM53_DSA_SHARD_COMB", "2")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_COMB=2: 0 or 1"):
+        SP.shard_comb(8)
+    assert SP.HDR["COMB_MSG"] == 8
 
 
 def test_zz_no_ttnn_was_imported_by_the_suite():

@@ -232,6 +232,10 @@ class _FabricStream:
         """FabricStreamScatter: [(position q, source chunk base of block q, direction 0 up / 1 down, hops)]"""
         return []
 
+    def _split_args(self, p: int, dsts: list) -> list:
+        """FabricStreamScatter first= / wait2= (rev 65): fs_read.cpp FS_WAIT2's (k_split, wait2) after the bases"""
+        return []
+
     def parts(self, x, r: int, c: int, *, cb_stage: int = CB_STAGE_FS, probe: tuple | None = None):
         """The phase pieces for mesh coordinate (r, c), for a program to merge: (kernels [fs_send, fs_read] on the lane
         cores, cbs [the staging CB at index cb_stage], io, counters). Then call connect(prog, r, c, i) on the merged
@@ -254,7 +258,7 @@ class _FabricStream:
         if self.scatter:  # count-prefixed destination lists (program lesson: never loop a fixed count over padding)
             assert dsts and all(0 < hops < self.n for _, _, _, hops in dsts), dsts
         sc_send = ([len(dsts)] + [v for _, _, d, hops in dsts for v in (d, hops)]) if self.scatter else []
-        sc_read = ([len(dsts)] + [base for _, base, _, _ in dsts]) if self.scatter else []
+        sc_read = ([len(dsts)] + [base for _, base, _, _ in dsts] + self._split_args(p, dsts)) if self.scatter else []
         pr = []
         if probe is not None:
             assert len(self.lanes) == 1, "the stream probe: one lane (its scratch is the lane-0 sync tensor)"
@@ -274,6 +278,8 @@ class _FabricStream:
         if self.scatter:
             sdefs.append(("FS_SCATTER", "1"))
             rdefs.append(("FS_SCATTER", "1"))
+            if self._split_args(p, dsts):
+                rdefs.append(("FS_WAIT2", "1"))
         if self.n > 2 and not row_barrier_defines():  # THE PER-HOP DRAIN: a multi-hop line -> the waiter's row barrier
             sdefs.append(("FS_ROW_BARRIER", "1"))
         if pr:
@@ -410,8 +416,13 @@ class FabricStreamScatter(_FabricStream):
 
     scatter = True
 
-    def __init__(self, mesh, rows_local: int, hidden: int, **kw):
+    def __init__(self, mesh, rows_local: int, hidden: int, *, first=None, wait2: int | None = None, **kw):
+        """first= (rev 65, the shard's RS1 early): position p -> the destinations streamed first (in position order),
+        the rest only once the wait semaphore reached wait2 (fs_read.cpp FS_WAIT2; wait= gates the first ones)"""
         assert rows_local % 32 == 0, rows_local
+        assert (first is None) == (wait2 is None), "first= and wait2= go together"
+        assert first is None or kw.get("wait") is not None, "wait2= is the second gate of wait="
+        self.first, self.wait2 = first, wait2
         ax = kw.get("axis")
         R, C = int(mesh.shape[0]), int(mesh.shape[1])
         n = (R if ax == 0 else C) if ax is not None else R * C
@@ -422,7 +433,19 @@ class FabricStreamScatter(_FabricStream):
         return 0, p * self.chunks, False, self.n - 1 - p, p
 
     def _dsts(self, p: int) -> list:
-        return [(q, q * self.chunks, 0 if q > p else 1, abs(q - p)) for q in range(self.n) if q != p]
+        out = [(q, q * self.chunks, 0 if q > p else 1, abs(q - p)) for q in range(self.n) if q != p]
+        if self.first is not None:  # the first= destinations, then the rest (each in position order)
+            early = set(self.first(p))
+            out = [d for d in out if d[0] in early] + [d for d in out if d[0] not in early]
+        return out
+
+    def _split_args(self, p: int, dsts: list) -> list:
+        if self.first is None:
+            return []
+        early = set(self.first(p))
+        k = sum(1 for d in dsts if d[0] in early)
+        assert all(d[0] in early for d in dsts[:k]), dsts
+        return [k, int(self.wait2)]
 
     def __call__(self, x):
         assert tuple(x.shape)[-2:] == (self.n * self.rows_local, self.hidden) and x.dtype == ttnn.bfloat16, x.shape
