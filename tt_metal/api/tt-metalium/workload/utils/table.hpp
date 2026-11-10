@@ -155,11 +155,9 @@ public:
     void clear() noexcept { entries_.clear(); }
 
     // Returns an iterator to the entry for `key`, or end() if the key is absent.
-    [[nodiscard]] iterator find(const K& key) {
-        return iterator{std::ranges::find(entries_, key, &Storage::value_type::first)};
-    }
+    [[nodiscard]] iterator find(const K& key) { return iterator{entries_.begin() + lookup(key).position}; }
     [[nodiscard]] const_iterator find(const K& key) const {
-        return const_iterator{std::ranges::find(entries_, key, &Storage::value_type::first)};
+        return const_iterator{entries_.begin() + lookup(key).position};
     }
 
     // Returns true if `key` is present in the table, false otherwise.
@@ -168,28 +166,28 @@ public:
     // Inserts an entry only if its key is absent. Returns {iterator to the entry,
     // true} when inserted, or {iterator to the existing entry, false} otherwise.
     std::pair<iterator, bool> insert(const value_type& entry) {
-        if (auto it = find(entry.first); it != end()) {
-            return {it, false};
+        const Lookup found = lookup(entry.first);
+        if (found.position != entries_.size()) {
+            return {iterator{entries_.begin() + found.position}, false};
         }
-        entries_.push_back(entry);
-        return {iterator{std::prev(entries_.end())}, true};
+        return {append(found, entry), true};
     }
     std::pair<iterator, bool> insert(value_type&& entry) {
-        if (auto it = find(entry.first); it != end()) {
-            return {it, false};
+        const Lookup found = lookup(entry.first);
+        if (found.position != entries_.size()) {
+            return {iterator{entries_.begin() + found.position}, false};
         }
-        entries_.push_back(std::move(entry));
-        return {iterator{std::prev(entries_.end())}, true};
+        return {append(found, std::move(entry)), true};
     }
 
     // Removes the entry for `key` if present. Returns the number of entries removed
     // (0 or 1). Invalidates iterators at or after the removed entry.
     size_type erase(const K& key) {
-        auto it = find(key);
-        if (it == end()) {
+        const Lookup found = lookup(key);
+        if (found.position == entries_.size()) {
             return 0;
         }
-        entries_.erase(it.backing());
+        entries_.erase(entries_.begin() + found.position);
         return 1;
     }
 
@@ -198,10 +196,11 @@ public:
     // existing value by assigning through the reference. (Requires V to be
     // default-constructible.)
     V& operator[](const K& key) {
-        if (auto it = find(key); it != end()) {
-            return it->second;
+        const Lookup found = lookup(key);
+        if (found.position != entries_.size()) {
+            return entries_[found.position].second;
         }
-        return insert(value_type{key, V{}}).first->second;
+        return append(found, key, V{})->second;
     }
 
     // Builds a value_type from `args` and inserts it only if its key is absent.
@@ -243,6 +242,27 @@ public:
     }
 
 private:
+    // The result of looking a key up in the table.
+    struct Lookup {
+        // The position of the key in entries_, or entries_.size() if the key is absent.
+        size_type position;
+    };
+
+    // Returns where `key` is in the table.
+    [[nodiscard]] Lookup lookup(const K& key) const {
+        const auto it = std::ranges::find(entries_, key, &Storage::value_type::first);
+        return {static_cast<size_type>(it - entries_.begin())};
+    }
+
+    // Appends an entry built from `args` and returns an iterator to it.
+    // precondition: `absent` is the result of lookup() for the entry's key, and that key is absent.
+    template <typename... Args>
+    iterator append(const Lookup& absent, Args&&... args) {
+        TT_ASSERT(absent.position == entries_.size());
+        entries_.emplace_back(std::forward<Args>(args)...);
+        return iterator{std::prev(entries_.end())};
+    }
+
     Storage entries_;
 };
 
