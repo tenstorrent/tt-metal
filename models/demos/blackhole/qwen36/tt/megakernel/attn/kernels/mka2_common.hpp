@@ -55,7 +55,7 @@ constexpr uint32_t PQ_QSL = 320, PQ_WS = MKA_PQW == 0 ? 0 : (MKA_PQW == 1 ? PQ_Q
 constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU, FANOUT = MKA_FAN, NUSR = MKA_NU;   // own users per chip (u8: 4, u1: 1)
 // global-semaphore slots (index into the runtime-arg address array)
 constexpr uint32_t GS_QFLAG = 0, GS_LVL0 = 1, GS_LVL1 = 2, GS_DONE = 3, GS_MIXDONE = 4, GS_ADONE = 5, GS_ADFLAG = 6, GS_KVPROG = 7, GS_QPART = 8, GS_XRDY = 9, GS_PQH = 10, GS_ACNT = 11, GS_AFLAG = 12, GS_WOCNT = 13, GS_WODONE = 14, GS_AADDR = 15,
-                   GS_SADDR = 16, GS_SCNT = 17, GS_SFLAG = 18, NGS = 19;   // KVPROG: core-local count of KV groups the reader pushed (kv_mode 2)
+                   GS_SADDR = 16, GS_SCNT = 17, GS_SFLAG = 18, GS_WOHC = 19, GS_RADDR = 20, NGS = 21;   // KVPROG: core-local count of KV groups the reader pushed (kv_mode 2)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* l1w(uint32_t addr) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr); }
 FORCE_INLINE void spin_cycles(uint32_t cyc) {
     if (cyc == 0) return;

@@ -3,6 +3,13 @@
 //   all:    SDPA over this core's KV slice (flash-decode, O_aug = Σ exp(Q·Kᵀ)·[V | 1], fp32 packer L1 accumulation),
 //           tree children added into CB_O, the group root normalizes into CB_OA.
 //   STREAM: (after GO) fm11 MLP: gate|up -> silu·mul -> h, down -> CB_OUT.
+#if defined(MKA_OPTSZ)   // size experiment (spec §17): optimize the whole TU for size; must precede every include
+#if MKA_OPTSZ == 1
+#pragma GCC optimize("Os")
+#else
+#pragma GCC optimize("Oz")
+#endif
+#endif
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"

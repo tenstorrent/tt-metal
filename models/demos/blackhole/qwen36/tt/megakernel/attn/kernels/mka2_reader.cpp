@@ -4,6 +4,13 @@
 //         on the Q root.
 //   STREAM, gate|up core: the even gate|up groups of layer L (fm11 engine) -> CB_W.
 //   STREAM, NOC1 root (2/3): layer L's h root broadcast.
+#if defined(MKA_OPTSZ)   // size experiment (spec §17): optimize the whole TU for size; must precede every include
+#if MKA_OPTSZ == 1
+#pragma GCC optimize("Os")
+#else
+#pragma GCC optimize("Oz")
+#endif
+#endif
 #include "api/debug/kernel_profiler.hpp"
 #include "mka2_common.hpp"
 
@@ -82,6 +89,11 @@ void kernel_main() {
 #if defined(MKA_RWO)
     const uint32_t rw_nt = get_arg_val<uint32_t>(a++), rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
     const uint32_t wo_addr2 = get_arg_val<uint32_t>(a++), cc_x = get_arg_val<uint32_t>(a++), cc_y = get_arg_val<uint32_t>(a++);
+    // MKA_WOHELP: ext cores read only rw_own pages of their Wo slice; STREAM helpers read the rest into their scratch
+    // and forward it into the ext ring (spreads the 8.4 MB DRAM issue over 116 readers, like the stand-in's reads)
+    const uint32_t rw_own = get_arg_val<uint32_t>(a++), rw_hlp = get_arg_val<uint32_t>(a++);
+    const uint32_t h_x = get_arg_val<uint32_t>(a++), h_y = get_arg_val<uint32_t>(a++), h_page = get_arg_val<uint32_t>(a++);
+    const uint32_t h_np = get_arg_val<uint32_t>(a++), h_off = get_arg_val<uint32_t>(a++);
     const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
     constexpr uint32_t TRID_WOR = 10;
 #endif
@@ -212,7 +224,33 @@ void kernel_main() {
             const uint64_t pq_src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
 #endif
 #if defined(MKA_RWO)
-            const uint32_t wo_np = rw_nt * WK;   // pages of this core's Wo slice
+#if defined(MKA_RWOSKIP)
+            const uint32_t wo_np = 0;   // DEBUG timing split: Wo slice not read (stale ring; wo PCC invalid)
+#else
+            const uint32_t wo_np = rw_own;   // pages of this core's Wo slice it reads itself (rest: STREAM helpers)
+#endif
+            // helper (STREAM): h_np pages of an ext core's slice, 8 at a time via CB_SCR, once that ring is free
+            // (QFLAG >= A + 1: every qkv producer, ext included, finished, so every ring was popped)
+            uint32_t h_done = 0;
+            const uint64_t h_src = wow.get_noc_addr(h_page + L * rw_pl);
+            auto help_some = [&](bool all) {
+                if (!h_np || !att) return;
+                if (!all && *l1w(gs[GS_QFLAG]) < A + 1) return;
+                if (all) noc_semaphore_wait_min(l1w(gs[GS_QFLAG]), A + 1);
+                const uint32_t ring = *l1w(gs[GS_RADDR]);
+                while (h_done < h_np) {
+                    const uint32_t n = (h_np - h_done) < 8 ? (h_np - h_done) : 8;
+                    noc_async_read_set_trid(TRID_WOR + 1);
+                    noc_async_read(h_src + h_done * MWTB, scr, n * MWTB);
+                    noc_async_read_set_trid(0);
+                    noc_async_read_barrier_with_trid(TRID_WOR + 1);
+                    noc_async_write(scr, get_noc_addr(h_x, h_y, ring + (h_off + h_done) * MWTB), n * MWTB);
+                    noc_async_writes_flushed();   // scratch reused next chunk
+                    h_done += n;
+                    if (!all) break;   // one chunk per KV group
+                }
+                if (h_done == h_np) { noc_async_write_barrier(); noc_semaphore_inc(get_noc_addr(h_x, h_y, gs[GS_WOHC]), h_np); }
+            };
             const uint32_t wo_per = (wo_np + pq_ng - 1) / pq_ng;
             uint32_t wo_done = 0, wo_dst = 0;
             bool wo_rsv = false;
@@ -221,6 +259,7 @@ void kernel_main() {
             for (uint32_t b = b0; b < b1; b += NBB) {
                 const uint32_t nb = (b1 - b) < NBB ? (b1 - b) : NBB;
 #if defined(MKA_RWO)
+                if (h_np && h_done < h_np) help_some(false);
                 if (rw_nt && gi >= pq_g0 && wo_done < wo_np) {   // the ring is free once this layer's qkv popped it
                     if (!wo_rsv) { cb_reserve_back(CB_PQ, QSL); wo_dst = get_write_ptr(CB_PQ); wo_rsv = true; }
                     const uint32_t n = (wo_np - wo_done) < wo_per ? (wo_np - wo_done) : wo_per;
@@ -296,8 +335,10 @@ void kernel_main() {
                     noc_async_read_set_trid(0);
                 }
                 noc_async_read_barrier_with_trid(TRID_WOR);
+                if (rw_hlp) noc_semaphore_wait_min(l1w(gs[GS_WOHC]), rw_hlp * (A + 1));   // helpers' pages landed
                 cb_push_back(CB_PQ, QSL);   // full slot (straddle-safe ring), wo_np pages valid
             }
+            if (h_np && h_done < h_np) help_some(true);
 #endif
         }
         if (att) {   // SDPA: tree reduce (pull), cumulative global semaphores (over attention layers: A)
@@ -430,6 +471,9 @@ void kernel_main() {
     // reset the tree's global semaphores for the next pass: every inc into them for layer NL - 1 happened before the
     // matching wait above returned, so nothing arrives after this point
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
+#if defined(MKA_RWO)
+    if (rw_hlp) *l1w(gs[GS_WOHC]) = 0;
+#endif
 #if defined(MKA_RQKV)
     if (qrole == QR_EXT && PQ_WS) *l1w(gs[GS_PQH]) = 0;   // the writer's last set (NL - 2) preceded our last wait
 #endif

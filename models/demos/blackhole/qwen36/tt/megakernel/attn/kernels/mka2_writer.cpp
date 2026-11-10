@@ -8,6 +8,13 @@
 //           outstanding (spec v0.3 phase word 13; 0 = issue everything up front).
 //   STREAM: wait ADFLAG = L + 1 (all 4 SDPA roots done; multicast by the Q root), wo stand-in + attention AR stall,
 //           then the fm11 MLP (h to roots, root broadcast, down output) and the MLP AR stall.
+#if defined(MKA_OPTSZ)   // size experiment (spec §17): optimize the whole TU for size; must precede every include
+#if MKA_OPTSZ == 1
+#pragma GCC optimize("Os")
+#else
+#pragma GCC optimize("Oz")
+#endif
+#endif
 #include "api/debug/kernel_profiler.hpp"
 #include "mka2_common.hpp"
 
@@ -109,6 +116,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < WK * 2048 / 4; ++i) p[i] = 0;
         mcast_word<NRF>(gs[GS_AADDR], get_write_ptr(CB_A), rf, self_rf, 0);
         mcast_word<NRF>(gs[GS_SADDR], get_write_ptr(CB_S), rf, self_rf, 0);
+        mcast_word<NRF>(gs[GS_RADDR], get_write_ptr(CB_PQ), rf, self_rf, 0);   // ext ring base (uniform), for Wo helpers
         noc_async_write_barrier();
     }
 #endif

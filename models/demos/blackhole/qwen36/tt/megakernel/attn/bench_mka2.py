@@ -207,7 +207,7 @@ members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
 if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
 rank = {i: members[grp[i]].index(i) for i in ACT}
 kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
-GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(19)]
+GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(21)]
 GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
 if ARC:
     # spec v0.9.1: the AR sender cores are not in ANY mka2 range (kernels, CBs, sharded L1 tensors, global semaphores,
@@ -471,10 +471,27 @@ def wo_wargs(fi):
     oc = owner_fi.index(fi) if fi in owner_fi else 255
     return [len(t_)] + (t_ + [0] * 5)[:5] + [1 if fi == WCC else 0, oc] + RECTS_E + [self_re(fi) if fi in WOT else 3] + \
         sum(([fphys[f_].x, fphys[f_].y] for f_ in owner_fi), []) + [wod.buffer_address()]
+WOHELP = os.environ.get('MKA_WOHELP', '1') == '1'
+HLP = {}   # helper fi -> (ext fi, page offset, pages);  OWN[ext fi] = own pages
+OWN = {}
+if RWO:
+    _sl = sorted(stream_idx, key=lambda f_: stream_idx[f_])
+    for e_, fe in enumerate(wo_cores):
+        np_ = len(WOT[fe]) * 48
+        hs_ = [fs for k_, fs in enumerate(_sl) if WOHELP and k_ % len(wo_cores) == e_]
+        parts = len(hs_) + 1
+        cut = [round(np_ * i_ / parts) for i_ in range(parts + 1)]
+        OWN[fe] = cut[1]
+        for j_, fs in enumerate(hs_): HLP[fs] = (fe, cut[j_ + 1], cut[j_ + 2] - cut[j_ + 1])
 def wo_rargs(fi):
     if not RWO: return []
     cc = fphys[WCC]
-    return [len(WOT.get(fi, [])), (WOP[fi] * banks + WOB[fi]) if fi in WOT else 0, WOPL, wo_all.buffer_address(), cc.x, cc.y]
+    own = OWN.get(fi, 0); hl = (len(WOT[fi]) * 48 - own) if fi in WOT else 0
+    he, ho, hn = HLP.get(fi, (None, 0, 0))
+    hp = fphys[he] if he is not None else fphys[fi]
+    hpage = (WOP[he] * banks + WOB[he] + ho * banks) if he is not None else 0
+    return [len(WOT.get(fi, [])), (WOP[fi] * banks + WOB[fi]) if fi in WOT else 0, WOPL, wo_all.buffer_address(), cc.x, cc.y,
+            own, hl, hp.x, hp.y, hpage, hn, ho]
 def build(out):
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
