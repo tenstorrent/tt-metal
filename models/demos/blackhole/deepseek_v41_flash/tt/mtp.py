@@ -63,7 +63,7 @@ def _l1v(md, tag):
 # ---------------------------------------------------------------------------------------------------- weights
 def mtp_cache_dir(stage):
     ensure_stamp(WEIGHT_CACHE)
-    return os.path.join(WEIGHT_CACHE, f"mtp_{stage}") if WEIGHT_CACHE and WEIGHT_CACHE != "0" else None
+    return os.path.join(WEIGHT_CACHE, f"mtp_{stage}{os.environ.get('MOE_COMPUTE_RING') and '_r' + os.environ['MOE_COMPUTE_RING'] or ''}") if WEIGHT_CACHE and WEIGHT_CACHE != "0" else None
 
 
 def _cache_warm(stage):

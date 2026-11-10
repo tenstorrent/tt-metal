@@ -477,7 +477,9 @@ class Model:
         from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
 
         mib = 2**20
-        per = float(os.environ.get("DSV41_UNI_LAYER_MIB", "54"))
+        per = float(
+            os.environ.get("DSV41_UNI_LAYER_MIB", "29.5" if os.environ.get("DSV41_UNI_WDTYPE") == "bfp4" else "54")
+        )
         reserve = float(os.environ.get("DSV41_UNI_RESERVE_MIB", "450"))
         cap = int(os.environ.get("DSV41_UNI_MAX", "99"))
         n = 0

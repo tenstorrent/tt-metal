@@ -22,6 +22,7 @@ import ttnn
 from models.common.moe.tt_moe_decode import TTMoEDecode, moe_compute_kwargs
 from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.common.moe.tt_moe_gate_config import TTMoEGateConfig
+from models.demos.blackhole.deepseek_v41_flash.tt import layer_fmt
 from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate
 
 _RS_CCL = [None]  # the CCLManager of the model (set by Layer): DSV41_MOE_RS_MIN=1 takes the lean semaphores from it
@@ -159,6 +160,7 @@ def _read_rows(md, t):
 class DSV41MoEBlock:
     supports_ft_defer = True  # DSV41_FUSE_TAIL: forward(..., ft_defer=True) may return a FusedPartial
 
+    @layer_fmt.ctor_ctx  # DSV41_BFP4_LAYERS / _MAX_LAYER: the expert weights of this block are packed / uploaded in the layer's own format
     def __init__(
         self,
         mesh_device,

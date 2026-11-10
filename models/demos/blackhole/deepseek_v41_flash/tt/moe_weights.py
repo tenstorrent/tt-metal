@@ -22,6 +22,7 @@ import torch
 from safetensors import safe_open
 
 from models.demos.blackhole.deepseek_v41_flash.reference import ref_kernels
+from models.demos.blackhole.deepseek_v41_flash.tt import layer_fmt
 from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 
 CKPT_DIR = os.environ.get("DSV41_CKPT", "/mnt/tt-data/ssinghal/deepseek-v41-flash")
@@ -65,7 +66,13 @@ def _fp8_linear(sh, prefix, dtype):
 WEIGHT_CACHE = os.environ.get("DSV41_WEIGHT_CACHE", "/mnt/tt-data/ssinghal/dsv4-weight-cache")
 
 
-def expert_cache_dir(layer_id: int):
+def ring_cache_suffix(fmt=None):
+    """MOE_COMPUTE_RING=N (default off): the packed expert tensors are laid out for a matmul ring of N cores, so the directories carry the ring size."""
+    r = (str(fmt["ring"]) if fmt["ring"] != 8 else "") if fmt else os.environ.get("MOE_COMPUTE_RING", "")
+    return f"_r{r}" if r else ""
+
+
+def expert_cache_dir(layer_id: int, fmt=None):
     """Directory of the packed + quantized routed-expert tensors (see TTMoEDecode ``weight_cache_dir``); None = off."""
     from models.demos.blackhole.deepseek_v41_flash.tt import moe_place
 
@@ -73,15 +80,19 @@ def expert_cache_dir(layer_id: int):
         WEIGHT_CACHE
     )  # the packed tensors are in DEVICE order: a placement (DSV41_MOE_PLACE) keys the directory by its permutation
     return (
-        os.path.join(WEIGHT_CACHE, f"layer_{layer_id}{moe_place.cache_suffix(layer_id)}")
+        os.path.join(WEIGHT_CACHE, f"layer_{layer_id}{moe_place.cache_suffix(layer_id)}{ring_cache_suffix(fmt)}")
         if WEIGHT_CACHE and WEIGHT_CACHE != "0"
         else None
     )
 
 
-def _expert_cache_warm(layer_id: int):
-    d = expert_cache_dir(layer_id)
-    tag = "bfp8" if os.environ.get("MOE_COMPUTE_BFP8_WEIGHTS", "0") != "0" else "bfp4"
+def _expert_cache_warm(layer_id: int, fmt=None):
+    d = expert_cache_dir(layer_id, fmt)
+    tag = (
+        ("bfp4" if fmt["bfp4"] else "bfp8")
+        if fmt
+        else ("bfp8" if os.environ.get("MOE_COMPUTE_BFP8_WEIGHTS", "0") != "0" else "bfp4")
+    )
     return bool(d) and all(
         os.path.exists(os.path.join(d, f))
         for f in (f"moe_w0_w1_{tag}.tensorbin", f"moe_w2_{tag}.tensorbin", f"moe_meta_{tag}.json")
@@ -99,7 +110,7 @@ def load_moe_layer(layer_id: int, dtype=torch.bfloat16, ckpt_dir=CKPT_DIR, exper
     sh = _Shards(ckpt_dir)
     p = f"layers.{layer_id}.ffn."
     warm = (
-        experts is None and _expert_cache_warm(layer_id)
+        experts is None and _expert_cache_warm(layer_id, layer_fmt.fmt(layer_id))
     ) or not load_experts  # packed experts are cached: skip the 384-expert dequant
     ids = [] if warm else (list(range(NUM_ROUTED)) if experts is None else list(experts))
     w0 = w1 = w2 = None
@@ -137,10 +148,15 @@ def load_moe_layer(layer_id: int, dtype=torch.bfloat16, ckpt_dir=CKPT_DIR, exper
         "gate_bias_vl": sh.get(p + "gate.bias_vl").to(torch.float32)
         if _vision_enabled()
         else None,  # [384] selection bias of image tokens
+        "fmt": layer_fmt.fmt(
+            layer_id
+        ),  # DSV41_BFP4_LAYERS / DSV41_BFP4_MAX_LAYER: this layer's expert format (None: the global switches)
         "w0": w0,
         "w1": w1,
         "w2": w2,
-        "cache_dir": expert_cache_dir(layer_id) if (experts is None and load_experts) else None,
+        "cache_dir": expert_cache_dir(layer_id, layer_fmt.fmt(layer_id))
+        if (experts is None and load_experts)
+        else None,
         "shared_w0": {k: v[0] for k, v in shared.items()},
         "shared_w1": {k: v[1] for k, v in shared.items()},
         "shared_w2": {k: v[2] for k, v in shared.items()},

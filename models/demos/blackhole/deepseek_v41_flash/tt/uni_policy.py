@@ -11,6 +11,8 @@ The decode weights / decode path are never touched."""
 import ctypes
 import os
 
+from models.demos.blackhole.deepseek_v41_flash.tt import layer_fmt
+
 OFF_WORDS = ("off", "0", "none", "false", "baseline", "moe_compute", "no")
 # U = 1 (B = 4): set from the hang evidence, see PREFILL_UNIFIED_MOE_NOTES.md
 U1_DEFAULT_ON = True
@@ -19,7 +21,13 @@ _state = {"in_use": False}
 
 
 def requested():
-    """True unless the user forced the old path."""
+    """True unless the user forced the old path (or MOE_COMPUTE_RING is set: the in-place prefill needs the 8-core ring layout of the decode weights)."""
+    if (
+        os.environ.get("MOE_COMPUTE_RING")
+        and os.environ.get("DSV41_UNI_RING", "1") != "0"
+        and os.environ.get("DSV41_UNI_RING_INPLACE") != "1"
+    ):
+        return False  # a bigger decode ring: the in-place prefill needs the table-driven ring-N reads (DSV41_UNI_RING_INPLACE=1, ring_n_supported); DSV41_UNI_RING=0 = the unified prefill on its OWN weight copy (DSV41_UNI_WDTYPE=bfp4)
     return os.environ.get("DSV41_PREFILL_MOE", "").strip().lower() not in OFF_WORDS
 
 
@@ -37,34 +45,48 @@ def set_in_use(v):
 
 
 _RING_MARK = b"ring weights mode needs 8 live DRAM banks"
+_RING_N_MARK = b"the w2 ring size {} must be a multiple of 8"  # in the libraries whose unified op reads ring-24/40 and bfp4 weights in place
 _ring_ok = {}
 
 
-def ring_supported():
-    """Does the _ttnncpp library MAPPED in this process contain the RING_WEIGHTS validation string? (scans the mapped read-only segments, so a library
+def _lib_has(mark, key):
+    """Does the _ttnncpp library MAPPED in this process contain `mark`? (scans the mapped read-only segments, so a library
     that was replaced on disk after this process started is judged by what is actually loaded)"""
-    if "v" in _ring_ok:
-        return _ring_ok["v"]
+    if key in _ring_ok:
+        return _ring_ok[key]
     ok = False
     try:
         with open("/proc/self/maps") as f:
             for line in f:
                 if "_ttnncpp.so" in line and line.split()[1].startswith("r"):
                     a, b = (int(x, 16) for x in line.split()[0].split("-"))
-                    if _RING_MARK in ctypes.string_at(a, b - a):
+                    if mark in ctypes.string_at(a, b - a):
                         ok = True
                         break
     except Exception:
         ok = False
-    _ring_ok["v"] = ok
+    _ring_ok[key] = ok
     return ok
+
+
+def ring_supported():
+    """Does the mapped library have the RING_WEIGHTS mode of the unified op?"""
+    return _lib_has(_RING_MARK, "v")
+
+
+def ring_n_supported():
+    """Does it read decode rings of 8 * g cores (and bfp4 weights) in place?"""
+    return _lib_has(_RING_N_MARK, "n")
 
 
 def banks_ok(md):
     try:
         from ttnn.experimental.moe_compute_utils import effective_matmul_ring_size
 
-        return int(effective_matmul_ring_size(md)) == 8
+        n = int(effective_matmul_ring_size(md))
+        if layer_fmt.mixed_active() and layer_fmt.any_bfp4():
+            n = max(n, layer_fmt.bfp4_ring())  # DSV41_BFP4_LAYERS / _MAX_LAYER: the bfp4 layers' ring
+        return n == 8 or (n % 8 == 0 and ring_n_supported())
     except Exception:
         return False
 
@@ -89,6 +111,12 @@ def _decide(md, U, log):
     why = None
     if ring_requested() and not ring_supported():
         why = "the loaded ttnn library has no ring-weights mode for unified_routed_expert_moe (rebuild: PREFILL_UNIFIED_MOE_NOTES.md)"
+    elif (
+        ring_requested()
+        and (os.environ.get("MOE_COMPUTE_BFP8_WEIGHTS", "0") == "0" or layer_fmt.any_bfp4())
+        and not ring_n_supported()
+    ):
+        why = "bfp4 decode weights are read in place only by the ring-N build of the unified op"
     elif ring_requested() and not banks_ok(md):
         why = "the chip does not have 8 live DRAM banks (ring size != 8)"
     elif U == 1 and not U1_DEFAULT_ON and os.environ.get("DSV41_UNI_U1") != "1":
@@ -97,5 +125,12 @@ def _decide(md, U, log):
         log(f"prefill MoE: falling back to the moe_compute prefill path: {why}")
         set_in_use(False)
         return False
+    if ring_requested() and layer_fmt.mixed_active():
+        log(f"prefill MoE: unified, reading the decode ring weights in place, per layer: {layer_fmt.describe()}")
+    elif ring_requested():
+        log(
+            f"prefill MoE: unified, reading the decode ring weights in place (ring {os.environ.get('MOE_COMPUTE_RING') or 8}, "
+            f"{'bfp8' if os.environ.get('MOE_COMPUTE_BFP8_WEIGHTS', '0') != '0' else 'bfp4'} experts)"
+        )
     set_in_use(True)
     return True

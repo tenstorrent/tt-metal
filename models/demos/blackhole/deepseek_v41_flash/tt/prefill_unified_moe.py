@@ -34,7 +34,8 @@ TOPK = 6
 ROWS, COLS = 4, 8
 EPC = NUM_ROUTED // (ROWS * COLS)  # 12 experts per chip
 UNIFIED_CACHE = os.environ.get("DSV41_UNIFIED_CACHE", "/mnt/tt-data/ssinghal/dsv4-weight-cache-unified")
-W_DTYPE = ttnn.bfloat8_b
+# DSV41_UNI_WDTYPE=bfp4: separate bfp4 prefill copy (next to a MOE_COMPUTE_RING decode ring of bfp4 weights, DSV41_UNI_RING=0); the host cache names carry the dtype
+W_DTYPE = ttnn.bfloat4_b if os.environ.get("DSV41_UNI_WDTYPE", "") == "bfp4" else ttnn.bfloat8_b
 _SHARED = {}  # (id(mesh), tokens per row, cf) -> UnifiedMoEShared
 
 
@@ -184,7 +185,9 @@ def build_expert_weights(md, layer_id, log=print, cache_only=False):
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=W_DTYPE,
-                cache_file_name=_cache_name(layer_id, f"{l}_{proj}"),
+                cache_file_name=None
+                if os.environ.get("DSV41_UNI_NOCACHE") == "1"
+                else _cache_name(layer_id, f"{l}_{proj}"),
             )
             if cache_only:
                 del t
