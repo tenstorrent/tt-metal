@@ -73,6 +73,14 @@ def test_r7k2s_ident(mesh_device, monkeypatch):
         logger.info(f"[mk-stage0] {mk_report}")
         assert any(r["replays"] > 0 for r in mk_report.values()), f"no verify replay counted: {mk_report}"
         assert all(r["ok"] for r in mk_report.values()), f"megakernel probe mismatch: {mk_report}"
+    mk1 = getattr(model, "_vfy_mk1", None)
+    mk_stage1 = None
+    if mk1 is not None:
+        mk_stage1 = dict(ready=mk1.ready, reason=mk1.reason, replaces_layers=mk1.replaces_layers,
+                         kind=os.environ.get("QWEN36_R16_MK_ENGINE_KIND", "identity"),
+                         host_launches={str(b): p.launches for b, p in sorted(mk1.programs.items())})
+        logger.info(f"[mk-stage1] {mk_stage1}")
+        assert mk1.ready, f"stage1 not ready: {mk1.reason}"
     lens = {str(rid): len(s) for rid, s in sorted(streams.items())}
     committed = sum(m + 1 for s in drv.stats for m in s["m"].values())
     row_steps = sum(len(s["m"]) for s in drv.stats)
@@ -110,6 +118,7 @@ def test_r7k2s_ident(mesh_device, monkeypatch):
         fused_boundary_diffs=int(getattr(eng, "fused_boundary_diffs", 0)),
         text0=tokenizer.decode(streams[0][:64]),
         mk_stage0=mk_report,
+        mk_stage1=mk_stage1,
     )
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "a") as f:
