@@ -28,14 +28,26 @@ def _engine_builder():
 
 
 def kv_descriptors(model):
-    """Per full-attention layer: (layer index, k cache tensors, v cache tensors) as the TPAttention module holds them
-    (paged BFP8, one tensor per local KV head)."""
+    """Per full-attention layer, the KV cache the verify actually reads.
+
+    vLLM / prod (``use_paged``): two tensors, paged_k and paged_v, each [num_blocks, n_kv_heads, block_size, head_dim]
+    TILE, BFP8, replicated on every device. Tile page of (block p, head h, position tile r, dim tile c) =
+    ((p * n_kv_heads + h) * (block_size // 32) + r) * (head_dim // 32) + c. So K and V are SEPARATE base addresses, unlike
+    the bench's interleaved KVCacheDesc (one tensor, 8 K then 8 V tiles per block); the engine reader takes two bases.
+    Demo fallback (no vLLM cache): k_caches / v_caches lists, one [B, 1, max_seq_len, head_dim] bf16 tensor per KV head
+    (not paged; stage1 does not target it)."""
     out = []
     for i, l in enumerate(model.layers):
         if l.is_full_attention:
             a = l.attention
-            out.append(dict(layer=i, k=getattr(a, "k_caches", None), v=getattr(a, "v_caches", None),
-                            block_size=getattr(model, "block_size", None) or getattr(model.args, "block_size", None)))
+            paged = bool(getattr(a, "use_paged", False))
+            k, v = (a.paged_k, a.paged_v) if paged else (getattr(a, "k_caches", None), getattr(a, "v_caches", None))
+            d = dict(layer=i, paged=paged, k=k, v=v)
+            if paged and k is not None:
+                nb, nh, bs, hd = (int(x) for x in k.shape)
+                d.update(num_blocks=nb, n_kv_heads=nh, block_size=bs, head_dim=hd, dtype=str(k.dtype),
+                         k_addr=k.buffer_address(), v_addr=v.buffer_address())
+            out.append(d)
     return out
 
 
