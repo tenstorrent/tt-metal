@@ -67,9 +67,6 @@ constexpr uint32_t V_NNM = 7, V_NTM = 14, V_KTR = 20, V_OT = 10, V_NCOL = 10, V_
 // (DEST_TO_SRCA reuse adds truncate: -3% on an 8-way sum, never use them for this).
 constexpr uint32_t V_RSO = 2;
 #if defined(MKA_QSK)
-#if !defined(MKA_RWO)
-#error "MKA_QSK needs MKA_RWO (owner first-tile arg qn0; the ext ring carries Wo)"
-#endif
 #ifndef QSK_GK
 #define QSK_GK 6
 #endif
@@ -135,7 +132,7 @@ void kernel_main() {
 #if defined(MKA_RQKV)
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
-#if defined(MKA_RWO)
+#if defined(MKA_RWO) || defined(MKA_QSK)
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
 #endif
 #if defined(MKA_RQNR)
@@ -360,7 +357,6 @@ void kernel_main() {
         cb_wait_front(CB_VRT, 1);
         cb_wait_front(CB_VOWN, 2);
         cb_wait_front(CB_VRS, 16);
-        CZONE("C-QRS");
         cb_reserve_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
         tile_regs_acquire();
         for (uint32_t m = 0; m < qnt; ++m) v_rs_sum(CB_VOWN, m, CB_VRS, vk, m, 1, m);
