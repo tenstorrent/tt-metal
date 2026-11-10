@@ -670,6 +670,22 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
                     embeds, _ = self.encode_prompt("warmup", keyframes=list(keyframes))
                 finally:
                     self._force_prompt_pad = None
+                if not keyframes:
+                    # The DiT's static-source prefix pads the prompt rows from this rung to the arena cap: that pad
+                    # is keyed on the rung, so run it here too (as `_prepare_request` does).
+                    prompt_device = ttnn.reshape(embeds, (1, 1, embeds.shape[1], embeds.shape[2]))
+                    with self.ccl_manager.transient_ping_pong_buffers():
+                        self._prepare_transformer().prepare_static_sources(
+                            prompt_1BLP=prompt_device,
+                            prompt_len=1,
+                            condition_video_1BKC=self._upload_rows(
+                                torch.zeros(0, self.transformer_config["in_channels"] * 4),
+                                self.arena_caps.condition_video_rows,
+                            ),
+                            prompt_cap=self.arena_caps.prompt,
+                        )
+                        ttnn.synchronize_device(self.mesh_device)
+                    ttnn.deallocate(prompt_device)
                 ttnn.deallocate(embeds)
         self("warmup", width=4096, height=4096, seed=0)
         self("warmup", width=2048, height=2048, seed=0, images=[reference])
