@@ -16,6 +16,11 @@
 #endif
 #endif
 #include "api/debug/kernel_profiler.hpp"
+#if defined(MKAR_LEANZ) || (defined(MKA_LEAN_C) && defined(MK_REAL_AR))
+#define MK_AR_ZONE(n)
+#else
+#define MK_AR_ZONE(n) DeviceZoneScopedN(n)
+#endif
 #include "mka2_common.hpp"
 #if defined(MK_V12)
 #include "v12e.hpp"
@@ -51,6 +56,9 @@ void kernel_main() {
     constexpr auto wv_args = TensorAccessorArgs<qo_args.next_compile_time_args_offset()>();
 #else   // MIXN mixer stand-in (no qkv_out accessor): the v12 rstd stand-in (CB 43) is set up by the host on its own
     constexpr auto wv_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+#endif
+#if defined(MK_REAL_AR) && defined(MK_AR_GAMMA)
+    constexpr auto gm_args = TensorAccessorArgs<wv_args.next_compile_time_args_offset()>();   // γ table (DRAM)
 #endif
 #endif
 #if defined(MKA_QSK)
@@ -266,12 +274,42 @@ void kernel_main() {
     if (vrole == 1) { cb_reserve_back(CB_VJ, 1); cb_push_back(CB_VJ, 1); }
     if (vrole == 2) { cb_reserve_back(CB_VX0, V_OT); cb_push_back(CB_VX0, V_OT); }
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
-    // real MLP AR tail: [ar_on, n_ready, (READY xy, READY word) x n_ready, Recv common block, Recv role block]
-    const uint32_t ar_on = get_arg_val<uint32_t>(a++);
-    const uint32_t ar_nready = ar_on ? get_arg_val<uint32_t>(a++) : 0;
-    const uint32_t ar_rdy = a;
+    // real MLP AR: the owner's args live in its L1 arg table at MK_AR_BLK (ar_phase.py ArPhase.arg_table; spec v1.25,
+    // no runtime args): [ar_on, n_ready, (READY xy, READY word) x n_ready | comp @16 | Recv common + role @20]
+    volatile tt_l1_ptr uint32_t* const ar_blk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_BLK);
+    const uint32_t ar_on = vrole == 2 ? ar_blk[0] : 0;
+    const uint32_t ar_nready = ar_on ? ar_blk[1] : 0;
     static mkar::Recv ar;
-    if (ar_on) ar.init(a + 2 * ar_nready, a + 2 * ar_nready + MKAR_NCOMMON);
+    if (ar_on) ar.init(MK_AR_BLK_RECV, MK_AR_BLK_RECV + MKAR_NCOMMON);
+#endif
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_GAMMA)
+#ifndef MK_AR_GTRID
+#define MK_AR_GTRID 14   // writer trids in use: 1-3, 5, 6-7, 9, 12-13
+#endif
+    auto ar_gamma_issue = [&](uint32_t L) {
+        // spec §19: γ_next (layer L + 1's input_layernorm, row 0 of each tile, √1.25 folded) for this owner's chunk ->
+        // pbuf+0 (dead from C-OSUM(L) until the next MLP's partials, which follow delivery(L); NOT across ARs: real wo
+        // aliases A / S there). Issued at the AR start, it lands during the RS. R < 32: row 0 replicated into the
+        // packed pseudo-tile layout (2t + f) R 32 + 32 r.
+        {
+            cb_reserve_back(MK_AR_CBG, MK_AR_GT);
+            const uint32_t gd = get_write_ptr(MK_AR_CBG);
+#if MK_AR_GROWS == 0
+            const uint32_t gp = (((L + 1) % NL) * 2 + 0) * 160 + (2 * vk + voslot) * 10;
+            const auto gm = TensorAccessor(gm_args, ar_blk[MK_AR_BLK_GAMMA], 2048);   // address: AR arg table word 19
+            noc_async_read_set_trid(MK_AR_GTRID);
+            for (uint32_t t = 0; t < 10; ++t) noc_async_read(gm.get_noc_addr(gp + t), gd + t * 2048, 2048);
+            noc_async_read_set_trid(0);
+#else
+            // R < 32: the host-built packed table (one page per (layer, norm, chunk) = GT pseudo-tiles, γ row-replicated)
+            const uint32_t gp = (((L + 1) % NL) * 2 + 0) * 16 + (2 * vk + voslot);
+            const auto gm = TensorAccessor(gm_args, ar_blk[MK_AR_BLK_GAMMA], MK_AR_GT * 2048);
+            noc_async_read_set_trid(MK_AR_GTRID);
+            noc_async_read(gm.get_noc_addr(gp), gd, MK_AR_GT * 2048);
+            noc_async_read_set_trid(0);
+#endif
+        }
+    };
 #endif
     // owner phase of layer L (stand-in AR): x chunk to the K-row, then the column-partial sum and its release
     auto v12_owner = [&](uint32_t L) {
@@ -279,6 +317,9 @@ void kernel_main() {
         // busy only from MGO on (the pre-MLP AR is done): the same core's reader holds its PQGDN chunks while busy is
         // odd and delivers this layer's x after them, so raising busy earlier deadlocks (x -> partials -> clear)
         { DeviceZoneScopedN("W-OGO"); noc_semaphore_wait_min(vw(vg[VG_MGO]), L + 1); }
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_GAMMA) && defined(MK_AR_GEARLY)
+        ar_gamma_issue(L);   // dedicated γ CB (not pbuf): issue at the MLP start, off the AR path
+#endif
         v_busy(vg[VG_BUSY], 2 * L + 1, vbmirror, vbrc);   // x delivery (stand-in) is on the reader (NOC1)
         { DeviceZoneScopedN("W-OP"); noc_semaphore_wait_min(vw(vg[VG_P]), V_NCOL * (L + 1)); }
         cb_reserve_back(CB_VP, V_NCOL * V_OT);
@@ -297,16 +338,35 @@ void kernel_main() {
         // AR_RECV(L) here (real AR, spec v0.9.2: READY inc to the RS sender, then the receiver phase on this RISC)
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
         {
-            DeviceZoneScopedN("W-AR");
+            MK_AR_ZONE("W-AR");
             for (uint32_t i = 0; i < ar_nready; ++i) {   // CB_VXO complete: release this chunk to its RS sender / own receiver
-                const uint32_t xy = get_arg_val<uint32_t>(ar_rdy + 2 * i);
-                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, get_arg_val<uint32_t>(ar_rdy + 2 * i + 1)), 1);
+                const uint32_t xy = ar_blk[2 + 2 * i];
+                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ar_blk[3 + 2 * i]), 1);
             }
-            ar.iter(L);   // the gather role returns after the AG wait + x delivery; CB_VXO is read by then (RS done)
+#if defined(MK_AR_GAMMA) && !defined(MK_AR_GEARLY)
+            ar_gamma_issue(L);   // after READY: a stalled read issue under the weight pump delayed every device's RS
+#endif
+            ar.iter(L);   // the gather role returns after the AG wait; CB_VXO is read by then (RS done)
+#if defined(MK_AR_GAMMA)
+            // only the γ read (a plain barrier also waited on this writer's outstanding weight reads: +4-6 us in the
+            // pre-attention window)
+            noc_async_read_barrier_with_trid(MK_AR_GTRID);
+            cb_push_back(MK_AR_CBG, MK_AR_GT);   // γ landed + the AR output is complete: the compute may scale it
+#endif
+#if !defined(MKAR_DLV_SIGNAL) && !defined(MKAR_DLV_NONE)
             noc_semaphore_inc(get_noc_addr(qr_x, qr_y, MK_AR_XCNT), 1);   // x of layer L + 1 delivered to this K-row
+#endif   // (MKAR_DLV_SIGNAL: the reader delivers on NOC1 and counts it, mka2_reader.cpp v12_ardlv)
         }
 #endif
         cb_pop_front(CB_VXO, V_OT);
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_GAMMA)
+        {   // x_deliver = out ⊙ γ lands in v_xo (dead after the AR; its reserve was gated by the pop above) -> NOC1 reader
+            MK_AR_ZONE("W-ARG");
+            cb_wait_front(CB_VXO, V_OT);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_DLV) = L + 1;
+            cb_pop_front(CB_VXO, V_OT);   // reuse is gated transitively: the next C-OSUM needs partials that follow delivery(L)
+        }
+#endif
         v_busy(vg[VG_BUSY], 2 * L + 2, vbmirror, vbrc);
     };
 #define V12_OWNER(L) v12_owner(L)
@@ -918,10 +978,22 @@ void kernel_main() {
 #if defined(MK_REAL_AR)
         {   // the real MLP AR: this K-row's two owners delivered x of layer L + 1 (flags = per-pass delivery count)
             DeviceZoneScopedN("W-ARWAIT");
-#if defined(MK_AR_NOPUMP)   // the next attention layer's MLP-slice pump waits for the AR (it slows the AG / x delivery)
-            do { invalidate_l1_cache(); } while (*l1w(MK_AR_XF0) <= L || *l1w(MK_AR_XF1) <= L);
+#if defined(MK_V12_X2) || defined(MK_RS_QKV)   // X2 (QSK): AR(L) delivers layer L + 1's mixer x, flag 2(L + 1) + 1
+#define MK_AR_XWAIT(L) (*vw(vg[VG_XA]) < 2 * (L) + 3 || *vw(vg[VG_XB]) < 2 * (L) + 3)
 #else
-            do { invalidate_l1_cache(); v_pump(); } while (*l1w(MK_AR_XF0) <= L || *l1w(MK_AR_XF1) <= L);
+#define MK_AR_XWAIT(L) (*l1w(MK_AR_XF0) <= (L) || *l1w(MK_AR_XF1) <= (L))
+#endif
+#if defined(MK_AR_NOPUMP)   // the next attention layer's MLP-slice pump waits for the AR (it slows the AG / x delivery)
+            do { invalidate_l1_cache(); } while (MK_AR_XWAIT(L));
+#elif defined(MK_AR_PUMPGAP)   // rate-limited pump: at most one 16 KB piece per MK_AR_PUMPGAP cycles while the AR runs
+            uint32_t tp = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - (MK_AR_PUMPGAP);
+            do {
+                invalidate_l1_cache();
+                const uint32_t tn = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                if ((uint32_t)(tn - tp) >= (uint32_t)(MK_AR_PUMPGAP)) { v_pump(); tp = tn; }
+            } while (MK_AR_XWAIT(L));
+#else
+            do { invalidate_l1_cache(); v_pump(); } while (MK_AR_XWAIT(L));
 #endif
         }
         if (is_qroot && L + 1 < NL) {   // all 16 owners delivered -> STREAM_EXT
@@ -1002,7 +1074,11 @@ void kernel_main() {
 #if defined(MKA_ROLE_EXT)
     if (ar_on) ar.fini();
 #endif
+#if defined(MK_AR_DLV)
+    if (vrole == 1) { *l1w(MK_AR_XF0) = 0; *l1w(MK_AR_XF1) = 0; }   // owners: the reader resets its own copy
+#else
     if (vrole) { *l1w(MK_AR_XF0) = 0; *l1w(MK_AR_XF1) = 0; }
+#endif
     if (is_qroot) { noc_semaphore_wait_min(l1w(MK_AR_XCNT), 16 * NL); *l1w(MK_AR_XCNT) = 0; }
 #endif
 #endif

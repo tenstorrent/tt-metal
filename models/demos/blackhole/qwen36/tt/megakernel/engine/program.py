@@ -567,10 +567,17 @@ def setup_bench(dev, MESH, mesh_identity):
         from models.demos.blackhole.qwen36.tt.megakernel.ar_phase import ArPhase
         AR_XF = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(2)]
         AR_XCNT = ttnn.create_global_semaphore(dev, kgrid, 0)
+        # MK_AR_DLVR=1 (default, spec v1.21): x delivery on the owner READER (NOC1) via a local handoff word
+        AR_DLVR = os.environ.get('MK_AR_DLVR', '1') == '1'
+        AR_DLV = ttnn.create_global_semaphore(dev, O_CRS, 0) if AR_DLVR else None
+        if AR_DLVR: MKDEF = MKDEF + [('MK_AR_DLV', str(ttnn.get_global_semaphore_address(AR_DLV)))]
         MKDEF = MKDEF + [('MK_AR_XF0', str(ttnn.get_global_semaphore_address(AR_XF[0]))), ('MK_AR_XF1', str(ttnn.get_global_semaphore_address(AR_XF[1]))),
                          ('MK_AR_XCNT', str(ttnn.get_global_semaphore_address(AR_XCNT)))]
         # own_cb (R = 32): no own slot in the AR's RS slot CB; the reduce reads this device's partial from CB_VXO (CB 4)
-        AR = ArPhase(dev, n_ar=NL, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None,
+        # AR CB ids: v12 STREAM-only ids (free on the owners and the AR-only senders) so the program's max CB index stays 44
+        # (each index above it costs every core 16 B of kernel config buffer); MK_AR_CBHI=1: the 50..60 block
+        _arcb = None if os.environ.get('MK_AR_CBHI', '0') == '1' else [34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 30]
+        AR = ArPhase(dev, n_ar=NL, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None, cb_ids=_arcb, deliver_ext=AR_DLVR,
                      x_targets=dict(xk=v_xk.buffer_address(), xpk=v_xpk.buffer_address(), xflag=[ttnn.get_global_semaphore_address(g) for g in AR_XF], rstd=0))
         AR_PT = AR.pt
         _ow = AR.owners_grid()
@@ -583,10 +590,39 @@ def setup_bench(dev, MESH, mesh_identity):
         # owner sum with MK_OWNER_RESID=0), so the stand-in x delivery feeds each MLP the real residual stream and no extra
         # lockstep L1 is spent (the owners' CB region is ~50 KB short otherwise); R < 32: a packed residual of its own
         ar_out = v_x0 if AR_PT == 10 else ttnn.from_torch(torch.zeros(TILE, 16 * AR_PT * TILE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_arw(AR_PT))
+        if AR_DLVR and AR_PT != 10: MKDEF = MKDEF + [('MK_AR_OUT', str(ar_out.buffer_address()))]   # reader's packed source
+        # MK_AR_GAMMA=1 (spec §19): x_deliver = residual ⊙ γ_next on every owner; γ table in DRAM [NL x 2 (input_ln,
+        # post_attn_ln) x 16 chunks x 10 tiles] bf16, γ in row 0, page (L*2+n)*160 + chunk*10 + t (√1.25 host-folded)
+        AR_GAMMA = ('MK_AR_GAMMA', '1') in MKDEF
+        if AR_GAMMA:
+            assert AR_DLVR, "MK_AR_GAMMA delivers from the owner reader (MK_AR_DLVR=1)"
+            _gg = torch.Generator().manual_seed(19)
+            AR_GTAB = (0.5 + torch.rand(NL, 2, H, generator=_gg)) * (1.25 ** 0.5)
+            AR_GTAB = AR_GTAB.bfloat16().float()   # as the device sees it
+            AR_GT = 10 if AR_PT == 10 else AR_PT
+            AR_GEARLY = ('MK_AR_GEARLY', '1') in MKDEF
+            if AR_PT == 10:
+                _gt = torch.zeros(TILE, NL * 2 * H); _gt[0] = AR_GTAB.reshape(-1)
+                ar_gam = ttnn.from_torch(_gt.reshape(1, 1, TILE, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:   # R < 32: packed, row-replicated: page (L*2+n)*16 + chunk = AR_GT pseudo-tiles, element ((2t+f)R + r)16 + c
+                _R = V_R; _pk = torch.zeros(NL, 2, 16, AR_GT * 1024)
+                _g = AR_GTAB.reshape(NL, 2, 16, 10, 2, 16)                     # [L, n, chunk, t, f, c]
+                _rep = _g[:, :, :, :, :, None, :].expand(NL, 2, 16, 10, 2, _R, 16)   # [.., t, f, r, c]
+                _pk[..., :10 * 2 * _R * 16] = _rep.reshape(NL, 2, 16, -1)
+                ar_gam = ttnn.from_torch(_pk.reshape(1, 1, NL * 2 * 16, AR_GT * 1024), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            MKDEF = MKDEF + [('MK_AR_CBG', '32'), ('MK_AR_GT', str(AR_GT)),
+                             ('MK_AR_GROWS', '0' if AR_PT == 10 else str(V_R))]
+            print(f"[ar] gamma: table {NL}x2x16x10 tiles at DRAM {ar_gam.buffer_address()}, CB 32 = pbuf+0 ({AR_GT} tiles)", flush=True)
         AR_SEQ = AR_PT == 10   # the MLP input is the evolving residual: sequential golds (x_{L+1} = x_L + ring * mlp_L(x_L))
         _xres = xb.clone()
         _snd = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c_), ttnn.CoreCoord(*c_)) for c_ in ((10, 8), (11, 8), (10, 9), (11, 9))])
         ar_sem = ttnn.create_global_semaphore(dev, _ow.merge(_snd), 0)
+        # per-device AR parts up front (the owners' L1 arg table needs every device's args); build() reuses them
+        ARP = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), v_xo, ar_buf, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
+        ar_blk = AR.arg_table(ARP, gamma_addr=ar_gam.buffer_address() if AR_GAMMA else 0)
+        MKDEF = MKDEF + [('MK_AR_BLK', str(ar_blk.buffer_address())), ('MK_AR_BLK_COMP', str(AR.BLK_COMP)), ('MK_AR_BLK_RECV', str(AR.BLK_RECV)),
+                         ('MK_AR_BLK_GAMMA', str(AR.BLK_GAMMA))]
+        print(f"[ar] arg table at L1 {ar_blk.buffer_address()} ({AR.BLK_NW} words / owner)", flush=True)
         print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {ar_buf.buffer_address()} out {ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)}", flush=True)
 
     def q_wargs(fi):
@@ -605,9 +641,9 @@ def setup_bench(dev, MESH, mesh_identity):
     RWO = ('MKA_RWO', '1') in MKDEF
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
     assert not (GDN24 and RWO), "MKA_GDN24: wo moves to the GDN role's wo unit (spec v1.5); run the wo stand-in (MKA_RWO off) until then"
-    # MK_REAL_AR: the AR's CB ids (50-55) grow every core's CB-config block in the kernel config buffer; the u8 STREAM program
-    # was then 192 B past 70656 B with the compute zones in
-    if (RWO or ('MK_REAL_AR', '1') in MKDEF) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
+    # MK_REAL_AR with the 50..60 CB ids (MK_AR_CBHI=1): they grow every core's CB-config block (16 B per index up to the
+    # max); the u8 STREAM program was then 192 B past 70656 B with the compute zones in (default: compact ids, no LEAN_C)
+    if (RWO or (('MK_REAL_AR', '1') in MKDEF and os.environ.get('MK_AR_CBHI', '0') == '1')) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
     WOT, WOP, WOB = {}, {}, {}
     if RWO:
         assert RQKV and ('MKA_PQGDN', '1') in MKDEF, "MKA_RWO needs MKA_RQKV and MKA_PQGDN (the ext ring holds Wo after qkv)"
@@ -884,11 +920,18 @@ def setup_bench(dev, MESH, mesh_identity):
                 cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, O_CRS)]   # CB_VPK: the stand-in's packing scratch (R < 32 only)
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
         if REAL_AR:   # this device's AR parts: sender kernels / CBs / fabric semaphores, the shared RS slot CB, owner CBs
-            arp = AR.engine_parts(coord, v_xo, ar_buf, ar_out, ar_out, ar_sem)
+            arp = ARP[coord[1]]
             assert dict(arp['recv_defines']).get('MKAR_DELIVER', '0') != '0', "MK_REAL_AR: the AR must deliver x (STREAM waits its flags)"
             sems = sems + arp['semaphores']
             _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=d_.core_ranges, format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
             cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
+            if AR_GAMMA and AR_GEARLY:   # MK_AR_GEARLY: a dedicated γ CB (owners' CB region), filled from the MLP start
+                cbs = cbs + [cbd(32, ttnn.bfloat16, AR_GT, O_CRS)]
+            elif AR_GAMMA:   # CB 32 on the owners = pbuf+0 (dead from C-OSUM(L) to the next MLP's partials; spec v1.25 note)
+                _g = ttnn.cb_descriptor_from_sharded_tensor(32, v_pbuf)
+                _g.total_size = AR_GT * 2048
+                _g.format_descriptors = [ttnn.CBFormatDescriptor(buffer_index=32, data_format=ttnn.bfloat16, page_size=2048)]
+                cbs = cbs + [_g]
         rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         RS = os.environ.get('MKA_ROLESPLIT', '1') == '1'   # per-role binaries (spec v0.9.17)
         rta = {k_: (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for k_ in ('s', 'e')}
@@ -938,28 +981,24 @@ def setup_bench(dev, MESH, mesh_identity):
             if V12:   # v12 arg tails (appended after every other arg)
                 vw_, vr_, vc_ = v_args(fi, c)
                 _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
-            if REAL_AR and not isS:   # AR tails (EXT binary): writer [ar_on, n_ready, (xy, READY) x n, common, role], compute [has_work, ring, PT]
-                _k = (c.x, c.y)
-                if _k in arp['recv_args']:
-                    _rt = arp['ready_targets'][_k]
-                    _wa = list(_wa) + [1, len(_rt)] + [v_ for t_ in _rt for v_ in t_] + arp['recv_args'][_k]; _ca = list(_ca) + arp['comp_args'][_k]
-                else:
-                    _wa = list(_wa) + [0]; _ca = list(_ca) + [0, 0, 0]
             _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
         acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
         acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
         acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []
-        def _ks(rng, defs, rr, ww, cc, wdefs=(), cdefs=()):
-            return [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []) + (acc_qo if RQNR else []),
+        def _ks(rng, defs, rr, ww, cc, wdefs=(), cdefs=(), dmopt=None):
+            return [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=rng, defines=MKDEF + defs, opt_level=dmopt, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []) + (acc_qo if RQNR else []),
                                     runtime_args=rr, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
-              ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs + list(wdefs), compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []) + (ttnn.TensorAccessorArgs(wv_all).get_compile_time_args() if V12 else []),
+              ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs + list(wdefs), opt_level=dmopt, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []) + (ttnn.TensorAccessorArgs(wv_all).get_compile_time_args() if V12 else []) + (ttnn.TensorAccessorArgs(ar_gam).get_compile_time_args() if (REAL_AR and AR_GAMMA) else []),
                                     runtime_args=ww, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
               ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=rng, defines=MKDEF + defs + list(cdefs), compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=cc,
                                     config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
         if RS:
             _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
-            _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon']))], arp['comp_defines']) if REAL_AR else ((), ())
-            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard)
+            _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon'])), ('MKAR_ARGS_L1', str(ar_blk.buffer_address())), ('MKAR_TRID', '15')] + ([('MKAR_LEANZ', '1')] if ('MKA_LEAN_C', '1') in MKDEF else []) + ([('MKAR_DLV_NONE', '1')] if AR_GAMMA else [('MKAR_DLV_SIGNAL', str(ttnn.get_global_semaphore_address(AR_DLV)))] if AR_DLVR else []), arp['comp_defines']) if REAL_AR else ((), ())
+            # MK_EXT_DM_OS=1 (spec v1.5a: DM-only Os allowed after a timing check): the EXT (owner) reader / writer at -Os,
+            # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
+            _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
+            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard, dmopt=_dmo)
             if REAL_AR: ks = ks + arp['sender_kernels']
         else:
             assert not REAL_AR, "MK_REAL_AR needs the per-role binaries (MKA_ROLESPLIT=1)"
