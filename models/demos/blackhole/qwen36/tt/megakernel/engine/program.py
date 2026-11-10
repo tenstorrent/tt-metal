@@ -123,12 +123,13 @@ def setup_bench(dev, MESH, mesh_identity):
     x = ttnn.from_torch(x_t.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ws(rect, XSW * TILE))
     xb = ttnn.to_torch(x).float().reshape(M, H)
     gold = (torch.nn.functional.silu(xb @ wgq) * (xb @ wuq)).bfloat16().float() @ wdq
+    QSK = 'MKA_QSK=1' in os.environ.get('MK_DEFINES', '').split(',')
     # mesh: freed mesh buffers are not reliably reusable before the program runs, so with RQKV (which replaces x with a
     # full-grid copy below) the 80-core copy is never allocated
     _SKIP_XBUF80 = MESH and 'MKA_RQKV=1' in os.environ.get('MK_DEFINES', '')
-    xbuf = None if _SKIP_XBUF80 else ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, H))
+    xbuf = None if _SKIP_XBUF80 else ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE if QSK else H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, TILE if QSK else H))
     XPRE = 1 if os.environ.get("FM_XPRE", "1") == "1" else 0
-    if XPRE and not _SKIP_XBUF80:
+    if XPRE and not _SKIP_XBUF80 and not QSK:
         if MESH: ttnn.deallocate(xbuf)  # mesh tensors are not freed on rebinding
         xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NC, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(rect, H))
     HDT = ttnn.bfloat8_b if os.environ.get('MK_H_BFP8') == '1' else ttnn.bfloat16  # -mk-tail: h broadcast in BFP8 halves its bytes
@@ -180,6 +181,11 @@ def setup_bench(dev, MESH, mesh_identity):
     MKDEF = [tuple(kv.split('=', 1)) for kv in os.environ.get('MK_DEFINES', '').split(',') if kv]  # e.g. MKA_NOMLP=1  # -mk-tail: e.g. MK_DNPIPE=1,MK_FLAG_FLUSH=1
     AMASK = int(os.environ.get('MK_AMASK', '0xFFFFFFFF'), 0)   # mixed groups: bit L = attention-type layer
     S_GDN_US = float(os.environ.get('MK_SGDN_US', '0'))
+    QSK = ('MKA_QSK', '1') in MKDEF   # spec §18: qkv split-K on STREAM through v12's unit (implies MK_V12 + MK_RS_QKV)
+    if QSK:
+        for k_ in ('MK_V12', 'MK_RS_QKV', 'MKA_RQKV'):
+            if (k_, '1') not in MKDEF: MKDEF = MKDEF + [(k_, '1')]
+        QSK_GK = int(os.environ.get('QSK_GK', '6')); MKDEF = MKDEF + [('QSK_GK', str(QSK_GK))]
     MKDEF += [('MKA_AMASK', f'{AMASK & 0xFFFFFFFF}u'), ('MKA_S_GDN', str(int(S_GDN_US * 1350)))]
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
@@ -219,9 +225,15 @@ def setup_bench(dev, MESH, mesh_identity):
     for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
     members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
     if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
+    if ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
+        _sx = lambda f_: fcores[f_].x < GX and fcores[f_].y < GY
+        for m_ in members:
+            e_ = [f_ for f_ in m_ if not _sx(f_) and f_ != m_[0]]
+            assert e_, "a KV group without a non-STREAM core"
+            m_.remove(e_[-1]); m_.append(e_[-1])
     rank = {i: members[grp[i]].index(i) for i in ACT}
     kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
-    GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(17)]
+    GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(23)]
     GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
     if ARC:
         # spec v0.9.1: the AR sender cores are not in ANY mka2 range (kernels, CBs, sharded L1 tensors, global semaphores,
@@ -239,6 +251,8 @@ def setup_bench(dev, MESH, mesh_identity):
         if c.x < GX and c.y < GY: stream_idx[i] = c.x + GX * c.y
     torch.manual_seed(1)
     kvs, golds_s, qs_all = [], [], []
+    KVQ = {}
+    RQNR = ('MKA_RQNR', '1') in MKDEF
     KVPROD = os.environ.get('MKA_KVPROD', '0') == '1'
     NKVH, KVH, KVBS = int(os.environ.get('MKA_NKVH', '4')), int(os.environ.get('MKA_KVH', '1')), int(os.environ.get('MKA_BS', '64'))
     BS32 = KVBS // TILE; BPU = NBK // BS32
@@ -271,6 +285,7 @@ def setup_bench(dev, MESH, mesh_identity):
         g_ = torch.zeros(NU, TILE, DHD)
         for u in range(NU):
             p = torch.exp(qq_[u] @ kq_[u].T); g_[u] = (p @ vq_[u]) / p.sum(-1, keepdim=True)
+        if RQNR: KVQ[L] = (kq_.clone(), vq_.clone())
         if os.environ.get('MKA_SAMEDATA') == '1' and L > 0: kv, g_, q_t = kvs[0], golds_s[0], qs_all[0]
         kvs.append(kv); golds_s.append(g_); qs_all.append(q_t)
         del rows, kvq, kq_, vq_
@@ -341,17 +356,28 @@ def setup_bench(dev, MESH, mesh_identity):
         n_ext_tiles = 2 * len(ext_list); n_half = QN - n_ext_tiles
         assert n_half >= 0 and 2 * n_half <= len(stream_idx), (n_ext_tiles, n_half)
         for e, fi in enumerate(ext_list): QROLE[fi] = (3, 2 * e, 2, 0, KT, fi)
-        for i_ in range(2 * n_half):
+        for i_ in range(0 if QSK else 2 * n_half):
             fi = s_by_i[i_]; h_ = i_ % 2
             QROLE[fi] = (1 if h_ == 0 else 2, n_ext_tiles + i_ // 2, 1, h_ * QH, QH, s_by_i[i_ + 1] if h_ == 0 else s_by_i[i_ - 1])
         QDONE_N = sum(1 for v in QROLE.values() if v[0] in (1, 3))
+        if QSK:
+            import sys as _sys
+            _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))
+            import layout_attn as LA_
+            QSL_ = LA_.qkv_splitk_slices()
+            for fi in ext_list: QROLE[fi] = (3, 0, 0, 0, 0, fi)   # ext ring user (Wo); no qkv on the ext cores
+            QSKEY = {fi: (fcores[fi].x, fcores[fi].y) for fi in stream_idx}
+            for fi, (c_, k_) in QSKEY.items():
+                sl_ = QSL_[(c_, k_)]
+                QROLE[fi] = (1, sl_.first + k_, 1 + (1 if k_ + 8 < sl_.nt else 0), sl_.nt, QSK_GK, fi)   # owner of items k, k + 8
+            QDONE_N = len(stream_idx)
         QSLOT = 2 * KT
         # bank-local slices: each qkv core's slice in its nearest bank (fcores logical coords vs the bank's preferred worker)
-        qcores = sorted(QROLE)
+        qcores = sorted(f_ for f_ in QROLE if not (QSK and QROLE[f_][0] == 3))
         # byte-balanced: each slice class (ext 348 KB, STREAM half 87 KB) is spread evenly over the banks, nearest bank
         # first within the class (a count-only cap put most ext slices on the banks next to the ext cores -> hot banks)
         q_bank = {}
-        for cls in ([fi for fi in qcores if QROLE[fi][0] == 3], [fi for fi in qcores if QROLE[fi][0] != 3]):
+        for cls in ([] if QSK else ([fi for fi in qcores if QROLE[fi][0] == 3], [fi for fi in qcores if QROLE[fi][0] != 3])):
             caps = [len(cls) // banks + (1 if b_ < len(cls) % banks else 0) for b_ in range(banks)]
             pairs = sorted(((abs(fcores[fi].x - bx) + abs(fcores[fi].y - by), fi, b_) for fi in cls for b_, (bx, by) in enumerate(BANK_LOC)))
             for d_, fi, b_ in pairs:
@@ -359,14 +385,19 @@ def setup_bench(dev, MESH, mesh_identity):
                 q_bank[fi] = b_; caps[b_] -= 1
         q_slot = {}   # bank-local page offset of each core's slice (slices packed per bank)
         _tot = [0] * banks
-        for fi in qcores:
-            b_ = q_bank[fi]; q_slot[fi] = _tot[b_]; _tot[b_] += QROLE[fi][2] * QROLE[fi][4]
-        PQL = max(_tot) * banks
+        if QSK:
+            _qb, _qo, PQL = LA_.splitk_bank_assign(QSL_, {key: key for key in QSL_}, BANK_LOC, banks)
+            for fi, key in QSKEY.items(): q_bank[fi], q_slot[fi] = _qb[key], _qo[key]
+        else:
+            for fi in qcores:
+                b_ = q_bank[fi]; q_slot[fi] = _tot[b_]; _tot[b_] += QROLE[fi][2] * QROLE[fi][4]
+            PQL = max(_tot) * banks
         torch.manual_seed(7)
         wq_t = torch.randn(H, QN * TILE) / math.sqrt(H)
         gam = 0.5 + torch.rand(H)
         wf_t = gam[:, None] * wq_t   # diag(γ) W, folded at load (spec v0.4; × NORM_FIX is part of γ here)
         def q_pages(scale):
+            if QSK: return LA_.pack_qkv_splitk_layer(wf_t, QSL_, _qb, _qo, banks, PQL, scale)
             pg = torch.zeros(PQL, TILE, TILE)
             for fi in qcores:
                 ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
@@ -377,7 +408,13 @@ def setup_bench(dev, MESH, mesh_identity):
         wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         wqq = ttnn.to_torch(wq_all).float().reshape(NL, PQL, TILE, TILE)
         wfq = torch.zeros(NL, H, QN * TILE)   # dequantized folded weights as the device sees them, per layer
-        for fi in qcores:
+        if QSK:
+            for key, sl_ in QSL_.items():
+                for kl in range(sl_.pages // sl_.nt):
+                    for jj in range(sl_.nt):
+                        k_, n_ = sl_.k0 + kl, sl_.first + jj
+                        wfq[:, k_ * TILE:(k_ + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = wqq[:, (_qo[key] + sl_.page_of(kl, jj)) * banks + _qb[key]]
+        for fi in ([] if QSK else qcores):
             ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
             for kl in range(nk):
                 for jj in range(nt):
@@ -390,13 +427,18 @@ def setup_bench(dev, MESH, mesh_identity):
         gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
         qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # x on every qkv core: shard x over the full grid (lockstep L1 address, same footprint as the 80-core shard)
-        if xbuf is not None: ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
-        xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
+        if not QSK:
+            if xbuf is not None: ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
+            xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
+        elif xbuf is None:   # QSK: CB 0 is a 1-tile placeholder (hw_startup operand)
+            xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, TILE))
         EXTRA_T = EXTRA_TX = 0   # the qkv bytes are real now
         ext_crs = crs([fcores[fi] for fi in ext_list])
-        print(f"[rqkv] {QN} tiles: ext {len(ext_list)}x2 full-K, STREAM {2 * n_half} K-halves; producers {QDONE_N}; MB/bank {[round(sum(QROLE[f][2] * QROLE[f][4] for f in qcores if q_bank[f] == b_) * BF8TB / 1e6, 2) for b_ in range(banks)]}; {QN * KT * BF8TB / 1e6:.1f} MB/layer", flush=True)
+        if QSK: print(f"[qsk] split-K qkv: 80 STREAM owners, slot M {max(s_.pages for s_ in QSL_.values())} pages, PQL {PQL}, GDN stand-in {QSK_GK} K tiles", flush=True)
+        else: print(f"[rqkv] {QN} tiles: ext {len(ext_list)}x2 full-K, STREAM {2 * n_half} K-halves; producers {QDONE_N}; MB/bank {[round(sum(QROLE[f][2] * QROLE[f][4] for f in qcores if q_bank[f] == b_) * BF8TB / 1e6, 2) for b_ in range(banks)]}; {QN * KT * BF8TB / 1e6:.1f} MB/layer", flush=True)
     GDNIN = int(os.environ.get('MKA_GDNIN_CORES', '64'))   # GDN in-proj stand-in on the first 64 K-half cores (5.6 MB, spec 5.9),
     def gdn_on(fi):                                         # independent of how many K-half pairs the qkv split uses
+        if QSK: return 1 if fi in stream_idx else 0
         return 1 if (fi in stream_idx and stream_idx[fi] < GDNIN and QROLE.get(fi, (0,))[0] in (1, 2)) else 0
     # ================= MK_V12: fm12 split-K MLP phase (spec v0.6-v0.9) replacing the fm11 MLP =================
     V12 = ('MK_V12', '1') in MKDEF
@@ -411,6 +453,7 @@ def setup_bench(dev, MESH, mesh_identity):
         V_RESID = ('MK_OWNER_RESID', '1') in MKDEF
         V_R = int(os.environ.get('V12_R', '32')); V_FIRST = int(os.environ.get('V12_FIRST', '1'))
         assert V_R == 32 or 1 <= V_R <= 16
+        if os.environ.get('MK_V12_RCT', '1') == '1': MKDEF = MKDEF + [('MK_V12_RCT', str(V_R))]   # compile-time R (text budget)
         def q4(w): return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
         vwg, vwu, vwd = q4(wg_t), q4(wu_t), q4(wd_t)   # BFP4 values are tile-local, so layout independent
         # MK_REAL_AR at R = 32: the MLP input is the evolving residual (x + ring x MLP per layer, with the CB 20 rstd stand-in
@@ -523,8 +566,9 @@ def setup_bench(dev, MESH, mesh_identity):
     def q_rargs(fi):
         if not RQKV: return []
         ro = QROLE.get(fi, (0,))[0]
-        return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL] + wo_rargs(fi)
+        return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
+    assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
     # MK_REAL_AR: the AR's CB ids (50-55) grow every core's CB-config block in the kernel config buffer; the u8 STREAM program
     # was then 192 B past 70656 B with the compute zones in
     if (RWO or ('MK_REAL_AR', '1') in MKDEF) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
@@ -568,6 +612,7 @@ def setup_bench(dev, MESH, mesh_identity):
         WCC = wo_cores[0]   # concat core
         owner_fi = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + j_ % 2 and c_.y == j_ // 2)) for j_ in range(16)]
         assert all(f_ in WOT for f_ in owner_fi), "owners must be wo cores"
+        assert WCC == owner_fi[0], (WCC, owner_fi[0])   # writers reach the concat core through the owner table
         # wo-core multicast rects: ext columns (x 10-11, rows 0..y_ar-1) + bottom rows left / right of the DRAM split (x < x_ar)
         _yb = min(fcores[f_].y for f_ in ext_list if fcores[f_].x < 10)   # first ext-only row (8)
         def _pr(lx0, ly0, lx1, ly1):
@@ -593,23 +638,138 @@ def setup_bench(dev, MESH, mesh_identity):
                 g = (A_ * sg) @ woq[L]
             gold_wo.append(g)
         print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {rot}, rects {RECTS_E}", flush=True)
+    HC = []
+    if RQNR:
+        assert RWO and ('MKA_WORING', '1') not in MKDEF and ('MKA_TREEFLAG', '1') not in MKDEF
+        QT_ = 8 * NU
+        MKDEF = MKDEF + [('MKA_INVHD_BITS', f"{f2u(1.0 / 256)}u")]
+        # head cores: owners (10 + s, k) except the concat core (its CB_A must keep zero rows for the A multicast)
+        HC = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + (j_ % 2) and c_.y == j_ // 2)) for j_ in range(1, 8)]
+        assert WCC not in HC and all(h_ in WOT for h_ in HC)
+        torch.manual_seed(13)
+        g_q = (0.5 + torch.rand(6, 256)) / 16.0   # q head-norm gamma with the 1/sqrt(256) softmax scale folded in
+        g_k = 0.5 + torch.rand(256)
+        pos = torch.tensor([float(CTX - 4 + (r_ % 4)) for r_ in range(M)])   # verify row 4u + j at position pos_u + j
+        inv = 1.0 / (1.0e7 ** (torch.arange(32).float() / 32.0))
+        ang = pos[:, None] * inv[None, :]
+        cos_t, sin_t = torch.cos(ang), torch.sin(ang)
+        hg = torch.zeros(NHEAD_ := 7, 10, TILE, TILE)
+        for h_ in range(7):
+            g_ = g_q[h_] if h_ < 6 else g_k
+            for t_ in range(8): hg[h_, t_] = g_[t_ * 32:(t_ + 1) * 32][None, :].repeat(TILE, 1)
+            hg[h_, 8], hg[h_, 9] = cos_t, sin_t
+        hg_t = ttnn.from_torch(hg.reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hgq = ttnn.to_torch(hg_t).float().reshape(7, 10, TILE, TILE)
+        kd_t = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, 8 * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        def norm_rope(X, h_):   # X [M, 256] -> gamma * X / rms, RoPE on dims 0-63 (bf16 constants as on device)
+            gq_ = torch.cat([hgq[h_, t_, 0] for t_ in range(8)])
+            Y = X / torch.sqrt((X * X).mean(-1, keepdim=True) + 1e-6) * gq_
+            c_, s_ = hgq[h_, 8], hgq[h_, 9]
+            y0, y1 = Y[:, :32].clone(), Y[:, 32:64].clone()
+            Y[:, :32], Y[:, 32:64] = y0 * c_ - y1 * s_, y1 * c_ + y0 * s_
+            return Y
+        gold_k = {}
+        for L in range(NL):
+            if not is_attn_layer(L): continue
+            Xq = gold_qkv[L].double()
+            qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
+            gold_k[L] = norm_rope(Xq[:, 48 * TILE:56 * TILE].float(), 6)
+            g_ = torch.zeros(NU, TILE, DHD)
+            kq_, vq_ = KVQ[L]
+            for u_ in range(NU):
+                Qu = torch.zeros(TILE, DHD)
+                for h_ in range(6):
+                    for j_ in range(4): Qu[4 * h_ + j_] = qh[h_][4 * u_ + j_]
+                Qu = Qu.bfloat16().float()
+                p_ = torch.exp(Qu[:NQH * T] @ kq_[u_].T)
+                g_[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+            golds_s[L] = g_
+            # wo golden from the new attention output (gate unchanged)
+            A_ = torch.zeros(M, 48 * TILE)
+            sg = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE])
+            for u_ in range(NU):
+                for h_ in range(6):
+                    for j_ in range(4):
+                        A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+            gold_wo[L] = (A_ * sg) @ woq[L]
+        print(f"[rqnr] head cores {HC} (q 0-5, k 6), Q from the real qkv; SDPA golden recomputed", flush=True)
+    def head_args_w(fi):
+        if not RQNR: return []
+        return [HC.index(fi) if fi in HC else 255] + sum(([fphys[h_].x, fphys[h_].y] for h_ in HC), []) + [kd_t.buffer_address()]
+    RMASK = ('MKA_RMASK', '1') in MKDEF
+    MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if RMASK else {}   # last-block core -> user
+    if RMASK:
+        assert RQNR
+        mk = torch.ones(NU, TILE, TILE)
+        GOLD_NOMASK = {}
+        for u_ in range(NU):
+            for r_ in range(NQH * T):
+                j_ = r_ % 4
+                mk[u_, r_, 28 + j_ + 1:] = 0.0   # bench: pos_u = CTX - 4, last block = positions CTX-32 .. CTX-1
+        mk_t = ttnn.from_torch(mk.reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for L in range(NL):   # SDPA (and wo) golden with the causal mask
+            if not is_attn_layer(L): continue
+            Xq = gold_qkv[L].double()
+            qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
+            g_ = torch.zeros(NU, TILE, DHD)
+            kq_, vq_ = KVQ[L]
+            for u_ in range(NU):
+                Qu = torch.zeros(TILE, DHD)
+                for h_ in range(6):
+                    for j_ in range(4): Qu[4 * h_ + j_] = qh[h_][4 * u_ + j_]
+                Qu = Qu.bfloat16().float()
+                p_ = torch.exp(Qu[:NQH * T] @ kq_[u_].T)
+                g_nm = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+                p_[:, CTX - TILE:] *= mk[u_, :NQH * T]
+                g_[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+                GOLD_NOMASK.setdefault(L, torch.zeros(NU, TILE, DHD))[u_, :NQH * T] = g_nm
+            golds_s[L] = g_
+            A_ = torch.zeros(M, 48 * TILE)
+            sg = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE])
+            for u_ in range(NU):
+                for h_ in range(6):
+                    for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+            gold_wo[L] = (A_ * sg) @ woq[L]
+        print(f"[rmask] causal mask on last-block cores {sorted(MASKC)}", flush=True)
+    def head_args_r(fi):
+        if not RQNR: return []
+        return [hg_t.buffer_address() if fi in HC else 0, HC.index(fi) * 10 if fi in HC else 0,
+                mk_t.buffer_address() if fi in MASKC else 0, MASKC.get(fi, 0)]
     def wo_wargs(fi):
         if not RWO: return []
         t_ = WOT.get(fi, [])
         oc = owner_fi.index(fi) if fi in owner_fi else 255
         return [len(t_)] + (t_ + [0] * 5)[:5] + [1 if fi == WCC else 0, oc] + RECTS_E + [self_re(fi) if fi in WOT else 3] + \
-            sum(([fphys[f_].x, fphys[f_].y] for f_ in owner_fi), []) + [wod.buffer_address()]
+            sum(([fphys[f_].x, fphys[f_].y] for f_ in owner_fi), []) + [wod.buffer_address()] + head_args_w(fi)
+    WORING = ('MKA_WORING', '1') in MKDEF
+    WOHELP = os.environ.get('MKA_WOHELP', '1') == '1' and not WORING and not QSK   # QSK: Wo fills the ext ring in the GDN layers
+    HLP = {}   # helper fi -> (ext fi, page offset, pages);  OWN[ext fi] = own pages
+    OWN = {}
+    if RWO:
+        _sl = sorted(stream_idx, key=lambda f_: stream_idx[f_])
+        for e_, fe in enumerate(wo_cores):
+            np_ = len(WOT[fe]) * 48
+            hs_ = [fs for k_, fs in enumerate(_sl) if WOHELP and k_ % len(wo_cores) == e_]
+            parts = len(hs_) + 1
+            cut = [round(np_ * i_ / parts) for i_ in range(parts + 1)]
+            OWN[fe] = cut[1]
+            for j_, fs in enumerate(hs_): HLP[fs] = (fe, cut[j_ + 1], cut[j_ + 2] - cut[j_ + 1])
     def wo_rargs(fi):
         if not RWO: return []
         cc = fphys[WCC]
-        return [len(WOT.get(fi, [])), (WOP[fi] * banks + WOB[fi]) if fi in WOT else 0, WOPL, wo_all.buffer_address(), cc.x, cc.y]
+        own = OWN.get(fi, 0); hl = (len(WOT[fi]) * 48 - own) if fi in WOT else 0
+        he, ho, hn = HLP.get(fi, (None, 0, 0))
+        hp = fphys[he] if he is not None else fphys[fi]
+        hpage = (WOP[he] * banks + WOB[he] + ho * banks) if he is not None else 0
+        return [len(WOT.get(fi, [])), (WOP[fi] * banks + WOB[fi]) if fi in WOT else 0, WOPL, wo_all.buffer_address(), cc.x, cc.y,
+                own, hl, hp.x, hp.y, hpage, hn, ho] + head_args_r(fi)
     def build(out, coord=None):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
                ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
-               ttnn.cb_descriptor_from_sharded_tensor(16, out), (cbd(6, ttnn.bfloat8_b, QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
+               ttnn.cb_descriptor_from_sharded_tensor(16, out), (cbd(6, ttnn.bfloat8_b, 240 if QSK else QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
                ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
                # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
-               cbd(9, ttnn.bfloat16, 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
+               cbd(9, ttnn.bfloat16, QT_ if RQNR else 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
                cbd(24, ttnn.bfloat16, 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
                cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
         if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
@@ -622,6 +782,8 @@ def setup_bench(dev, MESH, mesh_identity):
             cbs = [c_ for c_ in cbs if not any(f_.buffer_index == 17 for f_ in c_.format_descriptors)]
             assert sum(1 for c_ in cbs for f_ in c_.format_descriptors if f_.buffer_index == 17) == 0
             cbs = cbs + [cbd(17, ttnn.bfloat16, 5, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs),
+                         *([cbd(31, ttnn.bfloat8_b, 5 * 48, ext_crs)] if WORING else []),
+                         *([cbd(31, ttnn.float32, 8, ext_crs), cbd(30, ttnn.bfloat16, 11, ext_crs)] if RQNR else []),
                          ttnn.CBDescriptor(total_size=48 * _p, core_ranges=ext_crs, format_descriptors=[
                              ttnn.CBFormatDescriptor(buffer_index=21, data_format=ttnn.bfloat16, page_size=_p),
                              ttnn.CBFormatDescriptor(buffer_index=22, data_format=ttnn.bfloat16, page_size=_p)])]
@@ -677,11 +839,11 @@ def setup_bench(dev, MESH, mesh_identity):
                 b, s0 = dn_slot(i); selfr = 0 if c.x < split else 1
                 mb, ms0 = mx_slot(i)
                 r_mk = [wgu_all.buffer_address(), gp] + RECTS + [selfr, hbuf.buffer_address(), rk if rk >= 2 else 255, g_, PGU]
-                w_mk = [i] + RECTS + [selfr] + RXY + [hbuf.buffer_address(), wd_all.buffer_address(), s0 * banks + b, wgu_all.buffer_address(), gp, rk if rk < 2 else 255, g_, PGU, PDN, *((wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if fi in QROLE else 0, PQL) if RQKV else (wm_all.buffer_address(), ms0 * banks + mb, PWM))]
+                w_mk = [i] + RECTS + [selfr] + RXY + [hbuf.buffer_address(), wd_all.buffer_address(), s0 * banks + b, wgu_all.buffer_address(), gp, rk if rk < 2 else 255, g_, PGU, PDN, *((wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if fi in QROLE else 0, PQL) if RQKV else (wm_all.buffer_address(), ms0 * banks + mb, PWM))]
             else:
                 g_ = 0; i = 0
                 r_mk = [0, 0] + z10 + [0, 0, 255, 0, 0]
-                w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 3 + ([wq_all.buffer_address(), q_slot[fi] * banks + q_bank[fi], PQL] if (RQKV and fi in QROLE) else [0] * 3)
+                w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 3 + ([wq_all.buffer_address(), q_slot.get(fi, 0) * banks + q_bank.get(fi, 0), PQL] if (RQKV and fi in QROLE) else [0] * 3)
             selff = 0 if c.x < fsplit else (2 if (ARC and c.y >= _ay[0]) else 1)
             i_s = stream_idx.get(fi, 0)
             rd_w = (isS or EXT) and not WO_NOC0 and not RWO   # RWO: the wo bytes are real (ext ring)
@@ -692,7 +854,7 @@ def setup_bench(dev, MESH, mesh_identity):
             _wa = wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
                 [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
             nrecv = len(ch0) + len(ch1)
-            _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if RWO else []) if RQKV else [])
+            _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if RWO else []) + ([1 if fi in HC else 0, 1 if (fi in HC or fi in MASKC) else 0] + ([(RNG[fi][1] - RNG[fi][0] - 1) if fi in MASKC else 0xFFFFFFFF] if RMASK else []) if RQNR else []) if RQKV else [])
             if V12:   # v12 arg tails (appended after every other arg)
                 vw_, vr_, vc_ = v_args(fi, c)
                 _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
@@ -708,7 +870,7 @@ def setup_bench(dev, MESH, mesh_identity):
         acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
         acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []
         def _ks(rng, defs, rr, ww, cc, wdefs=(), cdefs=()):
-            return [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []),
+            return [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []) + (acc_qo if RQNR else []),
                                     runtime_args=rr, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
               ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs + list(wdefs), compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []) + (ttnn.TensorAccessorArgs(wv_all).get_compile_time_args() if V12 else []),
                                     runtime_args=ww, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),

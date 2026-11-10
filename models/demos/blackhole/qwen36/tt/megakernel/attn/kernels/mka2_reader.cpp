@@ -4,6 +4,13 @@
 //         on the Q root.
 //   STREAM, gate|up core: the even gate|up groups of layer L (fm11 engine) -> CB_W.
 //   STREAM, NOC1 root (2/3): layer L's h root broadcast.
+#if defined(MKA_OPTSZ)   // size experiment (spec §17): optimize the whole TU for size; must precede every include
+#if MKA_OPTSZ == 1
+#pragma GCC optimize("Os")
+#else
+#pragma GCC optimize("Oz")
+#endif
+#endif
 #include "api/debug/kernel_profiler.hpp"
 #include "mka2_common.hpp"
 #if defined(MK_V12)
@@ -23,6 +30,9 @@ void kernel_main() {
     constexpr auto wo_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 #if defined(MKA_RQKV)
     constexpr auto wq_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+#if defined(MKA_RQNR)
+    constexpr auto qo_args_r = TensorAccessorArgs<wq_args.next_compile_time_args_offset()>();   // bf16 DRAM tiles
+#endif
     constexpr uint32_t MWTB = MKA_MWTB, QSL = 2 * KT;   // STREAM_EXT slice: 2 output tiles x full K, BFP8
     constexpr uint32_t TRID_PQ = 9;
 #endif
@@ -85,6 +95,30 @@ void kernel_main() {
 #if defined(MKA_RWO)
     const uint32_t rw_nt = get_arg_val<uint32_t>(a++), rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
     const uint32_t wo_addr2 = get_arg_val<uint32_t>(a++), cc_x = get_arg_val<uint32_t>(a++), cc_y = get_arg_val<uint32_t>(a++);
+    // MKA_WOHELP: ext cores read only rw_own pages of their Wo slice; STREAM helpers read the rest into their scratch
+    // and forward it into the ext ring (spreads the 8.4 MB DRAM issue over 116 readers, like the stand-in's reads)
+    const uint32_t rw_own = get_arg_val<uint32_t>(a++), rw_hlp = get_arg_val<uint32_t>(a++);
+    const uint32_t h_x = get_arg_val<uint32_t>(a++), h_y = get_arg_val<uint32_t>(a++), h_page = get_arg_val<uint32_t>(a++);
+    const uint32_t h_np = get_arg_val<uint32_t>(a++), h_off = get_arg_val<uint32_t>(a++);
+#if defined(MKA_RQNR)
+    {   // head constants (gamma x 8, cos, sin): 10 bf16 tiles from DRAM, once per pass
+        const uint32_t hg_addr = get_arg_val<uint32_t>(a++), hg_page = get_arg_val<uint32_t>(a++);
+        const uint32_t mk_addr = get_arg_val<uint32_t>(a++), mk_page = get_arg_val<uint32_t>(a++);
+        if (hg_addr || mk_addr) {   // slots 0-9 head constants, slot 10 this core's causal mask tile
+            cb_reserve_back(CB_HG, 11);
+            if (hg_addr) {
+                const auto hg = TensorAccessor(qo_args_r, hg_addr, 2048);
+                for (uint32_t t = 0; t < 10; ++t) noc_async_read(hg.get_noc_addr(hg_page + t), get_write_ptr(CB_HG) + t * 2048, 2048);
+            }
+            if (mk_addr) {
+                const auto mk = TensorAccessor(qo_args_r, mk_addr, 2048);
+                noc_async_read(mk.get_noc_addr(mk_page), get_write_ptr(CB_HG) + 10 * 2048, 2048);
+            }
+            noc_async_read_barrier();
+            cb_push_back(CB_HG, 11);
+        }
+    }
+#endif
     const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
     constexpr uint32_t TRID_WOR = 10;
 #endif
@@ -105,7 +139,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < V_NROW; ++i) vcy[i] = get_arg_val<uint32_t>(a++);
     const uint32_t vrsbuf = get_arg_val<uint32_t>(a++), vhbuf = get_arg_val<uint32_t>(a++);
     const uint32_t vobx = get_arg_val<uint32_t>(a++), voby = get_arg_val<uint32_t>(a++), vpbuf = get_arg_val<uint32_t>(a++);
+#if defined(MK_V12_RCT)   // R as a compile-time constant (fixed per deployment): the R < 32 face paths compile out
+    constexpr uint32_t vR = MK_V12_RCT; a++;
+#else
     const uint32_t vR = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t vg[NVG];
     for (uint32_t i = 0; i < NVG; ++i) vg[i] = get_arg_val<uint32_t>(a++);
     // owner x delivery (AR stand-in) on NOC1: west inside the row, no wrap (the BRISC/NOC0 path wraps the torus and
@@ -173,10 +211,22 @@ void kernel_main() {
     const uint32_t La0 = is_attn(0) ? 0 : next_att(0);
     if (qrole == QR_EXT && La0 < NL && !(kPqGdn && gdn_run(La0) > 0)) {   // the first attention layer's slice up front
         cb_reserve_back(CB_PQ, QSL);
+#if defined(MKA_QSK)
+        noc_async_read(wow.get_noc_addr(rw_page + La0 * rw_pl), get_write_ptr(CB_PQ), rw_nt * WK * MWTB);
+#else
         noc_async_read(wq.get_noc_addr(pq_page + La0 * pq_layer), get_write_ptr(CB_PQ), QSL * MWTB);
+#endif
         noc_async_read_barrier();
         cb_push_back(CB_PQ, QSL);
     }
+#if defined(MKA_RWO) && defined(MKA_WORING)
+    if (rw_nt && La0 < NL && !(kPqGdn && gdn_run(La0) > 0)) {
+        cb_reserve_back(CB_WOR, WOR_SLOT);
+        noc_async_read(wow.get_noc_addr(rw_page + La0 * rw_pl), get_write_ptr(CB_WOR), rw_nt * WK * MWTB);
+        noc_async_read_barrier();
+        cb_push_back(CB_WOR, WOR_SLOT);
+    }
+#endif
 #endif
     const auto wo = TensorAccessor(wo_args, wo_addr, WOTB);
     const uint32_t scr = get_write_ptr(CB_SCR);
@@ -201,13 +251,19 @@ void kernel_main() {
             if (Ln < NL) {
                 DeviceZoneScopedN("R-PQGDN");
                 const uint32_t run = gdn_run(Ln), j = L - (Ln - run);
-                const uint32_t p0 = j * QSL / run, p1 = (j + 1) * QSL / run;
+#if defined(MKA_QSK)
+                const uint32_t pqn = rw_nt * WK;   // §18: the ext ring is free of qkv -> it carries the Wo slice (WORING-like)
+                const uint64_t src = wow.get_noc_addr(rw_page + Ln * rw_pl);
+#else
+                const uint32_t pqn = QSL;
+                const uint64_t src = wq.get_noc_addr(pq_page + Ln * pq_layer);
+#endif
+                const uint32_t p0 = j * pqn / run, p1 = (j + 1) * pqn / run;
                 if (L > 0) noc_semaphore_wait_min(l1w(gs[GS_XRDY]), L);   // layer L has started
 #if defined(MKA_PQDELAY)
                 spin_cycles(MKA_PQDELAY);
 #endif
                 if (j == 0) cb_reserve_back(CB_PQ, QSL);
-                const uint64_t src = wq.get_noc_addr(pq_page + Ln * pq_layer);
                 const uint32_t dst = get_write_ptr(CB_PQ);
                 noc_async_read_set_trid(TRID_PQ);
                 for (uint32_t p = p0, c = 0; p < p1; p += MKA_PQCH, ++c) {
@@ -221,6 +277,23 @@ void kernel_main() {
                 noc_async_read_set_trid(0);
                 noc_async_read_barrier_with_trid(TRID_PQ);
                 if (j + 1 == run) cb_push_back(CB_PQ, QSL);
+#if defined(MKA_RWO) && defined(MKA_WORING)
+                if (rw_nt) {   // the next attention layer's Wo slice, same share / throttle (ring popped by the last wo)
+                    const uint32_t wn = rw_nt * WK, w0 = j * wn / run, w1 = (j + 1) * wn / run;
+                    if (j == 0) cb_reserve_back(CB_WOR, WOR_SLOT);
+                    const uint64_t wsrc = wow.get_noc_addr(rw_page + Ln * rw_pl);
+                    const uint32_t wdst = get_write_ptr(CB_WOR);
+                    noc_async_read_set_trid(TRID_PQ);
+                    for (uint32_t p = w0, c = 0; p < w1; p += MKA_PQCH, ++c) {
+                        if (c && (c % MKA_PQN) == 0) { noc_async_read_barrier_with_trid(TRID_PQ); noc_async_read_set_trid(TRID_PQ); }
+                        const uint32_t n = (w1 - p) < MKA_PQCH ? (w1 - p) : MKA_PQCH;
+                        noc_async_read(wsrc + p * MWTB, wdst + p * MWTB, n * MWTB);
+                    }
+                    noc_async_read_set_trid(0);
+                    noc_async_read_barrier_with_trid(TRID_PQ);
+                    if (j + 1 == run) cb_push_back(CB_WOR, WOR_SLOT);
+                }
+#endif
             }
 #if defined(MK_V12)
             v12_ox(L);
@@ -252,6 +325,16 @@ void kernel_main() {
                 dst += nb * BLK * WTB;
             }
             noc_async_read_set_trid(0);
+        }
+#endif
+#if defined(MKA_QSK)
+        if (att && vrole == 1) {   // spec §18: this core's qkv partial to the column rows above (NOC1); the writer does rows below
+            DeviceZoneScopedN("R-QRS");
+            cb_wait_front(CB_VA, V_NTM);
+            *vw(vg[VG_LA]) = 2 * L + 1;
+            v_rs_send(get_read_ptr(CB_VA), 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+            noc_semaphore_wait_min(vw(vg[VG_LB]), 2 * L + 1);
+            cb_pop_front(CB_VA, V_NTM);
         }
 #endif
 #if defined(MKA_RQKV) && defined(MKA_PQPOST)
@@ -286,7 +369,11 @@ void kernel_main() {
 #else
             // in-window fill of the NEXT ATTENTION layer's slice (with MKA_PQGDN only when no GDN layer precedes it)
             const uint32_t Lq = next_att(L);
+#if defined(MKA_QSK)
+            const bool pq_go = false;
+#else
             const bool pq_go = qrole == QR_EXT && Lq < NL && !(kPqGdn && gdn_run(Lq) > 0);
+#endif
 #endif
             const uint32_t pq_g0 = ngrp > 2 ? 2 : (ngrp ? ngrp - 1 : 0);
             const uint32_t pq_ng = ngrp > pq_g0 ? ngrp - pq_g0 : 1;
@@ -296,7 +383,35 @@ void kernel_main() {
             const uint64_t pq_src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
 #endif
 #if defined(MKA_RWO)
-            const uint32_t wo_np = rw_nt * WK;   // pages of this core's Wo slice
+#if defined(MKA_RWOSKIP)
+            const uint32_t wo_np = 0;   // DEBUG timing split: Wo slice not read (stale ring; wo PCC invalid)
+#elif defined(MKA_WORING) || defined(MKA_QSK)
+            const uint32_t wo_np = 0;   // filled during the GDN layers (own ring CB 31; under QSK the ext ring CB_PQ)
+#else
+            const uint32_t wo_np = rw_own;   // pages of this core's Wo slice it reads itself (rest: STREAM helpers)
+#endif
+            // helper (STREAM): h_np pages of an ext core's slice, 8 at a time via CB_SCR, once that ring is free
+            // (QFLAG >= A + 1: every qkv producer, ext included, finished, so every ring was popped)
+            uint32_t h_done = 0;
+            const uint64_t h_src = wow.get_noc_addr(h_page + L * rw_pl);
+            auto help_some = [&](bool all) {
+                if (!h_np || !att) return;
+                if (!all && *l1w(gs[GS_QFLAG]) < A + 1) return;
+                if (all) noc_semaphore_wait_min(l1w(gs[GS_QFLAG]), A + 1);
+                const uint32_t ring = *l1w(gs[GS_RADDR]);
+                while (h_done < h_np) {
+                    const uint32_t n = (h_np - h_done) < 8 ? (h_np - h_done) : 8;
+                    noc_async_read_set_trid(TRID_WOR + 1);
+                    noc_async_read(h_src + h_done * MWTB, scr, n * MWTB);
+                    noc_async_read_set_trid(0);
+                    noc_async_read_barrier_with_trid(TRID_WOR + 1);
+                    noc_async_write(scr, get_noc_addr(h_x, h_y, ring + (h_off + h_done) * MWTB), n * MWTB);
+                    noc_async_writes_flushed();   // scratch reused next chunk
+                    h_done += n;
+                    if (!all) break;   // one chunk per KV group
+                }
+                if (h_done == h_np) { noc_async_write_barrier(); noc_semaphore_inc(get_noc_addr(h_x, h_y, gs[GS_WOHC]), h_np); }
+            };
             const uint32_t wo_per = (wo_np + pq_ng - 1) / pq_ng;
             uint32_t wo_done = 0, wo_dst = 0;
             bool wo_rsv = false;
@@ -305,6 +420,7 @@ void kernel_main() {
             for (uint32_t b = b0; b < b1; b += NBB) {
                 const uint32_t nb = (b1 - b) < NBB ? (b1 - b) : NBB;
 #if defined(MKA_RWO)
+                if (h_np && h_done < h_np) help_some(false);
                 if (rw_nt && gi >= pq_g0 && wo_done < wo_np) {   // the ring is free once this layer's qkv popped it
                     if (!wo_rsv) { cb_reserve_back(CB_PQ, QSL); wo_dst = get_write_ptr(CB_PQ); wo_rsv = true; }
                     const uint32_t n = (wo_np - wo_done) < wo_per ? (wo_np - wo_done) : wo_per;
@@ -371,7 +487,7 @@ void kernel_main() {
                 cb_push_back(CB_PQ, QSL);
             }
 #endif
-#if defined(MKA_RWO)
+#if defined(MKA_RWO) && !defined(MKA_WORING) && !defined(MKA_QSK)   // QSK: the slice was pushed in the GDN layers
             if (rw_nt) {
                 if (!wo_rsv) { cb_reserve_back(CB_PQ, QSL); wo_dst = get_write_ptr(CB_PQ); wo_rsv = true; }
                 if (wo_done < wo_np) {
@@ -380,8 +496,10 @@ void kernel_main() {
                     noc_async_read_set_trid(0);
                 }
                 noc_async_read_barrier_with_trid(TRID_WOR);
+                if (rw_hlp) noc_semaphore_wait_min(l1w(gs[GS_WOHC]), rw_hlp * (A + 1));   // helpers' pages landed
                 cb_push_back(CB_PQ, QSL);   // full slot (straddle-safe ring), wo_np pages valid
             }
+            if (h_np && h_done < h_np) help_some(true);
 #endif
         }
         if (att) {   // SDPA: tree reduce (pull), cumulative global semaphores (over attention layers: A)
@@ -505,9 +623,9 @@ void kernel_main() {
         v12_ox(L);   // owners, attention-type layers (after this core's SDPA work)
         if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
             cb_wait_front(CB_VA, V_NTM);
-            *vw(vg[VG_LA]) = L + 1;
+            *vw(vg[VG_LA]) = V_LV(L);
             v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows above (NOC1)
-            noc_semaphore_wait_min(vw(vg[VG_LB]), L + 1);
+            noc_semaphore_wait_min(vw(vg[VG_LB]), V_LV(L));
             cb_pop_front(CB_VA, V_NTM);
             if (vk < vnn) {
                 cb_wait_front(CB_VHO2, 1);
@@ -537,6 +655,9 @@ void kernel_main() {
     // reset the tree's global semaphores for the next pass: every inc into them for layer NL - 1 happened before the
     // matching wait above returned, so nothing arrives after this point
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
+#if defined(MKA_RWO)
+    if (rw_hlp) *l1w(gs[GS_WOHC]) = 0;
+#endif
 #if defined(MKA_RQKV)
     if (qrole == QR_EXT && PQ_WS) *l1w(gs[GS_PQH]) = 0;   // the writer's last set (NL - 2) preceded our last wait
 #endif

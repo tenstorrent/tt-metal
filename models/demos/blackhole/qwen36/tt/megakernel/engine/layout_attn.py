@@ -216,3 +216,90 @@ def rows_R(n_users):
         if r <= c:
             return c
     raise ValueError(f"n_users={n_users}: R={r} > 32")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Spec §18 (v1.2+): qkv(+gate) split-K on the 80 STREAM cores, consumed through v12's shared split-K + column-RS unit.
+# Core (column c, K-row k) of the 10 x 8 STREAM rectangle computes the partial of its column's N-list over K tiles
+# 20k .. 20k+19 (x from CB_XK), then the column reduce-scatter gives row r the tiles {r, r + 8} of the N-list.
+QKV_COLS, QKV_KROWS, QKV_KPR = 10, 8, KT // 8   # 20 K tiles per K-row
+
+
+@dataclass(frozen=True)
+class SplitKSlice:
+    col: int
+    krow: int
+    first: int       # first qkv tile of the column's N-list
+    nt: int          # tiles in the N-list (11 or 12)
+    k0: int          # first K tile (20 * krow)
+
+    @property
+    def pages(self):
+        return self.nt * QKV_KPR
+
+    def page_of(self, kl, j):
+        """k-major order inside the slice: matmul_block in1 index kl * nt + j."""
+        return kl * self.nt + j
+
+
+def qkv_splitk_slices(qn=QN, cols=QKV_COLS, krows=QKV_KROWS):
+    """{(col, krow): SplitKSlice}. N-lists are contiguous qkv tile ranges: columns 0..(qn % cols)-1 get one extra tile
+    (112 over 10: 12, 12, 11 x 8)."""
+    base, extra = divmod(qn, cols)
+    out, first = {}, 0
+    for c in range(cols):
+        nt = base + (1 if c < extra else 0)
+        for k in range(krows):
+            out[(c, k)] = SplitKSlice(c, k, first, nt, k * QKV_KPR)
+        first += nt
+    assert first == qn
+    return out
+
+
+def qkv_splitk_owner(sl, tile):
+    """Row of the column that holds the reduced tile `tile` after the column RS: row r owns N-list entries {r, r + 8}."""
+    return (tile - sl.first) % QKV_KROWS
+
+
+def qkv_kind(tile):
+    """Route class of a qkv tile: 'q' (0-47, head tile // 8), 'k' (48-55), 'v' (56-63), 'gate' (64-111)."""
+    return 'q' if tile < 48 else ('k' if tile < 56 else ('v' if tile < 64 else 'gate'))
+
+
+def splitk_bank_assign(slices, stream_xy, bank_loc, banks):
+    """Byte-balanced bank-local placement of the 80 slices (nearest bank first). stream_xy[(col, krow)] = logical (x, y)
+    of that STREAM core. Returns bank{key}, offset{key} (bank-local page offset), pages_per_layer (multiple of banks)."""
+    keys = sorted(slices)
+    caps = [len(keys) // banks + (1 if b < len(keys) % banks else 0) for b in range(banks)]
+    pairs = sorted((abs(stream_xy[key][0] - bx) + abs(stream_xy[key][1] - by), key, b)
+                   for key in keys for b, (bx, by) in enumerate(bank_loc))
+    bank = {}
+    for _, key, b in pairs:
+        if key in bank or caps[b] == 0:
+            continue
+        bank[key] = b
+        caps[b] -= 1
+    off, tot = {}, [0] * banks
+    for key in keys:
+        off[key] = tot[bank[key]]
+        tot[bank[key]] += slices[key].pages
+    return bank, off, max(tot) * banks
+
+
+def pack_qkv_splitk_layer(w, slices, bank, off, banks, pages_per_layer, scale=1.0):
+    """One layer's page block (torch [pages_per_layer, 32, 32]) of w [H, QN*32] (gamma-folded) in split-K order."""
+    import torch
+
+    pg = torch.zeros(pages_per_layer, TILE, TILE)
+    for key, sl in slices.items():
+        for kl in range(QKV_KPR):
+            k = sl.k0 + kl
+            for j in range(sl.nt):
+                n = sl.first + j
+                pg[(off[key] + sl.page_of(kl, j)) * banks + bank[key]] = w[k * TILE:(k + 1) * TILE, n * TILE:(n + 1) * TILE] * scale
+    return pg
+
+
+def splitk_filler_args(slices, bank, off, banks, pages_per_layer, page_bytes=1088):
+    """Per-core inputs for v12's slot filler: {(col, krow): (base page, bytes, per-layer page stride)}."""
+    return {key: (off[key] * banks + bank[key], sl.pages * page_bytes, pages_per_layer) for key, sl in slices.items()}

@@ -57,7 +57,7 @@ import program as _mk_program
 globals().update(_mk_program.setup_bench(dev, MESH, mesh_identity))
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + ([ar_out] if REAL_AR else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + ([ar_out] if REAL_AR else []) + [out_t], prog); ttnn.synchronize_device(dev)
     if REAL_AR and AR_SEQ:   # this pass's golds from the residual the previous pass left (rstd stays the CB 20 stand-in)
         for L_ in range(NL):
             _g, _u, _d = vlayer(L_)
@@ -88,14 +88,17 @@ for it in range(ITERS):
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
     if RQKV:
         qv = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
+        QRW = V_R if (QSK and V_R < 32) else M   # split-K at R < 32: only rows 0..R-1 of x / the partials travel (v12 faces)
+        qv = qv[:, :QRW]
         for L in range(NL):
             if not is_attn_layer(L): continue
             if RWO: gold_qkv[L][:, 64 * TILE:112 * TILE] = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE]) if it == 0 else gold_qkv[L][:, 64 * TILE:112 * TILE]
-            pq_ = torch.corrcoef(torch.stack([qv[L].flatten(), gold_qkv[L].flatten()]))[0, 1].item()
+            gq_ = gold_qkv[L][:QRW]
+            pq_ = torch.corrcoef(torch.stack([qv[L].flatten(), gq_.flatten()]))[0, 1].item()
             nan_ = [n for n in range(QN) if not torch.isfinite(qv[L][:, n*TILE:(n+1)*TILE]).all()]
             if nan_: print(f"[rqkv] iter {it} layer {L} non-finite tiles {nan_}", flush=True)
-            bad_ = [n for n in range(QN) if torch.corrcoef(torch.stack([qv[L][:, n*TILE:(n+1)*TILE].flatten(), gold_qkv[L][:, n*TILE:(n+1)*TILE].flatten()]))[0, 1].item() < 0.999]
-            print(f"[rqkv] iter {it} layer {L} qkv pcc {pq_:.5f} max|err| {(qv[L]-gold_qkv[L]).abs().max().item():.4f} |gold|max {gold_qkv[L].abs().max().item():.3f} bad tiles {bad_[:12]}", flush=True)
+            bad_ = [n for n in range(QN) if torch.corrcoef(torch.stack([qv[L][:, n*TILE:(n+1)*TILE].flatten(), gq_[:, n*TILE:(n+1)*TILE].flatten()]))[0, 1].item() < 0.999]
+            print(f"[rqkv] iter {it} layer {L} rows {QRW} qkv pcc {pq_:.5f} max|err| {(qv[L]-gq_).abs().max().item():.4f} |gold|max {gq_.abs().max().item():.3f} bad tiles {bad_[:12]}", flush=True)
     vs = ttnn.to_torch(outs).float().reshape(NL, NU, TILE, DHD)
     for L in range(NL):
         v_, g2 = vs[L][:, :NQH * T], golds_s[L][:, :NQH * T]
@@ -107,7 +110,17 @@ for it in range(ITERS):
                 vu, gu_ = vs[L][uu, :NQH * T], golds_s[L][uu, :NQH * T]
                 print(f"[mka2]   L{L} user {uu} pcc {torch.corrcoef(torch.stack([vu.flatten(), gu_.flatten()]))[0, 1].item():.4f} |v|max {vu.abs().max().item():.3e} |g|max {gu_.abs().max().item():.3e} vs-other-layer-gold pcc {torch.corrcoef(torch.stack([vu.flatten(), golds_s[1-L][uu, :NQH*T].flatten()]))[0, 1].item() if NL > 1 else 0:.4f}", flush=True)
         if not is_attn_layer(L): continue
+        if RMASK and L in GOLD_NOMASK:   # discrimination: device error vs the masked and the unmasked golden
+            gn_ = GOLD_NOMASK[L][:, :NQH * T]
+            print(f"[rmask] iter {it} layer {L} |dev-masked| {(v_ - g2).norm().item():.4e}  |dev-unmasked| {(v_ - gn_).norm().item():.4e}  |masked-unmasked| {(g2 - gn_).norm().item():.4e}", flush=True)
         print(f"[mka2] iter {it} layer {L} sdpa pcc {torch.corrcoef(torch.stack([v_.flatten(), g2.flatten()]))[0, 1].item():.5f} max|err| {(v_-g2).abs().max().item():.4f}", flush=True)
+    if RQNR:
+        kv_ = ttnn.to_torch(kd_t).float().reshape(NL, M, -1)
+        for L in range(NL):
+            if not is_attn_layer(L): continue
+            KRW = V_R if (QSK and V_R < 32) else M
+            pk_ = torch.corrcoef(torch.stack([kv_[L][:KRW].flatten(), gold_k[L][:KRW].flatten()]))[0, 1].item()
+            print(f"[rqnr] iter {it} layer {L} rows {KRW} k head pcc {pk_:.5f} max|err| {(kv_[L][:KRW] - gold_k[L][:KRW]).abs().max().item():.4f}", flush=True)
     if RWO:
         wv_ = ttnn.to_torch(wod).float().reshape(NL, M, -1)
         for L in range(NL):
