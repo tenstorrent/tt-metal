@@ -467,3 +467,20 @@ Still stand-ins: the GDN step (64 µs; prefix split targets ~−19 µs/layer ≈
 (attention track), and the AR itself (split-K v0.6 removes x replication; the AR alone is 21.7 µs today, so the AR core
 must also drop to ≤15 µs, or overlap). The mixed-engine numbers predate the bank-0 fix (MKA_WOBANK), so its attention
 layers are pessimistic; rebase onto 1d559f26341 before the next mixed run.
+
+**v0.6 owner placement (changed): owners IN-ROW at logical x = 10, 11, rows 0-7** (-mk-v12 silicon, d30u20,
+1ebb16fd568, v12/XDEL_RESULTS.md):
+
+| x delivery to 80 cores | median |
+|---|---|
+| Replicated (8 owners × 40 KB) | 49.0 µs |
+| Split-K, pinned owners (0..7, 8..9), alternating NoC | 14.0 µs (all NOC0 35.6, all NOC1 17.0; shared vertical links wrap the torus) |
+| **Split-K, owners (10,k) and (11,k) for K-row k, NOC1 multicast west within the row** | **4.42 µs** (max 7.75) |
+
+- New pinning: owner 2k → (10,k), owner 2k+1 → (11,k). The CB_X chunk mapping is unchanged (chunk j = 10 tiles).
+- The down stage's owner sums also land in-row: (k,n) partials go to (10,k) and (11,k).
+- Role overlap is allowed (roles are per phase). Columns 10-11 are also STREAM_EXT (v0.5 qkv/wo) and part of the ATTN
+  set. The AR-owner phase (reduce-scatter landing, rstd partials, row multicast) is time-disjoint from their SDPA/EXT
+  phases. L1 on these cores: AR buffers ≤~100 KB (CB 17-20) + EXT ring + SDPA working set must fit, so check the
+  budget at integration.
+- **The AR track must move its owner coordinates** from (0..7, 8..9) to (10..11, 0..7).
