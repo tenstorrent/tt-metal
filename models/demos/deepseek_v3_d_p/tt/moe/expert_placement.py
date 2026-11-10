@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cache-coupled, bijective placement for GLM-5.3 on an eight-bank 8x4 Galaxy.
+"""Cache-coupled, bijective expert placement on an eight-bank 8x4 Blackhole Galaxy.
+
+Applies to any MoE whose routed experts are spread evenly over the 32 chips in column-major order
+(global expert = (col * 8 + row) * experts_per_chip + slot) with one dispatch group per mesh column,
+for example GLM-5.3 (256 experts, 8 per chip) and Kimi-K3 (896 experts, 28 per chip). A placement
+may move an expert to any chip row of its own column, never across columns, so dispatch groups and
+the expert count per chip are unchanged.
 
 Scoring and stable selection stay in logical expert order. Only the final IDs
 are translated; the prepared BF4 cache stores the matching original weight bytes.
@@ -10,18 +16,23 @@ are translated; the prepared BF4 cache stores the matching original weight bytes
 import json
 from pathlib import Path
 
-NUM_EXPERTS = 256
-GROUP_SIZE = 64
+MESH_SHAPE = (8, 4)
+NUM_DEVICES = MESH_SHAPE[0] * MESH_SHAPE[1]
+NUM_GROUPS = MESH_SHAPE[1]
 PLACEMENT_FILE = "layer_{layer}.expert_placement.json"
 
 
-def validate_mapping(mapping):
-    if not isinstance(mapping, list) or len(mapping) != NUM_EXPERTS or any(type(x) is not int for x in mapping):
-        raise ValueError("GLM placement requires 256 integer expert IDs")
-    if sorted(mapping) != list(range(NUM_EXPERTS)):
-        raise ValueError("GLM placement must retain every expert exactly once")
-    if any(logical // GROUP_SIZE != physical // GROUP_SIZE for logical, physical in enumerate(mapping)):
-        raise ValueError("GLM placement must preserve the four TP dispatch groups")
+def validate_mapping(mapping, num_experts=None):
+    if not isinstance(mapping, list) or any(type(x) is not int for x in mapping):
+        raise ValueError("Expert placement requires a list of integer expert IDs")
+    n = len(mapping)
+    if n == 0 or n % NUM_DEVICES or (num_experts is not None and n != num_experts):
+        raise ValueError(f"Expert placement requires {num_experts or 'a multiple of 32'} expert IDs, got {n}")
+    if sorted(mapping) != list(range(n)):
+        raise ValueError("Expert placement must retain every expert exactly once")
+    group_size = n // NUM_GROUPS
+    if any(logical // group_size != physical // group_size for logical, physical in enumerate(mapping)):
+        raise ValueError("Expert placement must preserve the four TP dispatch groups")
     return mapping
 
 
@@ -54,18 +65,22 @@ def load_placement(
         raise ValueError("A placed expert cache requires cache-only loading")
     if (
         mesh_device.arch() != ttnn.Arch.BLACKHOLE
-        or tuple(mesh_device.shape) != (8, 4)
-        or mesh_device.get_num_devices() != 32
+        or tuple(mesh_device.shape) != MESH_SHAPE
+        or mesh_device.get_num_devices() != NUM_DEVICES
     ):
-        raise ValueError("GLM placement requires an 8x4 Blackhole Galaxy")
-    if (num_experts, top_k, experts_per_chip, dispatch_group_size, num_dispatch_groups) != (256, 8, 8, 8, 4):
-        raise ValueError("GLM placement requires 256 experts, top-8, and SP=8/TP=4")
+        raise ValueError("Expert placement requires an 8x4 Blackhole Galaxy")
+    if (
+        (dispatch_group_size, num_dispatch_groups) != MESH_SHAPE
+        or experts_per_chip * NUM_DEVICES != num_experts
+        or not 0 < top_k <= 32
+    ):
+        raise ValueError("Expert placement requires experts spread evenly over SP=8/TP=4 and top-k <= 32")
     if expert_dtype != ttnn.bfloat4_b or data.get("expert_dtype") != "BFLOAT4_B":
-        raise ValueError("GLM placement requires the original BF4 expert cache")
-    if data.get("mesh_shape") != [8, 4] or data.get("num_experts") != 256:
+        raise ValueError("Expert placement requires the original BF4 expert cache")
+    if data.get("mesh_shape") != list(MESH_SHAPE) or data.get("num_experts") != num_experts:
         raise ValueError("Placement cache topology or expert count mismatch")
-    mapping = validate_mapping(data.get("logical_to_physical"))
-    inverse = validate_mapping(data.get("physical_to_logical"))
+    mapping = validate_mapping(data.get("logical_to_physical"), num_experts)
+    inverse = validate_mapping(data.get("physical_to_logical"), num_experts)
     if any(inverse[p] != e for e, p in enumerate(mapping)):
         raise ValueError("Placement inverse does not match its expert map")
     return mapping

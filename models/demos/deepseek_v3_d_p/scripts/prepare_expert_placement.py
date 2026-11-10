@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare a separate GLM-5.3 BF4 expert cache without changing any quantized shard.
+"""Prepare a separate placed BF4 expert cache without changing any quantized shard.
 
-Source and destination are the actual glm_5_3_bh_32dev/8x4 cache directories.
+Source and destination are the actual <model>_bh_32dev/8x4 cache directories (GLM-5.3, Kimi-K3, ...);
+the expert count, and so experts per chip, comes from the plan.
 The plan uses kind=bijective_within_tp_group and global layer-number keys.
 Keep source available: unchanged tensors are symlinked. Completion markers enable
 matching router translation and reject partially prepared caches.
@@ -16,7 +17,7 @@ import struct
 from pathlib import Path
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.expert_placement import PLACEMENT_FILE, validate_mapping
+from models.demos.deepseek_v3_d_p.tt.moe.expert_placement import NUM_DEVICES, PLACEMENT_FILE, validate_mapping
 
 
 def shard_hashes(path):
@@ -70,27 +71,28 @@ def weight_path(layer, slot, projection):
 def selected_layers(plan):
     if plan.get("kind") != "bijective_within_tp_group" or not isinstance(plan.get("layers"), dict):
         raise ValueError("Expected a bijective_within_tp_group placement plan with layers")
-    selected = {}
+    selected, num_experts = {}, None
     for key, entry in plan["layers"].items():
         if not isinstance(entry, dict):
             raise ValueError(f"Invalid layer entry: {key}")
         layer = int(key)
-        if str(layer) != key or not 3 <= layer <= 77 or type(entry.get("enabled")) is not bool:
+        if str(layer) != key or layer < 0 or type(entry.get("enabled")) is not bool:
             raise ValueError(f"Invalid layer entry: {key}")
-        physical = validate_mapping(entry.get("physical_to_logical"))
-        inverse = [0] * 256
+        physical = validate_mapping(entry.get("physical_to_logical"), num_experts)
+        num_experts = len(physical)
+        inverse = [0] * num_experts
         for slot, logical in enumerate(physical):
             inverse[logical] = slot
-        if "logical_to_physical" in entry and validate_mapping(entry["logical_to_physical"]) != inverse:
+        if "logical_to_physical" in entry and validate_mapping(entry["logical_to_physical"], num_experts) != inverse:
             raise ValueError(f"Inconsistent inverse for layer {layer}")
         if not entry["enabled"]:
-            if physical != list(range(256)):
+            if physical != list(range(num_experts)):
                 raise ValueError(f"Disabled layer {layer} must use the identity permutation")
             continue
         selected[layer] = (physical, inverse)
     if not selected:
         raise ValueError("The plan enables no layers")
-    return selected
+    return selected, num_experts
 
 
 def prepare(source, destination, plan_path):
@@ -104,9 +106,13 @@ def prepare(source, destination, plan_path):
         raise ValueError("Source already has placement markers; use the original logical-order cache")
     plan_bytes = plan_path.read_bytes()
     plan = json.loads(plan_bytes)
-    selected = selected_layers(plan)
+    selected, num_experts = selected_layers(plan)
+    per_chip = num_experts // NUM_DEVICES
     moved = {
-        weight_path(layer, slot, proj) for layer in selected for slot in range(8) for proj in ("gate", "up", "down")
+        weight_path(layer, slot, proj)
+        for layer in selected
+        for slot in range(per_chip)
+        for proj in ("gate", "up", "down")
     }
     for relative in moved:
         if not (source / relative).is_file():
@@ -121,7 +127,7 @@ def prepare(source, destination, plan_path):
         data = {
             "version": 1,
             "layer": layer,
-            "num_experts": 256,
+            "num_experts": num_experts,
             "complete": False,
             "kind": plan["kind"],
             "mesh_shape": [8, 4],
@@ -134,7 +140,11 @@ def prepare(source, destination, plan_path):
         }
         marker.write_text(json.dumps(data, indent=2) + "\n")
         markers[layer] = (marker, data)
-    for path in source.rglob("*.tensorbin"):
+    # Link every unchanged file, not only tensorbins: some models' caches also carry completion
+    # markers (Kimi-K3's hidden .layer_N.complete) that their loaders check before reading.
+    for path in source.rglob("*"):
+        if path.is_dir():
+            continue
         relative = path.relative_to(source)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +153,7 @@ def prepare(source, destination, plan_path):
     for layer, (permutation, _) in sorted(selected.items()):
         marker, data = markers[layer]
         for projection in ("gate", "up", "down"):
-            relatives = [weight_path(layer, slot, projection) for slot in range(8)]
+            relatives = [weight_path(layer, slot, projection) for slot in range(per_chip)]
             originals = [ttnn.load_tensor(source / relative) for relative in relatives]
             shards = [ttnn.get_device_tensors(tensor) for tensor in originals]
             hashes = [shard_hashes(source / relative) for relative in relatives]
@@ -153,9 +163,9 @@ def prepare(source, destination, plan_path):
                 ordered, expected = [], {}
                 for row in range(8):
                     for col in range(4):
-                        physical = (col * 8 + row) * 8 + slot
+                        physical = (col * 8 + row) * per_chip + slot
                         logical = permutation[physical]
-                        old_slot, old_row, old_col = logical % 8, logical // 8 % 8, logical // 64
+                        old_slot, old_row, old_col = logical % per_chip, logical // per_chip % 8, logical // (8 * per_chip)
                         ordered.append(shards[old_slot][old_row * 4 + old_col])
                         expected[(row, col)] = hashes[old_slot][(old_row, old_col)]
                 merged = ttnn.from_host_shards(ordered, ttnn.MeshShape(8, 4))
@@ -179,7 +189,7 @@ def prepare(source, destination, plan_path):
         temporary_marker = marker.with_suffix(".partial.json")
         temporary_marker.write_text(json.dumps(data, indent=2) + "\n")
         temporary_marker.replace(marker)
-        print(f"Layer {layer}: 24 files, 768 quantized shards verified", flush=True)
+        print(f"Layer {layer}: {3 * per_chip} files, {3 * per_chip * NUM_DEVICES} quantized shards verified", flush=True)
     print(f"Prepared {len(selected)} placed layers in {destination}", flush=True)
 
 

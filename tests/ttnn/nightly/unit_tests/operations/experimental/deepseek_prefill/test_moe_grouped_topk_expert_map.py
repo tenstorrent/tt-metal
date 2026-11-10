@@ -39,6 +39,9 @@ def test_fused_expert_map_exact_and_cached(mesh_device, expect_error):
         (33, 256, 32, 1, ttnn.float32, ttnn.TILE_LAYOUT, "sigmoid"),
         (65, 256, 8, 8, ttnn.float32, ttnn.TILE_LAYOUT, "sqrtsoftplus"),
         (33, 384, 8, 1, ttnn.bfloat16, ttnn.TILE_LAYOUT, "sigmoid"),
+        # Kimi-K3 gate shape: 896 experts, top-16, one group, 640 rows per chip.
+        (640, 896, 16, 1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "sigmoid"),
+        (65, 896, 16, 1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "sigmoid"),
     ]
     for case_index, (rows, experts, k, groups, dtype, layout, score_func) in enumerate(cases):
         scores = torch.randn((8 * rows, experts), generator=rng)
