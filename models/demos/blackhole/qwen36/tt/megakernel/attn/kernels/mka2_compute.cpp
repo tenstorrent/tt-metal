@@ -67,9 +67,6 @@ constexpr uint32_t V_NNM = 7, V_NTM = 14, V_KTR = 20, V_OT = 10, V_NCOL = 10, V_
 // (DEST_TO_SRCA reuse adds truncate: -3% on an 8-way sum, never use them for this).
 constexpr uint32_t V_RSO = 2;
 #if defined(MKA_QSK)
-#if !defined(MKA_RWO)
-#error "MKA_QSK needs MKA_RWO (owner first-tile arg qn0; the ext ring carries Wo)"
-#endif
 #ifndef QSK_GK
 #define QSK_GK 6
 #endif
@@ -87,7 +84,7 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
     }
 }
 #endif
-#if defined(MKA_RQKV)
+#if defined(MKA_RQKV) || defined(MK_V12)
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
@@ -135,7 +132,7 @@ void kernel_main() {
 #if defined(MKA_RQKV)
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
-#if defined(MKA_RWO)
+#if defined(MKA_RWO) || defined(MKA_QSK)
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
 #endif
 #if defined(MKA_RQNR)
@@ -237,6 +234,7 @@ void kernel_main() {
         cb_pop_front(CB_HSQ, 8);
     };
 #endif
+#endif   // MKA_RQKV (v12 args follow the qkv / head args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
 #if defined(MKA_ROLE_STREAM)
@@ -359,6 +357,7 @@ void kernel_main() {
 #else
 #define V12_OSUM(L) do {} while (0)
 #endif
+#if defined(MKA_RQKV)   // reopened after the v12 block
 #if defined(MKA_QSK)
     // spec §18 split-K qkv on STREAM core (column c, K-row vk): partial = x[K-row] @ slot M over this column's N-list
     // (qk0 = nt tiles, passes of <= 6 DST tiles), item-major into CB_VA (+ own items vk, vk + 8 into CB_VOWN). Slot M is
@@ -398,7 +397,6 @@ void kernel_main() {
         cb_wait_front(CB_VRT, 1);
         cb_wait_front(CB_VOWN, 2);
         cb_wait_front(CB_VRS, 16);
-        CZONE("C-QRS");
         cb_reserve_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
         tile_regs_acquire();
         for (uint32_t m = 0; m < qnt; ++m) v_rs_sum(CB_VOWN, m, CB_VRS, vk, m, 1, m);

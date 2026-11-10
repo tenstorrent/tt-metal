@@ -52,10 +52,11 @@ void kernel_main() {
     constexpr uint32_t MWTB = WTB;
 #endif
 #if defined(MK_V12)
-#if !defined(MKA_RQKV)
-#error "MK_V12 needs MKA_RQKV (CB 20 rstd stand-in shared with the qkv PROJ)"
-#endif
+#if defined(MKA_RQKV)
     constexpr auto wv_args = TensorAccessorArgs<qo_args.next_compile_time_args_offset()>();
+#else   // MIXN mixer stand-in (no qkv_out accessor): the v12 rstd stand-in (CB 43) is set up by the host on its own
+    constexpr auto wv_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+#endif
 #if defined(MK_REAL_AR) && defined(MK_AR_GAMMA)
     constexpr auto gm_args = TensorAccessorArgs<wv_args.next_compile_time_args_offset()>();   // γ table (DRAM)
 #endif
@@ -127,12 +128,6 @@ void kernel_main() {
     uint32_t ow_x[16], ow_y[16];
     for (uint32_t i = 0; i < 16; ++i) { ow_x[i] = get_arg_val<uint32_t>(a++); ow_y[i] = get_arg_val<uint32_t>(a++); }
     const uint32_t wod_addr = get_arg_val<uint32_t>(a++);
-#if defined(MKA_RQNR)
-    const uint32_t head_id = get_arg_val<uint32_t>(a++);   // 0-5 q heads, 6 k head, 255 none
-    uint32_t hd_x[NHEAD], hd_y[NHEAD];
-    for (uint32_t i = 0; i < NHEAD; ++i) { hd_x[i] = get_arg_val<uint32_t>(a++); hd_y[i] = get_arg_val<uint32_t>(a++); }
-    const uint32_t kd_addr = get_arg_val<uint32_t>(a++);   // DRAM debug copy of the k head output
-#endif
     const auto wod = TensorAccessor(qo_args, wod_addr, 2048);   // debug copy of every owner's CB_XO (bf16 tiles)
     auto mcast_ext = [&](uint32_t src, uint32_t dst, uint32_t bytes) {
         for (uint32_t i = 0; i < 3; ++i) {
@@ -151,6 +146,18 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 #endif
+#if defined(MKA_RQNR)   // q/k head-norm cores (independent of MKA_RWO since the GDN24 decouple)
+    const uint32_t head_id = get_arg_val<uint32_t>(a++);   // 0-5 q heads, 6 k head, 255 none
+    uint32_t hd_x[NHEAD], hd_y[NHEAD];
+    for (uint32_t i = 0; i < NHEAD; ++i) { hd_x[i] = get_arg_val<uint32_t>(a++); hd_y[i] = get_arg_val<uint32_t>(a++); }
+    const uint32_t kd_addr = get_arg_val<uint32_t>(a++);   // DRAM debug copy of the k head output
+#if !defined(MKA_RWO)
+    if (head_id == 0) {   // no concat core without RWO: head core 0 publishes the (uniform) CB_A address
+        mcast_word<NRF>(gs[GS_AADDR], get_write_ptr(CB_A), rf, self_rf, 0);
+        noc_async_write_barrier();
+    }
+#endif
+#endif
     const auto qo = TensorAccessor(qo_args, qo_addr, QOTB);
     constexpr uint32_t QATB = 4096;   // fp32 partial tile
     // the qkv tail of layer L on this core: ship / receive the K-half partial, write the rstd-scaled output tiles
@@ -165,8 +172,6 @@ void kernel_main() {
     auto qkv_route = [&](uint32_t L) {
         { DeviceZoneScopedN("W-QO"); cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt); }
         const uint32_t qsrc = get_read_ptr(CB_QO);
-#if defined(MKA_RWO)
-        uint32_t n_gate = 0;
 #if defined(MKA_RQNR)
         noc_semaphore_wait_min(l1w(gs[GS_AADDR]), 1);
         const uint32_t a_base = *l1w(gs[GS_AADDR]);
@@ -179,6 +184,8 @@ void kernel_main() {
             ++hcnt[n / 8];
         }
 #endif
+#if defined(MKA_RWO)
+        uint32_t n_gate = 0;
         if (qn + (qnt - 1) * QST >= 64) {   // sig(gate) tiles -> the concat core's CB_S slot n - 64 (it multicasts S after its V loop)
             noc_semaphore_wait_min(l1w(gs[GS_SADDR]), 1);
             const uint32_t s_base = *l1w(gs[GS_SADDR]);
@@ -187,10 +194,12 @@ void kernel_main() {
                 if (n >= 64) { noc_async_write(qsrc + j * QOTB, get_noc_addr(ow_x[0], ow_y[0], s_base + (n - 64) * QOTB), QOTB); ++n_gate; }
             }
         }
+#endif
         noc_async_write_barrier();
 #if defined(MKA_RQNR)
         for (uint32_t i = 0; i < NHEAD; ++i) if (hcnt[i]) noc_semaphore_inc(get_noc_addr(hd_x[i], hd_y[i], gs[GS_HCNT]), hcnt[i]);
 #endif
+#if defined(MKA_RWO)
         if (n_gate) noc_semaphore_inc(get_noc_addr(ow_x[0], ow_y[0], gs[GS_SCNT]), n_gate);
 #endif
         noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
@@ -566,9 +575,23 @@ void kernel_main() {
     if (IS_STREAM) qsk_start(0);
 #endif
     constexpr uint32_t TRID_V = 5;
+#if defined(MKA_GDN24)
+    // += 1 multicast to a device-local global sem on the 24 GDN cores (rows 8-9), from the Q root
+    auto gdn_inc = [&](uint32_t addr) {
+        constexpr uint32_t gr[2][5] = MKA_GDN_RECTS;
+        for (uint32_t i = 0; i < 2; ++i)
+            noc_semaphore_inc_multicast(get_noc_multicast_addr(gr[i][0], gr[i][1], gr[i][2], gr[i][3], addr), 1, gr[i][4]);
+        noc_async_atomic_barrier();
+    };
+#endif
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
         const uint32_t A = aidx(L);
+#if defined(MKA_GDN24) && defined(MKA_GDN_ATTNKV)
+        // attn_kv (GDN I/O schedule, modes 3 / 4): += 1 at attention-layer start (mode 4 starts the post-attention state
+        // prefetch) and += 1 at SDPA end (mode 3 releases its held writes) -> 2 per attention layer, cumulative
+        if (att && is_qroot) gdn_inc(MKA_GDN_ATTNKV);
+#endif
         if (!IS_STREAM && !att) { V12_OWNER(L); continue; }   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
@@ -677,6 +700,11 @@ void kernel_main() {
 #endif
         if (!att) {   // GDN-type layer: next layer's weights stream during the GDN stand-in stall (GDN step + out-proj + AR)
             DeviceZoneScopedN("W-GDN");
+#if defined(MKA_GDN24)
+            // GDN role (spec §17 / §20): this GDN-type layer's step may read its prefix input -> in_ready += 1 on the 24
+            // GDN cores (rows 8-9), from the Q root (device-local global sem; the GDN cores wait >= g + 1, then reset)
+            if (is_qroot) gdn_inc(MKA_GDN_INREADY);
+#endif
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             // GDN-type layer: the MLP slots of layer L are pushed here (before plan_layer(L + 1) reserves the other slot)
             V_MLP_WAIT_PUSH();
@@ -684,11 +712,24 @@ void kernel_main() {
             npc = ip = outstanding = 0;
             if (L + 1 < NL) plan_layer(L + 1, true);
             V12_PLAN_MLP(L);
+#if defined(MKA_GDN_WAIT)
+            // G2: the GDN role's step is the stall -- every one of the MKA_GDN_NC GDN cores multicasts out_ready += 1 to
+            // every engine core once its output rows landed; GDN layer g (= L - attention layers before L) is done at
+            // MKA_GDN_NC * (g + 1). The program-end reset is below.
+            volatile tt_l1_ptr uint32_t* gdn_or = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY);
+            const uint32_t gdn_tgt = MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1);
+#define MKA_GDN_STALL_DONE() (invalidate_l1_cache(), *gdn_or >= gdn_tgt)
+#endif
 #if defined(MK_V12)
             {   // pump the pieces through the GDN stall instead of blocking on the command buffer up front (a blocking
                 // issue_some held some writers ~20 us past the stall and delayed their MLP)
                 const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+#if defined(MKA_GDN_WAIT)
+                (void)t0;
+                while (!MKA_GDN_STALL_DONE()) {
+#else
                 while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)MKA_S_GDN) {
+#endif
 #if defined(MK_NO_PIECES)
                     v_pump();
 #else
@@ -704,7 +745,15 @@ void kernel_main() {
             }
 #else
             issue_some(true);
+#if defined(MKA_GDN_WAIT)
+            {
+                DeviceZoneScopedN("W-GDNW");
+                while (!MKA_GDN_STALL_DONE()) {
+                }
+            }
+#else
             spin_cycles(MKA_S_GDN);
+#endif
 #endif
             spin_cycles(S_AR);
 #if defined(MKA_RQKV) && !defined(MK_REAL_AR)   // real AR: XRDY only after the MLP AR's deliveries (below)
@@ -910,6 +959,9 @@ void kernel_main() {
             DeviceZoneScopedN("W-WOAR");
             if (is_qroot) {
                 noc_semaphore_wait_min(l1w(gs[GS_ADONE]), NUSR * (A + 1));
+#if defined(MKA_GDN24) && defined(MKA_GDN_ATTNKV)
+                gdn_inc(MKA_GDN_ATTNKV);   // SDPA end (all roots done): attn_kv = 2A + 2
+#endif
 #if defined(MKA_RWO)
                 noc_semaphore_wait_min(l1w(gs[GS_WODONE]), 16 * (A + 1));   // every owner chunk of wo complete
 #endif
@@ -1081,6 +1133,10 @@ void kernel_main() {
     if (head_id < NHEAD) *l1w(gs[GS_HCNT]) = 0;
 #endif
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
+#if defined(MKA_GDN_WAIT)
+    // out_ready: this core awaited MKA_GDN_NC * (number of GDN layers) in its last W-GDN, i.e. every increment landed
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY) = 0;
+#endif
 #if defined(MKA_RQKV)
     // XRDY: every STREAM_EXT core awaited the last multicast (NL - 1) before its last qkv, which precedes this point
     // only on that core; the reset of a late remote copy is covered by the next pass starting from 0 only after the
