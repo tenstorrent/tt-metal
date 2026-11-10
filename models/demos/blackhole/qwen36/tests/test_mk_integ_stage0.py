@@ -42,7 +42,7 @@ class _FakeModel:
 
 
 @run_for_blackhole()
-@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 def test_mk_stage0_probe_traced(mesh_device, monkeypatch):
     monkeypatch.setenv("QWEN36_R16_MEGAKERNEL", "stage0")

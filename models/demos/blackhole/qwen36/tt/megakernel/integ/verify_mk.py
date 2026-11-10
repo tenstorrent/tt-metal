@@ -10,7 +10,7 @@ import os
 
 from models.demos.blackhole.qwen36.tt.megakernel.integ.phase_table import WORDS, build_phase_table, checksum, summary
 
-_KDIR = "models/demos/blackhole/qwen36/tt/megakernel/integ/kernels"
+_KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")  # absolute: the tree may be an overlay
 
 
 def megakernel_mode():
