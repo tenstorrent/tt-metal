@@ -324,6 +324,11 @@ class Qwen3VlTextEncoder(Module):
 
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
+        fast_path = getattr(self, "fast_path", False)
+        if fast_path:
+            # [B, S, H] -> [B, 1, S, H] once (a view): every layer op accepts rank 4 and the CCL helpers then skip
+            # their reshape pair (6 view ops per layer); the taps are squeezed back below
+            hidden_states = ttnn.unsqueeze(hidden_states, 1)
 
         for layer_idx, decoder_layer in enumerate(self.layers):
             hidden_states = decoder_layer.forward(
@@ -334,13 +339,16 @@ class Qwen3VlTextEncoder(Module):
             # Vision also enters here, not only at the embeddings: the tower's intermediate features are
             # added to the vision rows of the first few layers.
             if layer_idx < len(deepstack_rows):
-                hidden_states = ttnn.add(hidden_states, deepstack_rows[layer_idx])
+                rows = ttnn.unsqueeze(deepstack_rows[layer_idx], 1) if fast_path else deepstack_rows[layer_idx]
+                hidden_states = ttnn.add(hidden_states, rows)
             if self._activation_layers is not None and layer_idx in self._activation_layers:
                 captured.append(hidden_states)
 
         if self._activation_layers is None:
             # default: final normalized hidden state
             captured = [self.norm.forward(hidden_states)]
+        if fast_path:
+            captured = [ttnn.squeeze(x, 1) for x in captured]
 
         if self._sp_axis is not None:
             captured = [
@@ -458,8 +466,18 @@ class Qwen3VlDecoderLayer(Module):
         return x + residual
 
 
+def interleaved_rope_permutation(head_dim: int) -> torch.Tensor:
+    return torch.stack([torch.arange(head_dim // 2), torch.arange(head_dim // 2) + head_dim // 2], dim=1).flatten()
+
+
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L590
 class Qwen3VlAttention(Module):
+    # Fused RoPE on the interleaved (adjacent-pair) layout: q / k projection rows and norm weights are permuted per
+    # head at load and the caller passes cos / sin interleaved. Set before loading (own weight-cache subfolder).
+    interleaved_rope: bool = False
+    # The layer input is [B, 1, S, H]: no unsqueeze before the head split, rank 4 out of the head concat.
+    rank4_input: bool = False
+
     def __init__(
         self,
         *,
@@ -546,6 +564,20 @@ class Qwen3VlAttention(Module):
         self._kv_gather_capacity = ctx.kv_gather_capacity
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self.interleaved_rope:
+            hd = self._head_dim
+            perm = interleaved_rope_permutation(hd)
+            for key in ("q_proj.weight", "k_proj.weight"):
+                if key in state:
+                    w = state[key]
+                    state[key] = w.unflatten(0, [-1, hd])[:, perm].flatten(0, 1)
+            for key in ("q_proj.bias", "k_proj.bias"):
+                if key in state:
+                    state[key] = state[key].unflatten(0, [-1, hd])[:, perm].flatten(0, 1)
+            for key in ("q_norm.weight", "k_norm.weight"):
+                if key in state:
+                    state[key] = state[key][..., perm]
+
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
             q = q.unflatten(0, [self._group_count, self._group_size, self._head_dim])
             k = k.unflatten(0, [self._group_count, 1, self._head_dim])
@@ -608,7 +640,7 @@ class Qwen3VlAttention(Module):
         x = self.qkv_proj.forward(x)
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.unsqueeze(x, 1),
+            x if self.rank4_input else ttnn.unsqueeze(x, 1),
             num_heads=self._num_local_heads,
             num_kv_heads=self._num_local_kv_heads,
             transpose_k_heads=False,
@@ -619,8 +651,27 @@ class Qwen3VlAttention(Module):
         k = self.k_norm.forward(k)
 
         cos, sin = pos_embeds
-        q = _apply_rope(q, cos, sin)
-        k = _apply_rope(k, cos, sin)
+        if self.interleaved_rope:
+            if getattr(self, "_rope_trans_mat", None) is None:
+                from ...utils.mochi import get_rot_transformation_mat
+                from ...utils.tensor import bf16_tensor
+
+                self._rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self._device)
+                self._rope_cfg = ttnn.init_device_compute_kernel_config(
+                    self._device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                )
+            q = ttnn.experimental.rotary_embedding_llama(
+                q, cos, sin, self._rope_trans_mat, compute_kernel_config=self._rope_cfg
+            )
+            k = ttnn.experimental.rotary_embedding_llama(
+                k, cos, sin, self._rope_trans_mat, compute_kernel_config=self._rope_cfg
+            )
+        else:
+            q = _apply_rope(q, cos, sin)
+            k = _apply_rope(k, cos, sin)
 
         if self._sp_axis is not None:
             assert attention_bias is None, "SP decoder attention supports only the causal path (attention_bias=None)"
@@ -636,7 +687,10 @@ class Qwen3VlAttention(Module):
                 compute_kernel_config=self._sdpa_compute_kernel_config,
             )
 
-        x = ttnn.transformer.concatenate_heads(x)
+        if self.rank4_input:
+            x = ttnn.experimental.nlp_concat_heads(x)  # the same kernel as concatenate_heads, [B, 1, S, H] out
+        else:
+            x = ttnn.transformer.concatenate_heads(x)
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)

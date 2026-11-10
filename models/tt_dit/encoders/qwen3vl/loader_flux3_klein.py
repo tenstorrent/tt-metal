@@ -20,7 +20,7 @@ from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...pipelines.flux3_klein.weights_flux3_klein import checkpoint_id
 from ...utils import cache
-from .model_qwen3vl import Qwen3VlTextEncoder
+from .model_qwen3vl import Qwen3VlAttention, Qwen3VlTextEncoder
 
 NUM_LAYERS = 32
 TAP_LAYERS = tuple(k - 1 for k in (4, 8, 12, 16, 20, 24, 28, 32))
@@ -88,11 +88,17 @@ def build_flux3_klein_text_encoder(
         is_fsdp=is_fsdp,
         high_fidelity_linears=True,
     )
+    # fused interleaved RoPE, rank-4 hidden state through the layers; the prompt encoder runs the attended rows only
+    for m in _walk_modules(encoder):
+        if isinstance(m, Qwen3VlAttention):
+            m.interleaved_rope = True
+            m.rank4_input = True
+    encoder.fast_path = True
     shards = sorted((Path(snapshot) / SUBFOLDER).glob("model-*.safetensors"))
     cache.load_model(
         encoder,
         model_name=f"flux3_klein_text_encoder_{checkpoint_id(*shards)}",
-        subfolder=f"text_encoder_L{NUM_LAYERS}",
+        subfolder=f"text_encoder_L{NUM_LAYERS}_ilrope",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
         mesh_device=mesh_device,
@@ -100,3 +106,9 @@ def build_flux3_klein_text_encoder(
         get_torch_state_dict=lambda: load_flux3_klein_text_state_dict(snapshot),
     )
     return encoder, config
+
+
+def _walk_modules(module):
+    yield module
+    for _, child in module.named_children():
+        yield from _walk_modules(child)

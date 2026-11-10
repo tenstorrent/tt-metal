@@ -19,7 +19,16 @@ from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tracing import traced_function
-from .vae import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDesc, VaeNormDescGroup, VaeResnetBlock, _norm
+from .vae import (
+    VaeContext,
+    VaeConv2d,
+    VaeMidBlock,
+    VaeNormDesc,
+    VaeNormDescGroup,
+    VaeResnetBlock,
+    _get_neighbor_pad_num_links,
+    _norm,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -28,14 +37,18 @@ if TYPE_CHECKING:
 class VaeDownsample2d(Module):
     def __init__(self, *, channels: int, ctx: VaeContext) -> None:
         super().__init__()
-        if ctx.h_factor > 1 or ctx.w_factor > 1:
-            raise NotImplementedError("spatial sharding of the strided VAE downsample is not implemented")
+        if ctx.w_factor > 1:
+            raise NotImplementedError("W sharding of the strided VAE downsample is not implemented")
+        # H-sharded: the bottom padding row comes from the next device (zeros below the image), which matches the
+        # unsharded conv when every shard has an even row count
+        self._h_halo = ctx.h_factor > 1
+        self._ctx = ctx
         self.conv = Conv2d(
             channels,
             channels,
             kernel_size=3,
             stride=2,
-            padding=(0, 1, 0, 1),
+            padding=(0, 0 if self._h_halo else 1, 0, 1),
             mesh_device=ctx.device,
             in_mesh_axis=ctx.tp_axis,
             out_mesh_axis=None,
@@ -68,6 +81,23 @@ class VaeDownsample2d(Module):
         conv.slice_params = {**conv.__dict__.get("slice_params", {}), mesh: instance_table}
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self._h_halo:
+            ccl = self._ctx.ccl_manager
+            axis = self._ctx.h_mesh_axis
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.unsqueeze(x, 0)
+            x = ccl.neighbor_pad(
+                x,
+                dims=[2],
+                pad_left=[0],
+                pad_right=[1],
+                padding_mode="zeros",
+                axes=[axis],
+                neighbor_sems=[ccl.get_np_ping_pong_semaphore(axis)],
+                num_links=[_get_neighbor_pad_num_links(ccl, x, 2)],
+            )
+            x = ttnn.squeeze(x, 0)
         _, h, w, _ = x.shape
         self._cap_slices(int(h), int(w))
         return self.conv.forward(x, use_persistent_buffer=False)
@@ -134,8 +164,10 @@ class Flux2VaeEncoder(Module):
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
             msg = "ccl_manager must be provided if tensor parallelism is used"
             raise ValueError(msg)
-        if ctx.h_factor > 1 or ctx.w_factor > 1:
-            raise NotImplementedError("Flux2VaeEncoder shards channels only; spatial sharding is not implemented")
+        if ctx.w_factor > 1:
+            raise NotImplementedError("Flux2VaeEncoder shards channels and H only; W sharding is not implemented")
+        # H sharding: every conv gets its halo from neighbor_pad (the stride-2 downsamplers' (0, 1) padding becomes a
+        # one-row bottom halo), the GroupNorms reduce their stats over H; the caller gathers the output along H.
 
         channel_counts = [block_out_channels[0], *block_out_channels]
         eps = 1e-6

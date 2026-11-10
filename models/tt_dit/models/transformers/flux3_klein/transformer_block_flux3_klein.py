@@ -25,6 +25,58 @@ HEADS = 24
 HEAD_DIM = 128
 MLP_RATIO = 3
 SDPA_Q_CHUNK_MAX = 128
+# Ring SDPA (q, k) chunks by per-device rows (SP8 x TP4): q fills whole rounds of (head, q chunk) units on the SDPA
+# grid, k divides the shard. Rows not listed keep the shared rule (q clamped to SDPA_Q_CHUNK_MAX).
+RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
+    # 2048x2048: 6 heads x 16 q chunks = 96 units, one round
+    2560: (160, 512),
+    # 2048x2048 + 1 reference: 96 units, one round
+    3072: (192, 512),
+    # 2048x2048 + 1 reference, 1024-row text bucket: 102 units, one round
+    2688: (160, 512),
+    # 4096x4096, 1024-row text bucket: k 640 divides the shard
+    8320: (128, 640),
+    # 2048x2048 + 1 reference, 2048-row text bucket: 108 units, one round
+    2816: (160, 512),
+    # 4096x4096 + 1 reference, 2048-row text bucket: k 640 divides the shard
+    8960: (128, 640),
+}
+
+# Streaming path only: its smaller score block fits q 160 x k 640 at 8320 rows (3 rounds of 160 instead of 4 of 128).
+RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
+    8320: (160, 640),
+    # 4096x4096 + 1 reference, 2048-row text bucket: 2 rounds of q 256
+    8960: (256, 512),
+}
+
+
+class Flux3KleinAttention(Attention):
+    # ring SDPA on the streaming compute path with fp32 dest (bf16 score block); False: the compute_common.hpp path
+    ring_sdpa_streaming_fp32_dest = True
+
+    def forward(self, *, sequence_1: ttnn.Tensor, **kwargs):
+        self._local_rows = int(sequence_1.shape[-2])
+        return super().forward(sequence_1=sequence_1, **kwargs)
+
+    def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
+        rows = getattr(self, "_local_rows", None)
+        chunks = (self.ring_sdpa_streaming_fp32_dest and RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS.get(rows)) or (
+            RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows)
+        )
+        if chunks is None:
+            config = super().get_ring_sdpa_program_config(per_device_seq_len)
+        else:
+            key = ("local", rows, chunks)
+            if key not in self.ring_sdpa_program_config:
+                self.ring_sdpa_program_config[key] = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
+                    q_chunk_size=chunks[0],
+                    k_chunk_size=chunks[1],
+                    exp_approx_mode=self.ring_sdpa_exp_approx,
+                )
+            config = self.ring_sdpa_program_config[key]
+        config.streaming_fp32_dest = self.ring_sdpa_streaming_fp32_dest
+        return config
 
 
 class Flux3KleinTransformerBlock(Module):
@@ -45,7 +97,7 @@ class Flux3KleinTransformerBlock(Module):
         mlp_hidden_dim = MLP_RATIO * HIDDEN
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.attn = Attention(
+        self.attn = Flux3KleinAttention(
             query_dim=HIDDEN,
             head_dim=HEAD_DIM,
             heads=HEADS,

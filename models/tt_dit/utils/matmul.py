@@ -11,6 +11,33 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 
+# The model calls these resolvers once per layer per step with the same shapes. The register_* functions clear the
+# caches; a direct write to a table bypasses them, so call _clear_config_caches() after one.
+_config_caches: list[dict] = []
+
+
+def _per_shape_cache(fn):
+    cache: dict = {}
+    _config_caches.append(cache)
+
+    def cached(*args, **kwargs):
+        key = tuple((a.x, a.y) if isinstance(a, ttnn.CoreCoord) else a for a in args) + tuple(
+            (k, (v.x, v.y) if isinstance(v, ttnn.CoreCoord) else v) for k, v in sorted(kwargs.items())
+        )
+        if key not in cache:
+            cache[key] = fn(*args, **kwargs)
+        return cache[key]
+
+    cached.__wrapped__ = fn
+    cached.__doc__ = fn.__doc__
+    return cached
+
+
+def _clear_config_caches() -> None:
+    for cache in _config_caches:
+        cache.clear()
+
+
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
 _logged_m_per_core_signatures = set()
@@ -482,10 +509,21 @@ _BH_GALAXY_MIN_DEVICES = 32
 _BH_GALAXY_MAX_CORE_GRID = (11, 10)
 
 
+_is_blackhole_cached: bool | None = None
+
+
+def _is_blackhole() -> bool:
+    """The arch query (`ttnn.get_arch_name`, ~30 us), once per process."""
+    global _is_blackhole_cached
+    if _is_blackhole_cached is None:
+        _is_blackhole_cached = bool(ttnn.device.is_blackhole())
+    return _is_blackhole_cached
+
+
 def get_matmul_core_grid(mesh_device):
     """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
     core_grid = mesh_device.compute_with_storage_grid_size()
-    if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
+    if _is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
         core_grid = ttnn.CoreCoord(
             min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
             min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
@@ -665,6 +703,7 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
+@_per_shape_cache
 def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
     """Get the matmul config for the given shape and core grid.
 
@@ -803,6 +842,7 @@ def _ring_safe_k_block(config, M, K, N, cluster_size):
 _logged_agmm_v3_signatures = set()
 
 
+@_per_shape_cache
 def get_agmm_config(
     M,
     K,
@@ -1100,6 +1140,7 @@ fused_mmrs_configs = {
 _logged_mmrs_rule_signatures = set()
 
 
+@_per_shape_cache
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     """Resolve the fused MM+RS parameter dict for a shape.
 
@@ -1199,6 +1240,7 @@ def register_matmul_configs(configs: dict) -> None:
             },
         })
     """
+    _clear_config_caches()
     grid_map = {
         "8x8": grid_88_configs,
         "8x9": grid_89_configs,
@@ -1232,6 +1274,7 @@ def register_fused_mmrs_configs(configs: dict) -> None:
             },
         })
     """
+    _clear_config_caches()
     for core_grid, entries in configs.items():
         fused_mmrs_configs.setdefault(core_grid, {}).update(entries)
 
@@ -1334,5 +1377,6 @@ def register_fabric_agmm_configs(configs: dict) -> None:
             },
         })
     """
+    _clear_config_caches()
     for core_grid, entries in configs.items():
         fabric_agmm_configs.setdefault(core_grid, {}).update(entries)
