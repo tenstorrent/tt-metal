@@ -317,7 +317,12 @@ class Model:
             else None
         )
         if self.host_rows is not None:
-            self.hasher = RaggedNgramHash(self.host_rows.engram.hash)
+            if os.environ.get("DSV41_PF_HASH_FAST", "0") == "1":  # numpy hash (no 8.4 MB history-row copies per slot); bit-identical ids
+                from models.demos.blackhole.deepseek_v41_flash.tt.hostopt import TorchFastNgramHash
+
+                self.hasher = TorchFastNgramHash(self.host_rows.engram.hash)
+            else:
+                self.hasher = RaggedNgramHash(self.host_rows.engram.hash)
             if os.environ.get("DSV41_ENGRAM_RAM", "1") == "1" and not all(
                 t.in_ram for t in self.host_rows.tables.values()
             ):

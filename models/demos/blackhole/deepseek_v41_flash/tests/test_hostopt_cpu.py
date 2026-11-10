@@ -79,3 +79,78 @@ def test_post_round_matches_loop():
             assert s1[key] == s2[key], (trial, key)
         assert s1["run"].m_hist == s2["run"].m_hist
         assert str(s1["run"].gaps) == str(s2["run"].gaps)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Engram hash: RaggedNgramHash (shipped) vs hostopt.FastNgramHash / TorchFastNgramHash (DSV41_PF_HASH_FAST)
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
+class _Layout:
+    def __init__(self, ng):
+        self.max_ngram_size = ng
+
+
+class _HState:
+    """Synthetic NgramHashState (same attributes the two hashes read): int64 wrap-around multipliers, DEAD entries in the token map."""
+
+    def __init__(self, rows, cap, ng=4, layers=3, heads=2, vocab=300, seed=0):
+        g = torch.Generator().manual_seed(seed)
+        self.layout = _Layout(ng)
+        self.DEAD, self.pad_id = -1, 2
+        self.token_map = torch.randint(0, 50, (vocab,), generator=g)
+        self.token_map[::37] = self.DEAD
+        self.cache = torch.full((rows, cap), self.pad_id, dtype=torch.long)
+        self.multipliers = torch.randint(1, 2**62, (layers, ng), generator=g)
+        self.primes = torch.randint(10007, 99991, (layers, ng - 1, heads), generator=g)
+        self.offsets = torch.randint(0, 5000, (layers, (ng - 1) * heads), generator=g)
+
+
+def _pair(rows, cap, **kw):
+    from models.demos.blackhole.deepseek_v41_flash.tt.engram_ragged import RaggedNgramHash
+
+    a, b = _HState(rows, cap, **kw), _HState(rows, cap, **kw)
+    return RaggedNgramHash(a), hostopt.TorchFastNgramHash(b), a, b
+
+
+def test_fast_hash_matches_ragged_windows():
+    rnd = random.Random(1)
+    for trial in range(60):
+        R = rnd.choice([1, 4, 16, 16])
+        n_users = rnd.choice([1, 4, 16])
+        n_users = min(n_users, R)
+        ng = rnd.choice([2, 3, 4])
+        old, new, sa, sb = _pair(R, 400, ng=ng, seed=trial)
+        g = torch.Generator().manual_seed(trial)
+        rowsel = torch.tensor(rnd.sample(range(R), n_users))  # global user of each input row
+        pos = [0] * R
+        for w in range(rnd.choice([1, 3, 6])):
+            L = rnd.choice([1, 5, 32, 64])  # windows of varying length
+            ids = torch.randint(0, 300, (n_users, L), generator=g)
+            if rnd.random() < 0.5:
+                ids[:, 1:] = ids[:, :1]  # repeated tokens
+            start = torch.tensor([pos[int(r)] for r in rowsel])  # per-user starts
+            kw = {}
+            if rnd.random() < 0.5:
+                kw["rows"] = rowsel
+            else:
+                rowsel, start = torch.arange(n_users), torch.tensor([pos[i] for i in range(n_users)])
+            if rnd.random() < 0.4:
+                kw["token_mask"] = torch.rand(n_users, L, generator=g) > 0.3  # image-span windows
+            use_rows = rowsel if "rows" in kw else torch.arange(n_users)
+            x, y = old(ids, start, **kw), new(ids, start, **kw)
+            assert y.dtype == x.dtype and torch.equal(x, y), (trial, w)
+            assert torch.equal(sa.cache, sb.cache), (trial, w, "history")
+            for r, s in zip(use_rows.tolist(), start.tolist()):
+                pos[r] = s + L
+
+
+def test_fast_hash_keeps_other_users_history():
+    old, new, sa, sb = _pair(16, 200)
+    for h, st in ((old, sa), (new, sb)):
+        st.cache[:] = torch.randint(0, 50, st.cache.shape, generator=torch.Generator().manual_seed(5))
+    before = sb.cache.clone()
+    ids = torch.randint(0, 300, (2, 8))
+    old(ids, torch.tensor([10, 20]), rows=torch.tensor([3, 9]))
+    new(ids, torch.tensor([10, 20]), rows=torch.tensor([3, 9]))
+    assert torch.equal(sa.cache, sb.cache)
+    untouched = [r for r in range(16) if r not in (3, 9)]
+    assert torch.equal(sb.cache[untouched], before[untouched])
