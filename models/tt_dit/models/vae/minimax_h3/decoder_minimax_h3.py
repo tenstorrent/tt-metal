@@ -88,6 +88,8 @@ class MiniMaxH3ViTAttention(Module):
         *,
         num_heads: int,
         head_dim: int,
+        rope_dim_ratio: float = 0.75,
+        sdpa_chunk: int = 192,
         eps: float = 1e-5,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
@@ -96,6 +98,7 @@ class MiniMaxH3ViTAttention(Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = head_dim
+        self.rope_dim_ratio = rope_dim_ratio
         self.eps = eps
         self.mesh_device = mesh_device
 
@@ -112,8 +115,8 @@ class MiniMaxH3ViTAttention(Module):
         # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=192,
-            k_chunk_size=192,
+            q_chunk_size=sdpa_chunk,
+            k_chunk_size=sdpa_chunk,
             exp_approx_mode=False,  # False is more correct, matching wan/ltx
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -137,7 +140,8 @@ class MiniMaxH3ViTAttention(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Fuse q/k/v, permute the q/k lanes for RoPE, and flatten ``to_out.0``."""
         if "to_q.weight" in state:
-            permutation = head_lane_permutation(self.head_dim, 0.75)
+            # The lane permute must use the decoder's own ratio: 0.75 for the video ViT3D, 0.5 for H3-Image's ViT2D.
+            permutation = head_lane_permutation(self.head_dim, self.rope_dim_ratio)
 
             def permute_heads(tensor: torch.Tensor) -> torch.Tensor:
                 # Rows are (head, lane); permute lanes within each head.
@@ -248,6 +252,8 @@ class MiniMaxH3TransformerBlock(Module):
         num_heads: int,
         head_dim: int,
         ffn_mult: int = 4,
+        rope_dim_ratio: float = 0.75,
+        sdpa_chunk: int = 192,
         eps: float = 1e-5,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
@@ -256,7 +262,14 @@ class MiniMaxH3TransformerBlock(Module):
         # Weight-only RMSNorm: tt_dit defaults bias=True and every H3 norm has no bias.
         self.norm1 = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device, dtype=dtype)
         self.attn = MiniMaxH3ViTAttention(
-            dim, num_heads=num_heads, head_dim=head_dim, eps=eps, mesh_device=mesh_device, dtype=dtype
+            dim,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            rope_dim_ratio=rope_dim_ratio,
+            sdpa_chunk=sdpa_chunk,
+            eps=eps,
+            mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.norm2 = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device, dtype=dtype)
         inner = dim * ffn_mult
@@ -337,10 +350,14 @@ class MiniMaxH3ViTDecoder3d(Module):
         ffn_mult: int = 4,
         rope_theta: float = 100.0,
         rope_dim_ratio: float = 0.75,
+        rope_num_axes: int = 3,
+        sdpa_chunk: int = 192,
         eps: float = 1e-5,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
+        """``rope_num_axes=2`` with ``num_frames=1, patch_size_t=1`` is H3-Image's ``ViT2DDecoder``: the same block
+        stack, with (H, W) RoPE ids instead of (T, H, W)."""
         super().__init__()
         dim = num_heads * head_dim
         self.dim = dim
@@ -366,6 +383,8 @@ class MiniMaxH3ViTDecoder3d(Module):
                     num_heads=num_heads,
                     head_dim=head_dim,
                     ffn_mult=ffn_mult,
+                    rope_dim_ratio=rope_dim_ratio,
+                    sdpa_chunk=sdpa_chunk,
                     eps=eps,
                     mesh_device=mesh_device,
                     dtype=dtype,
@@ -390,6 +409,7 @@ class MiniMaxH3ViTDecoder3d(Module):
             rope_dim_ratio=rope_dim_ratio,
             theta=rope_theta,
             permuted=True,
+            num_axes=rope_num_axes,
         )
         self.rope_cos = Parameter(total_shape=[1, 1, self.seq_len, head_dim], device=mesh_device, dtype=dtype)
         self.rope_sin = Parameter(total_shape=[1, 1, self.seq_len, head_dim], device=mesh_device, dtype=dtype)

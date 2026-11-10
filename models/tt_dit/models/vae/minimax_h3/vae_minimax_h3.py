@@ -86,6 +86,13 @@ class MiniMaxH3VaeConfig:
 
         self.spatial_compression_ratio = math.prod(self.spatial_downsample_factors)
         self.temporal_compression_ratio = math.prod(self.temporal_downsample_factors)
+        # H3-Image's ViT2D decoder: (H, W) RoPE ids and one pixel frame per latent frame. The video ViT3D decoder
+        # expands each latent frame into `temporal_compression_ratio` pixel frames with (T, H, W) ids.
+        self.decoder_rope_num_axes = cfg.get("decoder_rope_num_axes", 3)
+        self.decoder_patch_size_t = cfg.get("decoder_patch_size_t", self.temporal_compression_ratio)
+        self.is_image = self.decoder_rope_num_axes == 2
+        if self.is_image and self.decoder_patch_size_t != 1:
+            raise ValueError(f"a 2D (image) decoder has patch_size_t=1, got {self.decoder_patch_size_t}")
 
         self.frame_pre_padding = (-self.clip_length) % self.temporal_compression_ratio
         self.tokens_chunk_size = math.ceil(self.clip_length / self.temporal_compression_ratio)
@@ -358,8 +365,10 @@ class MiniMaxH3Vae:
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
     ) -> None:
-        if task not in ("t2va", "ref2va"):
-            raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
+        if task not in ("t2va", "ref2va", "image"):
+            raise ValueError(f"task must be 't2va' (also serves fl2va), 'ref2va' or 'image', got {task!r}")
+        if (task == "image") != config.is_image:
+            raise ValueError(f"task {task!r} does not match a {'2D' if config.is_image else '3D'} decoder config")
         if stitch_exchange not in ("gather", "strips", "neighbor"):
             raise ValueError(f"stitch_exchange must be 'gather', 'strips' or 'neighbor', got {stitch_exchange!r}")
         self.config = config
@@ -417,11 +426,8 @@ class MiniMaxH3Vae:
     def decode_unit_shape(self) -> tuple[int, int, int]:
         """The ``(T, H, W)`` of one decoder work unit: one temporal chunk of one spatial tile."""
         ratio = self.config.spatial_compression_ratio
-        return (
-            self.config.tokens_chunk_size + self.config.token_overlap,
-            self.tile_size // ratio,
-            self.tile_size // ratio,
-        )
+        frames = 1 if self.config.is_image else self.config.tokens_chunk_size + self.config.token_overlap
+        return (frames, self.tile_size // ratio, self.tile_size // ratio)
 
     def _make_encoder(self, *, num_frames: int, temporal_taps: int) -> MiniMaxH3Encoder3d:
         config = self.config
@@ -442,9 +448,13 @@ class MiniMaxH3Vae:
         )
 
     def _make_decoder(self):
-        from .decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
+        from .decoder_minimax_h3 import MiniMaxH3ViTDecoder3d, padded_sequence_length
 
         num_frames, height, width = self.decode_unit_shape()
+        seq_len = padded_sequence_length(num_frames * height * width, self.config.decoder_num_register_tokens + 1)
+        # The largest SDPA chunk that tiles the padded sequence: 192 for the video tile (1824), 96 for the image
+        # tile (288 = 256 patches + 5 suffix, padded).
+        sdpa_chunk = next(c for c in (192, 160, 128, 96, 64, 32) if seq_len % c == 0)
         return MiniMaxH3ViTDecoder3d(
             num_frames=num_frames,
             height=height,
@@ -452,7 +462,7 @@ class MiniMaxH3Vae:
             in_channels=self.config.latent_channels,
             out_channels=self.config.out_channels,
             patch_size=self.config.spatial_compression_ratio,
-            patch_size_t=self.config.temporal_compression_ratio,
+            patch_size_t=self.config.decoder_patch_size_t,
             num_layers=self.config.decoder_num_layers,
             num_heads=self.config.decoder_num_attention_heads,
             head_dim=self.config.decoder_attention_head_dim,
@@ -460,6 +470,8 @@ class MiniMaxH3Vae:
             ffn_mult=self.config.decoder_ffn_mult,
             rope_theta=self.config.decoder_rope_theta,
             rope_dim_ratio=self.config.decoder_rope_dim_ratio,
+            rope_num_axes=self.config.decoder_rope_num_axes,
+            sdpa_chunk=sdpa_chunk,
             eps=self.config.decoder_norm_eps,
             mesh_device=self.mesh_device,
         )
@@ -876,7 +888,7 @@ class MiniMaxH3Vae:
                     width=width,
                     out_channels=self.config.out_channels,
                     patch_size=self.config.spatial_compression_ratio,
-                    patch_size_t=self.config.temporal_compression_ratio,
+                    patch_size_t=self.config.decoder_patch_size_t,
                 )
                 for index in range(count)
             ]
@@ -962,7 +974,7 @@ class MiniMaxH3Vae:
             width=width,
             out_channels=self.config.out_channels,
             patch_size=self.config.spatial_compression_ratio,
-            patch_size_t=self.config.temporal_compression_ratio,
+            patch_size_t=self.config.decoder_patch_size_t,
         )
         if decoded.dtype == ttnn.float32 and width == 16:
             return unpatchify_tiled(decoded, **dims)
