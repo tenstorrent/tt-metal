@@ -704,8 +704,10 @@ def decode_forward(
     # users on columns 8..10 of an 11-wide Blackhole grid and corrupt the output.
     batch_size = tt_q.shape[1]
     device_grid = mesh_device.compute_with_storage_grid_size()
-    if config.head_dim >= 512 and batch_size == 1:
-        # Single-user global layers: smaller grid — head_dim=512 needs more L1 per core.
+    if config.head_dim >= 512 and batch_size == 1 and k_cache.dtype != ttnn.bfloat8_b:
+        # Single-user global layers over a bf16 cache: smaller grid — head_dim=512 needs more L1 per core. A bfp8
+        # cache takes the whole grid (one BH chip, 4 Q / 1 KV heads, 32 cores per head: 0.493 -> 0.453 ms per
+        # global layer at 131K, 0.175 -> 0.164 at 32K, same output; 2026-11-10).
         sdpa_grid = ttnn.CoreCoord(8, 4)
     else:
         # Sliding layers, and all batched decode: use the full device compute grid.
