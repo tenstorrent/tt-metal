@@ -43,7 +43,13 @@ What V4.1 imposes on the serving side:
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
   A user decoding alone keeps ``--decode-ahead`` (32) steps posted, as the decode demo does; a reply that stops
   early feeds the steps still posted a rerun of its last one (:meth:`V41ChatEngine.repeat_traced`).
-  Speculative decode is single-user.
+* Speculative decode (``--dspark``, or ``DEEPSEEK_V41_DSPARK=1``; off by default). The DSpark drafter takes the
+  mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds of four drafts
+  (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~70 tok/s against ~45 a step at a time, for a
+  sampled (temperature 1) chat reply in ``tests/decode/test_dspark_spec.py``. Its rounds restore one session's
+  rings and accept against the steps' logits on the host, and its drafter has no image rows, so ``--dspark`` serves
+  one user slot (``--num-users 1``, other conversations parked in host RAM) and turns off ``--vision``,
+  ``--device-sampling`` and the Rust host runtime; a request's ``temperature`` and ``top_p`` apply.
 * Shared prefixes. A prompt that continues no conversation starts from the longest prefix of it any other slot's
   cache holds, running or parked (a common system prompt, a forked conversation): the two slots share that prefix's
   compressed KV blocks, counted per slot so either can rewind or reset without the other losing them, and the
@@ -186,7 +192,9 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     _Handler,
     _normalized_messages,
     _Prefiller,
+    _Scheduler,
     _text_content,
+    _Turn,
     build_parser,
     check_args,
     serve,
@@ -195,6 +203,7 @@ from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
+from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 _NUM_USERS = 64  # default --num-users
 # Default --num-users with --prefill-all-stages. Its expert copies take ~5.7 GB more on each chip of stages 2-4
@@ -210,6 +219,9 @@ _KV_TOKENS_PER_USER = 204800
 # Default and most --decode-ahead: the decode steps a lone decoding turn keeps posted, the window
 # tests/decode/test_full_model_decode_demo.py keeps (its ``replay_ahead``).
 _DECODE_AHEAD = 32
+# --dspark: drafts a verify round checks, and the decode stages, which leave the 8 x 4 mesh's last row to the drafter.
+_DSPARK_DRAFTS = 4
+_DSPARK_STAGES = 7
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -859,6 +871,90 @@ class _V41Handler(_Handler):
             self._send_error_json(e)
 
 
+class _SpecScheduler(_Scheduler):
+    """:class:`_Scheduler` that decodes each reply by DSpark speculative decode (``--dspark``).
+
+    A turn's prompt goes in as without it (the traced prefill, then decode steps, each of which also writes its
+    row into the drafter's rings). Its reply then runs on this thread in verify rounds of :data:`_DSPARK_DRAFTS`
+    drafts (:class:`~..tt.spec.DSparkSpeculator`, at the request's ``temperature`` and ``top_p``) until it ends,
+    and the session is handed back as plain decode would leave it. The server has one user slot, so no other
+    turn has steps in flight meanwhile; later requests and chores wait for the reply. The last tokens before the
+    end of the context, where a round would run past it, are decoded a step at a time.
+    """
+
+    def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
+        engine = self.engine
+        user = engine.users[turn.slot]
+        # Room for a whole round past the reply's last token, and for the next round's first row.
+        budget = min(turn.max_tokens - len(turn.generated), engine.max_seq - user.pos - 2 * (_DSPARK_DRAFTS + 1))
+        if (
+            turn.phase == _Turn.DECODE
+            and not turn.pending
+            and not turn.cancelled.is_set()
+            and (turn.next_id != engine.eos_id or turn.ignore_eos)
+            and budget > 0
+        ):
+            self._speculate(turn, budget)
+            if turn not in self._active:
+                return []
+        # Ends the turn (EOS, max_tokens, stopped), or steps it on near the end of the context.
+        return super()._plan(turn)
+
+    def _speculate(self, turn: _Turn, budget: int) -> None:
+        """Generate up to ``budget`` tokens of ``turn``'s reply in verify rounds, from ``turn.next_id`` at the
+        session's position, keeping :attr:`_Turn.generated` and the session's tokens as single steps would: every
+        token fed, the last one produced left in ``next_id``."""
+        from models.experimental.deepseek_v41_flash.tt.spec import DSparkSpeculator
+
+        engine = self.engine
+        user = engine.users[turn.slot]
+        if not self._settle():
+            return
+        # The rounds write their packets themselves, after every packet the engine's thread has queued.
+        engine._packets.join()
+        temperature = turn.body.get("temperature")
+        if temperature is None:
+            temperature = self.server.temperature
+        spec = DSparkSpeculator(
+            engine.model,
+            _DSPARK_DRAFTS,
+            temperature=float(temperature or 0.0),
+            top_p=float(turn.body.get("top_p") or 1.0),
+            seed=int(torch.randint(1, 2**31 - 1, ())),
+        )
+        start = user.pos
+        tokens = [turn.next_id]  # the reply's tokens from start on; all but the last are fed
+
+        def take(emitted: list[int]) -> None:
+            for token in emitted:
+                turn.generated.append(tokens[-1])
+                turn.mark_token()
+                tokens.append(token)
+            turn.stream.push(turn.generated)
+
+        try:
+            user.activate()
+            spec.start(turn.next_id, start)
+            spec.generate(
+                budget,
+                stop_ids=() if turn.ignore_eos else (engine.eos_id,),
+                on_tokens=take,
+                should_stop=lambda: turn.cancelled.is_set() or self._stop,
+            )
+            spec.finish()
+        except Exception as e:  # noqa: BLE001 - see _abort_all: a round's outputs and rows are in an unknown state
+            self._abort_all(e)
+            return
+        fed = tokens[:-1]
+        if spec.position != start + len(fed):
+            self._abort_all(RuntimeError(f"DSpark ended at {spec.position}, not {start} + {len(fed)} fed tokens"))
+            return
+        user.tokens.extend(fed)
+        user.pos = spec.position
+        turn.next_id = tokens[-1]
+        self.steps += len(fed)
+
+
 class V41GenerationServer(GenerationServer):
     """:class:`GenerationServer` that takes images in user messages (see the images section above): uploaded files
     or inline base64 parts, at most :data:`_MAX_IMAGES` per request, each expanded into its span of image rows when
@@ -866,12 +962,15 @@ class V41GenerationServer(GenerationServer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.engine.dspark:
+            self.scheduler = _SpecScheduler(self, self.scheduler.prefill_chunk, self.scheduler.decode_ahead)
         # serve() builds the server after the warmup and the prefill snapshot, and before the scheduler starts: the
         # point past every other device allocation of startup.
         self.engine.capture_vision()
         self.monitor_feed = None
         self._monitor_sink = None
-        if host_rs.enabled():
+        # The host runtime does not run speculative decode.
+        if host_rs.enabled() and not self.engine.dspark:
             # After every capture: from here the decode step's replays, packets, Engram rows and outputs run on the
             # Rust host runtime's threads, which keep their counters where the web monitor reads them.
             prefix = monitor.default_prefix()
@@ -1224,6 +1323,18 @@ class V41ChatEngine(ChatEngine):
                 f"(temperature {self.temperature}, seed {self.seed}); requests cannot set their own"
             )
 
+        self.dspark = bool(getattr(args, "dspark", False))
+        if self.dspark:
+            # Before anything is compiled; the drafter's prefetcher rings are on its own row.
+            self.model.prepare_spec_decode(self.rope["main"])
+            if self.model.use_prefetcher:
+                prefetcher.enter_context(tensor_prefetcher_session(self.model.dspark.device))
+            logger.info(
+                f"DSpark speculative decode: {_DSPARK_DRAFTS} drafts a round, the drafter on mesh row "
+                f"{self.model.num_submeshes}"
+            )
+            # A reply decodes in verify rounds (_SpecScheduler), which post their own steps.
+            self.max_decode_ahead = 0
         if self.model._eager_decode:
             # An eager step runs as its packet is written, at the position it was posted for.
             self.max_decode_ahead = 1
@@ -1239,6 +1350,20 @@ class V41ChatEngine(ChatEngine):
         self._packet_writer.start()
         # Registered after the model's shutdown so it unwinds first: the thread's closure holds the model.
         prefetcher.callback(self._stop_packet_writer)
+
+    def warmup(self) -> None:
+        """:meth:`ChatEngine.warmup`; with DSpark, capture the speculative traces too (every stage's fixup and the
+        drafter's, :meth:`DeepSeekV41Model.capture_spec_traces`) along with the decode variants."""
+        if not self.dspark:
+            super().warmup()
+            return
+        print("[warming up: compiling kernels and capturing decode and DSpark traces...]", flush=True)
+        t0 = time.perf_counter()
+        user = self.users[0]
+        user.activate()
+        self.model.capture_spec_traces(self.tokenizer.bos_token_id or 0, 0)  # rows discarded by the reset
+        user.reset()
+        print(f"[warmup done in {time.perf_counter() - t0:.1f}s]", flush=True)
 
     def capture_vision(self) -> None:
         """Capture the vision traces: one per ViT bucket on the vision stage, and the embedding-row write on stage 0.
@@ -1336,6 +1461,8 @@ class _V41Prefiller(_Prefiller):
 
     def __init__(self, engine: V41ChatEngine, args, prefetcher: contextlib.ExitStack):
         self.kv_only = args.prefill_kv_only
+        # The DSpark drafter attends the last sliding_window positions, and only decode steps write its rings.
+        self.decode_window = self.kv_only or engine.dspark
         super().__init__(engine, args, prefetcher)
 
     def _build_model(self, engine: V41ChatEngine):
@@ -1365,8 +1492,9 @@ class _V41Prefiller(_Prefiller):
     def aligned(self, n_tokens: int, start: int = 0, bounded: bool = False) -> int:
         """Also continues a session: from a multiple of :attr:`continue_alignment` the prefill model starts from
         the session's decode caches (see :meth:`DeepSeekV41Model.seed_prefill`), or, ``bounded``, from their
-        compressed KV alone. KV-only, the last ``sliding_window`` of ``n_tokens`` are always left to decode."""
-        if self.kv_only:
+        compressed KV alone. KV-only or with DSpark, the last ``sliding_window`` of ``n_tokens`` are always left to
+        decode."""
+        if self.decode_window:
             n_tokens -= self.replay_window
             if n_tokens <= 0:
                 return 0
@@ -1494,6 +1622,15 @@ def parse_args(argv: list[str] | None = None):
         "by every run and process instead of each reading it into RAM (default: on; "
         "DEEPSEEK_V41_ENGRAM_STAGE=0 turns it off)",
     )
+    p.add_argument(
+        "--dspark",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V41_DSPARK", "0") == "1",
+        help=f"decode every reply by DSpark speculative decode, {_DSPARK_DRAFTS} drafts a round, the drafter on the "
+        f"mesh's last row (decode on the first {_DSPARK_STAGES}); one user slot (--num-users 1), host sampling at the "
+        "request's temperature / top_p, and no --vision, --device-sampling or Rust host runtime "
+        "(default: off; DEEPSEEK_V41_DSPARK=1 turns it on)",
+    )
     for action in p._actions:
         if action.dest == "temperature":
             action.help = (
@@ -1513,7 +1650,19 @@ def parse_args(argv: list[str] | None = None):
                 f"{_L1_SMALL_SIZE})"
             )
     args = p.parse_args(argv)
-    if host_rs.enabled():
+    if args.dspark:
+        # Speculative decode restores one session's rings, accepts against the steps' logits and has no image rows.
+        if args.num_users not in (None, 1):
+            p.error("--dspark decodes one session: --num-users must be 1")
+        args.num_users = 1
+        args.vision = False
+        args.device_sampling = False
+        if args.slot_idle_timeout == p.get_default("slot_idle_timeout"):
+            # The one slot would turn every other conversation away for the timeout; it moves to host RAM instead.
+            args.slot_idle_timeout = 1e-3
+        # Each verify round's log line, read when tt/spec.py is imported; DEEPSEEK_V4_SPEC_VERBOSE=1 brings them back.
+        os.environ.setdefault("DEEPSEEK_V4_SPEC_VERBOSE", "0")
+    elif host_rs.enabled():
         args.tui = False  # the web monitor (demo/monitor.py) watches it, from a process of its own
     if args.vision and (args.image_rows % 32 or args.image_rows <= FIRST_IMAGE_ROW):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")
@@ -1541,7 +1690,7 @@ def main(argv: list[str] | None = None) -> int:
         args,
         engine_cls=V41ChatEngine,
         prefiller_cls=_V41Prefiller,
-        num_stages=pipeline_stage_count(),
+        num_stages=min(pipeline_stage_count(), _DSPARK_STAGES) if args.dspark else pipeline_stage_count(),
         handler_cls=_V41Handler,
         server_cls=V41GenerationServer,
     )
