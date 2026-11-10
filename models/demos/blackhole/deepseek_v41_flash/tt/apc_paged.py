@@ -215,6 +215,7 @@ class BlockIndex:
         xrow=False,
         xrow_min=2048,
         xrow_max=65536,
+        loss_log=None,
     ):
         if chunk % page:
             raise ValueError(f"chunk {chunk} is not a multiple of the page {page}")
@@ -245,6 +246,11 @@ class BlockIndex:
         self._reserved = {}  # global user -> req id (planned)
         self._busy = {}  # global user -> req id (bound)
         self._lost = OrderedDict()
+        # per-event loss log (DSV41_APC_LOSS_LOG=1, diagnostics only, no behaviour change): ``loss_log(line)`` is called once per plan_hit call whose deepest resident hit is lost or shortened
+        # (busy row / halo / evicted blocks) and once per request bound without ever being looked up (no_lookup). The bookkeeping below is kept only when it is set; the counters are untouched.
+        self.loss_log = loss_log
+        self._evicted = OrderedDict()  # digest of an evicted block (bounded)
+        self._planned = OrderedDict()  # req id -> number of plan_hit calls (bounded)
         self._bid = 0
         self.counters = dict(
             lookups=0, hits=0, hit_tokens=0, lost=0, binds=0, misses_bound=0, commits=0, dup_commits=0, upgrades=0,
@@ -322,6 +328,10 @@ class BlockIndex:
         blk.halo_a = blk.halo_b = -1
         row.free_pages.extend(reversed(blk.pages))
         blk.state = "gone"
+        if self.loss_log is not None:
+            self._evicted[blk.key] = True
+            while len(self._evicted) > 1 << 19:
+                self._evicted.popitem(last=False)
         self.counters["ev_block"] += 1
         self._emit("block", ri, [blk.id], why)
 
@@ -442,6 +452,55 @@ class BlockIndex:
         return req
 
     @_locked
+    def peek_home(self, key_tokens, num_tokens, max_hit=None, salt=b"", finished_ids=(), touch=False):
+        """READ-ONLY look for the bounded home-row hold of the scheduler: -> (deepest resident hit of any row, that row (-1 = none), free users per row). Nothing is planned, pinned, reserved, dropped or
+        counted (``plan_hit`` does all of that), so it can be asked on every scheduler step. ``finished_ids`` as in ``plan_hit``.
+        ``touch``: refresh the LRU position of the block (and its halo slots) the hit resumes from, so that a request held for a busy home row does not lose its resume point to the halo / block
+        eviction of the commits that run meanwhile (measured: a 511 k hit gone after 31 s of hold, the halo A store being full). Only the recency order changes."""
+        fin_users = {r.user for r in (self._reqs.get(i) for i in finished_ids) if r is not None and r.state == "bound"}
+        num_tokens = int(num_tokens)
+        top = (
+            max(min(num_tokens - self.margin, int(max_hit) if max_hit is not None else 1 << 60), 0)
+            // self.chunk
+            * self.chunk
+        )
+        free = [len(self._free_users(ri, fin_users)) for ri in range(self.rows)]
+        if top <= 0 or not self.rows:
+            return 0, -1, free
+        digests = Chain(self.chunk, salt).extend(_as_i64(key_tokens), top).digests
+        best, home, bpath = 0, -1, None
+        for ri in range(self.rows):
+            hit, path = self._lookup_row(ri, digests, num_tokens, max_hit)
+            if hit > best:
+                best, home, bpath = hit, ri, path
+        if touch and best > 0:
+            self._touch(self._rows[home], bpath[-1], halos=True)
+        return best, home, free
+
+    def _log_loss(self, req_id, num_tokens, top, digests, hit, ri, any_hit, depth, home, row_info):
+        """one line for a plan whose deepest resident hit is lost (busy row), shortened by a missing halo, or whose chain was evicted (blocks that were resident earlier); lock held"""
+        ev = 0
+        for i in range(1, top // self.chunk + 1):
+            d = digests[i - 1]
+            if d in self._evicted or any(d in r.blocks for r in self._rows):
+                ev = i
+            else:
+                break
+        ev = ev * self.chunk
+        lost_busy = max(any_hit - hit, 0)
+        lost_halo = max(depth - any_hit, 0)
+        lost_ev = max(ev - max(depth, any_hit), 0)
+        if not (lost_busy or lost_halo or lost_ev):
+            return
+        reason = "busy_row" if lost_busy else ("halo" if lost_halo else "evicted")
+        self.loss_log(
+            f"APC loss: req={req_id} n={num_tokens} attempt={self._planned.get(req_id, 1)} reason={reason} "
+            f"resident_hit={any_hit} used_hit={hit} home_row={home if any_hit else -1} free_row={ri} "
+            f"row_hits={[h for h, _ in row_info]} free_users={[f for _, f in row_info]} "
+            f"lost_busy={lost_busy} lost_halo={lost_halo} lost_evicted={lost_ev} recompute={num_tokens - hit}"
+        )
+
+    @_locked
     def plan_hit(self, req_id, key_tokens, num_tokens, max_hit=None, salt=b"", spans=None, finished_ids=()):
         """``finished_ids``: request ids the scheduler finished since the model was last told (their users count as free, see ``_free_users``)"""
         self._expire()
@@ -449,6 +508,10 @@ class BlockIndex:
         self._drop(req_id)
         self._lost.pop(req_id, None)
         self.counters["lookups"] += 1
+        if self.loss_log is not None:
+            self._planned[req_id] = self._planned.get(req_id, 0) + 1
+            while len(self._planned) > 8192:
+                self._planned.popitem(last=False)
         num_tokens = int(num_tokens)
         top = (
             max(min(num_tokens - self.margin, int(max_hit) if max_hit is not None else 1 << 60), 0)
@@ -464,9 +527,11 @@ class BlockIndex:
         any_hit = (
             depth
         ) = 0  # diagnostics: the deepest hit of any row (ignoring free users) and the deepest block chain (ignoring halos)
+        row_info = []
         for ri in range(self.rows):
             free = self._free_users(ri, fin_users)
             hit, path = self._lookup_row(ri, digests, num_tokens, max_hit, spans)
+            row_info.append((hit, len(free)))
             any_hit = max(any_hit, hit)
             if hit > deep[0]:
                 deep = (hit, ri, path)
@@ -482,6 +547,8 @@ class BlockIndex:
         if depth > any_hit:
             self.counters["halo_loss"] += 1
             self.counters["halo_loss_tokens"] += depth - any_hit
+        if self.loss_log is not None:
+            self._log_loss(req_id, num_tokens, top, digests, hit, ri, any_hit, depth, deep[1], row_info)
         if self._xrow_on() and deep[0] - hit >= self.xrow_min and deep[0] <= self.xrow_max:
             xp = self._plan_xrow(req_id, chain, num_tokens, deep, ri, fin_users)
             if xp is not None:
@@ -687,6 +754,11 @@ class BlockIndex:
         user = int(user)
         if user in self._reserved or user in self._busy or not 0 <= self._row_of(user) < self.rows:
             raise ValueError(f"user {user} is reserved, busy or outside the rows")
+        if self.loss_log is not None and req_id not in self._planned:
+            self.loss_log(
+                f"APC loss: req={req_id} n={int(prompt_len or 0)} reason=no_lookup resident_hit=unknown used_hit=0 "
+                f"home_row=-1 free_row={self._row_of(user)} recompute={int(prompt_len or 0)}"
+            )
         req = _Req(req_id, "bound", self._row_of(user), user, float("inf"))
         req.plan = HitPlan(row=req.row, user=user)
         req.prompt_len = int(prompt_len or 0)
@@ -1079,6 +1151,16 @@ class ApcPagedHook:
             kt = tokens
         plan = self.index.plan_hit(request_id, kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids)
         return plan.hit_tokens, plan.row
+
+    def peek_home(self, request_id, tokens, num_tokens, max_hit=None, mm=None, salt=b"", finished_ids=(), touch=False):
+        """-> (resident hit tokens, home row, free users per row); read-only (the plugin's bounded home-row hold). Images never hold."""
+        if self.key_tokens_fn is not None:
+            kt = self.key_tokens_fn(tokens, mm)
+            if kt is None:
+                return 0, -1, []
+        else:
+            kt = tokens
+        return self.index.peek_home(kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids, touch=touch)
 
     def cancel(self, request_id):
         self.index.cancel(request_id)
