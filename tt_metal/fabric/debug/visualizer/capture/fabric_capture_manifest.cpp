@@ -98,8 +98,7 @@ std::vector<PlannedChip> collect_planned_chips(const manifest::ManifestFacts& fa
                 continue;
             }
             PlannedChip planned_chip{
-                .path = manifest::mesh_key(chip.fabric_node_id.mesh_id) + "/" +
-                        manifest::chip_key(chip.fabric_node_id.chip_id),
+                .path = manifest::chip_path(chip.fabric_node_id),
                 .asic_id = chip.asic_id.value(),
             };
             for (const manifest::Router& router : chip.routers) {
