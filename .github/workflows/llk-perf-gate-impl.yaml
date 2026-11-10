@@ -665,7 +665,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Notify Slack
-        if: ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}
+        if: false # ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}

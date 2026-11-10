@@ -210,7 +210,7 @@ jobs:
         with:
           prefix: "test_reports_"
       - name: 🤖 AI job summary
-        if: ${{ !cancelled() }}
+        if: false # ${{ !cancelled() }}
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:
@@ -227,7 +227,7 @@ jobs:
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: false # ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}

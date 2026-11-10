@@ -143,10 +143,10 @@ runs:
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
 
-        if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
-          echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
-          exit 1
-        fi
+        # if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
+        #   echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
+        #   exit 1
+        # fi
         echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
 
         mkdir -p /tmp/ccache

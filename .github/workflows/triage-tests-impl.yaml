@@ -167,7 +167,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
       - name: 🤖 AI job summary
-        if: ${{ !cancelled() }}
+        if: false # ${{ !cancelled() }}
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:
