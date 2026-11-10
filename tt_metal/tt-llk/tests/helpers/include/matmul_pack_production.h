@@ -70,13 +70,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     const std::uint32_t page = tile_stride >> 4;
     constexpr std::uint32_t face_rows = key_r0 < 16 ? key_r0 : 16;
     constexpr std::uint32_t faces     = (key_r0 > 16 ? 2 : 1) * (key_c1 > 16 ? 2 : 1);
-    constexpr std::uint32_t row       = matmul_pack_tables::llk_pack_block_class_k(
-        face_rows,
-        faces,
-        out_format == DataFormat::Bfp4 || out_format == DataFormat::Bfp2,
-        bfp_format(out_format),
-        out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp8,
-        wide_format(out_format));
+    constexpr std::uint32_t row       = matmul_pack_tables::llk_pack_block_class_k(face_rows, faces, static_cast<std::uint32_t>(out_format));
     constexpr bool int8     = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
     constexpr bool src32    = fp32 && key_src32;
     constexpr bool tables32 = src32 && unpack_to_dest; // llk_pack_form_table: the 32 bit input tables only when a CB unpacks to DEST
@@ -101,7 +95,8 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         !first,
         sync == DstSync::SyncFull,
         src32,
-        int8);
+        int8,
+        true); // a matmul init ran on the kernel: the masks behind matmul math (llk_pack_matmul_context)
     state.seen = true;
     if (first)
     {
@@ -174,20 +169,14 @@ constexpr bool always_per_tile()
         using namespace matmul_pack_tables;
         constexpr std::uint32_t face_rows = key_r0 < 16 ? key_r0 : 16;
         constexpr std::uint32_t faces     = (key_r0 > 16 ? 2 : 1) * (key_c1 > 16 ? 2 : 1);
-        constexpr std::uint32_t row       = llk_pack_block_class_k(
-            face_rows,
-            faces,
-            out_format == DataFormat::Bfp4 || out_format == DataFormat::Bfp2,
-            bfp_format(out_format),
-            out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp8,
-            wide_format(out_format));
+        constexpr std::uint32_t row       = llk_pack_block_class_k(face_rows, faces, static_cast<std::uint32_t>(out_format));
         constexpr bool int8  = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
         constexpr bool src32 = fp32 && key_src32;
         constexpr bool t32   = src32 && unpack_to_dest;
         constexpr bool full  = sync == DstSync::SyncFull;
-        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8) == 'T';
+        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8, true) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8, true) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8, true) == 'T';
     }
 }
 
