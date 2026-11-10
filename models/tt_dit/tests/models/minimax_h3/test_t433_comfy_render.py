@@ -51,6 +51,13 @@ def test_t433_render(mesh_device):
         vae_output_type="yuv420",
         video_shift=float(os.environ.get("T433_VSHIFT", "12")),
         audio_shift=float(os.environ.get("T433_ASHIFT", "3")),
+        # The full serving warm (every bucket rung, decode length and trace) outlasts the broker's
+        # 1500 s job limit on a cold JIT cache; this render needs one length, so it runs eager unless T433_WARM=1.
+        **(
+            {}
+            if os.environ.get("T433_WARM") == "1"
+            else dict(warmup=False, trace_denoise=False, bucket_denoise=False, trace_audio=False)
+        ),
     )
     logger.info(f"t433 load+warm {time.time() - t0:.1f}s file={os.environ.get('H3_TRANSFORMER_FILE')}")
     num_frames = align_num_frames(round(5 * MINIMAX_H3_FPS))
