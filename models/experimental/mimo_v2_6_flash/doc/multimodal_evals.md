@@ -300,6 +300,46 @@ are the closest templates. No video eval exists anywhere.
    release run picks up the multimodal tasks. GPQA at 10 epochs is too long for every release (estimate above): run 1
    epoch in release / nightly and 10 epochs before OpenRouter onboarding.
 
+## Serving image with the shared KV store (2026-11-09)
+
+`ghcr.io/tenstorrent/tt-shield/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.26.1-ec294657718ee4133bbd28ae8215b8799dbfa09c-88e5ca8-mm-kvstore`
+(private; index digest `sha256:99f0f9084be52edbd97c0a3fd636cc4853014fd1931f06b96d8fbff67807ea0b`, 21.8 GB, vLLM 0.30.0).
+Built on bhg2 with `scripts/build_single_docker.sh --build --ubuntu-version 22.04 --kvstore-bin <ttserve-kvstore>` from
+tt-metal `mimo-v2.6/multimodal` ec294657718, vllm-tt-plugin `mimo-v2.6-flash/multimodal` 88e5ca8 and
+tt-inference-server `mimo-v2.6-flash/multimodal` 29be1ec3c; `ttserve-kvstore` is a release build of
+github.com/zhenghaoniTT/ttserve main (head e8081870c on the build date).
+
+What it adds to the multimodal image: `/usr/local/bin/ttserve-kvstore`. The launcher starts it before the four row
+engines when the spec configures vllm-tt-plugin's `TTKVStoreConnector` (the `mimo-v2.6-flash-mm` entry does: 96 GiB
+global + 24 GiB sliding-window pools in `/dev/shm`, `docker_shm_size: 128g`), so a prompt prefix one engine computed
+is loaded by the others instead of prefilled again. Block keys chain the identifier and offset of every media item
+that overlaps the block (as vLLM's own prefix-cache hash does), so two images of the same size never share KV; a
+request with an unidentified item is neither loaded nor saved, and a prefill row the model could not serve is not
+saved. The launcher serves without the store when the binary is missing, `TT_KVSTORE=0`, or `/dev/shm` is too small.
+
+Container check on bhg2 (`mm_kv_check.py`: a ~13K-token text prompt, then media item A or B of the same size, greedy
+one-word answers; A is computed and saved on one engine and read on another):
+
+| | image | video |
+|---|---|---|
+| reference A / B (own cache salts) | Red / Blue | Red / Blue |
+| load A on another engine | 13440 of 13513 tokens from the store, 0.3 s (2.2 s computed), Red | 13696 of 13745, 0.4 s, Red |
+| load B (other item, same placeholder tokens) | only the 12288 text tokens, Blue | 12288, Blue |
+| API conformance through the proxy | 55/55 | |
+
+Running it (the shape of tt-inference-server's `docker run`): `--ipc private --shm-size 128g`, `/dev/tenstorrent`
+and `/dev/hugepages-1G`, the runtime spec JSON with `RUNTIME_MODEL_SPEC_JSON_PATH`, the checkpoint read-only with
+`MODEL_WEIGHTS_DIR`, and a persistent `cache_root` for the converted weights (~186 GB; the check mounted an existing
+cache read-only and set `TT_CACHE_PATH` to it). Two things to know:
+
+* **Cold start.** With an empty kernel cache the engines took 1899 s to become healthy (warmup compilation 1690 s;
+  converted weights loaded in about a minute). tt-inference-server does not set `TT_METAL_CACHE`, so the JIT cache
+  (14 GB) lives in the `--rm` container and every start pays it again; pass `-e TT_METAL_CACHE=` a directory inside
+  the persistent `cache_root`, as the check did.
+* **Offline weights.** vLLM resolves `--model` through the Hugging Face hub cache; with `HF_HUB_OFFLINE=1` (so a cache
+  miss cannot start a full checkpoint download) seed `$HF_HOME/hub/models--XiaomiMiMo--MiMo-V2.6-Flash-MOPD` with
+  `refs/main` and a snapshot link to the mounted checkpoint.
+
 ## Not done
 
 * The text benchmarks (GPQA-Diamond, tau2) are out of scope for now.
