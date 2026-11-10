@@ -66,12 +66,69 @@ def test_post_round_matches_loop():
         newconf = torch.rand(B, BLOCK, generator=g) if rnd.random() < 0.7 else None
         gen = [[1, 2] for _ in range(B)]
         max_new, top = rnd.choice([4, 6, 100]), rnd.choice([40, 60, 1000])
-        s1 = dict(X5=X5.clone(), base=base.clone(), done=done.clone(), conf=conf.clone(), gen=copy.deepcopy(gen), emitted=[], ms=[], cal=[], run=_Run(B))
-        s2 = dict(X5=X5.clone(), base=base.clone(), done=done.clone(), conf=conf.clone(), gen=copy.deepcopy(gen), emitted=[], ms=[], cal=[], run=_Run(B))
-        _reference(s1["run"], a, mm, d, s1["X5"], s1["base"], s1["done"], s1["gen"], s1["emitted"], s1["ms"], eos, max_new, top, s1["conf"], newconf, k, s1["cal"], draft, stale)
+        s1 = dict(
+            X5=X5.clone(),
+            base=base.clone(),
+            done=done.clone(),
+            conf=conf.clone(),
+            gen=copy.deepcopy(gen),
+            emitted=[],
+            ms=[],
+            cal=[],
+            run=_Run(B),
+        )
+        s2 = dict(
+            X5=X5.clone(),
+            base=base.clone(),
+            done=done.clone(),
+            conf=conf.clone(),
+            gen=copy.deepcopy(gen),
+            emitted=[],
+            ms=[],
+            cal=[],
+            run=_Run(B),
+        )
+        _reference(
+            s1["run"],
+            a,
+            mm,
+            d,
+            s1["X5"],
+            s1["base"],
+            s1["done"],
+            s1["gen"],
+            s1["emitted"],
+            s1["ms"],
+            eos,
+            max_new,
+            top,
+            s1["conf"],
+            newconf,
+            k,
+            s1["cal"],
+            draft,
+            stale,
+        )
         hostopt.post_round(
-            s2["run"], a, mm, d, s2["X5"], BLOCK, s2["base"], s2["done"], s2["gen"], s2["emitted"], s2["ms"], eos, max_new, top,
-            conf=s2["conf"], newconf=newconf, k=k, cal=s2["cal"] if (k > 0 and not stale) else None, draft=draft,
+            s2["run"],
+            a,
+            mm,
+            d,
+            s2["X5"],
+            BLOCK,
+            s2["base"],
+            s2["done"],
+            s2["gen"],
+            s2["emitted"],
+            s2["ms"],
+            eos,
+            max_new,
+            top,
+            conf=s2["conf"],
+            newconf=newconf,
+            k=k,
+            cal=s2["cal"] if (k > 0 and not stale) else None,
+            draft=draft,
         )
         for key in ("X5", "base", "done", "conf"):
             assert torch.equal(s1[key], s2[key]), (trial, key)
@@ -154,3 +211,14 @@ def test_fast_hash_keeps_other_users_history():
     assert torch.equal(sa.cache, sb.cache)
     untouched = [r for r in range(16) if r not in (3, 9)]
     assert torch.equal(sb.cache[untouched], before[untouched])
+
+
+def test_fast_hash_verify_mode(monkeypatch):
+    monkeypatch.setenv("DSV41_PF_HASH_VERIFY", "5")
+    old, new, sa, sb = _pair(4, 200)
+    ids = torch.randint(0, 300, (3, 20))
+    for w in range(7):
+        st = torch.full((3,), 20 * w)
+        a, b = old(ids, st, rows=torch.tensor([0, 2, 3])), new(ids, st, rows=torch.tensor([0, 2, 3]))
+        assert torch.equal(a, b)
+    assert new._vstat == [5, 0] and torch.equal(sa.cache[:, :140], sb.cache[:, :140])

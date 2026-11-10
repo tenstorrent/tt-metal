@@ -237,9 +237,37 @@ class TorchFastNgramHash:
     def __init__(self, state):
         self.st = state
         self.fast = FastNgramHash(state)
+        self._verify = int(
+            os.environ.get("DSV41_PF_HASH_VERIFY", "0")
+        )  # >0: compare the first N calls against the shipped RaggedNgramHash (ids and history), log the verdict
+        self._vstat = [0, 0]  # checked, mismatching
 
     def __call__(self, input_ids, start, rows=None, token_mask=None):
+        if self._verify > 0:
+            return self._checked(input_ids, start, rows, token_mask)
         return torch.from_numpy(self.fast(input_ids, start, rows=rows, token_mask=token_mask))
+
+    def _checked(self, input_ids, start, rows, token_mask):
+        from models.demos.blackhole.deepseek_v41_flash.tt.engram_ragged import RaggedNgramHash
+
+        self._verify -= 1
+        B, L = input_ids.shape
+        crow = torch.arange(B) if rows is None else torch.as_tensor(rows).long().reshape(B)
+        cache = self.st.cache
+        saved = cache[crow].clone()
+        got = torch.from_numpy(self.fast(input_ids, start, rows=rows, token_mask=token_mask)).clone()
+        after_fast = cache[crow].clone()
+        cache[crow] = saved
+        want = RaggedNgramHash(self.st)(input_ids, start, rows=rows, token_mask=token_mask)
+        ok = torch.equal(got, want) and torch.equal(cache[crow], after_fast)
+        self._vstat[0] += 1
+        self._vstat[1] += int(not ok)
+        if not ok or self._verify == 0 or self._vstat[0] % 50 == 0:
+            print(
+                f"[PF_HASH_VERIFY] checked={self._vstat[0]} mismatches={self._vstat[1]} last_ok={ok} shape={tuple(got.shape)} masked={token_mask is not None}",
+                flush=True,
+            )
+        return want
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------------
