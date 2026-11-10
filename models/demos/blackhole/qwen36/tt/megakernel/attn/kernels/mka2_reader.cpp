@@ -225,6 +225,34 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(qr_x, qr_y, MK_AR_XCNT), 1);
     };
 #define V12_ARDLV(L) v12_ardlv(L)
+#if defined(MK_REAL_AAR)
+    // the real attention AR (spec §19): the owner writer posts MK_AR_ADLV = A + 1 once x_mlp (residual ⊙ γ_post_attn
+    // with MK_AR_GAMMA, else the residual) is complete; delivered like the stand-in's MLP x (X2 flag 2L + 2, else L + 1)
+    auto v12_aardlv = [&](uint32_t L, uint32_t A) {
+        if (vrole != 2) return;
+        { MK_AR_ZONE("R-AARDLVW"); noc_semaphore_wait_min(vw(MK_AR_ADLV), A + 1); }
+        MK_AR_ZONE("R-AARDLV");
+#if defined(MK_AR_GAMMA)
+        const uint32_t sp = get_read_ptr(CB_VXO);
+#elif defined(MK_AR_OUT)
+        const uint32_t sp = MK_AR_OUT;
+#else
+        const uint32_t sp = get_read_ptr(CB_VX0);
+#endif
+        for (uint32_t i = 0; i < 2; ++i)
+            if (vorc[i][4]) noc_async_write_multicast(sp, v_mc_addr(vorc[i], vR >= 32 ? voxdst : voxpk, 1), vR >= 32 ? V_OT * V_PTB : 2 * V_OT * vR * V_ROW_B, vorc[i][4], false);
+        noc_async_writes_flushed();
+        *vw(MK_AR_ASRC) = 
+#if defined(MK_V12_X2)
+            2 * L + 2;
+#else
+            L + 1;
+#endif
+        for (uint32_t i = 0; i < 2; ++i)   // private source word (see v12_ardlv)
+            if (vorc[i][4]) noc_semaphore_set_multicast(MK_AR_ASRC, v_mc_addr(vorc[i], vg[VG_XA + voslot], 1), vorc[i][4], false, 1);
+        noc_async_write_barrier();
+    };
+#endif
 #else
 #define V12_ARDLV(L) do {} while (0)
 #endif
@@ -678,7 +706,11 @@ void kernel_main() {
         }
 #endif
 #if defined(MK_V12)
+#if defined(MK_REAL_AAR) && defined(MK_REAL_AR) && defined(MK_AR_DLV)
+        v12_aardlv(L, A);   // owners, attention-type layers: the real attention AR's x (replaces the MGO stand-in)
+#else
         v12_ox(L);   // owners, attention-type layers (after this core's SDPA work)
+#endif
         V12_ARDLV(L);
         if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
             cb_wait_front(CB_VA, V_NTM);
@@ -723,5 +755,8 @@ void kernel_main() {
 #if defined(MK_REAL_AR) && defined(MK_AR_DLV)
     // device-local words: this RISC awaited MK_AR_DLV = NL (the writer's last post) and wrote the owner's own XF copy last
     if (vrole == 2) { *vw(MK_AR_DLV) = 0; *vw(MK_AR_XF0) = 0; *vw(MK_AR_XF1) = 0; }
+#if defined(MK_REAL_AAR)
+    if (vrole == 2) { *vw(MK_AR_ADLV) = 0; *vw(MK_AR_ASRC) = 0; }
+#endif
 #endif
 }
