@@ -819,6 +819,27 @@ def test_glm_prefill_block(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
+    if os.environ.get("GLM_BLOCK_PROFILE") == "1":
+        # Op-trace mode (scripts/profile_glm_block.sh): one warm-up forward so every kernel is JIT-compiled and
+        # the program cache is hot, drain the device profiler, then signpost the measured forward. The
+        # perf report keeps only ops between PROFILE_MEASURE_START and PROFILE_MEASURE_END.
+        from tracy import signpost
+
+        warm = block.forward(
+            tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
+        )
+        ttnn.synchronize_device(mesh_device)
+        del warm
+        ttnn.ReadDeviceProfiler(mesh_device)
+        signpost("PROFILE_MEASURE_START")
+        prof_out = block.forward(
+            tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
+        )
+        ttnn.synchronize_device(mesh_device)
+        signpost("PROFILE_MEASURE_END")
+        ttnn.ReadDeviceProfiler(mesh_device)
+        del prof_out
+
     logger.info(f"[glm block {layer_type}] running device block")
     out = block.forward(
         tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
