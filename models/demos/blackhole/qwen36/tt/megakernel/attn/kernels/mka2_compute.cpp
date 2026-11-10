@@ -17,9 +17,15 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
 #include "api/debug/kernel_profiler.hpp"
+#if defined(MKA_RQKV)
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#endif
 
 constexpr uint32_t CB_X = 0, CB_W = 1, CB_HL = 2, CB_H = 3, CB_WD = 4, CB_W2 = 5, CB_WM = 6, CB_YM = 7, CB_GO = 8, CB_OUT = 16;
 constexpr uint32_t CB_Q = 9, CB_K = 10, CB_V = 11, CB_O = 12, CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28;
+constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, CB_RSP = 20;
 #ifndef MKA_NU
 #define MKA_NU 4
 #endif
@@ -38,13 +44,128 @@ void kernel_main() {
     const uint32_t u = get_arg_val<uint32_t>(a++), nblk = get_arg_val<uint32_t>(a++);
     const uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
     const uint32_t qoff = u * DH;
+#if defined(MKA_RQKV)
+    const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
+    const uint32_t qnt = get_arg_val<uint32_t>(a++);
+    // real qkv PROJ (spec v0.4): y = rstd ⊙ (x @ diag(γ)W); rstd = rsqrt(ΣΣx²/H + eps) from the AR owners' fp32 partials
+    auto qkv_proj = [&](bool att_layer) {
+        DeviceZoneScopedN("C-QKV");
+        const uint32_t cbw = qrole == 3 ? CB_PQ : CB_WM;
+        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, cbw, CB_QA);
+        reconfig_data_format(cbw, CB_X);
+        matmul_block_init(CB_X, cbw, 0, qnt, 1, KB);
+        cb_wait_front(cbw, qnk * qnt);
+        tile_regs_acquire();
+        for (uint32_t k = 0; k < qnk; ++k) matmul_block(CB_X, cbw, qk0 + k, k * qnt, 0, 0, qnt, 1, KB);
+        tile_regs_commit();
+        if (!att_layer) {   // GDN in-proj stand-in: discard the result WITHOUT touching CB_QA (the partner's writer
+            tile_regs_wait();   // reads CB_QA through its own read pointer, which must stay in step with the packer)
+            tile_regs_release();
+            cb_pop_front(cbw, qnk * qnt);
+            return;
+        }
+        cb_reserve_back(CB_QA, qnt);
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_QA);
+        for (uint32_t j = 0; j < qnt; ++j) pack_tile(j, CB_QA);
+        tile_regs_release();
+        cb_push_back(CB_QA, qnt);
+        cb_pop_front(cbw, qnk * qnt);
+        if (qrole == 2) return;   // partner: the writer ships the fp32 partial to the owner
+        if (qrole == 1) {   // owner: + partner's K-half partial
+            cb_wait_front(CB_QA, 1);
+            cb_wait_front(CB_QR, 1);
+            tile_regs_acquire();
+#if defined(MKA_QADD_FPU)
+            reconfig_data_format(CB_QA, CB_QR);   // FPU add: both fp32 partials pass the reduced-precision src registers
+            add_init(CB_QA, CB_QR);
+            add_tiles(CB_QA, CB_QR, 0, 0, 0);
+#else
+            // exact fp32: both partials unpack straight to the fp32 DST (copy_tile), SFPU fp32 add
+            reconfig_data_format_srca(CB_QA);
+            copy_init(CB_QA);
+            copy_tile(CB_QA, 0, 0);
+            reconfig_data_format_srca(CB_QR);
+            copy_init(CB_QR);
+            copy_tile(CB_QR, 0, 1);
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 0);
+#endif
+            tile_regs_commit();
+            cb_pop_front(CB_QA, 1);
+            cb_pop_front(CB_QR, 1);
+            cb_reserve_back(CB_QA, 1);
+            tile_regs_wait();
+            pack_reconfig_data_format(CB_QA);
+            pack_tile(0, CB_QA);
+            tile_regs_release();
+            cb_push_back(CB_QA, 1);
+        }
+        // rstd (column 0 of each partial tile holds that owner's per-row Σx²)
+        cb_wait_front(CB_RSP, MKA_NOWN);
+        tile_regs_acquire();
+#if MKA_NOWN == 2
+        reconfig_data_format(CB_RSP, CB_RSP);
+        add_init(CB_RSP, CB_RSP);
+        add_tiles(CB_RSP, CB_RSP, 0, 1, 0);
+#else
+        static_assert(MKA_NOWN == 1, "bench supports 1 or 2 AR-owner partials");
+        reconfig_data_format_srca(CB_RSP);
+        copy_init(CB_RSP);
+        copy_tile(CB_RSP, 0, 0);
+#endif
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, MKA_INVH_BITS);
+        add_unary_tile(0, MKA_EPS_BITS);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
+        tile_regs_commit();
+        cb_reserve_back(CB_RS, 1);
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_RS);
+        pack_tile(0, CB_RS);
+        tile_regs_release();
+        cb_push_back(CB_RS, 1);
+        cb_pop_front(CB_RSP, MKA_NOWN);
+        // scale the output rows at pack
+        cb_wait_front(CB_RS, 1);
+        cb_wait_front(CB_QA, qnt);
+        reconfig_data_format(CB_QA, CB_RS);
+        mul_bcast_cols_init(CB_QA, CB_RS);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < qnt; ++j) mul_tiles_bcast_cols(CB_QA, CB_RS, j, 0, j);
+        tile_regs_commit();
+        cb_reserve_back(CB_QO, qnt);
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_QO);
+        for (uint32_t j = 0; j < qnt; ++j) pack_tile(j, CB_QO);
+        tile_regs_release();
+        cb_push_back(CB_QO, qnt);
+        cb_pop_front(CB_QA, qnt);
+        cb_pop_front(CB_RS, 1);
+    };
+#endif
     if (IS_STREAM) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
     else compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
     cb_wait_front(CB_ONE, 1);
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = ((uint32_t)(MKA_AMASK) >> L) & 1u;
         if (!IS_STREAM && !att) continue;
+#if defined(MKA_RQKV)
+        // attention layers: the real qkv PROJ; GDN-type layers: the STREAM K-half matmul alone stands in for the GDN
+        // in-proj (64 x 87 KB BFP8 = 5.6 MB, spec 5.9 MB), output discarded
         if (IS_STREAM) {
+            cb_wait_front(CB_X, KT);
+            if (qrole) qkv_proj(att);
+        } else if (qrole == 3) {
+            cb_wait_front(CB_X, KT);
+            qkv_proj(true);
+            cb_pop_front(CB_X, KT);
+        }
+        if (false) {
+#else
+        if (IS_STREAM) {
+#endif
             cb_wait_front(CB_X, KT);
             DeviceZoneScopedN("C-MIX");
 #if !defined(MKA_NO_REINIT)
@@ -69,7 +190,11 @@ void kernel_main() {
 #if !defined(MKA_NO_REINIT)
             // the previous layer's tree adds (fp32 copy_tile = unpack-to-dest) and the root's eltwise normalize leave
             // unpacker / math state that a short matmul_init does not undo: re-run the full HW init per SDPA phase
+#if defined(MKA_RQKV)
+            if (L > 0 || qrole) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
+#else
             if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
+#endif
 #endif
             cb_wait_front(CB_Q, QT);
             cb_reserve_back(CB_O, NO);

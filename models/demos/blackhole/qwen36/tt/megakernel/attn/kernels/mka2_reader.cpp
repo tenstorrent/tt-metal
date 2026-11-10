@@ -18,6 +18,11 @@ void kernel_main() {
     constexpr auto kv_args = TensorAccessorArgs<wgu_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto wo_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#if defined(MKA_RQKV)
+    constexpr auto wq_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+    constexpr uint32_t MWTB = MKA_MWTB, QSL = 2 * KT;   // STREAM_EXT slice: 2 output tiles x full K, BFP8
+    constexpr uint32_t TRID_PQ = 9;
+#endif
     uint32_t a = 0;
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
     const uint32_t wgu_addr = get_arg_val<uint32_t>(a++), gu_page = get_arg_val<uint32_t>(a++);
@@ -55,6 +60,33 @@ void kernel_main() {
     const uint32_t kv_mode = get_arg_val<uint32_t>(a++);
     const bool rd_k = kv_mode == 0 || kv_mode == 2, rd_v = kv_mode == 1 || kv_mode == 2;
     uint32_t kv_groups = 0;
+#if defined(MKA_RQKV)
+    const uint32_t qrole = get_arg_val<uint32_t>(a++), wq_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
+    const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
+    bool pq_pending = false;
+    // next attention layer after L (NL if none) and the length of the GDN-type run right before attention layer La
+    auto next_att = [](uint32_t L) { uint32_t n = L + 1; while (n < NL && !is_attn(n)) ++n; return n; };
+    auto gdn_run = [](uint32_t La) { uint32_t r = 0; while (r < La && !is_attn(La - 1 - r)) ++r; return r; };
+#if defined(MKA_PQGDN)
+    constexpr bool kPqGdn = true;    // spec v0.8.1: the slice is streamed during the GDN-type layers before its layer
+#else
+    constexpr bool kPqGdn = false;
+#endif
+#ifndef MKA_PQCH
+#define MKA_PQCH 16
+#endif
+#ifndef MKA_PQN
+#define MKA_PQN 2
+#endif
+    const uint32_t La0 = is_attn(0) ? 0 : next_att(0);
+    if (qrole == QR_EXT && La0 < NL && !(kPqGdn && gdn_run(La0) > 0)) {   // the first attention layer's slice up front
+        cb_reserve_back(CB_PQ, QSL);
+        noc_async_read(wq.get_noc_addr(pq_page + La0 * pq_layer), get_write_ptr(CB_PQ), QSL * MWTB);
+        noc_async_read_barrier();
+        cb_push_back(CB_PQ, QSL);
+    }
+#endif
     const auto wo = TensorAccessor(wo_args, wo_addr, WOTB);
     const uint32_t scr = get_write_ptr(CB_SCR);
     constexpr uint32_t TRID_WO = 7;
@@ -67,6 +99,35 @@ void kernel_main() {
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
         const uint32_t A = aidx(L);
+#if defined(MKA_RQKV)
+        if (!IS_STREAM && !att && kPqGdn && qrole == QR_EXT) {
+            // STREAM_EXT in a GDN-type layer (spec v0.8.1): this layer's share of the next attention layer's slice,
+            // throttled (MKA_PQCH-page chunks, MKA_PQN in flight); the ring was popped by that core's last qkv
+            const uint32_t Ln = next_att(L);
+            if (Ln < NL) {
+                DeviceZoneScopedN("R-PQGDN");
+                const uint32_t run = gdn_run(Ln), j = L - (Ln - run);
+                const uint32_t p0 = j * QSL / run, p1 = (j + 1) * QSL / run;
+                if (L > 0) noc_semaphore_wait_min(l1w(gs[GS_XRDY]), L);   // layer L has started
+#if defined(MKA_PQDELAY)
+                spin_cycles(MKA_PQDELAY);
+#endif
+                if (j == 0) cb_reserve_back(CB_PQ, QSL);
+                const uint64_t src = wq.get_noc_addr(pq_page + Ln * pq_layer);
+                const uint32_t dst = get_write_ptr(CB_PQ);
+                noc_async_read_set_trid(TRID_PQ);
+                for (uint32_t p = p0, c = 0; p < p1; p += MKA_PQCH, ++c) {
+                    if (c && (c % MKA_PQN) == 0) { noc_async_read_barrier_with_trid(TRID_PQ); noc_async_read_set_trid(TRID_PQ); }
+                    const uint32_t n = (p1 - p) < MKA_PQCH ? (p1 - p) : MKA_PQCH;
+                    noc_async_read(src + p * MWTB, dst + p * MWTB, n * MWTB);
+                }
+                noc_async_read_set_trid(0);
+                noc_async_read_barrier_with_trid(TRID_PQ);
+                if (j + 1 == run) cb_push_back(CB_PQ, QSL);
+            }
+            continue;
+        }
+#endif
         if (!IS_STREAM && !att) continue;   // ATTN-only cores idle through GDN-type layers
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
@@ -88,6 +149,9 @@ void kernel_main() {
             noc_async_read_set_trid(0);
         }
 #endif
+#if defined(MKA_RQKV) && defined(MKA_PQPOST)
+        if (pq_pending) { noc_async_read_barrier_with_trid(TRID_PQ); cb_push_back(CB_PQ, QSL); pq_pending = false; }
+#endif
         if (att) {   // SDPA: K stream
             DeviceZoneScopedN("R-KV");
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
@@ -99,8 +163,39 @@ void kernel_main() {
             const uint32_t ngrp = (b1 - b0 + NBB - 1) / NBB;
             const uint32_t wper = ngrp ? (wtot + ngrp - 1) / ngrp : wtot;   // weight tiles per K group, spread evenly
             uint32_t wdone = 0;
+#if defined(MKA_RQKV)
+            // STREAM_EXT: layer L + 1's slice streams in from the 3rd KV group on (by then compute has run layer L's
+            // qkv, which precedes its SDPA, and freed CB_PQ), spread evenly over the remaining groups
+#if defined(MKA_PQPOST)
+            const bool pq_go = false;   // issued after this core's tree step instead (see below)
+#elif defined(MKA_PQSKIP)
+            const bool pq_go = false;
+            if (qrole == QR_EXT && next_att(L) < NL) { cb_reserve_back(CB_PQ, QSL); cb_push_back(CB_PQ, QSL); }   // DEBUG: stale slice, no bytes
+#else
+            // in-window fill of the NEXT ATTENTION layer's slice (with MKA_PQGDN only when no GDN layer precedes it)
+            const uint32_t Lq = next_att(L);
+            const bool pq_go = qrole == QR_EXT && Lq < NL && !(kPqGdn && gdn_run(Lq) > 0);
+#endif
+            const uint32_t pq_g0 = ngrp > 2 ? 2 : (ngrp ? ngrp - 1 : 0);
+            const uint32_t pq_ng = ngrp > pq_g0 ? ngrp - pq_g0 : 1;
+            const uint32_t pq_per = (QSL - PQ_WS + pq_ng - 1) / pq_ng;   // pages per group
+            uint32_t pq_done = PQ_WS, gi = 0, pq_dst = 0;
+            bool pq_rsv = false;
+            const uint64_t pq_src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
+#endif
             for (uint32_t b = b0; b < b1; b += NBB) {
                 const uint32_t nb = (b1 - b) < NBB ? (b1 - b) : NBB;
+#if defined(MKA_RQKV)
+                if (pq_go && gi >= pq_g0 && pq_done < QSL) {
+                    if (!pq_rsv) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); pq_rsv = true; }
+                    const uint32_t n = (QSL - pq_done) < pq_per ? (QSL - pq_done) : pq_per;
+                    noc_async_read_set_trid(TRID_PQ);
+                    noc_async_read(pq_src + pq_done * MWTB, pq_dst + pq_done * MWTB, n * MWTB);
+                    noc_async_read_set_trid(0);
+                    pq_done += n;
+                }
+                ++gi;
+#endif
                 if (wdone < wtot) {   // previous group's weight reads landed? (they had a whole K group to complete)
                     noc_async_read_barrier_with_trid(TRID_WO);
                     noc_async_read_set_trid(TRID_WO);
@@ -134,6 +229,19 @@ void kernel_main() {
                 if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = ++kv_groups;   // paces the writer's weight issue (it has no KV)
             }
             noc_async_read_barrier_with_trid(TRID_WO);
+#if defined(MKA_RQKV)
+            if (pq_go) {
+                if (!pq_rsv) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); pq_rsv = true; }
+                if (pq_done < QSL) {
+                    noc_async_read_set_trid(TRID_PQ);
+                    noc_async_read(pq_src + pq_done * MWTB, pq_dst + pq_done * MWTB, (QSL - pq_done) * MWTB);
+                    noc_async_read_set_trid(0);
+                }
+                noc_async_read_barrier_with_trid(TRID_PQ);
+                if (PQ_WS) noc_semaphore_wait_min(l1w(gs[GS_PQH]), L + 1);   // the writer's share landed
+                cb_push_back(CB_PQ, QSL);
+            }
+#endif
         }
         if (att) {   // SDPA: tree reduce (pull), cumulative global semaphores (over attention layers: A)
             DeviceZoneScopedN("R-RED");
@@ -175,6 +283,32 @@ void kernel_main() {
             noc_async_read_set_trid(0);
         }
 #endif
+#if defined(MKA_RQKV) && defined(MKA_PQPOST)
+        // STREAM_EXT: issue layer L + 1's whole slice once this core's KV + tree work is done (the STREAM cores are then
+        // in wo / AR / MLP); it lands during that tail and is pushed at the start of layer L + 1
+        if (qrole == QR_EXT && next_att(L) < NL) {
+            DeviceZoneScopedN("R-PQ");
+            cb_reserve_back(CB_PQ, QSL);
+            const uint64_t src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
+            const uint32_t dst = get_write_ptr(CB_PQ);
+#if defined(MKA_PQCH)
+            // throttled: MKA_PQCH-page chunks, at most MKA_PQN chunks in flight (big single reads from 40 cores flood
+            // the NoC and stall the STREAM cores' tail multicasts)
+            noc_async_read_set_trid(TRID_PQ);
+            for (uint32_t p = 0, c = 0; p < QSL; p += MKA_PQCH, ++c) {
+                if (c && (c % MKA_PQN) == 0) { noc_async_read_barrier_with_trid(TRID_PQ); noc_async_read_set_trid(TRID_PQ); }
+                const uint32_t n = (QSL - p) < MKA_PQCH ? (QSL - p) : MKA_PQCH;
+                noc_async_read(src + p * MWTB, dst + p * MWTB, n * MWTB);
+            }
+            noc_async_read_set_trid(0);
+#else
+            noc_async_read_set_trid(TRID_PQ);
+            noc_async_read(src, dst, QSL * MWTB);
+            noc_async_read_set_trid(0);
+#endif
+            pq_pending = true;
+        }
+#endif
 #if defined(MKA_GUPRE)
         if (att && IS_STREAM && IS_GU) { noc_async_read_barrier_with_trid(TRID_GU); cb_push_back(CB_W, even_t); }
         constexpr bool kGupre = true;
@@ -213,4 +347,7 @@ void kernel_main() {
     // reset the tree's global semaphores for the next pass: every inc into them for layer NL - 1 happened before the
     // matching wait above returned, so nothing arrives after this point
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
+#if defined(MKA_RQKV)
+    if (qrole == QR_EXT && PQ_WS) *l1w(gs[GS_PQH]) = 0;   // the writer's last set (NL - 2) preceded our last wait
+#endif
 }
