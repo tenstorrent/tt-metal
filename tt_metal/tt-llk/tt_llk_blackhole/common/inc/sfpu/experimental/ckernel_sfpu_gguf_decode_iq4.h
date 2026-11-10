@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// GGUF SFPU decoders of IQ4_NL and IQ4_XS.
+// GGUF SFPU decoders of IQ4_NL and IQ4_XS, whose pages hold their codes as 4-bit block-float datums.
 
 #pragma once
 
@@ -18,28 +18,44 @@ namespace gguf
 
 using namespace ckernel::gguf;
 
-sfpi_inline void iq4_init()
+// The page's codes are BFP4 datums in the [K][N] tile's face order, unpacked with the exponent forced to 15 into the
+// 16-bit DEST rows that the output tile's rows address (as MXFP4 / NVFP4), so the SFPU loads x = +-c / 4 (FP16) where
+// its output goes; the code of sign 1 and magnitude 0 loads as x8 = -131008. The host maps the IQ4 codes 0..14 (the
+// values in increasing order) to x = 1.75 .. -1.75 and code 15 to x8 (bfp_codes in the host packing). Then
+// w = kv + 14 = round(p(x)) for the cubic p below (error < 0.45 on the fifteen finite codes) and p(x8) > 127, which
+// SFPSTOCHRND's clamp to 127 turns into the largest value: kv = 113. The output is S w + M with M = -14 S.
+constexpr std::uint32_t IQ4B_NEG14 = 0xC160;     // -14, bf16
+constexpr std::uint32_t IQ4B_C3    = 0xC09F69F7; // -4.981685
+constexpr std::uint32_t IQ4B_C2    = 0xC03C14E6; // -2.938776
+constexpr std::uint32_t IQ4B_C1    = 0xC239D4DD; // -46.457874
+constexpr std::uint32_t IQ4B_C0    = 0x40639783; // 3.5561225
+
+// S of group p = pidx(a, b, 0), past the page.
+template <int FMT>
+constexpr int iq4_ps()
 {
-    sfpi::vConstFloatPrgm0 = IQ4_C4;
-    sfpi::vConstFloatPrgm1 = IQ4_C3;
-    sfpi::vConstFloatPrgm2 = IQ4_C2;
+    return CO + static_cast<int>(page_layout<static_cast<Format>(FMT)>().rows) / 2;
 }
 
-// Phase 1 of IQ4_XS (IQ4_NL: linear_params). TI = tile index inside the scale page's group of K-tiles.
+// Phase 1: S of the four column groups. IQ4_NL: row 0 holds d of columns n0 (low half) and n1 (high half); IQ4_XS:
+// rows 0..2 hold the 96-bit string of 6-bit scales, ls_j(column b) at bit 48 b + 6 j, and S = d (ls - 32). The two
+// columns' chains interleave (no SFPMAD result used at once). TI = tile index in the group.
 template <int FMT, int TI>
 sfpi_inline void iq4_params()
 {
-    if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0)
-    {
-        params_init();
-    }
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
-        if constexpr (FMT == IQ4_XS)
+        vFloat f0, f1;
+        if constexpr (FMT == IQ4_NL)
         {
-            // Rows 0..2: 96-bit string of 6-bit scales, ls_j(column b) at bit 48b + 6j; field 0: d. The replicated
-            // words stay in registers, and the two columns' chains interleave (no SFPMAD result used at once).
+            vUInt r0, r1, r2, r3;
+            rep4<FMT>(0, a, r0, r1, r2, r3);
+            const vUInt bias = 0x38000000u; // after rep4, which needs four registers
+            f16_both(r0, f0, f1, bias);
+        }
+        else
+        {
             vUInt r0, r1, r2, r3;
             rep4<FMT>(0, a, r0, r1, r2, r3);
             (void)r3;
@@ -64,157 +80,160 @@ sfpi_inline void iq4_params()
             {
                 l1 = (w1 >> static_cast<unsigned>(s1)) | (bits(r2, 0, s1 - 26) << static_cast<unsigned>(32 - s1));
             }
-            vFloat f0                         = ufloat(l0);
-            vFloat f1                         = ufloat(l1);
-            f0                                = f0 + -32.0f;
-            f1                                = f1 + -32.0f;
-            const vFloat d0                   = pf32<FMT>(0, 0, a);
-            const vFloat d1                   = pf32<FMT>(0, 1, a);
-            f0                                = d0 * f0;
-            f1                                = d1 * f1;
-            sfpi::dst_reg[PS + pidx(a, 0, 0)] = f0;
-            sfpi::dst_reg[PS + pidx(a, 1, 0)] = f1;
+            f0              = ufloat(l0);
+            f1              = ufloat(l1);
+            f0              = f0 + -32.0f;
+            f1              = f1 + -32.0f;
+            const vFloat d0 = pf32<FMT>(0, 0, a);
+            const vFloat d1 = pf32<FMT>(0, 1, a);
+            f0              = d0 * f0;
+            f1              = d1 * f1;
         }
+        sfpi::dst_reg[iq4_ps<FMT>() + pidx(a, 0, 0)] = f0;
+        sfpi::dst_reg[iq4_ps<FMT>() + pidx(a, 1, 0)] = f1;
     }
 }
 
-// IQ4_NL and IQ4_XS through SFPLOADMACRO (body_macro_iq4), and its coefficients.
-constexpr std::uint32_t IQ4M_C4    = 0x3ACFE2C4;
-constexpr std::uint32_t IQ4M_C3    = 0x3CFEA8FD;
-constexpr std::uint32_t IQ4M_C2    = 0xBFAF9B4E;
-constexpr std::uint32_t IQ4M_C1    = 0x41C16401;
-constexpr std::uint32_t IQ4M_C0K   = 0xC4CFD224; // c0 - 1536
-constexpr std::uint32_t IQ4M_NEG_K = 0x44C0;     // 1536, bf16
+// Phase 2 through SFPLOADMACRO, one output every six instructions. LRegs: x in L0, the Horner sum in L1, the outputs
+// of even and odd stream positions in L2 and L3, S and M = -14 S of the current column group in L4, L5, c0 in L6 and
+// -14 in L7; c3, c2, c1 in L12..L14 (iq4_init). Per output, plain: load x, L1 = c3 x + c2, L1 = L1 x + c1,
+// L2|3 = L1 x + c0, and its store; macro 1 takes the output's L2|3 and zeroes it, then rounds it to an integer
+// (saturating), casts it to Float32 and forms S w + M there, 3, 4 and 6 instructions on. The stores are plain
+// SFPSTOREs: arbitrated against the unpacker and the FPU, so nothing has to wait for the next page's copy or the
+// matmul.
+constexpr int IQ4B_RND = 2, IQ4B_CAST = 3, IQ4B_MAD = 5; // delays, in instructions
 
-template <int FMT>
-constexpr bool iq4_macro_body = LOADMACRO && (FMT == IQ4_NL || FMT == IQ4_XS);
-
-// Instruction templates: 0 = v >> 28 (amount in L7), 1 = int to fp32, 2 = TF32 round to nearest, 3 = S u + M (L5,
-// L6). Macro 0 runs the shift and cast 2 and 3 instructions on; macro 1 the round, MAD and store 4, 5 and 7 on.
-inline void macro_init_iq4()
+// c3, c2, c1 in L12..L14; with SFPLOADMACRO, templates 0 = round to a saturated integer, 1 = sign-magnitude integer
+// to Float32, 2 = S w + M with S, M in L4, L5, whose delays count instructions (the stores are plain).
+inline void iq4_init()
 {
-    TTI_SFPSHFT2(0, 7, 12, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4B_C3 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4B_C3 >> 16);
+    TTI_SFPCONFIG(0, 12, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4B_C2 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4B_C2 >> 16);
+    TTI_SFPCONFIG(0, 13, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4B_C1 & 0xFFFF);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4B_C1 >> 16);
+    TTI_SFPCONFIG(0, 14, 0);
+    TTI_SFPNOP;
+    if constexpr (!LOADMACRO)
+    {
+        return;
+    }
+    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, 9, 0, 12, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
     TTI_SFPCAST(0, 13, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
-    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, 9, 0, 14, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16A);
-    TTI_SFPMAD(5, 0, 6, 15, sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    constexpr std::uint32_t cast  = (2 << 3) | 5;
-    constexpr std::uint32_t shift = 0x80 | (1 << 3) | 4;
-    constexpr std::uint32_t mad   = 0xC0 | (4 << 3) | 7;
-    constexpr std::uint32_t round = (3 << 3) | 6;
-    constexpr std::uint32_t store = 0x40 | (6 << 3) | 3;
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, cast);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, shift);
-    TTI_SFPCONFIG(0, 4, 0);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, mad << 8);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store << 8) | round);
+    TTI_SFPMAD(4, 0, 5, 14, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    constexpr std::uint32_t cast  = (IQ4B_CAST << 3) | 5;
+    constexpr std::uint32_t round = (IQ4B_RND << 3) | 4;
+    constexpr std::uint32_t mad   = 0x80 | (IQ4B_MAD << 3) | 6;
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, cast | (mad << 8));
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, round);
     TTI_SFPCONFIG(0, 5, 0);
     TTI_SFPCONFIG(0xF00, 8, sfpi::SFPCONFIG_MOD1_ARG_IMM);
-    // c4, c3, c2 of body_macro_iq4 in L12..L14, which no other decode code of these formats writes.
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4M_C4 & 0xFFFF);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4M_C4 >> 16);
-    TTI_SFPCONFIG(0, 12, 0);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4M_C3 & 0xFFFF);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4M_C3 >> 16);
-    TTI_SFPCONFIG(0, 13, 0);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, IQ4M_C2 & 0xFFFF);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, IQ4M_C2 >> 16);
-    TTI_SFPCONFIG(0, 14, 0);
     TTI_SFPNOP;
 }
 
-// IQ4_NL / IQ4_XS through SFPLOADMACRO: a degree-4 polynomial of q whose constant term carries K = -1536, so a TF32
-// round gives kv + K exactly and S (kv + K) + M with M = -K S equals kv S (zeros may differ in sign from body()).
-// Seven slots per output (make_qplan), Horner in L[3 + k % 2] with c4, c3, c2, c1 in L12, L13, L14, L11 and c0K in L7,
-// whose low five bits are also the shift amount -28. S, M in L5, L6. macro_init_iq4 sets c4, c3, c2 once; the body sets
-// c1, c0K and restores L11 to -1.0 at the end.
-
 enum : int
 {
-    QS_NOP,
-    QS_WORD,  // macro 0, v = x, code word row y
-    QS_SHIFT, // v x <<= y
-    QS_STEP,  // Horner step z (1..4) of t x, v y
-    QS_OUT,   // macro 1, output row x
-    QS_SCALE, // register x = S of row y
-    QS_NEGK,  // register x *= -K
+    QB_NOP,
+    QB_LDX,  // x of output row y
+    QB_MAD1, // L1 = c3 x + c2
+    QB_MAD2, // L1 = L1 x + c1
+    QB_MAD3, // L(2 + x) = L1 x + c0
+    QB_MAC,  // macro 1 on L(2 + y), row z
+    QB_ST,   // store L(2 + x) to row y
+    QB_LDS,  // S of group x into L4
+    QB_LDM,  // M of group x into L5: L4 * -14
 };
 
-constexpr int QBASE  = 7 * 31 + 18;
-constexpr int QSLOTS = QBASE + 9;
+// Stream position k = 8 g + j: column group g (a, b) = (g / 2, g % 2), row o = 16 (j / 4) + 8 a + 2 (j % 4) + b.
+// Output k's instructions at 2 + 6 k + {0: load x, 1: MAD1, 3: MAD2, 4: macro, 5: MAD3, 14: store (the last two: 12,
+// where the next positions' instructions would be)}; group 0 loads
+// its S and forms its M first, group g = 1..3 after the load of x of position 8 g + 1: after the last macro operation
+// of group g - 1 that reads them and before the first of group g, where no macro operation in flight reads a value of
+// a later plain instruction.
+constexpr int QB_BASE  = 2 + 6 * 31 + 13;
+constexpr int QB_SLOTS = QB_BASE + 6;
 
-struct qplan
+struct qbplan
 {
-    mslot s[QSLOTS];
+    mslot s[QB_SLOTS];
     int n;
 };
 
-// Stream position k: scale group g = k / 8 = (a, b), then h, then i = b, b + 2, b + 4, b + 6.
-constexpr qplan make_qplan()
+constexpr int qb_row(const int k)
 {
-    qplan p {};
-    mslot base[QBASE] {};
+    const int g = k / 8, j = k % 8;
+    return 16 * (j / 4) + 8 * (g / 2) + 2 * (j % 4) + g % 2;
+}
+
+constexpr qbplan make_qbplan()
+{
+    qbplan p {};
+    mslot base[QB_BASE] {};
+    base[0] = {QB_LDS, 0, 0, 0};
+    base[1] = {QB_LDM, 0, 0, 0};
     for (int k = 0; k < 32; k++)
     {
-        const int g = k / 8, a = g / 2, b = g % 2, h = k / 4 % 2, i = b + 2 * (k % 4);
-        const int v = k % 2, t = 3 + k % 2, s = 7 * k;
-        base[s]      = {QS_WORD, v, CO + 2 * h + a, 0};
-        base[s + 1]  = {QS_SHIFT, v, 28 - 4 * i, 0};
-        base[s + 4]  = {QS_STEP, t, v, 1};
-        base[s + 6]  = {QS_STEP, t, v, 2};
-        base[s + 9]  = {QS_STEP, t, v, 3};
-        base[s + 10] = {QS_OUT, 16 * h + 8 * a + i, 0, 0};
-        base[s + 12] = {QS_STEP, t, v, 4};
+        const int s                  = 2 + 6 * k;
+        base[s]                      = {QB_LDX, 0, qb_row(k), 0};
+        base[s + 1]                  = {QB_MAD1, 0, 0, 0};
+        base[s + 3]                  = {QB_MAD2, 0, 0, 0};
+        base[s + 4]                  = {QB_MAC, k / 8, k % 2, qb_row(k)};
+        base[s + 5]                  = {QB_MAD3, k % 2, 0, 0};
+        base[s + (k < 30 ? 14 : 12)] = {QB_ST, k % 2, qb_row(k), 0};
     }
-    // Scale group 0's S, M in slots 2, 3, 5, free before output 0's steps (its first MAD reads them at slot 14).
-    base[2] = {QS_SCALE, 5, PS + pidx(0, 0, 0), 0};
-    base[3] = {QS_SCALE, 6, PS + pidx(0, 0, 0), 0};
-    base[5] = {QS_NEGK, 6, 0, 0};
-    for (int q = 0; q < QBASE; q++)
+    for (int q = 0; q < QB_BASE; q++)
     {
-        p.s[p.n++]  = base[q];
-        const int k = (q - 15) / 7;
-        if (q >= 15 && (q - 15) % 7 == 0 && k % 8 == 7 && k < 31)
+        p.s[p.n++] = base[q];
+        if (q == 2 + 6 * 9 || q == 2 + 6 * 17 || q == 2 + 6 * 25)
         {
-            const int g = k / 8 + 1;
-            p.s[p.n++]  = {QS_SCALE, 5, PS + pidx(g / 2, g % 2, 0), 0};
-            p.s[p.n++]  = {QS_SCALE, 6, PS + pidx(g / 2, g % 2, 0), 0};
-            p.s[p.n++]  = {QS_NEGK, 6, 0, 0};
+            const int g = ((q - 2) / 6 - 1) / 8;
+            p.s[p.n++]  = {QB_LDS, g, 0, 0};
+            p.s[p.n++]  = {QB_LDM, g, 0, 0};
         }
     }
     return p;
 }
 
-constexpr qplan qplan_iq4 = make_qplan();
+constexpr qbplan qbplan_iq4 = make_qbplan();
 
-template <int I>
-sfpi_inline void qslot_issue()
+template <int FMT, int I>
+sfpi_inline void qbslot_issue()
 {
-    constexpr mslot s = qplan_iq4.s[I];
-    if constexpr (s.kind == QS_WORD)
+    constexpr mslot s = qbplan_iq4.s[I];
+    if constexpr (s.kind == QB_LDX)
     {
-        TTI_SFPLOADMACRO(s.x, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * s.y);
+        TTI_SFPLOAD(0, sfpi::SFPLOAD_MOD0_FMT_FP16A, ADDR_MOD_7, 2 * s.y);
     }
-    else if constexpr (s.kind == QS_SHIFT)
+    else if constexpr (s.kind == QB_MAD1)
     {
-        TTI_SFPSHFT(s.y, s.x, s.x, SHIFT_IMM_OF_C);
+        TTI_SFPMAD(12, 0, 13, 1, sfpi::SFPMAD_MOD1_OFFSET_NONE);
     }
-    else if constexpr (s.kind == QS_STEP)
+    else if constexpr (s.kind == QB_MAD2)
     {
-        constexpr int a = s.z == 1 ? 12 : s.x;
-        constexpr int c = s.z == 1 ? 13 : s.z == 2 ? 14 : s.z == 3 ? 11 : 7;
-        TTI_SFPMAD(a, s.y, c, s.z == 4 ? 2 : s.x, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        TTI_SFPMAD(1, 0, 14, 1, sfpi::SFPMAD_MOD1_OFFSET_NONE);
     }
-    else if constexpr (s.kind == QS_OUT)
+    else if constexpr (s.kind == QB_MAD3)
     {
-        TTI_SFPLOADMACRO((1 << 2) | 2, LOAD_NONE, ADDR_MOD_7, 2 * s.x);
+        TTI_SFPMAD(1, 0, 6, 2 + s.x, sfpi::SFPMAD_MOD1_OFFSET_NONE);
     }
-    else if constexpr (s.kind == QS_SCALE)
+    else if constexpr (s.kind == QB_MAC)
     {
-        TTI_SFPLOAD(s.x, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 2 * s.y);
+        TTI_SFPLOADMACRO((1 << 2) | (2 + s.y), LOAD_NONE, ADDR_MOD_7, 2 * s.z);
     }
-    else if constexpr (s.kind == QS_NEGK)
+    else if constexpr (s.kind == QB_ST)
     {
-        TTI_SFPMULI(IQ4M_NEG_K, s.x, 0);
+        TTI_SFPSTORE(2 + s.x, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_7, 2 * s.y);
+    }
+    else if constexpr (s.kind == QB_LDS)
+    {
+        TTI_SFPLOAD(4, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, 2 * (iq4_ps<FMT>() + 2 * s.x));
+    }
+    else if constexpr (s.kind == QB_LDM)
+    {
+        TTI_SFPMAD(4, 7, 9, 5, sfpi::SFPMAD_MOD1_OFFSET_NONE);
     }
     else
     {
@@ -222,33 +241,50 @@ sfpi_inline void qslot_issue()
     }
 }
 
-template <int... I>
-sfpi_inline void qslots_issue(std::integer_sequence<int, I...>)
+template <int FMT, int... I>
+sfpi_inline void qbslots_issue(std::integer_sequence<int, I...>)
 {
-    (qslot_issue<I>(), ...);
+    (qbslot_issue<FMT, I>(), ...);
 }
 
-template <int REG, std::uint32_t BITS>
-sfpi_inline void lreg_bits()
+template <int FMT>
+sfpi_inline void body_iq4()
 {
-    TTI_SFPLOADI(REG, sfpi::SFPLOADI_MOD0_LOWER, BITS & 0xFFFF);
-    TTI_SFPLOADI(REG, sfpi::SFPLOADI_MOD0_UPPER, BITS >> 16);
-}
-
-sfpi_inline void body_macro_iq4()
-{
-    lreg_bits<0, IQ4M_C1>();
-    TTI_SFPCONFIG(0, 11, 0);
-    lreg_bits<7, IQ4M_C0K>();
-    qslots_issue(std::make_integer_sequence<int, qplan_iq4.n> {});
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_FLOATB, 0xBF80);
-    TTI_SFPCONFIG(0, 11, 0);
+    TTI_SFPLOADI(6, sfpi::SFPLOADI_MOD0_LOWER, IQ4B_C0 & 0xFFFF);
+    TTI_SFPLOADI(6, sfpi::SFPLOADI_MOD0_UPPER, IQ4B_C0 >> 16);
+    TTI_SFPLOADI(7, sfpi::SFPLOADI_MOD0_FLOATB, IQ4B_NEG14);
+    if constexpr (LOADMACRO)
+    {
+        qbslots_issue<FMT>(std::make_integer_sequence<int, qbplan_iq4.n> {});
+    }
+    else
+    {
+#pragma GCC unroll 4
+        for (int g = 0; g < 4; g++)
+        {
+            TTI_SFPLOAD(4, sfpi::SFPLOAD_MOD0_FMT_FP32, ADDR_MOD_7, 2 * (iq4_ps<FMT>() + 2 * g));
+            TTI_SFPMAD(4, 7, 9, 5, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+#pragma GCC unroll 8
+            for (int j = 0; j < 8; j++)
+            {
+                const int o = qb_row(8 * g + j);
+                TTI_SFPLOAD(0, sfpi::SFPLOAD_MOD0_FMT_FP16A, ADDR_MOD_7, 2 * o);
+                TTI_SFPMAD(12, 0, 13, 1, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+                TTI_SFPMAD(1, 0, 14, 1, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+                TTI_SFPMAD(1, 0, 6, 2, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+                TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, 9, 2, 2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+                TTI_SFPCAST(2, 2, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+                TTI_SFPMAD(4, 2, 5, 2, sfpi::SFPMAD_MOD1_OFFSET_NONE);
+                TTI_SFPSTORE(2, sfpi::SFPSTORE_MOD0_FMT_FP32, ADDR_MOD_7, 2 * o);
+            }
+        }
+    }
 }
 
 // One copy shared by IQ4_XS's eight tile indices.
-inline __attribute__((noinline)) void body_macro_iq4_shared()
+inline __attribute__((noinline)) void body_iq4_xs_shared()
 {
-    body_macro_iq4();
+    body_iq4<IQ4_XS>();
 }
 
 } // namespace gguf

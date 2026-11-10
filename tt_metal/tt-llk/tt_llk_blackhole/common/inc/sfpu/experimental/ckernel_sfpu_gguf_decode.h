@@ -11,9 +11,10 @@
 // codes of lane (r, c)'s outputs; in the scale rows (from scale_offset / 64), word 2c + p holds the fields of columns
 // 16p + 2c and 16p + 2c + 1 (low, high half).
 // Phase 1 (params) writes S[a][b][h] and M[a][b][h] to the scratch tile. Phase 2 (body) writes q * S + M (linear
-// formats) or v(q) * S (value-table and codebook formats).
-// MXFP4 and NVFP4 differ (ckernel_sfpu_gguf_decode_fp4.h): their codes are block-float datums in the 16-bit rows
-// that tile 0's rows address, their scratch is in tile 1 past the page's rows.
+// formats) or v(q) * S (codebook formats).
+// MXFP4, NVFP4, IQ4_NL and IQ4_XS differ (ckernel_sfpu_gguf_decode_fp4.h, ckernel_sfpu_gguf_decode_iq4.h): their
+// codes are block-float datums in the 16-bit rows that tile 0's rows address, their scratch is in tile 1 past the
+// page's rows.
 
 #pragma once
 
@@ -85,7 +86,7 @@ inline void _calculate_gguf_decode_params_()
     {
         fp4_bfp_params();
     }
-    else if constexpr (FMT == IQ4_XS)
+    else if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
     {
         iq4_params<FMT, TI>();
     }
@@ -158,20 +159,16 @@ inline void _calculate_gguf_decode_body_()
     {
         body_macro<FMT, traits<FMT>::pair ? TI % 2 : 0, cycle_body<FMT, BESIDE_UNPACK>>();
     }
-    else if constexpr (iq4_macro_body<FMT> && FMT == IQ4_XS)
+    else if constexpr (FMT == IQ4_XS)
     {
-        body_macro_iq4_shared();
+        body_iq4_xs_shared();
     }
-    else if constexpr (iq4_macro_body<FMT>)
+    else if constexpr (FMT == IQ4_NL)
     {
-        body_macro_iq4();
+        body_iq4<FMT>();
     }
     else
     {
-        if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
-        {
-            iq4_init();
-        }
         body<FMT, traits<FMT>::pair ? TI % 2 : 0>();
     }
 }
@@ -194,9 +191,9 @@ inline void macro_init()
     {
         macro_init_fp4_bfp();
     }
-    if constexpr (iq4_macro_body<FMT>)
+    if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
     {
-        macro_init_iq4();
+        iq4_init();
     }
     if constexpr (macro_body<FMT>)
     {
@@ -304,7 +301,20 @@ template <int FMT, bool BESIDE_UNPACK = true>
 constexpr bool sfpu_gguf_decode_body_unarbitrated()
 {
     using namespace gguf;
-    return iq4_macro_body<FMT> || (macro_body<FMT> && !cycle_body<FMT, BESIDE_UNPACK>);
+    return macro_body<FMT> && !cycle_body<FMT, BESIDE_UNPACK>;
+}
+
+/**
+ * @brief Whether phase 2 of format FMT stores through SFPLOADMACRO, so that it may not run beside the FPU's DEST
+ *        writes. The other formats' phase 2 stores with SFPSTORE, which DEST arbitrates against every client.
+ *
+ * @tparam FMT: ckernel::gguf::Format of the pages.
+ */
+template <int FMT>
+constexpr bool sfpu_gguf_decode_body_macro_stores()
+{
+    using namespace gguf;
+    return macro_body<FMT> || (LOADMACRO && (FMT == MXFP4 || FMT == NVFP4));
 }
 
 /**

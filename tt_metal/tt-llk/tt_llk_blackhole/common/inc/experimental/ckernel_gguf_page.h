@@ -144,13 +144,19 @@ constexpr std::uint32_t code_hi_bits(const Format fmt)
 template <std::uint32_t FMT>
 constexpr bool group_scales = FMT == Q4_K || FMT == Q5_K || FMT == Q3_K || FMT == Q2_K;
 
-// MXFP4, NVFP4: a page's FP4_CODES codes are 4-bit block-float datums, unpacked to DEST with the exponent forced to
-// FP4_CODE_EXP, followed by FP4_SCALE_WORDS words of scale fields at scale_offset (ckernel_sfpu_gguf_decode_fp4.h).
+// MXFP4, NVFP4, IQ4_NL, IQ4_XS: a page's BFP_CODES codes are 4-bit block-float datums, unpacked to DEST with the
+// exponent forced to BFP_CODE_EXP, followed by bfp_scale_words<FMT>() words of scale fields at scale_offset
+// (ckernel_sfpu_gguf_decode_fp4.h, ckernel_sfpu_gguf_decode_iq4.h).
 template <std::uint32_t FMT>
-constexpr bool fp4_bfp = FMT == NVFP4 || FMT == MXFP4;
+constexpr bool bfp_codes = FMT == NVFP4 || FMT == MXFP4 || FMT == IQ4_NL || FMT == IQ4_XS;
 
-constexpr std::uint32_t FP4_CODES       = 1024;
-constexpr std::uint32_t FP4_CODE_EXP    = 15;
-constexpr std::uint32_t FP4_SCALE_WORDS = 16;
+constexpr std::uint32_t BFP_CODES    = 1024;
+constexpr std::uint32_t BFP_CODE_EXP = 15;
+
+template <std::uint32_t FMT>
+constexpr std::uint32_t bfp_scale_words()
+{
+    return page_layout(static_cast<Format>(FMT)).scale_bytes / 4;
+}
 
 } // namespace ckernel::gguf

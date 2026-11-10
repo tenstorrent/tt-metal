@@ -141,28 +141,10 @@ sfpi_inline void q3_group()
     }
 }
 
-// Phase 1 of the linear formats and of IQ4_NL (Q4_0's scale rows). TI = tile index inside the scale page's group of
-// K-tiles.
+// Phase 1 of the linear formats. TI = tile index inside the scale page's group of K-tiles.
 template <int FMT, int TI>
 sfpi_inline void linear_params()
 {
-    if constexpr (FMT == IQ4_NL)
-    {
-        // Row 0: d of columns n0 (low half) and n1 (high half), the two conversions interleaved. The fp16 bias is in a
-        // register: the programmable constants hold body_macro_iq4's coefficients.
-#pragma GCC unroll 2
-        for (int a = 0; a < 2; a++)
-        {
-            vUInt r0, r1, r2, r3;
-            rep4<FMT>(0, a, r0, r1, r2, r3);
-            const vUInt bias = 0x38000000u; // after rep4, which needs four registers
-            vFloat d0, d1;
-            f16_both(r0, d0, d1, bias);
-            sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
-            sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
-        }
-        return;
-    }
     if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && !group_scales<FMT>)
     {
         params_init<!q40_params<FMT>>();
