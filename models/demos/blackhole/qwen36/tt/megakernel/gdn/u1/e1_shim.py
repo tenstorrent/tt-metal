@@ -283,8 +283,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # E1_ST_RING env, else 0. 2 = -216 KB per GDN core (needed only below an ~1.06 MB L1 floor on the GDN rows; QSK: 1.19 MB)
     st_ring = int(os.environ.get("E1_ST_RING", "0")) if st_ring is None else st_ring
     tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring)
-    ids = {n: (i, f) for i, (n, _, _, f) in enumerate(tab)}
-    assert len(tab) <= 45, len(tab)   # CB ids 0..44 (spec v1.25 MAX_CB_ID)
+    # E1_RESERVE_IDS (engine, GDN24 + MK_REAL_AR): CB ids the corner cores' hosted AR sender owns (34,35,37,39); the
+    # step's DFBs take the remaining ids in order (still <= 44)
+    _resv = {int(v) for v in os.environ.get("E1_RESERVE_IDS", "").split(",") if v}
+    _free = [i for i in range(64) if i not in _resv]
+    ids = {n: (_free[i], f) for i, (n, _, _, f) in enumerate(tab)}
+    assert max(v[0] for v in ids.values()) <= 44, (len(tab), sorted(_resv))   # CB ids 0..44 (spec v1.25 MAX_CB_ID)
     for a, b in ALIAS.items():
         if a not in ids:
             ids[a] = ids[b]

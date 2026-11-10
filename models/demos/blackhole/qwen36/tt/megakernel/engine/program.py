@@ -230,7 +230,8 @@ def setup_bench(dev, MESH, mesh_identity):
     GDNC = []
     if GDN24:
         assert GXF == GX + 2 and GYF == GY + 2, "MKA_GDN24 assumes the 12 x 10 grid (rows 8-9 = the 24 GDN cores)"
-        assert ('MK_REAL_AR', '1') not in MKDEF, "MKA_GDN24: the AR corner is GDN-role during bring-up (no MK_REAL_AR yet)"
+        # MK_REAL_AR + GDN24: the AR corner (x 10-11, rows 8-9) runs the GDN role with the AR sender phases hosted in its
+        # reader / writer (see _gdn_host_ar below)
         GDNC = [i for i in range(NCF) if fcores[i].y >= GY]   # row-major: y 8 then 9, x 0..11
         ARC = set()
     RESV = ARC | set(GDNC)
@@ -864,12 +865,15 @@ def setup_bench(dev, MESH, mesh_identity):
         GDN_WAIT = os.environ.get('MKA_GDN_WAIT', '0') == '1'
         if _gdn_hook is not None and os.environ.get('MKA_GDN_HOOK', '1') == '1':
             import types
+            if REAL_AR:   # the hosted AR sender owns CB ids RS / RED / HDR / AG on the corner cores: the step's DFBs skip them
+                os.environ['E1_RESERVE_IDS'] = ','.join(str(AR.cbids[i]) for i in (0, 1, 3, 5))
             b_ = types.SimpleNamespace(dev=dev, mesh=dev if MESH else None, NL=NL, AMASK=AMASK, is_attn=is_attn_layer, NU=NU, CTX=CTX,
                                        gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
                                        cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), out_rects=(RECTS_F[:10] if GDN_WAIT else None), per_replay={},
                                        free_cb_ids=list(range(45)))
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
             GDN_ROLE.setdefault('io', [])
+            os.environ.pop('E1_RESERVE_IDS', None)
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)
             if GDN_WAIT:
                 MKDEF = MKDEF + [('MKA_GDN_WAIT', '1'), ('MKA_GDN_OUTREADY', f"{GDN_SA['out_ready']}u"), ('MKA_GDN_NC', str(len(GDNC)))]
@@ -877,6 +881,59 @@ def setup_bench(dev, MESH, mesh_identity):
         else:
             assert not GDN_WAIT, "MKA_GDN_WAIT needs the GDN hook"
             print('[gdn24] no GDN hook: the 24 GDN cores stay idle', flush=True)
+    # ---- GDN24 + MK_REAL_AR: AR_SEND hosted in the GDN role's reader / writer on the 4 AR corner cores ----
+    def _gdn_host_ar(gks, sp):
+        """gks: the GDN role's [reader, writer, compute] over the 24 GDN cores; sp: AR.sender_parts(this device's parts).
+        The 20 other GDN cores keep the plain role kernels; the 4 corner cores get reader / writer sources generated from
+        the role's (same step code): the loop runs over ALL layers of the pass, GDN step on GDN-type layers, then that
+        layer's AR iterations (attention AR + MLP AR in program order); SendWriter is a kernel_main local (the fabric
+        connection is open for the whole pass). The sender's [common, role] words are the corner cores' runtime args
+        (the role has none)."""
+        import re as _re
+        corner = [ttnn.CoreCoord(*xy) for xy in ((10, 8), (11, 8), (10, 9), (11, 9))]
+        ck = {(c.x, c.y) for c in corner}
+        from models.demos.blackhole.qwen36.tt.megakernel.oneshot_ar import MKDIR as MKDIR_AR
+        _aar = ('MK_REAL_AAR', '1') in MKDEF   # the attention AR (its own branch): two ARs on attention layers
+        nar = [1 + (1 if _aar and is_attn_layer(L_) else 0) for L_ in range(NL)]
+        gmask = sum(1 << L_ for L_ in range(NL) if not is_attn_layer(L_))
+        a2 = sum(1 << L_ for L_ in range(NL) if nar[L_] == 2)
+        out = []
+        for kd in gks:
+            src = str(kd.kernel_source)
+            role = 'r' if src.endswith('g2_reader.cpp') else ('w' if src.endswith('g2_writer.cpp') else None)
+            if role is None:
+                out.append(kd); continue
+            cores = [c for c in ttnn.corerange_to_cores(kd.core_ranges) if (c.x, c.y) not in ck]
+            rest = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+            base = dict(compile_time_args=list(kd.compile_time_args), common_runtime_args=list(kd.common_runtime_args), config=kd.config)
+            out.append(ttnn.KernelDescriptor(kernel_source=src, core_ranges=rest, defines=list(kd.defines), runtime_args=ttnn.RuntimeArgs(), **base))
+            txt = open(src).read()
+            hdr = 'mk_ar_send.hpp' if role == 'r' else 'mk_ar_sendw.hpp'
+            obj = 'static mkar::SendReader ar_s;' if role == 'r' else 'mkar::SendWriter ar_s;   // kernel_main local: the fabric connection'
+            loop = _re.search(r'\n  for \(uint32_t L = 0; L < (\d+); \+\+L\) \{\n', txt)
+            assert loop, src
+            end = txt.index('\n  }\n', loop.end())
+            body = txt[loop.end():end]
+            nc = sp['rd_ncommon'] if role == 'r' else sp['wr_ncommon']
+            new_loop = (f'\n  {obj}\n  ar_s.init(0, {nc});\n  uint32_t ar_it = 0, gL = 0;\n'
+                        f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
+                        f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
+                        f'   for (uint32_t k = 0; k < 1u + (({a2}u >> LL) & 1u); ++k) ar_s.iter(ar_it++);   // this layer\'s ARs\n'
+                        '  }\n' + ('  ar_s.fini(MKAR_ITERS);\n' if role == 'r' else '  ar_s.fini();\n'))
+            txt = txt[:loop.start()] + new_loop + txt[end + len('\n  }\n'):]
+            # the AR phase headers right after the first include (the role's DM_OPT pragma, if any, stays first)
+            inc = f'#include "{os.path.join(MKDIR_AR, hdr)}"\n'
+            i_ = txt.index('#include')
+            txt = txt[:i_] + inc + txt[i_:]
+            hsrc = src.replace('.cpp', '_ar.cpp')
+            open(hsrc, 'w').write(txt)
+            rt = ttnn.RuntimeArgs()
+            for c in corner:
+                rt[c.x][c.y] = (sp['rd_args'] if role == 'r' else sp['wr_args'])[(c.x, c.y)]
+            dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines'])
+            out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
+                                             defines=dfs, runtime_args=rt, **base))
+        return out
     def build(out, coord=None):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
                ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
@@ -999,7 +1056,7 @@ def setup_bench(dev, MESH, mesh_identity):
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
             _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
             ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard, dmopt=_dmo)
-            if REAL_AR: ks = ks + arp['sender_kernels']
+            if REAL_AR and not GDN24: ks = ks + arp['sender_kernels']   # GDN24: hosted in the GDN role (corner cores)
         else:
             assert not REAL_AR, "MK_REAL_AR needs the per-role binaries (MKA_ROLESPLIT=1)"
             ks = _ks(kgrid, [], rrt, wrt, crt)
@@ -1009,7 +1066,9 @@ def setup_bench(dev, MESH, mesh_identity):
             cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
         print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
         if GDN24:
-            ks = ks + list(GDN_ROLE.get('kernels', [])); cbs = cbs + list(GDN_ROLE.get('cbs', []))
+            _gk = list(GDN_ROLE.get('kernels', []))
+            if REAL_AR: _gk = _gdn_host_ar(_gk, AR.sender_parts(arp))
+            ks = ks + _gk; cbs = cbs + list(GDN_ROLE.get('cbs', []))
             def _cbsum(lx, ly):
                 n_ = 0
                 for d_ in cbs:
