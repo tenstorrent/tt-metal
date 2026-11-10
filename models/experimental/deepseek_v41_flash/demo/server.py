@@ -186,6 +186,7 @@ from models.experimental.deepseek_v41_flash.tt.vision import (
 )
 from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, ChatFormat, UserSession
 from models.experimental.deepseek_v4_flash.demo.server import (
+    DECODE_RATE_WINDOW,
     GenerationServer,
     RequestError,
     _content_text,
@@ -880,7 +881,22 @@ class _SpecScheduler(_Scheduler):
     and the session is handed back as plain decode would leave it. The server has one user slot, so no other
     turn has steps in flight meanwhile; later requests and chores wait for the reply. The last tokens before the
     end of the context, where a round would run past it, are decoded a step at a time.
+
+    Every verify round counts as a round of :attr:`rounds` and adds its tokens to :attr:`steps` and the rate window
+    as it ends, so the status pane's tok/s and tok/s/user follow the reply.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._spec_accounted = 0  # steps of this round the verify rounds have already put in the rate window
+
+    def _round(self) -> None:
+        self.rounds += 1
+        before = self.steps
+        self._spec_accounted = 0
+        self._round_turns()
+        self._account(self.steps - before - self._spec_accounted)
+        self._log_pool_change()
 
     def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
         engine = self.engine
@@ -926,11 +942,25 @@ class _SpecScheduler(_Scheduler):
         tokens = [turn.next_id]  # the reply's tokens from start on; all but the last are fed
 
         def take(emitted: list[int]) -> None:
+            before = len(turn.generated)
             for token in emitted:
                 turn.generated.append(tokens[-1])
                 turn.mark_token()
                 tokens.append(token)
             turn.stream.push(turn.generated)
+            # Each verify round is a round of the status pane's counters, which roll its tokens into tok/s and
+            # tok/s/user as it goes rather than once the reply is over.
+            self.rounds += 1
+            self.steps += len(emitted)
+            self._spec_accounted += len(emitted)
+            self._account(len(emitted))
+            if len(turn.generated) // 32 > before // 32:
+                logger.debug(
+                    f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
+                    f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
+                    f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
+                    f"cache at {start + len(tokens) - 1}/{engine.max_seq}, DSpark {spec.stats.summary(_DSPARK_DRAFTS)}"
+                )
 
         try:
             user.activate()
@@ -952,7 +982,6 @@ class _SpecScheduler(_Scheduler):
         user.tokens.extend(fed)
         user.pos = spec.position
         turn.next_id = tokens[-1]
-        self.steps += len(fed)
 
 
 class V41GenerationServer(GenerationServer):
