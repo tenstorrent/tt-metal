@@ -100,7 +100,7 @@ class TextEncoder:
         """Build the encoder, and the vision tower if ``prompt_format`` takes images.
 
         With ``offload``, the device weights are loaded for each ``encode_cfg`` and freed after it,
-        which leaves their memory to the transformer. Encoding is then never traced. With
+        which leaves their memory to the transformer. Encoding then cannot be traced. With
         ``offload_vision``, only the vision tower's weights are, and only around encoding the images.
         Both need ``TT_DIT_CACHE_DIR``, which the reloads read from.
 
@@ -201,7 +201,12 @@ class TextEncoder:
         outputs = []
         with self._reshape():
             if self._offload:
-                traced = False
+                if traced:
+                    msg = (
+                        "the text encoder cannot trace while its weights are offloaded: "
+                        "pass traced=False, or build it with offload=False"
+                    )
+                    raise ValueError(msg)
                 self._load_weights()
             image_inputs = self._encode_images(images) if images else None
             for cfg_pass in cfg_passes:
@@ -227,6 +232,15 @@ class TextEncoder:
             self._checkpoint.load_vision_weights(
                 self._vision, device=self._device, parallel_config=self._parallel_config
             )
+
+    @property
+    def offloaded_modules(self) -> tuple[Qwen25VlEncoder | Qwen25VlVisionModel | None, ...]:
+        """The modules whose device weights this encoder frees and reloads itself."""
+        if self._offload:
+            return (self._encoder, self._vision)
+        if self._offload_vision:
+            return (self._vision,)
+        return ()
 
     def _deallocate_weights(self) -> None:
         assert self._encoder is not None
