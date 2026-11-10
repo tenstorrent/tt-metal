@@ -3,6 +3,13 @@
 //   all:    SDPA over this core's KV slice (flash-decode, O_aug = Σ exp(Q·Kᵀ)·[V | 1], fp32 packer L1 accumulation),
 //           tree children added into CB_O, the group root normalizes into CB_OA.
 //   STREAM: (after GO) fm11 MLP: gate|up -> silu·mul -> h, down -> CB_OUT.
+#if defined(MKA_OPTSZ)   // size experiment (spec §17): optimize the whole TU for size; must precede every include
+#if MKA_OPTSZ == 1
+#pragma GCC optimize("Os")
+#else
+#pragma GCC optimize("Oz")
+#endif
+#endif
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -82,7 +89,12 @@ constexpr uint32_t QO_SLOT = 5;
 #else
 constexpr uint32_t QO_SLOT = 0;
 #endif
-constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = 320;
+constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = 320, CB_XO = 23, CB_HSQ = 31, CB_HG = 30;
+#if defined(MKA_WORING)
+constexpr uint32_t CB_WSL = 31, WSL_N = 5 * WK;   // own Wo ring
+#else
+constexpr uint32_t CB_WSL = CB_PQ, WSL_N = PQ_QSL;
+#endif
 #ifndef MKA_NU
 #define MKA_NU 4
 #endif
@@ -113,6 +125,105 @@ void kernel_main() {
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
 #if defined(MKA_RWO)
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
+#endif
+#if defined(MKA_RQNR)
+    const uint32_t is_head = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
+#if defined(MKA_RMASK)
+    const uint32_t mask_blk = get_arg_val<uint32_t>(a++);   // local block index of the user's last block, or ~0
+#endif
+    // q/k head: y = gamma (.) x * rsqrt(mean(x^2) + eps) over the head's 256 columns; RoPE on dims 0-63 (tiles 0, 1)
+    auto head_norm_rope = [&]() {
+        CZONE("C-HNR");
+        cb_wait_front(CB_HG, 11);   // constants: pushed once, never popped
+        cb_wait_front(CB_A, WK);   // full slot (wo reuses CB_A later in the layer)
+        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_A, CB_HSQ);
+        reconfig_data_format(CB_A, CB_A);
+        mul_init(CB_A, CB_A);
+        pack_reconfig_data_format(CB_HSQ);
+        tile_regs_acquire();
+        for (uint32_t t = 0; t < 8; ++t) mul_tiles(CB_A, CB_A, t, t, t);   // x^2
+        tile_regs_commit();
+        cb_reserve_back(CB_HSQ, 8);
+        tile_regs_wait();
+        for (uint32_t t = 0; t < 8; ++t) pack_tile(t, CB_HSQ);
+        tile_regs_release();
+        cb_push_back(CB_HSQ, 8);
+        cb_wait_front(CB_HSQ, 8);
+        reconfig_data_format(CB_ONE, CB_HSQ);   // row sums: (x^2) @ ONES, accumulated over the 8 tiles in fp32 DST
+        matmul_init(CB_HSQ, CB_ONE, 0);
+        tile_regs_acquire();
+        for (uint32_t t = 0; t < 8; ++t) matmul_tiles(CB_HSQ, CB_ONE, t, 0, 0);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, MKA_INVHD_BITS);
+        add_unary_tile(0, MKA_EPS_BITS);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
+        tile_regs_commit();
+        cb_pop_front(CB_HSQ, 8);
+        cb_reserve_back(CB_RS, 1);
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_RS);
+        pack_tile(0, CB_RS);
+        tile_regs_release();
+        cb_push_back(CB_RS, 1);
+        cb_wait_front(CB_RS, 1);
+        // y_t = x_t * rstd (bcast cols), then * gamma_t (gamma tile rows all equal: plain eltwise)
+        reconfig_data_format(CB_A, CB_RS);
+        mul_bcast_cols_init(CB_A, CB_RS);
+        tile_regs_acquire();
+        for (uint32_t t = 0; t < 8; ++t) mul_tiles_bcast_cols(CB_A, CB_RS, t, 0, t);
+        tile_regs_commit();
+        cb_reserve_back(CB_HSQ, 8);
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_HSQ);
+        for (uint32_t t = 0; t < 8; ++t) pack_tile(t, CB_HSQ);
+        tile_regs_release();
+        cb_push_back(CB_HSQ, 8);
+        cb_pop_front(CB_RS, 1);
+        cb_pop_front(CB_A, WK);
+        cb_wait_front(CB_HSQ, 8);
+        reconfig_data_format(CB_HSQ, CB_HG);
+        mul_init(CB_HSQ, CB_HG);
+        tile_regs_acquire();
+        for (uint32_t t = 0; t < 8; ++t) mul_tiles(CB_HSQ, CB_HG, t, t, t);   // y = x * rstd * gamma
+        tile_regs_commit();
+        cb_pop_front(CB_HSQ, 8);
+        cb_reserve_back(CB_HSQ, 8);
+        tile_regs_wait();
+        for (uint32_t t = 0; t < 8; ++t) pack_tile(t, CB_HSQ);
+        tile_regs_release();
+        cb_push_back(CB_HSQ, 8);
+        cb_wait_front(CB_HSQ, 8);
+        // RoPE (rotate-half within the first 64 dims): o0 = y0 c - y1 s, o1 = y1 c + y0 s; tiles 2-7 copied
+        cb_reserve_back(CB_XO, 10);
+        reconfig_data_format(CB_HSQ, CB_HG);
+        mul_init(CB_HSQ, CB_HG);
+        tile_regs_acquire();
+        mul_tiles(CB_HSQ, CB_HG, 0, 8, 0);   // y0 c
+        mul_tiles(CB_HSQ, CB_HG, 1, 9, 1);   // y1 s
+        mul_tiles(CB_HSQ, CB_HG, 1, 8, 2);   // y1 c
+        mul_tiles(CB_HSQ, CB_HG, 0, 9, 3);   // y0 s
+        sub_binary_tile_init();
+        sub_binary_tile(0, 1, 0);
+        add_binary_tile_init();
+        add_binary_tile(2, 3, 2);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_XO);
+        pack_tile(0, CB_XO);
+        pack_tile(2, CB_XO);
+        tile_regs_release();
+        reconfig_data_format_srca(CB_HSQ);
+        copy_init(CB_HSQ);
+        tile_regs_acquire();
+        for (uint32_t t = 2; t < 8; ++t) copy_tile(CB_HSQ, t, t - 2);
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t t = 2; t < 8; ++t) pack_tile(t - 2, CB_XO);
+        tile_regs_release();
+        cb_push_back(CB_XO, 10);   // full slot (8 valid)
+        cb_pop_front(CB_HSQ, 8);
+    };
 #endif
 #if defined(MK_V12)
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
@@ -294,6 +405,9 @@ void kernel_main() {
             cb_wait_front(CB_X, KT);
             qkv_proj(true);
             cb_pop_front(CB_X, KT);
+#if defined(MKA_RQNR)
+            if (att && is_head) head_norm_rope();
+#endif
         }
         if (false) {
 #else
@@ -343,6 +457,13 @@ void kernel_main() {
                     for (uint32_t t = 0; t < DH; ++t) matmul_tiles(CB_Q, CB_K, qoff + t, i * DH + t, i);
                 exp_tile_init();
                 for (uint32_t i = 0; i < nb; ++i) exp_tile(i);
+#if defined(MKA_RQNR) && defined(MKA_RMASK)
+                if (!IS_STREAM && mask_blk >= b && mask_blk < b + nb) {   // causal mask on the last block: P = exp(S) (.) M
+                    cb_wait_front(CB_HG, 11);
+                    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_HG);
+                    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_HG, 10, mask_blk - b);
+                }
+#endif
                 tile_regs_commit();
                 cb_reserve_back(CB_P, NBB);
                 tile_regs_wait();
@@ -445,24 +566,24 @@ void kernel_main() {
             reconfig_data_format(CB_A, CB_S);
             mul_init(CB_A, CB_S);
             pack_reconfig_data_format(CB_AS);
-            for (uint32_t t = 0; t < WK; ++t) {
+            for (uint32_t t = 0; t < WK; t += 8) {   // 8 tiles per DST round (fp32 DST, full sync)
                 tile_regs_acquire();
-                mul_tiles(CB_A, CB_S, t, t, 0);
+                for (uint32_t i = 0; i < 8; ++i) mul_tiles(CB_A, CB_S, t + i, t + i, i);
                 tile_regs_commit();
-                cb_reserve_back(CB_AS, 1);
+                cb_reserve_back(CB_AS, 8);
                 tile_regs_wait();
-                pack_tile(0, CB_AS);   // S slot t, already unpacked
+                for (uint32_t i = 0; i < 8; ++i) pack_tile(i, CB_AS);   // S slots t..t+7, already unpacked this round
                 tile_regs_release();
-                cb_push_back(CB_AS, 1);
+                cb_push_back(CB_AS, 8);
             }
             cb_pop_front(CB_A, WK);
             cb_pop_front(CB_S, WK);
             cb_wait_front(CB_AS, WK);
-            cb_wait_front(CB_PQ, PQ_QSL);
-            reconfig_data_format(CB_PQ, CB_AS);
-            matmul_block_init(CB_AS, CB_PQ, 0, wo_nt, 1, WK);
+            cb_wait_front(CB_WSL, WSL_N);
+            reconfig_data_format(CB_WSL, CB_AS);
+            matmul_block_init(CB_AS, CB_WSL, 0, wo_nt, 1, WK);
             tile_regs_acquire();
-            for (uint32_t k = 0; k < WK; ++k) matmul_block(CB_AS, CB_PQ, k, k * wo_nt, 0, 0, wo_nt, 1, WK);
+            for (uint32_t k = 0; k < WK; ++k) matmul_block(CB_AS, CB_WSL, k, k * wo_nt, 0, 0, wo_nt, 1, WK);
             tile_regs_commit();
             cb_reserve_back(CB_QO, QO_SLOT);
             tile_regs_wait();
@@ -471,7 +592,7 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(CB_QO, QO_SLOT);
             cb_pop_front(CB_AS, WK);
-            cb_pop_front(CB_PQ, PQ_QSL);
+            cb_pop_front(CB_WSL, WSL_N);
         }
 #endif
         if (!IS_STREAM) { V12_OSUM(L); continue; }
