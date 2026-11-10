@@ -62,6 +62,9 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GDN_STATE_FIRST
 #define GDN_STATE_FIRST 0  // engine GDN role (BATCH): the state / stash reads go out before rd_pre (ring + ctrl only)
 #endif
+#ifndef GDN_ST_RING
+#define GDN_ST_RING 0  // BATCH: state / stash DFBs hold GDN_ST_RING users (streamed per user; 0 = all kBatchMax at once)
+#endif
 #ifndef GDN_IN_WAIT
 #define GDN_IN_WAIT 0  // engine GDN role: gdn_in_wait() (the including TU) gates the reads of `pre`
 #endif
@@ -527,6 +530,30 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     // (engine GDN role) it is issued before the in_ready wait, i.e. while the previous layer's compute still runs.
     auto rd_state_b = [&]() {
         DeviceZoneScopedN("rd_state");
+#if GDN_ST_RING
+        // GDN_ST_RING: one user at a time through a ring of GDN_ST_RING users (the compute pops per user)
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            state_in.reserve_back(KVs);
+            ktp_in.reserve_back(Kt);
+            up_in.reserve_back(Vs);
+            const uint32_t blk_u = ub_ * Nv + h;
+            for (uint32_t i = 0; i < Kt; ++i) {
+                read_tiles_at(ring_acc, state_in, noc, blk_u * KV + i * Vt + s * Vs, Vs, i * Vs);
+            }
+            const uint32_t stash_u = ((1 + par) * Mr + ub_) * Nv + h;
+            if (hold_b[ub_] || mi_b[ub_] >= T) {
+                zero_tiles_at(ktp_in, noc, 0, Kt);
+                zero_tiles_at(up_in, noc, 0, Vs);
+            } else {
+                read_tiles_at(ring_acc, ktp_in, noc, stash_u * KV, Kt, 0);
+                read_tiles_at(ring_acc, up_in, noc, stash_u * KV + Kt + s * Vs, Vs, 0);
+            }
+            noc.async_read_barrier();
+            state_in.push_back(KVs);
+            ktp_in.push_back(Kt);
+            up_in.push_back(Vs);
+        }
+#else
         state_in.reserve_back(nb * KVs);
         ktp_in.reserve_back(nb * Kt);
         up_in.reserve_back(nb * Vs);
@@ -548,6 +575,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         state_in.push_back(nb * KVs);
         ktp_in.push_back(nb * Kt);
         up_in.push_back(nb * Vs);
+#endif
     };
 #if GDN_STATE_FIRST
     {

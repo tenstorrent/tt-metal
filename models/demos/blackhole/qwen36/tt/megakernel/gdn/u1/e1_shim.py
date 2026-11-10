@@ -21,7 +21,7 @@ assert KDIR.startswith("/"), "set E1_KDIR to the private kernels dir (absolute)"
 bits = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]
 
 
-def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False):
+def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False, st_ring=0):
     """(name, entries, bytes, fmt) of every DFB the PREFIXED + PREFIXED_GATES + LAZY + VSPLIT + SFPU_GATE program uses."""
     Vs, t32, t16 = Vt // VB, 4096, 2048
     KVs, Ch = Kt * Vs, 2 * Kt + Vt
@@ -29,7 +29,9 @@ def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False):
     return [
         # reader-produced
         ("w_in", Vt, t16, B16), ("scaler", 1, t32, F32), ("eps_l2", 1, t16, B16), ("eps_norm", 1, t16, B16),
-        ("state_in", NBm * KVs, t32, F32), ("ktp_in", NBm * Kt, t32, F32), ("up_in", NBm * Vs, t32, F32),
+        # GDN_ST_RING (batch): the state / stash slots are a ring of st_ring users (streamed per user)
+        ("state_in", (st_ring or NBm) * KVs, t32, F32), ("ktp_in", (st_ring or NBm) * Kt, t32, F32),
+        ("up_in", (st_ring or NBm) * Vs, t32, F32),
         ("knq", 2 * Kt, t32, F32), ("vc", Vs, t32, F32), ("zs", Vt, t32, F32), ("ctrl_r", 1, 64, U32),
         # compute-local
         ("tmp", max(Kt, Vt), t32, F32), ("stats", 1, t32, F32), ("scratch", 1, t32, F32), ("inv", 1, t32, F32),
@@ -264,7 +266,7 @@ def argblock_tensor(dev, cores, payloads, kind=AB_KIND_GDN):
 
 
 def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
-                 out_b16=True, kdir=None):
+                 out_b16=True, kdir=None, st_ring=None):
     """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
     as build's tens). sems: {in_ready, attn_kv, vb0, vb1, out_ready} L1 addresses; out_target: (noc x, noc y) of the
     core whose out_ready gets +1 per GDN core per layer. Core i of `cores` (row-major) = head i // VB, value block i % VB.
@@ -277,7 +279,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     Ct, M = C // 32, B
     tens = layers[0]
     os.makedirs(gen_dir, exist_ok=True)
-    tab = dfb_table(Kt, Vt, T, VB, out_b16, True)
+    # st_ring: users per state / stash ring (GDN_ST_RING; 0 = all 8 resident, the full early-state prefetch). Default
+    # E1_ST_RING env, else 2 (-216 KB per GDN core: the engine's L1 tensors on the GDN rows start at ~860 KB)
+    st_ring = int(os.environ.get("E1_ST_RING", "2")) if st_ring is None else st_ring
+    tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring)
     ids = {n: (i, f) for i, (n, _, _, f) in enumerate(tab)}
     assert len(tab) <= 45, len(tab)   # CB ids 0..44 (spec v1.25 MAX_CB_ID)
     for a, b in ALIAS.items():
@@ -362,12 +367,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     common = [("GDN_RT_BM", "1"), ("GDN_BATCH", "1")]
     d_r = [("GDN_FAST", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_EARLY_SRC", "1"), ("GDN_LAZY", "1"),
            ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s)), ("GDN_STATE_FIRST", "1"),
-           ("GDN_IN_WAIT", "1")] + common
+           ("GDN_IN_WAIT", "1"), ("GDN_ST_RING", str(st_ring))] + common
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
            ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + common
-    d_c = [("GDN_BATCH", "1")] + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
+    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
                                                     "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
                                                     "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
     fphys = dev.worker_core_from_logical_core
@@ -406,5 +411,5 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]]
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab),
-                ab_words=len(payloads[0]), NG=NG)
+                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)

@@ -74,6 +74,9 @@
 #if GDN_FUSED_DECAY && !GDN_FP32_STATE
 #error "GDN_FUSED_DECAY needs GDN_FP32_STATE"
 #endif
+#ifndef GDN_ST_RING
+#define GDN_ST_RING 0  // BATCH: the state / stash DFBs are a ring of GDN_ST_RING users (popped per user)
+#endif
 #ifndef GDN_BATCH
 // batched type 4 (engine GDN role, B users per core): core (h, s) runs value block s of head h for ALL users. The
 // per-head WY / norm work runs once on the 32-row tile holding every user; replay and K S' / Q S' run per user
@@ -1934,6 +1937,19 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         DeviceZoneScopedN("c_replay");
 #if GDN_BATCH
         coef.wait_front(kCoefN);
+#if GDN_ST_RING
+        // per user through the reader's GDN_ST_RING-user ring
+#pragma GCC unroll 1
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            state_in.wait_front(KVs);
+            ktp_in.wait_front(Kt);
+            up_in.wait_front(Vs);
+            lz_replay<Kt, Vs>(sp, dnew, wu, 0u, 0u, 0u, 0u, kCoefC + ub_);
+            state_in.pop_front(KVs);
+            ktp_in.pop_front(Kt);
+            up_in.pop_front(Vs);
+        }
+#else
         state_in.wait_front(nb * KVs);
         ktp_in.wait_front(nb * Kt);
         up_in.wait_front(nb * Vs);
@@ -1944,6 +1960,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         state_in.pop_front(nb * KVs);
         ktp_in.pop_front(nb * Kt);
         up_in.pop_front(nb * Vs);
+#endif
         (void)crep_bits;
 #else
         coef.wait_front(8);
