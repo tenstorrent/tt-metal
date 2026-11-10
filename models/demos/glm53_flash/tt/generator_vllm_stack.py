@@ -221,6 +221,7 @@ class GLM53StackForCausalLM:
         self.vocab_size = int(generator.vocab_size)
         self.kv_cache = None
         self._alias = list(range(self.max_batch))  # plugin slot -> generator slot (identity until the first gather)
+        self._chain = []  # generator slots of the last reload step's decode rows: the resident chain's batch
 
     # ================================================================================= construction
     @classmethod
@@ -331,6 +332,7 @@ class GLM53StackForCausalLM:
             self.max_batch, self.max_seq_len, num_blocks=num_blocks, null_block=0
         )
         self._alias = list(range(self.max_batch))  # a fresh cache: every generator slot is free
+        self._chain = []
         return self.kv_cache
 
     def _kv(self, kv_cache):
@@ -523,6 +525,7 @@ class GLM53StackForCausalLM:
         if sampling_params is None:
             logits = self.gen.decode_forward(tokens, positions, sampling_params=None, read_from_device=True, **common)
             self._alias = alias
+            self._chain = [alias[i] for i in range(B) if int(positions[i]) >= 0]
             return logits.reshape(B, 1, -1).float(), None
         params = [row_params(sampling_params, i) for i in range(B)]
         bad = (
@@ -537,18 +540,24 @@ class GLM53StackForCausalLM:
             tokens, positions, sampling_params=params, read_from_device=read_from_device, **common
         )
         self._alias = alias
+        self._chain = [alias[i] for i in range(B) if int(positions[i]) >= 0]
         if isinstance(out, DecodeOutput):
             return out
         return self.gen.process_decode_output_host(out, is_tokens=True).to(torch.int32)
 
     def _chain_decode(self, kv, B: int, page_table, enable_trace: bool, read_from_device: bool):
-        """A resident chain step: every live generator slot decodes from its device-resident token and position
-        (``Glm53Generator.decode_forward(reload_inputs=False)``), in the generator's slot order. The plugin reads its
+        """A resident chain step: the last reload step's decode slots (``_chain``; a request mid-prefill holds an active
+        generator slot but is not in the plugin's decode batch until a reload adds it) that are still live decode from
+        their device-resident token and position (``Glm53Generator.decode_forward(reload_inputs=False, slots=...)``), in
+        the generator's slot order. The plugin reads its
         rows in its own order, so the output rows are the alias (plugin row ``i`` = generator slot ``alias[i]``; the
         layout is the last reload step's: a chain step carries no remap); a page-table refresh
         (``reload_page_table``) is reordered from plugin rows to the live slots the same way."""
         b = self.gen._binding(kv)
-        live = [s for s in range(self.max_batch) if b.slots[s].active and not b.slots[s].finished]
+        live = [s for s in self._chain if b.slots[s].active and not b.slots[s].finished]
+        if not live:
+            raise ValueError("a resident chain step (reload_inputs=False) without a live decode row from a reload step")
+        live.sort()
         pt = None
         if page_table is not None:
             rows = trim_page_rows(page_table)
@@ -563,6 +572,7 @@ class GLM53StackForCausalLM:
             empty,
             page_table=pt,
             kv_cache=kv,
+            slots=live,
             enable_trace=enable_trace,
             sampling_params=[],
             read_from_device=read_from_device,

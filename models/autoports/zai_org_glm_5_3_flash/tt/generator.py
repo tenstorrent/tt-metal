@@ -1961,7 +1961,8 @@ class Glm53Generator(_ReadinessGenerator):
         raise). Only inputs that differ from the device copies are written. Returns logits [B, V] without
         `sampling_params`, tokens [B] sampled on device, or a `DecodeOutput` handle with read_from_device=False.
         Serving commands (09a adapter): `slot_remap` is applied first; `reload_inputs=False` decodes every live slot
-        (active, not finished) from its device-resident token and cache length, ignoring `tokens` / `start_pos`."""
+        (active, not finished; of `slots` when given -- a slot mid-prefill is active but not in the decode batch) from its
+        device-resident token and cache length, ignoring `tokens` / `start_pos`."""
         b = self._binding(kv_cache)
         # GLM53_PF_HOST_TIMING (Stage 12, n29h7p2 2026-10-23: an admission's first decode submit took 1.1 s on the 1M
         # line vs 0.07 s steady): per-phase host ms of the input-reload steps -> backend.counters["decode_reload_host_ms"]
@@ -1976,7 +1977,8 @@ class Glm53Generator(_ReadinessGenerator):
             self.remap_slots(kv_cache, self._remap_dict(slot_remap))
         mark("remap")
         if reload_inputs is False:
-            rows = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
+            pick = range(b.max_batch) if slots is None else slots
+            rows = [s for s in pick if b.slots[s].active and not b.slots[s].finished]
             tokens = torch.full((len(rows),), -1, dtype=torch.int64)
             start_pos = torch.tensor([b.slots[s].seq_len for s in rows], dtype=torch.int64)
             if not reload_page_table:

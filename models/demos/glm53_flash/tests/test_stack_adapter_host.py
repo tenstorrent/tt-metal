@@ -848,6 +848,22 @@ def test_resident_chain_decode_follows_the_reload_steps():
         nxt, pos = res, [pos[0] + 1, pos[1] + 1]
     for row in range(2):  # plugin row r decoded in generator slot alias[r]: its last input = its token before
         assert kv.state[ad._alias[row]][-1] == (nxt[row] - 1) % VOCAB
+    # a request mid-prefill (first chunk of a 300-token prompt in plugin slot 2: its generator slot is active) stays out
+    # of the chain until a reload step adds it (the served 32 K x 4 crash: the chain decoded it past its page rows)
+    long = _prompt(300, 23)
+    ad.prefill_forward(
+        _history([long[:128]]),
+        page_table=_table([_blocks(2, 128)], 1),
+        kv_cache=kv,
+        prompt_lens=[128],
+        start_pos=[0],
+        empty_slots=[2],
+        sampling_params=None,
+    )
+    g2 = ad._alias[2]
+    assert len(kv.state[g2]) == 128 and g2 not in ad._chain
+    res = chain([_blocks(1, pos[1] + 1), _blocks(0, pos[0] + 1)])  # request 0 reaches position 64: its next block
+    assert res == [(t + 1) % VOCAB for t in nxt] and len(kv.state[g2]) == 128
     with expect_error(ValueError, "resident chain step"):
         ad.decode_forward(
             torch.zeros(B, 1, dtype=torch.int32),
