@@ -12,6 +12,9 @@ aligned starts, a follow-up at a 32-but-not-64-aligned start (ratio 2: 16 compre
 row) with a partial end, a 64-aligned follow-up, and a start in the last W block (the region shorter than two
 blocks). After every write, on every chip: B's bfp8 copy == R's bf16 copy (the rounded keys), exactly, and B's served
 192-byte rows == R's, byte for byte (R encodes the rounded keys: the encode of the bfp8 keys). Plus the fallback rule.
+INDEX_K_SERVED_FROM=bf16 (P.44, owner-authorized test change 2026-11-10): B encodes its served rows from the chunk's
+bf16 keys, so the served / mirror bytes are compared with U's instead: a third cache with INDEX_K_COPY=bf16 written
+with the unrounded keys (the stock cast of the bf16 key). Under INDEX_K_SERVED_FROM=bfp8 they are compared with R's.
 """
 
 import pytest
@@ -75,11 +78,15 @@ def test_index_k_copy_bfp8(mesh_device, monkeypatch):
     ]
     _set(monkeypatch, INDEX_K_FORMAT="bfp8", INDEX_K_SERVED="fp8_row192")
     gen = torch.Generator().manual_seed(41)
+    # P.44: the served rows' source (the orchestrator sets INDEX_K_SERVED_FROM)
+    from_bf16 = settings.get("INDEX_K_SERVED_FROM") == "bf16"
     for (max_seq, writes), ratio in [(c, r) for c in cases for r in (2, 1)]:
         _set(monkeypatch, INDEX_K_COPY="bfp8")
         b = C.TtServedRows(mesh, tables, max_seq, WIDTH, ratio, dedup=False, fp8=True, mirrors=[None])
         _set(monkeypatch, INDEX_K_COPY="bf16")
         ref = C.TtServedRows(mesh, tables, max_seq, WIDTH, ratio, dedup=False, fp8=True, mirrors=[None])
+        unr = C.TtServedRows(mesh, tables, max_seq, WIDTH, ratio, dedup=False, fp8=True, mirrors=[None])
+        srv = unr if from_bf16 else ref  # whose served bytes B's must equal
         assert b.k8 is not None and b.slab is None and ref.k8 is None
         assert b.k8.dtype == ttnn.bfloat8_b and tuple(b.k8.shape) == (1, 1, b.crows, WIDTH)
         for start, end in writes:
@@ -91,6 +98,7 @@ def test_index_k_copy_bfp8(mesh_device, monkeypatch):
             kb, kr = _rows(mesh, keys), _rows(mesh, round_values(keys, mbits=7))
             b.write(kb, start, end)
             ref.write(kr, start, end)
+            unr.write(kb, start, end)
             for t in (kb, kr):
                 ttnn.deallocate(t)
             what = f"max_seq {max_seq}, ratio {ratio}, write [{start}, {end})"
@@ -98,13 +106,14 @@ def test_index_k_copy_bfp8(mesh_device, monkeypatch):
             for chip, (g, e) in enumerate(zip(got, exp)):
                 bad = (g != e).any(dim=-1).nonzero().flatten()
                 assert not bad.numel(), f"{what}: chip {chip}: {bad.numel()} copy rows differ, first {bad[:4].tolist()}"
-            for sb, sr, name in ((b.served, ref.served, "served"), (b.mirrors[0], ref.mirrors[0], "mirror")):
+            for sb, sr, name in ((b.served, srv.served, "served"), (b.mirrors[0], srv.mirrors[0], "mirror")):
                 for chip, (g, e) in enumerate(zip(sb.host_rows(), sr.host_rows())):
                     bad = (g != e).any(dim=-1).nonzero().flatten()
                     assert (
                         not bad.numel()
                     ), f"{what}: chip {chip}: {bad.numel()} {name} rows differ, first {bad[:4].tolist()}"
-            print(f"[index_k_copy] {what}: bfp8 copy and served rows exact on {len(got)} chips")
-        assert b.version == ref.version == len(writes)
-        for c in (b, ref):
+            src = "bf16 keys" if from_bf16 else "bfp8 keys"
+            print(f"[index_k_copy] {what}: bfp8 copy and served rows (from the {src}) exact on {len(got)} chips")
+        assert b.version == ref.version == unr.version == len(writes)
+        for c in (b, ref, unr):
             c.free()

@@ -50,7 +50,8 @@ zeros]), encoded on the device from the same server-order bf16 rows (tile, stock
 ttnn.bringup.pack_fp8_rows packer) and written by the same update_padded_kv_cache, also into the served copies of the
 re-index layers that read this source's keys (``mirrors``: Blaze's REINDEX layers keep layer 20's key). The indexer
 scores a persistent private copy of the keys, INDEX_K_COPY: bfp8 (P.41, the default) = one bfloat8_b TILE copy
-(``k8``) the new keys are rounded into once, the served rows then encoded from those bfp8 keys; bf16 = the old path's
+(``k8``) the new keys are rounded into once, the served rows encoded from the chunk's bf16 keys (INDEX_K_SERVED_FROM=
+bf16, P.44, the default) or from those bfp8 keys (bfp8, P.41); bf16 = the old path's
 bf16 slab (``slab``), the served rows encoded from it, tiled and rounded by the indexer each chunk.
 
 No host work in ``__call__`` / ``write``: the per-chunk inputs are integers (start, end) picking load-time tables.
@@ -235,7 +236,8 @@ def fp8_rows(mesh, rows_rm: ttnn.Tensor) -> ttnn.Tensor:
 
 def fp8_rows_tile(mesh, tile: ttnn.Tensor) -> ttnn.Tensor:
     """``fp8_rows`` of keys already tiled: [1, 1, n, 128] bf16 TILE (device; not consumed) -> [1, 1, n, 192] uint8
-    ROW_MAJOR Blaze rows (INDEX_K_COPY=bfp8: the bfp8 keys typecast to bf16, exact; the cast takes bf16 / fp32 only)."""
+    ROW_MAJOR Blaze rows (INDEX_K_COPY=bfp8: the chunk's bf16 keys, or under INDEX_K_SERVED_FROM=bfp8 the bfp8 keys
+    typecast to bf16, exact; the cast takes bf16 / fp32 only)."""
     _check_cast_cores(mesh, tile.shape[-2])
     e4m3, scale = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
         tile, memory_config=DRAM, round_scale_to_power_of_two=False
@@ -427,7 +429,8 @@ class TtServedRows:
     in place at the chips' common tile row (every SP row's rows are its own W block at local row (start / S) W / r);
     any other start (a follow-up, the pulled-back last chunk: the chunk's rows then sit at a different local row on
     the c_start SP row, 16 rows off a tile for a ratio-2 start at 32 mod 64) through ``_region``. The served rows are
-    the bfp8 keys typecast to bf16 (exact) and encoded (``fp8_rows_tile``)."""
+    encoded (``fp8_rows_tile``) per INDEX_K_SERVED_FROM: bf16 (P.44, the default) from the chunk's tiled bf16 keys,
+    fp8(key) as Blaze's writer; bfp8 (P.41) from the bfp8 keys typecast to bf16 (exact), fp8(bfp8(key))."""
 
     def __init__(
         self,
@@ -504,27 +507,38 @@ class TtServedRows:
 
     def _put8(self, slab: ttnn.Tensor, start: int, end: int) -> None:
         """INDEX_K_COPY=bfp8 (P.41): ``slab`` (as ``_put``'s) -> its rows rounded once to bfloat8_b into ``k8`` -> the
-        served 192-byte rows (and the mirrors') encoded from those bfp8 values."""
+        served 192-byte rows (and the mirrors'), encoded per INDEX_K_SERVED_FROM: bf16 (P.44, the default) from the
+        chunk's tiled bf16 rows (the bfp_round input; Blaze's writer encodes the bf16 key), bfp8 (P.41) from those bfp8
+        values (k8's rows typecast to bf16, exact)."""
         g, r = self.geo, self.ratio
         wr = g.w // r  # compressed rows a chunk writes on each chip
         c, q = divmod(start, g.chunk)
         row0 = c * wr  # the chips' common local row of W block c (a tile row: wr % 32 == 0, TtIndexer asserts it)
         prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # (P.7: built once a shape, the first page patched)
+        from_bf16 = settings.get("INDEX_K_SERVED_FROM") == "bf16"
         tile = ttnn.to_layout(slab, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(slab))
+        k8 = None
         if q == 0:  # every SP row's rows are its own W block c: in place at row0 on every chip
             ttnn.bringup.bfp_round(tile, out=self.k8, row0=row0, prepared=prepared, max_grid=max_grid())
-            k8 = self._k8_rows(row0, row0 + wr)
-        else:  # the chunk's rows in the server's order, rounded as the region will round them (rows are independent)
-            k8 = ttnn.bringup.bfp_round(
-                tile, ttnn.bfloat8_b, memory_config=DRAM, prepared=prepared, max_grid=max_grid()
-            )
+            if not from_bf16:
+                k8 = self._k8_rows(row0, row0 + wr)
+        else:  # the region rounds the chunk's rows into k8 itself
+            if not from_bf16:  # the chunk's rows in the server's order, rounded as the region rounds them (per row)
+                k8 = ttnn.bringup.bfp_round(
+                    tile, ttnn.bfloat8_b, memory_config=DRAM, prepared=prepared, max_grid=max_grid()
+                )
             self._region(slab, start, end, c, q, prepared)
-        if tile is not slab:
-            dealloc(tile)
-        kb = ttnn.typecast(k8, ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(k8))  # exact
-        self._k8_free(k8)
-        rows8 = fp8_rows_tile(self.mesh, kb)
-        dealloc(kb)
+        if from_bf16:  # P.44: fp8(key), the stock cast of the bf16 key; the tiled rows are a per-chunk transient
+            rows8 = fp8_rows_tile(self.mesh, tile)
+            if tile is not slab:
+                dealloc(tile)
+        else:  # P.41: fp8(bfp8(key))
+            if tile is not slab:
+                dealloc(tile)
+            kb = ttnn.typecast(k8, ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(k8))  # exact
+            self._k8_free(k8)
+            rows8 = fp8_rows_tile(self.mesh, kb)
+            dealloc(kb)
         for target in (self.served, *self.mirrors):
             self._put_into(target, rows8, start, end)
         dealloc(rows8)

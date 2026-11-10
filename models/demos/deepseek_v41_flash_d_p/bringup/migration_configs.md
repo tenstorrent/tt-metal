@@ -74,7 +74,10 @@ One row per compressed position, uint8:
 - Made on the device: the stock `ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x,
   round_scale_to_power_of_two=False)`, then `ttnn.bringup.pack_fp8_rows`. Byte-exact with that stock cast, which is what
   tt-blaze's own test `test_dsa_indexer_direct_k_cache_update.py` checks its writer against.
-- Since P.41 the keys are rounded to bfloat8_b first (the indexer's one bfp8 copy), then cast to fp8 from that.
+- The cast takes the chunk's bf16 keys as they are: fp8(key), the stock cast of the bf16 key (P.44,
+  `INDEX_K_SERVED_FROM=bf16`, the default). The indexer's own bfp8 copy (P.41) is rounded from the same bf16 rows and
+  is not what is served. P.41 to P.43 cast from the bfp8 copy instead (fp8(bfp8(key)); still selectable with
+  `INDEX_K_SERVED_FROM=bfp8`).
 - Not byte-exact with tt-blaze's torch recipe `_quantize_scaled_keys`: about 1.1 % of values are one e4m3 step higher,
   and e4m3 subnormals are kept (DS41-213). See open point 1.
 
@@ -103,7 +106,7 @@ All in `tt/settings.py` (environment variable `DS41_<NAME>`). Verified by callin
 
 | # | Point | State |
 |---|---|---|
-| 1 | **fp8 quantizer rounding.** Brian's review asks for a byte-for-byte match with decode's `pack_index_keys` (`tests/blaze/deepseekv4_1/csa2_harness.py:402`), "round-to-nearest-even". P.39 read Blaze's device writer as truncating (reciprocal truncated to TF32, mantissa toward zero; serving_contract.md) and matches the stock cast that Blaze's own test compares its writer with. The two descriptions disagree. | Open: confirm what decode's writer really does |
+| 1 | **fp8 quantizer rounding.** Brian's review asks for a byte-for-byte match with decode's `pack_index_keys` (`tests/blaze/deepseekv4_1/csa2_harness.py:402`), "round-to-nearest-even". The served rows are the stock cast of the bf16 key (P.44: fp8(key), no bfp8 rounding first), which is what tt-blaze's writer test (`test_dsa_indexer_direct_k_cache_update.py:300`, bytes 0..131, atol 0) compares Blaze's writer `DsaIndexerDirectKCacheUpdate` with. `pack_index_keys` is a different recipe from both the writer and the stock cast: it rounds to nearest even and divides by 448; about half of the e4m3 values and the scale bytes differ from the writer's recipe on random keys (CPU, 2026-11-10). We do not change the cast to match it. | Open: decode to confirm `pack_index_keys` is a test helper, not the writer's contract |
 | 2 | **cap from prompt length vs where prefill stops (DS41-219).** At tt-d-gen 48b79127fb1 a PD prefill stops at prompt_len - 1. Our cap uses the end of the last chunk prefill ran; decode's may use the full prompt length. They differ only when prompt_len % 64 == 1 (e.g. 2,945: ours 2,880, decode's 2,944, so our snapshot rows sit 64 positions early). | Open: confirm with decode |
 | 3 | **No last-chunk flag.** tt-d-gen's chunk header `{slot_id, actual_start, actual_end}` has no "last chunk" bit, so prefill rewrites the snapshot on every chunk (+4.6 ms device a chunk at 51,200, P.42 A/B). The last chunk's version is the one shipped. | Owner raising the flag with tt-d-gen |
 | 4 | **Single-turn only.** A 128-row snapshot clamped at cap cannot serve a follow-up turn that starts past cap. | Open: agree single-turn with tt-d-gen, or recompute on follow-up |
