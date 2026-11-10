@@ -24,6 +24,7 @@
 #include "trace/trace_node.hpp"
 
 namespace tt::tt_metal {
+class CommandSink;
 class Device;
 class IDevice;
 class LaunchMessageRingBufferState;
@@ -231,8 +232,7 @@ void for_each_program_command_sequence_chunk(
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
-    SystemMemoryManager& manager,
-    uint32_t command_queue_id,
+    CommandSink& sink,
     bool stall_first,
     bool stall_before_program,
     bool send_binary = true);
