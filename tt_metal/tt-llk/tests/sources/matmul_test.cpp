@@ -517,20 +517,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_matmul_forms.h"
 #ifdef MATMUL_PACK_KEYS
 // the pack form of the block: the LLK decision, which the python mirror (the MATMUL_PACK_FORM define) must equal
-constexpr int matmul_pack_form_v = ckernel::matmul_pack_form_k(
+constexpr int matmul_pack_form_key = ckernel::matmul_pack_form_k(
     MATMUL_PK_FID, MATMUL_PK_HALF, MATMUL_PK_THROTTLE, MATMUL_PK_KT, MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_IN_A, MATMUL_PK_IN_B, MATMUL_PK_OUT, MATMUL_PK_R0, MATMUL_PK_C1, MATMUL_PK_DENSE,
     MATMUL_PK_L1ACC);
-static_assert(matmul_pack_form_v == MATMUL_PACK_FORM, "the python matmul_pack_form differs from matmul_pack_form_k");
+static_assert(matmul_pack_form_key == MATMUL_PACK_FORM, "the python matmul_pack_form differs from matmul_pack_form_k");
 #else
-constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+constexpr int matmul_pack_form_key = MATMUL_PACK_FORM;
 #endif
 #else
-constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+constexpr int matmul_pack_form_key = MATMUL_PACK_FORM;
 #endif
 #ifdef MATMUL_PACK_KEYS
 constexpr DataFormat matmul_pack_out_format = MATMUL_PK_OUT;
 #else
 constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
+#endif
+#if defined(ARCH_BLACKHOLE)
+// a block whose every form is per tile packs per tile (llk_matmul_block_pack); the full sync closed block runs prepared (pack_block_prepare) and takes no form
+constexpr int matmul_pack_form_v = (matmul_pack_form_key == 2 && dest_sync == DstSync::SyncFull) ||
+                                           !matmul_pack_production::always_per_tile<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>()
+                                       ? matmul_pack_form_key
+                                       : 0;
+#else
+constexpr int matmul_pack_form_v = matmul_pack_form_key;
 #endif
 #line 271
 

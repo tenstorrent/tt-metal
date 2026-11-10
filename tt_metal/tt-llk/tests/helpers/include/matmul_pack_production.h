@@ -144,5 +144,35 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         _llk_pack_block_closed_w_mop_<sync, fp32>(tile_index, out_tile, num_tiles, num_faces);
     }
 }
+
+// Every block of the output takes the per-tile form (the first, after a reconfigure, the next ones): the kernel packs per tile, as llk_matmul_block_pack decides
+// (llk_matmul_pack_always_per_tile). Needs the block keys.
+template <DstSync sync, bool fp32, DataFormat out_format>
+constexpr bool always_per_tile()
+{
+    if constexpr (key_nt == 0)
+    {
+        return false;
+    }
+    else
+    {
+        using namespace matmul_pack_tables;
+        constexpr std::uint32_t face_rows = key_r0 < 16 ? key_r0 : 16;
+        constexpr std::uint32_t faces     = (key_r0 > 16 ? 2 : 1) * (key_c1 > 16 ? 2 : 1);
+        constexpr std::uint32_t row       = llk_pack_block_class_k(
+            face_rows,
+            faces,
+            out_format == DataFormat::Bfp4 || out_format == DataFormat::Bfp2,
+            bfp_format(out_format),
+            out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp8,
+            wide_format(out_format));
+        constexpr bool int8  = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
+        constexpr bool src32 = fp32 && key_src32;
+        constexpr bool full  = sync == DstSync::SyncFull;
+        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, src32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, src32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, src32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8) == 'T';
+    }
+}
 } // namespace matmul_pack_production
 #endif

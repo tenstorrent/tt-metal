@@ -15,6 +15,7 @@ def test_tables_match_api():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.OUT.read_text() == mod.generate(), "matmul_pack_tables.h differs from llk_pack_tile_api.h: run tests/python_tests/gen_matmul_pack_tables.py --write"
+    assert mod.API.read_text() == mod.api_text(), "the generated region of llk_pack_tile_api.h differs from llk_pack_block: run tests/python_tests/gen_matmul_pack_tables.py --write"
 
 
 def test_block_selection_matches_api():
