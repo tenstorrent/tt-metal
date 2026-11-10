@@ -2186,7 +2186,10 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
         if state in ("1", "2"):
             out += f"\n#define MATMUL_PACK_STATE {state}"
         # LLK_MATMUL_PACK_NOK=1: the block pack takes no K (pack_block's default matmul_kt 0)
-        if os.environ.get("LLK_MATMUL_PACK_NOK") == "1":
+        # LLK_MATMUL_PACK_PROD=1: every block goes through the block pack without the K, as main's ttnn matmul kernels call pack_block
+        if os.environ.get("LLK_MATMUL_PACK_PROD") == "1":
+            out += "\n#define MATMUL_PACK_PROD 1"
+        if os.environ.get("LLK_MATMUL_PACK_NOK") == "1" or os.environ.get("LLK_MATMUL_PACK_PROD") == "1":
             out += "\n#define MATMUL_PACK_NOK 1"
         return out
 

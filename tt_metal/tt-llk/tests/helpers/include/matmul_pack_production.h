@@ -177,5 +177,13 @@ constexpr bool always_per_tile()
                llk_pack_block_form_k<fp32, key_kt>(row, key_nt, src32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8) == 'T';
     }
 }
+
+// MATMUL_PACK_PROD: the block pack of llk_pack_block for this output, the plain block where one run writes it back to back (plain format, full tiles), else the
+// closed block (3, not the prepared one)
+template <DataFormat out_format>
+constexpr int prod_form()
+{
+    return (bfp_format(out_format) || key_r0 < 32 || key_c1 < 32) ? 3 : 1;
+}
 } // namespace matmul_pack_production
 #endif
