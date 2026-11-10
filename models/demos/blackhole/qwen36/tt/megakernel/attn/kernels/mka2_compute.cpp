@@ -87,7 +87,7 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
     }
 }
 #endif
-#if defined(MKA_RQKV)
+#if defined(MKA_RQKV) || defined(MK_V12)
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
@@ -237,6 +237,7 @@ void kernel_main() {
         cb_pop_front(CB_HSQ, 8);
     };
 #endif
+#endif   // MKA_RQKV (v12 args follow the qkv / head args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
 #if defined(MKA_ROLE_STREAM)
@@ -321,6 +322,7 @@ void kernel_main() {
 #else
 #define V12_OSUM(L) do {} while (0)
 #endif
+#if defined(MKA_RQKV)   // reopened after the v12 block
 #if defined(MKA_QSK)
     // spec §18 split-K qkv on STREAM core (column c, K-row vk): partial = x[K-row] @ slot M over this column's N-list
     // (qk0 = nt tiles, passes of <= 6 DST tiles), item-major into CB_VA (+ own items vk, vk + 8 into CB_VOWN). Slot M is

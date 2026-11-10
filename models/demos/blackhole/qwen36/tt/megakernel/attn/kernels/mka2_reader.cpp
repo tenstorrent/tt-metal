@@ -123,6 +123,7 @@ void kernel_main() {
     constexpr uint32_t TRID_WOR = 10;
 #endif
     bool pq_pending = false;
+#endif   // MKA_RQKV (the v12 args follow the qkv args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
     // ---- v12 MLP args (appended after every other reader arg) ----
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++);   // 0 none, 1 STREAM, 2 owner
@@ -193,7 +194,8 @@ void kernel_main() {
 #else
     auto v_gate = [&]() {};
 #endif
-#endif
+#endif   // MK_V12
+#if defined(MKA_RQKV)
     // next attention layer after L (NL if none) and the length of the GDN-type run right before attention layer La
     auto next_att = [](uint32_t L) { uint32_t n = L + 1; while (n < NL && !is_attn(n)) ++n; return n; };
     auto gdn_run = [](uint32_t La) { uint32_t r = 0; while (r < La && !is_attn(La - 1 - r)) ++r; return r; };

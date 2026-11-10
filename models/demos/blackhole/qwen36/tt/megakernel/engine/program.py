@@ -376,7 +376,7 @@ def setup_bench(dev, MESH, mesh_identity):
         ext_list = [fi for fi in range(NCF) if fi not in stream_idx and fi not in RESV]
         s_by_i = {i_: fi for fi, i_ in stream_idx.items()}
         n_ext_tiles = 2 * len(ext_list); n_half = QN - n_ext_tiles
-        assert n_half >= 0 and 2 * n_half <= len(stream_idx), (n_ext_tiles, n_half)
+        assert QSK or (n_half >= 0 and 2 * n_half <= len(stream_idx)), (n_ext_tiles, n_half)   # QSK: no ext qkv (all 112 tiles split-K on STREAM)
         for e, fi in enumerate(ext_list): QROLE[fi] = (3, 2 * e, 2, 0, KT, fi)
         for i_ in range(0 if QSK else 2 * n_half):
             fi = s_by_i[i_]; h_ = i_ % 2
@@ -458,6 +458,19 @@ def setup_bench(dev, MESH, mesh_identity):
         ext_crs = crs([fcores[fi] for fi in ext_list])
         if QSK: print(f"[qsk] split-K qkv: 80 STREAM owners, slot M {max(s_.pages for s_ in QSL_.values())} pages, PQL {PQL}, GDN stand-in {QSK_GK} K tiles", flush=True)
         else: print(f"[rqkv] {QN} tiles: ext {len(ext_list)}x2 full-K, STREAM {2 * n_half} K-halves; producers {QDONE_N}; MB/bank {[round(sum(QROLE[f][2] * QROLE[f][4] for f in qcores if q_bank[f] == b_) * BF8TB / 1e6, 2) for b_ in range(banks)]}; {QN * KT * BF8TB / 1e6:.1f} MB/layer", flush=True)
+    if not RQKV and ('MK_V12', '1') in MKDEF:   # V12 on the MIXN mixer stand-in (GDN24 before QSK builds without RWO): own CB 43 rstd stand-in
+        import struct
+        f2u = lambda v: struct.unpack('<I', struct.pack('<f', v))[0]
+        MKDEF = MKDEF + [("MKA_NOWN", str(NOWN)), ("MKA_INVH_BITS", f"{f2u(1.0 / H)}u"), ("MKA_EPS_BITS", f"{f2u(EPS)}u")]
+        ss = torch.stack([(xb[:, o * (H // NOWN):(o + 1) * (H // NOWN)].double() ** 2).sum(-1) for o in range(NOWN)])   # [NOWN, M]
+        rsp_t = torch.zeros(TILE, NOWN * TILE)
+        for o in range(NOWN): rsp_t[:, o * TILE] = ss[o].float()
+        rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
+        rstd_g = 1.0 / torch.sqrt(ss.sum(0) / H + EPS)   # [M]
+        print('[v12] on the MIXN qkv stand-in (no MKA_RQKV): CB 43 rstd stand-in on its own', flush=True)
+        if xbuf is not None and not MESH:   # compact L1 like the RQKV path: the re-made x shard lands in the placeholder's hole,
+            ttnn.deallocate(xbuf)              # so the v12 L1 tensors (v_pbuf 200 KB) fit above the STREAM CB region
+            xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NC, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(rect, H))
     GDNIN = int(os.environ.get('MKA_GDNIN_CORES', '64'))   # GDN in-proj stand-in on the first 64 K-half cores (5.6 MB, spec 5.9),
     def gdn_on(fi):                                         # independent of how many K-half pairs the qkv split uses
         if QSK: return 1 if fi in stream_idx else 0
@@ -468,7 +481,6 @@ def setup_bench(dev, MESH, mesh_identity):
         import sys as _sys
         _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))
         import layout_mlp as LM
-        assert RQKV, "MK_V12 needs MKA_RQKV (the CB 20 rstd stand-in)"
         if not any(k_ == 'MK_OWNER_RESID' for k_, _ in MKDEF): MKDEF = MKDEF + [('MK_OWNER_RESID', '1')]
         # LoFi on the BFP4 MLP matmuls is bit-identical to HiFi2 in the engine (owner xo torch.equal, d30u20) -> default on
         if not any(k_ == 'MK_V12_LOFI' for k_, _ in MKDEF): MKDEF = MKDEF + [('MK_V12_LOFI', '1')]
@@ -592,6 +604,7 @@ def setup_bench(dev, MESH, mesh_identity):
         return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
+    assert not (GDN24 and QSK), "MKA_GDN24 + MKA_QSK: QSK still needs MKA_RWO (ext Wo ring, qn0), which GDN24 excludes; until QSK builds without RWO run V12 on the MIXN qkv stand-in (no MKA_QSK / MKA_RQKV)"
     assert not (GDN24 and RWO), "MKA_GDN24: wo moves to the GDN role's wo unit (spec v1.5); run the wo stand-in (MKA_RWO off) until then"
     # MK_REAL_AR: the AR's CB ids (50-55) grow every core's CB-config block in the kernel config buffer; the u8 STREAM program
     # was then 192 B past 70656 B with the compute zones in
@@ -946,6 +959,15 @@ def setup_bench(dev, MESH, mesh_identity):
         print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
         if GDN24:
             ks = ks + list(GDN_ROLE.get('kernels', [])); cbs = cbs + list(GDN_ROLE.get('cbs', []))
+            def _cbsum(lx, ly):
+                n_ = 0
+                for d_ in cbs:
+                    try:
+                        if d_.core_ranges.contains(ttnn.CoreCoord(lx, ly)) and getattr(d_, 'buffer', None) is None: n_ += d_.total_size   # static CBs only
+                    except Exception:
+                        return None
+                return n_
+            print(f"[gdn24] CB bytes per core: STREAM (0,0) {_cbsum(0, 0)}  ext (10,0) {_cbsum(10, 0)}  GDN (0,{GY}) {_cbsum(0, GY)}", flush=True)
         return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, NDN * TILE))
     if os.environ.get("MK_L1DUMP") == "1":  # debug: every live L1 tensor's address
@@ -962,4 +984,20 @@ def setup_bench(dev, MESH, mesh_identity):
         prog = PROG_PER_DEV(ttnn.MeshCoordinate(0, 0))
     else:
         prog = build(out_t)
+    if GDN24:   # GDN-core CB headroom (spec rule): every L1 tensor reserves its range on ALL cores, CBs grow from the bottom
+        _l1 = []
+        for _n, _v in list(locals().items()):
+            for _t in (_v if isinstance(_v, (list, tuple)) else [_v]):
+                try:
+                    if isinstance(_t, ttnn.Tensor) and _t.is_allocated() and _t.memory_config().buffer_type == ttnn.BufferType.L1:
+                        _l1.append((_t.buffer_address(), _n))
+                except Exception:
+                    pass
+        _lo = min(_l1) if _l1 else (None, None)
+        try:
+            _cbb = dev.allocator().get_base_allocator_addr(ttnn.HalMemType.L1)
+        except Exception:
+            _cbb = None
+        print(f"[gdn24] L1 tensors (addr, name) {sorted(set(_l1))}", flush=True)
+        print(f"[gdn24] L1 tensors {len(_l1)}; lowest {_lo[1]} @ {_lo[0]}; CB base {_cbb}; GDN-core CB space {(_lo[0] - _cbb) / 1024 if (_cbb and _lo[0]) else '?'} KB", flush=True)
     return dict(locals())

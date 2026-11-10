@@ -47,10 +47,11 @@ void kernel_main() {
     constexpr uint32_t MWTB = WTB;
 #endif
 #if defined(MK_V12)
-#if !defined(MKA_RQKV)
-#error "MK_V12 needs MKA_RQKV (CB 20 rstd stand-in shared with the qkv PROJ)"
-#endif
+#if defined(MKA_RQKV)
     constexpr auto wv_args = TensorAccessorArgs<qo_args.next_compile_time_args_offset()>();
+#else   // MIXN mixer stand-in (no qkv_out accessor): the v12 rstd stand-in (CB 43) is set up by the host on its own
+    constexpr auto wv_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+#endif
 #endif
 #if defined(MKA_QSK)
     constexpr bool kQsk = true;
