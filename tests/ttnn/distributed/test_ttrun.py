@@ -1338,35 +1338,37 @@ class TestJobOwnership:
     """tt-run owns the job (teardown plan P5, P6, P7, P19): the wall clock on the mpirun line when asked for, signals
     forwarded to the launcher, leftovers ended and reported."""
 
-    def test_job_clock_is_off_by_default_for_the_ranks(self):
-        from ttnn.distributed.ttrun import DEFAULT_JOB_TIMEOUT_S, DEFAULT_PHASE1_TIMEOUT_S
-
-        # tt-run adds no wall clock unless asked: both phases are off by default, turned on by env vars
-        assert DEFAULT_JOB_TIMEOUT_S == int(os.environ.get("TT_RUN_TIMEOUT", "0"))
-        assert DEFAULT_PHASE1_TIMEOUT_S == int(os.environ.get("TT_RUN_PHASE1_TIMEOUT", "0"))
-
-    def test_timeout_args_added_unless_given(self):
-        from ttnn.distributed.ttrun import job_timeout_mpi_args, mpi_args_specify_timeout
-
-        assert job_timeout_mpi_args(None, 100) == ["--timeout", "100", "--report-state-on-timeout"]
-        assert job_timeout_mpi_args(["--oversubscribe"], 100) == ["--timeout", "100", "--report-state-on-timeout"]
-        assert job_timeout_mpi_args(["--timeout", "5"], 100) == []
-        assert job_timeout_mpi_args(["--timeout=5"], 100) == []
-        assert job_timeout_mpi_args(None, 0) == []
-        assert mpi_args_specify_timeout(["--oversubscribe", "--timeout", "5"])
-        assert not mpi_args_specify_timeout(["--oversubscribe"])
-
-    def test_phase2_line_carries_the_clock(self, sample_rank_binding_yaml):
+    def test_ttrun_adds_no_timeout_of_its_own(self, sample_rank_binding_yaml):
         from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
 
+        # The overall wall clock is PRRTE's own --timeout, reached only through --mpi-args; tt-run never adds one.
         config = parse_binding_config(sample_rank_binding_yaml)
-        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe"], job_timeout_s=42)
-        assert cmd[cmd.index("--timeout") + 1] == "42"
-        assert "--report-state-on-timeout" in cmd
-        cmd = build_mpi_command(config, ["echo"], mpi_args=["--timeout", "7"], job_timeout_s=42)
-        assert cmd.count("--timeout") == 1 and cmd[cmd.index("--timeout") + 1] == "7"
-        cmd = build_mpi_command(config, ["echo"], mpi_args=None, job_timeout_s=0)
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe"])
         assert "--timeout" not in cmd
+
+    def test_user_timeout_in_mpi_args_is_passed_through(self, sample_rank_binding_yaml):
+        from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
+
+        # --mpi-args "--timeout N" reaches the mpirun line verbatim, exactly once, with nothing tt-run invents.
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe", "--timeout", "90"])
+        assert cmd.count("--timeout") == 1
+        assert cmd[cmd.index("--timeout") + 1] == "90"
+
+    def test_run_launcher_preserves_the_timeout_exit_code(self):
+        from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, run_launcher
+
+        # A launcher that exits with PRRTE's timeout code and leaves nothing: tt-run returns it unchanged, never
+        # reclassified as 0 or as a tt-run failure.
+        rc = run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd())
+        assert rc == PRTE_TIMEOUT_EXIT_CODE
+
+    def test_run_launcher_passes_a_rank_failure_code_through(self):
+        from ttnn.distributed.ttrun import run_launcher
+
+        # A launcher that reports a rank's non-zero code with nothing left: the code is the truth, returned as is.
+        rc = run_launcher(["bash", "-c", "exit 7"], cwd=Path.cwd())
+        assert rc == 7
 
     def test_run_launcher_forwards_sigterm_and_reports_it(self):
         import signal
