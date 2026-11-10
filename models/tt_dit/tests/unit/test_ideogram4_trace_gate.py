@@ -56,3 +56,13 @@ def test_warmup_captures_only_when_tracing(monkeypatch: pytest.MonkeyPatch, trac
     else:
         pipeline.warmup(sizes=[])
         assert checked == []
+
+
+@pytest.mark.parametrize(("trace", "expected"), [(None, True), (True, True), (False, False)])
+def test_create_pipeline_passes_trace_and_none_keeps_the_default(
+    monkeypatch: pytest.MonkeyPatch, trace: bool | None, expected: bool
+) -> None:
+    built: list[object] = []
+    monkeypatch.setattr(Ideogram4Pipeline, "__init__", lambda self, *, device, config, run_warmup: built.append(config))
+    Ideogram4Pipeline.create_pipeline(mesh_device=SimpleNamespace(shape=(4, 8)), trace=trace)
+    assert built[0].trace is expected

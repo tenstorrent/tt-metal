@@ -45,7 +45,7 @@ class _Module:
     def __init__(self) -> None:
         self.exclusions: list[_Module] = []
 
-    def register_coresident_exclusions(self, *modules: _Module) -> None:
+    def _register_coresident_exclusions(self, *modules: _Module) -> None:
         self.exclusions.extend(modules)
 
 
@@ -69,6 +69,12 @@ def test_encoder_pair_traces_only_with_a_traced_resident_pipeline(
     trace: bool, offload_weights: bool, encoder_trace: bool
 ) -> None:
     pair = GemmaTokenizerEncoderPair(
-        None, mesh_device=None, ccl_manager=None, parallel_config=None, trace=trace, offload_weights=offload_weights
+        None,
+        mesh_device=None,
+        ccl_manager=None,
+        parallel_config=None,
+        trace=trace,
+        offload_weights=offload_weights,
+        register_exclusions=lambda module, *others: None,
     )
     assert pair._encoder_trace is encoder_trace

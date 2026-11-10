@@ -121,7 +121,7 @@ class GemmaTokenizerEncoderPair:
         mode: str = "av",
         offload_weights: bool = False,
         trace: bool = False,
-        register_exclusions: Callable[..., None] | None = None,
+        register_exclusions: Callable[..., None],
         sequence_length: int = GEMMA_SEQUENCE_LENGTH,
         video_dim: int = VIDEO_EMBED_DIM,
         audio_dim: int = AUDIO_EMBED_DIM,
@@ -139,9 +139,7 @@ class GemmaTokenizerEncoderPair:
         self.mode = mode
         self.offload_weights = offload_weights
         # The owning pipeline's registration, so that it knows which modules are evicted.
-        self._register_exclusions_with = register_exclusions or (
-            lambda module, *others: module.register_coresident_exclusions(*others)
-        )
+        self._register_exclusions_with = register_exclusions
         self._num_layers = num_layers
         self._hidden_layer_index = hidden_layer_index
         self._sequence_length = sequence_length

@@ -403,11 +403,13 @@ class QwenImagePipeline(Pipeline):
         mesh_device: ttnn.MeshDevice,
         cfg_enabled: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        trace: bool | None = None,
     ) -> QwenImagePipeline:
         config = QwenImagePipelineConfig.default(
             mesh_shape=mesh_device.shape,
             cfg_enabled=cfg_enabled,
             checkpoint_name=checkpoint_name,
+            trace=trace,
         )
         return cls(device=mesh_device, config=config)
 

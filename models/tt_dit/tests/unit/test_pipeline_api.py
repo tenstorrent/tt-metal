@@ -20,7 +20,7 @@ class _FakeModule:
     def __init__(self) -> None:
         self.exclusions: list[_FakeModule] = []
 
-    def register_coresident_exclusions(self, *modules: _FakeModule) -> None:
+    def _register_coresident_exclusions(self, *modules: _FakeModule) -> None:
         self.exclusions.extend(modules)
 
 
