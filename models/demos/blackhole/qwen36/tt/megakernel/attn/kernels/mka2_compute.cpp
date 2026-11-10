@@ -84,7 +84,7 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
     }
 }
 #endif
-#if defined(MKA_RQKV)
+#if defined(MKA_RQKV) || defined(MK_V12)
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
@@ -234,6 +234,7 @@ void kernel_main() {
         cb_pop_front(CB_HSQ, 8);
     };
 #endif
+#endif   // MKA_RQKV (v12 args follow the qkv / head args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
 #if defined(MKA_ROLE_STREAM)
@@ -272,8 +273,9 @@ void kernel_main() {
         cb_pop_front(CB_VRSA, MKA_NOWN);
     };
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
-    mkar::Reduce ar_red;   // [has_work, ring, PT]: has_work = this device owns the core's chunk
-    ar_red.init(a); a += 3;
+    mkar::Reduce ar_red;   // [has_work, ring, PT] from the owner's L1 arg table (spec v1.25): has_work = this device owns it
+    ar_red.has_work = 0;
+    if (vrole == 2) ar_red.init_l1(MK_AR_BLK, MK_AR_BLK_COMP);
 #endif
     // owner: Σ of the 10 column down partials (P @ I, fp32 DST) [+ the x chunk while the AR is a stall] -> CB_VXO
     auto v12_osum = [&](uint32_t L) {
@@ -309,15 +311,46 @@ void kernel_main() {
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
         if (ar_red.has_work) {
             CZONE("C-AR");
+#if defined(MK_AR_HWSTART)
             compute_kernel_hw_startup(MKAR_CB_RED, MKAR_CB_RED, MKAR_CB_OUT);
-            ar_red.iter();
+#endif
+            ar_red.iter();   // sets its own unpack / pack formats and add init (v12_osum's hw startup ran this layer)
         }
+#if defined(MK_AR_GAMMA)
+        {   // spec §19: x_deliver = out ⊙ γ_next on every owner (owning + gather role); out stays un-scaled (residual)
+            CZONE("C-ARG");
+            cb_wait_front(MK_AR_CBG, MK_AR_GT);   // the writer pushes it once γ landed and the AR output is complete
+            cb_reserve_back(CB_VXO, V_OT);        // free once the writer popped this layer's partial (after the AR)
+            reconfig_data_format(MKAR_CB_OUT, MK_AR_CBG);
+            pack_reconfig_data_format(CB_VXO);
+#if MK_AR_GROWS == 0
+            mul_bcast_rows_init(MKAR_CB_OUT, MK_AR_CBG);
+#else
+            mul_init(MKAR_CB_OUT, MK_AR_CBG);   // packed pseudo-tiles, γ pre-replicated: element-wise
+#endif
+            for (uint32_t t = 0; t < MK_AR_GT; ++t) {
+                tile_regs_acquire();
+#if MK_AR_GROWS == 0
+                mul_tiles_bcast_rows(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
+#else
+                mul_tiles(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
+#endif
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, CB_VXO, t);
+                tile_regs_release();
+            }
+            cb_push_back(CB_VXO, V_OT);
+            cb_pop_front(MK_AR_CBG, MK_AR_GT);
+        }
+#endif
 #endif
     };
 #define V12_OSUM(L) v12_osum(L)
 #else
 #define V12_OSUM(L) do {} while (0)
 #endif
+#if defined(MKA_RQKV)   // reopened after the v12 block
 #if defined(MKA_QSK)
     // spec §18 split-K qkv on STREAM core (column c, K-row vk): partial = x[K-row] @ slot M over this column's N-list
     // (qk0 = nt tiles, passes of <= 6 DST tiles), item-major into CB_VA (+ own items vk, vk + 8 into CB_VOWN). Slot M is

@@ -30,8 +30,8 @@ constexpr uint32_t V_FACE_B = 512, V_ROW_B = 32, V_XPK_SLOT_B = 10 * 2 * 16 * V_
 #if !defined(MK_RS_QKV)
 #error "MKA_QSK needs MK_RS_QKV (the owners' mixer x delivery, flag 2L + 1)"
 #endif
-#if defined(MK_REAL_AR)
-#error "MKA_QSK + MK_REAL_AR: the AR's x delivery (XF flags) does not yet feed the split-K mixer (flag 2L + 1)"
+#if defined(MK_REAL_AR) && !defined(MK_AR_DLV)
+#error "MKA_QSK + MK_REAL_AR needs the reader-side AR delivery (MK_AR_DLV): it raises the mixer flag 2L + 3 (X2)"
 #endif
 #ifndef QSK_GK
 #define QSK_GK 6

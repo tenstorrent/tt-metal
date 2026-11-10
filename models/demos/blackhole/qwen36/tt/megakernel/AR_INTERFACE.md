@@ -156,3 +156,28 @@ next program cannot start before its own previous one ends).
   The residual stream is v12's `v_x0` (unused with MK_OWNER_RESID=0). Owner CB budget is otherwise ~50 KB short.
 - CB ids 50-55 grow every core's CB-config block; with the compute zones the u8 STREAM program was 192 B over the
   70656 B kernel config buffer, so MK_REAL_AR turns on MKA_LEAN_C.
+- v1.1 (spec v1.21): x delivery moved to the owner READER on NOC1 (`MKAR_DLV_SIGNAL`: AR_RECV posts `MK_AR_DLV` = L + 1
+  once the output chunk is complete; mka2_reader.cpp `v12_ardlv` multicasts it west inside the row, sets the row flag
+  and counts on the Q root); the receiver's role block drops its delivery tail (`deliver_ext`). CB ids compacted to
+  v12 STREAM-only ids 30/34-41/43/44 (`cb_ids`): the local CB-config block of every core is sized by the program's max
+  CB index (16 B per index, dispatch.cpp finalize_cbs), so MKA_LEAN_C is no longer needed (`MK_AR_CBHI=1`: old ids).
+- The pre-attention MLP AR (40-54 us vs ~21) is the next attention layer's MLP-slice pump (19.4 MB) sharing the NoC:
+  the all-gather landing stretches, not the delivery. Rate-limiting the pump (`MK_AR_PUMPGAP`) or holding it
+  (`MK_AR_NOPUMP`) restores ~21 us but the attention layer then loses 35-80 us; full-rate pumping is best.
+- v1.2 (spec v1.25, engine rules: CB ids < 45; bulky per-core args out of runtime args): the owners' AR args (READY
+  targets, Reduce [has_work, ring, PT], Recv common + role blocks) are a per-core L1 table, `ArPhase.arg_table(parts)`
+  (uint32, width-sharded over the owners, 64 words / core, per-device contents via ShardTensorToMesh; layout
+  [ar_on, n_ready, (xy, READY) x n | comp @16 | recv @20]). Kernels: `MKAR_ARGS_L1` (Recv carg / rarg),
+  `Reduce::init_l1`, engine defines `MK_AR_BLK` / `MK_AR_BLK_COMP` / `MK_AR_BLK_RECV`. The owner writer / compute
+  carry no AR runtime args. (The AR-only sender kernels keep theirs: the fabric connection args are runtime args, and
+  the sender group is not the program's largest.)
+- v1.3 MK_AR_GAMMA (spec §19, default off): the AG carries the un-scaled residual; every owner (owning + gather role)
+  computes x_deliver = out ⊙ γ_next (layer L + 1's input_layernorm, √1.25 folded) in compute right after the AR:
+  R = 32 bcast-rows multiply with the row-0 γ tiles; R < 32 element-wise with a host-built packed, row-replicated γ
+  table (one page per (layer, norm, chunk)). γ lands in CB 32 = pbuf+0 (dead from C-OSUM(L) until the next MLP's
+  partials; never across ARs: real wo aliases A / S there), read on trid 14 right after the READY incs (issuing it
+  before them stalled every device's RS under the weight pump). x_deliver goes into v_xo (dead after the AR; the
+  writer's pop of the partial gates the compute's reserve), then the writer posts MK_AR_DLV and the NOC1 reader
+  delivers it. The γ table's DRAM address is arg-table word 19 (runtime data). Recv: MKAR_DLV_NONE; its own-chunk
+  reads use MKAR_TRID (15) instead of a global read barrier. MK_AR_GEARLY (u1 only, L1): a dedicated γ CB filled at
+  the MLP start (no gain measured).

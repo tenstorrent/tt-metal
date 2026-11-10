@@ -11,6 +11,12 @@
 //   MKAR_SEM_AG_READY, MKAR_SEM_DONE, MKAR_SEM_READY   (program-semaphore ids, or global-semaphore addresses with MK_PS_GSEM)
 //   MKAR_PROG, MKAR_ROWS, MKAR_DELIVER, MKAR_STATS, MKAR_SRED, MKAR_AGD, MKAR_INPK
 //   MKAR_CB_PART, MKAR_CB_SCALER, MKAR_CB_STAGE      Sum(x^2) CBs (STATS)
+//   MKAR_ARGS_L1 (engine): L1 address of this core's arg table; carg / rarg index it instead of the runtime args
+//     (runtime-arg space is sized by the largest core of the program, spec v1.25)
+//   MKAR_DLV_SIGNAL (engine): L1 address of a local word; instead of delivering x itself, post it = it + 1 when the
+//     output chunk is complete (the engine's owner reader multicasts it on NOC1)
+//   MKAR_TRID (engine): transaction id for this phase's own-chunk reads (barrier on it, not on all reads)
+//   MKAR_DLV_NONE (engine, MK_AR_GAMMA): no delivery and no post here (the engine scales the output first)
 //   MKAR_ALL_RT: 1 = the "common" block is read from the runtime args at cbase (engine), 0 = from the common args
 //   MKAR_SEM_BASE (with MK_PS_GSEM, v0.9.14): uniform L1 address of a persistent per-core word holding how many RS / AG
 //     arrival increments earlier programs consumed. The arrival semaphore is then NEVER reset: trace replays are not
@@ -46,6 +52,16 @@
 #endif
 #endif
 
+// MKAR_LEANZ (engine, with MKA_LEAN_C): no AR-phase profiler zones (each costs code on the owner role, which is the
+// text-sizing group once QSK + RWO land)
+#ifndef MKAR_ZONE
+#if defined(MKAR_LEANZ)
+#define MKAR_ZONE(n)
+#else
+#define MKAR_ZONE(n) DeviceZoneScopedN(n)
+#endif
+#endif
+
 namespace mkar {
 
 // wrap-safe ">=" wait (v0.9.14): with never-reset arrival semaphores the counts wrap after 2^32 increments (~13 h of
@@ -72,13 +88,22 @@ struct Recv {
     uint32_t done_iters = 0;  // ARs of this program (fini advances the base by wait_value x done_iters)
 
     FORCE_INLINE uint32_t carg(uint32_t i) const {
+#if defined(MKAR_ARGS_L1)   // engine (spec v1.25): the whole arg block lives in a per-core L1 table at MKAR_ARGS_L1
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_ARGS_L1)[cbase + i];
+#endif
         if constexpr (MKAR_ALL_RT) {
             return get_arg_val<uint32_t>(cbase + i);
         } else {
             return get_common_arg_val<uint32_t>(i);
         }
     }
-    FORCE_INLINE uint32_t rarg(size_t i) const { return get_arg_val<uint32_t>(i); }
+    FORCE_INLINE uint32_t rarg(size_t i) const {
+#if defined(MKAR_ARGS_L1)
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_ARGS_L1)[i];
+#else
+        return get_arg_val<uint32_t>(i);
+#endif
+    }
 
     // returns false for a core without an AR role
     FORCE_INLINE bool init(uint32_t common_base, uint32_t role_base) {
@@ -135,7 +160,7 @@ struct Recv {
             r[i].x0 = rarg(a++); r[i].y0 = rarg(a++); r[i].x1 = rarg(a++); r[i].y1 = rarg(a++); r[i].n = rarg(a++);
         }
         const uint32_t xflag = rarg(a++);
-        DeviceZoneScopedN("PS-DELIVER");
+        MKAR_ZONE("PS-DELIVER");
         if constexpr (MKAR_ROWS > 0 && MKAR_DELIVER == 2) {
             ar_bcast(src, xdst, XCT * 2 * MKAR_ROWS * 32, r, 0xFF, noc_index);
         } else if constexpr (MKAR_ROWS > 0) {
@@ -162,7 +187,7 @@ struct Recv {
         a += 1 + 10 + 1;  // xdst, 2 rects, xflag
         const uint32_t rslot = rarg(a++), rtag = rarg(a++);
         cb_wait_front(MKAR_CB_PART, 1);
-        DeviceZoneScopedN("PS-STATS");
+        MKAR_ZONE("PS-STATS");
         volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(MKAR_CB_PART));
         const uint32_t stage = get_write_ptr(MKAR_CB_STAGE);
         volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
@@ -199,14 +224,19 @@ struct Recv {
         if (role != kRoleOwner) {
             PW(2, it, 0x20);
             {
-                DeviceZoneScopedN("PS-G-AGWAIT");
+                MKAR_ZONE("PS-G-AGWAIT");
                 wait_ge(sem, base + wait_value * (it + 1));  // monotonic (v0.8.7), epoch base + wrap-safe (v0.9.14)
             }
             PW(2, it, 0x21);
             cb_out.push_back(MKAR_CHUNK_TILES);
             if constexpr (MKAR_DELIVER != 0) {
                 cb_out.wait_front(MKAR_CHUNK_TILES);
+#if defined(MKAR_DLV_NONE)   // the engine scales x (MK_AR_GAMMA) and hands it to its delivery RISC itself
+#elif defined(MKAR_DLV_SIGNAL)
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_DLV_SIGNAL) = it + 1;   // another RISC delivers
+#else
                 deliver_x(cb_out.get_read_ptr(), tail_base);
+#endif
             }
             if constexpr (MKAR_STATS) {
                 // DONE only after compute has taken Sum(x^2) from this chunk: DONE releases the next RS, and the next
@@ -230,6 +260,9 @@ struct Recv {
         PW(2, it, 3);
 #if !defined(MKAR_NOOWN)   // MKAR_NOOWN: no own slot; the compute reads this device's partial in place (MKAR_CB_OWN)
         uint32_t l1_write_addr = get_write_ptr(MKAR_CB_RED) + my_chip * MKAR_CHUNK_TILES * MKAR_IN_PAGE;
+#if defined(MKAR_TRID)   // engine: barrier on our own reads only (the host RISC has its own reads in flight)
+        noc_async_read_set_trid(MKAR_TRID);
+#endif
         size_t s_idx = seg_base;
         for (uint32_t s = 0; s < num_segs; s++) {
             const uint32_t xy = rarg(s_idx++);
@@ -259,11 +292,16 @@ struct Recv {
                 z += b;
             }
         }
+#if defined(MKAR_TRID)
+        noc_async_read_set_trid(0);
+        noc_async_read_barrier_with_trid(MKAR_TRID);
+#else
         noc_async_read_barrier();
+#endif
 #endif
         if constexpr (MKAR_SRED) {
             const uint32_t flag_base = rarg(after_segs);
-            DeviceZoneScopedN("PS-O-RSWAIT");
+            MKAR_ZONE("PS-O-RSWAIT");
             for (uint32_t k = 0; k < MKAR_RING; ++k) {
                 const uint32_t slot = rarg(after_segs + 1 + k);
                 if (slot != my_chip) {
@@ -273,7 +311,7 @@ struct Recv {
             }
         } else {
             {
-                DeviceZoneScopedN("PS-O-RSWAIT");
+                MKAR_ZONE("PS-O-RSWAIT");
                 PW(2, it, 4);
                 wait_ge(sem, base + wait_value * (it + 1));
                 PW(2, it, 5);
@@ -285,7 +323,7 @@ struct Recv {
 #endif
         }
         {
-            DeviceZoneScopedN("PS-O-REDUCE");
+            MKAR_ZONE("PS-O-REDUCE");
             cb_out.wait_front(MKAR_CHUNK_TILES);
         }
         PW(2, it, 6);
@@ -303,7 +341,12 @@ struct Recv {
             noc_semaphore_inc(get_noc_addr(sender_xy >> 16, sender_xy & 0xFFFF, MK_PS_SEM(MKAR_SEM_AG_READY)), 1);
         }
         if constexpr (MKAR_DELIVER != 0) {
+#if defined(MKAR_DLV_NONE)
+#elif defined(MKAR_DLV_SIGNAL)
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_DLV_SIGNAL) = it + 1;   // another RISC delivers
+#else
             deliver_x(cb_out.get_read_ptr(), tail_base);
+#endif
         }
         signal_done();
         if constexpr (MKAR_STATS) {

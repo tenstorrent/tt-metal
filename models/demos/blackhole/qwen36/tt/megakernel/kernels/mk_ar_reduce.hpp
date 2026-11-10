@@ -27,6 +27,14 @@ struct Reduce {
         block_tiles = get_arg_val<uint32_t>(rbase + 2);
         return has_work || MKAR_STATS;
     }
+    // engine (spec v1.25): [has_work, num_blocks, block_tiles] from the core's L1 arg table at word offset `off`
+    FORCE_INLINE bool init_l1(uint32_t addr, uint32_t off) {
+        volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        has_work = t[off];
+        num_blocks = t[off + 1];
+        block_tiles = t[off + 2];
+        return has_work || MKAR_STATS;
+    }
 
     FORCE_INLINE void iter() const {
         constexpr uint32_t cb_in0 = MKAR_CB_RED, cb_in1 = MKAR_CB_RED, cb_out0 = MKAR_CB_OUT;

@@ -44,6 +44,6 @@ for L in range(NLr):
     e = ends[L][1]
     print(f"  layer {L}: {(e - prev) / MHZ:8.1f} us  (ends at {(e - t0) / MHZ:8.1f} us)")
     prev = e
-for z in ["W-MIX", "C-MIX", "W-SDPA", "C-SDPA", "R-KV", "R-RED", "W-WOAR", "C-GU", "C-DN", "W-HWAIT", "W-VX", "W-VMD", "W-OREL", "C-OSUM", "W-ARSTALL", "W-AR", "C-AR", "W-ARWAIT", "PS-O-RSWAIT", "PS-O-REDUCE", "PS-G-AGWAIT", "PS-DELIVER"]:
+for z in ["W-MIX", "C-MIX", "W-SDPA", "C-SDPA", "R-KV", "R-RED", "W-WOAR", "C-GU", "C-DN", "W-HWAIT", "W-VX", "W-VMD", "W-OREL", "C-OSUM", "W-ARSTALL", "W-AR", "C-AR", "W-ARWAIT", "R-ARDLVW", "R-ARDLV", "C-ARG", "W-ARG", "PS-O-RSWAIT", "PS-O-REDUCE", "PS-G-AGWAIT", "PS-DELIVER"]:
     sp = layer_spans(z)
     if sp: print(f"  {z:<10} " + "  ".join(f"L{L} {(s - t0) / MHZ:7.1f}-{(e - t0) / MHZ:7.1f} ({(e - s) / MHZ:6.1f})" for L, (s, e) in sorted(sp.items())))
