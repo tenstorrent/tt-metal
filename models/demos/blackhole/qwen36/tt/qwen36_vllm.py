@@ -207,20 +207,30 @@ _PREFILL_WARMUP_BUCKET = 4096
 _BLOCK_SIZE = 64
 
 
+def _max_images() -> int:
+    """Images per request (QWEN36_MM_MAX_IMAGES, default 1). Video stays at one item and never mixes with images."""
+    try:
+        n = int(os.environ.get("QWEN36_MM_MAX_IMAGES", "1"))
+    except ValueError:
+        n = 1
+    return max(1, min(n, 8))
+
+
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         # Serve a single visual item per request (B=1, max_concurrency=1). Image and video are both
         # supported, but only ONE modality per request: the model's vision splice keys off a single
         # placeholder token id (image_token_id XOR video_token_id), so a mixed image+video prompt
-        # cannot be spliced correctly.
-        return {"image": 1, "video": 1}
+        # cannot be spliced correctly. Several images in one request are spliced in order (one image_token_id run per
+        # image, each through its own warmed vision bucket); QWEN36_MM_MAX_IMAGES raises the image cap (default 1).
+        return {"image": _max_images(), "video": 1}
 
 
 class TT_Qwen3_5SpecProcessingInfo(TT_Qwen3_5ProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         # the spec engine prefills image / video requests too (vision rows spliced in the traced prefill); one item per
-        # request, one modality (see TT_Qwen3_5ProcessingInfo)
-        return {"image": 1, "video": 1}
+        # request, one modality (see TT_Qwen3_5ProcessingInfo); QWEN36_MM_MAX_IMAGES raises the image cap
+        return {"image": _max_images(), "video": 1}
 
 
 @MULTIMODAL_REGISTRY.register_processor(
