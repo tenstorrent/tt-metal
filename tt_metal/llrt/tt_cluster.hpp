@@ -359,6 +359,9 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
+    // Returns whether D2H sockets must use the hugepage fallback: the host can't pin device-visible memory (no 64-bit
+    // PCIe addressing and no IOMMU).
+    bool needs_d2h_hugepage_fallback() const;
     // Returns whether device-read-only page pinning is available.
     bool is_read_only_page_pinning_supported() const;
 

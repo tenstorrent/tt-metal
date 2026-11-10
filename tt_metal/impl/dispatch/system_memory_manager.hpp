@@ -5,6 +5,7 @@
 #pragma once
 
 // needed for private members
+#include "aux_region_allocator.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-umd/io_window/io_window.hpp>  // for tt::umd::IoWindow
 #include <tt-umd/types/xy_pair.hpp>        // for tt_cxy_pair
@@ -22,9 +23,6 @@ namespace tt::tt_metal {
 class Buffer;
 class MetalContext;
 class MetalEnvImpl;
-
-// True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
-bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
 
 class SystemMemoryManager {
 public:
@@ -103,7 +101,7 @@ public:
 
     uint32_t get_dram_region_bank_id() const;
 
-    std::pair<void*, uint32_t> allocate_region(uint32_t size);
+    AuxRegionAllocator& aux_region_allocator() { return aux_region_allocator_; }
 
 private:
     bool is_mock_device() const { return is_mock_device_; }
@@ -140,12 +138,8 @@ private:
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
 
-    // Bump-allocated tail of CQ sysmem (after all per-CQ issue/completion buffers). Device and host
-    // addresses are returned together by allocate_region() for PCIe/D2H consumers.
-    uint32_t free_region_start_ = 0;
-    uint32_t free_region_size_ = 0;
-    uint32_t free_region_bump_ = 0;
-    char* free_region_host_ptr_ = nullptr;
+    // Empty on mock devices.
+    AuxRegionAllocator aux_region_allocator_;
 };
 
 }  // namespace tt::tt_metal
