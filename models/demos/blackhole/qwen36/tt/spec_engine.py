@@ -1119,6 +1119,19 @@ class MTPSpecEngine:
         self._buckets = (
             (self.B,) if raw in ("", "8") else tuple(engine_spec_buckets(self.B))
         )  # "8" = off at any engine width
+        # QWEN36_R16_MEGAKERNEL (engine on): pad 2..(min engine bucket - 1) live users onto the engine's verify width (spec owner
+        # 11-10: decode is weight-stream bound, the padded u8 engine pass beats op-by-op u2-u7). Buckets 2 <= b that the engine
+        # does not serve are dropped, so pick_bucket rounds those steps up to the engine bucket; bucket 1 stays (op-by-op, r13
+        # identical). QWEN36_R16_MK_PAD=0 keeps every configured bucket. Flag off: unchanged.
+        if os.environ.get("QWEN36_R16_MEGAKERNEL", "").strip() in ("1", "stage1") and os.environ.get("QWEN36_R16_MK_PAD", "1") == "1":
+            from models.demos.blackhole.qwen36.tt.megakernel.engine.build import engine_buckets
+
+            _eb = engine_buckets()
+            if _eb is not None and len(self._buckets) > 1:
+                _kept = tuple(b for b in self._buckets if b < 2 or b in _eb or b == self.B)
+                if _kept != self._buckets:
+                    logger.info(f"[spec_engine] megakernel pad: buckets {self._buckets} -> {_kept} (engine buckets {sorted(_eb)})")
+                    self._buckets = _kept
         self._dr_traces = {}  # bucket b < B -> drafter trace id of b rows (filled when a per-bucket capture exists)
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
         # QWEN36_DRAFT_VOCAB_TOPK + QWEN36_DRAFT_VOCAB_FALLBACK (tt/draft_vocab.py): the per-row guard, the full-head drafter
