@@ -45,8 +45,16 @@ void kernel_main() {
     // CB_W2 / CB_WD are two layer slots each. Layer L + 1 is issued before layer L is pushed, so its address is the
     // OTHER slot (get_write_ptr still points at layer L's), and its reserve covers both slots (= layer L - 1 popped).
     const uint32_t w2_base = get_write_ptr(CB_W2), wd_base = get_write_ptr(CB_WD), wm_base = get_write_ptr(CB_WM); (void)wm_base;
+#if defined(MK_COLD_MIXFIRST) && MK_COLD_MIXFIRST
+    // -mk-tail: the mixer slice gets its own transaction ids (3/4 by layer parity), so compute can start the mixer as
+    // soon as ITS slice landed instead of waiting for the layer's whole 19 MB gate|up/down (cold start: layer 0's
+    // mixer was gated on all of layer 0 + layer 1's issue, med 69 / max 103 us vs ~20 us steady).
+    constexpr uint32_t MIX_TRID0 = 3;
+#else
+    constexpr uint32_t MIX_TRID0 = 1;
+#endif
     auto issue_mix = [&](uint32_t L) {
-        noc_async_read_set_trid(1 + (L & 1));
+        noc_async_read_set_trid(MIX_TRID0 + (L & 1));
         cb_reserve_back(CB_WM, MIXT);   // single slot: free once compute popped layer L - 1's mixer slice
         noc_async_read(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * WTB);
         noc_async_read_set_trid(0);
@@ -72,13 +80,24 @@ void kernel_main() {
     };
 
     issue_mix(0);
+#if defined(MK_COLD_MIXFIRST) && MK_COLD_MIXFIRST
+    // cold start: land layer 0's mixer before queueing any gate|up/down reads from this core
+    noc_async_read_barrier_with_trid(MIX_TRID0);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_COLD)) = 1;  // releases this core's reader
+#endif
     issue(0);
     for (uint32_t L = 0; L < NL; ++L) {
         if (L + 1 < NL) issue(L + 1);
         cb_reserve_back(CB_X, KT);  // producer-fed x: already in place; re-expose it to compute for this layer
         cb_push_back(CB_X, KT);
+#if defined(MK_COLD_MIXFIRST) && MK_COLD_MIXFIRST
+        noc_async_read_barrier_with_trid(MIX_TRID0 + (L & 1));
+        cb_push_back(CB_WM, MIXT);
+        noc_async_read_barrier_with_trid(1 + (L & 1));
+#else
         noc_async_read_barrier_with_trid(1 + (L & 1));
         cb_push_back(CB_WM, MIXT);
+#endif
         if (IS_GU) cb_push_back(CB_W2, w2_tiles);
         cb_push_back(CB_WD, DN_TILES);
         {   // mixer projection done on every core -> chain stall (GDN step / SDPA + out-proj + all-reduce) -> MLP go
@@ -99,9 +118,20 @@ void kernel_main() {
             cb_pop_front(CB_HL, 1);
         }
         if (ROOT < 2) root_bcast_layer(ROOT, L, NCORES, HCH, cbh_base + ROOT * HCH * XTB, HCH * XTB, r, self_rect, 0);
-        wait_hflags(L);
+#if defined(MK_DNPIPE) && MK_DNPIPE
+        // -mk-tail: publish h root chunk by root chunk (fixed root order, CB order = landing-buffer order) so the
+        // down projection starts on chunk 0 while chunks 1-3 are still in flight.
+        for (uint32_t i = 0; i < NROOT; ++i) {
+            DeviceZoneScopedN("W-HWAIT");
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HFLG0 + i)), L + 1);
+            cb_reserve_back(CB_H, HCH);
+            cb_push_back(CB_H, HCH);
+        }
+#else
+        { DeviceZoneScopedN("W-HWAIT"); wait_hflags(L); }
         cb_reserve_back(CB_H, HT);
         cb_push_back(CB_H, HT);
+#endif
         cb_wait_front(CB_OUT, NDN);   // layer L's down output (in the model: the next all-reduce's send buffer)
         cb_pop_front(CB_OUT, NDN);
         { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }  // MLP all-reduce before the next layer's x
@@ -112,6 +142,9 @@ void kernel_main() {
     // reset for the next launch: every core clears its received h flags; NOC0 roots wait until every core is past
     // the last layer, then clear their counters (NOC1 roots do the same in the reader)
     for (uint32_t i = 0; i < NROOT; ++i) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HFLG0 + i)) = 0;
+#if defined(MK_COLD_MIXFIRST) && MK_COLD_MIXFIRST
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_COLD)) = 0;
+#endif
     if (ROOT < 2) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE0 + ROOT)), NCORES * NL);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE0 + ROOT)) = 0;
