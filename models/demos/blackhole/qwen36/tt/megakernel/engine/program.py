@@ -1128,12 +1128,12 @@ def _io_list(S):
     g = S.get
     io = [S["x"], S["wgu_all"], S["wd_all"], S["wm_all"], S["xbuf"], S["hbuf"], S["ymix"], S["qten"], S["outs"], S["wo_dummy"]]
     io += list(S["kvs"]) + list(S["kvvs"])
-    io += [S["wq_all"], S["rsp"], S["qkv_out"]] if g("RQKV") else []
+    io += [S["wq_all"], S["rsp"], S["qkv_out"]] if g("RQKV") else ([S["rsp"]] if g("V12") else [])
     io += [S["wo_all"], S["wod"]] if g("RWO") else []
     io += [S["hg_t"], S["kd_t"]] if g("RQNR") else []
     io += [S["mk_t"]] if g("RMASK") else []
     io += [S[n] for n in ("wv_all", "v_xk", "v_rs", "v_h7", "v_xpk", "v_pbuf", "v_xo", "v_x0", "v_id", "v_j")] if g("V12") else []
-    io += [S["ar_out"]] if g("REAL_AR") else []
+    io += [S["ar_out"], S["ar_blk"]] if g("REAL_AR") else []
     io += list(S["GDN_ROLE"].get("io", [])) if g("GDN24") else []
     return io + [S["out_t"]]
 

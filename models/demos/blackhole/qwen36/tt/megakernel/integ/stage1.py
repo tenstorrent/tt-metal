@@ -92,40 +92,84 @@ def per_replay_inputs(model, in_body):
     return d
 
 
-def l1_dump(tag, prog=None, limit=120):
-    """Debug (QWEN36_R16_MK_L1DUMP=1): every live device L1 tensor (address, shape, layout, shard grid), lowest address
-    first, marking the engine's own setup tensors -- to see what sits inside the engine's static CB region."""
-    import gc
+def _named_tensors(root, prefix, out, depth=5, seen=None):
+    """{buffer address: attribute path} for every allocated device ttnn.Tensor reachable from ``root`` through
+    attributes / dicts / lists (pybind tensors are not gc-tracked, so gc.get_objects() cannot see them)."""
+    import ttnn
 
+    seen = set() if seen is None else seen
+    if id(root) in seen or depth < 0:
+        return out
+    seen.add(id(root))
+    if isinstance(root, ttnn.Tensor):
+        try:
+            if root.storage_type() == ttnn.StorageType.DEVICE and root.is_allocated():
+                out.setdefault(root.buffer_address(), prefix)
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+    if isinstance(root, dict):
+        items = list(root.items())
+    elif isinstance(root, (list, tuple)):
+        items = list(enumerate(root))
+    elif hasattr(root, "__dict__") and type(root).__module__.startswith(("models.", "__main__")):
+        items = list(vars(root).items())
+    else:
+        return out
+    for k, v in items[:4096]:
+        if isinstance(v, (int, float, str, bytes, bool)) or v is None:
+            continue
+        _named_tensors(v, f"{prefix}.{k}" if not isinstance(k, int) else f"{prefix}[{k}]", out, depth - 1, seen)
+    return out
+
+
+def l1_dump(tag, prog=None, model=None, limit=80, cores=None):
+    """Debug (QWEN36_R16_MK_L1DUMP=1): every live L1 buffer from the device allocator (ttnn reports), lowest address
+    first, sized per bank, named by the model / engine attribute that holds it ('?' = op-internal: trace intermediates,
+    CCL persistent buffers, ...). ``cores`` (default the owner rect x10-11 y0-7): which sharded buffers sit there."""
     import ttnn
     from loguru import logger
 
-    eng = {}
+    mesh = model.mesh_device if model is not None else None
     S = getattr(getattr(prog, "program", None), "setup", None) or {}
-    for k, v in S.items():
-        for t in (v if isinstance(v, list) else [v]):
-            if isinstance(t, ttnn.Tensor):
-                eng[id(t)] = k
+    names = {}
+    if model is not None:
+        _named_tensors(model, "model", names)
+    _named_tensors(S, "engine", names)
+    blocks = getattr(getattr(prog, "program", None), "blocks", None)
+    if blocks is not None:
+        _named_tensors({k: v["tensor"] for k, v in blocks.blocks.items()}, "argblock", names)
+    if mesh is None:
+        logger.info(f"[mk-l1] {tag}: no mesh")
+        return []
+    rep = ttnn._ttnn.reports
+    try:
+        info = rep.get_device_info(mesh)
+        top, cb0 = info.worker_l1_size, info.address_at_first_l1_cb_buffer
+    except Exception:  # noqa: BLE001
+        top, cb0 = 0, 0
+    cores = cores or {(x, y) for x in (10, 11) for y in range(8)}
+    on_cores = {}
+    try:
+        for pg in rep.get_buffer_pages(mesh):
+            if (pg.core_x, pg.core_y) in cores:
+                on_cores.setdefault(pg.address, set()).add((pg.core_x, pg.core_y))
+    except Exception as e:  # noqa: BLE001
+        logger.info(f"[mk-l1] get_buffer_pages failed: {e}")
     rows = []
-    for o in gc.get_objects():
-        try:
-            if isinstance(o, ttnn.Tensor) and o.storage_type() == ttnn.StorageType.DEVICE and o.is_allocated():
-                mc = o.memory_config()
-                if mc.buffer_type == ttnn.BufferType.L1:
-                    ss = mc.shard_spec
-                    sg = f"{ss.grid} shard {list(ss.shape)}" if ss is not None else "interleaved(all cores)"
-                    try:
-                        vol = o.volume() if callable(getattr(o, "volume", None)) else int(__import__("math").prod(o.padded_shape))
-                    except Exception:  # noqa: BLE001
-                        vol = 0
-                    rows.append((o.buffer_address(), tuple(o.shape), str(o.dtype).split(".")[-1], str(mc.memory_layout).split(".")[-1],
-                                 sg, eng.get(id(o), "model"), vol))
-        except Exception:  # noqa: BLE001
-            pass
-    rows.sort()
-    logger.info(f"[mk-l1] {tag}: {len(rows)} live L1 tensors (engine-owned {sum(r[5] != 'model' for r in rows)})")
+    for b in rep.get_buffers(mesh):
+        if b.buffer_type != ttnn.BufferType.L1:
+            continue
+        lay = str(b.buffer_layout).split(".")[-1]
+        rows.append((b.address, b.max_size_per_bank, lay, names.get(b.address, "?"), len(on_cores.get(b.address, ()))))
+    rows = sorted(set(rows))
+    low = min((r[0] for r in rows if r[4]), default=None)
+    tot = sum(r[1] for r in rows if r[4])
+    logger.info(f"[mk-l1] {tag}: {len(rows)} live L1 buffers; L1 top {top} CB base {cb0}; on the owner cores: "
+                f"{sum(1 for r in rows if r[4])} buffers, {tot} B per core, lowest {low}")
     for r in rows[:limit]:
-        logger.info(f"[mk-l1]   addr {r[0]:>8} {r[5]:>10} {r[2]:>9} {r[3]:>15} shape {r[1]} vol {r[6]} {r[4][:200]}")
+        logger.info(f"[mk-l1]   addr {r[0]:>8} +{r[1]:>7} {r[2]:>15} owners {r[4]:>2} {r[3][:160]}")
+    return rows
 
 
 class Stage1Verify:
@@ -155,6 +199,9 @@ class Stage1Verify:
             except NotImplementedError as e:  # no layouts = a stand-in engine; a real engine raises on None
                 self.weights_mk, self.weights_reason = None, str(e)
         kv, gdn = kv_descriptors(self.model), gdn_descriptors(self.model)
+        dump = os.environ.get("QWEN36_R16_MK_L1DUMP") == "1"
+        if dump:
+            l1_dump("before engine setup", None, self.model)
         for b in buckets:
             try:
                 prog = self.builder(self.model.mesh_device, self.layer_types, b, self.weights_mk, kv, gdn, None, T=T)
@@ -172,6 +219,8 @@ class Stage1Verify:
                 self.programs.clear()
                 return {"ready": False, "reason": "EngineProgram has no alloc_x_out()"}
             self.programs[b], self.x_out[b] = prog, alloc()
+            if dump:
+                l1_dump(f"after engine setup bucket {b}", prog, self.model)
         if not self.programs:
             self.reason = f"no bucket in scope ({self.skipped})"
             return {"ready": False, "reason": self.reason}
@@ -194,7 +243,7 @@ class Stage1Verify:
         if x_in is not x:
             ttnn.deallocate(x)
         if os.environ.get("QWEN36_R16_MK_L1DUMP") == "1":
-            l1_dump(f"engine launch bucket {n_users}", prog)
+            l1_dump(f"engine launch bucket {n_users}", prog, self.model)
         prog.launch(x_in, x_out, per_replay_inputs(self.model, in_body))
         ttnn.deallocate(x_in)
         return ttnn.to_memory_config(x_out, mc)
