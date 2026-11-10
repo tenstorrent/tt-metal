@@ -214,13 +214,27 @@ def setup_bench(dev, MESH, mesh_identity):
     EXTRA_T = max(0, int((19.5e6 - NC * KT * MIXN * WTB) / NC / ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat8_b)))
     EXTRA_TX = 0
     if os.environ.get('MKA_EXT', '0') == '1':
-        _w = float(os.environ.get('MKA_EXTW', '1')); _d = NC + (NCF - NC) * _w
+        _arc0 = os.environ.get('MKA_ARCORES', '106,107,118,119')   # active-core count (reserved AR corner / GDN24 rows excluded)
+        _nact = NCF - (2 * GXF if os.environ.get('MKA_GDN24', '0') == '1' else (0 if _arc0 in ('', 'none') else len(_arc0.split(','))))
+        _w = float(os.environ.get('MKA_EXTW', '1')); _d = NC + (_nact - NC) * _w
         EXTRA_T, EXTRA_TX = int(EXTRA_T * NC / _d), int(EXTRA_T * NC * _w / _d)
     S_WO = int(float(os.environ.get("MKA_SWO_US", "10")) * MHZ)
     # MKA_ARCORES="fi,fi,...": AR-only cores (spec: the AR's 4 fabric link-sender cores) - no MKA2 kernel, no KV, no qkv
     _arc = os.environ.get('MKA_ARCORES', '106,107,118,119')   # default ON (spec v0.9.1); 'none' disables
     ARC = set() if _arc in ('', 'none') else set(int(v) for v in _arc.split(','))
-    ACT = [i for i in range(NCF) if i not in ARC]
+    # MKA_GDN24 (spec §17 / §20): rows 8-9 (x 0-11, 24 cores, row-major = 6 heads x 4 value blocks) are the GDN role's
+    # cores. They are RESERVED like the AR corner: no MKA2 kernel, CB, sharded L1 tensor, global semaphore, SDPA / KV /
+    # qkv / wo share, or multicast destination; their kernels come only from the GDN hook (engine/gdn_role.py). During
+    # bring-up the AR corner (x 10-11, rows 8-9) is GDN-role too (MK_REAL_AR + GDN24 later, AR + GDN combined).
+    GDN24 = os.environ.get('MKA_GDN24', '0') == '1'
+    GDNC = []
+    if GDN24:
+        assert GXF == GX + 2 and GYF == GY + 2, "MKA_GDN24 assumes the 12 x 10 grid (rows 8-9 = the 24 GDN cores)"
+        assert ('MK_REAL_AR', '1') not in MKDEF, "MKA_GDN24: the AR corner is GDN-role during bring-up (no MK_REAL_AR yet)"
+        GDNC = [i for i in range(NCF) if fcores[i].y >= GY]   # row-major: y 8 then 9, x 0..11
+        ARC = set()
+    RESV = ARC | set(GDNC)
+    ACT = [i for i in range(NCF) if i not in RESV]
     grp = [0] * NCF
     for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
     members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
@@ -232,7 +246,7 @@ def setup_bench(dev, MESH, mesh_identity):
             assert e_, "a KV group without a non-STREAM core"
             m_.remove(e_[-1]); m_.append(e_[-1])
     rank = {i: members[grp[i]].index(i) for i in ACT}
-    kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
+    kgrid = crs([fcores[i] for i in ACT]) if RESV else fgrid
     GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(23)]
     GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
     if ARC:
@@ -245,6 +259,13 @@ def setup_bench(dev, MESH, mesh_identity):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (ly1 - ly0 + 1)]
         RECTS_F = (_prect(0, 0, fsplit - 1, GYF - 1) + _prect(fsplit, 0, GXF - 1, _ay[0] - 1) + _prect(fsplit, _ay[0], _ax[0] - 1, GYF - 1))
+    if GDN24:   # full-grid multicasts cover rows 0-7 only (left / right of the DRAM split), third rect empty
+        def _prect2(lx0, ly0, lx1, ly1):
+            a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
+            return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (ly1 - ly0 + 1)]
+        RECTS_F = _prect2(0, 0, fsplit - 1, GY - 1) + _prect2(fsplit, 0, GXF - 1, GY - 1) + [0, 0, 0, 0, 0]
+        assert sum(RECTS_F[4::5]) == len(ACT), (RECTS_F, len(ACT))
+        print(f'[mka2] GDN24: reserved {len(GDNC)} GDN cores (rows {GY}-{GYF - 1}); {len(ACT)} MKA2 cores; RECTS_F {RECTS_F}', flush=True)
     if ARC: print(f'[mka2] AR-only cores {sorted(ARC)} (phys {[(fphys[i].x, fphys[i].y) for i in sorted(ARC)]}): {len(ACT)} MKA2 cores', flush=True)
     stream_idx = {}   # full-grid core -> STREAM index (mk1 numbering, x + 10*y on the 10x8 rect)
     for i, c in enumerate(fcores):
@@ -296,7 +317,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # are read by all 120 cores (STREAM + STREAM_EXT), each core's share = 80/120 of a STREAM core's v0.4 share
     EXT = os.environ.get('MKA_EXT', '0') == '1'
     EXTW = float(os.environ.get('MKA_EXTW', '1'))   # STREAM_EXT share / STREAM share of the projection bytes
-    _den = NC + (NCF - NC) * EXTW
+    _den = NC + (len(ACT) - NC) * EXTW
     WO_T120 = int(NC * WO_T / _den) if EXT else WO_T
     WO_TX = int(NC * WO_T * EXTW / _den) if EXT else 0
     wo_dummy = ttnn.from_torch(torch.zeros(1, 1, (NC * WO_T + 1024) * TILE, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -351,7 +372,8 @@ def setup_bench(dev, MESH, mesh_identity):
         f2u = lambda v: struct.unpack('<I', struct.pack('<f', v))[0]
         BF8TB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat8_b)
         MKDEF = MKDEF + [("MKA_MWTB", str(BF8TB)), ("MKA_NOWN", str(NOWN)), ("MKA_INVH_BITS", f"{f2u(1.0 / H)}u"), ("MKA_EPS_BITS", f"{f2u(EPS)}u")]
-        ext_list = [fi for fi in range(NCF) if fi not in stream_idx and fi not in ARC]
+        assert not (GDN24 and ('MKA_QSK', '1') not in MKDEF), "MKA_GDN24 with the real qkv needs MKA_QSK (16 ext cores cannot hold the ext qkv tiles); use the MIXN stand-in"
+        ext_list = [fi for fi in range(NCF) if fi not in stream_idx and fi not in RESV]
         s_by_i = {i_: fi for fi, i_ in stream_idx.items()}
         n_ext_tiles = 2 * len(ext_list); n_half = QN - n_ext_tiles
         assert n_half >= 0 and 2 * n_half <= len(stream_idx), (n_ext_tiles, n_half)
@@ -487,13 +509,14 @@ def setup_bench(dev, MESH, mesh_identity):
         _J = torch.zeros(TILE, TILE); _J[0, :] = 1.0
         v_j = ttnn.from_torch(_J.repeat(1, NC), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(rect, 1))
         hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), HDT, ttnn.TILE_LAYOUT, dev, hs(rect, TILE))   # placeholder
-        VGS = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(10)]
+        VGS = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(10)]   # never on reserved (AR / GDN) cores
         VGA = [ttnn.get_global_semaphore_address(g) for g in VGS]
         def v_prect(lx0, lx1, ly0, ly1):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (ly1 - ly0 + 1)]
         def v_ph(x_, y_): return dev.worker_core_from_logical_core(ttnn.CoreCoord(x_, y_))
-        V_BRC = v_prect(0, split - 1, GY, GYF - 1) + v_prect(split, GX - 1, GY, GYF - 1)   # rows 8-9, x 0-9 (not the AR cores)
+        # busy mirror to the rows 8-9 ext PQ readers (x 0-9, never the AR corner); none under GDN24 (rows 8-9 reserved)
+        V_BRC = [0] * 10 if GDN24 else v_prect(0, split - 1, GY, GYF - 1) + v_prect(split, GX - 1, GY, GYF - 1)
         print(f"[v12] R {V_R} FIRST {V_FIRST} RESID {int(V_RESID)} pages/layer {PVL} ({NC * LM.SLOT * WTB / 1e6:.1f} MB/layer, built {time.time() - t_v:.1f}s) vgs {VGA}", flush=True)
         def v_args(fi, c):
             """(writer, reader, compute) v12 arg tails for full-grid core fi"""
@@ -569,6 +592,7 @@ def setup_bench(dev, MESH, mesh_identity):
         return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
+    assert not (GDN24 and RWO), "MKA_GDN24: wo moves to the GDN role's wo unit (spec v1.5); run the wo stand-in (MKA_RWO off) until then"
     # MK_REAL_AR: the AR's CB ids (50-55) grow every core's CB-config block in the kernel config buffer; the u8 STREAM program
     # was then 192 B past 70656 B with the compute zones in
     if (RWO or ('MK_REAL_AR', '1') in MKDEF) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
@@ -763,6 +787,37 @@ def setup_bench(dev, MESH, mesh_identity):
         hpage = (WOP[he] * banks + WOB[he] + ho * banks) if he is not None else 0
         return [len(WOT.get(fi, [])), (WOP[fi] * banks + WOB[fi]) if fi in WOT else 0, WOPL, wo_all.buffer_address(), cc.x, cc.y,
                 own, hl, hp.x, hp.y, hpage, hn, ho] + head_args_r(fi)
+    # ---- MKA_GDN24: GDN-role sems + hook (engine/gdn_role.py, the GDN agent's; default / absent = no-op: cores idle) ----
+    GDN_ROLE = dict(kernels=[], cbs=[], io=[])
+    if GDN24:
+        gdn_crs = crs([fcores[i] for i in GDNC])
+        # device-local global sems (spec v1.33: the waiter drains to its final target and resets at program end)
+        GDN_SEMS = dict(in_ready=ttnn.create_global_semaphore(dev, gdn_crs, 0), attn_kv=ttnn.create_global_semaphore(dev, gdn_crs, 0),
+                        vb0=ttnn.create_global_semaphore(dev, gdn_crs, 0), vb1=ttnn.create_global_semaphore(dev, gdn_crs, 0),
+                        out_ready=ttnn.create_global_semaphore(dev, kgrid, 0))   # out_ready: target = the Q root (kgrid)
+        GDN_SA = {k_: ttnn.get_global_semaphore_address(v_) for k_, v_ in GDN_SEMS.items()}
+        def _gpr(lx0, lx1):
+            a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, GY)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, GYF - 1))
+            return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (GYF - GY)]
+        _gr = _gpr(0, fsplit - 1) + _gpr(fsplit, GXF - 1)
+        assert _gr[4] + _gr[9] == len(GDNC), _gr
+        MKDEF = MKDEF + [('MKA_GDN24', '1'), ('MKA_GDN_INREADY', f"{GDN_SA['in_ready']}u"),
+                         ('MKA_GDN_RECTS', '{{' + ','.join(map(str, _gr[:5])) + '},{' + ','.join(map(str, _gr[5:])) + '}}')]
+        try:
+            from models.demos.blackhole.qwen36.tt.megakernel.engine.gdn_role import gdn_role as _gdn_hook
+        except ImportError:
+            _gdn_hook = None
+        if _gdn_hook is not None and os.environ.get('MKA_GDN_HOOK', '1') == '1':
+            import types
+            b_ = types.SimpleNamespace(dev=dev, mesh=dev if MESH else None, NL=NL, AMASK=AMASK, is_attn=is_attn_layer, NU=NU, CTX=CTX,
+                                       gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
+                                       cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), per_replay={},
+                                       free_cb_ids=list(range(45)))
+            GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
+            GDN_ROLE.setdefault('io', [])
+            print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)
+        else:
+            print('[gdn24] no GDN hook: the 24 GDN cores stay idle', flush=True)
     def build(out, coord=None):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
                ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
@@ -814,7 +869,7 @@ def setup_bench(dev, MESH, mesh_identity):
         rta = {k_: (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for k_ in ('s', 'e')}
         z10 = [0] * 10
         for fi, c in enumerate(fcores):
-            if fi in ARC: continue
+            if fi in RESV: continue
             u, r, n = grp[fi], rank[fi], len(members[grp[fi]])
             sb0, sb1 = RNG[fi]
             m = members[u]
@@ -889,6 +944,8 @@ def setup_bench(dev, MESH, mesh_identity):
             _ext_only = lambda c_: c_.core_ranges == ext_crs
             cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
         print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
+        if GDN24:
+            ks = ks + list(GDN_ROLE.get('kernels', [])); cbs = cbs + list(GDN_ROLE.get('cbs', []))
         return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, NDN * TILE))
     if os.environ.get("MK_L1DUMP") == "1":  # debug: every live L1 tensor's address

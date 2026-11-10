@@ -598,6 +598,16 @@ void kernel_main() {
 #endif
         if (!att) {   // GDN-type layer: next layer's weights stream during the GDN stand-in stall (GDN step + out-proj + AR)
             DeviceZoneScopedN("W-GDN");
+#if defined(MKA_GDN24)
+            // GDN role (spec §17 / §20): this GDN-type layer's step may read its prefix input -> in_ready += 1 on the 24
+            // GDN cores (rows 8-9), from the Q root (device-local global sem; the GDN cores wait >= g + 1, then reset)
+            if (is_qroot) {
+                constexpr uint32_t gr[2][5] = MKA_GDN_RECTS;
+                for (uint32_t i = 0; i < 2; ++i)
+                    noc_semaphore_inc_multicast(get_noc_multicast_addr(gr[i][0], gr[i][1], gr[i][2], gr[i][3], MKA_GDN_INREADY), 1, gr[i][4]);
+                noc_async_atomic_barrier();
+            }
+#endif
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             // GDN-type layer: the MLP slots of layer L are pushed here (before plan_layer(L + 1) reserves the other slot)
             V_MLP_WAIT_PUSH();
