@@ -180,18 +180,34 @@ def tree_links(groups, fi):
 
 @dataclass(frozen=True)
 class KVCacheDesc:
-    """Per-chip KV cache of one attention layer (KV head h = chip // 2, users u % 2 == chip % 2 are 'own').
+    """Per-layer KV cache as the engine reads it (MKA_KVPROD = the prod vLLM cache, read in place, no re-allocation).
 
-    Unit = one 32-position block of one user: 8 K tiles then 8 V tiles (head_dim 256), dtype BFP8 by default (BFP4
-    failed the GPQA output-length gate). Device page index of (user u, block b, kv in {0 K, 1 V}, tile t):
-        contiguous (bench):  ((u * n_blocks + b) * 2 + kv) * 8 + t
-        paged (prod):        ((page_table[u][b]) * 2 + kv) * 8 + t      (page_table: [users, max_blocks] int32)
-    so one physical block is 16 interleaved pages. Readers stream K on NOC1 / V on NOC0 per block group."""
+    prod (paged=True): TWO tensors per attention layer, paged_k and paged_v, each [num_blocks, n_kv_heads, block_size,
+        head_dim] TILE, dtype bfloat8_b (BFP4 failed the GPQA output-length gate), DRAM interleaved, replicated on every
+        device. Tile page of (block p, head h, position tile r, dim tile c) = ((p * n_kv_heads + h) * (block_size // 32)
+        + r) * 8 + c. This chip reads head h = chip // 2. SDPA 32-position block b of user u: p = page_table[u][b //
+        (block_size // 32)], r = b % (block_size // 32). Bank spread: dim tile c lands on bank c (8 banks), as before.
+    bench (paged=False): one tensor per layer, K / V interleaved per 32-position block:
+        ((u * n_blocks + b) * 2 + kv) * 8 + c.
+    k_addr / v_addr / num_blocks / n_kv_heads / block_size come per layer from integ/stage1.kv_descriptors."""
     dtype: str = "bfp8"
-    block_positions: int = 32
     head_dim: int = 256
-    tiles_per_block_kv: int = 8
+    block_size: int = 64
+    n_kv_heads: int = 4
     paged: bool = True
+
+    @property
+    def pos_tiles_per_block(self):
+        assert self.block_size % TILE == 0
+        return self.block_size // TILE
+
+    def page(self, p, h, r, c):
+        return ((p * self.n_kv_heads + h) * self.pos_tiles_per_block + r) * (self.head_dim // TILE) + c
+
+    def kernel_defines(self, head):
+        """Compile-time defines for the mka2 reader / writer (head = chip // 2)."""
+        return [("MKA_KVPROD", "1"), ("MKA_NKVH", str(self.n_kv_heads)), ("MKA_BS32", str(self.pos_tiles_per_block)),
+                ("MKA_KVH", str(head))]
 
 
 def rows_R(n_users):

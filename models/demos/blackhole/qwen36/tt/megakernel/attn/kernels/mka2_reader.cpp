@@ -40,6 +40,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < NGS; ++i) gs[i] = get_arg_val<uint32_t>(a++);
     uint32_t kv_addr[NL];
     for (uint32_t L = 0; L < NL; ++L) kv_addr[L] = get_arg_val<uint32_t>(a++);
+#if defined(MKA_KVPROD)
+    uint32_t kvv_addr[NL];   // paged_v per layer (kv_addr = paged_k)
+    for (uint32_t L = 0; L < NL; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t user = get_arg_val<uint32_t>(a++), b0 = get_arg_val<uint32_t>(a++), b1 = get_arg_val<uint32_t>(a++);
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
     const uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
@@ -160,6 +164,13 @@ void kernel_main() {
         if (att) {   // SDPA: K stream
             DeviceZoneScopedN("R-KV");
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
+#if defined(MKA_KVPROD)
+            const auto kvv = TensorAccessor(kv_args, kvv_addr[L], KVTB);
+            const uint32_t kvn = MKA_BPU;
+#else
+            const auto& kvv = kv;
+            const uint32_t kvn = NBK;
+#endif
             #if defined(MKA_EXTPOST)
             const uint32_t wtot = IS_STREAM ? wo_tiles + extra_tiles : 0;   // STREAM_EXT cores read theirs after the tree
 #else
@@ -223,9 +234,9 @@ void kernel_main() {
                 const uint32_t wk = rd_k ? get_write_ptr(CB_K) : 0, wv = rd_v ? get_write_ptr(CB_V) : 0;
                 noc_async_read_set_trid(TRID_K);
                 for (uint32_t i = 0; i < nb; ++i) {
-                    const uint32_t pk = ((user * NBK + b + i) * 2) * DH;
+                    const uint32_t pk = kv_page(user, b + i, kvn, false), pv = kv_page(user, b + i, kvn, true);
                     if (rd_k) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + t), wk + (i * DH + t) * KVTB, KVTB);
-                    if (rd_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + DH + t), wv + (i * DH + t) * KVTB, KVTB);
+                    if (rd_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kvv.get_noc_addr(pv + t), wv + (i * DH + t) * KVTB, KVTB);
                 }
                 noc_async_read_set_trid(0);
                 noc_async_read_barrier_with_trid(TRID_K);

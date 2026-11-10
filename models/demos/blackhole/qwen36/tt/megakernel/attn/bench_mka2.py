@@ -225,13 +225,34 @@ for i, c in enumerate(fcores):
     if c.x < GX and c.y < GY: stream_idx[i] = c.x + GX * c.y
 torch.manual_seed(1)
 kvs, golds_s, qs_all = [], [], []
+KVPROD = os.environ.get('MKA_KVPROD', '0') == '1'
+NKVH, KVH, KVBS = int(os.environ.get('MKA_NKVH', '4')), int(os.environ.get('MKA_KVH', '1')), int(os.environ.get('MKA_BS', '64'))
+BS32 = KVBS // TILE; BPU = NBK // BS32
+kvvs = []   # paged_v per layer (KVPROD); kvs holds paged_k (KVPROD) or the interleaved K|V tensor
+if KVPROD:
+    assert NBK % BS32 == 0 and 0 <= KVH < NKVH
+    MKDEF = MKDEF + [('MKA_KVPROD', '1'), ('MKA_NKVH', str(NKVH)), ('MKA_BS32', str(BS32)), ('MKA_KVH', str(KVH)), ('MKA_BPU', str(BPU))]
+    print(f"[mka2] KV prod layout: paged_k / paged_v [{NU * BPU}, {NKVH}, {KVBS}, {DHD}] per layer, head {KVH}", flush=True)
+    def to_paged(t):   # [NU, CTX, DHD] -> [NU*BPU, NKVH, KVBS, DHD] with head KVH filled, identity page table
+        full = torch.zeros(NU * BPU, NKVH, KVBS, DHD, dtype=torch.bfloat16)
+        full[:, KVH] = t.reshape(NU * BPU, KVBS, DHD).bfloat16()
+        return full
+    def from_paged(tt):
+        return ttnn.to_torch(tt).float().reshape(NU * BPU, NKVH, KVBS, DHD)[:, KVH].reshape(NU, CTX, DHD)
 for L in range(NL):
+    if KVPROD and kvs and not is_attn_layer(L):   # GDN-type layers never read KV: share the previous layer's tensors
+        q_t = torch.zeros(NU, TILE, DHD); kvs.append(kvs[-1]); kvvs.append(kvvs[-1]); golds_s.append(golds_s[-1]); qs_all.append(q_t); continue
     q_t = torch.zeros(NU, TILE, DHD); q_t[:, :NQH * T] = torch.randn(NU, NQH * T, DHD) / math.sqrt(DHD)
     k_t = torch.randn(NU, CTX, DHD); v_t = torch.randn(NU, CTX, DHD)
-    rows = torch.stack([k_t.reshape(NU, NBK, TILE, DHD), v_t.reshape(NU, NBK, TILE, DHD)], dim=2).reshape(1, 1, -1, DHD)
-    kv = ttnn.from_torch(rows.bfloat16(), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    kvq = ttnn.to_torch(kv).float().reshape(NU, NBK, 2, TILE, DHD)
-    kq_, vq_ = kvq[:, :, 0].reshape(NU, CTX, DHD), kvq[:, :, 1].reshape(NU, CTX, DHD)
+    if KVPROD:
+        kv = ttnn.from_torch(to_paged(k_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kvv_ = ttnn.from_torch(to_paged(v_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kq_, vq_ = from_paged(kv), from_paged(kvv_); kvvs.append(kvv_); rows = kvq = None
+    else:
+        rows = torch.stack([k_t.reshape(NU, NBK, TILE, DHD), v_t.reshape(NU, NBK, TILE, DHD)], dim=2).reshape(1, 1, -1, DHD)
+        kv = ttnn.from_torch(rows.bfloat16(), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kvq = ttnn.to_torch(kv).float().reshape(NU, NBK, 2, TILE, DHD)
+        kq_, vq_ = kvq[:, :, 0].reshape(NU, CTX, DHD), kvq[:, :, 1].reshape(NU, CTX, DHD)
     qq_ = q_t.bfloat16().float()
     g_ = torch.zeros(NU, TILE, DHD)
     for u in range(NU):
@@ -407,7 +428,7 @@ def build(out):
             for k in range(FAN - 1): o += [fphys[lst[k]].x, fphys[lst[k]].y] if k < len(lst) else [0, 0]
             return o
         pp = fphys[par]
-        sdpa_r = [kv.buffer_address() for kv in kvs] + [u, sb0, sb1, NBK, has_p, pp.x, pp.y, plvl, len(ch0)] + xy(ch0) + [len(ch1)] + xy(ch1) + [1 if r == 0 else 0, outs.buffer_address(), QRP.x, QRP.y]
+        sdpa_r = [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, has_p, pp.x, pp.y, plvl, len(ch0)] + xy(ch0) + [len(ch1)] + xy(ch1) + [1 if r == 0 else 0, outs.buffer_address(), QRP.x, QRP.y]
         isS = fi in stream_idx
         WO_NOC0 = ('MKA_WO_NOC0', '1') in MKDEF
         if isS:
@@ -430,7 +451,7 @@ def build(out):
         wob = (fi % 8) if os.environ.get('MKA_WOBANK', '1') == '1' else 0
         rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), ((fi * WO_T120) if EXT else (i_s * WO_T)) + wob, (WO_T120 if isS else WO_TX) if rd_w else 0, (EXTRA_T if isS else EXTRA_TX) if rd_w else 0, SWAP(fi)] + ([tfk(fi)] if TREEFLAG else []) + q_rargs(fi)
         wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
-            [kv.buffer_address() for kv in kvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
+            [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
         nrecv = len(ch0) + len(ch1)
         crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] if RQKV else [])
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
@@ -447,7 +468,7 @@ out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, 
 prog = build(out_t)
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + ([wq_all, rsp, qkv_out] if RQKV else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + [out_t], prog); ttnn.synchronize_device(dev)
     p, e = pcc_of(y, gold_last)
     if os.environ.get("FM_DIAG") == "1":
         v = ttnn.to_torch(y).float().reshape(M, H)

@@ -60,6 +60,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) rs[i][k] = get_arg_val<uint32_t>(a++);
     uint32_t kv_addr[NL];
     for (uint32_t L = 0; L < NL; ++L) kv_addr[L] = get_arg_val<uint32_t>(a++);
+#if defined(MKA_KVPROD)
+    uint32_t kvv_addr[NL];   // paged_v per layer (kv_addr = paged_k)
+    for (uint32_t L = 0; L < NL; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t user = get_arg_val<uint32_t>(a++), vb0 = get_arg_val<uint32_t>(a++), vb1 = get_arg_val<uint32_t>(a++);
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++), wo_tiles = get_arg_val<uint32_t>(a++);
@@ -300,6 +304,13 @@ void kernel_main() {
                 if (!budget) issue_some(true);
             }
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
+#if defined(MKA_KVPROD)
+            const auto kvv = TensorAccessor(kv_args, kvv_addr[L], KVTB);
+            const uint32_t kvn = MKA_BPU;
+#else
+            const auto& kvv = kv;
+            const uint32_t kvn = NBK;
+#endif
 #if defined(MKA_RQKV)
             // STREAM_EXT: the writer's share of layer L + 1's slice (pages [0, PQ_WS)), spread over this core's V groups.
             // Safe from group 0: qkv_tail(L) above waited this layer's qkv output, i.e. compute already popped CB_PQ.
@@ -339,9 +350,9 @@ void kernel_main() {
                 const uint32_t wk = wr_k ? get_write_ptr(CB_K) : 0, wv = wr_v ? get_write_ptr(CB_V) : 0;
                 noc_async_read_set_trid(TRID_V);
                 for (uint32_t i = 0; i < nb; ++i) {
-                    const uint32_t pk = ((user * NBK + b + i) * 2) * DH;
+                    const uint32_t pk = kv_page(user, b + i, kvn, false), pv = kv_page(user, b + i, kvn, true);
                     if (wr_k) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + t), wk + (i * DH + t) * KVTB, KVTB);
-                    if (wr_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + DH + t), wv + (i * DH + t) * KVTB, KVTB);
+                    if (wr_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kvv.get_noc_addr(pv + t), wv + (i * DH + t) * KVTB, KVTB);
                 }
                 noc_async_read_set_trid(0);
                 if (IS_STREAM) issue_some(false, minp);   // one budget's worth (or the even share) of weight chunks per KV group
@@ -436,6 +447,9 @@ void kernel_main() {
     // XRDY: every STREAM_EXT core awaited the last multicast (NL - 1) before its last qkv, which precedes this point
     // only on that core; the reset of a late remote copy is covered by the next pass starting from 0 only after the
     // host synchronises, and the Q root never re-sends after NL - 2. QPART: every inc was awaited by its owner.
+    // spec v0.9.13: reach the FINAL cumulative value before the reset (QROOT multicasts XRDY = L + 1 for L + 1 < NL to
+    // the whole grid; cores that never wait on it would otherwise race the last multicast)
+    if (NL > 1) noc_semaphore_wait_min(l1w(gs[GS_XRDY]), NL - 1);
     *l1w(gs[GS_XRDY]) = 0;
     if (qrole == QR_OWNER) *l1w(gs[GS_QPART]) = 0;
     // GS_PQH is reset by the reader after its last wait (see reader)

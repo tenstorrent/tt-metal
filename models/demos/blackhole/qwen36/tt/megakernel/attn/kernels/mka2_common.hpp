@@ -15,7 +15,20 @@ constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, C
 // MKA_TREEFLAG: per-child arrival flags (2 x FANOUT words) at a uniform L1 address, so a parent pulls each child as
 // soon as THAT child is done instead of after the slowest one
 constexpr uint32_t CB_TF = 31;
-constexpr uint32_t NRF = 3;   // full-grid multicast rectangles (left block, right block rows 0-7, right block rows 8-9 minus AR corner)   // ATTN scratch range 24-31 (spec)
+constexpr uint32_t NRF = 3;
+// KV cache addressing. MKA_KVPROD (prod vLLM): per layer TWO tensors paged_k / paged_v [num_blocks, n_kv_heads,
+// block_size, 256] TILE bf8, tile page of (block p, head h, pos-tile r, dim-tile c) = ((p * NKVH + h) * BS32 + r) * 8 + c.
+// SDPA block b (32 positions) of a user maps to (p = user * BPU + b / BS32, r = b % BS32); the bench's page table is
+// the identity (user-major blocks). Without MKA_KVPROD: one tensor per layer, K / V interleaved per 32-position block.
+#if defined(MKA_KVPROD)
+constexpr uint32_t KV_NKVH = MKA_NKVH, KV_BS32 = MKA_BS32, KV_H = MKA_KVH;
+FORCE_INLINE uint32_t kv_page(uint32_t user, uint32_t blk, uint32_t bpu, bool /*v*/) {
+    const uint32_t p = user * bpu + blk / KV_BS32, r = blk % KV_BS32;
+    return ((p * KV_NKVH + KV_H) * KV_BS32 + r) * 8;
+}
+#else
+FORCE_INLINE uint32_t kv_page(uint32_t user, uint32_t blk, uint32_t nbk, bool v) { return ((user * nbk + blk) * 2 + (v ? 1 : 0)) * 8; }
+#endif   // full-grid multicast rectangles (left block, right block rows 0-7, right block rows 8-9 minus AR corner)   // ATTN scratch range 24-31 (spec)
 // qkv roles: 0 none, 1 K-half owner (STREAM), 2 K-half partner (STREAM), 3 STREAM_EXT (2 tiles, full K)
 constexpr uint32_t QR_NONE = 0, QR_OWNER = 1, QR_PARTNER = 2, QR_EXT = 3;
 // STREAM_EXT ring split (MKA_PQW): the writer (NOC0) streams pages [0, PQ_WS) of the next layer's slice, the reader
