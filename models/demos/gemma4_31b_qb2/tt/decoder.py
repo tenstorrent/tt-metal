@@ -52,7 +52,9 @@ class Decoder:
     PREFILL_CHUNK = 1024
 
     @classmethod
-    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, shared_setup=None):
+    def from_state_dict(
+        cls, state_dict, *, hf_config, layer_idx, mesh_device, shared_setup=None, projection_dtype=ttnn.bfloat4_b
+    ):
         """Load one layer and share the stack's collective and rotary buffers."""
         import torch
         from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
@@ -189,7 +191,7 @@ class Decoder:
 
         def linear(name):
             return tensor(
-                sd[name + ".weight"].T, ttnn.bfloat4_b, dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1
+                sd[name + ".weight"].T, projection_dtype, dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1
             )
 
         q, k = (sd["self_attn.q_proj.weight"], sd["self_attn.k_proj.weight"])
@@ -202,17 +204,17 @@ class Decoder:
 
         self.qkv = tensor(
             packed(q, k, v),
-            ttnn.bfloat4_b,
+            projection_dtype,
             dim=1,
             decode_only="qkv" if not self.sliding else None,
         )
         if not self.sliding:
-            self.qk = tensor(packed(q, k), ttnn.bfloat4_b, dim=1)
+            self.qk = tensor(packed(q, k), projection_dtype, dim=1)
         self.o = linear("self_attn.o_proj")
         self.gate, self.up, self.down = (linear("mlp." + name + "_proj") for name in ("gate", "up", "down"))
         self.gate_up = tensor(
             packed(sd["mlp.gate_proj.weight"], sd["mlp.up_proj.weight"]),
-            ttnn.bfloat4_b,
+            projection_dtype,
             dim=1,
             decode_only="gate_up",
         )

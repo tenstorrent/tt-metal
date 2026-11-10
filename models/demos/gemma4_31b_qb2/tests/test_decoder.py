@@ -55,9 +55,10 @@ def check_rows(expected, actual):
         assert passed, message
 
 
+@pytest.mark.parametrize("projection_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b], ids=["bf4", "bf8"])
 @pytest.mark.parametrize("layer_index", [0, 5], ids=["sliding", "full"])
 @pytest.mark.parametrize("length,batch", [(1, 13), (127, 1), (129, 3), (1025, 2)])
-def test_prefill_and_live_decode_trace(qb2_mesh, layer_index, length, batch):
+def test_prefill_and_live_decode_trace(qb2_mesh, layer_index, length, batch, projection_dtype):
     """Every logical row is scored; changed inputs, positions and slot maps reach the trace."""
     torch.set_num_threads(8)
     rng = torch.Generator().manual_seed(3600 + layer_index + length)
@@ -72,7 +73,9 @@ def test_prefill_and_live_decode_trace(qb2_mesh, layer_index, length, batch):
     hf.load_state_dict({k[len(prefix) :]: v for k, v in weights.items()}, assign=True, strict=True)
     hf.eval()
     rope = Gemma4TextRotaryEmbedding(config)
-    layer = Decoder.from_state_dict(weights, hf_config=config, layer_idx=layer_index, mesh_device=qb2_mesh)
+    layer = Decoder.from_state_dict(
+        weights, hf_config=config, layer_idx=layer_index, mesh_device=qb2_mesh, projection_dtype=projection_dtype
+    )
     layer._prepare_prefill_norm_stats()
     capacity = ((length + 4 + 127) // 128) * 128
     pages = capacity // 128

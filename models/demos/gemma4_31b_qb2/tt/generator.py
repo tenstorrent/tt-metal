@@ -770,6 +770,10 @@ class Gemma4Generator:
         self._retire_traces()
 
 
-def build_generator(mesh_device, *, checkpoint=None, layer_indices=None, max_seq_len=2048):
-    model = Gemma4Model(mesh_device, checkpoint=checkpoint, layer_indices=layer_indices)
+def build_generator(
+    mesh_device, *, checkpoint=None, layer_indices=None, max_seq_len=2048, projection_dtype=ttnn.bfloat4_b
+):
+    model = Gemma4Model(
+        mesh_device, checkpoint=checkpoint, layer_indices=layer_indices, projection_dtype=projection_dtype
+    )
     return Gemma4Generator(model, max_seq_len=max_seq_len)

@@ -48,7 +48,7 @@ class WeightReader:
 
 
 class Gemma4Model:
-    def __init__(self, mesh_device, *, checkpoint=None, layer_indices=None):
+    def __init__(self, mesh_device, *, checkpoint=None, layer_indices=None, projection_dtype=ttnn.bfloat4_b):
         if tuple(mesh_device.shape) != (1, 4):
             raise ValueError("Gemma4 31B QB2 requires a [1, 4] mesh")
         self.mesh = mesh_device
@@ -76,6 +76,7 @@ class Gemma4Model:
                     layer_idx=index,
                     mesh_device=mesh_device,
                     shared_setup=self.shared_setup,
+                    projection_dtype=projection_dtype,
                 )
             )
         self.ccl = self.shared_setup["ccl"]
