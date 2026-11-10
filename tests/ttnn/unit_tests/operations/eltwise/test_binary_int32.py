@@ -2401,12 +2401,12 @@ def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_
 
 
 @pytest.mark.parametrize("activation", [ttnn.UnaryOpType.SIGMOID, ttnn.UnaryOpType.TANH, ttnn.UnaryOpType.SQRT])
-def test_binary_int32_fused_float_only_activation_is_rejected(device, activation):
+def test_binary_int32_fused_float_only_activation_is_rejected(device, activation, expect_error):
     t = ttnn.from_torch(
         torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8),
         dtype=ttnn.int32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    with pytest.raises(RuntimeError, match="does not support integer input dtype"):
+    with expect_error(RuntimeError, "does not support integer input dtype"):
         ttnn.add(t, t, input_tensor_a_activations=[activation])
