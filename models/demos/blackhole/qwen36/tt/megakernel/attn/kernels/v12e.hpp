@@ -65,7 +65,9 @@ FORCE_INLINE uint64_t v_mc_addr(const uint32_t* r, uint32_t l1, uint8_t noc) {
 }
 // MLP / AR busy window (spec v0.8.9): odd = busy. Owners set/clear it around their MLP (and, later, AR) windows;
 // owner 0 mirrors it to the rows 8-9 ext cores (x 0-9 only, v0.9.1) so their PQGDN reads hold while it is odd.
+// Called from the owner WRITER (BRISC): it must use the writer's own NOC (noc_index = NOC0). Issuing on NOC1 from
+// BRISC shares the NCRISC's NOC1 command buffers / ack counters and hung the engine once the reader delivered x on NOC1.
 FORCE_INLINE void v_busy(uint32_t busy_word, uint32_t val, bool mirror, const uint32_t (*rc)[5]) {
-    if (mirror) v_mcast_word(busy_word, val, rc, 1);
+    if (mirror) { v_mcast_word(busy_word, val, rc, noc_index); noc_async_write_barrier(); }
     else *vw(busy_word) = val;
 }
