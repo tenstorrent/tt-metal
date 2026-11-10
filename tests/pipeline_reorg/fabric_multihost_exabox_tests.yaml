@@ -485,3 +485,28 @@
   budget_type: e2e
   sp_config: sc4
   release_ready: false
+
+# ============================================================================
+# Teardown sanity, multi-host (plan tt-metal #56902, lane L1c): a fault on a
+# remote host. Needs more than one host, so it cannot run in the single-host
+# lane; here on SC4.
+# ============================================================================
+- name: "Teardown sanity multihost (remote death / hang, P19 P20 P22)"
+  cmd: |
+    set -o pipefail
+    TTRUN_DIR="${TT_METAL_HOME}/generated/ttrun"
+    RESOLVED_HOSTS=$(awk 'NF {print $1}' "${TTRUN_DIR}/hostfile" 2>/dev/null | awk '!seen[$0]++' | paste -sd, -)
+    if [ -z "$RESOLVED_HOSTS" ]; then
+      echo "::error::could not resolve the hosts from ${TTRUN_DIR}/hostfile"; exit 1
+    fi
+    echo "hosts: $RESOLVED_HOSTS"
+    ./tests/scripts/multihost/run_teardown_multihost_tests.sh --hosts "$RESOLVED_HOSTS" 2>&1 \
+      | tee "${PIPELINE_DIR}/teardown_multihost.log"
+  skus:
+    bh_sc4:
+      timeout: 20
+  owner_id: U08RRAU5E15 # Ridvan Song
+  team: scaleout
+  budget_type: e2e
+  sp_config: sc4
+  release_ready: false
