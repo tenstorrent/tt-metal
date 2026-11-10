@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Tests for the Dest->Src move source-bank wait checker."""
 import contextlib
+import importlib.util
 import io
 import os
 import runpy
+import subprocess
 import sys
 import textwrap
 import types
@@ -12,6 +14,14 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "check_dest_to_src_wait.py")
+LEXER = os.path.join(HERE, "..", "check_mutex_balance.py")
+
+
+def load_checker(name):
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def run(*paths):
@@ -620,6 +630,114 @@ def test_missing_argument_file_is_ignored(tmp_path):
     res = run(missing, bad)
     assert res.returncode == 0
     assert "MOVD2B with no SRCB_VLD wait" in res.stdout
+
+
+@pytest.mark.parametrize("trigger", [SCRIPT, LEXER])
+def test_checker_or_lexer_change_rescans_the_whole_tree(tmp_path, monkeypatch, trigger):
+    """pre-commit passes the changed .py. That has to scan every header, not return early,
+    and it has to pass no files so an unindexed kernel_includes/ directory is walked."""
+    mod = load_checker("rescan")
+    seen = {}
+    header = tmp_path / "only.h"
+    header.write_text(
+        textwrap.dedent(
+            """
+            inline void _llk_math_thing_()
+            {
+                TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+            }
+            """
+        )
+    )
+
+    def fake_tree(files=()):
+        seen["files"] = tuple(files)
+        return [str(header)]
+
+    monkeypatch.setattr(mod, "tree_headers", fake_tree)
+    monkeypatch.setattr(sys, "argv", [SCRIPT, trigger])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert mod.main() == 0
+    assert seen["files"] == ()
+    assert "MOVD2B with no SRCB_VLD wait" in out.getvalue()
+    assert str(header) in out.getvalue()
+
+
+def test_unrelated_python_file_skips_the_scan(monkeypatch):
+    mod = load_checker("unrelated")
+
+    def boom(files=()):
+        raise AssertionError("tree_headers should not run")
+
+    monkeypatch.setattr(mod, "tree_headers", boom)
+    monkeypatch.setattr(
+        sys, "argv", [SCRIPT, os.path.join(HERE, "..", "check_cross_thread_cfg.py")]
+    )
+    assert mod.main() == 0
+
+
+def test_header_without_a_move_skips_the_tree(tmp_path, monkeypatch):
+    mod = load_checker("no_move")
+    plain = tmp_path / "plain.h"
+    plain.write_text("inline void f() { TTI_NOP(); }\n")
+
+    def boom(files=()):
+        raise AssertionError("tree_headers should not run")
+
+    monkeypatch.setattr(mod, "tree_headers", boom)
+    monkeypatch.setattr(sys, "argv", [SCRIPT, str(plain)])
+    assert mod.main() == 0
+
+
+def test_non_utf8_untracked_header_is_listed(tmp_path, monkeypatch):
+    """git ls-files emits the raw bytes. Decoding them as strict UTF-8 used to abort the hook."""
+    mod = load_checker("non_utf8")
+    repo = tmp_path / "repo"
+    header_dir = repo / "tt_metal" / "tt-llk" / "tt_llk_blackhole"
+    header_dir.mkdir(parents=True)
+    (header_dir / "ok.h").write_text("// ok\n")
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "--", "tt_metal/tt-llk/tt_llk_blackhole/ok.h"],
+        check=True,
+    )
+    with open(os.path.join(os.fsencode(header_dir), b"\xff.h"), "w") as f:
+        f.write("// odd\n")
+    monkeypatch.setattr(mod, "REPO", str(repo))
+    names = {
+        os.path.basename(path).encode("utf-8", "surrogateescape")
+        for path in mod.tree_headers()
+    }
+    assert names == {b"ok.h", b"\xff.h"}
+
+
+def test_warning_for_a_non_utf8_path_is_escaped(tmp_path, monkeypatch):
+    """The warning goes to a UTF-8 stream. The undecodable name is escaped, not raised."""
+    mod = load_checker("print_non_utf8")
+    odd = os.path.join(os.fsencode(tmp_path), b"\xff.h")
+    with open(odd, "w") as f:
+        f.write(
+            textwrap.dedent(
+                """
+                inline void _llk_math_thing_()
+                {
+                    TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+                }
+                """
+            )
+        )
+    odd_str = os.fsdecode(odd)
+    monkeypatch.setattr(mod, "tree_headers", lambda files=(): [odd_str])
+    monkeypatch.setattr(sys, "argv", [SCRIPT, SCRIPT])
+    buf = io.BytesIO()
+    out = io.TextIOWrapper(buf, encoding="utf-8", errors="strict")
+    with contextlib.redirect_stdout(out):
+        assert mod.main() == 0
+        out.flush()
+    text = buf.getvalue().decode("utf-8")
+    assert "MOVD2B with no SRCB_VLD wait" in text
+    assert "\\xff.h" in text
 
 
 def test_shipped_tree_never_fails():
