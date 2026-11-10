@@ -34,13 +34,13 @@
 namespace {
 using ttnn::experimental::prim::MinimalMatmulConfig;
 
-constexpr uint32_t kClusterAxis = 1;
+constexpr uint32_t kClusterAxis = 0;
 constexpr uint32_t kRingSize = 4;
 constexpr uint32_t kCalls = 4;
 
 class AllGatherWeightMinimalMatmulAsyncTest : public ttml::test_utils::MeshFixture {
 protected:
-    AllGatherWeightMinimalMatmulAsyncTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(1, kRingSize)) {
+    AllGatherWeightMinimalMatmulAsyncTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(kRingSize, 1)) {
     }
 
     void SetUp() override {
@@ -50,7 +50,7 @@ protected:
         // device test instead of letting these skip.
         if (std::getenv(kMgdEnv) == nullptr && root != nullptr && cluster->get_arch() == tt::ARCH::BLACKHOLE &&
             cluster->get_number_of_chips() >= kRingSize) {
-            const auto mgd = std::filesystem::path(root) / "tt-train/configs/mgd/bh_qb_1_4_ring_ring.textproto";
+            const auto mgd = std::filesystem::path(root) / "tt-train/configs/mgd/bh_4_1_ring_ring.textproto";
             if (std::filesystem::exists(mgd)) {
                 setenv(kMgdEnv, mgd.c_str(), 1);
                 m_set_mgd = true;

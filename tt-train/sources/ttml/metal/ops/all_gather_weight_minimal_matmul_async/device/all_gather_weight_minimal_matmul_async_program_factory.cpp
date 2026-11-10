@@ -34,6 +34,11 @@ constexpr uint32_t kRtSenderShardAddrIdx = 0;
 constexpr uint32_t kRtSenderPwbAddrIdx = 1;
 constexpr uint32_t kRtSenderSemaphoresIdx = 2;
 constexpr uint32_t kMaxSendSlots = 16;
+constexpr uint32_t kMinTilesPerPacket = 2;
+constexpr uint32_t kMaxTilesPerPacket = 4;
+// Each send slot has its packet header in front of the payload (send_on_grid.cpp); the header area is the fabric's
+// packet header size rounded up to this alignment, which keeps the payload aligned for DRAM reads.
+constexpr uint32_t kSendSlotAlignBytes = 64;
 
 std::pair<std::vector<ttnn::CoreCoord>, uint32_t> build_core_order_for_axis(
     const ttnn::CoreCoord& core,
@@ -77,10 +82,9 @@ uint64_t padded_work_per_core(
     return static_cast<uint64_t>(tt::div_up(M_tiles, m_cores)) * ring_size * tt::div_up(N_tiles / ring_size, n_chains);
 }
 
-// A scatter-write packet carries at most 4 tiles.
+// A scatter-write packet carries at most kMaxTilesPerPacket tiles (the caller requires at least kMinTilesPerPacket).
 uint32_t send_tiles_per_packet(uint32_t tile_size) {
-    return std::max<uint32_t>(
-        1, std::min<uint32_t>(4, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / tile_size));
+    return std::min<uint32_t>(kMaxTilesPerPacket, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / tile_size);
 }
 
 // On the sink row one data-mover kernel takes both operands, which frees a RISC for the fabric sender.
@@ -229,15 +233,39 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         tt::CBIndex::c_3, program, core_grid, intermediate_tile_size, out_block_num_tiles, intermediate_data_format);
 
     const uint32_t tiles_per_packet = send_tiles_per_packet(in1_tile_size);
-    const uint64_t packet_bytes = static_cast<uint64_t>(tiles_per_packet) * in1_tile_size;
+    TT_FATAL(
+        tiles_per_packet >= kMinTilesPerPacket,
+        "all_gather_weight_minimal_matmul_async: the fabric packet payload ({} B) must hold at least {} weight "
+        "tiles of {} B",
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        kMinTilesPerPacket,
+        in1_tile_size);
+    const uint32_t slot_header_bytes = tt::round_up(
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()), kSendSlotAlignBytes);
+    const uint64_t slot_bytes = slot_header_bytes + (static_cast<uint64_t>(tiles_per_packet) * in1_tile_size);
+    TT_FATAL(
+        slot_bytes % kSendSlotAlignBytes == 0,
+        "all_gather_weight_minimal_matmul_async: a send slot ({} B) must be a multiple of {} B to keep its payload "
+        "aligned for DRAM reads",
+        slot_bytes,
+        kSendSlotAlignBytes);
     const uint64_t matmul_cb_bytes = tt::tt_metal::calculate_total_cb_size(program);
     const uint64_t free_l1 = ttml::metal::available_l1_bytes(*device);
-    const uint64_t fit = matmul_cb_bytes < free_l1 ? (free_l1 - matmul_cb_bytes) / packet_bytes : 0;
-    const uint32_t grid_send_slots = static_cast<uint32_t>(std::min<uint64_t>(kMaxSendSlots, fit)) & ~1U;
+    TT_FATAL(
+        matmul_cb_bytes + kSendSlotAlignBytes <= free_l1,
+        "all_gather_weight_minimal_matmul_async: the matmul's circular buffers take {} B of the {} B of L1 available "
+        "per core, which leaves no room for the fabric senders' packet slots on the sink row; use smaller blocks",
+        matmul_cb_bytes,
+        free_l1);
+    const uint64_t slot_room = free_l1 - matmul_cb_bytes - kSendSlotAlignBytes;
+    const uint32_t grid_send_slots =
+        static_cast<uint32_t>(std::min<uint64_t>(kMaxSendSlots, slot_room / slot_bytes)) & ~1U;
     TT_FATAL(
         grid_send_slots >= 2,
-        "all_gather_weight_minimal_matmul_async: the matmul's circular buffers leave no L1 for the fabric senders' "
-        "packets on the sink row; use smaller blocks");
+        "all_gather_weight_minimal_matmul_async: {} B of L1 are left for the fabric senders' packet slots after the "
+        "matmul's circular buffers, but two slots need {} B; use smaller blocks",
+        slot_room,
+        2 * slot_bytes);
 
     // Chain handshake: a core with room bumps its upstream's sender semaphore, the upstream writes the block and
     // flips the core's receiver semaphore to VALID.
@@ -459,7 +487,14 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 defer_write_k_block,
             };
             // override_runtime_arguments finds the persistent buffer and semaphores past these.
-            TT_ASSERT(args.size() == kRtDmFixedArgs && layout.stripe_order.size() == operation_attributes.ring_size);
+            TT_FATAL(
+                args.size() == kRtDmFixedArgs && layout.stripe_order.size() == operation_attributes.ring_size,
+                "all_gather_weight_minimal_matmul_async: the data-mover runtime args do not match kRtDmFixedArgs "
+                "({} fixed args, expected {}) or the ring ({} stripes, ring size {})",
+                args.size(),
+                kRtDmFixedArgs,
+                layout.stripe_order.size(),
+                operation_attributes.ring_size);
             args.insert(args.end(), layout.stripe_order.begin(), layout.stripe_order.end());
             return args;
         };
@@ -502,10 +537,11 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         mesh_coordinate, forward_coord, backward_coord, device);
 
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t chunk_tiles = K_block_tiles;  // senders ship K in the chunks the matmul consumes
     const auto src_node_id = device->get_fabric_node_id(mesh_coordinate);
 
+    // Packet slots (header + payload each), plus one alignment unit of slack so the kernel can align the base.
+    const auto send_slots_bytes = static_cast<uint32_t>((grid_send_slots * slot_bytes) + kSendSlotAlignBytes);
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < 2; ++dir) {
             const auto& neighbour = dir == 0 ? forward_coord : backward_coord;
@@ -550,13 +586,12 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             const uint32_t sender_index = (2 * link) + dir;
             const ttnn::CoreCoord send_core{1 + ((sender_index * (grid_size.x - 1)) / (2 * num_links)), sink_row};
             const ttnn::CoreCoord send_virtual_core = device->worker_core_from_logical_core(send_core);
-            tt::tt_metal::create_cb(
-                tt::CBIndex::c_4,
+            create_circular_buffer_bytes(
                 program,
-                send_core,
-                in1_tile_size,
-                tiles_per_packet * grid_send_slots,
-                in1_data_format);
+                tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(send_core)),
+                tt::CBIndex::c_4,
+                tt::DataFormat::UInt32,
+                send_slots_bytes);
             std::vector<uint32_t> send_ct = {
                 in1_tile_size,
                 tiles_per_packet,
@@ -566,7 +601,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 layout.ring_size,
                 static_cast<uint32_t>(transpose_b),
                 grid_send_slots,
-                static_cast<uint32_t>(packet_size_bytes)};
+                slot_header_bytes};
             const auto& route = dir == 0 ? forward_route : backward_route;
             send_ct.insert(send_ct.end(), route.begin(), route.end());
             tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(send_ct);
