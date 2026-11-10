@@ -68,14 +68,23 @@ ALWI void gguf_decode_tile(const std::uint32_t idst, const std::uint32_t ti, con
     if constexpr (thr == GgufDecodeThread::Math) {
         MATH((llk_math_gguf_decode_tile<fmt, true, true, beside_unpack>(idst, ti, rows)));
     } else {
-        // Phase 2 waits for the matmul of the tile before (an SFPLOADMACRO body beside the FPU's DEST writes loses
-        // stores) and, where its stores are not arbitrated against the unpacker either, for the copy of the next page
-        // (gguf_decode_overlap_body_ready).
-        PACK((llk_math_gguf_decode_tile<fmt, true, false>(idst, ti, rows)));
-        PACK((TTI_SEMWAIT(
-            p_stall::STALL_SFPU | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::PACK_DONE), p_stall::STALL_ON_ZERO)));
-        PACK((t6_semaphore_get<p_stall::NONE>(semaphore::PACK_DONE)));
-        PACK((llk_math_gguf_decode_tile<fmt, false, true>(idst, ti, rows)));
+        // A phase 2 that stores through SFPLOADMACRO waits for the matmul of the tile before (such stores beside the
+        // FPU's DEST writes are lost) and, where they are not arbitrated against the unpacker either, for the copy of
+        // the next page (gguf_decode_overlap_body_ready). One with SFPSTOREs runs right after phase 1, but for Q8_0's,
+        // which waits too (measured faster).
+        PACK(({
+            if constexpr (llk_math_gguf_decode_body_macro_stores<fmt>() || fmt == gguf::Q8_0) {
+                llk_math_gguf_decode_tile<fmt, true, false>(idst, ti, rows);
+                TTI_SEMWAIT(
+                    p_stall::STALL_SFPU | p_stall::STALL_SYNC,
+                    semaphore::t6_sem(semaphore::PACK_DONE),
+                    p_stall::STALL_ON_ZERO);
+                t6_semaphore_get<p_stall::NONE>(semaphore::PACK_DONE);
+                llk_math_gguf_decode_tile<fmt, false, true>(idst, ti, rows);
+            } else {
+                llk_math_gguf_decode_tile<fmt>(idst, ti, rows);
+            }
+        }));
     }
 }
 
@@ -93,8 +102,9 @@ ALWI void gguf_zero_tile(const std::uint32_t idst) {
  * full-sync DEST acquire, with three Tensix semaphores, two as sdpa.h's FPU <-> SFPU handoff:
  *   PAGE = FPU_SFPU, math -> pack: page k is in DEST, and the DEST rows its decoded tile overwrites are free;
  *   TILE = UNPACK_MATH_DONE, pack -> math: decoded tile k is complete;
- *   BODY = PACK_DONE, math -> pack: phase 2 of tile k may start: the matmul of tile k - 1 is done, and so is the copy
- *   of page k + 1 where phase 2's stores are not arbitrated against the unpacker
+ *   BODY = PACK_DONE, math -> pack, where phase 2 stores through SFPLOADMACRO
+ *   (llk_math_gguf_decode_body_macro_stores) and for Q8_0: phase 2 of tile k may start: the matmul of tile k - 1 is
+ *   done, and so is the copy of page k + 1 where phase 2's stores are not arbitrated against the unpacker
  *   (llk_math_gguf_decode_body_unarbitrated).
  * Per K tile k, math:  overlap_body_ready<fmt, false>(); [dest_srca_mm_page_post(next)];
  *                      [page_wait(next); overlap_page_ready()]; overlap_body_ready<fmt, true>();
@@ -132,12 +142,14 @@ ALWI void gguf_decode_overlap_tile_done() {
 }
 
 // MATH, twice per K tile: first (after_copy false) and after the copy of the next page, or where it would be (true).
-// Posts BODY at one of the two, once the math before it is done: at the second where fmt's phase 2 has stores that
-// are not arbitrated against the unpacker.
+// Where fmt's phase 2 waits for BODY (gguf_decode_tile), posts it at one of the two, once the math before it is done:
+// at the second where its stores are not arbitrated against the unpacker.
 template <std::uint32_t fmt, bool after_copy>
 ALWI void gguf_decode_overlap_body_ready() {
     MATH(({
-        if constexpr (llk_math_gguf_decode_body_unarbitrated<fmt>() == after_copy) {
+        if constexpr (
+            (llk_math_gguf_decode_body_macro_stores<fmt>() || fmt == gguf::Q8_0) &&
+            llk_math_gguf_decode_body_unarbitrated<fmt>() == after_copy) {
             t6_semaphore_post<p_stall::MATH>(semaphore::PACK_DONE);
         }
     }));

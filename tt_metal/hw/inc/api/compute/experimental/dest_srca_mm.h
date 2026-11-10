@@ -79,7 +79,7 @@ ALWI void dest_srca_mm_page_to_dest(
 // clang-format off
 /**
  * The page_* calls for a page whose first codes are 4-bit block-float datums (BFP4, sign in bit 3) to be read with a
- * fixed exponent, e.g. GGUF MXFP4 / NVFP4 (gguf_decode.h): the codes go, as FP16, to the 16-bit rows of DEST that the rows of
+ * fixed exponent, e.g. GGUF MXFP4 / NVFP4 / IQ4_NL / IQ4_XS (gguf_decode.h): the codes go, as FP16, to the 16-bit rows of DEST that the rows of
  * tile codes_idst address (where the SFPU reads them in that tile's order), and `words` 32-bit words of the page from
  * byte words_offset (e.g. its scale fields) to DEST tile idst, as many rows in as they are in the page.
  *
