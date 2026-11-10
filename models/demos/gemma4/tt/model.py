@@ -1435,6 +1435,7 @@ class Gemma4Model:
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": _hot,
+                    "kv_modulo": packed.get("kv_modulo_sliding") if sliding else None,
                 }
 
             hidden_states = layer(
@@ -1841,6 +1842,7 @@ class Gemma4Model:
         hot_pt_sliding=None,
         page_tables_per_layer=None,
         keep_logits_sharded=False,
+        kv_modulo_sliding=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1864,6 +1866,11 @@ class Gemma4Model:
             embed_idx_full / embed_idx_sliding: [1, nkv_local*S2] uint32 merge
                 gather indices (loop-free staging path; nkv differs per type).
             hot_pt: [1, PV_HOT_BLOCKS] int32 physical fill pages (-1 = skip).
+            kv_modulo_sliding: the sliding layers' KV write modulo when their
+                verify tables are the serving records' sliding span ring
+                (``spec_decode.serving_ring_window_table``: position x writes
+                ring slot x mod R through that table); None writes by the
+                layer's own ``cache_position_modulo``.
             keep_logits_sharded: leave the lm_head logits TP-sharded, the
                 chip's vocab slice ``[1,1,P,vocab / tp]`` (the serving records'
                 sharded verify argmax, GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX: no
@@ -1902,6 +1909,7 @@ class Gemma4Model:
             # to the shared ``hot_pt`` when unset (unbounded callers).
             "hot_pt_full": hot_pt_full,
             "hot_pt_sliding": hot_pt_sliding,
+            "kv_modulo_sliding": kv_modulo_sliding,
         }
 
         # Same per-layer page-table contract as ttnn_verify_forward: bounded

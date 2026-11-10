@@ -35,6 +35,7 @@ spec-decode is token-identical to plain greedy up to the first near-tie token
 and produces an equally-valid greedy trajectory thereafter.
 """
 
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -104,6 +105,10 @@ SPEC_LEAN_SEED_ENV = "GEMMA4_SPEC_LEAN_SEED"
 SPEC_ONE_UPLOAD_ENV = "GEMMA4_SPEC_ONE_UPLOAD"
 # Measured 12B TP8 (3 GB region): 21.9-31.9 MB per captured record, width-independent.
 SPEC_RECORD_MB_DEFAULT = 32.0
+# GEMMA4_SPEC_SLIDING_SPAN_RING (default 1): the serving records attend an UNBOUNDED sliding layer (vLLM hybrid
+# kv-cache groups) through a window-sized ring over its paged cache (serving_sliding_span_ring) instead of the
+# whole rung; "0" keeps the rung-wide sliding span. Plain engine only (the lane engine keeps the rung).
+SPEC_SLIDING_SPAN_RING_ENV = "GEMMA4_SPEC_SLIDING_SPAN_RING"
 
 
 def _to_probs(logits_row, temperature, top_p, top_k):
@@ -675,6 +680,70 @@ def serving_verify_table_widths(s_k, block_size_by_type, ring_by_type, blocks):
     return widths
 
 
+def sliding_span_ring_enabled() -> bool:
+    """``GEMMA4_SPEC_SLIDING_SPAN_RING`` (default on): see ``serving_sliding_span_ring``."""
+    return os.environ.get(SPEC_SLIDING_SPAN_RING_ENV, "1") != "0"
+
+
+def serving_sliding_span_ring(window, max_p, block_size, align=64):
+    """Key span (tokens) the serving verify gives an UNBOUNDED sliding layer: a ring of R slots over its paged cache.
+
+    The packed verify attends the table width times the block size, so with the rung as the sliding span each of
+    the sliding layers walked the whole rung (131072 keys at the 128K rung, 263168 at the top) to use the last
+    ``window`` of them: the verify cost followed the rung on the 50 sliding layers of the 31B, not the position.
+    Packed row p of a replay at c attends (c + p - window, c + p]; every such key lies in (top - R, top] for
+    top = c + P - 1 once R >= window + P - 1. Ring slot j then holds position ``top - ((top - j) mod R)`` (the
+    bounded ring's rule, so the ring mask and its uploaded scalars apply unchanged) and the table maps each slot
+    column to the block of the positions it holds (``serving_ring_window_table``). One column holds the top
+    block's slots up to ``top mod R`` and, past them, slots that wrap to positions R earlier; one more block of
+    span keeps those wrapped slots outside every row's window, so that column can name the top block:
+    R >= window + P - 1 + block_size, rounded up to ``align`` and the block (the tile and the packed SDPA's k
+    chunk divide 64)."""
+    window, max_p, block_size, align = int(window), int(max_p), int(block_size), int(align)
+    if min(window, max_p, block_size, align) < 1:
+        raise ValueError(
+            f"window, max_p, block_size and align must be >= 1, got {window}, {max_p}, {block_size}, {align}"
+        )
+    step = math.lcm(block_size, align)
+    need = window + max_p - 1 + block_size
+    return ((need + step - 1) // step) * step
+
+
+def serving_ring_window_table(table, positions, P, ring, block_size):
+    """Host ``[B, ring // block_size]`` int64 verify table of an unbounded paged sliding layer seen as a ring of
+    ``ring`` slots (``serving_sliding_span_ring``).
+
+    Row b (``positions[b] = c_b``, top = c_b + P - 1, tm = top mod ring, base = top - tm): column k holds the
+    row's block of the positions its slots carry, ``base + k * bs`` when ``k * bs <= tm`` (the top block's
+    column included), else ``base + k * bs - ring``; a column whose positions precede the sequence is block 0,
+    which the ring mask hides (``position < 0``). ``table`` is ``[B, cols]`` (row b = the row's absolute table);
+    the KV writes of the replay address the same table through ``cache_position_modulo = ring``
+    (position x -> slot x mod ring -> column), which lands every packed position c_b + p on its own block.
+    """
+    t = torch.as_tensor(table).to(torch.int64)
+    if t.dim() != 2:
+        raise ValueError(f"table must be [rows, blocks], got shape {tuple(t.shape)}")
+    ring, bs, P = int(ring), int(block_size), int(P)
+    if ring % bs or ring < bs:
+        raise ValueError(f"ring {ring} is not a positive multiple of the block size {bs}")
+    B, cols = int(t.shape[0]), int(t.shape[1])
+    if len(positions) != B:
+        raise ValueError(f"{len(positions)} positions for a {B}-row table")
+    ncol = ring // bs
+    k = torch.arange(ncol, dtype=torch.int64)
+    out = torch.zeros(B, ncol, dtype=torch.int64)
+    for b, c in enumerate(positions):
+        top = int(c) + P - 1
+        if top >= cols * bs:
+            raise ValueError(f"row {b}: position {top} is past its {cols}-block table")
+        tm = top % ring
+        start = (top - tm) + k * bs - (k * bs > tm).to(torch.int64) * ring
+        blk = torch.div(start, bs, rounding_mode="floor")
+        ok = blk >= 0
+        out[b, ok] = t[b, blk[ok]]
+    return out
+
+
 def serving_mask_padded_bytes(shape, width, elem_bytes=2):
     """Device bytes of ONE ``[B, 1, P, width]`` mask tensor or intermediate: TILE pads P to 32 rows."""
     rows, _k = spec_check_shape(shape)
@@ -825,6 +894,8 @@ class SpeculativeDecoder:
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
         # Serving records (see the "serving: batched fused records" section).
         self._srv_records = None  # {(shape, S_k): record} once serving_prepare ran
+        self._srv_vring = {}  # {layer_type: sliding span ring} (serving_prepare; serving_sliding_span_ring)
+        self._srv_slot_types = {}  # {KV group slot: layer type of its first layer} (serving_prepare)
         self._srv_captured = False
         self._srv_shape_bufs = {}  # {shape: width-independent buffers}
         self._srv_per_layer = None  # adapter-installed per-layer host page tables
@@ -2657,6 +2728,29 @@ class SpeculativeDecoder:
         # type): under hybrid groups the layers of one type are spread over
         # several groups with disjoint block ids.
         self._srv_slots, self._srv_n_slots = serving_kv_group_slots(self._srv_layer_types())
+        layer_types = self._srv_layer_types()
+        self._srv_slot_types = {}
+        for i, slot in enumerate(self._srv_slots):
+            self._srv_slot_types.setdefault(slot, layer_types[i])
+        # The sliding span of the verify records: an unbounded sliding pool attends a window-sized virtual ring
+        # (serving_sliding_span_ring) when it is narrower than the smallest rung; a bounded pool keeps its own ring.
+        self._srv_vring = {}
+        if sliding_span_ring_enabled() and self._srv_lanes <= 1 and self._pv_window:
+            max_p = max(int(K) + 1 for _B, K in shapes)
+            narrowest = min(int(w) for ws in widths.values() for w in ws)
+            for lt, ring in self._pv_ring.items():
+                if lt != "sliding_attention" or ring is not None:
+                    continue
+                span = serving_sliding_span_ring(self._pv_window, max_p, self._pv_bs_t[lt])
+                if span < narrowest:
+                    self._srv_vring[lt] = span
+        if self._srv_vring:
+            _lg.info(
+                f"[spec-serving] sliding verify span: a {self._srv_vring['sliding_attention']}-slot ring over the "
+                f"paged sliding pool (window {self._pv_window}, up to {max(int(K) + 1 for _B, K in shapes)} packed "
+                f"rows, block {self._pv_bs_t['sliding_attention']}) in place of the rung ({SPEC_SLIDING_SPAN_RING_ENV}=0 "
+                "keeps the rung)"
+            )
         self._srv_uploaded = {}
         self._srv_last = None
         self._srv_phase_ms = {}
@@ -3133,6 +3227,12 @@ class SpeculativeDecoder:
         self._srv_checked = {}
 
     # ── serving internals ────────────────────────────────────────────────────
+    def _srv_span_ring(self, lt):
+        """Ring (slots) the verify records attend a layer type through: a bounded pool's own ring, else the
+        sliding span ring of an unbounded sliding pool (serving_sliding_span_ring), else None (the rung)."""
+        ring = self._pv_ring.get(lt)
+        return ring if ring else self._srv_vring.get(lt)
+
     def _srv_alloc_shape(self, shape):
         """Width-independent persistent inputs of one shape (shared by its width records)."""
         B, K = shape
@@ -3146,7 +3246,7 @@ class SpeculativeDecoder:
         ]
         # The assistant reads each type's shared-KV layer: its table is that layer's slot.
         d_ptl = {lt: d_ptl_slots[slots[self.target.last_kv_layer_by_type[lt]]] for lt in self._pv_ring}
-        ring = self._pv_ring.get("sliding_attention")
+        ring = self._srv_span_ring("sliding_attention")
         ring_scalars = {}
         if ring:
             # per-row ring geometry for the in-trace sliding mask (serving_mask_plan)
@@ -3238,7 +3338,8 @@ class SpeculativeDecoder:
         # Width-matched to the type's mask with the type's OWN block size (see
         # serving_verify_table_widths): the packed SDPA attends the TABLE width
         # times that block size, and under hybrid groups the types differ.
-        widths = serving_verify_table_widths(s_k, self._pv_bs_t, self._pv_ring, self._srv_blocks)
+        span_rings = {lt: self._srv_span_ring(lt) for lt in self._pv_ring}
+        widths = serving_verify_table_widths(s_k, self._pv_bs_t, span_rings, self._srv_blocks)
         slots = self._srv_slots
         layer_types = self._srv_layer_types()
         slot_type = {}
@@ -3490,6 +3591,7 @@ class SpeculativeDecoder:
             embed_idx_sliding=None,
             hot_pt=None,
             page_tables_per_layer=rec["v_ptl_list"],
+            kv_modulo_sliding=self._srv_vring.get("sliding_attention"),
             **verify_kwargs,
         )
         mask_full.deallocate(True)
@@ -3716,7 +3818,7 @@ class SpeculativeDecoder:
         B, P = S["B"], S["P"]
         H = self._packed_H()
         W = float(self._pv_window)
-        ring = self._pv_ring.get("sliding_attention")
+        ring = self._srv_span_ring("sliding_attention")
         neg = float(SPEC_MASK_NEG)
         # query positions per packed row [B, 1, H*P, 1] fp32 from the uploaded [1, B*H*P] row positions
         q = ttnn.typecast(
@@ -3827,8 +3929,10 @@ class SpeculativeDecoder:
         B = int(page_tables.shape[0])
         return serving_select_rows(src, rows, B, int(src.shape[1]), allow_clip=False)
 
-    def _srv_upload_tables(self, shape, rows, live, page_tables, rec):
-        """Upload the drafter tables of ``shape`` (and the verify tables of ``rec`` when given), one per KV group slot."""
+    def _srv_upload_tables(self, shape, rows, live, page_tables, rec, positions=None):
+        """Upload the drafter tables of ``shape`` (and the verify tables of ``rec`` when given), one per KV group slot.
+        ``positions`` (the replay's padded row positions) lays out the verify table of a slot whose type attends
+        through the sliding span ring (``serving_ring_window_table``); required when one does."""
         S = self._srv_shape_bufs[shape]
         B = S["B"]
         if not hasattr(page_tables, "dim") or page_tables.dim() != 2 or int(page_tables.shape[0]) != B:
@@ -3860,10 +3964,24 @@ class SpeculativeDecoder:
                 v_host = v_host.clone()
                 v_host[live:] = v_host[0]
             width = int(rec["v_ptl_slots"][slot].shape[-1])
-            # Fitted, not checked: the verify table is width-matched to its mask
-            # on purpose (serving_verify_table_widths); columns past the adapter's
-            # table are zero (block 0) and columns past the mask are never attended.
-            v_host = serving_select_rows(v_host, list(range(B)), B, width, allow_clip=True)
+            vring = self._srv_vring.get(self._srv_slot_types[slot]) if self._srv_vring else None
+            if vring:
+                # the window-sized ring over the paged sliding pool: column k = the block of the positions its slots
+                # hold this replay (the KV writes address it through cache_position_modulo = the ring)
+                if positions is None:
+                    raise ValueError(f"shape {shape}: the sliding span ring needs the replay's positions")
+                v_host = serving_ring_window_table(
+                    v_host, positions, S["P"], vring, self._pv_bs_t[self._srv_slot_types[slot]]
+                )
+                if int(v_host.shape[1]) != width:
+                    raise ValueError(
+                        f"shape {shape}: ring table {tuple(v_host.shape)} for a {width}-column verify table"
+                    )
+            else:
+                # Fitted, not checked: the verify table is width-matched to its mask
+                # on purpose (serving_verify_table_widths); columns past the adapter's
+                # table are zero (block 0) and columns past the mask are never attended.
+                v_host = serving_select_rows(v_host, list(range(B)), B, width, allow_clip=True)
             self._srv_copy_if_changed(
                 ("v", shape, rec["S_k"], slot), v_host.to(torch.int32), rec["v_ptl_slots"][slot], ttnn.int32
             )
@@ -3909,13 +4027,13 @@ class SpeculativeDecoder:
             for p in range(P):
                 wi = torch.tensor([c + p for c in pos], dtype=torch.int32)
                 self._srv_copy_if_changed(("widx", shape, p), wi, S["write_idxs"][p], ttnn.int32)
-        ring = self._pv_ring.get("sliding_attention")
+        ring = self._srv_span_ring("sliding_attention")
         if ring:
             plan = serving_mask_plan(pos, P, ring=ring)
             for key in ("ring_base", "ring_tm"):
                 host = plan[key.split("_")[1]].to(torch.float32).reshape(B, 1, 1, 1)
                 self._srv_copy_if_changed((key, shape), host, S[key], ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        self._srv_upload_tables(shape, rows, live, page_tables, rec)
+        self._srv_upload_tables(shape, rows, live, page_tables, rec, positions=pos)
 
     def _srv_tp_group(self, first):
         """Row-major device indices of the TP group whose first chip is ``first`` (the chips holding one tensor's

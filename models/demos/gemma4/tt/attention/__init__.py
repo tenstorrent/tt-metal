@@ -303,7 +303,7 @@ class Gemma4Attention:
             is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
             packed: optional packed-verify dict (decode only) — keys packed_p,
                 position_idx, kv_write_idxs, attn_mask, rope_packed, embed_idx,
-                hot_pt; routes to packed_decode_forward (P positions, one pass)
+                hot_pt, kv_modulo; routes to packed_decode_forward (P positions, one pass)
         """
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
@@ -337,6 +337,7 @@ class Gemma4Attention:
                 kv_staging=self.kv_staging,
                 embed_idx=packed.get("embed_idx"),
                 hot_pt=packed.get("hot_pt"),
+                kv_modulo=packed.get("kv_modulo"),
             )
 
         if is_decode:

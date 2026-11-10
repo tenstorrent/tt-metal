@@ -116,7 +116,9 @@ def packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared):
 _ROWS_OP_WARNED = set()
 
 
-def packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, batch, packed_p, nkv_local, head_dim, config):
+def packed_rows_op_reason(
+    kv_cache, kv_write_idxs, page_table, batch, packed_p, nkv_local, head_dim, config, modulo=None
+):
     """Why the packed verify's KV write takes the per-position loop instead of ``custom_ops/paged_update_rows``:
     ``"off"`` unless ``GEMMA4_PACKED_KV_WRITE_OP=1`` (the served default: the loop, until the device A/B passes),
     else the op's ``unsupported_reason`` (warned once per reason), else ``None`` (the op serves)."""
@@ -132,7 +134,7 @@ def packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, batch, packed_p, 
         num_kv_heads=nkv_local,
         head_dim=head_dim,
         block_size=effective_block_size(k_cache_w, head_dim, nkv_local),
-        modulo=config.cache_position_modulo,
+        modulo=modulo if modulo is not None else config.cache_position_modulo,
     )
     if reason is not None and reason not in _ROWS_OP_WARNED:
         _ROWS_OP_WARNED.add(reason)
@@ -1092,6 +1094,7 @@ def packed_decode_forward(
     kv_staging=None,
     embed_idx=None,
     hot_pt=None,
+    kv_modulo=None,
 ):
     """Packed multi-token decode attention — P query positions/slot in one pass.
 
@@ -1118,6 +1121,10 @@ def packed_decode_forward(
             buffers (loop-free write path; see _packed_fill_kv_loopfree_embed).
         embed_idx: [1, nkv_local*S2] uint32 merge gather index (loop-free path).
         hot_pt: [1, max_batch*PV_HOT_BLOCKS] int32 physical fill pages, -1=skip.
+        kv_modulo: the per-position KV write's ``cache_position_modulo`` when
+            ``page_table`` is a ring over an unbounded pool (the serving
+            records' sliding span ring); None = the layer's own
+            ``config.cache_position_modulo``.
 
     Returns:
         [1, 1, B*P, hidden_size] — attention output for every packed position.
@@ -1136,6 +1143,7 @@ def packed_decode_forward(
     # needs cache_position_modulo.
     if kv_cache is None:
         raise ValueError("packed_decode_forward requires a KV cache (it attends through the paged cache)")
+    write_modulo = kv_modulo if kv_modulo is not None else config.cache_position_modulo
     l1 = ttnn.L1_MEMORY_CONFIG
 
     # ── ① QKV projection (one call on the full B*P, output kept on L1) ──────
@@ -1150,7 +1158,7 @@ def packed_decode_forward(
     # The loop-free custom op (GEMMA4_PACKED_KV_WRITE_OP=1) needs no sharded layout: the probe runs only when the
     # loop serves the write.
     rows_op_reason = (
-        packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, B, P, nkv_local, head_dim, config)
+        packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, B, P, nkv_local, head_dim, config, write_modulo)
         if packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared)
         else "staging"
     )
@@ -1242,7 +1250,7 @@ def packed_decode_forward(
                 B,
                 nkv_local,
                 eff_bs,
-                config.cache_position_modulo,
+                write_modulo,
             )
         else:
             packed_kv_write_loop(
@@ -1258,7 +1266,7 @@ def packed_decode_forward(
                 head_dim,
                 eff_bs,
                 q_sharded_mem,
-                config.cache_position_modulo,
+                write_modulo,
             )
 
     k_cache_use, v_cache_use = kv_cache
