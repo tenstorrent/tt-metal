@@ -118,11 +118,11 @@ def _cache_name(layer_id, name):
     return str(Path(UNIFIED_CACHE) / f"layer_{layer_id}" / f"local_{name}")
 
 
-def _cache_complete(layer_id):
+def _cache_complete(layer_id, wdtype=None):
     ensure_stamp(UNIFIED_CACHE)
     d = Path(UNIFIED_CACHE) / f"layer_{layer_id}"
     return all(
-        any(d.glob(f"local_{l}_{p}_dtype_{W_DTYPE.name}_*.tensorbin"))
+        any(d.glob(f"local_{l}_{p}_dtype_{(wdtype or W_DTYPE).name}_*.tensorbin"))
         for l in range(EPC)
         for p in ("gate", "up", "down")
     )
@@ -147,13 +147,14 @@ def _wmc(md, n_dim, k_dim):
     )
 
 
-def build_expert_weights(md, layer_id, log=print, cache_only=False):
+def build_expert_weights(md, layer_id, log=print, cache_only=False, wdtype=None):
     """-> (gate_projs, up_projs, down_projs), lists of EPC per-device tensors (K, N) bf8 DRAM ND-sharded.
     Host cache miss: dequantise the checkpoint (fp4 + e8m0 scales -> bf16), the same source and rounding as the moe_compute cache.
     """
     ensure_stamp(UNIFIED_CACHE)
     os.makedirs(Path(UNIFIED_CACHE) / f"layer_{layer_id}", exist_ok=True)
-    warm = _cache_complete(layer_id)
+    wdtype = wdtype or W_DTYPE
+    warm = _cache_complete(layer_id, wdtype)
     src = None
     if not warm:
         from models.demos.blackhole.deepseek_v41_flash.tt import moe_weights as mw
@@ -184,7 +185,7 @@ def build_expert_weights(md, layer_id, log=print, cache_only=False):
                 host,
                 mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=W_DTYPE,
+                dtype=wdtype,
                 cache_file_name=None
                 if os.environ.get("DSV41_UNI_NOCACHE") == "1"
                 else _cache_name(layer_id, f"{l}_{proj}"),
@@ -208,7 +209,7 @@ class DSV41UnifiedMoE:
     chunk (all tokens of the mesh row, replicated over the columns) and returns the per-column PARTIAL weighted sums [1,1,N,D] (tile, DRAM).
     """
 
-    def __init__(self, md, layer_id, weights=None, log=print, ring=None, gate=None):
+    def __init__(self, md, layer_id, weights=None, log=print, ring=None, gate=None, wdtype=None):
         """ring: (w0_w1, w2) = the moe_compute decode weight tensors of the layer; the op then reads them in place (RING_WEIGHTS mode, 8 columns,
         no second weight copy): the same tensor is passed EPC times in the gate/up/down lists."""
         self.md, self.layer_id = md, layer_id
@@ -246,7 +247,7 @@ class DSV41UnifiedMoE:
             self.lut = None
             self.gate_view = None
             self.gate_projs, self.up_projs, self.down_projs = (
-                weights if weights is not None else build_expert_weights(md, layer_id, log=log)
+                weights if weights is not None else build_expert_weights(md, layer_id, log=log, wdtype=wdtype)
             )
 
     def _permuted_gate(self, gate, pi):

@@ -88,7 +88,7 @@ void kernel_main() {
 
     // T16 dedup mode: whole index row = one chunk (python DSV41_PFA_SP_KC=<topk>), plain bf16/fp8 rows, 32 padded heads
     // (8 real).
-    constexpr bool dedup = !scaled_kv && !block_cyclic && k_chunk == topk && H == 32 && topk <= 1024;
+    constexpr bool dedup = !scaled_kv && !block_cyclic && kv_elem_bytes == 1 && k_chunk == topk && H == 32 && topk >= 512 && topk <= 1024;
 
     Noc noc;
     experimental::CB q_cb(cb_q_rm), k_cb(cb_k_rm), mask_part_cb(cb_mask_part), idx_cb(cb_idx), ctrl_cb(cb_ctrl);
@@ -356,3 +356,4 @@ void kernel_main() {
         }
     }
 }
+// T16-HDR-SHA 19c1140fe654dee3

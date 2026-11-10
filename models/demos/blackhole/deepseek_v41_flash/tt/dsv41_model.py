@@ -363,6 +363,8 @@ class Model:
         self.pool_pages_free = None
         if self.uni and os.environ.get("DSV41_UNI_LAYERS", "all").startswith("auto"):
             self._uni_auto(pls)
+        if self.uni and uni_policy.ring_requested() and os.environ.get("DSV41_UNI_COPY_LAYERS", ""):
+            self._uni_copy(pls)
         self._keep = {
             "experts": {L: layer.moe.decode.expert_state for L, layer, _ in self.built},
             "umoe": {  # unified-layout expert weights that are a COPY (not the ring-layout decode weights read in place): batch independent, kept too
@@ -494,6 +496,41 @@ class Model:
         self.uni_layers = [L for L, pl in pls if pl.umoe is not None]
         self.log(
             f"UNI auto: unified prefill MoE on {n}/{len(pls)} layers {self.uni_layers} (reserve {reserve} MiB/bank)"
+        )
+
+    def _uni_copy(self, pls):
+        """DSV41_UNI_COPY_LAYERS=<auto|list like "2-11,20"> (default OFF; T16): the layers listed (``auto``: ascending, as many as fit) run the unified prefill MoE on their OWN bfp4 weight copy
+        (the non-ring unified layout: 88 cores, 29.5 MiB/bank/layer; -29 % expert op at N=1024 vs the ring in place, tests/test_moe_fuse_bench.py MF_WMODE=copy4) instead of reading the decode ring weights in place (the
+        other layers keep the in-place read: ONE copy of those). The copies are added after everything else is resident, while the free DRAM per bank stays above DSV41_UNI_COPY_RESERVE_MIB (default 550 =
+        the 450 MiB growth reserve of ``_uni_auto`` + 100 MiB margin); DSV41_UNI_COPY_MAX caps the count, DSV41_UNI_COPY_LAYER_MIB (29.5) is the cost per layer. The host cache of a copy layer
+        (DSV41_UNIFIED_CACHE/layer_<L>/*BFLOAT4_B*) is built from the checkpoint at the first boot (several minutes per layer)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
+
+        v = os.environ.get("DSV41_UNI_COPY_LAYERS", "").strip()
+        mib = 2**20
+        per = float(os.environ.get("DSV41_UNI_COPY_LAYER_MIB", "29.5"))
+        reserve = float(os.environ.get("DSV41_UNI_COPY_RESERVE_MIB", "550"))
+        cap = int(os.environ.get("DSV41_UNI_COPY_MAX", "99"))
+        wanted = None
+        if not v.startswith("auto"):
+            wanted = set()
+            for part in v.split(","):
+                lo, _, hi = part.partition("-")
+                wanted |= set(range(int(lo), int(hi or lo) + 1))
+        done = []
+        for L, pl in pls:
+            if getattr(pl, "umoe", None) is None or (wanted is not None and L not in wanted):
+                continue
+            mv = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+            free = mv.total_bytes_free_per_bank / mib
+            if len(done) >= cap or free - per < reserve:
+                break
+            kept = (self._keep or {}).get("umoe", {}).get(L)
+            pl.umoe = DSV41UnifiedMoE(self.md, L, log=self.log, weights=kept, wdtype=ttnn.bfloat4_b)
+            done.append(L)
+        self.uni_copy_layers = done
+        self.log(
+            f"UNI copy: own bfp4 weight copy on {len(done)} layers {done} (reserve {reserve} MiB/bank, {per} MiB/bank/layer); the other unified layers read the decode ring weights in place"
         )
 
     def mem_report(self, tag):

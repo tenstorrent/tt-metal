@@ -104,7 +104,34 @@ def safe(name, fn, *a, **kw):
 def route_pool():
     r = torch.load(ROUTES)
     arr = np.stack([np.stack([t.numpy() for t in st]) for st in r]).astype(np.int64)  # [S, L, B, 6]
-    return arr[:, LAYER].reshape(-1, TOPK)
+    pool = arr[:, LAYER].reshape(-1, TOPK)
+    pl = os.environ.get("MF_PLACE", "")
+    if pl:  # T16: static expert placement study (random-weight copy mode only): fit on one half of the pool, sample from the other half; seq = the sequential layout (control)
+        rng = np.random.default_rng(0)
+        perm = rng.permutation(pool.shape[0])
+        tr, te = pool[perm[: len(perm) // 2]], pool[perm[len(perm) // 2 :]]
+        if pl != "seq":
+            c = np.bincount(tr.reshape(-1), minlength=NE).astype(np.float64)
+            groups = (
+                [(list(range(384)), list(range(32)))]
+                if pl == "lpt_any"
+                else [(list(range(k * 48, k * 48 + 48)), list(range(k * 4, k * 4 + 4))) for k in range(8)]
+            )
+            place, load, cnt = -np.ones(NE, dtype=int), np.zeros(32), np.zeros(32, dtype=int)
+            for ex, chips in groups:
+                for e in sorted(ex, key=lambda e: -c[e]):
+                    ch = min([x for x in chips if cnt[x] < EPC], key=lambda x: load[x])
+                    place[e], load[ch], cnt[ch] = ch, load[ch] + c[e], cnt[ch] + 1
+            # sequential layout: expert id x lives on chip (x // 48) * 4 + (x % 48) // 12; give expert e one id of its assigned chip
+            slots = {ch: [x for x in range(NE) if (x // 48) * 4 + (x % 48) // 12 == ch] for ch in range(32)}
+            pi, used = np.zeros(NE, dtype=np.int64), {ch: 0 for ch in range(32)}
+            for e in range(NE):
+                ch = int(place[e])
+                pi[e] = slots[ch][used[ch]]
+                used[ch] += 1
+            te = pi[te]
+        pool = te
+    return pool
 
 
 def make_ids(kind, T, g, pool):
