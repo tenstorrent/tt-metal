@@ -20,13 +20,33 @@ ttnn build matches the RC's C++.
 - vllm-tt-plugin: `66980cb`
 - Tag `0.25.0-<rc sha>-66980cb-mk…`, deployed by `@sha256` digest; chart/values change committed in tt-orchestration.
 
+## RC runtime env (spec v1.10) = prod r13 runtime-model-spec env + the lines below
+Base: the prod `qwen38-tt-inference-server-runtime-model-spec` env_vars (64 vars; integ's prod_env.sh matches it exactly,
+the step harness adds only `QWEN36_FABRIC_RING=1`). KV stays BFP8 (no `QWEN36_R16_KV_BFP4`). Added on top:
+
+| var | value | where it acts | in RC tree? |
+|---|---|---|---|
+| `QWEN36_R16_MEGAKERNEL` | `stage1` + `QWEN36_R16_MK_ENGINE_KIND=mk` (until the flag value `1` is wired to kind mk) | traced verify layer loop | yes (integ2) |
+| `QWEN36_MTP_LAYER_BFP4` | `1` | drafter (always active) | yes (r13) |
+| `QWEN36_DRAFT_VOCAB_TOPK` | `131072` | drafter (always active) | yes (r13) |
+| `QWEN36_MTP_SDPA_WINDOW` | `8192` | drafter (always active) | yes (r13) |
+| `QWEN36_BFP4_LAYOUT_GATEUP` | `dsmc:3:2:4` | op path (prefill, kv-split variants, out-of-scope buckets, engine-off fallback) | yes (r13 tp_common `{BFP4_LAYOUT_ENV}_{TARGET}` override; needs `QWEN36_BFP4_LAYOUT=1`, already prod) |
+| `QWEN36_R16_VERIFY_SDPA_MULTI_CORES` | `16` | op path (as above) | yes since integ2 `21910a5b87c` (cherry-pick of r16-kernels `6b6d67ecee9`; not in r13 / -mk-int before) |
+| `QWEN36_GLUE` | `kvwo,guin,kvt` | op path; md5-identical | yes (integ2). The GSNK gate ran WITH it (spec_GSNK.json), so keep it in the RC env |
+
+The GSNK gate (length ratio 1.027, CI 0.958-1.096; GPQA 87.1 vs 86.4; needle 9/9) ran these on d26u08's in-pod tree,
+not on this RC SHA. **The binding check is the RC's own flag-on length gate: RC SHA + this env (engine on) vs prod r13,
+≥ 2 replicates.**
+
 ## Ship config
-- Megakernel: `QWEN36_R16_MEGAKERNEL=1` (real engine, kind=mk) — off (unset) = r13 graph.
+- Megakernel: see the RC runtime env above — off (unset) = r13 graph (gate 1: md5 identity PASSED, see below).
 - Multi-image: `QWEN36_MM_MAX_IMAGES=4`, vllm `limit-mm-per-prompt {"image": 4, "video": 1}` (ConfigMap
   qwen38-dev-mm4-spec), router `VLLM_ROUTER_MAX_IMAGES=4`.
 
 ## Gates (dev hosts only)
 1. Flag-off md5 identity vs prod r13 (stock in-pod r13 tree vs RC tree, prod runtime-spec env, greedy + sampled ident).
+   PASSED 2026-11-10 on d26u02, RC `bb5f961b63e`: greedy c522fcae4e83cd38 (2341 accepted, 2.7126/row-step) and sampled
+   a85b8ed4407707ae (2358, 2.7938) identical to r13 `8eb9af536d8`. Re-run on the final RC SHA.
 2. Flag-on (not md5-identical by design: split-K order, deferred norm): acceptance, GPQA accuracy + paired length
    (±5% of r13), needle / long context, OR-style replay (primary), 13 router standard tests.
 3. Multi-image co-batched decode: 3 clients × 4×1024px images, flag on vs off (dev baseline 234 → 126 tok/s).
