@@ -158,7 +158,7 @@ def test_paged_verify_sources_carry_the_page_arguments() -> None:
     assert "_lane_update_page_table(state, lane_constants, count)" in write and "**table_kwargs" in write
     assert "_deallocate(rotated, owned_table)" in write
     assert write.count("page_table=update_idxs") == 0
-    score = inspect.getsource(qsa_module.Qwen38TTNNQSA._score_blocks_lanes_verify)
+    score = inspect.getsource(qsa_module.Qwen38TTNNQSA._local_scores_lanes_verify)
     assert "_lane_indexer_kwargs(state, lane_constants, count=count, wide=True)" in score
     assert "state.compressed_index_cache_flat" in score  # the flat path stays
     materialize = inspect.getsource(qsa_module.Qwen38TTNNQSA._materialize_rows_lanes)

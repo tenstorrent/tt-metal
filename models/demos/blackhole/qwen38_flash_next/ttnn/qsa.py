@@ -338,6 +338,22 @@ def _topk_seg_width(width: int, k: int) -> int:
     return seg
 
 
+def _verify_dtopk_width(blocks: int, tp: int, k: int = BLOCK_TOPK) -> int:
+    """Per-device column slice width of the distributed verify top-k for a score row of ``blocks`` blocks, or 0 when
+    it does not apply.  QWEN38_VERIFY_DTOPK=0 turns it off (default on: the off path keeps the all-reduce and the
+    full-row top-k).  Each slice must fit one fused top-k body and hold k, and the tp * k candidates must fit one too.
+    """
+
+    if os.environ.get("QWEN38_VERIFY_DTOPK", "1") != "1":
+        return 0
+    if tp <= 0 or blocks % (tp * ttnn.TILE_SIZE):
+        return 0
+    width = blocks // tp
+    if width < k or width & (width - 1) or width > TOPK_CLASSIC_MAX_WIDTH or tp * k > TOPK_CLASSIC_MAX_WIDTH:
+        return 0
+    return width
+
+
 def _release_reshaped(source, result) -> None:
     """Free ``source`` after ttnn.reshape unless the reshape returned a view of it (same buffer)."""
 
@@ -3348,10 +3364,13 @@ class Qwen38TTNNQSALaneVerifyInputs:
     stage_b_select: Any  # None in the single-row form
     pool_select: Any
     single_row: bool = False
+    # BF16 ROW_MAJOR [1,1,32,blocks], -2^100 hidden / 0.0 visible; built unless QWEN38_VERIFY_DTOPK=0
+    indexer_rs_mask: Any = None
 
     def deallocate(self) -> None:
         _deallocate(
             self.indexer_neg_mask,
+            self.indexer_rs_mask,
             self.row_keep_bits,
             self.row_fill,
             *self.block_index_i32,
@@ -3549,6 +3568,11 @@ def derive_qsa_lane_verify_inputs(
         valid = ttnn.typecast(valid_bits, ttnn.bfloat16, memory_config=dram)
         invalid = ttnn.rsub(valid, 1.0, memory_config=dram)
         indexer_neg_mask = keep(ttnn.multiply(invalid, INDEXER_MASK_VALUE, memory_config=dram))
+        indexer_rs_mask = (
+            keep(ttnn.multiply(invalid, SLAB_SCORES_RS_MASK_VALUE, memory_config=dram))
+            if _verify_dtopk_width(blocks, TP_SIZE)
+            else None
+        )
         _deallocate(context_blocks, context_blocks_plus, complete_blocks_rows, valid_bits, valid, invalid)
         context_length = ttnn.add(positions, 1, memory_config=dram)
         complete_blocks = ttnn.bitwise_right_shift(context_length, 2, memory_config=dram)
@@ -3605,9 +3629,17 @@ def derive_qsa_lane_verify_inputs(
         stage_b_select=stage_b_select,
         pool_select=pool_select,
         single_row=single_row,
+        indexer_rs_mask=indexer_rs_mask,
     )
     for name, tensor, shape, dtype, layout in (
         ("indexer_neg_mask", indexer_neg_mask, (1, 1, MAX_LANES, blocks), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        *(
+            ()
+            if indexer_rs_mask is None
+            else (
+                ("indexer_rs_mask", indexer_rs_mask, (1, 1, MAX_LANES, blocks), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+            )
+        ),
         ("row_keep_bits", row_keep_bits, (1, 1, MAX_LANES, SPARSE_INDEX_CAPACITY), u32, ttnn.ROW_MAJOR_LAYOUT),
         ("row_fill", row_fill, (1, 1, MAX_LANES, SPARSE_INDEX_CAPACITY), u32, ttnn.ROW_MAJOR_LAYOUT),
         *(
@@ -8752,12 +8784,16 @@ class Qwen38TTNNQSA:
         lanes: Qwen38TTNNQSALaneInputs,
         constants: Qwen38TTNNQSAChunkConstants,
         lane_constants: Qwen38TTNNQSALaneConstants,
+        *,
+        block_ids=None,
     ):
         # The chunk's row materialization with lane u's KV offset folded into its block-offset row: the expanded
         # ids and the tail ids (lanes.row_fill) address lane u's region of the flat cache; the sentinels are
-        # untouched (the offset rows are added before the keep mask and the OR).
-        block_ids = qsa_topk_block_ids(masked_scores, k=BLOCK_TOPK)
-        _deallocate(masked_scores)
+        # untouched (the offset rows are added before the keep mask and the OR).  ``block_ids`` (the distributed
+        # verify top-k's result) replaces the top-k of ``masked_scores``.
+        if block_ids is None:
+            block_ids = qsa_topk_block_ids(masked_scores, k=BLOCK_TOPK)
+            _deallocate(masked_scores)
         _require_shape(block_ids, (1, 1, MAX_LANES, BLOCK_TOPK), "top-k QSA lane block IDs")
         if block_ids.dtype != ttnn.uint32 or block_ids.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(
@@ -9141,17 +9177,16 @@ class Qwen38TTNNQSA:
             _deallocate(users_sharded)
         _deallocate(rotated, owned_table)
 
-    def _score_blocks_lanes_verify(
+    def _local_scores_lanes_verify(
         self,
         index_query,
         state: Qwen38TTNNQSALaneState,
-        inputs: Qwen38TTNNQSALaneVerifyInputs,
         lane_verify: Qwen38TTNNQSALaneVerifyConstants,
         lane_constants: Qwen38TTNNQSALaneConstants | None = None,
     ):
         """The wide indexer once over the lane-major query tile and the flat compressed cache (on shared pools: the
         Index pool through the lane page table, the table's users bounded to the first ``count``), row r windowed to
-        lane_of(r)'s columns (the fused row windows, or the chain's slices), the score all-reduce and the per-row mask.
+        lane_of(r)'s columns (the fused row windows, or the chain's slices): the per-device partial scores.
         The width is the lane verify constants' context: a context-width set scores only the blocks below it.
         """
 
@@ -9185,6 +9220,20 @@ class Qwen38TTNNQSA:
         self.mesh_contract.mark_local_partial(
             score_rows, replicated_reference=state.compressed_index_cache, expected_shape=(1, 1, CHUNK_ROWS, blocks)
         )
+        return score_rows
+
+    def _score_blocks_lanes_verify(
+        self,
+        index_query,
+        state: Qwen38TTNNQSALaneState,
+        inputs: Qwen38TTNNQSALaneVerifyInputs,
+        lane_verify: Qwen38TTNNQSALaneVerifyConstants,
+        lane_constants: Qwen38TTNNQSALaneConstants | None = None,
+    ):
+        """The local scores, their all-reduce and the per-row mask."""
+
+        blocks = lane_verify.allocated_context // COMPRESS_RATIO
+        score_rows = self._local_scores_lanes_verify(index_query, state, lane_verify, lane_constants)
         scores = ttnn.all_reduce(
             score_rows,
             cluster_axis=TP_AXIS,
@@ -9203,6 +9252,48 @@ class Qwen38TTNNQSA:
                 f"masked QSA lane verify block scores must be BF16 ROW_MAJOR, got {tensor_metadata(masked)}"
             )
         return masked
+
+    def _block_ids_lanes_verify_distributed(self, score_rows, inputs: Qwen38TTNNQSALaneVerifyInputs, width: int):
+        """Block ids [1,1,32,BLOCK_TOPK] of the lane verify from the per-device partial scores, without the full-row
+        all-reduce: mask, reduce-scatter the columns, top-k each device's slice, all-gather the candidates and take a
+        second top-k.  Tolerance: scores are summed in the reduce-scatter's hop order (BF16) instead of the
+        composite's fp32 device-order sum, as qsa_scores_rs_ag; the candidate order is device-major, so ties may
+        order differently from the segmented top-k."""
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        # masked before the sum on every device: a hidden block is -2^100 per device, visible blocks gain exactly 0.0
+        masked_local = ttnn.add(score_rows, inputs.indexer_rs_mask, memory_config=dram, fast_and_approximate_mode=False)
+        _deallocate(score_rows)
+        tiled = ttnn.to_layout(masked_local, ttnn.TILE_LAYOUT, memory_config=dram)
+        _deallocate(masked_local)
+        summed = ttnn.reduce_scatter(
+            tiled, dim=3, cluster_axis=TP_AXIS, memory_config=dram, topology=self.collective_topology
+        )
+        _deallocate(tiled)
+        local = ttnn.to_layout(summed, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+        _deallocate(summed)
+        _require_shape(local, (1, 1, CHUNK_ROWS, width), "QSA lane verify score column slice")
+        local_ids = ttnn.experimental.topk_large_indices(local, k=BLOCK_TOPK)  # slice-local ids
+        local_values = ttnn.gather(local, 3, local_ids, memory_config=dram)
+        _deallocate(local)
+        cand_values = ttnn.all_gather(local_values, dim=3, cluster_axis=TP_AXIS, memory_config=dram)
+        _deallocate(local_values)
+        cand_ids = ttnn.all_gather(local_ids, dim=3, cluster_axis=TP_AXIS, memory_config=dram)
+        _deallocate(local_ids)
+        # stage 2 as in qsa_topk_block_ids: candidate position -> slice-local id -> global id (slice index * width)
+        picked = ttnn.experimental.topk_large_indices(cand_values, k=BLOCK_TOPK)
+        _deallocate(cand_values)
+        local_of_picked = ttnn.gather(cand_ids, 3, picked, memory_config=dram)
+        _deallocate(cand_ids)
+        seg_base = ttnn.bitwise_left_shift(
+            ttnn.bitwise_right_shift(picked, LOCAL_SEGMENT_LOG2, memory_config=dram),
+            width.bit_length() - 1,
+            memory_config=dram,
+        )
+        _deallocate(picked)
+        ids = ttnn.bitwise_or(local_of_picked, seg_base, memory_config=dram)
+        _deallocate(local_of_picked, seg_base)
+        return ids
 
     def _write_packed_kv_lanes_verify(
         self, state: Qwen38TTNNQSALaneState, key, value, inputs: Qwen38TTNNQSALaneVerifyInputs
@@ -9306,9 +9397,16 @@ class Qwen38TTNNQSA:
         self._write_compressed_index_lanes_verify(
             state, verify_state, raw_key, block_start_cos, block_start_sin, inputs, lane_constants, lane_verify
         )
-        masked_scores = self._score_blocks_lanes_verify(index_query, state, inputs, lane_verify, lane_constants)
-        _deallocate(index_query)
-        sparse_indices = self._materialize_rows_lanes(masked_scores, inputs, constants, lane_verify)
+        width = _verify_dtopk_width(lane_verify.allocated_context // COMPRESS_RATIO, TP_SIZE)
+        if width and inputs.indexer_rs_mask is not None:
+            score_rows = self._local_scores_lanes_verify(index_query, state, lane_verify, lane_constants)
+            _deallocate(index_query)
+            block_ids = self._block_ids_lanes_verify_distributed(score_rows, inputs, width)
+            sparse_indices = self._materialize_rows_lanes(None, inputs, constants, lane_verify, block_ids=block_ids)
+        else:
+            masked_scores = self._score_blocks_lanes_verify(index_query, state, inputs, lane_verify, lane_constants)
+            _deallocate(index_query)
+            sparse_indices = self._materialize_rows_lanes(masked_scores, inputs, constants, lane_verify)
 
         query, gate, key, value = self._main_projection_rows(full_hidden, None, cos, sin, constants)
         self._write_packed_kv_lanes_verify(state, key, value, inputs)

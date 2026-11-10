@@ -176,6 +176,9 @@ class _MTPModelCapabilities:
                 # QWEN38_MTP_CHAIN=1: the lane verifies then run as the plugin's chain mode
                 "supports_async_decode": chain_on,
                 "supports_async_spec_decode": chain_on,
+                # prefill lands the deferred verify first, so it never reads stale host mirrors, and the drafts
+                # read the handle's own snapshots
+                "supports_prefill_over_pending_spec": chain_on,
                 # the chain has no sampled tail: prefill returns a logits row and the decode steps are verifies
                 "supports_sample_on_device": False,
                 "supports_device_penalties": False,

@@ -1953,6 +1953,7 @@ def test_chain_off_capabilities_and_plan_are_unchanged(monkeypatch, expect_error
     monkeypatch.delenv("QWEN38_MTP_CHAIN", raising=False)
     capabilities = Qwen38MTPForCausalLM.model_capabilities
     assert capabilities["supports_async_decode"] is False and capabilities["supports_async_spec_decode"] is False
+    assert capabilities["supports_prefill_over_pending_spec"] is False
     monkeypatch.setenv("QWEN38_VLLM_MTP_K", "3")
     assert Qwen38MTPForCausalLM.spec_plan(_config(), 4, 3).accept_modes == ("argmax_ids",)
     monkeypatch.setenv("QWEN38_MTP_CHAIN", "0")
@@ -1970,6 +1971,7 @@ def test_chain_on_declares_the_async_capabilities_and_the_fused_mode(monkeypatch
     monkeypatch.setenv("QWEN38_VLLM_MTP_K", "3")
     capabilities = Qwen38MTPForCausalLM.model_capabilities
     assert capabilities["supports_async_decode"] is True and capabilities["supports_async_spec_decode"] is True
+    assert capabilities["supports_prefill_over_pending_spec"] is True
     plan = Qwen38MTPForCausalLM.spec_plan(_config(), 4, 3)
     assert plan.accept_modes == ("argmax_ids", "fused_sample")
     assert Qwen38MTPForCausalLM.spec_plan(_config(), 1, 3).accept_modes == ("argmax_ids",)  # batch 1 is not chained
