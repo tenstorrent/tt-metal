@@ -288,7 +288,7 @@ void kernel_main() {
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
     // one AR on the owner TRISCs: the reduce (this device's chunk; own partial read in place from own_cb at R = 32) and,
     // with MK_AR_GAMMA, x_deliver = out ⊙ γ into CB_VXO. MLP AR: own_cb = CB_VXO; attention AR: the wo output CB_XO.
-    auto ar_step = [&](uint32_t own_cb) {
+    auto ar_step = [&](uint32_t own_cb) __attribute__((noinline)) {   // one copy for both call sites (MLP AR, attention AR): EXT text
         if (ar_red.has_work) {
             CZONE("C-AR");
 #if defined(MK_AR_HWSTART)
