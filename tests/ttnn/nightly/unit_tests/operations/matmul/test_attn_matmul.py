@@ -1003,3 +1003,50 @@ def test_attn_matmul_compute_grid_shorter_than_device(device):
     golden = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
     assert_numeric_metrics(golden, sub_grid_output, pcc_threshold=0.999, check_allclose=False, check_frobenius=False)
     assert torch.equal(sub_grid_output, full_grid_output)
+
+
+# The output was declared with the tile-padded kv length (128) instead of the logical one (100), so to_torch
+# returned columns that do not exist in the torch result.
+@pytest.mark.use_module_device
+@pytest.mark.parametrize("seq_len", [100, 70])
+def test_attn_matmul_output_keeps_logical_kv_length(device, seq_len):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    input_tensor_a = torch.randn([1, 10, 32, 64]).bfloat16()
+    input_tensor_b = torch.randn([32, 1, 64, seq_len]).bfloat16()
+    tt_a = ttnn.from_torch(input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn_attn_matmul(
+        tt_a,
+        tt_b,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+    out = ttnn.to_torch(tt_out)
+    golden = (input_tensor_a.float().transpose(0, 2) @ input_tensor_b.float()).transpose(0, 2)
+    assert list(out.shape) == list(golden.shape)
+    assert_numeric_metrics(golden, out, pcc_threshold=0.999, check_allclose=False, check_frobenius=False)
+
+
+@pytest.mark.use_module_device
+def test_group_attn_matmul_output_keeps_logical_kv_length(device):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    q_heads, kv_heads, seq_len = 16, 2, 100
+    input_tensor_a = torch.randn([1, q_heads, 32, 64]).bfloat16()
+    input_tensor_b = torch.randn([32, kv_heads, 64, seq_len]).bfloat16()
+    tt_a = ttnn.from_torch(input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn_group_attn_matmul(
+        tt_a,
+        tt_b,
+        compute_with_storage_grid_size=grid,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+    out = ttnn.to_torch(tt_out)
+    expanded_b = torch.repeat_interleave(input_tensor_b.float(), q_heads // kv_heads, dim=1)
+    golden = (input_tensor_a.float().transpose(0, 2) @ expanded_b).transpose(0, 2)
+    assert list(out.shape) == list(golden.shape)
+    assert_numeric_metrics(golden, out, pcc_threshold=0.999, check_allclose=False, check_frobenius=False)
