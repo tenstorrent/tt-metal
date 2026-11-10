@@ -171,7 +171,8 @@ def test_minimal_pipe_completion(device, num_layers):
     _pt, tt_weights, tt_addrs = _make_weights(device, layout, num_layers)
 
     with _Isolation(device, layout) as isolation:
-        ttnn.dram_prefetcher(tt_weights + [tt_addrs], num_layers, prefetcher_pipes=pipes)
+        # The op takes one weight per tensor kind; the address table carries every layer's copy.
+        ttnn.dram_prefetcher(tt_weights[:1] + [tt_addrs], num_layers, prefetcher_pipes=pipes)
         isolation.stall_on_workers()
         for _layer in range(num_layers):
             ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
