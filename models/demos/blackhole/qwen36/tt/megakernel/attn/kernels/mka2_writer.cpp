@@ -20,6 +20,9 @@
 #if defined(MK_V12)
 #include "v12e.hpp"
 #endif
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+#include "../../kernels/mk_ar_recv.hpp"   // AR_RECV on the owners (AR_INTERFACE.md; MKAR_* defines from ar_phase.py)
+#endif
 
 void kernel_main() {
     constexpr uint32_t XTB = get_compile_time_arg_val(0), NGU = get_compile_time_arg_val(1);
@@ -253,6 +256,14 @@ void kernel_main() {
     if (vrole) { cb_reserve_back(CB_VI, 1); cb_push_back(CB_VI, 1); }
     if (vrole == 1) { cb_reserve_back(CB_VJ, 1); cb_push_back(CB_VJ, 1); }
     if (vrole == 2) { cb_reserve_back(CB_VX0, V_OT); cb_push_back(CB_VX0, V_OT); }
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+    // real MLP AR tail: [ar_on, n_ready, (READY xy, READY word) x n_ready, Recv common block, Recv role block]
+    const uint32_t ar_on = get_arg_val<uint32_t>(a++);
+    const uint32_t ar_nready = ar_on ? get_arg_val<uint32_t>(a++) : 0;
+    const uint32_t ar_rdy = a;
+    static mkar::Recv ar;
+    if (ar_on) ar.init(a + 2 * ar_nready, a + 2 * ar_nready + MKAR_NCOMMON);
+#endif
     // owner phase of layer L (stand-in AR): x chunk to the K-row, then the column-partial sum and its release
     auto v12_owner = [&](uint32_t L) {
         if (vrole != 2) return;
@@ -275,6 +286,17 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
         // AR_RECV(L) here (real AR, spec v0.9.2: READY inc to the RS sender, then the receiver phase on this RISC)
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+        {
+            DeviceZoneScopedN("W-AR");
+            for (uint32_t i = 0; i < ar_nready; ++i) {   // CB_VXO complete: release this chunk to its RS sender / own receiver
+                const uint32_t xy = get_arg_val<uint32_t>(ar_rdy + 2 * i);
+                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, get_arg_val<uint32_t>(ar_rdy + 2 * i + 1)), 1);
+            }
+            ar.iter(L);   // the gather role returns after the AG wait + x delivery; CB_VXO is read by then (RS done)
+            noc_semaphore_inc(get_noc_addr(qr_x, qr_y, MK_AR_XCNT), 1);   // x of layer L + 1 delivered to this K-row
+        }
+#endif
         cb_pop_front(CB_VXO, V_OT);
         v_busy(vg[VG_BUSY], 2 * L + 2, vbmirror, vbrc);
     };
@@ -606,7 +628,7 @@ void kernel_main() {
             spin_cycles(MKA_S_GDN);
 #endif
             spin_cycles(S_AR);
-#if defined(MKA_RQKV)
+#if defined(MKA_RQKV) && !defined(MK_REAL_AR)   // real AR: XRDY only after the MLP AR's deliveries (below)
             if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // layer boundary -> STREAM_EXT
 #endif
             cb_reserve_back(CB_GO, 1);
@@ -841,13 +863,28 @@ void kernel_main() {
             { DeviceZoneScopedN("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
             if (L + 1 < NL && is_attn(L + 1)) v_mlp_start(L + 1);   // slot V is free (popped before CB_VDO)
         }
+#if defined(MK_REAL_AR)
+        {   // the real MLP AR: this K-row's two owners delivered x of layer L + 1 (flags = per-pass delivery count)
+            DeviceZoneScopedN("W-ARWAIT");
+#if defined(MK_AR_NOPUMP)   // the next attention layer's MLP-slice pump waits for the AR (it slows the AG / x delivery)
+            do { invalidate_l1_cache(); } while (*l1w(MK_AR_XF0) <= L || *l1w(MK_AR_XF1) <= L);
+#else
+            do { invalidate_l1_cache(); v_pump(); } while (*l1w(MK_AR_XF0) <= L || *l1w(MK_AR_XF1) <= L);
+#endif
+        }
+        if (is_qroot && L + 1 < NL) {   // all 16 owners delivered -> STREAM_EXT
+            noc_semaphore_wait_min(l1w(MK_AR_XCNT), 16 * (L + 1));
+            mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // all 3 full-grid rects (ARCORES cut-out)
+        }
+#else
         {
             DeviceZoneScopedN("W-ARSTALL");
             const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
             while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)S_AR) v_pump();
         }
 #if defined(MKA_RQKV)
-        if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
+        if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
+#endif
 #endif
 #else
 #if defined(MKA_NOMLP)
@@ -907,6 +944,15 @@ void kernel_main() {
     // v12 words: every increment into this core's words for layer NL - 1 preceded its last wait above (STREAM: W-VMD;
     // owner: W-OP), and the reader's LA write preceded the writer's last LA wait
     if (vrole) for (uint32_t i = 0; i < NVG; ++i) *vw(vg[i]) = 0;
+#if defined(MK_REAL_AR)
+    // device-local words only (the arrival semaphore / EPOCH base are handled by fini): STREAM awaited XF = NL in its
+    // last W-ARWAIT; the owner's own copy counted its NL deliveries; the Q root drains the last layer's 16 increments
+#if defined(MKA_ROLE_EXT)
+    if (ar_on) ar.fini();
+#endif
+    if (vrole) { *l1w(MK_AR_XF0) = 0; *l1w(MK_AR_XF1) = 0; }
+    if (is_qroot) { noc_semaphore_wait_min(l1w(MK_AR_XCNT), 16 * NL); *l1w(MK_AR_XCNT) = 0; }
+#endif
 #endif
 #if defined(MKA_RQNR)
     if (is_qroot) *l1w(gs[GS_QHD]) = 0;

@@ -24,6 +24,9 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
 #include "api/debug/kernel_profiler.hpp"
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+#include "../../kernels/mk_ar_reduce.hpp"   // AR reduce on the owners (MKAR_* defines from ar_phase.py)
+#endif
 // MKA_LEAN_C: no compute-side profiler zones (each one is compiled into all three TRISC binaries; the RWO build is
 // otherwise past the 70656 B kernel-config buffer). Phase timing then comes from the dataflow zones.
 #if defined(MKA_LEAN_C)
@@ -271,6 +274,10 @@ void kernel_main() {
         cb_push_back(CB_VRT, 1);
         cb_pop_front(CB_VRSA, MKA_NOWN);
     };
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+    mkar::Reduce ar_red;   // [has_work, ring, PT]: has_work = this device owns the core's chunk
+    ar_red.init(a); a += 3;
+#endif
     // owner: Σ of the 10 column down partials (P @ I, fp32 DST) [+ the x chunk while the AR is a stall] -> CB_VXO
     auto v12_osum = [&](uint32_t L) {
         if (vrole != 2) return;
@@ -302,6 +309,13 @@ void kernel_main() {
         cb_push_back(CB_VXO, V_OT);
         cb_pop_front(CB_VP, V_NCOL * V_OT);
         // AR reduce (real AR, spec v0.9.2) follows here on the owner TRISCs
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+        if (ar_red.has_work) {
+            CZONE("C-AR");
+            compute_kernel_hw_startup(MKAR_CB_RED, MKAR_CB_RED, MKAR_CB_OUT);
+            ar_red.iter();
+        }
+#endif
     };
 #define V12_OSUM(L) v12_osum(L)
 #else
