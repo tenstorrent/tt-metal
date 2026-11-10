@@ -130,8 +130,20 @@ says, in pass order. Weight prefetch (DM RISCs) runs ahead of compute, up to dep
 13-15 GDN (state, conv window, out) · 16 CB_OUT (block output → AR send) · 17-20 AR (send, recv, residual, norm w) ·
 24-31 block scratch (owner = phase type).
 
-**Semaphore ids:** 0-11 MLP roots (fm11: h counters 0-3, h flags 4-7, down-done 8-11) · 12-15 phase/layer
-barriers (cumulative, value = phase seq + 1) · 16-19 ATTN · 20-23 GDN · 24-27 AR.
+**Semaphores (v0.1, per the AR track):** tt-metal allows only 16 *program* semaphores per core (NUM_SEMAPHORES = 16).
+- Program semaphores: 0-11 MLP roots (fm11: h counters 0-3, h flags 4-7, down-done 8-11), 12-15 phase/layer
+  barriers (cumulative, value = phase seq + 1).
+- Every other track (ATTN, GDN, AR) uses **global semaphores**: `ttnn.create_global_semaphore(mesh, core_ranges, 0)`,
+  i.e. L1 words at a uniform address on every core and device. Pass the addresses in runtime args or phase-table
+  words 12-15, and use `noc_semaphore_*` on the raw addresses. The uniform cross-device address is also what fabric
+  fused write + atomic-inc needs.
+- Exception: a track may keep a program semaphore on a core that is not a STREAM core (e.g. the AR sender's
+  producer counter on (10,0)).
+- setup_fabric_connection appends its own program semaphores on fabric sender cores, so keep those off STREAM cores.
+
+**Activation distribution rule:** x (and every replicated activation) goes through the 4 roots. Each core unicasts its
+slice into root k's buffer at its final offset, and each root multicasts its range. Never have many cores multicast
+into overlapping rectangles at once (fused MLP v1/v2: 150 µs stalls on silicon).
 
 **L1 budget per STREAM core (BH ~1.45 MB usable after FW/kernel/CB config):**
 | Item | KB |
