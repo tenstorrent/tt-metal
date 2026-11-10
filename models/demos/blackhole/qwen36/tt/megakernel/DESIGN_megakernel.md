@@ -756,3 +756,24 @@ The pipelined K=2 chain at R=32 was ~17.8 µs, a tie with one-shot. u8 stays on 
 - **Projected u8 gain: −13 µs × 48 GDN layers − ~9 µs × 16 attention layers ≈ −0.77 ms.** Planned as **−0.5 ms**, because in the engine the next mixer's weights stream at the same time, so v12 will land above 13.5 µs.
 - **u8 ≈ 13.47 → ~12.97 ms** (0.7 margin), before v0.8.1 helps u8 attention.
 - A 3rd weight slot gave no gain (MLP-only stream ~350 GB/s, bank/NoC-bound, vs fm11's 406 with separate gu/dn bank placement). The pass is chain-bound, so this does not matter now. Low-priority item: port fm11's gu/dn bank placement to v12 if the DRAM budget ever binds.
+
+**v0.8.4 AR: Σx² + R=32 breakdown (b29902fc1fc):**
+- **Σx² (MK_PS_STATS):** the output cores square and REDUCE_ROW (fp32 dest) after delivery, then multicast 32 tile-row partials into CB_RSTD slot j%2.
+  - Contract: row r = Σ over tile rows i ≡ r (mod R), with R ∈ {4, 8, 16, 32} (round R up, e.g. users=3 → R=16). Padding is zero-filled.
+  - Cost: +0.53 µs (R=4), +1.08 µs (R=32); rel err 8e-4.
+  - **Off-path rule:** deferred RMSNorm consumes rstd only at PACK time, so consumers start the matmul on x and wait for CB_RSTD at the pack, ≥~4 µs later. Σx² is therefore not on the path, and the on-path AR stays t0 → x.
+- **R=32 critical path** (t0 → x 17.1 µs):
+
+  | Step | µs |
+  |---|---|
+  | RS injection | 0.5-3.8 |
+  | last RS arrival | 9.5 |
+  | reduce | 1.49 |
+  | handoff | 0.8 |
+  | AG send | 0.68 |
+  | AG transit | → 15.4 |
+  | delivery | 1.6-1.9 |
+
+  - Link bytes are balanced: RS 160 KB per direction, AG 80 KB.
+  - **The multi-hop RS runs at ~18 GB/s vs 34 GB/s for a single hop.** That is the biggest exact item, up to −3-4 µs.
+  - Next: (c) root-cause the RS link rate, (a) reduce-on-arrival (−1.2), (b) owner → CB_AG direct (−0.5).
