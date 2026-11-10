@@ -272,6 +272,18 @@ class GdnRole:
             e_out, e_ring, e_win = torch.equal(iv(outA), iv(outB)), torch.equal(ringbits(rA), ringbits(rE)), torch.equal(iv(wA), iv(wE))
             print(f"[{tag}] GDN layer {l} hold={self.hold}: out {e_out} (max|d| {(outA - outB).abs().max().item():.3e}) | "
                   f"ring {e_ring} | win {e_win}", flush=True)
+            if not e_out:  # where: shape, # differing elements, first indices (row = user*T + t)
+                d = (iv(outA) != iv(outB)).reshape(outB.shape)
+                nz = d.nonzero()
+                print(f"[{tag}]   out diff: shape {tuple(outB.shape)} n {nz.shape[0]} first {nz[:12].tolist()}", flush=True)
+                c0 = int(nz[0, -1]) // 32 * 32  # first differing 32-column block: per-row diff count + value pairs
+                dd = d.reshape(-1, outB.shape[-1])[:, c0:c0 + 32]
+                print(f"[{tag}]   block cols {c0}..{c0 + 31}: diffs per row {dd.sum(1).tolist()}", flush=True)
+                oa = outA.reshape(-1, outB.shape[-1])[:, c0:c0 + 32]; ob = outB.reshape(-1, outB.shape[-1])[:, c0:c0 + 32]
+                idx = dd.nonzero()[:8].tolist()
+                print(f"[{tag}]   pairs (row, col, ref, got): {[(r, c, float(oa[r, c]), float(ob[r, c])) for r, c in idx]}", flush=True)
+                n2 = int(((iv(outA) != iv(outB)).reshape(-1, outB.shape[-1]).sum(0) > 0).reshape(-1, 32).any(1).sum())
+                print(f"[{tag}]   blocks with diffs: {n2}", flush=True)
             ok_all = ok_all and e_out and e_ring and e_win
             ttnn.deallocate(oAs[l])
             cA.par, cE.par = 1 - cA.par, 1 - cE.par

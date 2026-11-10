@@ -21,8 +21,21 @@ assert KDIR.startswith("/"), "set E1_KDIR to the private kernels dir (absolute)"
 bits = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]
 
 
-def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False, st_ring=0):
-    """(name, entries, bytes, fmt) of every DFB the PREFIXED + PREFIXED_GATES + LAZY + VSPLIT + SFPU_GATE program uses."""
+# engine GDN role (build_engine, lean=True): DFBs dropped from the table and bound to another id instead (spec v1.50:
+# frees 3 CB ids on the GDN cores for gdn_out). ctrl_w / gnew -> gprev: writer-local, never pushed across a gprev use
+# (ctrl_w's reserve/push/pop runs at the writer's layer start, before wr_rcoef stages into gprev; gnew is dead code
+# under GDN_BATCH); eps_l2 -> eps_norm: never generated / waited under GDN_NO_EPS_L2 (PREFIXED: the prefix did the l2)
+LEAN_ALIAS = {"ctrl_w": "gprev", "gnew": "gprev", "eps_l2": "eps_norm"}
+
+
+def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False, st_ring=0, lean=False, kmq_users=4):
+    """(name, entries, bytes, fmt) of every DFB the PREFIXED + PREFIXED_GATES + LAZY + VSPLIT + SFPU_GATE program uses.
+    lean (engine role): LEAN_ALIAS entries dropped; kmq_users = per-user K_u / Q_u slots in the kmq ring (lean: 2)."""
+    tab = _dfb_table(Kt, Vt, T, VB, out_b16, batch, st_ring, kmq_users)
+    return [e for e in tab if e[0] not in LEAN_ALIAS] if lean else tab
+
+
+def _dfb_table(Kt, Vt, T, VB, out_b16, batch, st_ring, kmq_users):
     Vs, t32, t16 = Vt // VB, 4096, 2048
     KVs, Ch = Kt * Vs, 2 * Kt + Vt
     NBm = 8 if batch else 1  # GDN_BATCH: per-user slots for every user of the head (kBatchMax = 8)
@@ -45,8 +58,9 @@ def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False, st_ring=0):
         # writer
         ("ctrl_w", 1, 64, U32), ("bounce", Ch, t16, B16), ("gprev", 1, t32, F32), ("gnew", 1, t32, F32),
         ("acc_x", Vt, t32, F32), ("coef", 15 if batch else 8, t32, F32),
-    ] + ([("l12", 1, t32, F32)] if T > 4 else []) + ([("kmq", 4 * Kt, t32, F32), ("kts", NBm * ((Kt + VB - 1) // VB), t32, F32),
-                                                ("stg", NBm * (Vs + 1), t32, F32), ("spd", 1, 64, U32)] if batch else [])
+    ] + ([("l12", 1, t32, F32)] if T > 4 else []) + ([("kmq", kmq_users * Kt, t32, F32), ("kts", NBm * ((Kt + VB - 1) // VB), t32, F32),
+                                                # stg: [U_u (8 * Vs) | the decay pages of users u = s mod VB]
+                                                ("stg", NBm * Vs + (NBm + VB - 1) // VB, t32, F32), ("spd", 1, 64, U32)] if batch else [])
 
 
 # names the three kernels reference but this variant never touches -> alias of a configured CB of the same format
@@ -285,13 +299,25 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # GDN_EARLY_REPLAY (default on): the writer builds W / C_u before in_ready (its own in_ready wait, GDN_W_IN_WAIT),
     # the compute replays before the prefix inputs
     early = os.environ.get("E1_EARLY_REPLAY", "1") == "1"
-    tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring)
+    # GDN_SP_LATE (default OFF until the out race is root-caused): S' leaves sp after the output rows (writer), the compute pops sp at the next layer's
+    # replay / program end -- the S' DRAM write is off the step's critical path
+    sp_late = os.environ.get("E1_SP_LATE", "0") == "1"
+    # GDN_RCOEF_FAST (default on, needs early): wr_rcoef reads each user's decay rows (256 B) under one barrier and fills
+    # C_u by NoC doubling instead of 1024 RISC stores per user (~36 us of writer time per layer at u8)
+    rcoef_fast = os.environ.get("E1_RCOEF_FAST", "1") == "1"
+    # GDN_SP_RD (needs sp_late): the reader (NOC1) writes S' after its kmq stream instead of the writer after the out rows
+    sp_rd = sp_late and os.environ.get("E1_SP_RD", "0") == "1"
+    # GDN_ZS_LATE (default on, needs early): the compute waits zs right before the gated output, not before the replay
+    zs_late = early and os.environ.get("E1_ZS_LATE", "1") == "1"
+    # lean CB table (E1_LEAN, default on): 3 ids freed (LEAN_ALIAS) and kmq 4 -> 2 user slots (-32 KB)
+    lean = os.environ.get("E1_LEAN", "1") == "1"
+    tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring, lean=lean, kmq_users=2 if lean else 4)
     # CB ids 0..44 (spec v1.25 MAX_CB_ID), skipping the AR senders' ids on the corner cores (RS 34, RED 35, HDR 37,
     # AG 39: ArPhase.sender_parts) -- one table on all 24 GDN cores
     free_ids = [i for i in range(45) if i not in set(skip_cb_ids)]
     assert len(tab) <= len(free_ids), (len(tab), len(free_ids))
     ids = {n: (free_ids[i], f) for i, (n, _, _, f) in enumerate(tab)}
-    for a, b in ALIAS.items():
+    for a, b in (list(LEAN_ALIAS.items()) if lean else []) + list(ALIAS.items()):  # LEAN first: ALIAS gsc -> ctrl_w
         if a not in ids:
             ids[a] = ids[b]
     ids.setdefault("dnew", ids["tmp"])
@@ -430,19 +456,25 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'#include "{WOU}/wo_unit_c.hpp"\n' if GO else '') +
         f'static volatile tt_l1_ptr uint32_t* g_ab;\nuint32_t gdn_rt_B() {{ return g_ab[{OC + 3}]; }}\n'
         f'void kernel_main() {{\n  g_ab = {AB};\n'
-        f'  for (uint32_t L = 0; L < {NG}; ++L) {{ compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
-        f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '') + '  }\n}\n')
+        + ('  g_sp_pending = 0;\n' if sp_late else '')
+        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{ compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '') + '  }\n'
+        + ('  gdn_sp_drain();\n' if sp_late else '') + '}\n')
     pre_w = Nv * pre_s
     common = [("GDN_RT_BM", "1"), ("GDN_BATCH", "1")]
     d_r = [("GDN_FAST", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_EARLY_SRC", "1"), ("GDN_LAZY", "1"),
            ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s)), ("GDN_STATE_FIRST", "1"),
-           ("GDN_IN_WAIT", "1"), ("GDN_ST_RING", str(st_ring))] + common
+           ("GDN_IN_WAIT", "1"), ("GDN_ST_RING", str(st_ring))] + common + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
+        [("GDN_SP_RD", "1")] if sp_rd else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
            ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + common + (
-        [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else [])
-    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_EARLY_REPLAY", "1")] if early else []) + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
+        [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
+        [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else [])
+    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
+        [("GDN_ZS_LATE", "1")] if zs_late else []) + ([("GDN_EARLY_REPLAY", "1")] if early else []) + (
+        [("GDN_SP_LATE", "1")] if sp_late else []) + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
                                                     "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
                                                     "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
     fphys = dev.worker_core_from_logical_core
@@ -490,5 +522,5 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]] + ([GO["w"], GO["dbg"]] if GO else [])
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab) + (sum(c_.total_size for c_ in cbs[-3:]) if GO else 0),
-                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early)
+                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
