@@ -360,11 +360,14 @@ if RQKV:
     EXTRA_T = EXTRA_TX = 0   # the qkv bytes are real now
     ext_crs = crs([fcores[fi] for fi in ext_list])
     print(f"[rqkv] {QN} tiles: ext {len(ext_list)}x2 full-K, STREAM {2 * n_half} K-halves; producers {QDONE_N}; MB/bank {[round(sum(QROLE[f][2] * QROLE[f][4] for f in qcores if q_bank[f] == b_) * BF8TB / 1e6, 2) for b_ in range(banks)]}; {QN * KT * BF8TB / 1e6:.1f} MB/layer", flush=True)
+GDNIN = int(os.environ.get('MKA_GDNIN_CORES', '64'))   # GDN in-proj stand-in on the first 64 K-half cores (5.6 MB, spec 5.9),
+def gdn_on(fi):                                         # independent of how many K-half pairs the qkv split uses
+    return 1 if (fi in stream_idx and stream_idx[fi] < GDNIN and QROLE.get(fi, (0,))[0] in (1, 2)) else 0
 def q_wargs(fi):
     if not RQKV: return []
     ro, n0, nt, k0, nk, peer = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
     pp_ = fphys[peer]
-    return [ro, n0, nt, pp_.x, pp_.y, qkv_out.buffer_address()]
+    return [ro, n0, nt, pp_.x, pp_.y, qkv_out.buffer_address(), gdn_on(fi)]
 TREEFLAG = ('MKA_TREEFLAG', '1') in MKDEF
 def tfk(fi):   # index of this core in its parent's child list (level-0 list or the root's level-1 list)
     r_ = rank[fi]
@@ -429,7 +432,7 @@ def build(out):
         wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
             [kv.buffer_address() for kv in kvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
         nrecv = len(ch0) + len(ch1)
-        crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) if RQKV else [])
+        crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] if RQKV else [])
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
     acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
     acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []

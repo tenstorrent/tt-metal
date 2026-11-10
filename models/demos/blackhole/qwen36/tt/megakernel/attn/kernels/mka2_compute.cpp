@@ -46,7 +46,7 @@ void kernel_main() {
     const uint32_t qoff = u * DH;
 #if defined(MKA_RQKV)
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
-    const uint32_t qnt = get_arg_val<uint32_t>(a++);
+    const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
     // real qkv PROJ (spec v0.4): y = rstd ⊙ (x @ diag(γ)W); rstd = rsqrt(ΣΣx²/H + eps) from the AR owners' fp32 partials
     auto qkv_proj = [&](bool att_layer) {
         DeviceZoneScopedN("C-QKV");
@@ -156,7 +156,7 @@ void kernel_main() {
         // in-proj (64 x 87 KB BFP8 = 5.6 MB, spec 5.9 MB), output discarded
         if (IS_STREAM) {
             cb_wait_front(CB_X, KT);
-            if (qrole) qkv_proj(att);
+            if (qrole && (att || gdn_on)) qkv_proj(att);
         } else if (qrole == 3) {
             cb_wait_front(CB_X, KT);
             qkv_proj(true);

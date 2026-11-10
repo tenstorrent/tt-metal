@@ -72,6 +72,7 @@ void kernel_main() {
 #if defined(MKA_RQKV)
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
     const uint32_t q_ox = get_arg_val<uint32_t>(a++), q_oy = get_arg_val<uint32_t>(a++), qo_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t gdn_on = get_arg_val<uint32_t>(a++);   // this core runs the GDN in-proj stand-in in GDN-type layers
     const auto qo = TensorAccessor(qo_args, qo_addr, QOTB);
     constexpr uint32_t QATB = 4096;   // fp32 partial tile
     // the qkv tail of layer L on this core: ship / receive the K-half partial, write the rstd-scaled output tiles
@@ -138,7 +139,7 @@ void kernel_main() {
         // that here deadlocks, since layer L's slot is only popped by the MLP after this SDPA.)
         const uint32_t trid = 1 + (L & 1);
 #if defined(MKA_RQKV)
-        if (with_mix && (qrole == QR_OWNER || qrole == QR_PARTNER)) {
+        if (with_mix && (qrole == QR_OWNER || qrole == QR_PARTNER) && (is_attn(L) || gdn_on)) {
 #else
         if (with_mix) {
 #endif
@@ -203,7 +204,7 @@ void kernel_main() {
             if (att && qrole == QR_OWNER) { cb_reserve_back(CB_RSP, MKA_NOWN); cb_push_back(CB_RSP, MKA_NOWN); }   // partners skip the norm
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             noc_async_read_barrier_with_trid(MIX_TRID0 + (L & 1));   // layer L's qkv / in-proj half landed
-            if (qrole) cb_push_back(CB_WM, MIXT);
+            if (qrole && (att || gdn_on)) cb_push_back(CB_WM, MIXT);
             if (att) {
                 noc_async_read_barrier_with_trid(1 + (L & 1));
                 if (IS_GU) cb_push_back(CB_W2, w2_tiles);
@@ -211,7 +212,7 @@ void kernel_main() {
             }
 #else
             noc_async_read_barrier_with_trid(1 + (L & 1));   // layer L's qkv half + MLP weights landed
-            if (qrole) cb_push_back(CB_WM, MIXT);
+            if (qrole && (att || gdn_on)) cb_push_back(CB_WM, MIXT);
             if (IS_GU) cb_push_back(CB_W2, w2_tiles);
             cb_push_back(CB_WD, DN_TILES);
 #endif
