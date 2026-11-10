@@ -2599,7 +2599,22 @@ class Qwen36Model:
         _ksp_attns = [l.attention for l in self.layers if l.is_full_attention] if _ksp is not None else []
         for _a in _ksp_attns:
             _a._kv_split_ctx = _ksp
-        for layer in self.layers:
+        # QWEN36_R16_MEGAKERNEL (tt/megakernel/integ): stage0 probes the bucket's phase table inside this trace; the layer
+        # loop below is unchanged until the megakernel takes it over.
+        _mk = getattr(self, "_vfy_mk", None)
+        if _mk is not None:
+            _mk.pre_layers(n_users)
+        # QWEN36_R16_MEGAKERNEL=stage1: the engine's one generic_op replaces the layer loop (persistent x_out per bucket)
+        _mk1 = getattr(self, "_vfy_mk1", None)
+        _mk1_on = (
+            _mk1 is not None and _mk1.ready and n_users in _mk1.programs and kv_split is not True and _dar is not None
+        )
+        if _mk1_on:
+            x = _mk1.forward(
+                x, n_users, T,
+                dict(kvpos=kvpos, ctrl=ctrl, cos=_cos, sin=_sin, pt_rows=pt_rows, pt_users=pt_users, pt_groups=pt_groups),
+            )
+        for layer in () if _mk1_on and _mk1.replaces_layers else self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
                 # p_u+j, so the decode SDPA's causal bound gives that row exactly [0, p_u+j]; the candidate
@@ -3408,6 +3423,25 @@ class Qwen36Model:
         self._vfy_prepared_key = None
         self._vfy_T, self._vfy_B = T, B
         self._vfy_nb = nb
+        # QWEN36_R16_MEGAKERNEL: per-bucket phase tables + probe outputs, allocated before any trace capture
+        from models.demos.blackhole.qwen36.tt.megakernel.integ.verify_mk import MegakernelVerify, megakernel_mode
+
+        self._vfy_mk = None
+        if megakernel_mode():
+            self._vfy_mk = MegakernelVerify(self)
+            self._vfy_mk_summary = self._vfy_mk.prepare(range(1, B + 1))
+            if self._vfy_mk.fallback_reason:
+                logger.warning(f"megakernel: {self._vfy_mk.fallback_reason}")
+        self._vfy_mk1 = None
+        if megakernel_mode() in ("stage1", "1"):
+            from models.demos.blackhole.qwen36.tt.megakernel.integ.stage1 import Stage1Verify
+
+            self._vfy_mk1 = Stage1Verify(self)
+            _r = self._vfy_mk1.prepare(range(1, B + 1), T)
+            if not _r.get("ready"):
+                logger.warning(f"megakernel stage1 not ready, layer loop stays op-by-op: {_r.get('reason')}")
+            else:
+                logger.info(f"megakernel stage1: {_r}")
         self._vfy_setup_sharded_argmax(rows)
         self._vfy_setup_device_topk()
         # QWEN36_SPEC_HOSTSET (+ _TRACE): packed aux inputs + in-trace RoPE lookup (see _vfy_inputs). Decided here, so
@@ -3685,6 +3719,8 @@ class Qwen36Model:
         _kv_grouped = self._vfy_kv_grouped
 
         _pre = getattr(self, "_vfy_pre", None) if spec_vfy_outs_prealloc_enabled() else None
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = True
         self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         (
             self._vfy_logits_out,
@@ -3699,6 +3735,8 @@ class Qwen36Model:
             self._vfy_ids_out = self._vfy_pre_into(_pre, "ids", self._vfy_ids_out)
             self._vfy_normed_out = self._vfy_pre_into(_pre, "normed", self._vfy_normed_out)
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = False
         if self._vfy_sharded:
             # Sampled requests (read_logits) need the full logits, which the main trace no longer gathers:
             # a second, small trace (lm_head + all-gather + untilize on the persistent normed rows).
@@ -3897,10 +3935,14 @@ class Qwen36Model:
             "topk_ids": getattr(self, "_vfy_topk_ids_out", None),
         }
         _pre = bk.pre if spec_vfy_outs_prealloc_enabled() else None
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = True
         bk.trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         outs = self._forward_verify_bucket_tp(n_users=b, bk=bk, **({"kv_split": True} if kv_split else {}))
         _normed = self._vfy_pre_into(_pre, "normed", outs[4]) if _pre else outs[4]  # QWEN36_SPEC_VFY_OUTS_PREALLOC
         ttnn.end_trace_capture(dev, bk.trace_id, cq_id=0)
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = False
         bk.normed, bk.shard_logits = _normed, outs[5]
         bk.logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         bk.logits_out, bk.logits_rm_out = self._forward_verify_logits_body(bk)
@@ -4186,6 +4228,8 @@ class Qwen36Model:
                 self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
         ttnn.execute_trace(dev, _main_tid, cq_id=0, blocking=False)
         self._vfy_last_bucket = bk
+        if getattr(self, "_vfy_mk", None) is not None:  # QWEN36_R16_MEGAKERNEL stage0: replay accounting
+            self._vfy_mk.count_replay(self._vfy_B if bk is None else bk.b)
         mask_keep = None
         if not forward_only:
             if read_logits and self._vfy_sharded:

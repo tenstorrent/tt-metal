@@ -111,12 +111,24 @@ says, in pass order. Weight prefetch (DM RISCs) runs ahead of compute, up to dep
     prefix output. A ~16-32 core GDN set runs PREFIX then STEP back to back.
   - Why two phases: the all-users prefix does not fit in one gdn_spec_step program (the 70,656 B kernel config buffer
     overflows by ~0.5 KB at B=8).
+  - v0.5 GDN_PREFIX data rules (GDN track, milestone A on silicon: conv+silu correct at B=8/B=1, standalone
+    53.4 µs at B=8, mostly launch overhead):
+    (a) **Megakernel-owned compact conv window:** one bf16 tile per (head, chunk) holding all users' K-1=3 rows
+        (8 × 3 = 24 rows). GDN_PREFIX writes it back itself after the conv: the new window is rows t..t+2 of W per
+        user, chosen by the accepted-draft index `mi`. That is 1 read + 1 write per chunk instead of 8 + 8.
+        **The write-back must use the committed (accepted) position**, i.e. the same rollback rule as the GDN
+        state under speculative verify.
+    (b) Selector tiles (2K one-hots per (B, T)) stay resident in L1 for the whole pass (constant, inside the GDN
+        working region).
+    (c) Raw qkv rows come straight from the gdn_in phase's L1 output (STREAM cores → prefix cores by unicast at
+        the final offset, under the activation distribution rule), with no DRAM round-trip.
+    Estimated steady PREFIX phase ≈ 6-8 µs per layer at u8, replacing ~33 µs of per-user row-wise work in the step.
 - `AR` (bit 4): all-reduce send/recv cores (AR track defines; receive writes x into STREAM cores' CB_X).
 
 **Phase table** (L1, array of 16-u32 records, base address in runtime arg; `n_phases` in runtime arg):
 | word | field |
 |---|---|
-| 0 | type: 1 PROJ, 2 MLP_GU, 3 MLP_DN, 4 GDN_STEP, 5 SDPA, 6 AR_SEND, 7 AR_RECV, 8 NORM, 9 STALL, 10 GDN_PREFIX |
+| 0 | type: 1 PROJ, 2 MLP_GU, 3 MLP_DN, 4 GDN_STEP, 5 SDPA, 6 AR_SEND, 7 AR_RECV, 8 NORM, 9 STALL, 10 GDN_PREFIX, 11 GDN_STEP_U1 |
 | 1 | layer index |
 | 2 | weight tensor id (0 gate_up, 1 down, 2 gdn_in, 3 gdn_out, 4 qkv, 5 wo, 6 kv cache, 7 gdn state) |
 | 3 | weight page base for this core (bank-local slice), or KV/state page base |
@@ -164,6 +176,12 @@ into overlapping rectangles at once (fused MLP v1/v2: 150 µs stalls on silicon)
 | AR buffers | 100 |
 | slack | ~90 |
 Rule: a block may use the shared working region only during its own phases. Weight prefetch must never touch it.
+
+**Attention-layer L1 during SDPA (v0.3):** STREAM weight residents during SDPA are this layer's wo slice (~105 KB) +
+the next MLP's even gate|up (MKA_GUPRE: the whole even half, 110 KB, prefetched during SDPA to cut the ~93 µs
+post-SDPA tail) + odd W2 + WD, all inside the 500 KB weight ring. qkv streams through the ring in chunks and is
+consumed before SDPA, so it never co-resides with GUPRE. Keep GUPRE if the MK2 build keeps ≥16 KB headroom on STREAM
+cores; otherwise single-buffer WD.
 
 **Prefetch throttle (v0.3, attention track request):** during a phase with word 13 > 0, the engine issues next-phase
 weight reads in chunks and keeps at most that many bytes outstanding (trid-ring waits), interleaving one weight chunk
@@ -222,3 +240,540 @@ all-reduces (~2.3 ms), the GDN step (the prefix split targets ~−0.9 ms at u8),
 Attention-track silicon confirms the §8 attention-layer SDPA term: ~240 µs **including** the next layer's weight
 prefetch running alongside (it was modeled as 236 µs SDPA + hidden stream). The §8 projection stands (u8 ~12.3 ms,
 u1 ~8.7 ms).
+
+## 8b. Projection update: measured in-engine attention layer + all-reduce sensitivity (2026-11-10)
+The attention track measured the attention layer *inside the engine* on silicon at **368 µs steady** (32K, u8, BFP8
+KV, with modeled 18 µs AR stalls), against the 322 µs estimated in §8.
+
+Model: pass = 48 × (GDN non-AR + 2·AR) + 16 × (attention non-AR + 2·AR) + 0.5 ms (LM head/MTP) = base + 0.128 ms
+per µs of AR. Non-AR per layer: u8 GDN 102 µs / attention 332 µs; u1 GDN 77 / attention 139. The u1 attention has
+not been re-measured in the engine; the last row assumes it grows +46 µs like u8.
+
+| Per-AR µs | 18 | 25 | 40 | 60 | 116 | 181 | **break-even** |
+|---|---|---|---|---|---|---|---|
+| u8 pass (gate 13.7) | **13.0** | 13.9 ✗ | 15.8 ✗ | 18.4 ✗ | 25.6 ✗ | 33.9 ✗ | **≤ 23.4 µs** |
+| u1 pass (gate 9.4) | **8.7** | 9.6 ✗ | 11.5 ✗ | 14.1 ✗ | 21.3 ✗ | 29.6 ✗ | **≤ 23.3 µs** |
+| u1 if attention +46 µs | 9.5 ✗ | 10.4 ✗ | 12.3 ✗ | 14.8 ✗ | 22.0 ✗ | 30.3 ✗ | **≤ 17.5 µs** |
+
+**AR RISK (blocking):** the gate is met only if the in-megakernel all-reduce is about as fast as today's one-shot
+all_reduce_async (18-20 µs), i.e. ≤ ~23 µs per call (≤ ~17.5 µs if u1 attention grows like u8). The real
+megakernel AR is currently 116-181 µs per call (v1/v2), and v3 hung. At those numbers the pass is 25-34 ms, worse than
+today. AR latency is now the make-or-break item, ahead of the GDN restructure and the MLP tail.
+Mitigations:
+(a) reuse the proven all_reduce_async kernels' one-shot fabric path as a phase inside the program (same packets,
+    same 2 links), rather than a new AR design;
+(b) overlap: issue the MLP AR send as soon as each core's down chunk is ready (per-root-chunk publication already
+    exists), so part of the AR hides under the down tail;
+(c) cut AR count: fuse the attention/GDN out-proj AR with the MLP-in residual where the math allows (not possible
+    across a norm without a 2-stage AR);
+(d) fallback: per-sub-block programs with today's AR op between them. That costs ~7 µs launch per boundary
+    (×128 ≈ 0.9 ms) on top of 18-20 µs ARs, about 14 ms at u8, which misses the gate.
+
+## 9. Spec v0.4: deferred RMSNorm (block contract change, AR track proposal, 2026-11-10)
+Measured (AR track): the one-shot AR phase is **21.7 µs**, bit-identical to all_reduce_async. With the RMSNorm on the
+owners plus 4-root x delivery it was 71.9 µs (norm chain ~25 µs, x multicast ~16-30 µs). The norm chain must leave the
+critical path.
+
+**New block contract:**
+- The AR delivers the **un-normed residual x** (bf16 32×5120) straight into the STREAM cores' CB_X via the 4-root
+  rule. Alongside it come **rstd partials**: each AR owner computes Σx² over its reduced slice and appends fp32 32 rows
+  × n_owners to the all-gather payload (CB 20, renamed CB_RSTD).
+- Consumers (MLP gate_up, attention qkv, GDN in-proj) use weights with **γ (× NORM_FIX) folded into the rows**
+  (diag(γ)W, done at load). They compute rstd = 1/sqrt(ΣΣx²/5120 + eps) from the partials (a few ops) and **scale
+  each output row by rstd at pack time**.
+- Exact in real arithmetic: RMSNorm(x)·γ @ W = rstd ⊙ (x @ diag(γ)W).
+- The residual add stays with the AR owners (they hold the residual).
+- **Numerics gate:** folding γ re-quantizes the BFP4/BFP8 weights (different rounding), so it must pass the GPQA
+  output-length gate before it becomes default. Fallback: unchanged weights + x ⊙ γ on the consumer (~7 µs per
+  projection phase on the critical path).
+
+**§8b re-run with the AR split into on-path vs overlappable** (base + 0.128 ms per on-path µs):
+
+| On-path µs per AR | 21.7 (all on path) | 18 | 15 | 12 |
+|---|---|---|---|---|
+| u8 (gate 13.7) | 13.49 ✓ (0.2 margin) | 13.01 | 12.63 | 12.25 |
+| u1 (gate 9.4) | 9.20 ✓ (0.2 margin) | 8.72 | 8.34 | 7.96 |
+| u1 if attention +46 µs | 9.94 ✗ | 9.46 ✗ | 9.08 ✓ | 8.70 ✓ |
+
+Overlappable candidates: the MLP AR send starts per down chunk (DNPIPE publication), hiding part of the
+reduce-scatter under the down tail. The gather multicast for the next phase can overlap the consumer's γ-folded
+weight prefetch, which is already resident. Target on-path **≤ 15 µs** for a real margin at both u8 and u1.
+
+## 8c. Correction: steady attention layer = 377 µs (2026-11-10)
+The attention track's true steady figure is the mean of the middle layers of a 5-layer pass: **377 µs** (GUPRE,
+NBB=1, 16 KB budget). The earlier 368 µs was a last layer, which is 40-60 µs cheaper because it has no next-layer
+prefetch. Non-AR per layer at u8: GDN 102, attention 341. The u1 attention is not yet measured in the engine; the
+last row assumes it grows like u8 (+55 µs).
+
+| On-path µs per AR | 21.7 | 18 | 15 | 12 | break-even |
+|---|---|---|---|---|---|
+| u8 (gate 13.7) | **13.63** (0.07 margin) | 13.16 | **12.77** | 12.39 | 22.2 µs |
+| u1 (gate 9.4) | 9.20 | 8.72 | **8.34** | 7.96 | 23.3 µs |
+| u1 if attention +55 µs | 10.08 ✗ | 9.60 ✗ | **9.22** | 8.84 | 16.4 µs |
+
+**The ≤15 µs on-path AR target is now REQUIRED, not optional.** At 21.7 µs, u8 has essentially no margin, and u1 fails
+if its attention layer grows like u8's. At 15 µs: u8 12.77 (0.9 ms margin), u1 8.34-9.22.
+
+## 10. Spec v0.5 proposal: all ~120 cores stream weights when not in their own phase (2026-11-10)
+**Why:** at u1 the attention layer measures ~270 µs in-engine (§8 assumed 175). Cause (attention track): the layer is
+bound by the 80 STREAM cores' weight stream (~46.7 MB of next-layer qkv chunks, wo, gate|up, MLP; ~64.5 MB total at
+~240-290 GB/s), while the 40 ATTN-only cores finish their 148 KB KV slice and idle. They also idle through every
+GDN-type layer.
+
+u1 now decides the gate: base 7.94 ms → 10.72 at 21.7 µs per AR, 9.86 at 15 µs (gate 9.4: **FAIL**); break-even
+11.4 µs per AR.
+
+**Change (roles become per phase, not per core):**
+- New role bit `STREAM_EXT` (bit 5) on the ATTN-only cores. A STREAM_EXT core owns bank-local slices of the
+  *projection* weights (qkv, wo, GDN in, GDN out) and streams and computes them like a STREAM core, whenever it is not
+  in its own SDPA phase (before SDPA starts, after its KV slice is done, and through every GDN-type layer).
+- Step 1 (minimum, attention track): qkv/wo PROJ across all 120 cores at u1.
+- ~~Step 2: GDN in/out across all 120 cores during GDN-type layers.~~ DROPPED (§13): the mixer is 4.2 µs with resident weights.
+- Step 3, only if needed: MLP gate|up/down on 120 cores. fm11 assumes the 80-core rectangle (68 gate|up columns,
+  4 roots), so going to 120 needs extra multicast rectangles and new h-chunk ownership. Not in v0.5.
+- Rules unchanged: bank-local placement (each STREAM_EXT slice in its nearest bank) and the 4-root rule for every
+  replicated activation (x to STREAM_EXT cores goes through the same 4 roots, adding more multicast rectangles).
+- L1: STREAM_EXT cores have no MLP buffers (no CB_W/CB_W2/CB_WD/CB_H), so they hold a larger projection ring
+  (~600 KB) next to their 300 KB SDPA working set.
+
+**Re-projection, u1** (non-AR GDN 77 µs; attention layer at the stated µs; 0.128 ms per µs of on-path AR):
+
+| Attention layer, u1 | AR 21.7 | AR 15 | AR 12 | break-even AR |
+|---|---|---|---|---|
+| today 270 µs | 10.72 ✗ | 9.86 ✗ | 9.48 ✗ | 11.4 µs |
+| v0.5 conservative 230 µs (stream ~340 GB/s) | 10.08 ✗ | **9.22** | 8.84 | 16.4 µs |
+| v0.5 at ~400 GB/s, 210 µs | 9.76 ✗ | **8.90** | 8.52 | 18.9 µs |
+
+**u8:** little change expected. The ATTN-only cores are already busy with KV (u8 SDPA is KV-read-bound), so the gain
+is limited to the post-SDPA tail (perhaps 377 → ~355-365 µs). u8 at 15 µs AR stays ~12.6-12.8 ms (gate 13.7).
+**Both gates need both changes: AR ≤15 µs on path AND v0.5 streaming at u1.**
+
+## 11. Mixed-group silicon checkpoint (2026-11-10, d27u08 chip 0, branch -mk-mixed @183d9b41350)
+32K, u8, BFP8 KV, NL=8 = 2 × [G,G,G,A], GUPRE, NBB 1, 16 KB budget, GDN stand-in 64 µs, AR stalls 18 µs. The CSV is
+on the laptop at .claude/tmp/r16/mega/si_mixed8/.
+- **Correctness:** mixer PCC 0.99999; SDPA L3/L7 0.99998; MLP last layer 0.99998.
+- **Per layer (µs):** 220.4 (L0, cold), 145.4, 141.3, **382.4** (L3, attention, middle), 151.3, 141.2, 146.1,
+  330.1 (L7, attention, last).
+- **Steady:** GDN-type 145.1 µs (model 138); attention middle 382.4 µs (model 377).
+- **Group:** 817.7 µs vs the 791 µs estimate (+3.4 %).
+- **u8 full pass from measured layers:** 13.58 ms at 18 µs AR stalls; ~13.19 ms at 15 µs on-path AR; ~14.05 ms at
+  21.7 µs. The gate (13.7) needs AR ≤15 µs **plus** the GDN restructure (replaces the 64 µs stand-in, target
+  ~-19 µs/layer ≈ -0.9 ms) and/or v0.5 streaming.
+
+## 12. AR / x-delivery layout pinned (v0.4) + the x-delivery problem (2026-11-10, AR track f5342c9cbd3)
+**Pinned layout:**
+- CB_X: un-normed residual, bf16 [32, 5120]. Chunk j = 10 tiles at offset j × 20 KB; owner j = (0,8)-(7,9),
+  row-major.
+- CB_RSTD: fp32 [16 owners][32 rows] at offset 0, P_j[r] = Σ_{c∈chunk j} x[r,c]² · 2^-12. The tag for owner j is at
+  2048 + 16·j and is set to SEQ+1.
+- Consumer: rstd' = rsqrt(Σ_j P_j + 1.25·eps) = rstd / NORM_FIX, so γ·NORM_FIX is folded into the weights.
+- Flags: 4 root x-flags (4-root mode).
+
+**Silicon (d26u02, 1x8 ring):**
+- The residual is bit-identical on all devices, and CB_X == residual on all 80 cores. Partials max relative error
+  8.2e-4.
+- AR alone 21.7 µs; AR + 1 chunk + partials 24.7 µs.
+- **x delivery (bf16, 320 KB to 80 cores) is multicast-throughput-bound:**
+  - one 20 KB multicast to 40 cores takes ~1.3-1.5 µs;
+  - 16 owners multicasting at once thrash: ~92-102 µs per call;
+  - serial or token-chained delivery: ~101-107 µs;
+  - 4 roots × 80 KB: ~96-102 µs in trace, 20 µs median per root multicast.
+- The practical floor is ~16-20 µs (theory 3.7 µs). **Replicated full-K x cannot be on the critical path.**
+
+**Options:**
+1. Overlap: K-ordered root flags so consumers start on chunk 0 (weights are resident), and start delivering each
+   chunk as soon as the all-gather lands it. Removes up to ~10 µs; delivery still ≥ AR tail.
+2. Fewer bytes: BFP8 x (≈½; numerics, so it needs the output-length gate); gate_up-only targets (68 cores) for
+   the MLP.
+3. **Proposed v0.6, split-K tiling (removes replication):** arrange the 80 STREAM cores as 8 K-rows × 10 N-columns.
+   Core (k, n) owns W[K-slice k, N-slice n]. x chunk k (40 KB) goes only to K-row k: 8 owners multicast to 8
+   *non-overlapping* row rectangles at once, ~40 KB per core instead of 320 KB, no thrash (~2-4 µs). Each N-column
+   then reduces its 8 partial outputs (32 × N/10, small) to the column's root before the nonlinearity (SwiGLU) or
+   the next consumer. Extra reduce traffic is ~2 MB/layer vs ~25 MB of x multicast. This changes fm11's gate|up/down
+   layout and the qkv/GDN in-proj layouts. Biggest remaining lever for the ≤15 µs on-path AR + delivery target.
+   Needs a sim prototype first (fused MLP v12).
+
+## 13. v0.5 step 2 dropped; engine to-dos (2026-11-10, -mk-gdnext GDNEXT_RESULTS.md)
+- **Step 2 dropped:** with resident weights the GDN-type mixer compute is only 4.2 µs, so spreading GDN in/out over
+  120 cores has at most ~2-3 µs headroom. v0.5 = step 1 only (qkv/wo on 120 cores, the u1 attention lever).
+- **To integrate into the mixed engine:**
+  - MKA_MIXTRID (separate mixer trids 6/7; GDN-layer MLP slots pushed in W-GDN before plan_layer(L+1)): cold
+    layer 0 mixer 114 → 89 µs, layer 0 247 → 235 µs, PCC unchanged. From anatarajan/qwen38-r16-mk-gdnext.
+  - Port MK_DNPIPE / MK_FLAG_FLUSH (from -mk-tail, currently only in fm11_common.hpp) into mka2_writer/compute's
+    MLP tail: ~1-2 µs per layer.
+  - **Owner:** a0992fda706a58a7c is porting DNPIPE, FLAG_FLUSH and MIXTRID into the MKA2 kernels on -mk-gdnext
+    (default-off, measured with mixed NL=8 on d30u20). The base integrates from there.
+- **GDN-type layer anatomy (silicon, steady ~145 µs):** ~100 µs of stand-ins (GDN step 64 + 2 ARs × 18) plus
+  ~35 µs of real work (mixer ~4 with resident weights, MLP, h-broadcast/down tail, syncs). The levers are the
+  **GDN step** (prefix split: ~6-8 µs prefix + reduced step vs 64) and the **AR + x delivery** (§12). Projection:
+  u8 GDN layer ≈ 35 + GDN(prefix+step) + 2·AR_on-path.
+
+**v0.6 split-K: AR-side check (AR track) and decisions:**
+- **Fits the owner layout.** Keep **16 owners, 2 per K-row** (owners 2k and 2k+1, 10 tiles each, ~40 KB per core),
+  which preserves the 10-tile reduction parallelism.
+- Each K-row is 2 physical rectangles (column split at logical x=7: 7 + 3 cores), so 2 multicasts per chunk.
+  Destinations never overlap, so no destination thrash.
+- **Next bottleneck: the shared vertical link.** On NOC1 all chunks for a rectangle climb one column (logical 6 for
+  rect0, 9 for rect1), ~320 KB through one link (≥3.7 µs). Rule: alternate NoCs per K-row (even rows NOC1, odd rows
+  NOC0 entering at the x0 corner) and/or give each K-row a distinct entry column. Check in sim.
+- **rstd goes only to the 10 N-column roots** (applied after the N-column reduce): 2.3 KB to 10 cores instead of 80.
+- Pipelining with the all-gather is already the default (owners multicast each chunk as soon as it lands).
+  Landing order is not K order, so K-ordered flags in the replicated layout can stall. Split-K avoids that because
+  each K-row waits only for its own chunk.
+- Next: fused MLP v12 (split-K gate|up + N-column reduce + SwiGLU at the column root, split-K down) in sim, then
+  silicon.
+
+**v0.6 down-stage layout (adopted, -mk-v12 agent's proposal):** gate|up gives h_n at column root n (68 (g,u) pairs
+over 10 columns: 7×8 + 6×2). Root n multicasts h_n down its own N-column (10 non-overlapping column rectangles).
+Core (k, n) computes out[:, N-slice k (20 tiles)] over K = h_n, then sends its 2 × 10-tile halves to K-row k's 2
+owners, which sum the 10 column partials. **The down output lands directly in the next layer's x chunk layout**, so no h
+redistribution and no separate x gather: the AR's reduce-scatter input is already per owner.
+Partials bf16 first; fp32 if PCC needs it. Branch anatarajan/qwen38-r16-mk-v12 (stage A kernels from the coordinator;
+silicon, down stage and persistence by the -mk-v12 agent; sim by the coordinator).
+- MLP tail port merged-ready (-mk-gdnext top): DNPIPE in mka2 + MIXTRID, numerically identical, GDN-type layer
+  ~-2 to -2.5 µs. Default ON at integration.
+- **Replicated-x delivery measured with pipelining (AR track, fresh d26u02):** consumers can start (K-cumulative
+  chunk 0) only at ~44 µs after AR start. Everything lands by 57 µs (per-chunk mode) or 57.2 µs (4-root mode, root 0
+  last), against 21.7 µs for the AR alone. Replication adds ~20-35 µs on the path even when pipelined, and landing order
+  ≠ K order makes it worse. **≤15-23 µs is not reachable with replication; split-K (v0.6) is required.** The rstd
+  partial multicasts also contend with x. In split-K they go to only the 10 column roots, sent after x.
+
+**v0.5 step 1 stand-in result (attention track, 1d559f26341; 5-layer middle mean, 32K BFP8 KV, GUPRE, NBB 1, 16 KB):**
+- u1 attention layer **239.8 µs** with STREAM_EXT, vs 256.7 µs on 80 cores. u8 370.0 vs 374.5.
+- **Bench fix:** the wo/extra stand-in reads all hit DRAM bank 0 (that was the "column skew"). MKA_WOBANK=1 spreads
+  them (core i reads bank i%8) and took u1 from 270 to 257 µs. **The mixed engine (-mk-mixed @183d9b41350, off
+  efe85cf56ca) has the same hotspot**, so its 382 µs attention and GDN layer timings are pessimistic. Rebase onto
+  1d559f26341 and re-measure.
+- With EXT, u1 is DRAM-bound in the SDPA window (~400 GB/s, 64.5 MB in ~160 µs) plus a ~74 µs chain (wo + S_WO 10 +
+  2 × 18 AR + MLP).
+- **u1 pass** (GDN non-AR 77 assumed): base 7.46 ms → AR 15 µs: **9.38** (gate 9.4, 0.02 margin); AR 13: 9.12;
+  AR 12: 8.99. Break-even 15.2 µs per AR. With split-K (v0.6) removing the x gather, the on-path AR should approach
+  the 21.7 µs AR-alone or below, so u1 also needs the AR itself ≤~13 µs, or a shorter post-SDPA chain (fold wo into
+  the tree tail, overlap the attention AR with the MLP's gate|up K-stream).
+
+## 8d. Projection of record (2026-11-10), all measured in-engine on silicon except the u1 GDN layer
+Inputs (32K, BFP8 KV):
+- GDN-type layer u8 145.1 µs (mixed checkpoint) − 2.25 µs (DNPIPE+MIXTRID port) → non-AR 106.85 µs.
+- Attention layer u8 370.0 µs, u1 239.8 µs (v0.5 step 1 STREAM_EXT, MKA_WOBANK bank fix) → non-AR 334 / 203.8 µs.
+- u1 GDN non-AR is assumed 77 − 2.25 = 74.75 µs (not yet measured in-engine at u1).
+- +0.5 ms LM head/MTP; 2 ARs per layer.
+
+| On-path µs per AR | 21.7 | 18 | **15** | 13 | 12 | break-even |
+|---|---|---|---|---|---|---|
+| u8 (gate 13.7) | 13.75 ✗ | 13.28 | **12.89 (0.8 margin)** | 12.64 | 12.51 | 21.3 µs |
+| u1 (gate 9.4) | 10.13 ✗ | 9.65 ✗ | **9.27 (0.13 margin)** | 9.01 | 8.88 | 16.0 µs |
+
+Still stand-ins: the GDN step (64 µs; prefix split targets ~−19 µs/layer ≈ −0.9 ms), real qkv/wo PROJ phases
+(attention track), and the AR itself (split-K v0.6 removes x replication; the AR alone is 21.7 µs today, so the AR core
+must also drop to ≤15 µs, or overlap). The mixed-engine numbers predate the bank-0 fix (MKA_WOBANK), so its attention
+layers are pessimistic; rebase onto 1d559f26341 before the next mixed run.
+
+**v0.6 owner placement (changed): owners IN-ROW at logical x = 10, 11, rows 0-7** (-mk-v12 silicon, d30u20,
+1ebb16fd568, v12/XDEL_RESULTS.md):
+
+| x delivery to 80 cores | median |
+|---|---|
+| Replicated (8 owners × 40 KB) | 49.0 µs |
+| Split-K, pinned owners (0..7, 8..9), alternating NoC | 14.0 µs (all NOC0 35.6, all NOC1 17.0; shared vertical links wrap the torus) |
+| **Split-K, owners (10,k) and (11,k) for K-row k, NOC1 multicast west within the row** | **4.42 µs** (max 7.75) |
+
+- New pinning: owner 2k → (10,k), owner 2k+1 → (11,k). The CB_X chunk mapping is unchanged (chunk j = 10 tiles).
+- The down stage's owner sums also land in-row: (k,n) partials go to (10,k) and (11,k).
+- Role overlap is allowed (roles are per phase). Columns 10-11 are also STREAM_EXT (v0.5 qkv/wo) and part of the ATTN
+  set. The AR-owner phase (reduce-scatter landing, rstd partials, row multicast) is time-disjoint from their SDPA/EXT
+  phases. L1 on these cores: AR buffers ≤~100 KB (CB 17-20) + EXT ring + SDPA working set must fit, so check the
+  budget at integration.
+- **The AR track must move its owner coordinates** from (0..7, 8..9) to (10..11, 0..7).
+
+## 8e. Projection of record, updated with in-engine u1 GDN (2026-11-10, -mk-mixed2 @746a7169b44, d27u08)
+Mixed NL=8 (2 × [G,G,G,A]), 32K, BFP8 KV, with EXT + bank fix + tail port (DNPIPE, FLAG_FLUSH, MIXTRID). All PCCs as
+before (mixer 0.99999, SDPA 0.99998, MLP 0.99998). CSVs are on the laptop at .claude/tmp/r16/mega/si_mx2_{u8,u1}/.
+
+| Layer (µs, middle means, with 2 × 18 AR stalls) | u8 | u1 |
+|---|---|---|
+| GDN-type (5 middle layers; GDN step stand-in 64) | 138.0 (136.8 / 140.0 / 135.1 / 141.1 / 137.2) | 142.3 (150.3 / 136.5 / 145.8 / 134.0 / 145.0) |
+| Attention-type (L3 middle) | 367.3 | 242.0 |
+
+- Non-AR per layer: u8 GDN 102.0 (incl. the 64 µs stand-in), attention 331.3.
+- u1 GDN 84.3 (the 64 µs stand-in replaced by r15's u1 GDN step of 42), attention 206.0.
+- **The u1 GDN layer is 84.3 µs non-AR, not the assumed 74.75.**
+
+| On-path µs per AR | 12 | **15** | 18 | 21.7 | 25 | break-even |
+|---|---|---|---|---|---|---|
+| u8 (gate 13.7) | 12.23 | **12.62 ✓** | 13.00 | 13.48 | 13.90 ✗ | 23.4 µs |
+| u1 (gate 9.4) | 9.38 ✓ | **9.76 ✗** | 10.15 | 10.62 | 11.04 | **12.2 µs** |
+
+**u1 is the binding gate: on-path AR ≤ ~12 µs, or ~0.4 ms of other u1 savings.** With split-K and in-row owners, x
+delivery is ~4.4-7.8 µs, so the on-path AR ≈ AR core (21.7 today; part of its in-chip gather is now done by the down
+stage's owner sums) + the unoverlapped delivery. u1 levers:
+- AR core speed (the dominant one);
+- the u1 attention post-SDPA chain (fold wo into the tree tail; overlap the attention AR with the gate|up K-stream);
+- the u1 GDN step (42 µs; the prefix split does not help at u1, which has one user per head).
+
+## 14. Spec v0.7: GDN_STEP_U1 (phase type 11) for the u1 gate (GDN track, -mk-gdn-u1v2 @3de08997fd3, DESIGN_gdn_step_u1.md)
+- **Phase type 11, GDN_STEP_U1:** one core per (head, value block): 24 cores, or 48 with split-K. Replay + WY +
+  gated norm, with the norm's Σo² combined by a scalar exchange. It consumes GDN_PREFIX output (phase 10 on 72 cores,
+  plus l2norm and silu(z)/gates on aux cores).
+- **Selection:** the host builds the per-pass phase table with type 11 when the verify batch has users == 1, and
+  type 4 (existing step) otherwise. Both are compiled into the program, with no runtime branch inside a phase.
+- **Resources:** CB 13-15 keep their GDN meaning (state, conv window, out). CB 24-31 scratch is owned by the running
+  GDN phase. GDN global semaphores: up to 8 (prefix + step), addresses in runtime args / phase words 14-15. No program
+  semaphores.
+- **Output contract:** the gated-norm output o goes to the gdn_out PROJ input (on STREAM cores, v0.6 split-K layout),
+  and gdn_out writes the AR send buffer (CB_OUT). If the step writes CB_OUT directly (fusing gdn_out), the fused
+  phase must keep the owner/partial layout of §12.
+- **Estimate:** ~42 → ~21 µs per u1 GDN op, about −1.0 ms per u1 pass. §8e u1 at 15 µs AR: 9.76 → ~**8.75 ms** (gate
+  9.4, ~0.65 margin). At 18 µs: ~9.14.
+
+## 15. Split-K AR on silicon (AR track, -mk-ar @92e213cb005, d26u02 1x8, trace per call; bit-identical on 8 devices)
+
+| Config | µs/call |
+|---|---|
+| RS + AG core, in-row owners (10..11, 0..7) + residual, senders (10..11, 8..9) | 23.0 (22.6 without residual) |
+| + split-K x delivery (owner j → K-row j//2 slot j%2, NOC1 west) | 26.2 (+3.2 on path) |
+| + Σx² partials in-row | 28.4 |
+| + Σx² partials multicast to row-0 column roots | 45.5 (cross-row multicast from rows 1-7 stalls) |
+
+**Pinned (v0.7):** Σx² partials go in-row. CB_RSTD on (k,n): slot p = j%2 at p × 128 B, tag at 2048 + p × 16. Each
+(k,n) forwards its 2 partials to the column root inside its column-reduce payload (column root = row 0, end of the
+column tree), and the root sums the 16. No extra multicast.
+
+**AR cost model:** chunk sweep 10/5/2/1 tiles → 23.1/17.6/14.2/12.8 µs ≈ 11.7 µs fixed + 0.036 µs/KB. About 7 µs
+of each traced call is dispatch, so **in-megakernel device time ≈ 16 µs** (~5 fixed + ~10 bandwidth). Adding split-K
+delivery brings the on-path total to **~19 µs**. 2 links only.
+Levers:
+- persistent fabric connections, −3 to −5 µs fixed;
+- BFP8 RS/AG payload, ~−5 µs, numerics change, so it needs the gate;
+- start the RS per down-chunk, hiding it under the MLP tail.
+
+**L1:** the one-shot reduction buffer is 160 KB per owner (> ~100 KB budget), so a streaming reduce (accumulate on
+arrival) is required.
+
+**Gate arithmetic with GDN_STEP_U1 (§14, −21 µs per u1 GDN layer):** u1 break-even AR rises from 12.2 to **~20.0 µs**;
+u8 break-even stays 23.4 µs. So **~19 µs on-path AR (today's in-megakernel estimate) plus GDN_STEP_U1 passes both
+gates**, with thin u1 margin. Persistent fabric connections add margin; BFP8 payload stays gated.
+
+**Persistent AR on silicon (AR track, -mk-ar @4229b02c43f, after reset; bit-identical at every N):**
+
+| ARs per program | µs per program | µs per AR |
+|---|---|---|
+| 1 | 23.4 | 23.4 |
+| 2 | 41.4 | 20.7 |
+| 4 | 77.6 | 19.4 |
+| 8 | 149.9 | 18.7 |
+
+- Marginal **18.07 µs per AR**; launch + setup ~5.3 µs.
+- The earlier hang was the CB-wrap bug, now fixed. The single-AR sanity pass is clean, so this was not hardware.
+- Per-iteration profile at N=8:
+  - RS send ~8 µs (~9 GB/s per link-direction worker);
+  - owners wait 15.7 µs for the 7 RS chunks; reduce 1.5 µs;
+  - AG send ~2 µs; x ready at 17.8 µs.
+- **On-path AR ≈ 18 + 3.2 split-K delivery ≈ 21 µs.** u8 passes (break-even 23.4). u1 with GDN_STEP_U1 is
+  ~1 µs over its ~20 µs break-even.
+- **AR work order (decided):**
+  1. **Start the RS per down-chunk, under the MLP tail.** In v12 the owners sum column partials chunk by chunk, so
+     each owner can start its RS as soon as its chunk is complete. That hides up to ~8 µs of RS send with no numerics
+     change. Prototype now with a synthetic progressive producer (chunks released at the measured down cadence); same
+     idea for the attention AR after wo.
+  2. **Streaming reduce** (accumulate on arrival): required to fit the ~100 KB L1 budget at integration.
+  3. Pipelined per-packet flush (rotating headers).
+  4. BFP8 payload: flag only, gated.
+
+**RS started per down-chunk (AR track, -mk-ar @a17e60b0376; synthetic producer, bit-identical on 8 devices):**
+On-path = marginal per-iteration time − the 15δ release window.
+
+| Release order | δ 0 | 0.5 µs | 1 µs | 2 µs |
+|---|---|---|---|---|
+| Chunk index, same on every device | 18.13 | — | 16.7-17.6 | — |
+| **rot**: per device, farthest-owned chunks first, own chunks last | — | 11.08 | **8.97** | 8.70 |
+
+**Pinned contract (v0.7) for every AR producer (v12 down stage, attention wo):** on each device, owners complete
+their chunks in **descending ring distance from the chunk's owner device, the device's own chunks last**. This is a
+per-device permutation of the owner (column-sum) completion order. Equivalent if owners can't be reordered: rotate
+per device which K-row the down stage finishes first.
+
+**Result:** on-path AR ≈ 9 µs + 3.2 µs split-K delivery ≈ **12 µs**. Projection (§8e layers):
+
+| On-path AR | u8 (gate 13.7) | u1 (gate 9.4) | u1 + GDN_STEP_U1 |
+|---|---|---|---|
+| 12 µs | **12.23 ms** | **9.38 ms** (0.02 margin) | **~8.37 ms** |
+| 15 µs | 12.62 ms | 9.76 ✗ | ~8.75 ms |
+
+**Both gates pass at ~12 µs on-path AR. With GDN_STEP_U1, u1 has ~1 ms margin.** Remaining AR items: streaming reduce
+(L1), rotating packet headers.
+
+**AR slot L1 decision (v0.7):** no streaming reduce. The AR owners (10..11, 0..7) are not STREAM cores. They hold no
+CB_X (320 KB), weight rings, CB_H or MLP buffers, so the ~100 KB AR budget (written for STREAM cores) does not apply.
+Owner-core L1 map (~1.45 MB usable):
+
+| Region | KB |
+|---|---|
+| **AR slot region, 8 sources × 20 KB, shared by attention-AR and MLP-AR** (sound by the AR dependency chain: attention-AR(L) writes only after MLP-AR(L-1) completes everywhere, MLP-AR(L) writes only after attention-AR(L) completes everywhere) | 160 |
+| SDPA working set (NBB 1, BFP8), never aliased with AR slots | ≤300 |
+| EXT projection ring (v0.5), capped on these 16 cores | ≤500 |
+| CB_RSTD, AR flags, rstd partials, misc | ≤40 |
+| **Total** | ≤1,000 (≥~400 KB headroom) |
+
+The AR slots never overlap SDPA/EXT: a faster remote device can write attention-AR(L) while we are still in SDPA(L).
+Alternatives not taken: credit-based streaming (adds a fabric round trip on the late sources); separate
+attention-AR owners (needs a second in-row placement); BFP8 slots (gated).
+
+**§15 amendments (v0.7.1):**
+- *rot-order contract, clarified:* in the v0.6 down layout all 16 owners finish together, 2-4 µs after h lands. No K-row is delayed on purpose; that would add latency, not hide AR. The contract is now:
+  - (a) Each owner releases (flag + multicast) the moment its own 10-partial sum is done, with no stage-end barrier.
+  - (b) Within a K-row, the sub-block order of 2k / 2k+1 is a per-device runtime arg: the chunk whose RS destination is farther around the ring goes first.
+  - (c) The AR side polls owner flags and issues RS sends in rot order, so among chunks that finish together, the farthest destinations go first.
+  - The attention wo producer follows (a)-(c) the same way.
+- *Owner-core L1, revised with the EXT x shard:*
+  - The x shard on the ext cores (320 KB bf16, at the same lockstep address as the STREAM x) is separate from the AR slots. A faster remote device can write attention-AR(L) while we are still in qkv(L), so they cannot alias.
+  - Owner-core totals: EXT ring 348 + SDPA ~250 + misc 28 + x 320 + AR 160 ≈ **1.11 MB of ~1.45 MB**. The 2-tile ext ring stays.
+
+**§15 risk note (v0.7.2):** the down stage finishes all 16 owner chunks within ~1 µs, 2-4 µs after h lands (v12 report). So the progressive-RS overlap with the down stage is small. The RS is fabric-link bound (~200 KB per link direction, ~25 GB/s; header rotation gave 0 gain), so on-path AR may land between 12 and 18 µs, not at the ~12 µs of record.
+Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
+
+| On-path AR | u8 (≤13.7) | u1 (≤9.4) | u1 + STEP_U1 |
+|---|---|---|---|
+| 12 µs | 12.23 | 9.38 | 8.37 |
+| 15 µs | 12.62 | 9.76 ✗ | 8.75 |
+| 18 µs | 13.01 | 10.15 ✗ | 9.14 |
+
+**Consequence:** GDN_STEP_U1 is **required** for the u1 gate, not optional. u8 passes even with a fully exposed 18 µs AR.
+
+**STEP_U1 silicon budget (v0.7.3):** 48 GDN layers per pass. At 18 µs on-path AR, u1 has 0.26 ms margin, so the full u1 op (prefix + step) must be **≤26.4 µs on silicon**. At 12 µs AR the limit is ≤42 µs. The ~21 µs figure is a sim/zone estimate; with the 1.3-1.5× sim optimism seen on MK1, silicon could land at 27-31 µs, which is marginal at the top of the AR band.
+
+**§15 measured burst AR (v0.7.4, AR track, d26u02):** all 16 chunks released at t0, rot order. t0 → x ready on owners is **17.6 µs**, **≈20.8 µs with split-K delivery**. Index order is 19.1-19.8 µs, so rot order saves 1.5-2 µs and stays the default. Nothing hides behind the down stage.
+- Sensitivity stays **1:1 (0.128 ms per µs)**. The pass is chain-bound, not DRAM-bound: the non-AR chain is ~167 µs/layer, while DRAM at peak BW is ~107 µs/layer. The writer already prefetches all of layer L+1's weights during layer L's stall. Deeper prefetch (L+2) would not shorten the chain, and there is no L1 for it.
+- At 20.8 µs: u8 **13.36 ms** ✓ (0.34 margin); u1 + STEP_U1 (21 µs/op) **9.50 ms ✗**.
+- **Plan:** the AR track builds a chain RS: two 1-hop chains per chunk (4 + 3 devices) with partial-sum forwarding, so link bytes per direction drop from ~200 KB to ~75 KB. The estimate is RS 6-7 + reduce 1 + AG 4 + delivery 3.2 ≈ **15 µs**. Target **≤15 µs, ideally ≤14**, including delivery. Possible hybrid: chain for far devices, direct sends for near ones.
+- Equally valuable: every µs cut from the non-AR chain counts 1:1, e.g. STEP_U1 and attention qkv/wo.
+
+**Joint u1 constraint (v0.7.5):** the u1 margin is shared between the AR and STEP_U1 (48 GDN layers, 128 ARs).
+- STEP_U1 silicon budget by on-path AR: AR 14 µs → ≤37 µs; AR 15 µs → ≤34 µs; AR 18 µs → ≤26 µs; AR 20.8 µs → nothing passes.
+- So the chain RS is the must-have. STEP_U1's ~21 µs sim estimate clears ≤34 µs even at 1.5× sim optimism.
+
+**Chain RS result (v0.7.6, 174dd5fad1d): no gain.** Marginal µs per AR: K=4 20.0, K=2 18.5, K=1 19.4, vs one-shot 18.07 (burst + rot 17.6). A hop send is cheap (0.58 µs per 20 KB); a chain stage costs ~3 µs of latency (sem → push → add → copy → send). Owner reduce 1.4 µs; AG tail 4.8 µs. The one-shot path is byte-bound; the chain is latency-bound. **Next AR levers, in order:**
+0. Check link count: eth links per ring-neighbor pair, cabled vs used. Stripe over all of them if more are free (exact).
+1. AG lands directly in the K-row CB_X via a destination-side NOC multicast, if tt-fabric supports it. This removes the 3.2 µs delivery step (exact).
+2. BFP8 payload behind two flags: MK_AR_AG_BFP8 (consumer copy only; owners keep the full-precision residual) and MK_AR_RS_BFP8 (partials). Both need the output-length gate.
+
+**AR lever check (v0.7.7):**
+- Link striping is closed: every neighbor pair in the 8-chip ring (0-1-2-3-27-26-25-24) has exactly 2 eth links, and the AR already uses both. The only 4-link pairs are 7↔31 and 15↔23, which are off our ring.
+- AG straight into CB_X is closed: the tt-fabric EDM has no destination-side multicast (NOC_MULTICAST_WRITE asserts), and per-core unicast would be ~10× the bytes.
+- **Remaining:**
+  - (a) BFP8 AG copy and (b) BFP8 RS partials, both behind flags and gated on output length. The residual is sharded on its owner, and every device builds CB_X and Σx² from the same BFP8 copy.
+  - (c) Sub-chunk pipelined K=2 hybrid: exact numerics, so it is the fallback that does not depend on the gate.
+- **Risk:** the gate can run only after integration, so a ≤15 µs AR via BFP8 stays provisional until then.
+
+**Joint constraint with real qkv (v0.7.8, attention 9e81917a513, PCC 0.99999):**
+- Attention middle measured: u1 ~260 µs (was 242), u8 ~381 µs (was ~368). Over 16 attention layers that adds +0.29 ms (u1) and +0.19 ms (u8).
+- The u1 +18 µs is mostly an SDPA-window x-ramp, which the attention agent is fixing first.
+- Model: 0.128 ms per AR µs, 0.048 ms per STEP_U1 µs.
+
+| On-path AR | u8 (≤13.7) | u1 + STEP_U1 @21 µs (≤9.4) | STEP_U1 silicon budget for u1 |
+|---|---|---|---|
+| 12 µs | 12.42 | 8.66 | ≤36 µs |
+| 14 µs | 12.68 | 8.91 | ≤31 µs |
+| 15 µs | 12.80 | 9.04 | ≤28.5 µs |
+| 17.8 µs | 13.16 | 9.40 (edge) | ≤21 µs |
+| 20.8 µs (measured) | 13.55 ✓ (0.15) | 9.79 ✗ | none |
+
+- **Break-evens:** u8 AR ≤ 22.0 µs. u1 AR ≤ 17.8 µs if STEP_U1 is 21 µs on silicon; AR ≤ 14.6 µs if STEP_U1 is 29.4 µs (1.4× sim).
+- **Note:** each µs recovered by the x-ramp fix on the 16 attention layers is worth 0.016 ms, i.e. 8 µs of attention ≈ 1 µs of AR.
+
+**BFP8 AR results (v0.7.9, 9dd6427740e, both flags default off):**
+
+| Variant | µs per call | Δ | x PCC | x max err | In-megakernel estimate |
+|---|---|---|---|---|---|
+| bf16 | 28.4 | — | 0.999998 | 0.086 | 20.8 |
+| AG BFP8 | 26.1 | −2.3 | 0.999971 | 0.109 | ~18.5 |
+| RS BFP8 | 25.2 | −3.2 | 0.999973 | 0.118 | ~17.6 |
+| both | 22.7 | −5.7 | 0.999944 | 0.167 | ~15.1 |
+
+Only both flags together reach ~15 µs, and they need the output-length gate.
+
+**v0.8 row-compact activations (R = 4·users).** A u1 verify pass carries R = 4 valid rows out of each 32-row tile (u8 = 32). Today every activation transfer moves full tiles, so at u1, 7/8 of the AR fabric bytes are padding, on a byte-bound path.
+- **Rule:** when R < 32, every activation transfer moves only rows 0..R-1. For R ≤ 16 that is R×32 B at tile offsets 0 and 512 (bf16 faces 0 and 1).
+  - Covered: AR RS partials, AG, owner → K-row multicast, and later the h column multicast and the down-stage column partials.
+  - Senders pack these runs contiguously (a 10-tile chunk is 2.5 KB instead of 20 KB at R=4); receivers unpack into tile layout.
+  - Rows ≥R are don't-care, and Σx² is taken over rows <R. The numerics are exact.
+- **Expected:** the u1 AR becomes latency-bound at ~8-10 µs (to be measured). At a 10 µs u1 AR, u1 + STEP_U1@21 ≈ 8.40 ms, and STEP_U1's silicon budget widens to ≤~41 µs.
+- **Consequence:** u1 is no longer AR-bound. u8 stays at 13.55 ms (0.15 margin) on the exact bf16 AR; the pipelined K=2 chain is the exact u8 lever, and BFP8 is the gated one.
+- *v0.8 refinement (from v12):*
+  - On-chip transfers need no pack step. Issue two NoC writes per bf16 tile (R×32 B at offsets 0 and 512) straight into the receiver's tile layout. Measure whether 20 small writes beat one 20 KB write. Fabric packets still pack.
+  - **Stale-row safety:** rows ≥R hold stale data. Two rules:
+    - (i) Every activation buffer is zeroed once at engine start, so stale rows are always finite (earlier valid data or 0) and never NaN or Inf.
+    - (ii) Any op that reduces ACROSS rows must mask rows ≥R. This covers the GDN state update (kᵀv over tokens), the GDN conv window, and any column reduction. Row-independent ops need no mask: matmul, SwiGLU, Σx² per row, SDPA per query row.
+
+**v0.8.1 cross-layer qkv prefetch (attention track finding):**
+- The u1 attention regression (+28 µs) is real DRAM time: the ext cores' 348 KB qkv slices total 13.9 MB of the 19.5 MB qkv per layer, read inside a DRAM-saturated SDPA window. Skipping those reads gives 231-233 µs; with them it is ~260. NoC splits and unthrottled tail reads are worse.
+- **Rule:** the ATTN-only ext cores sit idle during the 3 GDN-type layers before each attention layer, and those layers are chain-bound with DRAM slack. So the ext cores prefetch the NEXT attention layer's whole qkv slice into their 348 KB ring during the preceding GDN layers, throttled (~4.6 MB per GDN layer, 1-2 chunks in flight). Nothing reads in the SDPA window.
+- **Expected:** u1 attention returns to ~232 µs (−0.45 ms per pass vs 260, i.e. 16 × 28 µs), with no GDN-layer regression, to be confirmed.
+- *v0.8.1 measured bound (u1, 32K, mid-layer mean):*
+
+  | Where the slice reads go | u1 attention µs |
+  |---|---|
+  | In the KV loop | 260 |
+  | Tail, 16-page chunks × 2 in flight | 254.3 |
+  | Tail, 8 × 1 | 255.3 |
+  | Tail, 32 × 4 | 272.9 |
+  | Resident (PQSKIP) | **231-233** |
+
+  The attention agent is porting this to `anatarajan/qwen38-r16-mk-mixed3` (mixed2 + RQKV 9e81917a513 + PQ loop 0011c9aea48), with the ext reader filling during W-GDN. Validation: NL=8, AMASK 0x88, u8 and u1, reporting attention µs and the preceding GDN-layer µs.
+
+**v0.8.2 row-compact AR measured (AR track, 3b2077cefab, exact, PCC 0.999996, identical on all 8 devices):**
+
+| R | AR only (µs) | t0 → x in CB_X |
+|---|---|---|
+| 4 | 10.14 | **11.05** (packed delivery) |
+| 8 | 11.10 | — |
+| 16 | 13.02 | — |
+| 32 | 17.59 | 20.22 (no regression) |
+
+The pipelined K=2 chain at R=32 was ~17.8 µs, a tie with one-shot. u8 stays on the exact bf16 one-shot (~20.2 µs).
+
+**Pinned u1 x layout ("packed stream").** When R < 32, CB_X slot (j % 2) holds chunk j as a stream of **[R,32] tiny tiles**. For tile t of the chunk, face 0 (rows 0..R-1, cols 0-15) is at byte t·2R·32 and face 1 (cols 16-31) is at (2t+1)·R·32. This is byte-identical to a ttnn [R,32] tile with two R×16 faces.
+- Consumers (MLP gate/up, GDN in-proj, attention qkv) take one of two options:
+  - (a) **Default:** the reader unpacks locally into 32-row tile layout (20 copies of R·32 B per chunk, est. 0.3-0.5 µs), rows ≥R stale.
+  - (b) **Flag MK_TINY_IN0:** the matmul reads in0 directly as [R,32] tiny tiles (LLK partial-face unpack). This has zero copy cost, is to be proven, and must stay exact vs (a).
+- Unpacking in place on the owner (40 tiny multicasts per chunk, 28.3 µs) is forbidden.
+- Σx² for R < 32 is computed on the owner from the packed stream (rows < R only), in parallel with the AG, budget ≤0.5 µs on path.
+
+**Projection at u1:** AR 11.05 µs, attention 232 µs (v0.8.1 resident bound), real qkv, unpack +0.5 µs per consumer phase.
+- With STEP_U1 at 21 µs: **u1 ≈ 8.1 ms** (1.3 ms margin).
+- Without STEP_U1 (GDN at 42 µs): ≈ 9.1 ms ✓ (0.3 margin).
+- So with row-compact AR + v0.8.1, **u1 no longer depends on STEP_U1**; STEP_U1 becomes margin.
+- u8: 13.47 ms at 20.2 µs AR (0.23 margin, exact). u8 is now the binding gate.
+
+**v12 MLP at R=32 (d30u20, PCC 0.99996):**
+- Weights resident: 25.7 µs/layer traced (NL=8). Profiled steady state 18.7 µs: x delivery 2.8, gate|up 4.1, column-RS + SwiGLU 3.6, h multicast 3.4, down 2.4, partial send 0.6, owner sum 2.6.
+- Weights streamed standalone: 53.2 µs/layer at NL=32 (353 GB/s, bank-bound; a 3rd weight slot is being tried). In the engine the MLP weights are prefetched during the earlier stages, so the chain sees the resident figure.
+- **Numerics rule (engine-wide):** do NOT accumulate across partials with DEST_TO_SRCA reuse-dest. It truncates and biased an 8-way sum by −3%. Sum partials with P @ I matmuls (identity in srcA, LoFi, fp32 DST), which are exact. This applies to the owner sums, the attention tree folds, and any in-DST cross-partial accumulation.
+- *Numerics rule, accepted alternative:* packer L1 accumulation into an fp32 CB (pack_tile<true> + l1_acc) is also exact. The SDPA tree folds use it, and the RQKV K-half owner add moves to it from add_tiles on fp32 CBs, which round through srcA/srcB.
+
+**v0.8.3 v12 MLP vs fm11, like for like (span = x available → last down end):**
+- fm11 in mixed2: GDN layers median ~27-29 µs (floor 25.4, outliers 37-49); attention layers 20-27 µs.
+- v12 resident: **13.5 µs**. v12 also includes the split-K x delivery (2.8 µs) and the owner sum (2.6 µs), which fm11 leaves to the AR.
+- **Projected u8 gain: −13 µs × 48 GDN layers − ~9 µs × 16 attention layers ≈ −0.77 ms.** Planned as **−0.5 ms**, because in the engine the next mixer's weights stream at the same time, so v12 will land above 13.5 µs.
+- **u8 ≈ 13.47 → ~12.97 ms** (0.7 margin), before v0.8.1 helps u8 attention.
+- A 3rd weight slot gave no gain (MLP-only stream ~350 GB/s, bank/NoC-bound, vs fm11's 406 with separate gu/dn bank placement). The pass is chain-bound, so this does not matter now. Low-priority item: port fm11's gu/dn bank placement to v12 if the DRAM budget ever binds.
+
+**v0.8.4 AR: Σx² + R=32 breakdown (b29902fc1fc):**
+- **Σx² (MK_PS_STATS):** the output cores square and REDUCE_ROW (fp32 dest) after delivery, then multicast 32 tile-row partials into CB_RSTD slot j%2.
+  - Contract: row r = Σ over tile rows i ≡ r (mod R), with R ∈ {4, 8, 16, 32} (round R up, e.g. users=3 → R=16). Padding is zero-filled.
+  - Cost: +0.53 µs (R=4), +1.08 µs (R=32); rel err 8e-4.
+  - **Off-path rule:** deferred RMSNorm consumes rstd only at PACK time, so consumers start the matmul on x and wait for CB_RSTD at the pack, ≥~4 µs later. Σx² is therefore not on the path, and the on-path AR stays t0 → x.
+- **R=32 critical path** (t0 → x 17.1 µs):
+
+  | Step | µs |
+  |---|---|
+  | RS injection | 0.5-3.8 |
+  | last RS arrival | 9.5 |
+  | reduce | 1.49 |
+  | handoff | 0.8 |
+  | AG send | 0.68 |
+  | AG transit | → 15.4 |
+  | delivery | 1.6-1.9 |
+
+  - Link bytes are balanced: RS 160 KB per direction, AG 80 KB.
+  - **The multi-hop RS runs at ~18 GB/s vs 34 GB/s for a single hop.** That is the biggest exact item, up to −3-4 µs.
+  - Next: (c) root-cause the RS link rate, (a) reduce-on-arrival (−1.2), (b) owner → CB_AG direct (−0.5).

@@ -960,6 +960,12 @@ class TPAttention:
                 _mc_env = os.environ.get("QWEN36_VERIFY_SDPA_MAX_CORES")
                 if _mc_env:
                     max_cores = max(1, int(_mc_env))
+                # QWEN36_R16_VERIFY_SDPA_MULTI_CORES (unset = the table): cores per group only when the fused verify
+                # SDPA runs several groups (multi-user); 1 group (u1) keeps the table's count. r16 sweep (d26u02, 32K):
+                # u8 verify 18.92 (default 27) -> 18.74 at 16, 18.78 at 24; forcing fewer cores at u1 is slower.
+                _mm_env = os.environ.get("QWEN36_R16_VERIFY_SDPA_MULTI_CORES")
+                if _mm_env and groups > 1:
+                    max_cores = max(1, min(int(_mm_env), max_cores))
                 plan = (
                     ttnn.SDPAProgramConfig(
                         compute_with_storage_grid_size=(grid.x, grid.y),
