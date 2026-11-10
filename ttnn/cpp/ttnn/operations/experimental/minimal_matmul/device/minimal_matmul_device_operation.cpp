@@ -180,6 +180,14 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         dtype_supported(act_tensor.dtype()) && dtype_supported(weight_tensor.dtype()),
         "minimal_matmul supports only BFLOAT16, BFLOAT8_B, BFLOAT4_B, and FLOAT32 for inputs");
+    // The result is packed from the float DEST, so an integer output dtype only reinterprets its
+    // bits and nothing downstream reports it.
+    if (operation_attributes.output_dtype.has_value()) {
+        TT_FATAL(
+            dtype_supported(*operation_attributes.output_dtype),
+            "minimal_matmul supports only BFLOAT16, BFLOAT8_B, BFLOAT4_B, and FLOAT32 for the output dtype, got {}",
+            *operation_attributes.output_dtype);
+    }
 
     // Bias dtype constraint, if present
     if (has_bias) {
