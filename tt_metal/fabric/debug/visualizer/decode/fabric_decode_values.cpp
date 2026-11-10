@@ -38,6 +38,15 @@ T read_element(std::span<const std::byte> region_bytes, uint32_t element_size, u
     return std::bit_cast<T>(bytes);
 }
 
+// Where a read's bytes start in the .bin. Every read the snapshot keeps worked, and a read that worked has an offset.
+uint64_t get_read_bin_offset(const capture::ReadRecord& read) {
+    TT_FATAL(
+        read.bin_offset.has_value(),
+        "Fabric decode: the capture record's read at {:#x} didn't fail, but has no .bin offset",
+        read.address);
+    return *read.bin_offset;
+}
+
 // What reading one region gives: its reads, its bytes if it's inactive, or why it has none.
 using RegionResult = std::variant<TypedRegionReads, InactiveRegion, Unread>;
 
@@ -86,7 +95,7 @@ RegionResult read_l1_region(const RouterSnapshot& snapshot, const manifest::cont
         }
         return InactiveRegion{
             .bytes = full_read_bytes,
-            .bin_offset = *l1_read->bin_offset + (region.address - l1_read->address)};
+            .bin_offset = get_read_bin_offset(*l1_read) + (region.address - l1_read->address)};
     }
 
     if (sizeof(T) > region.element_size) {
@@ -112,11 +121,15 @@ RegionResult read_l1_region(const RouterSnapshot& snapshot, const manifest::cont
             reads.push_back(RegionRead<T>{
                 .round = round_read.round,
                 .t_ns = round_read.read->t_ns,
+                .bin_offset = get_read_bin_offset(*round_read.read),
                 .elements = read_elements<T>(round_read.bytes, region)});
         }
     }
     if (l1_read != nullptr) {
-        reads.push_back(RegionRead<T>{.t_ns = l1_read->t_ns, .elements = read_elements<T>(full_read_bytes, region)});
+        reads.push_back(RegionRead<T>{
+            .t_ns = l1_read->t_ns,
+            .bin_offset = get_read_bin_offset(*l1_read) + (region.address - l1_read->address),
+            .elements = read_elements<T>(full_read_bytes, region)});
     }
     if (reads.empty()) {
         return get_missing_bytes_reason(
@@ -172,12 +185,16 @@ RegionResult read_stream_register(const RouterSnapshot& snapshot, const manifest
                 reads.push_back(RegionRead<T>{
                     .round = round_read.round,
                     .t_ns = round_read.read->t_ns,
+                    .bin_offset = get_read_bin_offset(*round_read.read),
+                    .word = word,
                     .elements = {read_stream_register_value<T>(word, stream_register.value_bits)}});
             }
         }
         if (const std::optional<RegisterRead> register_read = snapshot.find_register_read(stream_register.address)) {
             reads.push_back(RegionRead<T>{
                 .t_ns = register_read->read->t_ns,
+                .bin_offset = get_read_bin_offset(*register_read->read),
+                .word = register_read->word,
                 .elements = {read_stream_register_value<T>(register_read->word, stream_register.value_bits)}});
         }
         if (reads.empty()) {
@@ -251,7 +268,7 @@ RouterValues::RouterValues(const RouterSnapshot& snapshot, const manifest::Arch&
         *snapshot.get_router().router, ttsl::overloaded{read_l1_region_at, read_stream_register_at});
     // Every router core has its own copy of the areas the architecture fixes.
     manifest::for_each_arch_area(arch, [&](std::string_view name, const manifest::content::L1& area) {
-        read_l1_region_at(fmt::format("l1_areas/{}", name), area);
+        read_l1_region_at(make_arch_area_path(name), area);
     });
 }
 

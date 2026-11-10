@@ -20,6 +20,7 @@
 #include <variant>
 #include <vector>
 
+#include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_snapshot.hpp"
@@ -38,6 +39,12 @@ struct RegionRead {
     std::optional<uint32_t> round;
     // When the read started, on capture's clock.
     uint64_t t_ns = 0;
+    // Where the region's bytes start in the .bin: inside the full read's L1 read for an L1 region, or the read's own
+    // bytes for a round read or a stream register.
+    uint64_t bin_offset = 0;
+    // A stream register's whole word, before it's masked to value_bits, so bits set above the value still show. Null
+    // for an L1 region.
+    std::optional<uint32_t> word;
     std::vector<T> elements;
 };
 
@@ -73,6 +80,10 @@ struct variant_of_each<Wrap, manifest::TypeList<Ts...>> {
 // A region's reads, as whichever registered type the manifest names for it.
 using TypedRegionReads = typename detail::variant_of_each<RegionReads, manifest::RegisteredTypes>::type;
 
+// The path of the arch area `name` (for_each_arch_area's name) below a router's node, where each router core's copy
+// of it is: "l1_areas/<name>", such as "l1_areas/heartbeat".
+inline std::string make_arch_area_path(std::string_view name) { return fmt::format("l1_areas/{}", name); }
+
 // Every region one router's manifest entry names, read into its registered type, by path. A region has at least one
 // read, or is inactive, or is Unread, never empty. Paths are for_each_router_region's, below the router's node; the
 // arch areas, which every router core has its own copy of, are at "l1_areas/<name>" (for_each_arch_area's name). Valid
@@ -100,6 +111,14 @@ public:
 
     // Why the region at `path` has no bytes. Null when it was read, or there's no region there.
     const Unread* find_unread(std::string_view path) const;
+
+    // How many of the router's regions, the arch areas' copies included, were read, are inactive, or are unread. Each
+    // region is exactly one of the three.
+    size_t get_num_read() const { return reads_.size(); }
+    size_t get_num_inactive() const { return inactive_.size(); }
+    size_t get_num_unread() const { return unread_.size(); }
+    // Every unread region's reason, by path.
+    const std::map<std::string, Unread, std::less<>>& get_unread_regions() const { return unread_; }
 
 private:
     const RouterSnapshot* snapshot_;

@@ -16,6 +16,12 @@
 //       captures/<capture_id>/
 //           fabric_capture_rank_<r>_of_<n>.json  the capture record
 //           fabric_capture_rank_<r>_of_<n>.bin   the bytes it read
+//           fabric_decoded_rank_<r>_of_<n>.json  what decode made of them
+//
+// Every file is written to a temporary name beside it and then moved to its own, so a file under its name is always
+// complete.
+
+#include <unistd.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -34,6 +40,37 @@ inline constexpr uint32_t k_manifest_version = 1;
 // A capture record's file_kind and capture_version. The version changes as the manifest's does.
 inline constexpr std::string_view k_capture_file_kind = "fabric_capture";
 inline constexpr uint32_t k_capture_version = 1;
+
+// A decoded file's file_kind and decoded_version. The manifest within keeps its own manifest_version.
+inline constexpr std::string_view k_decoded_file_kind = "fabric_decoded";
+inline constexpr uint32_t k_decoded_version = 1;
+
+// One rank's decoded file name, by its rank in the whole job: fabric_decoded_rank_<mpi_rank + 1>_of_<world_size>.json.
+inline std::string make_decoded_file_name(uint32_t mpi_rank, uint32_t world_size) {
+    return "fabric_decoded_rank_" + std::to_string(mpi_rank + 1) + "_of_" + std::to_string(world_size) + ".json";
+}
+
+// Where a file is written before it's moved to `path`: beside it, so the move stays on one filesystem, and named by
+// the process, so two writers don't share one.
+inline std::filesystem::path make_temporary_path(const std::filesystem::path& path) {
+    return path.string() + ".tmp." + std::to_string(::getpid());
+}
+
+// Moves `from` to `to`, and returns why it couldn't. Without `replace`, fails if `to` already exists: a hard link
+// refuses an existing name, where a rename would replace it. With it, a rename replaces whatever is at `to`.
+inline std::error_code move_into_place(
+    const std::filesystem::path& from, const std::filesystem::path& to, bool replace) {
+    std::error_code error;
+    if (replace) {
+        std::filesystem::rename(from, to, error);
+        return error;
+    }
+    std::filesystem::create_hard_link(from, to, error);
+    if (!error) {
+        std::filesystem::remove(from, error);
+    }
+    return error;
+}
 
 // One rank's manifest file name, by its rank in the whole job:
 // fabric_manifest_rank_<mpi_rank + 1>_of_<world_size>.json.
