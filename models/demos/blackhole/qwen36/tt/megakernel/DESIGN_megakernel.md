@@ -627,3 +627,14 @@ attention-AR owners (needs a second in-row placement); BFP8 slots (gated).
 - *Owner-core L1, revised with the EXT x shard:*
   - The x shard on the ext cores (320 KB bf16, at the same lockstep address as the STREAM x) is separate from the AR slots. A faster remote device can write attention-AR(L) while we are still in qkv(L), so they cannot alias.
   - Owner-core totals: EXT ring 348 + SDPA ~250 + misc 28 + x 320 + AR 160 ≈ **1.11 MB of ~1.45 MB**. The 2-tile ext ring stays.
+
+**§15 risk note (v0.7.2):** the down stage finishes all 16 owner chunks within ~1 µs, 2-4 µs after h lands (v12 report). So the progressive-RS overlap with the down stage is small. The RS is fabric-link bound (~200 KB per link direction, ~25 GB/s; header rotation gave 0 gain), so on-path AR may land between 12 and 18 µs, not at the ~12 µs of record.
+Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
+
+| On-path AR | u8 (≤13.7) | u1 (≤9.4) | u1 + STEP_U1 |
+|---|---|---|---|
+| 12 µs | 12.23 | 9.38 | 8.37 |
+| 15 µs | 12.62 | 9.76 ✗ | 8.75 |
+| 18 µs | 13.01 | 10.15 ✗ | 9.14 |
+
+**Consequence:** GDN_STEP_U1 is **required** for the u1 gate, not optional. u8 passes even with a fully exposed 18 µs AR.
