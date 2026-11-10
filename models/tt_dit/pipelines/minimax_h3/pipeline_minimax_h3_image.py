@@ -215,6 +215,9 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
         )
         self._transformer = self._build_transformer()
+        # Prompts arrive padded to a warmed presentation rung, so the token refiner runs at that rung rather than
+        # at the 32768-row prompt arena (0.25 s a request at the cap).
+        self._transformer.refine_at_input_length = True
         self._vae = MiniMaxH3Vae(
             self.vae_config,
             task="image",

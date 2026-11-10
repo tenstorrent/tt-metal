@@ -252,6 +252,7 @@ class MiniMaxH3Transformer3DModel(Module):
             norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
         self._modulation_cache: dict = {}  # precompute_modulation: key -> per-block modulation tables
+        self.refine_at_input_length = False  # see prepare_static_sources
         self._timestep_idx_state: dict[int, StateTensor] = {}  # traced path only, keyed by padded length
         self._eye_states: dict[int, StateTensor] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
@@ -436,14 +437,17 @@ class MiniMaxH3Transformer3DModel(Module):
             if stream is not None and stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
 
-        # Padding before the refiner, not after, keeps its programs independent of prompt length.
-        if prompt_1BLP.shape[2] < prompt_cap:
-            prompt_1BLP = pad_single(prompt_1BLP, dim=2, back=prompt_cap - prompt_1BLP.shape[2])
+        # Padding before the refiner, not after, keeps its programs independent of prompt length. A caller whose
+        # prompts already arrive padded to a warmed rung (`refine_at_input_length`) refines at that rung and pads
+        # after: the refiner then costs the rung, not the arena cap, and still compiles one program set per rung.
+        refine_rows = prompt_1BLP.shape[2] if self.refine_at_input_length else prompt_cap
+        if prompt_1BLP.shape[2] < refine_rows:
+            prompt_1BLP = pad_single(prompt_1BLP, dim=2, back=refine_rows - prompt_1BLP.shape[2])
         prompt_windows = None
-        if prompt_len < prompt_cap:
+        if prompt_len < refine_rows:
             self._prompt_windows_state.update(
                 from_torch(
-                    torch.tensor([0, prompt_len, prompt_cap], dtype=torch.int32),
+                    torch.tensor([0, prompt_len, refine_rows], dtype=torch.int32),
                     device=self.mesh_device,
                     dtype=ttnn.uint32,
                     layout=ttnn.Layout.ROW_MAJOR,
@@ -453,6 +457,8 @@ class MiniMaxH3Transformer3DModel(Module):
             )
             prompt_windows = self._prompt_windows_state.value
         refined = self.token_refiner(self.context_embedder(prompt_1BLP), cu_window_seqlens=prompt_windows)
+        if refined.shape[2] < prompt_cap:
+            refined = pad_single(refined, dim=2, back=prompt_cap - refined.shape[2])
         segments = [refined]
         if condition_video_1BKC is not None:
             segments.append(self.proj_in(condition_video_1BKC))
