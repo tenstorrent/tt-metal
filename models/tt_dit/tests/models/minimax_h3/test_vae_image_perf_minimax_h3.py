@@ -79,3 +79,73 @@ def test_stitch_slowness(mesh_device):
         torch.set_num_threads(n)
         run(f"threads={n}", decoded)
     torch.set_num_threads(threads)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_decode_breakdown_4k(mesh_device):
+    """Where the pipeline's 4K decode stage goes: VAE decode_clip (host stitch, profiled) and the host post-processing
+    the pipeline applies after it, then the device-stitch variants (time, and max abs diff vs the host stitch)."""
+    from ....pipelines.minimax_h3 import image_host_minimax_h3 as host
+
+    torch.set_num_threads(max(1, len(os.sched_getaffinity(0)) // 2))
+    path = os.environ.get("MINIMAX_H3_IMAGE_MODEL_PATH")
+    if not path:
+        pytest.skip("set MINIMAX_H3_IMAGE_MODEL_PATH")
+    from safetensors.torch import load_file
+
+    config = MiniMaxH3VaeConfig.from_pretrained(os.path.join(path, "vae"))
+    state = load_file(os.path.join(path, "vae", "diffusion_pytorch_model.safetensors"))
+    z = torch.randn(1, config.latent_channels, 1, 256, 256, generator=torch.Generator().manual_seed(0))
+    mean = torch.tensor(config.latents_mean).view(1, -1, 1, 1, 1)
+    std = torch.tensor(config.latents_std).view(1, -1, 1, 1, 1)
+    z = z * std + mean
+    pm, ps = torch.tensor(host.PIXEL_MEAN).view(3, 1, 1), torch.tensor(host.PIXEL_STD).view(3, 1, 1)
+
+    def post(decoded):
+        mark = time.perf_counter()
+        pixels01 = (decoded[0, :, 0].float() * ps + pm).clamp(0, 1)
+        t_norm = time.perf_counter() - mark
+        mark = time.perf_counter()
+        image = host.finish_image(pixels01, (4096, 4096))
+        return image, t_norm, time.perf_counter() - mark
+
+    vae = MiniMaxH3Vae(
+        config, task="image", mesh_device=mesh_device, waves_per_device=2, pixel_norm=(host.PIXEL_MEAN, host.PIXEL_STD)
+    )
+    vae.load_state(state)
+    reference = None
+    for run in ("cold", "warm1", "warm2"):
+        vae._profile = vae._empty_profile()
+        mark = time.perf_counter()
+        decoded = vae.decode_clip(z)
+        t_decode = time.perf_counter() - mark
+        image, t_norm, t_finish = post(decoded)
+        profile = {k: round(v, 3) for k, v in vae._profile.items() if isinstance(v, float) and v > 0.003}
+        logger.info(
+            f"RESULT host-stitch {run}: decode_clip {t_decode:.3f}s + denorm/clamp {t_norm:.3f}s + uint8 {t_finish:.3f}s "
+            f"| out {tuple(decoded.shape)} {decoded.dtype} | profile={profile}"
+        )
+        reference = decoded
+
+    for exchange in ("gather", "strips", "neighbor"):
+        vae.device_stitch, vae.stitch_exchange = True, exchange
+        try:
+            for run in ("cold", "warm"):
+                vae._profile = vae._empty_profile()
+                mark = time.perf_counter()
+                decoded = vae.decode_clip(z)
+                t_decode = time.perf_counter() - mark
+                _, t_norm, t_finish = post(decoded)
+                diff = (
+                    (decoded.float() - reference.float()).abs().max().item()
+                    if decoded.shape == reference.shape
+                    else None
+                )
+                logger.info(
+                    f"RESULT device-stitch {exchange} {run}: decode_clip {t_decode:.3f}s + post {t_norm + t_finish:.3f}s "
+                    f"| out {tuple(decoded.shape)} {decoded.dtype} | max abs diff vs host stitch {diff}"
+                )
+        except Exception as err:  # report and move on: each variant is a separate question
+            logger.info(f"RESULT device-stitch {exchange}: failed: {type(err).__name__}: {str(err)[:300]}")
+    vae.device_stitch = False

@@ -424,7 +424,9 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         decoded = self._vae.decode_clip(latents * std + mean)[0, :, 0].float()  # ImageNet-normalized pixels
         pm = torch.tensor(host.PIXEL_MEAN).view(3, 1, 1)
         ps = torch.tensor(host.PIXEL_STD).view(3, 1, 1)
-        pixels01 = (decoded * ps + pm).clamp(0, 1)
+        # In place on the decoder's own output: the same ops in the same order as `(x * ps + pm).clamp(0, 1)`, so
+        # the same bits, without three 4K-sized float temporaries.
+        pixels01 = decoded.mul_(ps).add_(pm).clamp_(0, 1)
         image = host.finish_image(pixels01, (width, height))
         timings.decode = time.perf_counter() - mark
         miss_since(count, "decode")
