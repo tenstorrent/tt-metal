@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-11-10 14:14 PST",
+  "provenance": "Owner-reported identities from sulphur-mac #494; no new host or large-weight verification.",
+  "owner_note_ids": ["a078cdf5c764f649", "a9fcb4a71b3a8638", "8717765e1628189a"],
+  "h3": {
+    "tt_metal_commit": "15d5b0028220bb994f6d3652fd9948bea04e34c6",
+    "runtime_path": "/home/smarton/tt-metal-ltx-rt-b",
+    "server_repository": "ltx-server",
+    "server_commit_prefix": "874684a",
+    "hosts": {"f101": "OM-F1-GBH01", "f102": "OM-F1-GBH02"},
+    "mesh": [4, 8],
+    "fps": 24,
+    "audio": true,
+    "short_edge": 768,
+    "max_area_pixels": 1032192,
+    "dimension_multiple": 32,
+    "pipeline": "models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3_turbo.py",
+    "adapter_loader": "models/tt_dit/experimental/lora/h3_adapter_loader.py",
+    "server_driver": "ltx_server/h3.py",
+    "base": {
+      "path": "/home/sulphur/models/minimax-h3",
+      "hf_revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+      "revision_evidence": "f101 HF metadata for 131 files; f102 matching configs without HF metadata",
+      "conditioning": {"FL2V": {"directory": "transformer/", "shards": 14, "bytes": 66280573346}, "R2V": {"directory": "transformer_ref/", "shards": 14, "bytes": 66280573346}},
+      "sha256": {
+        "transformer_ref/config.json": "74c11bff524336576096993cbfcdcdc2ef4fa2fa4409df693bdcbc6c666282ae",
+        "model_index.json": "5a587fe13b2371427415ac892463142683aefcd8d322e274a3a095eac37ac7d2",
+        "modular_model_index.json": "a2b6a210e482ffb78e613b553f570c44e101afce6741bd4ed91429d0559af031",
+        "vae/config.json": "78f67deec3d63aae807f2bfe7154bc1e26f6372cb20b63265fcbae1b62bb5745",
+        "vae_index": "15f6d44553c3c616b0dc999920aa784f92ecee7e4201f1f99ac405cfbf3061ca",
+        "audio_vae/config.json": "9a3c645ff892b376c6f5f4c8685964cd75474731af594ff058492a0000caabb6",
+        "text_encoder/config.json": "d2dd0c60d01b9e195d9447c52da61c7302d28828524914c044d9c6e1b81d0427",
+        "text_encoder_index": "06c952c569285870b811989b794b9766493e280fb77fbcb957fc4e5fcf25403a"
+      },
+      "unexpanded_owner_hashes": ["transformer index ac30a3b5...783e", "FL2VA/model_index.json d1113e0f...aa6b", "Ref2VA/model_index.json b160b137...b90c"],
+      "large_shard_identity_receipt": "sulphur-mac state/runs/1592/f101-h3-lfs-sha256.txt (46 LFS oids; not copied here)"
+    },
+    "turbo": {
+      "repository": "lightx2v/Minimax-h3-Turbo",
+      "revision": "30f485ed874aa44c8183348ad361c5eabad318da",
+      "directory": "/home/sulphur/models/lightx2v-h3-turbo",
+      "strength": 1.0,
+      "nfe": 4,
+      "H3_STEPS": 5,
+      "video_shift": 6,
+      "audio_shift": "tree default",
+      "adapters": {
+        "FL2V": {"file": "minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors", "bytes": 1383677808, "sha256": "1bdabc2e9fce20b1db563b96bcf6e46adcad4c1964f423676436bf266cc7416c"},
+        "R2V": {"file": "minimax_h3_ref2v_turbo_4step_v1.0_768p_bf16.safetensors", "bytes": 1383677808, "sha256": "e470d3043fb3b8b4f8f77be39e3498071d18f09fd8658150eeb5bc6bb9a32d43"}
+      }
+    },
+    "hyperflow": {
+      "repository": "VideoRebirthAI/hyperflow",
+      "revision": "5bde94d7de3e78dafa2abc43ee2f280a1cb244e8",
+      "path": "/home/sulphur/models/hyperflow/minimax_h3_hyperflow_8step_v1.0.safetensors",
+      "bytes": 2795328008,
+      "sha256": "9297f4505bfdef59c3014d11274411809c19b0abfe26161cab2b425a696df447",
+      "modes": ["FL2V", "R2V"],
+      "nfe": 8,
+      "grid_points": 9,
+      "video_shift": 12,
+      "audio_shift": 3
+    },
+    "quality_controls": {"plain_h3_steps": 50, "plain_h3_adapter": null, "variants_optional": true, "no_new_quality_claim": true},
+    "route": {
+      "entrypoint": "cs04 POST /v1",
+      "public_model": "h3-fast",
+      "R2V": "references supplied; server selects ref2va twin",
+      "FL2V": "FL2V first/last conditioning; Turbo FL2V adapter, not an R2V request relabelled",
+      "internal_r2v_registry": "h3-fast-r2v",
+      "internal_alias_accepted_at_edge": false
+    },
+    "nominal_requests": {"6_seconds_frames": 158, "10_seconds_frames": 243, "snap": "17n+5", "performance_denominator": "measured newly playable media seconds; exclude overlap and padding"},
+    "excluded_f4_adapter": {
+      "file": "/data_models/h3/adapters/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors",
+      "bytes": 1383677768,
+      "sha256": "9e642fc8749c74f8da5e2382877ab5c7aa37b9a73b7fd0d6d457bd1b3cb1ae99",
+      "reason": "v0.1 differs from served v1.0; not a matched baseline"
+    }
+  },
+  "ltx25_iclora": {
+    "tt_metal_commit": "0b43a32cda9128299bbd10ce72706bf6d435c254",
+    "runtime_path": "/home/smarton/tt-metal-ltx-rt",
+    "backup_ref": "ttp/ltx-rt-boxes-0b43a32",
+    "vae": "convolutional",
+    "modes": ["FL2V", "R2V"],
+    "unresolved": ["exact IC-LoRA and VAE checkpoint hashes for matched cases", "October 26 runnable configuration", "owner staging completion receipt"]
+  },
+  "owner_main6653391": {"repository": null, "status": "Unmapped owner benchmark prefix; does not replace either tt-metal model identity."},
+  "staging": {
+    "owner": "sulphur-mac #557",
+    "host": "OM-F4-GBH02",
+    "request": "0af212b741dd1979",
+    "reuse_existing": true,
+    "completion_receipt": null,
+    "required_receipt": ["exact paths", "hashes", "ownership", "admission", "free disk"]
+  },
+  "qualification": {
+    "contract_updated_at": "2026-11-10 14:54 PST",
+    "restriction": "R-1ac7",
+    "required_location": "TYO2",
+    "required_watts_per_chip": 160,
+    "enforced_power_readbacks": null,
+    "actual_aiclk": null,
+    "throttling": null,
+    "cells": [
+      {"model": "H3", "mode": "FL2V", "qualified": false},
+      {"model": "H3", "mode": "R2V", "qualified": false},
+      {"model": "LTX 2.5 IC-LoRA", "mode": "FL2V", "qualified": false},
+      {"model": "LTX 2.5 IC-LoRA", "mode": "R2V", "qualified": false}
+    ],
+    "minimum_chunks": 60,
+    "minimum_new_playable_seconds": 300,
+    "paced_playback_seconds": 1800,
+    "production": "concurrent galaxies permitted in both protocols",
+    "sustained_caller_throughput": {
+      "numerator": "unique playable video seconds received by the API caller",
+      "denominator": "elapsed wall seconds",
+      "operator": ">",
+      "threshold": 1,
+      "included_costs": ["queue", "generation", "export", "delivery"],
+      "excluded_media": ["overlap", "padding"],
+      "concurrent_galaxies_count": true
+    },
+    "report_separately": [
+      "per-clip latency", "startup buffer", "concurrency", "participating galaxies",
+      "unpaced capacity", "deliberately paced playback"
+    ],
+    "historical_contract": {
+      "status": "superseded; not an acceptance gate",
+      "minimum_sequential_chunks": 60,
+      "final_capacity_rtf_max": 0.8,
+      "service_rtf_max": 0.8,
+      "preserved_snapshot": "tt-project/state/runs/142/source-config-manifest.json"
+    },
+    "required_evidence": [
+      "per-chip enforced 160 W readback",
+      "sample counts and runtime/client-ready timings",
+      "p50/p90/p95/p99/max latency",
+      "host/mesh and actual clocks/throttling",
+      "bounded host/device memory",
+      "A/V continuity and quality",
+      "changing references/prompts and three matched seeds",
+      "zero underruns after declared startup buffer"
+    ]
+  },
+  "delivery": {
+    "accepted_controller": "3f8a885f5f48b087e937747d4994ee6069d6bc07",
+    "controller_review": 15,
+    "transport": "14fa5e4d5c50b24402e12c6d616eabcfb21a0439",
+    "transport_review": 37,
+    "transport_review_status": "queued at run142 inspection",
+    "transport_cpu_tests_run135": 36,
+    "measurement_repository": "ltx-server",
+    "measurement_commit": "c19b5fb3f146f6169e7604785b2263e16f8696f3",
+    "no_publication_claim": true
+  },
+  "authorship": "[authored by AI]"
+}
