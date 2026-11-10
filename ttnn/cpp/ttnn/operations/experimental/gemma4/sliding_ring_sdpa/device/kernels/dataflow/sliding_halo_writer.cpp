@@ -166,14 +166,16 @@ void kernel_main() {
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     // Concrete accessors for 1 or 2 inputs avoid the abstract wrapper's indirect call per page.
+    // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
     const auto output_noc_addr = [&](uint32_t input_idx, uint32_t page) -> uint64_t {
+        using tt::tt_fabric::linear::addrgen_detail::get_noc_address;
         if constexpr (num_inputs == 1) {
-            return std::get<0>(outputs_tuple).get_noc_addr(page);
+            return get_noc_address(std::get<0>(outputs_tuple), page);
         } else if constexpr (num_inputs == 2) {
-            return input_idx == 0 ? std::get<0>(outputs_tuple).get_noc_addr(page)
-                                  : std::get<num_inputs - 1>(outputs_tuple).get_noc_addr(page);
+            return input_idx == 0 ? get_noc_address(std::get<0>(outputs_tuple), page)
+                                  : get_noc_address(std::get<num_inputs - 1>(outputs_tuple), page);
         } else {
-            return output_addrgens[input_idx].get_noc_addr(page);
+            return get_noc_address(output_addrgens[input_idx], page);
         }
     };
     size_t fabric_args_idx = arg_idx;

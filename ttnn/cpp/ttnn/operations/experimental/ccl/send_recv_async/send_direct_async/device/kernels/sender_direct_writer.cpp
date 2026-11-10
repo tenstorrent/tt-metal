@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -138,11 +139,12 @@ void kernel_main() {
                 for (uint32_t pp = head; count < num_pages_per_packet && pp < end_page; pp += num_banks) {
                     ++count;
                 }
+                // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
                 fabric_write_page(
                     fabric_connection,
                     data_packet_header_addr,
                     l1_base + b * bank_region_bytes,
-                    output_addr_gen.get_noc_addr(head),
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addr_gen, head),
                     count * output_page_size);
             }
             cb_pop_front(data_cb_id, 1);
@@ -154,7 +156,9 @@ void kernel_main() {
             cb_wait_front(data_cb_id, 1);
             uint32_t l1_read_addr = get_read_ptr(data_cb_id);
             for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
-                uint64_t out_noc_addr = output_addr_gen.get_noc_addr(page_index);
+                // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                uint64_t out_noc_addr =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addr_gen, page_index);
                 fabric_write_page(
                     fabric_connection, data_packet_header_addr, l1_read_addr, out_noc_addr, output_page_size);
                 l1_read_addr += socket_page_size;
@@ -167,7 +171,9 @@ void kernel_main() {
             cb_wait_front(data_cb_id, 1);
             uint32_t l1_read_addr = get_read_ptr(data_cb_id);
             for (uint32_t j = 0; j < num_pages_remainder; ++j) {
-                uint64_t out_noc_addr = output_addr_gen.get_noc_addr(page_index);
+                // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                uint64_t out_noc_addr =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addr_gen, page_index);
                 fabric_write_page(
                     fabric_connection, data_packet_header_addr, l1_read_addr, out_noc_addr, output_page_size);
                 l1_read_addr += socket_page_size;
@@ -179,7 +185,8 @@ void kernel_main() {
         // Large pages: each output page spans multiple fabric packets (one CB entry per packet).
         uint32_t page_index = page_start_offset;
         for (uint32_t i = 0; i < num_pages; ++i) {
-            uint64_t out_noc_addr = output_addr_gen.get_noc_addr(page_index);
+            // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+            uint64_t out_noc_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addr_gen, page_index);
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
                 cb_wait_front(data_cb_id, 1);
                 uint32_t l1_read_addr = get_read_ptr(data_cb_id);

@@ -52,6 +52,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
@@ -208,7 +209,13 @@ FORCE_INLINE void stream_pages(
         const uint32_t trid = ReadRing::trid(k);
         const uint32_t src = cb_l1_addr + slot * page_size;
         noc.async_read_barrier<NocOptions::TXN_ID>(NocOptVals{.trid = trid});
-        fabric_write_bytes(conn, out_acc.get_noc_addr(page_start_ + k), src, page_size, data_packet_header_addr);
+        // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+        fabric_write_bytes(
+            conn,
+            tt::tt_fabric::linear::addrgen_detail::get_noc_address(out_acc, page_start_ + k),
+            src,
+            page_size,
+            data_packet_header_addr);
         const uint32_t next = k + ReadRing::depth;
         if (next < n) {
             noc.async_read<NocOptions::TXN_ID>(

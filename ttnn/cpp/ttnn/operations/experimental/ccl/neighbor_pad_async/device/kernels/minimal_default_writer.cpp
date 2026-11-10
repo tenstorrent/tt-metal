@@ -365,7 +365,9 @@ void kernel_main() {
                             l1_buf_offset += stick_size;
                         } else {
                             // Non-corner: send directly to neighbor's output DRAM
-                            dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
+                            // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                            dst_noc_addr =
+                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_accessor, dst_stick_id);
                         }
                     } else if constexpr (use_l1_intermediate) {
                         // W writer: all sticks to L1
@@ -373,7 +375,9 @@ void kernel_main() {
                             neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
                         l1_buf_offset += stick_size;
                     } else {
-                        dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
+                        // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                        dst_noc_addr =
+                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_accessor, dst_stick_id);
                     }
 
                     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
