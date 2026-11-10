@@ -18,8 +18,8 @@ name: Request Copilot review for non-org-member PRs
 #   2. It only runs for PRs whose head branch lives in this repo
 
 on:
-  pull_request_target:
-    types: [opened, ready_for_review]
+  # pull_request_target:
+  #  types: [opened, ready_for_review]
 
 permissions:
   pull-requests: write

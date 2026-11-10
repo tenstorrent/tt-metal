@@ -73,9 +73,9 @@ jobs:
     uses: ./.github/workflows/build-all-docker-images.yaml
     secrets: inherit
     with:
-      runs-on-large: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
-      runs-on-medium: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
-      check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
+      runs-on-large: tt-gh-linux-32-core # ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      runs-on-medium: tt-gh-linux-32-core # ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
+      check-harbor-runs-on: ubuntu-latest # ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
   # TODO: Duplicate check-harbor call. build-all-docker-images.yaml (called by
   # docker-images above) also calls check-harbor internally, but does not expose
@@ -87,7 +87,7 @@ jobs:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/check-harbor.yaml
     with:
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
+      runs-on: ubuntu-latest # ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
   find-changes:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
@@ -152,7 +152,9 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      # TEMP: compile on the GitHub-hosted 32-core runner; self-hosted runners are unavailable.
+      # Restore: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      runs-on: tt-gh-linux-32-core
       fetch-depth: 1
       checkout-filter: tree:0
 
@@ -184,7 +186,9 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      # TEMP: compile on the GitHub-hosted 32-core runner; self-hosted runners are unavailable.
+      # Restore: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      runs-on: tt-gh-linux-32-core
       fetch-depth: 1
       checkout-filter: tree:0
 
@@ -216,7 +220,9 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      # TEMP: compile on the GitHub-hosted 32-core runner; self-hosted runners are unavailable.
+      # Restore: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      runs-on: tt-gh-linux-32-core
       fetch-depth: 1
       checkout-filter: tree:0
 
@@ -239,7 +245,7 @@ jobs:
       ubuntu-2404-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ubuntu-2404-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
+      runs-on: tt-gh-linux-32-core # ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
       fetch-depth: 1
 
   resolve-docker-pull-refs:
@@ -585,7 +591,7 @@ jobs:
     uses: ./.github/workflows/build-quasar-perf.yml
     with:
       docker_image: ${{ needs.resolve-docker-pull-refs-llk.outputs.llk-ci-docker-image }}
-      runs_on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      runs_on: tt-gh-linux-32-core # ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       timeout_minutes: 15
 
   llk-unit-tests:
@@ -628,10 +634,7 @@ jobs:
   # that entry's gate uploaded its head as merge_baseline, so the next entry finds it.
   llk-perf-merge-gate-changes:
     name: LLK perf merge gate (changes)
-    if: ${{
-        github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
-      }}
+    if: false # ${{ github.event.action != 'destroyed' && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-slim
     outputs:
       changed: ${{ steps.classify.outputs.changed }}
@@ -660,7 +663,7 @@ jobs:
   llk-perf-merge-gate-measure:
     name: LLK perf merge gate (measure)
     needs: [llk-perf-merge-gate-changes]
-    if: needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    if: false # needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: all
@@ -679,7 +682,7 @@ jobs:
   llk-perf-merge-gate:
     name: LLK perf merge gate (${{ matrix.arch }})
     needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
-    if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    if: false # always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -716,9 +719,7 @@ jobs:
   llk-perf-merge-gate-notify:
     name: LLK perf merge gate (Slack)
     needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate]
-    if: >-
-      always() && !cancelled() && github.event_name == 'merge_group'
-      && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    if: false # always() && !cancelled() && github.event_name == 'merge_group' && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -785,7 +786,7 @@ jobs:
           echo "::error::The gate could not build its Slack notification."
           echo "should_post=false" >> "$GITHUB_OUTPUT"
       - name: Notify Slack
-        if: steps.slack.outputs.should_post == 'true'
+        if: false # steps.slack.outputs.should_post == 'true'
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
@@ -878,12 +879,12 @@ jobs:
           optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
+      - if: false # (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
           owner: ""
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
+      - if: false # (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}

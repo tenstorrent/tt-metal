@@ -35,7 +35,10 @@ on:
 jobs:
   check:
     name: "Check Harbor"
-    runs-on: ${{ inputs.runs-on || 'tt-ubuntu-light' }}
+    # TEMP: always GitHub-hosted (ignores the runs-on input) since self-hosted runners are
+    # unavailable. Harbor is unreachable from here, so callers get an empty prefix (direct GHCR).
+    # Restore: ${{ inputs.runs-on || 'tt-ubuntu-light' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:

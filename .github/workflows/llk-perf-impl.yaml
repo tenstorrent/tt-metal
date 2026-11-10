@@ -451,7 +451,7 @@ jobs:
           echo "::warning::No usable CPU build for this shard; the board compiles it."
           echo "### Offload fallback: the board compiled this shard" >> "$GITHUB_STEP_SUMMARY"
       - name: "Offload: report the fallback to Slack"
-        if: ${{ steps.offload-fallback.outcome == 'success' && github.event_name == 'schedule' }}
+        if: false # ${{ steps.offload-fallback.outcome == 'success' && github.event_name == 'schedule' }}
         continue-on-error: true
         uses: ./.github/actions/report-failure
         with:
@@ -734,7 +734,7 @@ jobs:
           path: shadow-compare/report.json
           retention-days: 30
       - name: Report a CHECK to Slack
-        if: ${{ failure() && github.event_name == 'schedule' }}
+        if: false # ${{ failure() && github.event_name == 'schedule' }}
         uses: ./.github/actions/report-failure
         with:
           test_name: "LLK perf shadow compile (report-only)"

@@ -287,7 +287,8 @@ jobs:
     # Configure and flatc are mostly single-threaded and the sweep takes about 40 s
     # on this size; medium is the smallest self-hosted size that already runs
     # CPU-only container jobs.
-    runs-on: tt-ubuntu-2204-medium-stable
+    # TEMP: GitHub-hosted; self-hosted runners are unavailable.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read

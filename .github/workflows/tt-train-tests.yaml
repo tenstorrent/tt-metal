@@ -197,7 +197,7 @@ jobs:
               -- bash -c '${{ matrix.test-group.cmd }}'
 
       - name: 📈 Publish tt-train metrics
-        if: ${{ !cancelled() }}
+        if: false # ${{ !cancelled() }}
         uses: ./docker-job/.github/actions/publish-tt-train-metrics
         with:
           repo-root: /work
@@ -238,7 +238,7 @@ jobs:
           prefix: "test_reports_"
 
       - name: 🤖 AI job summary
-        if: ${{ !cancelled() }}
+        if: false # ${{ !cancelled() }}
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:

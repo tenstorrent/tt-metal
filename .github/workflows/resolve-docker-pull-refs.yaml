@@ -93,7 +93,9 @@ jobs:
       - id: prefix
         shell: bash
         env:
-          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+          # TEMP: ignore Harbor so every consumer pulls straight from GHCR (GitHub-hosted
+          # runners can't reach the in-cluster Harbor proxy). Restore: ${{ inputs.harbor-prefix }}
+          HARBOR_PREFIX: ""
           DEV_DOCKER_IMAGE: ${{ inputs.dev-docker-image }}
           BASIC_DEV_DOCKER_IMAGE: ${{ inputs.basic-dev-docker-image }}
           CI_TEST_DOCKER_IMAGE: ${{ inputs.ci-test-docker-image }}

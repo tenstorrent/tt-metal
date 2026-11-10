@@ -200,12 +200,12 @@ skus:
 
   cpu_medium:
     runs_on:
-      - tt-ubuntu-2204-medium-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-medium-stable
     merge_queue_sku: cpu_medium_prio
 
   cpu_xlarge:
     runs_on:
-      - tt-ubuntu-2204-xlarge-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-xlarge-stable
 
   # GitHub-hosted CPU-only runner: no Tenstorrent device, no Harbor access.
   # Used for host-only (CPU_-prefixed) subsets of device test binaries so scarce
@@ -237,7 +237,7 @@ skus:
 
   cpu_medium_prio:
     runs_on:
-      - tt-ubuntu-2204-medium-prio-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-medium-prio-stable
 
   # Synthetic CPU SKUs for ttsim simulator jobs. The impl invokes
   # .github/actions/setup-ttsim gated on `startsWith(sku, 'sim_')`; that action reads
@@ -260,11 +260,11 @@ skus:
     ttsim_lib: libttsim_wh_x2.so
   sim_wh_llmbox:
     runs_on:
-      - tt-ubuntu-2204-large-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-large-stable
     ttsim_lib: libttsim_wh_x8.so
   sim_wh_galaxy:
     runs_on:
-      - tt-ubuntu-2204-large-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-large-stable
     ttsim_lib: libttsim_wh_x32.so
   sim_bh_p150:
     runs_on:
@@ -276,11 +276,11 @@ skus:
     ttsim_lib: libttsim_bh_x2.so
   sim_bh_quietbox_2:
     runs_on:
-      - tt-ubuntu-2204-large-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-large-stable
     ttsim_lib: libttsim_bh_x4.so
   sim_bh_galaxy:
     runs_on:
-      - tt-ubuntu-2204-large-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-large-stable
     ttsim_lib: libttsim_bh_x32.so
   sim_quasar:
     runs_on:
@@ -293,13 +293,13 @@ skus:
   # OOMs or fails to fork workers, see llk_ttsim_weekly.yaml).
   sim_wh_n150_xl:
     runs_on:
-      - tt-ubuntu-2204-xlarge-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-xlarge-stable
     ttsim_lib: libttsim_wh.so
   sim_bh_p150_xl:
     runs_on:
-      - tt-ubuntu-2204-xlarge-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-xlarge-stable
     ttsim_lib: libttsim_bh.so
   sim_quasar_xl:
     runs_on:
-      - tt-ubuntu-2204-xlarge-stable
+      - tt-gh-linux-32-core # tt-ubuntu-2204-xlarge-stable
     ttsim_lib: libttsim_qsr.so
