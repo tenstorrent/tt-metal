@@ -213,15 +213,14 @@ constexpr bool llk_matmul_block_pack() {
     constexpr bool keyed = in_format != DataFormat::Invalid && block_rt != 0 && block_ct != 0;
     constexpr DataFormat out_format = static_cast<DataFormat>(pack_dst_format[output]);
     if constexpr (keyed && in0_format != DataFormat::Invalid) {
-        constexpr bool full_tile = pack_tile_num_faces[output] == 4 && pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0;
 #ifdef PACKER_L1_ACC
         constexpr bool keyed_l1_acc = true;
 #else
         constexpr bool keyed_l1_acc = false;
 #endif
         return matmul_pack_form_k(
-                   math_fidelity, DST_SYNC_MODE != DstSync::SyncFull, throttle_level, kt_per_section, block_rt, block_ct, in_format, in0_format, out_format, full_tile ? 32 : 16,
-                   full_tile ? 32 : 16, false, keyed_l1_acc) != 0;
+                   math_fidelity, DST_SYNC_MODE != DstSync::SyncFull, throttle_level, kt_per_section, block_rt, block_ct, in_format, in0_format, out_format, pack_tile_r_dim[output],
+                   pack_tile_c_dim[output], false, keyed_l1_acc) != 0;
     } else if constexpr (
         keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 &&
         (in_format == DataFormat::Float16_b || in_format == DataFormat::Float32) && kt_per_section == 1 && math_fidelity == MathFidelity::HiFi2 &&
@@ -702,19 +701,22 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     }
 }
 
-// Whether llk_pack_block takes the closed form, whose destination words llk_pack_block_prepare can issue early.
+// Whether the prepared block takes the closed form, whose destination words llk_pack_block_prepare can issue early. Int8 and UInt8 from a 16 bit DEST stay per tile, as in llk_pack_block.
+template <bool is_fp32_dest_acc_en>
 inline bool llk_pack_block_is_closed_form(std::uint32_t output, std::uint32_t ntiles) {
     const std::uint8_t output_id = get_output_id(output);
-    return ntiles > 1 && !llk_pack_block_is_contiguous(output_id) && llk_pack_block_is_closable(output_id);
+    return ntiles > 1 && (is_fp32_dest_acc_en || !llk_pack_dst_is_int8(output_id)) && !llk_pack_block_is_contiguous(output_id) &&
+           llk_pack_block_is_closable(output_id);
 }
 
 // Full sync only: issues the closed block pack's destination words before the math wait of the block.
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt = 0>
 inline void llk_pack_block_prepare(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
-        if (llk_pack_block_is_closed_form(output, ntiles)) {
+        if (llk_pack_block_is_closed_form<is_fp32_dest_acc_en>(output, ntiles)) {
             const std::uint8_t output_id = get_output_id(output);
-            _llk_pack_block_closed_pre_(
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+            _llk_pack_block_closed_pre_<llk_pack_rmw_tile<PackMode::Default>>(
                 start_tile_index,
                 get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1);
         }
@@ -722,10 +724,10 @@ inline void llk_pack_block_prepare(std::uint32_t start_tile_index, std::uint32_t
 }
 
 // llk_pack_block after llk_pack_block_prepare of the same block, with no pack in between.
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt = 0>
 inline void llk_pack_block_prepared(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
-        if (llk_pack_block_is_closed_form(output, ntiles)) {
+        if (llk_pack_block_is_closed_form<is_fp32_dest_acc_en>(output, ntiles)) {
             const std::uint8_t output_id = get_output_id(output);
             const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
             get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
@@ -733,5 +735,5 @@ inline void llk_pack_block_prepared(std::uint32_t start_tile_index, std::uint32_
             return;
         }
     }
-    llk_pack_block<is_fp32_dest_acc_en>(start_tile_index, output, ntiles);
+    llk_pack_block<is_fp32_dest_acc_en, false, matmul_kt>(start_tile_index, output, ntiles);
 }
