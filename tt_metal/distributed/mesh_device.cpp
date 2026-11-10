@@ -2108,7 +2108,8 @@ void MeshDeviceImpl::quiesce_devices() {
             TT_ASSERT(
                 device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
                 "Last completed event is not 0");
-            TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
+            TT_ASSERT(
+                device->sysmem_manager().get_last_issued_event(command_queue->id()) == 0, "Last issued event is not 0");
         }
     }
 }

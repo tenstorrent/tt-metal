@@ -159,6 +159,7 @@ void issue_record_event_commands(
 
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    manager.set_last_issued_event(cq_id, event_id);
 }
 
 void issue_wait_for_event_commands(

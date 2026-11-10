@@ -375,8 +375,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     }
 
     auto sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, {});
-    auto& sysmem_manager = this->reference_sysmem_manager();
-    auto event = MeshEvent(sysmem_manager.get_next_event(id_), *this, MeshCoordinateRange(mesh_device_->shape()));
+    auto event = MeshEvent(++last_event_id_, *this, MeshCoordinateRange(mesh_device_->shape()));
 
     // Issue commands to clear expected_num_workers_completed counter(s) on the dispatcher
     for (auto* device : mesh_device_->impl().get_devices()) {
@@ -1024,9 +1023,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
 
-    auto& sysmem_manager = this->reference_sysmem_manager();
-    auto event = MeshEvent(
-        sysmem_manager.get_next_event(id_), *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    auto event = MeshEvent(++last_event_id_, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
@@ -1967,16 +1964,15 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
 void FDMeshCommandQueue::finish_and_reset_in_use() {
     if (in_use_) {
         auto lock = lock_api_function_();
-        uint32_t current_event = reference_sysmem_manager().get_current_event(id_);
+        const uint32_t current_event = last_event_id_;
         for (auto* device : mesh_device_->impl().get_devices()) {
             TT_ASSERT(
                 device->sysmem_manager().get_last_completed_event(id_) == current_event,
                 "Current event must be equal to last completed event");
-            bool is_reference_cq = &device->sysmem_manager() == &reference_sysmem_manager();
-            // Ensure the next command will be recorded as event 0
-            device->sysmem_manager().set_current_and_last_completed_event(
-                id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
+            device->sysmem_manager().reset_events(id_, UINT32_MAX);
         }
+        // The next event ID is 0.
+        last_event_id_ = UINT32_MAX;
         finish_nolock({});
 
         in_use_ = false;
