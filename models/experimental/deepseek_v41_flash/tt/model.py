@@ -2782,12 +2782,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for i in range(0, len(positions), rows):
             self.spec_write_main(positions[i : i + rows])
 
-    def spec_draft(
-        self, token: int, frontier: int, seed: Optional[int] = None, logits: bool = False
-    ) -> tuple[list[int], list[float], Optional[torch.Tensor]]:
-        """Draft from ``token``, the next input after the last verified position ``frontier``: ``block_size``
-        proposals for positions ``frontier + 2 ..``, their confidence logits and, with ``logits``, the rows'
-        logits ``[block_size, V]``. The drafter rings must hold every verified position up to ``frontier``.
+    def spec_draft_async(self, token: int, frontier: int, seed: Optional[int] = None) -> None:
+        """Queue a draft from ``token``, the next input after the last verified position ``frontier``:
+        ``block_size`` proposals for positions ``frontier + 2 ..``, which :meth:`spec_read_draft` reads. The
+        drafter rings must hold every verified position up to ``frontier``. The host is free while the drafter
+        runs, say to dispatch the next round's first row.
 
         The draft samples at the drafter's temperature (``dspark.set_sampling``), from uniforms drawn on
         device with ``seed`` first (``None`` keeps the last draw, which a greedy draft ignores)."""
@@ -2797,7 +2796,6 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if seed is not None:
             d.refresh_uniforms(seed, accept=False)
         ttnn.execute_trace(d.device, self._spec_tids["draft"], cq_id=0, blocking=False)
-        return self._read_draft(logits)
 
     def spec_accept_draft(
         self, start: int, drafts: int, sampled: bool, seed: Optional[int] = None
@@ -2819,8 +2817,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         m, token = (int(v) for v in accept)
         return m, token, [int(i) for i in ids]
 
-    def _read_draft(self, logits: bool) -> tuple[list[int], list[float], Optional[torch.Tensor]]:
-        """The last draft's proposals, confidence logits and (with ``logits``) rows' logits, off the drafter."""
+    def spec_read_draft(self, logits: bool = False) -> tuple[list[int], list[float], Optional[torch.Tensor]]:
+        """The last draft's proposals, confidence logits and (with ``logits``) rows' logits ``[block_size, V]``,
+        off the drafter (waiting for it)."""
         d = self.dspark
         ids, conf = (ttnn.to_torch(ttnn.get_device_tensors(d.out[name])[0]) for name in ("ids", "conf"))
         rows = self.spec_draft_logits() if logits else None
