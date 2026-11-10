@@ -158,7 +158,9 @@ Full list with estimates: [optimization_strategies.md](optimization_strategies.m
 - [ ] Recognizer width bucket 160 for short lines
 - [ ] L1-sharded activations for the detector convs (manual; tt-opt has no conv2d sweeps)
 - [ ] bfp8 weights, lower math fidelity, approximate GELU, gated on the accuracy tests and the torch agreement rate
-- [ ] Pipelining across requests (overlap det of frame N+1 with rec of frame N) for the throughput target
+- [x] Pipelining across requests: `TtnnBackend.lock` with worker threads (see `gate_ocr`)
+- [x] Several crops per call: `PPOCRv6Pipeline.read_many` batches the detector (`det_batches`) and the recognizer across crops
+- [ ] Detector batch 4 reads wrong once an L1 buffer is allocated after its first run (no error raised); report with a repro
 
 ### 2. YOLO11-small
 - [ ] Confirm with the customer how the 4K frame becomes the 640x640 input (full-frame resize, fixed lane region, larger input or tiles)

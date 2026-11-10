@@ -159,14 +159,7 @@ def main():
             for v in result.vehicles:
                 texts = ", ".join(f"{l.text!r} {l.confidence:.2f}" for l in v.lines) or "-"
                 print(f"  {v.label} {v.confidence:.2f} box {[round(c) for c in v.box]}: {texts}", flush=True)
-                print(
-                    "    crop timings ms: " + ", ".join(f"{k} {val:.2f}" for k, val in v.timings_ms.items()), flush=True
-                )
-            print(
-                f"  frame ms (median of {RUNS}): YOLO pre {t['yolo_pre']:.2f}, YOLO {t['yolo']:.2f}, "
-                f"NMS {t['yolo_nms']:.2f}, OCR {crops} crop(s) {t['ocr_all_crops']:.2f}, total {t['total']:.2f}",
-                flush=True,
-            )
+            print(f"  frame ms (median of {RUNS}): " + ", ".join(f"{k} {val:.2f}" for k, val in t.items()), flush=True)
             rows.append((name, crops, t, load_ms))
             if not any(v.label.startswith("no vehicle") for v in result.vehicles):
                 with_vehicle.append((name, path))
@@ -176,7 +169,7 @@ def main():
         for name, crops, t, load_ms in rows:
             print(
                 f"| {name} | {crops} | {t['yolo_pre']:.1f} | {t['yolo']:.1f} | {t['yolo_nms']:.1f} | "
-                f"{t['ocr_all_crops']:.1f} | {t['total']:.1f} | {load_ms:.0f} |",
+                f"{t['ocr_total']:.1f} | {t['total']:.1f} | {load_ms:.0f} |",
                 flush=True,
             )
 

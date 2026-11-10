@@ -30,6 +30,7 @@ DB_BOX_THRESH = 0.45
 DB_UNCLIP_RATIO = 1.4
 MIN_BOX_SIDE = 3
 REC_BATCH_BUCKETS = (1, 2, 4, 8)
+L1_INPUT_MAX_BYTES = 3 << 20  # bf16 input; the 640x640 detector at batch 1 is 2.4 MB
 
 
 @dataclass
@@ -47,6 +48,7 @@ class Result:
 
 class TorchBackend:
     name = "torch-cpu"
+    det_batches = (1,)
 
     def __init__(self):
         self.det = load_torch_det()
@@ -54,7 +56,8 @@ class TorchBackend:
 
     @torch.no_grad()
     def detect(self, x):
-        return self.det(x)[0, 0]
+        """[B, 3, H, W] -> probability maps [B, H, W]."""
+        return self.det(x)[:, 0]
 
     @torch.no_grad()
     def recognize(self, x):
@@ -64,11 +67,16 @@ class TorchBackend:
 
 
 class TtnnBackend:
-    """Detector and recognizer on device. traced=True replays one captured trace per input shape."""
+    """Detector and recognizer on device. traced=True replays one captured trace per input shape.
+
+    det_batches: detector batch sizes to trace; more than (1,) pays off when several crops are read
+    together (PPOCRv6Pipeline.read_many), at the cost of trace and L1_SMALL memory.
+    """
 
     name = "ttnn-p150"
 
-    def __init__(self, device, traced=True):
+    def __init__(self, device, traced=True, det_batches=(1,)):
+        self.det_batches = tuple(det_batches)
         import ttnn
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import TtPPOCRv6SmallDet
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_rec import TtPPOCRv6SmallRec
@@ -98,8 +106,11 @@ class TtnnBackend:
         return self.ttnn.from_torch(x, dtype=self.ttnn.bfloat16)
 
     def _nhwc(self, t, b, h, w):
-        # Into L1: the first conv reshards it from there instead of from DRAM.
-        return self.ttnn.reshape(t, (b, h // 2, w // 2, 12), memory_config=self.ttnn.L1_MEMORY_CONFIG)
+        # Into L1 when small, so the first conv reshards from L1 instead of DRAM (-0.27 ms on the
+        # 640x640 detector). Larger inputs (detector batch 2+) clash with conv circular buffers.
+        on_l1 = b * h * w * 3 * 2 <= L1_INPUT_MAX_BYTES
+        memory_config = self.ttnn.L1_MEMORY_CONFIG if on_l1 else self.ttnn.DRAM_MEMORY_CONFIG
+        return self.ttnn.reshape(t, (b, h // 2, w // 2, 12), memory_config=memory_config)
 
     def _det_fn(self, b, h, w):
         return lambda t: self.det(self._nhwc(t, b, h, w), b, h, w)[0]
@@ -108,7 +119,10 @@ class TtnnBackend:
         return lambda t: self.rec(self._nhwc(t, b, REC_HEIGHT, REC_WIDTH), b, REC_HEIGHT, REC_WIDTH, decode=True)
 
     def _trace_shapes(self):
-        shapes = {("det", 1, DET_SIZE, DET_SIZE): (self._det_fn(1, DET_SIZE, DET_SIZE), (1, 3, DET_SIZE, DET_SIZE))}
+        shapes = {
+            ("det", b, DET_SIZE, DET_SIZE): (self._det_fn(b, DET_SIZE, DET_SIZE), (b, 3, DET_SIZE, DET_SIZE))
+            for b in self.det_batches
+        }
         for b in REC_BATCH_BUCKETS:
             shapes[("rec", b)] = (self._rec_fn(b), (b, 3, REC_HEIGHT, REC_WIDTH))
         return {key: (fn, self._host(torch.zeros(shape))) for key, (fn, shape) in shapes.items()}
@@ -135,7 +149,8 @@ class TtnnBackend:
             return self.runners[key](host)
         if self.traced:
             raise ValueError(
-                f"no trace captured for {key}; traced mode supports det {DET_SIZE}x{DET_SIZE}, rec {REC_BATCH_BUCKETS}"
+                f"no trace captured for {key}; traced mode supports det {DET_SIZE}x{DET_SIZE} at batch "
+                f"{self.det_batches}, rec at batch {REC_BATCH_BUCKETS}"
             )
         return fn(host)
 
@@ -144,6 +159,7 @@ class TtnnBackend:
         self.ttnn.event_synchronize(self.ttnn.record_event(self.device, 0))
 
     def detect(self, x):
+        """[B, 3, H, W] -> probability maps [B, H, W]."""
         from models.demos.blackhole.pp_ocrv6.tt.ttnn_det import unshuffle_probability
 
         b, _, h, w = x.shape
@@ -152,7 +168,7 @@ class TtnnBackend:
             out = self._run(("det", b, h, w), self._det_fn(b, h, w), host)
             self._wait()
             out = self.ttnn.to_torch(out)
-        return unshuffle_probability(out.float(), b, h // 4, w // 4)[0, 0]
+        return unshuffle_probability(out.float(), b, h // 4, w // 4)[:, 0]
 
     def recognize(self, x):
         """[B, 3, 48, W] -> (argmax indices [B, T], their probabilities [B, T])."""
@@ -239,11 +255,24 @@ def crop_text_line(bgr, box, line_height=None):
     return np.ascontiguousarray(crop)
 
 
-def _bucket(n):
-    for b in REC_BATCH_BUCKETS:
+def _bucket(n, buckets=REC_BATCH_BUCKETS):
+    for b in buckets:
         if n <= b:
             return b
-    return REC_BATCH_BUCKETS[-1]
+    return buckets[-1]
+
+
+def _bucketed(run, items, buckets):
+    """run(batch) on zero-padded bucket-sized chunks of items [1, ...]; returns one output row per item."""
+    out = []
+    i = 0
+    while i < len(items):
+        chunk = items[i : i + buckets[-1]]
+        bucket = _bucket(len(chunk), buckets)
+        result = run(torch.cat(chunk + [torch.zeros_like(chunk[0])] * (bucket - len(chunk))))
+        out.extend(zip(*(r[: len(chunk)] for r in result)) if isinstance(result, tuple) else result[: len(chunk)])
+        i += len(chunk)
+    return out
 
 
 class PPOCRv6Pipeline:
@@ -252,37 +281,39 @@ class PPOCRv6Pipeline:
         self.charset = charset or load_rec_charset()
 
     def __call__(self, bgr):
+        return self.read_many([bgr])[0]
+
+    def read_many(self, bgrs):
+        """Text lines of each crop. The detector runs batched over the crops and the recognizer over
+        all their lines together, so several crops cost fewer device calls than one call each.
+        Every Result carries the timings of the whole call."""
         t = {}
         start = time.perf_counter()
 
-        img, scale = letterbox(bgr)
-        x = det_normalize_bgr(img)
+        fitted = [letterbox(bgr) for bgr in bgrs]
+        xs = [det_normalize_bgr(img) for img, _ in fitted]
         t["det_pre"] = time.perf_counter()
 
-        prob = self.backend.detect(x)
+        probs = _bucketed(self.backend.detect, xs, self.backend.det_batches)
         t["det"] = time.perf_counter()
 
-        boxes = db_boxes(prob)
-        boxes = [np.clip(b / scale, 0, [bgr.shape[1] - 1, bgr.shape[0] - 1]).astype(np.float32) for b in boxes]
-        crops = [rec_normalize_bgr(crop_text_line(bgr, b, REC_HEIGHT)) for b in boxes]
+        boxes, owners, crops = [], [], []
+        for k, (bgr, (_, scale), prob) in enumerate(zip(bgrs, fitted, probs)):
+            for b in db_boxes(prob):
+                b = np.clip(b / scale, 0, [bgr.shape[1] - 1, bgr.shape[0] - 1]).astype(np.float32)
+                boxes.append(b)
+                owners.append(k)
+                crops.append(rec_normalize_bgr(crop_text_line(bgr, b, REC_HEIGHT)))
         t["det_post_rec_pre"] = time.perf_counter()
 
-        steps = []
-        i = 0
-        while i < len(crops):
-            chunk = crops[i : i + REC_BATCH_BUCKETS[-1]]
-            bucket = _bucket(len(chunk))
-            batch = torch.cat(chunk + [torch.zeros_like(chunk[0])] * (bucket - len(chunk)))
-            idx, conf = self.backend.recognize(batch)
-            steps.extend(zip(idx[: len(chunk)], conf[: len(chunk)]))
-            i += len(chunk)
+        steps = _bucketed(self.backend.recognize, crops, REC_BATCH_BUCKETS)
         t["rec"] = time.perf_counter()
 
-        lines = []
-        for box, (idx, conf) in zip(boxes, steps):
+        lines = [[] for _ in bgrs]
+        for k, box, (idx, conf) in zip(owners, boxes, steps):
             text, conf = ctc_decode_indices(idx, conf, self.charset)
             if text:
-                lines.append(TextLine(text, conf, box))
+                lines[k].append(TextLine(text, conf, box))
         t["rec_post"] = time.perf_counter()
 
         timings, prev = {}, start
@@ -290,4 +321,4 @@ class PPOCRv6Pipeline:
             timings[k] = (v - prev) * 1000
             prev = v
         timings["total"] = (prev - start) * 1000
-        return Result(lines, timings)
+        return [Result(l, timings) for l in lines]
