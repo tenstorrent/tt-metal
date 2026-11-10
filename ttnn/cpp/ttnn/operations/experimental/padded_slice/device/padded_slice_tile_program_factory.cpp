@@ -43,12 +43,16 @@ const DFBSpecName IN{"in"};
 const DFBSpecName UNTILIZED{"untilized"};
 const DFBSpecName OUT{"out"};
 const DFBSpecName PADDING{"padding"};
+const DFBSpecName SCALE{"scale"};
+const DFBSpecName SHIFT{"shift"};
 
 const ScratchpadSpecName ID_PER_DIM{"id_per_dim"};
 const ScratchpadSpecName OUTPUT_COORD{"output_coord"};
 
 const TensorParamName INPUT{"input"};
 const TensorParamName OUTPUT{"output"};
+const TensorParamName SCALE_T{"scale_t"};
+const TensorParamName SHIFT_T{"shift_t"};
 }  // namespace padded_slice_tile_metal2
 
 namespace {
@@ -495,6 +499,19 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
         .num_entries = 1,  // We need only a single row to hold the padding, and reuse it.
         .data_format_metadata = output_dfb_data_format,
     };
+    // The per-channel scale / shift tiles for the untilize compute kernel
+    // (height-sharded slices only: every core holds the whole channel row)
+    const bool prologue_affine = operation_attributes.prologue_affine;
+    if (prologue_affine) {
+        TT_FATAL(
+            num_cores_channels == 1,
+            "padded_slice prologue affine needs a height-sharded output (got {} channel cores)",
+            num_cores_channels);
+    }
+    KernelSpec::CompilerOptions::Defines affine_defines;
+    if (prologue_affine) {
+        affine_defines.insert({"PROLOGUE_AFFINE", "1"});
+    }
     log_debug(
         tt::LogOp,
         "num_tiles_height_per_core: {}, num_tiles_per_channel: {}, max_num_tiles_per_row: {}",
@@ -527,7 +544,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
     KernelSpec untilize_compute_kernel{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize_metal2.cpp",
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = affine_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 DFBBinding{
@@ -659,6 +676,20 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
         .advanced_options = {.num_runtime_varargs = 3 * num_dims},
     };
 
+    if (prologue_affine) {
+        reader_kernel.compiler_options.defines = affine_defines;
+        for (const auto& [dfb_name, accessor] : {std::pair{SCALE, "scale"}, std::pair{SHIFT, "shift"}}) {
+            untilize_compute_kernel.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = dfb_name, .accessor_name = accessor, .endpoint_type = DFBEndpointType::CONSUMER});
+            reader_kernel.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = dfb_name, .accessor_name = accessor, .endpoint_type = DFBEndpointType::PRODUCER});
+        }
+        reader_kernel.tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = SCALE_T, .accessor_name = "scale_src"});
+        reader_kernel.tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = SHIFT_T, .accessor_name = "shift_src"});
+    }
+
     // ---- Per-core runtime args ----
     auto all_runtime_args = get_padded_slice_runtime_args_tile_sharded_output(
         a, output, output_tensor_start, actual_output_shape, iter_cores, max_num_tiles_per_row, is_non_aligned);
@@ -725,6 +756,22 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
         {INPUT, input_mesh},
         {OUTPUT, output_mesh},
     };
+    if (prologue_affine) {
+        const Tensor& scale = tensor_args.prologue_scale.value();
+        const Tensor& shift = tensor_args.prologue_shift.value();
+        for (const auto& [dfb_name, t] : {std::pair{SCALE, &scale}, std::pair{SHIFT, &shift}}) {
+            spec.dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = dfb_name,
+                .entry_size = input_single_tile_size,
+                .num_entries = max_num_tiles_per_row,
+                .data_format_metadata = input_dfb_data_format,
+            });
+        }
+        spec.tensor_parameters.push_back(TensorParameter{.unique_id = SCALE_T, .spec = scale.tensor_spec()});
+        spec.tensor_parameters.push_back(TensorParameter{.unique_id = SHIFT_T, .spec = shift.tensor_spec()});
+        run_args.tensor_args.insert({SCALE_T, scale.mesh_tensor()});
+        run_args.tensor_args.insert({SHIFT_T, shift.mesh_tensor()});
+    }
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

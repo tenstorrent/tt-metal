@@ -546,6 +546,85 @@ std::vector<PixelMetadata> generate_tensor_metadata(
 }
 
 const uint16_t PAD_LOCAL_SENTINAL = 0xFFFF;
+// Source "core" of a route whose sticks come from the external boundary buffer (never a real core id)
+const uint16_t EXTERNAL_SRC_SENTINEL = 0xFFFE;
+
+uint32_t ExternalHaloSpec::sticks_per_image() const {
+    const uint32_t dl = device_pad_left(), dr = device_pad_right();
+    const uint32_t wb = dl + device_w() + dr;
+    return (pad_top + pad_bottom) * wb + in_h * (dl + dr);
+}
+
+int64_t ExternalHaloSpec::boundary_index(uint32_t b, uint32_t r, uint32_t c) const {
+    const uint32_t dl = device_pad_left(), dr = device_pad_right(), wd = device_w();
+    const uint32_t wb = dl + wd + dr;
+    const int64_t base = static_cast<int64_t>(b) * sticks_per_image();
+    if (r >= pad_top + in_h + pad_bottom) {
+        return -1;  // ceil padding: stays the pad value
+    }
+    // device-padded column of window column c, and the window's real column range: the left pad band only at the
+    // device's left edge, the right band only at its right edge; anything past it (tile-rounding pad) stays the pad
+    const int64_t cg = static_cast<int64_t>(col_offset) + c - pad_left + dl;
+    const int64_t lo = col_offset == 0 ? 0 : static_cast<int64_t>(dl) + col_offset;
+    const int64_t hi =
+        col_offset + in_w == wd ? static_cast<int64_t>(wb) : static_cast<int64_t>(dl) + col_offset + in_w;
+    if (cg < lo || cg >= hi) {
+        return -1;
+    }
+    if (r < pad_top) {
+        return base + r * wb + cg;
+    }
+    if (r >= pad_top + in_h) {
+        return base + pad_top * wb + (r - pad_top - in_h) * wb + cg;
+    }
+    const uint32_t lr = r - pad_top;
+    if (cg < dl) {
+        return base + (pad_top + pad_bottom) * wb + lr * dl + cg;
+    }
+    if (cg >= dl + wd) {
+        return base + (pad_top + pad_bottom) * wb + in_h * dl + lr * dr + (cg - dl - wd);
+    }
+    return -1;  // interior (a stride / dilation pad, or a slice's rounding pad over real data): stays the pad value
+}
+
+ExternalHaloSpec external_halo_spec(const SlidingWindowConfig& config, const ExternalHaloWindow& window) {
+    TT_FATAL(!config.is_transpose && !config.is_bilinear, "external halo supports plain convolution windows only");
+    TT_FATAL(
+        config.get_ceil_pad_h() == 0 && config.get_ceil_pad_w() == 0, "external halo does not support ceil padding");
+    ExternalHaloSpec spec{
+        .batch = config.batch_size,
+        .in_h = config.input_hw.first,
+        .in_w = config.input_hw.second,
+        .pad_top = config.get_pad_top(),
+        .pad_bottom = config.get_pad_bottom(),
+        .pad_left = config.get_pad_left(),
+        .pad_right = config.get_pad_right(),
+        .col_offset = window.col_offset,
+        .boundary_w = window.boundary_w,
+        .dev_pad_left = window.dev_pad_left,
+        .dev_pad_right = window.dev_pad_right};
+    if (window.boundary_w != 0) {
+        TT_FATAL(
+            window.col_offset + spec.in_w <= window.boundary_w,
+            "external halo window [{}, {}) exceeds the device image width {}",
+            window.col_offset,
+            window.col_offset + spec.in_w,
+            window.boundary_w);
+        TT_FATAL(
+            spec.pad_left <= window.dev_pad_left + window.col_offset && (window.col_offset == 0 || spec.pad_left == 0),
+            "external halo window: left pad {} at column {} (device pad {})",
+            spec.pad_left,
+            window.col_offset,
+            window.dev_pad_left);
+    } else {
+        TT_FATAL(window.col_offset == 0, "external halo window: col_offset needs boundary_w");
+    }
+    TT_FATAL(
+        static_cast<uint64_t>(spec.batch) * spec.sticks_per_image() < PAD_LOCAL_SENTINAL - 1,
+        "external halo boundary buffer of {} sticks does not fit 16-bit indices",
+        static_cast<uint64_t>(spec.batch) * spec.sticks_per_image());
+    return spec;
+}
 
 using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
 using GatherStep = uint32_triplet_t;
@@ -823,7 +902,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_in_tiled,
     int block_size,
     const CoreRangeSet& shard_grid,
-    ShardOrientation shard_orientation) {
+    ShardOrientation shard_orientation,
+    const std::optional<ExternalHaloSpec>& external) {
     validate_sliding_window_shard_grid(shard_grid, is_block_sharded, shard_orientation);
     // Same width the validator uses, so a caller cannot pass a stride that disagrees with the grid.
     const uint32_t num_cores_x = sliding_window_shard_row_width(shard_grid, is_block_sharded);
@@ -847,14 +927,30 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             uint32_t local_idx = global_idx - input_start;
             auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
             TT_ASSERT(local_idx < PAD_LOCAL_SENTINAL && src_local_idx < PAD_LOCAL_SENTINAL, "Index overflow");
+            bool is_external_stick = false;
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
                 src_core_id = PAD_LOCAL_SENTINAL;
+                if (external.has_value()) {
+                    // A border pad stick of this device's image is the neighbour's boundary stick
+                    const uint32_t wp = external->pad_left + external->in_w + external->pad_right;
+                    const uint32_t hp = external->pad_top + external->in_h + external->pad_bottom;
+                    const uint32_t b = global_idx / (hp * wp);
+                    const uint32_t r = (global_idx / wp) % hp;
+                    const uint32_t c = global_idx % wp;
+                    const int64_t bidx = external->boundary_index(b, r, c);
+                    if (bidx >= 0) {
+                        is_external_stick = true;
+                        src_core_id = EXTERNAL_SRC_SENTINEL;
+                        src_local_idx = static_cast<uint32_t>(bidx);
+                    }
+                }
             }
             if (per_core_gather_data.contains({src_core_id, dst_core_id})) {
                 auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
-                // src idx is 0 if it is a pad
-                if ((src_local_idx == (src_start + length) || is_pad_stick) && local_idx == (dst_start + length)) {
+                // src idx is 0 if it is a pad; external runs need contiguous boundary sticks
+                if ((src_local_idx == (src_start + length) || (is_pad_stick && !is_external_stick)) &&
+                    local_idx == (dst_start + length)) {
                     ++length;
                     continue;
                 }
@@ -868,6 +964,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     // construct the config tensors
     // pad_config: length num_cores_nhw - each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
     std::vector<std::vector<uint32_pair_t>> pad_config;
+    std::vector<std::vector<uint32_triplet_t>> external_routes(num_cores_nhw);
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
     std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
     pad_config.resize(num_cores_nhw);
@@ -877,6 +974,12 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     // Split off padding, local transfer, remote transfer operations into their own configs
     for (const auto& [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
+        if (src_core_id == EXTERNAL_SRC_SENTINEL) {  // (src boundary idx, dst local idx, length)
+            for (auto [src_start, dst_start, length] : data) {
+                external_routes[dst_core_id].push_back({dst_start, src_start, length});
+            }
+            continue;
+        }
         bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
         bool is_local = src_core_id == dst_core_id;
         bool is_remote = !is_local && !is_pad;
@@ -1016,12 +1119,32 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     align_config(flattened_pad_config0, 2);
     align_config(flattened_pad_config1, 2);
 
+    // Per core [dst, src, n] triples closed by a zero triple, uniform length (one DRAM page per core)
+    std::vector<std::vector<uint16_t>> flattened_external_config;
+    if (external.has_value()) {
+        flattened_external_config.resize(num_cores_nhw);
+        for (uint32_t core = 0; core < num_cores_nhw; ++core) {
+            auto& flat = flattened_external_config[core];
+            for (auto [dst_start, src_start, length] : external_routes[core]) {
+                TT_ASSERT(length > 0 && length < PAD_LOCAL_SENTINAL);
+                flat.push_back(static_cast<uint16_t>(dst_start));
+                flat.push_back(static_cast<uint16_t>(src_start));
+                flat.push_back(static_cast<uint16_t>(length));
+            }
+            flat.push_back(0);
+            flat.push_back(0);
+            flat.push_back(0);
+        }
+        align_config(flattened_external_config, 2);
+    }
+
     return HaloGatherKernelConfig{
         std::move(flattened_pad_config0),
         std::move(flattened_pad_config1),
         std::move(serialized_gather_configs0),
         std::move(serialized_gather_configs1),
-        std::move(number_of_blocks_per_core)};
+        std::move(number_of_blocks_per_core),
+        std::move(flattened_external_config)};
 }
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {

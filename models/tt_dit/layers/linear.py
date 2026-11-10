@@ -170,6 +170,9 @@ class ColParallelLinear(Module):
     Linear layer with column parallel weights
     """
 
+    # The fused SwiGLU epilogue overlapped with the next block's matmul (all-gather-matmul path, no bias)
+    swiglu_overlap: bool = False
+
     def __init__(
         self,
         in_features,
@@ -472,6 +475,7 @@ class ColParallelLinear(Module):
                 ),
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
+                swiglu_overlap=self.swiglu_overlap,
                 scalar=addcmul_scalar if addcmul_a is not None else None,
                 addcmul_input_tensor1=addcmul_a,
                 addcmul_input_tensor2=addcmul_b,
@@ -696,8 +700,13 @@ class RowParallelLinear(Module):
         compute_kernel_config=None,
         dtype=None,
         use_persistent_buffer: bool = True,
+        rs_barrier: bool = False,
     ) -> ttnn.Tensor:
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
+
+        ``rs_barrier``: the reduce-scatter handshakes with its ring peers (barrier semaphore) before writing into them,
+        even with persistent buffers. Needed when no other collective on this axis separates the previous op from this
+        one: without it a peer that runs ahead writes partial sums into this device while it still runs the op before.
 
         Computes: output = addcmul_a + scalar * rs_result * addcmul_b
 
@@ -763,7 +772,11 @@ class RowParallelLinear(Module):
             topology=self.ccl_manager.topology,
             cluster_axis=self.mesh_axis,
             compute_kernel_config=compute_kernel_config or self.compute_config,
-            barrier_semaphore=None if use_persistent_buffer else self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            barrier_semaphore=(
+                self.ccl_manager.get_barrier_semaphore(self.mesh_axis)
+                if rs_barrier or not use_persistent_buffer
+                else None
+            ),
             using_persistent_buffers=use_persistent_buffer,
             optional_rs_output_tensor=rs_output_buffer,
             fused_ternary_scalar=scalar,

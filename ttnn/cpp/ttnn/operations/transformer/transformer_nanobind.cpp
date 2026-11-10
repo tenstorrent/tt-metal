@@ -38,7 +38,8 @@ void py_module(nb::module_& mod) {
                 uint32_t,
                 std::optional<tt::tt_metal::MathFidelity>,
                 bool,
-                bool>(),
+                bool,
+                std::optional<uint32_t>>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
@@ -49,7 +50,8 @@ void py_module(nb::module_& mod) {
             nb::arg("k_splits") = 1,
             nb::arg("matmul_math_fidelity") = nb::none(),
             nb::arg("segmented_accumulation") = false,
-            nb::arg("streaming_fp32_dest") = false)
+            nb::arg("streaming_fp32_dest") = false,
+            nb::arg("ccl_row_sdpa_start_x") = nb::none())
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
@@ -60,11 +62,12 @@ void py_module(nb::module_& mod) {
         .def_rw("matmul_math_fidelity", &SDPAProgramConfig::matmul_math_fidelity)
         .def_rw("segmented_accumulation", &SDPAProgramConfig::segmented_accumulation)
         .def_rw("streaming_fp32_dest", &SDPAProgramConfig::streaming_fp32_dest)
+        .def_rw("ccl_row_sdpa_start_x", &SDPAProgramConfig::ccl_row_sdpa_start_x)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
                 "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, k_splits={}, "
-                "matmul_math_fidelity={}, segmented_accumulation={}, streaming_fp32_dest={})",
+                "matmul_math_fidelity={}, segmented_accumulation={}, streaming_fp32_dest={}, ccl_row_sdpa_start_x={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,
@@ -74,7 +77,8 @@ void py_module(nb::module_& mod) {
                 config.k_splits,
                 config.matmul_math_fidelity,
                 config.segmented_accumulation,
-                config.streaming_fp32_dest);
+                config.streaming_fp32_dest,
+                config.ccl_row_sdpa_start_x);
         });
 
     nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")
