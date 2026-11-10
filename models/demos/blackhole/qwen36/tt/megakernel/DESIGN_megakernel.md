@@ -432,3 +432,8 @@ Partials bf16 first; fp32 if PCC needs it. Branch anatarajan/qwen38-r16-mk-v12 (
 silicon, down stage and persistence by the -mk-v12 agent; sim by the coordinator).
 - MLP tail port merged-ready (-mk-gdnext top): DNPIPE in mka2 + MIXTRID, numerically identical, GDN-type layer
   ~-2 to -2.5 µs. Default ON at integration.
+- **Replicated-x delivery measured with pipelining (AR track, fresh d26u02):** consumers can start (K-cumulative
+  chunk 0) only at ~44 µs after AR start. Everything lands by 57 µs (per-chunk mode) or 57.2 µs (4-root mode, root 0
+  last), against 21.7 µs for the AR alone. Replication adds ~20-35 µs on the path even when pipelined, and landing order
+  ≠ K order makes it worse. **≤15-23 µs is not reachable with replication; split-K (v0.6) is required.** The rstd
+  partial multicasts also contend with x. In split-K they go to only the 10 column roots, sent after x.
