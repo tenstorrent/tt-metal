@@ -32,6 +32,7 @@
 #include <memory>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -333,7 +334,16 @@ BalanceConfig balance_config(const SparseRingSDPAParams& args, const SparseRingS
     };
     c.core = *core;
     c.on = scratch(1) <= kMaxScratchBytes;
-    c.remote = c.on && args.ring_size > 1 && max_q <= 32 &&
+    // Remote devices are addressed through this device's NoC coordinates for the balance core (fabric increments):
+    // every device must map it the same way. Ranks are tensor ranks, which are the transport ranks off the full mesh.
+    auto* mesh = tensor_args.input_q.device();
+    const CoreCoord noc = mesh->worker_core_from_logical_core(c.core);
+    bool same_noc = true;
+    for (auto* device : mesh->get_devices()) {
+        same_noc = same_noc && device->worker_core_from_logical_core(c.core) == noc;
+    }
+    c.remote = c.on && same_noc && args.ring_size > 1 && max_q <= 32 &&
+               !args.all_gather_operation_attributes.full_mesh &&
                tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
                scratch(args.ring_size) <= kMaxScratchBytes;
     c.ring = c.remote ? static_cast<uint32_t>(args.ring_size) : 1u;
@@ -980,6 +990,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         bal_sems.import = add_semaphore(core_grid_set);
         bal_sems.costs = add_semaphore(balance_core_set);
         bal_sems.outputs = add_semaphore(balance_core_set);
+        // The gather adds up to 3 sync semaphores and the writers' flag after these: ids stay below 16.
+        TT_FATAL(
+            desc.semaphores.size() + 4 <= 16,
+            "SparseRingSDPA load balancing: {} semaphores leave no room for the gather's",
+            desc.semaphores.size());
     }
     const CoreCoord balance_core_noc = balance ? mesh_device->worker_core_from_logical_core(bal.core) : CoreCoord{0, 0};
 
