@@ -2,15 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// block_topk_route compute. Unit = (head h, local Q-block tile row it): the 32 local Q blocks [32 it, 32 it + 32)
-// against all NBGT * 32 global blocks. Per unit, all math in fp32 DST (full-sync, 8 tiles):
+// block_topk_route compute. First the pool phase (block_pool_compute.cpp), then the route. Unit = (head h, local
+// Q-block tile row it): the 32 local Q blocks [32 it, 32 it + 32) against all NBGT * 32 global blocks. Per unit, all
+// math in fp32 DST (full-sync, 8 tiles):
 //
 //   scores : S[c] = q_bar @ k_bar[c]^T for every column tile c, kept in cb_s (fp32) for the later phases.
 //   top-k  : a running sorted buffer of KT tiles (cb_acc, in the transposed domain: row j of tile p holds position
 //            32 p + j of every Q block's descending candidate scores, column r = Q block r), seeded with SENTINEL.
 //            Each column tile enters as S[c]^T plus the transposed candidate bias (0 / EXCLUDED) and is inserted
-//            level by level with the 64-wide SFPU bitonic sort (topk_local_sort, as ttnn.topk's insertion cascade);
-//            the loser of level p moves to level p + 1, the loser of the last level is dropped.
+//            level by level with the SFPU bitonic network: level 0 sorts both tiles into 32-runs, then every level
+//            merges its descending buffer tile with the ascending loser from the level above and rebuilds both
+//            runs (topk_merge + topk_rebuild); the loser of level p moves to level p + 1, the loser of the last
+//            level is dropped.
 //   k-th   : the sorted tiles go to the writer (cb_fin), which copies position k - 1 of every Q block into a
 //            row-broadcast threshold tile (cb_thr_raw); compute adds the per-row bias (0 for a scored Q block,
 //            -DENSE for a dense Q block, +DENSE for a pad Q block).
@@ -28,7 +31,8 @@
 // SFPU ops use 4 and 5 as scratch.
 //
 // Compile-time args: 0 H, 1 NBPT, 2 NBGT, 3 DT, 4 KT, 5 MC, 6 NX, 7 NY, 8 UNITS, 9 COARSE, 10 SCALE (fp32 bits),
-// 11 RT (32-row tile rows per shard), 12 PC (column tiles per chunk of p).
+// 11 RT (32-row tile rows per shard), 12 PC (column tiles per chunk of p),
+// 13 NCORES (the cores that take units, the first NCORES in row-major order), then the pool compute's.
 
 #include <cstdint>
 
@@ -47,16 +51,18 @@
 #include "api/compute/topk.h"
 #include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
+#include "block_pool_compute.cpp"
 
 namespace {
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_const = 2, cb_cand_t = 7, cb_colbias = 8, cb_rowbias = 9, cb_pad = 10,
                    cb_v = 11, cb_x = 12, cb_y = 13, cb_mb = 14, cb_l = 15, cb_mask = 16, cb_co = 17, cb_mx = 18,
                    cb_fin = 19, cb_thr_raw = 20, cb_cot = 22, cb_s = 24, cb_acc = 25, cb_loser = 26, cb_thr = 28,
-                   cb_p = 29, cb_part = 30;
+                   cb_p = 29, cb_part = 6;
 // Constant tiles: eye, SENTINEL, ones, then row_sel[r] (column r ones: row_sel[r] @ T copies row r of T to every row).
 constexpr uint32_t EYE = 0, SENT = 1, ONES = 2, ROW_SEL = 3, N_CONST = ROW_SEL + 32;
 constexpr uint32_t QUAD = 4;
 constexpr int SORT_END_PHASE = 5;
+constexpr int RUN = 32, LOG_RUN = 5;
 
 ALWI void mm_begin(uint32_t in0, uint32_t in1, uint32_t transpose) {
     reconfig_data_format<SrcOrder::Reverse>(in0, in1);
@@ -74,6 +80,26 @@ ALWI void sort_pair() {
     ckernel::topk_local_sort(0, 0, SORT_END_PHASE);
 }
 
+// DST 0 holds a descending and DST 1 an ascending 32-run per column. Afterwards DST 0 holds the larger 32 descending,
+// DST 1 the smaller 32 ascending, so DST 1 is a valid partner for the next level's descending buffer tile.
+ALWI void merge_runs() {
+    ckernel::topk_merge(0, 0, RUN);
+    ckernel::topk_rebuild(0, false, 0, RUN, LOG_RUN, 0);
+}
+
+// Level 0: the incoming tile is unsorted, so both tiles are first sorted into 32-runs (DST 0 descending, DST 1
+// ascending).
+ALWI void insert_unsorted() {
+    ckernel::topk_tile_init();
+    ckernel::topk_local_sort(0, 0, LOG_RUN - 1);
+    merge_runs();
+}
+
+ALWI void insert_sorted() {
+    ckernel::topk_tile_init();
+    merge_runs();
+}
+
 ALWI void pack_one(uint32_t dst, uint32_t cb) {
     CircularBuffer out(cb);
     out.reserve_back(1);
@@ -89,23 +115,24 @@ void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(4);
     constexpr uint32_t MC = get_compile_time_arg_val(5);
     constexpr uint32_t NX = get_compile_time_arg_val(6);
-    constexpr uint32_t NY = get_compile_time_arg_val(7);
     constexpr uint32_t UNITS = get_compile_time_arg_val(8);
     constexpr bool COARSE = get_compile_time_arg_val(9) == 1;
     constexpr uint32_t SCALE = get_compile_time_arg_val(10);
     constexpr uint32_t RT = get_compile_time_arg_val(11);
     constexpr uint32_t PC = get_compile_time_arg_val(12);
+    constexpr uint32_t NCORES = get_compile_time_arg_val(13);
     constexpr uint32_t NB = (RT + 1) / 2;
     static_assert(NBGT % 8 == 0 && MC % QUAD == 0 && NBGT % MC == 0, "column tiles go in batches of 8 and 4");
     static_assert(DT < 8, "the coarse output and its row sum share DST");
     static_assert(PC % QUAD == 0 && NBGT % PC == 0, "p is produced in quads and in whole chunks");
     static_assert(NBPT > 0);
 
-    constexpr uint32_t NCORES = NX * NY;
+    compute_kernel_hw_startup(cb_q, cb_k, cb_s);
+    block_pool::pool<14>();
+
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     const uint32_t unit_start = ci * UNITS / NCORES;
     const uint32_t unit_count = (ci + 1) * UNITS / NCORES - unit_start;
-    compute_kernel_hw_startup(cb_q, cb_k, cb_s);
     if (unit_count == 0) {
         return;
     }
@@ -166,7 +193,7 @@ void kernel_main() {
             copy_begin(cb_acc);
             copy_tile(cb_acc, 0, 0);
             cacc.pop_front(1);
-            sort_pair();
+            insert_unsorted();
             tile_regs_commit();
             tile_regs_wait();
             pack_one(0, cb_acc);
@@ -184,7 +211,7 @@ void kernel_main() {
                 copy_begin(cb_loser);
                 copy_tile(cb_loser, 0, 1);
                 closer.pop_front(1);
-                sort_pair();
+                insert_sorted();
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_one(0, cb_acc);

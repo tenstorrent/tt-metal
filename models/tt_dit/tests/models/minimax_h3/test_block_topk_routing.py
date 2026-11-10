@@ -4,9 +4,13 @@
 
 """BlockTopKRouting (models/tt_dit/layers/block_topk_routing.py) on device vs its torch mirror, on VSA geometries.
 
-`test_pool`: block means vs the mirror. `test_route`: the block mask against tie-robust top-k bounds, with exact
-ties in the data, `k = k_max`, a cached second call, and in-place request swaps. `test_coarse`: the coarse output vs
-the mirror.
+`test_pool`: block means vs the mirror, and their gather: every device holds every shard. `test_route`: the block mask
+against tie-robust top-k bounds, with exact ties in the data, `k = k_max`, a cached second call, and in-place request
+swaps. `test_coarse`: the coarse output vs the mirror. `test_large_rungs`: the production rungs, device only: an eager
+call, a two-call capture replayed back to back and a following all-gather complete. `test_traced_replays`: two
+consecutive calls captured once and replayed back to back reproduce eager, also after an in-place request swap.
+`test_repeated_calls`: many eager calls and trace replays all reproduce the first call (the per-call unit claims, unit
+pages and completion flags).
 
 Run (Galaxy): pytest models/tt_dit/tests/models/minimax_h3/test_block_topk_routing.py -k 4x8 -s --tb=short
 """
@@ -26,8 +30,38 @@ from ....models.transformers.minimax_h3.vsa_prepass import _round_up, compute_to
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, build_vsa_geometry
 from ....utils.tensor import from_torch
-from .common import GALAXY_RING
-from .test_vsa_attention_minimax_h3 import REF2VA_H_15S_SEGMENTS
+from .common import _BH_ONLY, GALAXY_RING, _ring_8k, _ring_8k_trace
+from .test_vsa_attention_minimax_h3 import REF2VA_H_15S_SEGMENTS, REF2VA_M_10S_SEGMENTS
+
+# GALAXY_RING's rows with a trace region: 4x8 gets one, 4x32 has its own.
+TRACED_RING = pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param(
+            (4, 8),
+            1,
+            0,
+            2,
+            {**_ring_8k, "trace_region_size": 50_000_000},
+            ttnn.Topology.Ring,
+            False,
+            id="4x8sp1tp0nl2_ring_is_fsdp0",
+            marks=_BH_ONLY,
+        ),
+        pytest.param(
+            (4, 32),
+            1,
+            0,
+            2,
+            _ring_8k_trace,
+            ttnn.Topology.Ring,
+            False,
+            id="4x32sp1tp0nl2_ring_is_fsdp0",
+            marks=_BH_ONLY,
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 
 HEADS = 14
 HEAD_DIM = 128
@@ -42,6 +76,9 @@ QUICK = [
 LARGE = [
     pytest.param((39, 0, 414), (37, 24, 42), 45312, id="5s-1344x768"),
     pytest.param((39, 0, 1206), (107, 24, 42), 120320, id="15s-1344x768"),
+    pytest.param(REF2VA_M_10S_SEGMENTS, (37, 24, 42), 106496, id="ref2va-m-5s"),
+    pytest.param(REF2VA_M_10S_SEGMENTS, (72, 24, 42), 147712, id="ref2va-m-10s"),
+    pytest.param(REF2VA_M_10S_SEGMENTS, (107, 24, 42), 204544, id="ref2va-m-15s"),
     pytest.param(REF2VA_H_15S_SEGMENTS, (107, 24, 42), 240640, id="ref2va-h-15s"),
     pytest.param(REF2VA_H_15S_SEGMENTS, (107, 24, 42), 326656, id="ref2va-top"),
 ]
@@ -108,12 +145,18 @@ def _routing(case: _Case, ccl_manager) -> BlockTopKRouting:
     )
 
 
+def _local_slots(case: _Case, kv_g: torch.Tensor) -> torch.Tensor:
+    """Each device's own shard of the gathered [S, 2H, S * nb_pad, D]: [S, 2H, nb_pad, D]."""
+    nb = case.nb_pad
+    return torch.stack([kv_g[s, :, s * nb : (s + 1) * nb] for s in range(kv_g.shape[0])])
+
+
 def _mirror_scores(case: _Case, routing: BlockTopKRouting) -> torch.Tensor:
     """fp32 scores from the device's own block means: [S, H, nb_pad, S * nb_pad]."""
-    q_bar, kv_bar = routing.pool(*case.device)
-    qb, kvb = case.to_host(q_bar).float(), case.to_host(kv_bar).float()
+    q_bar, kv_g = routing.pool(*case.device)
+    qb, kvb = case.to_host(q_bar).float(), _local_slots(case, case.to_host(kv_g).float())
     ttnn.deallocate(q_bar)
-    ttnn.deallocate(kv_bar)
+    ttnn.deallocate(kv_g)
     k_glob = kvb[:, :HEADS].permute(1, 0, 2, 3).reshape(HEADS, -1, HEAD_DIM)
     return torch.einsum("shbd,hcd->shbc", qb, k_glob)
 
@@ -182,8 +225,11 @@ def test_pool(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefi
     routing.update(case.request, traced=False)
     ref = torch_reference(*case.shards, case.request)
 
-    q_bar, kv_bar = routing.pool(*case.device)
-    qb, kvb = case.to_host(q_bar).float(), case.to_host(kv_bar).float()
+    q_bar, kv_g = routing.pool(*case.device)
+    gathered = case.to_host(kv_g)
+    # The gather copies bf16 tiles: every device holds the same S shards, bit for bit.
+    assert all(torch.equal(gathered[0], gathered[s]) for s in range(1, sp)), "the devices' gathered buffers differ"
+    qb, kvb = case.to_host(q_bar).float(), _local_slots(case, gathered).float()
     pad = case.request.counts == 0
     for name, dev, expected in (
         ("q", qb, ref["q_bar"]),
@@ -198,7 +244,7 @@ def test_pool(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefi
 
 
 @GALAXY_RING
-@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK + LARGE)
+@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK)
 def test_route(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefix_segments, grid, rung, reset_seeds):
     sp = tuple(mesh_device.shape)[sp_axis]
     case = _Case(
@@ -241,7 +287,7 @@ def test_route(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pref
 
 
 @GALAXY_RING
-@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK + LARGE)
+@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK)
 def test_coarse(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefix_segments, grid, rung, reset_seeds):
     sp = tuple(mesh_device.shape)[sp_axis]
     geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung)
@@ -251,10 +297,14 @@ def test_coarse(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pre
     routing.update(case.request, traced=False)
     ref = torch_reference(*case.shards, case.request)
 
-    out = routing(*case.device, coarse=True)
-    ttnn.deallocate(out["block_mask"])
-    rows = case.to_host(out["coarse_out"])[:, 0].float().reshape(sp, case.rows, HEADS, HEAD_DIM)
-    ttnn.deallocate(out["coarse_out"])
+    def coarse_rows(r: BlockTopKRouting) -> torch.Tensor:
+        out = r(*case.device, coarse=True)
+        ttnn.deallocate(out["block_mask"])
+        rows = case.to_host(out["coarse_out"])[:, 0].float().reshape(sp, case.rows, HEADS, HEAD_DIM)
+        ttnn.deallocate(out["coarse_out"])
+        return rows
+
+    rows = coarse_rows(routing)
     # Every row of a block carries the block's coarse output: compare all rows of the real blocks.
     block = torch.arange(case.rows) // VSA_TILE_TOKENS
     real = case.request.counts[:, block] > 0
@@ -264,3 +314,173 @@ def test_coarse(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pre
     logger.info(f"coarse vs mirror: PCC {pcc:.6f}, max abs err {float((a - b).abs().max()):.3e}")
     assert pcc >= 0.999, pcc
     torch.testing.assert_close(a, b, atol=3e-2, rtol=3e-2)
+
+
+@TRACED_RING
+@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), LARGE)
+def test_large_rungs(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefix_segments, grid, rung, reset_seeds
+):
+    """The pipeline's rungs, device only (the correctness checks run on QUICK): the program fits and the calls, the
+    replays and the next fabric op after them complete."""
+    sp = tuple(mesh_device.shape)[sp_axis]
+    case = _Case(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung),
+        seed=0,
+        tie=False,
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    routing = _routing(case, ccl_manager)
+    logger.info(f"rung {rung}: nb_pad {case.nb_pad}, k {case.k}, k_max {case.k_max} ({routing.kt} sorted tiles)")
+    routing.update(case.request, traced=False)
+
+    outs = [routing(*case.device, coarse=True)]
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outs += [routing(*case.device, coarse=True) for _ in range(2)]
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for _ in range(8):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+
+    probe = from_torch(
+        torch.randn(sp, 1, 32, 32), device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=[sp_axis, None, None, None]
+    )
+    ccl_manager.all_gather_persistent_buffer(probe, dim=2, mesh_axis=sp_axis)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.release_trace(mesh_device, trace_id)
+    for out in outs:
+        ttnn.deallocate(out["block_mask"])
+        ttnn.deallocate(out["coarse_out"])
+    ttnn.deallocate(probe)
+
+
+@TRACED_RING
+@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK)
+def test_traced_replays(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefix_segments, grid, rung, reset_seeds
+):
+    """Production shape: one routing call per layer, so the ping-pong buffers alternate inside the capture. Replays
+    back to back, where a fast peer's arrival increment for the next call can land before this device took its own."""
+    sp = tuple(mesh_device.shape)[sp_axis]
+    case = _Case(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung),
+        seed=0,
+        tie=False,
+    )
+    other = _Case(
+        mesh_device, sp_axis, tp_axis, build_vsa_geometry(*SWAPPED_IN, sp_factor=sp, padded_len=rung), seed=1, tie=False
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+
+    def read(c: _Case, out: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        return c.to_host(out["block_mask"]), c.to_host(out["coarse_out"])
+
+    def eager(c: _Case, routing: BlockTopKRouting) -> tuple[torch.Tensor, torch.Tensor]:
+        out = routing(*c.device, coarse=True)
+        result = read(c, out)
+        ttnn.deallocate(out["block_mask"])
+        ttnn.deallocate(out["coarse_out"])
+        return result
+
+    fresh = _routing(other, ccl_manager)
+    fresh.update(other.request, traced=False)
+    expected_other = eager(other, fresh)
+    routing = _routing(case, ccl_manager)
+    routing.update(case.request, traced=False)
+    expected = eager(case, routing)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outs = [routing(*case.device, coarse=True) for _ in range(2)]
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for _ in range(8):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    for i, out in enumerate(outs):
+        mask, coarse = read(case, out)
+        assert torch.equal(mask, expected[0]), f"call {i} of the replayed capture: mask differs from eager"
+        assert torch.equal(coarse, expected[1]), f"call {i} of the replayed capture: coarse output differs from eager"
+
+    routing.update(other.request, traced=True)
+    for src, dst in zip(other.device, case.device):
+        ttnn.copy(src, dst)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    for i, out in enumerate(outs):
+        mask, coarse = read(other, out)
+        assert torch.equal(mask, expected_other[0]), f"call {i} after the in-place swap: mask differs from eager"
+        assert torch.equal(coarse, expected_other[1]), f"call {i} after the in-place swap: coarse differs from eager"
+    ttnn.release_trace(mesh_device, trace_id)
+
+    # The pipeline hung in the first fabric op after routing: an all-gather over the same links must complete.
+    probe = torch.randn(sp, 1, 32, 32).bfloat16()
+    gathered = ccl_manager.all_gather_persistent_buffer(
+        from_torch(probe, device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=[sp_axis, None, None, None]),
+        dim=2,
+        mesh_axis=sp_axis,
+    )
+    ttnn.synchronize_device(mesh_device)
+    expected_gather = probe.reshape(1, 1, sp * 32, 32).expand(sp, -1, -1, -1)
+    assert torch.equal(case.to_host(gathered), expected_gather), "the all-gather after the replays differs"
+
+
+@TRACED_RING
+@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK[1:])
+def test_repeated_calls(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefix_segments, grid, rung, reset_seeds
+):
+    """Which core pools which unit changes from call to call, the outputs must not: a flag written before its reset,
+    a unit claimed twice or lost, or a stale unit page shows up as a difference in some call. Three inputs take turns,
+    so data left from an earlier call in either ping-pong buffer or in q_bar never matches; each call is read back on
+    one device, a different one each call."""
+    sp = tuple(mesh_device.shape)[sp_axis]
+    geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung)
+    cases = [_Case(mesh_device, sp_axis, tp_axis, geometry, seed=seed, tie=False) for seed in range(3)]
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    routing = _routing(cases[0], ccl_manager)
+    routing.update(cases[0].request, traced=False)
+
+    def per_device(out: dict) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        masks, coarse = ttnn.get_device_tensors(out["block_mask"]), ttnn.get_device_tensors(out["coarse_out"])
+        return [(ttnn.to_torch(m), ttnn.to_torch(c)) for m, c in zip(masks, coarse)]
+
+    def one_device(out: dict, d: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            ttnn.to_torch(ttnn.get_device_tensors(out["block_mask"])[d]),
+            ttnn.to_torch(ttnn.get_device_tensors(out["coarse_out"])[d]),
+        )
+
+    def drop(out: dict) -> None:
+        ttnn.deallocate(out["block_mask"])
+        ttnn.deallocate(out["coarse_out"])
+
+    expected = []
+    for c in cases:
+        out = routing(*c.device, coarse=True)
+        expected.append(per_device(out))
+        drop(out)
+    n_devices = len(expected[0])
+    assert not torch.equal(expected[0][0][1], expected[1][0][1]), "the inputs must change the coarse output"
+
+    for i in range(200):
+        out = routing(*cases[i % 3].device, coarse=True)
+        d = i % n_devices
+        mask, coarse = one_device(out, d)
+        drop(out)
+        assert torch.equal(mask, expected[i % 3][d][0]), f"eager call {i}, device {d}: mask differs"
+        assert torch.equal(coarse, expected[i % 3][d][1]), f"eager call {i}, device {d}: coarse differs"
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outs = [routing(*c.device, coarse=True) for c in cases]
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for i in range(50):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        for j, out in enumerate(outs):
+            d = (3 * i + j) % n_devices
+            mask, coarse = one_device(out, d)
+            assert torch.equal(mask, expected[j][d][0]), f"replay {i}, call {j}, device {d}: mask differs"
+            assert torch.equal(coarse, expected[j][d][1]), f"replay {i}, call {j}, device {d}: coarse differs"
+    ttnn.release_trace(mesh_device, trace_id)
