@@ -345,8 +345,13 @@ void kernel_main() {
                         const uint32_t d = d0 + i;
                         for (uint32_t j = 0; j < mlashard::PIECES; ++j) {  // piece j = rank tile PIECES + j
                             const uint32_t blk = mlashard::ag_blk(tile * mlashard::PIECES + j);
+#if defined(MLA_DSA_SHARD_AGK)  // rev 68: y_ag in the key-packed format (dsa_shard.hpp AGK: 2 pages per token)
+                            const uint64_t src =
+                                yag.get_noc_addr(mlashard::agy_q_page(t_rows, blk, t, d), mlashard::agx_q_off(d));
+#else
                             const uint64_t src =
                                 yag.get_noc_addr(mlashard::agx_q_page(t_rows, blk, t, d), mlashard::agx_q_off(d));
+#endif
                             const uint32_t dst = scr + i * TB + mlashard::slice_off(j, TB);
                             noc_async_read(src, dst, mlashard::PIECE_RUN);  // rows PIECE_ROWS j .. of face 0 / 2
                             noc_async_read(src + mlashard::PIECE_RUN, dst + TB / 4, mlashard::PIECE_RUN);  // face 1 / 3

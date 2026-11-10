@@ -255,4 +255,28 @@ constexpr uint32_t MERGE_SCR_BYTES1 = CAND_PAGES * TB + 2 * CAND_MAX * 4 + mlads
 constexpr uint32_t MSTG_PAGES = 2;
 constexpr uint32_t MERGE_SCR_BYTESK = MSTG_PAGES * TB + KPH * CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4;
 constexpr uint32_t MERGE_SCR_BYTES = KPH == 1 ? MERGE_SCR_BYTES1 : MERGE_SCR_BYTESK;
+// rev 68, THE KEY-PACKED ALL-GATHER (MLA_DSA_SHARD_AGK, tt/mk_mla.py GLM53_DSA_SHARD_AGK; the 8x4 only, unset: every
+// build of rev 67 unchanged). The AG moved 32 x t x 6 pages per chip (the AG32 block: q page + header + 512 16-B
+// records), 5 / 6 of it records whose core id only the record's own chip reads -- at t = 16 the busiest link 0 hop
+// carries 7 (AG1) + 3 x 8 (AG2) blocks = 6 MB per launch, the ~535 us AG window of the probe (doc/perf/
+// shard_8x4_design.md section 9). x_ag keeps the AG32 format (the producers are unchanged); the AG1 lane's NCRISC
+// (fs_read.cpp FS_KEYPACK) rewrites each staged chunk in place -- page AG32_QPAGES = the n = min(header, CAND_MAX)
+// record keys in record order, zeros after -- and ships AGK_PPC = 2 pages per token: y_ag block blk, token t = the
+// q-piece page (agy_q_page) + the key page (agk_key_page). The count is not shipped: chip q's list of a sparse token
+// at position p holds exactly agk_count(p, q) = min(CAND_MAX, n_closed_local(p, q)) records (the local select keeps
+// every key below k candidates, exactly k above). The merge helpers read one key page per list (instead of <= 5
+// record pages); the helper of chip `rank` reads its per-core tie order from this chip's own x_ag records.
+#if defined(MLA_DSA_SHARD_AGK)
+constexpr uint32_t AGK_PPC = 2;
+static_assert(PAIR == 8 && LINE == 4 && AG_PPC == AG32_PPC && AG_QPAGES == 1, "AGK: the 8x4 AG32 block");
+static_assert(CAND_MAX * 4 == TB && AGK_PPC == AG_QPAGES + 1, "AGK: one key page holds a full list; page pairs");
+inline uint32_t agy_q_page(uint32_t T, uint32_t blk, uint32_t t, uint32_t d) {
+    return (blk * T + t) * AGK_PPC + d / PIECES_PER_PAGE;
+}
+inline uint32_t agk_key_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * T + t) * AGK_PPC + AG_QPAGES; }
+inline uint32_t agk_count(uint32_t p, uint32_t q, uint32_t C) {
+    const uint32_t n = n_closed_local(p, q, C);
+    return n < CAND_MAX ? n : CAND_MAX;
+}
+#endif
 }  // namespace mlashard

@@ -20,7 +20,9 @@
 // (to_chip_unicast(hops)) on this chip's connection in q's direction, into q's y at this chip's block (row_base), the
 // chunk-end packet a fused write + atomic inc of q's counter ARR + p LANES + h (one counter per source: lesson of the
 // credit-ahead hang). Runtime args after the FS_CONS block: n_dst, then (direction 0 up / 1 down, hops) per destination
-// (count-prefixed). MK_PROBE_ARG (tt/fabric_stream.py probe=, the shard phase probe: kernels/mk/probe.hpp): the probe
+// (count-prefixed). FS_KEYPACK (rev 68, tt/fabric_stream.py keypack=): a staged batch = one x chunk that fs_read.cpp
+// packed in place; only its first FS_KEYPACK pages go out (y holds FS_KEYPACK pages per chunk, one chunk-end signal
+// each as before). MK_PROBE_ARG (tt/fabric_stream.py probe=, the shard phase probe: kernels/mk/probe.hpp): the probe
 // pair after the scatter block (before the fabric connections); marks: start, the first batch staged + the link opened,
 // the sends done, closed (DONE), the waiter's completion (lane 0) -> one row of the MkMla probe tensor.
 #include <cstddef>
@@ -173,17 +175,29 @@ void kernel_main() {
             }
 #endif
             const uint32_t buf = get_read_ptr(CB_STAGE);
+#if defined(FS_KEYPACK)  // rev 68 (fs_read.cpp FS_KEYPACK): the batch = one x chunk packed in place; its first
+            // FS_KEYPACK pages are y's chunk (FS_KEYPACK pages per chunk in y)
+            static_assert(NB == PPC && FS_KEYPACK % 2 == 0 && FS_KEYPACK <= NB, "keypack: one chunk per batch");
+            for (uint32_t i = 0; i < FS_KEYPACK; i += 2) {
+                const uint32_t chunk = c_lo + b, col = i;
+                const uint32_t g0 = (row_base + chunk) * FS_KEYPACK + col;
+#else
             for (uint32_t i = 0; i < NB; i += 2) {
                 const uint32_t idx = b * NB + i;  // this lane's page index
                 const uint32_t chunk = c_lo + idx / PPC, col = idx % PPC;
                 const uint32_t g0 = (row_base + chunk) * PPC + col;
+#endif
                 const uint32_t src = buf + i * TB;
                 if (local) {
                     noc_async_write_page(g0, y, src);
                     noc_async_write_page(g0 + 1, y, src + TB);
                 }
                 const uint64_t d0 = y.get_noc_addr(g0, 0, 0), d1 = y.get_noc_addr(g0 + 1, 0, 0);
+#if defined(FS_KEYPACK)
+                const bool last = col + 2 == FS_KEYPACK;
+#else
                 const bool last = col + 2 == PPC;
+#endif
 #if defined(FS_SCATTER)
                 send(dirs[sdir], src, d0, d1, last, shops);
 #else

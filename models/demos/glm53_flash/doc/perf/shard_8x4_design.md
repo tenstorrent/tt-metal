@@ -135,3 +135,38 @@ quotas equal KPH 1's. Lane-local slots TL = 4 when a lane holds <= 4 tokens keep
 
 B 1 is unchanged (one lane: KPH 1; 4 K 18.9 ms = 52.8). At 4 K x 16 the unsharded TP32 pool runs 32.1 ms, so the shard
 now adds 10.5 ms (35.3 with 2 lanes).
+
+## 9. The merge window at B = 16 is the all-gather's bytes: the key-packed AG (2026-11-10, MLA_REV 68)
+
+Eager probe, chip 0, B 16 (8 lanes x 2 tokens, KPH 4), pos 4095, both rev-65 RS knobs on (test_mk_backend_probe,
+layer 3; marks are the max over the chip's cores of a kind unless noted):
+
+| mark | site | us |
+|---|---|---|
+| owner_dm1 0 | att_dsa_shard_dm1.cpp phase start (after mhc_pre) | 59.9 |
+| ix_dm0 1 / 2 | ix_dm0.cpp: the I1 hand-off / the 9 index tiles in | 84.1 / 85.6 |
+| ix_dm0 3 | ix_dm0.cpp: the lane's 2 tokens selected (8 rounds + tie each), record counts in x_ag | 210.4 (216.7 max) |
+| owner_dm1 1 | att_dsa_shard_dm1.cpp: the last chunk core's records in x_ag = the AG1 lane's last producer | 217.4 |
+| ix_dm0 4, ix_dm1 3 | SEM_AGC: AG2's waiter, all 32 blocks of y_ag landed | 752.6 |
+| ix_dm1 4 | the q tiles of the lane's 2 tokens assembled (behind the merge) | 819 - 824 |
+| ix_dm0 5 | both tokens' T_g + per-core quotas broadcast | 871.3 |
+| owner_dm1 2 | CB_ASEL written (every lane token) | 872.0 |
+
+The 217 -> 872 us window is the all-gather (535 us, 82 %) then the global merge (119 us: 2 tokens x 12 sequential
+steps -- start, 8 radix rounds, tie, quotas, the rank helper's per-core quotas -- ~5 us each); the local select (9
+report / broadcast handshakes per token) runs before it. The AG is bytes on link 0: both rounds are line multicasts,
+so the column's last hop carries 7 blocks (AG1) and the row's last hop 3 bundles of 8 (AG2) = 31 blocks of t x 6 pages
+= 5.8 MB at t = 16 (~11 GB/s), and 5 / 6 of a block is 16-B (key, core) records whose core id only the record's own
+chip reads.
+
+`GLM53_DSA_SHARD_AGK=1` (opt-in; dsa_shard.hpp AGK): x_ag keeps the AG32 records (no producer change); the AG1 lane's
+NCRISC packs each staged chunk in place (fs_read.cpp FS_KEYPACK: page 1 = the n = min(header, 512) keys in record
+order, zeros after) and ships 2 pages per token; AG2 multicasts the packed bundles (y_ag = 32 blocks x t x 2 pages).
+The count is not shipped: chip q's list of a sparse token holds exactly min(512, n_closed_local(p, q)) records. The
+merge helpers read one key page per list; the helper of chip rank takes its per-core tie order from its own x_ag. T_g,
+the per-chip / per-core quotas and the tie order are rev 65's bitwise (tt/shard_plan.py emulate_agk_launch,
+tests/test_shard_plan_8x4.py). Staging CBs: AG1 4 x 6 pages (unchanged), AG2 48 -> 16 KB; no new semaphores.
+Expected: the AG at a third of its bytes, ~535 -> ~180-200 us per DSA layer at B 16 (~-3.7 ms per 45-layer step at
+4 K x 16), ~-170 us at B 8 and ~-85 us at B 4 (the bytes scale with t; the per-hop drains / hand-offs do not), plus
+one key page per list instead of up to 5 record pages in the merge at >= 64 K. The next cut is the local select +
+merge handshakes (~245 us at B 16: one report / broadcast per round carrying the lane's tokens).

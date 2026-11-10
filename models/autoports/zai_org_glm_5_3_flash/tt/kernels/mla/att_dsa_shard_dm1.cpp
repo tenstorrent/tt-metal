@@ -365,6 +365,25 @@ void kernel_main() {
 #if !(defined(MLA_DSA_SHARD_KPH) && MLA_DSA_SHARD_KPH > 1)
     auto merge_help = [&](uint32_t t, uint32_t j) {  // (t: the y_ag token; j: its mailbox slots)
         noc_semaphore_wait_min(sel_sem, ++msgs);     // start: every chip's records landed in y_ag
+#if defined(MLA_DSA_SHARD_AGK)
+        // rev 68 (dsa_shard.hpp AGK): chip c's key page straight into mkeys (one page = CAND_MAX words), its count from
+        // the position; helper `rank` also reads this chip's own records (x_ag: the core ids of the per-core quotas)
+        noc_async_read_page(
+            mlashard::agk_key_page(t_rows, mlashard::ag_blk(c), t), xyag, reinterpret_cast<uint32_t>(mkeys));
+        if (c == rank) {
+            for (uint32_t pg = 0; pg < mlashard::CAND_PAGES; ++pg) {
+                noc_async_read_page(
+                    mlashard::agx_cand_page(t_rows, 0, t, pg * mlashard::TB), xag, mstg + pg * mlashard::TB);
+            }
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg);
+        const uint32_t n = mlashard::agk_count(pos_of(t), c, nchips);
+        ASSERT(n == 0 || mkeys[n - 1] != 0);  // (a finite score's key is never 0: the pack's zero fill starts at n)
+        ASSERT(n == mlashard::CAND_MAX || mkeys[n] == 0);
+        ASSERT(c != rank || rq[0] == n);  // this chip's header count = the position's
+#else
         for (uint32_t pg = 0; pg < mlashard::CAND_PAGES; ++pg) {
             noc_async_read_page(
                 mlashard::agx_cand_page(t_rows, mlashard::ag_blk(c), t, pg * mlashard::TB),
@@ -378,6 +397,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < n; ++i) {
             mkeys[i] = rq[(mlashard::REC_HDR + i * mlashard::REC_BYTES) / 4];
         }
+#endif
         uint32_t prefix = 0, mask = 0;
         volatile tt_l1_ptr uint32_t* src = mkeys;
         uint32_t nsrc = n;
@@ -453,10 +473,16 @@ void kernel_main() {
         constexpr uint32_t RPP = mlashard::TB / mlashard::REC_BYTES;        // record slots per page (128)
         constexpr uint32_t HREC = mlashard::REC_HDR / mlashard::REC_BYTES;  // the header's slots (1)
         auto issue = [&](uint32_t li, uint32_t pg, uint32_t s) {
+#if defined(MLA_DSA_SHARD_AGK)
+            // rev 68: only this chip's own list is streamed (the per-core quotas): its records in this chip's x_ag
+            ASSERT(c * mlashard::KPH + li == rank);
+            noc_async_read_page(mlashard::agx_cand_page(t_rows, 0, t, pg * mlashard::TB), xag, mstg + s * mlashard::TB);
+#else
             noc_async_read_page(
                 mlashard::agx_cand_page(t_rows, mlashard::ag_blk(c * mlashard::KPH + li), t, pg * mlashard::TB),
                 xyag,
                 mstg + s * mlashard::TB);
+#endif
         };
         if (i0 >= i1) {
             return;
@@ -510,6 +536,31 @@ void kernel_main() {
             len[i] = 0;
         }
         uint32_t ntot = 0, lbase = 0;
+#if defined(MLA_DSA_SHARD_AGK)
+        // rev 68 (dsa_shard.hpp AGK): list i's key page straight into mkeys + i CAND_MAX (the KPH reads in flight
+        // together, one page each), its count from the position; then the lists packed contiguous in list order (the
+        // same array as the record stream builds: forward copies, lbase <= i CAND_MAX)
+        (void)lbase;
+        for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+            noc_async_read_page(
+                mlashard::agk_key_page(t_rows, mlashard::ag_blk(c * mlashard::KPH + i), t),
+                xyag,
+                reinterpret_cast<uint32_t>(mkeys + i * mlashard::CAND_MAX));
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+            const uint32_t n = mlashard::agk_count(pos_of(t), c * mlashard::KPH + i, nchips);
+            volatile tt_l1_ptr uint32_t* src = mkeys + i * mlashard::CAND_MAX;
+            ASSERT(n == 0 || src[n - 1] != 0);  // (a finite score's key is never 0: the pack's zero fill starts at n)
+            ASSERT(n == mlashard::CAND_MAX || src[n] == 0);
+            len[i] = n;
+            for (uint32_t e = 0; e < n; ++e) {
+                mkeys[ntot + e] = src[e];
+            }
+            ntot += n;
+        }
+#else
         stream_lists(
             t,
             0,
@@ -525,6 +576,7 @@ void kernel_main() {
                 }
                 return true;
             });
+#endif
         uint32_t prefix = 0, mask = 0;
         uint32_t nsrc = ntot;
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {

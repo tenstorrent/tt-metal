@@ -190,15 +190,21 @@ class TPMlaShard(TPM.TPMla):
             # both (the kernel never reaches that path when PAIR > 2, only the accessor's address is passed).
             W32 = 32 * SP.AG32_PPC
             W2B = 32 * SP.RS2B_PPC
+            # rev 68 (GLM53_DSA_SHARD_AGK, dsa_shard.hpp AGK): y_ag in the key-packed format (2 pages per token: the q
+            # page + one page of record keys) -- AG1 packs x_ag's AG32 chunks on its lane (fs_read.cpp FS_KEYPACK), AG2
+            # multicasts the packed bundles: a third of the bytes of both rounds
+            agk = SP.shard_agk(self.P)
+            WY = 32 * SP.AGK_PPC if agk else W32
+            kp = dict(keypack=(SP.AG32_PPC, SP.AG32_QPAGES)) if agk else {}
             x_ag = z(t * 32, W32)
             x_rs = z(32, W_RS)
             x_rs1 = z(self.P * t * 32, W8)
             x_rs2b = z(self.L * t * 32, W2B)
             q_asm = z(2 * t * 32, HIDDEN)
             ag2_noc = self._noc(self.lane_core["ag2"])
-            ag1 = FS.FabricStreamAG(mesh, t * 32, W32, axis=geo.pair_axis, lanes=lane("ag1"), **sy("ag1"), local_copy=True,
-                                    wait=ag_wait, cons=(MK.SEM_FSW, [ag2_noc]), link_base=0, after=MK.SEM_FSA)  # fmt: skip
-            ag2 = FS.FabricStreamAG(mesh, self.P * t * 32, W32, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
+            ag1 = FS.FabricStreamAG(mesh, t * 32, WY, axis=geo.pair_axis, lanes=lane("ag1"), **sy("ag1"), local_copy=True,
+                                    wait=ag_wait, cons=(MK.SEM_FSW, [ag2_noc]), link_base=0, after=MK.SEM_FSA, **kp)  # fmt: skip
+            ag2 = FS.FabricStreamAG(mesh, self.P * t * 32, WY, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
                                     y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA)  # fmt: skip
             # rev 65 (GLM53_DSA_SHARD_RS1_EARLY, dsa_shard.hpp RS1 early): the roots signal after each pass; the lane
             # streams the other half's destinations (pass 0's slices) once t pass-0 signals landed, the own half's at t
@@ -217,7 +223,7 @@ class TPMlaShard(TPM.TPMla):
                                          cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
             assert int(ag1.y.shape[-2]) == geo.n * t * 32 and int(rs1.y.shape[-2]) == self.P * t * 32
             assert int(rs2.y.shape[-2]) == self.L * t * 32
-            return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, x_ag=x_ag, y_ag=ag1.y,
+            return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, agk=agk, x_ag=x_ag, y_ag=ag1.y,
                         x_rs=x_rs, y_rs=x_rs,
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],

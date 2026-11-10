@@ -11,6 +11,7 @@ over 32 candidate lists against the serial reference. The 2x4 plan is regression
 from __future__ import annotations
 
 import contextlib
+import random
 import sys
 
 import pytest
@@ -649,6 +650,123 @@ def test_rev65_knobs(monkeypatch):
     with expect_error(ValueError, "GLM53_DSA_SHARD_COMB=2: 0 or 1"):
         SP.shard_comb(8)
     assert SP.HDR["COMB_MSG"] == 8
+
+
+# ------------------------------------------------------------------ rev 68: the key-packed all-gather (AGK)
+def _stale(rnd) -> list:
+    """an earlier launch's leftovers in an x_ag chunk (nonzero words everywhere)"""
+    return [rnd.randrange(1, 1 << 32) for _ in range(SP.AG32_PPC * SP.WORDS)]
+
+
+@pytest.mark.parametrize("case", ["random", "ties", "few", "empty", "one_chip", "all_empty"])
+def test_keypack_merge_matches_records(case):
+    """fs_read.cpp FS_KEYPACK's in-place pack of each chip's AG32 chunk (stale words past its records) -> its key page
+    (the keys in record order, zeros after; the q page verbatim); the AGK merge (every list from its key page with its
+    count, this chip's tie order from its own x_ag records) == rev 65's helper_merge over the record lists bitwise (round
+    sums, T_g, k_rem, done, per-chip / per-core quotas, messages) and == the serial merge, at kph 1 / 2 / 4"""
+    gen = torch.Generator().manual_seed(660 + len(case))
+    rnd = random.Random(len(case))
+    lists = _lists(gen, case)
+    chunks = [SP.x_ag_chunk(lst, q_words=[rnd.randrange(1 << 32) for _ in range(SP.WORDS)], stale=_stale(rnd))
+              for lst in lists]  # fmt: skip
+    packed = [SP.keypack_chunk(ch) for ch in chunks]
+    kp = slice(SP.AG32_QPAGES * SP.WORDS, SP.AGK_PPC * SP.WORDS)
+    for lst, pk, ch in zip(lists, packed, chunks):
+        page = pk[kp]
+        assert page[: len(lst)] == [kk for kk, _ in lst] and not any(page[len(lst) :])
+        assert pk[: SP.WORDS] == ch[: SP.WORDS]  # the q page travels verbatim
+        assert SP.agk_records(ch) == [tuple(r) for r in lst]
+    pages, counts = [pk[kp] for pk in packed], [len(lst) for lst in lists]
+    for rank in (0, 5, 7, 18, 31):
+        ref = SP.serial_merge(lists, rank)
+        for kph in (1, 2, 4):
+            base = SP.helper_merge(lists, rank, kph=kph)
+            got = SP.agk_merge(pages, counts, chunks[rank], rank, kph=kph)
+            assert got == base, (case, rank, kph)
+            assert (got["T_g"], got["core_quota"]) == (ref["T_g"], ref["core_quota"]), (case, rank, kph)
+    # a wrong count is caught by the helpers' checks (the kernel's watcher ASSERTs)
+    if case == "random":
+        with expect_error(AssertionError, "the count runs short of the keys"):
+            SP.agk_keys(pages[0], counts[0] - 1)
+        with expect_error(AssertionError, "a zero key inside the list"):
+            SP.agk_keys(packed[1][kp][:-1] + [0], SP.CAND_MAX)
+
+
+def _launch(gen, case: str, T: int) -> tuple:
+    """positions + order keys of T sparse tokens: "sparse" (16 .. 32 local pools per chip), "random" / "ties" (mixed
+    lengths up to 192 per chip, at T <= 2 token 0 with full 512-record lists on every chip; ties: 40 key values)"""
+    pos, keys = [], []
+    for t in range(T):
+        if case == "sparse":
+            p = int(torch.randint(2051, 4096, (1,), generator=gen))
+        elif t == 0 and T <= 2:
+            p = 65535 + 4096 * int(torch.randint(0, 3, (1,), generator=gen))  # >= 512 local pools on every chip
+        else:
+            p = int(torch.randint(2051, 24576 if T <= 8 else 8192, (1,), generator=gen))
+        hi = 40 if case == "ties" else 1 << 31
+        keys.append(torch.randint(1, hi, ((p + 1) // 4,), generator=gen, dtype=torch.int64))
+        pos.append(p)
+    return pos, keys
+
+
+@pytest.mark.parametrize("case", ["random", "ties", "sparse"])
+@pytest.mark.parametrize("tl", [1, 2, 4])
+@pytest.mark.parametrize("lanes", [1, 2, 4, 8])
+def test_agk_launch_matches_rev65(lanes, tl, case):
+    """one launch of t = lanes x TL tokens under AGK (auto KPH 1 / 1 / 2 / 4): every chip's local top-512 records ->
+    x_ag (stale words past them) -> the key pack + both AG rounds -> y_ag (32 blocks x t x 2 pages, each written once)
+    -> ix_dm1's q pieces where x_ag had them, and on chips 0 / 13 / 31 the AGK merge == rev 65's helper merge over the
+    records bitwise (T_g, per-chip / per-core quotas, the tie order) == the serial merge, per token; the count derived
+    from the position = the local select's record count on every chip"""
+    t = lanes * tl
+    kph = SP.shard_kph(32, 64, lanes, 8, "auto")
+    gen = torch.Generator().manual_seed(1000 * lanes + 10 * tl + len(case))
+    pos, keys = _launch(gen, case, t)
+    ranks = (0, 13, 31) if t <= 8 else (0, 31)
+    res = SP.emulate_agk_launch(keys, pos, lanes, kph, ranks=ranks, seed=t)
+    assert [r["lane"] for r in res] == [i % lanes for i in range(t)]
+    for i, r in enumerate(res):
+        for rank in ranks:
+            assert r["got"][rank] == r["ref"][rank], (lanes, tl, case, i, rank)
+            ser = r["serial"][rank]
+            assert (r["got"][rank]["T_g"], r["got"][rank]["core_quota"]) == (ser["T_g"], ser["core_quota"])
+        assert sum(r["got"][0]["helper_quota"]) == r["got"][0]["k_rem"]  # the tie quotas cover k_rem exactly
+        if case == "ties":
+            assert r["got"][0]["k_rem"] > 0 and not r["got"][0]["done"]  # a real tie round on every token
+
+
+def test_agk_count_is_the_local_select_count():
+    """the AGK count (min(512, n_closed_local(p, q))) = the local top-512's record count on every chip at every lane
+    count, across pool-page / unit boundaries, below / at / above 512 local pools (the key page carries no count)"""
+    gen = torch.Generator().manual_seed(66)
+    for p in (2051, 2052, 4095, 4096 + 127, 4096 + 128 + 3, 32767, 65535 - 128, 65535, 65535 + 129, 262143):
+        keys = torch.randint(1, 1 << 31, ((p + 1) // 4,), generator=gen, dtype=torch.int64)
+        g = torch.arange(int(keys.numel()))
+        for q in (0, 1, 15, 31):
+            mine = torch.nonzero((g // SP.POOL_PAGE) % 32 == q).reshape(-1)
+            assert int(mine.numel()) == SP.n_closed_local(p, q, 32), (p, q)
+            lq = (mine // SP.POOL_PAGE // 32) * SP.POOL_PAGE + mine % SP.POOL_PAGE
+            for lanes in (1, 8):
+                assert len(SP.lane_records(keys[mine], lq, 64, lanes)) == SP.agk_count(p, q), (p, q, lanes)
+
+
+def test_rev68_agk_knob_and_layout(monkeypatch):
+    """GLM53_DSA_SHARD_AGK: default off, the 8x4 only, 0 / 1 only; the kernels' AGK layout / fs_read.cpp's record format
+    = the host mirrors; the busiest link-0 hop of one launch carries 7 + 3 x 8 blocks of t chunks: 6 pages each -> 2"""
+    monkeypatch.delenv("GLM53_DSA_SHARD_AGK", raising=False)
+    assert not SP.shard_agk(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "1")
+    assert SP.shard_agk(8) and not SP.shard_agk(2)  # the pair / the 2x4 keep their AG formats
+    monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "2")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_AGK=2: 0 or 1"):
+        SP.shard_agk(8)
+    SP.agk_header_check()
+    assert SP.AGK_PPC == 2 and SP.FSR["KP_CAND_MAX"] * 4 == SP.TB
+    geo, T = SP.Geometry(8, 4), 16
+    assert SP.agy_q_page(T, 3, 5, 15) == ((3 * T + 5) * 2, 15 * 128) and SP.agk_key_page(T, 3, 5) == (3 * T + 5) * 2 + 1
+    hop = (geo.P - 1) + (geo.L - 1) * geo.P  # AG1's last column hop + AG2's last row hop (multicast lines)
+    assert hop == 31
+    assert hop * T * SP.AG32_PPC * SP.TB == 3 * hop * T * SP.AGK_PPC * SP.TB == 6094848  # 5.8 MB -> 1.9 MB at t 16
 
 
 def test_zz_no_ttnn_was_imported_by_the_suite():

@@ -163,13 +163,18 @@ def fabric_connect(me, peer, link: int, prog, core, base: int | None = None) -> 
 class _FabricStream:
     """One block send per chip along mesh axis `axis` (default: the mesh's one non-trivial axis -- the pair / a line),
     every line of that axis independent; `len(lanes)` lane cores per chip (lane h on link link_base + h); the block =
-    `chunks` 32-row chunks of [., H] bf16 tiles. nb: pages per staging batch; slots: batches the staging CB holds."""
+    `chunks` 32-row chunks of [., H] bf16 tiles. nb: pages per staging batch; slots: batches the staging CB holds.
+    keypack=(x pages per chunk, q pages) (rev 68, the 8x4 DSA shard's AG round 1, kernels/mla/dsa_shard.hpp AGK): x holds
+    chunks of keypack[0] pages (q pages, then a record header + 16-B records), y chunks of H / 32 = q pages + 1 -- the
+    lane's NCRISC packs each staged chunk's record keys into one page (fs_read.cpp FS_KEYPACK) and its BRISC ships the
+    first H / 32 pages (fs_send.cpp FS_KEYPACK); the staging CB holds slots whole x chunks."""
 
     scatter = False  # FabricStreamScatter: per-destination unicast (fs_send.cpp / fs_read.cpp FS_SCATTER)
 
     def __init__(self, mesh, chunks: int, hidden: int, dst_rows: int, *, lanes=None, nb: int = 16, slots: int = 4,
                  wait: tuple | None = None, cons: tuple | None = None, link_base: int = 0,
-                 after: int | None = None, axis: int | None = None, y=None, sync=None):  # fmt: skip
+                 after: int | None = None, axis: int | None = None, y=None, sync=None,
+                 keypack: tuple | None = None):  # fmt: skip
         """link_base: lane h sends on ethernet link link_base + h. after=(semaphore id): the lane opens its
         connections only around its sends (fs_send.cpp FS_LATE_OPEN) and only once that semaphore on the lane core
         was incremented by the link's other holder (FS_AFTER_SEM); it closes before DONE / the consumers' signal.
@@ -196,6 +201,16 @@ class _FabricStream:
         nb = min(nb, self.ppc)
         self.nb, self.slots = nb, slots
         assert self.ppc % nb == 0 and nb % 2 == 0, (self.ppc, nb)
+        self.keypack = None
+        if (
+            keypack is not None
+        ):  # rev 68: x chunks of xp pages -> y chunks of qp + 1 pages (one staged x chunk per batch)
+            xp, qp = (int(v) for v in keypack)
+            assert not self.scatter and self.ppc == qp + 1 and self.ppc % 2 == 0 and xp % 2 == 0 and xp > self.ppc, (
+                keypack,
+                self.ppc,
+            )
+            self.keypack = (xp, qp)
         self.wait, self.cons = wait, cons
         self.link_base, self.after = int(link_base), after
         rep = ttnn.ReplicateTensorToMesh(mesh)
@@ -246,8 +261,9 @@ class _FabricStream:
         src_base, row_base, local, up, dn = self._block(p, line)
         per = self.chunks // len(self.lanes)
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
-        ct_send = [self.ppc, self.nb, cb_stage] + acc(x) + acc(self.y)
-        ct_read = [self.ppc, self.nb, cb_stage] + acc(x)
+        xp, xnb = (self.keypack[0], self.keypack[0]) if self.keypack else (self.ppc, self.nb)  # rev 68: the x chunk
+        ct_send = [xp, xnb, cb_stage] + acc(x) + acc(self.y)
+        ct_read = [xp, xnb, cb_stage] + acc(x)
         rt_send, rt_read = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         sync = self.sync.buffer_address()
         cons_rt = []
@@ -280,6 +296,9 @@ class _FabricStream:
             rdefs.append(("FS_SCATTER", "1"))
             if self._split_args(p, dsts):
                 rdefs.append(("FS_WAIT2", "1"))
+        if self.keypack:  # rev 68: fs_read.cpp packs the staged chunk, fs_send.cpp ships its first ppc pages
+            sdefs.append(("FS_KEYPACK", str(self.ppc)))
+            rdefs += [("FS_KEYPACK", str(self.ppc)), ("FS_KP_QPAGES", str(self.keypack[1]))]
         if self.n > 2 and not row_barrier_defines():  # THE PER-HOP DRAIN: a multi-hop line -> the waiter's row barrier
             sdefs.append(("FS_ROW_BARRIER", "1"))
         if pr:
@@ -289,7 +308,7 @@ class _FabricStream:
             core_ranges=_crs(self.lanes), compile_time_args=ct, runtime_args=rt, config=cfg, defines=defs)  # fmt: skip
         kernels = [kd("fs_send.cpp", ct_send, rt_send, ttnn.WriterConfigDescriptor(), sdefs),
                    kd("fs_read.cpp", ct_read, rt_read, ttnn.ReaderConfigDescriptor(), rdefs)]  # fmt: skip
-        cbs = [ttnn.CBDescriptor(total_size=self.slots * self.nb * TB, core_ranges=_crs(self.lanes), format_descriptors=[
+        cbs = [ttnn.CBDescriptor(total_size=self.slots * xnb * TB, core_ranges=_crs(self.lanes), format_descriptors=[
             ttnn.CBFormatDescriptor(buffer_index=cb_stage, data_format=ttnn.bfloat16, page_size=TB)])]  # fmt: skip
         nl = len(self.lanes)
         counters = dict(core=self.lanes[0], noc=self.l0_noc, sync=sync, word=lambda q, h: q * nl + h,
@@ -361,11 +380,14 @@ class _FabricStream:
 class FabricStreamAG(_FabricStream):
     """All-gather of x [1, 1, R_loc, H] bf16 rows (chip p's) -> self.y [1, 1, N R_loc, H] on every chip of the line:
     block (line n + p) = position p's rows of line `line` (N = blocks = n x lines unless y= is given). bundle=True (x IS
-    y, local_copy off): position p's block is y's block p, already in place, multicast to the line's other chips."""
+    y, local_copy off): position p's block is y's block p, already in place, multicast to the line's other chips.
+    keypack= (rev 68, _FabricStream): x [1, 1, R_loc, 32 keypack[0]] -> y in the packed chunks of H = hidden (not with
+    bundle: AG round 2 multicasts the packed y as it is)."""
 
     def __init__(self, mesh, rows_local: int, hidden: int = 4096, *, local_copy: bool = True, bundle: bool = False,
                  **kw):  # fmt: skip
         assert rows_local % 32 == 0, rows_local
+        assert not (bundle and kw.get("keypack")), "keypack: round 1 (the bundle ships the packed y as it is)"
         ax = kw.get("axis")
         R, C = int(mesh.shape[0]), int(mesh.shape[1])
         n = (R if ax == 0 else C) if ax is not None else R * C
@@ -380,7 +402,8 @@ class FabricStreamAG(_FabricStream):
         return 0, (line * self.n + p) * self.chunks, self.local_copy, self.n - 1 - p, p
 
     def __call__(self, x):
-        assert tuple(x.shape)[-2:] == (self.rows_local, self.hidden) and x.dtype == ttnn.bfloat16, (x.shape, x.dtype)
+        xh = 32 * self.keypack[0] if self.keypack else self.hidden
+        assert tuple(x.shape)[-2:] == (self.rows_local, xh) and x.dtype == ttnn.bfloat16, (x.shape, x.dtype)
         return self.run(x)
 
 

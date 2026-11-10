@@ -7,7 +7,7 @@
 // holds a whole number of batches: every push lands inside the CB), for the lane's BRISC (ag_send.cpp) to write and
 // send. FS_SCATTER (tt/fabric_stream.py FabricStreamScatter): after the wait count, n_dst then the n_dst source chunk
 // bases (block q of x for destination q): the lane streams its share of each destination's block in turn, in the order
-// fs_send.cpp sends them.
+// fs_send.cpp sends them. FS_KEYPACK (rev 68, below): each staged chunk's candidate records -> one key page.
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -17,6 +17,25 @@ constexpr uint32_t NB = get_compile_time_arg_val(1);   // pages per batch
 constexpr uint32_t CB_STAGE = get_compile_time_arg_val(2);
 constexpr uint32_t TB = 2048;
 static_assert(PPC % NB == 0, "a batch never straddles a chunk");
+#if defined(FS_KEYPACK)
+// rev 68, the KEY PACK (tt/fabric_stream.py keypack=; the 8x4 DSA shard's AG round 1, kernels/mla/dsa_shard.hpp AGK):
+// a staged batch is ONE x chunk (NB = PPC pages: FS_KP_QPAGES q-piece pages, then the candidate bytes = a KP_REC_HDR-
+// byte header whose word 0 is the record count, then KP_REC_BYTES-byte records whose word 0 is the key), rewritten in
+// place before the push: page FS_KP_QPAGES = the n = min(count, KP_CAND_MAX) keys in record order as words 0 .. n - 1,
+// zeros after (stale records of earlier launches never travel); fs_send.cpp ships pages [0, FS_KEYPACK) of the batch.
+// The record format mirrors dsa_shard.hpp (tt/shard_plan.py asserts these constants against it).
+constexpr uint32_t KP_REC_HDR = 16;
+constexpr uint32_t KP_REC_BYTES = 16;
+constexpr uint32_t KP_CAND_MAX = 512;
+static_assert(NB == PPC, "keypack: one x chunk per staged batch");
+static_assert(KP_CAND_MAX * 4 == TB, "keypack: one key page holds a full list");
+static_assert(
+    FS_KEYPACK == FS_KP_QPAGES + 1 && FS_KEYPACK % 2 == 0, "keypack: the y chunk = q pages + key page, pairs");
+static_assert(FS_KP_QPAGES * TB + KP_REC_HDR + KP_CAND_MAX * KP_REC_BYTES <= PPC * TB, "keypack: records in the chunk");
+#if defined(FS_SCATTER)
+#error "FS_KEYPACK: the all-gather only"
+#endif
+#endif
 
 void kernel_main() {
     constexpr auto x_args = TensorAccessorArgs<3>();
@@ -73,6 +92,20 @@ void kernel_main() {
                 noc_async_read_page((base + c_lo) * PPC + b * NB + i, x, wp + i * TB);
             }
             noc_async_read_barrier();
+#if defined(FS_KEYPACK)
+            {
+                invalidate_l1_cache();  // the landed pages, not stale cached words
+                volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wp + FS_KP_QPAGES * TB);
+                const uint32_t n = w[0] < KP_CAND_MAX ? w[0] : KP_CAND_MAX;
+                for (uint32_t e = 0; e < n; e++) {  // in place: word e < record e's key word (KP_REC_HDR + e 16) / 4
+                    w[e] = w[(KP_REC_HDR + e * KP_REC_BYTES) / 4];
+                }
+                for (uint32_t e = n; e < KP_CAND_MAX; e++) {
+                    w[e] = 0;
+                }
+                invalidate_l1_cache();  // the stores land before fs_send.cpp's NoC reads them
+            }
+#endif
             cb_push_back(CB_STAGE, NB);
         }
     }

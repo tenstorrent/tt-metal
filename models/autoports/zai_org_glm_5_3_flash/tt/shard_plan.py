@@ -1158,7 +1158,7 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
 
 
 # ------------------------------------------------------------------ the rev-59 global merge on helpers (emulation)
-def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph: int = 1) -> dict:
+def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph: int = 1, own=None) -> dict:
     """ix_dm0.cpp (the coordinator) + att_dsa_shard_dm1.cpp merge_help (helper q holds chip q's list), step by step:
     lists[q] = chip q's candidate records [(key, core)] in its (core, local) order. Per round the helpers' 16-bin
     histograms of their compacted candidates are summed in helper order (sum_hist), the digit picked as the local
@@ -1170,7 +1170,10 @@ def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph:
     their keys concatenated in one array (list i's after list i - 1's, len[i] each), ONE histogram over the union per
     round, the compaction in place list by list (the lists stay contiguous), the tie report = the kph per-list counts
     (words 0 .. kph - 1 of the helper's slot) -> the quotas in chip order h kph + i; helper rank // kph re-reads chip
-    rank's records for the per-core quotas."""
+    rank's records for the per-core quotas.
+    Rev 66, own= (the key-packed y_ag, agk_merge): lists hold keys only ((key, None): the key pages) and the per-core
+    quotas come from this chip's own x_ag records -- kph > 1 re-reads them (key and core), kph 1 compares its y_ag keys
+    (mkeys) and takes the core ids from the x_ag records (rq) at the same index."""
     bins, rounds = 1 << digit_bits, 32 // digit_bits
     assert kph >= 1 and len(lists) % kph == 0, (kph, len(lists))
     nh = len(lists) // kph
@@ -1220,7 +1223,10 @@ def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph:
             rem -= hq[-1]
     msgs += 1
     cq, q = {}, hq[rank]  # helper rank // kph: chip rank's records (re-read: the compaction dropped the core ids)
-    for kk, core in lists[rank]:
+    scan = lists[rank]
+    if own is not None:  # rev 68 AGK: the core ids from this chip's x_ag records
+        scan = own if kph > 1 else [(kk, core) for (kk, _), (_, core) in zip(lists[rank], own)]
+    for kk, core in scan:
         if q == 0:
             break
         if kk == prefix:
@@ -1244,3 +1250,184 @@ def serial_merge(lists: list, rank: int, k: int = 512) -> dict:
             if q == rank:
                 cq[core] = cq.get(core, 0) + 1
     return dict(T_g=T, core_quota=cq)
+
+
+# ------------------------------------------------------------------ rev 68: the key-packed all-gather (AGK, the 8x4)
+AGK_PPC = HDR[
+    "AGK_PPC"
+]  # y_ag pages per token under GLM53_DSA_SHARD_AGK (dsa_shard.hpp AGK): the q page + the key page
+FSR = header_constants("fabric_stream/fs_read.cpp")  # fs_read.cpp FS_KEYPACK's mirror of the record format
+WORDS = TB // 4  # uint32 words per page
+
+
+def shard_agk(pair: int) -> bool:
+    """rev 68 GLM53_DSA_SHARD_AGK (default 0 = rev 65's AG32 y_ag): the key-packed all-gather of the 8x4 shard
+    (dsa_shard.hpp AGK, fs_read.cpp / fs_send.cpp FS_KEYPACK, fabric_stream.py keypack=); the pair / the 2x4 never take
+    it"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_AGK")
+
+
+def agk_header_check() -> None:
+    """the AGK host mirrors vs the kernels' text (tt/mk_mla.py _shard_header_check): fs_read.cpp's record format =
+    dsa_shard.hpp's, one key page holds a full list, the y_ag page helpers / the count as mirrored below"""
+    assert (FSR["KP_REC_HDR"], FSR["KP_REC_BYTES"], FSR["KP_CAND_MAX"]) == (REC_HDR, REC_BYTES, CAND_MAX), FSR
+    assert AGK_PPC == AG32_QPAGES + 1 and AGK_PPC % 2 == 0 and CAND_MAX * 4 == TB, AGK_PPC
+    with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
+        src = f.read()
+    for line in (
+        "return (blk * T + t) * AGK_PPC + d / PIECES_PER_PAGE;",
+        "{ return (blk * T + t) * AGK_PPC + AG_QPAGES; }",
+        "const uint32_t n = n_closed_local(p, q, C);",
+        "return n < CAND_MAX ? n : CAND_MAX;",
+    ):
+        assert line in src, ("dsa_shard.hpp AGK", line)
+
+
+def n_closed_local(p: int, r: int, C: int) -> int:
+    """dsa_shard.hpp n_closed_local: the closed pools (< (p + 1) / 4) that live on chip r of C (pool page u on chip
+    u % C)"""
+    n = (p + 1) // 4
+    fu, rem = divmod(n, POOL_PAGE)
+    full = (fu - r + C - 1) // C if fu > r else 0
+    return full * POOL_PAGE + (rem if fu % C == r else 0)
+
+
+def agk_count(p: int, q: int, C: int = 32) -> int:
+    """dsa_shard.hpp agk_count: chip q's candidate records of a sparse token at position p -- its local top-512 keeps
+    every key below 512 local pools and exactly 512 above (the count the key page does not carry)"""
+    return min(CAND_MAX, n_closed_local(p, q, C))
+
+
+def agy_q_page(T: int, blk: int, t: int, d: int) -> tuple:
+    """dsa_shard.hpp agy_q_page / agx_q_off: (page, byte offset) of q tile d's 2-row piece of token t of block blk in
+    the key-packed y_ag"""
+    n = pieces_per_page(2)
+    return (blk * T + t) * AGK_PPC + d // n, (d % n) * piece_bytes(2)
+
+
+def agk_key_page(T: int, blk: int, t: int) -> int:
+    """dsa_shard.hpp agk_key_page: the key page of token t of block blk in the key-packed y_ag"""
+    return (blk * T + t) * AGK_PPC + AG32_QPAGES
+
+
+def x_ag_chunk(records: list, q_words=None, n_rec: int | None = None, stale=None) -> list:
+    """one token's AG32 chunk of x_ag as AG32_PPC x 512 uint32 words, as the producers leave it: page 0 = the q-piece
+    page (lat_dm1.cpp; q_words, default zeros), the candidate bytes from page AG32_QPAGES: word 0 = the coordinator's
+    record count (ix_dm0.cpp; n_rec, default len(records)), record e = (key, chunk core, 0, 0) at byte REC_HDR + e
+    REC_BYTES (the group-0 chunk cores, att_dsa_shard_dm1.cpp phase A); every other word = `stale` (an earlier launch's
+    leftovers; default 0)"""
+    w = [0] * (AG32_PPC * WORDS) if stale is None else list(stale)
+    assert len(w) == AG32_PPC * WORDS
+    if q_words is not None:
+        w[:WORDS] = list(q_words)
+    base = AG32_QPAGES * WORDS
+    w[base : base + 4] = [len(records) if n_rec is None else n_rec, 0, 0, 0]
+    for e, (kk, core) in enumerate(records):
+        i = base + (REC_HDR + e * REC_BYTES) // 4
+        w[i : i + 4] = [kk, core, 0, 0]
+    return w
+
+
+def keypack_chunk(words: list) -> list:
+    """fs_read.cpp FS_KEYPACK on one staged x chunk (AG32_PPC pages of words), in place and in the kernel's order: page
+    AG32_QPAGES = the n = min(header, 512) record keys as words 0 .. n - 1 (word e is written after record e's key word
+    4 + 4 e was read and before any later record's), zeros after; -> the batch (fs_send.cpp ships its first AGK_PPC
+    pages = the y_ag chunk)"""
+    w = list(words)
+    base = AG32_QPAGES * WORDS
+    n = min(w[base], CAND_MAX)
+    for e in range(n):
+        w[base + e] = w[base + (REC_HDR + e * REC_BYTES) // 4]
+    for e in range(n, CAND_MAX):
+        w[base + e] = 0
+    return w
+
+
+def agk_keys(page: list, n: int) -> list:
+    """a merge helper's view of one key page (att_dsa_shard_dm1.cpp merge_help under AGK): its first n words, n =
+    agk_count (the kernel's watcher ASSERTs: word n - 1 != 0, word n == 0 below 512)"""
+    assert len(page) == WORDS and 0 <= n <= CAND_MAX, (len(page), n)
+    assert n == 0 or page[n - 1] != 0, "AGK: a zero key inside the list"
+    assert n == CAND_MAX or page[n] == 0, "AGK: the count runs short of the keys"
+    return list(page[:n])
+
+
+def agk_records(chunk: list) -> list:
+    """this chip's own records [(key, core)] from its x_ag chunk (the header's count): the per-core tie order"""
+    base = AG32_QPAGES * WORDS
+    n = min(chunk[base], CAND_MAX)
+    return [
+        tuple(chunk[base + (REC_HDR + e * REC_BYTES) // 4 : base + (REC_HDR + e * REC_BYTES) // 4 + 2])
+        for e in range(n)
+    ]
+
+
+def agk_merge(key_pages: list, counts: list, own_chunk: list, rank: int, k: int = 512, kph: int = 1) -> dict:
+    """the global merge of one token on chip `rank` under AGK (att_dsa_shard_dm1.cpp merge_help + ix_dm0.cpp, rev 68):
+    every chip's keys from its key page with the position's count, this chip's per-core tie order from its own x_ag
+    chunk -> helper_merge's dict (to equal rev 65's helper_merge over the record lists, bitwise)"""
+    lists = [[(kk, None) for kk in agk_keys(pg, n)] for pg, n in zip(key_pages, counts)]
+    return helper_merge(lists, rank, k, kph=kph, own=agk_records(own_chunk))
+
+
+def emulate_agk_launch(keys_by_token: list, pos_by_token: list, lanes: int, kph: int, *, ranks=(0,), chunks: int = 64,
+                       seed: int = 0) -> list:  # fmt: skip
+    """one t-row launch on the 8x4 under AGK, host-side, against rev 65: per token t (lane t % lanes) its 32 chips'
+    local top-512 records over the lane's chunk cores (lane_records), every chip's x_ag (AG32 chunks, stale words past
+    the records), AG1 with the key pack + AG2 = y_ag (identical on every chip: block ag_blk(q), token t = the first
+    AGK_PPC pages of keypack_chunk(chip q's chunk t); every page written once), then on each chip of `ranks` the q-piece
+    placement and the AGK merge vs helper_merge over the records (and the serial merge) -> [per token dict(p, lane,
+    counts, ref {rank: dict}, got {rank: dict}, serial {rank: dict})]. keys_by_token[t]: int64 order keys of token t's
+    (p + 1) // 4 closed pools (global pool ids)"""
+    import random
+
+    import torch
+
+    geo, C = Geometry(8, 4), 32
+    T = len(keys_by_token)
+    assert T == len(pos_by_token) and not lanes_reasons(T, lanes, chunks, geo.L, 1, nchips=C, kph=kph), (T, lanes, kph)
+    rnd = random.Random(seed)
+    lists, x_ag = [], {q: {} for q in range(C)}
+    for t, (keys, p) in enumerate(zip(keys_by_token, pos_by_token)):
+        assert int(keys.numel()) == (p + 1) // 4 and p + 1 > 2051, (t, p)
+        g = torch.arange(int(keys.numel()))
+        per = []
+        for q in range(C):
+            mine = torch.nonzero((g // POOL_PAGE) % C == q).reshape(-1)
+            lq = (mine // POOL_PAGE // C) * POOL_PAGE + mine % POOL_PAGE
+            rec = lane_records(keys[mine], lq, chunks, lanes, CAND_MAX)
+            assert len(rec) == agk_count(p, q, C), ("the local top-512 count", t, q, len(rec), agk_count(p, q, C))
+            per.append(rec)
+            stale = [rnd.randrange(1, 1 << 32) for _ in range(AG32_PPC * WORDS)]
+            q_words = [(q << 20) ^ (t << 12) ^ i for i in range(WORDS)]
+            x_ag[q][t] = x_ag_chunk(rec, q_words=q_words, stale=stale)
+        lists.append(per)
+    y_ag = {}
+    for q in range(C):  # AG1 (the column, local copy on) + AG2 (the row bundles): every chip's packed chunk lands
+        blk = geo.ag_blk(q)
+        for t in range(T):
+            packed = keypack_chunk(x_ag[q][t])
+            for i in range(AGK_PPC):
+                pg = (blk * T + t) * AGK_PPC + i
+                assert pg not in y_ag, ("y_ag page written twice", q, t, i)
+                y_ag[pg] = packed[i * WORDS : (i + 1) * WORDS]
+    assert sorted(y_ag) == list(range(C * T * AGK_PPC)), "y_ag: every page of 32 blocks x T tokens"
+    out = []
+    for t, p in enumerate(pos_by_token):
+        counts = [agk_count(p, q, C) for q in range(C)]
+        for q in range(C):  # ix_dm1's q assembly reads the piece where AG1 put x_ag's q page
+            for d in (0, 7, 15):
+                pg, off = agy_q_page(T, geo.ag_blk(q), t, d)
+                xpg, xoff = agx_q_page(geo, T, 0, t, d)
+                assert (
+                    off == xoff
+                    and y_ag[pg] == x_ag[q][t][(xpg - t * AG32_PPC) * WORDS : (xpg - t * AG32_PPC + 1) * WORDS]
+                )
+        pages = [y_ag[agk_key_page(T, geo.ag_blk(q), t)] for q in range(C)]
+        res = dict(p=p, lane=t % lanes, counts=counts, ref={}, got={}, serial={})
+        for rank in ranks:
+            res["ref"][rank] = helper_merge(lists[t], rank, CAND_MAX, kph=kph)
+            res["got"][rank] = agk_merge(pages, counts, x_ag[rank][t], rank, CAND_MAX, kph=kph)
+            res["serial"][rank] = serial_merge(lists[t], rank, CAND_MAX)
+        out.append(res)
+    return out
