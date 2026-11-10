@@ -137,7 +137,11 @@ for it in range(ITERS):
             print(f"[rwo] iter {it} layer {L} wo pcc {pw_:.5f} max|err| {(wv_[L][rows_] - gold_wo[L][rows_]).abs().max().item():.4f} |gold|max {gold_wo[L].abs().max().item():.3f}", flush=True)
     print(f"[fm11] iter {it} wall {time.time()-t1:.2f}s last-layer pcc {p:.5f} max|err| {e:.4f} |gold|max {gold_last.abs().max().item():.3f}", flush=True)
     if MESH:
-        print(f"[mesh] iter {it} devices {dev.get_num_devices()}: max |dev d - dev 0| out {mesh_identity(y):.3e} ymix {mesh_identity(ymix):.3e} sdpa {mesh_identity(outs):.3e}", flush=True)
+        # dead buffers are skipped: out (fm11 output) is never written under V12, ymix (MIXN mixer) never under QSK; the
+        # residual identity is the [ar] line (ar_out), qkv / v12 xo / sdpa are compared here when they are live
+        _mi = ([] if V12 else [('out', y)]) + ([] if QSK else [('ymix', ymix)]) + ([('qkv', qkv_out)] if RQKV else []) + \
+              ([('v12 xo', v_xo)] if V12 else []) + [('sdpa', outs)]
+        print(f"[mesh] iter {it} devices {dev.get_num_devices()}: max |dev d - dev 0| " + ' '.join(f"{n_} {mesh_identity(t_):.3e}" for n_, t_ in _mi), flush=True)
 ttnn.ReadDeviceProfiler(dev)
 print('[fm11] profiler read', flush=True)
 ttnn.close_device(dev)
