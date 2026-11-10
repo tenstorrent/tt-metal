@@ -22,6 +22,28 @@ constexpr uint32_t V_TRID0 = 12;   // MLP slice read trids 12 / 13 (layer parity
 constexpr uint32_t VG_XA = 0, VG_XB = 1, VG_RS = 2, VG_H = 3, VG_P = 4, VG_MDONE = 5, VG_MGO = 6, VG_LA = 7, VG_LB = 8,
                    VG_BUSY = 9, NVG = 10;
 constexpr uint32_t V_FACE_B = 512, V_ROW_B = 32, V_XPK_SLOT_B = 10 * 2 * 16 * V_ROW_B;
+// spec §18 qkv split-K (MKA_QSK) through this unit: column c's N-list = qkv tiles first(c) .. + qsk_nt(c) - 1 (112 over
+// 10 columns: 12, 12, 11 x 8), slot M (CB_WM) = 20 K tiles x nt BFP8 pages, k-major; GDN-type layers read QSK_GK K tiles
+// (in-proj stand-in, ~5.9 MB over the 80 cores). The qkv RS shares VG_RS / VG_LA / VG_LB with the MLP RS: LA / LB carry
+// 2L + 1 (qkv) and 2L + 2 (MLP); an owner row's VG_RS count adds 7 per attention layer.
+#if defined(MKA_QSK)
+#if !defined(MK_RS_QKV)
+#error "MKA_QSK needs MK_RS_QKV (the owners' mixer x delivery, flag 2L + 1)"
+#endif
+#if defined(MK_REAL_AR) && !defined(MK_AR_DLV)
+#error "MKA_QSK + MK_REAL_AR needs the reader-side AR delivery (MK_AR_DLV): it raises the mixer flag 2L + 3 (X2)"
+#endif
+#ifndef QSK_GK
+#define QSK_GK 6
+#endif
+constexpr uint32_t QSK_SLOT = 240, QSK_KPR = 20;
+FORCE_INLINE uint32_t qsk_nt(uint32_t col) { return col < 2 ? 12u : 11u; }
+#define V_LV(L) (2 * (L) + 2)
+#define V_NRS(L) ((L) + 1 + aidx(L) + (is_attn(L) ? 1u : 0u))
+#else
+#define V_LV(L) ((L) + 1)
+#define V_NRS(L) ((L) + 1)
+#endif
 
 FORCE_INLINE volatile tt_l1_ptr uint32_t* vw(uint32_t addr) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr); }
 // R = 32: whole tiles; R <= 16: rows 0..R-1 = two face writes (face 0 at +0, face 1 at +512) per tile
@@ -33,16 +55,19 @@ FORCE_INLINE void v_tile_write(uint32_t src, uint64_t dst, uint32_t ntiles, uint
     }
 }
 FORCE_INLINE uint32_t v_pk_off(uint32_t t, uint32_t f, uint32_t R) { return (2 * t + f) * R * V_ROW_B; }
-// reduce-scatter: (gate j, up j) of `part` to row j's slot `slot` for j in [j0, j1), then one RS increment each
-FORCE_INLINE void v_rs_send(uint32_t part, uint32_t j0, uint32_t j1, const uint32_t* cy, uint32_t cx, uint32_t rsbuf,
-                            uint32_t slot, uint32_t R, uint32_t rs_word) {
-    for (uint32_t j = j0; j < j1; ++j) {
-        const uint32_t d = rsbuf + 2 * slot * V_PTB;
-        v_tile_write(part + j * V_PTB, get_noc_addr(cx, cy[j], d), 1, R);
-        v_tile_write(part + (V_NNM + j) * V_PTB, get_noc_addr(cx, cy[j], d + V_PTB), 1, R);
-    }
+// Shared split-K column reduce-scatter (spec §18; MLP now, qkv / GDN in-proj next). A column's N-list is `nitem`
+// items of `ipt` tiles (MLP: (gate j, up j) pairs, ipt 2; qkv: single tiles, ipt 1) and the partial is item-major
+// (item i at tiles i*ipt ..). Row r owns items r, r+8, ...; each sender has V_RSO tile slots in an owner's landing
+// buffer (MLP 1 item x 2, qkv <= 2 items x 1). Sender k writes the items of owner rows [r0, r1) to slot k (item i at
+// ((i / 8) * ipt)), then bumps each such owner's rs word once (an owner waits 7 per RS phase).
+constexpr uint32_t V_RSO = 2;
+FORCE_INLINE void v_rs_send(uint32_t part, uint32_t r0, uint32_t r1, uint32_t nitem, uint32_t ipt, const uint32_t* cy,
+                            uint32_t cx, uint32_t rsbuf, uint32_t k, uint32_t R, uint32_t rs_word) {
+    for (uint32_t r = r0; r < r1; ++r)
+        for (uint32_t i = r; i < nitem; i += V_NROW)
+            v_tile_write(part + i * ipt * V_PTB, get_noc_addr(cx, cy[r], rsbuf + (k * V_RSO + (i / V_NROW) * ipt) * V_PTB), ipt, R);
     noc_async_write_barrier();
-    for (uint32_t j = j0; j < j1; ++j) noc_semaphore_inc(get_noc_addr(cx, cy[j], rs_word), 1);
+    for (uint32_t r = r0; r < r1; ++r) noc_semaphore_inc(get_noc_addr(cx, cy[r], rs_word), 1);
 }
 // h all-gather: h_k (one tile) to column rows [r0, r1), then H += 1 on each
 FORCE_INLINE void v_hu_send(uint32_t src, uint32_t r0, uint32_t r1, const uint32_t* cy, uint32_t cx, uint32_t hdst,

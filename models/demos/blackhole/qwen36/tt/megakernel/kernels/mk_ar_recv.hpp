@@ -52,6 +52,16 @@
 #endif
 #endif
 
+// MKAR_LEANZ (engine, with MKA_LEAN_C): no AR-phase profiler zones (each costs code on the owner role, which is the
+// text-sizing group once QSK + RWO land)
+#ifndef MKAR_ZONE
+#if defined(MKAR_LEANZ)
+#define MKAR_ZONE(n)
+#else
+#define MKAR_ZONE(n) DeviceZoneScopedN(n)
+#endif
+#endif
+
 namespace mkar {
 
 // wrap-safe ">=" wait (v0.9.14): with never-reset arrival semaphores the counts wrap after 2^32 increments (~13 h of
@@ -150,7 +160,7 @@ struct Recv {
             r[i].x0 = rarg(a++); r[i].y0 = rarg(a++); r[i].x1 = rarg(a++); r[i].y1 = rarg(a++); r[i].n = rarg(a++);
         }
         const uint32_t xflag = rarg(a++);
-        DeviceZoneScopedN("PS-DELIVER");
+        MKAR_ZONE("PS-DELIVER");
         if constexpr (MKAR_ROWS > 0 && MKAR_DELIVER == 2) {
             ar_bcast(src, xdst, XCT * 2 * MKAR_ROWS * 32, r, 0xFF, noc_index);
         } else if constexpr (MKAR_ROWS > 0) {
@@ -177,7 +187,7 @@ struct Recv {
         a += 1 + 10 + 1;  // xdst, 2 rects, xflag
         const uint32_t rslot = rarg(a++), rtag = rarg(a++);
         cb_wait_front(MKAR_CB_PART, 1);
-        DeviceZoneScopedN("PS-STATS");
+        MKAR_ZONE("PS-STATS");
         volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(MKAR_CB_PART));
         const uint32_t stage = get_write_ptr(MKAR_CB_STAGE);
         volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
@@ -214,7 +224,7 @@ struct Recv {
         if (role != kRoleOwner) {
             PW(2, it, 0x20);
             {
-                DeviceZoneScopedN("PS-G-AGWAIT");
+                MKAR_ZONE("PS-G-AGWAIT");
                 wait_ge(sem, base + wait_value * (it + 1));  // monotonic (v0.8.7), epoch base + wrap-safe (v0.9.14)
             }
             PW(2, it, 0x21);
@@ -291,7 +301,7 @@ struct Recv {
 #endif
         if constexpr (MKAR_SRED) {
             const uint32_t flag_base = rarg(after_segs);
-            DeviceZoneScopedN("PS-O-RSWAIT");
+            MKAR_ZONE("PS-O-RSWAIT");
             for (uint32_t k = 0; k < MKAR_RING; ++k) {
                 const uint32_t slot = rarg(after_segs + 1 + k);
                 if (slot != my_chip) {
@@ -301,7 +311,7 @@ struct Recv {
             }
         } else {
             {
-                DeviceZoneScopedN("PS-O-RSWAIT");
+                MKAR_ZONE("PS-O-RSWAIT");
                 PW(2, it, 4);
                 wait_ge(sem, base + wait_value * (it + 1));
                 PW(2, it, 5);
@@ -313,7 +323,7 @@ struct Recv {
 #endif
         }
         {
-            DeviceZoneScopedN("PS-O-REDUCE");
+            MKAR_ZONE("PS-O-REDUCE");
             cb_out.wait_front(MKAR_CHUNK_TILES);
         }
         PW(2, it, 6);
