@@ -8,11 +8,11 @@ TGZ=$(mktemp -t mkpush.XXXXXX); trap 'rm -f "$TGZ"' EXIT   # unique per run: con
 RD=/tmp/mk2r/$TAG.$(date +%s).$$   # unique pod run dir
 STAMP="$(git -C $D rev-parse --short HEAD) dirty=$(git -C $D diff HEAD -- . | md5 -q | cut -c1-8)"; echo "pushed-tree: $STAMP"
 tar -C $(dirname $D) -czf "$TGZ" megakernel
-LH=$(cd $D && find attn/kernels attn/bench_mka2.py -type f | LC_ALL=C sort | xargs cat | md5 -q)
+LH=$(cd $D && find attn/kernels attn/bench_mka2.py engine/program.py -type f | LC_ALL=C sort | xargs cat | md5 -q)
 kubectl -n $NS exec $P -c inference-server -- mkdir -p $RD
 kubectl -n $NS cp "$TGZ" $P:$RD/mk.tgz -c inference-server
 kubectl -n $NS exec $P -c inference-server -- bash -c "cd $RD && tar xzf mk.tgz && echo $RD > /tmp/mk2r/$TAG.dir && echo \"$STAMP\" > $RD/PUSH_STAMP && \
-  RH=\$(cd megakernel && find attn/kernels attn/bench_mka2.py -type f | LC_ALL=C sort | xargs cat | md5sum | cut -d' ' -f1) && \
+  RH=\$(cd megakernel && find attn/kernels attn/bench_mka2.py engine/program.py -type f | LC_ALL=C sort | xargs cat | md5sum | cut -d' ' -f1) && \
   if [ \"\$RH\" != \"$LH\" ]; then echo TREE MISMATCH local $LH pod \$RH; exit 3; fi; echo TREE $LH; \
   MK2=$RD bash megakernel/attn/run_si_mka2.sh $TAG FM_NL=$NLV MK_AMASK=$AM MK_SGDN_US=64 MK_SAR_US=18 MKA_SWO_US=10 MKA_CTX=$CTXV \
   MKA_KVDT=bfp8 MKA_NBB=1 MKA_BUDGET=16384 FM_ITERS=2 MKA_EXT=1 MK_DEFINES=MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1 $EXTRA; \
