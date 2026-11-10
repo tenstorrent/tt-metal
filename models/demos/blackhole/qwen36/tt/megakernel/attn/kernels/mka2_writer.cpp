@@ -311,6 +311,19 @@ void kernel_main() {
     // Attention-type layers get their slice from the PREVIOUS layer's MLP tail instead (v12_prefetch_attn): inside the
     // SDPA window it competed with the KV stream (+27-36 us per attention layer). MLP slices use their own trids
     // (V_TRID0 + parity) so the SDPA throttle's per-group barriers on trids 1-3 never wait for them.
+    // non-blocking prefetch of the next attention layer's MLP slice: one 16 KB read whenever the read command buffer is
+    // free, pumped through the post-MLP AR stall and the SDPA weight-issue points; drained before that MLP's barrier
+    // (issued in one go it held the writer ~40-60 us: GDN layers before an attention layer went 125 -> 165 us)
+    uint64_t vp_src = 0; uint32_t vp_dst = 0, vp_rem = 0, vp_trid = 0;
+    auto v_pump = [&]() {
+        if (vp_rem && noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+            const uint32_t sz = vp_rem < 16384 ? vp_rem : 16384;
+            noc_async_read_set_trid(vp_trid);
+            noc_async_read(vp_src, vp_dst, sz);
+            noc_async_read_set_trid(0);
+            vp_src += sz; vp_dst += sz; vp_rem -= sz;
+        }
+    };
     auto v12_plan_mlp = [&](uint32_t L) {
         if (vrole != 1 || L == 0 || is_attn(L)) return;   // layer 0: plan_layer(0)
         cb_reserve_back(CB_WV, V_SLOT);
@@ -520,6 +533,9 @@ void kernel_main() {
                 }
                 noc_async_read_set_trid(0);
                 if (IS_STREAM) issue_some(false, minp);   // one budget's worth (or the even share) of weight chunks per KV group
+#if defined(MK_V12)
+                v_pump(); v_pump();
+#endif
                 noc_async_read_barrier_with_trid(TRID_V);
                 if (wr_k) cb_push_back(CB_K, NBB * DH);
                 if (wr_v) cb_push_back(CB_V, NBB * DH);
@@ -610,6 +626,7 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(vgo1x, vgo1y, vg[VG_MGO]), 1);
             }
             const bool own_h = vk < vnn;
+            while (vp_rem) v_pump();
             { noc_async_read_barrier_with_trid(V_TRID0 + (L & 1)); }   // layer L's MLP slice landed
             cb_push_back(CB_WV, V_SLOT);
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
@@ -650,14 +667,15 @@ void kernel_main() {
             { DeviceZoneScopedN("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
             if (L + 1 < NL && is_attn(L + 1)) {   // the next (attention) layer's slice: the slot is free (popped before CB_VDO)
                 cb_reserve_back(CB_WV, V_SLOT);
-                const uint64_t src = wv.get_noc_addr(vwv_page + (L + 1) * vpvl);
-                const uint32_t dst = get_write_ptr(CB_WV), nb = vnt * WTB;
-                noc_async_read_set_trid(V_TRID0 + ((L + 1) & 1));
-                for (uint32_t o = 0; o < nb; o += 16384) noc_async_read(src + o, dst + o, (nb - o) < 16384 ? (nb - o) : 16384);
-                noc_async_read_set_trid(0);
+                vp_src = wv.get_noc_addr(vwv_page + (L + 1) * vpvl); vp_dst = get_write_ptr(CB_WV);
+                vp_rem = vnt * WTB; vp_trid = V_TRID0 + ((L + 1) & 1);
             }
         }
-        { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
+        {
+            DeviceZoneScopedN("W-ARSTALL");
+            const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)S_AR) v_pump();
+        }
 #if defined(MKA_RQKV)
         if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
 #endif
