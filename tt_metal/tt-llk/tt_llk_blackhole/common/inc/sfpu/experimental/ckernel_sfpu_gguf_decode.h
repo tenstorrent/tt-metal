@@ -46,8 +46,8 @@ struct traits
     static constexpr bool linear = !(FMT == IQ4_NL || FMT == IQ4_XS || FMT == MXFP4 || FMT == NVFP4);
 };
 
-// Phase 1 of one tile. TI = the tile's index in its group of K tiles.
-template <int FMT, int TI>
+// Phase 1 of one tile. TI = the tile's index in its group of K tiles; BESIDE_UNPACK as phase 2's.
+template <int FMT, int TI, bool BESIDE_UNPACK = true>
 inline void _calculate_gguf_decode_params_()
 {
     if constexpr (FMT == IQ2_XXS)
@@ -92,7 +92,7 @@ inline void _calculate_gguf_decode_params_()
     }
     else
     {
-        linear_params<FMT, TI>();
+        linear_params<FMT, TI, BESIDE_UNPACK>();
     }
 }
 
@@ -261,7 +261,7 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
     }
     else if constexpr (PARAMS)
     {
-        gguf::_calculate_gguf_decode_params_<FMT, TI>();
+        gguf::_calculate_gguf_decode_params_<FMT, TI, BESIDE_UNPACK>();
     }
     if constexpr (BODY && gguf::shared_body<FMT>)
     {
@@ -359,8 +359,8 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
  * @tparam PARAMS, BODY: Run phase 1 (the scales) and phase 2 (the codes). A decoded tile needs both, in one call or in
  *                       two (phase 1, then phase 2 with no other SFPU code in between); one alone is for timing it.
  * @tparam BESIDE_UNPACK: Whether an unpack to DEST may run beside phase 2 (where
- *                        @ref sfpu_gguf_decode_body_unarbitrated is false); false selects shorter phase 2 streams
- *                        for decodes with no DEST writer beside them.
+ *                        @ref sfpu_gguf_decode_body_unarbitrated is false); false selects shorter phase 1 and
+ *                        phase 2 streams for decodes with no DEST writer beside them.
  * @param dst_index: DEST tile of the output. The page must be in tile dst_index + 1 (unpacked to DEST as UInt32);
  *                   tile dst_index + 2 is scratch.
  * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles).

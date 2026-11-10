@@ -141,48 +141,168 @@ sfpi_inline void q3_group()
     }
 }
 
-// Phase 1 of the linear formats. TI = tile index inside the scale page's group of K-tiles.
+// fp16 in bits 16..31 of v (the low bits any) to fp32, exact for every finite value (as f16_at).
+sfpi_inline vFloat f16_top(const vUInt v)
+{
+    const vUInt m13 = ((v >> 16u) << 17u) >> 4u;
+    const vFloat b  = sfpi::as<vFloat>(m13 + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
+    const vFloat a  = sfpi::addexp(b, 1) + -6.103515625e-05f;
+    return sfpi::copysgn(sfpi::min_max(a, b).first, sfpi::as<vInt>(v));
+}
+
+// f16_top of v and w, the two chains interleaved.
+sfpi_inline void f16_top_both(const vUInt v, const vUInt w, vFloat& x, vFloat& y)
+{
+    vUInt mv        = v >> 16u;
+    vUInt mw        = w >> 16u;
+    mv              = mv << 17u;
+    mw              = mw << 17u;
+    mv              = mv >> 4u;
+    mw              = mw >> 4u;
+    const vFloat bv = sfpi::as<vFloat>(mv + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
+    const vFloat bw = sfpi::as<vFloat>(mw + sfpi::as<vUInt>(sfpi::vConstIntPrgm0));
+    vFloat av       = sfpi::addexp(bv, 1);
+    vFloat aw       = sfpi::addexp(bw, 1);
+    av              = av + -6.103515625e-05f;
+    aw              = aw + -6.103515625e-05f;
+    x               = sfpi::copysgn(sfpi::min_max(av, bv).first, sfpi::as<vInt>(v));
+    y               = sfpi::copysgn(sfpi::min_max(aw, bw).first, sfpi::as<vInt>(w));
+}
+
+template <int F>
+sfpi_inline vUInt pick4(const vUInt l0, const vUInt l1, const vUInt l2, const vUInt l3)
+{
+    return F == 0 ? l0 : F == 1 ? l1 : F == 2 ? l2 : l3;
+}
+
+// Phase 1 of Q8_0, Q4_0, Q5_0, Q4_1 and Q5_1: the fp16 fields of scale rows 0..3 (d in row 0; Q4_1 m in row 1; Q5_0 d
+// in row TI; Q5_1 d, m in rows 2 TI, 2 TI + 1) with one conversion per field for all four column groups. The scale
+// words of parity a, column half b's field at the top (shifted for b = 0), are LRegs 2a + b of a transpose, which puts
+// field row f of column group g = 2a + b in row group g of LReg f. After the conversion, a transpose of four copies of
+// S (and of M) broadcasts row group g to every lane.
 template <int FMT, int TI>
+sfpi_inline void q40_params_regs()
+{
+    constexpr int w = CO + scale_row<FMT>() / 2;
+    vUInt l1        = ldu(w);
+    vUInt l3        = ldu(w + 1);
+    vUInt l0        = l1 << 16u;
+    vUInt l2        = l3 << 16u;
+    vUInt l4, l5, l6, l7; // the transpose of LRegs 4..7 is not used
+    sfpi::subvec_transp(l0, l1, l2, l3, l4, l5, l6, l7);
+    constexpr int fd = FMT == Q5_0 ? TI % 2 : FMT == Q5_1 ? 2 * (TI % 2) : 0;
+    vFloat s0, m0;
+    if constexpr (FMT == Q4_1 || FMT == Q5_1)
+    {
+        f16_top_both(pick4<fd>(l0, l1, l2, l3), pick4<fd + 1>(l0, l1, l2, l3), s0, m0);
+    }
+    else
+    {
+        constexpr float c = FMT == Q8_0 ? -128.0f : FMT == Q4_0 ? -8.0f : -16.0f;
+        s0                = f16_top(pick4<fd>(l0, l1, l2, l3));
+        m0                = s0 * c;
+    }
+    vFloat s1 = s0, s2 = s0, s3 = s0;
+    vFloat m1 = m0, m2 = m0, m3 = m0;
+    sfpi::subvec_transp(s0, s1, s2, s3, m0, m1, m2, m3);
+    sfpi::dst_reg[PS + pidx(0, 0, 0)] = s0;
+    sfpi::dst_reg[PS + pidx(0, 1, 0)] = s1;
+    sfpi::dst_reg[PS + pidx(1, 0, 0)] = s2;
+    sfpi::dst_reg[PS + pidx(1, 1, 0)] = s3;
+    sfpi::dst_reg[PM + pidx(0, 0, 0)] = m0;
+    sfpi::dst_reg[PM + pidx(0, 1, 0)] = m1;
+    sfpi::dst_reg[PM + pidx(1, 0, 0)] = m2;
+    sfpi::dst_reg[PM + pidx(1, 1, 0)] = m3;
+}
+
+// The same phase 1 by column parity a: the scale rows of parity a replicated to all row groups, then both columns'
+// conversions interleaved (f16_both). ONE_TRANSP (Q4_0): one transpose replicates both parities' rows.
+template <int FMT, int TI, bool ONE_TRANSP>
+sfpi_inline void q40_params_rep()
+{
+    constexpr float c = FMT == Q8_0 ? -128.0f : FMT == Q4_0 ? -8.0f : -16.0f;
+    if constexpr (ONE_TRANSP)
+    {
+        static_assert(FMT == Q4_0);
+        vUInt r0 = ldu(CO + scale_row<FMT>() / 2), r1 = r0, r2 = r0, r3 = r0;
+        vUInt q0 = ldu(CO + scale_row<FMT>() / 2 + 1), q1 = q0, q2 = q0, q3 = q0;
+        sfpi::subvec_transp(r0, r1, r2, r3, q0, q1, q2, q3);
+#pragma GCC unroll 2
+        for (int a = 0; a < 2; a++)
+        {
+            vFloat d0, d1;
+            f16_both(a == 0 ? r0 : q0, d0, d1);
+            sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
+            sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
+            d0                                = d0 * c;
+            d1                                = d1 * c;
+            sfpi::dst_reg[PM + pidx(a, 0, 0)] = d0;
+            sfpi::dst_reg[PM + pidx(a, 1, 0)] = d1;
+        }
+        return;
+    }
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        vUInt r0, r1, r2, r3;
+        rep4<FMT>(0, a, r0, r1, r2, r3);
+        const vUInt dw = FMT == Q5_1 && TI % 2 ? r2 : FMT == Q5_0 && TI % 2 ? r1 : r0;
+        vFloat d0, d1;
+        f16_both(dw, d0, d1);
+        if constexpr (FMT == Q4_1 || FMT == Q5_1)
+        {
+            vFloat m0, m1;
+            f16_both(FMT == Q5_1 && TI % 2 ? r3 : r1, m0, m1);
+            sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
+            sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
+            sfpi::dst_reg[PM + pidx(a, 0, 0)] = m0;
+            sfpi::dst_reg[PM + pidx(a, 1, 0)] = m1;
+        }
+        else
+        {
+            sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
+            sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
+            d0                                = d0 * c;
+            d1                                = d1 * c;
+            sfpi::dst_reg[PM + pidx(a, 0, 0)] = d0;
+            sfpi::dst_reg[PM + pidx(a, 1, 0)] = d1;
+        }
+    }
+}
+
+// Phase 1 variant of the q40_params formats: 2 = q40_params_regs, 1 = q40_params_rep with one transpose, 0 = by
+// parity. Beside an unpack (the pack-thread decode that overlaps the matmul) phase 1 also paces the weight reads:
+// there the variants are those whose tile loop keeps every shape at least as fast.
+template <int FMT, bool BESIDE_UNPACK>
+constexpr int q40_params_kind = !BESIDE_UNPACK || FMT == Q5_0 ? 2
+                                : FMT == Q4_0                 ? 1
+                                                              : 0;
+
+// Phase 1 of the linear formats. TI = tile index inside the scale page's group of K-tiles.
+template <int FMT, int TI, bool BESIDE_UNPACK>
 sfpi_inline void linear_params()
 {
     if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && !group_scales<FMT>)
     {
         params_init<!q40_params<FMT>>();
     }
+    if constexpr (q40_params<FMT>)
+    {
+        constexpr int kind = q40_params_kind<FMT, BESIDE_UNPACK>;
+        if constexpr (kind == 2)
+        {
+            q40_params_regs<FMT, TI>();
+        }
+        else
+        {
+            q40_params_rep<FMT, TI, kind == 1>();
+        }
+        return;
+    }
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
     {
-        if constexpr (q40_params<FMT>)
-        {
-            // Row 0: d of columns n0 (low half) and n1 (high half); Q4_1 row 1: m; Q5_0 row TI: d; Q5_1 rows 2 TI,
-            // 2 TI + 1: d, m. The two columns' conversions interleave.
-            vUInt r0, r1, r2, r3;
-            rep4<FMT>(0, a, r0, r1, r2, r3);
-            const vUInt dw = FMT == Q5_1 && TI % 2 ? r2 : FMT == Q5_0 && TI % 2 ? r1 : r0;
-            vFloat d0, d1;
-            f16_both(dw, d0, d1);
-            if constexpr (FMT == Q4_1 || FMT == Q5_1)
-            {
-                vFloat m0, m1;
-                f16_both(FMT == Q5_1 && TI % 2 ? r3 : r1, m0, m1);
-                sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
-                sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
-                sfpi::dst_reg[PM + pidx(a, 0, 0)] = m0;
-                sfpi::dst_reg[PM + pidx(a, 1, 0)] = m1;
-            }
-            else
-            {
-                // M = c d in d's register after its store.
-                constexpr float c                 = FMT == Q8_0 ? -128.0f : FMT == Q4_0 ? -8.0f : -16.0f;
-                sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
-                sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
-                d0                                = d0 * c;
-                d1                                = d1 * c;
-                sfpi::dst_reg[PM + pidx(a, 0, 0)] = d0;
-                sfpi::dst_reg[PM + pidx(a, 1, 0)] = d1;
-            }
-        }
-        else if constexpr (FMT == TQ2_0 || FMT == Q2_0 || FMT == Q1_0 || FMT == TQ1_0)
+        if constexpr (FMT == TQ2_0 || FMT == Q2_0 || FMT == Q1_0 || FMT == TQ1_0)
         {
             // Row 0: d of columns n0 (low half) and n1 (high half); TQ1_0 row 2: d.
             vUInt r0, r1, r2, r3;
