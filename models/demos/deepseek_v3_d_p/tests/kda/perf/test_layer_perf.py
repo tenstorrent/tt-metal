@@ -47,6 +47,9 @@ pytestmark = [
 
 _REPETITIONS = 10
 _TIMING_SAMPLES = 5
+# Isolated calls (report only, traced and untraced): each starts on an idle device and is followed by a sync, so nothing
+# hides the host setup before its first op (the head). The first half are warm-up; the median of the rest is reported.
+_ISOLATED_CALLS = 20
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _QUIETBOX_PERF_SKU = "bh_quietbox"
 _PERF_MARGIN = 0.03
@@ -312,6 +315,28 @@ def _release_layer_trace(mesh_device: ttnn.MeshDevice, trace: _LayerTrace) -> No
         deallocate_state(trace.state)
 
 
+def _isolated_call_ms(mesh_device: ttnn.MeshDevice, call: Callable[[], None]) -> dict[str, float | list[float]]:
+    """Time single calls, each started on an idle device and followed by a sync (report only).
+
+    Back-to-back blocks hide a call's head (host work before its first device op) behind the previous call's device
+    tail; an isolated call exposes it. The first half of the calls are warm-up; the median of the rest is reported.
+    Traced and untraced pay the same replay/sync cost, so untraced minus traced isolated is the head plus the gaps.
+    """
+    ttnn.synchronize_device(mesh_device)
+    calls_ms = []
+    for _ in range(_ISOLATED_CALLS):
+        start = time.perf_counter()
+        call()
+        ttnn.synchronize_device(mesh_device)
+        calls_ms.append((time.perf_counter() - start) * 1e3)
+    warmup = _ISOLATED_CALLS // 2
+    return {
+        "isolated_warmup_samples_ms": calls_ms[:warmup],
+        "isolated_call_samples_ms": calls_ms[warmup:],
+        "median_isolated_call_ms": statistics.median(calls_ms[warmup:]),
+    }
+
+
 def _trace_wall_samples_ms(
     mesh_device: ttnn.MeshDevice,
     layer: ttKDA,
@@ -321,7 +346,9 @@ def _trace_wall_samples_ms(
     actual_start: int = 0,
     actual_end: int | None = None,
     slots: _Slots | None = None,
+    isolated: dict | None = None,
 ) -> tuple[list[float], dict[str, float] | None]:
+    """Median-ready samples of back-to-back replays; with ``isolated``, also fill it from _isolated_call_ms."""
     trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end, slots)
     try:
         validation = (
@@ -341,6 +368,12 @@ def _trace_wall_samples_ms(
                 ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
+        if isolated is not None:
+            isolated.update(
+                _isolated_call_ms(
+                    mesh_device, lambda: ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
+                )
+            )
         return samples_ms, validation
     finally:
         _release_layer_trace(mesh_device, trace)
@@ -371,8 +404,12 @@ def _untraced_wall_samples_ms(
     actual_start: int,
     actual_end: int | None,
     slots: _Slots | None = None,
-) -> list[float]:
-    """_trace_wall_samples_ms with layer.forward() in place of the trace replay."""
+) -> tuple[list[float], dict[str, float | list[float]]]:
+    """_trace_wall_samples_ms with layer.forward() in place of the trace replay, plus _isolated_call_ms.
+
+    The block samples are the gated in-model cost when the op before the layer hides its head; the isolated calls also
+    expose the head, the cost when it is not hidden (in K3, KDA follows RMSNorm, a short op).
+    """
     actual_start_tt = make_actual_start(mesh_device, actual_start)
     actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
     state = _allocate_state(layer)
@@ -393,7 +430,9 @@ def _untraced_wall_samples_ms(
                 call()
             ttnn.synchronize_device(mesh_device)
             samples_ms.append((time.perf_counter() - start) * 1e3 / _REPETITIONS)
-        return samples_ms
+
+        isolated = _isolated_call_ms(mesh_device, call)
+        return samples_ms, isolated
     finally:
         deallocate_state(state)
 
@@ -485,6 +524,7 @@ def test_synthetic_kimi_k3_perf(
     ), f"{layout} must run Galaxy's per-chip workload"
     if device_reference_ms is not None:
         require_realtime_profiler(f"the {layout} device-time gate")
+    isolated = {}
     if device_reference_ms is not None:
         samples_ms, device_samples_ms = _trace_device_samples_ms(
             mesh_device, layer, hidden_tt, actual_start=actual_start, actual_end=actual_end, slots=slots
@@ -498,10 +538,13 @@ def test_synthetic_kimi_k3_perf(
             actual_start=actual_start,
             actual_end=actual_end,
             slots=slots,
+            isolated=isolated,
         )
         device_samples_ms = None
     else:
-        samples_ms = _untraced_wall_samples_ms(mesh_device, layer, hidden_tt, actual_start, actual_end, slots)
+        samples_ms, isolated = _untraced_wall_samples_ms(
+            mesh_device, layer, hidden_tt, actual_start, actual_end, slots
+        )
         device_samples_ms = None
     slots.deallocate()
     median_wall_ms = statistics.median(samples_ms)
@@ -526,6 +569,9 @@ def test_synthetic_kimi_k3_perf(
         "median_device_ms": median_device_ms,
         "reference_device_ms": device_reference_ms,
         "device_perf_margin_pct": _DEVICE_PERF_MARGIN * 100.0,
+        # Report only: isolated calls, see _isolated_call_ms.
+        **isolated,
+        "env": {name: os.environ.get(name) for name in ("TT_METAL_SHM_TRACKING_DISABLED", "LOGURU_LEVEL")},
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
     tp_wrapped = layout != "SP8xTP4" or tp_axis_is_wrapped(mesh_device)
