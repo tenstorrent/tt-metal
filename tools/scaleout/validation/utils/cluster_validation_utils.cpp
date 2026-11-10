@@ -167,6 +167,16 @@ void execute_parallel_batches(
 // Traffic Configuration Functions
 // ============================================================================
 
+// A Program is bound to the MeshDevice it will run on, so it is created on first use for each chip.
+tt::tt_metal::Program& get_or_create_program(
+    ClusterContext& ctx, std::unordered_map<ChipId, tt::tt_metal::Program>& programs, ChipId chip_id) {
+    auto it = programs.find(chip_id);
+    if (it == programs.end()) {
+        it = programs.emplace(chip_id, tt::tt_metal::CreateProgram(*ctx.devices.at(chip_id))).first;
+    }
+    return it->second;
+}
+
 void configure_local_kernels(
     ClusterContext& ctx,
     const std::vector<uint32_t>& inputs,
@@ -284,8 +294,8 @@ void configure_local_kernels(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
 
     for (const auto& [curr_chip_id, curr_coord, neighbor_chip_id, neighbor_coord] : kernel_infos) {
-        auto& curr_program = programs[curr_chip_id];
-        auto& neighbor_program = programs[neighbor_chip_id];
+        auto& curr_program = get_or_create_program(ctx, programs, curr_chip_id);
+        auto& neighbor_program = get_or_create_program(ctx, programs, neighbor_chip_id);
 
         auto curr_kernel = tt::tt_metal::CreateKernel(
             curr_program,
@@ -401,7 +411,7 @@ void configure_cross_host_kernels(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
 
     for (const auto& [my_chip, my_coord, sender] : kernel_infos) {
-        auto& my_program = programs[my_chip];
+        auto& my_program = get_or_create_program(ctx, programs, my_chip);
 
         if (sender) {
             auto sender_kernel = tt::tt_metal::CreateKernel(

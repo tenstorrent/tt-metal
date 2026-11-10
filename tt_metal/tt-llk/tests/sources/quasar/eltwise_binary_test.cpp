@@ -131,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
@@ -186,7 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         // Clear a stale FPU-to-PACK wait in modes without a math handshake.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -216,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_(i, block * OUTPUT_NUM_TILES_IN_BLOCK + i, tensor_shape);
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                     {
                         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }

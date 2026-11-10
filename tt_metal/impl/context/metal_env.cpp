@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <string>
 #include <enchantum/enchantum.hpp>
+#include <tt_stl/cleanup.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
 #include <optional>
@@ -58,6 +59,12 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     if (rtoptions_->is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_->get_custom_fabric_mesh_graph_desc_path();
     }
+
+    // Pick up the launcher's mesh binding (TT_MESH_ID / TT_MESH_HOST_RANK) from env/rtoptions
+    fabric_desc_.mesh_id = rtoptions_->get_fabric_mesh_id();
+    fabric_desc_.host_rank = rtoptions_->get_fabric_mesh_host_rank();
+    fabric_mesh_id_ = fabric_desc_.mesh_id;
+    fabric_host_rank_ = fabric_desc_.host_rank;
 
     // Initialize distributed context
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -276,6 +283,8 @@ void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
     fabric_udm_mode_ = fabric.fabric_udm_mode;
     fabric_manager_ = fabric.fabric_manager;
     fabric_router_config_ = fabric.router_config;
+    fabric_mesh_id_ = fabric.mesh_id;
+    fabric_host_rank_ = fabric.host_rank;
 }
 
 namespace {
@@ -349,6 +358,25 @@ bool MetalEnvImpl::set_fabric_config(
             enchantum::to_string(fabric_config));
     }
 
+    // On failure, restore the previous config; the next control plane access rebuilds from it.
+    auto rollback = ttsl::make_cleanup([this,
+                                        prev_fabric_config = fabric_config_,
+                                        prev_reliability_mode = fabric_reliability_mode_,
+                                        prev_tensix_config = fabric_tensix_config_,
+                                        prev_udm_mode = fabric_udm_mode_,
+                                        prev_manager = fabric_manager_,
+                                        prev_router_config = fabric_router_config_,
+                                        prev_routing_planes = num_fabric_active_routing_planes_]() {
+        fabric_config_ = prev_fabric_config;
+        fabric_reliability_mode_ = prev_reliability_mode;
+        fabric_tensix_config_ = prev_tensix_config;
+        fabric_udm_mode_ = prev_udm_mode;
+        fabric_manager_ = prev_manager;
+        fabric_router_config_ = prev_router_config;
+        num_fabric_active_routing_planes_ = prev_routing_planes;
+        control_plane_.reset();
+    });
+
     force_reinit_ = true;
 
     // Export channel trimming capture data before fabric config changes.
@@ -378,6 +406,7 @@ bool MetalEnvImpl::set_fabric_config(
                 "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
         }
 
+        std::move(rollback).cancel();
         this->teardown_fabric_config();
         return false;
     }
@@ -392,6 +421,7 @@ bool MetalEnvImpl::set_fabric_config(
             "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
             num_routing_planes.value(),
             this->num_fabric_active_routing_planes_);
+        std::move(rollback).cancel();
         return false;
     }
 
@@ -430,6 +460,9 @@ bool MetalEnvImpl::set_fabric_config(
         }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
+    } else if (this->fabric_config_ == tt_fabric::FabricConfig::MGD_DEFAULT) {
+        // Resolve now so the routing setup below sees the concrete config.
+        this->get_control_plane();
     }
 
     // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
@@ -437,6 +470,7 @@ bool MetalEnvImpl::set_fabric_config(
         this->initialize_fabric_config();
     }
 
+    std::move(rollback).cancel();
     return true;
 }
 
@@ -566,12 +600,7 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             *distributed_context_,
             mesh_graph_desc_path.string(),
             logical_mesh_chip_id_to_physical_chip_id_mapping_,
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_,
-            this->fabric_udm_mode_,
-            this->fabric_router_config_,
-            this->fabric_manager_);
+            this->control_plane_config());
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             get_cluster(),
@@ -579,13 +608,9 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             get_hal(),
             *distributed_context_,
             mesh_graph_desc_path.string(),
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_,
-            this->fabric_udm_mode_,
-            this->fabric_router_config_,
-            this->fabric_manager_);
+            this->control_plane_config());
     }
+    fabric_config_ = control_plane_->get_fabric_config();
 }
 
 void MetalEnvImpl::construct_control_plane() {
@@ -598,16 +623,21 @@ void MetalEnvImpl::construct_control_plane() {
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-        get_cluster(),
-        *rtoptions_,
-        get_hal(),
-        *distributed_context_,
-        this->fabric_config_,
-        this->fabric_reliability_mode_,
-        this->fabric_tensix_config_,
-        this->fabric_udm_mode_,
-        this->fabric_router_config_,
-        this->fabric_manager_);
+        get_cluster(), *rtoptions_, get_hal(), *distributed_context_, this->control_plane_config());
+    fabric_config_ = control_plane_->get_fabric_config();
+}
+
+FabricConfigDescriptor MetalEnvImpl::control_plane_config() const {
+    return FabricConfigDescriptor{
+        .fabric_config = fabric_config_,
+        .reliability_mode = fabric_reliability_mode_,
+        .num_routing_planes = num_fabric_active_routing_planes_,
+        .fabric_tensix_config = fabric_tensix_config_,
+        .fabric_udm_mode = fabric_udm_mode_,
+        .fabric_manager = fabric_manager_,
+        .router_config = fabric_router_config_,
+        .mesh_id = fabric_mesh_id_,
+        .host_rank = fabric_host_rank_};
 }
 
 // ─── System mesh ──────────────────────────────────────────────────────────────

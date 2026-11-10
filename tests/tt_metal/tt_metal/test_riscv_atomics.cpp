@@ -60,7 +60,7 @@ protected:
 
     void run_riscv_atomics_test(const std::map<std::string, std::string>& dm_defines) {
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(this->device());
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 

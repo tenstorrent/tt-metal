@@ -27,6 +27,16 @@ namespace {
 const IntermeshVCConfig k_full_mesh = IntermeshVCConfig::full_mesh();
 const IntermeshVCConfig k_full_mesh_pass_through = IntermeshVCConfig::full_mesh_with_pass_through();
 
+// TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic on VC0, no VC1. Built the same way as
+// FabricBuilderContext::compute_intermesh_vc_config.
+IntermeshVCConfig make_intermesh_vc_disabled() {
+    auto config = IntermeshVCConfig::disabled();
+    config.mode = IntermeshVCMode::FULL_MESH;
+    config.intermesh_vc_disabled = true;
+    return config;
+}
+const IntermeshVCConfig k_intermesh_vc_disabled = make_intermesh_vc_disabled();
+
 // The set of directions a router's receiver forwards to on one VC.
 std::set<RoutingDirection> target_directions(const RouterTurnSet& turn_set, uint32_t vc) {
     std::set<RoutingDirection> out;
@@ -186,8 +196,8 @@ TEST_F(RouterTurnSetTest, BoundaryTemplate_FansOutToEveryMeshDirectionOnVC1) {
 }
 
 TEST_F(RouterTurnSetTest, BoundaryTemplate_Requires2DAndVC1) {
-    // Its entire shape is the from-boundary VC1 fanout, so without VC1 or on 1D the boundary
-    // router cannot be constructed.
+    // Its entire shape is the from-boundary fanout, so without VC1 (and without inter-mesh traffic
+    // on VC0) or on 1D the boundary router cannot be constructed.
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, nullptr));
 
@@ -197,6 +207,69 @@ TEST_F(RouterTurnSetTest, BoundaryTemplate_Requires2DAndVC1) {
         chip_with_z(EdgeCapability::INTERMESH),
         ExpressAxis::NONE,
         &k_full_mesh));
+}
+
+// ============================================================================
+// Intermesh VC disabled: inter-mesh traffic on VC0, the D2D relay carries it on from the landing chip
+// ============================================================================
+
+TEST_F(RouterTurnSetTest, IntermeshVCDisabled_BoundaryForwardsOnlyNorthSouthOnVC0) {
+    // A landed packet may only go N or S: an E or W turn could close a buffer cycle across meshes.
+    const auto turn_set = turn_set_for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        chip_with_z(EdgeCapability::INTERMESH),
+        ExpressAxis::NONE,
+        &k_intermesh_vc_disabled);
+
+    EXPECT_EQ(target_directions(turn_set, 0), (std::set<RoutingDirection>{RoutingDirection::N, RoutingDirection::S}));
+    expect_all_targets_on_vc(turn_set, 0, 0);
+    EXPECT_TRUE(turn_set[1].empty());
+    EXPECT_TRUE(turn_set[2].empty());
+}
+
+TEST_F(RouterTurnSetTest, IntermeshVCDisabled_NoRouterHasVC1Channels) {
+    for (const auto facing :
+         {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
+        const auto shape = router_vc_shape(
+            Topology::Mesh,
+            facing,
+            chip_with_z(EdgeCapability::INTERMESH),
+            ExpressAxis::NONE,
+            &k_intermesh_vc_disabled);
+
+        EXPECT_EQ(shape.num_vcs, 1) << "facing " << enchantum::to_string(facing);
+        EXPECT_EQ(shape.sender_counts[1], 0) << "facing " << enchantum::to_string(facing);
+        EXPECT_EQ(shape.receiver_counts[1], 0) << "facing " << enchantum::to_string(facing);
+    }
+}
+
+TEST_F(RouterTurnSetTest, IntermeshVCDisabled_OnlyNorthSouthGetTheZSenderSlot) {
+    // The Z router feeds N and S on VC0, so only they need one VC0 sender more than a router on a
+    // chip without a boundary. E and W keep the plain non-express width.
+    for (const auto facing : k_all_cardinals) {
+        const auto boundary_chip = router_vc_shape(
+            Topology::Mesh,
+            facing,
+            chip_with_z(EdgeCapability::INTERMESH),
+            ExpressAxis::NONE,
+            &k_intermesh_vc_disabled);
+        const auto plain_chip =
+            router_vc_shape(Topology::Mesh, facing, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
+
+        const bool feeds_from_z = facing == RoutingDirection::N || facing == RoutingDirection::S;
+        EXPECT_EQ(boundary_chip.sender_counts[0], plain_chip.sender_counts[0] + (feeds_from_z ? 1 : 0))
+            << "facing " << enchantum::to_string(facing);
+    }
+}
+
+TEST_F(RouterTurnSetTest, IntermeshVCDisabled_RejectsExpressRouting) {
+    EXPECT_ANY_THROW(router_vc_shape(
+        Topology::Torus,
+        RoutingDirection::N,
+        chip_with_z(EdgeCapability::INTERMESH),
+        ExpressAxis::Y,
+        &k_intermesh_vc_disabled));
 }
 
 // ============================================================================
