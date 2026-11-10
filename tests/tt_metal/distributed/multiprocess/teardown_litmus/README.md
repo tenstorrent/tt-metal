@@ -1,83 +1,85 @@
-# Teardown litmus (CPU only, mock dual galaxy)
+# Teardown litmus — structure and groupings
 
-One fault, one assertion per row, on tt-metal's own distributed stack: the distributed context, the control
-plane's init inside `open_mesh_device`, the collectives, close and exit, plus the user's signals at tt-run.
-Two ranks of 8x4 on the Wormhole 6U dual-host mock descriptors, launched by tt-run, no device.
+A dedicated test suite for the distributed-teardown plan (tt-metal #56902, tt-blaze `tools/teardown_probe`). It
+is **not a fabric test**: it does not exercise the fabric or a device. It asks one question — *after a single
+failure, does a distributed tt-metal / tt-run job tear down correctly?* — and answers it one fault at a time:
+one fault, one assertion per row.
 
-The rows come from the teardown plan for tt-metal #56902 (tt-blaze `tools/teardown_probe`, lane L4, where
-every row was first measured with its log). A row that passes today in the fabric CPU-only lane is a gate. A row that fails today is
-marked `@known("P..: ...")` with the plan's error id and fix: it fails, so the lane is red until the fix lands, and
-the failure message names the error; the marker is dropped in the PR that fixes it.
+A row that passes today is a **gate**: the behavior already holds and the row guards it. A row that fails today
+is marked `@known("P..")` with the plan's error id and fails on purpose, so the lane stays red until that fix
+lands; the marker is dropped in the PR that fixes it.
 
-| row | fault | assertion | today |
-|---|---|---|---|
-| `test_clean` | none | exit 0, nothing left | gate |
-| `test_dead_peer_barrier` | rank 1 dies before a barrier | the survivor's barrier raises MPI_ERR_PROC_FAILED, the job ends, nothing left | gate |
-| `test_dead_peer_recv_raises` | rank 1 dies before rank 0's recv | recv raises, the job ends | gate |
-| `test_fabric_mismatch` | FABRIC_2D on one rank only | TT_FATAL on one rank, exit non-zero, nothing left | gate |
-| `test_prte_timeout` | a send nobody receives, PRRTE `--timeout 60` | exit 241 after both ranks were past open, nothing left | gate |
-| `test_exit_nofinalize` | rank 1 `_exit`s with the mesh open | exit non-zero, nothing left | gate |
-| `test_invalid_rank` | recv from a rank that does not exist | raises at once | gate |
-| `test_use_before_init` | a barrier before init | raises "not initialized" | gate |
-| `test_raise_after_open` | rank 1 raises with the mesh open | the job ends non-zero | fails today, P1 |
-| `test_bad_shape` | rank 1 opens 9x9 | the job ends non-zero | fails today, P21 |
-| `test_bad_descriptor` | rank 1's descriptor is a T3K | the job ends non-zero | fails today, P21 |
-| `test_barrier_timeout` | rank 1 skips a barrier | the job ends | fails today, P16 |
-| `test_send_timeout` | a send nobody receives | the job ends | fails today, P16 |
-| `test_sigkill_before_init` | rank 1 killed before MPI_Init | the job ends | fails today, P13 |
-| `test_dead_peer_in_open` | rank 1 killed inside open | exit non-zero | fails today, P17 P4 |
-| `test_ctrl_c_in_deadlock` | SIGINT at tt-run in a deadlock after open | tt-run ends, nothing left 3 s later | fails today, P6 (prterun is left in CI) |
-| `test_ctrl_c_in_init` | SIGINT at tt-run while a rank waits in the context init for a late peer | nothing left 3 s later | fails today, P6 |
-| `test_sigterm_at_ttrun` | SIGTERM at tt-run in a deadlock | the job ends, nothing left | fails today, P7 |
-| `test_solve_rank_killed` | a phase-1 rank killed | tt-run ends non-zero, nothing left | fails today, P18 |
-| `test_survivor_closes_ulfm` | rank 1 killed with the mesh open, ULFM opted in so the survivor runs on | rank 0's close completes | fails today, P3 |
-| `test_abort_core_dump` | rank 1 aborts with the core limit raised | the job ends non-zero within 20 s | fails today, P8 (38 s) |
-| `test_unsat_mgd` | a quad-galaxy descriptor on the dual-galaxy mock | phase 1 ends non-zero | fails today, P9 |
-| `test_late_rank` | rank 1 late by 20 s, operation timeout 1 s | rank 0 does not wait the whole 20 s | fails today, P10 |
-| `test_shape_mismatch` | rank 1 opens 4x4 against 8x4 | exit non-zero | fails today, P17 |
+This suite is built in two stacked PRs. This document is the map; each PR fills in its part.
 
-## MPI only (`test_teardown_litmus_mpi.py`)
+---
 
-The same questions asked of OpenMPI and PRRTE alone: `litmus_mpi_probe.c` uses MPI the way the DistributedContext
-does and has no tt-metal in it. These are the rows to run again when the MPI install changes:
-`TT_LITMUS_MPI_PREFIX=/opt/openmpi-<version>` picks that install's `mpirun` and `mpicc` and the probe is
-recompiled against it; otherwise the build's `teardown_mpi_probe` and the `mpirun` on PATH are used.
+## Part 1 — tt-run, the launcher (PR #65121, base)
 
-| row | fault | assertion | today |
-|---|---|---|---|
-| `test_mpi_clean` | none | exit 0, nothing left | gate |
-| `test_mpi_dead_rank_ulfm` | a rank killed, `--with-ft ulfm` | the job ends, nothing left | gate |
-| `test_mpi_dead_rank_plain` | a rank killed, plain mpirun | exit non-zero (the truthful code) | gate |
-| `test_mpi_survivor_abort` | a rank killed, survivors call MPI_Abort | exit non-zero under ULFM (the fix shape) | gate |
-| `test_mpi_exit_nofinalize` | a rank `_exit`s, `btl self,tcp` | exit non-zero, nothing left | gate |
-| `test_mpi_hang_timeout` | a rank spins, PRRTE `--timeout 20` | exit 241, nothing left | gate |
-| `test_mpi_ctrl_c_at_mpirun` | SIGINT at mpirun | the whole tree is gone | gate |
-| `test_mpi_dead_rank_ulfm_exit0` | a rank killed, `--with-ft ulfm` | exit non-zero | fails today, P4 |
-| `test_mpi_exit_after_error` | a rank `exit(1)`s after an error | the job ends | fails today, P1 |
-| `test_mpi_hang_no_clock` | a rank spins, no wall clock | the job ends | fails today, P5 |
-| `test_mpi_wrong_interface` | `btl_tcp_if_include nosuchif` | the job ends | fails today, P14 |
-| `test_mpi_exit_nofinalize_sm` | a rank `_exit`s with the shared-memory layer on | the job ends | fails today, P2 |
-| `test_mpi_singleton_shm` | the C probe alone, no launcher | nothing new in /dev/shm | fails today, P11 |
-| `test_mpi_killed_job_shm` | default transports, SIGKILL at mpirun | no sm_segment left | fails today, P11 |
-| `test_scripts_tcp_only` | static: every bare mpirun in tests/scripts/multihost/*.sh | carries `--mca btl self,tcp` | fails today, P15 (run_dual_t3k_tests.sh) |
+*Does tt-run address each MPI/launcher failure?* Every row launches the raw C probe (`litmus_mpi_probe.c`)
+**through tt-run** (no ttnn import, seconds per row) and asserts tt-run ends the job correctly: the right exit
+code, every rank gone, nothing left in `/dev/shm`. Files: `test_teardown_litmus_mpi.py`, `litmus_mpi_probe.c`,
+`litmus_mpi_binding.yaml`, `litmus_common.py`.
 
-Every row kills whatever it left (its own process group, then any launcher or probe process of this user
-that appeared during the row) before the next one starts, so a hang in one row cannot fail the next.
+### Group A — fault classes (does tt-run end the job right on each failure?)
+| test | tt-run behavior | plan |
+|---|---|---|
+| `test_ttrun_clean` | a clean job: exit 0, nothing left | — |
+| `test_ttrun_dead_rank` | a dead rank gets a truthful non-zero code (plain launcher) | P4 |
+| `test_ttrun_abort_ends` | an aborting rank ends fast, no core-dump stall | P8 |
+| `test_ttrun_hang_timeout` | a hang ends at PRRTE `--timeout` passed via `--mpi-args` (241) | P5 |
+| `test_ttrun_no_shm_leak` | self,tcp: a failed job leaves nothing in `/dev/shm` | P11 |
+| `test_ttrun_ctrl_c` | Ctrl-C at tt-run is forwarded to the launcher; nothing left | P6 |
+| `test_ttrun_sigterm` | SIGTERM at tt-run is forwarded; nothing left | P7 |
 
-Run from the repository root with a built tree:
+### Group B — the mpirun line (group E of the plan): one-variable config departures, through tt-run
+Production line: `pml ob1`, `--mca btl self,tcp`, `--mca btl_tcp_if_include <nic>`. Each row changes one variable
+through `--mpi-args` and asserts a known teardown shape.
+| test | departure | shape |
+|---|---|---|
+| `test_ttrun_bad_interface` | a bogus TCP interface | fails fast, non-zero |
+| `test_ttrun_lo_interface` | the loopback interface | clean job completes |
+| `test_ttrun_shm_layer_still_ends` | the shared-memory layer put back | still ends cleanly (P15) |
+| `test_ttrun_pml_ucx_known_shape` | UCX instead of ob1 | refuses with a non-zero code, never a hang |
+| `test_scripts_tcp_only` | static: every multihost script carries `--mca btl self,tcp` | P15 |
 
+### Group C — tt-run unit tests
+`tests/ttnn/distributed/test_ttrun.py`, class `TestJobOwnership`: the launcher logic in isolation — the clock is
+off by default, a user `--timeout` in `--mpi-args` is passed through, the timeout exit code is preserved, signals
+are forwarded, and a leftover rank makes the job fail.
+
+---
+
+## Part 2 — tt-metal, the DistributedContext (PR #64546, stacked on Part 1)
+
+*Does tt-metal's own distributed stack tear down?* Added in the stacked PR, continuing the same structure.
+
+### Group D — DistributedContext rows (`test_teardown_litmus.py`, `litmus_probe.py`)
+Two tt-metal ranks on the mock dual galaxy, launched by tt-run; one fault at each stage. Grouped by the piece
+that fails: the per-collective timeout (barrier / send / all_gather / recv, P16) and its false-positive guard,
+the control plane's init (shape, fabric config), the solver, descriptor loading, and the user's signals.
+
+### Group E — raw-MPI expectation gates (does our OpenMPI build meet our expectations?)
+Gates only, not tests of things MPI cannot do: `test_mpi_delivers_proc_failed_ulfm` (ULFM delivers the failure)
+and `test_mpi_abort_reports_failure` (MPI_Abort reports a non-zero code) — the two MPI capabilities the
+DistributedContext recovery relies on.
+
+### Group F — multi-host (SC4), lane L1c of the plan
+The two-host classes cannot run on one host. `run_teardown_multihost_tests.sh`, wired into the SC4 (4-host)
+`fabric-multihost-exabox` CI, runs the C probe across the hosts and asserts the teardown shape for a clean job,
+a rank death on a remote host (P20), and a remote hang bounded by the wall clock (P22 backstop); a lost remote
+daemon is the P19 shape.
+
+---
+
+## Running it
+
+Locally (a built tree and the python environment):
 ```
 pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v -p no:benchmark
 ```
 
-In CI this is group `teardown-litmus` of `tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh`, entry
-`fabric-cpu-teardown-litmus` of `tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml` (the
-`fabric-cpu-only-unit-tests` job of `tm-fabric-tests-impl.yaml`). Deadlines: `TT_LITMUS_DEADLINE` (a row that
-must end, 90 s) and `TT_LITMUS_DEADLINE_HANG` (a row that hangs today, 60 s).
-
-## Not in this lane
-
-Three of the plan's errors need two hosts and stay in the plan's Slurm lanes (tt-blaze `tools/teardown_probe`,
-lanes L1c and L4c): P19 (a lost prted), P20 (a dead peer aborting the survivor through the TCP transport) and
-P22 (a frozen prted). The hardware half of P3 (the device accepted by the next open without a tt-smi reset) is
-the plan's array R5.
+In CI the single-host groups run as `teardown-litmus-mpi` (Part 1) and `teardown-litmus-ttmetal` (Part 2); each is
+its own matrix entry, so they are reported as teardown, not folded into the fabric suite. The multi-host group
+(Part 2, F) runs on the SC4 lane. Deadlines: `TT_LITMUS_DEADLINE` (a row that must end) and
+`TT_LITMUS_DEADLINE_HANG` (a row that hangs today). `TT_LITMUS_MPI_PREFIX=/opt/openmpi-<version>` reruns the MPI
+rows against another install.

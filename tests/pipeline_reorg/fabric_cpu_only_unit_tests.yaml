@@ -164,7 +164,7 @@
   owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-teardown-litmus-mpi
-  name: fabric cpu teardown litmus, MPI only (#56902)
+  name: teardown litmus — tt-run launcher, MPI (CPU) (#56902)
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-litmus-mpi
   skus:
     cpu_medium:
