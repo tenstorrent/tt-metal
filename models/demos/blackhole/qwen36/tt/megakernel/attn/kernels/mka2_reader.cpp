@@ -33,7 +33,7 @@ void kernel_main() {
 #if defined(MKA_RQNR)
     constexpr auto qo_args_r = TensorAccessorArgs<wq_args.next_compile_time_args_offset()>();   // bf16 DRAM tiles
 #endif
-    constexpr uint32_t MWTB = MKA_MWTB, QSL = 2 * KT;   // STREAM_EXT slice: 2 output tiles x full K, BFP8
+    constexpr uint32_t MWTB = MKA_MWTB, QSL = RING_P;   // ext ring slot: 2 qkv tiles x full K (pre-QSK) or the Wo slice, BFP8
     constexpr uint32_t TRID_PQ = 9;
 #endif
     uint32_t a = 0;
