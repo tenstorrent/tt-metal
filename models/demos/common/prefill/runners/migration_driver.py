@@ -83,12 +83,28 @@ class MigrationDriver:
         if self.handoff_tail < 0:
             raise ValueError(f"PREFILL_MIGRATION_HANDOFF_TAIL must be >= 0, got {self.handoff_tail}")
         self.client = None
+        # tt-d-gen KV Manager: POST each layer run to the prefill leader's /migrate (its HTTP health port) instead of
+        # the tt-llm-engine migration worker's queues. Both sides then publish their tables by file export.
+        self.kvm_url = os.environ.get("PREFILL_MIGRATION_KVM_URL", "").rstrip("/")
+        self.kvm_receiver = os.environ.get("PREFILL_MIGRATION_KVM_RECEIVER", "")
+        self.kvm_mode = os.environ.get("PREFILL_MIGRATION_KVM_MODE", "full")
+        self.kvm_session_id = int(os.environ.get("PREFILL_MIGRATION_KVM_SESSION_ID", str(os.getpid())))
 
     @property
     def cross_endpoint(self) -> bool:
         return self.dest_endpoint_id != self.src_endpoint_id
 
+    @property
+    def via_kvm(self) -> bool:
+        return bool(self.kvm_url)
+
     def attach(self) -> None:
+        if self.via_kvm:
+            logger.info(
+                f"[migration_driver] KV Manager mode: POST {self.kvm_url}/migrate "
+                f"(receiver={self.kvm_receiver or '-'}, mode={self.kvm_mode}, session={self.kvm_session_id})"
+            )
+            return
         self.client = self._attach_client()
         if self.cross_endpoint:
             self._pair_cross_endpoint()
@@ -115,7 +131,7 @@ class MigrationDriver:
     def run(
         self, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None, kv_table=None
     ) -> list:
-        if self.client is None:
+        if self.client is None and not self.via_kvm:
             raise RuntimeError("[migration_driver] run() called before attach()")
         if os.environ.get("PREFILL_DFLASH", "0") == "1" and (
             kv_table is None
@@ -215,6 +231,18 @@ class MigrationDriver:
                 )
                 uuid = next_uuid
                 next_uuid += 1
+                if self.via_kvm:
+                    self._post_kvm_migrate(
+                        command_id=uuid,
+                        migration_id=src_slot * 65536 + dst_slot + 1,
+                        src_slot=src_slot,
+                        dst_slot=dst_slot,
+                        layer_begin=layer_start,
+                        layer_end=layer_end,
+                        pos_begin=pos_start,
+                        pos_end=pos_end,
+                    )
+                    continue
                 token = self.client.migrate(
                     uuid=uuid,
                     remote_endpoint_id=self.dest_endpoint_id,
@@ -232,6 +260,64 @@ class MigrationDriver:
             migrated += 1
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
         return migrated
+
+    def _post_kvm_migrate(
+        self,
+        *,
+        command_id: int,
+        migration_id: int,
+        src_slot: int,
+        dst_slot: int,
+        layer_begin: int,
+        layer_end: int,
+        pos_begin: int,
+        pos_end: int,
+    ) -> dict:
+        """One synchronous KV Manager /migrate; raises unless it reports SUCCESSFUL.
+
+        A Snapshot config (Kimi-K3's KDA state) moves whole whatever position range the request names."""
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        body = {
+            "command_session_id": self.kvm_session_id,
+            "command_id": command_id,
+            "migration_id": migration_id,
+            "src_slot": src_slot,
+            "dst_slot": dst_slot,
+            "layer_begin": layer_begin,
+            "layer_end": layer_end,
+            "src_position_begin": pos_begin,
+            "src_position_end": pos_end,
+            "dst_position_begin": pos_begin,
+            "dst_position_end": pos_end,
+            "mode": self.kvm_mode,
+        }
+        if self.kvm_receiver:
+            body["receiver"] = self.kvm_receiver
+        req = urllib.request.Request(
+            f"{self.kvm_url}/migrate",
+            data=_json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        t0 = time.monotonic()
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_ms / 1000.0) as resp:
+                text = resp.read().decode()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(
+                f"[migration_driver] KVM /migrate HTTP {e.code} for {body}: {e.read().decode(errors='replace')}"
+            ) from e
+        reply = _json.loads(text) if text.strip() else {}
+        if reply.get("status") != "SUCCESSFUL":
+            raise RuntimeError(f"[migration_driver] KVM /migrate failed for {body}: {reply}")
+        logger.info(
+            f"[migration_driver] KVM /migrate ok: layers=[{layer_begin},{layer_end}) pos=[{pos_begin},{pos_end}) "
+            f"{reply.get('duration_ms', '?')} ms (wall {time.monotonic() - t0:.1f} s)"
+        )
+        return reply
 
     def _write_handoff(self, triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
         if not self.handoff_path:
