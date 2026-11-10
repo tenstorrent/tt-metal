@@ -335,3 +335,15 @@ u1 now decides the gate: base 7.94 ms → 10.72 at 21.7 µs per AR, 9.86 at 15 �
 **u8:** little change expected. The ATTN-only cores are already busy with KV (u8 SDPA is KV-read-bound), so the gain
 is limited to the post-SDPA tail (perhaps 377 → ~355-365 µs). u8 at 15 µs AR stays ~12.6-12.8 ms (gate 13.7).
 **Both gates need both changes: AR ≤15 µs on path AND v0.5 streaming at u1.**
+
+## 11. Mixed-group silicon checkpoint (2026-11-10, d27u08 chip 0, branch -mk-mixed @183d9b41350)
+32K, u8, BFP8 KV, NL=8 = 2 × [G,G,G,A], GUPRE, NBB 1, 16 KB budget, GDN stand-in 64 µs, AR stalls 18 µs. The CSV is
+on the laptop at .claude/tmp/r16/mega/si_mixed8/.
+- **Correctness:** mixer PCC 0.99999; SDPA L3/L7 0.99998; MLP last layer 0.99998.
+- **Per layer (µs):** 220.4 (L0, cold), 145.4, 141.3, **382.4** (L3, attention, middle), 151.3, 141.2, 146.1,
+  330.1 (L7, attention, last).
+- **Steady:** GDN-type 145.1 µs (model 138); attention middle 382.4 µs (model 377).
+- **Group:** 817.7 µs vs the 791 µs estimate (+3.4 %).
+- **u8 full pass from measured layers:** 13.58 ms at 18 µs AR stalls; ~13.19 ms at 15 µs on-path AR; ~14.05 ms at
+  21.7 µs. The gate (13.7) needs AR ≤15 µs **plus** the GDN restructure (replaces the 64 µs stand-in, target
+  ~-19 µs/layer ≈ -0.9 ms) and/or v0.5 streaming.
