@@ -269,6 +269,7 @@ TEST(Cluster, TestGenerateClusterDescriptorFromFSD) {
 
     EXPECT_TRUE(std::filesystem::exists(result_file));
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
+    EXPECT_EQ(YAML::LoadFile(result_file)["cluster_id"].as<std::string>(), deployment.hosts(0).host());
 
     std::cout << "Generated cluster descriptor written to: " << result_file << std::endl;
 }
@@ -290,6 +291,19 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
 
     EXPECT_TRUE(std::filesystem::exists(result_file));
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
+
+    fsd::proto::FactorySystemDescriptor fsd;
+    std::ifstream fsd_stream(fsd_file);
+    const std::string fsd_content((std::istreambuf_iterator<char>(fsd_stream)), std::istreambuf_iterator<char>());
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd));
+
+    const YAML::Node mapping = YAML::LoadFile(result_file)["rank_to_cluster_mock_cluster_desc"];
+    ASSERT_EQ(mapping.size(), static_cast<size_t>(fsd.hosts_size()));
+    for (int host_idx = 0; host_idx < fsd.hosts_size(); ++host_idx) {
+        const YAML::Node cluster_desc = YAML::LoadFile(mapping[host_idx].as<std::string>());
+        ASSERT_TRUE(cluster_desc["cluster_id"]) << "host " << host_idx;
+        EXPECT_EQ(cluster_desc["cluster_id"].as<std::string>(), fsd.hosts(host_idx).hostname());
+    }
 }
 
 TEST(Cluster, TestMinConnectionsPassesWithMatchingConnections) {
