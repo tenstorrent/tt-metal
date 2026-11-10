@@ -4,13 +4,11 @@
 
 import pytest
 import os
-
 import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import merge_gate_subset
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc, merge_gate_subset
 from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42

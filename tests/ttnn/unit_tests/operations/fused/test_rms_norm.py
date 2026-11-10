@@ -8,8 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import merge_gate_subset
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 import os
 
