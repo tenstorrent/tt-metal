@@ -143,6 +143,18 @@ def test_halo_only_default_on(monkeypatch, env, expected):
     assert _mock_conv(monkeypatch, env).halo_only is expected
 
 
+def test_set_halo_only_walks_nested(monkeypatch):
+    """The encoder turns halo_only off on every causal conv it holds, nested ones included."""
+    from models.tt_dit.layers.module import ModuleList
+    from models.tt_dit.models.vae.vae_ltx import _set_halo_only
+
+    convs = [_mock_conv(monkeypatch, None) for _ in range(3)]
+    root = ModuleList([convs[0], ModuleList([convs[1], ModuleList([convs[2]])])])
+    assert all(c.halo_only for c in convs)
+    assert _set_halo_only(root, False) == 3
+    assert not any(c.halo_only for c in convs)
+
+
 @pytest.mark.parametrize("causal", [False, True])
 def test_halo_only_forward_wiring(monkeypatch, causal):
     """With the flag on, forward skips neighbor_pad_persistent_buffer and hands conv3d the halo buffer,

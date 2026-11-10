@@ -480,6 +480,27 @@ _BLOCKINGS = {
     (2, 4, 128, 128, (3, 3, 3), 147, 88, 80): (64, 128, 6, 4, 8),  # s4_res
     (2, 4, 128, 48, (3, 3, 3), 147, 88, 80): (128, 64, 6, 4, 8),  # s4_out
     # ===================================================================
+    # LTX VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4), 1088x576 (1080p-portrait).
+    # Per-device (H,W) 1088x576: s0(17,5) s1(34,9) s2/s3(68,18) s4(136,36).
+    # It had no entry, so every 512/1024-ch conv (incl. both 4096-ch depth-to-space convs)
+    # fell to the (256, 32, 1, 1, 1) channel fallback: 1088x576 decoded 3x slower than 1088x1920.
+    # C_in/C_out/T blocks come from the same-channel 1080p/720p 2x4 entries above; the H/W block is
+    # re-shaped to fit inside the per-device output (product 32, or 16 where 32 does not fit) to waste
+    # the least padding. Other clip lengths reuse these through the T-relaxed lookup.
+    # 448x768 (s0(7,6) .. s4(56,48)) is left out on purpose: blockings of this kind hung the device there
+    # in the A/B (twice); it keeps the fallback (2.7 s per 121 frames) until a sweep finds safe ones.
+    # ===================================================================
+    (2, 4, 128, 1024, (3, 3, 3), 21, 17, 5): (64, 256, 1, 8, 4),  # 1088x576 s0_conv_in
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 5): (128, 64, 5, 8, 4),  # 1088x576 s0_res
+    (2, 4, 1024, 4096, (3, 3, 3), 21, 17, 5): (128, 64, 5, 8, 4),  # 1088x576 s0_up
+    (2, 4, 512, 512, (3, 3, 3), 39, 34, 9): (64, 256, 1, 8, 4),  # 1088x576 s1_res
+    (2, 4, 512, 4096, (3, 3, 3), 39, 34, 9): (128, 64, 5, 8, 4),  # 1088x576 s1_up
+    (2, 4, 512, 512, (3, 3, 3), 75, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s2_res
+    (2, 4, 256, 256, (3, 3, 3), 147, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s3_res
+    (2, 4, 256, 512, (3, 3, 3), 147, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s3_chg
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 36): (64, 128, 6, 8, 4),  # 1088x576 s4_res
+    (2, 4, 128, 48, (3, 3, 3), 147, 136, 36): (128, 64, 6, 8, 4),  # 1088x576 s4_out
+    # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8), 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
     # ===================================================================
@@ -528,6 +549,35 @@ _BLOCKINGS = {
     (4, 8, 1024, 128, (3, 3, 3), 3, 6, 5): (64, 32, 1, 8, 4),  # 58us was 178 (3.1x)
     (4, 8, 128, 1024, (3, 3, 3), 21, 6, 5): (64, 128, 3, 8, 4),  # 164us was 350 (2.1x)
     (4, 8, 512, 128, (3, 3, 3), 4, 22, 20): (64, 128, 1, 8, 4),  # 103us was 1090 (10.5x)
+    # LTX 576x1088 (1080p-portrait) decoder, BH Galaxy 4x8. Per-device (H,W): s0(9,3) s1(17,5)
+    # s2/s3(34,9) s4(68,18). Without entries every decoder conv took the channel fallback (warm
+    # decode 1.32 s vs 0.40 s landscape). Transplanted from the nearest same-(Cin,Cout,kernel)
+    # 4x8 entry with H_out*W_out=32 and W_out_block<=W (narrow shards); s4_res swept (halo, 2x4).
+    # Other T (chunk heads, cached-T) reuse these via the T-relaxed lookup.
+    (4, 8, 128, 1024, (3, 3, 3), 18, 9, 3): (64, 128, 3, 8, 4),  # s0_conv_in
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 9, 3): (128, 64, 5, 8, 4),  # s0_res
+    (4, 8, 1024, 4096, (3, 3, 3), 18, 9, 3): (128, 64, 7, 8, 4),  # s0_up
+    (4, 8, 1024, 128, (3, 3, 3), 18, 9, 3): (128, 64, 3, 8, 4),  # s0 (cached-T)
+    (4, 8, 512, 512, (3, 3, 3), 33, 17, 5): (64, 256, 1, 8, 4),  # s1_res
+    (4, 8, 512, 4096, (3, 3, 3), 33, 17, 5): (128, 64, 5, 8, 4),  # s1_up
+    (4, 8, 1024, 1024, (3, 3, 3), 3, 17, 5): (64, 256, 1, 8, 4),  # cached-T
+    (4, 8, 1024, 128, (3, 3, 3), 4, 17, 5): (128, 32, 2, 8, 4),  # chunk head
+    (4, 8, 512, 512, (3, 3, 3), 63, 34, 9): (64, 256, 1, 8, 4),  # s2_res
+    (4, 8, 256, 256, (3, 3, 3), 123, 34, 9): (64, 256, 1, 8, 4),  # s3_res
+    (4, 8, 256, 512, (3, 3, 3), 123, 34, 9): (64, 256, 1, 8, 4),  # s3_chg
+    (4, 8, 512, 128, (3, 3, 3), 4, 34, 9): (64, 128, 1, 8, 4),  # chunk head
+    (4, 8, 128, 128, (3, 3, 3), 123, 68, 18): (128, 64, 7, 8, 4),  # s4_res — 1765us was 5782 (sweep 137127)
+    (4, 8, 128, 48, (3, 3, 3), 123, 68, 18): (128, 64, 6, 8, 4),  # s4_out
+    # LTX 576x1088 (1080p-portrait) latent upsampler (per-device 10x4 and 5x2) and VAE encoder (68x18),
+    # BH Galaxy 4x8. Without entries these 21 convs per run took the channel fallback. Swept on 1x1
+    # (jobs 137315/137344); ups_pre_res copies the ups_post_res winner narrowed to W_out_block=2.
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 10, 4): (128, 64, 6, 4, 4),  # ups_post_res — 1064us was 16593 (15.6x)
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 5, 2): (128, 64, 6, 4, 2),  # ups_pre_res — untimed copy
+    (4, 8, 1024, 4096, (1, 3, 3), 16, 5, 2): (256, 64, 1, 4, 2),  # ups_ups — 1150us was 5033 (4.4x)
+    (4, 8, 1024, 128, (3, 3, 3), 18, 10, 4): (128, 64, 6, 8, 4),  # ups_final — 168us was 1647 (9.8x); 161us winner has no prefetch shard
+    (4, 8, 128, 1024, (3, 3, 3), 18, 5, 2): (128, 128, 1, 4, 2),  # ups_initial — 110us was 190 (1.7x)
+    (4, 8, 64, 128, (3, 3, 3), 3, 68, 18): (64, 128, 1, 2, 16),  # enc_conv_in — 36us was 52 (1.4x)
+    (4, 8, 128, 64, (3, 3, 3), 3, 68, 18): (128, 64, 1, 2, 16),  # enc_down — 37us was 54 (1.5x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.

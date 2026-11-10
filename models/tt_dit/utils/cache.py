@@ -7,8 +7,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import shutil
-import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -31,6 +32,14 @@ CACHE_FORMAT = 1
 # shape or dtype — e.g. GemmaFeatureExtractor's D-major→layer-major column permutation.
 # Shape, dtype, layout and sharding changes need no bump: `module_signature` already sees them.
 CACHE_VERSION = 1
+
+# A cache hit up to this many bytes of tensorbins is scanned for NaN/inf before it is served
+# (TT_DIT_CACHE_VERIFY=1): connectors and VAEs, not a transformer, whose publish-time verify covers it.
+SCAN_MAX_BYTES_DEFAULT = 8 << 30
+# A clean scan leaves this stamp, keyed on the tensorbins' names, sizes and mtimes, so the next process
+# skips the scan (it costs ~90 s of a cs04 worker start) until a tensorbin is rewritten.
+SCAN_OK_FILE = ".nonfinite-scan-ok"
+_scanned_cache_dirs: set[str] = set()
 
 
 class MissingCacheError(Exception):
@@ -190,7 +199,9 @@ def load_model(
         ttnn.distributed_context_barrier()
         return
 
-    if _cache_is_complete(cache_dir, tt_model, key):
+    if _cache_is_complete(cache_dir, tt_model, key) and not (
+        get_torch_state_dict is not None and _set_aside_if_nonfinite(tt_model, cache_dir)
+    ):
         logger.info(f"loading cache at '{cache_dir}'.")
         with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
             tt_model.load(cache_dir)
@@ -228,6 +239,31 @@ def load_model(
             _reclaim_superseded(model_cache_dir(**key_args, content=None, required=False))
         logger.info(f"Writing cache to '{cache_dir}'.")
         _publish_cache(tt_model, cache_dir, key)
+        _place_like_a_cache_hit(tt_model, cache_dir, key, post_load_hook)
+
+
+def _place_like_a_cache_hit(
+    tt_model: Module, cache_dir: Path, key: str | None, post_load_hook: Callable[[Module], None] | None
+) -> None:
+    """After a miss has published the cache, reload the weights from it, so they sit on the device
+    exactly where every later cache hit puts them.
+
+    A miss builds the weights from the state dict, which allocates differently from a cache load. A
+    trace captured on those weights bakes their addresses, and a dynamic-load mesh reloads the module
+    from the cache before the next replay: the replay then reads memory the reload did not put there.
+    On f07cs04 a job whose transformer missed in-gen captured its denoise traces on the state-dict
+    weights, and the next job, reloaded from the cache, replayed them into pure noise (jobs 2749-2750,
+    2026-10-18). Reloading here costs one cache read, on a miss only. A cache that was not published
+    (capture-only pass, failed verify, no disk room) keeps the weights as built.
+    """
+    if not _cache_is_complete(cache_dir, tt_model, key):
+        return
+    tt_model.deallocate_weights()
+    logger.info(f"reloading from the cache just written at '{cache_dir}', as a cache hit places it.")
+    tt_model.load(cache_dir)
+    if post_load_hook is not None:
+        post_load_hook(tt_model)
+    ttnn.distributed_context_barrier()
 
 
 def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "") -> bool:
@@ -265,6 +301,11 @@ def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: st
                     f"cache mismatch in '{path.name}': shards {bad or 'count'} differ "
                     f"({len(resident)} resident vs {len(fresh)} reloaded)"
                 )
+            elif nonfinite := [i for i, t in enumerate(fresh) if not torch.isfinite(t).all()]:
+                # Weights prepped on a faulty device read back exactly and are still garbage (#208: an
+                # ltx VAE encoder cache of inf/NaN). to_torch drops tile padding, so only real values count.
+                ok = False
+                logger.error(f"cache holds NaN or inf in '{path.name}': shards {nonfinite}")
         except RuntimeError as err:
             ok = False
             logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
@@ -316,6 +357,78 @@ def model_cache_dir(
         path = path / ownership_suffix
 
     return path
+
+
+def nonfinite_tensorbins(tt_model: Module, cache_dir: str | Path) -> list[str]:
+    """The parameters of `tt_model` whose tensorbin in `cache_dir` holds NaN or inf, read on the host.
+
+    Only logical values count: to_torch drops tile padding. A file that does not load is listed too.
+    """
+    import torch
+
+    bad = []
+    for name, _ in _walk_parameters(tt_model):
+        try:
+            stored = ttnn.load_tensor(Path(cache_dir) / f"{name}.tensorbin", device=None)
+            if not all(torch.isfinite(ttnn.to_torch(t)).all() for t in ttnn.get_device_tensors(stored)):
+                bad.append(name)
+        except RuntimeError as err:
+            logger.warning(f"cache tensorbin '{name}' in '{cache_dir}' does not load on the host: {err}")
+            bad.append(name)
+    return bad
+
+
+def _scan_signature(cache_dir: Path) -> str:
+    entries = sorted((f.name, st.st_size, st.st_mtime_ns) for f in cache_dir.glob("*.tensorbin") for st in [f.stat()])
+    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+
+
+def _set_aside_if_nonfinite(tt_model: Module, cache_dir: Path) -> bool:
+    """Whether a cache hit holds NaN or inf; if so it is moved aside, so `load_model` rebuilds it.
+
+    The manifest check sees only sizes, so a cache written from bad weights (a faulty device, a
+    torn prep) is otherwise served on every run until someone deletes it by hand (#208: an ltx VAE
+    encoder cache of inf/NaN). Opt-in with TT_DIT_CACHE_VERIFY=1, like the publish-time verify; once
+    per cache dir per process; single-process meshes only, since a rebuild on one rank alone would
+    leave the others waiting at its barriers; and only up to TT_DIT_CACHE_SCAN_MAX_BYTES of tensorbins.
+    """
+    if not _verify_env_enabled() or str(cache_dir) in _scanned_cache_dirs or _distributed_world_size() > 1:
+        return False
+    _scanned_cache_dirs.add(str(cache_dir))
+    size = sum(f.stat().st_size for f in cache_dir.glob("*.tensorbin"))
+    if size > int(os.environ.get("TT_DIT_CACHE_SCAN_MAX_BYTES", SCAN_MAX_BYTES_DEFAULT)):
+        return False
+    stamp = _scan_signature(cache_dir)
+    try:
+        if (cache_dir / SCAN_OK_FILE).read_text() == stamp:
+            return False
+    except OSError:
+        pass
+    t0 = time.time()
+    bad = nonfinite_tensorbins(tt_model, cache_dir)
+    logger.info(f"scanned cache at '{cache_dir}' ({size / 2**30:.2f} GiB) for NaN/inf in {time.time() - t0:.1f}s")
+    if not bad:
+        try:
+            tmp = cache_dir / f"{SCAN_OK_FILE}.{os.getpid()}"
+            tmp.write_text(stamp)
+            tmp.replace(cache_dir / SCAN_OK_FILE)
+        except OSError as err:
+            logger.debug(f"cannot stamp the clean scan of '{cache_dir}' ({err}); the next load scans it again")
+        return False
+    aside = cache_dir.with_name(f"{cache_dir.name}.bad-nonfinite-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
+    logger.warning(
+        f"cache at '{cache_dir}' holds NaN or inf in {len(bad)} tensors ({', '.join(bad[:5])}"
+        f"{', ...' if len(bad) > 5 else ''}); moving it to '{aside}' and rebuilding"
+    )
+    try:
+        cache_dir.rename(aside)
+    except FileNotFoundError:
+        pass  # another process moved it first
+    except OSError as err:
+        # Not ours to move (a cache root shared read-only): rebuilding could not publish over it either.
+        logger.error(f"cannot move the NaN/inf cache at '{cache_dir}' aside ({err}); serving it as it is")
+        return False
+    return True
 
 
 def miss_reason(cache_dir: str | Path) -> str:
@@ -421,7 +534,13 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
     """
     cache_dir = Path(cache_dir)
     cache_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{cache_dir.name}.staging-", dir=cache_dir.parent))
+    # Not tempfile.mkdtemp: it creates the directory 0700 and the rename below publishes that mode.
+    # Under a default ACL (a cache root shared by several users) the 0700 also sets the leaf's ACL
+    # mask to ---, so every other user, the serving account included, is denied the cache. A plain
+    # mkdir gets 0777 less the umask, the parent's default ACL and its setgid group like any other
+    # directory; the pid and random suffix keep concurrent builders apart as mkdtemp did.
+    staging = cache_dir.parent / f".{cache_dir.name}.staging-{os.getpid()}-{secrets.token_hex(4)}"
+    staging.mkdir()
 
     try:
         tt_model.save(staging)

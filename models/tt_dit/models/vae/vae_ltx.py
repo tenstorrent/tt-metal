@@ -408,6 +408,17 @@ def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, 
     return min(upper_dims, ccl_manager.num_links)
 
 
+def _set_halo_only(module: Module, on: bool) -> int:
+    """Set ``halo_only`` on every LTXCausalConv3d under ``module``; returns how many."""
+    n = 0
+    for _, child in module.named_children():
+        if isinstance(child, LTXCausalConv3d):
+            child.halo_only = on
+            n += 1
+        n += _set_halo_only(child, on)
+    return n
+
+
 class LTXResnetBlock3D(Module):
     """LTX-2 residual block: RMSNorm+SiLU → CausalConv3d ×2 with optional shortcut projection."""
 
@@ -1526,6 +1537,12 @@ class LTXVideoEncoder(Module):
             conv_dims=_pop_dims(),
             **conv_kwargs,
         )
+        # The 2D halo-only exchange corrupts the latent next to the pixel-shard corners on 4x8 (mean error
+        # 0.086 there vs 0.016 elsewhere, max 0.57 at 1088x1920): dots at the tile corners of first-frame
+        # clips. The full neighbor_pad exchange is as fast here (0.2 s warm either way), so the encoder uses
+        # it; LTX_VAE_ENC_HALO_ONLY=1 opts back in.
+        if os.environ.get("LTX_VAE_ENC_HALO_ONLY", "0") != "1":
+            _set_halo_only(self, False)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Map per_channel_statistics (dash keys) -> per_channel_mean/std.

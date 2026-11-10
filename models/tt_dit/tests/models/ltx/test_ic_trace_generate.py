@@ -113,6 +113,7 @@ def _build_shim() -> tuple[type, dict]:
         "LTXTransformerState": lambda: mock.MagicMock(name="state"),
         "upsample_latent": mock.MagicMock(name="upsample_latent"),
         "export_video_audio": mock.MagicMock(name="export_video_audio"),
+        "run_with_stall_watchdog": lambda fn, **kw: fn(),  # the bounded eager audio warmup
     }
     exec(compile(shim_src, str(DISTILLED_PATH), "exec"), ns)
     return ns["LTXDistilledPipeline"], ns
@@ -146,6 +147,7 @@ def _make_warmup_pipe():
     )
     obj.encode_prompts = mock.MagicMock(name="encode_prompts")
     obj._kf_trace_anchors = mock.MagicMock(name="_kf_trace_anchors", return_value=[])
+    obj._capture_warmup_traces = mock.MagicMock(name="_capture_warmup_traces")
 
     for name in (
         "_prepare_transformer",
@@ -270,6 +272,24 @@ def test_t2v_only_worker_refuses_uncaptured_i2v_family(expect_error):
     obj._assert_trace_family_warmed("s1_i2v", traced=False)  # eager gens never capture
     with expect_error(RuntimeError, r"LTX_WARMUP_T2V_ONLY"):
         obj._assert_trace_family_warmed("s1_i2v", traced=True)
+
+
+def test_ref_only_warmup_refuses_no_sheet_gen(monkeypatch, expect_error):
+    # Exabox job 138701: a no-sheet gen after IC gens on a reference-only warmup captured the unwarmed s1
+    # family and hit TT_FATAL "Cannot load new binaries during trace capture". It must refuse instead.
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    obj = _make_warmup_pipe()
+    obj._trace_state = {}
+    obj._assert_trace_family_warmed("s1", traced=True)  # never warmed: gen 0 captures its own family
+    obj.warmup_buffers(num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17)
+    obj._trace_state = {"s1_ref_i2v": object(), "s2_ref_i2v": object()}  # what the mocked prealloc sets up
+    obj._assert_trace_family_warmed("s1_ref_i2v", traced=True)
+    obj._assert_trace_family_warmed("s1", traced=False)  # eager gens never capture
+    with expect_error(RuntimeError, r"trace family s1 was not warmed"):
+        obj._assert_trace_family_warmed("s1", traced=True)
+    with expect_error(RuntimeError, r"trace family s2 was not warmed"):
+        obj._assert_trace_family_warmed("s2", traced=True)
 
 
 def test_warmup_ref_denoise_uses_grid_initial_latent(monkeypatch):

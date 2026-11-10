@@ -16,6 +16,10 @@ never open a device.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import stat
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -263,3 +267,121 @@ def test_a_miss_under_tmp_warns_that_reboots_wipe_it(monkeypatch):
 
     assert "wiped at every boot" in cache.miss_reason("/tmp/tt-dit-cache-test/absent/key")
     assert "wiped" not in cache.miss_reason("/var/tmp/tt-dit-cache-test/absent/key")
+
+
+class _LoadingModule(_StubModule):
+    """A stub module that records the load_model calls that place its weights on the device."""
+
+    def __init__(self, log):
+        super().__init__({"weight": _StubParameter(), "bias": _StubParameter(shape=(32,), mesh_axes=(None,))})
+        self.log, self.loaded = log, False
+
+    def is_loaded(self):
+        return self.loaded
+
+    def load_torch_state_dict(self, state):
+        self.log.append("state dict")
+        self.loaded = True
+
+    def save(self, directory, /, *, prefix=""):
+        self.log.append("save")
+        super().save(directory, prefix=prefix)
+
+    def deallocate_weights(self):
+        self.log.append("deallocate")
+        self.loaded = False
+
+    def load(self, directory, /):
+        self.log.append(f"load {Path(directory).name}")
+        self.loaded = True
+
+
+def _load(module, checkpoint, hook):
+    cache.load_model(
+        module,
+        model_name="m",
+        subfolder="transformer",
+        parallel_config=SimpleNamespace(_asdict=dict),
+        mesh_shape=(4, 8),
+        mesh_device=None,
+        sources=[checkpoint],
+        get_torch_state_dict=dict,
+        post_load_hook=hook,
+    )
+
+
+def test_a_miss_places_the_weights_as_a_cache_hit_does(checkpoint, monkeypatch, tmp_path):
+    """A trace captured on weights built from the state dict, then replayed after a dynamic-load mesh
+    reloaded them from the cache, rendered pure noise (f07cs04 jobs 2749-2750 and 2753-2754): the two
+    paths put the weights in different places. So a miss reloads from the cache it just published, and
+    every load leaves the weights where a cache hit puts them."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("TT_METAL_KERNEL_CAPTURE_ONLY", raising=False)
+    monkeypatch.setattr(cache.ttnn, "distributed_context_barrier", lambda: None)
+    log = []
+    module = _LoadingModule(log)
+    leaf = _key(module, [checkpoint]).name
+
+    _load(module, checkpoint, lambda m: log.append("hook"))
+
+    assert log == ["state dict", "hook", "save", "deallocate", f"load {leaf}", "hook"]
+    log.clear()
+    module.deallocate_weights()
+    _load(module, checkpoint, lambda m: log.append("hook"))  # the next reload: a plain hit, placed the same way
+    assert log == ["deallocate", f"load {leaf}", "hook"]
+
+
+def test_a_miss_that_publishes_nothing_keeps_the_weights_it_built(checkpoint, monkeypatch, tmp_path):
+    """The capture-only pass writes no cache, so there is nothing to reload from."""
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("TT_METAL_KERNEL_CAPTURE_ONLY", "1")
+    monkeypatch.setattr(cache.ttnn, "distributed_context_barrier", lambda: None)
+    log = []
+    _load(_LoadingModule(log), checkpoint, lambda m: log.append("hook"))
+    assert log == ["state dict", "hook"]
+
+
+# A published cache directory must be readable by the other users of a shared cache root:
+# tempfile.mkdtemp staged it 0700 and the rename published that mode; under a default ACL that also
+# set the leaf mask to ---, so the serving account could not read a cache another user had built.
+class _SavesOneFile:
+    def save(self, path) -> None:
+        (path / "w.tensorbin").write_bytes(b"x")
+
+
+@pytest.fixture
+def umask_022():
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
+
+
+def test_published_cache_dir_gets_the_umask_mode_not_0700(tmp_path, umask_022) -> None:
+    leaf = tmp_path / "model" / "transformer" / "leaf"
+    cache._publish_cache(_SavesOneFile(), leaf, None)
+    assert (leaf / "w.tensorbin").read_bytes() == b"x"
+    assert stat.S_IMODE(leaf.stat().st_mode) == 0o755
+    assert not [p for p in leaf.parent.iterdir() if ".staging-" in p.name]
+
+
+def test_published_cache_dir_keeps_the_parents_setgid_group(tmp_path, umask_022) -> None:
+    parent = tmp_path / "root"
+    parent.mkdir()
+    parent.chmod(0o2775)
+    cache._publish_cache(_SavesOneFile(), parent / "leaf", None)
+    assert (parent / "leaf").stat().st_mode & stat.S_ISGID
+
+
+@pytest.mark.skipif(not (shutil.which("setfacl") and shutil.which("getfacl")), reason="needs setfacl/getfacl")
+def test_published_cache_dir_has_an_open_acl_mask_under_a_default_acl(tmp_path, umask_022) -> None:
+    """The shared cache root grants the serving account a named default ACL entry, which brings a
+    mask; a 0700 staging dir published mask ---, denying that account."""
+    parent = tmp_path / "root"
+    parent.mkdir()
+    spec = f"u::rwx,u:{os.getuid()}:rwx,g::rwx,o::rx"
+    if subprocess.run(["setfacl", "-d", "-m", spec, str(parent)], capture_output=True).returncode:
+        pytest.skip("filesystem without ACL support")
+    cache._publish_cache(_SavesOneFile(), parent / "leaf", None)
+    acl = subprocess.run(["getfacl", "-p", str(parent / "leaf")], capture_output=True, text=True, check=True).stdout
+    access = [line for line in acl.splitlines() if line and not line.startswith(("#", "default:"))]
+    assert "mask::rwx" in access, acl
