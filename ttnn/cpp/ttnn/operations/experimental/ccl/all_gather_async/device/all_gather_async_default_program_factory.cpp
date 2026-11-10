@@ -120,7 +120,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     // Tensor Info
     TT_FATAL(input_tensor.is_allocated(), "Input tensor buffer is null");
     TT_FATAL(output_tensor.is_allocated(), "Output tensor buffer is null");
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer().num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     auto* mesh_device = input_tensor.device();
@@ -146,7 +146,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     }
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
-    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
+    uint32_t output_data_size_bytes = output_tensor.mesh_buffer().device_local_size();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(default_workers(
         *mesh_device,
         sub_device_id,
@@ -189,7 +189,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     }
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer().page_size();
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
@@ -420,6 +420,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     // The mux's map goes in program-local L1 rather than at a fixed address, so it stays clear of persistent L1
     // (PrefetcherPipe rings) on the mux cores. Its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -564,11 +565,11 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
                     if (dir) {  // forward
                         const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, mux_logical_core);
+                            *mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
                     } else {
                         const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, mux_logical_core);
+                            *mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
                     }
                     desc.kernels[mux_kernel_index.value()].runtime_args.emplace_back(
                         mux_logical_core, std::move(mux_rt_args));

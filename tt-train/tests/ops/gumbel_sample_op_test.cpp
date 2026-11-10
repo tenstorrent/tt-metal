@@ -1450,7 +1450,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingPreallocatedOutput) {
         ttnn::Shape({kBatch, 1U, kTokens, 1U}),
         device,
         ttnn::Layout::ROW_MAJOR);
-    const auto preallocated_address = preallocated.buffer()->address();
+    const auto preallocated_address = preallocated.mesh_buffer().address();
 
     auto out = ttnn::prim::ttml_gumbel_sample(
         tensor_a,
@@ -1463,7 +1463,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingPreallocatedOutput) {
 
     // Greedy is exact: assert the returned tensor aliases the caller's buffer AND that reading the
     // preallocated tensor itself (not just the returned handle) sees the results.
-    EXPECT_EQ(out.buffer()->address(), preallocated_address) << "output must reuse the preallocated buffer";
+    EXPECT_EQ(out.mesh_buffer().address(), preallocated_address) << "output must reuse the preallocated buffer";
     EXPECT_EQ(ttml::core::to_vector<uint32_t>(out), expected);
     EXPECT_EQ(ttml::core::to_vector<uint32_t>(preallocated), expected) << "samples must land in the caller's tensor";
 }

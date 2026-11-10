@@ -311,12 +311,12 @@ void MorehSgdOperation::MorehSgdProgramFactory::override_runtime_arguments(
     const auto& momentum_buffer_in = tensor_args.momentum_buffer_in;
     const auto& momentum_buffer_out = output_tensor.at(1);
     const std::array<uint32_t, 3> reader_addrs{
-        tensor_args.param_in.buffer()->address(),
-        tensor_args.grad.buffer()->address(),
-        momentum_buffer_in.has_value() ? momentum_buffer_in->buffer()->address() : 0u};
+        tensor_args.param_in.mesh_buffer().address(),
+        tensor_args.grad.mesh_buffer().address(),
+        momentum_buffer_in.has_value() ? momentum_buffer_in->mesh_buffer().address() : 0u};
     const std::array<uint32_t, 2> writer_addrs{
-        output_tensor.at(0)->buffer()->address(),
-        momentum_buffer_out.has_value() ? momentum_buffer_out->buffer()->address() : 0u};
+        output_tensor.at(0)->mesh_buffer().address(),
+        momentum_buffer_out.has_value() ? momentum_buffer_out->mesh_buffer().address() : 0u};
     const uint32_t u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
 
     for (auto& column : GetRuntimeArgs(program, READER_KERNEL_IDX)) {
