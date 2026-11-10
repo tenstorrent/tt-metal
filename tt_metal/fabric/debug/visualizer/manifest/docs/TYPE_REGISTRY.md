@@ -196,13 +196,14 @@ register_l1_region<Header>(address, num_slots, slot_size);
 
 ### 3. Describe, from the architecture
 
-Regions the architecture fixes on every router core are registered once per manifest, in `arch.l1_areas`:
+Regions the architecture fixes on every router core are registered once per manifest, in `arch.l1_areas`, one per
+`ArchArea`. `describe_arch_area` picks the function for each:
 
 | Function | Region | Location |
 | --- | --- | --- |
 | `describe_hal_l1_area<T>` | Fabric telemetry (`FabricTelemetry`), the routing table (`routing_l1_info_t`), the ETH firmware mailbox (`uint32_t`) | The HAL's address and size for the area. The size must hold a whole number of `T`s, which is `num_elements` |
 | `describe_base_fw_word` | A base firmware word, as `uint32_t` | The HAL's Ethernet firmware mailbox values. `null` when the HAL gives none, as on Wormhole |
-| `describe_heartbeat` | The router kernel's heartbeat word, as `uint32_t` | Fabric's heartbeat address for the architecture |
+| `describe_heartbeat_word` | The router kernel's heartbeat word, as `uint32_t` | Fabric's heartbeat address for the architecture |
 
 ```cpp
 // describe_hal_l1_area<FabricTelemetry>: as many FabricTelemetry as the HAL's area holds.
@@ -215,8 +216,9 @@ register_l1_region<T>(get_hal_l1_address(hal, area_id), area_size / sizeof(T));
   ([FIELD_TABLES.md](FIELD_TABLES.md)). The router pass fills in the location, and the field shows up in FIELDS.md.
 - **The builder knows where it is, but no single argument says so:** register it in a router pass `describe_*`
   function, with the location from the builder ([ROUTER_PASS.md](ROUTER_PASS.md)).
-- **The architecture fixes it on every router core:** register it in describe, with the location from the HAL
-  ([DESCRIBE.md](DESCRIBE.md)).
+- **The architecture fixes it on every router core:** add an `ArchArea` enumerator, and its case in describe's
+  `describe_arch_area`, with the location from the HAL ([DESCRIBE.md](DESCRIBE.md)). The build fails until the case is
+  there; the writer, the reader and `for_each_arch_area` pick the area up from the enum.
 
 In every case, add the region's type to `RegisteredTypes` first if it isn't there; the build fails until you do.
 
@@ -237,21 +239,22 @@ A registered type's name is the compiler's spelling of it without its namespaces
 
 ## How decode uses it
 
-Decode isn't built yet. This is how it reads a region with the registry; the code is a sketch.
-
-Decode is built from the same commit as the run, so it has the same `RegisteredTypes`. It turns a name back into a type
-by walking the list at compile time and comparing each type's name:
+Decode is built from the same commit as the run, so it has the same `RegisteredTypes`. `visit_registered_type`, beside
+`get_manifest_type_name`, turns a name back into a type by walking the list at compile time and comparing each type's
+name. It calls its function with `std::type_identity<T>{}`, and returns false for a name no registered type has:
 
 ```cpp
-// Go through RegisteredTypes and ensure the type corresponding to `name` is registered.
-template <typename F>
-void visit_registered_type(std::string_view name, F&& f) {
-    const bool found = []<typename... Ts>(TypeList<Ts...>, std::string_view name, F& f) {
-        return ((manifest_type_name<Ts> == name && (f.template operator()<Ts>(), true)) || ...);
-    }(RegisteredTypes{}, name, f);
-    TT_FATAL(found, "{} names no registered type: was the manifest written by another build?", name);
-}
+template <typename OnType>
+bool visit_registered_type(std::string_view name, OnType&& on_type);
 ```
+
+The regions to read come from `fabric_manifest_regions.hpp`. `for_each_router_region` calls its function for every L1
+region and stream register a router names, with the region's path below the router's node in a `PER_ROUTER` manifest,
+such as `fields/erisc0/edm_status` or `channels/senders/vc0/ch1/ring_buffer`. `for_each_arch_area` does the same for
+the areas in `arch.l1_areas`, which every router core has its own copy of. Capture collects each router's stream
+registers through `for_each_router_region` too, so capture and decode agree on which regions a router has.
+
+The rest of this section is a sketch of what decode does with a region.
 
 An L1 region is `num_elements` elements, `element_size` bytes apart from `address`. Element `i` is the `sizeof(T)`
 bytes at `address + i * element_size`, copied into a `T`:
@@ -265,7 +268,7 @@ T read_element(std::span<const std::byte> l1, const Region& region, uint32_t i) 
     return std::bit_cast<T>(bytes);
 }
 
-visit_registered_type(region.type, [&]<typename T>() {
+visit_registered_type(region.type, [&]<typename T>(std::type_identity<T>) {
     for (uint32_t i = 0; i < region.num_elements; ++i) {
         show(read_element<T>(l1, region, i));
     }

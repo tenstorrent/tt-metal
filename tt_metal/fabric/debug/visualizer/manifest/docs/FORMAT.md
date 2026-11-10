@@ -53,7 +53,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
   "run":        { run_id, mpi_rank, world_size, subcontext?: { id, rank, size }, host_name, written_at,
                   build: { git_sha, git_sha_short, version, build_type, git_dirty } },
   "fabric":     { config: { ... }, topology, is_2d_routing, packet_header, ... },
-  "arch":       { name, l1: { address, size_bytes }, l1_areas: { ... }, core_registers: [ ... ] },
+  "arch":       { name, l1: { address, size_bytes }, l1_areas: { ... }, heartbeat_protocol: { ... }, core_registers: [ ... ] },
   "vocabulary": { <list name>: [ <name>, ... ] },
   "field_sets": { "F<n>": { erisc<r>: { ... } } },
   "meshes": {
@@ -199,7 +199,8 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | --- | --- |
 | `name` | The architecture, such as `wormhole_b0` |
 | `l1` | The whole L1 of the Ethernet core a router runs on: `size_bytes` bytes from `address`. Every L1 region the manifest names lies inside it |
-| `l1_areas` | L1 regions the architecture fixes on every router core: `heartbeat` (with its `magic`, `magic_mask` and `period_iters`; multi-sampled as `loop_heartbeat`), `fabric_telemetry` (multi-sampled as `fabric_telemetry`), `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null. Every router core writes each area, so each is `active` |
+| `l1_areas` | L1 regions the architecture fixes on every router core, one per `ArchArea` keyed by its name in lower case, in the enum's order: `heartbeat` (multi-sampled as `loop_heartbeat`), `fabric_telemetry` (multi-sampled as `fabric_telemetry`), `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null. Every router core writes each area, so each is `active` |
+| `heartbeat_protocol` | How the router kernel writes its heartbeat word (`l1_areas.heartbeat`): `{ magic, magic_mask, period_iters }`, the word being `magic \| iteration count`, written every `period_iters` main-loop iterations |
 | `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word. The model's `k_core_registers` holds this order, which the writer and the reader follow |
 | `fabric_telemetry_version` | `FABRIC_TELEMETRY_VERSION`: which layout of `FabricTelemetry` the `fabric_telemetry` area holds |
 

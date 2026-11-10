@@ -145,6 +145,28 @@ constexpr bool is_registered_type_name(std::string_view name) { return detail::i
 
 namespace detail {
 
+// Finds the type in `types` whose manifest name is `name`, and calls `on_type` once with it, as
+// std::type_identity<T>{}. Returns true when a type has that name, and false, without calling `on_type`, when none
+// does. Names are unique, so it stops at the first match.
+//
+// Example: with `types` TypeList<uint32_t, EDMStatus>, the name "EDMStatus" calls
+// on_type(std::type_identity<EDMStatus>{}) and returns true; the name "Foo" calls nothing and returns false.
+template <typename OnType, typename... Ts>
+bool visit_type_named(std::string_view name, OnType& on_type, TypeList<Ts...> /*types*/) {
+    return ((manifest_type_name<Ts> == name && (static_cast<void>(on_type(std::type_identity<Ts>{})), true)) || ...);
+}
+
+}  // namespace detail
+
+// get_manifest_type_name's inverse: calls `on_type(std::type_identity<T>{})` for the registered type T named `name`,
+// and returns true. Returns false, calling nothing, when `name` names no registered type.
+template <typename OnType>
+bool visit_registered_type(std::string_view name, OnType&& on_type) {
+    return detail::visit_type_named(name, on_type, RegisteredTypes{});
+}
+
+namespace detail {
+
 template <typename... Ts>
 consteval bool are_names_unique(TypeList<Ts...> /*types*/) {
     const std::array<std::string_view, sizeof...(Ts)> names{manifest_type_name<Ts>...};

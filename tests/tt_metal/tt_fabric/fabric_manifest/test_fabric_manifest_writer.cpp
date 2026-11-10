@@ -32,6 +32,16 @@ content::L1 multi_sampled_as(content::L1 region, MultiSampleRole role) {
     return region;
 }
 
+// The areas every architecture has, marked as describe marks them; the rest are null, as on Wormhole.
+ArchAreas make_arch_areas() {
+    ArchAreas areas;
+    areas.get(ArchArea::HEARTBEAT) = multi_sampled_as(word_at(0x1f80), MultiSampleRole::LOOP_HEARTBEAT);
+    areas.get(ArchArea::FABRIC_TELEMETRY) =
+        multi_sampled_as(register_l1_region<FabricTelemetry>(0x3000), MultiSampleRole::FABRIC_TELEMETRY);
+    areas.get(ArchArea::ROUTING_TABLE) = word_at(0x4000);
+    return areas;
+}
+
 // One mesh, M0, of two chips. C0 is this rank's, with one router, E0, whose link reaches W0 on C1, another rank's chip.
 ManifestFacts make_facts() {
     const FabricNodeId local_node{MeshId{0}, 0};
@@ -100,11 +110,7 @@ ManifestFacts make_facts() {
              .host_clears = {{.address = 0x100, .size_bytes = 4}}},
         .arch =
             {.arch = tt::ARCH::WORMHOLE_B0,
-             .areas =
-                 {.heartbeat = {.word = multi_sampled_as(word_at(0x1f80), MultiSampleRole::LOOP_HEARTBEAT)},
-                  .fabric_telemetry = multi_sampled_as(
-                      register_l1_region<FabricTelemetry>(0x3000), MultiSampleRole::FABRIC_TELEMETRY),
-                  .routing_table = word_at(0x4000)},
+             .areas = make_arch_areas(),
              .core_registers =
                  {.soft_reset = 0x1, .reset_masks = {0x800}, .wall_clock_low = 0x2, .wall_clock_high = 0x3}},
         .meshes = {Mesh{

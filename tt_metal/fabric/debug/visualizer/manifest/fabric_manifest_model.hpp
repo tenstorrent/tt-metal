@@ -434,30 +434,53 @@ struct Mesh {
     std::vector<Chip> chips;
 };
 
-// The word the router kernel writes every period_iters main-loop iterations: magic | its 16-bit iteration count.
-// Multi-sampled as LOOP_HEARTBEAT.
-struct Heartbeat {
-    content::L1 word;
+// An L1 area on every router core that the architecture fixes, rather than the builder allocates. The manifest keys
+// each in the arch block's l1_areas by its lower_enum_name, such as "routing_table". Adding one here adds it to the
+// writer, the reader and for_each_arch_area; describe_arch_area's switch fails the build until it's described. Every
+// router core writes each of them, so an arch area is always active: a region only some routers write is described on
+// the router.
+enum class ArchArea : uint8_t {
+    // The word the router kernel writes its heartbeat to (HeartbeatProtocol). Multi-sampled as LOOP_HEARTBEAT.
+    HEARTBEAT,
+    // Multi-sampled as FABRIC_TELEMETRY.
+    FABRIC_TELEMETRY,
+    ROUTING_TABLE,
+    // Only on architectures with an Ethernet firmware mailbox.
+    ETH_FW_MAILBOX,
+    // Base firmware's link status words, where the HAL gives an address for them (not on Wormhole).
+    BASE_FW_PORT_STATUS,
+    BASE_FW_TRAIN_STATUS,
+    BASE_FW_RETRAIN_COUNT,
+    BASE_FW_RX_LINK_UP,
+    BASE_FW_POSTCODE,
+};
+
+static_assert(
+    [] {
+        for (size_t index = 0; index < enchantum::count<ArchArea>; ++index) {
+            if (enchantum::values<ArchArea>[index] != static_cast<ArchArea>(index)) {
+                return false;
+            }
+        }
+        return true;
+    }(),
+    "ArchArea's enumerators are 0, 1, 2, ..., since ArchAreas indexes its regions by them");
+
+// The region of each ArchArea on a router core. An area is null when the architecture doesn't have it.
+struct ArchAreas {
+    // Indexed by ArchArea.
+    std::array<std::optional<content::L1>, enchantum::count<ArchArea>> regions;
+
+    std::optional<content::L1>& get(ArchArea area) { return regions.at(static_cast<size_t>(area)); }
+    const std::optional<content::L1>& get(ArchArea area) const { return regions.at(static_cast<size_t>(area)); }
+};
+
+// How the router kernel writes its heartbeat word (ArchArea::HEARTBEAT): magic | its 16-bit iteration count, every
+// period_iters main-loop iterations.
+struct HeartbeatProtocol {
     uint32_t magic = 0;
     uint32_t magic_mask = 0;
     uint32_t period_iters = 0;
-};
-
-// The L1 areas on every router core that the architecture fixes, rather than the builder allocates. Every router core
-// writes each of them, so an arch area is always active: a region only some routers write is described on the router.
-struct ArchAreas {
-    Heartbeat heartbeat;
-    // Multi-sampled as FABRIC_TELEMETRY.
-    content::L1 fabric_telemetry;
-    content::L1 routing_table;
-    // Null when the architecture has no Ethernet firmware mailbox.
-    std::optional<content::L1> eth_fw_mailbox;
-    // Base firmware's link status words. Each is null when the HAL gives no address for it, as on Wormhole.
-    std::optional<content::L1> base_fw_port_status;
-    std::optional<content::L1> base_fw_train_status;
-    std::optional<content::L1> base_fw_retrain_count;
-    std::optional<content::L1> base_fw_rx_link_up;
-    std::optional<content::L1> base_fw_postcode;
 };
 
 // The addresses of a router core's soft reset and wall clock registers.
@@ -494,6 +517,7 @@ struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
     EthCoreL1 l1;
     ArchAreas areas;
+    HeartbeatProtocol heartbeat_protocol;
     CoreRegisters core_registers;
     // FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.
     uint32_t fabric_telemetry_version = 0;

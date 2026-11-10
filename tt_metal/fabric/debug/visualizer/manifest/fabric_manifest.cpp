@@ -187,8 +187,18 @@ json make_credit_transport_json(const std::vector<manifest::VcCreditTransport>& 
 
 // ============ Architecture ============
 
-json make_heartbeat_json(const manifest::Heartbeat& heartbeat) {
-    json out = make_l1_json(heartbeat.word);
+// Each ArchArea's region, keyed by its lower_enum_name, in ArchArea's order. An area the architecture doesn't have is
+// null.
+json make_arch_areas_json(const manifest::ArchAreas& areas) {
+    json out = json::object();
+    for (const manifest::ArchArea area : enchantum::values<manifest::ArchArea>) {
+        out[lower_enum_name(area)] = make_optional_l1_json(areas.get(area));
+    }
+    return out;
+}
+
+json make_heartbeat_protocol_json(const manifest::HeartbeatProtocol& heartbeat) {
+    json out;
     out["magic"] = heartbeat.magic;
     out["magic_mask"] = heartbeat.magic_mask;
     out["period_iters"] = heartbeat.period_iters;
@@ -213,24 +223,14 @@ json make_core_registers_json(const manifest::CoreRegisters& registers) {
 
 // What the architecture fixes on every router core: its L1, L1 areas at the HAL's addresses, and the register blocks.
 json make_arch_json(const manifest::Arch& arch) {
-    const auto& areas = arch.areas;
-    json areas_json;
-    areas_json["heartbeat"] = make_heartbeat_json(areas.heartbeat);
-    areas_json["fabric_telemetry"] = make_l1_json(areas.fabric_telemetry);
-    areas_json["routing_table"] = make_l1_json(areas.routing_table);
-    areas_json["eth_fw_mailbox"] = make_optional_l1_json(areas.eth_fw_mailbox);
-    areas_json["base_fw_port_status"] = make_optional_l1_json(areas.base_fw_port_status);
-    areas_json["base_fw_train_status"] = make_optional_l1_json(areas.base_fw_train_status);
-    areas_json["base_fw_retrain_count"] = make_optional_l1_json(areas.base_fw_retrain_count);
-    areas_json["base_fw_rx_link_up"] = make_optional_l1_json(areas.base_fw_rx_link_up);
-    areas_json["base_fw_postcode"] = make_optional_l1_json(areas.base_fw_postcode);
     json out;
     out["name"] = lower_enum_name(arch.arch);
     json l1;
     l1["address"] = arch.l1.address;
     l1["size_bytes"] = arch.l1.size_bytes;
     out["l1"] = std::move(l1);
-    out["l1_areas"] = std::move(areas_json);
+    out["l1_areas"] = make_arch_areas_json(arch.areas);
+    out["heartbeat_protocol"] = make_heartbeat_protocol_json(arch.heartbeat_protocol);
     out["core_registers"] = make_core_registers_json(arch.core_registers);
     out["fabric_telemetry_version"] = arch.fabric_telemetry_version;
     return out;
@@ -698,15 +698,12 @@ manifest::content::L1 check_arch_area_active(manifest::content::L1 area, const J
     return area;
 }
 
-manifest::content::L1 read_arch_area(const JsonValueReader& value) {
-    return check_arch_area_active(read_l1(value), value);
-}
-
+// An arch area, or null when the architecture doesn't have it.
 std::optional<manifest::content::L1> read_optional_arch_area(const JsonValueReader& value) {
     if (value.is_null()) {
         return std::nullopt;
     }
-    return read_arch_area(value);
+    return check_arch_area_active(read_l1(value), value);
 }
 
 // The keys make_stream_reg_json writes, out of an object that may hold others.
@@ -835,26 +832,21 @@ manifest::CoreRegisters read_core_registers(const JsonValueReader& value) {
     return registers;
 }
 
+// The regions make_arch_areas_json writes: one per ArchArea, keyed by its lower_enum_name.
 manifest::ArchAreas read_arch_areas(JsonObjectReader& areas_json) {
     manifest::ArchAreas areas;
-    const JsonValueReader heartbeat_value = areas_json.take("heartbeat");
-    areas.heartbeat = heartbeat_value.read_object([&](JsonObjectReader& heartbeat_json) {
-        manifest::Heartbeat heartbeat;
-        heartbeat.word = check_arch_area_active(take_l1_keys(heartbeat_json), heartbeat_value);
-        heartbeat.magic = heartbeat_json.take<uint32_t>("magic");
-        heartbeat.magic_mask = heartbeat_json.take<uint32_t>("magic_mask");
-        heartbeat.period_iters = heartbeat_json.take<uint32_t>("period_iters");
-        return heartbeat;
-    });
-    areas.fabric_telemetry = read_arch_area(areas_json.take("fabric_telemetry"));
-    areas.routing_table = read_arch_area(areas_json.take("routing_table"));
-    areas.eth_fw_mailbox = read_optional_arch_area(areas_json.take("eth_fw_mailbox"));
-    areas.base_fw_port_status = read_optional_arch_area(areas_json.take("base_fw_port_status"));
-    areas.base_fw_train_status = read_optional_arch_area(areas_json.take("base_fw_train_status"));
-    areas.base_fw_retrain_count = read_optional_arch_area(areas_json.take("base_fw_retrain_count"));
-    areas.base_fw_rx_link_up = read_optional_arch_area(areas_json.take("base_fw_rx_link_up"));
-    areas.base_fw_postcode = read_optional_arch_area(areas_json.take("base_fw_postcode"));
+    for (const manifest::ArchArea area : enchantum::values<manifest::ArchArea>) {
+        areas.get(area) = read_optional_arch_area(areas_json.take(lower_enum_name(area)));
+    }
     return areas;
+}
+
+manifest::HeartbeatProtocol read_heartbeat_protocol(JsonObjectReader& heartbeat_json) {
+    manifest::HeartbeatProtocol heartbeat;
+    heartbeat.magic = heartbeat_json.take<uint32_t>("magic");
+    heartbeat.magic_mask = heartbeat_json.take<uint32_t>("magic_mask");
+    heartbeat.period_iters = heartbeat_json.take<uint32_t>("period_iters");
+    return heartbeat;
 }
 
 manifest::Arch read_arch(JsonObjectReader& block) {
@@ -867,6 +859,7 @@ manifest::Arch read_arch(JsonObjectReader& block) {
         return out;
     });
     arch.areas = block.take("l1_areas").read_object(read_arch_areas);
+    arch.heartbeat_protocol = block.take("heartbeat_protocol").read_object(read_heartbeat_protocol);
     arch.core_registers = read_core_registers(block.take("core_registers"));
     arch.fabric_telemetry_version = block.take<uint32_t>("fabric_telemetry_version");
     return arch;

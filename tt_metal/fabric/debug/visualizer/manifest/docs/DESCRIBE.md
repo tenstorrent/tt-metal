@@ -71,12 +71,15 @@ The rest of `fabric` is what FabricContext derived from the settings:
 **L1** (`arch.l1`): the HAL's `BASE` area on an active Ethernet core, its address and size. On Wormhole that stops 32
 bytes short of the core's 256 KB, which UMD keeps for its L1 barrier.
 
-**L1 areas** (`arch.l1_areas`). Each is an L1 region, registered with the type it holds and its location from the HAL
-or fabric (TYPE_REGISTRY.md's "Where regions are registered"):
+**L1 areas** (`arch.l1_areas`). The model's `ArchArea` enum names every area, and `ArchAreas` holds one optional
+region per enumerator. `describe_arch_area(hal, area)` describes each in a `switch` with no `default`, so a new
+enumerator fails the build until it has a case; the writer, the reader and `for_each_arch_area`
+(`fabric_manifest_regions.hpp`) loop over the enum, so they need no edit. Each area is an L1 region, registered with
+the type it holds and its location from the HAL or fabric (TYPE_REGISTRY.md's "Where regions are registered"):
 
 | Area | From |
 | --- | --- |
-| `heartbeat` | The word the router writes `magic \| iteration count` to every `period_iters` main-loop iterations, from `fabric_common.h`, with its `magic`, `magic_mask` and `period_iters`. On Blackhole it's base firmware's own heartbeat word, which the router writes over while it runs. The address is picked by arch, copying the kernel's `heartbeat_addr` (`router_common.hpp`), since no input carries it |
+| `heartbeat` | The word the router writes its heartbeat to, as a `uint32_t` (`describe_heartbeat_word`). On Blackhole it's base firmware's own heartbeat word, which the router writes over while it runs. The address is picked by arch, copying the kernel's `heartbeat_addr` (`router_common.hpp`), since no input carries it |
 | `fabric_telemetry` | The HAL's `FABRIC_TELEMETRY` area, as a `FabricTelemetry`. `arch.fabric_telemetry_version` is `FABRIC_TELEMETRY_VERSION` (`fabric_telemetry_msgs.h`), which layout of the struct it holds |
 | `routing_table` | The HAL's `ROUTING_TABLE` area, as a `routing_l1_info_t` |
 | `eth_fw_mailbox` | The HAL's `ETH_FW_MAILBOX` area, as `uint32_t`s. Null where the HAL has no Ethernet firmware mailbox |
@@ -84,8 +87,12 @@ or fabric (TYPE_REGISTRY.md's "Where regions are registered"):
 
 A HAL area (`describe_hal_l1_area<T>`) must hold a whole number of its type, and that number is its `num_elements`.
 
+**Heartbeat protocol** (`arch.heartbeat_protocol`): how the router writes its heartbeat word, from `fabric_common.h`'s constants
+(`describe_heartbeat_protocol`). The word is `magic | iteration count`, written every `period_iters` main-loop
+iterations, and `magic_mask` picks out the magic.
+
 **Multi-sampled areas.** Describe marks two areas for capture to read in each of its rounds as well as in its full read
-(`mark_multi_sampled`), each with its role ([FORMAT.md](FORMAT.md), "Shapes that repeat"):
+(`mark_multi_sampled`, in `describe_arch_area`), each with its role ([FORMAT.md](FORMAT.md), "Shapes that repeat"):
 
 | Area | Role | Why |
 | --- | --- | --- |

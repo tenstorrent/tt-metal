@@ -294,16 +294,8 @@
           "type": "object",
           "properties": {
             "heartbeat": {
-              "$ref": "#/$defs/region_keys",
-              "properties": {
-                "multi_sampled": { "const": "loop_heartbeat" },
-                "active": { "const": true },
-                "magic": { "$ref": "#/$defs/count" },
-                "magic_mask": { "$ref": "#/$defs/count" },
-                "period_iters": { "$ref": "#/$defs/count" }
-              },
-              "required": ["magic", "magic_mask", "period_iters"],
-              "unevaluatedProperties": false
+              "$ref": "#/$defs/arch_area",
+              "properties": { "multi_sampled": { "const": "loop_heartbeat" } }
             },
             "fabric_telemetry": {
               "$ref": "#/$defs/arch_area",
@@ -322,6 +314,17 @@
             "eth_fw_mailbox", "base_fw_port_status", "base_fw_train_status", "base_fw_retrain_count",
             "base_fw_rx_link_up", "base_fw_postcode"
           ],
+          "additionalProperties": false
+        },
+        "heartbeat_protocol": {
+          "description": "How the router kernel writes its heartbeat word (l1_areas.heartbeat): magic | its 16-bit iteration count, every period_iters main-loop iterations.",
+          "type": "object",
+          "properties": {
+            "magic": { "$ref": "#/$defs/count" },
+            "magic_mask": { "$ref": "#/$defs/count" },
+            "period_iters": { "$ref": "#/$defs/count" }
+          },
+          "required": ["magic", "magic_mask", "period_iters"],
           "additionalProperties": false
         },
         "core_registers": {
@@ -353,7 +356,7 @@
         },
         "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" }
       },
-      "required": ["name", "l1", "l1_areas", "core_registers", "fabric_telemetry_version"],
+      "required": ["name", "l1", "l1_areas", "heartbeat_protocol", "core_registers", "fabric_telemetry_version"],
       "additionalProperties": false
     },
 
