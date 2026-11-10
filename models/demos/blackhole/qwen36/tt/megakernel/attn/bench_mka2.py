@@ -384,6 +384,82 @@ if RQKV:
 GDNIN = int(os.environ.get('MKA_GDNIN_CORES', '64'))   # GDN in-proj stand-in on the first 64 K-half cores (5.6 MB, spec 5.9),
 def gdn_on(fi):                                         # independent of how many K-half pairs the qkv split uses
     return 1 if (fi in stream_idx and stream_idx[fi] < GDNIN and QROLE.get(fi, (0,))[0] in (1, 2)) else 0
+# ================= MK_V12: fm12 split-K MLP phase (spec v0.6-v0.9) replacing the fm11 MLP =================
+V12 = ('MK_V12', '1') in MKDEF
+if V12:
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))
+    import layout_mlp as LM
+    assert RQKV, "MK_V12 needs MKA_RQKV (the CB 20 rstd stand-in)"
+    if not any(k_ == 'MK_OWNER_RESID' for k_, _ in MKDEF): MKDEF = MKDEF + [('MK_OWNER_RESID', '1')]
+    # LoFi on the BFP4 MLP matmuls is bit-identical to HiFi2 in the engine (owner xo torch.equal, d30u20) -> default on
+    if not any(k_ == 'MK_V12_LOFI' for k_, _ in MKDEF): MKDEF = MKDEF + [('MK_V12_LOFI', '1')]
+    V_RESID = ('MK_OWNER_RESID', '1') in MKDEF
+    V_R = int(os.environ.get('V12_R', '32')); V_FIRST = int(os.environ.get('V12_FIRST', '1'))
+    assert V_R == 32 or 1 <= V_R <= 16
+    def q4(w): return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
+    vwg, vwu, vwd = q4(wg_t), q4(wu_t), q4(wd_t)   # BFP4 values are tile-local, so layout independent
+    def vlayer(L): return vwg, vwu * (2.0 ** (L % 2)), vwd * (2.0 ** -(L % 3))   # distinct per layer, exact in BFP4
+    s_xy = [(i % GX, i // GX) for i in range(NC)]
+    v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)
+    PVL = LM.pages_per_layer(v_nsb, banks)
+    t_v = time.time()
+    wv_all = ttnn.from_torch(torch.cat([LM.pack_layer(*vlayer(L), v_bank, v_rank, v_nsb, banks) for L in range(NL)]).reshape(1, 1, -1, TILE),
+                             dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # gold of the last layer's owner output (x static in the engine): Σ down partials (+ x while the AR is a stall)
+    _g, _u, _d = vlayer(NL - 1)
+    _xn = (rstd_g[:, None] * xb.double()).float()
+    _h = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float()
+    v_gold = _h @ _d + (xb if V_RESID else 0)
+    O_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(GX + 1, GY - 1))])
+    def v_wsh(crs, tiles_per): return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(crs, [TILE, tiles_per * TILE], ttnn.ShardOrientation.ROW_MAJOR))
+    def v_zero(crs, ncores, tiles_per, dt=ttnn.bfloat16):
+        return ttnn.from_torch(torch.zeros(TILE, ncores * tiles_per * TILE), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(crs, tiles_per))
+    # the fm11 h landing buffer (136 KB, unused by v12) is freed FIRST so the v12 landing buffers reuse its range (the L1
+    # allocator is lockstep across cores, so the owners' pbuf also costs STREAM-core address space)
+    ttnn.deallocate(hbuf)
+    v_xk = v_zero(rect, NC, 20); v_rs = v_zero(rect, NC, 16); v_h7 = v_zero(rect, NC, 7); v_xpk = v_zero(rect, NC, 10 if V_R < 32 else 1)
+    v_xo = v_zero(O_CRS, 16, 10)
+    v_x0 = ttnn.from_torch(xb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(O_CRS, 10))   # owner j: x tiles 10j..
+    v_pbuf = v_zero(O_CRS, 16, 100)
+    V_ALL = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1)), ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(GX + 1, GY - 1))])
+    v_id = ttnn.from_torch(torch.eye(TILE).repeat(1, NC + 16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(V_ALL, 1))
+    _J = torch.zeros(TILE, TILE); _J[0, :] = 1.0
+    v_j = ttnn.from_torch(_J.repeat(1, NC), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(rect, 1))
+    hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), HDT, ttnn.TILE_LAYOUT, dev, hs(rect, TILE))   # placeholder
+    VGS = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(10)]
+    VGA = [ttnn.get_global_semaphore_address(g) for g in VGS]
+    def v_prect(lx0, lx1, ly0, ly1):
+        a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
+        return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (ly1 - ly0 + 1)]
+    def v_ph(x_, y_): return dev.worker_core_from_logical_core(ttnn.CoreCoord(x_, y_))
+    V_BRC = v_prect(0, split - 1, GY, GYF - 1) + v_prect(split, GX - 1, GY, GYF - 1)   # rows 8-9, x 0-9 (not the AR cores)
+    print(f"[v12] R {V_R} FIRST {V_FIRST} RESID {int(V_RESID)} pages/layer {PVL} ({NC * LM.SLOT * WTB / 1e6:.1f} MB/layer, built {time.time() - t_v:.1f}s) vgs {VGA}", flush=True)
+    def v_args(fi, c):
+        """(writer, reader, compute) v12 arg tails for full-grid core fi"""
+        z_own = [0] * 3 + [0] * 10 + [0] * 10 + [0, 0] + [0] * 10
+        if fi in stream_idx:
+            n, k = c.x, c.y; i_ = stream_idx[fi]
+            fp, nt, nn = LM.core_fields(i_, v_bank, v_rank, banks)
+            me = v_ph(n, k); cy = [v_ph(n, r_).y for r_ in range(GY)]
+            hi = (2 * k + 1, 2 * k) if V_FIRST else (2 * k, 2 * k + 1)
+            ob = v_ph(GX + hi[0] % 2, k); oa = v_ph(GX + hi[1] % 2, k)
+            g0, g1 = v_ph(GX, k), v_ph(GX + 1, k)
+            w_ = [1, k, nn, n] + v_prect(n, n, 0, GY - 1) + [me.x] + cy + [v_h7.buffer_address(), v_rs.buffer_address(), oa.x, oa.y, v_pbuf.buffer_address(),
+                  V_R, v_xpk.buffer_address(), me.x, me.y, 1 if n == 0 else 0, g0.x, g0.y, g1.x, g1.y, wv_all.buffer_address(), fp, PVL, nt] + VGA + z_own
+            r_ = [1, k, nn, n, me.x] + cy + [v_rs.buffer_address(), v_h7.buffer_address(), ob.x, ob.y, v_pbuf.buffer_address(), V_R] + VGA + [0] * 15
+            return w_, r_, [1, nn, k, V_FIRST]
+        if GX <= c.x <= GX + 1 and c.y < GY:   # owner j = 2k + slot
+            k, slot = c.y, c.x - GX; me = v_ph(c.x, c.y)
+            w_ = [2, k, 0, 0] + [0] * 5 + [0] + [0] * 8 + [0, 0, 0, 0, v_pbuf.buffer_address(), V_R, 0, me.x, me.y, 0, 0, 0, 0, 0, 0, 0, 0, 0] + VGA + \
+                 [slot, v_xk.buffer_address() + slot * 10 * 2048, v_xpk.buffer_address() + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + \
+                 [v_ph(n_, k).x for n_ in range(GX)] + [v_ph(0, k).y, 1 if (k == 0 and slot == 0) else 0] + V_BRC
+            r_ = [2, k, 0, 0, 0] + [0] * 8 + [0, 0, 0, 0, 0, V_R] + VGA + [slot, v_xk.buffer_address() + slot * 10 * 2048, v_xpk.buffer_address() + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + [me.x, me.y]
+            return w_, r_, [2, 0, k, 0]
+        w_ = [0] * 4 + [0] * 5 + [0] + [0] * 8 + [0] * 18 + VGA + z_own
+        r_ = [0] * 5 + [0] * 8 + [0] * 6 + VGA + [0] * 15
+        return w_, r_, [0, 0, 0, 0]
+
 def q_wargs(fi):
     if not RQKV: return []
     ro, n0, nt, k0, nk, peer = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
@@ -496,6 +572,21 @@ def build(out):
                      ttnn.CBDescriptor(total_size=48 * _p, core_ranges=ext_crs, format_descriptors=[
                          ttnn.CBFormatDescriptor(buffer_index=21, data_format=ttnn.bfloat16, page_size=_p),
                          ttnn.CBFormatDescriptor(buffer_index=22, data_format=ttnn.bfloat16, page_size=_p)])]
+    if V12:   # drop the fm11 MLP CBs (keep 1-tile CB 1 / 2 for the hw_startup calls), add the v12 set
+        keep = []
+        for d_ in cbs:
+            idx_ = d_.format_descriptors[0].buffer_index
+            if idx_ in (3, 4, 5, 16): continue
+            if idx_ == 1: d_ = cbd(1, ttnn.bfloat4_b, 1, rect)
+            if idx_ == 2: d_ = cbd(2, HDT, 1, rect)
+            keep.append(d_)
+        cbs = [cbd(32, ttnn.bfloat4_b, LM.SLOT, rect)] + keep + [
+            ttnn.cb_descriptor_from_sharded_tensor(33, v_xk), cbd(34, ttnn.bfloat16, 14, rect), cbd(35, ttnn.bfloat16, 2, rect),
+            ttnn.cb_descriptor_from_sharded_tensor(36, v_rs), ttnn.cb_descriptor_from_sharded_tensor(37, v_h7), cbd(38, ttnn.bfloat16, 1, rect),
+            cbd(39, ttnn.bfloat16, 1, rect), cbd(40, ttnn.bfloat16, 10, rect), cbd(41, ttnn.bfloat16, 10, rect), ttnn.cb_descriptor_from_sharded_tensor(42, v_id),
+            ttnn.cb_descriptor_from_sharded_tensor(43, rsp), cbd(44, ttnn.float32, 1, rect), ttnn.cb_descriptor_from_sharded_tensor(30, v_j),
+            ttnn.cb_descriptor_from_sharded_tensor(3, v_pbuf), ttnn.cb_descriptor_from_sharded_tensor(4, v_xo), ttnn.cb_descriptor_from_sharded_tensor(5, v_x0),
+            cbd(16, ttnn.bfloat16, 10, O_CRS)]
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     RS = os.environ.get('MKA_ROLESPLIT', '1') == '1'   # per-role binaries (spec v0.9.17)
@@ -522,6 +613,7 @@ def build(out):
         if isS:
             i = stream_idx[fi]
             g_ = 1 if i < NGU else 0; rk = ROLE.get(i, 255)
+            if V12: g_, rk = 0, 255   # fm11 gate|up / h-root roles off (v12 MLP)
             gp = (slot[i][1] * banks + slot[i][0]) if g_ else 0
             b, s0 = dn_slot(i); selfr = 0 if c.x < split else 1
             mb, ms0 = mx_slot(i)
@@ -542,6 +634,9 @@ def build(out):
             [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
         nrecv = len(ch0) + len(ch1)
         _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if RWO else []) if RQKV else [])
+        if V12:   # v12 arg tails (appended after every other arg)
+            vw_, vr_, vc_ = v_args(fi, c)
+            _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
         _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
     acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
@@ -549,7 +644,7 @@ def build(out):
     def _ks(rng, defs, rr, ww, cc):
         return [ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_reader.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC, KVTB, OTB, QTB, NBB, WOTB] + acc_gu + acc_kv + acc_o + acc_wo + (acc_wq if RQKV else []),
                                 runtime_args=rr, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
-          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []),
+          ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []) + (ttnn.TensorAccessorArgs(wv_all).get_compile_time_args() if V12 else []),
                                 runtime_args=ww, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
           ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=rng, defines=MKDEF + defs, compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=cc,
                                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
@@ -568,7 +663,12 @@ out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, 
 prog = build(out_t)
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    if V12:
+        _v = ttnn.to_torch(v_xo).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
+        if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(v_xo), os.environ['V12_SAVE'])
+        _bad = [j_ for j_ in range(16) if torch.corrcoef(torch.stack([_v[:, j_*320:(j_+1)*320].flatten(), _g2[:, j_*320:(j_+1)*320].flatten()]))[0, 1].item() < 0.999]
+        print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
     p, e = pcc_of(y, gold_last)
     if os.environ.get("FM_DIAG") == "1":
         v = ttnn.to_torch(y).float().reshape(M, H)

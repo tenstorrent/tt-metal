@@ -6,6 +6,9 @@
 //   STREAM, NOC1 root (2/3): layer L's h root broadcast.
 #include "api/debug/kernel_profiler.hpp"
 #include "mka2_common.hpp"
+#if defined(MK_V12)
+#include "v12e.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
@@ -86,6 +89,61 @@ void kernel_main() {
     constexpr uint32_t TRID_WOR = 10;
 #endif
     bool pq_pending = false;
+#if defined(MK_V12)
+    // ---- v12 MLP args (appended after every other reader arg) ----
+    const uint32_t vrole_rt = get_arg_val<uint32_t>(a++);   // 0 none, 1 STREAM, 2 owner
+#if defined(MKA_ROLE_STREAM)
+    constexpr uint32_t vrole = 1;
+#elif defined(MKA_ROLE_EXT)
+    const uint32_t vrole = vrole_rt == 2 ? 2u : 0u;
+#else
+    const uint32_t vrole = vrole_rt;
+#endif
+    const uint32_t vk = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vn = get_arg_val<uint32_t>(a++);
+    const uint32_t vcx = get_arg_val<uint32_t>(a++);
+    uint32_t vcy[V_NROW];
+    for (uint32_t i = 0; i < V_NROW; ++i) vcy[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t vrsbuf = get_arg_val<uint32_t>(a++), vhbuf = get_arg_val<uint32_t>(a++);
+    const uint32_t vobx = get_arg_val<uint32_t>(a++), voby = get_arg_val<uint32_t>(a++), vpbuf = get_arg_val<uint32_t>(a++);
+    const uint32_t vR = get_arg_val<uint32_t>(a++);
+    uint32_t vg[NVG];
+    for (uint32_t i = 0; i < NVG; ++i) vg[i] = get_arg_val<uint32_t>(a++);
+    // owner x delivery (AR stand-in) on NOC1: west inside the row, no wrap (the BRISC/NOC0 path wraps the torus and
+    // ran ~25 us late on some rows under the engine's NOC0 weight traffic)
+    const uint32_t voslot = get_arg_val<uint32_t>(a++), voxdst = get_arg_val<uint32_t>(a++), voxpk = get_arg_val<uint32_t>(a++);
+    uint32_t vorc[2][5];
+    for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) vorc[i][k] = get_arg_val<uint32_t>(a++);
+    const uint32_t vmyx = get_arg_val<uint32_t>(a++), vmyy = get_arg_val<uint32_t>(a++);
+    auto v12_ox = [&](uint32_t L) {
+        if (vrole != 2) return;
+        noc_semaphore_wait_min(vw(vg[VG_MGO]), L + 1);
+        DeviceZoneScopedN("R-OX");
+        const uint32_t sp = get_read_ptr(CB_VX0);
+        if (vR >= 32) {
+            for (uint32_t i = 0; i < 2; ++i)
+                if (vorc[i][4]) noc_async_write_multicast(sp, v_mc_addr(vorc[i], voxdst, 1), V_OT * V_PTB, vorc[i][4], false);
+        } else {
+            const uint32_t pk = get_write_ptr(CB_VPK);
+            for (uint32_t t = 0; t < V_OT; ++t)
+                for (uint32_t f = 0; f < 2; ++f)
+                    noc_async_write(sp + t * V_PTB + f * V_FACE_B, get_noc_addr(vmyx, vmyy, pk + v_pk_off(t, f, vR)), vR * V_ROW_B);
+            noc_async_write_barrier();
+            for (uint32_t i = 0; i < 2; ++i)
+                if (vorc[i][4]) noc_async_write_multicast(pk, v_mc_addr(vorc[i], voxpk, 1), 2 * V_OT * vR * V_ROW_B, vorc[i][4], false);
+        }
+        noc_async_writes_flushed();
+        v_mcast_word(vg[VG_XA + voslot], L + 1, vorc, 1);
+        noc_async_write_barrier();
+    };
+#if !defined(MK_NOBUSYGATE)
+    // spec v0.8.9 busy gate: the non-owner ext cores hold their PQGDN chunks while the MLP owners are busy (odd)
+    // owner cores never gate on their own word: this RISC delivers the owner's x after its PQ chunks, so a self-gate
+    // would deadlock (busy clears only after the partials that need that x)
+    auto v_gate = [&]() { if (vrole != 2) while (*vw(vg[VG_BUSY]) & 1u) {} };
+#else
+    auto v_gate = [&]() {};
+#endif
+#endif
     // next attention layer after L (NL if none) and the length of the GDN-type run right before attention layer La
     auto next_att = [](uint32_t L) { uint32_t n = L + 1; while (n < NL && !is_attn(n)) ++n; return n; };
     auto gdn_run = [](uint32_t La) { uint32_t r = 0; while (r < La && !is_attn(La - 1 - r)) ++r; return r; };
@@ -139,6 +197,9 @@ void kernel_main() {
                 noc_async_read_set_trid(TRID_PQ);
                 for (uint32_t p = p0, c = 0; p < p1; p += MKA_PQCH, ++c) {
                     if (c && (c % MKA_PQN) == 0) { noc_async_read_barrier_with_trid(TRID_PQ); noc_async_read_set_trid(TRID_PQ); }
+#if defined(MK_V12)
+                    if ((c % MKA_PQN) == 0) v_gate();
+#endif
                     const uint32_t n = (p1 - p) < MKA_PQCH ? (p1 - p) : MKA_PQCH;
                     noc_async_read(src + p * MWTB, dst + p * MWTB, n * MWTB);
                 }
@@ -146,14 +207,22 @@ void kernel_main() {
                 noc_async_read_barrier_with_trid(TRID_PQ);
                 if (j + 1 == run) cb_push_back(CB_PQ, QSL);
             }
+#if defined(MK_V12)
+            v12_ox(L);
+#endif
             continue;
         }
 #endif
-        if (!IS_STREAM && !att) continue;   // ATTN-only cores idle through GDN-type layers
+        if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers
+#if defined(MK_V12)
+            v12_ox(L);
+#endif
+            continue;
+        }
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
 #endif
-#if defined(MKA_GUPRE)
+#if defined(MKA_GUPRE) && !defined(MK_V12)
         constexpr uint32_t TRID_GU = 8;
         uint32_t even_t = 0;
         if (att && IS_STREAM && IS_GU) {   // layer L's even gate|up groups land in L1 during SDPA (CB_W holds the whole even half)
@@ -392,13 +461,13 @@ void kernel_main() {
             pq_pending = true;
         }
 #endif
-#if defined(MKA_GUPRE)
+#if defined(MKA_GUPRE) && !defined(MK_V12)
         if (att && IS_STREAM && IS_GU) { noc_async_read_barrier_with_trid(TRID_GU); cb_push_back(CB_W, even_t); }
         constexpr bool kGupre = true;
 #else
         constexpr bool kGupre = false;
 #endif
-#if !defined(MKA_NOMLP)
+#if !defined(MKA_NOMLP) && !defined(MK_V12)
         if (IS_STREAM && IS_GU && !(kGupre && att)) {   // GDN-type layers (and non-GUPRE builds) stream the even groups here
             DeviceZoneScopedN("R-GU");
             const uint64_t base = wgu.get_noc_addr(gu_page + L * pgu_layer);
@@ -411,14 +480,37 @@ void kernel_main() {
             }
         }
 #endif
-#if !defined(MKA_NOMLP)
+#if !defined(MKA_NOMLP) && !defined(MK_V12)
         if (IS_STREAM && (ROOT == 2 || ROOT == 3)) {
             DeviceZoneScopedN("R-HROOT");
             root_bcast_layer(ROOT, L, NCORES, HCH, cbh_base + ROOT * HCH * XTB, HCH * XTB, r, self_rect, 1);
         }
 #endif
+#if defined(MK_V12)
+        v12_ox(L);   // owners, attention-type layers (after this core's SDPA work)
+        if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
+            cb_wait_front(CB_VA, V_NTM);
+            *vw(vg[VG_LA]) = L + 1;
+            if (vk > 0) { v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]); }
+            noc_semaphore_wait_min(vw(vg[VG_LB]), L + 1);
+            cb_pop_front(CB_VA, V_NTM);
+            if (vk < vnn) {
+                cb_wait_front(CB_VHO2, 1);
+                if (vk > 0) { v_hu_send(get_read_ptr(CB_VHO2), 0, vk, vcy, vcx, vhbuf + vk * V_PTB, vR, vg[VG_H]); }
+                cb_pop_front(CB_VHO2, 1);
+            }
+            cb_wait_front(CB_VDO2, V_OT);
+            {
+                DeviceZoneScopedN("R-VDN");
+                v_tile_write(get_read_ptr(CB_VDO2), get_noc_addr(vobx, voby, vpbuf + vn * V_OT * V_PTB), V_OT, vR);
+                noc_async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(vobx, voby, vg[VG_P]), 1);
+            }
+            cb_pop_front(CB_VDO2, V_OT);
+        }
+#endif
     }
-#if !defined(MKA_NOMLP)
+#if !defined(MKA_NOMLP) && !defined(MK_V12)
     if (IS_STREAM && (ROOT == 2 || ROOT == 3)) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE0 + ROOT)), NCORES * NL);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE0 + ROOT)) = 0;

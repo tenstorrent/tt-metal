@@ -10,6 +10,9 @@
 //           then the fm11 MLP (h to roots, root broadcast, down output) and the MLP AR stall.
 #include "api/debug/kernel_profiler.hpp"
 #include "mka2_common.hpp"
+#if defined(MK_V12)
+#include "v12e.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t XTB = get_compile_time_arg_val(0), NGU = get_compile_time_arg_val(1);
@@ -32,6 +35,12 @@ void kernel_main() {
     constexpr uint32_t MWTB = MKA_MWTB, QOTB = 2048, QN = 112;   // qkv weight page (BFP8), output page (bf16), output tiles
 #else
     constexpr uint32_t MWTB = WTB;
+#endif
+#if defined(MK_V12)
+#if !defined(MKA_RQKV)
+#error "MK_V12 needs MKA_RQKV (CB 20 rstd stand-in shared with the qkv PROJ)"
+#endif
+    constexpr auto wv_args = TensorAccessorArgs<qo_args.next_compile_time_args_offset()>();
 #endif
     uint32_t a = 0;
 #if defined(MKA_ROLE_STREAM)
@@ -145,6 +154,80 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
     };
 #endif
+#if defined(MK_V12)
+    // ---- v12 MLP args (appended after every other writer arg) ----
+    const uint32_t vrole_rt = get_arg_val<uint32_t>(a++);   // 0 none, 1 STREAM, 2 owner
+#if defined(MKA_ROLE_STREAM)
+    constexpr uint32_t vrole = 1;
+#elif defined(MKA_ROLE_EXT)
+    const uint32_t vrole = vrole_rt == 2 ? 2u : 0u;
+#else
+    const uint32_t vrole = vrole_rt;
+#endif
+    const uint32_t vk = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vn = get_arg_val<uint32_t>(a++);
+    uint32_t vcol[5];
+    for (uint32_t i = 0; i < 5; ++i) vcol[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t vcx = get_arg_val<uint32_t>(a++);
+    uint32_t vcy[V_NROW];
+    for (uint32_t i = 0; i < V_NROW; ++i) vcy[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t vhbuf = get_arg_val<uint32_t>(a++), vrsbuf = get_arg_val<uint32_t>(a++);
+    const uint32_t voax = get_arg_val<uint32_t>(a++), voay = get_arg_val<uint32_t>(a++), vpbuf = get_arg_val<uint32_t>(a++);
+    const uint32_t vR = get_arg_val<uint32_t>(a++), vxpk = get_arg_val<uint32_t>(a++), vmyx = get_arg_val<uint32_t>(a++), vmyy = get_arg_val<uint32_t>(a++);
+    const uint32_t vgo = get_arg_val<uint32_t>(a++);
+    const uint32_t vgo0x = get_arg_val<uint32_t>(a++), vgo0y = get_arg_val<uint32_t>(a++), vgo1x = get_arg_val<uint32_t>(a++), vgo1y = get_arg_val<uint32_t>(a++);
+    const uint32_t vwv_addr = get_arg_val<uint32_t>(a++), vwv_page = get_arg_val<uint32_t>(a++), vpvl = get_arg_val<uint32_t>(a++), vnt = get_arg_val<uint32_t>(a++);
+    uint32_t vg[NVG];
+    for (uint32_t i = 0; i < NVG; ++i) vg[i] = get_arg_val<uint32_t>(a++);
+    // owner fields
+    const uint32_t voslot = get_arg_val<uint32_t>(a++), voxdst = get_arg_val<uint32_t>(a++), voxpk = get_arg_val<uint32_t>(a++);
+    uint32_t vorc[2][5];
+    for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) vorc[i][k] = get_arg_val<uint32_t>(a++);
+    uint32_t vrowx[V_NCOL];
+    for (uint32_t i = 0; i < V_NCOL; ++i) vrowx[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t vrowy = get_arg_val<uint32_t>(a++), vbmirror = get_arg_val<uint32_t>(a++);
+    uint32_t vbrc[2][5];
+    for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) vbrc[i][k] = get_arg_val<uint32_t>(a++);
+    const auto wv = TensorAccessor(wv_args, vwv_addr, WTB);
+    const uint32_t vabase = vrole == 1 ? get_write_ptr(CB_VA) : 0;
+    if (vrole) { cb_reserve_back(CB_VI, 1); cb_push_back(CB_VI, 1); }
+    if (vrole == 1) { cb_reserve_back(CB_VJ, 1); cb_push_back(CB_VJ, 1); }
+    if (vrole == 2) { cb_reserve_back(CB_VX0, V_OT); cb_push_back(CB_VX0, V_OT); }
+    // owner phase of layer L (stand-in AR): x chunk to the K-row, then the column-partial sum and its release
+    auto v12_owner = [&](uint32_t L) {
+        if (vrole != 2) return;
+        // busy only from MGO on (the pre-MLP AR is done): the same core's reader holds its PQGDN chunks while busy is
+        // odd and delivers this layer's x after them, so raising busy earlier deadlocks (x -> partials -> clear)
+        { DeviceZoneScopedN("W-OGO"); noc_semaphore_wait_min(vw(vg[VG_MGO]), L + 1); }
+        v_busy(vg[VG_BUSY], 2 * L + 1, vbmirror, vbrc);   // x delivery (stand-in) is on the reader (NOC1)
+        { DeviceZoneScopedN("W-OP"); noc_semaphore_wait_min(vw(vg[VG_P]), V_NCOL * (L + 1)); }
+        cb_reserve_back(CB_VP, V_NCOL * V_OT);
+        cb_push_back(CB_VP, V_NCOL * V_OT);
+        cb_wait_front(CB_VXO, V_OT);
+        {
+            DeviceZoneScopedN("W-OREL");   // stand-in release: the K-row's STREAM cores may enter the MLP AR stall
+#if defined(MK_V12_RELUNI)
+            for (uint32_t i = 0; i < V_NCOL; ++i) noc_semaphore_inc(get_noc_addr(vrowx[i], vrowy, vg[VG_MDONE]), 1);
+#else
+            for (uint32_t i = 0; i < 2; ++i)
+                if (vorc[i][4]) noc_semaphore_inc_multicast(v_mc_addr(vorc[i], vg[VG_MDONE], 0), 1, vorc[i][4]);
+#endif
+            noc_async_atomic_barrier();
+        }
+        // AR_RECV(L) here (real AR, spec v0.9.2: READY inc to the RS sender, then the receiver phase on this RISC)
+        cb_pop_front(CB_VXO, V_OT);
+        v_busy(vg[VG_BUSY], 2 * L + 2, vbmirror, vbrc);
+    };
+#define V12_OWNER(L) v12_owner(L)
+#define V12_PLAN_MLP(L) v12_plan_mlp(L)
+// v12: the MLP slice is barriered + pushed at the MLP phase itself (it streams through the whole pre-MLP stall)
+#define V_MLP_PUSH() do {} while (0)
+#define V_MLP_WAIT_PUSH() do {} while (0)
+#else
+#define V12_OWNER(L) do {} while (0)
+#define V12_PLAN_MLP(L) do {} while (0)
+#define V_MLP_PUSH() do { if (IS_GU) cb_push_back(CB_W2, w2_tiles); cb_push_back(CB_WD, DN_TILES); } while (0)
+#define V_MLP_WAIT_PUSH() do { noc_async_read_barrier_with_trid(1 + (L & 1)); V_MLP_PUSH(); } while (0)
+#endif
     const auto wm = TensorAccessor(wm_args, wm_addr, MWTB);
     const auto wd = TensorAccessor(wd_args, wd_addr, WTB);
     const auto wgu = TensorAccessor(wgu_args, wgu_addr, WTB);
@@ -170,7 +253,11 @@ void kernel_main() {
 #endif
     // ---- next-layer weight issue as a list of chunks (spec v0.3 prefetch budget) ----
     struct Piece { uint64_t src; uint32_t dst, bytes, trid; };
+#if defined(MK_V12)
+    constexpr uint32_t MAXP = 128, CHB = 16384;   // + the 242 KB MLP slice (16 pieces)
+#else
     constexpr uint32_t MAXP = 96, CHB = 16384;
+#endif
     Piece pcs[MAXP];
     uint32_t npc = 0, ip = 0, outstanding = 0;
     auto add = [&](uint64_t src, uint32_t dst, uint32_t bytes, uint32_t trid, bool scratch) {
@@ -193,7 +280,15 @@ void kernel_main() {
             cb_reserve_back(CB_WM, MIXT);
             add(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * MWTB, MIX_TRID0 + (L & 1), false);
         }
+#if defined(MK_V12)
+        if (vrole == 1 && L == 0) {   // later layers: issued by the MLP of the previous layer (single-slot CB_WV, L1)
+            cb_reserve_back(CB_WV, V_SLOT);
+            add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, trid, false);
+        }
+        if (false) {
+#else
         if (IS_GU) {
+#endif
             cb_reserve_back(CB_W2, w2_tiles);
             uint32_t dst = get_write_ptr(CB_W2);
             const uint64_t base = wgu.get_noc_addr(gu_page + L * pgu_layer);
@@ -203,9 +298,22 @@ void kernel_main() {
                 dst += nb * BLK * WTB;
             }
         }
+#if !defined(MK_V12)
         cb_reserve_back(CB_WD, DN_TILES);
         add(wd.get_noc_addr(dn_page + L * pdn_layer), get_write_ptr(CB_WD), DN_TILES * WTB, trid, false);
+#endif
     };
+#if defined(MK_V12)
+    // layer L's MLP slice into the single CB_WV slot, as weight pieces (trid of layer L). Queued in layer L itself:
+    // GDN-type layers after plan_layer(L + 1)'s mixer pieces in W-GDN (it lands during the GDN + AR stall),
+    // attention layers with the SDPA phase's throttled weight issue. Queued straight after the previous MLP it
+    // stalled the next layer's mixer issue behind 242 KB per core of reads (W-GDN +35 us on some cores).
+    auto v12_plan_mlp = [&](uint32_t L) {
+        if (vrole != 1 || L == 0) return;   // layer 0: plan_layer(0)
+        cb_reserve_back(CB_WV, V_SLOT);
+        add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, 1 + (L & 1), false);
+    };
+#endif
     auto plan_wo = [&]() {   // layer L's wo slice + the next layer's uncovered qkv bytes (real bytes into a scratch region)
         for (uint32_t t = 0; t < wo_tiles; t += 8) add(wo.get_noc_addr(wo_page + t), get_write_ptr(CB_SCR), (wo_tiles - t < 8 ? wo_tiles - t : 8) * WOTB, 3, true);
         for (uint32_t t = 0; t < extra_tiles; t += 8) add(wo.get_noc_addr(wo_page + (t % wo_tiles)), get_write_ptr(CB_SCR), (extra_tiles - t < 8 ? extra_tiles - t : 8) * WOTB, 3, true);
@@ -238,7 +346,7 @@ void kernel_main() {
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
         const uint32_t A = aidx(L);
-        if (!IS_STREAM && !att) continue;   // ATTN-only cores idle through GDN-type layers
+        if (!IS_STREAM && !att) { V12_OWNER(L); continue; }   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
 #endif
@@ -253,15 +361,12 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(MIX_TRID0 + (L & 1));   // layer L's qkv / in-proj half landed
             if (qrole && (att || gdn_on)) cb_push_back(CB_WM, MIXT);
             if (att) {
-                noc_async_read_barrier_with_trid(1 + (L & 1));
-                if (IS_GU) cb_push_back(CB_W2, w2_tiles);
-                cb_push_back(CB_WD, DN_TILES);
+                V_MLP_WAIT_PUSH();
             }
 #else
             noc_async_read_barrier_with_trid(1 + (L & 1));   // layer L's qkv half + MLP weights landed
             if (qrole && (att || gdn_on)) cb_push_back(CB_WM, MIXT);
-            if (IS_GU) cb_push_back(CB_W2, w2_tiles);
-            cb_push_back(CB_WD, DN_TILES);
+            V_MLP_PUSH();
 #endif
             if (att) qkv_tail(L, A);
         } else if (qrole == QR_EXT) {   // STREAM_EXT: x of layer L is there once the previous layer's MLP AR is done
@@ -282,15 +387,12 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(MIX_TRID0 + (L & 1));   // layer L's mixer slice landed
             cb_push_back(CB_WM, MIXT);
             if (att) {   // attention layers: plan_layer(L + 1) runs in SDPA, after the MLP slots are pushed here
-                noc_async_read_barrier_with_trid(1 + (L & 1));
-                if (IS_GU) cb_push_back(CB_W2, w2_tiles);
-                cb_push_back(CB_WD, DN_TILES);
+                V_MLP_WAIT_PUSH();
             }
 #else
             noc_async_read_barrier_with_trid(1 + (L & 1));   // layer L's mixer + MLP weights landed
             cb_push_back(CB_WM, MIXT);
-            if (IS_GU) cb_push_back(CB_W2, w2_tiles);
-            cb_push_back(CB_WD, DN_TILES);
+            V_MLP_PUSH();
 #endif
             cb_wait_front(CB_YM, MIXT / KT);
             cb_pop_front(CB_YM, MIXT / KT);
@@ -301,14 +403,29 @@ void kernel_main() {
             DeviceZoneScopedN("W-GDN");
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             // GDN-type layer: the MLP slots of layer L are pushed here (before plan_layer(L + 1) reserves the other slot)
-            noc_async_read_barrier_with_trid(1 + (L & 1));
-            if (IS_GU) cb_push_back(CB_W2, w2_tiles);
-            cb_push_back(CB_WD, DN_TILES);
+            V_MLP_WAIT_PUSH();
 #endif
             npc = ip = outstanding = 0;
             if (L + 1 < NL) plan_layer(L + 1, true);
+            V12_PLAN_MLP(L);
+#if defined(MK_V12)
+            {   // pump the pieces through the GDN stall instead of blocking on the command buffer up front (a blocking
+                // issue_some held some writers ~20 us past the stall and delayed their MLP)
+                const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)MKA_S_GDN) {
+                    if (ip < npc && noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+                        const Piece& pc = pcs[ip++];
+                        noc_async_read_set_trid(pc.trid);
+                        noc_async_read(pc.src, pc.dst, pc.bytes);
+                        noc_async_read_set_trid(0);
+                    }
+                }
+                issue_some(true);
+            }
+#else
             issue_some(true);
             spin_cycles(MKA_S_GDN);
+#endif
             spin_cycles(S_AR);
 #if defined(MKA_RQKV)
             if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // layer boundary -> STREAM_EXT
@@ -343,6 +460,7 @@ void kernel_main() {
 #if defined(MKA_WO_NOC0)
                 plan_wo();
 #endif
+                V12_PLAN_MLP(L);   // needed at the end of THIS layer: before the next layer's mixer pieces
                 if (L + 1 < NL) plan_layer(L + 1, true);
                 if (!budget) issue_some(true);
             }
@@ -460,7 +578,7 @@ void kernel_main() {
             }
         }
 #endif
-        if (!IS_STREAM) continue;
+        if (!IS_STREAM) { V12_OWNER(L); continue; }
         if (att) {   // attention done (all 4 SDPA roots) -> wo stand-in + attention AR -> MLP go
             DeviceZoneScopedN("W-WOAR");
             if (is_qroot) {
@@ -482,6 +600,57 @@ void kernel_main() {
             cb_reserve_back(CB_GO, 1);
             cb_push_back(CB_GO, 1);
         }
+#if defined(MK_V12)
+        if (vrole == 1) {   // v12 MLP, STREAM core (n, k)
+            if (vgo) {   // the pre-MLP AR (stand-in) is done: this K-row's owners deliver x (the real AR does this itself)
+                noc_semaphore_inc(get_noc_addr(vgo0x, vgo0y, vg[VG_MGO]), 1);
+                noc_semaphore_inc(get_noc_addr(vgo1x, vgo1y, vg[VG_MGO]), 1);
+            }
+            const bool own_h = vk < vnn;
+            { noc_async_read_barrier_with_trid(1 + (L & 1)); }   // layer L's MLP slice landed
+            cb_push_back(CB_WV, V_SLOT);
+            if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
+            { DeviceZoneScopedN("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), L + 1); noc_semaphore_wait_min(vw(vg[VG_XB]), L + 1); }
+            cb_reserve_back(CB_XK, 2 * V_OT);
+            if (vR < 32) {   // unpack the two packed chunks (v0.8.2) into tile layout
+                DeviceZoneScopedN("W-VXU");
+                const uint32_t xd = get_write_ptr(CB_XK);
+                for (uint32_t c = 0; c < 2; ++c)
+                    for (uint32_t t = 0; t < V_OT; ++t)
+                        for (uint32_t f = 0; f < 2; ++f)
+                            noc_async_write(vxpk + c * V_XPK_SLOT_B + v_pk_off(t, f, vR), get_noc_addr(vmyx, vmyy, xd + (c * V_OT + t) * V_PTB + f * V_FACE_B), vR * V_ROW_B);
+                noc_async_write_barrier();
+            }
+            cb_push_back(CB_XK, 2 * V_OT);
+            noc_semaphore_wait_min(vw(vg[VG_LA]), L + 1);
+            if (vk + 1 < vnn) { v_rs_send(vabase, vk + 1, vnn, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]); }
+            *vw(vg[VG_LB]) = L + 1;
+            if (own_h) {
+                { DeviceZoneScopedN("W-VRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * (L + 1)); }
+                cb_reserve_back(CB_VRS, 2 * V_NROW);
+                cb_push_back(CB_VRS, 2 * V_NROW);
+                cb_wait_front(CB_VHO, 1);
+                { v_hu_send(get_read_ptr(CB_VHO), vk, V_NROW, vcy, vcx, vhbuf + vk * V_PTB, vR, vg[VG_H]); }
+                cb_pop_front(CB_VHO, 1);
+            }
+            { DeviceZoneScopedN("W-VH"); noc_semaphore_wait_min(vw(vg[VG_H]), vnn * (L + 1)); }
+            cb_reserve_back(CB_VH, V_NNM);
+            cb_push_back(CB_VH, V_NNM);
+            cb_wait_front(CB_VDO, V_OT);
+            {
+                DeviceZoneScopedN("W-VDN");
+                v_tile_write(get_read_ptr(CB_VDO), get_noc_addr(voax, voay, vpbuf + vn * V_OT * V_PTB), V_OT, vR);
+                noc_async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(voax, voay, vg[VG_P]), 1);
+            }
+            cb_pop_front(CB_VDO, V_OT);
+            { DeviceZoneScopedN("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
+        }
+        { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
+#if defined(MKA_RQKV)
+        if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
+#endif
+#else
 #if defined(MKA_NOMLP)
         if (IS_GU) cb_pop_front(CB_W2, w2_tiles);
         cb_pop_front(CB_WD, DN_TILES);
@@ -517,6 +686,7 @@ void kernel_main() {
         if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
 #endif
         for (uint32_t i = 0; i < NROOT; ++i) noc_semaphore_inc(get_noc_addr(rx[i], ry[i], get_semaphore(SEM_DONE0 + i)), 1);
+#endif
     }
     noc_async_atomic_barrier();
     noc_async_write_barrier();
@@ -525,7 +695,7 @@ void kernel_main() {
     if (IS_STREAM) {
         *l1w(gs[GS_ADFLAG]) = 0;
         for (uint32_t i = 0; i < NROOT; ++i) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HFLG0 + i)) = 0;
-#if !defined(MKA_NOMLP)
+#if !defined(MKA_NOMLP) && !defined(MK_V12)
         if (ROOT < 2) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE0 + ROOT)), NCORES * NL);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE0 + ROOT)) = 0;
@@ -534,6 +704,11 @@ void kernel_main() {
 #endif
     }
     if (is_qroot) { *l1w(gs[GS_MIXDONE]) = 0; *l1w(gs[GS_ADONE]) = 0; }
+#if defined(MK_V12)
+    // v12 words: every increment into this core's words for layer NL - 1 preceded its last wait above (STREAM: W-VMD;
+    // owner: W-OP), and the reader's LA write preceded the writer's last LA wait
+    if (vrole) for (uint32_t i = 0; i < NVG; ++i) *vw(vg[i]) = 0;
+#endif
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
 #if defined(MKA_RQKV)
     // XRDY: every STREAM_EXT core awaited the last multicast (NL - 1) before its last qkv, which precedes this point
