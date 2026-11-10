@@ -16,6 +16,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_json_reader.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_time.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_topology_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -26,10 +27,8 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ctime>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -1305,13 +1304,9 @@ manifest::Mesh read_mesh(const JsonValueReader& value, MeshId mesh_id, const Fie
 // A new fabric run id: the UTC time to the second, then 8 random hex digits, such as "20261105T221500Z-1a2b3c4d". It
 // sorts by time, and the digits tell apart runs started in the same second.
 std::string make_fabric_run_id() {
-    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm utc{};
-    gmtime_r(&now, &utc);
-    std::array<char, 32> time_text{};
-    std::strftime(time_text.data(), time_text.size(), "%Y%m%dT%H%M%SZ", &utc);
     std::random_device random_device;
-    return fmt::format("{}-{:08x}", time_text.data(), std::uniform_int_distribution<uint32_t>()(random_device));
+    return fmt::format(
+        "{}-{:08x}", visualizer::get_utc_now_compact(), std::uniform_int_distribution<uint32_t>()(random_device));
 }
 
 // The run id every rank of this fabric writes: rank 0 makes it and broadcasts it, so a run's files on every host share

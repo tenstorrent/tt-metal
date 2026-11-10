@@ -5,9 +5,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 
 #include <array>
-#include <chrono>
 #include <cstdint>
-#include <ctime>
 #include <limits>
 #include <optional>
 #include <string>
@@ -29,6 +27,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/packet_header_types.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_build_identity.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_time.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
@@ -39,16 +38,6 @@ namespace {
 using tt::tt_metal::FWMailboxMsg;
 using tt::tt_metal::HalL1MemAddrType;
 using tt::tt_metal::HalProgrammableCoreType;
-
-// The time now in UTC, as ISO 8601.
-std::string get_utc_now_iso8601() {
-    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm utc{};
-    gmtime_r(&now, &utc);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
-    return buffer;
-}
 
 // The most routing planes fabric opens per link, or nullopt when it opens all the available ones.
 std::optional<uint8_t> get_num_routing_planes() {
@@ -237,7 +226,7 @@ RunInfo describe_run(const ControlPlane& control_plane, const std::string& run_i
         .world_size = static_cast<uint32_t>(*world->size()),
         .subcontext = subcontext,
         .host_name = control_plane.get_physical_system_descriptor().my_host_name(),
-        .written_at = get_utc_now_iso8601(),
+        .written_at = visualizer::get_utc_now_iso8601(),
         .build = visualizer::get_build_identity(),
     };
 }
