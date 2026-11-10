@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 import weakref
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +36,11 @@ class Pipeline:
         if "__call__" in cls.__dict__:
             msg = f"{cls.__name__} must implement _run, not __call__: Pipeline.__call__ enforces the trace rule"
             raise TypeError(msg)
+        # The base only sees the trace flags a caller passes, so `_run` must not default one to on.
+        for name, parameter in inspect.signature(cls._run).parameters.items():
+            if (name == "traced" or name.endswith("_traced")) and parameter.default is True:
+                msg = f"{cls.__name__}._run must not default {name} to True: tracing follows the pipeline's trace"
+                raise TypeError(msg)
 
     def __init__(self, *, offload_weights: bool, trace: bool) -> None:
         self._offload_weights_requested = bool(offload_weights)

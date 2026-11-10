@@ -94,39 +94,3 @@ def test_component_flags_default_to_narrowing(
     for name, parameter in inspect.signature(pipeline_class._run).parameters.items():
         if name == "traced" or name.endswith("_traced"):
             assert parameter.default in (None, False), f"{pipeline_class.__name__}._run({name}=...)"
-
-
-def _all_pipeline_classes() -> list[type[Pipeline]]:
-    # Importing the modules defines the classes.
-    from ...experimental.pipelines import (  # noqa: F401
-        pipeline_anisora,
-        pipeline_wan_distill,
-        pipeline_wan_lora,
-        pipeline_wan_runtime_lora,
-        pipeline_wan_svi,
-    )
-    from ...pipelines.flux2 import pipeline_flux2  # noqa: F401
-    from ...pipelines.ltx import pipeline_ltx_distilled, pipeline_ltx_one_stage, pipeline_ltx_two_stages  # noqa: F401
-    from ...pipelines.minimax_h3 import pipeline_minimax_h3_turbo  # noqa: F401
-    from ...pipelines.qwenimage import pipeline_qwenimage  # noqa: F401
-    from ...pipelines.wan import pipeline_wan_i2v  # noqa: F401
-
-    found: list[type[Pipeline]] = []
-    pending = list(Pipeline.__subclasses__())
-    while pending:
-        cls = pending.pop()
-        if cls.__module__.startswith("models.tt_dit.") or ".tt_dit." in cls.__module__:
-            found.append(cls)
-        pending.extend(cls.__subclasses__())
-    return found
-
-
-def test_no_pipeline_defaults_a_trace_flag_to_on() -> None:
-    """The base only sees flags a caller passes, so a default of True in `_run` would trace behind its back."""
-    classes = _all_pipeline_classes()
-    assert len(classes) >= 20
-    for cls in classes:
-        assert "__call__" not in cls.__dict__
-        for name, parameter in inspect.signature(cls._run).parameters.items():
-            if name == "traced" or name.endswith("_traced"):
-                assert parameter.default in (None, False), f"{cls.__name__}._run({name}=...)"
