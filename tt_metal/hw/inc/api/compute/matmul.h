@@ -114,6 +114,9 @@ ALWI void matmul_init(
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
+#ifdef ARCH_BLACKHOLE
+    PACK((llk_pack_matmul_context()));
+#endif
 #else
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
@@ -221,6 +224,9 @@ ALWI void matmul_block_init(
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
+#endif
+#ifdef ARCH_BLACKHOLE
+    PACK((llk_pack_matmul_context()));
 #endif
 #else
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
