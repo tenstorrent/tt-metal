@@ -77,6 +77,35 @@ void kernel_main() {
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
     const uint32_t q_ox = get_arg_val<uint32_t>(a++), q_oy = get_arg_val<uint32_t>(a++), qo_addr = get_arg_val<uint32_t>(a++);
     const uint32_t gdn_on = get_arg_val<uint32_t>(a++);   // this core runs the GDN in-proj stand-in in GDN-type layers
+#if defined(MKA_RWO)
+    // wo: tiles (rot order), concat role, owner chunk, wo-core multicast rects, the 16 owners' coords, debug output
+    const uint32_t wo_nt = get_arg_val<uint32_t>(a++);
+    uint32_t wo_tile[WO_MAXT];
+    for (uint32_t i = 0; i < WO_MAXT; ++i) wo_tile[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t is_concat = get_arg_val<uint32_t>(a++), own_chunk = get_arg_val<uint32_t>(a++);
+    uint32_t re[3][5];
+    for (uint32_t i = 0; i < 3; ++i) for (uint32_t k = 0; k < 5; ++k) re[i][k] = get_arg_val<uint32_t>(a++);
+    const uint32_t self_re = get_arg_val<uint32_t>(a++);
+    uint32_t ow_x[16], ow_y[16];
+    for (uint32_t i = 0; i < 16; ++i) { ow_x[i] = get_arg_val<uint32_t>(a++); ow_y[i] = get_arg_val<uint32_t>(a++); }
+    const uint32_t wod_addr = get_arg_val<uint32_t>(a++);
+    const auto wod = TensorAccessor(qo_args, wod_addr, 2048);   // debug copy of every owner's CB_XO (bf16 tiles)
+    auto mcast_ext = [&](uint32_t src, uint32_t dst, uint32_t bytes) {
+        for (uint32_t i = 0; i < 3; ++i) {
+            if (re[i][4] == 0) continue;
+            const uint64_t m = get_noc_multicast_addr(re[i][0], re[i][1], re[i][2], re[i][3], dst);
+            if (i == self_re) noc_async_write_multicast_loopback_src(src, m, bytes, re[i][4], false);
+            else noc_async_write_multicast(src, m, bytes, re[i][4], false);
+        }
+    };
+    if (is_concat) {   // A rows of non-own users stay 0; publish the (uniform) CB_A / CB_S addresses to every core
+        volatile tt_l1_ptr uint32_t* p = l1w(get_write_ptr(CB_A));
+        for (uint32_t i = 0; i < WK * 2048 / 4; ++i) p[i] = 0;
+        mcast_word<NRF>(gs[GS_AADDR], get_write_ptr(CB_A), rf, self_rf, 0);
+        mcast_word<NRF>(gs[GS_SADDR], get_write_ptr(CB_S), rf, self_rf, 0);
+        noc_async_write_barrier();
+    }
+#endif
     const auto qo = TensorAccessor(qo_args, qo_addr, QOTB);
     constexpr uint32_t QATB = 4096;   // fp32 partial tile
     // the qkv tail of layer L on this core: ship / receive the K-half partial, write the rstd-scaled output tiles
@@ -95,10 +124,18 @@ void kernel_main() {
             cb_push_back(CB_QR, 1);
         }
         if (qrole == QR_NONE) return;
-        cb_wait_front(CB_QO, qnt);
+        cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt);
         for (uint32_t j = 0; j < qnt; ++j) noc_async_write(get_read_ptr(CB_QO) + j * QOTB, qo.get_noc_addr(L * QN + qn + j), QOTB);
+#if defined(MKA_RWO)
+        if (qn + qnt > 64) {   // sig(gate) tiles -> every wo core's CB_S slot n - 64
+            noc_semaphore_wait_min(l1w(gs[GS_SADDR]), 1);
+            const uint32_t s_base = *l1w(gs[GS_SADDR]);
+            for (uint32_t j = 0; j < qnt; ++j)
+                if (qn + j >= 64) mcast_ext(get_read_ptr(CB_QO) + j * QOTB, s_base + (qn + j - 64) * QOTB, QOTB);
+        }
+#endif
         noc_async_write_barrier();
-        cb_pop_front(CB_QO, qnt);
+        cb_pop_front(CB_QO, QO_SLOT ? QO_SLOT : qnt);
         noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
     };
 #endif
@@ -373,11 +410,58 @@ void kernel_main() {
             }
 #endif
         }
+#if defined(MKA_RWO)
+        if (att && wo_nt) {
+            DeviceZoneScopedN("W-WO");
+            cb_reserve_back(CB_S, WK);   // sig(gate) landed before QFLAG (producers barrier before MIXDONE)
+            cb_push_back(CB_S, WK);
+            if (is_concat) {
+                noc_semaphore_wait_min(l1w(gs[GS_ACNT]), NUSR * (A + 1));
+                mcast_ext(get_write_ptr(CB_A), get_write_ptr(CB_A), WK * 2048);
+                noc_async_write_barrier();
+                for (uint32_t i = 0; i < 3; ++i) {   // AFLAG (data before flag: same NoC, barrier above)
+                    if (re[i][4] == 0) continue;
+                    *l1w(gs[GS_AFLAG]) = A + 1;
+                    const uint64_t m = get_noc_multicast_addr(re[i][0], re[i][1], re[i][2], re[i][3], gs[GS_AFLAG]);
+                    if (i == self_re) noc_semaphore_set_multicast_loopback_src(gs[GS_AFLAG], m, re[i][4], false);
+                    else noc_semaphore_set_multicast(gs[GS_AFLAG], m, re[i][4], false);
+                }
+                noc_async_write_barrier();
+            }
+            noc_semaphore_wait_min(l1w(gs[GS_AFLAG]), A + 1);
+            cb_reserve_back(CB_A, WK);
+            cb_push_back(CB_A, WK);
+            cb_wait_front(CB_QO, QO_SLOT);   // A_g @ Wo slice (full slot, wo_nt valid)
+            const uint32_t xo = get_write_ptr(CB_XO);   // uniform on the ext cores
+            uint32_t cnt[16];
+            for (uint32_t i = 0; i < 16; ++i) cnt[i] = 0;
+            for (uint32_t j = 0; j < wo_nt; ++j) {   // rot order: farthest owning device first
+                const uint32_t n = wo_tile[j], ch = n / 10;
+                noc_async_write(get_read_ptr(CB_QO) + j * 2048, get_noc_addr(ow_x[ch], ow_y[ch], xo + (n % 10) * 2048), 2048);
+                ++cnt[ch];
+            }
+            noc_async_write_barrier();
+            for (uint32_t j = 0; j < wo_nt; ++j) {
+                const uint32_t ch = wo_tile[j] / 10;
+                if (cnt[ch]) { noc_semaphore_inc(get_noc_addr(ow_x[ch], ow_y[ch], gs[GS_WOCNT]), cnt[ch]); cnt[ch] = 0; }
+            }
+            cb_pop_front(CB_QO, QO_SLOT);
+            if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
+                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * (A + 1));
+                for (uint32_t i = 0; i < 10; ++i) noc_async_write(xo + i * 2048, wod.get_noc_addr(L * WN + own_chunk * 10 + i), 2048);
+                noc_async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_WODONE]), 1);
+            }
+        }
+#endif
         if (!IS_STREAM) continue;
         if (att) {   // attention done (all 4 SDPA roots) -> wo stand-in + attention AR -> MLP go
             DeviceZoneScopedN("W-WOAR");
             if (is_qroot) {
                 noc_semaphore_wait_min(l1w(gs[GS_ADONE]), NUSR * (A + 1));
+#if defined(MKA_RWO)
+                noc_semaphore_wait_min(l1w(gs[GS_WODONE]), 16 * (A + 1));   // every owner chunk of wo complete
+#endif
                 mcast_word(gs[GS_ADFLAG], A + 1, rs, self_rect, 0);
                 noc_async_write_barrier();
             }
@@ -385,7 +469,9 @@ void kernel_main() {
 #if defined(MKA_WO_NOC0)
             noc_async_read_barrier_with_trid(3);   // layer L's wo slice landed
 #endif
+#if !defined(MKA_RWO)
             spin_cycles(S_WO);
+#endif
             spin_cycles(S_AR);
             cb_reserve_back(CB_GO, 1);
             cb_push_back(CB_GO, 1);
@@ -452,6 +538,9 @@ void kernel_main() {
     if (NL > 1) noc_semaphore_wait_min(l1w(gs[GS_XRDY]), NL - 1);
     *l1w(gs[GS_XRDY]) = 0;
     if (qrole == QR_OWNER) *l1w(gs[GS_QPART]) = 0;
+#if defined(MKA_RWO)
+    *l1w(gs[GS_ACNT]) = 0; *l1w(gs[GS_AFLAG]) = 0; *l1w(gs[GS_WOCNT]) = 0; if (is_qroot) *l1w(gs[GS_WODONE]) = 0;
+#endif
     // GS_PQH is reset by the reader after its last wait (see reader)
 #endif
 }

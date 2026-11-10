@@ -15,6 +15,8 @@ constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, C
 // MKA_TREEFLAG: per-child arrival flags (2 x FANOUT words) at a uniform L1 address, so a parent pulls each child as
 // soon as THAT child is done instead of after the slowest one
 constexpr uint32_t CB_TF = 31;
+// MKA_RWO (real wo, E'): A rows (48 bf16 tiles), sig(gate) (48 tiles, aliased in place by A (.) S), owner CB_XO (10 tiles)
+constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, CB_XO = 23, WK = 48, WN = 160, WO_MAXT = 5;
 constexpr uint32_t NRF = 3;
 // KV cache addressing. MKA_KVPROD (prod vLLM): per layer TWO tensors paged_k / paged_v [num_blocks, n_kv_heads,
 // block_size, 256] TILE bf8, tile page of (block p, head h, pos-tile r, dim-tile c) = ((p * NKVH + h) * BS32 + r) * 8 + c.
@@ -31,6 +33,13 @@ FORCE_INLINE uint32_t kv_page(uint32_t user, uint32_t blk, uint32_t nbk, bool v)
 #endif   // full-grid multicast rectangles (left block, right block rows 0-7, right block rows 8-9 minus AR corner)   // ATTN scratch range 24-31 (spec)
 // qkv roles: 0 none, 1 K-half owner (STREAM), 2 K-half partner (STREAM), 3 STREAM_EXT (2 tiles, full K)
 constexpr uint32_t QR_NONE = 0, QR_OWNER = 1, QR_PARTNER = 2, QR_EXT = 3;
+// CB_QO slot: qkv output (1-2 tiles) and, under MKA_RWO, the wo output (4-5 tiles) share CB 17; every use reserves /
+// pushes / pops the FULL slot so the ring never straddles its end (same rule as the KV groups)
+#if defined(MKA_RWO)
+constexpr uint32_t QO_SLOT = 5;
+#else
+constexpr uint32_t QO_SLOT = 0;   // 0: use the exact tile count
+#endif
 // STREAM_EXT ring split (MKA_PQW): the writer (NOC0) streams pages [0, PQ_WS) of the next layer's slice, the reader
 // (NOC1) [PQ_WS, 2 KT). 0 = all reader, 1 = all writer, 2 = half / half
 #ifndef MKA_PQW
@@ -45,7 +54,8 @@ constexpr uint32_t PQ_QSL = 320, PQ_WS = MKA_PQW == 0 ? 0 : (MKA_PQW == 1 ? PQ_Q
 #endif
 constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU, FANOUT = MKA_FAN, NUSR = MKA_NU;   // own users per chip (u8: 4, u1: 1)
 // global-semaphore slots (index into the runtime-arg address array)
-constexpr uint32_t GS_QFLAG = 0, GS_LVL0 = 1, GS_LVL1 = 2, GS_DONE = 3, GS_MIXDONE = 4, GS_ADONE = 5, GS_ADFLAG = 6, GS_KVPROG = 7, GS_QPART = 8, GS_XRDY = 9, GS_PQH = 10, NGS = 11;   // KVPROG: core-local count of KV groups the reader pushed (kv_mode 2)
+constexpr uint32_t GS_QFLAG = 0, GS_LVL0 = 1, GS_LVL1 = 2, GS_DONE = 3, GS_MIXDONE = 4, GS_ADONE = 5, GS_ADFLAG = 6, GS_KVPROG = 7, GS_QPART = 8, GS_XRDY = 9, GS_PQH = 10, GS_ACNT = 11, GS_AFLAG = 12, GS_WOCNT = 13, GS_WODONE = 14, GS_AADDR = 15,
+                   GS_SADDR = 16, NGS = 17;   // KVPROG: core-local count of KV groups the reader pushed (kv_mode 2)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* l1w(uint32_t addr) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr); }
 FORCE_INLINE void spin_cycles(uint32_t cyc) {
     if (cyc == 0) return;

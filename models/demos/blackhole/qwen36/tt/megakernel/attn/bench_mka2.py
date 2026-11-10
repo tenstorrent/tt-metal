@@ -207,7 +207,7 @@ members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
 if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
 rank = {i: members[grp[i]].index(i) for i in ACT}
 kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
-GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(11)]
+GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(17)]
 GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
 if ARC:
     # spec v0.9.1: the AR sender cores are not in ANY mka2 range (kernels, CBs, sharded L1 tensors, global semaphores,
@@ -388,7 +388,7 @@ def q_wargs(fi):
     if not RQKV: return []
     ro, n0, nt, k0, nk, peer = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
     pp_ = fphys[peer]
-    return [ro, n0, nt, pp_.x, pp_.y, qkv_out.buffer_address(), gdn_on(fi)]
+    return [ro, n0, nt, pp_.x, pp_.y, qkv_out.buffer_address(), gdn_on(fi)] + wo_wargs(fi)
 TREEFLAG = ('MKA_TREEFLAG', '1') in MKDEF
 def tfk(fi):   # index of this core in its parent's child list (level-0 list or the root's level-1 list)
     r_ = rank[fi]
@@ -396,7 +396,84 @@ def tfk(fi):   # index of this core in its parent's child list (level-0 list or 
 def q_rargs(fi):
     if not RQKV: return []
     ro = QROLE.get(fi, (0,))[0]
-    return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL]
+    return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL] + wo_rargs(fi)
+RWO = ('MKA_RWO', '1') in MKDEF
+if RWO and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
+WOT, WOP, WOB = {}, {}, {}
+if RWO:
+    assert RQKV and ('MKA_PQGDN', '1') in MKDEF, "MKA_RWO needs MKA_RQKV and MKA_PQGDN (the ext ring holds Wo after qkv)"
+    assert not any(is_attn_layer(L_) and is_attn_layer(L_ + 1) for L_ in range(NL - 1)), "MKA_RWO: no back-to-back attention layers"
+    WK_, WN_ = 48, 160
+    wo_cores = list(ext_list)
+    # rot chunk order for device 0: owning device o = j // 2, farthest around the 8-ring first, own (o = 0) last
+    rot = sorted(range(16), key=lambda j_: (-min(j_ // 2, 8 - j_ // 2), j_))
+    flat = [n_ for j_ in rot for n_ in range(10 * j_, 10 * j_ + 10)]
+    for c_, fi in enumerate(wo_cores): WOT[fi] = flat[c_::len(wo_cores)]
+    assert max(len(v) for v in WOT.values()) <= 5
+    torch.manual_seed(11)
+    wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
+    # byte-balanced bank-local slices, k-major pages (k * nt + j)
+    caps_ = [len(wo_cores) // banks + (1 if b_ < len(wo_cores) % banks else 0) for b_ in range(banks)]
+    pairs_ = sorted(((abs(fcores[fi].x - bx) + abs(fcores[fi].y - by), fi, b_) for fi in wo_cores for b_, (bx, by) in enumerate(BANK_LOC)))
+    for d_, fi, b_ in pairs_:
+        if fi in WOB or caps_[b_] == 0: continue
+        WOB[fi] = b_; caps_[b_] -= 1
+    tot_ = [0] * banks
+    for fi in wo_cores: WOP[fi] = tot_[WOB[fi]]; tot_[WOB[fi]] += len(WOT[fi]) * WK_
+    WOPL = max(tot_) * banks
+    def wo_pages(scale):
+        pg = torch.zeros(WOPL, TILE, TILE)
+        for fi in wo_cores:
+            for kl in range(WK_):
+                for jj, n_ in enumerate(WOT[fi]):
+                    pg[(WOP[fi] + kl * len(WOT[fi]) + jj) * banks + WOB[fi]] = tl(wo_t, kl, n_) * scale
+        return pg
+    wo_all = ttnn.from_torch(torch.cat([wo_pages(2.0 ** -(L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    woq_ = ttnn.to_torch(wo_all).float().reshape(NL, WOPL, TILE, TILE)
+    woq = torch.zeros(NL, WK_ * TILE, WN_ * TILE)
+    for fi in wo_cores:
+        for kl in range(WK_):
+            for jj, n_ in enumerate(WOT[fi]):
+                woq[:, kl * TILE:(kl + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = woq_[:, (WOP[fi] + kl * len(WOT[fi]) + jj) * banks + WOB[fi]]
+    wod = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, WN_ * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    WCC = wo_cores[0]   # concat core
+    owner_fi = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + j_ % 2 and c_.y == j_ // 2)) for j_ in range(16)]
+    assert all(f_ in WOT for f_ in owner_fi), "owners must be wo cores"
+    # wo-core multicast rects: ext columns (x 10-11, rows 0..y_ar-1) + bottom rows left / right of the DRAM split (x < x_ar)
+    _yb = min(fcores[f_].y for f_ in ext_list if fcores[f_].x < 10)   # first ext-only row (8)
+    def _pr(lx0, ly0, lx1, ly1):
+        if lx1 < lx0 or ly1 < ly0: return [0, 0, 0, 0, 0]
+        a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
+        return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (ly1 - ly0 + 1)]
+    _xr = min(fcores[f_].x for f_ in ARC) if ARC else GXF   # AR corner starts here (bottom rows)
+    RECTS_E = _pr(10, 0, 11, _yb - 1) + _pr(0, _yb, fsplit - 1, GYF - 1) + _pr(fsplit, _yb, min(_xr, GXF) - 1, GYF - 1)
+    def self_re(fi):
+        c_ = fcores[fi]
+        return 0 if c_.x >= 10 and c_.y < _yb else (1 if c_.x < fsplit else 2)
+    assert sum(RECTS_E[4::5]) == len(wo_cores), (RECTS_E, len(wo_cores))
+    gold_wo = []
+    for L in range(NL):
+        g = torch.zeros(M, WN_ * TILE)
+        if is_attn_layer(L):
+            A_ = torch.zeros(M, WK_ * TILE)
+            sg = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE])
+            for u_ in range(NU):
+                for h_ in range(6):
+                    for j_ in range(4):
+                        A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = golds_s[L][u_, 4 * h_ + j_, :]
+            g = (A_ * sg) @ woq[L]
+        gold_wo.append(g)
+    print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {rot}, rects {RECTS_E}", flush=True)
+def wo_wargs(fi):
+    if not RWO: return []
+    t_ = WOT.get(fi, [])
+    oc = owner_fi.index(fi) if fi in owner_fi else 255
+    return [len(t_)] + (t_ + [0] * 5)[:5] + [1 if fi == WCC else 0, oc] + RECTS_E + [self_re(fi) if fi in WOT else 3] + \
+        sum(([fphys[f_].x, fphys[f_].y] for f_ in owner_fi), []) + [wod.buffer_address()]
+def wo_rargs(fi):
+    if not RWO: return []
+    cc = fphys[WCC]
+    return [len(WOT.get(fi, [])), (WOP[fi] * banks + WOB[fi]) if fi in WOT else 0, WOPL, wo_all.buffer_address(), cc.x, cc.y]
 def build(out):
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
@@ -404,12 +481,21 @@ def build(out):
            ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
            # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
            cbd(9, ttnn.bfloat16, 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
-           cbd(24, ttnn.bfloat16, 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), cbd(26, ttnn.float32, 18, kgrid), cbd(27, ttnn.float32, 1, kgrid),
+           cbd(24, ttnn.bfloat16, 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
            cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
     if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
         cbs = [cbd(19, ttnn.bfloat8_b, 2 * KT, ext_crs)] + cbs + [cbd(13, ttnn.float32, 1, kgrid), cbd(14, ttnn.float32, 2, kgrid),
                cbd(17, ttnn.bfloat16, 2, kgrid), cbd(18, ttnn.float32, 1, kgrid), ttnn.cb_descriptor_from_sharded_tensor(20, rsp)]
     if TREEFLAG: cbs = cbs + [cbd(31, ttnn.bfloat16, 1, kgrid)]
+    if RWO:   # ext-only: A, sig(gate) S with the in-place A (.) S view (same memory), owner CB_XO; CB_QO grows to 5
+        _p = 2048
+        # (CB 26, the tree receive CB, keeps 2 slots on STREAM and 1 slot on the ext cores: see the ATTN set above)
+        cbs = [c_ for c_ in cbs if not any(f_.buffer_index == 17 for f_ in c_.format_descriptors)]
+        assert sum(1 for c_ in cbs for f_ in c_.format_descriptors if f_.buffer_index == 17) == 0
+        cbs = cbs + [cbd(17, ttnn.bfloat16, 5, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs),
+                     ttnn.CBDescriptor(total_size=48 * _p, core_ranges=ext_crs, format_descriptors=[
+                         ttnn.CBFormatDescriptor(buffer_index=21, data_format=ttnn.bfloat16, page_size=_p),
+                         ttnn.CBFormatDescriptor(buffer_index=22, data_format=ttnn.bfloat16, page_size=_p)])]
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     z10 = [0] * 10
@@ -445,7 +531,7 @@ def build(out):
             w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 3 + ([wq_all.buffer_address(), q_slot[fi] * banks + q_bank[fi], PQL] if (RQKV and fi in QROLE) else [0] * 3)
         selff = 0 if c.x < fsplit else (2 if (ARC and c.y >= _ay[0]) else 1)
         i_s = stream_idx.get(fi, 0)
-        rd_w = (isS or EXT) and not WO_NOC0
+        rd_w = (isS or EXT) and not WO_NOC0 and not RWO   # RWO: the wo bytes are real (ext ring)
         # stand-in bank spread: the reader reads 8-tile runs from page wo_page + 8k, which all sit in bank wo_page % 8.
         # With wo_page = i * 96 every core hammered bank 0 (and cores near it won). MKA_WOBANK=1 (default) puts core i on bank i % 8.
         wob = (fi % 8) if os.environ.get('MKA_WOBANK', '1') == '1' else 0
@@ -453,7 +539,7 @@ def build(out):
         wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
             [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
         nrecv = len(ch0) + len(ch1)
-        crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] if RQKV else [])
+        crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if RWO else []) if RQKV else [])
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
     acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
     acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []
@@ -463,12 +549,17 @@ def build(out):
                                 runtime_args=wrt, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
           ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=kgrid, defines=MKDEF, compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=crt,
                                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
+    if RWO:   # placement: a CB on kgrid sits above BOTH the STREAM-rect and the ext CBs; ext-only CBs listed FIRST land
+        # at low addresses on the ext cores (beside the STREAM rect's own CBs, which they never share a core with)
+        _ext_only = lambda c_: c_.core_ranges == ext_crs
+        cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
+    print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
     return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
 out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, NDN * TILE))
 prog = build(out_t)
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + [out_t], prog); ttnn.synchronize_device(dev)
     p, e = pcc_of(y, gold_last)
     if os.environ.get("FM_DIAG") == "1":
         v = ttnn.to_torch(y).float().reshape(M, H)
@@ -486,7 +577,10 @@ for it in range(ITERS):
         qv = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
         for L in range(NL):
             if not is_attn_layer(L): continue
+            if RWO: gold_qkv[L][:, 64 * TILE:112 * TILE] = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE]) if it == 0 else gold_qkv[L][:, 64 * TILE:112 * TILE]
             pq_ = torch.corrcoef(torch.stack([qv[L].flatten(), gold_qkv[L].flatten()]))[0, 1].item()
+            nan_ = [n for n in range(QN) if not torch.isfinite(qv[L][:, n*TILE:(n+1)*TILE]).all()]
+            if nan_: print(f"[rqkv] iter {it} layer {L} non-finite tiles {nan_}", flush=True)
             bad_ = [n for n in range(QN) if torch.corrcoef(torch.stack([qv[L][:, n*TILE:(n+1)*TILE].flatten(), gold_qkv[L][:, n*TILE:(n+1)*TILE].flatten()]))[0, 1].item() < 0.999]
             print(f"[rqkv] iter {it} layer {L} qkv pcc {pq_:.5f} max|err| {(qv[L]-gold_qkv[L]).abs().max().item():.4f} |gold|max {gold_qkv[L].abs().max().item():.3f} bad tiles {bad_[:12]}", flush=True)
     vs = ttnn.to_torch(outs).float().reshape(NL, NU, TILE, DHD)
@@ -501,6 +595,13 @@ for it in range(ITERS):
                 print(f"[mka2]   L{L} user {uu} pcc {torch.corrcoef(torch.stack([vu.flatten(), gu_.flatten()]))[0, 1].item():.4f} |v|max {vu.abs().max().item():.3e} |g|max {gu_.abs().max().item():.3e} vs-other-layer-gold pcc {torch.corrcoef(torch.stack([vu.flatten(), golds_s[1-L][uu, :NQH*T].flatten()]))[0, 1].item() if NL > 1 else 0:.4f}", flush=True)
         if not is_attn_layer(L): continue
         print(f"[mka2] iter {it} layer {L} sdpa pcc {torch.corrcoef(torch.stack([v_.flatten(), g2.flatten()]))[0, 1].item():.5f} max|err| {(v_-g2).abs().max().item():.4f}", flush=True)
+    if RWO:
+        wv_ = ttnn.to_torch(wod).float().reshape(NL, M, -1)
+        for L in range(NL):
+            if not is_attn_layer(L): continue
+            rows_ = slice(0, 4 * NU)
+            pw_ = torch.corrcoef(torch.stack([wv_[L][rows_].flatten(), gold_wo[L][rows_].flatten()]))[0, 1].item()
+            print(f"[rwo] iter {it} layer {L} wo pcc {pw_:.5f} max|err| {(wv_[L][rows_] - gold_wo[L][rows_]).abs().max().item():.4f} |gold|max {gold_wo[L].abs().max().item():.3f}", flush=True)
     print(f"[fm11] iter {it} wall {time.time()-t1:.2f}s last-layer pcc {p:.5f} max|err| {e:.4f} |gold|max {gold_last.abs().max().item():.3f}", flush=True)
 ttnn.ReadDeviceProfiler(dev)
 print('[fm11] profiler read', flush=True)

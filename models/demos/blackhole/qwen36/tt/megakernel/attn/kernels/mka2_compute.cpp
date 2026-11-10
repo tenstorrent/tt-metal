@@ -17,6 +17,13 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
 #include "api/debug/kernel_profiler.hpp"
+// MKA_LEAN_C: no compute-side profiler zones (each one is compiled into all three TRISC binaries; the RWO build is
+// otherwise past the 70656 B kernel-config buffer). Phase timing then comes from the dataflow zones.
+#if defined(MKA_LEAN_C)
+#define CZONE(n)
+#else
+#define CZONE(n) DeviceZoneScopedN(n)
+#endif
 #if defined(MKA_RQKV)
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -26,6 +33,12 @@
 constexpr uint32_t CB_X = 0, CB_W = 1, CB_HL = 2, CB_H = 3, CB_WD = 4, CB_W2 = 5, CB_WM = 6, CB_YM = 7, CB_GO = 8, CB_OUT = 16;
 constexpr uint32_t CB_Q = 9, CB_K = 10, CB_V = 11, CB_O = 12, CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28;
 constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, CB_RSP = 20;
+#if defined(MKA_RWO)
+constexpr uint32_t QO_SLOT = 5;
+#else
+constexpr uint32_t QO_SLOT = 0;
+#endif
+constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = 320;
 #ifndef MKA_NU
 #define MKA_NU 4
 #endif
@@ -47,9 +60,12 @@ void kernel_main() {
 #if defined(MKA_RQKV)
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
+#if defined(MKA_RWO)
+    const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
+#endif
     // real qkv PROJ (spec v0.4): y = rstd ⊙ (x @ diag(γ)W); rstd = rsqrt(ΣΣx²/H + eps) from the AR owners' fp32 partials
     auto qkv_proj = [&](bool att_layer) {
-        DeviceZoneScopedN("C-QKV");
+        CZONE("C-QKV");
         const uint32_t cbw = qrole == 3 ? CB_PQ : CB_WM;
         compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, cbw, CB_QA);
         reconfig_data_format(cbw, CB_X);
@@ -134,13 +150,30 @@ void kernel_main() {
         mul_bcast_cols_init(CB_QA, CB_RS);
         tile_regs_acquire();
         for (uint32_t j = 0; j < qnt; ++j) mul_tiles_bcast_cols(CB_QA, CB_RS, j, 0, j);
+#if defined(MKA_RWO)
+        if (qn0 + qnt > 64) {   // gate tiles (64-111): only sig(gate) is ever used (o (.) sigmoid(gate)).
+            // sigmoid = 1 / (1 + exp(-x)) from SFPU ops the kernel already links (exp, recip, scalar binops): a separate
+            // sigmoid_tile pushed the program past the 70656 B kernel-config buffer
+            for (uint32_t j = 0; j < qnt; ++j) {
+                if (qn0 + j < 64) continue;
+                binop_with_scalar_tile_init();
+                mul_unary_tile(j, 0xBF800000u);   // * -1
+                exp_tile_init();
+                exp_tile(j);
+                binop_with_scalar_tile_init();
+                add_unary_tile(j, 0x3F800000u);   // + 1
+                recip_tile_init();
+                recip_tile(j);
+            }
+        }
+#endif
         tile_regs_commit();
-        cb_reserve_back(CB_QO, qnt);
+        cb_reserve_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
         tile_regs_wait();
         pack_reconfig_data_format(CB_QO);
         for (uint32_t j = 0; j < qnt; ++j) pack_tile(j, CB_QO);
         tile_regs_release();
-        cb_push_back(CB_QO, qnt);
+        cb_push_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
         cb_pop_front(CB_QA, qnt);
         cb_pop_front(CB_RS, 1);
     };
@@ -167,7 +200,7 @@ void kernel_main() {
         if (IS_STREAM) {
 #endif
             cb_wait_front(CB_X, KT);
-            DeviceZoneScopedN("C-MIX");
+            CZONE("C-MIX");
 #if !defined(MKA_NO_REINIT)
             if (L > 0) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
 #endif
@@ -186,7 +219,7 @@ void kernel_main() {
             cb_pop_front(CB_WM, KT * MIXN);
         }
         if (att) {   // ---- SDPA phase (type 5) ----
-            DeviceZoneScopedN("C-SDPA");
+            CZONE("C-SDPA");
 #if !defined(MKA_NO_REINIT)
             // the previous layer's tree adds (fp32 copy_tile = unpack-to-dest) and the root's eltwise normalize leave
             // unpacker / math state that a short matmul_init does not undo: re-run the full HW init per SDPA phase
@@ -303,6 +336,44 @@ void kernel_main() {
                 cb_pop_front(CB_O, NO);
             }
         }
+#if defined(MKA_RWO)
+        if (att && wo_nt) {   // real wo, split-N: A_g = A (.) sig(gate) in place over S, then A_g @ Wo slice (ext ring)
+            CZONE("C-WO");
+            compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_S, CB_AS);
+            cb_wait_front(CB_A, WK);
+            cb_wait_front(CB_S, WK);
+            reconfig_data_format(CB_A, CB_S);
+            mul_init(CB_A, CB_S);
+            pack_reconfig_data_format(CB_AS);
+            for (uint32_t t = 0; t < WK; ++t) {
+                tile_regs_acquire();
+                mul_tiles(CB_A, CB_S, t, t, 0);
+                tile_regs_commit();
+                cb_reserve_back(CB_AS, 1);
+                tile_regs_wait();
+                pack_tile(0, CB_AS);   // S slot t, already unpacked
+                tile_regs_release();
+                cb_push_back(CB_AS, 1);
+            }
+            cb_pop_front(CB_A, WK);
+            cb_pop_front(CB_S, WK);
+            cb_wait_front(CB_AS, WK);
+            cb_wait_front(CB_PQ, PQ_QSL);
+            reconfig_data_format(CB_PQ, CB_AS);
+            matmul_block_init(CB_AS, CB_PQ, 0, wo_nt, 1, WK);
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < WK; ++k) matmul_block(CB_AS, CB_PQ, k, k * wo_nt, 0, 0, wo_nt, 1, WK);
+            tile_regs_commit();
+            cb_reserve_back(CB_QO, QO_SLOT);
+            tile_regs_wait();
+            pack_reconfig_data_format(CB_QO);
+            for (uint32_t j = 0; j < wo_nt; ++j) pack_tile(j, CB_QO);
+            tile_regs_release();
+            cb_push_back(CB_QO, QO_SLOT);
+            cb_pop_front(CB_AS, WK);
+            cb_pop_front(CB_PQ, PQ_QSL);
+        }
+#endif
         if (!IS_STREAM) continue;
 #if defined(MKA_NOMLP)
         cb_wait_front(CB_GO, 1); cb_pop_front(CB_GO, 1); cb_pop_front(CB_X, KT); continue;
@@ -312,7 +383,7 @@ void kernel_main() {
         if (IS_GU) {
             reconfig_data_format(CB_W, CB_X);
             matmul_block_init(CB_X, CB_W, 0, 2, 1, KB);
-            DeviceZoneScopedN("C-GU");
+            CZONE("C-GU");
             tile_regs_acquire();
             constexpr uint32_t NBG = KT / KB;
             for (uint32_t b0 = 0, g = 0; b0 < NBG; b0 += GRP, ++g) {
@@ -341,7 +412,7 @@ void kernel_main() {
         matmul_block_init(CB_H, CB_WD, 0, NDN, 1, HT);
         cb_wait_front(CB_WD, HT * NDN);
 #if defined(MK_DNPIPE) && MK_DNPIPE
-        DeviceZoneScopedN("C-DN");
+        CZONE("C-DN");
         tile_regs_acquire();
         {   // -mk-tail port: accumulate the down K-dim root chunk by root chunk as h arrives (4 roots x HT/4 tiles)
             constexpr uint32_t HCHC = HT / 4;
@@ -352,7 +423,7 @@ void kernel_main() {
         }
 #else
         cb_wait_front(CB_H, HT);
-        DeviceZoneScopedN("C-DN");
+        CZONE("C-DN");
         tile_regs_acquire();
         for (uint32_t k = 0; k < HT; ++k) matmul_block(CB_H, CB_WD, k, k * NDN, 0, 0, NDN, 1, HT);
 #endif

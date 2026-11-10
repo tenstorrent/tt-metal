@@ -73,6 +73,12 @@ void kernel_main() {
     const uint32_t qrole = get_arg_val<uint32_t>(a++), wq_addr = get_arg_val<uint32_t>(a++);
     const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
     const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
+#if defined(MKA_RWO)
+    const uint32_t rw_nt = get_arg_val<uint32_t>(a++), rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
+    const uint32_t wo_addr2 = get_arg_val<uint32_t>(a++), cc_x = get_arg_val<uint32_t>(a++), cc_y = get_arg_val<uint32_t>(a++);
+    const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
+    constexpr uint32_t TRID_WOR = 10;
+#endif
     bool pq_pending = false;
     // next attention layer after L (NL if none) and the length of the GDN-type run right before attention layer La
     auto next_att = [](uint32_t L) { uint32_t n = L + 1; while (n < NL && !is_attn(n)) ++n; return n; };
@@ -199,8 +205,25 @@ void kernel_main() {
             bool pq_rsv = false;
             const uint64_t pq_src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
 #endif
+#if defined(MKA_RWO)
+            const uint32_t wo_np = rw_nt * WK;   // pages of this core's Wo slice
+            const uint32_t wo_per = (wo_np + pq_ng - 1) / pq_ng;
+            uint32_t wo_done = 0, wo_dst = 0;
+            bool wo_rsv = false;
+            const uint64_t wo_src = wow.get_noc_addr(rw_page + L * rw_pl);
+#endif
             for (uint32_t b = b0; b < b1; b += NBB) {
                 const uint32_t nb = (b1 - b) < NBB ? (b1 - b) : NBB;
+#if defined(MKA_RWO)
+                if (rw_nt && gi >= pq_g0 && wo_done < wo_np) {   // the ring is free once this layer's qkv popped it
+                    if (!wo_rsv) { cb_reserve_back(CB_PQ, QSL); wo_dst = get_write_ptr(CB_PQ); wo_rsv = true; }
+                    const uint32_t n = (wo_np - wo_done) < wo_per ? (wo_np - wo_done) : wo_per;
+                    noc_async_read_set_trid(TRID_WOR);
+                    noc_async_read(wo_src + wo_done * MWTB, wo_dst + wo_done * MWTB, n * MWTB);
+                    noc_async_read_set_trid(0);
+                    wo_done += n;
+                }
+#endif
 #if defined(MKA_RQKV)
                 if (pq_go && gi >= pq_g0 && pq_done < QSL) {
                     if (!pq_rsv) { cb_reserve_back(CB_PQ, QSL); pq_dst = get_write_ptr(CB_PQ); pq_rsv = true; }
@@ -258,6 +281,18 @@ void kernel_main() {
                 cb_push_back(CB_PQ, QSL);
             }
 #endif
+#if defined(MKA_RWO)
+            if (rw_nt) {
+                if (!wo_rsv) { cb_reserve_back(CB_PQ, QSL); wo_dst = get_write_ptr(CB_PQ); wo_rsv = true; }
+                if (wo_done < wo_np) {
+                    noc_async_read_set_trid(TRID_WOR);
+                    noc_async_read(wo_src + wo_done * MWTB, wo_dst + wo_done * MWTB, (wo_np - wo_done) * MWTB);
+                    noc_async_read_set_trid(0);
+                }
+                noc_async_read_barrier_with_trid(TRID_WOR);
+                cb_push_back(CB_PQ, QSL);   // full slot (straddle-safe ring), wo_np pages valid
+            }
+#endif
         }
         if (att) {   // SDPA: tree reduce (pull), cumulative global semaphores (over attention layers: A)
             DeviceZoneScopedN("R-RED");
@@ -293,7 +328,24 @@ void kernel_main() {
                 cb_wait_front(CB_OA, DH);
                 const uint32_t rp = get_read_ptr(CB_OA);
                 for (uint32_t t = 0; t < DH; ++t) noc_async_write(rp + t * OATB, out.get_noc_addr((L * NUSR + user) * DH + t), OATB);
+#if defined(MKA_RWO)
+                {   // O rows (4h + j, head h, candidate j) -> A rows 4u + j, cols h * 256 + t * 32 (tile h * 8 + t): 128 B blocks
+                    noc_semaphore_wait_min(l1w(gs[GS_AADDR]), 1);
+                    const uint32_t a_base = *l1w(gs[GS_AADDR]);
+                    const uint32_t drow = (4 * user) % 16, dface = user < 4 ? 0 : 2;
+                    for (uint32_t h = 0; h < 6; ++h)
+                        for (uint32_t t = 0; t < DH; ++t)
+                            for (uint32_t c = 0; c < 2; ++c) {
+                                const uint32_t src = rp + t * OATB + ((h < 4 ? 0 : 2) + c) * 512 + ((4 * h) % 16) * 32;
+                                const uint32_t dst = a_base + (h * 8 + t) * 2048 + (dface + c) * 512 + drow * 32;
+                                noc_async_write(src, get_noc_addr(cc_x, cc_y, dst), 128);
+                            }
+                }
+#endif
                 noc_async_write_barrier();
+#if defined(MKA_RWO)
+                noc_semaphore_inc(get_noc_addr(cc_x, cc_y, gs[GS_ACNT]), 1);
+#endif
                 cb_pop_front(CB_OA, DH);
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_ADONE]), 1);
             }
