@@ -16,6 +16,35 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
+// SwiGLU epilogue overlapped with the next subblock's matmul (swiglu_overlap): SiLU and multiply on the PACK SFPU.
+#if defined(SWIGLU_OVERLAP) && !defined(FUSE_BIAS)
+#define SWOV 1
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#endif
+namespace ckernel {
+// PACK-thread twins of mul_binary_tile_init / mul_binary_tile: same SFPU init and microcode, issued from the packer
+// thread (as silu_tile_init_pack / silu_tile_pack do for SiLU).
+ALWI void swov_mul_init_pack() {
+    PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
+}
+ALWI void swov_mul_pack(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_mul,
+        (APPROX, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+}  // namespace ckernel
+#else
+#define SWOV 0
+#endif
+
 #if defined(FUSE_SWIGLU) || defined(GROUPED_N)
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
@@ -349,6 +378,89 @@ void add_bias_and_addcmul_block(
     intermediate_cb.pop_front(out_block_num_tiles);
 }
 
+#if SWOV
+// The last K block of a SwiGLU output block: per subblock, the matmul (final L1-accumulate pack), then that
+// subblock's SwiGLU on the PACK-thread SFPU overlapping the next subblock's matmul. subblock_h must be 1 and
+// subblock_w even (the caller checks), so a subblock holds whole gate / up pairs of one output row.
+void matmul_blocks_swov(
+    CircularBuffer& in0_cb,
+    CircularBuffer& in1_cb,
+    CircularBuffer& inter_cb,
+    CircularBuffer& out_cb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_w,
+    const bool l1_acc_after) {
+    const uint32_t out_N_full = full_N_block_tiles >> 1;
+    uint32_t in0_index_offset = 0;
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start++) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            // Matmul of this subblock (as matmul_blocks), final L1-accumulate pack.
+            tile_regs_acquire();
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+                matmul_block(
+                    in0_cb.get_cb_id(), in1_cb.get_cb_id(), in0_index, in1_index, 0, false, subblock_w, 1,
+                    K_block_tiles);
+                in0_index++;
+                in1_index += full_N_block_tiles;
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                pack_tile<true>(w, inter_cb.get_cb_id(), M_start * full_N_block_tiles + N_start + w);
+            }
+            tile_regs_release();
+            // The final sums are in L1 once the packer is idle: hand them to the unpacker.
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+
+            // This subblock's SwiGLU: MATH copies, the PACK-thread SFPU computes and packs.
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            copy_init(inter_cb.get_cb_id());
+            reconfig_data_format_srca(inter_cb.get_cb_id());
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                copy_tile(inter_cb.get_cb_id(), M_start * full_N_block_tiles + N_start + w, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            const uint32_t pairs = subblock_w >> 1;
+            silu_tile_init_pack();
+            for (uint32_t q = 0; q < pairs; q++) {
+                silu_tile_pack(2 * q);
+            }
+            swov_mul_init_pack();
+            for (uint32_t q = 0; q < pairs; q++) {
+                swov_mul_pack(2 * q, 2 * q + 1, 2 * q);
+            }
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            pack_reconfig_data_format(out_cb.get_cb_id());
+            for (uint32_t q = 0; q < pairs; q++) {
+                pack_tile<true>(2 * q, out_cb.get_cb_id(), (N_start >> 1) + q);
+            }
+            pack_reconfig_data_format(inter_cb.get_cb_id());
+            if (l1_acc_after) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            tile_regs_release();
+            // back to the matmul for the next subblock
+            matmul_block_init(in0_cb.get_cb_id(), in1_cb.get_cb_id(), false, subblock_w, 1, K_block_tiles);
+            reconfig_data_format(in1_cb.get_cb_id(), in0_cb.get_cb_id());
+
+            in1_index_offset += subblock_w;
+        }
+        out_cb.push_back(out_N_full);  // this output row is complete
+        in0_index_offset += K_block_tiles;
+    }
+}
+#endif
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     CircularBuffer& in0_cb,
@@ -456,6 +568,13 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
+#if SWOV
+    // subblock_h 1 and an even subblock_w keep whole gate / up pairs of one row in a subblock; otherwise today's path.
+    constexpr bool swov_on = (subblock_h == 1) && (subblock_w % 2 == 0) && (N_block_tiles % subblock_w == 0);
+    if constexpr (swov_on) {
+        PACK((t6_semaphore_init(semaphore::PACK_DONE, 0, 1)));
+    }
+#endif
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -486,6 +605,14 @@ void kernel_main() {
             n_tile_end = n_tile + current_N_block_tiles;
 #endif
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
+#if SWOV
+#ifdef GROUPED_N
+            // linear1: only the SwiGLU (group B) blocks take the overlapped epilogue; group A (q / k / v) is unchanged.
+            const bool swov_blk = swov_on && n_tile >= GRP_A_TILES && current_N_block_tiles == N_block_tiles;
+#else
+            const bool swov_blk = swov_on && current_N_block_tiles == N_block_tiles;
+#endif
+#endif
 
             matmul_block_init(
                 in0_cb_id,
@@ -502,16 +629,32 @@ void kernel_main() {
                 in0_cb.wait_front(in0_block_num_tiles);
                 in1_cb.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+#if SWOV
+                if (swov_blk && k_block == K_num_blocks - 1) {
+                    out_cb.reserve_back(out_block_num_tiles >> 1);
+                    matmul_blocks_swov(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        out_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_w,
+                        K_num_blocks > 1);
+                } else
+#endif
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -541,6 +684,17 @@ void kernel_main() {
             intermediate_cb.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
+#if SWOV
+            if (swov_blk) {
+                // the epilogue already ran inside the last K block; rows past the valid M rows are pushed as padding
+                for (uint32_t m = current_M_block_tiles; m < M_block_tiles; m++) {
+                    out_cb.push_back(N_block_tiles >> 1);
+                }
+                intermediate_cb.wait_front(out_block_num_tiles);
+                intermediate_cb.pop_front(out_block_num_tiles);
+                continue;
+            }
+#endif
 #ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.
             out_cb.reserve_back(out_block_num_tiles >> 1);

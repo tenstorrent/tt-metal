@@ -76,6 +76,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     bool fuse_swiglu = false,
     const std::vector<uint32_t>& chunk_sizes = {},
     std::optional<bool> transpose_core_grid = std::nullopt,
-    int32_t swiglu_chunk = -1);
+    int32_t swiglu_chunk = -1,
+    bool swiglu_overlap = false);
 
 }  // namespace ttnn::prim

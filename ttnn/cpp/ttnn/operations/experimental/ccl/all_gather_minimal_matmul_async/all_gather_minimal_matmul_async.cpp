@@ -42,7 +42,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
     std::optional<bool> transpose_core_grid,
-    int32_t swiglu_chunk) {
+    int32_t swiglu_chunk,
+    bool swiglu_overlap) {
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -73,7 +74,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fuse_swiglu,
         chunk_sizes,
         transpose_core_grid,
-        swiglu_chunk);
+        swiglu_chunk,
+        swiglu_overlap);
 }
 
 }  // namespace ttnn

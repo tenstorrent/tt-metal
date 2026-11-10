@@ -173,6 +173,7 @@ class Flux3KleinTransformerBlock(Module):
         self._tp_factor = parallel_config.tensor_parallel.factor
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
+        self.proj_mlp.swiglu_overlap = True
         self._mesh_device = device
         self._barrier_tile = None
         self._l1_weight = None  # [W_qkv | W_mlp], built once from the loaded weights, outside the state dict
@@ -270,6 +271,7 @@ class Flux3KleinTransformerBlock(Module):
                 chunks=4,
                 chunk_sizes=[third, third, third, n_mlp],
                 swiglu_chunk=3,
+                swiglu_overlap=True,
             )
         )
 
