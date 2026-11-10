@@ -82,9 +82,7 @@ RouterPairing pair_routers_with_record(const DecodeInputs& inputs) {
     // corresponding record from the capture record
     for (const manifest::Mesh& mesh : inputs.manifest.facts.meshes) {
         for (const manifest::Chip& chip : mesh.chips) {
-            const std::string chip_path =
-                manifest::mesh_key(chip.fabric_node_id.mesh_id) + "/" + manifest::chip_key(chip.fabric_node_id.chip_id);
-            const auto chip_record = entries.chips.find(chip_path);
+            const auto chip_record = entries.chips.find(manifest::chip_path(chip.fabric_node_id));
             for (const manifest::Router& router : chip.routers) {
                 CapturedRouter captured{
                     .ref = {.node = chip.fabric_node_id, .key = router.identity.key},
