@@ -312,7 +312,7 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
             .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = false,
-            .compile_args = {f.format_id, mc, kb, mchunks, ur, passes}});
+            .compile_args = {f.format_id, mc, kb, mchunks, ur, passes, kPrefillOutTiles}});
 
     auto band_core = [&](uint32_t band, uint32_t j) { return CoreCoord(j % grid.x, bands[band].row0 + j / grid.x); };
     for (uint32_t band = 0; band < bands.size(); band++) {

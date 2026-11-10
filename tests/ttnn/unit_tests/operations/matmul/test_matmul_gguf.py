@@ -179,6 +179,48 @@ def test_prefill_n_passes(device, dtype, m, k):
     _check(ttnn.to_torch(out), x, blocks, dtype, k, n)
 
 
+def _check_tiles(out, x, blocks, dtype, k, n):
+    """No output tile with an error above MAX_ERROR of the largest output (a few wrong tiles pass the PCC check)."""
+    w = torch.from_numpy(gguf.quants.dequantize(blocks, _qtype(dtype)).reshape(n, k).astype(np.float64))
+    want = (x.reshape(-1, k).to(torch.float64) @ w.T).reshape(-1, n)
+    err = (out.to(torch.float64).reshape(-1, n) - want).abs()
+    m = want.shape[0]
+    err = torch.nn.functional.pad(err, (0, 0, 0, -m % 32)).reshape(-(-m // 32), 32, n // 32, 32).amax(dim=(1, 3))
+    bad = (err > MAX_ERROR * want.abs().max()).nonzero().tolist()
+    assert not bad, f"{len(bad)} of {err.numel()} output tiles wrong, first [M tile, N tile]: {bad[:8]}"
+
+
+# A K split with one row per unit (ur = 1) and an odd number of N tiles on band 0's cores: their units of sums end on
+# a single tile, so the pairs that follow start on odd pages of c_16 (24 pages). Controls: the same N with an even
+# number of row tiles. M = 160, K = 544: the smallest shapes of this plan; the others with --runslow.
+@pytest.mark.parametrize(
+    "dtype",
+    [pytest.param(d, id=_name(d), marks=() if d == ttnn.gguf_q4_0 else pytest.mark.slow) for d in PREFILL_DTYPES],
+)
+@pytest.mark.parametrize(
+    "m, k, n",
+    [
+        (160, 544, 11200),
+        (96, 544, 21600),
+        (128, 544, 11200),
+        pytest.param(160, 4096, 11008, marks=pytest.mark.slow),
+        pytest.param(200, 4096, 12288, marks=pytest.mark.slow),
+        pytest.param(352, 4096, 8800, marks=pytest.mark.slow),
+        pytest.param(192, 4096, 12288, marks=pytest.mark.slow),
+        pytest.param(256, 4096, 12288, marks=pytest.mark.slow),
+    ],
+)
+def test_prefill_k_split_odd_units(device, dtype, m, k, n):
+    if k % _k(dtype, 1):
+        pytest.skip(f"K = {k} is not whole pages of {_name(dtype)}")
+    blocks = _blocks(dtype, k, n)
+    torch.manual_seed(0)
+    x = torch.randn(1, m, k).bfloat16()
+    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _check_tiles(ttnn.to_torch(ttnn.matmul(x_tt, w)), x, blocks, dtype, k, n)
+
+
 def test_leading_dims_and_bias(device):
     dtype, k, n = ttnn.gguf_q4_k, 512, 128
     blocks = _blocks(dtype, k, n)
