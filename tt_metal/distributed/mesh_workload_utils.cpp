@@ -134,10 +134,9 @@ HostMemDeviceCommand build_go_signal_sequence(
 // In the MeshWorkload context, a go signal must be sent to each device when
 // a workload is dispatched, in order to maintain consistent global state.
 void write_go_signal_sequence(
-    uint8_t cq_id,
+    CommandSink& sink,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
-    SystemMemoryManager& sysmem_manager,
     uint32_t expected_num_workers_completed,
     bool send_mcast,
     uint32_t go_ring_slot,
@@ -152,14 +151,11 @@ void write_go_signal_sequence(
         .dispatch_metadata = dispatch_md,
         .config_ring_sync_count = config_ring_sync_count};
     const uint32_t cmd_sequence_sizeB = go_signal_sequence_size(config);
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    void* cmd_region = sink.issue_queue_reserve(cmd_sequence_sizeB);
     HugepageDeviceCommand go_signal_cmd_sequence(mesh_device->impl().metal_context(), cmd_region, cmd_sequence_sizeB);
     populate_go_signal_sequence(go_signal_cmd_sequence, config);
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    sink.publish(cmd_sequence_sizeB);
 }
 
 void write_rt_profiler_flush(

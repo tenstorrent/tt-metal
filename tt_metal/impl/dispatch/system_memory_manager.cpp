@@ -339,18 +339,6 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     cq_interface.completion_fifo_rd_toggle = false;
 }
 
-void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
-    this->bypass_enable = enable;
-    if (clear) {
-        this->bypass_buffer.clear();
-        this->bypass_buffer_write_offset = 0;
-    }
-}
-
-bool SystemMemoryManager::get_bypass_mode() const { return this->bypass_enable; }
-
-std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
-
 uint32_t SystemMemoryManager::get_issue_queue_size(const uint8_t cq_id) const {
     if (is_mock_device()) {
         return 65536;
@@ -382,9 +370,6 @@ uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) co
 uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
     if (is_mock_device()) {
         return 0;
-    }
-    if (this->bypass_enable) {
-        return this->bypass_buffer_write_offset;
     }
     return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
@@ -443,13 +428,6 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
         return dummy_buffer.data();
     }
 
-    if (this->bypass_enable) {
-        uint32_t curr_size = this->bypass_buffer.size();
-        uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
-        this->bypass_buffer.resize(new_size);
-        return (void*)((char*)this->bypass_buffer.data() + this->bypass_buffer_write_offset);
-    }
-
     uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
     const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
@@ -493,9 +471,7 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
     // TODO: Reconsider offset sysmem offset calculations based on
     // https://github.com/tenstorrent/tt-metal/issues/4757
 
-    if (this->bypass_enable) {
-        std::copy((uint8_t*)data, (uint8_t*)data + size_in_bytes, (uint8_t*)this->bypass_buffer.data() + write_ptr);
-    } else if (is_dram_backed()) {
+    if (is_dram_backed()) {
         void* user_scratchspace =
             this->cq_sysmem_start + (write_ptr - this->get_dram_region_base_addr() - this->channel_offset);
         memcpy(user_scratchspace, data, size_in_bytes);
@@ -511,10 +487,6 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         return;
     }
 
-    if (this->bypass_enable) {
-        this->bypass_buffer_write_offset += push_size_B;
-        return;
-    }
     const uint32_t push_size_16B = align(push_size_B, cq_alignment_) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
@@ -601,9 +573,6 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         return;
     }
 
-    if (this->bypass_enable) {
-        return;
-    }
     const uint32_t prefetch_q_rd_ptr =
         ctx_.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
 
@@ -725,9 +694,6 @@ void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
         return;
     }
 
-    if (this->bypass_enable) {
-        return;
-    }
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;
     cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;
@@ -772,9 +738,6 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < max_encodable,
         "FetchQ command too large to represent");
     TT_ASSERT(command_size_B > 0, "Command size must be greater than 0");
-    if (this->bypass_enable) {
-        return;
-    }
     tt_driver_atomics::sfence();
     uint32_t entry_val = command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE;
 
