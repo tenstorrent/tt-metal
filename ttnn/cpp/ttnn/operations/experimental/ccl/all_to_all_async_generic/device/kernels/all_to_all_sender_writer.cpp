@@ -24,7 +24,8 @@ using address_t = uint32_t;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
-constexpr uint32_t current_device_id = get_compile_time_arg_val(1);
+// This chip's values: common runtime args 3, 4, 5 (per device), set at kernel start.
+uint32_t current_device_id = 0;
 constexpr uint32_t num_devices = get_compile_time_arg_val(2);
 constexpr uint32_t concat_dim_size = get_compile_time_arg_val(3);
 constexpr uint32_t inner_dims_size = get_compile_time_arg_val(4);
@@ -33,11 +34,11 @@ constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(7);
 constexpr uint32_t semaphore_expected_value = get_compile_time_arg_val(8);
 constexpr uint32_t concat_num_tiles = get_compile_time_arg_val(9);
-constexpr uint32_t full_block_offset = get_compile_time_arg_val(10);
+uint32_t full_block_offset = 0;
 constexpr auto topology = static_cast<tt::tt_fabric::Topology>(get_compile_time_arg_val(11));
 constexpr auto replicate_axis =
     static_cast<ttnn::operations::ccl::common::ReplicateGroup>(get_compile_time_arg_val(12));
-constexpr uint16_t source_chip_id = get_compile_time_arg_val(13);
+uint16_t source_chip_id = 0;
 constexpr uint16_t source_mesh_id = get_compile_time_arg_val(14);
 constexpr bool is_fabric_2d = get_compile_time_arg_val(15);
 constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(16);
@@ -71,12 +72,12 @@ using FabricConnections = std::conditional_t<stream_uses_mux, FabricMuxConnectio
 constexpr bool fabric2d_multicast_initialization_is_safe = is_fabric_2d && use_multicast_initialization;
 
 // Multicast range for one physical slot: `range` hops when the packet travels along `slot`, else 0.
-constexpr uint16_t mcast_range_for(uint32_t slot, uint32_t travel_direction, uint32_t range) {
+FORCE_INLINE uint16_t mcast_range_for(uint32_t slot, uint32_t travel_direction, uint32_t range) {
     return slot == travel_direction ? static_cast<uint16_t>(range) : 0;
 }
 
-template <uint32_t travel_direction, uint32_t range, typename PacketHeader>
-FORCE_INLINE void set_fabric2d_line_mcast_route(volatile PacketHeader* header) {
+template <uint32_t travel_direction, typename PacketHeader>
+FORCE_INLINE void set_fabric2d_line_mcast_route(volatile PacketHeader* header, uint32_t range) {
     tt::tt_fabric::fabric_set_mcast_route(
         header,
         source_chip_id,
@@ -216,17 +217,17 @@ void send_initialization(
         if (core_id % compile_safe_mux_num_clients != 0) {
             return;
         }
-        constexpr uint32_t positive_range = num_devices - current_device_id - 1;
-        constexpr uint32_t negative_range = current_device_id;
+        const uint32_t positive_range = num_devices - current_device_id - 1;
+        const uint32_t negative_range = current_device_id;
         constexpr uint32_t positive_direction = is_fabric_2d ? mcast_positive_direction : eth_chan_directions::EAST;
         constexpr uint32_t negative_direction = is_fabric_2d ? mcast_negative_direction : eth_chan_directions::WEST;
         constexpr bool owns_positive_targets = fabric_directions[positive_direction];
         constexpr bool owns_negative_targets = fabric_directions[negative_direction];
 
-        if constexpr (positive_range > 0) {
+        if (positive_range > 0) {
             if (owns_positive_targets) {
                 if constexpr (is_fabric_2d) {
-                    set_fabric2d_line_mcast_route<positive_direction, positive_range>(pkt_hdr_sema_forward);
+                    set_fabric2d_line_mcast_route<positive_direction>(pkt_hdr_sema_forward, positive_range);
                 } else {
                     pkt_hdr_sema_forward->to_chip_multicast(
                         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(positive_range)});
@@ -237,10 +238,10 @@ void send_initialization(
                     fabric_connection, packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
             }
         }
-        if constexpr (negative_range > 0) {
+        if (negative_range > 0) {
             if (owns_negative_targets) {
                 if constexpr (is_fabric_2d) {
-                    set_fabric2d_line_mcast_route<negative_direction, negative_range>(pkt_hdr_sema_backward);
+                    set_fabric2d_line_mcast_route<negative_direction>(pkt_hdr_sema_backward, negative_range);
                 } else {
                     pkt_hdr_sema_backward->to_chip_multicast(
                         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(negative_range)});
@@ -280,28 +281,32 @@ void send_initialization(
     }
 
     if constexpr (fabric2d_multicast_initialization_is_safe) {
-        constexpr uint32_t positive_range = num_devices - current_device_id - 1;
-        constexpr uint32_t negative_range = current_device_id;
+        const uint32_t positive_range = num_devices - current_device_id - 1;
+        const uint32_t negative_range = current_device_id;
         constexpr uint32_t positive_direction = mcast_positive_direction;
         constexpr uint32_t negative_direction = mcast_negative_direction;
 
-        if constexpr (positive_range > 0 && fabric_directions[positive_direction]) {
-            set_fabric2d_line_mcast_route<positive_direction, positive_range>(pkt_hdr_sema_forward);
-            pkt_hdr_sema_forward->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
-            auto& connection = select_connection_by_direction(fabric_connections, positive_direction);
-            connection.wait_for_empty_write_slot();
-            connection.send_payload_flush_blocking_from_address(
-                packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
+        if constexpr (fabric_directions[positive_direction]) {
+            if (positive_range > 0) {
+                set_fabric2d_line_mcast_route<positive_direction>(pkt_hdr_sema_forward, positive_range);
+                pkt_hdr_sema_forward->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
+                auto& connection = select_connection_by_direction(fabric_connections, positive_direction);
+                connection.wait_for_empty_write_slot();
+                connection.send_payload_flush_blocking_from_address(
+                    packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
+            }
         }
-        if constexpr (negative_range > 0 && fabric_directions[negative_direction]) {
-            set_fabric2d_line_mcast_route<negative_direction, negative_range>(pkt_hdr_sema_backward);
-            pkt_hdr_sema_backward->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
-            auto& connection = select_connection_by_direction(fabric_connections, negative_direction);
-            connection.wait_for_empty_write_slot();
-            connection.send_payload_flush_blocking_from_address(
-                packet_header_buffer_addr_sema_backward, sizeof(PacketHeader));
+        if constexpr (fabric_directions[negative_direction]) {
+            if (negative_range > 0) {
+                set_fabric2d_line_mcast_route<negative_direction>(pkt_hdr_sema_backward, negative_range);
+                pkt_hdr_sema_backward->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
+                auto& connection = select_connection_by_direction(fabric_connections, negative_direction);
+                connection.wait_for_empty_write_slot();
+                connection.send_payload_flush_blocking_from_address(
+                    packet_header_buffer_addr_sema_backward, sizeof(PacketHeader));
+            }
         }
         return;
     }
@@ -471,6 +476,9 @@ void kernel_main() {
     address_t output_address = get_common_arg_val<address_t>(0);
     uint32_t global_init_semaphore_addr = get_common_arg_val<uint32_t>(1);
     uint32_t global_semaphore_addr = get_common_arg_val<uint32_t>(2);
+    current_device_id = get_common_arg_val<uint32_t>(3);
+    full_block_offset = get_common_arg_val<uint32_t>(4);
+    source_chip_id = static_cast<uint16_t>(get_common_arg_val<uint32_t>(5));
 
     uint32_t core_id = get_arg_val<uint32_t>(arg_idx++);
     uint32_t link_id = get_arg_val<uint32_t>(arg_idx++);
@@ -547,8 +555,8 @@ void kernel_main() {
         }
     }
 
-    constexpr bool has_pre_half_tile = has_half_tile && current_device_id % 2 == 1;
-    constexpr bool has_post_half_tile = has_half_tile && current_device_id % 2 == 0;
+    const bool has_pre_half_tile = has_half_tile && current_device_id % 2 == 1;
+    const bool has_post_half_tile = has_half_tile && current_device_id % 2 == 0;
 
     {
         send_initialization<topology>(
