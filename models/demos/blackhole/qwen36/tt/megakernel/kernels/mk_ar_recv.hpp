@@ -11,6 +11,8 @@
 //   MKAR_SEM_AG_READY, MKAR_SEM_DONE, MKAR_SEM_READY   (program-semaphore ids, or global-semaphore addresses with MK_PS_GSEM)
 //   MKAR_PROG, MKAR_ROWS, MKAR_DELIVER, MKAR_STATS, MKAR_SRED, MKAR_AGD, MKAR_INPK
 //   MKAR_CB_PART, MKAR_CB_SCALER, MKAR_CB_STAGE      Sum(x^2) CBs (STATS)
+//   MKAR_ARGS_L1 (engine): L1 address of this core's arg table; carg / rarg index it instead of the runtime args
+//     (runtime-arg space is sized by the largest core of the program, spec v1.25)
 //   MKAR_DLV_SIGNAL (engine): L1 address of a local word; instead of delivering x itself, post it = it + 1 when the
 //     output chunk is complete (the engine's owner reader multicasts it on NOC1)
 //   MKAR_ALL_RT: 1 = the "common" block is read from the runtime args at cbase (engine), 0 = from the common args
@@ -74,13 +76,22 @@ struct Recv {
     uint32_t done_iters = 0;  // ARs of this program (fini advances the base by wait_value x done_iters)
 
     FORCE_INLINE uint32_t carg(uint32_t i) const {
+#if defined(MKAR_ARGS_L1)   // engine (spec v1.25): the whole arg block lives in a per-core L1 table at MKAR_ARGS_L1
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_ARGS_L1)[cbase + i];
+#endif
         if constexpr (MKAR_ALL_RT) {
             return get_arg_val<uint32_t>(cbase + i);
         } else {
             return get_common_arg_val<uint32_t>(i);
         }
     }
-    FORCE_INLINE uint32_t rarg(size_t i) const { return get_arg_val<uint32_t>(i); }
+    FORCE_INLINE uint32_t rarg(size_t i) const {
+#if defined(MKAR_ARGS_L1)
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_ARGS_L1)[i];
+#else
+        return get_arg_val<uint32_t>(i);
+#endif
+    }
 
     // returns false for a core without an AR role
     FORCE_INLINE bool init(uint32_t common_base, uint32_t role_base) {

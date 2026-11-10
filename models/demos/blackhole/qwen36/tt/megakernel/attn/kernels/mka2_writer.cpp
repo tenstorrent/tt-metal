@@ -196,12 +196,13 @@ void kernel_main() {
     if (vrole == 1) { cb_reserve_back(CB_VJ, 1); cb_push_back(CB_VJ, 1); }
     if (vrole == 2) { cb_reserve_back(CB_VX0, V_OT); cb_push_back(CB_VX0, V_OT); }
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
-    // real MLP AR tail: [ar_on, n_ready, (READY xy, READY word) x n_ready, Recv common block, Recv role block]
-    const uint32_t ar_on = get_arg_val<uint32_t>(a++);
-    const uint32_t ar_nready = ar_on ? get_arg_val<uint32_t>(a++) : 0;
-    const uint32_t ar_rdy = a;
+    // real MLP AR: the owner's args live in its L1 arg table at MK_AR_BLK (ar_phase.py ArPhase.arg_table; spec v1.25,
+    // no runtime args): [ar_on, n_ready, (READY xy, READY word) x n_ready | comp @16 | Recv common + role @20]
+    volatile tt_l1_ptr uint32_t* const ar_blk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_BLK);
+    const uint32_t ar_on = vrole == 2 ? ar_blk[0] : 0;
+    const uint32_t ar_nready = ar_on ? ar_blk[1] : 0;
     static mkar::Recv ar;
-    if (ar_on) ar.init(a + 2 * ar_nready, a + 2 * ar_nready + MKAR_NCOMMON);
+    if (ar_on) ar.init(MK_AR_BLK_RECV, MK_AR_BLK_RECV + MKAR_NCOMMON);
 #endif
     // owner phase of layer L (stand-in AR): x chunk to the K-row, then the column-partial sum and its release
     auto v12_owner = [&](uint32_t L) {
@@ -229,8 +230,8 @@ void kernel_main() {
         {
             DeviceZoneScopedN("W-AR");
             for (uint32_t i = 0; i < ar_nready; ++i) {   // CB_VXO complete: release this chunk to its RS sender / own receiver
-                const uint32_t xy = get_arg_val<uint32_t>(ar_rdy + 2 * i);
-                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, get_arg_val<uint32_t>(ar_rdy + 2 * i + 1)), 1);
+                const uint32_t xy = ar_blk[2 + 2 * i];
+                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ar_blk[3 + 2 * i]), 1);
             }
             ar.iter(L);   // the gather role returns after the AG wait; CB_VXO is read by then (RS done)
 #if !defined(MKAR_DLV_SIGNAL)

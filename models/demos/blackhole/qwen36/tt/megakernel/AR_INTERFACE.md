@@ -164,3 +164,10 @@ next program cannot start before its own previous one ends).
 - The pre-attention MLP AR (40-54 us vs ~21) is the next attention layer's MLP-slice pump (19.4 MB) sharing the NoC:
   the all-gather landing stretches, not the delivery. Rate-limiting the pump (`MK_AR_PUMPGAP`) or holding it
   (`MK_AR_NOPUMP`) restores ~21 us but the attention layer then loses 35-80 us; full-rate pumping is best.
+- v1.2 (spec v1.25, engine rules: CB ids < 45; bulky per-core args out of runtime args): the owners' AR args (READY
+  targets, Reduce [has_work, ring, PT], Recv common + role blocks) are a per-core L1 table, `ArPhase.arg_table(parts)`
+  (uint32, width-sharded over the owners, 64 words / core, per-device contents via ShardTensorToMesh; layout
+  [ar_on, n_ready, (xy, READY) x n | comp @16 | recv @20]). Kernels: `MKAR_ARGS_L1` (Recv carg / rarg),
+  `Reduce::init_l1`, engine defines `MK_AR_BLK` / `MK_AR_BLK_COMP` / `MK_AR_BLK_RECV`. The owner writer / compute
+  carry no AR runtime args. (The AR-only sender kernels keep theirs: the fabric connection args are runtime args, and
+  the sender group is not the program's largest.)

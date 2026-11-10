@@ -112,8 +112,9 @@ void kernel_main() {
 #endif
     const uint32_t vfirst = get_arg_val<uint32_t>(a++);
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
-    mkar::Reduce ar_red;   // [has_work, ring, PT]: has_work = this device owns the core's chunk
-    ar_red.init(a); a += 3;
+    mkar::Reduce ar_red;   // [has_work, ring, PT] from the owner's L1 arg table (spec v1.25): has_work = this device owns it
+    ar_red.has_work = 0;
+    if (vrole == 2) ar_red.init_l1(MK_AR_BLK, MK_AR_BLK_COMP);
 #endif
     // owner: Σ of the 10 column down partials (P @ I, fp32 DST) [+ the x chunk while the AR is a stall] -> CB_VXO
     auto v12_osum = [&](uint32_t L) {

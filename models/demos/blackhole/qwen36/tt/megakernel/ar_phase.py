@@ -138,6 +138,40 @@ class ArPhase(OneShotARP):
                     recv_args=recv_args, comp_defines=comp_defines, comp_args=comp_args, ready_targets=ready,
                     semaphores=list(prog.semaphores), program=prog)
 
+    # ---------------------------------------------------------------- per-core L1 arg table (spec v1.25)
+    BLK_NW, BLK_COMP, BLK_RECV = 64, 16, 20  # words per owner; [ar_on, n_ready, (xy, READY) x n | comp @16 | recv @20]
+
+    def arg_table(self, parts_by_coord):
+        """The owners' AR args as a per-core L1 table (uint32, width-sharded over the owners, one row of BLK_NW words per
+        core; per-device contents). parts_by_coord: {mesh column: engine_parts(...)}. Returns the tensor; its L1 address
+        is uniform (MKAR_ARGS_L1 / the engine's MK_AR_BLK define). The kernels read it at init: no runtime args."""
+        import torch
+
+        own = ttnn.corerange_to_cores(self.owners_grid(), row_wise=True)
+        rows = []
+        for c in range(len(parts_by_coord)):
+            P = parts_by_coord[c]
+            dev = []
+            for core in own:
+                k = (core.x, core.y)
+                w = [0] * self.BLK_NW
+                rt = P["ready_targets"].get(k, [])
+                assert 2 + 2 * len(rt) <= self.BLK_COMP
+                w[0], w[1] = 1, len(rt)
+                for i, (xy, ra) in enumerate(rt):
+                    w[2 + 2 * i], w[3 + 2 * i] = xy, ra
+                w[self.BLK_COMP:self.BLK_COMP + 3] = P["comp_args"][k]
+                ra = P["recv_args"][k]
+                assert self.BLK_RECV + len(ra) <= self.BLK_NW, len(ra)
+                w[self.BLK_RECV:self.BLK_RECV + len(ra)] = ra
+                dev += w
+            rows.append(dev)
+        t = torch.tensor(rows, dtype=torch.int64).to(torch.int32).reshape(len(rows), 1, 1, -1)
+        mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1,
+                               ttnn.ShardSpec(self.owners_grid(), [1, self.BLK_NW], ttnn.ShardOrientation.ROW_MAJOR))
+        return ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, memory_config=mc,
+                               mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0))
+
     def owners_grid(self):
         return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(11, 7))])
 

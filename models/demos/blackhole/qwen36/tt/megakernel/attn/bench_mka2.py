@@ -543,6 +543,11 @@ if REAL_AR:
     _xres = xb.clone()
     _snd = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c_), ttnn.CoreCoord(*c_)) for c_ in ((10, 8), (11, 8), (10, 9), (11, 9))])
     ar_sem = ttnn.create_global_semaphore(dev, _ow.merge(_snd), 0)
+    # per-device AR parts up front (the owners' L1 arg table needs every device's args); build() reuses them
+    ARP = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), v_xo, ar_buf, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
+    ar_blk = AR.arg_table(ARP)
+    MKDEF = MKDEF + [('MK_AR_BLK', str(ar_blk.buffer_address())), ('MK_AR_BLK_COMP', str(AR.BLK_COMP)), ('MK_AR_BLK_RECV', str(AR.BLK_RECV))]
+    print(f"[ar] arg table at L1 {ar_blk.buffer_address()} ({AR.BLK_NW} words / owner)", flush=True)
     print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {ar_buf.buffer_address()} out {ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)}", flush=True)
 
 def q_wargs(fi):
@@ -676,7 +681,7 @@ def build(out, coord=None):
             cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, O_CRS)]   # CB_VPK: the stand-in's packing scratch (R < 32 only)
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
     if REAL_AR:   # this device's AR parts: sender kernels / CBs / fabric semaphores, the shared RS slot CB, owner CBs
-        arp = AR.engine_parts(coord, v_xo, ar_buf, ar_out, ar_out, ar_sem)
+        arp = ARP[coord[1]]
         assert dict(arp['recv_defines']).get('MKAR_DELIVER', '0') != '0', "MK_REAL_AR: the AR must deliver x (STREAM waits its flags)"
         sems = sems + arp['semaphores']
         _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=d_.core_ranges, format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
@@ -730,13 +735,6 @@ def build(out, coord=None):
         if V12:   # v12 arg tails (appended after every other arg)
             vw_, vr_, vc_ = v_args(fi, c)
             _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
-        if REAL_AR and not isS:   # AR tails (EXT binary): writer [ar_on, n_ready, (xy, READY) x n, common, role], compute [has_work, ring, PT]
-            _k = (c.x, c.y)
-            if _k in arp['recv_args']:
-                _rt = arp['ready_targets'][_k]
-                _wa = list(_wa) + [1, len(_rt)] + [v_ for t_ in _rt for v_ in t_] + arp['recv_args'][_k]; _ca = list(_ca) + arp['comp_args'][_k]
-            else:
-                _wa = list(_wa) + [0]; _ca = list(_ca) + [0, 0, 0]
         _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
     acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
@@ -750,7 +748,7 @@ def build(out, coord=None):
                                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
     if RS:
         _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
-        _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon']))] + ([('MKAR_DLV_SIGNAL', str(ttnn.get_global_semaphore_address(AR_DLV)))] if AR_DLVR else []), arp['comp_defines']) if REAL_AR else ((), ())
+        _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon'])), ('MKAR_ARGS_L1', str(ar_blk.buffer_address()))] + ([('MKAR_DLV_SIGNAL', str(ttnn.get_global_semaphore_address(AR_DLV)))] if AR_DLVR else []), arp['comp_defines']) if REAL_AR else ((), ())
         ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard)
         if REAL_AR: ks = ks + arp['sender_kernels']
     else:
@@ -779,7 +777,7 @@ else:
     prog = build(out_t)
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + ([ar_out] if REAL_AR else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + [out_t], prog); ttnn.synchronize_device(dev)
     if REAL_AR and AR_SEQ:   # this pass's golds from the residual the previous pass left (rstd stays the CB 20 stand-in)
         for L_ in range(NL):
             _g, _u, _d = vlayer(L_)
