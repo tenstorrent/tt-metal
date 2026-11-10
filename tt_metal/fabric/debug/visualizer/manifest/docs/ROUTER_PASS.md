@@ -78,6 +78,11 @@ credit counter arrays, leftover L1, and credits on stream registers. Each is reg
 builder (TYPE_REGISTRY.md's "Where regions are registered" lists them), and each L1 region records whether fabric init
 clears it.
 
+**Active.** Every L1 region says whether anything writes it on this run (`active`, [FORMAT.md](FORMAT.md)). A field's
+region follows its `written_when` gate (FIELD_TABLES.md's "Reading a table"). Of the router pass's own regions, the
+ring buffers are always active, the credit counter arrays are active when the kernel uses them (below), and leftover L1
+never is.
+
 ## The router
 
 **Identity** (`identity`): the router's Ethernet channel and the direction its builder built it facing, from its
@@ -104,12 +109,18 @@ peer in one packet, so it relies on the arrays being back to back and the same s
 spacing. Each array is `uint32_t`s, one per sender channel, indexed by the channel's compact index. The `to_sender`
 arrays count this router's own sender channels, and the `receiver` arrays the sender channels of the router on the other
 end of the link. The model's `k_credit_counter_arrays` says which, and where `L1CreditCounters` holds each array; the
-writer records which as `indexed_by`. `credit_counter_region` gives the region a `CounterRef` points into.
+writer records which as `indexed_by`. `credit_counter_region` gives the region a `CounterRef` points into. The arrays
+are active when any of the router's ERISCs is fed `VC<n>_USES_COUNTER_CREDITS` (`uses_credit_counters`): the same
+arguments the kernel's `any_vc_uses_counter_credits` reads, so the manifest and the kernel decide it from one place,
+the builder's credit transport plan. A router on two TX queues requires counters on every VC, so the arrays it zeroes
+by role in `router_init.hpp` are zeroed exactly then. With this router VC0 and VC1 always use counters, so the arrays
+are always active.
 
 **Leftover L1** (`leftover_l1`): the L1 from the end of what the router places (the builder's
 `get_allocated_l1_end_address`) to the end of the L1 the router may load into (`max_l1_loading_size`), as `std::byte`,
 or null when nothing is left. With the streaming profiler on, `LinkSyncL1` sits above `max_l1_loading_size`, so it is
-not leftover.
+not leftover. It's never active, since nothing is placed there; capture still reads its bytes, so a stray write there
+shows.
 
 **ERISCs** (`eriscs`): one per RISC the kernel runs on, in RISC order, each with its processor, its physical ERISC
 from the HAL, and the opt level its kernel was compiled and linked at. Each ERISC's fields are under the router's

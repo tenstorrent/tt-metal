@@ -219,7 +219,8 @@ TEST(ManifestWriter, ContentsNameTheirType) {
              {"num_elements", 1},
              {"element_size", sizeof(EDMStatus)},
              {"type", "EDMStatus"},
-             {"multi_sampled", nullptr}}));
+             {"multi_sampled", nullptr},
+             {"active", true}}));
     EXPECT_EQ(
         fields.at("retrain_sync"),
         json(
@@ -258,6 +259,22 @@ TEST(ManifestWriter, MultiSampledRegionsNameTheirRole) {
     EXPECT_TRUE(router.at("credit_counters").at("to_sender_ack").at("multi_sampled").is_null());
     EXPECT_TRUE(router.at("fields").at("erisc0").at("retrain_sync").at("multi_sampled").is_null());
     EXPECT_EQ(manifest.at("vocabulary").at("multi_sample_role"), json({"loop_heartbeat", "fabric_telemetry"}));
+}
+
+// Every L1 region says whether anything writes it: leftover L1 doesn't, and the rest here do. A stream register has no
+// active: the kernel or the hardware always holds its value.
+TEST(ManifestWriter, ActiveSaysWhetherAnythingWritesTheRegion) {
+    auto facts = make_facts();
+    auto& leftover = facts.meshes.at(0).chips.at(0).routers.at(0).leftover_l1;
+    leftover = register_l1_region<std::byte>(0x8000, 0x100, 1);
+    leftover->active = false;
+    const auto manifest = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
+    const auto& router = router_e0(manifest);
+    EXPECT_EQ(router.at("leftover_l1").at("active"), false);
+    EXPECT_EQ(router.at("fields").at("erisc0").at("edm_status").at("active"), true);
+    EXPECT_EQ(router.at("credit_counters").at("to_sender_ack").at("active"), true);
+    EXPECT_EQ(manifest.at("arch").at("l1_areas").at("heartbeat").at("active"), true);
+    EXPECT_FALSE(router.at("fields").at("erisc0").at("retrain_sync").contains("active"));
 }
 
 // Each ERISC's values are written under its own key, as the builder gave them, even where two ERISCs differ.
@@ -317,7 +334,7 @@ TEST(ManifestModel, CreditCounterArraysResolve) {
 // ============ Reader ============
 
 // make_facts with what it leaves out: a sub-context, a sibling producer, an acked credit, a downstream edge, live
-// downstreams, fields of every kind, and a multi-sampled stream register.
+// downstreams, fields of every kind, a multi-sampled stream register, and leftover L1, which nothing writes.
 ManifestFacts make_facts_with_every_part() {
     auto facts = make_facts();
     facts.run.subcontext = Subcontext{.id = 1, .rank = 0, .size = 2};
@@ -348,6 +365,7 @@ ManifestFacts make_facts_with_every_part() {
             .type = std::string(get_manifest_type_name<uint32_t>()),
             .multi_sampled = MultiSampleRole::LOOP_HEARTBEAT}});
     router.leftover_l1 = register_l1_region<std::byte>(0x8000, 0x100, 1);
+    router.leftover_l1->active = false;
     return facts;
 }
 
@@ -434,6 +452,27 @@ TEST(ManifestReader, FailsOnAMultiSampledItCannotRead) {
     expect_parse_fails_with(
         missing,
         "Fabric manifest: /meshes/M0/chips/C0/routers/E0/credit_counters/to_sender_ack/multi_sampled is missing");
+}
+
+// Every router core writes an arch area, so one that says it's inactive fails.
+TEST(ManifestReader, FailsOnAnInactiveArchArea) {
+    json manifest = make_manifest_json(make_facts());
+    manifest.at("arch").at("l1_areas").at("routing_table").at("active") = false;
+    expect_parse_fails_with(
+        manifest,
+        "Fabric manifest: /arch/l1_areas/routing_table is inactive, but every router core writes an arch area");
+}
+
+// Sampling a region nothing writes says nothing, so an inactive multi-sampled region fails.
+TEST(ManifestReader, FailsOnAnInactiveMultiSampledRegion) {
+    json manifest = make_manifest_json(make_facts());
+    auto& counters = router_e0(manifest).at("credit_counters").at("to_sender_ack");
+    counters.at("multi_sampled") = "loop_heartbeat";
+    counters.at("active") = false;
+    expect_parse_fails_with(
+        manifest,
+        "Fabric manifest: /meshes/M0/chips/C0/routers/E0/credit_counters/to_sender_ack/active is false, but the region "
+        "is multi_sampled, and nothing writes it");
 }
 
 // A fields id names a block in field_sets, and in the PER_ROUTER layout there are no ids.

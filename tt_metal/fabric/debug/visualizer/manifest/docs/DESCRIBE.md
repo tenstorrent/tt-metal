@@ -100,6 +100,13 @@ also catch each ERISC's router state and the bandwidth counts as they change.
 
 No region the builder allocates is marked.
 
+**Arch areas are always written.** An arch area is one whose place the architecture fixes *and* that every router core
+writes: the heartbeat word (the router kernel, and base firmware on Blackhole), the telemetry area (the router's
+prologue, `init_telemetry_block`, zeroes it and writes its static info whatever its telemetry options), the routing
+table (the host), and the base firmware words. So an arch area is always `active`, and the reader refuses one that
+isn't. A region only some routers write is described on the router instead, where `active` can say so
+([ROUTER_PASS.md](ROUTER_PASS.md)).
+
 `arch` doesn't describe stream registers. Each stream register the manifest names carries its own address and value
 width, worked out from the HAL where it's read ([ROUTER_PASS.md](ROUTER_PASS.md)).
 

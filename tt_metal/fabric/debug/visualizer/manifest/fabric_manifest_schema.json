@@ -234,12 +234,24 @@
         "num_elements": { "type": "integer", "minimum": 1 },
         "element_size": { "type": "integer", "minimum": 1 },
         "type": { "$ref": "#/$defs/type_name" },
-        "multi_sampled": { "$ref": "#/$defs/multi_sampled" }
+        "multi_sampled": { "$ref": "#/$defs/multi_sampled" },
+        "active": {
+          "description": "False when the run's options mean nothing writes the region, though it's allocated: its bytes are whatever the L1 held. A multi-sampled region is always active.",
+          "type": "boolean"
+        }
       },
-      "required": ["address", "num_elements", "element_size", "type", "multi_sampled"]
+      "required": ["address", "num_elements", "element_size", "type", "multi_sampled", "active"],
+      "if": { "properties": { "multi_sampled": { "type": "string" } } },
+      "then": { "properties": { "active": { "const": true } } }
     },
     "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
     "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
+    "arch_area": {
+      "description": "An L1 area the architecture fixes. Every router core writes it, so it's always active.",
+      "$ref": "#/$defs/region",
+      "properties": { "active": { "const": true } }
+    },
+    "optional_arch_area": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/arch_area" }] },
     "stream_reg_keys": {
       "description": "A stream register's word at address. Its value is the word's low value_bits bits, read as type; the bits above can hold other state.",
       "type": "object",
@@ -285,6 +297,7 @@
               "$ref": "#/$defs/region_keys",
               "properties": {
                 "multi_sampled": { "const": "loop_heartbeat" },
+                "active": { "const": true },
                 "magic": { "$ref": "#/$defs/count" },
                 "magic_mask": { "$ref": "#/$defs/count" },
                 "period_iters": { "$ref": "#/$defs/count" }
@@ -293,16 +306,16 @@
               "unevaluatedProperties": false
             },
             "fabric_telemetry": {
-              "$ref": "#/$defs/region",
+              "$ref": "#/$defs/arch_area",
               "properties": { "multi_sampled": { "const": "fabric_telemetry" } }
             },
-            "routing_table": { "$ref": "#/$defs/region" },
-            "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" },
-            "base_fw_port_status": { "$ref": "#/$defs/optional_region" },
-            "base_fw_train_status": { "$ref": "#/$defs/optional_region" },
-            "base_fw_retrain_count": { "$ref": "#/$defs/optional_region" },
-            "base_fw_rx_link_up": { "$ref": "#/$defs/optional_region" },
-            "base_fw_postcode": { "$ref": "#/$defs/optional_region" }
+            "routing_table": { "$ref": "#/$defs/arch_area" },
+            "eth_fw_mailbox": { "$ref": "#/$defs/optional_arch_area" },
+            "base_fw_port_status": { "$ref": "#/$defs/optional_arch_area" },
+            "base_fw_train_status": { "$ref": "#/$defs/optional_arch_area" },
+            "base_fw_retrain_count": { "$ref": "#/$defs/optional_arch_area" },
+            "base_fw_rx_link_up": { "$ref": "#/$defs/optional_arch_area" },
+            "base_fw_postcode": { "$ref": "#/$defs/optional_arch_area" }
           },
           "required": [
             "heartbeat", "fabric_telemetry", "routing_table",

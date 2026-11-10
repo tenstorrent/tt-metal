@@ -76,6 +76,7 @@ json make_l1_json(const manifest::content::L1& l1) {
     out["element_size"] = l1.element_size;
     out["type"] = l1.type;
     out["multi_sampled"] = make_multi_sampled_json(l1.multi_sampled);
+    out["active"] = l1.active;
     return out;
 }
 
@@ -666,7 +667,8 @@ std::optional<manifest::MultiSampleRole> take_multi_sampled(JsonObjectReader& ob
     return read_enum<manifest::MultiSampleRole>(value);
 }
 
-// The keys make_l1_json writes, out of an object that may hold others.
+// The keys make_l1_json writes, out of an object that may hold others. A region nothing writes can't be multi-sampled:
+// sampling it would say nothing.
 manifest::content::L1 take_l1_keys(JsonObjectReader& object) {
     manifest::content::L1 l1;
     l1.address = object.take<uint32_t>("address");
@@ -674,6 +676,11 @@ manifest::content::L1 take_l1_keys(JsonObjectReader& object) {
     l1.element_size = object.take<uint32_t>("element_size");
     l1.type = take_type_name(object, "type");
     l1.multi_sampled = take_multi_sampled(object);
+    const JsonValueReader active = object.take("active");
+    l1.active = active.read<bool>();
+    if (!l1.active && l1.multi_sampled.has_value()) {
+        active.fail("is false, but the region is multi_sampled, and nothing writes it");
+    }
     return l1;
 }
 
@@ -681,6 +688,25 @@ manifest::content::L1 read_l1(const JsonValueReader& value) { return value.read_
 
 std::optional<manifest::content::L1> read_optional_l1(const JsonValueReader& value) {
     return value.read_nullable_object(take_l1_keys);
+}
+
+// An arch area, which every router core writes, so it's never inactive.
+manifest::content::L1 check_arch_area_active(manifest::content::L1 area, const JsonValueReader& value) {
+    if (!area.active) {
+        value.fail("is inactive, but every router core writes an arch area");
+    }
+    return area;
+}
+
+manifest::content::L1 read_arch_area(const JsonValueReader& value) {
+    return check_arch_area_active(read_l1(value), value);
+}
+
+std::optional<manifest::content::L1> read_optional_arch_area(const JsonValueReader& value) {
+    if (value.is_null()) {
+        return std::nullopt;
+    }
+    return read_arch_area(value);
 }
 
 // The keys make_stream_reg_json writes, out of an object that may hold others.
@@ -811,22 +837,23 @@ manifest::CoreRegisters read_core_registers(const JsonValueReader& value) {
 
 manifest::ArchAreas read_arch_areas(JsonObjectReader& areas_json) {
     manifest::ArchAreas areas;
-    areas.heartbeat = areas_json.take("heartbeat").read_object([](JsonObjectReader& heartbeat_json) {
+    const JsonValueReader heartbeat_value = areas_json.take("heartbeat");
+    areas.heartbeat = heartbeat_value.read_object([&](JsonObjectReader& heartbeat_json) {
         manifest::Heartbeat heartbeat;
-        heartbeat.word = take_l1_keys(heartbeat_json);
+        heartbeat.word = check_arch_area_active(take_l1_keys(heartbeat_json), heartbeat_value);
         heartbeat.magic = heartbeat_json.take<uint32_t>("magic");
         heartbeat.magic_mask = heartbeat_json.take<uint32_t>("magic_mask");
         heartbeat.period_iters = heartbeat_json.take<uint32_t>("period_iters");
         return heartbeat;
     });
-    areas.fabric_telemetry = read_l1(areas_json.take("fabric_telemetry"));
-    areas.routing_table = read_l1(areas_json.take("routing_table"));
-    areas.eth_fw_mailbox = read_optional_l1(areas_json.take("eth_fw_mailbox"));
-    areas.base_fw_port_status = read_optional_l1(areas_json.take("base_fw_port_status"));
-    areas.base_fw_train_status = read_optional_l1(areas_json.take("base_fw_train_status"));
-    areas.base_fw_retrain_count = read_optional_l1(areas_json.take("base_fw_retrain_count"));
-    areas.base_fw_rx_link_up = read_optional_l1(areas_json.take("base_fw_rx_link_up"));
-    areas.base_fw_postcode = read_optional_l1(areas_json.take("base_fw_postcode"));
+    areas.fabric_telemetry = read_arch_area(areas_json.take("fabric_telemetry"));
+    areas.routing_table = read_arch_area(areas_json.take("routing_table"));
+    areas.eth_fw_mailbox = read_optional_arch_area(areas_json.take("eth_fw_mailbox"));
+    areas.base_fw_port_status = read_optional_arch_area(areas_json.take("base_fw_port_status"));
+    areas.base_fw_train_status = read_optional_arch_area(areas_json.take("base_fw_train_status"));
+    areas.base_fw_retrain_count = read_optional_arch_area(areas_json.take("base_fw_retrain_count"));
+    areas.base_fw_rx_link_up = read_optional_arch_area(areas_json.take("base_fw_rx_link_up"));
+    areas.base_fw_postcode = read_optional_arch_area(areas_json.take("base_fw_postcode"));
     return areas;
 }
 

@@ -88,6 +88,16 @@ std::string source_text(const manifest::Source& source) {
         source);
 }
 
+// The field's description, and when the kernel writes its region if it has a written_when gate.
+std::string description_text(const manifest::RouterField& field) {
+    std::string out = cell(field.description.value);
+    if (field.written_when.has_value()) {
+        out += fmt::format(
+            " Written only while `{}` is nonzero; otherwise the region is inactive.", *field.written_when);
+    }
+    return out;
+}
+
 std::string fields_table(std::string_view title, std::string_view path, std::span<const manifest::RouterField> table) {
     std::string out =
         fmt::format("### {}\n\nEach `erisc<r>` of the `field_sets` block that `{}` names.\n\n", title, path);
@@ -101,7 +111,7 @@ std::string fields_table(std::string_view title, std::string_view path, std::spa
             content_type(field.content.value),
             manifest::lower_enum_name(field.category.value),
             source_text(field.source),
-            cell(field.description.value));
+            description_text(field));
     }
     return out;
 }

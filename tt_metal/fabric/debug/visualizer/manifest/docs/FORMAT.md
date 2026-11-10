@@ -34,6 +34,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 | Stream register | One of the Ethernet core's hardware stream registers, which fabric uses as counters and scratch |
 | Region | Router state the manifest describes: an L1 region, or a stream register. It says where the bytes are and the type they hold |
 | Multi-sampled | A region capture reads in each of its rounds, as well as once in its full read. Its role says what its change across the rounds means |
+| Active | Whether anything writes an L1 region on this run. An inactive region is allocated, but its bytes are whatever the L1 held |
 | Type name | A registered C++ type's name, such as `EDMStatus`, which decode maps back to the type ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) |
 | Field | One value a router's kernel was fed, keyed by name ([FIELD_TABLES.md](FIELD_TABLES.md)) |
 | Field set | One distinct fields block, which every router, channel or edge with those same fields names by its id, such as `F0` |
@@ -82,13 +83,14 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 
 ## Shapes that repeat
 
-**L1 region**: `{ address, num_elements, element_size, type, multi_sampled }`. `num_elements` elements of `type`,
-`element_size` bytes apart from `address`. Element `i` holds a `type` in its first `sizeof(type)` bytes, at
+**L1 region**: `{ address, num_elements, element_size, type, multi_sampled, active }`. `num_elements` elements of
+`type`, `element_size` bytes apart from `address`. Element `i` holds a `type` in its first `sizeof(type)` bytes, at
 `address + i * element_size`; the rest of the element, if `element_size` is larger, isn't typed. Whether fabric init
 zeroes part of a region before launch is `fabric.host_clears`.
 
 ```json
-{ "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int", "multi_sampled": null }
+{ "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int", "multi_sampled": null,
+  "active": true }
 ```
 
 **Stream register**: `{ stream_id, address, value_bits, type, multi_sampled }`. One word at `address`, in stream
@@ -108,9 +110,23 @@ value is the region's role (`multi_sample_role`), which says what its change acr
 | `loop_heartbeat` | Written every pass of the router's loop, stuck or not | Moving: the loop runs. Stopped: it doesn't |
 | `fabric_telemetry` | The fabric telemetry area: each ERISC's TX and RX heartbeats and router state, and the bandwidth counts | A heartbeat moves while its side makes progress or has nothing to do, and stops when it's stuck. Which an ERISC writes is its `telemetry_enabled` and `telemetry_stats_mask` fields |
 
+A multi-sampled region is always active.
+
 How many rounds capture reads, and how far apart, is capture's choice, not the manifest's. Only the arch areas
 `heartbeat` and `fabric_telemetry` are multi-sampled now; stream registers carry the key so one can be marked with no
 change to the format.
+
+**Active**: an L1 region's `active`. A region can go unwritten on a run in three ways, each said where the writer's
+configuration lives:
+
+| Case | Example | What the manifest says |
+| --- | --- | --- |
+| Not allocated | Code profiling results with profiling off (address 0) | The field is `null` |
+| Allocated, never written | Blackhole's perf telemetry buffer with bandwidth telemetry off; leftover L1 | `"active": false` |
+| Written, some members skipped | The telemetry area, where each ERISC writes only the statistics its telemetry options name | Nothing: the router's fields say what's written, and decode reads them |
+
+An inactive region's bytes are still captured, so something writing it unexpectedly still shows. An arch area is always
+active (`arch`, below). A stream register has no `active`.
 
 **Type name**: the `type` of a region or stream register, or `fabric.packet_header`. It's a registered C++ type's name
 without its namespaces, as the build that wrote the manifest spells it: `EDMStatus`, `HybridMeshPacketHeaderT<36>`,
@@ -183,7 +199,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | --- | --- |
 | `name` | The architecture, such as `wormhole_b0` |
 | `l1` | The whole L1 of the Ethernet core a router runs on: `size_bytes` bytes from `address`. Every L1 region the manifest names lies inside it |
-| `l1_areas` | L1 regions the architecture fixes on every router core: `heartbeat` (with its `magic`, `magic_mask` and `period_iters`; multi-sampled as `loop_heartbeat`), `fabric_telemetry` (multi-sampled as `fabric_telemetry`), `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null |
+| `l1_areas` | L1 regions the architecture fixes on every router core: `heartbeat` (with its `magic`, `magic_mask` and `period_iters`; multi-sampled as `loop_heartbeat`), `fabric_telemetry` (multi-sampled as `fabric_telemetry`), `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null. Every router core writes each area, so each is `active` |
 | `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word. The model's `k_core_registers` holds this order, which the writer and the reader follow |
 | `fabric_telemetry_version` | `FABRIC_TELEMETRY_VERSION`: which layout of `FabricTelemetry` the `fabric_telemetry` area holds |
 

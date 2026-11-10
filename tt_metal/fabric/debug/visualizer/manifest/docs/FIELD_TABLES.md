@@ -18,9 +18,11 @@ written once, in the manifest's `field_sets`, and a router, channel or edge name
 
 ```json
 "edm_status":                      { "category": "lifecycle", "kind": "l1", "address": 98624, "num_elements": 1,
-                                     "element_size": 4, "type": "EDMStatus" },
+                                     "element_size": 4, "type": "EDMStatus", "multi_sampled": null,
+                                     "active": true },
 "erisc_sync":                      { "category": "lifecycle", "kind": "stream_reg", "stream_id": 31,
-                                     "address": 4290113536, "value_bits": 24, "type": "unsigned int" },
+                                     "address": 4290113536, "value_bits": 24, "type": "unsigned int",
+                                     "multi_sampled": null },
 "handshake_sender":                { "category": "lifecycle", "kind": "flag", "value": true },
 "producer_credit_return_noc":      { "category": "flow_control", "kind": "number", "value": 0 },
 "producer_credit_return_cmd_buf":  { "category": "flow_control", "kind": "enum", "value": 3,
@@ -56,8 +58,8 @@ sync and which channels it services.
 
 ## An entry
 
-Each entry is a `RouterField`. Every member except `source` is wrapped in `Required`, which has no default, so an entry
-that leaves one out doesn't compile.
+Each entry is a `RouterField`. Every member except `source` and `written_when` is wrapped in `Required`, which has no
+default, so an entry that leaves one out doesn't compile.
 
 ```cpp
 RouterField{
@@ -76,6 +78,7 @@ RouterField{
 | `category` | What the field is for (below) |
 | `content` | The field's kind and, for an L1 region or stream register, the registered type it holds (below) |
 | `description` | One sentence for [FIELDS.md](FIELDS.md) and for readers of the manifest |
+| `written_when` | Optional, L1 fields only: the key of a flag or number field in the same table whose value, on the same ERISC, says whether the kernel writes the region (below) |
 
 ### Source
 
@@ -151,6 +154,16 @@ per ERISC. For each entry:
 | Flag | `true` or `false`. Anything other than 0 or 1 fails |
 | Enum | The value and its enumerator's name. A value that isn't one of the enum's enumerators fails |
 
+**Written when.** A region the builder allocates can still go unwritten, because the option that writes it is off. An L1
+entry with a `written_when` gate is `active` only when the gate's value on the same ERISC is nonzero (`is_written`); one
+without a gate is always active. So the router pass reads every entry's value first, then makes the fields. The gates:
+
+| Field | Gate | Why |
+| --- | --- | --- |
+| `perf_telemetry` | `perf_telemetry_mode` | Blackhole allocates the buffer even with bandwidth telemetry off, and the kernel writes it only with a recorder (`router_telemetry.hpp`'s `perf_recorder`) |
+| `code_profiling` | `code_profiling_timers` | The kernel clears and fills the buffer only with some timer on |
+| `channel_trimming_capture` | `channel_trimming_capture_enabled` | The kernel records usage only with the capture on. Its address is fed only then too, so the gate always holds where the field is present |
+
 ## Every kernel input is accounted for
 
 The router pass starts each router by checking its kernel inputs (`check_kernel_inputs_accounted`). Every named
@@ -175,12 +188,14 @@ name no table reads and `k_router_pass_args` doesn't list, so the lists stay tru
 - **A read argument must exist.** `RouterArgs` fails for one the builder didn't feed: "... reads ..., but ERISC<n>
 wasn't given it".
 - **At compile time** (`static_assert` in `fabric_manifest_fields.hpp`): an argument's `{}` count matches its
-`ArgIndex`, only per-channel and per-edge tables use indices or builder members, and nothing is both read and listed
-as unrecorded.
+`ArgIndex`, only per-channel and per-edge tables use indices or builder members, only an L1 field has a `written_when`
+gate and the gate names a flag or number field in the same table (`gates_name_flag_or_number_fields`), and nothing is
+both read and listed as unrecorded.
 
 ## Adding a field
 
-1. Add an entry to the table for where it sits, with its key, source, category, content and description.
+1. Add an entry to the table for where it sits, with its key, source, category, content and description. If it's an
+   L1 region an option can leave unwritten, give it the `written_when` gate that option's field is.
 2. If its content is an L1 region or stream register of a type that isn't registered yet, add the type to
    `RegisteredTypes` ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)). The build fails until you do. A configuration enum needs
    nothing unless enchantum can't find its enumerators.

@@ -167,6 +167,9 @@ struct RouterField {
     Required<FieldCategory> category;
     Required<FieldContent> content;
     Required<std::string_view> description;
+    // The key of the field in the same table whose value, on the same ERISC, says whether the kernel writes this L1
+    // field's region: it's active when that value is nonzero. Null: the kernel writes it whenever it's allocated.
+    std::optional<std::string_view> written_when;
 };
 
 inline constexpr auto k_router_fields = [] {
@@ -358,6 +361,7 @@ inline constexpr auto k_router_fields = [] {
                 static_cast<uint32_t>(FabricEriscDatamoverConfig::perf_telemetry_buffer_size), 1),
             .description = "Where the router records its bandwidth telemetry, when bandwidth telemetry is on. "
                            "Allocated only then, except on Blackhole, which always allocates it.",
+            .written_when = "perf_telemetry_mode",
         },
         RouterField{
             .key = "code_profiling",
@@ -366,6 +370,7 @@ inline constexpr auto k_router_fields = [] {
             .content = register_l1_field<CodeProfilingTimerResult>(get_max_code_profiling_timer_types()),
             .description = "Where the router accumulates each code profiling timer's cycles and captures, one result "
                            "per timer type. Allocated only with code profiling on.",
+            .written_when = "code_profiling_timers",
         },
         RouterField{
             .key = "channel_trimming_capture_enabled",
@@ -383,6 +388,7 @@ inline constexpr auto k_router_fields = [] {
             .content = register_l1_field<ChannelTrimmingOverrides>(),
             .description = "Where it records them: the packet sizes each sender channel saw, and which sender and "
                            "receiver channels carried traffic.",
+            .written_when = "channel_trimming_capture_enabled",
         },
 
         // What differs between a router's ERISCs by design: each one's role, its handshake, and its context switching.
@@ -789,6 +795,29 @@ static_assert(sources_name_channels(k_sender_channel_fields, true));
 static_assert(sources_name_channels(k_receiver_channel_fields, true));
 static_assert(sources_name_channels(k_downstream_edge_fields, true));
 
+// Only an L1 field has a written_when gate, and the gate is the key of a flag or number field in the same table.
+constexpr bool gates_name_flag_or_number_fields(const auto& fields) {
+    for (const auto& field : fields) {
+        if (!field.written_when.has_value()) {
+            continue;
+        }
+        if (!std::holds_alternative<L1Field>(field.content.value)) {
+            return false;
+        }
+        const auto gate = std::ranges::find_if(
+            fields, [&](const RouterField& other) { return other.key.value == *field.written_when; });
+        if (gate == std::ranges::end(fields) || (!std::holds_alternative<content::Flag>(gate->content.value) &&
+                                                 !std::holds_alternative<content::Number>(gate->content.value))) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(gates_name_flag_or_number_fields(k_router_fields));
+static_assert(gates_name_flag_or_number_fields(k_sender_channel_fields));
+static_assert(gates_name_flag_or_number_fields(k_receiver_channel_fields));
+static_assert(gates_name_flag_or_number_fields(k_downstream_edge_fields));
+
 // Every named argument and define the router kernel is fed is read by a field table above or by the router pass, or
 // is listed as unrecorded with a reason; otherwise the router pass throws (check_kernel_inputs_accounted). Arguments
 // are matched by family, so "SENDER_CH_{}_IS_INJECTION" covers every channel's; defines are matched exactly.
@@ -844,6 +873,7 @@ inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
     "DISABLE_RX_CH{}_FORWARDING",
     "VC2_CROSSOVER_TO_VC1",
     "NUM_DOWNSTREAM_SENDERS_VC{}",
+    "VC{}_USES_COUNTER_CREDITS",
 });
 
 // The defines the router pass reads.
@@ -896,8 +926,6 @@ inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
      "Not read: the kernel derives the flag from FABRIC_TENSIX_EXTENSION_MUX_MODE (fabric_erisc_router_ct_args.hpp)."},
     {"PACKED_DOWNSTREAM_VC{}_SENDER_CHANNEL_IDS",
      "The edges' landing channels, packed; fed only in 2D with channel trimming capture. Each edge records its own."},
-    {"VC{}_USES_COUNTER_CREDITS",
-     "Set wherever the VC has senders, and indicates whether a vc credit mechanism is through counters in l1."},
     {"TO_SENDER_{}_PKTS_COMPLETED_ID", k_stream_credits_unused},
     {"TO_SENDER_{}_PKTS_ACKED_ID", k_stream_credits_unused},
     {"SENDER_CREDIT_AMORTIZATION_FREQUENCY", k_amortization_unused},

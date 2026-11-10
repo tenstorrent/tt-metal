@@ -871,6 +871,41 @@ void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
                 ASSERT_FALSE(notify.is_null());
                 EXPECT_EQ(notify.at("address").get<size_t>(), notify_address);
             }
+            // A gated region is active exactly when its gate is nonzero on the same ERISC, as Blackhole's perf
+            // telemetry buffer is allocated with bandwidth telemetry off but not written.
+            for (const auto& field : manifest::k_router_fields) {
+                if (!field.written_when.has_value()) {
+                    continue;
+                }
+                const auto region = fields.find(std::string(field.key.value));
+                if (region == fields.end() || region->is_null()) {
+                    continue;
+                }
+                const auto& gate = fields.at(std::string(*field.written_when)).at("value");
+                const bool gate_on = gate.is_boolean() ? gate.get<bool>() : gate.get<uint32_t>() != 0;
+                EXPECT_EQ(region->at("active").get<bool>(), gate_on) << field.key.value;
+            }
+        }
+    }
+}
+
+// Leftover L1 is never active, and a router's credit counter arrays are active exactly when its mesh takes some VC's
+// credits through L1 counters.
+void check_router_regions_active(const json& manifest, const std::vector<RouterEntry>& routers) {
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& router = *entry.router;
+        if (!router.at("leftover_l1").is_null()) {
+            EXPECT_FALSE(router.at("leftover_l1").at("active").get<bool>());
+        }
+        const auto& mesh = manifest.at("meshes").at(mesh_key(entry.node.mesh_id));
+        bool mesh_uses_counters = false;
+        for (const auto& [vc_key, vc_transport] : mesh.at("credit_transport").items()) {
+            mesh_uses_counters = mesh_uses_counters ||
+                                 vc_transport.at("backing") == lower_enum_name(manifest::CreditBacking::L1_COUNTER);
+        }
+        for (const auto& [array_key, array] : router.at("credit_counters").items()) {
+            EXPECT_EQ(array.at("active").get<bool>(), mesh_uses_counters) << array_key;
         }
     }
 }
@@ -943,6 +978,12 @@ void check_arch(const json& manifest) {
     const uint32_t base_fw_heartbeat = hal.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
     if (base_fw_heartbeat != 0) {
         EXPECT_EQ(areas.at("heartbeat").at("address").get<uint32_t>(), base_fw_heartbeat);
+    }
+    // Every router core writes an arch area.
+    for (const auto& [key, area] : areas.items()) {
+        if (!area.is_null()) {
+            EXPECT_TRUE(area.at("active").get<bool>()) << key;
+        }
     }
     std::map<std::string, std::string> sampled;
     collect_multi_sampled(manifest, "", sampled);
@@ -1164,7 +1205,8 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     TEST_F(Fixture, RouterStreamRegisters) { check_router_stream_registers(routers_); }                    \
     TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                 \
     TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                             \
-    TEST_F(Fixture, HostClears) { check_host_clears(manifest_, routers_); }
+    TEST_F(Fixture, HostClears) { check_host_clears(manifest_, routers_); }                                \
+    TEST_F(Fixture, RouterRegionsActive) { check_router_regions_active(manifest_, routers_); }
 
 TEST_MANIFEST_CHECKS(Manifest1DFixture)
 TEST_MANIFEST_CHECKS(Manifest2DFixture)

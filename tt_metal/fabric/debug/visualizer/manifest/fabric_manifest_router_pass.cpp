@@ -10,6 +10,8 @@
 #include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -17,6 +19,7 @@
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
@@ -78,7 +81,21 @@ manifest::content::L1 describe_l1_array(size_t address, size_t size) {
     return manifest::register_l1_region<T>(static_cast<uint32_t>(address), static_cast<uint32_t>(size / sizeof(T)));
 }
 
-// Return the router's L1 credit counter arrays, from the bases the kernel is given.
+// Whether the router's kernel takes any VC's credits through its L1 credit counters: whether any of its ERISCs is fed
+// VC<n>_USES_COUNTER_CREDITS, the arguments the kernel's any_vc_uses_counter_credits reads.
+bool uses_credit_counters(const RouterArgs& args) {
+    for (uint32_t erisc = 0; erisc < args.num_eriscs(); ++erisc) {
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            if (args.read_erisc_arg(erisc, fmt::format("VC{}_USES_COUNTER_CREDITS", vc)) != 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Return the router's L1 credit counter arrays, from the bases the kernel is given. They're active when the kernel
+// takes some VC's credits through them.
 manifest::L1CreditCounters collect_credit_counters(const ManifestRouterInputs& inputs) {
     const auto read_base = [&](const char* name) -> size_t { return inputs.args.read_router_arg(name); };
     const size_t to_sender_ack = read_base("TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR");
@@ -86,12 +103,17 @@ manifest::L1CreditCounters collect_credit_counters(const ManifestRouterInputs& i
     const size_t receiver_ack = read_base("LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR");
     const size_t receiver_completion = read_base("LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR");
     const size_t size = to_sender_completion - to_sender_ack;
-    return {
+    manifest::L1CreditCounters counters{
         .to_sender_ack = describe_l1_array<uint32_t>(to_sender_ack, size),
         .to_sender_completion = describe_l1_array<uint32_t>(to_sender_completion, size),
         .receiver_ack = describe_l1_array<uint32_t>(receiver_ack, size),
         .receiver_completion = describe_l1_array<uint32_t>(receiver_completion, size),
     };
+    const bool active = uses_credit_counters(inputs.args);
+    for (const auto& layout : manifest::k_credit_counter_arrays) {
+        (counters.*layout.member).active = active;
+    }
+    return counters;
 }
 
 // A channel's packet slots, each `slot_size` bytes, or none when it has no slots. Each slot starts with the run's
@@ -114,7 +136,11 @@ std::optional<manifest::content::L1> collect_leftover_l1(const ManifestRouterInp
     if (start == end) {
         return std::nullopt;
     }
-    return manifest::register_l1_region<std::byte>(static_cast<uint32_t>(start), static_cast<uint32_t>(end - start), 1);
+    // Nothing is placed there, so it's never active. Its bytes are still captured, so a write there shows.
+    auto leftover = manifest::register_l1_region<std::byte>(
+        static_cast<uint32_t>(start), static_cast<uint32_t>(end - start), 1);
+    leftover.active = false;
+    return leftover;
 }
 
 // The described stream register `stream_reg` on stream `stream_id`: where it is, from the HAL, and how many of its low
@@ -168,8 +194,10 @@ std::string get_arg_name(const manifest::NamedArg& arg, const FieldIndex& index)
 
 // `field`, with its content's address, stream register or value filled in from `arg`, the value of its source. An L1
 // address of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled),
-// and k_unused_stream_id a stream register it did not allocate.
-manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg) {
+// and k_unused_stream_id a stream register it did not allocate. `written` is whether the kernel writes an L1 field's
+// region (is_written).
+manifest::Field make_field(
+    const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg, bool written) {
     const std::string key(field.key.value);
     const bool unallocated =
         (std::holds_alternative<manifest::L1Field>(field.content.value) && arg == 0) ||
@@ -184,7 +212,8 @@ manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::R
                     .address = arg,
                     .num_elements = l1.num_elements,
                     .element_size = l1.element_size,
-                    .type = std::string(l1.type)};
+                    .type = std::string(l1.type),
+                    .active = written};
             },
             [&](const manifest::StreamRegField& stream) -> manifest::Content {
                 return describe_stream_register(inputs.hal, arg, stream);
@@ -242,6 +271,29 @@ bool is_emitted(manifest::Emitted emitted, const Emission& emission) {
     TT_THROW("Fabric manifest: unknown emission {}", static_cast<int>(emitted));
 }
 
+// Whether the kernel writes `field`'s region: it has no written_when gate, or the gate's value on the same ERISC is
+// nonzero. `values` holds each of `table`'s values on that ERISC, in table order.
+bool is_written(
+    std::span<const manifest::RouterField> table,
+    std::span<const std::optional<uint32_t>> values,
+    const manifest::RouterField& field) {
+    if (!field.written_when.has_value()) {
+        return true;
+    }
+    // gates_name_flag_or_number_fields checks the gate is in the table.
+    const auto gate = std::ranges::find(table, *field.written_when, [](const manifest::RouterField& other) {
+        return other.key.value;
+    });
+    const std::optional<uint32_t>& gate_value = values[std::distance(table.begin(), gate)];
+    TT_FATAL(
+        gate_value.has_value(),
+        "Fabric manifest: field {} is written when {} is nonzero, but the builder doesn't emit {}",
+        field.key.value,
+        *field.written_when,
+        *field.written_when);
+    return *gate_value != 0;
+}
+
 // The fields in `table`, for the channel or edge at `index` when the table is per channel or per edge. `read_arg`
 // reads a named argument by its name.
 template <typename ReadArg>
@@ -251,9 +303,11 @@ std::vector<manifest::Field> collect_fields(
     const FieldIndex& index,
     const Emission& emission,
     const ReadArg& read_arg) {
-    std::vector<manifest::Field> fields;
+    // Each field's value, or nullopt where the builder doesn't emit it, in table order.
+    std::vector<std::optional<uint32_t>> values;
+    values.reserve(table.size());
     for (const auto& field : table) {
-        const std::optional<uint32_t> value = std::visit(
+        values.push_back(std::visit(
             ttsl::overloaded{
                 [&](const manifest::NamedArg& arg) -> std::optional<uint32_t> {
                     if (!is_emitted(arg.emitted, emission)) {
@@ -265,9 +319,13 @@ std::vector<manifest::Field> collect_fields(
                     return member.read(inputs.erisc_builder, index);
                 },
             },
-            field.source);
-        if (value.has_value()) {
-            fields.push_back(make_field(inputs, field, *value));
+            field.source));
+    }
+    std::vector<manifest::Field> fields;
+    for (size_t position = 0; position < table.size(); ++position) {
+        if (values[position].has_value()) {
+            const auto& field = table[position];
+            fields.push_back(make_field(inputs, field, *values[position], is_written(table, values, field)));
         }
     }
     return fields;

@@ -59,6 +59,9 @@ struct L1 {
     std::string type;
     // Null: capture reads the region once, in its full read. Otherwise it reads it in every round too.
     std::optional<MultiSampleRole> multi_sampled;
+    // False when the run's options mean nothing writes the region, though it's allocated: its bytes are whatever the
+    // L1 held.
+    bool active = true;
 };
 
 // A stream register's word. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold
@@ -176,7 +179,7 @@ enum class ChannelStatus : uint32_t {
 };
 
 // A router's L1 credit counter arrays, shared by every VC that uses counter credits. k_credit_counter_arrays says whose
-// sender channel indexes each.
+// sender channel indexes each. Active when any of the router's ERISCs is fed VC<n>_USES_COUNTER_CREDITS.
 struct L1CreditCounters {
     content::L1 to_sender_ack;
     content::L1 to_sender_completion;
@@ -374,7 +377,7 @@ struct Router {
     FieldsByErisc fields_by_erisc;
     // Indexed by ERISC id.
     std::vector<Erisc> eriscs;
-    // The L1 past the channel buffers. Null when the router has no leftover L1.
+    // The L1 past the channel buffers. Null when the router has no leftover L1. Never active: nothing is placed there.
     std::optional<content::L1> leftover_l1;
 };
 
@@ -440,7 +443,8 @@ struct Heartbeat {
     uint32_t period_iters = 0;
 };
 
-// The L1 areas on every router core that the architecture fixes, rather than the builder allocates.
+// The L1 areas on every router core that the architecture fixes, rather than the builder allocates. Every router core
+// writes each of them, so an arch area is always active: a region only some routers write is described on the router.
 struct ArchAreas {
     Heartbeat heartbeat;
     // Multi-sampled as FABRIC_TELEMETRY.
