@@ -301,3 +301,37 @@ last row assumes it grows like u8 (+55 µs).
 
 **The ≤15 µs on-path AR target is now REQUIRED, not optional.** At 21.7 µs, u8 has essentially no margin, and u1 fails
 if its attention layer grows like u8's. At 15 µs: u8 12.77 (0.9 ms margin), u1 8.34-9.22.
+
+## 10. Spec v0.5 proposal: all ~120 cores stream weights when not in their own phase (2026-11-10)
+**Why:** at u1 the attention layer measures ~270 µs in-engine (§8 assumed 175). Cause (attention track): the layer is
+bound by the 80 STREAM cores' weight stream (~46.7 MB of next-layer qkv chunks, wo, gate|up, MLP; ~64.5 MB total at
+~240-290 GB/s), while the 40 ATTN-only cores finish their 148 KB KV slice and idle. They also idle through every
+GDN-type layer.
+
+u1 now decides the gate: base 7.94 ms → 10.72 at 21.7 µs per AR, 9.86 at 15 µs (gate 9.4: **FAIL**); break-even
+11.4 µs per AR.
+
+**Change (roles become per phase, not per core):**
+- New role bit `STREAM_EXT` (bit 5) on the ATTN-only cores. A STREAM_EXT core owns bank-local slices of the
+  *projection* weights (qkv, wo, GDN in, GDN out) and streams and computes them like a STREAM core, whenever it is not
+  in its own SDPA phase (before SDPA starts, after its KV slice is done, and through every GDN-type layer).
+- Step 1 (minimum, attention track): qkv/wo PROJ across all 120 cores at u1.
+- Step 2: GDN in/out across all 120 cores during GDN-type layers.
+- Step 3, only if needed: MLP gate|up/down on 120 cores. fm11 assumes the 80-core rectangle (68 gate|up columns,
+  4 roots), so going to 120 needs extra multicast rectangles and new h-chunk ownership. Not in v0.5.
+- Rules unchanged: bank-local placement (each STREAM_EXT slice in its nearest bank) and the 4-root rule for every
+  replicated activation (x to STREAM_EXT cores goes through the same 4 roots, adding more multicast rectangles).
+- L1: STREAM_EXT cores have no MLP buffers (no CB_W/CB_W2/CB_WD/CB_H), so they hold a larger projection ring
+  (~600 KB) next to their 300 KB SDPA working set.
+
+**Re-projection, u1** (non-AR GDN 77 µs; attention layer at the stated µs; 0.128 ms per µs of on-path AR):
+
+| Attention layer, u1 | AR 21.7 | AR 15 | AR 12 | break-even AR |
+|---|---|---|---|---|
+| today 270 µs | 10.72 ✗ | 9.86 ✗ | 9.48 ✗ | 11.4 µs |
+| v0.5 conservative 230 µs (stream ~340 GB/s) | 10.08 ✗ | **9.22** | 8.84 | 16.4 µs |
+| v0.5 at ~400 GB/s, 210 µs | 9.76 ✗ | **8.90** | 8.52 | 18.9 µs |
+
+**u8:** little change expected. The ATTN-only cores are already busy with KV (u8 SDPA is KV-read-bound), so the gain
+is limited to the post-SDPA tail (perhaps 377 → ~355-365 µs). u8 at 15 µs AR stays ~12.6-12.8 ms (gate 13.7).
+**Both gates need both changes: AR ≤15 µs on path AND v0.5 streaming at u1.**
