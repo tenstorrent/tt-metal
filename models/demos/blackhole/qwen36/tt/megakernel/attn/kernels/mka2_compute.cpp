@@ -352,15 +352,15 @@ void kernel_main() {
             reconfig_data_format(CB_A, CB_S);
             mul_init(CB_A, CB_S);
             pack_reconfig_data_format(CB_AS);
-            for (uint32_t t = 0; t < WK; ++t) {
+            for (uint32_t t = 0; t < WK; t += 8) {   // 8 tiles per DST round (fp32 DST, full sync)
                 tile_regs_acquire();
-                mul_tiles(CB_A, CB_S, t, t, 0);
+                for (uint32_t i = 0; i < 8; ++i) mul_tiles(CB_A, CB_S, t + i, t + i, i);
                 tile_regs_commit();
-                cb_reserve_back(CB_AS, 1);
+                cb_reserve_back(CB_AS, 8);
                 tile_regs_wait();
-                pack_tile(0, CB_AS);   // S slot t, already unpacked
+                for (uint32_t i = 0; i < 8; ++i) pack_tile(i, CB_AS);   // S slots t..t+7, already unpacked this round
                 tile_regs_release();
-                cb_push_back(CB_AS, 1);
+                cb_push_back(CB_AS, 8);
             }
             cb_pop_front(CB_A, WK);
             cb_pop_front(CB_S, WK);

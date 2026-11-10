@@ -133,15 +133,19 @@ void kernel_main() {
         cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt);
         for (uint32_t j = 0; j < qnt; ++j) noc_async_write(get_read_ptr(CB_QO) + j * QOTB, qo.get_noc_addr(L * QN + qn + j), QOTB);
 #if defined(MKA_RWO)
-        if (qn + qnt > 64) {   // sig(gate) tiles -> every wo core's CB_S slot n - 64
+        uint32_t n_gate = 0;
+        if (qn + qnt > 64) {   // sig(gate) tiles -> the concat core's CB_S slot n - 64 (it multicasts S after its V loop)
             noc_semaphore_wait_min(l1w(gs[GS_SADDR]), 1);
             const uint32_t s_base = *l1w(gs[GS_SADDR]);
             for (uint32_t j = 0; j < qnt; ++j)
-                if (qn + j >= 64) mcast_ext(get_read_ptr(CB_QO) + j * QOTB, s_base + (qn + j - 64) * QOTB, QOTB);
+                if (qn + j >= 64) { noc_async_write(get_read_ptr(CB_QO) + j * QOTB, get_noc_addr(ow_x[0], ow_y[0], s_base + (qn + j - 64) * QOTB), QOTB); ++n_gate; }
         }
 #endif
         noc_async_write_barrier();
         cb_pop_front(CB_QO, QO_SLOT ? QO_SLOT : qnt);
+#if defined(MKA_RWO)
+        if (n_gate) noc_semaphore_inc(get_noc_addr(ow_x[0], ow_y[0], gs[GS_SCNT]), n_gate);
+#endif
         noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
     };
 #endif
@@ -419,9 +423,25 @@ void kernel_main() {
 #if defined(MKA_RWO)
         if (!IS_STREAM && att && wo_nt) {
             DeviceZoneScopedN("W-WO");
-            cb_reserve_back(CB_S, WK);   // sig(gate) landed before QFLAG (producers barrier before MIXDONE)
+            if (is_concat) {   // S: all 48 sig(gate) tiles landed here at qkv time -> multicast (off the critical path)
+                DeviceZoneScopedN("W-CATS");
+                noc_semaphore_wait_min(l1w(gs[GS_SCNT]), WK * (A + 1));
+                mcast_ext(get_write_ptr(CB_S), get_write_ptr(CB_S), WK * 2048);
+                noc_async_write_barrier();
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (re[i][4] == 0) continue;
+                    *l1w(gs[GS_SFLAG]) = A + 1;
+                    const uint64_t m = get_noc_multicast_addr(re[i][0], re[i][1], re[i][2], re[i][3], gs[GS_SFLAG]);
+                    if (i == self_re) noc_semaphore_set_multicast_loopback_src(gs[GS_SFLAG], m, re[i][4], false);
+                    else noc_semaphore_set_multicast(gs[GS_SFLAG], m, re[i][4], false);
+                }
+                noc_async_write_barrier();
+            }
+            noc_semaphore_wait_min(l1w(gs[GS_SFLAG]), A + 1);
+            cb_reserve_back(CB_S, WK);
             cb_push_back(CB_S, WK);
             if (is_concat) {
+                DeviceZoneScopedN("W-CATA");
                 noc_semaphore_wait_min(l1w(gs[GS_ACNT]), NUSR * (A + 1));
                 mcast_ext(get_write_ptr(CB_A), get_write_ptr(CB_A), WK * 2048);
                 noc_async_write_barrier();
@@ -434,10 +454,10 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
             }
-            noc_semaphore_wait_min(l1w(gs[GS_AFLAG]), A + 1);
+            { DeviceZoneScopedN("W-AFL"); noc_semaphore_wait_min(l1w(gs[GS_AFLAG]), A + 1); }
             cb_reserve_back(CB_A, WK);
             cb_push_back(CB_A, WK);
-            cb_wait_front(CB_QO, QO_SLOT);   // A_g @ Wo slice (full slot, wo_nt valid)
+            { DeviceZoneScopedN("W-WOQO"); cb_wait_front(CB_QO, QO_SLOT); }   // A_g @ Wo slice (full slot, wo_nt valid)
             const uint32_t xo = get_write_ptr(CB_XO);   // uniform on the ext cores
             uint32_t cnt[16];
             for (uint32_t i = 0; i < 16; ++i) cnt[i] = 0;
@@ -454,9 +474,9 @@ void kernel_main() {
             cb_pop_front(CB_QO, QO_SLOT);
             if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
                 noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * (A + 1));
+                noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_WODONE]), 1);   // READY first; the copy is bench-only
                 for (uint32_t i = 0; i < 10; ++i) noc_async_write(xo + i * 2048, wod.get_noc_addr(L * WN + own_chunk * 10 + i), 2048);
                 noc_async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_WODONE]), 1);
             }
         }
 #endif
@@ -545,7 +565,7 @@ void kernel_main() {
     *l1w(gs[GS_XRDY]) = 0;
     if (qrole == QR_OWNER) *l1w(gs[GS_QPART]) = 0;
 #if defined(MKA_RWO)
-    *l1w(gs[GS_ACNT]) = 0; *l1w(gs[GS_AFLAG]) = 0; *l1w(gs[GS_WOCNT]) = 0; if (is_qroot) *l1w(gs[GS_WODONE]) = 0;
+    *l1w(gs[GS_ACNT]) = 0; *l1w(gs[GS_AFLAG]) = 0; *l1w(gs[GS_SCNT]) = 0; *l1w(gs[GS_SFLAG]) = 0; *l1w(gs[GS_WOCNT]) = 0; if (is_qroot) *l1w(gs[GS_WODONE]) = 0;
 #endif
     // GS_PQH is reset by the reader after its last wait (see reader)
 #endif

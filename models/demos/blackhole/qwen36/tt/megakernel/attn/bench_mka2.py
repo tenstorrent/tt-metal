@@ -207,7 +207,7 @@ members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
 if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
 rank = {i: members[grp[i]].index(i) for i in ACT}
 kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
-GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(17)]
+GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(19)]
 GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
 if ARC:
     # spec v0.9.1: the AR sender cores are not in ANY mka2 range (kernels, CBs, sharded L1 tensors, global semaphores,
@@ -439,6 +439,7 @@ if RWO:
     WCC = wo_cores[0]   # concat core
     owner_fi = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + j_ % 2 and c_.y == j_ // 2)) for j_ in range(16)]
     assert all(f_ in WOT for f_ in owner_fi), "owners must be wo cores"
+    assert WCC == owner_fi[0], (WCC, owner_fi[0])   # writers reach the concat core through the owner table
     # wo-core multicast rects: ext columns (x 10-11, rows 0..y_ar-1) + bottom rows left / right of the DRAM split (x < x_ar)
     _yb = min(fcores[f_].y for f_ in ext_list if fcores[f_].x < 10)   # first ext-only row (8)
     def _pr(lx0, ly0, lx1, ly1):
