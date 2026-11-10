@@ -6,16 +6,21 @@
 Positions come from spec ``perf.positions`` (token offsets), default 0 and 1..4 x the start of the target's last chunk
 (Gemma-4 at 55k in 5k chunks: 0, 50k, 100k, 150k, 200k; k = 1024). Positions may lie past the target: the device model
 is built with ``target.seq`` raised in memory to the longest position, so it sizes its position tables for it. Timing
-only: the KV prefix is zeros and the tokens are random ids (the work does not depend on the values). Each position runs
-once to compile, then once timed, with one sync and nothing read back.
+only: the KV prefix is zeros and the tokens are random ids (the work does not depend on the values). F263 (owner
+2026-11-09: one timed run a position put 128k below 51.2k): each position is timed as the clean wall is
+(testing/profile.py): one run to compile, warm_up (until a run adds no program and the walls settle), then
+profile.WALL_RUNS timed runs with program-cache misses refused; pos_ms_<start> is their median. Each run is one sync and
+nothing read back. BRINGUP_POSITIONS ("51200,128000") overrides the spec's positions for a hand-run sweep.
 
-Records pos_chunk, pos_ms_<start> per position, device_model_hybrid, and deferred_cpu_steps / deferred_cpu_ms (the
-CPU bridge's steps and host time over the timed runs, F46).
+Records pos_chunk, per position pos_ms_<start> (the median), pos_ms_runs_<start>, pos_ms_spread_<start>,
+pos_settled_<start> (F200: 0 = the walls may still be falling), pos_warm_runs_<start>, device_model_hybrid, and
+deferred_cpu_steps / deferred_cpu_ms (the CPU bridge's steps and host time over the timed runs, F46).
 """
 
 from __future__ import annotations
 
 import gc
+import os
 import time
 
 import torch
@@ -33,7 +38,13 @@ def _target_seq(s) -> int:
     return int(t.setdefault("_seq_before_positions", t["seq"]))
 
 
+POSITIONS_ENV = "BRINGUP_POSITIONS"
+
+
 def positions(s) -> list[int]:
+    env = os.environ.get(POSITIONS_ENV, "").strip()
+    if env:
+        return [int(p) for p in env.split(",") if p.strip()]
     got = s.get("perf.positions")
     if got:
         return [int(p) for p in got]
@@ -50,6 +61,33 @@ def _free(state) -> None:
         for c in v.values() if isinstance(v, dict) else [v]:
             if hasattr(c, "free"):
                 c.free()
+
+
+def _wall(mesh, timed, start: int, bridge) -> float:
+    """F263: the position's clean wall (profile.warm_up, then WALL_RUNS timed runs with misses refused); records its
+    metrics and adds the timed runs' CPU-bridge time to ``bridge``. Returns the median ms."""
+    w = profile.warm_up(mesh, timed)
+    assert w["warm"], f"F196: position {start} not warm after {len(w['walls'])} runs: every run adds programs"
+    if not w["settled"]:
+        print(f"F200 NOT SETTLED: position {start}, warm-up walls {w['walls'][-2 * profile.WALL_SETTLE_WINDOW:]} ms")
+    cpu_bridge.STATS.reset()
+    n0 = profile.cache_entries(mesh)
+    profile.misses_allowed(mesh, False)
+    try:
+        walls = [timed() for _ in range(profile.WALL_RUNS)]
+    finally:
+        profile.misses_allowed(mesh, True)
+    profile.record_warm(mesh, n0, f"pos_{start}")  # F197: a timed run that built programs is not warm
+    bridge.ms += cpu_bridge.STATS.ms
+    bridge.steps |= cpu_bridge.STATS.steps
+    kept = sorted(walls)
+    med = kept[len(kept) // 2]
+    metrics.record(f"pos_ms_{start}", med)
+    metrics.record(f"pos_ms_runs_{start}", walls)
+    metrics.record(f"pos_ms_spread_{start}", round(kept[-1] - kept[0], 1))
+    metrics.record(f"pos_settled_{start}", int(w["settled"]))
+    metrics.record(f"pos_warm_runs_{start}", len(w["walls"]))
+    return med
 
 
 def run_positions(s, mesh) -> list[tuple[int, float]]:
@@ -79,16 +117,13 @@ def run_positions(s, mesh) -> list[tuple[int, float]]:
             model.sync()
             model.free(h)
 
+        def timed() -> float:
+            t0 = time.time()
+            once()
+            return round((time.time() - t0) * 1e3, 1)
+
         once()  # compile this position's programs
-        cpu_bridge.STATS.reset()
-        n0 = profile.cache_entries(mesh)
-        t0 = time.time()
-        once()
-        ms = (time.time() - t0) * 1e3
-        profile.record_warm(mesh, n0, f"pos_{start}")  # F197: a timed run that built programs is not warm
-        bridge.ms += cpu_bridge.STATS.ms
-        bridge.steps |= cpu_bridge.STATS.steps
-        metrics.record(f"pos_ms_{start}", round(ms, 1))
+        ms = _wall(mesh, timed, start, bridge)
         rows.append((start, ms))
         print(f"position {start}->{start + chunk}: {ms:.1f} ms ({chunk / ms * 1e3:.0f} tok/s)", flush=True)
         _free(state)
