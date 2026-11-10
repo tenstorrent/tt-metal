@@ -51,6 +51,9 @@ add_subdirectory(isin)
 add_subdirectory(minimal_matmul)
 add_subdirectory(rgb_to_yuv)
 
+# mstaletovic (named individual): the MoE block's prefill ops
+add_subdirectory(moe_block)
+
 # Jointly owned by convolutions + ops-data-movement — already covered by this
 # file's CODEOWNERS union above, so no separate decision was needed to fold
 # these in.
@@ -110,6 +113,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::RgbToYuv
+        TTNN::Ops::Experimental::MoEBlock
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::BcastTo
@@ -168,6 +172,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::RgbToYuv>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEBlock>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>

@@ -92,8 +92,55 @@ struct WorkerToFabricEdmSenderBase {
     // the core-specific address space used while resolving runtime arguments.
     // sem_args_are_l1_addresses selects whether the teardown and producer-cursor arguments
     // are program-semaphore IDs (default) or L1 addresses supplied directly.
+    // The TENSIX VC0 connection from values rather than runtime args: what build_from_args reads from its three args
+    // (the eth channel, the teardown and the buffer-index semaphore args), given by the caller - for a kernel that
+    // keeps its per-core values elsewhere than in runtime args (e.g. a per-core block read from DRAM).
+    template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
+    static WorkerToFabricEdmSenderBase build_from_eth_channel(
+        uint32_t eth_channel, uint32_t teardown_sem_arg, uint32_t buffer_index_sem_arg) {
+        static_assert(
+            my_core_type == ProgrammableCoreType::TENSIX && VC_ID == 0,
+            "build_from_eth_channel: the TENSIX VC0 connection (the L1 connection table) only");
+        constexpr bool is_persistent_fabric = true;
+        tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+            reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
+        const auto conn = &connection_info->read_only[eth_channel];
+        const auto aligned_conn = &connection_info->read_write[eth_channel];
+        const auto resolve_sem_arg = [](uint32_t arg) -> uintptr_t {
+            if constexpr (sem_args_are_l1_addresses) {
+                return static_cast<uintptr_t>(arg);
+            } else {
+                return get_semaphore<my_core_type>(arg);
+            }
+        };
+        const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
+        return WorkerToFabricEdmSenderBase(
+            is_persistent_fabric,
+            conn->edm_noc_x,
+            conn->edm_noc_y,
+            conn->edm_buffer_base_addr,
+            conn->num_buffers_per_channel,
+            conn->edm_connection_handshake_addr,
+            conn->edm_worker_location_info_addr,
+            conn->buffer_size_bytes,
+            conn->buffer_index_semaphore_id,
+            reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore)),
+            reinterpret_cast<volatile uint32_t* const>(resolve_sem_arg(teardown_sem_arg)),
+            resolve_sem_arg(buffer_index_sem_arg),
+            static_cast<uint32_t>(conn->worker_free_slots_stream_id),
+            my_fc_stream_channel_id,
+            write_reg_cmd_buf,
+            write_at_cmd_buf);
+    }
+
     template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
+        if constexpr (my_core_type == ProgrammableCoreType::TENSIX && VC_ID == 0) {
+            const uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
+            const uint32_t teardown = get_arg_val<uint32_t>(arg_idx++);
+            const uint32_t buffer_index = get_arg_val<uint32_t>(arg_idx++);
+            return build_from_eth_channel<my_core_type, sem_args_are_l1_addresses>(eth_channel, teardown, buffer_index);
+        } else {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
         uint8_t edm_worker_x;
@@ -111,46 +158,25 @@ struct WorkerToFabricEdmSenderBase {
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
-        if constexpr (my_core_type == ProgrammableCoreType::TENSIX && VC_ID == 0) {
-            // VC0: connection info is populated into the L1 conn table by device-init;
-            // read it by eth channel index.
-            tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-                reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
-            uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            const auto conn = &connection_info->read_only[eth_channel];
-            const auto aligned_conn = &connection_info->read_write[eth_channel];
-            direction = conn->edm_direction;
-            edm_worker_x = conn->edm_noc_x;
-            edm_worker_y = conn->edm_noc_y;
-            edm_buffer_base_addr = conn->edm_buffer_base_addr;
-            num_buffers_per_channel = conn->num_buffers_per_channel;
-            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
-            edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
-            buffer_size_bytes = conn->buffer_size_bytes;
-            edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
-            writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
-                reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
-            worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
-        } else {
-            // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
-            // TODO: will be deprecated. currently for ethernet dispatch case
-            //       ethernet core need to have same memory mapping as worker
-            direction = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            auto edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
-            edm_worker_x = edm_worker_xy.x;
-            edm_worker_y = edm_worker_xy.y;
-            edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
-            num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-            edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-            edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
-            buffer_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
-            edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
-            auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
-            writer_send_sem_addr =
-                reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
-            worker_free_slots_stream_id = STREAM_ID;
-        }
+        // (TENSIX VC0 returned above: build_from_eth_channel)
+        // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
+        // TODO: will be deprecated. currently for ethernet dispatch case
+        //       ethernet core need to have same memory mapping as worker
+        direction = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+        auto edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+        edm_worker_x = edm_worker_xy.x;
+        edm_worker_y = edm_worker_xy.y;
+        edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
+        num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+        edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
+        edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+        edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
+        buffer_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+        edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
+        auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
+        writer_send_sem_addr =
+            reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
+        worker_free_slots_stream_id = STREAM_ID;
 
         // DEAD CODE
         // Workers don't have a local stream ID, so we set to a placeholder (unused) value until the worker and EDM
@@ -185,6 +211,7 @@ struct WorkerToFabricEdmSenderBase {
             my_fc_stream_channel_id,
             write_reg_cmd_buf,
             write_at_cmd_buf);
+        }
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>

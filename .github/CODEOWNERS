@@ -353,6 +353,7 @@ ttnn/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/distributed/ttrun.py @Riddy21 @p1-0tr
 ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 ttnn/ttnn/_experimental/moe_compute_utils.py @tenstorrent/metalium-developers-ops-data-movement
+ttnn/ttnn/_experimental/moe_block.py @tenstorrent/metalium-developers-ds-prefill
 ttnn/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads
 ttnn/ttnn/operations/activations.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
@@ -462,6 +463,8 @@ ttnn/cpp/ttnn/operations/experimental/minimal_matmul/ @cglagovichTT @jonathansuT
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/**/CMakeLists.txt @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
 ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/moe_block/ @tenstorrent/metalium-developers-ds-prefill
+ttnn/cpp/ttnn/operations/experimental/moe_block/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT
 ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/**/CMakeLists.txt @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement
@@ -591,6 +594,7 @@ tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-ma
 tests/ttnn/unit_tests/operations/experimental/gemma4/ @svuckovicTT @amilovanovicTT @sdjordjevicTT @kmabeeTT
 tests/ttnn/unit_tests/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
 tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
+tests/ttnn/unit_tests/operations/experimental/moe_block/ @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/unit_tests/operations/experimental/test_attn_res_*.py @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
