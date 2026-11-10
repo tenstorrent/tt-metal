@@ -15,14 +15,14 @@ logits at ``temperature``, then top-p, then top-k; ``p_j`` is the distribution t
 rejected row ``j`` draws ``a_j`` from ``max(q_j - exp(-DRAFT_PROB_PENALTY) * p_j, 0)`` instead, and a round
 that accepts all ``k`` drafts draws ``a_k`` from ``q_k``. The output is then distributed as sampling the
 target alone. The DSpark drafter samples each Markov step at ``temperature`` on device (Gumbel-max over
-uniforms drawn on device, :meth:`~.model.DeepSeekV41Model.spec_draft`) without top-p / top-k, so ``p_j =
+uniforms drawn on device, :meth:`~.model.DeepSeekV41Model.spec_draft_async`) without top-p / top-k, so ``p_j =
 softmax(logits_j / temperature)``; a ``propose`` override is deterministic, a one-hot ``p_j``.
 
 The pipelined verify is streamed (:meth:`~.model.DeepSeekV41Model.spec_verify_async`): the host applies the
 rule to each step's logits as they come out, and at the first reject (or after the last row) it queues the
-fixup and the next round's first row ``a_m``, which needs no draft, then drafts its successors, while the rows
-past the reject are still in the pipeline; their outputs are dropped and the next round's steps queue behind
-them. So a round takes the pipeline's latency plus a step per accepted draft, plus whatever of the draft is
+draft of the next round, then, while the drafter runs, the fixup and that round's first row ``a_m``, which
+needs no draft, then reads the drafts that follow ``a_m``, while the rows past the reject are still in the
+pipeline; their outputs are dropped and the next round's steps queue behind them. So a round takes the pipeline's latency plus a step per accepted draft, plus whatever of the draft is
 not hidden behind ``a_m``'s step (only the caller's last round, see :meth:`DSparkSpeculator.step`, leaves its
 fixup to the next round). Each decode step's row reaches the drafter's rings only when the host releases its
 receive, one row ahead of the accept, so the draft sees the round's rows up to the reject and no further.
@@ -266,14 +266,22 @@ class DSparkSpeculator:
         return int(torch.randint(1, 2**31 - 1, (), generator=self._rng))
 
     def _draft(self, token: int, frontier: int) -> list[int]:
+        self._queue_draft(token, frontier)
+        return self._drafted()
+
+    def _queue_draft(self, token: int, frontier: int) -> None:
+        """Start the proposals after ``token`` at ``frontier + 1``; :meth:`_drafted` returns them."""
         self._proposal_logits = None
+        self._drafting = (token, frontier)
+        if self._propose is None:
+            self._logits_pending = self.temperature > 0 and not self.device_accept and self.streaming
+            self.model.spec_draft_async(token, frontier, self._seed())
+
+    def _drafted(self) -> list[int]:
         if self._propose is not None:
-            return list(self._propose(token, frontier))[: self.drafts]
+            return list(self._propose(*self._drafting))[: self.drafts]
         host_accept = self.temperature > 0 and not self.device_accept
-        self._logits_pending = host_accept and self.streaming
-        ids, _, logits = self.model.spec_draft(
-            token, frontier, self._seed(), logits=host_accept and not self._logits_pending
-        )
+        ids, _, logits = self.model.spec_read_draft(logits=host_accept and not self._logits_pending)
         if logits is not None:
             self._proposal_logits = logits[: self.drafts]
         return ids[: self.drafts]
@@ -455,9 +463,15 @@ class DSparkSpeculator:
             self._pos = p + m + 1
             emitted = inputs[1 : m + 1] + [token]
             last = any(t in stop_ids for t in emitted) or (budget is not None and len(emitted) >= budget)
+            self._stall.enter(f"round p={p}: queue the draft (frontier {p + m})")
+            try:
+                self._queue_draft(token, p + m)
+            finally:
+                self._stall.cancel()
+            t_queued = time.perf_counter()
             if not last:
                 # The next round's first row needs no draft: queue it (behind the fixup of this round's
-                # rejects) now, so it runs through the pipeline while the drafter drafts its successors.
+                # rejects) while the drafter drafts its successors, so it runs through the pipeline meanwhile.
                 self._stall.enter(f"round p={p}: early row 0 at {self._pos} (fixup {self._rejected})")
                 try:
                     model.spec_fixup(self._rejected)
@@ -466,11 +480,13 @@ class DSparkSpeculator:
                     self._stall.cancel()
                 self._rejected = []
                 self._row0_dispatched = True
-            self._stall.enter(f"round p={p}: draft (frontier {p + m})")
+            t_row0 = time.perf_counter()
+            self._stall.enter(f"round p={p}: read the draft (frontier {p + m})")
             try:
-                self._proposals = self._draft(token, p + m)
+                self._proposals = self._drafted()
             finally:
                 self._stall.cancel()
+            t_draft = time.perf_counter()
             # After the draft's readback, which would otherwise wait behind these rows' receives.
             if held:
                 self._stall.enter(f"round p={p}: release_writes({k - m} trailing rows)")
@@ -480,7 +496,14 @@ class DSparkSpeculator:
                     self._stall.cancel()
             model.spec_discard_outputs(k - m)
             t3 = time.perf_counter()
-            phases = {"fixup": t1 - t0, "verify": t2 - t1, "draft": t3 - t2}
+            phases = {
+                "fixup": t1 - t0,
+                "verify": t2 - t1,
+                "queue draft": t_queued - t2,
+                "row0": t_row0 - t_queued,
+                "draft": t_draft - t_row0,
+                "release": t3 - t_draft,
+            }
             for phase, seconds in phases.items():
                 self.stats.add(phase, seconds)
             self.stats.accepted.append(m)
