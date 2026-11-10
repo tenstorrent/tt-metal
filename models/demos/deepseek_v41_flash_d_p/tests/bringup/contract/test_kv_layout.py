@@ -28,6 +28,9 @@ stage_layouts)). No chunk runs. Pass:
     copy, so the recipe and the stock cast are applied to the keys the rows are built from: the golden's bf16 keys
     rounded to bfloat8_b by tt-metal's host rule (dequantized; ckv_bfp4_ttnn/tests/reference.round_values, which
     ttnn.bringup.bfp_round equals for bf16 inputs). Every other check, tolerance and limit unchanged.
+    INDEX_K_SERVED_FROM=bf16 (P.44, owner-authorized test change 2026-11-10): the served rows are encoded from the
+    chunk's bf16 keys again, so the reference input is the golden's keys unrounded (P.39's byte-exact check); under
+    INDEX_K_SERVED_FROM=bfp8 it stays the bfp8-rounded keys above.
   - P.42 (owner-authorized contract change 2026-11-07): WINDOW_KV_KEEP=snapshot128 makes 0_window_kv a Snapshot
     config, [slots x layers, 1, 128, 512] (4 records a (slot, layer), every chip the same bytes: the table's device
     group is the whole mesh, no record past position 128); REINDEX_SERVE=alias gives the re-index layers no slab of
@@ -161,7 +164,10 @@ def _encoding_failures(mesh, runtime, kv, path, tmp_path, layers) -> list[str]:
             keys = gk.g.state(src)["index_k"][: n_tok // r].float()
             st.compress[src].index_k.load_host(keys, 0)
             ttnn.synchronize_device(mesh)
-            if st.compress[src].index_k.k8 is not None:  # INDEX_K_COPY=bfp8 (P.41): the rows' source is the bfp8 keys
+            from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+            k8_source = settings.get("INDEX_K_SERVED_FROM") == "bfp8"  # P.44: bf16 = the golden keys as they are
+            if st.compress[src].index_k.k8 is not None and k8_source:  # INDEX_K_COPY=bfp8 (P.41): the bfp8 keys
                 from ttnn.bringup.ckv_bfp4_ttnn.tests.reference import round_values
 
                 keys = round_values(keys.bfloat16().float(), mbits=7)

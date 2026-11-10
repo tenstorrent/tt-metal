@@ -779,10 +779,20 @@ TABLE = {
         "(start % chunk == 0: at the chip's tile row; any other 32-aligned start: the two W blocks the chunk touches "
         "read back exactly, the rows written by update_padded_kv_cache, re-rounded in place, an identity on the old "
         "rows); the indexer scores that copy as it is (no per-chunk tilize / re-rounding of the history), and the "
-        "served Blaze 192-byte rows are encoded from the bfp8 keys (typecast to bf16, exact, then the stock "
-        "per_token_cast_to_fp8 + pack_fp8_rows). Needs INDEX_K_FORMAT=bfp8 and INDEX_K_SERVED=fp8_row192: with any "
+        "served Blaze 192-byte rows are encoded (stock per_token_cast_to_fp8 + pack_fp8_rows) from the chunk's bf16 keys "
+        "or the bfp8 keys, as INDEX_K_SERVED_FROM picks (P.44). Needs INDEX_K_FORMAT=bfp8 and INDEX_K_SERVED=fp8_row192: with any "
         "other value of either it FALLS BACK to the bf16 copy (logged once). bf16 = the path before P.41: a persistent "
         "bf16 copy (the served rows encoded from it), tiled and rounded to INDEX_K_FORMAT by the indexer every chunk",
+    ),
+    "INDEX_K_SERVED_FROM": Setting(
+        "bf16",
+        ("bf16", "bfp8"),
+        "P.44 (OWNER 2026-11-10): with INDEX_K_COPY=bfp8, which keys the served Blaze 192-byte index rows (and the "
+        "re-index mirrors') are encoded from (tt/compressor.TtServedRows._put8). bf16 = the chunk's tiled bf16 keys "
+        "(the bfp_round input), the stock per_token_cast_to_fp8 of the bf16 key, as Blaze decode's own writer "
+        "(DsaIndexerDirectKCacheUpdate) and the path before P.41; the tiled copy is a per-chunk transient. bfp8 = P.41's "
+        "path: the bfp8 copy k8 typecast to bf16, then encoded (fp8(bfp8(key))). The scored bfp8 copy is the same "
+        "either way. No effect under INDEX_K_COPY=bf16 (served rows from the bf16 copy)",
     ),
     "INDEX_Q_FORMAT": Setting(
         "bfp4",

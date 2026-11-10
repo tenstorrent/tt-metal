@@ -129,14 +129,21 @@ round_scale_to_power_of_two=False)` packed [e4m3 | scale | zeros] (tt-blaze 8223
 tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:75-118 checks bytes 0..131 against it;
 `_quantize_scaled_keys` is the torch recipe). The model encodes on the device: the chunk's server-order bf16 key rows
 -> tiled -> that stock cast -> `ttnn.bringup.pack_fp8_rows` (tt/compressor.py `fp8_rows`) -> update_padded_kv_cache.
+Under INDEX_K_COPY=bfp8 (P.41) the cast is applied, since P.44 (`INDEX_K_SERVED_FROM=bf16`, the default), to the
+chunk's bf16 keys as they are, the tiled rows the bfp8 scoring copy is rounded from: the served row is fp8(key), the
+stock cast of the bf16 key, which is what tt-blaze's writer test compares its writer with. `INDEX_K_SERVED_FROM=bfp8`
+keeps P.41's fp8(bfp8(key)). tt-blaze's torch helper `pack_index_keys` (tests/blaze/deepseekv4_1/csa2_harness.py:402)
+rounds to nearest even and divides by 448, a different recipe from both the writer and the stock cast (about half of
+the e4m3 values and the scale bytes differ from the writer's recipe on random keys, CPU 2026-11-10); the model does not
+follow it.
 Records: 16 x 192 = 3072 B (ratio 2), 32 x 192 = 6144 B (ratio 1), still one ND shard [1, 1, 32 / r, 192] in one bank,
 SP-sharded and TP-replicated as before. Blaze decode keeps an index cache on its REINDEX layers 24, 28, 32, 36 too:
 it quantizes the key the stage payload carries (`index_cache_row`, the producer's post-norm post-RoPE bf16 key,
 blaze/models/deepseek_v4_1_flash/stage_payload.py:29-32; csa_attention/op.py:1126-1161), and the only producer
 before them is layer 20 (the candidate-source stage, csa_candidate_pool_stage/op.py:271-281). So 4_index_k_r1 covers
 20, 24, 28, 32, 36 and each re-index layer's slab holds layer 20's rows (written with them, in the same chunk, before
-layer 20's ack). The prefill indexer scores a persistent bf16 compute copy of the keys (the old served slab, now
-private), not the fp8 rows. Memory per chip per slot, 8x4 (SP 8) at 1,048,576 tokens: served index rows 3 x 65,536 x
+layer 20's ack). The prefill indexer scores a private copy of the keys, not the fp8 rows: a bfloat8_b copy under
+INDEX_K_COPY=bfp8 (P.41, the default), else a persistent bf16 compute copy (the old served slab, now private). Memory per chip per slot, 8x4 (SP 8) at 1,048,576 tokens: served index rows 3 x 65,536 x
 192 B + 131,072 x 192 B = 60 MiB (bf16: 80 MiB), the re-index copies 4 x 24 MiB = 96 MiB, the compute copy 80 MiB:
 236 MiB (bf16 contract: 80 MiB).
 

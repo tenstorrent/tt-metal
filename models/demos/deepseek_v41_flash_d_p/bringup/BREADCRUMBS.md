@@ -3682,3 +3682,37 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   dashboard/*.html, which are not this step's files). `orchestrator measure --task P.36` reused quick / p51200 /
   p512000 (same code and switch): rc 0, with attempt 1's numbers above (quick chunk_wall 184.7 ms, p51200 203.1,
   p512000 246.1).
+
+## P.44 (perf, attempt 1, 2026-11-10): served index rows encoded from the chunk's bf16 keys (INDEX_K_SERVED_FROM)
+
+- Expected saving (written before measuring): per index-key write with start % chunk == 0, the k8 slice and the
+  bfp8 -> bf16 typecast go (2 launches); at other starts the separate bfp_round to a bfp8 temp and the typecast go
+  (2 launches). 4 index-key sources a chunk (layers 2, 8, 14, 20) -> 8 launches fewer: device ~-0.05 to -0.2 ms
+  (640 / 320 rows x 128 a chip each, tiny ops), host ~-0.5 to -1 ms a chunk (~60-100 us a launch on 32 chips). The
+  main point is correctness of the served bytes (fp8(key) as Blaze's writer), not speed. No persistent memory
+  change; the per-chunk transient peak is lower (the tiled bf16 rows live through the encode instead of a k8 slice +
+  a bf16 typecast copy).
+- Change: new Setting INDEX_K_SERVED_FROM (bf16 default | bfp8 = P.41). `_put8` with bf16: start % chunk == 0 rounds
+  the tiled rows into k8 in place as before and encodes the served / mirror rows from the same tiled bf16 rows
+  (fp8_rows_tile), then frees the tile; any other start runs `_region` (unchanged) and encodes from the tile; the
+  separate bfp_round to a bfp8 temp, the k8 slice and the bfp8 -> bf16 typecast are skipped. bfp8 keeps P.41's
+  path byte for byte. INDEX_K_COPY=bf16 is untouched (its served rows were already from bf16). No new op, no new
+  core grid (fp8_rows_tile / bfp_round as before: rule 18 unchanged; bfp_round prepared=True as before, OV-23).
+- Tests (owner-authorized): test_kv_layout's served-row reference input is the unrounded golden keys under bf16
+  (rounded under bfp8); test_index_k_copy adds a third cache (INDEX_K_COPY=bf16, unrounded keys) whose served /
+  mirror bytes B's must equal under bf16; the k8 == rounded-copy assertions unchanged.
+- Results (change on): gate units test_index_k_copy PASS (served + mirror byte-exact with the bf16-key encode on 32
+  chips, all 6 write patterns incl. 1312 / 2944 follow-ups), test_kv_layout PASS (served bytes == stock
+  per_token_cast_to_fp8 of the golden keys, every byte, all 4_index_k_r1 / 2_index_k_r2 layers).
+  `orchestrator measure --task P.44` rc 0: quick chunk_wall 181.1 ms (spread 4.9); p51200 wall 205.9 (spread 22.1),
+  device_ms_total 185.77, device_ms_indexer 6.88. err_state_index_k L02/08/14/20 0.0526 / 0.0607 / 0.1015 / 0.0868
+  (limits 0.236 / 0.260 / 0.292 / 0.276); topk overlap 0.866-0.933. The paired off/on table is the orchestrator's.
+- Host-only: golden index keys of chunk 2 (s10240 rung) of layers 2/8/14/20, CPU writer recipe (caches.blaze_rows):
+  fp8(key) vs fp8(bfp8(key)) differ in 18.9 % of e4m3 values, 49.6 % of scales, 100 % of rows (DS41-226).
+- Memory (per chip, k8 = the only index-key copy, 136 B a row): 56,320 tok 2.28 MiB, 1,044,480 tok 42.33 MiB, before
+  = after (no persistent buffer added or removed; the per-chunk transient is smaller).
+- Gotcha: I edited settings.py / compressor.py / tests with `python - <<EOF` text-replace heredocs and ran a host-only
+  CPU script (/tmp/p44/share.py: golden keys + blaze_rows, imports ttnn, opens no device). Neither touches a device;
+  noted because P.36 attempt 1 was flagged for a python heredoc editing settings.py.
+- Re-run: `gate P.44 --spec <spec> --check --unit 'P.44#test_index_k_copy'` / `'P.44#test_kv_layout'`;
+  `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.44`.
