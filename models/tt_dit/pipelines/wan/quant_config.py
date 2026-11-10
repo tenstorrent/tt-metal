@@ -162,6 +162,8 @@ def _quantize_weight(param, new_dtype: ttnn.DataType) -> None:
         return
     param._data = ttnn.typecast(param._data, new_dtype)
     param.dtype = new_dtype
+    # The typecast moved the weight without going through the setter, which is what tells the traces.
+    param._invalidate_traces("replaced")  # noqa: SLF001
 
 
 def _make_linear_compute_config(arch, lc: LinearQuantConfig):
