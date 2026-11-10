@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import time
+import weakref
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
@@ -417,6 +418,11 @@ class UnregisteredModule:
         return self.module(*args, **kwargs)
 
 
+# The tracers capturing right now. A trace bakes in the addresses of the weights it reads, so each
+# parameter read during a capture remembers the tracer, and tells it when those weights go away.
+_capturing_tracers: list[Any] = []
+
+
 class Parameter:
     def __init__(
         self,
@@ -477,6 +483,7 @@ class Parameter:
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
+        self._tracers: weakref.WeakSet[Any] = weakref.WeakSet()
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
@@ -511,11 +518,16 @@ class Parameter:
         if self._data is None:
             msg = "parameter has no data"
             raise RuntimeError(msg)
+        if _capturing_tracers:
+            for tracer in _capturing_tracers:
+                tracer.watch(self)
         return self._data
 
     @data.setter
     def data(self, value: ttnn.Tensor) -> None:
         self._check_data(value)
+        if self._data is not None:
+            self._invalidate_traces("replaced")
         self._data = value
 
     def deallocate(self) -> None:
@@ -523,6 +535,12 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
+            self._invalidate_traces("deallocated")
+
+    def _invalidate_traces(self, change: str) -> None:
+        """Mark the traces that read this parameter at capture as stale: its data was freed or moved."""
+        for tracer in tuple(self._tracers):
+            tracer.invalidate(f"a weight of shape {self.total_shape} that the trace read at capture was {change}")
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:

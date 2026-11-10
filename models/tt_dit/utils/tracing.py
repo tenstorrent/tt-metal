@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_dit.layers import module as _module
 from models.tt_dit.utils import tensor
 
 if TYPE_CHECKING:
@@ -83,6 +84,9 @@ class Tracer:
 
     2. The tracer returns the same output tensor objects every time; a subsequent call
        overwrites previous results in place.
+    3. A trace bakes in the addresses of the module weights it reads. If one of them is
+       deallocated or replaced after capture, executing the trace raises: release it and
+       capture again.
     """
 
     _traces_live: ClassVar[dict[int, int]] = {}
@@ -150,6 +154,7 @@ class Tracer:
                 Tracer._traces_live[d.id()] = 0
 
         self._function = function
+        self._name = getattr(function, "__qualname__", None) or repr(function)
         self._devices: tuple[ttnn.MeshDevice, ...] = tuple(devices)
         self._prep_run = prep_run
         self._clone_prep_inputs = clone_prep_inputs
@@ -157,6 +162,32 @@ class Tracer:
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
+        # The parameters read at capture, and why the trace can no longer run, if it cannot.
+        self._watched: weakref.WeakSet[Any] = weakref.WeakSet()
+        self._stale: str | None = None
+
+    def watch(self, parameter: Any) -> None:  # noqa: ANN401
+        """Called by a ``Parameter`` read while this tracer captures."""
+        self._watched.add(parameter)
+        parameter._tracers.add(self)  # noqa: SLF001
+
+    def invalidate(self, reason: str) -> None:
+        """Called by a watched ``Parameter`` whose data was freed or moved."""
+        self._stale = self._stale or reason
+
+    def _unwatch(self) -> None:
+        for parameter in tuple(self._watched):
+            parameter._tracers.discard(self)  # noqa: SLF001
+        self._watched = weakref.WeakSet()
+        self._stale = None
+
+    def _check_not_stale(self) -> None:
+        if self._stale is not None:
+            msg = (
+                f"TDM-130: the trace of {self._name} is stale: {self._stale}, so executing it would read freed "
+                "or moved memory. Release the trace and capture it again, or keep the weights it reads resident."
+            )
+            raise RuntimeError(msg)
 
     def __call__(
         self,
@@ -242,6 +273,14 @@ class Tracer:
         self._args = _tree_map(self._tensor_to_device, args, path_label="args")
         self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
+        self._unwatch()
+        _module._capturing_tracers.append(self)  # noqa: SLF001
+        try:
+            self._capture_watched(cq_id=cq_id, blocking_execution=blocking_execution, execute=execute)
+        finally:
+            _module._capturing_tracers.remove(self)  # noqa: SLF001
+
+    def _capture_watched(self, *, cq_id: int, blocking_execution: bool, execute: bool) -> None:
         if self._prep_run:
             if self._clone_prep_inputs:
                 prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
@@ -277,6 +316,7 @@ class Tracer:
         if execute:
             # Trace capture records commands but does not execute them. Execute the trace to
             # actually compute outputs.
+            self._check_not_stale()
             for d, trace_id in zip(self._devices, trace_ids, strict=True):
                 ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
 
@@ -290,6 +330,7 @@ class Tracer:
     ) -> None:
         trace_ids = self._trace_ids
         assert trace_ids is not None
+        self._check_not_stale()
 
         if len(args) != len(self._args):
             msg = f"expected {len(self._args)} positional args, got {len(args)}"
@@ -333,6 +374,7 @@ class Tracer:
         self._args = ()
         self._kwargs = {}
         self._outputs = None
+        self._unwatch()
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)
