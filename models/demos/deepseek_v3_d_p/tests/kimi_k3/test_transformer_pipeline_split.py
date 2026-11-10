@@ -97,6 +97,7 @@ def _build_rank(mesh_device, config, cache, first_layer_idx, num_layers, *, is_f
         tp_axis=TP_AXIS,
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
+        moe_impl="ttmoe",  # (TtMoe: this test opens its mesh without the MoE block's L1_SMALL / payload)
     )
 
 

@@ -114,6 +114,8 @@ class TtKimiK3Transformer(LightweightModule):
         mtp_predictor=None,
         # KV dedup for the MLA layers only; must match the KVPE cache allocation.
         tp_shard_kv: Optional[bool] = None,
+        # The MoE every MoE layer builds (tt/moe_impl.py: "block" - the MoE block's C++ ops, K3's default - or "ttmoe").
+        moe_impl: Optional[str] = None,
         **block_kwargs,
     ):
         super().__init__()
@@ -269,6 +271,7 @@ class TtKimiK3Transformer(LightweightModule):
                     gate_fallback_mode=gate_fallback_mode,
                     weight_cache_path=weight_cache_path,
                     kv_only=kv_only_last_layer and is_last,
+                    moe_impl=moe_impl,
                     **block_kwargs,
                 )
             )
