@@ -793,10 +793,11 @@ constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_
     constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));
     const std::uint32_t bit = column * 16 + count;
     char out = form;
-    if (out != 'T' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) {
-        out = 'T';
-    } else if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) {
+    if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) {
         out = 'B';
+    }
+    if (out == 'B' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) {
+        out = 'T';
     }
     if constexpr (matmul_kt != 0) {
         if (next && out != 'W' && ((llk_pack_mm_take_w[family][group - 1][row] >> bit) & 1) != 0) {
@@ -841,8 +842,9 @@ constexpr bool llk_matmul_pack_always_per_tile() {
         !bfp && datum_size_in_bytes(f) == 4);
     constexpr bool int8 = f == static_cast<std::uint32_t>(DataFormat::Int8) || f == static_cast<std::uint32_t>(DataFormat::UInt8);
     constexpr bool src32 = llk_pack_src32_family<DST_ACCUM_MODE>;
+    constexpr bool t32 = src32 && llk_pack_unpack_to_dest;
     constexpr bool full = DST_SYNC_MODE == DstSync::SyncFull;
-    return llk_pack_block_form_k<DST_ACCUM_MODE, matmul_kt>(row, ntiles, src32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8) == 'T' &&
-           llk_pack_block_form_k<DST_ACCUM_MODE, matmul_kt>(row, ntiles, src32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8) == 'T' &&
-           llk_pack_block_form_k<DST_ACCUM_MODE, matmul_kt>(row, ntiles, src32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8) == 'T';
+    return llk_pack_block_form_k<DST_ACCUM_MODE, matmul_kt>(row, ntiles, t32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8) == 'T' &&
+           llk_pack_block_form_k<DST_ACCUM_MODE, matmul_kt>(row, ntiles, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8) == 'T' &&
+           llk_pack_block_form_k<DST_ACCUM_MODE, matmul_kt>(row, ntiles, t32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8) == 'T';
 }

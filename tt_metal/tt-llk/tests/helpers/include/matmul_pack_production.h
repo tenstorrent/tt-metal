@@ -79,13 +79,25 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         wide_format(out_format));
     constexpr bool int8     = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
     constexpr bool src32    = fp32 && key_src32;
+    constexpr bool tables32 = src32 && unpack_to_dest; // llk_pack_form_table: the 32 bit input tables only when a CB unpacks to DEST
+    // llk_pack_block: per tile after another pack program init, and while the packer accumulates in L1 under half sync
+    if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (sync == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE()))
+    {
+        _llk_pack_close_fast_untilize_<sync>();
+        state.valid = false;
+        for (std::uint32_t i = 0; i < num_tiles; i++)
+        {
+            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
+        }
+        return;
+    }
     const bool first        = MATMUL_PACK_STATE != 0 || !state.seen;
     const char f = matmul_pack_tables::llk_pack_block_form_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(
         row,
         key_nt != 0 ? key_nt : num_tiles,
-        first ? (MATMUL_PACK_STATE == 1 ? (src32 ? matmul_pack_tables::llk_pack_reconf_form : matmul_pack_tables::llk_pack_reconf_form_dc)
-                                        : (src32 ? matmul_pack_tables::llk_pack_init_form : matmul_pack_tables::llk_pack_init_form_dc))
-              : (src32 ? matmul_pack_tables::llk_pack_next_form : matmul_pack_tables::llk_pack_next_form_dc),
+        first ? (MATMUL_PACK_STATE == 1 ? (tables32 ? matmul_pack_tables::llk_pack_reconf_form : matmul_pack_tables::llk_pack_reconf_form_dc)
+                                        : (tables32 ? matmul_pack_tables::llk_pack_init_form : matmul_pack_tables::llk_pack_init_form_dc))
+              : (tables32 ? matmul_pack_tables::llk_pack_next_form : matmul_pack_tables::llk_pack_next_form_dc),
         !first,
         sync == DstSync::SyncFull,
         src32,
@@ -171,10 +183,11 @@ constexpr bool always_per_tile()
             wide_format(out_format));
         constexpr bool int8  = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
         constexpr bool src32 = fp32 && key_src32;
+        constexpr bool t32   = src32 && unpack_to_dest;
         constexpr bool full  = sync == DstSync::SyncFull;
-        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, src32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, src32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, src32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8) == 'T';
+        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8) == 'T';
     }
 }
 
