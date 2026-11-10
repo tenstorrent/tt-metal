@@ -1240,6 +1240,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src);
+    // Blackhole llk_pack_block: the forms of its 32 bit input family apply only when some CB unpacks to DEST.
+    out << "#define LLK_UNPACK_TO_DEST_ANY " << (tt::any_unpack_to_dest(options.unpack_to_dest_mode) ? 1 : 0) << "\n";
     out << "#endif\n";    // if pack
     out << "#endif\n\n";  // if not math and not unpack
 

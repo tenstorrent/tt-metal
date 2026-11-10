@@ -407,6 +407,12 @@ constexpr std::uint32_t llk_pack_src32_mask(const std::uint32_t first) {
 // A 32 bit CB next to a 32 bit DEST may unpack to DEST, where the unpacker bounds the loop and a block pack steals its L1 reads: those kernels take the forms no sweep read slower, the others the datacopy tables.
 template <bool is_fp32_dest_acc_en>
 inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);
+// Whether a CB of the kernel unpacks to DEST (the JIT defines LLK_UNPACK_TO_DEST_ANY); without it one may. A kernel that unpacks to SrcA only takes the datacopy tables.
+#if defined(LLK_UNPACK_TO_DEST_ANY)
+inline constexpr bool llk_pack_unpack_to_dest = LLK_UNPACK_TO_DEST_ANY != 0;
+#else
+inline constexpr bool llk_pack_unpack_to_dest = true;
+#endif
 
 // Form of a block per tile count (above 16: the entry of 16): T per-tile packs, B the block that programs the output, W the block with the W offset, where no cell of the row read slower in the tt-llk sweeps.
 // Columns: half sync 16 and 32 bit DEST, full sync 16 and 32 bit DEST; the first block of an output takes the init or the reconfigure table, the blocks that continue it the next table. The _dc tables hold the rows of the datacopy family.
@@ -507,10 +513,10 @@ constexpr std::uint64_t llk_pack_mm_no_w[2][4][10] = {
         {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00AE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
     },
     {  // 32 bit input family
-        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K not given
-        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0x0000000000080000, 0x0000000000080000, 0, 0, 0},  // LoFi, K 1
-        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K above 1
-        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00AE, 0x00000000000E0062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
+        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K not given
+        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0x00000000000A0000, 0x00020000000A0000, 0, 0, 0},  // LoFi, K 1
+        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K above 1
+        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00AE, 0x00000000000E0062, 0x0002000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
     },
 };
 constexpr std::uint64_t llk_pack_mm_take_w[2][3][10] = {
@@ -570,7 +576,7 @@ inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32
 
 template <bool is_fp32_dest_acc_en>
 inline const char (*llk_pack_form_table(const char (*u)[4][17], const char (*dc)[4][17]))[4][17] {
-    return llk_pack_src32_family<is_fp32_dest_acc_en> ? u : dc;
+    return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;
 }
 
 // The per-tile packs of a block that takes none of the block forms: main's loop.
