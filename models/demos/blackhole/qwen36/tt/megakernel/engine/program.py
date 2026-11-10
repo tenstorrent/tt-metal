@@ -1196,7 +1196,8 @@ def _io_list(S):
     io += [S[n] for n in ("wv_all", "v_xk", "v_rs", "v_h7", "v_xpk", "v_pbuf", "v_xo", "v_x0", "v_id", "v_j")] if g("V12") else []
     io += [S["ar_out"], S["ar_blk"]] if g("REAL_AR") else []
     io += list(S["GDN_ROLE"].get("io", [])) if g("GDN24") else []
-    return io + [S["out_t"]]
+    # MK_V12_CB (spec §20): v12 scratch moved to CBs -> setup_bench leaves those names None (bench_mka2 skips them too)
+    return [t for t in io if t is not None] + [S["out_t"]]
 
 
 def weight_layouts(mesh):
@@ -1230,6 +1231,12 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
         S = setup_bench(mesh, True, lambda t: 0.0)
     io0 = _io_list(S)
     per_dev = S.get("PROG_PER_DEV")
+    try:  # v12's CB plan check (engine/cbplan.py, on -mk-v12cb): the in-model CB base / L1 high-water may differ from 112000
+        from models.demos.blackhole.qwen36.tt.megakernel.engine import cbplan as CBP
+    except ImportError:
+        CBP = None
+    if CBP is not None and os.environ.get("QWEN36_R16_MK_CBPLAN_VERIFY", "1") == "1":
+        CBP.verify(mesh, per_dev(ttnn.MeshCoordinate(0, 0)) if per_dev else S["prog"])
     grid = mesh.compute_with_storage_grid_size()
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     # the integration arg blocks are model-global (KV bases, page table) or rewritten per launch (replay): ONE set per
