@@ -31,6 +31,8 @@ PROMPT = os.environ.get(
 )
 REFS = os.environ.get("T433_REFS", "").split(",")
 SEED = int(os.environ.get("T433_SEED", "13"))
+# T433_SEEDS: comma list rendered on one warm pipeline after a throwaway warm-up gen (t458).
+SEEDS = [int(x) for x in os.environ.get("T433_SEEDS", "").split(",") if x.strip()]
 STEPS = int(os.environ.get("T433_STEPS", "9"))
 OUT = Path(os.environ.get("T433_OUT", "/tmp/t433-out"))
 
@@ -53,23 +55,43 @@ def test_t433_render(mesh_device):
     logger.info(f"t433 load+warm {time.time() - t0:.1f}s file={os.environ.get('H3_TRANSFORMER_FILE')}")
     num_frames = align_num_frames(round(5 * MINIMAX_H3_FPS))
     OUT.mkdir(parents=True, exist_ok=True)
-    for run in range(int(os.environ.get("T433_RUNS", "2"))):
-        t1 = time.time()
-        output = pipeline(
+
+    def gen(seed):
+        return pipeline(
             PROMPT,
             references=references or None,
             num_frames=num_frames,
             height=768,
             width=1344,
             num_inference_steps=STEPS,
-            seed=SEED,
+            seed=seed,
         )
+
+    def write(output, seed):
+        mp4 = OUT / f"{task}_s{seed}.mp4"
+        export_video_audio_yuv(
+            output.video,
+            str(mp4),
+            fps=output.fps,
+            audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
+        )
+        logger.info(f"t433 wrote {mp4}")
+
+    if SEEDS:
+        t1 = time.time()
+        gen(SEEDS[0])
+        logger.info(f"t433 warmup {time.time() - t1:.2f}s")
+        for seed in SEEDS:
+            t1 = time.time()
+            output = gen(seed)
+            dt = time.time() - t1
+            logger.info(f"t433 warm seed={seed} {dt:.2f}s {dt / STEPS:.2f}s/step")
+            with open(OUT / "times.jsonl", "a") as f:
+                f.write(f'{{"seed": {seed}, "gen_s": {dt:.3f}, "steps": {STEPS}, "end": {time.time():.0f}}}\n')
+            write(output, seed)
+        return
+    for run in range(int(os.environ.get("T433_RUNS", "2"))):
+        t1 = time.time()
+        output = gen(SEED)
         logger.info(f"t433 gen{run} {time.time() - t1:.2f}s")
-    mp4 = OUT / f"{task}_s{SEED}.mp4"
-    export_video_audio_yuv(
-        output.video,
-        str(mp4),
-        fps=output.fps,
-        audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
-    )
-    logger.info(f"t433 wrote {mp4}")
+    write(output, SEED)
