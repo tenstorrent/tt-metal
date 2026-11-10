@@ -2529,9 +2529,22 @@ class DeepSeekV41Model(DeepSeekV4Model):
         With a drafter, the drafter's receive of each step's row is held: the caller queues them in step order
         (:meth:`spec_release_writes`), one before reading each output, so a draft queued between two releases
         sees exactly the rows released before it. Every step must be released and read eventually: its output
-        stage waits on both."""
+        stage waits on both.
+
+        The previous round's abandoned rows (:meth:`spec_discard_outputs`) are read off first. They are its
+        rejected tail, still in the output socket; dispatching this block on top of them overfills the pipeline
+        and wedges the host in the packet writes, which block on the Engram FIFO while the device waits for a
+        read that cannot come (see :meth:`_write_engram_rows`). Draining costs nothing: those rows are ahead
+        of this block in the replay queue, so it could not produce anything before they finish anyway.
+        """
         if self._eager_decode:
             raise RuntimeError("a streamed verify replays the decode traces: build with traced decode")
+        if self._stale_outputs:
+            logger.info(
+                f"spec verify at {start}: reading off {self._stale_outputs} abandoned output(s) of the previous "
+                f"round before dispatching {len(tokens)} step(s)"
+            )
+            self.drain_stale_outputs()
         tokens = list(tokens)
         positions = range(start, start + len(tokens))
         self.ensure_session_capacity(positions[-1])
@@ -2548,6 +2561,23 @@ class DeepSeekV41Model(DeepSeekV4Model):
         with self._cq_lock:
             for _ in range(steps):
                 ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
+
+    def spec_state(self) -> dict:
+        """Where a speculative round's host-side book-keeping stands, for progress logs and stall dumps.
+
+        ``replays`` (replays the thread has not dispatched yet) and ``packets`` (steps posted whose packet
+        is not written yet) are the two queues a round can be waiting on; ``stale`` outputs and ``held``
+        rows are the steps the drafter has yet to receive, which the caller releases one at a time.
+        """
+        resident = self._resident[0] if self._resident else None
+        return {
+            "pos": self._session_pos.get(resident) if resident is not None else None,
+            "held": self._spec_hold_writes,
+            "stale": self._stale_outputs,
+            "packets": len(self._packet_sids),
+            "replays": self._replay_queue.unfinished_tasks,
+            "drafter": self.dspark is not None,
+        }
 
     def spec_discard_outputs(self, steps: int) -> None:
         """Mark the next ``steps`` unread outputs as unwanted: the next read drops them first."""

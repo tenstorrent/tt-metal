@@ -26,6 +26,15 @@ built with the parallel verify's traces only when a mode needs them. The paralle
 until its rows match the single-row decode (``test_parallel_verify_rows``).
 ``DEEPSEEK_V4_SPEC_EXACT=0`` logs a divergence from the baseline instead of failing.
 
+Progress logging while it runs:
+
+* every spec round logs its start position, the drafts it accepted and each phase's wall time
+  (``[spec] round ...``), and every verified row logs whether it accepted its draft (``[spec] round p=...: row ...``);
+* every greedy step logs every 200 tokens;
+* a phase that runs longer than ``DEEPSEEK_V4_SPEC_STALL_SECONDS`` (default 30) dumps the model's dispatch
+  state and every thread's stack (``[spec stall]``), which names the wait a hung round is sitting in;
+* ``DEEPSEEK_V4_SPEC_VERBOSE=0`` silences the per-round and per-row lines.
+
 The DSpark experts (bfloat8_b) come from ``tools/fill_expert_cache.py --dspark --dtype bfloat8_b``.
 
     DEEPSEEK_V4_SPEC_TOKENS=2000 pytest -s models/experimental/deepseek_v41_flash/tests/decode/test_dspark_spec.py
@@ -67,6 +76,8 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher
 DRAFTS = 4
 CORRUPT = 1 / 3
 VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "pipelined")
+# Log the greedy loop's progress (every 200 steps); the spec rounds log every phase regardless.
+_VERBOSE = os.environ.get("DEEPSEEK_V4_SPEC_VERBOSE", "1") not in ("0", "", "false", "False")
 # 0: log a divergence from the baseline instead of failing (for throughput runs).
 EXACT = os.environ.get("DEEPSEEK_V4_SPEC_EXACT", "1") != "0"
 # The DSpark run's sampling (DSparkSpeculator.temperature / top_p); temperature 0 is greedy.
@@ -143,6 +154,7 @@ def test_dspark_spec_decode(mesh_device):
 
         # 1. Plain greedy decode. Each end of sentence asks the next follow-up, until n_tokens are generated
         # or the follow-ups run out.
+        logger.info(f"[test] starting greedy baseline: prompt {len(prompt)} tokens, target {n_tokens}")
         out = model.decode_prompt_traced(prompt, 0)
         stream = list(prompt)  # stream[q] is the token at position q
         baseline = []  # the generated tokens, without the follow-ups
@@ -159,6 +171,10 @@ def test_dspark_spec_decode(mesh_device):
                 break
             if baseline[-1] == eos_id:
                 feed = [eos_id, *turns[asked - 1]]
+                logger.info(
+                    f"[test] greedy: end of sentence {asked}/{len(turns)} at {len(baseline)} tokens, "
+                    f"feeding a {len(feed)}-token user turn from {len(stream)}"
+                )
                 out = model.decode_prompt_traced(feed, len(stream))
                 stream += feed
             else:
@@ -167,6 +183,11 @@ def test_dspark_spec_decode(mesh_device):
                 plain_seconds += time.perf_counter() - t0
                 plain_steps += 1
                 stream.append(baseline[-1])
+                if _VERBOSE and plain_steps % 200 == 0:
+                    logger.info(
+                        f"[test] greedy: {len(baseline)}/{n_tokens} tokens, pos {len(stream)}, "
+                        f"{plain_steps / plain_seconds:.2f} tok/s"
+                    )
         greedy_tps = plain_steps / plain_seconds
         logger.info(
             f"greedy: {len(baseline)} tokens, {baseline.count(eos_id)} end(s) of sentence, {greedy_tps:.2f} tok/s; "
@@ -187,14 +208,20 @@ def test_dspark_spec_decode(mesh_device):
         def converse(spec: DSparkSpeculator) -> list[int]:
             """The baseline's conversation through ``spec``: its generated tokens, without the follow-ups."""
             got = [spec.prefill(prompt)]
+            logger.info(
+                f"[spec] run start: {'parallel' if spec.parallel_verify else 'pipelined'} verify, "
+                f"prefill gave {got[0]}, pos {spec.position}"
+            )
             while len(got) < n_tokens:
                 asked = got.count(eos_id)
                 if got[-1] == eos_id:
                     if asked > len(turns):
                         break
+                    logger.info(f"[spec] end of sentence {asked}/{len(turns)}: extending with the next user turn")
                     got.append(spec.extend(turns[asked - 1]))
                 else:
                     got += spec.generate(n_tokens - len(got), stop_ids=(eos_id,))
+            logger.info(f"[spec] run done: {len(got)} tokens, pos {spec.position}")
             return got
 
         for parallel_verify in modes:
@@ -210,6 +237,7 @@ def test_dspark_spec_decode(mesh_device):
                 ]
 
             oracle = DSparkSpeculator(model, DRAFTS, propose=propose, parallel_verify=parallel_verify)
+            logger.info(f"[test] starting oracle run ({verify}): {DRAFTS} drafts/round, 1/3 corrupted")
             got = converse(oracle)
             logger.info(f"oracle, {verify}: {oracle.stats.summary(DRAFTS)}")
             check(f"oracle spec ({verify})", got, EXACT)
@@ -218,6 +246,7 @@ def test_dspark_spec_decode(mesh_device):
             spec = DSparkSpeculator(
                 model, DRAFTS, parallel_verify=parallel_verify, temperature=TEMPERATURE, top_p=TOP_P
             )
+            logger.info(f"[test] starting DSpark run ({verify}): temperature {TEMPERATURE}, top_p {TOP_P}")
             got = converse(spec)
             logger.info(
                 f"DSpark, {verify}, temperature {TEMPERATURE}, top_p {TOP_P}: {spec.stats.summary(DRAFTS)} "

@@ -48,13 +48,23 @@ hand-off are the same.
 from __future__ import annotations
 
 import math
+import os
+import sys
+import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
 import torch
+from loguru import logger
 
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DRAFT_PROB_PENALTY
+
+# Log every round's phases (and the round's accepted count) as it finishes. Off: only the end-of-run summary.
+_VERBOSE = os.environ.get("DEEPSEEK_V4_SPEC_VERBOSE", "1") not in ("0", "", "false", "False")
+# Seconds a single round phase may take before the watchdog dumps every thread's stack. 0 disables it.
+_STALL_SECONDS = float(os.environ.get("DEEPSEEK_V4_SPEC_STALL_SECONDS", "30"))
 
 
 @dataclass
@@ -89,6 +99,72 @@ class SpecStats:
             f"accepted per round {histogram}, {self.tokens / self.seconds:.2f} tok/s; "
             f"ms/round {1000 * self.seconds / rounds:.1f} ({split})"
         )
+
+
+class _StallWatch:
+    """Dump every thread's stack when one phase of a round runs past :data:`_STALL_SECONDS`.
+
+    A speculative round is a chain of host waits -- a fixup's uploads, the verify's output reads, the
+    drafter's readback -- and a stall in any of them looks identical from outside: the test simply stops
+    printing. The watchdog names the phase and shows which queue every thread is parked on, which is what
+    distinguishes a deadlocked device from a slow one.
+
+    ``enter`` arms it for one phase; ``cancel`` disarms it. A phase that trips the timer logs once and does
+    not re-arm, so a genuinely slow phase reports its stack once instead of spamming.
+    """
+
+    def __init__(self, model=None) -> None:
+        self._timer: Optional[threading.Timer] = None
+        self._phase = ""
+        self._model = model
+
+    def enter(self, phase: str) -> None:
+        if _STALL_SECONDS <= 0:
+            return
+        self.cancel()
+        self._phase = phase
+        timer = threading.Timer(_STALL_SECONDS, self._dump, args=(phase,))
+        timer.daemon = True
+        self._timer = timer
+        timer.start()
+
+    def cancel(self) -> None:
+        timer, self._timer = self._timer, None
+        if timer is not None:
+            timer.cancel()
+        self._phase = ""
+
+    def _dump(self, phase: str) -> None:
+        """Log the model's dispatch state and then the stack of every thread.
+
+        The state line comes first: it says which queue the round is stuck on (undispatched replays,
+        unwritten packets, unread outputs), and the stacks then say which thread is holding it. The dump
+        also shows the watchdog's own frame, harmless because it runs after the state line is built.
+        """
+        frames = sys._current_frames()
+        state = ""
+        if self._model is not None:
+            try:
+                state = f" state {self._model.spec_state()}"
+            except Exception as exc:  # a probe must never be the thing that kills a run
+                state = f" state unavailable ({exc!r})"
+        lines = [f"[spec stall] no progress for {_STALL_SECONDS:.0f}s in phase {phase!r};{state}"]
+        for thread in threading.enumerate():
+            frame = frames.get(thread.ident)
+            if frame is None:
+                continue
+            where = "".join(traceback.format_stack(frame))
+            lines.append(f"\n--- thread {thread.name} (daemon={thread.daemon}) ---\n{where.rstrip()}")
+        logger.error("".join(lines))
+
+
+def _log_round(spec: "DSparkSpeculator", p: int, emitted: Sequence[int], phases: dict[str, float]) -> None:
+    """Per-round one-liner: the round's start position, how many drafts it accepted and each phase's time."""
+    split = ", ".join(f"{name} {1000 * t:.2f}" for name, t in phases.items())
+    logger.info(
+        f"[spec] round {len(spec.stats.accepted)}: p {p} -> {spec._pos} ({len(emitted)} tokens, "
+        f"m={len(emitted) - 1}), {split}; {spec.model.spec_state()}"
+    )
 
 
 class DSparkSpeculator:
@@ -164,6 +240,7 @@ class DSparkSpeculator:
         if model.dspark is not None and propose is None:
             model.dspark.set_sampling(temperature)
         self.stats = SpecStats()
+        self._stall = _StallWatch(model)
         self._next = None
         self._pos = None
         self._proposals: list[int] = []
@@ -243,14 +320,30 @@ class DSparkSpeculator:
         """
         model = self.model
         prompt = list(prompt)
+        logger.info(
+            f"[spec] prefill: {len(prompt)} tokens from {start_pos} (traces captured: {model._traced_captured})"
+        )
         if not model._traced_captured:
-            model.capture_spec_traces(prompt[0], start_pos)
-        out = model.decode_prompt_traced(prompt, start_pos)
+            self._stall.enter("prefill: capture_spec_traces")
+            try:
+                model.capture_spec_traces(prompt[0], start_pos)
+            finally:
+                self._stall.cancel()
+        self._stall.enter("prefill: decode_prompt_traced")
+        try:
+            out = model.decode_prompt_traced(prompt, start_pos)
+        finally:
+            self._stall.cancel()
         end = start_pos + len(prompt)
         self._next = self._next_token(out)
         self._pos = end
         self._rejected = []
-        self._proposals = self._draft(self._next, end - 1)
+        self._stall.enter("prefill: draft")
+        try:
+            self._proposals = self._draft(self._next, end - 1)
+        finally:
+            self._stall.cancel()
+        logger.info(f"[spec] prefilled to {self._pos}: first token {self._next}, drafts {self._proposals}")
         return self._next
 
     def step(self) -> list[int]:
@@ -259,64 +352,128 @@ class DSparkSpeculator:
         t0 = time.perf_counter()
         p = self._pos
         inputs = [self._next] + self._proposals
-        model.spec_fixup(self._rejected)
+        self._stall.enter(f"round p={p}: spec_fixup({self._rejected})")
+        try:
+            model.spec_fixup(self._rejected)
+        finally:
+            self._stall.cancel()
         t1 = time.perf_counter()
         if self.device_accept:
-            model.decode_prompt_traced(inputs, p)
+            self._stall.enter(f"round p={p}: device-accept verify")
+            try:
+                model.decode_prompt_traced(inputs, p)
+            finally:
+                self._stall.cancel()
             t2 = time.perf_counter()
-            m, token, ids = model.spec_accept_draft(p, k, self.temperature > 0, self._seed())
+            self._stall.enter(f"round p={p}: spec_accept_draft")
+            try:
+                m, token, ids = model.spec_accept_draft(p, k, self.temperature > 0, self._seed())
+            finally:
+                self._stall.cancel()
             self._rejected = list(range(p + m + 1, p + len(inputs)))
             self._next = token
             self._pos = p + m + 1
             self._proposals = ids[:k]
             t3 = time.perf_counter()
-            for phase, seconds in (("fixup", t1 - t0), ("verify", t2 - t1), ("accept+draft", t3 - t2)):
+            phases = {"fixup": t1 - t0, "verify": t2 - t1, "accept+draft": t3 - t2}
+            for phase, seconds in phases.items():
                 self.stats.add(phase, seconds)
             self.stats.accepted.append(m)
             self.stats.seconds += t3 - t0
-            return inputs[1 : m + 1] + [token]
+            emitted = inputs[1 : m + 1] + [token]
+            if _VERBOSE:
+                _log_round(self, p, emitted, phases)
+            return emitted
         if self.streaming:
             held = model.dspark is not None
-            model.spec_verify_async(inputs, p)
+            self._stall.enter(f"round p={p}: spec_verify_async ({len(inputs)} steps)")
+            try:
+                model.spec_verify_async(inputs, p)
+            finally:
+                self._stall.cancel()
             for m in range(k + 1):
                 if held:
-                    model.spec_release_writes()
-                token = self._verify_row(inputs, m, model.read_decoded_output().reshape(-1).float())
+                    self._stall.enter(f"round p={p}: release_writes(row {m})")
+                    try:
+                        model.spec_release_writes()
+                    finally:
+                        self._stall.cancel()
+                self._stall.enter(f"round p={p}: read output of row {m}")
+                try:
+                    row = model.read_decoded_output().reshape(-1).float()
+                finally:
+                    self._stall.cancel()
+                token = self._verify_row(inputs, m, row)
+                if _VERBOSE:
+                    # Row ``k`` is the bonus row: it has no draft to accept, it emits the round's last token.
+                    if m < k:
+                        logger.info(
+                            f"[spec] round p={p}: row {m} draft {inputs[m + 1]} -> "
+                            f"{'accepted' if token is None else f'rejected, token {token}'}"
+                        )
+                    else:
+                        logger.info(f"[spec] round p={p}: row {m} bonus (all drafts accepted) -> token {token}")
                 if token is not None:
                     break
             t2 = time.perf_counter()
             self._rejected = list(range(p + m + 1, p + len(inputs)))
             self._next = token
             self._pos = p + m + 1
-            self._proposals = self._draft(token, p + m)
+            self._stall.enter(f"round p={p}: draft (frontier {p + m})")
+            try:
+                self._proposals = self._draft(token, p + m)
+            finally:
+                self._stall.cancel()
             # After the draft's readback, which would otherwise wait behind these rows' receives.
             if held:
-                model.spec_release_writes(k - m)
+                self._stall.enter(f"round p={p}: release_writes({k - m} trailing rows)")
+                try:
+                    model.spec_release_writes(k - m)
+                finally:
+                    self._stall.cancel()
             model.spec_discard_outputs(k - m)
             t3 = time.perf_counter()
-            for phase, seconds in (("fixup", t1 - t0), ("verify", t2 - t1), ("draft", t3 - t2)):
+            phases = {"fixup": t1 - t0, "verify": t2 - t1, "draft": t3 - t2}
+            for phase, seconds in phases.items():
                 self.stats.add(phase, seconds)
             self.stats.accepted.append(m)
             self.stats.seconds += t3 - t0
-            return inputs[1 : m + 1] + [token]
+            emitted = inputs[1 : m + 1] + [token]
+            if _VERBOSE:
+                _log_round(self, p, emitted, phases)
+            return emitted
         rows: list[torch.Tensor] = []
-        if self.parallel_verify:
-            rows = [row.reshape(-1).float() for row in model.decode_verify(inputs, p)]
-        else:
-            model.decode_prompt_traced(inputs, p, on_output=lambda i, out: rows.append(out.reshape(-1).float().clone()))
+        self._stall.enter(f"round p={p}: {'parallel' if self.parallel_verify else 'pipelined'} verify")
+        try:
+            if self.parallel_verify:
+                rows = [row.reshape(-1).float() for row in model.decode_verify(inputs, p)]
+            else:
+                model.decode_prompt_traced(
+                    inputs, p, on_output=lambda i, out: rows.append(out.reshape(-1).float().clone())
+                )
+        finally:
+            self._stall.cancel()
         t2 = time.perf_counter()
         m, token = self._accept(inputs, rows)
         self._rejected = list(range(p + m + 1, p + len(inputs)))
         t3 = time.perf_counter()
         self._next = token
         self._pos = p + m + 1
-        self._proposals = self._draft(self._next, self._pos - 1)[:k]
+        self._stall.enter(f"round p={p}: draft (frontier {self._pos - 1})")
+        try:
+            self._proposals = self._draft(self._next, self._pos - 1)[:k]
+        finally:
+            self._stall.cancel()
         t4 = time.perf_counter()
-        for phase, seconds in (("fixup", t1 - t0), ("verify", t2 - t1), ("accept", t3 - t2), ("draft", t4 - t3)):
+        phases = {"fixup": t1 - t0, "verify": t2 - t1, "accept": t3 - t2, "draft": t4 - t3}
+        for phase, seconds in phases.items():
             self.stats.add(phase, seconds)
         self.stats.accepted.append(m)
         self.stats.seconds += t4 - t0
-        return inputs[1 : m + 1] + [token]
+        emitted = inputs[1 : m + 1] + [token]
+        if _VERBOSE:
+            _log_round(self, p, emitted, phases)
+        return emitted
 
     def generate(self, max_new_tokens: int, stop_ids: Sequence[int] = ()) -> list[int]:
         """Rounds until ``max_new_tokens`` (beyond the first token :meth:`prefill` returned) or a stop id.
@@ -336,7 +493,16 @@ class DSparkSpeculator:
                     self._cut_round(emitted, keep)
                     done = True
                     break
-        self.model.drain_stale_outputs()
+            if _VERBOSE and (len(out) % 10 < len(emitted) or done):
+                logger.info(f"[spec] generate: {len(out)}/{max_new_tokens} tokens, pos {self._pos}")
+        self._stall.enter("generate: drain_stale_outputs")
+        try:
+            self.model.drain_stale_outputs()
+        finally:
+            self._stall.cancel()
+        logger.info(
+            f"[spec] generate done: {len(out)} tokens, pos {self._pos}, stats {self.stats.summary(self.drafts)}"
+        )
         return out
 
     def _cut_round(self, emitted: list[int], keep: int) -> None:
@@ -349,14 +515,31 @@ class DSparkSpeculator:
         self._next = emitted[keep - 1]
         self.stats.accepted[-1] = keep - 1
         # The rows the drafter has yet to receive each wait for the host to read their output first.
-        self.model.drain_stale_outputs()
-        self._proposals = self._draft(self._next, self._pos - 1)[: self.drafts]
+        self._stall.enter(f"cut at p={p} keep={keep}: drain_stale_outputs")
+        try:
+            self.model.drain_stale_outputs()
+        finally:
+            self._stall.cancel()
+        self._stall.enter(f"cut at p={p} keep={keep}: draft")
+        try:
+            self._proposals = self._draft(self._next, self._pos - 1)[: self.drafts]
+        finally:
+            self._stall.cancel()
+        logger.info(
+            f"[spec] cut the round at p={p} to {keep} token(s): pos {self._pos}, next {self._next}, "
+            f"drafts {self._proposals}, rejected {self._rejected}"
+        )
 
     def extend(self, tokens: Sequence[int]) -> int:
         """Feed ``tokens`` after the last returned token (say, the next user turn after an end-of-sentence id)
         and seed the drafter on them; returns the first token generated after them, as :meth:`prefill`."""
         start = self._pos
-        self.model.spec_fixup(self._rejected)
+        logger.info(f"[spec] extend: {len(tokens)} tokens from {start}, next {self._next}, rejected {self._rejected}")
+        self._stall.enter(f"extend at {start}: spec_fixup({self._rejected})")
+        try:
+            self.model.spec_fixup(self._rejected)
+        finally:
+            self._stall.cancel()
         return self.prefill([self._next, *tokens], start)
 
     @property
