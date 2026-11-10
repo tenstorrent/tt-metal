@@ -194,6 +194,9 @@ def setup_bench(dev, MESH, mesh_identity):
         for k_ in ('MK_V12', 'MK_RS_QKV', 'MKA_RQKV'):
             if (k_, '1') not in MKDEF: MKDEF = MKDEF + [(k_, '1')]
         QSK_GK = int(os.environ.get('QSK_GK', '6')); MKDEF = MKDEF + [('QSK_GK', str(QSK_GK))]
+    # spec v1.67: MK_V12_CB is the default under MK_V12 (v12's landing buffers as role-local CBs, §20); MK_V12_CB=0 opts out
+    if ('MK_V12', '1') in MKDEF and not any(k_ == 'MK_V12_CB' for k_, _ in MKDEF):
+        MKDEF = MKDEF + [('MK_V12_CB', '1')]
     MKDEF += [('MKA_AMASK', f'{AMASK & 0xFFFFFFFF}u'), ('MKA_S_GDN', str(int(S_GDN_US * 1350)))]
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
