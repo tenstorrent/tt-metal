@@ -614,6 +614,13 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
+    // The block forms run the default pack program: after a tilize, untilize or pack rows init, main's per-tile packs. So too while the packer
+    // accumulates in L1 under half sync, where a block behind matmul math reads up to 64 cycles slower (full sync: faster).
+    if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE())) {
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        return;
+    }
+
 #ifdef LLK_PACK_W_OFFSET
     const bool first_block = pack_w_last != output_id;
     const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(

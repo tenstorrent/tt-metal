@@ -205,6 +205,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_replay_();
     _llk_pack_fast_tilize_mop_config_(unit_dim);
+    LLK_PACK_OTHER_PROGRAM_SET();
 }
 
 // ===========================================================================

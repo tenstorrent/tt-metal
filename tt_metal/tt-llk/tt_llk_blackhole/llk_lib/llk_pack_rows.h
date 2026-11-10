@@ -111,6 +111,7 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 
     _llk_pack_rows_configure_addrmod_();
     _llk_pack_rows_mop_config_(num_rows);
+    LLK_PACK_OTHER_PROGRAM_SET();
 
     // To ensure that Y_POS counter gets reset to 0 after the operation is completed,
     // we need to set pack_reads_per_xy_plane to 1. When Y_POS counter hits that value, it will reset.

@@ -117,8 +117,8 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
- * NOTE: On Blackhole the block is one packer program run where the layout allows, which needs the default pack
- * program installed (the tilize and untilize uninits restore it).
+ * NOTE: On Blackhole the block is one packer program run where the layout allows. After a tilize, untilize or pack rows
+ * init, and while the packer accumulates in L1 under half sync, it packs tile by tile, as before.
  *
  * NOTE: On Blackhole a matmul kernel passes the K tiles of its output block as the second template argument (pack_block<DST_ACCUM_MODE, K>), which picks the forms behind matmul math for that K.
  *
