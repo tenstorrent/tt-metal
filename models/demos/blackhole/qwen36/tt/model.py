@@ -3699,6 +3699,8 @@ class Qwen36Model:
         _kv_grouped = self._vfy_kv_grouped
 
         _pre = getattr(self, "_vfy_pre", None) if spec_vfy_outs_prealloc_enabled() else None
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = True
         self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         (
             self._vfy_logits_out,
@@ -3713,6 +3715,8 @@ class Qwen36Model:
             self._vfy_ids_out = self._vfy_pre_into(_pre, "ids", self._vfy_ids_out)
             self._vfy_normed_out = self._vfy_pre_into(_pre, "normed", self._vfy_normed_out)
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = False
         if self._vfy_sharded:
             # Sampled requests (read_logits) need the full logits, which the main trace no longer gathers:
             # a second, small trace (lm_head + all-gather + untilize on the persistent normed rows).
@@ -3911,10 +3915,14 @@ class Qwen36Model:
             "topk_ids": getattr(self, "_vfy_topk_ids_out", None),
         }
         _pre = bk.pre if spec_vfy_outs_prealloc_enabled() else None
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = True
         bk.trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         outs = self._forward_verify_bucket_tp(n_users=b, bk=bk, **({"kv_split": True} if kv_split else {}))
         _normed = self._vfy_pre_into(_pre, "normed", outs[4]) if _pre else outs[4]  # QWEN36_SPEC_VFY_OUTS_PREALLOC
         ttnn.end_trace_capture(dev, bk.trace_id, cq_id=0)
+        if getattr(self, "_vfy_mk", None) is not None:
+            self._vfy_mk.capturing = False
         bk.normed, bk.shard_logits = _normed, outs[5]
         bk.logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
         bk.logits_out, bk.logits_rm_out = self._forward_verify_logits_body(bk)
@@ -4200,6 +4208,8 @@ class Qwen36Model:
                 self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
         ttnn.execute_trace(dev, _main_tid, cq_id=0, blocking=False)
         self._vfy_last_bucket = bk
+        if getattr(self, "_vfy_mk", None) is not None:  # QWEN36_R16_MEGAKERNEL stage0: replay accounting
+            self._vfy_mk.count_replay(self._vfy_B if bk is None else bk.b)
         mask_keep = None
         if not forward_only:
             if read_logits and self._vfy_sharded:

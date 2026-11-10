@@ -34,6 +34,11 @@ class MegakernelVerify:
         self.tables = {}  # n_users -> (records, device table tensor)
         self.probe_out = {}  # n_users -> device uint32 [1,1,1,32] RM (persistent: the trace writes it)
         self.fallback_reason = None
+        # launch accounting (stage0 proof that the probe runs inside every replay): eager body calls outside a trace
+        # capture + execute_trace replays, per bucket; the device counter (out[4]) must equal their sum.
+        self.capturing = False
+        self.eager = {}
+        self.replays = {}
         if self.mode not in ("stage0",):
             self.fallback_reason = f"QWEN36_R16_MEGAKERNEL={self.mode}: only stage0 is implemented; layer loop op-by-op"
 
@@ -84,7 +89,33 @@ class MegakernelVerify:
             return
         recs, tbl = self._table(n_users)
         out = self.probe_out[n_users]
+        if not self.capturing:
+            self.eager[n_users] = self.eager.get(n_users, 0) + 1
         self.ttnn.generic_op([tbl, out], self._probe_program(tbl, out, len(recs)))
+
+    def count_replay(self, n_users):
+        """Called by model.verify_traced right after execute_trace of a verify trace for ``n_users`` rows."""
+        self.replays[n_users] = self.replays.get(n_users, 0) + 1
+
+    def report(self):
+        """Per bucket: device launch counters (every device), expected = eager + replays, checksum ok on all devices.
+        Synchronizes the mesh (call after the run, outside any trace)."""
+        import torch
+
+        ttnn = self.ttnn
+        ttnn.synchronize_device(self.mesh)
+        rep = {}
+        for b, (recs, _) in sorted(self.tables.items()):
+            want = checksum(recs)
+            got = ttnn.to_torch(self.probe_out[b], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+            rows = (got.reshape(-1, 32).to(torch.int64) & 0xFFFFFFFF).tolist()
+            exp = self.eager.get(b, 0) + self.replays.get(b, 0)
+            launched = [r[4] for r in rows]
+            ok_sum = all((r[0], r[1], r[2]) == want and r[3] == 0x4D4B5030 for r in rows) if exp else None
+            rep[b] = dict(expected=exp, eager=self.eager.get(b, 0), replays=self.replays.get(b, 0),
+                          device_counts=sorted(set(launched)), checksum_ok=ok_sum,
+                          ok=(exp == 0 and set(launched) == {0}) or (ok_sum and set(launched) == {exp}))
+        return rep
 
     def check_probe(self, n_users):
         """Host check after a replay: every device's probe output equals the host checksum of the bucket's table."""

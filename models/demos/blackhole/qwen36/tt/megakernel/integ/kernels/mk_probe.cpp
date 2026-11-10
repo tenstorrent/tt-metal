@@ -1,6 +1,6 @@
 // Megakernel integration stage0 probe (QWEN36_R16_MEGAKERNEL=stage0): one core per device reads the bucket's phase
 // table from DRAM (uint32 ROW_MAJOR [n_phases, 16]) and writes (n_phases, sum(word0), FNV-1a-32 of all words, marker)
-// to out[0..3]. It proves the per-bucket table tensor, the mesh generic_op inside the captured verify trace, and replay,
+// to out[0..3], and a launch counter to out[4]. It proves the per-bucket table tensor, the mesh generic_op inside the captured verify trace, and replay,
 // without touching the residual. Must match integ/phase_table.py:checksum().
 #include "api/dataflow/dataflow_api.h"
 
@@ -28,7 +28,11 @@ void kernel_main() {
         }
     }
     volatile tt_l1_ptr uint32_t* res = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 64 * 2);
+    noc_async_read(out.get_noc_addr(0), scratch + 64 * 2, 32 * 4);  // previous launch's row: keeps the counter
+    noc_async_read_barrier();
+    const uint32_t launches = (res[3] == 0x4D4B5030u ? res[4] : 0) + 1;
     for (uint32_t i = 0; i < 32; ++i) res[i] = 0;
+    res[4] = launches;  // per-launch counter: eager calls + trace replays (host checks it, verify_mk.report)
     res[0] = n_phases;
     res[1] = sum;
     res[2] = x;
