@@ -42,35 +42,53 @@ DEADLINE_END = float(os.environ.get("TT_SANITY_DEADLINE", "90"))
 DEADLINE_HANG = float(os.environ.get("TT_SANITY_DEADLINE_HANG", "60"))
 SETTLE_S = 3.0  # after the launcher returns, before the census
 
-LAUNCHER_COMMS = {"prterun", "prted", "mpirun", "mpirun-ulfm", "tt-run"}
 RANK_MARK = re.compile(r"\[probe r=(\d+) pid=\d+ t=[\d.]+\] (.*)")
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# census: what of this job's kind is alive, and what it left in /dev/shm
+# census: what of THIS job is alive, and what it left in /dev/shm
 # ---------------------------------------------------------------------------------------------------------------
-def _procs() -> dict:
-    """pid -> (comm, args) of this user's processes that belong to a launcher or run the probe or the solver."""
+def _procs(tag: str) -> dict:
+    """pid -> (comm, args) of this user's processes that belong to THIS job: their environment carries the job's
+    unique ``PROBE_PIDDIR`` tag. Every process in the launcher's tree inherits it (the launcher, its ranks, a
+    prted, the solver), so the census and cleanup touch only this job — never a concurrent job on the same runner,
+    even one PRRTE re-sessioned into its own session, and never this harness's own pytest process. Scoping by the
+    tag (not by comm or by a before/after diff of all same-uid processes) is what makes the suite safe to run
+    alongside other jobs and in ``--parallel``."""
     out = {}
     uid = os.getuid()
+    needle = ("PROBE_PIDDIR=" + tag).encode()
     for p in glob.glob("/proc/[0-9]*"):
         try:
             if os.stat(p).st_uid != uid:
+                continue
+            if needle not in open(p + "/environ", "rb").read():
                 continue
             comm = open(p + "/comm").read().strip()
             args = open(p + "/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace")
         except OSError:
             continue
-        if (
-            comm in LAUNCHER_COMMS or "sanity_probe.py" in args or comm.startswith("generate_rank_b")
-        ):  # comm is 15 chars
-            out[int(p.rsplit("/", 1)[1])] = (comm, args[:120])
+        out[int(p.rsplit("/", 1)[1])] = (comm, args[:120])
     return out
 
 
 def _shm() -> set:
     uid = os.getuid()
     return {f for f in glob.glob("/dev/shm/sm_segment.*") if re.search(rf"\.{uid}\.", f)}
+
+
+def _shm_mapped() -> set:
+    """Shared-memory segments that some live process still maps — never remove these: they belong to a running
+    job (possibly a concurrent one), not to a job that has gone."""
+    mapped = set()
+    for m in glob.glob("/proc/[0-9]*/maps"):
+        try:
+            for line in open(m):
+                if "sm_segment." in line:
+                    mapped.add(line.rsplit(" ", 1)[1].strip())
+        except OSError:
+            continue
+    return mapped
 
 
 @dataclass
@@ -237,13 +255,21 @@ def run_case(
     cmd = cmd or legacy_cmd()
     piddir = tempfile.mkdtemp(prefix="sanity_pids_")
     env = dict(os.environ, PROBE_PIDDIR=piddir, **env_over)
-    before = _procs()
     before_shm = _shm()
     t0 = time.time()
     proc = subprocess.Popen(
         cmd, env=env, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
     )
     sent = []
+
+    def kill_job():
+        """SIGKILL every process of THIS job (matched by the unique tag), its ranks included, whatever session or
+        process group PRRTE put them in. Scoped by the tag, so it never reaches another job on the runner."""
+        for p in _procs(piddir):
+            try:
+                os.kill(p, signal.SIGKILL)
+            except OSError:
+                pass
 
     def pid_of(rank: int) -> int:
         f = Path(piddir) / f"rank_{rank}.pid"
@@ -269,45 +295,49 @@ def run_case(
             if phase1_kill:
                 end = time.time() + deadline
                 while time.time() < end:
-                    new = [p for p, (c, a) in _procs().items() if c.startswith("generate_rank_b") and p not in before]
+                    new = [p for p, (c, a) in _procs(piddir).items() if c.startswith("generate_rank_b")]
                     if new:
                         os.kill(new[0], signal.SIGKILL)
                         sent.append(f"SIGKILL to phase-1 rank (pid {new[0]})")
                         return
                     time.sleep(0.2)
         except Exception as e:  # noqa: BLE001
-            sent.append(f"signal worker failed: {e!r}")
+            # a fault that could not be delivered is a harness error, not a teardown outcome: mark it loudly so a
+            # row cannot quietly "pass" (or xfail) without the fault it was supposed to inject (review: P9/P4 ack).
+            sent.append(f"FAULT NOT DELIVERED: {e!r}")
 
     if launcher_signal is not None or rank_signal is not None or phase1_kill:
         threading.Thread(target=worker, daemon=True).start()
-    timed_out, alive = False, []
+    timed_out, alive, out, rc = False, [], "", None
     try:
-        out, _ = proc.communicate(timeout=deadline)
-        rc = proc.returncode
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        alive = [f"{c}({p})" for p, (c, a) in _procs().items() if p not in before]
-        os.killpg(proc.pid, signal.SIGKILL)
-        out, _ = proc.communicate()
-        rc = proc.returncode
-    wall = time.time() - t0
-    time.sleep(SETTLE_S)
-    after = _procs()
-    left = [f"{c}({p})" for p, (c, a) in after.items() if p not in before]
-    shm = sorted(_shm() - before_shm)
-    # leave the host as we found it for the next row, whatever this one left
-    for p in after:
-        if p not in before:
+        try:
+            out, _ = proc.communicate(timeout=deadline)
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            alive = [f"{c}({p})" for p, (c, a) in _procs(piddir).items()]
+            kill_job()  # the whole job tree, not just the launcher's process group, so the stdout pipe is released
             try:
-                os.kill(p, signal.SIGKILL)
+                out, _ = proc.communicate(timeout=SETTLE_S)  # bounded: the writers are dead, so this is EOF, not a wait
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, _ = proc.communicate(timeout=SETTLE_S)
+            rc = proc.returncode
+        wall = time.time() - t0
+        time.sleep(SETTLE_S)
+        left = [f"{c}({p})" for p, (c, a) in _procs(piddir).items()]
+        mapped = _shm_mapped()
+        shm = sorted(s for s in (_shm() - before_shm) if s not in mapped)  # our dead leftovers, not a live job's
+    finally:
+        # leave the host as we found it for the next row, whatever this one left — always, even on an assertion or
+        # an error above. Scoped to this job (tag) and to unmapped segments (never a concurrent job's live memory).
+        kill_job()
+        for f in sorted(s for s in (_shm() - before_shm) if s not in _shm_mapped()):
+            try:
+                os.remove(f)
             except OSError:
                 pass
-    for f in shm:
-        try:
-            os.remove(f)
-        except OSError:
-            pass
-    shutil.rmtree(piddir, ignore_errors=True)
+        shutil.rmtree(piddir, ignore_errors=True)
     reached, rcs = _parse(out)
     res = Result(name, " ".join(cmd), rc, wall, timed_out, "; ".join(sent), alive, left, shm, reached, rcs, out)
     print(f"\n[sanity] {name}: {res}")
