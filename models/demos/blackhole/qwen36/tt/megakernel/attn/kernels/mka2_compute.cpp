@@ -83,11 +83,14 @@ void kernel_main() {
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
 #endif
 #if defined(MKA_RQNR)
-    const uint32_t is_head = get_arg_val<uint32_t>(a++);
+    const uint32_t is_head = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
+#if defined(MKA_RMASK)
+    const uint32_t mask_blk = get_arg_val<uint32_t>(a++);   // local block index of the user's last block, or ~0
+#endif
     // q/k head: y = gamma (.) x * rsqrt(mean(x^2) + eps) over the head's 256 columns; RoPE on dims 0-63 (tiles 0, 1)
     auto head_norm_rope = [&]() {
         CZONE("C-HNR");
-        cb_wait_front(CB_HG, 10);   // constants: pushed once, never popped
+        cb_wait_front(CB_HG, 11);   // constants: pushed once, never popped
         cb_wait_front(CB_A, WK);   // full slot (wo reuses CB_A later in the layer)
         compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_A, CB_HSQ);
         reconfig_data_format(CB_A, CB_A);
@@ -361,6 +364,13 @@ void kernel_main() {
                     for (uint32_t t = 0; t < DH; ++t) matmul_tiles(CB_Q, CB_K, qoff + t, i * DH + t, i);
                 exp_tile_init();
                 for (uint32_t i = 0; i < nb; ++i) exp_tile(i);
+#if defined(MKA_RQNR) && defined(MKA_RMASK)
+                if (!IS_STREAM && mask_blk >= b && mask_blk < b + nb) {   // causal mask on the last block: P = exp(S) (.) M
+                    cb_wait_front(CB_HG, 11);
+                    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_HG);
+                    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_HG, 10, mask_blk - b);
+                }
+#endif
                 tile_regs_commit();
                 cb_reserve_back(CB_P, NBB);
                 tile_regs_wait();

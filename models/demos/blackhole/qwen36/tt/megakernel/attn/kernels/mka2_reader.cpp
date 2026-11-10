@@ -100,12 +100,19 @@ void kernel_main() {
 #if defined(MKA_RQNR)
     {   // head constants (gamma x 8, cos, sin): 10 bf16 tiles from DRAM, once per pass
         const uint32_t hg_addr = get_arg_val<uint32_t>(a++), hg_page = get_arg_val<uint32_t>(a++);
-        if (hg_addr) {
-            const auto hg = TensorAccessor(qo_args_r, hg_addr, 2048);
-            cb_reserve_back(CB_HG, 10);
-            for (uint32_t t = 0; t < 10; ++t) noc_async_read(hg.get_noc_addr(hg_page + t), get_write_ptr(CB_HG) + t * 2048, 2048);
+        const uint32_t mk_addr = get_arg_val<uint32_t>(a++), mk_page = get_arg_val<uint32_t>(a++);
+        if (hg_addr || mk_addr) {   // slots 0-9 head constants, slot 10 this core's causal mask tile
+            cb_reserve_back(CB_HG, 11);
+            if (hg_addr) {
+                const auto hg = TensorAccessor(qo_args_r, hg_addr, 2048);
+                for (uint32_t t = 0; t < 10; ++t) noc_async_read(hg.get_noc_addr(hg_page + t), get_write_ptr(CB_HG) + t * 2048, 2048);
+            }
+            if (mk_addr) {
+                const auto mk = TensorAccessor(qo_args_r, mk_addr, 2048);
+                noc_async_read(mk.get_noc_addr(mk_page), get_write_ptr(CB_HG) + 10 * 2048, 2048);
+            }
             noc_async_read_barrier();
-            cb_push_back(CB_HG, 10);
+            cb_push_back(CB_HG, 11);
         }
     }
 #endif

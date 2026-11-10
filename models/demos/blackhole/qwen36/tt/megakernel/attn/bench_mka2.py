@@ -205,6 +205,12 @@ grp = [0] * NCF
 for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
 members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
 if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
+if ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
+    _sx = lambda f_: fcores[f_].x < GX and fcores[f_].y < GY
+    for m_ in members:
+        e_ = [f_ for f_ in m_ if not _sx(f_) and f_ != m_[0]]
+        assert e_, "a KV group without a non-STREAM core"
+        m_.remove(e_[-1]); m_.append(e_[-1])
 rank = {i: members[grp[i]].index(i) for i in ACT}
 kgrid = crs([fcores[i] for i in ACT]) if ARC else fgrid
 GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(23)]
@@ -527,9 +533,45 @@ if RQNR:
 def head_args_w(fi):
     if not RQNR: return []
     return [HC.index(fi) if fi in HC else 255] + sum(([fphys[h_].x, fphys[h_].y] for h_ in HC), []) + [kd_t.buffer_address()]
+RMASK = ('MKA_RMASK', '1') in MKDEF
+MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if RMASK else {}   # last-block core -> user
+if RMASK:
+    assert RQNR
+    mk = torch.ones(NU, TILE, TILE)
+    GOLD_NOMASK = {}
+    for u_ in range(NU):
+        for r_ in range(NQH * T):
+            j_ = r_ % 4
+            mk[u_, r_, 28 + j_ + 1:] = 0.0   # bench: pos_u = CTX - 4, last block = positions CTX-32 .. CTX-1
+    mk_t = ttnn.from_torch(mk.reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for L in range(NL):   # SDPA (and wo) golden with the causal mask
+        if not is_attn_layer(L): continue
+        Xq = gold_qkv[L].double()
+        qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
+        g_ = torch.zeros(NU, TILE, DHD)
+        kq_, vq_ = KVQ[L]
+        for u_ in range(NU):
+            Qu = torch.zeros(TILE, DHD)
+            for h_ in range(6):
+                for j_ in range(4): Qu[4 * h_ + j_] = qh[h_][4 * u_ + j_]
+            Qu = Qu.bfloat16().float()
+            p_ = torch.exp(Qu[:NQH * T] @ kq_[u_].T)
+            g_nm = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+            p_[:, CTX - TILE:] *= mk[u_, :NQH * T]
+            g_[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+            GOLD_NOMASK.setdefault(L, torch.zeros(NU, TILE, DHD))[u_, :NQH * T] = g_nm
+        golds_s[L] = g_
+        A_ = torch.zeros(M, 48 * TILE)
+        sg = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE])
+        for u_ in range(NU):
+            for h_ in range(6):
+                for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+        gold_wo[L] = (A_ * sg) @ woq[L]
+    print(f"[rmask] causal mask on last-block cores {sorted(MASKC)}", flush=True)
 def head_args_r(fi):
     if not RQNR: return []
-    return [hg_t.buffer_address() if fi in HC else 0, HC.index(fi) * 10 if fi in HC else 0]
+    return [hg_t.buffer_address() if fi in HC else 0, HC.index(fi) * 10 if fi in HC else 0,
+            mk_t.buffer_address() if fi in MASKC else 0, MASKC.get(fi, 0)]
 def wo_wargs(fi):
     if not RWO: return []
     t_ = WOT.get(fi, [])
@@ -578,7 +620,7 @@ def build(out):
         assert sum(1 for c_ in cbs for f_ in c_.format_descriptors if f_.buffer_index == 17) == 0
         cbs = cbs + [cbd(17, ttnn.bfloat16, 5, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs),
                      *([cbd(31, ttnn.bfloat8_b, 5 * 48, ext_crs)] if WORING else []),
-                     *([cbd(31, ttnn.float32, 8, ext_crs), cbd(30, ttnn.bfloat16, 10, ext_crs)] if RQNR else []),
+                     *([cbd(31, ttnn.float32, 8, ext_crs), cbd(30, ttnn.bfloat16, 11, ext_crs)] if RQNR else []),
                      ttnn.CBDescriptor(total_size=48 * _p, core_ranges=ext_crs, format_descriptors=[
                          ttnn.CBFormatDescriptor(buffer_index=21, data_format=ttnn.bfloat16, page_size=_p),
                          ttnn.CBFormatDescriptor(buffer_index=22, data_format=ttnn.bfloat16, page_size=_p)])]
@@ -627,7 +669,7 @@ def build(out):
         _wa = wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
             [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
         nrecv = len(ch0) + len(ch1)
-        _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if RWO else []) + ([1 if fi in HC else 0] if RQNR else []) if RQKV else [])
+        _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if RWO else []) + ([1 if fi in HC else 0, 1 if (fi in HC or fi in MASKC) else 0] + ([(RNG[fi][1] - RNG[fi][0] - 1) if fi in MASKC else 0xFFFFFFFF] if RMASK else []) if RQNR else []) if RQKV else [])
         _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
     acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
@@ -654,7 +696,7 @@ out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, 
 prog = build(out_t)
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
 for it in range(ITERS):
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + [out_t], prog); ttnn.synchronize_device(dev)
     p, e = pcc_of(y, gold_last)
     if os.environ.get("FM_DIAG") == "1":
         v = ttnn.to_torch(y).float().reshape(M, H)
@@ -689,6 +731,9 @@ for it in range(ITERS):
                 vu, gu_ = vs[L][uu, :NQH * T], golds_s[L][uu, :NQH * T]
                 print(f"[mka2]   L{L} user {uu} pcc {torch.corrcoef(torch.stack([vu.flatten(), gu_.flatten()]))[0, 1].item():.4f} |v|max {vu.abs().max().item():.3e} |g|max {gu_.abs().max().item():.3e} vs-other-layer-gold pcc {torch.corrcoef(torch.stack([vu.flatten(), golds_s[1-L][uu, :NQH*T].flatten()]))[0, 1].item() if NL > 1 else 0:.4f}", flush=True)
         if not is_attn_layer(L): continue
+        if RMASK and L in GOLD_NOMASK:   # discrimination: device error vs the masked and the unmasked golden
+            gn_ = GOLD_NOMASK[L][:, :NQH * T]
+            print(f"[rmask] iter {it} layer {L} |dev-masked| {(v_ - g2).norm().item():.4e}  |dev-unmasked| {(v_ - gn_).norm().item():.4e}  |masked-unmasked| {(g2 - gn_).norm().item():.4e}", flush=True)
         print(f"[mka2] iter {it} layer {L} sdpa pcc {torch.corrcoef(torch.stack([v_.flatten(), g2.flatten()]))[0, 1].item():.5f} max|err| {(v_-g2).abs().max().item():.4f}", flush=True)
     if RQNR:
         kv_ = ttnn.to_torch(kd_t).float().reshape(NL, M, -1)
