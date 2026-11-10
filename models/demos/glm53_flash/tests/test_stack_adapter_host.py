@@ -73,8 +73,10 @@ def test_module_imports_without_ttnn():
     assert "ttnn" not in sys.modules, "importing the adapter must not import ttnn"
     caps = GLM53StackForCausalLM.model_capabilities
     assert caps["supports_chunked_prefill"] is True
-    assert caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == gvs.DEVICE_TOP_K == 32
-    assert caps["device_top_k_unbounded_as"] == 32  # GLM sets no top-k: default requests stay on the device
+    assert (
+        caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == gvs.DEVICE_TOP_K == 10
+    )  # the 8x4 default
+    assert caps["device_top_k_unbounded_as"] == 10  # GLM sets no top-k: default requests stay on the device
     assert caps["supports_device_penalties"] is False
     assert caps["fabric_config"] is None
     for key in (
@@ -779,3 +781,14 @@ def test_sampled_rows_take_the_device_route():
     )
     assert isinstance(out, tuple) and out[0].shape == (1, 1)
     assert gen.live_slots(kv) == [0]
+
+
+def test_device_top_k_follows_the_head_gather(monkeypatch):
+    """The bound is the largest top-K the TP head's candidate gather carries (K x 6 fields per chip in 2,048 columns):
+    10 on the 32-chip 8x4, 32 on an 8-chip mesh; 1 (greedy only) with GLM53_STACK_DEVICE_SAMPLING=0."""
+    monkeypatch.setenv("GLM53_MESH_SHAPE", "8,4")
+    assert gvs._device_top_k() == 10
+    monkeypatch.setenv("GLM53_MESH_SHAPE", "2,4")
+    assert gvs._device_top_k() == 32
+    monkeypatch.setenv("GLM53_STACK_DEVICE_SAMPLING", "0")
+    assert gvs._device_top_k() == 1

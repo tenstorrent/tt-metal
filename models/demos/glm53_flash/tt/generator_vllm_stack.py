@@ -46,11 +46,6 @@ from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
 ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
 LATENT_DIM = 512  # kv_lora_rank: the latent page row, the only "KV" vLLM accounts for (generator_vllm.LATENT_DIM)
-# the head's device sampler (kernels/head/topk_select.cpp): StackBackend(topk=DEVICE_TOP_K, sample=True) draws
-# temperature / top-k / top-p rows from the 32 best candidates inside the traced decode step; a request without a
-# top-k bound (GLM's generation config sets none) or above it is drawn from those 32 (device_top_k_unbounded_as).
-# GLM53_STACK_DEVICE_SAMPLING=0: greedy on device only, sampled rows on the host sampler over the full logits
-DEVICE_TOP_K = 32 if os.environ.get("GLM53_STACK_DEVICE_SAMPLING", "1") == "1" else 1
 
 
 def _mesh_shape_from_env() -> tuple[int, int]:
@@ -65,6 +60,22 @@ def _mesh_shape_from_env() -> tuple[int, int]:
         r, c = (int(v) for v in md.strip("() ").split(","))
         return r, c
     return {"BH-Galaxy": (8, 4), "TG": (8, 4), "P150x8": (1, 8), "P150x4": (1, 4)}.get(md, (8, 4))
+
+
+def _device_top_k() -> int:
+    """The head's device sampler bound (kernels/head/topk_select.cpp, StackBackend(topk=K, sample=True)): temperature /
+    top-k / top-p rows are drawn from the K best candidates inside the traced decode step; a request without a top-k
+    bound (GLM's generation config sets none) or above K is drawn from those K (device_top_k_unbounded_as). K is the
+    largest the head's in-program candidate gather carries: every chip's K candidates x 6 bf16 fields in lane 0's
+    64 tiles (mk_head.MkHead), 10 on the 32-chip 8x4, 32 (the sampler's cap) on 8 chips.
+    GLM53_STACK_DEVICE_SAMPLING=0: greedy on device only, sampled rows on the host sampler over the full logits."""
+    if os.environ.get("GLM53_STACK_DEVICE_SAMPLING", "1") != "1":
+        return 1
+    rows, cols = _mesh_shape_from_env()
+    return max(1, min(32, (64 * 32) // (6 * rows * cols)))
+
+
+DEVICE_TOP_K = _device_top_k()
 
 
 def _fabric_capability() -> dict | None:
