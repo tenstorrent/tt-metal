@@ -86,7 +86,8 @@ class ArgBlocks:
             kernel_source=os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "mk_argblock_write.cpp"),
             core_ranges=core, compile_time_args=[], runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
-        ttnn.generic_op([b["tensor"]], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb]))
+        # generic_op wants >= 2 io tensors (inputs..., output): the block is both (the writer only writes it)
+        ttnn.generic_op([b["tensor"], b["tensor"]], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb]))
 
     def common_args(self):
         """The common runtime args every engine kernel carries: [L1 address of kind 0, 1, ...] (0 = kind absent)."""
