@@ -222,3 +222,31 @@ all-reduces (~2.3 ms), the GDN step (the prefix split targets ~−0.9 ms at u8),
 Attention-track silicon confirms the §8 attention-layer SDPA term: ~240 µs **including** the next layer's weight
 prefetch running alongside (it was modeled as 236 µs SDPA + hidden stream). The §8 projection stands (u8 ~12.3 ms,
 u1 ~8.7 ms).
+
+## 8b. Projection update: measured in-engine attention layer + all-reduce sensitivity (2026-11-10)
+The attention track measured the attention layer *inside the engine* on silicon at **368 µs steady** (32K, u8, BFP8
+KV, with modeled 18 µs AR stalls), against the 322 µs estimated in §8.
+
+Model: pass = 48 × (GDN non-AR + 2·AR) + 16 × (attention non-AR + 2·AR) + 0.5 ms (LM head/MTP) = base + 0.128 ms
+per µs of AR. Non-AR per layer: u8 GDN 102 µs / attention 332 µs; u1 GDN 77 / attention 139. The u1 attention has
+not been re-measured in the engine; the last row assumes it grows +46 µs like u8.
+
+| Per-AR µs | 18 | 25 | 40 | 60 | 116 | 181 | **break-even** |
+|---|---|---|---|---|---|---|---|
+| u8 pass (gate 13.7) | **13.0** | 13.9 ✗ | 15.8 ✗ | 18.4 ✗ | 25.6 ✗ | 33.9 ✗ | **≤ 23.4 µs** |
+| u1 pass (gate 9.4) | **8.7** | 9.6 ✗ | 11.5 ✗ | 14.1 ✗ | 21.3 ✗ | 29.6 ✗ | **≤ 23.3 µs** |
+| u1 if attention +46 µs | 9.5 ✗ | 10.4 ✗ | 12.3 ✗ | 14.8 ✗ | 22.0 ✗ | 30.3 ✗ | **≤ 17.5 µs** |
+
+**AR RISK (blocking):** the gate is met only if the in-megakernel all-reduce is about as fast as today's one-shot
+all_reduce_async (18-20 µs), i.e. ≤ ~23 µs per call (≤ ~17.5 µs if u1 attention grows like u8). The real
+megakernel AR is currently 116-181 µs per call (v1/v2), and v3 hung. At those numbers the pass is 25-34 ms, worse than
+today. AR latency is now the make-or-break item, ahead of the GDN restructure and the MLP tail.
+Mitigations:
+(a) reuse the proven all_reduce_async kernels' one-shot fabric path as a phase inside the program (same packets,
+    same 2 links), rather than a new AR design;
+(b) overlap: issue the MLP AR send as soon as each core's down chunk is ready (per-root-chunk publication already
+    exists), so part of the AR hides under the down tail;
+(c) cut AR count: fuse the attention/GDN out-proj AR with the MLP-in residual where the math allows (not possible
+    across a norm without a 2-stage AR);
+(d) fallback: per-sub-block programs with today's AR op between them. That costs ~7 µs launch per boundary
+    (×128 ≈ 0.9 ms) on top of 18-20 µs ARs, about 14 ms at u8, which misses the gate.
