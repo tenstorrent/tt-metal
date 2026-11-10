@@ -7,7 +7,8 @@ Same shape as :class:`~models.experimental.deepseek_v4_flash.tt.model.DeepSeekV4
 layer stack (each layer on its pipeline stage's ``1 x TP`` submesh, the residual handed to the next stage through
 the host), a head on the last stage -- with what V4.1 changed:
 
-* Layers exchange ``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])``. The first ``pre_mix`` is the one-hot
+* Layers exchange ``(streams [1, hc, T, D], pre_mix [1, T, 1, hc])`` -- the streams stream-major, each a dense
+  ``[T, D]`` slab (see :mod:`.decoder_layer`). The first ``pre_mix`` is the one-hot
   ``[1, 0, 0, 0]``. There is no ``hc_head``: the head collapses the last token's streams with the last layer's FFN
   ``pre_mix``, then applies the final RMSNorm and ``lm_head`` (decode's ``_collapse_streams``).
 * Engram layers (1 and 14) take the chunk's n-gram rows from an :class:`~..engram_lookup.EngramHostLookup`, called once
@@ -105,6 +106,11 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
     ``bounded_replay`` also captures the traced prefill's fresh-window variants, so :meth:`prefill_traced` can
     resume a prompt from its cached compressed KV alone (see :meth:`DeepSeekV41TracedPrefill.run`).
 
+    ``balance_dram_banks`` matches :class:`~..model.DeepSeekV41Model`'s: the routed experts' gate_up columns are
+    split into K-row pieces that cover every DRAM bank. It must agree with the experts of the decode model the
+    prefill shares them with (``build_prefill`` passes that model's setting through), or the two ops read two
+    different weight layouts.
+
     Does not call :meth:`DeepSeekV4PrefillModel.__init__`: it builds V4 layers and an ``hc_head``.
     """
 
@@ -130,6 +136,7 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         kv_only: bool = False,
         bounded_replay: bool = False,
         image_rows: int = 0,
+        balance_dram_banks: bool = True,
     ):
         self._progress = progress or (lambda message, important=False: None)
         self.image_rows = image_rows
@@ -206,6 +213,7 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                         dtype=expert_dtype,
                         cache=layer_cache.sub("ffn"),
                         tp_size=tp_size,
+                        balance_dram_banks=balance_dram_banks,
                     )
                 self.layers[i] = DeepSeekV41PrefillDecoderLayer(
                     config,
@@ -298,22 +306,17 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
             if layer.engram is not None
         }
 
-    def _collapse(self, streams: ttnn.Tensor, pre_mix: ttnn.Tensor) -> ttnn.Tensor:
-        """``sum_j pre_mix[j] * streams[j]`` in fp32, one stream at a time: ``[1, T, hc, D]`` and ``[1, T, 1, hc]`` ->
-        ``[1, T, 1, D]`` bf16. (A ``ttnn.sum`` over ``hc`` in a tile would add the tile's padding.)"""
-        t = streams.shape[1]
-        streams_f = ttnn.typecast(streams, ttnn.float32)
-        weights = ttnn.typecast(pre_mix, ttnn.float32)
-        total = None
-        for j in range(self.hc):
-            row = ttnn.slice(streams_f, [0, 0, j, 0], [1, t, j + 1, self.hidden])
-            weight = ttnn.slice(weights, [0, 0, 0, j], [1, t, 1, j + 1])
-            term = ttnn.multiply(row, weight)
-            total = term if total is None else ttnn.add(total, term)
-        return ttnn.typecast(total, ttnn.bfloat16)
+    def embed(self, ids_dev: ttnn.Tensor) -> ttnn.Tensor:
+        """``[1, T]`` uint32 ids -> the initial streams ``[1, hc, T, D]`` TILE: the embedding, once per stream."""
+        t = ids_dev.shape[1]
+        emb = ttnn.embedding(ids_dev, self.embedding_weight, layout=ttnn.TILE_LAYOUT)  # [1, T, D]
+        rows = ttnn.reshape(emb, [1, 1, t, self.hidden])
+        streams = ttnn.repeat(rows, ttnn.Shape([1, self.hc, 1, 1]))
+        _free_distinct(emb, rows)
+        return streams
 
     def head(self, streams: ttnn.Tensor, pre_mix: ttnn.Tensor, select: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
-        """Final ``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])`` -> one token's logits ``[1, 1, 1, V]``.
+        """Final ``(streams [1, hc, T, D], pre_mix [1, T, 1, hc])`` -> one token's logits ``[1, 1, 1, V]``.
 
         The last token's, or with ``select`` (a one-hot bf16 TILE row ``[1, 1, 1, T]``, traced prefill) the one it
         picks.
@@ -321,14 +324,16 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         if self.kv_only:
             raise RuntimeError("a kv_only prefill model has no head")
         self._note(f"{self._tag}: head (collapse, final norm, lm_head)")
-        t = streams.shape[1]
+        t = streams.shape[2]
         if select is None:
-            last_streams = ttnn.slice(streams, [0, t - 1, 0, 0], [1, t, self.hc, self.hidden])
+            last_streams = ttnn.slice(streams, [0, 0, t - 1, 0], [1, self.hc, t, self.hidden])
             last_mix = ttnn.slice(pre_mix, [0, t - 1, 0, 0], [1, t, 1, self.hc])
         else:
-            last_streams = ttnn.reshape(self._select_row(select, streams), [1, 1, self.hc, self.hidden])
+            selects = ttnn.repeat(select, ttnn.Shape([1, self.hc, 1, 1]))  # [1, hc, 1, T]
+            last_streams = ttnn.matmul(selects, streams, compute_kernel_config=_HIFI4)  # [1, hc, 1, D]
+            ttnn.deallocate(selects)
             last_mix = self._select_row(select, pre_mix)
-        collapsed = self._collapse(last_streams, last_mix)
+        collapsed = ttnn.experimental.deepseek.stream_mix(last_streams, last_mix)  # [1, 1, 1, D]
         ttnn.deallocate(last_streams)
         ttnn.deallocate(last_mix)
         hidden = ttnn.rms_norm(collapsed, weight=self.norm_weight, epsilon=self.eps)
@@ -600,7 +605,7 @@ def _free_distinct(*tensors: ttnn.Tensor) -> None:
 #
 # What V4.1 adds to the D2D hand-off and the persistent state:
 #
-# * The residual is ``(streams [1, C, hc, D], pre_mix [1, C, 1, hc])``: both go row-major, ``pre_mix`` flattened to
+# * The residual is ``(streams [1, hc, C, D], pre_mix [1, C, 1, hc])``: both go row-major, ``pre_mix`` flattened to
 #   rows of ``_PRE_MIX_ROW`` values (a ``[.., 1, hc]`` row would be an 8-byte page). Stage 0's first ``pre_mix`` is a
 #   persistent one-hot.
 # * Only the kv sources (2, 8, 14, 20) own entry and index-key buffers; the layers of their group read them through a
@@ -637,7 +642,7 @@ _PRE_MIX_ROW = 64
 class _V41StageIO:
     """Persistent per-stage device tensors (see the section comment)."""
 
-    streams_in: Optional[ttnn.Tensor]  # [1, C, hc, D] bf16 ROW_MAJOR (stages after the first)
+    streams_in: Optional[ttnn.Tensor]  # [1, hc, C, D] bf16 ROW_MAJOR (stages after the first)
     pre_in: Optional[ttnn.Tensor]  # [1, 1, C * hc / _PRE_MIX_ROW, _PRE_MIX_ROW] bf16 ROW_MAJOR (stages after the first)
     one_hot: Optional[ttnn.Tensor]  # [1, C, 1, hc] bf16 TILE, the first pre_mix (stage 0)
     ramp: Optional[ttnn.Tensor]  # [1, 1, 1, C] fp32 TILE 0 .. C - 1 (last stage with a head)
@@ -838,7 +843,7 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             hot[..., 0] = 1
             one_hot = zeros(hot.shape, ttnn.TILE_LAYOUT, value=hot)
         else:
-            streams_in = zeros((1, t, hc, model.hidden))
+            streams_in = zeros((1, hc, t, model.hidden))
             pre_in = zeros((1, 1, t * hc // _PRE_MIX_ROW, _PRE_MIX_ROW))
 
         ramp = None

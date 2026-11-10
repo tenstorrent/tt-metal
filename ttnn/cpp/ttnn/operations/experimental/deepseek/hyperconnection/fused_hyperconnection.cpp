@@ -97,4 +97,25 @@ std::vector<Tensor> fused_hyperconnection(
     return outputs;
 }
 
+std::vector<Tensor> fused_hyperconnection_weights(
+    const Tensor& fused_w,
+    const Tensor& pre_bias,
+    const Tensor& post_bias,
+    const Tensor& comb_bias,
+    uint32_t num_streams,
+    uint32_t sinkhorn_iters,
+    float pre_scale,
+    float post_scale,
+    float comb_scale,
+    float eps,
+    const std::optional<MemoryConfig>& memory_config) {
+    const uint32_t hc = num_streams;
+    std::vector<Tensor> stage = ttnn::prim::fused_hyperconnection_pre_post(
+        fused_w, pre_bias, post_bias, std::nullopt, hc, pre_scale, post_scale, eps, memory_config, std::nullopt);
+    Tensor comb_bias_mat = ttnn::reshape(comb_bias, ttnn::Shape({1, 1, hc, hc}));
+    Tensor comb = ttnn::prim::fused_hyperconnection_sinkhorn(
+        stage[1], comb_bias_mat, hc, sinkhorn_iters, comb_scale, eps, memory_config);
+    return {stage[0], comb, stage[2]};
+}
+
 }  // namespace ttnn::experimental::deepseek::hyperconnection

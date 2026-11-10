@@ -218,7 +218,7 @@ def test_prefill_moe_pcc(device, reset_seeds, case):
 
 @pytest.mark.parametrize("layer_idx", (0, 1), ids=("hash", "learned"))
 def test_prefill_moe_chunked(device, reset_seeds, layer_idx):
-    """T > 512: the routed op is fed in slices of ``MAX_OP_TOKENS`` (here 512 + 512 + 32 rows)."""
+    """T > op cap: the routed op is fed in slices of ``MAX_OP_TOKENS`` (here 1024 + 1024 + 32 rows)."""
     _run_case(device, 64, layer_idx, 2 * MAX_OP_TOKENS + 32)
 
 

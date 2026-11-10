@@ -89,10 +89,11 @@ void kernel_main() {
     constexpr uint32_t eps_bits = get_compile_time_arg_val(11);
     constexpr uint32_t two_bits = get_compile_time_arg_val(12);
     // Given pre_mix, the reader fills cb_pre (matmul in0) with it, and the computed pre goes to
-    // cb_pre_out for the writer to return instead.
-    constexpr bool use_pre_mix = get_compile_time_arg_val(13) != 0;
+    // cb_pre_out for the writer to return instead. Without the collapse, pre is only returned.
+    constexpr bool emit_pre = get_compile_time_arg_val(13) != 0;
     constexpr uint32_t cb_pre_out = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_pre_dst = use_pre_mix ? cb_pre_out : cb_pre;
+    constexpr bool collapse = get_compile_time_arg_val(15) != 0;
+    constexpr uint32_t cb_pre_dst = emit_pre ? cb_pre_out : cb_pre;
 
     compute_kernel_hw_startup(cb_pre_w, cb_pre_bias, cb_pre_dst);
 
@@ -105,6 +106,10 @@ void kernel_main() {
             cb_pre_w, cb_pre_bias, cb_scratch, cb_pre_dst, pre_scale_bits, 0, true, eps_bits);
         fused_sigmoid_with_bias_and_scale(
             cb_post_w, cb_post_bias, cb_scratch, cb_post_out, post_scale_bits, two_bits, false, eps_bits);
+
+        if constexpr (!collapse) {
+            continue;
+        }
 
         // collapsed = pre[1,H] @ hidden[H,D] -> [1,D]. Padding rows of hidden (>= H) are zero, so
         // the K reduction only accumulates the H valid streams regardless of pre's padding values.

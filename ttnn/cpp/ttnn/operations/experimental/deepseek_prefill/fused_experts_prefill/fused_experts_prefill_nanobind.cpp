@@ -32,7 +32,7 @@ void bind_fused_experts_prefill(nb::module_& mod) {
 
         Args:
             x_tok (ttnn.Tensor): [1, 1, T, H] ROW_MAJOR BFLOAT16, DRAM interleaved. T is a multiple of
-                32 and at most 512.
+                32 and at most 1024 (one production prefill chunk).
             routing_scores (ttnn.Tensor): [1, 1, T, E] TILE BFLOAT16, the unbiased scores.
             gate_up_weights (list[ttnn.Tensor]): E tensors [H, 2I], decode layout (DRAM ND-sharded,
                 [H, 64] shards of one [gate_32 | up_32] pair).

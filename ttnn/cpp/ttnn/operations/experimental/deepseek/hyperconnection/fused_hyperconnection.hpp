@@ -73,4 +73,23 @@ std::vector<Tensor> fused_hyperconnection(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& pre_mix = std::nullopt);
 
+// `fused_hyperconnection` without the collapse, for stream-major residual stacks [1, H, T, D]
+// (DeepSeek V4.1 prefill), which the caller collapses itself with `stream_mix(streams, pre)`.
+// Same pre / post / comb math over the T tokens of `fused_w` [1, 1, T, (2+H)*H].
+//
+// Returns [post [1,T,H,1], comb [1,T,H,H], pre [1,T,1,H]] (BFLOAT16 TILE, one zero-padded tile
+// per token).
+std::vector<Tensor> fused_hyperconnection_weights(
+    const Tensor& fused_w,
+    const Tensor& pre_bias,
+    const Tensor& post_bias,
+    const Tensor& comb_bias,
+    uint32_t num_streams,
+    uint32_t sinkhorn_iters,
+    float pre_scale,
+    float post_scale,
+    float comb_scale,
+    float eps,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
 }  // namespace ttnn::experimental::deepseek::hyperconnection

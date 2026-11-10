@@ -15,6 +15,8 @@
 #include "api/compile_time_args.h"
 #include "api/debug/kernel_profiler.hpp"
 
+#include "ttnn/operations/experimental/deepseek_prefill/fused_experts_prefill/device/kernels/fused_experts_prefill_routing_entry.hpp"
+
 // Writer / group all-gather for fused_experts_prefill. One instance per worker core.
 //
 // For every owned expert with a non-zero count (same skip decision as reader and compute), per chunk of
@@ -156,8 +158,8 @@ void kernel_main() {
                 const uint32_t nvalid = (count - first) < 32 ? (count - first) : 32;
                 for (uint32_t rr = 0; rr < nvalid; ++rr) {
                     const uint32_t entry = entries[jl * T + first + rr];
-                    const uint32_t token = entry & 0x1FFu;
-                    const uint32_t slot = (entry >> 9) & 0xFu;
+                    const uint32_t token = fused_experts_prefill_routing::token_of(entry);
+                    const uint32_t slot = fused_experts_prefill_routing::slot_of(entry);
                     noc.async_write(
                         cb_outrm,
                         out,

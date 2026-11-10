@@ -7,6 +7,8 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_MIX_STREAMS_SRCS
     mix_streams.cpp
     device/mix_streams_device_operation.cpp
     device/mix_streams_program_factory.cpp
+    device/stream_mix_device_operation.cpp
+    device/stream_mix_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

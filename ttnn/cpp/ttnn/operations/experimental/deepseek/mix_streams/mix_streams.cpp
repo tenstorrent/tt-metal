@@ -11,6 +11,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "device/mix_streams_device_operation.hpp"
+#include "device/stream_mix_device_operation.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -270,6 +271,16 @@ Tensor mix_streams(
         result = ttnn::to_memory_config(result, dst_mem_config);
     }
     return result;
+}
+
+Tensor stream_mix(
+    const Tensor& streams,
+    const Tensor& weights,
+    const std::optional<Tensor>& post,
+    const std::optional<Tensor>& sublayer_out,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return ttnn::prim::stream_mix(streams, weights, post, sublayer_out, memory_config, compute_kernel_config);
 }
 
 }  // namespace ttnn::experimental::deepseek::mix_streams

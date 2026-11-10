@@ -53,6 +53,46 @@ void bind_mix_streams(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = std::nullopt,
         nb::arg("compute_kernel_config") = std::nullopt);
+
+    ttnn::bind_function<"stream_mix", "ttnn.experimental.deepseek.">(
+        mod,
+        R"doc(
+        Hyper-connection stream mixing over a stream-major residual stack (DeepSeek V4.1 prefill).
+
+        ``streams`` is [1, hc, T, D] -- each stream a dense [T, D] slab, so the stack has none of
+        the per-token tile padding of the token-major [1, T, hc, D]. With ``comb`` weights it is
+        the residual mix; with ``pre`` weights it is the collapse::
+
+            comb [1, T, hc, hc], post [1, T, hc, 1], sublayer_out [1, 1, T, D]:
+                out[:, i] = sum_j comb[t, j, i] * streams[:, j] + post[t, i] * sublayer_out   [1, hc, T, D]
+            pre [1, T, 1, hc]:
+                out[:, 0] = sum_j pre[t, 0, j] * streams[:, j]                               [1, 1, T, D]
+
+        All inputs are BFLOAT16 TILE 32x32 interleaved, hc <= 16 and D a multiple of 32.
+
+        Args:
+            streams (ttnn.Tensor): residual-stream stack, [1, hc, T, D].
+            weights (ttnn.Tensor): comb [1, T, hc, hc] or pre [1, T, 1, hc].
+            post (Optional[ttnn.Tensor]): sublayer-output placement weights, [1, T, hc, 1].
+            sublayer_out (Optional[ttnn.Tensor]): sublayer output, [1, 1, T, D]. Given with ``post``.
+
+        Keyword Args:
+            memory_config (Optional[ttnn.MemoryConfig]): output memory config. Defaults to the
+                ``streams`` tensor's memory config.
+            compute_kernel_config (Optional[ttnn.DeviceComputeKernelConfig]): defaults to HiFi4 /
+                fp32 dest acc.
+
+        Returns:
+            ttnn.Tensor: [1, hc, T, D] for comb weights, [1, 1, T, D] for pre weights (TILE).
+        )doc",
+        &ttnn::experimental::deepseek::mix_streams::stream_mix,
+        nb::arg("streams"),
+        nb::arg("weights"),
+        nb::arg("post") = std::nullopt,
+        nb::arg("sublayer_out") = std::nullopt,
+        nb::kw_only(),
+        nb::arg("memory_config") = std::nullopt,
+        nb::arg("compute_kernel_config") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::mix_streams::detail

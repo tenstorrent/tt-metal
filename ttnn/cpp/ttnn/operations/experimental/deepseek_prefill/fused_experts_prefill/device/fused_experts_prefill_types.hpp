@@ -41,10 +41,26 @@ inline constexpr uint32_t kRmChunkTiles = 16;
 // the actual group is the largest divisor of kt / kRmChunkTiles that is <= this).
 inline constexpr uint32_t kRmGroupMax = 4;
 
-// Tokens are addressed with 9 bits in a routing entry.
-inline constexpr uint32_t kMaxTokens = 512;
+// Tokens are addressed by the routing entry's token field (kTokenBits wide, see
+// kernels/fused_experts_prefill_routing_entry.hpp). The cap decides what a prefill chunk costs, because one
+// call reads EVERY expert's weights: a chunk split into two calls pays twice for the same weights.
+//
+// 1024 is the size that costs nothing extra. At 384 experts and top-6, T tokens put 6T / 384 on an average
+// expert, and an expert's rows are rounded up to whole tile rows:
+//   T =  512 -> 8 tokens/expert  -> 1.000 tile rows/expert (every expert one row, 16 of 32 rows used)
+//   T = 1024 -> 16 tokens/expert -> 1.000 tile rows/expert (still one row, 16 of 32 rows used)
+//   T = 2048 -> 32 tokens/expert -> ~1.45 tile rows/expert (the spread pushes many experts to a second row)
+// So 512 -> 1024 doubles the tokens for exactly the same WEIGHT traffic, while 2048 already re-reads ~45% of
+// them. The op's cost is not otherwise flat in T: the routing prologue runs on every core, and the x rows and
+// partials are O(T) (see the reader's comment). Measured at TP4, 1024 tokens cost ~1.35x what 512 does, so the
+// win from this cap is that a chunk is ONE call instead of two -- each call re-reading all the weights -- not
+// that the extra tokens are free. L1 agrees: the routing lists in cb_meta (one list of T entries per owned
+// expert, 20 experts in a group) take ~82 KiB of the 1536 KiB at 1024, but at 2048 the 3x2 group's best
+// resident tier (dpp = 14, m_chunk = 8) goes from 1500 KiB to 1612 KiB and the factory would drop a tier and
+// stream weights per M-block.
+inline constexpr uint32_t kMaxTokens = 1024;
 // Selected experts per token: the per-token selection lives on the reader's stack, and the slot index
-// takes 4 bits of a routing entry.
+// takes kSlotBits of a routing entry.
 inline constexpr uint32_t kMaxTopK = 16;
 
 // Non-tensor parameters of the prefill routed-expert FFN.
@@ -61,7 +77,7 @@ struct operation_attributes_t {
 // All tensors flowing in/out of the operation. The routing is computed ON DEVICE by every core (each
 // core needs the token lists of its own experts only, but derives them from the full routing).
 //
-//   x_tok:             [1, 1, T, H] ROW_MAJOR BFLOAT16, DRAM interleaved (T a multiple of 32, <= 512).
+//   x_tok:             [1, 1, T, H] ROW_MAJOR BFLOAT16, DRAM interleaved (T a multiple of 32, <= kMaxTokens).
 //   routing_scores:    [1, 1, T, E] TILE BFLOAT16, the UNBIASED scores that become the weights.
 //   routing_indices:   [1, 1, T, top_k] TILE UINT16 / BFLOAT16 -- the router's selected expert ids; or
 //   ranking_scores:    [1, 1, T, E] TILE BFLOAT16 -- the row ranked on device (exactly one of the two).
