@@ -3271,6 +3271,55 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.44
+  title: 'Index keys: the served Blaze 8-bit rows encoded from the chunk''s bf16 keys, not from the bfp8 scoring copy'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.43
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md
+  - ttnn/ttnn/bringup
+  brief:
+    details: |
+      OWNER 2026-11-10. Background: P.41 (INDEX_K_COPY=bfp8, the default) keeps one persistent bfloat8_b copy of the index keys (``k8``) for scoring and builds the served 192-byte rows from it: tt/compressor.py TtServedRows._put8 rounds the chunk's keys into k8 (bfp_round), typecasts k8 back to bf16 and encodes that (fp8_rows_tile). The served bytes are therefore fp8(bfp8(key)). Blaze decode's own writer (tt-blaze DsaIndexerDirectKCacheUpdate; its test tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:300 asserts the written bytes 0..131 equal the stock per_token_cast_to_fp8 + pack_scaled_fp8_kv_cache with atol 0) encodes the bf16 key directly: fp8(key). Before P.41 (P.39 / P.40) the served rows were encoded from the unrounded bf16 keys. The notes give no reason for encoding the served rows from k8; the persistent memory saving of P.41 comes from dropping the persistent bf16 slab, not from where the served rows are encoded.
+      Change: a new switch INDEX_K_SERVED_FROM: bf16 (new, default after acceptance) | bfp8 (P.41's path, unchanged). With bf16, in _put8 (the start % chunk == 0 branch and the _region branch of every other start) encode the served rows, and the mirrors' (re-index layers 24 / 28 / 32 / 36), from the chunk's tiled bf16 rows (the bfp_round input) with fp8_rows_tile, without the k8 typecast; free that tiled copy after the encode (it is a per-chunk transient, not a persistent copy). The bfp_round into k8 for scoring is unchanged, so the scored keys, err_state_topk_idx and the top-k overlap stay as they are. No new persistent memory. INDEX_K_COPY=bf16 and every INDEX_K_FORMAT / INDEX_K_SERVED value keep working as they do today. KEEP EVERY OPTION.
+      OWNER-AUTHORIZED TEST CHANGES: (1) test_kv_layout's reference input for the served rows: P.41 made it the golden keys rounded to bfloat8_b when k8 is in use. Under INDEX_K_SERVED_FROM=bf16 it goes back to the unrounded golden keys, so the served bytes equal the stock cast of the golden keys exactly (the byte-exact check P.39 had); under bfp8 it stays as P.41 left it. (2) tests/test_index_k_copy.py: its served / mirror byte-equality assertion follows the switch (add the bf16-source arm; the k8-equals-the-bf16-path's-copy assertions are unchanged). Change only these two reference inputs; every other check, tolerance and limit stays. Never loosen any check.
+      Also update bringup/serving_contract.md and bringup/migration_configs.md: the line ``Since P.41 the keys are rounded to bfloat8_b first ... then cast to fp8 from that`` and open point 1 (the served rows are now the stock cast of the bf16 key, which is what tt-blaze's writer test compares its writer with; tt-blaze's torch helper pack_index_keys at tests/blaze/deepseekv4_1/csa2_harness.py:402 rounds to nearest even and divides by 448, a different recipe from the writer and from the stock cast: about half of the e4m3 values and the scale bytes differ from the writer's recipe on random keys, measured on CPU 2026-11-10; do not change the cast to match it).
+      Report in one short table: per-chip memory of the index-key copies at 56,320 and 1,044,480 tokens (before / after; expected equal, say if not), err_state_index_k_L*, err_state_topk_idx_L* and overlap, err_final_hidden, top5_overlap, device_ms_indexer, device_ms_total, chunk_wall_ms. Add one host-only number: on the golden index keys of one chunk, the share of served e4m3 values (and of rows) that differ between fp8(key) and fp8(bfp8(key)). Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator measures off vs on at 51200.
+  ab:
+    env:
+      INDEX_K_SERVED_FROM: bfp8
+      ENGRAM_TABLE: resident
+    change:
+      INDEX_K_SERVED_FROM: bf16
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_index_k_copy.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      short_turn_ms: '> 0'
+      short_turn_device_ms: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
