@@ -145,3 +145,53 @@ class TestTypedArguments:
 
     def test_mesh_device(self):
         assert parse_argument("MeshDevice(1x1 grid, 1 devices)")["k"] == "device"
+
+    @pytest.mark.parametrize(
+        "text, value",
+        [
+            ("[UnaryWithParam(op_type=UnaryOpType::RELU)]", [{"op": "RELU", "params": []}]),
+            (
+                "[UnaryWithParam(op_type=UnaryOpType::RELU), UnaryWithParam(op_type=UnaryOpType::LEAKY_RELU, params=[0.1])]",
+                [{"op": "RELU", "params": []}, {"op": "LEAKY_RELU", "params": [0.1]}],
+            ),
+        ],
+    )
+    def test_unary_with_param_list(self, text, value):
+        """``ttnn.add(..., activations=[ttnn.UnaryWithParam(RELU)])`` — a fused residual relu."""
+        spec = parse_argument(text)
+
+        assert spec == {"k": "uwp", "v": value, "list": True}, spec
+
+    def test_unary_with_param_refuses_an_element_it_cannot_read(self):
+        assert parse_argument("[UnaryWithParam(op_type=UnaryOpType::RELU), UnaryWithParam(?)]")["k"] == "skip"
+
+    def test_config_field_unary_with_param(self):
+        """Conv2dConfig.activation is a UnaryWithParam nested in the config repr."""
+        spec = parse_argument(
+            "Conv2dConfig(weights_dtype=DataType::BFLOAT8_B,activation=UnaryWithParam(op_type=UnaryOpType::RELU),"
+            "deallocate_activation=0,core_grid=std::nullopt)"
+        )
+
+        assert spec["k"] == "cfg" and spec["kind"] == "Conv2dConfig", spec
+        assert spec["fields"]["activation"] == {"op": "RELU", "params": []}, spec
+        assert spec["fields"]["weights_dtype"] == "DataType::BFLOAT8_B", spec
+        assert spec["fields"]["core_grid"] is None, spec
+
+
+class TestTensorStorage:
+    """A host tensor prints a MemoryConfig too; only storage_type tells it apart."""
+
+    def test_host_tensor_is_flagged(self):
+        spec = parse_argument(_summary().replace("StorageType.DEVICE", "StorageType.HOST"))
+
+        assert spec["k"] == "t" and spec.get("host") is True, spec
+
+    def test_device_tensor_spec_is_unchanged(self):
+        """No `host` key at all, so captures without host arguments generate identical cases."""
+        assert "host" not in parse_argument(_summary())
+
+    def test_host_flag_per_list_element(self):
+        host = _summary(tensor_id=2).replace("StorageType.DEVICE", "StorageType.HOST")
+        spec = parse_argument(f"[{_summary(tensor_id=1)}, {host}]")
+
+        assert [t.get("host", False) for t in spec["tensors"]] == [False, True], spec
