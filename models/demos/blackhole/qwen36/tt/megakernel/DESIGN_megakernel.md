@@ -128,7 +128,7 @@ says, in pass order. Weight prefetch (DM RISCs) runs ahead of compute, up to dep
 **Phase table** (L1, array of 16-u32 records, base address in runtime arg; `n_phases` in runtime arg):
 | word | field |
 |---|---|
-| 0 | type: 1 PROJ, 2 MLP_GU, 3 MLP_DN, 4 GDN_STEP, 5 SDPA, 6 AR_SEND, 7 AR_RECV, 8 NORM, 9 STALL, 10 GDN_PREFIX |
+| 0 | type: 1 PROJ, 2 MLP_GU, 3 MLP_DN, 4 GDN_STEP, 5 SDPA, 6 AR_SEND, 7 AR_RECV, 8 NORM, 9 STALL, 10 GDN_PREFIX, 11 GDN_STEP_U1 |
 | 1 | layer index |
 | 2 | weight tensor id (0 gate_up, 1 down, 2 gdn_in, 3 gdn_out, 4 qkv, 5 wo, 6 kv cache, 7 gdn state) |
 | 3 | weight page base for this core (bank-local slice), or KV/state page base |
@@ -509,3 +509,18 @@ stage's owner sums) + the unoverlapped delivery. u1 levers:
 - AR core speed (the dominant one);
 - the u1 attention post-SDPA chain (fold wo into the tree tail; overlap the attention AR with the gate|up K-stream);
 - the u1 GDN step (42 µs; the prefix split does not help at u1, which has one user per head).
+
+## 14. Spec v0.7: GDN_STEP_U1 (phase type 11) for the u1 gate (GDN track, -mk-gdn-u1v2 @3de08997fd3, DESIGN_gdn_step_u1.md)
+- **Phase type 11, GDN_STEP_U1:** one core per (head, value block): 24 cores, or 48 with split-K. Replay + WY +
+  gated norm, with the norm's Σo² combined by a scalar exchange. It consumes GDN_PREFIX output (phase 10 on 72 cores,
+  plus l2norm and silu(z)/gates on aux cores).
+- **Selection:** the host builds the per-pass phase table with type 11 when the verify batch has users == 1, and
+  type 4 (existing step) otherwise. Both are compiled into the program, with no runtime branch inside a phase.
+- **Resources:** CB 13-15 keep their GDN meaning (state, conv window, out). CB 24-31 scratch is owned by the running
+  GDN phase. GDN global semaphores: up to 8 (prefix + step), addresses in runtime args / phase words 14-15. No program
+  semaphores.
+- **Output contract:** the gated-norm output o goes to the gdn_out PROJ input (on STREAM cores, v0.6 split-K layout),
+  and gdn_out writes the AR send buffer (CB_OUT). If the step writes CB_OUT directly (fusing gdn_out), the fused
+  phase must keep the owner/partial layout of §12.
+- **Estimate:** ~42 → ~21 µs per u1 GDN op, about −1.0 ms per u1 pass. §8e u1 at 15 µs AR: 9.76 → ~**8.75 ms** (gate
+  9.4, ~0.65 margin). At 18 µs: ~9.14.
