@@ -286,8 +286,10 @@ def test_kda_forward_slot_imports_gathers_runs_and_exports_in_order(monkeypatch)
     tp_shard = SimpleNamespace(shape=(1, 64, 64))  # 256 / TP 4: the model's TP-sharded residual
     assert layer.forward_slot(tp_shard, scratch, slabs, slot, 7, start, end) == "output"
     order = [c[0] for c in calls.mock_calls if not c[0].startswith("project_inputs().")]
-    # import -> TP all-gather -> projection -> ... -> output projection -> export, then free the replacement carry.
-    assert order.index("slabs.import_layer") < order.index("all_gather") < order.index("project_inputs")
+    # TP all-gather -> projection -> import -> convolution -> ... -> output projection -> export, then free the
+    # replacement carry. The projection goes first: untraced, the device idles until the host has dispatched it.
+    assert order.index("all_gather") < order.index("project_inputs") < order.index("slabs.import_layer")
+    assert order.index("slabs.import_layer") < order.index("conv")
     assert order.index("project_output") < order.index("slabs.export_layer")
     calls.slabs.import_layer.assert_called_once_with(scratch, slot, 7, zero_fill_at_zero=start)
     calls.all_gather.assert_called_once_with(tp_shard, dim=-1, cluster_axis=1)

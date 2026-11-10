@@ -610,14 +610,32 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
-        # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
-        # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
-        # keep an SP barrier between this reservation and the recurrence.
-        self.recurrence.reserve_affine_relay()
+        return self._forward_projected(self._gather_and_project(hidden_states), state, actual_start, actual_end)
+
+    def _gather_and_project(self, hidden_states: ttnn.Tensor) -> _ProjectedInputs:
+        """The TP all-gather and the fused input projection: the layer's first device work, and its longest program.
+
+        Untraced, the device idles until the host has dispatched the projection, so the layer issues it before any
+        host work it does not depend on (the state import, the relay's landing buffer).
+        """
         hidden_states, gathered = self._gather_tp_input(hidden_states)
         inputs = self._project_inputs(hidden_states)
         if gathered:
             ttnn.deallocate(hidden_states)
+        return inputs
+
+    def _forward_projected(
+        self,
+        inputs: _ProjectedInputs,
+        state: KdaState,
+        actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
+    ) -> tuple[ttnn.Tensor, KdaState]:
+        """forward() after _gather_and_project: convolution, decay, recurrence, norm and output projection."""
+        # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
+        # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
+        # keep an SP barrier between this reservation and the recurrence.
+        self.recurrence.reserve_affine_relay()
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             inputs.projected,
             state.convolution,
@@ -675,8 +693,13 @@ class ttKDA:
         replacement carry is stored back at ``(slot, layer_idx)`` and freed. ``actual_start`` also marks a request
         head: where it reads 0 the import loads zeros instead of the slot. Returns the layer output.
         """
+        self._validate_forward(hidden_states, scratch, actual_start)
+        if actual_end is not None:
+            self._validate_runtime_bound(actual_end, "actual_end")
+        # The projection reads only the hidden states: dispatch it before the import (see _gather_and_project).
+        inputs = self._gather_and_project(hidden_states)
         states.import_layer(scratch, slot, layer_idx, zero_fill_at_zero=actual_start)
-        output, new_state = self.forward(hidden_states, scratch, actual_start, actual_end)
+        output, new_state = self._forward_projected(inputs, scratch, actual_start, actual_end)
         states.export_layer(new_state, slot, layer_idx)
         ttnn.deallocate(new_state.recurrent)
         ttnn.deallocate(new_state.convolution)
