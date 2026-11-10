@@ -385,7 +385,7 @@ def test_exp_from_the_design_example(device, expect_error):
     torch_input, input_tensor, output_tensor = exp_inputs(device, 8)
     spec, run_args = exp_program(input_tensor, output_tensor)
     result = E.generic_op([input_tensor, output_tensor], spec, run_args)
-    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(result), 0.999)
+    assert_close(torch.exp(torch_input), ttnn.to_torch(result))
 
     # A tensor bound to two parameters must be listed twice, so io_tensors holding only the output is rejected.
     in_place_run_args = E.ProgramRunArgs(
@@ -490,7 +490,7 @@ def guide_example(device):
 
 def test_the_guide_example(device):
     torch_input, output_tensor = guide_example(device)
-    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(output_tensor), 0.999)
+    assert_close(torch.exp(torch_input), ttnn.to_torch(output_tensor))
 
 
 def test_two_compute_threads_on_quasar(device):
