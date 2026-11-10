@@ -749,3 +749,10 @@ The pipelined K=2 chain at R=32 was ~17.8 µs, a tie with one-shot. u8 stays on 
 - Weights streamed standalone: 53.2 µs/layer at NL=32 (353 GB/s, bank-bound; a 3rd weight slot is being tried). In the engine the MLP weights are prefetched during the earlier stages, so the chain sees the resident figure.
 - **Numerics rule (engine-wide):** do NOT accumulate across partials with DEST_TO_SRCA reuse-dest. It truncates and biased an 8-way sum by −3%. Sum partials with P @ I matmuls (identity in srcA, LoFi, fp32 DST), which are exact. This applies to the owner sums, the attention tree folds, and any in-DST cross-partial accumulation.
 - *Numerics rule, accepted alternative:* packer L1 accumulation into an fp32 CB (pack_tile<true> + l1_acc) is also exact. The SDPA tree folds use it, and the RQKV K-half owner add moves to it from add_tiles on fp32 CBs, which round through srcA/srcB.
+
+**v0.8.3 v12 MLP vs fm11, like for like (span = x available → last down end):**
+- fm11 in mixed2: GDN layers median ~27-29 µs (floor 25.4, outliers 37-49); attention layers 20-27 µs.
+- v12 resident: **13.5 µs**. v12 also includes the split-K x delivery (2.8 µs) and the owner sum (2.6 µs), which fm11 leaves to the AR.
+- **Projected u8 gain: −13 µs × 48 GDN layers − ~9 µs × 16 attention layers ≈ −0.77 ms.** Planned as **−0.5 ms**, because in the engine the next mixer's weights stream at the same time, so v12 will land above 13.5 µs.
+- **u8 ≈ 13.47 → ~12.97 ms** (0.7 margin), before v0.8.1 helps u8 attention.
+- A 3rd weight slot gave no gain (MLP-only stream ~350 GB/s, bank/NoC-bound, vs fm11's 406 with separate gu/dn bank placement). The pass is chain-bound, so this does not matter now. Low-priority item: port fm11's gu/dn bank placement to v12 if the DRAM budget ever binds.
