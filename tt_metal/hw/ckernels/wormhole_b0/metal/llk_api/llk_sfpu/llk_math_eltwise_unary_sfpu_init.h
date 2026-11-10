@@ -71,8 +71,8 @@ void unary_le_init();
 void unary_lt_init();
 void unary_ne_init();
 
-// Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). config_reg is
-// run per-op by the bare delegate below (_llk_math_eltwise_unary_sfpu_init_once_()), so these program only the
+// Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). The bare
+// delegate below (_llk_math_eltwise_unary_sfpu_init_once_()) programs config_reg per op, so these program only the
 // op's residual state (op-specific ADDR_MOD_6 where needed + reset the RWC counters).
 // Rounding-family ops (ceil/floor/trunc/frac/round): pure-arithmetic SFPI kernels with no LUT/ADDR_MOD_6
 // state (production shares rounding_op_tile_init -> SFPU_UNARY_INIT(unused)); only reset the RWC counters.
