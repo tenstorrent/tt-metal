@@ -533,6 +533,73 @@ def test_tree_headers_includes_untracked_headers(tmp_path, monkeypatch):
     ]
 
 
+def test_whole_tree_scan_includes_a_new_kernel_includes_directory(
+    tmp_path, monkeypatch
+):
+    """A copy directory with no indexed header is part of a no-argument scan.
+
+    An explicit-file run must not use that ttnn-wide pathspec. It adds the copy directory
+    only when one of the files is inside it.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_dest_to_src_wait_new_copy", SCRIPT
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    tracked = tmp_path / "tt_metal/tt-llk/tt_llk_blackhole/tracked.h"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("// tracked\n")
+    fresh = tmp_path / "ttnn/ops/new_op/kernel_includes/fresh.h"
+    fresh.parent.mkdir(parents=True)
+    fresh.write_text("// untracked copy\n")
+    seen = []
+
+    class Result:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self.stdout = stdout
+
+    def run(cmd, **kwargs):
+        seen.append(list(cmd))
+        names_new_copy = any(
+            "ttnn/ops/new_op/kernel_includes" in arg or arg == mod.COPIES_PATHSPEC
+            for arg in cmd
+        )
+        if "--others" in cmd and names_new_copy:
+            return Result("ttnn/ops/new_op/kernel_includes/fresh.h\0")
+        if "--others" in cmd:
+            return Result("")
+        return Result("tt_metal/tt-llk/tt_llk_blackhole/tracked.h\0")
+
+    monkeypatch.setattr(mod, "REPO", str(tmp_path))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    headers = sorted(os.path.basename(path) for path in mod.tree_headers())
+    assert headers == ["fresh.h", "tracked.h"]
+    assert mod.COPIES_PATHSPEC in seen[-1]
+
+    seen.clear()
+    explicit = tmp_path / "tt_metal/tt-llk/tt_llk_blackhole/other.h"
+    assert [os.path.basename(path) for path in mod.tree_headers([str(explicit)])] == [
+        "tracked.h"
+    ]
+    explicit_others = next(cmd for cmd in seen if "--others" in cmd)
+    assert mod.COPIES_PATHSPEC not in explicit_others
+    assert not any("kernel_includes" in arg for arg in explicit_others)
+
+    seen.clear()
+    assert "fresh.h" in [
+        os.path.basename(path) for path in mod.tree_headers([str(fresh)])
+    ]
+    named_others = next(cmd for cmd in seen if "--others" in cmd)
+    assert mod.COPIES_PATHSPEC not in named_others
+    assert any(
+        arg.endswith("ttnn/ops/new_op/kernel_includes/**/*.h") for arg in named_others
+    )
+
+
 def test_missing_argument_file_is_ignored(tmp_path):
     """A deleted or non-existent file passed on the command line must not raise FileNotFoundError."""
     missing = tmp_path / "deleted.h"

@@ -269,31 +269,48 @@ def _git_ls_files(*args):
     ]
 
 
-def tree_headers():
-    """The LLK headers and their ttnn copies. Listed from git when it can answer:
-    walking all of ttnn/ for kernel_includes/ directories is slow on a network mount.
+def _copy_dir(path):
+    """The ``kernel_includes`` directory that contains ``path``, relative to the repo."""
+    rel = path.replace("\\", "/")
+    if os.path.isabs(rel):
+        rel = os.path.relpath(rel, REPO).replace("\\", "/")
+    if rel.startswith("../"):
+        return None
+    marker = "/kernel_includes/"
+    at = rel.find(marker)
+    if at >= 0:
+        return rel[: at + len(marker) - 1]
+    if rel == "kernel_includes" or rel.endswith("/kernel_includes"):
+        return rel
+    return None
 
-    ``--cached`` reads the index without walking ttnn/ on disk. ``--others`` is scoped to
-    ``tt_metal/tt-llk/`` (plus any ``kernel_includes/`` directories already in the index) so
-    untracked headers are still found without walking the whole ttnn/ tree.
+
+def tree_headers(files=()):
+    """The LLK headers and their ttnn copies. Listed from git when it can answer.
+
+    ``--cached`` reads the index and does not walk ``ttnn/``. An explicit-file run lists
+    untracked headers under the LLK tree, under ``kernel_includes/`` directories already in
+    the index, and under a ``kernel_includes/`` directory named by one of ``files``. Walking
+    ``ttnn/`` for a copy directory that nobody has named takes several seconds on a network
+    mount, so that query is reserved for a whole-tree run, which passes no files.
     """
     try:
         tracked = _git_ls_files("--cached", "--", *TREE_PATHSPECS)
         if tracked is not None:
-            copy_dirs = sorted(
-                {
-                    rel[: rel.index("/kernel_includes/") + len("/kernel_includes")]
-                    for p in tracked
-                    for rel in (os.path.relpath(p, REPO).replace("\\", "/"),)
-                    if "/kernel_includes/" in rel
-                }
+            copy_dirs = {d for p in tracked if (d := _copy_dir(p))}
+            copy_dirs.update(d for p in files if (d := _copy_dir(p)))
+            # No file arguments: a whole-tree scan has to see a copy directory that is not
+            # indexed yet. The copies pathspec is what walks ttnn/.
+            untracked_specs = (
+                TREE_PATHSPECS
+                if not files
+                else (LLK_PATHSPEC, *(f":(glob){d}/**/*.h" for d in sorted(copy_dirs)))
             )
             untracked = _git_ls_files(
                 "--others",
                 "--exclude-standard",
                 "--",
-                LLK_PATHSPEC,
-                *(f":(glob){d}/**/*.h" for d in copy_dirs),
+                *untracked_specs,
             )
             if untracked is not None:
                 combined = set(tracked) | set(untracked)
@@ -333,7 +350,7 @@ def main():
         f.endswith((".h", ".hpp")) and _has_move(f) for f in args.files
     ):
         return 0
-    tree = tree_headers()
+    tree = tree_headers(args.files)
     files = args.files or tree
     # Wait helpers live in shared headers a commit seldom touches, so find them in the whole tree.
     providers = wait_providers(sorted(set(tree) | set(files)))
