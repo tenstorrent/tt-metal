@@ -650,3 +650,8 @@ Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
 **Joint u1 constraint (v0.7.5):** the u1 margin is shared between the AR and STEP_U1 (48 GDN layers, 128 ARs).
 - STEP_U1 silicon budget by on-path AR: AR 14 µs → ≤37 µs; AR 15 µs → ≤34 µs; AR 18 µs → ≤26 µs; AR 20.8 µs → nothing passes.
 - So the chain RS is the must-have. STEP_U1's ~21 µs sim estimate clears ≤34 µs even at 1.5× sim optimism.
+
+**Chain RS result (v0.7.6, 174dd5fad1d): no gain.** Marginal µs per AR: K=4 20.0, K=2 18.5, K=1 19.4, vs one-shot 18.07 (burst + rot 17.6). A hop send is cheap (0.58 µs per 20 KB); a chain stage costs ~3 µs of latency (sem → push → add → copy → send). Owner reduce 1.4 µs; AG tail 4.8 µs. The one-shot path is byte-bound; the chain is latency-bound. **Next AR levers, in order:**
+0. Check link count: eth links per ring-neighbor pair, cabled vs used. Stripe over all of them if more are free (exact).
+1. AG lands directly in the K-row CB_X via a destination-side NOC multicast, if tt-fabric supports it. This removes the 3.2 µs delivery step (exact).
+2. BFP8 payload behind two flags: MK_AR_AG_BFP8 (consumer copy only; owners keep the full-precision residual) and MK_AR_RS_BFP8 (partials). Both need the output-length gate.
