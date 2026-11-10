@@ -663,3 +663,19 @@ Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
   - (a) BFP8 AG copy and (b) BFP8 RS partials, both behind flags and gated on output length. The residual is sharded on its owner, and every device builds CB_X and Σx² from the same BFP8 copy.
   - (c) Sub-chunk pipelined K=2 hybrid: exact numerics, so it is the fallback that does not depend on the gate.
 - **Risk:** the gate can run only after integration, so a ≤15 µs AR via BFP8 stays provisional until then.
+
+**Joint constraint with real qkv (v0.7.8, attention 9e81917a513, PCC 0.99999):**
+- Attention middle measured: u1 ~260 µs (was 242), u8 ~381 µs (was ~368). Over 16 attention layers that adds +0.29 ms (u1) and +0.19 ms (u8).
+- The u1 +18 µs is mostly an SDPA-window x-ramp, which the attention agent is fixing first.
+- Model: 0.128 ms per AR µs, 0.048 ms per STEP_U1 µs.
+
+| On-path AR | u8 (≤13.7) | u1 + STEP_U1 @21 µs (≤9.4) | STEP_U1 silicon budget for u1 |
+|---|---|---|---|
+| 12 µs | 12.42 | 8.66 | ≤36 µs |
+| 14 µs | 12.68 | 8.91 | ≤31 µs |
+| 15 µs | 12.80 | 9.04 | ≤28.5 µs |
+| 17.8 µs | 13.16 | 9.40 (edge) | ≤21 µs |
+| 20.8 µs (measured) | 13.55 ✓ (0.15) | 9.79 ✗ | none |
+
+- **Break-evens:** u8 AR ≤ 22.0 µs. u1 AR ≤ 17.8 µs if STEP_U1 is 21 µs on silicon; AR ≤ 14.6 µs if STEP_U1 is 29.4 µs (1.4× sim).
+- **Note:** each µs recovered by the x-ramp fix on the 16 attention layers is worth 0.016 ms, i.e. 8 µs of attention ≈ 1 µs of AR.
