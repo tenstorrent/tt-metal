@@ -94,6 +94,29 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 //       retains its current size (as last set), rather than reverting to the ProgramSpec default.
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
+// Per-device values of named run args. A Program added to a MeshWorkload on a range runs on every device of the range
+// with the same args; this sets chosen named args (runtime or common, scalar or array) of one device to its own
+// values, so one program can serve a range where each chip needs a few different values (a ring rank, a peer chip).
+// The Metal 2.0 form of distributed::SetRuntimeArgs on a MeshWorkload, with the same semantics:
+// - `values` holds only kernel_run_args named values (runtime_arg_values for the nodes given,
+//   common_runtime_arg_values, and the array forms); tensor args, DFB overrides, varargs and advanced program args
+//   are rejected. Set the program's own run args (SetProgramRunArgs) first.
+// - Args without a per-device value, and devices without a value for an arg, keep the program's own values,
+//   including later SetProgramRunArgs / UpdateProgramRunArgs updates. Calling again replaces the value.
+// - Supported in fast dispatch (eager, trace, command lists) and slow dispatch.
+void SetProgramRunArgsPerDevice(
+    distributed::MeshWorkload& workload,
+    const distributed::MeshCoordinateRange& program_range,
+    const distributed::MeshCoordinate& device,
+    const ProgramRunArgs& values);
+// Drops one device's values of the named args in `names` (their values are ignored): they follow the program's own
+// run args again.
+void ClearProgramRunArgsPerDevice(
+    distributed::MeshWorkload& workload,
+    const distributed::MeshCoordinateRange& program_range,
+    const distributed::MeshCoordinate& device,
+    const ProgramRunArgs& names);
+
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
 // All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their current values
 // (as most recently set by SetProgramRunArgs or UpdateProgramRunArgs).
