@@ -132,3 +132,91 @@ def pad_curve(tensor: torch.Tensor, dim: int = -1, size: int = CURVE_PAD) -> tor
     shape = list(tensor.shape)
     shape[dim] = extra
     return torch.cat([tensor, tensor.new_zeros(shape)], dim=dim)
+
+
+# Per-step output heads (progressive-distillation grafts such as 10Eros-Max beta7_fix1, built from FastH3):
+# `final_layer.video_out` / `audio_out` hold P heads stacked on the output rows ([P * C, hidden]); head 0
+# is stored in full and heads 1..P-1 as offsets from it (metadata `pdd_head_storage`). A run of N forwards
+# uses head `pdd_step_indices[i]` at forward i (metadata `source_inference_contract`).
+STEP_HEAD_KEYS = ("proj_out", "audio_proj_out")
+_OFFSET_STORAGE = "heads1-31-offset-from-head0"
+
+
+def step_head_contract(metadata: dict[str, str] | None, num_heads: int) -> list[int]:
+    """Head index used at each forward, from the file's inference contract (default: P/8 apart over 8 forwards)."""
+    import json
+
+    indices = None
+    raw = (metadata or {}).get("source_inference_contract")
+    if raw:
+        contract = json.loads(raw)
+        indices = contract.get("pdd_step_indices")
+        forwards = contract.get("num_inference_steps") or contract.get("transformer_forwards")
+        if indices is not None and forwards is not None:
+            indices = list(indices)[: int(forwards)]
+    if indices is None:
+        indices = list(range(0, num_heads, max(num_heads // 8, 1)))[:8]
+    if not indices or any(not 0 <= int(h) < num_heads for h in indices):
+        raise ValueError(f"step heads {indices} out of range for {num_heads} heads")
+    return [int(h) for h in indices]
+
+
+def num_step_heads(rows: int, channels: int) -> int:
+    """How many heads an output projection with `rows` output rows stacks (1: a plain single head)."""
+    if rows % channels:
+        raise ValueError(f"output rows {rows} are not a multiple of {channels} channels")
+    return rows // channels
+
+
+def unfold_step_heads(tensor: torch.Tensor, channels: int, heads: list[int], *, offsets: bool = True) -> torch.Tensor:
+    """`[P * C, ...]` stacked heads -> the heads in `heads` order, stacked `[len(heads) * C, ...]`.
+
+    With `offsets` (the beta7 storage), head k >= 1 is `head0 + stored_k`, summed in fp32 and cast back.
+    """
+    count = num_step_heads(tensor.shape[0], channels)
+    stacked = tensor.float().reshape(count, channels, *tensor.shape[1:])
+    out = []
+    for h in heads:
+        head = stacked[h] if h == 0 or not offsets else stacked[0] + stacked[h]
+        out.append(head)
+    return torch.cat(out, dim=0).to(tensor.dtype)
+
+
+def select_step_heads(
+    state: dict[str, torch.Tensor], channels: dict[str, int], heads: list[int], metadata: dict[str, str] | None
+) -> int:
+    """Rewrite multi-head `proj_out` / `audio_proj_out` in a diffusers-named state dict to the heads in
+    `heads` order. `channels` maps each projection to its per-head width (video: in_channels * prod(patch_size)).
+    Returns the number of heads left per projection (1 when the file has single heads)."""
+    storage = (metadata or {}).get("pdd_head_storage", "")
+    offsets = _OFFSET_STORAGE in storage or not storage
+    counts = set()
+    for name in STEP_HEAD_KEYS:
+        c = channels[name]
+        weight = state[f"{name}.weight"]
+        count = num_step_heads(weight.shape[0], c)
+        counts.add(count)
+        if count == 1:
+            continue
+        for part in ("weight", "bias"):
+            state[f"{name}.{part}"] = unfold_step_heads(state[f"{name}.{part}"], c, heads, offsets=offsets)
+    if counts == {1}:
+        return 1
+    if 1 in counts:
+        raise ValueError("video and audio output heads disagree: one is single-head, the other stacked")
+    return len(heads)
+
+
+def step_head_selector(step: int, num_steps: int, num_slots: int, channels: int) -> torch.Tensor:
+    """One-hot `[num_slots * C, C]` that picks forward `step`'s head out of the stacked projection output.
+
+    With the contract's step count, forward i uses slot i; another count spreads the slots evenly, first
+    forward on the first slot and last on the last.
+    """
+    if num_steps == num_slots:
+        slot = step
+    else:
+        slot = round(step * (num_slots - 1) / (num_steps - 1)) if num_steps > 1 else 0
+    sel = torch.zeros(num_slots * channels, channels)
+    sel[slot * channels : (slot + 1) * channels] = torch.eye(channels)
+    return sel

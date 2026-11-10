@@ -216,6 +216,7 @@ class MiniMaxH3Transformer3DModel(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         adaln_curve: bool = False,
+        output_heads: int = 1,
     ) -> None:
         super().__init__()
 
@@ -224,6 +225,12 @@ class MiniMaxH3Transformer3DModel(Module):
         # Pruned ComfyUI checkpoints replace the time embedder with `adaln_t_table`; the caller then
         # passes the interpolated curve, zero-padded to `time_embed_dim`, as `timestep`.
         self.adaln_curve = adaln_curve
+        # Per-step output heads (`convert_comfy_minimax_h3.select_step_heads`): the two output projections
+        # stack `output_heads` heads, and `forward` keeps one step's head through a one-hot selector.
+        self.output_heads = output_heads
+        self._head_select_kernel = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
@@ -345,8 +352,8 @@ class MiniMaxH3Transformer3DModel(Module):
             parallel_config=parallel_config,
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
-        self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
-        self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+        self.proj_out = Linear(hidden_size, video_patch_dim * output_heads, bias=True, mesh_device=mesh_device)
+        self.audio_proj_out = Linear(hidden_size, audio_in_channels * output_heads, bias=True, mesh_device=mesh_device)
 
     def prepare_static_sources(
         self,
@@ -441,6 +448,8 @@ class MiniMaxH3Transformer3DModel(Module):
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        video_head_select: ttnn.Tensor | None = None,
+        audio_head_select: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -463,6 +472,8 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
+        video_head_select / audio_head_select: with `output_heads > 1`, bfloat16 one-hot [heads * C, C]
+            (`step_head_selector`) keeping this step's head; required then, ignored otherwise.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -565,6 +576,12 @@ class MiniMaxH3Transformer3DModel(Module):
 
         video_all = self.proj_out(hidden)
         audio_all = self.audio_proj_out(hidden)
+        if self.output_heads > 1:
+            if video_head_select is None or audio_head_select is None:
+                raise ValueError("a per-step-head transformer needs video_head_select and audio_head_select")
+            # Exact with HiFi4 and fp32 accumulation; before the SP gather, so only one head's channels travel.
+            video_all = ttnn.matmul(video_all, video_head_select, compute_kernel_config=self._head_select_kernel)
+            audio_all = ttnn.matmul(audio_all, audio_head_select, compute_kernel_config=self._head_select_kernel)
         if self.sp_factor > 1:
             video_all = self.ccl_manager.all_gather(
                 video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False

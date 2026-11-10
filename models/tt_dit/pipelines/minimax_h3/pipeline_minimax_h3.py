@@ -43,6 +43,7 @@ itself (~2.8 s), never the reload. `coresident=False` evicts each stage and disa
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -600,6 +601,8 @@ class MiniMaxH3Pipeline:
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        self._tt_video_head_select = StateTensor()
+        self._tt_audio_head_select = StateTensor()
         # True during `warmup`, whose output is discarded.
         self._warming = False
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
@@ -614,11 +617,23 @@ class MiniMaxH3Pipeline:
         # of the partition's weights; the partition's config.json still describes the architecture.
         self.transformer_file, self.transformer_layout = _transformer_file_from_env()
         self._adaln_t_table = None
-        if self.transformer_layout == "comfy_pruned":
+        # Per-step output heads (10Eros-Max beta7_fix1): the file's metadata and stacked output rows; the
+        # head plan itself needs the config, see `_step_head_plan`.
+        self._transformer_metadata: dict[str, str] = {}
+        self._out_rows: dict[str, int] = {}
+        if self.transformer_file is not None:
             from safetensors import safe_open
 
             with safe_open(str(self.transformer_file), framework="pt") as f:
-                self._adaln_t_table = f.get_tensor(comfy_h3.CURVE_TABLE_KEY).float()
+                self._transformer_metadata = f.metadata() or {}
+                for name, key in (
+                    ("proj_out", "final_layer.video_out.weight"),
+                    ("audio_proj_out", "final_layer.audio_out.weight"),
+                ):
+                    if key in f.keys():
+                        self._out_rows[name] = f.get_slice(key).get_shape()[0]
+                if self.transformer_layout == "comfy_pruned":
+                    self._adaln_t_table = f.get_tensor(comfy_h3.CURVE_TABLE_KEY).float()
         self.tp_axis, self.sp_axis = tp_axis, sp_axis
         shape = tuple(mesh_device.shape)
         if tp_axis == sp_axis:
@@ -889,6 +904,23 @@ class MiniMaxH3Pipeline:
         stat = self.transformer_file.stat()
         return f"{self.transformer_layout}_{self.transformer_file.stem}_{stat.st_size}"
 
+    def _head_channels(self) -> dict[str, int]:
+        cfg = self.transformer_config
+        return {
+            "proj_out": cfg["in_channels"] * math.prod(cfg["patch_size"]),
+            "audio_proj_out": cfg["audio_in_channels"],
+        }
+
+    def _step_head_plan(self) -> list[int]:
+        """The head used at each forward of the file's contract; `[]` for a plain single-head transformer."""
+        channels = self._head_channels()
+        counts = {comfy_h3.num_step_heads(rows, channels[name]) for name, rows in self._out_rows.items()}
+        if not counts or counts == {1}:
+            return []
+        if len(counts) > 1:
+            raise ValueError(f"{self.transformer_file}: video and audio output head counts differ ({counts})")
+        return comfy_h3.step_head_contract(self._transformer_metadata, counts.pop())
+
     def _read_transformer_state(self) -> dict[str, torch.Tensor]:
         if self.transformer_file is None:
             return self._read_safetensors(self.transformer_subfolder)
@@ -903,6 +935,10 @@ class MiniMaxH3Pipeline:
                     state[key] = comfy_h3.pad_curve(state[key].float())
                 elif key.endswith("adaln_proj.linear.bias") or key == "norm_out.linear.bias":
                     state[key] = state[key].float()
+        heads = self._step_head_plan()
+        if heads:
+            logger.info(f"per-step output heads {heads} from {self.transformer_file.name}")
+            comfy_h3.select_step_heads(state, self._head_channels(), heads, self._transformer_metadata)
         return state
 
     # ------------------------------------------------------------------ residency
@@ -1454,6 +1490,8 @@ class MiniMaxH3Pipeline:
         if self._adaln_t_table is not None:
             config["time_embed_dim"] = comfy_h3.CURVE_PAD
             config["adaln_curve"] = True
+        if self.transformer_file is not None:
+            config["output_heads"] = max(len(self._step_head_plan()), 1)
         weight_mode = self._dit_weight_mode()
         self._host_log(
             f"building the {config['num_layers']}-layer transformer from {self.transformer_subfolder}/, "
@@ -2971,7 +3009,11 @@ class MiniMaxH3Pipeline:
             }
             return slot_levels(slot_roles, **level_kwargs), slot_levels(slot_roles, **endpoint_kwargs)
 
-        def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None]) -> None:
+        step_heads = self._step_head_plan() if self.transformer_file is not None else []
+        if step_heads and len(timesteps) != len(step_heads):
+            logger.warning(f"{len(timesteps)} steps on a {len(step_heads)}-step head contract: heads spread evenly")
+
+        def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None], step: int) -> None:
             timestep, endpoint = levels
             if self._adaln_t_table is None:
                 timestep_value = timestep.reshape(1, 1, -1, 1)
@@ -2980,12 +3022,20 @@ class MiniMaxH3Pipeline:
                 curve = comfy_h3.adaln_curve_embedding(self._adaln_t_table, timestep.flatten())
                 timestep_value = comfy_h3.pad_curve(curve).reshape(1, 1, -1, comfy_h3.CURVE_PAD)
             self._tt_timestep.update(timestep_value, traced=traced, dtype=ttnn.float32, device=self.mesh_device)
+            if step_heads:
+                channels = self._head_channels()
+                for state_tensor, name in (
+                    (self._tt_video_head_select, "proj_out"),
+                    (self._tt_audio_head_select, "audio_proj_out"),
+                ):
+                    selector = comfy_h3.step_head_selector(step, len(timesteps), len(step_heads), channels[name])
+                    state_tensor.update(selector, traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
             if endpoint is not None:
                 self._tt_endpoint_timestep.update(
                     endpoint.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
                 )
 
-        upload_levels(step_levels(0))
+        upload_levels(step_levels(0), 0)
         if _is_host_rank():
             _tqdm_spacer()
         # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
@@ -3006,6 +3056,15 @@ class MiniMaxH3Pipeline:
                 )
             ):
                 t_step = time.time()
+                # Read each step: untraced, `update` rebinds the selector buffers.
+                head_kwargs = (
+                    {
+                        "video_head_select": self._tt_video_head_select.value,
+                        "audio_head_select": self._tt_audio_head_select.value,
+                    }
+                    if step_heads
+                    else {}
+                )
                 try:
                     video_velocity, audio_velocity = transformer(
                         video_1BVC=self._tt_video.value,
@@ -3022,6 +3081,7 @@ class MiniMaxH3Pipeline:
                         pad_to=rung,
                         traced=traced,
                         **tilerow_kwargs,
+                        **head_kwargs,
                         **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
                     )
                 except RuntimeError as err:
@@ -3035,7 +3095,7 @@ class MiniMaxH3Pipeline:
                 ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_audio.value, audio_velocity)
                 if i + 1 < len(timesteps):
-                    upload_levels(step_levels(i + 1))
+                    upload_levels(step_levels(i + 1), i + 1)
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
