@@ -2604,7 +2604,12 @@ class Qwen36Model:
         _mk = getattr(self, "_vfy_mk", None)
         if _mk is not None:
             _mk.pre_layers(n_users)
-        for layer in self.layers:
+        # QWEN36_R16_MEGAKERNEL=stage1: the engine's one generic_op replaces the layer loop (persistent x_out per bucket)
+        _mk1 = getattr(self, "_vfy_mk1", None)
+        _mk1_on = _mk1 is not None and _mk1.ready and n_users in _mk1.programs and kv_split is not True
+        if _mk1_on:
+            x = _mk1.forward(x, n_users, T)
+        for layer in () if _mk1_on else self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
                 # p_u+j, so the decode SDPA's causal bound gives that row exactly [0, p_u+j]; the candidate
@@ -3422,6 +3427,14 @@ class Qwen36Model:
             self._vfy_mk_summary = self._vfy_mk.prepare(range(1, B + 1))
             if self._vfy_mk.fallback_reason:
                 logger.warning(f"megakernel: {self._vfy_mk.fallback_reason}")
+        self._vfy_mk1 = None
+        if megakernel_mode() == "stage1":
+            from models.demos.blackhole.qwen36.tt.megakernel.integ.stage1 import Stage1Verify
+
+            self._vfy_mk1 = Stage1Verify(self)
+            _r = self._vfy_mk1.prepare(range(1, B + 1), T)
+            if not _r.get("ready"):
+                logger.warning(f"megakernel stage1 not ready, layer loop stays op-by-op: {_r.get('reason')}")
         self._vfy_setup_sharded_argmax(rows)
         self._vfy_setup_device_topk()
         # QWEN36_SPEC_HOSTSET (+ _TRACE): packed aux inputs + in-trace RoPE lookup (see _vfy_inputs). Decided here, so

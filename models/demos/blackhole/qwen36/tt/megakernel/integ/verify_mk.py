@@ -39,8 +39,8 @@ class MegakernelVerify:
         self.capturing = False
         self.eager = {}
         self.replays = {}
-        if self.mode not in ("stage0",):
-            self.fallback_reason = f"QWEN36_R16_MEGAKERNEL={self.mode}: only stage0 is implemented; layer loop op-by-op"
+        if self.mode not in ("stage0", "stage1"):
+            self.fallback_reason = f"QWEN36_R16_MEGAKERNEL={self.mode}: unknown mode; layer loop op-by-op"
 
     # ---- tables -------------------------------------------------------------------------------------------------
     def _table(self, n_users):
@@ -85,7 +85,7 @@ class MegakernelVerify:
 
     def pre_layers(self, n_users):
         """Called inside the traced verify body. stage0: launch the probe (does not touch the residual)."""
-        if self.mode != "stage0":
+        if self.mode not in ("stage0", "stage1"):  # stage1 keeps the probe: proves the bucket trace replays
             return
         recs, tbl = self._table(n_users)
         out = self.probe_out[n_users]
