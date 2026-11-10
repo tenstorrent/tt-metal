@@ -177,11 +177,13 @@ void kernel_main() {
         v_busy(vg[VG_BUSY], 2 * L + 2, vbmirror, vbrc);
     };
 #define V12_OWNER(L) v12_owner(L)
+#define V12_PLAN_MLP(L) v12_plan_mlp(L)
 // v12: the MLP slice is barriered + pushed at the MLP phase itself (it streams through the whole pre-MLP stall)
 #define V_MLP_PUSH() do {} while (0)
 #define V_MLP_WAIT_PUSH() do {} while (0)
 #else
 #define V12_OWNER(L) do {} while (0)
+#define V12_PLAN_MLP(L) do {} while (0)
 #define V_MLP_PUSH() do { if (IS_GU) cb_push_back(CB_W2, w2_tiles); cb_push_back(CB_WD, DN_TILES); } while (0)
 #define V_MLP_WAIT_PUSH() do { noc_async_read_barrier_with_trid(1 + (L & 1)); V_MLP_PUSH(); } while (0)
 #endif
@@ -210,7 +212,11 @@ void kernel_main() {
 #endif
     // ---- next-layer weight issue as a list of chunks (spec v0.3 prefetch budget) ----
     struct Piece { uint64_t src; uint32_t dst, bytes, trid; };
+#if defined(MK_V12)
+    constexpr uint32_t MAXP = 128, CHB = 16384;   // + the 242 KB MLP slice (16 pieces)
+#else
     constexpr uint32_t MAXP = 96, CHB = 16384;
+#endif
     Piece pcs[MAXP];
     uint32_t npc = 0, ip = 0, outstanding = 0;
     auto add = [&](uint64_t src, uint32_t dst, uint32_t bytes, uint32_t trid, bool scratch) {
@@ -256,6 +262,17 @@ void kernel_main() {
         add(wd.get_noc_addr(dn_page + L * pdn_layer), get_write_ptr(CB_WD), DN_TILES * WTB, trid, false);
 #endif
     };
+#if defined(MK_V12)
+    // layer L's MLP slice into the single CB_WV slot, as weight pieces (trid of layer L). Queued in layer L itself:
+    // GDN-type layers after plan_layer(L + 1)'s mixer pieces in W-GDN (it lands during the GDN + AR stall),
+    // attention layers with the SDPA phase's throttled weight issue. Queued straight after the previous MLP it
+    // stalled the next layer's mixer issue behind 242 KB per core of reads (W-GDN +35 us on some cores).
+    auto v12_plan_mlp = [&](uint32_t L) {
+        if (vrole != 1 || L == 0) return;   // layer 0: plan_layer(0)
+        cb_reserve_back(CB_WV, V_SLOT);
+        add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, 1 + (L & 1), false);
+    };
+#endif
     auto plan_wo = [&]() {   // layer L's wo slice + the next layer's uncovered qkv bytes (real bytes into a scratch region)
         for (uint32_t t = 0; t < wo_tiles; t += 8) add(wo.get_noc_addr(wo_page + t), get_write_ptr(CB_SCR), (wo_tiles - t < 8 ? wo_tiles - t : 8) * WOTB, 3, true);
         for (uint32_t t = 0; t < extra_tiles; t += 8) add(wo.get_noc_addr(wo_page + (t % wo_tiles)), get_write_ptr(CB_SCR), (extra_tiles - t < 8 ? extra_tiles - t : 8) * WOTB, 3, true);
@@ -349,6 +366,7 @@ void kernel_main() {
 #endif
             npc = ip = outstanding = 0;
             if (L + 1 < NL) plan_layer(L + 1, true);
+            V12_PLAN_MLP(L);
             issue_some(true);
             spin_cycles(MKA_S_GDN);
             spin_cycles(S_AR);
@@ -386,6 +404,7 @@ void kernel_main() {
                 plan_wo();
 #endif
                 if (L + 1 < NL) plan_layer(L + 1, true);
+                V12_PLAN_MLP(L);
                 if (!budget) issue_some(true);
             }
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
@@ -513,17 +532,6 @@ void kernel_main() {
             }
             cb_pop_front(CB_VDO, V_OT);
             { DeviceZoneScopedN("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
-            if (L + 1 < NL) {
-                // single-slot CB_WV (L1): compute popped layer L's slice before pushing CB_VDO; layer L + 1's slice streams
-                // after this row's MLP is released (W-VMD), outside the MLP's own send window (trid of layer L + 1; pushed after its barrier at layer L + 1's W-MIX / W-GDN)
-                DeviceZoneScopedN("W-VWI");
-                cb_reserve_back(CB_WV, V_SLOT);
-                const uint64_t src = wv.get_noc_addr(vwv_page + (L + 1) * vpvl);
-                const uint32_t dst = get_write_ptr(CB_WV), nb = vnt * WTB;
-                noc_async_read_set_trid(1 + ((L + 1) & 1));
-                for (uint32_t o = 0; o < nb; o += 16384) noc_async_read(src + o, dst + o, (nb - o) < 16384 ? (nb - o) : 16384);
-                noc_async_read_set_trid(0);
-            }
         }
         { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
 #if defined(MKA_RQKV)
