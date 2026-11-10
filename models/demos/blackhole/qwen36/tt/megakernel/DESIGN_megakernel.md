@@ -655,3 +655,11 @@ Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
 0. Check link count: eth links per ring-neighbor pair, cabled vs used. Stripe over all of them if more are free (exact).
 1. AG lands directly in the K-row CB_X via a destination-side NOC multicast, if tt-fabric supports it. This removes the 3.2 µs delivery step (exact).
 2. BFP8 payload behind two flags: MK_AR_AG_BFP8 (consumer copy only; owners keep the full-precision residual) and MK_AR_RS_BFP8 (partials). Both need the output-length gate.
+
+**AR lever check (v0.7.7):**
+- Link striping is closed: every neighbor pair in the 8-chip ring (0-1-2-3-27-26-25-24) has exactly 2 eth links, and the AR already uses both. The only 4-link pairs are 7↔31 and 15↔23, which are off our ring.
+- AG straight into CB_X is closed: the tt-fabric EDM has no destination-side multicast (NOC_MULTICAST_WRITE asserts), and per-core unicast would be ~10× the bytes.
+- **Remaining:**
+  - (a) BFP8 AG copy and (b) BFP8 RS partials, both behind flags and gated on output length. The residual is sharded on its owner, and every device builds CB_X and Σx² from the same BFP8 copy.
+  - (c) Sub-chunk pipelined K=2 hybrid: exact numerics, so it is the fallback that does not depend on the gate.
+- **Risk:** the gate can run only after integration, so a ≤15 µs AR via BFP8 stays provisional until then.
