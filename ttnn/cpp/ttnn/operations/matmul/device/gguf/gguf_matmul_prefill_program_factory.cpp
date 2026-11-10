@@ -26,7 +26,7 @@ constexpr uint32_t kPrefillInputSlots = 4;          // input blocks in flight pe
 constexpr uint32_t kPrefillSenders = 2;             // input senders per band, on different NoCs
 constexpr uint32_t kPrefillDestTiles = 4;           // Float32 tiles in half of DEST
 constexpr uint32_t kPrefillOutTiles = 24;           // c_16: a multiple of every subblock size, so no subblock wraps
-constexpr uint32_t kPrefillL1Budget = 1250 * 1024;  // bytes of circular buffers per core
+constexpr uint32_t kPrefillL1Budget = 1250 * 1024;  // bytes of circular buffers per core, at most
 constexpr double kPrefillDecodeCycles = 300.0;      // one weight tile: page copy, decode, pack
 constexpr double kPrefillSumCycles = 150.0;         // one tile of a K split's sums: send, add
 
@@ -73,11 +73,12 @@ bool prefill_partners_fit(uint32_t n_tiles, uint32_t nc0, uint32_t nc1) {
 
 uint32_t prefill_fixed_l1(const GgufTraits& f) { return weight_reader_l1_bytes(f) + kPrefillOutTiles * 2048; }
 
-// The least modeled time within the L1 budget: per core, the decodes (once per M chunk), the multiplies, a fixed cost
-// per block and, on band 0 of a K split, the sums' exchange, against the band's input stream (measured multicast rates
-// per band count). N passes only where no blocking takes a core's N tiles at once.
+// The least modeled time within the L1 budget (kPrefillL1Budget or the L1 left to programs, the less): per core, the
+// decodes (once per M chunk), the multiplies, a fixed cost per block and, on band 0 of a K split, the sums' exchange,
+// against the band's input stream (measured multicast rates per band count). N passes only where no blocking takes a
+// core's N tiles at once.
 std::optional<PrefillPlan> prefill_plan(
-    const GgufTraits& f, uint32_t m_tiles, uint32_t k_tiles, uint32_t n_tiles, CoreCoord grid) {
+    const GgufTraits& f, uint32_t m_tiles, uint32_t k_tiles, uint32_t n_tiles, CoreCoord grid, uint32_t l1_budget) {
     const uint32_t gt = f.group_tiles;
     const uint32_t base_l1 = prefill_fixed_l1(f);
     PrefillPlan best;
@@ -98,7 +99,7 @@ std::optional<PrefillPlan> prefill_plan(
     auto fits = [&](uint32_t mc, uint32_t ur, uint32_t kb, uint32_t nc, bool ksplit) {
         return base_l1 + kPrefillInputSlots * ur * kb * 2048 + kb * nc * 4096 + mc * nc * 4096 +
                    (ksplit ? 4 * ur * nc * 4096 : 0) <=
-               kPrefillL1Budget;
+               l1_budget;
     };
     for (uint32_t mg = 1; mg <= grid.y; mg++) {
         if (grid.y % mg || m_tiles % mg) {
@@ -170,19 +171,31 @@ std::optional<PrefillPlan> prefill_plan(
 
 uint32_t prefill_rows(const Tensor& input) { return input.padded_shape().volume() / input.padded_shape()[-1]; }
 
+std::optional<PrefillPlan> prefill_plan(const Tensor& input, const Tensor& weight) {
+    if (!prefill_format_supported(weight.dtype()) || prefill_rows(input) % tt::constants::TILE_HEIGHT != 0) {
+        return std::nullopt;
+    }
+    return prefill_plan(
+        gguf_traits(weight.dtype()),
+        prefill_rows(input) / tt::constants::TILE_HEIGHT,
+        weight.logical_shape()[0] / tt::constants::TILE_WIDTH,
+        weight.logical_shape()[1] / tt::constants::TILE_WIDTH,
+        input.device()->compute_with_storage_grid_size(),
+        std::min(kPrefillL1Budget, program_l1_bytes(input.device())));
+}
+
 }  // namespace
 
 bool gguf_prefill_supported(const Tensor& input, const Tensor& weight) {
-    if (!prefill_format_supported(weight.dtype()) || prefill_rows(input) % tt::constants::TILE_HEIGHT != 0) {
-        return false;
+    return prefill_plan(input, weight).has_value();
+}
+
+std::vector<uint32_t> gguf_prefill_plan_key(const Tensor& input, const Tensor& weight) {
+    const std::optional<PrefillPlan> p = prefill_plan(input, weight);
+    if (!p.has_value()) {
+        return {};
     }
-    return prefill_plan(
-               gguf_traits(weight.dtype()),
-               prefill_rows(input) / tt::constants::TILE_HEIGHT,
-               weight.logical_shape()[0] / tt::constants::TILE_WIDTH,
-               weight.logical_shape()[1] / tt::constants::TILE_WIDTH,
-               input.device()->compute_with_storage_grid_size())
-        .has_value();
+    return {p->mg, p->ks, p->rows0, p->kt0, p->mc, p->kb, p->ur, p->nc[0], p->nc[1], p->np};
 }
 
 GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactory::create(
@@ -195,8 +208,13 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
     const uint32_t m_tiles = prefill_rows(input) / 32;
     const CoreCoord grid = device->compute_with_storage_grid_size();
 
-    const std::optional<PrefillPlan> p = prefill_plan(f, m_tiles, k_tiles, n_tiles, grid);
-    TT_FATAL(p.has_value(), "GGUF prefill matmul: no blocking fits ({} M tiles, {} K tiles)", m_tiles, k_tiles);
+    const std::optional<PrefillPlan> p = prefill_plan(input, weight);
+    TT_FATAL(
+        p.has_value(),
+        "GGUF prefill matmul: no blocking fits the {} bytes of L1 left to programs ({} M tiles, {} K tiles)",
+        program_l1_bytes(device),
+        m_tiles,
+        k_tiles);
     const uint32_t mg = p->mg, mc = p->mc, kb = p->kb, ur = p->ur, ks = p->ks;
     const uint32_t nc = p->np > 0 ? p->np : std::max(p->nc[0], p->nc[1]);  // N tiles the circular buffers are sized for
     const uint32_t passes = p->np > 0 ? (p->nc[0] + p->np - 1) / p->np : 1;

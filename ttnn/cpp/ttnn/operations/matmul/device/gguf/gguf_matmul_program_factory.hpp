@@ -49,4 +49,9 @@ struct GgufMatmulPrefillProgramFactory {
 // that fits L1).
 bool gguf_prefill_supported(const Tensor& input, const Tensor& weight);
 
+// The factories' plans, which depend on the L1 left to programs (L1_SMALL, live L1 buffers), for the program hash:
+// the decode's K bands, the prefill's blocking.
+std::vector<uint32_t> gguf_decode_plan_key(const Tensor& input, const Tensor& weight);
+std::vector<uint32_t> gguf_prefill_plan_key(const Tensor& input, const Tensor& weight);
+
 }  // namespace ttnn::prim

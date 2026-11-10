@@ -17,6 +17,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/matmul/device/gguf/gguf_matmul_program_factory.hpp"
 
 namespace ttnn::prim::gguf_program {
@@ -27,6 +28,11 @@ inline constexpr auto kKernels = "ttnn/cpp/ttnn/operations/matmul/device/kernels
 inline constexpr uint32_t kGroupsPerRead = 4;  // one-page groups: records per unit of reads
 inline constexpr uint32_t kPageUnits = 4;      // units of pages c_0 holds
 inline constexpr uint32_t kRecordSlots = 3;    // multi-page groups: records staged in L1, two in flight from DRAM
+
+// Bytes of circular buffers a core may hold from the allocator's base: below L1_SMALL and any live L1 buffer.
+inline uint32_t program_l1_bytes(const IDevice* device) {
+    return static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(device));
+}
 
 inline void add_cb(
     Program& program,

@@ -4,6 +4,9 @@
 
 #include "ttnn/operations/matmul/device/gguf/gguf_matmul_device_operation.hpp"
 
+#include <variant>
+#include <vector>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -69,6 +72,19 @@ void GgufMatmulDeviceOperation::validate_on_program_cache_miss(
 void GgufMatmulDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     validate_on_program_cache_miss(attributes, args);
+}
+
+ttsl::hash::hash_t GgufMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& args) {
+    std::vector<uint32_t> plan;
+    if (args.input.storage_type() == StorageType::DEVICE && args.weight.storage_type() == StorageType::DEVICE &&
+        args.input.is_allocated() && args.weight.is_allocated() && is_gguf(args.weight.dtype())) {
+        plan = std::holds_alternative<GgufMatmulPrefillProgramFactory>(select_program_factory(attributes, args))
+                   ? gguf_prefill_plan_key(args.input, args.weight)
+                   : gguf_decode_plan_key(args.input, args.weight);
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<GgufMatmulDeviceOperation>, attributes, args, plan);
 }
 
 GgufMatmulDeviceOperation::spec_return_value_t GgufMatmulDeviceOperation::compute_output_specs(

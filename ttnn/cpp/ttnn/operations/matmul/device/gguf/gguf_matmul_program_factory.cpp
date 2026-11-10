@@ -139,7 +139,80 @@ CoreRangeSet core_ranges(const std::vector<CoreCoord>& cores) {
     return ranges;
 }
 
+// The K bands and each plan core's segments: when the input of all K tiles in c_1 and the other circular buffers
+// (below) exceed the L1 that programs may use, the grid's rows split into bands, each taking a share of K (whole
+// groups; one-row TQ2_0: whole windows) and holding only that.
+struct DecodePlan {
+    uint32_t k_tiles = 0, n_tiles = 0, in0_rows = 0;
+    bool tq2 = false, one_row = false, lookup_counts = false;
+    uint32_t window = 1, scale_tile_bytes = 0;
+    std::vector<KBand> bands;
+    std::vector<std::vector<Segment>> plan;
+    uint32_t band_tiles = 0, most_parts = 1, most_heads = 1;  // c_1, c_18, c_20 pages
+};
+
+DecodePlan decode_plan(const Tensor& input, const Tensor& weight) {
+    auto* device = input.device();
+    const GgufTraits& f = gguf_traits(weight.dtype());
+    DecodePlan p;
+    p.k_tiles = weight.logical_shape()[0] / 32;
+    p.n_tiles = weight.logical_shape()[1] / 32;
+    const uint32_t groups = p.k_tiles / f.group_tiles;
+    const uint32_t rows = input.logical_shape().volume() / input.logical_shape()[-1];
+    p.in0_rows = rows > 16 ? 32 : rows > 8 ? 16 : 8;
+    // TQ2_0 and expanded TQ1_0 (TQ2_0's pages): block-float weight tiles, no decoding (gguf_matmul_tq2_*.cpp). With one
+    // input row the scales apply once per window of 16 K groups (one DEST row each), otherwise once per K group.
+    p.tq2 = weight.dtype() == DataType::GGUF_TQ2_0 || weight.dtype() == DataType::GGUF_TQ1_0_EXPANDED;
+    p.one_row = p.tq2 && rows == 1;
+    p.window = p.one_row ? 16 : 1;
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const uint32_t grid_x = grid.x, grid_y = grid.y;
+    const uint32_t l1_free = program_l1_bytes(device);
+    p.scale_tile_bytes = p.one_row ? 2048 : 4096;
+    p.lookup_counts = !p.tq2 && f.code_offset > 0 && !is_gguf_expanded(weight.dtype());
+    // The weight's circular buffers, c_16 and c_17.
+    const uint32_t fixed_l1 = (p.tq2 ? kTq2Units * kTq2Unit * f.page_bytes() + kScaleTiles * p.scale_tile_bytes
+                                     : weight_reader_l1_bytes(f) + (p.lookup_counts ? 64 : 0)) +
+                              2 * 2048 + 4096;
+    const uint32_t units = (groups + p.window - 1) / p.window;  // shares are whole units of `window` K groups
+    for (uint32_t count = 1;; count++) {
+        TT_FATAL(
+            count <= std::min(grid_y, kMaxPartials + 1),
+            "GGUF matmul: the input of {} K tiles does not fit the {} bytes of L1 left to programs",
+            p.k_tiles,
+            l1_free);
+        p.bands.clear();
+        for (uint32_t i = 0; i < count; i++) {
+            const uint32_t g0 = std::min(groups, units * i / count * p.window);
+            const uint32_t g1 = i + 1 == count ? groups : std::min(groups, units * (i + 1) / count * p.window);
+            p.bands.push_back({g0, g1, grid_y * i / count, grid_y * (i + 1) / count - grid_y * i / count});
+        }
+        p.plan = plan_segments(p.n_tiles, p.bands, grid_x);
+        p.band_tiles = 0;
+        p.most_parts = p.most_heads = 1;
+        for (const KBand& band : p.bands) {
+            p.band_tiles = std::max(p.band_tiles, (band.g1 - band.g0) * f.group_tiles);
+        }
+        for (const auto& segments : p.plan) {
+            uint32_t parts = 0, heads = 0;
+            for (const Segment& s : segments) {
+                parts += s.parts;
+                heads += s.role == kHead ? 1 : 0;
+            }
+            p.most_parts = std::max(p.most_parts, parts);
+            p.most_heads = std::max(p.most_heads, heads);
+        }
+        if (uint64_t(p.band_tiles) * 2048 + fixed_l1 + 4096 * (p.most_parts + p.most_heads) <= l1_free) {
+            return p;
+        }
+    }
+}
+
 }  // namespace
+
+std::vector<uint32_t> gguf_decode_plan_key(const Tensor& input, const Tensor& weight) {
+    return {uint32_t(decode_plan(input, weight).bands.size())};
+}
 
 GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     const GgufMatmulParams&, const GgufMatmulInputs& inputs, Tensor& output) {
@@ -147,61 +220,14 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
     const Tensor& weight = inputs.weight;
     auto* device = input.device();
     const GgufTraits& f = gguf_traits(weight.dtype());
-    const uint32_t k_tiles = weight.logical_shape()[0] / 32, n_tiles = weight.logical_shape()[1] / 32;
-    const uint32_t groups = k_tiles / f.group_tiles;
-    const uint32_t rows = input.logical_shape().volume() / input.logical_shape()[-1];
-    const uint32_t in0_rows = rows > 16 ? 32 : rows > 8 ? 16 : 8;
-    // TQ2_0 and expanded TQ1_0 (TQ2_0's pages): block-float weight tiles, no decoding (gguf_matmul_tq2_*.cpp). With one
-    // input row the scales apply once per window of 16 K groups (one DEST row each), otherwise once per K group.
-    const bool tq2 = weight.dtype() == DataType::GGUF_TQ2_0 || weight.dtype() == DataType::GGUF_TQ1_0_EXPANDED;
-    const bool one_row = tq2 && rows == 1;
-    const uint32_t window = one_row ? 16 : 1;
-
-    // K bands: when the input of all K tiles in c_1 and the other circular buffers (below) exceed L1, the grid's rows
-    // split into bands, each taking a share of K (whole groups; one-row TQ2_0: whole windows) and holding only that.
+    DecodePlan p = decode_plan(input, weight);
+    const uint32_t n_tiles = p.n_tiles, in0_rows = p.in0_rows, window = p.window, scale_tile_bytes = p.scale_tile_bytes;
+    const bool tq2 = p.tq2, one_row = p.one_row, lookup_counts = p.lookup_counts;
+    const uint32_t band_tiles = p.band_tiles, most_parts = p.most_parts, most_heads = p.most_heads;
+    const std::vector<KBand>& bands = p.bands;
+    std::vector<std::vector<Segment>>& plan = p.plan;
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    const uint32_t grid_x = grid.x, grid_y = grid.y;
-    const uint32_t l1_free = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t scale_tile_bytes = one_row ? 2048 : 4096;
-    const bool lookup_counts = !tq2 && f.code_offset > 0 && !is_gguf_expanded(weight.dtype());
-    // The weight's circular buffers, c_16 and c_17.
-    const uint32_t fixed_l1 = (tq2 ? kTq2Units * kTq2Unit * f.page_bytes() + kScaleTiles * scale_tile_bytes
-                                   : weight_reader_l1_bytes(f) + (lookup_counts ? 64 : 0)) +
-                              2 * 2048 + 4096;
-    const uint32_t units = (groups + window - 1) / window;  // shares are whole units of `window` K groups
-    std::vector<KBand> bands;
-    std::vector<std::vector<Segment>> plan;
-    uint32_t band_tiles = 0, most_parts = 1, most_heads = 1;  // c_1, c_18, c_20 pages
-    for (uint32_t count = 1;; count++) {
-        TT_FATAL(
-            count <= std::min(grid_y, kMaxPartials + 1),
-            "GGUF matmul: the input of {} K tiles does not fit L1",
-            k_tiles);
-        bands.clear();
-        for (uint32_t i = 0; i < count; i++) {
-            const uint32_t g0 = std::min(groups, units * i / count * window);
-            const uint32_t g1 = i + 1 == count ? groups : std::min(groups, units * (i + 1) / count * window);
-            bands.push_back({g0, g1, grid_y * i / count, grid_y * (i + 1) / count - grid_y * i / count});
-        }
-        plan = plan_segments(n_tiles, bands, grid_x);
-        band_tiles = 0;
-        most_parts = most_heads = 1;
-        for (const KBand& band : bands) {
-            band_tiles = std::max(band_tiles, (band.g1 - band.g0) * f.group_tiles);
-        }
-        for (const auto& segments : plan) {
-            uint32_t parts = 0, heads = 0;
-            for (const Segment& s : segments) {
-                parts += s.parts;
-                heads += s.role == kHead ? 1 : 0;
-            }
-            most_parts = std::max(most_parts, parts);
-            most_heads = std::max(most_heads, heads);
-        }
-        if (band_tiles * 2048 + fixed_l1 + 4096 * (most_parts + most_heads) <= l1_free) {
-            break;
-        }
-    }
+    const uint32_t grid_x = grid.x;
 
     // N tiles in bank order when each N tile's records sit in one DRAM bank (page g * n_tiles + n of an interleaved
     // buffer is in bank page % banks), so that a run of a core's items is in one bank.
