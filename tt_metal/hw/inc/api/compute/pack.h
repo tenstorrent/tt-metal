@@ -121,6 +121,7 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * init, and while the packer accumulates in L1 under half sync, it packs tile by tile, as before.
  *
  * NOTE: On Blackhole a matmul kernel passes the K tiles of its output block as the second template argument (pack_block<DST_ACCUM_MODE, K>), which picks the forms behind matmul math for that K.
+ * Without it the forms behind matmul math apply once a matmul init ran on the kernel, for any K.
  *
  * Return value: None
  *

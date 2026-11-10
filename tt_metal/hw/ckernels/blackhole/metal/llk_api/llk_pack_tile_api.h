@@ -366,73 +366,41 @@ inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t ad
 }
 #endif
 
-// Which outputs pack block float: two constant masks, so the per-call test is a shift, not a load and a format switch.
-constexpr std::uint32_t llk_pack_dst_bfp_mask(const std::uint32_t first) {
-    std::uint32_t mask = 0;
-    for (std::uint32_t i = 0; i < 32; i++) {
-        if (IS_BFP_FORMAT(pack_dst_format[first + i])) {
-            mask |= 1u << i;
-        }
-    }
-    return mask;
-}
-inline bool llk_pack_dst_is_bfp(const std::uint32_t output_id) {
-    constexpr std::uint32_t low = llk_pack_dst_bfp_mask(0);
-    constexpr std::uint32_t high = llk_pack_dst_bfp_mask(32);
-    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
-}
-
-// Bfp4 and Bfp2 read differently from the other block-float outputs in the sweep: a row of their own.
-constexpr std::uint32_t llk_pack_dst_bfpa_mask(const std::uint32_t first) {
-    std::uint32_t mask = 0;
-    for (std::uint32_t i = 0; i < 32; i++) {
-        if (pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp4) ||
-            pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp2)) {
-            mask |= 1u << i;
-        }
-    }
-    return mask;
-}
-inline bool llk_pack_dst_is_bfpa(const std::uint32_t output_id) {
-    constexpr std::uint32_t low = llk_pack_dst_bfpa_mask(0);
-    constexpr std::uint32_t high = llk_pack_dst_bfpa_mask(32);
-    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
-}
-
-// Which outputs pack Bfp8_b or Bfp8: two constant masks, like llk_pack_dst_bfp_mask.
-constexpr std::uint32_t llk_pack_dst_bfp8_mask(const std::uint32_t first) {
-    std::uint32_t mask = 0;
-    for (std::uint32_t i = 0; i < 32; i++) {
-        if (pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
-            pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp8)) {
-            mask |= 1u << i;
-        }
-    }
-    return mask;
-}
-inline bool llk_pack_dst_is_bfp8(const std::uint32_t output_id) {
-    constexpr std::uint32_t low = llk_pack_dst_bfp8_mask(0);
-    constexpr std::uint32_t high = llk_pack_dst_bfp8_mask(32);
-    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
-}
-
-// Rows of the form tables: tiles of 16x16, 16x32, 8x32, 4x32 and 1x32 (a face of 16, 8, 4 or fewer rows), Bfp8_b and Bfp8, Bfp4_b and Bfp2_b, Bfp4 and Bfp2, 4 byte datums, the other plain formats.
-inline std::uint32_t llk_pack_block_class(const std::uint32_t output_id) {
-    const std::uint32_t rows = get_output_face_r_dim(output_id);
-    if (get_output_num_faces(output_id) != 4 || rows != FACE_R_DIM) {
+// Row of the form tables per output: tiles of 16x16, 16x32, 8x32, 4x32 and 1x32 (a face of 16, 8, 4 or fewer rows), Bfp8_b and Bfp8, Bfp4_b and Bfp2_b,
+// Bfp4 and Bfp2, the other 4 byte datums, the other plain formats, Float16_b, Float32. A constant table, so the class of a call is one load.
+constexpr std::uint8_t llk_pack_class_of(const std::uint32_t i) {
+    const std::uint32_t rows = pack_tile_face_r_dim[i];
+    const std::uint32_t fmt = pack_dst_format[i];
+    if (pack_tile_num_faces[i] != 4 || rows != FACE_R_DIM) {
         if (rows == FACE_R_DIM) {
-            return get_output_num_faces(output_id) == 1 ? 0 : 1;
+            return pack_tile_num_faces[i] == 1 ? 0 : 1;
         }
         return rows >= 8 ? 2 : (rows >= 4 ? 3 : 4);
     }
-    if (llk_pack_dst_is_bfpa(output_id)) {
+    if (fmt == static_cast<std::uint32_t>(DataFormat::Bfp4) || fmt == static_cast<std::uint32_t>(DataFormat::Bfp2)) {
         return 7;
     }
-    if (llk_pack_dst_is_bfp(output_id)) {
-        return llk_pack_dst_is_bfp8(output_id) ? 5 : 6;
+    if (IS_BFP_FORMAT(fmt)) {
+        return fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b) || fmt == static_cast<std::uint32_t>(DataFormat::Bfp8) ? 5 : 6;
     }
-    return llk_pack_dst_is_wide(output_id) ? 8 : 9;
+    if (fmt == static_cast<std::uint32_t>(DataFormat::Float16_b)) {
+        return 10;
+    }
+    if (fmt == static_cast<std::uint32_t>(DataFormat::Float32)) {
+        return 11;
+    }
+    return datum_size_in_bytes(fmt) == 4 ? 8 : 9;
 }
+struct llk_pack_class_tab_t {
+    std::uint8_t row[sizeof(pack_dst_format) / sizeof(pack_dst_format[0])];
+    constexpr llk_pack_class_tab_t() : row() {
+        for (std::uint32_t i = 0; i < sizeof(row); i++) {
+            row[i] = llk_pack_class_of(i);
+        }
+    }
+};
+constexpr llk_pack_class_tab_t llk_pack_class_tab{};
+inline std::uint32_t llk_pack_block_class(const std::uint32_t output_id) { return llk_pack_class_tab.row[output_id]; }
 
 // Which outputs pack Int8 or UInt8: two constant masks. From a 16 bit DEST the per-tile pack writes two faces of them and the block forms four, so they stay per tile there.
 constexpr std::uint32_t llk_pack_dst_int8_mask(const std::uint32_t first) {
@@ -475,7 +443,7 @@ inline constexpr bool llk_pack_unpack_to_dest = true;
 
 // Form of a block per tile count (above 16: the entry of 16): T per-tile packs, B the block that programs the output, W the block with the W offset, where no cell of the row read slower in the tt-llk sweeps.
 // Columns: half sync 16 and 32 bit DEST, full sync 16 and 32 bit DEST; the first block of an output takes the init or the reconfigure table, the blocks that continue it the next table. The _dc tables hold the rows of the datacopy family.
-constexpr char llk_pack_init_form[10][4][17] = {
+constexpr char llk_pack_init_form[12][4][17] = {
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
@@ -484,10 +452,12 @@ constexpr char llk_pack_init_form[10][4][17] = {
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBTBTTTTTTTTTTT"},  // Bfp4, Bfp2
-    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // 4 byte datums
-    {"TBBBBBBBBBBBBBBB", "TBBTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other 4 byte datums
+    {"TBBBBBBBBBBBBBBB", "TBBTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other plain formats
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Float16_b
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Float32
 };
-constexpr char llk_pack_reconf_form[10][4][17] = {
+constexpr char llk_pack_reconf_form[12][4][17] = {
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
@@ -496,10 +466,12 @@ constexpr char llk_pack_reconf_form[10][4][17] = {
     {"TBBBBBBBBBBBBBBB", "TBTBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
     {"TBBBBBBBBBBBBBBB", "TBBTTTTTTTTTTTTT", "TBBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp4, Bfp2
-    {"BBBBBBBBBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // 4 byte datums
-    {"BBBBBBBBBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other
+    {"BBBBBBBBBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other 4 byte datums
+    {"BBBBBBBBBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other plain formats
+    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // Float16_b
+    {"BBBBBBBBBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // Float32
 };
-constexpr char llk_pack_next_form[10][4][17] = {
+constexpr char llk_pack_next_form[12][4][17] = {
     {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 16x16
     {"TWWWBWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBBBBBWWWWW", "TWWBBBBBBBBBBBBB"},  // tile 16x32
     {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 8x32
@@ -508,10 +480,12 @@ constexpr char llk_pack_next_form[10][4][17] = {
     {"TWBBBBWWWWWWWWWW", "TBWTTTTTTTTTTTTT", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp8_b, Bfp8
     {"TWBBWWWWWWWWWWWW", "TBBBBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TBWWWWWWWWWWWWWW"},  // Bfp4_b, Bfp2_b
     {"TWBBWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp4, Bfp2
-    {"BWWWBBBBBBBBBBBB", "TBWBBBBBBBBBBBBB", "BWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // 4 byte datums
-    {"BBBWWWWWWWWWWWWW", "TBBTTTTTTTTTTTTT", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other
+    {"BWWWBBBBBBBBBBBB", "TBWBBBBBBBBBBBBB", "BWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other 4 byte datums
+    {"BBBWWWWWWWWWWWWW", "TBWWWWWWWWWWWWWW", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other plain formats
+    {"WWWWWWWWWWWWWWWW", "TBBBBBBBBBBBBBBB", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // Float16_b
+    {"WWWWBBBBBBBBBBBB", "TBWBBBBBBBBBBBBB", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // Float32
 };
-constexpr char llk_pack_init_form_dc[10][4][17] = {
+constexpr char llk_pack_init_form_dc[12][4][17] = {
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
@@ -520,10 +494,12 @@ constexpr char llk_pack_init_form_dc[10][4][17] = {
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBTBTTTTTTTTTTT"},  // Bfp4, Bfp2
-    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // 4 byte datums
-    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other 4 byte datums
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other plain formats
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Float16_b
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Float32
 };
-constexpr char llk_pack_reconf_form_dc[10][4][17] = {
+constexpr char llk_pack_reconf_form_dc[12][4][17] = {
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
@@ -532,10 +508,12 @@ constexpr char llk_pack_reconf_form_dc[10][4][17] = {
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp4, Bfp2
-    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // 4 byte datums
-    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other
+    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other 4 byte datums
+    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other plain formats
+    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // Float16_b
+    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // Float32
 };
-constexpr char llk_pack_next_form_dc[10][4][17] = {
+constexpr char llk_pack_next_form_dc[12][4][17] = {
     {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 16x16
     {"TWWWBWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBBBBBWWWWW", "TWWBBBBBBBBBBBBB"},  // tile 16x32
     {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 8x32
@@ -544,64 +522,79 @@ constexpr char llk_pack_next_form_dc[10][4][17] = {
     {"TWBBBBWWWWWWWWWW", "TWBBBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp8_b, Bfp8
     {"TWBBWWWWWWWWWWWW", "TWBBBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp4_b, Bfp2_b
     {"TWBBWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp4, Bfp2
-    {"BWWWBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "BWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // 4 byte datums
-    {"BBBWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other
+    {"BWWWBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "BWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other 4 byte datums
+    {"BBBWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other plain formats
+    {"WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // Float16_b
+    {"WWWWBBBBBBBBBBBB", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // Float32
 };
 
-// Behind matmul math a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the W offset (no_w: the block instead), then the block (no_block) at n tiles,
-// or, with the K given, takes the W offset (take_w) or the block (take_b). Rows: LoFi K not given, K 1, K above 1, HiFi2 to HiFi4 together (take_w without the first); one entry per row of the form tables.
-constexpr std::uint64_t llk_pack_mm_no_block[2][4][10] = {
+// Behind matmul math (a matmul init ran, or the K is given) a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the W offset (no_w: the block instead), then the block (no_block) at n tiles,
+// or, with the K given, takes the W offset (take_w) or the block (take_b). Rows: LoFi K not given, K 1, K above 1, HiFi2 to HiFi4 together, then LoFi and HiFi in a kernel
+// without a matmul init (the other unpack and math contexts; take_w and take_b only with the K: without the first group or the last two); one entry per row of the form tables.
+constexpr std::uint64_t llk_pack_mm_no_block[2][6][12] = {
     {  // datacopy family
-        {0x0020002000000020, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
-        {0x0020002000000020, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
-        {0x00000000000E00FE, 0x00000000000A00AA, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0},  // HiFi
+        {0x0020002000000020, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K not given
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0x0020002000000020, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K above 1
+        {0x00000000000E00FE, 0x00000000000A00AA, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0, 0, 0x0000000000000040},  // HiFi
+        {0x0020002000020022, 0x00000000000A00DA, 0x0000000000020002, 0x0000000000020022, 0x0000000000020002, 0x00020002000A00AA, 0x00020002000A002A, 0x00160002000600EA, 0x0000000100000081, 0x00010001000100A1, 0x00010001000100A1, 0x0000000100000081},  // LoFi, no matmul init
+        {0x00000000000E00FE, 0x00000000000A00AA, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0002000200020062, 0x0002000200020022, 0x0016000200060022, 0x0000000100000041, 0x0001000100010001, 0x0001000100010001, 0x0000000100000041},  // HiFi, no matmul init
     },
     {  // 32 bit input family
-        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
-        {0, 0, 0, 0, 0, 0x0000000000080000, 0, 0, 0, 0},  // LoFi, K 1
-        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
-        {0x00000000000E00FE, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000060062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0},  // HiFi
+        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K not given
+        {0, 0, 0, 0, 0, 0x0000000000080000, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K above 1
+        {0x00000000000E00FE, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000060062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0, 0, 0x0000000000000040},  // HiFi
+        {0x0020002000020020, 0x00000000000E00D8, 0x0000000000020000, 0x0000000000060020, 0x00000000000E0000, 0x00000000000E00A8, 0x00000000000A0028, 0x00160000000600E8, 0x0001000000010080, 0x00010000000100A0, 0x00010000000100A0, 0x0001000000010080},  // LoFi, no matmul init
+        {0x00000000000E00FE, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000060062, 0x0000000000020022, 0x0016000000060022, 0x0001000000010040, 0x0001000000010000, 0x0001000000010000, 0x0001000000010040},  // HiFi, no matmul init
     },
 };
-constexpr std::uint64_t llk_pack_mm_no_w[2][4][10] = {
+constexpr std::uint64_t llk_pack_mm_no_w[2][6][12] = {
     {  // datacopy family
-        {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0},  // LoFi, K not given
-        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0, 0, 0, 0, 0},  // LoFi, K 1
-        {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0},  // LoFi, K above 1
-        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00AE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
+        {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0, 0x00000000000000A0, 0},  // LoFi, K not given
+        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0, 0x00000000000000A0, 0},  // LoFi, K above 1
+        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00AE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002, 0x0000000000020002, 0x0000000000000040},  // HiFi
+        {0x000E000E00000020, 0x0004000000000090, 0x0004004000000000, 0x0004000000000060, 0x0006000000000080, 0x0000000A000A00BA, 0x0002000A000A002A, 0x00000002000200EA, 0x0000000100000009, 0x00010001000100A1, 0x00010001000100A1, 0x0000000100000009},  // LoFi, no matmul init
+        {0x00060000000E00EE, 0x00040000000E00AE, 0x00040040000A00EA, 0x00040000000E00CE, 0x00040000000E00AE, 0x0000000000020062, 0x0000000000020022, 0x0000000000020022, 0x0000000100000049, 0x0001000100030003, 0x0001000100030003, 0x0000000100000049},  // HiFi, no matmul init
     },
     {  // 32 bit input family
-        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K not given
-        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0x00000000000A0000, 0x00020000000A0000, 0, 0, 0},  // LoFi, K 1
-        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0},  // LoFi, K above 1
-        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00AE, 0x00000000000E0062, 0x0002000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
+        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0, 0x00000000000200A0, 0x00000000000A0000},  // LoFi, K not given
+        {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0x00000000000A0000, 0x00020000000A0000, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0, 0x00000000000200A0, 0x00000000000A0000},  // LoFi, K above 1
+        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00AE, 0x00000000000E0062, 0x0002000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002, 0x0000000000020002, 0x0000000000000040},  // HiFi
+        {0x000E000E00000020, 0x00040000000C0090, 0x0004000000040000, 0x0004000000000060, 0x0006000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000200E8, 0x00010000000B0000, 0x00010000000300A0, 0x00010000000300A0, 0x00010000000B0000},  // LoFi, no matmul init
+        {0x00060000000E00EE, 0x00040000000E00AE, 0x00040000000E00EA, 0x00040000000E00CE, 0x00060000000E00AE, 0x00000000000E0062, 0x0002000000020022, 0x0000000000020022, 0x0001000000010040, 0x0001000000030002, 0x0001000000030002, 0x0001000000010040},  // HiFi, no matmul init
     },
 };
-constexpr std::uint64_t llk_pack_mm_take_w[2][3][10] = {
+constexpr std::uint64_t llk_pack_mm_take_w[2][3][12] = {
     {  // datacopy family
-        {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C003C, 0x00000000000C000C, 0x000000000000000C, 0x00000000000000F0, 0x0000000600000006},  // LoFi, K 1
-        {0x0020D02000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000040004, 0, 0x0000000000000004, 0x00000000000000F0, 0x0000000600000000},  // LoFi, K above 1
-        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C001C, 0, 0, 0x00000000000000B0, 0x0000000600000004},  // HiFi
+        {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C003C, 0x00000000000C000C, 0x000000000000000C, 0, 0, 0, 0x00000000000000F0},  // LoFi, K 1
+        {0x0020D02000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000040004, 0, 0x0000000000000004, 0, 0, 0, 0x00000000000000F0},  // LoFi, K above 1
+        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C001C, 0, 0, 0, 0, 0, 0x00000000000000B0},  // HiFi
     },
     {  // 32 bit input family
-        {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000003C, 0x000200000006000C, 0x000000000000000C, 0x00000000000A00F0, 0x00000006000E0006},  // LoFi, K 1
-        {0x00E0D02000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000020004, 0x0000000000060000, 0x0000000000000004, 0x00000000000000F0, 0x00000006000C0000},  // LoFi, K above 1
-        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000001C, 0x0002000000000000, 0, 0x00000000000A00B0, 0x00000006000C0004},  // HiFi
+        {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000003C, 0x000200000006000C, 0x000000000000000C, 0, 0, 0x00000000000E0000, 0x00000000000A00F0},  // LoFi, K 1
+        {0x00E0D02000000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000020004, 0x0000000000060000, 0x0000000000000004, 0, 0, 0x00000000000C0000, 0x00000000000000F0},  // LoFi, K above 1
+        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000001C, 0x0002000000000000, 0, 0, 0, 0x0000000000040000, 0x00000000000A00B0},  // HiFi
     },
 };
-constexpr std::uint64_t llk_pack_mm_take_b[2][3][10] = {
+constexpr std::uint64_t llk_pack_mm_take_b[2][3][12] = {
     {  // datacopy family
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K above 1
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // HiFi
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K above 1
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // HiFi
     },
     {  // 32 bit input family
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0000000000080000},  // LoFi, K 1
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0000000000080000},  // LoFi, K above 1
-        {0, 0, 0, 0, 0, 0x0000000000080000, 0, 0, 0, 0x0000000000080000},  // HiFi
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K above 1
+        {0, 0, 0, 0, 0, 0x0000000000080000, 0, 0, 0, 0, 0, 0},  // HiFi
     },
 };
+
+// Set by the matmul inits on the pack thread: the masks are for blocks behind matmul math. Only matmul kernels write it, so the others fold the test away.
+[[maybe_unused]] static bool llk_pack_matmul_seen = false;
+inline void llk_pack_matmul_context() { llk_pack_matmul_seen = true; }
 
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32_t ntiles, const char (*table)[4][17], const bool next) {
@@ -614,12 +607,14 @@ inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32
     const char form = table[row][column][count];
     constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;
     constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));
+    constexpr std::uint32_t group_other = MATH_FIDELITY != MathFidelity::LoFi ? 5 : 4;
+    const std::uint32_t mask_group = (matmul_kt != 0 || llk_pack_matmul_seen) ? group : group_other;
     const std::uint32_t bit = column * 16 + count;
     char out = form;
-    if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) {
+    if (out == 'W' && ((llk_pack_mm_no_w[family][mask_group][row] >> bit) & 1) != 0) {
         out = 'B';
     }
-    if (out == 'B' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) {
+    if (out == 'B' && ((llk_pack_mm_no_block[family][mask_group][row] >> bit) & 1) != 0) {
         out = 'T';
     }
     if constexpr (matmul_kt != 0) {
