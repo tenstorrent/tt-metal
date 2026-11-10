@@ -557,6 +557,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # Outputs of dispatched steps nobody wants (a streamed round's rows past its first reject), read and
         # dropped ahead of the next read_decoded_output.
         self._stale_outputs = 0
+        # A streamed verify's outputs, read off the socket on a thread of their own (_spec_reader): one ticket per
+        # step dispatched, its output (or the read's exception) in _spec_outs, _spec_expected of them not yet taken.
+        self._spec_tickets: queue.Queue = queue.Queue()
+        self._spec_outs: queue.Queue = queue.Queue()
+        self._spec_expected = 0
+        self._spec_reader: Optional[threading.Thread] = None
         # The Rust host runtime (start_host_runtime), and its index of each trace variant.
         self._host = None
         self._host_variants: dict = {}
@@ -2531,30 +2537,47 @@ class DeepSeekV41Model(DeepSeekV4Model):
         sees exactly the rows released before it. Every step must be released and read eventually: its output
         stage waits on both.
 
-        The previous round's abandoned rows (:meth:`spec_discard_outputs`) are read off first. They are its
-        rejected tail, still in the output socket; dispatching this block on top of them overfills the pipeline
-        and wedges the host in the packet writes, which block on the Engram FIFO while the device waits for a
-        read that cannot come (see :meth:`_write_engram_rows`). Draining costs nothing: those rows are ahead
-        of this block in the replay queue, so it could not produce anything before they finish anyway.
+        The steps' outputs are read off the socket by a thread of its own (:meth:`_ensure_spec_reader`), so the
+        previous round's abandoned rows (:meth:`spec_discard_outputs`) need not be drained first: this block
+        follows them down the pipeline while they finish on the last stages. Were the dispatching thread also
+        the reader, this block on top of them would overfill the pipeline and wedge the host in the packet
+        writes, which block on the Engram FIFO while the device waits for a read that cannot come (see
+        :meth:`_write_engram_rows`).
         """
         if self._eager_decode:
             raise RuntimeError("a streamed verify replays the decode traces: build with traced decode")
-        if self._stale_outputs:
-            logger.info(
-                f"spec verify at {start}: reading off {self._stale_outputs} abandoned output(s) of the previous "
-                f"round before dispatching {len(tokens)} step(s)"
-            )
-            self.drain_stale_outputs()
+        if self._host is not None:
+            raise RuntimeError("the host runtime reads the outputs itself")
         tokens = list(tokens)
         positions = range(start, start + len(tokens))
         self.ensure_session_capacity(positions[-1])
+        self._ensure_spec_reader()
         self._spec_hold_writes = True
         try:
             self.replay_traced_ahead(positions, tokens)
         finally:
             self._spec_hold_writes = False
+        self._spec_expected += len(tokens)
+        for _ in tokens:
+            self._spec_tickets.put(True)
         for token, pos in zip(tokens, positions):
             self.write_step_packet(token, pos)
+
+    def _ensure_spec_reader(self) -> None:
+        """Start the daemon thread that reads one output off the socket per ticket :meth:`spec_verify_async` posts."""
+        if self._spec_reader is not None:
+            return
+
+        def _run() -> None:
+            for _ in iter(self._spec_tickets.get, None):
+                try:
+                    self._spec_outs.put(self._read_socket_output())
+                except BaseException as exc:  # re-raised on the caller's thread by _read_step_output
+                    self._spec_outs.put(exc)
+                    return
+
+        self._spec_reader = threading.Thread(target=_run, name="spec-reader", daemon=True)
+        self._spec_reader.start()
 
     def spec_release_writes(self, steps: int = 1) -> None:
         """Queue the drafter's receive of the next ``steps`` held rows (:meth:`spec_verify_async`)."""
@@ -2574,6 +2597,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "pos": self._session_pos.get(resident) if resident is not None else None,
             "held": self._spec_hold_writes,
             "stale": self._stale_outputs,
+            "unread": self._spec_expected,
             "packets": len(self._packet_sids),
             "replays": self._replay_queue.unfinished_tasks,
             "drafter": self.dspark is not None,
@@ -2595,6 +2619,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return self._read_step_output()
 
     def _read_step_output(self) -> torch.Tensor:
+        """The oldest unread step's output: off the streamed verify's reader while it has some, else the socket."""
+        if self._spec_expected:
+            self._spec_expected -= 1
+            out = self._spec_outs.get()
+            if isinstance(out, BaseException):
+                raise out
+            return out
+        return self._read_socket_output()
+
+    def _read_socket_output(self) -> torch.Tensor:
         if self._host is None:
             return super().read_decoded_output()
         out = torch.frombuffer(self._host.read_output(), dtype=self._out_torch_dtype)
@@ -2659,6 +2693,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         super()._wait_replays_dispatched()
 
     def shutdown(self) -> None:
+        reader, self._spec_reader = self._spec_reader, None
+        if reader is not None:
+            self._spec_tickets.put(None)
+            # A ticket whose step never ran leaves the reader parked on the socket for good.
+            reader.join(timeout=5.0)
         host, self._host = self._host, None
         if host is not None:
             host.close()
