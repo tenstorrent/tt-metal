@@ -640,3 +640,9 @@ Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
 **Consequence:** GDN_STEP_U1 is **required** for the u1 gate, not optional. u8 passes even with a fully exposed 18 µs AR.
 
 **STEP_U1 silicon budget (v0.7.3):** 48 GDN layers per pass. At 18 µs on-path AR, u1 has 0.26 ms margin, so the full u1 op (prefix + step) must be **≤26.4 µs on silicon**. At 12 µs AR the limit is ≤42 µs. The ~21 µs figure is a sim/zone estimate; with the 1.3-1.5× sim optimism seen on MK1, silicon could land at 27-31 µs, which is marginal at the top of the AR band.
+
+**§15 measured burst AR (v0.7.4, AR track, d26u02):** all 16 chunks released at t0, rot order. t0 → x ready on owners is **17.6 µs**, **≈20.8 µs with split-K delivery**. Index order is 19.1-19.8 µs, so rot order saves 1.5-2 µs and stays the default. Nothing hides behind the down stage.
+- Sensitivity stays **1:1 (0.128 ms per µs)**. The pass is chain-bound, not DRAM-bound: the non-AR chain is ~167 µs/layer, while DRAM at peak BW is ~107 µs/layer. The writer already prefetches all of layer L+1's weights during layer L's stall. Deeper prefetch (L+2) would not shorten the chain, and there is no L1 for it.
+- At 20.8 µs: u8 **13.36 ms** ✓ (0.34 margin); u1 + STEP_U1 (21 µs/op) **9.50 ms ✗**.
+- **Plan:** the AR track builds a chain RS: two 1-hop chains per chunk (4 + 3 devices) with partial-sum forwarding, so link bytes per direction drop from ~200 KB to ~75 KB. The estimate is RS 6-7 + reduce 1 + AG 4 + delivery 3.2 ≈ **15 µs**. Target **≤15 µs, ideally ≤14**, including delivery. Possible hybrid: chain for far devices, direct sends for near ones.
+- Equally valuable: every µs cut from the non-AR chain counts 1:1, e.g. STEP_U1 and attention qkv/wo.
