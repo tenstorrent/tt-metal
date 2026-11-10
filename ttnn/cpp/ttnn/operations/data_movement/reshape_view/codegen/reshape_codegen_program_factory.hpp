@@ -37,7 +37,16 @@ struct ReshapeCodegenInputs {
     Tensor input;
 };
 
+// Row-major stick and slab programs.
 struct ReshapeCodegenRMProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ReshapeCodegenParams& operation_attributes,
+        const ReshapeCodegenInputs& tensor_args,
+        Tensor& tensor_return_value);
+};
+
+// LCM TILE program: the compute engine untilizes and re-tilizes each chunk, so it needs no device-side table.
+struct ReshapeCodegenLcmProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ReshapeCodegenParams& operation_attributes,
         const ReshapeCodegenInputs& tensor_args,
@@ -54,8 +63,8 @@ struct ReshapeCodegenTileRowsProgramFactory {
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
-// Segment-map TILE program, for widths that are not multiples of 32. Its map is a device tensor parked on the
-// workload as the tile-rows table is.
+// Segment-map TILE program, for widths that are not multiples of 32, and the fallback for tile-rows and LCM plans
+// that do not fit live L1. Its map is a device tensor parked on the workload as the tile-rows table is.
 struct ReshapeCodegenTileMappedProgramFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const ReshapeCodegenParams& operation_attributes,

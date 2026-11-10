@@ -29,6 +29,11 @@ namespace metal_exp = tt::tt_metal::experimental;
 
 namespace {
 constexpr uint32_t kRemoteCBId = 31;
+
+// Pipe i's parameter.
+metal_exp::PrefetcherPipeParamName pipe_param_name(size_t i) {
+    return metal_exp::PrefetcherPipeParamName{fmt::format("pipe_{}", i)};
+}
 }  // namespace
 
 void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_miss(
@@ -66,10 +71,11 @@ DramPrefetcherConsumerDeviceOperation::create_output_tensors(const operation_att
 
 ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
-    // Hash the identity of whichever target is set: the program bakes in a target's config and ring
-    // addresses, so a same-geometry replacement must miss this cache. A pipe reflects its own
-    // identity, so the pipe list hashes as the pipes themselves; the unset target contributes an
-    // empty list, which is what keeps the two transports from colliding.
+    // Hash whichever target is set by what the program bakes in from it: its config and ring addresses
+    // and its geometry. A pipe reflects exactly that, so a pipe re-carved in place of one hits that
+    // pipe's program, which override_runtime_arguments rebinds; a GCB has no rebind, so it also hashes
+    // its addresses. The unset target contributes an empty list, which is what keeps the two transports
+    // from colliding.
     for (const auto& pipe : attrs.prefetcher_pipes) {
         TT_FATAL(pipe != nullptr, "prefetcher_pipes contains a null pipe");
     }
@@ -105,7 +111,7 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
         std::vector<metal_exp::PrefetcherPipeParameter> parameters;
         metal_exp::ProgramRunArgs run_args;
         for (size_t i = 0; i < pipes.size(); ++i) {
-            metal_exp::PrefetcherPipeParamName name{fmt::format("pipe_{}", i)};
+            const metal_exp::PrefetcherPipeParamName name = pipe_param_name(i);
             names.push_back(name);
             parameters.push_back(
                 {.unique_id = name,
@@ -161,11 +167,23 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
 }
 
 void DramPrefetcherConsumerDeviceOperation::ProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& /*cached_workload*/,
-    const operation_attributes_t& /*attrs*/,
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/) {
-    // Nothing to override — all args are compile-time.
+    // Every other arg is compile-time. The hit may bring pipes re-carved in place of the program's, and
+    // supplying the pipes rebinds the program to them (a no-op for the pipes it already holds).
+    if (operation_attributes.prefetcher_pipes.empty()) {
+        return;
+    }
+    metal_exp::ProgramRunArgs run_args;
+    for (size_t i = 0; i < operation_attributes.prefetcher_pipes.size(); ++i) {
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            pipe_param_name(i), metal_exp::PrefetcherPipeArgument{*operation_attributes.prefetcher_pipes[i]});
+    }
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        metal_exp::UpdateProgramRunArgs(program, run_args);
+    }
 }
 
 void test_dram_prefetcher_consumer(
