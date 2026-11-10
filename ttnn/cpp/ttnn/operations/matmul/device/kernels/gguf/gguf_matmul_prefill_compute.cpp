@@ -10,10 +10,10 @@
 // (block-float codes: tiles 2 and 1), then packed. K split (krole): band 1 packs its sums to c_17 for the writer to
 // send, band 0 adds the partners' (c_18); both in units of ur rows x the planned N tiles, the rows of each N tile
 // together (subblocks of ur x 1). Compile args: format id, mc, kb, M chunks, ur (sh divides it), N passes (the core's N
-// tiles in passes of up to the width below; a pass without any only consumes the input). Runtime args: N tiles of this
-// core (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that
-// width, so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add
-// them), K blocks.
+// tiles in passes of up to the width below; a pass without any only consumes the input), c_16's pages. Runtime args: N
+// tiles of this core (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole
+// blocks of that width, so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send
+// sums, 2: add them), K blocks.
 
 #include <cstdint>
 
@@ -38,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t mchunks = get_compile_time_arg_val(3);
     constexpr uint32_t ur = get_compile_time_arg_val(4);  // input rows per unit (c_1 holds units of ur x kb tiles)
     constexpr uint32_t passes = get_compile_time_arg_val(5);
+    constexpr uint32_t out_pages = get_compile_time_arg_val(6);
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
     constexpr bool group_step = gguf::group_scales<fmt>;
     constexpr uint32_t block_groups = kb / L.group_tiles;
@@ -61,6 +62,7 @@ void kernel_main() {
         return;
     }
     const uint32_t sub = sh * sw, w_tiles = kb * nca, acc_ring = mc * nca;
+    uint32_t out_page = 0;  // krole 2: c_16's write page
 
     compute_kernel_hw_startup(cb_page, cb_in0, cb_w);
     uint32_t srca = cb_page;  // the CB SrcA is configured for
@@ -172,10 +174,12 @@ void kernel_main() {
                         srca_to(cb_acc);
                         cb_wait_front(cb_acc, ur * nc);
                         if (krole == 2) {
-                            // Own sums + the partner's, in fp32 on the SFPU, two tiles at a time.
+                            // Own sums + the partner's, in fp32 on the SFPU, two tiles at a time; one where a pair
+                            // would cross the end of c_16 (a unit of an odd number of tiles shifts the pairs).
                             cb_wait_front(cb_recv, ur * nca);
-                            for (uint32_t i = 0; i < ur * nc; i += 2) {
-                                const uint32_t n2 = ur * nc - i < 2 ? 1 : 2;
+                            for (uint32_t i = 0, n2 = 0; i < ur * nc; i += n2) {
+                                n2 = ur * nc - i < 2 || out_page + 1 == out_pages ? 1 : 2;
+                                out_page = out_page + n2 == out_pages ? 0 : out_page + n2;
                                 tile_regs_acquire();
                                 copy_init(cb_acc);
                                 for (uint32_t t = 0; t < n2; t++) {
