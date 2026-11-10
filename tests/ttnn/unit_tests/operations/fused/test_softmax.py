@@ -4,13 +4,12 @@
 
 import pytest
 import os
-from itertools import product
 
 import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
+from tests.ttnn.utils_for_testing import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tt_py_test_utils_common.utility_functions import torch_random
 
@@ -285,11 +284,17 @@ _SOFTMAX_SHARDED_STABLE_MERGE_GATE = {
 @pytest.mark.parametrize("h", [384])
 @pytest.mark.parametrize("w", [384])
 @pytest.mark.parametrize(
-    "skip_scale_mask, math_approx, fp32_acc_en, in_dtype",
-    merge_gate_subset(
-        product([True, False], [True, False], [True, False], [ttnn.bfloat8_b, ttnn.bfloat16]),
-        keep=_SOFTMAX_SHARDED_STABLE_MERGE_GATE,
-    ),
+    *merge_gate_subset(
+        {
+            "in_dtype": [ttnn.bfloat8_b, ttnn.bfloat16],
+            "fp32_acc_en": [True, False],
+            "math_approx": [True, False],
+            "skip_scale_mask": [True, False],
+        },
+        keep=lambda skip_scale_mask, math_approx, fp32_acc_en, in_dtype: (
+            (skip_scale_mask, math_approx, fp32_acc_en, in_dtype) in _SOFTMAX_SHARDED_STABLE_MERGE_GATE
+        ),
+    )
 )
 def test_softmax_sharded_stable_with_program_cache(
     device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
@@ -927,16 +932,17 @@ SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES = [
 
 # Unpadded rows with fp32 acc and numeric stable on, plus causal Wt=13 with both off.
 @pytest.mark.parametrize(
-    "batch, causal, Wt, pad, fp32_acc_en, numeric_stable",
-    merge_gate_subset(
-        (
-            (*case, fp32_acc_en, numeric_stable)
-            for numeric_stable, fp32_acc_en, case in product(
-                [True, False], [True, False], SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES
-            )
+    *merge_gate_subset(
+        {
+            "numeric_stable": [True, False],
+            "fp32_acc_en": [True, False],
+            "batch, causal, Wt, pad": SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_CASES,
+        },
+        keep=lambda batch, causal, Wt, pad, fp32_acc_en, numeric_stable: (
+            ((batch, causal, Wt, pad) in _SCALE_MASK_UNPADDED_CASES and fp32_acc_en and numeric_stable)
+            or ((batch, causal, Wt, pad, fp32_acc_en, numeric_stable) == (16, True, 13, 0, False, False))
         ),
-        keep={(*case, True, True) for case in _SCALE_MASK_UNPADDED_CASES} | {(16, True, 13, 0, False, False)},
-    ),
+    )
 )
 def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, fp32_acc_en, numeric_stable):
     """Issue #39050: the fused scale/mask path streams the attention mask (c_4) in blocks of the

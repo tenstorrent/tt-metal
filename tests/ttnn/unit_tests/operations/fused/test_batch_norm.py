@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_results_batch_norm,
 )
 from itertools import product
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
+from tests.ttnn.utils_for_testing import merge_gate_subset
 from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -475,25 +475,22 @@ def test_batch_norm_output_Default(input_shapes, device):
 
 
 # Shape [1, 8, 24, 42], training with weight and bias, bf16/bf16 and fp32/fp32.
-_BATCH_NORM_COMPUTE_MERGE_GATE = {
-    (torch.Size([1, 8, 24, 42]), True, True, True, "bfloat16", "bfloat16"),
-    (torch.Size([1, 8, 24, 42]), True, True, True, "float32", "float32"),
-}
-
-
 @pytest.mark.parametrize(
-    "input_shapes, training, weight, bias, input_dtype, param_dtype",
-    merge_gate_subset(
-        (
-            (shape, *affine, *dtypes)
-            for shape, affine, dtypes in product(
-                [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
-                [(True, True, True), (True, False, False), (False, True, True), (False, False, False)],
-                [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
-            )
+    *merge_gate_subset(
+        {
+            "input_dtype, param_dtype": [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
+            "training, weight, bias": [
+                (True, True, True),
+                (True, False, False),
+                (False, True, True),
+                (False, False, False),
+            ],
+            "input_shapes": [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
+        },
+        keep=lambda input_shapes, training, weight, bias, input_dtype, param_dtype: (
+            input_shapes == torch.Size([1, 8, 24, 42]) and training and weight and bias and input_dtype == param_dtype
         ),
-        keep=_BATCH_NORM_COMPUTE_MERGE_GATE,
-    ),
+    )
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
     N, H, W, C = input_shapes
@@ -1129,12 +1126,19 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
         )
 
 
+# Gate the var-only row, with fp32 acc on and off.
 @pytest.mark.parametrize(
-    "check_mean, check_var",
-    # Gate the var-only row, with fp32 acc on and off.
-    merge_gate_subset([(True, False), (False, True)], keep=[(False, True)]),
+    *merge_gate_subset(
+        {
+            "fp32_dest_acc_en": [False, True],
+            "check_mean, check_var": [
+                (True, False),  # mean-only: batch_var must still be drained
+                (False, True),  # var-only: batch_mean must still be drained (FPU)
+            ],
+        },
+        keep=lambda check_mean, check_var, **_: check_var and not check_mean,
+    )
 )
-@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_acc_en, device):
     """Regression for CB drain hangs when a running stat is absent.
 
@@ -1157,9 +1161,11 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi
-        if not fp32_dest_acc_en
-        else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4),
+        math_fidelity=(
+            ttnn.MathFidelity.LoFi
+            if not fp32_dest_acc_en
+            else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4)
+        ),
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
