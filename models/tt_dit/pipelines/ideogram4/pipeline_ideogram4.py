@@ -370,7 +370,7 @@ class Ideogram4Pipeline(Pipeline):
 
     def __init__(self, *, device: ttnn.MeshDevice, config: Ideogram4PipelineConfig, run_warmup: bool = True) -> None:
         super().__init__(offload_weights=False, trace=config.trace)
-        if run_warmup and config.resolutions:
+        if run_warmup and config.resolutions and self.trace:
             # Before loading the weights, so a server with too small a trace region fails fast.
             _check_trace_region(device, device.shape, config.resolutions)
         self._config = config
@@ -856,14 +856,18 @@ class Ideogram4Pipeline(Pipeline):
         Afterwards a request at a warmed size compiles nothing, captures nothing and keeps no new
         device allocation; a request at any other size raises. Calling it again re-captures every
         trace, adding the new sizes.
+
+        A pipeline built with ``trace=False`` runs only the first phase: it replays no trace, so it
+        captures none and needs no trace region.
         """
         if sizes is None:
             sizes = [(self._config.width, self._config.height)]
         sizes = [(int(w), int(h)) for w, h in sizes]
         for w, h in sizes:
             self._check_size(w, h)
-        # Every warmed size's trace is re-captured, not only the new ones.
-        _check_trace_region(self.mesh_device, self.mesh_device.shape, [*self._sizes, *sizes])
+        if self.trace:
+            # Every warmed size's trace is re-captured, not only the new ones.
+            _check_trace_region(self.mesh_device, self.mesh_device.shape, [*self._sizes, *sizes])
 
         # No trace may be live while phase 1 allocates.
         self.release_traces()
@@ -885,7 +889,7 @@ class Ideogram4Pipeline(Pipeline):
             self.decode_stage.decode(st.z, grid_h=st.grid_h, grid_w=st.grid_w)
             ttnn.synchronize_device(self.mesh_device)
 
-        for size, st in self._sizes.items():
+        for size, st in self._sizes.items() if self.trace else ():
             _dq_log.info(f"Ideogram4 warmup: capturing the step trace at {size[0]}x{size[1]}")
             sb = self._seq_buffers[st.padded_len]
             st.tracer = Tracer(self._step_fn(st, sb), device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
