@@ -801,7 +801,7 @@ def setup_bench(dev, MESH, mesh_identity):
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (GYF - GY)]
         _gr = _gpr(0, fsplit - 1) + _gpr(fsplit, GXF - 1)
         assert _gr[4] + _gr[9] == len(GDNC), _gr
-        MKDEF = MKDEF + [('MKA_GDN24', '1'), ('MKA_GDN_INREADY', f"{GDN_SA['in_ready']}u"),
+        MKDEF = MKDEF + [('MKA_GDN24', '1'), ('MKA_GDN_INREADY', f"{GDN_SA['in_ready']}u"), ('MKA_GDN_ATTNKV', f"{GDN_SA['attn_kv']}u"),
                          ('MKA_GDN_RECTS', '{{' + ','.join(map(str, _gr[:5])) + '},{' + ','.join(map(str, _gr[5:])) + '}}')]
         try:
             from models.demos.blackhole.qwen36.tt.megakernel.engine.gdn_role import gdn_role as _gdn_hook
