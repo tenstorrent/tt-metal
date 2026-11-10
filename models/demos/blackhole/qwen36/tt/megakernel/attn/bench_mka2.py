@@ -515,10 +515,17 @@ if REAL_AR:
     from models.demos.blackhole.qwen36.tt.megakernel.ar_phase import ArPhase
     AR_XF = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(2)]
     AR_XCNT = ttnn.create_global_semaphore(dev, kgrid, 0)
+    # MK_AR_DLVR=1 (default, spec v1.21): x delivery on the owner READER (NOC1) via a local handoff word
+    AR_DLVR = os.environ.get('MK_AR_DLVR', '1') == '1'
+    AR_DLV = ttnn.create_global_semaphore(dev, O_CRS, 0) if AR_DLVR else None
+    if AR_DLVR: MKDEF = MKDEF + [('MK_AR_DLV', str(ttnn.get_global_semaphore_address(AR_DLV)))]
     MKDEF = MKDEF + [('MK_AR_XF0', str(ttnn.get_global_semaphore_address(AR_XF[0]))), ('MK_AR_XF1', str(ttnn.get_global_semaphore_address(AR_XF[1]))),
                      ('MK_AR_XCNT', str(ttnn.get_global_semaphore_address(AR_XCNT)))]
     # own_cb (R = 32): no own slot in the AR's RS slot CB; the reduce reads this device's partial from CB_VXO (CB 4)
-    AR = ArPhase(dev, n_ar=NL, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None,
+    # AR CB ids: v12 STREAM-only ids (free on the owners and the AR-only senders) so the program's max CB index stays 44
+    # (each index above it costs every core 16 B of kernel config buffer); MK_AR_CBHI=1: the 50..60 block
+    _arcb = None if os.environ.get('MK_AR_CBHI', '0') == '1' else [34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 30]
+    AR = ArPhase(dev, n_ar=NL, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None, cb_ids=_arcb, deliver_ext=AR_DLVR,
                  x_targets=dict(xk=v_xk.buffer_address(), xpk=v_xpk.buffer_address(), xflag=[ttnn.get_global_semaphore_address(g) for g in AR_XF], rstd=0))
     AR_PT = AR.pt
     _ow = AR.owners_grid()
@@ -531,6 +538,7 @@ if REAL_AR:
     # owner sum with MK_OWNER_RESID=0), so the stand-in x delivery feeds each MLP the real residual stream and no extra
     # lockstep L1 is spent (the owners' CB region is ~50 KB short otherwise); R < 32: a packed residual of its own
     ar_out = v_x0 if AR_PT == 10 else ttnn.from_torch(torch.zeros(TILE, 16 * AR_PT * TILE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_arw(AR_PT))
+    if AR_DLVR and AR_PT != 10: MKDEF = MKDEF + [('MK_AR_OUT', str(ar_out.buffer_address()))]   # reader's packed source
     AR_SEQ = AR_PT == 10   # the MLP input is the evolving residual: sequential golds (x_{L+1} = x_L + ring * mlp_L(x_L))
     _xres = xb.clone()
     _snd = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c_), ttnn.CoreCoord(*c_)) for c_ in ((10, 8), (11, 8), (10, 9), (11, 9))])
@@ -551,9 +559,9 @@ def q_rargs(fi):
     ro = QROLE.get(fi, (0,))[0]
     return [ro, wq_all.buffer_address(), (q_slot[fi] * banks + q_bank[fi]) if ro else 0, PQL] + wo_rargs(fi)
 RWO = ('MKA_RWO', '1') in MKDEF
-# MK_REAL_AR: the AR's CB ids (50-55) grow every core's CB-config block in the kernel config buffer; the u8 STREAM program
-# was then 192 B past 70656 B with the compute zones in
-if (RWO or ('MK_REAL_AR', '1') in MKDEF) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
+# MK_REAL_AR with the 50..60 CB ids (MK_AR_CBHI=1): they grow every core's CB-config block (16 B per index up to the max);
+# the u8 STREAM program was then 192 B past 70656 B with the compute zones in (default: compact ids, no LEAN_C needed)
+if (RWO or (('MK_REAL_AR', '1') in MKDEF and os.environ.get('MK_AR_CBHI', '0') == '1')) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
 WOT, WOP, WOB = {}, {}, {}
 if RWO:
     assert RQKV and ('MKA_PQGDN', '1') in MKDEF, "MKA_RWO needs MKA_RQKV and MKA_PQGDN (the ext ring holds Wo after qkv)"
@@ -742,7 +750,7 @@ def build(out, coord=None):
                                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
     if RS:
         _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
-        _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon']))], arp['comp_defines']) if REAL_AR else ((), ())
+        _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon']))] + ([('MKAR_DLV_SIGNAL', str(ttnn.get_global_semaphore_address(AR_DLV)))] if AR_DLVR else []), arp['comp_defines']) if REAL_AR else ((), ())
         ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard)
         if REAL_AR: ks = ks + arp['sender_kernels']
     else:

@@ -156,3 +156,11 @@ next program cannot start before its own previous one ends).
   The residual stream is v12's `v_x0` (unused with MK_OWNER_RESID=0). Owner CB budget is otherwise ~50 KB short.
 - CB ids 50-55 grow every core's CB-config block; with the compute zones the u8 STREAM program was 192 B over the
   70656 B kernel config buffer, so MK_REAL_AR turns on MKA_LEAN_C.
+- v1.1 (spec v1.21): x delivery moved to the owner READER on NOC1 (`MKAR_DLV_SIGNAL`: AR_RECV posts `MK_AR_DLV` = L + 1
+  once the output chunk is complete; mka2_reader.cpp `v12_ardlv` multicasts it west inside the row, sets the row flag
+  and counts on the Q root); the receiver's role block drops its delivery tail (`deliver_ext`). CB ids compacted to
+  v12 STREAM-only ids 30/34-41/43/44 (`cb_ids`): the local CB-config block of every core is sized by the program's max
+  CB index (16 B per index, dispatch.cpp finalize_cbs), so MKA_LEAN_C is no longer needed (`MK_AR_CBHI=1`: old ids).
+- The pre-attention MLP AR (40-54 us vs ~21) is the next attention layer's MLP-slice pump (19.4 MB) sharing the NoC:
+  the all-gather landing stretches, not the delivery. Rate-limiting the pump (`MK_AR_PUMPGAP`) or holding it
+  (`MK_AR_NOPUMP`) restores ~21 us but the attention layer then loses 35-80 us; full-rate pumping is best.

@@ -232,8 +232,10 @@ void kernel_main() {
                 const uint32_t xy = get_arg_val<uint32_t>(ar_rdy + 2 * i);
                 noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, get_arg_val<uint32_t>(ar_rdy + 2 * i + 1)), 1);
             }
-            ar.iter(L);   // the gather role returns after the AG wait + x delivery; CB_VXO is read by then (RS done)
+            ar.iter(L);   // the gather role returns after the AG wait; CB_VXO is read by then (RS done)
+#if !defined(MKAR_DLV_SIGNAL)
             noc_semaphore_inc(get_noc_addr(qr_x, qr_y, MK_AR_XCNT), 1);   // x of layer L + 1 delivered to this K-row
+#endif   // (MKAR_DLV_SIGNAL: the reader delivers on NOC1 and counts it, mka2_reader.cpp v12_ardlv)
         }
 #endif
         cb_pop_front(CB_VXO, V_OT);
@@ -698,6 +700,13 @@ void kernel_main() {
             DeviceZoneScopedN("W-ARWAIT");
 #if defined(MK_AR_NOPUMP)   // the next attention layer's MLP-slice pump waits for the AR (it slows the AG / x delivery)
             do { invalidate_l1_cache(); } while (*l1w(MK_AR_XF0) <= L || *l1w(MK_AR_XF1) <= L);
+#elif defined(MK_AR_PUMPGAP)   // rate-limited pump: at most one 16 KB piece per MK_AR_PUMPGAP cycles while the AR runs
+            uint32_t tp = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - (MK_AR_PUMPGAP);
+            do {
+                invalidate_l1_cache();
+                const uint32_t tn = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                if ((uint32_t)(tn - tp) >= (uint32_t)(MK_AR_PUMPGAP)) { v_pump(); tp = tn; }
+            } while (*l1w(MK_AR_XF0) <= L || *l1w(MK_AR_XF1) <= L);
 #else
             do { invalidate_l1_cache(); v_pump(); } while (*l1w(MK_AR_XF0) <= L || *l1w(MK_AR_XF1) <= L);
 #endif
@@ -780,7 +789,11 @@ void kernel_main() {
 #if defined(MKA_ROLE_EXT)
     if (ar_on) ar.fini();
 #endif
+#if defined(MKAR_DLV_SIGNAL)
+    if (vrole == 1) { *l1w(MK_AR_XF0) = 0; *l1w(MK_AR_XF1) = 0; }   // owners: the reader resets its own copy
+#else
     if (vrole) { *l1w(MK_AR_XF0) = 0; *l1w(MK_AR_XF1) = 0; }
+#endif
     if (is_qroot) { noc_semaphore_wait_min(l1w(MK_AR_XCNT), 16 * NL); *l1w(MK_AR_XCNT) = 0; }
 #endif
 #endif

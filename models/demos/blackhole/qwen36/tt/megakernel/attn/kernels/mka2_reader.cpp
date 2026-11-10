@@ -135,6 +135,31 @@ void kernel_main() {
         v_mcast_word(vg[VG_XA + voslot], L + 1, vorc, 1);
         noc_async_write_barrier();
     };
+#if defined(MK_REAL_AR) && defined(MK_AR_DLV)
+    // real MLP AR, x delivery on NOC1 (spec v1.21): the owner writer's AR_RECV posts MK_AR_DLV = L + 1 once the AR output
+    // (the residual chunk: v_x0 = CB_VX0 at R = 32, MK_AR_OUT packed at R < 32) is complete; this RISC multicasts it into
+    // the K-row slot (west inside the row, no torus wrap: the BRISC/NOC0 path ran 40-54 us under the next attention
+    // layer's MLP-slice pump), sets the row's AR flag and counts the delivery on the Q root
+    auto v12_ardlv = [&](uint32_t L) {
+        if (vrole != 2) return;
+        { DeviceZoneScopedN("R-ARDLVW"); noc_semaphore_wait_min(vw(MK_AR_DLV), L + 1); }
+        DeviceZoneScopedN("R-ARDLV");
+#if defined(MK_AR_OUT)
+        const uint32_t sp = MK_AR_OUT;
+#else
+        const uint32_t sp = get_read_ptr(CB_VX0);
+#endif
+        for (uint32_t i = 0; i < 2; ++i)
+            if (vorc[i][4]) noc_async_write_multicast(sp, v_mc_addr(vorc[i], vR >= 32 ? voxdst : voxpk, 1), vR >= 32 ? V_OT * V_PTB : 2 * V_OT * vR * V_ROW_B, vorc[i][4], false);
+        noc_async_writes_flushed();
+        v_mcast_word(voslot ? MK_AR_XF1 : MK_AR_XF0, L + 1, vorc, 1);
+        noc_async_write_barrier();
+        noc_semaphore_inc(get_noc_addr(qr_x, qr_y, MK_AR_XCNT), 1);
+    };
+#define V12_ARDLV(L) v12_ardlv(L)
+#else
+#define V12_ARDLV(L) do {} while (0)
+#endif
 #if !defined(MK_NOBUSYGATE)
     // spec v0.8.9 busy gate: the non-owner ext cores hold their PQGDN chunks while the MLP owners are busy (odd)
     // owner cores never gate on their own word: this RISC delivers the owner's x after its PQ chunks, so a self-gate
@@ -209,6 +234,7 @@ void kernel_main() {
             }
 #if defined(MK_V12)
             v12_ox(L);
+            V12_ARDLV(L);
 #endif
             continue;
         }
@@ -216,6 +242,7 @@ void kernel_main() {
         if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers
 #if defined(MK_V12)
             v12_ox(L);
+            V12_ARDLV(L);
 #endif
             continue;
         }
@@ -488,6 +515,7 @@ void kernel_main() {
 #endif
 #if defined(MK_V12)
         v12_ox(L);   // owners, attention-type layers (after this core's SDPA work)
+        V12_ARDLV(L);
         if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = L + 1;
@@ -524,5 +552,9 @@ void kernel_main() {
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
 #if defined(MKA_RQKV)
     if (qrole == QR_EXT && PQ_WS) *l1w(gs[GS_PQH]) = 0;   // the writer's last set (NL - 2) preceded our last wait
+#endif
+#if defined(MK_REAL_AR) && defined(MK_AR_DLV)
+    // device-local words: this RISC awaited MK_AR_DLV = NL (the writer's last post) and wrote the owner's own XF copy last
+    if (vrole == 2) { *vw(MK_AR_DLV) = 0; *vw(MK_AR_XF0) = 0; *vw(MK_AR_XF1) = 0; }
 #endif
 }

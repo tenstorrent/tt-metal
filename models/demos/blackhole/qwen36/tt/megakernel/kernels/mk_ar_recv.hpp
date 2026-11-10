@@ -11,6 +11,8 @@
 //   MKAR_SEM_AG_READY, MKAR_SEM_DONE, MKAR_SEM_READY   (program-semaphore ids, or global-semaphore addresses with MK_PS_GSEM)
 //   MKAR_PROG, MKAR_ROWS, MKAR_DELIVER, MKAR_STATS, MKAR_SRED, MKAR_AGD, MKAR_INPK
 //   MKAR_CB_PART, MKAR_CB_SCALER, MKAR_CB_STAGE      Sum(x^2) CBs (STATS)
+//   MKAR_DLV_SIGNAL (engine): L1 address of a local word; instead of delivering x itself, post it = it + 1 when the
+//     output chunk is complete (the engine's owner reader multicasts it on NOC1)
 //   MKAR_ALL_RT: 1 = the "common" block is read from the runtime args at cbase (engine), 0 = from the common args
 //   MKAR_SEM_BASE (with MK_PS_GSEM, v0.9.14): uniform L1 address of a persistent per-core word holding how many RS / AG
 //     arrival increments earlier programs consumed. The arrival semaphore is then NEVER reset: trace replays are not
@@ -206,7 +208,11 @@ struct Recv {
             cb_out.push_back(MKAR_CHUNK_TILES);
             if constexpr (MKAR_DELIVER != 0) {
                 cb_out.wait_front(MKAR_CHUNK_TILES);
+#if defined(MKAR_DLV_SIGNAL)
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_DLV_SIGNAL) = it + 1;   // another RISC delivers
+#else
                 deliver_x(cb_out.get_read_ptr(), tail_base);
+#endif
             }
             if constexpr (MKAR_STATS) {
                 // DONE only after compute has taken Sum(x^2) from this chunk: DONE releases the next RS, and the next
@@ -303,7 +309,11 @@ struct Recv {
             noc_semaphore_inc(get_noc_addr(sender_xy >> 16, sender_xy & 0xFFFF, MK_PS_SEM(MKAR_SEM_AG_READY)), 1);
         }
         if constexpr (MKAR_DELIVER != 0) {
+#if defined(MKAR_DLV_SIGNAL)
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_DLV_SIGNAL) = it + 1;   // another RISC delivers
+#else
             deliver_x(cb_out.get_read_ptr(), tail_base);
+#endif
         }
         signal_done();
         if constexpr (MKAR_STATS) {

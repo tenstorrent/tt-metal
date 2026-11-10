@@ -55,7 +55,8 @@ def _env(**kv):
 class ArPhase(OneShotARP):
     CB_BASE = 50
 
-    def __init__(self, mesh_device, n_ar, rows=0, stats=True, deliver=None, x_targets=None, release_delta_ns=1, own_cb=None):
+    def __init__(self, mesh_device, n_ar, rows=0, stats=True, deliver=None, x_targets=None, release_delta_ns=1, own_cb=None,
+                 cb_ids=None, deliver_ext=False):
         """n_ar: all-reduces per pass (2 per layer: attention + MLP). rows: R (0 = full 32 rows; 4 / 8 / 16 packed).
         deliver: 1 = tile layout into CB_X, 2 = packed stream (default: 2 if rows else 1). x_targets: dict(xk=, xpk=,
         xflag=[slot0, slot1], rstd=) engine buffer / global-semaphore addresses (default: this object's own test buffers).
@@ -69,9 +70,19 @@ class ArPhase(OneShotARP):
         # (ring - 1 slots, -20 KB on the owners) and the compute reads the own partial in place
         self.own_cb = own_cb if not rows else None
         self.noown = self.own_cb is not None
-        self.cbids = (b, b + 1, b + 2, b + 3, b + 4, b + 5, b + 6)  # RS, RED, OUT, HDR, RES, AG, OUTQ
-        self.cb_stage, self.cb_sq, self.cb_part, self.cb_scaler = b + 7, b + 8, b + 9, b + 10
+        # CB ids (RS, RED, OUT, HDR, RES, AG, OUTQ, stage, sq, part, scaler). The local CB-config block of EVERY core of
+        # the program is sized by the highest CB index used anywhere (dispatch.cpp finalize_cbs: 16 B per index), so ids
+        # >= 45 cost the STREAM cores too (ids 50-55 put the u8 STREAM program 192 B over the kernel config buffer).
+        # cb_ids=None: the CB_BASE block (50..60, standalone tests); the engine passes ids that are free on the owner /
+        # sender cores and <= its own max (bench_mka2.py: the v12 STREAM-only ids).
+        ids = list(cb_ids) if cb_ids is not None else [b + i for i in range(11)]
+        assert len(ids) == 11 and len(set(ids)) == 11
+        self.cbids = tuple(ids[:7])  # RS, RED, OUT, HDR, RES, AG, OUTQ
+        self.cb_stage, self.cb_sq, self.cb_part, self.cb_scaler = ids[7:]
         self.n_ar = n_ar
+        # deliver_ext (engine, MKAR_DLV_SIGNAL): another RISC delivers x, so the receiver's role block drops its
+        # delivery tail (14 words; the runtime-arg region is sized by the largest core of the program)
+        self.deliver_ext = deliver_ext
         self._assemble = os.environ.get("MK_PS_ENGINE", "0") == "1"  # test: build the program from the engine parts
         if x_targets is not None and self.deliver_mode:   # (MK_PS_EXTX: the base set no test deliver)
             self._xt = x_targets
@@ -110,8 +121,10 @@ class ArPhase(OneShotARP):
             comp_defines += [("MKAR_NOOWN", "1"), ("MKAR_CB_OWN", str(self.own_cb))]
         common = list(recv.common_runtime_args)
         recv_args, comp_args, ready = {}, {}, {}
+        ntail = len(self.deliver(0)) if (self.deliver_ext and self.deliver and not self.stats) else 0
         for c in ttnn.corerange_to_cores(self.owners_grid(), row_wise=True):
-            recv_args[(c.x, c.y)] = common + list(recv.runtime_args[c.x][c.y])
+            ra = list(recv.runtime_args[c.x][c.y])
+            recv_args[(c.x, c.y)] = common + (ra[:len(ra) - ntail] if ntail else ra)
             comp_args[(c.x, c.y)] = list(comp.runtime_args[c.x][c.y])
         prod = ks[4] if len(ks) > 4 else None  # synthetic producer: its args are the engine producer's READY targets
         if prod is not None:
