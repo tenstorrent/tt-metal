@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import torch
 
-from models.demos.muse_glimmer_30b.tt import generator_vllm as gv
-from models.demos.muse_glimmer_30b.tt.generator_vllm import MuseGlimmerForConditionalGeneration, prefill_buckets
+from models.demos.muse_glimmer_30b.tt import generator_vllm_base as gv
+from models.demos.muse_glimmer_30b.tt.generator_vllm_base import MuseGlimmerForConditionalGeneration, prefill_buckets
 from models.demos.muse_glimmer_30b.tt.model import DECODE_B_PAD
 
 

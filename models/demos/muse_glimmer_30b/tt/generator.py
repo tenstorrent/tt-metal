@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.muse_glimmer_30b.tt.sampling import lane_seeds, normalize_sampling
 
 
 class MuseGlimmerGenerator:
@@ -46,7 +47,14 @@ class MuseGlimmerGenerator:
     def global_batch_size(self) -> int:
         return self.dp * self.B
 
+    def _release_traces_for_new_prefill(self, prompts):
+        """A prefill of a new length must not run while a decode trace exists (see MuseGlimmerModel.prefill_is_new)."""
+        if self.trace_ids and any(self.models[u // self.B].prefill_is_new(len(p)) for u, p in enumerate(prompts)):
+            logger.info("new prefill length: releasing decode traces (recaptured on the next decode step)")
+            self.release_traces()
+
     def prefill(self, prompts: list[list[int]]) -> torch.Tensor:
+        self._release_traces_for_new_prefill(prompts)
         assert len(prompts) <= self.global_batch_size
         self.page_table_dirty = True
         out = torch.zeros(len(prompts), self.vocab_size, dtype=torch.float32)
@@ -59,6 +67,7 @@ class MuseGlimmerGenerator:
 
     def prefill_tokens(self, prompts: list[list[int]], sampling_params) -> torch.Tensor:
         """Prefill and sample each prompt's first token on device -> LongTensor [n]."""
+        self._release_traces_for_new_prefill(prompts)
         assert len(prompts) <= self.global_batch_size
         self.page_table_dirty = True
         out = torch.zeros(len(prompts), dtype=torch.int64)
@@ -80,22 +89,70 @@ class MuseGlimmerGenerator:
                 m.sampling.reset_sampling_params(sampling_params)
         return out
 
+    def prefill_slot(self, slot: int, token_ids: list[int], sampling_params=None):
+        """Prefill one prompt into global slot `slot` (replica slot // B, local slot slot % B).
+
+        sampling_params None -> host logits float32 [vocab]; a `SamplingParams` -> the first token sampled on device
+        (int, parameters loaded on that replica's sampler). Marks the device page table stale and releases decode
+        traces when the prompt length is new. Used by the vLLM data-parallel adapter; generate() has its own loops.
+        """
+        assert 0 <= slot < self.global_batch_size
+        r, local = slot // self.B, slot % self.B
+        m = self.models[r]
+        if self.trace_ids and m.prefill_is_new(len(token_ids)):
+            logger.info("new prefill length: releasing decode traces (recaptured on the next decode step)")
+            self.release_traces()
+        self.page_table_dirty = True
+        tokens = torch.tensor(token_ids, dtype=torch.int64)
+        if sampling_params is None:
+            return m.prefill_forward(tokens, local, self.page_table_tt[r]).float().reshape(-1)
+        logits_tt = m.prefill_forward_logits_tt(tokens, local, self.page_table_tt[r])
+        tok_tt = m.sample_on_device(logits_tt, sampling_params)
+        tok = int(m.tokens_to_torch(tok_tt, 1)[0])
+        ttnn.deallocate(logits_tt)
+        ttnn.deallocate(tok_tt)
+        return tok
+
+    def prefill_slot(self, slot: int, token_ids: list[int], sampling_params=None):
+        """Prefill one prompt into global slot `slot` (replica slot // B, local slot slot % B).
+
+        sampling_params None -> host logits float32 [vocab]; a `SamplingParams` -> the first token sampled on device
+        (int, parameters loaded on that replica's sampler). Marks the device page table stale and releases decode
+        traces when the prompt length is new. Used by the vLLM data-parallel adapter; generate() has its own loops.
+        """
+        assert 0 <= slot < self.global_batch_size
+        r, local = slot // self.B, slot % self.B
+        m = self.models[r]
+        if self.trace_ids and m.prefill_is_new(len(token_ids)):
+            logger.info("new prefill length: releasing decode traces (recaptured on the next decode step)")
+            self.release_traces()
+        self.page_table_dirty = True
+        tokens = torch.tensor(token_ids, dtype=torch.int64)
+        if sampling_params is None:
+            return m.prefill_forward(tokens, local, self.page_table_tt[r]).float().reshape(-1)
+        logits_tt = m.prefill_forward_logits_tt(tokens, local, self.page_table_tt[r])
+        tok_tt = m.sample_on_device(logits_tt, sampling_params)
+        tok = int(m.tokens_to_torch(tok_tt, 1)[0])
+        ttnn.deallocate(logits_tt)
+        ttnn.deallocate(tok_tt)
+        return tok
+
     @staticmethod
-    def _to_sampling_params(sampling: dict | None):
+    def _to_sampling_params(sampling: dict | None, max_top_k: int, seed: int | None = None):
         """Our sampling dict (None => greedy) -> SamplingParams (greedy: temp 0 / top_k 1 / top_p 1, as gemma4)."""
         from models.common.sampling.generator import SamplingParams, format_sampling_params
 
-        sp = sampling or {}
-        t = float(sp.get("temperature", 1.0) or 0.0)
-        if sampling is None or t <= 0:
+        norm = normalize_sampling(sampling, max_top_k)
+        if norm is None:
             return format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=1.0), 32)
+        t, top_p, top_k = norm
         # len(temperature) sets the active lane count; a scalar would leave lanes 1..31 greedy.
-        # top_k <= 0 means "no filter": the sampler clamps k to max_top_k (32).
         return format_sampling_params(
             SamplingParams(
                 temperature=[t] * 32,
-                top_k=int(sp.get("top_k", 32)) or 32,
-                top_p=float(sp.get("top_p", 1.0)),
+                top_k=top_k,
+                top_p=top_p,
+                seed=lane_seeds(seed) if seed is not None else None,
             ),
             32,
         )
@@ -111,16 +168,34 @@ class MuseGlimmerGenerator:
         reload=False (traced device sampling only) skips all host->device writes: the previous step's
         sampled token and advanced positions are still on device.
         """
-        device_sampling = sampling is not None
         tokens = tokens.reshape(-1)
         positions = positions.reshape(-1)
         assert tokens.shape[0] == self.global_batch_size and positions.shape[0] == self.global_batch_size
+        handle = self.decode_issue(tokens, positions, sampling, sampling_params, reload)
+        payload, _ = self.decode_read(handle)
+        return self.decode_finish(handle, payload)
+
+    def decode_issue(
+        self, tokens=None, positions=None, sampling=None, sampling_params=None, reload=True, copy_page_table=None
+    ):
+        """Issue one decode step on every replica (execute_trace(blocking=False)) and return a handle of device outputs.
+
+        Inputs are copied host->device only if `reload` (tokens/positions required). reload=False needs traced
+        device sampling with an already captured trace and performs no input writes: the previous step's sampled
+        token and advanced positions stay resident. copy_page_table None -> follow `page_table_dirty`.
+        """
+        device_sampling = sampling is not None
         traced_sampling = device_sampling and self.enable_trace
         assert reload or traced_sampling, "reload=False requires traced device sampling"
+        if reload:
+            assert tokens is not None and positions is not None, "reload=True needs tokens and positions"
+            tokens = tokens.reshape(-1)
+            positions = positions.reshape(-1)
+            assert tokens.shape[0] == self.global_batch_size and positions.shape[0] == self.global_batch_size
         bd = {}
         outs = []
         t_a = time.perf_counter()
-        copy_pt = self.page_table_dirty
+        copy_pt = self.page_table_dirty if copy_page_table is None else bool(copy_page_table)
 
         def copy_inputs(r, m):
             sl = slice(r * self.B, (r + 1) * self.B)
@@ -131,11 +206,19 @@ class MuseGlimmerGenerator:
         if reload:
             for r, m in enumerate(self.models):
                 copy_inputs(r, m)
+        elif copy_pt:
+            # page table only; tokens/positions stay the device-resident ones
+            for r, m in enumerate(self.models):
+                zeros = torch.zeros(self.B, dtype=torch.int64)
+                host = m.prepare_decode_inputs_host(zeros, zeros, self.page_table)
+                ttnn.copy_host_to_device_tensor(host[3], self.decode_inputs[r][3])
+        if copy_pt:
             self.page_table_dirty = False
         if traced_sampling and sampling_params is not None:
             for m in self.models:
                 m.sampling.reset_sampling_params(sampling_params)
         t_b = time.perf_counter()
+        free = []  # device tensors to release once the result is read
         for r, m in enumerate(self.models):
             if traced_sampling:
                 s = m.sampling
@@ -162,7 +245,9 @@ class MuseGlimmerGenerator:
                 ttnn.execute_trace(m.mesh_device, self.trace_ids[key], cq_id=0, blocking=False)
                 outs.append(self.trace_outputs[key])
             elif not self.enable_trace:
-                outs.append(m.decode_forward(*self.decode_inputs[r]))
+                o = m.decode_forward(*self.decode_inputs[r])
+                outs.append(o)
+                free.append(o)
             else:
                 key = (r, "logits")
                 if key not in self.trace_ids:
@@ -179,27 +264,50 @@ class MuseGlimmerGenerator:
         bd["host_input_copy_s"] = t_b - t_a
         bd["device_issue_s"] = t_c - t_b
         if traced_sampling:
-            t_d = time.perf_counter()
-            res = [m.tokens_to_torch(outs[r], self.B) for r, m in enumerate(self.models)]
-            t_e = time.perf_counter()
+            kind = "tokens"
+            bd["sample_s"] = time.perf_counter() - t_c
         elif device_sampling:
             # Eager path: sampling runs untraced (its force-argmax all_gather semaphore must not be frozen into a trace).
-            toks_tt = [m.sample_on_device(outs[r], sampling_params) for r, m in enumerate(self.models)]
-            t_d = time.perf_counter()
-            res = [m.tokens_to_torch(toks_tt[r], self.B) for r, m in enumerate(self.models)]
-            t_e = time.perf_counter()
-            for r in range(self.dp):
-                ttnn.deallocate(toks_tt[r])
+            outs = [m.sample_on_device(outs[r], sampling_params) for r, m in enumerate(self.models)]
+            free = outs + free  # sampled tokens first, then the logits they came from
+            kind = "tokens"
+            bd["sample_s"] = time.perf_counter() - t_c
         else:
-            t_d = time.perf_counter()
-            res = [m.logits_to_torch(outs[r], self.B) for r, m in enumerate(self.models)]
-            t_e = time.perf_counter()
-        if not self.enable_trace:
-            for o in outs:
-                ttnn.deallocate(o)
-        bd["sample_s"] = t_d - t_c
-        bd["readback_s"] = t_e - t_d
+            kind = "logits"
+            bd["sample_s"] = 0.0
         self.last_step_breakdown = bd
+        return {"kind": kind, "outs": outs, "free": free, "bd": bd}
+
+    def decode_read(self, handle, async_read=False):
+        """Read a decode_issue handle -> (payload, events).
+
+        Tokens: only device 0's token vector of each replica is transferred (the output is replicated); payload is
+        the list of host tensors. async_read=True does not block and returns one ttnn event per replica (wait with
+        ttnn.event_synchronize before `decode_finish`); otherwise events is None. Logits are read blocking
+        (payload: list of torch [B, vocab]) whatever async_read.
+        """
+        t0 = time.perf_counter()
+        if handle["kind"] == "tokens":
+            payload = [
+                ttnn.get_device_tensors(o)[0].cpu(blocking=not async_read, cq_id=0) for o in handle["outs"]
+            ]
+            events = [ttnn.record_event(m.mesh_device, 0) for m in self.models] if async_read else None
+        else:
+            payload = [m.logits_to_torch(handle["outs"][r], self.B) for r, m in enumerate(self.models)]
+            events = None
+        handle["bd"]["readback_s"] = time.perf_counter() - t0
+        return payload, events
+
+    def decode_finish(self, handle, payload):
+        """Convert a (completed) decode_read payload to torch: int64 tokens [global_batch] or logits [global_batch, vocab]."""
+        t0 = time.perf_counter()
+        if handle["kind"] == "tokens":
+            res = [ttnn.to_torch(ttnn.get_device_tensors(h)[0]).reshape(-1)[: self.B].to(torch.int64) for h in payload]
+        else:
+            res = payload
+        for t in handle["free"]:
+            ttnn.deallocate(t)
+        handle["bd"]["readback_s"] = handle["bd"].get("readback_s", 0.0) + time.perf_counter() - t0
         return torch.cat(res, dim=0)
 
     def decode_step_tokens(
@@ -246,7 +354,14 @@ class MuseGlimmerGenerator:
         stop = set(stop_token_ids or [])
         gen = torch.Generator().manual_seed(seed)
 
-        dev_sp = self._to_sampling_params(sampling) if self.device_sampling else None
+        dev_sp = (
+            self._to_sampling_params(sampling, self.models[0].args.max_top_k, seed) if self.device_sampling else None
+        )
+        is_sampled = normalize_sampling(sampling, self.models[0].args.max_top_k) is not None
+        if dev_sp is not None and is_sampled:
+            # make the device draws reproducible from `seed`
+            for m in self.models:
+                m.sampling.seed_manager.reset_seed(dev_sp.seed, list(range(32)))
         t0 = time.time()
         if dev_sp is not None:
             cur = self.prefill_tokens(prompts, dev_sp)

@@ -4,6 +4,7 @@
 
 """Model arguments, derived TP shapes, weight cache paths and lazy checkpoint loading for Muse-Glimmer-30B."""
 
+import functools
 import json
 import math
 import os
@@ -16,6 +17,11 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
+
+# Prefill padding (see model.prefill_len): prompts up to PREFILL_COARSE_MAX tokens use coarse buckets that a generator
+# compiles before its first trace capture; every bucket pads a prompt by less than PREFILL_MAX_PAD rows.
+PREFILL_COARSE_MAX = 131072
+PREFILL_MAX_PAD = 16384
 
 DEFAULT_CKPT_DIR = "/mnt/tt-data/Muse-Glimmer-30B"
 _PREFIX = "model.language_model."
@@ -41,6 +47,42 @@ LOW_PRECISION = os.environ.get("MUSE_LOW_PRECISION", "1") == "1"
 
 def checkpoint_dir() -> str:
     return os.environ.get("HF_MODEL") or DEFAULT_CKPT_DIR
+
+
+# DFlash2 block-diffusion drafter (z-lab/Muse-Glimmer-30B-DFlash2) for speculative decoding.
+DEFAULT_DFLASH_CKPT_DIR = "/mnt/tt-data/Muse-Glimmer-30B-DFlash2"
+
+
+DFLASH_REPO_ID = "z-lab/Muse-Glimmer-30B-DFlash2"
+
+
+def dflash_checkpoint_dir() -> str:
+    """Drafter checkpoint folder. MUSE_DFLASH_MODEL is a local folder or a Hugging Face repo id; a repo id resolves to
+    its snapshot (from the HF cache, downloaded if missing). Unset: DEFAULT_DFLASH_CKPT_DIR if it exists, else
+    DFLASH_REPO_ID."""
+    src = os.environ.get("MUSE_DFLASH_MODEL")
+    if not src:
+        src = DEFAULT_DFLASH_CKPT_DIR if os.path.isdir(DEFAULT_DFLASH_CKPT_DIR) else DFLASH_REPO_ID
+    if os.path.isdir(src):
+        return src
+    return _hf_snapshot(src)
+
+
+@functools.lru_cache(maxsize=None)
+def _hf_snapshot(repo_id: str) -> str:
+    from huggingface_hub import snapshot_download
+
+    try:
+        return snapshot_download(repo_id=repo_id)
+    except Exception as e:  # offline and not cached, unknown repo, ...: callers then see a missing folder
+        logger.warning(f"drafter checkpoint {repo_id!r} is not a folder and the HF download failed: {e}")
+        return repo_id
+
+
+def dflash_cache_dir() -> str:
+    """Drafter weight cache root, kept apart from the target cache (the drafter reuses target cache names)."""
+    base = os.environ.get("TT_CACHE_PATH") or f"{dflash_checkpoint_dir()}/tt_cache"
+    return os.path.join(base, "dflash2")
 
 
 def _dtype_str(dtype) -> str:
@@ -83,6 +125,8 @@ class MuseGlimmerModelArgs:
     tp: int = 1
     num_layers: Optional[int] = None
     max_batch_size: int = 32
+    # ttnn.sampling keeps a fixed top-32 candidate row (kernel K = 32); a larger top_k is clamped to this.
+    max_top_k: int = 32
     max_seq_len: int = 8192
     max_prefill_len: int = 8192
     block_size: int = 64
@@ -92,6 +136,8 @@ class MuseGlimmerModelArgs:
     embed_dtype: ttnn.DataType = ttnn.bfloat16
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b if LOW_PRECISION else ttnn.bfloat16
     cache_dir: Optional[str] = None
+    # generation_config.json sampling defaults; None means greedy.
+    default_sampling: Optional[dict] = None
     _handles: dict = field(default_factory=dict, init=False, repr=False, compare=False)
     _weight_map: Optional[dict] = field(default=None, init=False, repr=False, compare=False)
 
@@ -154,6 +200,15 @@ class MuseGlimmerModelArgs:
             eos_token_ids=eos,
             pad_token_id=pad,
             tp=tp,
+            default_sampling=(
+                {
+                    "temperature": float(gen.get("temperature") or 1.0),
+                    "top_p": float(gen.get("top_p") or 1.0),
+                    "top_k": int(gen.get("top_k") or 0),
+                }
+                if gen.get("do_sample")
+                else None
+            ),
         )
         for k, v in overrides.items():
             assert hasattr(args, k), f"Unknown MuseGlimmerModelArgs override: {k}"
@@ -166,6 +221,9 @@ class MuseGlimmerModelArgs:
         assert self.num_attention_heads % self.tp == 0, "heads not divisible by tp"
         assert self.hidden_size % self.tp == 0, "hidden not divisible by tp"
         assert self.n_layers <= self.num_hidden_layers
+        assert (
+            1 <= self.max_top_k <= 32
+        ), f"max_top_k must be in [1, 32] (ttnn.sampling top-32 limit), got {self.max_top_k}"
         assert self.max_seq_len % 256 == 0, f"max_seq_len must be a multiple of 256, got {self.max_seq_len}"
         assert (
             self.max_seq_len <= self.max_position_embeddings
@@ -249,9 +307,9 @@ class MuseGlimmerModelArgs:
 
     @property
     def sliding_kv_blocks(self) -> int:
-        """Per-user KV blocks of a sliding layer: a ring of the window plus one 256-row prefill pad, so the last
+        """Per-user KV blocks of a sliding layer: a ring of the window plus the largest prefill pad, so the last
         `sliding_window` real rows of a padded prompt survive the fill. Never more than the full span."""
-        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + 256) / self.block_size))
+        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + PREFILL_MAX_PAD) / self.block_size))
 
     def is_sliding(self, i: int) -> bool:
         return self.layer_types[i] == "sliding_attention"
