@@ -667,6 +667,8 @@
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
+        # The MoE block (GLM-5.3's default MoE in the model): the same check on its C++ ops, random weights.
+        python3 -m pytest models/demos/moe_block/tests/test_moe_block_models.py -k "glm53-8x4-5120 and not eager" -vvv --tb=short
       '
     )
 

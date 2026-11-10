@@ -39,6 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -653,9 +654,12 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     [
         pytest.param(
             (8, 4),
+            # (GLM-5.3's MoE is the MoE block by default - tt/moe_impl.py, $MOE_IMPL=ttmoe for TtMoe: its fabric
+            # payload and L1_SMALL)
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0)[0],
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0)[1],
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -756,6 +760,7 @@ def test_glm_prefill_block(
         f"[glm block {layer_type}] building TtPrefillBlock layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
     )
     block = TtPrefillBlock(
+        # (GLM-5.3's default MoE: the MoE block, its weights from this state dict's random host weights)
         mesh_device=mesh_device,
         config=config,
         model_cfg=GLM53Config,
