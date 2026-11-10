@@ -12,6 +12,7 @@
 #include <tuple>
 
 #include "ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/mesh_wiring_cache.hpp"
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -135,26 +136,28 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
 }
 
 bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
-    const auto& mesh_view = mesh_device.get_view();
-    const auto& mesh_shape = mesh_view.shape();
-    if (mesh_shape[axis] < 2) {
-        return true;  // no hops to compare
-    }
-
-    // Axis 0 runs down a column, axis 1 along a row.
-    std::optional<tt::tt_fabric::eth_chan_directions> axis_direction;
-    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
-        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
-                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
-        for (size_t i = 1; i < nodes.size(); i++) {
-            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(mesh_device, nodes[i - 1], nodes[i]);
-            if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
-                return false;
-            }
-            axis_direction = directions.front();
+    return cached_mesh_wiring(mesh_device, axis, [&] {
+        const auto& mesh_view = mesh_device.get_view();
+        const auto& mesh_shape = mesh_view.shape();
+        if (mesh_shape[axis] < 2) {
+            return true;  // no hops to compare
         }
-    }
-    return true;
+
+        // Axis 0 runs down a column, axis 1 along a row.
+        std::optional<tt::tt_fabric::eth_chan_directions> axis_direction;
+        for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+            const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                         : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+            for (size_t i = 1; i < nodes.size(); i++) {
+                const auto directions = tt::tt_fabric::get_neighbor_eth_directions(mesh_device, nodes[i - 1], nodes[i]);
+                if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
+                    return false;
+                }
+                axis_direction = directions.front();
+            }
+        }
+        return true;
+    });
 }
 
 tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
@@ -179,25 +182,27 @@ size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_
 }
 
 bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
-    const auto& mesh_view = mesh_device.get_view();
-    const auto& mesh_shape = mesh_view.shape();
-    // A 2-device axis would close on the link it already uses, so it stays open and never rings.
-    if (!tt::tt_fabric::is_genuine_torus_dim(mesh_shape[axis])) {
-        return false;
-    }
-
-    const auto num_lines = mesh_shape[1 - axis];
-    for (uint32_t line = 0; line < num_lines; ++line) {
-        const MeshCoordinate first = axis == 0 ? MeshCoordinate(0, line) : MeshCoordinate(line, 0);
-        const MeshCoordinate last =
-            axis == 0 ? MeshCoordinate(mesh_shape[0] - 1, line) : MeshCoordinate(line, mesh_shape[1] - 1);
-        const auto first_node = mesh_view.get_fabric_node_id(first);
-        const auto last_node = mesh_view.get_fabric_node_id(last);
-        if (!tt::tt_fabric::are_intra_mesh_neighbors(mesh_device, last_node, first_node)) {
+    return cached_mesh_wiring(mesh_device, axis, [&] {
+        const auto& mesh_view = mesh_device.get_view();
+        const auto& mesh_shape = mesh_view.shape();
+        // A 2-device axis would close on the link it already uses, so it stays open and never rings.
+        if (!tt::tt_fabric::is_genuine_torus_dim(mesh_shape[axis])) {
             return false;
         }
-    }
-    return true;
+
+        const auto num_lines = mesh_shape[1 - axis];
+        for (uint32_t line = 0; line < num_lines; ++line) {
+            const MeshCoordinate first = axis == 0 ? MeshCoordinate(0, line) : MeshCoordinate(line, 0);
+            const MeshCoordinate last =
+                axis == 0 ? MeshCoordinate(mesh_shape[0] - 1, line) : MeshCoordinate(line, mesh_shape[1] - 1);
+            const auto first_node = mesh_view.get_fabric_node_id(first);
+            const auto last_node = mesh_view.get_fabric_node_id(last);
+            if (!tt::tt_fabric::are_intra_mesh_neighbors(mesh_device, last_node, first_node)) {
+                return false;
+            }
+        }
+        return true;
+    });
 }
 
 tt::tt_fabric::Topology get_axis_topology(
@@ -1450,7 +1455,7 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
-        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
     const uint32_t termination_sync_semaphore_id =
         termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : alloc_sem();
     worker_rt_args.push_back(termination_sync_semaphore_id);      // termination_sync_address 10

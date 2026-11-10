@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/mesh_wiring_cache.hpp"
 
 namespace ttnn::operations::ccl::common {
 
@@ -96,39 +97,43 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
 }
 
 size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis) {
-    const auto mesh_shape = mesh_device.get_view().shape();
+    // -1: both axes.
+    const int64_t query = cluster_axis.has_value() ? static_cast<int64_t>(*cluster_axis) : -1;
+    return ttnn::ccl::cached_mesh_wiring(mesh_device, query, [&]() -> size_t {
+        const auto mesh_shape = mesh_device.get_view().shape();
 
-    ttsl::SmallVector<size_t> cluster_axes;
-    if (cluster_axis.has_value()) {
-        cluster_axes = {cluster_axis.value()};
-    } else {
-        cluster_axes = {0, 1};
-    }
+        ttsl::SmallVector<size_t> cluster_axes;
+        if (cluster_axis.has_value()) {
+            cluster_axes = {cluster_axis.value()};
+        } else {
+            cluster_axes = {0, 1};
+        }
 
-    std::optional<size_t> num_links;
-    for (const auto axis : cluster_axes) {
-        // The op runs on every row (or column) along the axis, and they can be wired differently.
-        // All of them must be able to open the link, so take the lowest count. Hops owned by
-        // another host report 0 and are skipped, so this counts what this host can see.
-        for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
-            const size_t planes =
-                tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, axis, row_or_col);
-            if (planes > 0) {
-                num_links = num_links.has_value() ? std::min(*num_links, planes) : planes;
+        std::optional<size_t> num_links;
+        for (const auto axis : cluster_axes) {
+            // The op runs on every row (or column) along the axis, and they can be wired differently.
+            // All of them must be able to open the link, so take the lowest count. Hops owned by
+            // another host report 0 and are skipped, so this counts what this host can see.
+            for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+                const size_t planes =
+                    tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, axis, row_or_col);
+                if (planes > 0) {
+                    num_links = num_links.has_value() ? std::min(*num_links, planes) : planes;
+                }
             }
         }
-    }
 
-    if (!num_links.has_value()) {
-        // This runs on every op invocation, so warn once per process to keep serving logs readable.
-        static std::once_flag warned;
-        std::call_once(warned, [] {
-            log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
-        });
-        return 1;
-    }
-    log_debug(tt::LogOp, "num_links: {}", *num_links);
-    return *num_links;
+        if (!num_links.has_value()) {
+            // This runs on every op invocation, so warn once per process to keep serving logs readable.
+            static std::once_flag warned;
+            std::call_once(warned, [] {
+                log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+            });
+            return 1;
+        }
+        log_debug(tt::LogOp, "num_links: {}", *num_links);
+        return *num_links;
+    });
 }
 
 }  // namespace ttnn::operations::ccl::common
