@@ -390,6 +390,46 @@ def test_softmax_sharded_masked_subblock_w_zero(device, expect_error):
         ttnn.scale_mask_softmax_in_place(input_tensor, 1.0, attention_mask_t, program_config=program_config)
 
 
+# Shard grids that do not start at core (0, 0). Each core holds one batch, so a kernel on the wrong core or a mask
+# from the wrong batch shows up in that batch's rows.
+@pytest.mark.parametrize("start", [(0, 0), (1, 0), (0, 1)])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("masked", [False, True])
+def test_softmax_sharded_offset_grid(device, start, orientation, masked):
+    torch.manual_seed(0)
+    grid_size = (2, 2)
+    batch_size, h, w = grid_size[0] * grid_size[1], 32, 256
+    x0, y0 = start
+    shard_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x0 + grid_size[0] - 1, y0 + grid_size[1] - 1))}
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(shard_grid, [h, w], orientation)
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size, subblock_w=4, block_h=h // 32, block_w=w // 32
+    )
+
+    torch_input_tensor = torch_random((batch_size, 1, h, w), -10, 10, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    if masked:
+        attention_mask = torch_random((batch_size, 1, 1, w), -10, 0, dtype=torch.bfloat16)
+        attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.scale_mask_softmax_in_place(
+            input_tensor, 0.5, attention_mask_t, program_config=program_config
+        )
+        torch_output_tensor = torch.softmax(torch_input_tensor.float() * 0.5 + attention_mask.float(), dim=-1)
+    else:
+        output_tensor = ttnn.softmax_in_place(input_tensor, program_config=program_config)
+        torch_output_tensor = torch.softmax(torch_input_tensor.float(), dim=-1)
+
+    output_tensor = ttnn.to_torch(output_tensor).float()
+    for batch in range(batch_size):
+        assert_with_pcc(torch_output_tensor[batch], output_tensor[batch], 0.999)
+
+
 @pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [24, 32, 64])
