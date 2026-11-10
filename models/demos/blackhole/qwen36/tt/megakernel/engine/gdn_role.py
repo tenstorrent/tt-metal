@@ -37,10 +37,13 @@ def gdn_role(b, coords):
     rects = getattr(b, "out_rects", None)
     tgt = list(rects) if rects else b.out_ready_target
     gen = os.path.join(os.getcwd(), f"gdn24gen_b{B}")
-    role = g2_role.GdnRole(dev, coords, NG, B, b.sems, tgt, prod, gen, kdir=KDIR)
+    # the stock-op reference (priming + check) only without device-profiler zones: the stock op's program overflows the
+    # kernel config buffer with them (MKA_GDN_CHECK forces either way)
+    ref = os.environ.get("MKA_GDN_CHECK", "0" if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1" else "1") == "1"
+    role = g2_role.GdnRole(dev, coords, NG, B, b.sems, tgt, prod, gen, kdir=KDIR, ref=ref)
     role.prepare()
     r = role.role
     print(f"[gdn24] G2 role: {NG} GDN layers {list(b.gdn_layers)}, B {B}, out_ready {'multicast' if rects else 'Q root'}, CB ids {r['info']['cb_ids'][0]}.."
           f"{r['info']['cb_ids'][-1]} ({r['info']['cb_bytes'] // 1024} KB L1 per GDN core), arg block "
-          f"{r['info']['ab_words']} words, kernels {KDIR}", flush=True)
+          f"{r['info']['ab_words']} words, reference {'on' if ref else 'off (profiler)'}, kernels {KDIR}", flush=True)
     return dict(kernels=r["kernels"], cbs=r["cbs"], io=r["io"], check=lambda: role.check("gdn24"), role=role)

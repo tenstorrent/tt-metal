@@ -45,7 +45,10 @@ def _host(t):
 
 class GdnRole:
     def __init__(self, dev, cores, NG, B, sems, out_target, prod_cores, gen_dir, kdir=None, opt=4094, seed=901,
-                 hold_users=()):
+                 hold_users=(), ref=True):
+        """ref=False: no stock-op reference (no priming step, check() skipped) -- the stock op's program does not fit
+        the kernel config buffer with device-profiler zones compiled in; the checked step is then FRESH."""
+        self.ref = ref
         m = self.m = _test_module()
         self.dev, self.cores, self.NG, self.B, self.T, self.K = dev, list(cores), NG, B, 4, 4
         g = self.g = m.GEOS[0]
@@ -74,14 +77,15 @@ class GdnRole:
         self.gen = torch.Generator().manual_seed(5)
         # prime: one FRESH step through the stock op on both copies (identical states, a real stash to replay)
         self.mi_ctrl = [T] * B
-        self._rows()
-        for ly in self.LY:
-            self._write_ctrl(ly, [])
-            for c in (ly["cA"], ly["cE"]):
-                ttnn.deallocate(self._plain(c, ly["ctrl"]))
-                c.par = 1 - c.par
-        ttnn.synchronize_device(dev)
-        self.mi_ctrl = [int(x) for x in torch.randint(0, T, (B,), generator=self.gen)]
+        if ref:
+            self._rows()
+            for ly in self.LY:
+                self._write_ctrl(ly, [])
+                for c in (ly["cA"], ly["cE"]):
+                    ttnn.deallocate(self._plain(c, ly["ctrl"]))
+                    c.par = 1 - c.par
+            ttnn.synchronize_device(dev)
+            self.mi_ctrl = [int(x) for x in torch.randint(0, T, (B,), generator=self.gen)]
         self.tl = [dict(qkv=self.qkv, win_a=ly["cE"].win_a, win_b=ly["cE"].win_b, ring=ly["cE"].ring, ctrl=ly["ctrl"],
                         taps=ly["cE"].taps_d, dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d,
                         pre=ly["pre"], out=ly["outE"]) for ly in self.LY]
@@ -225,6 +229,9 @@ class GdnRole:
 
     def check(self, tag="g2"):
         """After ONE engine pass: the stock op on the reference copies, then out / ring / next window per GDN layer."""
+        if not self.ref:
+            print(f"[{tag}] check skipped (no stock-op reference in this run: device profiler on)", flush=True)
+            return True
         Kt, Vt, T, B, Nv = self.Kt, self.Vt, self.T, self.B, self.Nv
         m = self.m
         iv = lambda t: t.contiguous().view(torch.int32)
