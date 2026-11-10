@@ -86,6 +86,7 @@ protected:
 
     void unique_and_common_fields_eager();
     void batched_setter_and_clear();
+    void own_args_change_between_enqueues();
     void trace_replays_capture_time_values();
     void field_after_kernel_without_args_on_core();
     void rejects_invalid_fields();
@@ -209,6 +210,54 @@ void PerDeviceRuntimeArgsChecks::batched_setter_and_clear() {
         EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
         idx++;
     }
+}
+
+// The program's own words change between enqueues while the field values stay: outside the field they reach every
+// device, under the field only the device without a value.
+void PerDeviceRuntimeArgsChecks::own_args_change_between_enqueues() {
+    const MeshCoordinateRange range(mesh_device_->shape());
+    const CoreCoord core{0, 0};
+    const uint32_t results = results_addr();
+
+    Program program = CreateProgram();
+    const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
+    SetRuntimeArgs(program, kernel, core, default_args(core));
+    SetCommonRuntimeArgs(program, kernel, default_common_args());
+    MeshWorkload workload;
+    workload.add_program(range, std::move(program));
+
+    const uint32_t num_devices = range.shape().mesh_size();
+    std::vector<uint32_t> values(num_devices);
+    for (uint32_t i = 0; i < num_devices; i++) {
+        values[i] = 9000 + i;
+    }
+    SetRuntimeArgsPerDevice(workload, range, kernel, core, 4, 1, values);
+    const auto cleared = *range.begin();
+    ClearRuntimeArgs(workload, range, cleared, kernel, core, 4);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto run_and_check = [&](uint32_t word0, uint32_t word4) {
+        EnqueueMeshWorkload(cq, workload, false);
+        Finish(cq);
+        uint32_t idx = 0;
+        for (const auto& coord : range) {
+            auto expected = default_args(core);
+            expected[0] = word0;
+            expected[4] = coord == cleared ? word4 : 9000 + idx;
+            EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
+            idx++;
+        }
+    };
+    auto& own = GetRuntimeArgs(workload.get_programs().at(range), kernel, core);
+    run_and_check(default_args(core)[0], default_args(core)[4]);
+    for (uint32_t round = 1; round <= 3; round++) {
+        own[0] = 300 + round;  // outside the field
+        run_and_check(300 + round, default_args(core)[4]);
+    }
+    own[4] = 555;  // under the field
+    run_and_check(303, 555);
+    own[0] = 400;
+    run_and_check(400, 555);
 }
 
 void PerDeviceRuntimeArgsChecks::trace_replays_capture_time_values() {
@@ -464,6 +513,7 @@ TEST_F(MeshPerDeviceRuntimeArgsTest, UniqueAndCommonFieldsEager) { unique_and_co
 TEST_F(MeshPerDeviceRuntimeArgsTest, ProgramOnSubRange) { program_on_sub_range(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceNodeInSeveralPartitions) { trace_node_in_several_partitions(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, BatchedSetterAndClear) { batched_setter_and_clear(); }
+TEST_F(MeshPerDeviceRuntimeArgsTest, OwnArgsChangeBetweenEnqueues) { own_args_change_between_enqueues(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceReplaysCaptureTimeValues) { trace_replays_capture_time_values(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, FieldAfterKernelWithoutArgsOnCore) { field_after_kernel_without_args_on_core(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, RejectsInvalidFields) { rejects_invalid_fields(); }

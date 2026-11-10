@@ -55,6 +55,25 @@ struct PerDeviceRuntimeArgs {
         std::vector<ResolvedPerDeviceRuntimeArgsField> resolved;
     };
     mutable ResolvedCache resolved_cache;
+    uint64_t values_version = 0;  // bumps when a value is set or cleared (or a field is added)
+    // Each local device's copy of the region of the packed command that holds the fields (fast-dispatch eager
+    // enqueue): words outside the fields track the packed command by delta, so a hit writes each device's command as
+    // packed prefix + its region + packed suffix with no per-field work.
+    struct DeviceImages {
+        uint64_t assembly_id = 0;
+        uint64_t generation = 0;
+        uint64_t values_version = 0;
+        bool stall_first = false;
+        bool stall_before_program = false;
+        uint32_t size_words = 0;
+        std::vector<uint32_t> coord_indices;  // the devices the images are for, in write order
+        uint32_t begin = 0;                   // region in the packed command, in words
+        uint32_t words = 0;
+        std::vector<uint32_t> snapshot;  // the packed region when the images were last brought up to date
+        std::vector<uint8_t> in_field;   // per region word: a field covers it
+        std::vector<uint32_t> images;    // [device][words]
+    };
+    mutable DeviceImages device_images;
 };
 
 // Linear index of `coord` in `range`, in the range's iteration order.

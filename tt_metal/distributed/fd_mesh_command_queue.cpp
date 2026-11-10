@@ -468,18 +468,22 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     // Per-device runtime args: validate and resolve every program's before any queue state changes or anything is
     // written, so an error leaves the queue as it was.
-    static thread_local std::vector<
-        std::pair<const MeshCoordinateRange*, const std::vector<ResolvedPerDeviceRuntimeArgsField>*>>
-        per_device_runtime_args;
+    struct ResolvedProgramArgs {
+        const MeshCoordinateRange* range;
+        const PerDeviceRuntimeArgs* per_device;
+        const std::vector<ResolvedPerDeviceRuntimeArgsField>* resolved;
+    };
+    static thread_local std::vector<ResolvedProgramArgs> per_device_runtime_args;
     per_device_runtime_args.clear();
     if (mesh_workload.impl().has_per_device_runtime_args()) {
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
             if (const auto* per_device = mesh_workload.impl().per_device_runtime_args(device_range)) {
-                per_device_runtime_args.emplace_back(
+                per_device_runtime_args.push_back(ResolvedProgramArgs{
                     &device_range,
+                    per_device,
                     &resolve_per_device_runtime_args_cached(
                         *per_device,
-                        mesh_workload.impl().get_dispatch_cmds_for_program(program, active_sub_device_manager_id)));
+                        mesh_workload.impl().get_dispatch_cmds_for_program(program, active_sub_device_manager_id))});
             }
         }
     }
@@ -585,10 +589,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
-        const std::vector<ResolvedPerDeviceRuntimeArgsField>* per_device_resolved = nullptr;
-        for (const auto& [range, resolved] : per_device_runtime_args) {
-            if (*range == device_range) {
-                per_device_resolved = resolved;
+        const ResolvedProgramArgs* per_device_resolved = nullptr;
+        for (const auto& entry : per_device_runtime_args) {
+            if (*entry.range == device_range) {
+                per_device_resolved = &entry;
             }
         }
         if (per_device_resolved != nullptr) {
@@ -597,7 +601,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 program_cmd_seq,
                 dispatch_metadata.stall_first,
                 dispatch_metadata.stall_before_program,
-                *per_device_resolved);
+                *per_device_resolved->per_device,
+                *per_device_resolved->resolved);
         } else {
             this->write_program_commands_to_devices(
                 local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
@@ -1425,11 +1430,124 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     }
 }
 
+namespace {
+
+// Brings `per_device`'s device images up to date with `packed` (the program's packed command): rebuilt when the
+// command layout, the fields, their values or the devices changed, or when a word under a field changed in the packed
+// command; otherwise the words that changed since the last enqueue (dispatch addresses, the program's own args) are
+// copied into every image.
+const PerDeviceRuntimeArgs::DeviceImages& update_device_images(
+    const PerDeviceRuntimeArgs& per_device,
+    const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolved,
+    const ProgramCommandSequence& sequence,
+    bool stall_first,
+    bool stall_before_program,
+    const vector_aligned<uint32_t>& packed,
+    const std::vector<program_dispatch::PackedCommandChunk>& chunks,
+    const std::vector<std::pair<uint32_t, Device*>>& local_devices) {
+    auto& images = per_device.device_images;
+    const auto size_words = static_cast<uint32_t>(packed.size());
+    bool valid = images.assembly_id != 0 && images.assembly_id == sequence.assembly_id &&
+                 images.generation == per_device.generation && images.values_version == per_device.values_version &&
+                 images.stall_first == stall_first && images.stall_before_program == stall_before_program &&
+                 images.size_words == size_words && images.coord_indices.size() == local_devices.size();
+    for (size_t d = 0; valid && d < local_devices.size(); ++d) {
+        valid = images.coord_indices[d] == local_devices[d].first;
+    }
+    if (valid) {
+        // the words that changed since the images were brought up to date; any under a field forces a rebuild
+        static thread_local std::vector<uint32_t> changed;
+        changed.clear();
+        const uint32_t* now = packed.data() + images.begin;
+        constexpr uint32_t kBlock = 64;
+        for (uint32_t b = 0; valid && b < images.words; b += kBlock) {
+            const uint32_t n = std::min(kBlock, images.words - b);
+            if (std::memcmp(now + b, images.snapshot.data() + b, n * sizeof(uint32_t)) == 0) {
+                continue;
+            }
+            for (uint32_t w = b; w < b + n; ++w) {
+                if (now[w] != images.snapshot[w]) {
+                    if (images.in_field[w]) {
+                        valid = false;
+                        break;
+                    }
+                    changed.push_back(w);
+                }
+            }
+        }
+        if (valid && changed.size() <= images.words / 8) {
+            for (const uint32_t w : changed) {
+                images.snapshot[w] = now[w];
+                for (size_t d = 0; d < local_devices.size(); ++d) {
+                    images.images[d * images.words + w] = now[w];
+                }
+            }
+            return images;
+        }
+    }
+
+    // rebuild
+    static thread_local std::vector<uint32_t> offsets;  // word offset of each resolved field in `packed`
+    offsets.resize(resolved.size());
+    uint32_t begin = size_words;
+    uint32_t end = 0;
+    for (size_t i = 0; i < resolved.size(); ++i) {
+        const uint32_t words = resolved[i].field->num_words;
+        offsets[i] = program_dispatch::packed_offset_of(chunks, resolved[i].location, words * sizeof(uint32_t)) /
+                     static_cast<uint32_t>(sizeof(uint32_t));
+        begin = std::min(begin, offsets[i]);
+        end = std::max(end, offsets[i] + words);
+    }
+    if (resolved.empty()) {
+        begin = end = 0;
+    }
+    // whole 64 B blocks, so the device writes keep their alignment
+    constexpr uint32_t kAlignWords = 16;
+    begin = begin / kAlignWords * kAlignWords;
+    end = std::min(size_words, (end + kAlignWords - 1) / kAlignWords * kAlignWords);
+    images.assembly_id = sequence.assembly_id;
+    images.generation = per_device.generation;
+    images.values_version = per_device.values_version;
+    images.stall_first = stall_first;
+    images.stall_before_program = stall_before_program;
+    images.size_words = size_words;
+    images.coord_indices.clear();
+    for (const auto& [coord_index, device] : local_devices) {
+        images.coord_indices.push_back(coord_index);
+    }
+    images.begin = begin;
+    images.words = end - begin;
+    images.snapshot.assign(packed.data() + begin, packed.data() + end);
+    images.in_field.assign(images.words, 0);
+    for (size_t i = 0; i < resolved.size(); ++i) {
+        std::fill_n(images.in_field.begin() + (offsets[i] - begin), resolved[i].field->num_words, 1);
+    }
+    images.images.resize(local_devices.size() * images.words);
+    for (size_t d = 0; d < local_devices.size(); ++d) {
+        uint32_t* image = images.images.data() + d * images.words;
+        std::copy(images.snapshot.begin(), images.snapshot.end(), image);
+        const uint32_t coord_index = local_devices[d].first;
+        for (size_t i = 0; i < resolved.size(); ++i) {
+            const auto* field = resolved[i].field;
+            if (field->present[coord_index] != 0) {
+                std::copy_n(
+                    field->values.data() + static_cast<size_t>(coord_index) * field->num_words,
+                    field->num_words,
+                    image + (offsets[i] - begin));
+            }
+        }
+    }
+    return images;
+}
+
+}  // namespace
+
 void FDMeshCommandQueue::write_program_commands_to_devices(
     const MeshCoordinateRange& device_range,
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program,
+    const PerDeviceRuntimeArgs& per_device_runtime_args,
     const std::vector<ResolvedPerDeviceRuntimeArgsField>& resolved) {
     static thread_local std::vector<std::pair<uint32_t, Device*>> local_devices;  // (coordinate index, device)
     local_devices.clear();
@@ -1461,30 +1579,38 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     }
     static thread_local std::vector<RtaPatch> patches;
     if (local_devices.size() > 1 && size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
-        // Pack once, then write each device's values over the packed copy before copying it to that device. Every
-        // field is written for every device (its value or the sequence's own words), so nothing carries over.
+        // Pack once; each device's command is the packed prefix, that device's copy of the region holding the
+        // fields, and the packed suffix (see PerDeviceRuntimeArgs::DeviceImages).
         static thread_local vector_aligned<uint32_t> packed;
         static thread_local std::vector<program_dispatch::PackedCommandChunk> chunks;
         program_dispatch::pack_program_command_sequence(
             program_cmd_seq, stall_first, stall_before_program, true, packed, chunks);
-        static thread_local std::vector<uint32_t> packed_offsets;
-        packed_offsets.resize(resolved.size());
-        for (size_t i = 0; i < resolved.size(); ++i) {
-            packed_offsets[i] = program_dispatch::packed_offset_of(
-                chunks, resolved[i].location, resolved[i].field->num_words * sizeof(uint32_t));
-        }
-        auto* packed_bytes = reinterpret_cast<uint8_t*>(packed.data());
-        for (const auto& [coord_index, device] : local_devices) {
-            for (size_t i = 0; i < resolved.size(); ++i) {
-                const auto* field = resolved[i].field;
-                const uint32_t* src = field->present[coord_index] != 0
-                                          ? field->values.data() + static_cast<size_t>(coord_index) * field->num_words
-                                          : resolved[i].location;
-                std::memcpy(packed_bytes + packed_offsets[i], src, field->num_words * sizeof(uint32_t));
-            }
-            auto& manager = device->sysmem_manager();
+        const auto& images = update_device_images(
+            per_device_runtime_args,
+            resolved,
+            program_cmd_seq,
+            stall_first,
+            stall_before_program,
+            packed,
+            chunks,
+            local_devices);
+        const uint32_t prefix_bytes = images.begin * sizeof(uint32_t);
+        const uint32_t region_bytes = images.words * sizeof(uint32_t);
+        const uint32_t suffix_bytes = size - prefix_bytes - region_bytes;
+        for (size_t d = 0; d < local_devices.size(); ++d) {
+            auto& manager = local_devices[d].second->sysmem_manager();
             manager.issue_queue_reserve(size, id_);
-            manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
+            const uint32_t write_ptr = manager.get_issue_queue_write_ptr(id_);
+            if (prefix_bytes) {
+                manager.cq_write(packed.data(), prefix_bytes, write_ptr);
+            }
+            if (region_bytes) {
+                manager.cq_write(images.images.data() + d * images.words, region_bytes, write_ptr + prefix_bytes);
+            }
+            if (suffix_bytes) {
+                manager.cq_write(
+                    packed.data() + images.begin + images.words, suffix_bytes, write_ptr + prefix_bytes + region_bytes);
+            }
             manager.issue_queue_push_back(size, id_);
             manager.fetch_queue_reserve_back(id_);
             manager.fetch_queue_write(size, id_);
