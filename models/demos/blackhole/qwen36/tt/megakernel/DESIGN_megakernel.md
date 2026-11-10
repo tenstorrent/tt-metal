@@ -743,3 +743,8 @@ The pipelined K=2 chain at R=32 was ~17.8 µs, a tie with one-shot. u8 stays on 
 - Without STEP_U1 (GDN at 42 µs): ≈ 9.1 ms ✓ (0.3 margin).
 - So with row-compact AR + v0.8.1, **u1 no longer depends on STEP_U1**; STEP_U1 becomes margin.
 - u8: 13.47 ms at 20.2 µs AR (0.23 margin, exact). u8 is now the binding gate.
+
+**v12 MLP at R=32 (d30u20, PCC 0.99996):**
+- Weights resident: 25.7 µs/layer traced (NL=8). Profiled steady state 18.7 µs: x delivery 2.8, gate|up 4.1, column-RS + SwiGLU 3.6, h multicast 3.4, down 2.4, partial send 0.6, owner sum 2.6.
+- Weights streamed standalone: 53.2 µs/layer at NL=32 (353 GB/s, bank-bound; a 3rd weight slot is being tried). In the engine the MLP weights are prefetched during the earlier stages, so the chain sees the resident figure.
+- **Numerics rule (engine-wide):** do NOT accumulate across partials with DEST_TO_SRCA reuse-dest. It truncates and biased an 8-way sum by −3%. Sum partials with P @ I matmuls (identity in srcA, LoFi, fp32 DST), which are exact. This applies to the owner sums, the attention tree folds, and any in-DST cross-partial accumulation.
