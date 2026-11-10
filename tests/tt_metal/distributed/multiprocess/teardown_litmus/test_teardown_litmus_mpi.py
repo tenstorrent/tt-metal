@@ -143,3 +143,58 @@ def test_ttrun_sigterm():
     )
     ended(r)
     clean(r)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# group E: one-variable departures from the production mpirun line, through tt-run; each needs a known teardown shape
+# production line: pml ob1, --mca btl self,tcp, --mca btl_tcp_if_include <nic>. Departures go through --mpi-args.
+# ---------------------------------------------------------------------------------------------------------------
+def test_ttrun_abort_ends():
+    """A rank aborts (SIGABRT, the TT_FATAL shape). With the plain launcher tt-run ends the job quickly once the
+    rank is reaped; it must not stall for the length of a core dump (P8)."""
+    r = run_case("ttrun_abort", {**NP, "PROBE_SCENARIO": "victim_abort"}, DEADLINE_END, cmd=ttrun_mpi_cmd())
+    ended(r)
+    nonzero(r)
+    assert r.wall_s < 30, f"tt-run stalled on the aborting rank: {r}"
+
+
+def test_ttrun_shm_layer_still_ends():
+    """Group-E departure: the shared-memory layer put back (btl self,sm,tcp). A clean job through tt-run must still
+    end cleanly; the layer changes the transport, not tt-run's teardown (P15). tt-run uses self,tcp by default, so
+    this is the guard that the departure does not hang."""
+    r = run_case(
+        "ttrun_shm_layer",
+        {**NP, "PROBE_SCENARIO": "clean"},
+        DEADLINE_END,
+        cmd=ttrun_mpi_cmd("--mca btl self,sm,tcp"),
+    )
+    ended(r)
+    assert r.exit == 0, str(r)
+
+
+def test_ttrun_lo_interface():
+    """Group-E departure: the loopback interface. On a single host a clean job through tt-run still completes; the
+    row is the guard that an interface change has a known shape (compare test_ttrun_bad_interface, which must fail
+    fast)."""
+    r = run_case(
+        "ttrun_lo_interface",
+        {**NP, "PROBE_SCENARIO": "clean"},
+        DEADLINE_END,
+        cmd=ttrun_mpi_cmd("--mca btl_tcp_if_include lo"),
+    )
+    ended(r)
+    assert r.exit == 0, str(r)
+
+
+def test_ttrun_pml_ucx_known_shape():
+    """Group-E departure: the UCX point-to-point layer instead of ob1. Through tt-run a clean job must end with a
+    known shape — either it runs (exit 0) or UCX refuses and tt-run ends the job with a non-zero code, never a
+    hang."""
+    r = run_case(
+        "ttrun_pml_ucx",
+        {**NP, "PROBE_SCENARIO": "clean"},
+        DEADLINE_END,
+        cmd=ttrun_mpi_cmd("--mca pml ucx"),
+    )
+    ended(r)
+    clean(r)
