@@ -34,29 +34,13 @@ TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 
-# The job's wall clock (teardown plan P5): PRRTE's --timeout, which ends every rank on every host when it expires,
-# prints each rank's state, and returns 241. It is a clock on the whole job, not on any one MPI call, so it is OFF by
-# default for the ranks: a model server or a long training run is meant to run for days. Tests and CI lanes turn it
-# on with TT_RUN_TIMEOUT=<seconds> (or --mpi-args "--timeout N"), and then a rank that hangs, or waits forever for a
-# peer that died or never arrived, cannot hold the lane. A collective that never completes inside a long-running job
-# is bounded in the DistributedContext itself (the operation timeout, plan P16), not by this clock.
-DEFAULT_JOB_TIMEOUT_S = int(os.environ.get("TT_RUN_TIMEOUT", "0"))
-# Phase 1 (generate_rank_bindings) is also opt-in: tt-run adds no clock unless asked. A solve that hangs is bounded
-# inside generate_rank_bindings (its own collectives, plan P16) and ended by the abort-on-fatal rule (plan P1/P9),
-# not by a tt-run wall clock. CI sets TT_RUN_PHASE1_TIMEOUT to put a backstop under the solve.
-DEFAULT_PHASE1_TIMEOUT_S = int(os.environ.get("TT_RUN_PHASE1_TIMEOUT", "0"))
-
-
-def mpi_args_specify_timeout(mpi_args: Optional[List[str]]) -> bool:
-    """True if the user already passed PRRTE's --timeout (``--timeout N`` or ``--timeout=N``)."""
-    return any(a == "--timeout" or a.startswith("--timeout=") for a in (mpi_args or []))
-
-
-def job_timeout_mpi_args(mpi_args: Optional[List[str]], seconds: int) -> List[str]:
-    """``--timeout N --report-state-on-timeout`` for the mpirun line, unless disabled or already given."""
-    if seconds <= 0 or mpi_args_specify_timeout(mpi_args):
-        return []
-    return ["--timeout", str(seconds), "--report-state-on-timeout"]
+# The overall job wall clock (teardown plan P5) is PRRTE's own --timeout, reached only through --mpi-args
+# ("--timeout N [--report-state-on-timeout]"); tt-run adds no clock of its own, so a long-running job is never cut
+# off. PRRTE's --timeout is a single timer on the whole job, not on any one MPI call: when it expires it ends every
+# rank on every host and the launcher returns this code. tt-run passes it through verbatim and, below, reports that
+# exit as the launcher's own timeout rather than a tt-run failure. A specific collective that hangs is bounded in
+# the DistributedContext instead (the per-call operation timeout, plan P16).
+PRTE_TIMEOUT_EXIT_CODE = 241
 
 
 def _procs_in(sid: int, pgid: int) -> List[int]:
@@ -128,7 +112,15 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
         for s, h in previous.items():
             signal.signal(s, h)
     if rc < 0:
-        rc = 128 - rc  # died by a signal: the shell's convention
+        rc = 128 - rc  # the launcher itself died by a signal: the shell's convention (128 + signal number)
+    # Preserve the launcher's own exit code. PRRTE returns PRTE_TIMEOUT_EXIT_CODE when its --timeout (passed through
+    # --mpi-args) expires: it has already ended every rank on every host, so this is a clean, correctly-classified
+    # timeout, not a tt-run failure. We return it unchanged and only sweep for stragglers.
+    timed_out = rc == PRTE_TIMEOUT_EXIT_CODE
+    if timed_out:
+        logger.warning(
+            f"{TT_RUN_PREFIX} the job hit its PRRTE --timeout wall clock (exit {rc}); the launcher ended every rank"
+        )
     left = [pid for pid in _procs_in(sid, pgid) if pid != os.getpid() and pid != proc.pid]
     if left:
         logger.error(
@@ -136,9 +128,12 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
             f"host: {left}; ending them (last resort; the launcher should have torn the job down itself)"
         )
         _end_processes(left)
+        # A launcher that reported success (0) yet left a rank alive is a failure (teardown plan P19). A non-zero
+        # code (a rank's code, a signal, or the --timeout code) is the truth already and is preserved.
         if rc == 0:
             rc = 1
     if forwarded and rc == 0:
+        # tt-run was signalled and forwarded it, but the launcher still reported success: report the signal.
         rc = 128 + forwarded[0]
     return rc
 
@@ -1114,7 +1109,6 @@ def build_generate_rank_bindings_mpi_cmd(
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
     factory_system_descriptor: Optional[Path] = None,
-    job_timeout_s: int = DEFAULT_PHASE1_TIMEOUT_S,
 ) -> List[str]:
     """Build MPI command for running generate_rank_bindings.
 
@@ -1140,7 +1134,6 @@ def build_generate_rank_bindings_mpi_cmd(
     """
     mpi_launcher = get_mpi_launcher()
     cmd = [mpi_launcher]
-    cmd.extend(job_timeout_mpi_args(mpi_args, job_timeout_s))
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
@@ -2237,7 +2230,6 @@ def build_mpi_command(
     debug_gdbserver: bool = False,
     rankfile_syntax: Optional[RankfileSyntax] = None,
     tracy_config: Optional[TracyConfig] = None,
-    job_timeout_s: int = DEFAULT_JOB_TIMEOUT_S,
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
     mpi_launcher = get_mpi_launcher()
@@ -2245,7 +2237,6 @@ def build_mpi_command(
     effective_mpi_args = normalize_rankfile_mpi_args(mpi_args, syntax)
 
     cmd = [mpi_launcher]
-    cmd.extend(job_timeout_mpi_args(effective_mpi_args, job_timeout_s))
 
     bind_to_already_specified = mpi_args_specify_bind_to(effective_mpi_args)
     rankfile_placement = mpi_args_contain_rankfile_options(effective_mpi_args)
