@@ -20,7 +20,10 @@
 
 constexpr uint32_t CB_X = 0, CB_W = 1, CB_HL = 2, CB_H = 3, CB_WD = 4, CB_W2 = 5, CB_WM = 6, CB_YM = 7, CB_GO = 8, CB_OUT = 16;
 constexpr uint32_t CB_Q = 9, CB_K = 10, CB_V = 11, CB_O = 12, CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28;
-constexpr uint32_t DH = 8, NO = DH + 1, QT = 32;
+#ifndef MKA_NU
+#define MKA_NU 4
+#endif
+constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);

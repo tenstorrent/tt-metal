@@ -155,7 +155,7 @@ void kernel_main() {
             const uint32_t qdst = get_write_ptr(CB_Q);
             if (is_qroot) {
                 noc_semaphore_wait_min(l1w(gs[GS_MIXDONE]), NSTREAM * (L + 1));
-                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), 4 * L);
+                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), NUSR * L);
                 for (uint32_t t = 0; t < QT; ++t) noc_async_read(qacc.get_noc_addr(L * QT + t), qdst + t * QTB, QTB);
                 noc_async_read_barrier();
                 for (uint32_t i = 0; i < 2; ++i) {
@@ -199,7 +199,7 @@ void kernel_main() {
         {   // attention done (all 4 SDPA roots) -> wo stand-in + attention AR -> MLP go
             DeviceZoneScopedN("W-WOAR");
             if (is_qroot) {
-                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), 4 * (L + 1));
+                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), NUSR * (L + 1));
                 mcast_word(gs[GS_ADFLAG], L + 1, rs, self_rect, 0);
                 noc_async_write_barrier();
             }

@@ -9,7 +9,13 @@
 constexpr uint32_t CB_WM = 6, CB_YM = 7, CB_GO = 8;
 constexpr uint32_t CB_Q = 9, CB_K = 10, CB_V = 11, CB_O = 12;
 constexpr uint32_t CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28, CB_SCR = 29;
-constexpr uint32_t DH = 8, NO = DH + 1, QT = 32, FANOUT = 6;
+#ifndef MKA_NU
+#define MKA_NU 4
+#endif
+#ifndef MKA_FAN
+#define MKA_FAN 6
+#endif
+constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU, FANOUT = MKA_FAN, NUSR = MKA_NU;   // own users per chip (u8: 4, u1: 1)
 // global-semaphore slots (index into the runtime-arg address array)
 constexpr uint32_t GS_QFLAG = 0, GS_LVL0 = 1, GS_LVL1 = 2, GS_DONE = 3, GS_MIXDONE = 4, GS_ADONE = 5, GS_ADFLAG = 6, NGS = 7;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* l1w(uint32_t addr) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr); }

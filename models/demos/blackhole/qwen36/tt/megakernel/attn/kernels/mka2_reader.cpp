@@ -139,7 +139,7 @@ void kernel_main() {
             if (is_root) {
                 cb_wait_front(CB_OA, DH);
                 const uint32_t rp = get_read_ptr(CB_OA);
-                for (uint32_t t = 0; t < DH; ++t) noc_async_write(rp + t * OATB, out.get_noc_addr((L * 4 + user) * DH + t), OATB);
+                for (uint32_t t = 0; t < DH; ++t) noc_async_write(rp + t * OATB, out.get_noc_addr((L * NUSR + user) * DH + t), OATB);
                 noc_async_write_barrier();
                 cb_pop_front(CB_OA, DH);
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_ADONE]), 1);
