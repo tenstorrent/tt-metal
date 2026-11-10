@@ -34,6 +34,10 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(17);
     constexpr uint32_t slice_tiles = get_compile_time_arg_val(18);
     constexpr bool transpose_b = get_compile_time_arg_val(19) == 1;
+    constexpr bool sink_in0 = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t in0_sender_semaphore_id = get_compile_time_arg_val(21);
+    constexpr uint32_t in0_receiver_semaphore_id = get_compile_time_arg_val(22);
+    constexpr uint32_t go_semaphore_id = get_compile_time_arg_val(23);
 
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
@@ -52,8 +56,14 @@ void kernel_main() {
     RingWriterArgs ring;
     ring.defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     ring.ring_index = get_arg_val<uint32_t>(argidx++);
+    ring.landed_sem_addr = get_arg_val<uint32_t>(argidx++);
+    ring.sender_noc_x = get_arg_val<uint32_t>(argidx++);
+    ring.sender_noc_y = get_arg_val<uint32_t>(argidx++);
+    ring.go_sem_addr = get_semaphore(go_semaphore_id);
+    const uint32_t in0_upstream_noc_x = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
+    const uint32_t in0_upstream_noc_y = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
 
-    constexpr auto in1_args = TensorAccessorArgs<21>();
+    constexpr auto in1_args = TensorAccessorArgs<25>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -63,8 +73,14 @@ void kernel_main() {
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
 
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1_id = tt::CBIndex::c_1;
     CircularBuffer cb_in1(cb_in1_id);
+
+    constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
+    CircularBuffer cb_in0(cb_in0_id);
+    Semaphore<> in0_sender_semaphore(in0_sender_semaphore_id);
+    Semaphore<> in0_receiver_semaphore(in0_receiver_semaphore_id);
 
     in1_valid_semaphore.set(VALID);
 
@@ -83,6 +99,11 @@ void kernel_main() {
                 const bool is_last_block = step == ring_size - 1 && nb == N_blocks - 1 && mb == M_blocks - 1;
 
                 for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+                    if constexpr (sink_in0) {
+                        cb_in0.reserve_back(in0_block_num_tiles);
+                        in0_receiver_semaphore.set(INVALID);
+                        in0_sender_semaphore.up(noc, in0_upstream_noc_x, in0_upstream_noc_y, 1);
+                    }
                     cb_in1.reserve_back(in1_block_num_tiles);
 
                     uint32_t in1_start_address = cb_in1.get_write_ptr();
@@ -105,6 +126,10 @@ void kernel_main() {
                     }
 
                     cb_in1.push_back(in1_block_num_tiles);
+                    if constexpr (sink_in0) {
+                        in0_receiver_semaphore.wait(VALID);
+                        cb_in0.push_back(in0_block_num_tiles);
+                    }
 
                     if (!is_sink_core) {
                         in1_sender_semaphore.wait(1);
@@ -131,6 +156,9 @@ void kernel_main() {
 
                     if constexpr (is_output_writer) {
                         writer.at_k_block(k_block);
+                        if (k_block == K_num_blocks - 1) {
+                            writer.fetch_incoming(step, region);
+                        }
                     }
                 }
 

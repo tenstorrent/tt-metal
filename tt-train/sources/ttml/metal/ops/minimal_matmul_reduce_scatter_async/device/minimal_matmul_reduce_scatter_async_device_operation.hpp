@@ -32,6 +32,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const ttnn::Tensor& persistent_buffer,
+    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
     std::optional<uint32_t> cluster_axis,
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,

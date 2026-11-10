@@ -30,6 +30,7 @@
 #include "test_utils/relative_l2.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace {
 using ttnn::experimental::prim::MinimalMatmulConfig;
@@ -148,13 +149,12 @@ Problem make_problem(const Shape& s, uint32_t ring_size, bool spot_check = false
     const xt::xarray<float> x = xt::adapt(
         p.x, transpose_a ? std::vector<size_t>{ring_size, s.K, s.M} : std::vector<size_t>{ring_size, s.M, s.K});
     const xt::xarray<float> w = xt::adapt(p.w_kn, std::vector<size_t>{ring_size, s.K, s.N});
-    const uint32_t rows = s.M / ring_size;
     if (!spot_check) {
         p.y = xt::zeros<float>({s.M, s.N});
         for (uint32_t d = 0; d < ring_size; ++d) {
-            const xt::xarray<float> xd = input_rows(p, x, d, d * rows, (d + 1) * rows);
+            const xt::xarray<float> xd = input_rows(p, x, d, 0, s.M);
             const xt::xarray<float> wd = xt::view(w, d);
-            xt::view(p.y, xt::range(d * rows, (d + 1) * rows), xt::all()) = xt::linalg::dot(xd, wd);
+            p.y += xt::linalg::dot(xd, wd);
         }
         return p;
     }
@@ -162,10 +162,11 @@ Problem make_problem(const Shape& s, uint32_t ring_size, bool spot_check = false
     p.y = xt::zeros<float>({p.tiles.size(), size_t{kTile}, size_t{kTile}});
     for (size_t i = 0; i < p.tiles.size(); ++i) {
         const auto [m, n] = p.tiles[i];
-        const uint32_t d = m * kTile / rows;
-        const xt::xarray<float> x_rows = input_rows(p, x, d, m * kTile, (m + 1) * kTile);
-        const xt::xarray<float> w_cols = xt::view(w, d, xt::all(), xt::range(n * kTile, (n + 1) * kTile));
-        xt::view(p.y, i) = xt::linalg::dot(x_rows, w_cols);
+        for (uint32_t d = 0; d < ring_size; ++d) {
+            const xt::xarray<float> x_rows = input_rows(p, x, d, m * kTile, (m + 1) * kTile);
+            const xt::xarray<float> w_cols = xt::view(w, d, xt::all(), xt::range(n * kTile, (n + 1) * kTile));
+            xt::view(p.y, i) += xt::linalg::dot(x_rows, w_cols);
+        }
     }
     return p;
 }
@@ -214,6 +215,12 @@ void expect_close(const Problem& p, const ttnn::Tensor& out) {
     EXPECT_LT(rel, 0.01);
 }
 
+std::vector<tt::tt_metal::GlobalSemaphore> make_semaphores(ttnn::distributed::MeshDevice* device) {
+    const auto grid = device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreRangeSet cores(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    return {ttnn::global_semaphore::create_global_semaphore(device, cores, 0)};
+}
+
 std::optional<MinimalMatmulConfig> make_config(const std::optional<Block>& block) {
     if (!block.has_value()) {
         return std::nullopt;
@@ -249,11 +256,16 @@ ttnn::Tensor make_buffer(const Shape& s) {
     return ttml::core::zeros(ttnn::Shape({s.M, s.N}), &ttml::autograd::ctx().get_device());
 }
 
-ttnn::Tensor call_op(const DeviceInputs& in, const ttnn::Tensor& buffer, const RunOptions& opt) {
+ttnn::Tensor call_op(
+    const DeviceInputs& in,
+    const ttnn::Tensor& buffer,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphores,
+    const RunOptions& opt) {
     return ttml::metal::minimal_matmul_reduce_scatter_async(
         in.x,
         in.w,
         buffer,
+        semaphores,
         kClusterAxis,
         make_config(opt.block),
         std::nullopt,
@@ -264,10 +276,12 @@ ttnn::Tensor call_op(const DeviceInputs& in, const ttnn::Tensor& buffer, const R
 }
 
 void run(const Problem& p, const DeviceInputs& in, const RunOptions& opt) {
+    auto* device = &ttml::autograd::ctx().get_device();
     const std::array<ttnn::Tensor, 2> buffers = {make_buffer(p.shape), make_buffer(p.shape)};
+    const auto semaphores = make_semaphores(device);
     std::vector<ttnn::Tensor> outputs;
     for (uint32_t i = 0; i < opt.num_calls; ++i) {
-        outputs.push_back(call_op(in, buffers[i % 2], opt));
+        outputs.push_back(call_op(in, buffers[i % 2], semaphores, opt));
     }
     for (uint32_t i = 0; i < opt.num_calls; ++i) {
         SCOPED_TRACE(testing::Message() << "call " << i);
@@ -336,20 +350,55 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, RowsNotMultipleOfBlocks) {
     }
 }
 
-TEST_F(MinimalMatmulReduceScatterAsyncTest, ProgramCacheHitWithOtherBuffers) {
+TEST_F(MinimalMatmulReduceScatterAsyncTest, SharedSemaphoresAcrossShapes) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const std::array<Shape, 3> shapes = {{{512, 512, 1024}, {1024, 256, 512}, {512, 1024, 2048}}};
+    struct Layer {
+        Problem p;
+        DeviceInputs in;
+        std::array<ttnn::Tensor, 2> buffers;
+    };
+    std::vector<Layer> layers;
+    for (const auto& s : shapes) {
+        Problem p = make_problem(s, ring_size());
+        DeviceInputs in = upload(p, true);
+        layers.push_back({std::move(p), std::move(in), {make_buffer(s), make_buffer(s)}});
+    }
+    const auto semaphores = make_semaphores(device);
+    const RunOptions opt{.transpose_b = true};
+    constexpr uint32_t kRounds = 3;
+    std::vector<std::pair<uint32_t, ttnn::Tensor>> outputs;
+    for (uint32_t round = 0; round < kRounds; ++round) {
+        for (uint32_t l = 0; l < layers.size(); ++l) {
+            outputs.emplace_back(l, call_op(layers[l].in, layers[l].buffers[round % 2], semaphores, opt));
+        }
+    }
+    for (uint32_t i = 0; i < outputs.size(); ++i) {
+        const auto& [l, y] = outputs[i];
+        SCOPED_TRACE(testing::Message() << "call " << i << " layer " << l);
+        expect_close(layers[l].p, y);
+    }
+}
+
+TEST_F(MinimalMatmulReduceScatterAsyncTest, ProgramCacheHitWithOtherBuffersAndSemaphores) {
     auto* device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
     const Shape s{1024, 512, 1024};
     const Problem p = make_problem(s, ring_size());
     const DeviceInputs in = upload(p, true);
+    const std::array<std::vector<tt::tt_metal::GlobalSemaphore>, 2> semaphores = {
+        make_semaphores(device), make_semaphores(device)};
     const RunOptions opt{.transpose_b = true};
     size_t entries_after_first = 0;
     for (uint32_t i = 0; i < 2; ++i) {
         SCOPED_TRACE(testing::Message() << "call " << i);
-        const auto y = call_op(in, make_buffer(s), opt);
+        const auto y = call_op(in, make_buffer(s), semaphores[i], opt);
         expect_close(p, y);
         if (i == 0) {
             entries_after_first = device->num_program_cache_entries();
+            for (const auto& semaphore : semaphores[0]) {
+                semaphore.reset_semaphore_value(1000);
+            }
         } else {
             EXPECT_EQ(device->num_program_cache_entries(), entries_after_first);
         }
@@ -400,10 +449,11 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, TransposeATakesRowsFromLastDim) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto x = ttml::core::zeros(ttnn::Shape({512, 96}), device);
     const auto w = ttml::core::zeros(ttnn::Shape({512, 64}), device);
+    const auto semaphores = make_semaphores(device);
     const auto buffer = ttml::core::zeros(ttnn::Shape({96, 64}), device);
     try {
         (void)ttml::metal::minimal_matmul_reduce_scatter_async(
-            x, w, buffer, kClusterAxis, std::nullopt, std::nullopt, std::nullopt, std::nullopt, true);
+            x, w, buffer, semaphores, kClusterAxis, std::nullopt, std::nullopt, std::nullopt, std::nullopt, true);
         ADD_FAILURE() << "expected a validation error";
     } catch (const std::exception& e) {
         EXPECT_NE(std::string(e.what()).find("M (96) must be a multiple of ring_size"), std::string::npos) << e.what();
@@ -418,12 +468,17 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, TransposeAProgramCache) {
     const Problem transposed = make_problem(s, ring_size(), false, true);
     const DeviceInputs plain_in = upload(plain, false);
     const DeviceInputs transposed_in = upload(transposed, false);
+    const std::array<std::vector<tt::tt_metal::GlobalSemaphore>, 2> semaphores = {
+        make_semaphores(device), make_semaphores(device)};
     const RunOptions opt{};
-    expect_close(plain, call_op(plain_in, make_buffer(s), opt));
+    expect_close(plain, call_op(plain_in, make_buffer(s), semaphores[0], opt));
     const size_t entries_plain = device->num_program_cache_entries();
-    expect_close(transposed, call_op(transposed_in, make_buffer(s), opt));
+    expect_close(transposed, call_op(transposed_in, make_buffer(s), semaphores[0], opt));
     const size_t entries_both = device->num_program_cache_entries();
     EXPECT_GT(entries_both, entries_plain);
-    expect_close(transposed, call_op(transposed_in, make_buffer(s), opt));
+    for (const auto& semaphore : semaphores[0]) {
+        semaphore.reset_semaphore_value(1000);
+    }
+    expect_close(transposed, call_op(transposed_in, make_buffer(s), semaphores[1], opt));
     EXPECT_EQ(device->num_program_cache_entries(), entries_both);
 }

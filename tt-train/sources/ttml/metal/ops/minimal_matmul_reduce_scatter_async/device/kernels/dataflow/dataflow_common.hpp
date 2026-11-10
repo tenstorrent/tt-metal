@@ -141,9 +141,31 @@ inline void write_block(
     }
 }
 
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename Accessor>
+inline void read_incoming_block(
+    const Accessor& buffer, uint32_t cb_id, uint32_t tile_bytes, uint32_t N_tiles, const BlockRegion& region) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(M_block_tiles * N_block_tiles);
+    const uint32_t base = cb.get_write_ptr();
+    for (uint32_t m = 0; m < region.rows; m++) {
+        const uint32_t page = ((region.row0 + m) * N_tiles) + region.col0;
+        uint32_t ptr = base + (m * N_block_tiles * tile_bytes);
+        for (uint32_t j = 0; j < region.cols; j++, ptr += tile_bytes) {
+            noc.async_read(buffer, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = page + j}, {});
+        }
+    }
+    noc.async_read_barrier();
+    cb.push_back(M_block_tiles * N_block_tiles);
+}
+
 struct RingWriterArgs {
     uint32_t ring_index = 0;
     uint32_t defer_write_k_block = 0;
+    uint32_t landed_sem_addr = 0;
+    uint32_t sender_noc_x = 0;
+    uint32_t sender_noc_y = 0;
+    uint32_t go_sem_addr = 0;
 };
 
 template <
@@ -165,9 +187,21 @@ public:
     }
 
     void at_k_block(uint32_t k_block) {
+        signal_ready();
         if (deferred_.pending && k_block == args_.defer_write_k_block) {
             write_deferred();
         }
+    }
+
+    void fetch_incoming(uint32_t step, const BlockRegion& region) {
+        signal_ready();
+        if (step == 0) {
+            return;
+        }
+        if (!region.empty()) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.landed_sem_addr), ++consumed_);
+        }
+        read_incoming_block<M_block_tiles, N_block_tiles>(buffer_, kIncomingCb, tile_bytes_, N_tiles_, region);
     }
 
     void end_block(uint32_t step, const BlockRegion& region, bool last) {
@@ -185,10 +219,15 @@ public:
         }
         Noc noc;
         noc.async_write_barrier();
+        signal_ready();
+        if (consumed_ > 0) {
+            noc_semaphore_inc(get_noc_addr(args_.landed_sem_addr), -consumed_);
+        }
     }
 
 private:
     static constexpr uint32_t kOutCb = tt::CBIndex::c_2;
+    static constexpr uint32_t kIncomingCb = tt::CBIndex::c_5;
 
     struct Deferred {
         BlockRegion region;
@@ -204,11 +243,27 @@ private:
         if (deferred_.staged) {
             write_block<M_block_tiles, N_block_tiles, false>(
                 buffer_, kOutCb, tile_bytes_, N_tiles_, 0, deferred_.region);
+            unsignalled_++;
         } else {
             write_block<M_block_tiles, N_block_tiles, false>(
                 out_, kOutCb, tile_bytes_, N_tiles_, own_first_row(), deferred_.region);
         }
         deferred_.pending = false;
+    }
+
+    void signal_ready() {
+        if (unsignalled_ == 0) {
+            return;
+        }
+        Noc noc;
+        noc.async_write_barrier();
+        if (ready_addr_ == 0) {
+            auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.go_sem_addr);
+            noc_semaphore_wait_min(go, 1);
+            ready_addr_ = *go;
+        }
+        noc_semaphore_inc(get_noc_addr(args_.sender_noc_x, args_.sender_noc_y, ready_addr_), unsignalled_);
+        unsignalled_ = 0;
     }
 
     const OutAccessor& out_;
@@ -217,4 +272,7 @@ private:
     uint32_t N_tiles_;
     RingWriterArgs args_;
     Deferred deferred_;
+    uint32_t consumed_ = 0;
+    uint32_t unsignalled_ = 0;
+    uint32_t ready_addr_ = 0;
 };

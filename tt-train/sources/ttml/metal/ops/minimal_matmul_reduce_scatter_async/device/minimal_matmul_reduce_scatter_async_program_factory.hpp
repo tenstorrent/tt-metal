@@ -19,6 +19,11 @@ struct MinimalMatmulReduceScatterAsyncProgramFactory {
             std::optional<tt::tt_metal::KernelHandle> in1;
         };
         std::vector<CoreKernels> cores;
+        struct Sender {
+            ttnn::CoreCoord core;
+            tt::tt_metal::KernelHandle kernel{};
+        };
+        std::vector<Sender> senders;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

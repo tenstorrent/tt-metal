@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -23,6 +25,7 @@ struct MinimalMatmulReduceScatterAsyncParams {
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     uint32_t ring_size = 1;
     std::optional<uint32_t> cluster_axis;
+    std::vector<ttnn::GlobalSemaphore> semaphores;
     bool transpose_a = false;
     bool transpose_b = false;
 };

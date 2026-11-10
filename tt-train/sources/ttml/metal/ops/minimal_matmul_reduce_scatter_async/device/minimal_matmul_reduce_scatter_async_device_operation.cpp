@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "metal/common/tensor_validation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::constants;
@@ -128,6 +129,10 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_m
     TT_FATAL(M > 0 && K > 0 && N > 0, "Matmul dims must be positive, got M={}, K={}, N={}.", M, K, N);
 
     TT_FATAL(
+        attrs.ring_size >= 2,
+        "The reduce-scatter needs a ring of at least 2 devices, got ring_size={}.",
+        attrs.ring_size);
+    TT_FATAL(
         M % (attrs.ring_size * TILE_HEIGHT) == 0,
         "M ({}) must be a multiple of ring_size * {} = {}, so every device keeps a tile-aligned slice of rows",
         M,
@@ -149,7 +154,23 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_m
         out_dtype,
         buffer.dtype());
 
+    TT_FATAL(
+        attrs.semaphores.size() == 1,
+        "multi_device_global_semaphore must hold 1 semaphore, got {}",
+        attrs.semaphores.size());
     const ttnn::CoreCoord device_grid = x.device()->compute_with_storage_grid_size();
+    const ttnn::CoreRange all_cores({0, 0}, {device_grid.x - 1, device_grid.y - 1});
+    for (const auto& sem : attrs.semaphores) {
+        TT_FATAL(
+            std::get<0>(sem.attribute_values()).contains(all_cores),
+            "multi_device_global_semaphore must be created on the whole compute grid {}",
+            all_cores.str());
+    }
+    TT_FATAL(attrs.cluster_axis.has_value(), "cluster_axis must be set: it names the ring the rows are scattered over");
+    TT_FATAL(
+        ttnn::ccl::is_axis_wrap_wired(*x.device(), attrs.cluster_axis.value()),
+        "The reduce-scatter runs on a ring, but mesh axis {} has no wrap-around link on this mesh",
+        attrs.cluster_axis.value());
 
     if (attrs.config.has_value()) {
         validate_config(attrs.config.value(), device_grid, attrs.compute_kernel_config);
@@ -180,6 +201,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const ttnn::Tensor& persistent_buffer,
+    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
     std::optional<uint32_t> cluster_axis,
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
@@ -210,6 +232,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
             .compute_kernel_config = kernel_config_val,
             .ring_size = ring_size,
             .cluster_axis = cluster_axis,
+            .semaphores = multi_device_global_semaphore,
             .transpose_a = transpose_a,
             .transpose_b = transpose_b},
         OperationType::tensor_args_t{

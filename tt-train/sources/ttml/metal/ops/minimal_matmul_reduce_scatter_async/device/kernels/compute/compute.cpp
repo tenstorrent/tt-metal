@@ -4,6 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
@@ -30,6 +31,38 @@ void copy_and_pack_block(
         }
         cb_out.push_back(N_block_tiles);
     }
+}
+
+void add_and_pack_block(
+    uint32_t in_cb,
+    uint32_t incoming_cb,
+    uint32_t out_cb,
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t rows,
+    uint32_t cols) {
+    CircularBuffer cb_out(out_cb);
+    CircularBuffer cb_incoming(incoming_cb);
+    reconfig_data_format(in_cb, incoming_cb);
+    pack_reconfig_data_format(out_cb);
+    add_init(in_cb, incoming_cb);
+    cb_incoming.wait_front(M_block_tiles * N_block_tiles);
+
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        if (m < rows) {
+            for (uint32_t n = 0; n < cols; n++) {
+                const uint32_t tile = (m * N_block_tiles) + n;
+                tile_regs_acquire();
+                add_tiles(in_cb, incoming_cb, tile, tile, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, out_cb, n);
+                tile_regs_release();
+            }
+        }
+        cb_out.push_back(N_block_tiles);
+    }
+    cb_incoming.pop_front(M_block_tiles * N_block_tiles);
 }
 
 void transpose_in0_block(uint32_t in_cb, uint32_t out_cb, uint32_t in1_cb, uint32_t tiles, uint32_t block_tiles) {
@@ -130,6 +163,7 @@ void kernel_main() {
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
+    constexpr uint32_t incoming_cb = tt::CBIndex::c_5;
     constexpr uint32_t mm_in0_cb = transposes_in0 ? tt::CBIndex::c_7 : in0_cb;
 
     CircularBuffer cb_in0(mm_in0_cb);
@@ -198,13 +232,24 @@ void kernel_main() {
 
                 cb_out.reserve_back(out_block_num_tiles);
                 cb_intermediate.wait_front(out_block_num_tiles);
-                copy_and_pack_block(
-                    intermediate_cb,
-                    out_cb,
-                    M_block_tiles,
-                    N_block_tiles,
-                    current_M_block_tiles,
-                    current_N_block_tiles);
+                if (step == 0) {
+                    copy_and_pack_block(
+                        intermediate_cb,
+                        out_cb,
+                        M_block_tiles,
+                        N_block_tiles,
+                        current_M_block_tiles,
+                        current_N_block_tiles);
+                } else {
+                    add_and_pack_block(
+                        intermediate_cb,
+                        incoming_cb,
+                        out_cb,
+                        M_block_tiles,
+                        N_block_tiles,
+                        current_M_block_tiles,
+                        current_N_block_tiles);
+                }
                 cb_intermediate.pop_front(out_block_num_tiles);
             }
         }
