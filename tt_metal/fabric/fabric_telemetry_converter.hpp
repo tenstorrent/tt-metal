@@ -47,6 +47,7 @@ tt::tt_fabric::FabricTelemetryStaticInfo unpack_static_info_from_hal(const Stati
     dst.version = src.version();
     dst.supported_stats = static_cast<tt::tt_fabric::FabricTelemetryStatisticMask>(src.supported_stats());
     dst.neighbor_device_id = src.neighbor_device_id();
+    dst.channel_in_use = src.channel_in_use() != 0;
     return dst;
 }
 

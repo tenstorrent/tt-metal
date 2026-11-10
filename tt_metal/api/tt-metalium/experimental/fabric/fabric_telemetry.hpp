@@ -82,6 +82,8 @@ struct FabricTelemetryStaticInfo {
     std::uint8_t direction = 0;
     FabricTelemetryStatisticMask supported_stats = 0;
     std::uint32_t fabric_config = 0;
+    // True when fabric routes over this channel; false on an active ethernet channel fabric does not use.
+    bool channel_in_use = false;
 };
 
 /**

@@ -2938,11 +2938,18 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
     auto telemetry_view = telemetry.view();
     auto static_view = telemetry_view.static_info();
+    // Channels without a router keep this block, so it must carry a valid version for readers to trust it.
+    static_view.version() = FABRIC_TELEMETRY_VERSION;
     static_view.mesh_id() = static_cast<std::uint16_t>(*fabric_node_id.mesh_id);
     static_view.device_id() = static_cast<std::uint8_t>(fabric_node_id.chip_id);
     static_view.direction() = 0;  // TODO: populate from routing direction when available.
-    static_view.fabric_config() = static_cast<std::uint32_t>(this->get_fabric_config());
+    static_view.fabric_config() = static_cast<std::uint16_t>(this->get_fabric_config());
     static_view.supported_stats() = ::tt::tt_fabric::fabric_telemetry::DynamicStatistics::NONE;
+
+    std::unordered_set<chan_id_t> fabric_eth_chans;
+    for (const auto& [chan_id, _] : this->get_active_fabric_eth_channels(fabric_node_id)) {
+        fabric_eth_chans.insert(chan_id);
+    }
 
     for (const auto& active_ethernet_core : active_ethernet_cores) {
         auto chan_id =
@@ -2950,6 +2957,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
 
         // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
         // static_view.direction() = static_cast<std::uint8_t>(routing_direction);
+        static_view.channel_in_use() = fabric_eth_chans.contains(static_cast<chan_id_t>(chan_id)) ? 1 : 0;
 
         tt::tt_metal::CoreCoord virtual_eth_core =
             this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
