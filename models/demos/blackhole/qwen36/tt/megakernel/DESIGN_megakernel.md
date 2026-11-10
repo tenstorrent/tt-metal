@@ -165,6 +165,12 @@ into overlapping rectangles at once (fused MLP v1/v2: 150 µs stalls on silicon)
 | slack | ~90 |
 Rule: a block may use the shared working region only during its own phases. Weight prefetch must never touch it.
 
+**Attention-layer L1 during SDPA (v0.3):** STREAM weight residents during SDPA are this layer's wo slice (~105 KB) +
+the next MLP's even gate|up (MKA_GUPRE: the whole even half, 110 KB, prefetched during SDPA to cut the ~93 µs
+post-SDPA tail) + odd W2 + WD, all inside the 500 KB weight ring. qkv streams through the ring in chunks and is
+consumed before SDPA, so it never co-resides with GUPRE. Keep GUPRE if the MK2 build keeps ≥16 KB headroom on STREAM
+cores; otherwise single-buffer WD.
+
 **Prefetch throttle (v0.3, attention track request):** during a phase with word 13 > 0, the engine issues next-phase
 weight reads in chunks and keeps at most that many bytes outstanding (trid-ring waits), interleaving one weight chunk
 per KV group. Why: unthrottled, the STREAM cores' NOC0 V reads finish last (~190 µs on top-row cores vs ~60 µs on
