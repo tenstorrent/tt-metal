@@ -1,0 +1,284 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Row-major bf16 y (SE_Y_RM, with SE_DYN): y is [rows, H] bf16 row major, one page (H * 2 bytes) per flat row. The
+// down compute pack-untilizes each row tile of its [MT x PCD] block and pushes it as PCD pages (32 rows x PCD * 32
+// bf16, row after row); the writer sends each token row's PCD * 64 bytes to y[row, col0 * 32 ..], skipping rows at or
+// past the entry's token count. Up to ROWS row tiles (the out CB's capacity) are in flight, each on its own write
+// transaction id (TRID0 + k); they retire in order once their id is flushed. A virtual expert (entry a, sub-block s)
+// is complete after its row tiles that hold tokens, min(MT, ceil((cnt - s MT 32) / 32)): the count the compute uses.
+// The caller resets the write transaction id to 0 before the kernel exits.
+#pragma once
+#include <stdint.h>
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "flat_accessors.hpp"
+#include "expert_schedule.hpp"
+
+template <uint32_t out_cb, uint32_t pcd, uint32_t mt, uint32_t ht>
+struct SeYRmWriter {
+    static constexpr uint32_t seg = pcd * 64;           // one token row of this core's columns (bytes)
+    static constexpr uint32_t tile_bytes = pcd * 2048;  // one row tile in the out CB
+    static constexpr uint32_t rows = SE_Y_RM_ROWS;      // out CB capacity in row tiles (host: yrm_rows)
+    static constexpr uint32_t trid0 = 8;
+    // The y writes' unicast VC: not the default write VC (1), which the weight forwarding, the h chain and the read
+    // requests share; a y write queued behind them there stalls this core's NIU, and through its L1 reads the down
+    // matmul's unpacker (~+20% expert time at large M, test_flat_balanced_sweep.py)
+    static constexpr uint8_t yvc = 2;
+    // the y writes' NoC: this RISC's
+    static constexpr uint8_t ynoc = noc_index;
+    static_assert(rows >= 1 && trid0 + rows <= 16);
+    decltype(TensorAccessor(flat_acc::y, 0u, 0u)) yg;
+    uint32_t col_off;
+    uint32_t base = 0;  // the out CB's start (its read pointer before anything is consumed)
+    // issue cursor (entry, sub-block, row tile) and the in-order retire cursor
+    uint32_t ia = 0, is = 0, ir = 0, issued = 0;
+    uint32_t da = 0, ds = 0, dr = 0, retired = 0;
+    uint32_t done_a = 0;  // the entry of the virtual expert the last retire() completed
+
+#ifdef SE_Y_L1
+    // L1 hand-off (flat_routed_expert_with_program, y_l1): no y in DRAM; each token row's segment goes
+    // straight into a slot of the row's destination core (a combine port's injection ring, or an accumulator's local
+    // ring), from a per-chip table (per 32-row tile one 256-byte page: (destination, header word) per row). A
+    // destination numbers its rows in the order the writers produce them (all writers walk the same schedule, so they
+    // agree), grants slots (cumulative grant[d] in this core's words, +gbase[d] at this call's start), and takes a
+    // row once every writer's landed counter there covers it (+1 per row, sent when a row tile's writes are acked).
+    // The column-0 writer also writes each row's 32-byte trailer (header word, gate weight, arrival flags); a table
+    // row is (destination | gate weight bf16 << 16, header word). This core's args (moe_block_args, its per-core block:
+    // the destinations are this chip's ports and accumulators, so they differ by chip - no common args) at SE_Y_L1: nd,
+    // slot stride, table address, words address (grant[32], gbase[32], table page, trailer stages), (unused: the writer
+    // index is this core's arg SE_CMB_WIDX), the combine's zero gate (gate noc x | y << 16, its words' address, the
+    // bytes of this core's words to zero; 0: off), then per destination: noc x, noc y, slot base, slots, landed counter
+    // array address.
+    static constexpr uint32_t L1_MAXD = 32;
+    uint32_t nd = 0, islot = 0, words = 0, widx = 0, tab_tile = 0xFFFFFFFF, tab_base = 0;
+    uint32_t dx[L1_MAXD], dy[L1_MAXD], dbase[L1_MAXD], dq[L1_MAXD], dland[L1_MAXD];
+    uint32_t cnt[L1_MAXD];  // rows issued per destination this call
+    // A row tile goes out in one or more parts (units): as many leading rows as the destinations have granted slots
+    // for, the rest once they grant more - so a ring smaller than one tile's rows for it (e.g. an accumulator's local
+    // ring of a few slots) never blocks the writer for good. Each unit has its own transaction id and landed counts;
+    // the tile's out CB pages go when its last unit retires.
+    uint8_t tcnt[rows][L1_MAXD];         // rows per destination of each in-flight unit
+    uint8_t ulast[rows];                 // 1: the unit completes its row tile
+    uint32_t part = 0;                   // rows of the current row tile already issued
+    uint32_t uiss = 0, uret = 0;         // units issued / retired
+    volatile tt_l1_ptr uint32_t* grant;  // words[0..32): grants received (cumulative)
+    volatile tt_l1_ptr uint32_t* gbase;  // words[32..64): grants consumed by earlier calls
+#endif
+
+    SeYRmWriter(uint32_t y_addr, uint32_t col0) :
+        yg(TensorAccessor(flat_acc::y, y_addr, ht * 64)), col_off(col0 * 64), base(get_read_ptr(out_cb)) {
+#ifdef SE_Y_L1
+        constexpr uint32_t A0 = SE_Y_L1;
+        nd = moe_block_args::arg(A0 + 0);
+        islot = moe_block_args::arg(A0 + 1);
+        tab_base = moe_block_args::arg(A0 + 2);
+        words = moe_block_args::arg(A0 + 3);
+        widx = moe_block_args::arg(SE_CMB_WIDX);
+        for (uint32_t d = 0; d < nd; ++d) {
+            dx[d] = moe_block_args::arg(A0 + 8 + 5 * d);
+            dy[d] = moe_block_args::arg(A0 + 9 + 5 * d);
+            dbase[d] = moe_block_args::arg(A0 + 10 + 5 * d);
+            dq[d] = moe_block_args::arg(A0 + 11 + 5 * d);
+            dland[d] = moe_block_args::arg(A0 + 12 + 5 * d);
+            cnt[d] = 0;
+        }
+        grant = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
+        gbase = grant + 32;
+        // (routed_experts_combine: the words are in the call's arena - zero them, then count in on the combine's gate,
+        // before any grant can arrive: the gate releases the ports / accumulators that grant only after every writer)
+        if (const uint32_t zb = moe_block_args::arg(A0 + 7); zb != 0) {
+            const uint32_t gxy = moe_block_args::arg(A0 + 5), bar = moe_block_args::arg(A0 + 6);
+            const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+            for (uint32_t o = 0; o < zb; o += MEM_ZEROS_SIZE) {
+                noc_async_read(zeros, words + o, zb - o < MEM_ZEROS_SIZE ? zb - o : MEM_ZEROS_SIZE);
+            }
+            noc_async_read_barrier();
+            noc_semaphore_inc(get_noc_addr(gxy & 0xFFFF, gxy >> 16, bar + 8), 1);  // (bar[2]: combine_zero_gate.hpp)
+            noc_async_atomic_barrier();
+        }
+#endif
+    }
+#ifdef SE_Y_L1
+    // after the last row: the grants this call consumed
+    void finish() {
+        for (uint32_t d = 0; d < nd; ++d) {
+            gbase[d] = gbase[d] + cnt[d];
+        }
+    }
+#endif
+
+    static uint32_t rows_v(const SeDyn& dyn, uint32_t a, uint32_t s) {
+        const uint32_t left = dyn.cnt[a] - s * mt * 32;
+        return left >= mt * 32 ? mt : (left + 31) / 32;
+    }
+
+    // Issue the next row tile's writes if the compute has pushed it and a transaction id is free; true if issued.
+    bool issue(const SeDyn& dyn) {
+#if defined(SE_Y_L1)
+        if (uiss - uret == rows ||
+            (part == 0 &&
+             (issued - retired == rows || !cb_pages_available_at_front(out_cb, (issued - retired + 1) * pcd)))) {
+            return false;
+        }
+#else
+        if (issued - retired == rows || !cb_pages_available_at_front(out_cb, (issued - retired + 1) * pcd)) {
+            return false;
+        }
+#endif
+        const uint32_t src = base + (issued % rows) * tile_bytes;
+        const uint32_t row_base = is * mt * 32 + ir * 32;
+        const uint32_t left = dyn.cnt[ia] - row_base;
+        const uint32_t n = left < 32 ? left : 32;
+        const uint32_t row0 = dyn.off[ia] + row_base;
+#if defined(SE_Y_L1)
+        const uint32_t trid = trid0 + uiss % rows;
+        if (nd == 0) {  // (nothing to hand off to: the flat expert alone without y)
+            (void)src, (void)row0, (void)trid;
+            for (uint32_t d = 0; d < L1_MAXD; ++d) {
+                tcnt[uiss % rows][d] = 0;
+            }
+            ulast[uiss % rows] = 1;
+            ++uiss;
+            ++issued;
+            goto advanced;
+        }
+#else
+        const uint32_t trid = trid0 + issued % rows;
+#endif
+#if defined(SE_Y_L1)
+        {
+            // this tile's table page: (destination, header word) per row
+            const uint32_t page = row0 / 32, tabl = words + 256;
+            if (page != tab_tile) {
+                noc_async_read(TensorAccessor(flat_acc::y_table, tab_base, 256).get_noc_addr(page), tabl, 256);
+                noc_async_read_barrier();
+                tab_tile = page;
+            }
+            const volatile tt_l1_ptr uint32_t* ent = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(tabl);
+            uint8_t* tc = tcnt[uiss % rows];
+            for (uint32_t d = 0; d < nd; ++d) {
+                tc[d] = 0;
+            }
+            invalidate_l1_cache();
+            // this unit: the tile's next rows while their destinations have granted slots for them
+            uint32_t i1 = part;
+            for (; i1 < n; ++i1) {
+                const uint32_t d = ent[2 * i1] & 0xFF;
+                if (grant[d] - gbase[d] < cnt[d] + tc[d] + 1) {
+                    break;
+                }
+                ++tc[d];
+            }
+            if (i1 == part) {
+                return false;
+            }
+            const uint32_t stage = words + 512 + (uiss % rows) * 32 * 32;  // trailers in flight (column-0 writer)
+            if (col_off == 0) {
+                for (uint32_t i = part; i < i1; ++i) {
+                    volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + i * 32);
+                    tr[0] = ent[2 * i + 1];    // the row's header word
+                    tr[1] = ent[2 * i] >> 16;  // the row's gate weight (bf16 bits)
+                    tr[2] = tr[4] = tr[5] = tr[6] = 0;
+                    tr[3] = 1;
+                    tr[7] = 1;
+                }
+                // (the NoC reads the stage straight from L1: these stores must land first, or a trailer write can
+                // carry the stage's previous words - e.g. a zeroed tr[7] (the stage is zeroed every call), and the
+                // row is never taken at its home: the combine hangs)
+                asm volatile("fence" ::: "memory");
+            }
+            for (uint32_t i = part; i < i1; ++i) {
+                const uint32_t d = ent[2 * i] & 0xFF;
+                const uint32_t slot = dbase[d] + (cnt[d] % dq[d]) * islot;
+                ++cnt[d];
+                noc_async_write_one_packet_with_trid(
+                    src + i * seg,
+                    get_noc_addr(dx[d], dy[d], slot + col_off, ynoc),
+                    seg,
+                    trid,
+                    write_cmd_buf,
+                    ynoc,
+                    yvc);
+                if (col_off == 0) {  // (its trailer, staged above)
+                    noc_async_write_one_packet_with_trid(
+                        stage + i * 32,
+                        get_noc_addr(dx[d], dy[d], slot + ht * 64, ynoc),
+                        32,
+                        trid,
+                        write_cmd_buf,
+                        ynoc,
+                        yvc);
+                }
+            }
+            (void)row0;
+            ulast[uiss % rows] = i1 == n ? 1 : 0;
+            ++uiss;
+            if (i1 < n) {  // (the tile's other rows in a later unit: the cursor stays on it)
+                part = i1;
+                return true;
+            }
+            part = 0;
+        }
+#else
+        for (uint32_t i = 0; i < n; ++i) {
+            noc_async_write_one_packet_with_trid(
+                src + i * seg, yg.get_noc_addr(row0 + i, col_off, ynoc), seg, trid, write_cmd_buf, ynoc, yvc);
+        }
+#endif
+        ++issued;
+#if defined(SE_Y_L1)
+    advanced:
+#endif
+        if (++ir == rows_v(dyn, ia, is)) {
+            ir = 0;
+            if (++is == dyn.subs[ia]) {
+                is = 0;
+                ++ia;
+            }
+        }
+        return true;
+    }
+
+    // Retire the oldest issued row tile once its writes are flushed (frees its pages); returns the number of virtual
+    // experts completed by it (0 or 1).
+    uint32_t retire(const SeDyn& dyn) {
+#ifdef SE_Y_L1
+        if (uret == uiss || !ncrisc_noc_nonposted_write_with_transaction_id_flushed(ynoc, trid0 + uret % rows)) {
+            return 0;
+        }
+        {
+            const uint8_t* tc = tcnt[uret % rows];
+            for (uint32_t d = 0; d < nd; ++d) {
+                if (tc[d]) {
+                    noc_semaphore_inc(get_noc_addr(dx[d], dy[d], dland[d] + 4 * widx, ynoc), tc[d], ynoc);
+                }
+            }
+        }
+        const bool tile_done = ulast[uret % rows] != 0;
+        ++uret;
+        if (!tile_done) {
+            return 0;
+        }
+        cb_pop_front(out_cb, pcd);
+#else
+        if (retired == issued ||
+            !ncrisc_noc_nonposted_write_with_transaction_id_flushed(ynoc, trid0 + retired % rows)) {
+            return 0;
+        }
+        cb_pop_front(out_cb, pcd);
+#endif
+        ++retired;
+        if (++dr == rows_v(dyn, da, ds)) {
+            dr = 0;
+            done_a = da;
+            if (++ds == dyn.subs[da]) {
+                ds = 0;
+                ++da;
+            }
+            return 1;
+        }
+        return 0;
+    }
+};

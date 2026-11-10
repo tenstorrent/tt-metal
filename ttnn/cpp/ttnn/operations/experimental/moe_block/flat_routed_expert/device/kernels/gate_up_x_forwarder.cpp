@@ -1,0 +1,135 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// gate_up_x_forwarder: forwards x along the gate/up snake and reads this core's gate/up weights
+// Runs on: gate/up cores (p.gu), RISCV_1 (NCRISC), NoC 0
+// Responsibilities:
+//  - reads its gate/up weight chunks from DRAM over NoC 0 into the landing slots gate_up_core_reader grants
+//    (gate_up_weight_read.hpp), bumping DATA as chunks land
+//  - unicasts each arrived x piece (XARR) into the successor's x ring (transaction ids, DEPTH in flight) once its
+//    slot is free (SFREE), then bumps the successor's XARR
+//  - reports min(consumed, forwarded) blocks upstream: predecessor's SFREE or, on a snake head, the primary relay's
+//    freed word (x_injector_writer); ends on gate_up_core_reader's end count (XEND)
+
+// Gate/up x forwarder (NCRISC) on a gate/up core, also its weight reads (gate_up_weight_read.hpp): x travels the
+// gate/up cores by unicast (no multicast: the NOC0 wedge of a multicast into the gate/up rectangle beside the weight
+// and DRAM traffic). The receiver (gate_up_core_reader.cpp, BRISC, SE_X_FWD_NC) only consumes x; this kernel forwards
+// each piece as soon as it has arrived (XARR here, in pieces) into the successor's x ring, once the successor has freed
+// the block's slot (SFREE here), then bumps the successor's XARR after the write is acknowledged; and reports
+// min(consumed (XCONS, published by gate_up_core_reader), forwarded) blocks upstream - the predecessor's SFREE, or on a
+// chain head the relay's word. It ends once gate_up_core_reader has published its last count (XEND = blocks + 1) and
+// every block is forwarded and reported. CT: 0 X_SLOTS, 1 X_BYTES, 2 X_PIECES, 3 XARR_SEM, 4 SFREE_SEM, 5 XCONS_SEM, 6
+// XEND_SEM, 7 DEPTH (pieces in flight) RT: 0 x ring address, 1 predecessor xy (0: chain head), 2 sem id of this core's
+// free word on the predecessor,
+//     3 successor xy (0: chain tail), 4 relay xy, 5 the relay's word for this core (a chain head), 6.. the
+//     gate_up_weight_read.hpp args
+#include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/moe_block_args.hpp"
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "gate_up_weight_read.hpp"
+
+void kernel_main() {
+    moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
+    constexpr uint32_t x_slots = get_compile_time_arg_val(0), x_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t xp = get_compile_time_arg_val(2), xarr_id = get_compile_time_arg_val(3);
+    constexpr uint32_t sfree_id = get_compile_time_arg_val(4), xcons_id = get_compile_time_arg_val(5);
+    constexpr uint32_t xend_id = get_compile_time_arg_val(6), depth = get_compile_time_arg_val(7);
+    // (CT 8 NB: x blocks a sub-block, CT 9 MT: row tiles a block)
+    constexpr uint32_t nb = get_compile_time_arg_val(8), mt = get_compile_time_arg_val(9);
+    static_assert(depth >= 1 && depth <= 14);
+    constexpr uint32_t piece = x_bytes / xp;
+    const uint32_t x_ring = moe_block_args::arg(0);
+    const uint32_t pxy = moe_block_args::arg(1), sxy = moe_block_args::arg(3);
+    const uint64_t pred_free = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(moe_block_args::arg(2)));
+    const uint32_t rxy = moe_block_args::arg(4);
+    const uint64_t relay_word = get_noc_addr(rxy >> 16, rxy & 0xFFFF, moe_block_args::arg(5));
+    const uint64_t s_ring = get_noc_addr(sxy >> 16, sxy & 0xFFFF, x_ring);
+    const uint64_t s_xarr = get_noc_addr(sxy >> 16, sxy & 0xFFFF, get_semaphore(xarr_id));
+    auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
+    volatile tt_l1_ptr uint32_t* xarr = sem(xarr_id);
+    volatile tt_l1_ptr uint32_t* sfree = sem(sfree_id);
+    volatile tt_l1_ptr uint32_t* xcons = sem(xcons_id);
+    volatile tt_l1_ptr uint32_t* xend = sem(xend_id);
+    uint32_t iss = 0, fwd = 0, rep = 0;  // pieces issued / acknowledged (+ XARR'd), blocks reported
+    // gate/up weights read from here (gate_up_weight_read.hpp, RT 6..), into the landing slots the receiver (BRISC)
+    // grants; the loads list comes from the receiver (its mailbox word, then the list in this RISC's half of CB 7)
+    SeGuRead gr;
+    bool g_done = true;
+    {
+        volatile tt_l1_ptr uint32_t* mbox = sem(SE_GU_MBOX_SEM);
+        while (*mbox == 0) {
+            invalidate_l1_cache();
+        }
+        volatile tt_l1_ptr uint32_t* mb =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF);
+        gr.init(6, SE_GU_BLK, SE_GU_PER_E, SE_GU_DEPTH, mb[0], mb + 1, sem(SE_GU_GRANT_SEM), sem(SE_GU_DATA_SEM));
+        g_done = gr.total == 0;
+    }
+    // a short last sub-block: its blocks' pieces past its row tiles holding tokens carry nothing - counted (XARR), not
+    // written. The entries (sub-blocks | last one's row tiles << 16) follow the loads list in the mailbox.
+    const volatile tt_l1_ptr uint32_t* xe =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF) + 1 +
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF)[0];
+    const uint32_t n_ent = xe[0];
+    uint32_t ca = 0, cs = 0, cv_end = nb, cnp = xp;  // the block cursor's entry / sub-block, its end block, its pieces
+    auto set_np = [&]() {
+        const uint32_t subs = ca < n_ent ? (xe[1 + ca] & 0xFFFF) : 1u;
+        const uint32_t lr = ca < n_ent && cs + 1 == subs ? (xe[1 + ca] >> 16) : mt;
+        cnp = (lr * xp + mt - 1) / mt;
+    };
+    set_np();
+    while (true) {
+        invalidate_l1_cache();
+        if (!g_done) {
+            g_done = gr.step();
+        }
+        if (sxy) {
+            const uint32_t arrived = *xarr;
+            while (iss < arrived && iss - fwd < depth && (iss / xp < x_slots || *sfree >= iss / xp + 1 - x_slots)) {
+                while (iss / xp >= cv_end) {  // (the cursor onto the block's sub-block)
+                    cv_end += nb;
+                    if (ca < n_ent && ++cs == (xe[1 + ca] & 0xFFFF)) {
+                        cs = 0;
+                        ++ca;
+                    }
+                    set_np();
+                }
+                if (iss % xp >= cnp) {  // (an empty piece: nothing to write, its count goes on in order)
+                    ++iss;
+                    continue;
+                }
+                const uint32_t off = ((iss / xp) % x_slots) * x_bytes + (iss % xp) * piece;
+                for (uint32_t o = 0; o < piece; o += NOC_MAX_BURST_SIZE) {
+                    const uint32_t n = piece - o < NOC_MAX_BURST_SIZE ? piece - o : NOC_MAX_BURST_SIZE;
+                    noc_async_write_one_packet_with_trid(x_ring + off + o, s_ring + off + o, n, 1 + iss % depth);
+                }
+                ++iss;
+            }
+            // (the write command buffer drained first: a transaction id's outstanding count only covers requests the
+            // NIU has taken - polled right after issuing, the last write can still sit in the command buffer and the
+            // id reads "done" before its data has landed; the read-side twin: FLAT_COMBINE_OVERLAP_WORKLOG.md 6.14)
+            while (fwd < iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+            }
+            while (fwd < iss && ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + fwd % depth)) {
+                noc_semaphore_inc(s_xarr, 1);
+                ++fwd;
+            }
+        }
+        const uint32_t cons = *xcons;
+        const uint32_t freed = sxy && fwd / xp < cons ? fwd / xp : cons;
+        if (freed > rep) {
+            noc_semaphore_inc(pxy ? pred_free : relay_word, freed - rep);
+            rep = freed;
+        }
+        const uint32_t end = *xend;
+        if (g_done && end && rep == end - 1 && (!sxy || fwd == (end - 1) * xp)) {
+            break;
+        }
+    }
+    gr.finish();
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+    noc_async_write_set_trid(0);
+}
+
