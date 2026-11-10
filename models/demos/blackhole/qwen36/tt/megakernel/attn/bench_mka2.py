@@ -22,8 +22,13 @@ if MESH:
     dev = ttnn.open_mesh_device(ttnn.MeshShape(1, int(os.environ.get('MK_MESH_N', '8'))), trace_region_size=64 << 20)
     _from_torch, _to_torch, _generic_op = ttnn.from_torch, ttnn.to_torch, ttnn.generic_op
     def _ft(*a, **k):
-        if k.get('device') is not None and 'mesh_mapper' not in k: k['mesh_mapper'] = ttnn.ReplicateTensorToMesh(dev)
-        return _from_torch(*a, **k)
+        # tilize on the HOST (the mesh path would tilize on device through a same-size L1 temp, which leaves a hole above
+        # the result and pushes the buffer into the CB region), then move to the mesh with the requested memory config
+        d = k.pop('device', None); mc = k.pop('memory_config', None)
+        if d is None: return _from_torch(*a, **k)
+        if 'mesh_mapper' not in k: k['mesh_mapper'] = ttnn.ReplicateTensorToMesh(dev)
+        h = _from_torch(*a, **k)
+        return ttnn.to_device(h, d, memory_config=mc) if mc is not None else ttnn.to_device(h, d)
     def _tt(t, *a, **k):  # device 0's copy (mesh_identity() checks the other devices)
         return _to_torch(ttnn.get_device_tensors(t)[0], *a, **k) if t.storage_type() == ttnn.StorageType.DEVICE else _to_torch(t, *a, **k)
     PROG_PER_DEV = None  # optional callable(coord) -> ProgramDescriptor (per-device AR args); else the same program everywhere
@@ -144,9 +149,12 @@ def hs(r, w): return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, t
 x = ttnn.from_torch(x_t.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ws(rect, XSW * TILE))
 xb = ttnn.to_torch(x).float().reshape(M, H)
 gold = (torch.nn.functional.silu(xb @ wgq) * (xb @ wuq)).bfloat16().float() @ wdq
-xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, H))
+# mesh: freed mesh buffers are not reliably reusable before the program runs, so with RQKV (which replaces x with a
+# full-grid copy below) the 80-core copy is never allocated
+_SKIP_XBUF80 = MESH and 'MKA_RQKV=1' in os.environ.get('MK_DEFINES', '')
+xbuf = None if _SKIP_XBUF80 else ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, H))
 XPRE = 1 if os.environ.get("FM_XPRE", "1") == "1" else 0
-if XPRE:
+if XPRE and not _SKIP_XBUF80:
     if MESH: ttnn.deallocate(xbuf)  # mesh tensors are not freed on rebinding
     xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NC, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(rect, H))
 HDT = ttnn.bfloat8_b if os.environ.get('MK_H_BFP8') == '1' else ttnn.bfloat16  # -mk-tail: h broadcast in BFP8 halves its bytes
@@ -408,8 +416,7 @@ if RQKV:
     gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
     qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     # x on every qkv core: shard x over the full grid (lockstep L1 address, same footprint as the 80-core shard)
-    ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
-    if MESH and xbuf is not None: ttnn.deallocate(xbuf)  # mesh tensors are not freed on rebinding
+    if xbuf is not None: ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
     xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
     EXTRA_T = EXTRA_TX = 0   # the qkv bytes are real now
     ext_crs = crs([fcores[fi] for fi in ext_list])
