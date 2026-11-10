@@ -37,6 +37,7 @@
 #include <llrt/tt_cluster.hpp>
 
 #include "generate_rank_bindings_helpers.hpp"
+#include <factory_system_descriptor/utils.hpp>
 
 #ifdef OPEN_MPI
 #include <mpi.h>
@@ -464,6 +465,7 @@ struct ProgramArgs {
     std::size_t max_solutions = 0;    // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
     bool distinct_host_sets = false;  // --distinct-host-sets/-d: one solution per unique host set
     bool allow_shape_permutations = false;  // hidden: disable the solver's unique_shapes dedup
+    std::optional<std::string> mock_cluster_desc_from_fsd;
 };
 
 /**
@@ -504,7 +506,11 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         "d,distinct-host-sets",
         "Keep only one solution per unique set of HOSTS: after enumeration, solutions that occupy the same hosts "
         "(even if they wire/assign the meshes differently) are collapsed to the first. Only meaningful with "
-        "--all-solutions.")("h,help", "Print usage information");
+        "--all-solutions.")(
+        "mock-cluster-desc-from-fsd",
+        "Write one mock cluster descriptor per host of this Factory System Descriptor (.textproto) into "
+        "--output-dir, plus a rank mapping for multi-host FSDs, then exit. Runs without MPI; -m/-M are not used.",
+        cxxopts::value<std::string>())("h,help", "Print usage information");
 
     // Hidden/advanced options (in a separate group so they do NOT appear in --help).
     options.add_options("hidden")(
@@ -523,6 +529,18 @@ ProgramArgs parse_arguments(int argc, char** argv) {
 
         const bool has_m = result.contains("mesh-graph-descriptor");
         const bool has_M = result.contains("mesh-graph-descriptor-mapping");
+        if (result.contains("mock-cluster-desc-from-fsd")) {
+            if (has_m || has_M) {
+                throw std::invalid_argument("--mock-cluster-desc-from-fsd does not take -m or -M");
+            }
+            if (!result.contains("output-dir")) {
+                throw std::invalid_argument("--mock-cluster-desc-from-fsd requires --output-dir");
+            }
+            ProgramArgs args;
+            args.mock_cluster_desc_from_fsd = result["mock-cluster-desc-from-fsd"].as<std::string>();
+            args.output_dir = result["output-dir"].as<std::string>();
+            return args;
+        }
         if (has_m == has_M) {
             throw std::invalid_argument(
                 "Exactly one of --mesh-graph-descriptor (-m) or --mesh-graph-descriptor-mapping (-M) is required");
@@ -579,6 +597,18 @@ ProgramArgs parse_arguments(int argc, char** argv) {
 int main(int argc, char** argv) {
     // Parse arguments first (before MPI initialization)
     ProgramArgs args = parse_arguments(argc, argv);
+
+    if (args.mock_cluster_desc_from_fsd.has_value()) {
+        try {
+            std::cout << tt::scaleout_tools::generate_cluster_descriptor_from_fsd(
+                             *args.mock_cluster_desc_from_fsd, *args.output_dir, "mock_cluster_desc")
+                      << std::endl;
+            return 0;
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return 1;
+        }
+    }
 
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
 
