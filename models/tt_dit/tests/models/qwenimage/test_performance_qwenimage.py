@@ -122,7 +122,6 @@ def run_cases(
                 images = pipeline(
                     prompts=[prompt],
                     num_inference_steps=case.num_inference_steps,
-                    traced=True,
                     on_event=profiler_event_callback(benchmark_profiler, iteration),
                     **case.kwargs,
                 )
@@ -347,6 +346,7 @@ def test_qwenimage_edit_pipeline_performance(
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
     checkpoint_name = "Qwen/Qwen-Image-Edit-2511"
+    # `trace` is left to the pipeline: eager on the Wormhole 2x4, which offloads the vision tower.
     pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=checkpoint_name)
     config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape, checkpoint_name=checkpoint_name)
 

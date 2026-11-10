@@ -29,7 +29,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConf
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.pipeline_api import Pipeline
 from models.tt_dit.pipelines.qwenimage.text_encoder import (
     EDIT_FORMAT,
     EDIT_PLUS_FORMAT,
@@ -208,6 +208,8 @@ class QwenImagePipelineConfig:
     offload_text_encoder: bool
     # Load the vision tower's device weights only while encoding the input images.
     offload_vision_tower: bool
+    # Capture traces and replay them. Not possible while any weights are offloaded.
+    trace: bool
 
     resolutions: tuple[tuple[int, int], ...]
     spatial_sequence_length_buckets: tuple[int, ...]
@@ -220,6 +222,22 @@ class QwenImagePipelineConfig:
     dbcache: DBCacheConfig | None
 
     checkpoint_name: str
+
+    @staticmethod
+    def _offloads_weights(
+        *, use_torch_text_encoder: bool, offload_text_encoder: bool, offload_vision_tower: bool, max_images: int
+    ) -> bool:
+        """Whether these settings evict device weights: only the edit checkpoints have a vision tower."""
+        return not use_torch_text_encoder and (offload_text_encoder or (offload_vision_tower and max_images > 0))
+
+    @property
+    def offloads_weights(self) -> bool:
+        return self._offloads_weights(
+            use_torch_text_encoder=self.use_torch_text_encoder,
+            offload_text_encoder=self.offload_text_encoder,
+            offload_vision_tower=self.offload_vision_tower,
+            max_images=self.max_images,
+        )
 
     @classmethod
     def default(
@@ -236,6 +254,7 @@ class QwenImagePipelineConfig:
         use_torch_vae_encoder: bool = False,
         offload_text_encoder: bool | None = None,
         offload_vision_tower: bool | None = None,
+        trace: bool | None = None,
         resolutions: Sequence[tuple[int, int]] | None = None,
         spatial_sequence_length_buckets: Sequence[int] | None = None,
         cfg_enabled: bool = True,
@@ -286,6 +305,13 @@ class QwenImagePipelineConfig:
             offload_text_encoder = max_images > 0 and preset.get("edit_offload_text_encoder", False)
         if offload_vision_tower is None:
             offload_vision_tower = preset.get("offload_vision_tower", False)
+        if trace is None:
+            trace = not cls._offloads_weights(
+                use_torch_text_encoder=use_torch_text_encoder,
+                offload_text_encoder=offload_text_encoder,
+                offload_vision_tower=offload_vision_tower,
+                max_images=max_images,
+            )
 
         return cls(
             topology=topology,
@@ -298,6 +324,7 @@ class QwenImagePipelineConfig:
             use_torch_vae_encoder=use_torch_vae_encoder,
             offload_text_encoder=offload_text_encoder,
             offload_vision_tower=offload_vision_tower,
+            trace=trace,
             resolutions=tuple(resolutions),
             spatial_sequence_length_buckets=tuple(spatial_sequence_length_buckets),
             cfg_enabled=cfg_enabled,
@@ -361,7 +388,7 @@ class _Layout(NamedTuple):
     padded_sequence_length: int
 
 
-class QwenImagePipeline(PipelineAPIMixin):
+class QwenImagePipeline(Pipeline):
     """QwenImagePipeline is a pipeline for generating images from text prompts.
 
     It uses a transformer to encode the text prompts and a VAE to decode the latent space.
@@ -385,6 +412,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         return cls(device=mesh_device, config=config)
 
     def __init__(self, *, device: ttnn.MeshDevice, config: QwenImagePipelineConfig) -> None:
+        super().__init__(offload_weights=config.offloads_weights, trace=config.trace)
         self._parallel_config = config.dit_parallel_config
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis
         self._cfg_parallel = config.dit_parallel_config.cfg_parallel.factor != 1
@@ -461,6 +489,8 @@ class QwenImagePipeline(PipelineAPIMixin):
             vision_image_sizes=[self._vision_size(s.width / s.height, s) for s in self._image_sizes.values()],
             max_images=self._max_images,
         )
+        # What the text encoder really evicts decides, whatever the config predicted.
+        self.register_evictable(*self._text_encoder.offloaded_modules)
 
         logger.info("creating transformers...")
         self._transformers = [
@@ -543,8 +573,9 @@ class QwenImagePipeline(PipelineAPIMixin):
         logger.info("pipeline allocation run...")
         self._warm_up(traced=False)
 
-        logger.info("pipeline capture run...")
-        self._warm_up(traced=True)
+        if self.trace:
+            logger.info("pipeline capture run...")
+            self._warm_up(traced=True)
 
     def _warm_up(self, *, traced: bool) -> None:
         """Runs every prompt bucket with every spatial bucket, and the VAE at every resolution."""
@@ -630,14 +661,14 @@ class QwenImagePipeline(PipelineAPIMixin):
     ) -> None:
         """One warm-up generation, its last step cached with DBCache."""
         cached_step = self._warm_up_computed_steps
-        self(
+        # A capture run is an ordinary call, so that the trace rule applies to it.
+        (self if traced else self.run_untraced)(
             prompts=prompts,
             negative_prompts=prompts,
             num_inference_steps=cached_step + 1,
             cfg_scale=2 if self._cfg_enabled else 1,
             width=width,
             height=height,
-            traced=traced,
             encoder_traced=traced,
             image=image,
             mask_image=mask_image,
@@ -650,7 +681,7 @@ class QwenImagePipeline(PipelineAPIMixin):
             msg = f"the DBCache warm-up cached steps {self._dbcache.cached_steps}, not step {cached_step}"
             raise RuntimeError(msg)
 
-    def __call__(
+    def _run(
         self,
         *,
         prompts: Sequence[str],
@@ -661,7 +692,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         cfg_scale: float = 4.0,
         width: int | None = None,
         height: int | None = None,
-        traced: bool = True,
+        traced: bool | None = None,
         encoder_traced: bool | None = None,
         image: Image.Image | Sequence[Image.Image] | None = None,
         mask_image: Image.Image | None = None,
@@ -688,7 +719,10 @@ class QwenImagePipeline(PipelineAPIMixin):
         ``dbcache`` replaces the pipeline's DBCache configuration for this call. It needs one to be
         configured, with the same ``Fn_compute_blocks``, ``Bn_compute_blocks`` and
         ``taylorseer_order``.
+
+        ``traced`` is the pipeline's ``trace`` unless it is ``False``.
         """
+        traced = self.trace if traced is None else traced
         prompt_count = len(prompts)
 
         if cfg_scale > 1 and not self._cfg_enabled:

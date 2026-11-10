@@ -27,9 +27,9 @@ from .device_params import DBCACHE_MESH_DEVICE_PARAMS, EDIT_MESH_DEVICE_PARAMS, 
 DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
 
 
-def create_1024_pipeline(mesh_device: ttnn.MeshDevice) -> QwenImagePipeline:
+def create_1024_pipeline(mesh_device: ttnn.MeshDevice, *, trace: bool | None = None) -> QwenImagePipeline:
     """A text-to-image pipeline that only warms up 1024x1024, the size these tests generate."""
-    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape, resolutions=[(1024, 1024)])
+    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape, resolutions=[(1024, 1024)], trace=trace)
     return QwenImagePipeline(device=mesh_device, config=config)
 
 
@@ -59,7 +59,7 @@ def test_qwenimage_pipeline(
 
     width, height = 1024, 1024
 
-    pipeline = create_1024_pipeline(mesh_device)
+    pipeline = create_1024_pipeline(mesh_device, trace=traced)
 
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee 😊 $2 per cup," with a neon light '
@@ -99,7 +99,6 @@ def test_qwenimage_pipeline(
             seed=seed,
             width=width,
             height=height,
-            traced=traced,
         )
 
         output_filename = f"{filename_prefix}_{number}.png"
@@ -231,6 +230,8 @@ EDIT_CHECKPOINTS = [
 ]
 
 
+# The edit tests leave `trace` to the pipeline: it traces on the Blackhole meshes and runs eager on the
+# Wormhole 2x4, where the edit checkpoints offload their vision tower.
 @pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("checkpoint_name", EDIT_CHECKPOINTS)
 def test_qwenimage_edit(
