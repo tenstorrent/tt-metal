@@ -20,6 +20,9 @@
 #if defined(MK_V12)
 #include "v12e.hpp"
 #endif
+#if defined(MKA_RWO)
+#include "wo_unit_dm.hpp"
+#endif
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
 #include "../../kernels/mk_ar_recv.hpp"   // AR_RECV on the owners (AR_INTERFACE.md; MKAR_* defines from ar_phase.py)
 #endif
@@ -807,19 +810,7 @@ void kernel_main() {
             cb_push_back(CB_A, WK);
             { DeviceZoneScopedN("W-WOQO"); cb_wait_front(CB_QO, QO_SLOT); }   // A_g @ Wo slice (full slot, wo_nt valid)
             const uint32_t xo = get_write_ptr(CB_XO);   // uniform on the ext cores
-            uint32_t cnt[16];
-            for (uint32_t i = 0; i < 16; ++i) cnt[i] = 0;
-            for (uint32_t j = 0; j < wo_nt; ++j) {   // rot order: farthest owning device first
-                const uint32_t n = wo_tile[j], ch = n / 10;
-                noc_async_write(get_read_ptr(CB_QO) + j * 2048, get_noc_addr(ow_x[ch], ow_y[ch], xo + (n % 10) * 2048), 2048);
-                ++cnt[ch];
-            }
-            noc_async_write_barrier();
-            for (uint32_t j = 0; j < wo_nt; ++j) {
-                const uint32_t ch = wo_tile[j] / 10;
-                if (cnt[ch]) { noc_semaphore_inc(get_noc_addr(ow_x[ch], ow_y[ch], gs[GS_WOCNT]), cnt[ch]); cnt[ch] = 0; }
-            }
-            cb_pop_front(CB_QO, QO_SLOT);
+            wou::scatter(CB_QO, QO_SLOT, wo_nt, wo_tile, ow_x, ow_y, xo, gs[GS_WOCNT]);   // rot order: farthest owner first
             if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
                 noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * (A + 1));
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_WODONE]), 1);   // READY first; the copy is bench-only
