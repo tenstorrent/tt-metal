@@ -121,7 +121,11 @@ def allreduce_gather_sum_enabled() -> bool:
 ONESHOT_SLOTS = ("o", "down")
 # Mesh shapes whose builds take the one-shot all-reduce by default (default_ccl_oneshot); the measured basis is in
 # its docstring. A shape joins when a served knob A/B measures a decode win with the PCC gates intact.
-_ONESHOT_DEFAULT_ON_SHAPES = ((1, 4), (1, 8))
+# (1,8) is OFF: on the Blackhole Galaxy DP4 engine the one-shot op garbles long-context decode on two of the four
+# rows (2026-11-10, 31B, rows TT_VISIBLE_DEVICES 4-7/28-31 and 12-15/20-23: the 32K needle answers with a correct
+# first token, then garbage; rows 0 and 3 and every 1K prompt clean; GEMMA4_CCL_ONESHOT=0 alone restores all four
+# rows at a 1-3 % decode cost). The prose / PCC / 128-1K gates that qualified it never decode at long context.
+_ONESHOT_DEFAULT_ON_SHAPES = ((1, 4),)
 
 
 def default_ccl_oneshot(mesh_shape=None) -> bool:

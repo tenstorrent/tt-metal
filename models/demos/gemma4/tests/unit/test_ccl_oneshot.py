@@ -69,7 +69,7 @@ def test_oneshot_knobs(monkeypatch, expect_error):
     for shape in ((1, 4), (4, 1), (1, 8), (8, 4), (1, 1)):
         assert ccl_mod.ccl_oneshot_enabled(mesh_shape=shape) == ccl_mod.default_ccl_oneshot(shape)
         assert ccl_mod.default_ccl_oneshot(shape) == (shape in ccl_mod._ONESHOT_DEFAULT_ON_SHAPES)
-    assert ccl_mod.default_ccl_oneshot((1, 4)) and ccl_mod.default_ccl_oneshot((1, 8))
+    assert ccl_mod.default_ccl_oneshot((1, 4)) and not ccl_mod.default_ccl_oneshot((1, 8))
     monkeypatch.setattr(ccl_mod, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too): never by default
     assert not any(ccl_mod.default_ccl_oneshot(s) for s in ((1, 4), (1, 8)))
     monkeypatch.setattr(ccl_mod, "is_blackhole", lambda: True)
