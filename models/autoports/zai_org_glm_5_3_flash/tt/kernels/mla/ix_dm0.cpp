@@ -193,15 +193,19 @@ void kernel_main() {
     // chip's records in (core, local) order) and writes them into slots 0..3. The same union histograms, digits, T_g
     // and (chip, core, local) tie order as rev 58's serial merge of the C x 512 keys on this RISC (bitwise-identical
     // results), with each helper's work 1 / C of it and NCHIPS (not 64) participants per round.
-    static_assert(mlashard::NCHIPS <= C, "one merge helper per chip");
+    // Rev 64 (MLA_DSA_SHARD_KPH, dsa_shard.hpp KPH / NHELP): NHELP = NCHIPS / KPH helpers, helper h holding the lists
+    // of chips h KPH .. h KPH + KPH - 1: NHELP histograms per round (each over the union of its KPH lists: the same
+    // sums), the tie round's KPH per-list counts per helper (words 0 .. KPH - 1 of its slot) -> the per-chip quotas in
+    // chip order h KPH + i (the same quotas); helper rank / KPH writes this chip's per-core quotas.
+    static_assert(mlashard::NHELP <= C, "the merge helpers among the lane's chunk cores");
     auto hsend = [&](uint32_t src, uint32_t off, uint32_t bytes) {
         invalidate_l1_cache();
-        for (uint32_t k = 0; k < mlashard::NCHIPS; ++k) {
+        for (uint32_t k = 0; k < mlashard::NHELP; ++k) {
             const uint32_t x = get_arg_val<uint32_t>(OWN0 + 2 * k), yy = get_arg_val<uint32_t>(OWN0 + 2 * k + 1);
             noc_async_write(src, get_noc_addr(x, yy, mbox + off), bytes);
         }
         noc_async_write_barrier();
-        for (uint32_t k = 0; k < mlashard::NCHIPS; ++k) {
+        for (uint32_t k = 0; k < mlashard::NHELP; ++k) {
             const uint32_t x = get_arg_val<uint32_t>(OWN0 + 2 * k), yy = get_arg_val<uint32_t>(OWN0 + 2 * k + 1);
             noc_semaphore_inc(get_noc_addr(x, yy, get_semaphore(SEL_SEM)), 1);
         }
@@ -313,10 +317,10 @@ void kernel_main() {
             bool done = false;
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
                 const uint32_t shift = 32 - mladsa::DIGIT_BITS * (r + 1);
-                mk::wait_handoff(H_SEM, mlashard::NCHIPS);
+                mk::wait_handoff(H_SEM, mlashard::NHELP);
                 invalidate_l1_cache();
                 uint32_t h[mladsa::BINS];
-                mladsa::sum_hist(hist, mlashard::NCHIPS, h);
+                mladsa::sum_hist(hist, mlashard::NHELP, h);
                 if (r == 0) {
                     uint32_t m = 0;
                     for (uint32_t b = 0; b < mladsa::BINS; ++b) {
@@ -343,14 +347,26 @@ void kernel_main() {
                 hsend(scr + MSG_OFF, mlashard::merge_msg(j, 1 + r), mladsa::MSG_BYTES);
             }
             if (!done) {
-                // ties: the first k_rem keys == T_g in (chip, core, local) order -> per helper (= chip) quotas
-                mk::wait_handoff(H_SEM, mlashard::NCHIPS);
+                // ties: the first k_rem keys == T_g in (chip, core, local) order -> per chip quotas (rev 64: chip
+                // q = h KPH + i = list i of helper h, its count in word i of slot h)
+                mk::wait_handoff(H_SEM, mlashard::NHELP);
                 invalidate_l1_cache();
                 uint32_t rem = k_rem;
-                for (uint32_t q = 0; q < mlashard::NCHIPS; ++q) {
-                    const uint32_t n = hist[q * (mladsa::HIST_SLOT_BYTES / 4)];
-                    msg[q] = n < rem ? n : rem;
-                    rem -= msg[q];
+                if constexpr (mlashard::KPH == 1) {
+                    for (uint32_t q = 0; q < mlashard::NCHIPS; ++q) {
+                        const uint32_t n = hist[q * (mladsa::HIST_SLOT_BYTES / 4)];
+                        msg[q] = n < rem ? n : rem;
+                        rem -= msg[q];
+                    }
+                } else {
+                    for (uint32_t hh = 0; hh < mlashard::NHELP; ++hh) {
+                        for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                            const uint32_t q = hh * mlashard::KPH + i;
+                            const uint32_t n = hist[hh * (mladsa::HIST_SLOT_BYTES / 4) + i];
+                            msg[q] = n < rem ? n : rem;
+                            rem -= msg[q];
+                        }
+                    }
                 }
                 static_assert(
                     mlashard::NCHIPS * 4 <= mlashard::QUOTA_SLOTS * mladsa::MSG_BYTES &&
@@ -361,7 +377,7 @@ void kernel_main() {
                     mlashard::merge_msg(j, 1 + mladsa::ROUNDS),
                     mlashard::QUOTA_SLOTS * mladsa::MSG_BYTES);
                 T_g = prefix;
-                mk::wait_handoff(H_SEM, 1);  // helper `rank`: this chip's per-core quotas, words [0, C) of the slots
+                mk::wait_handoff(H_SEM, 1);  // helper rank / KPH: this chip's per-core quotas, words [0, C)
                 invalidate_l1_cache();
                 for (uint32_t c = 0; c < C; ++c) {
                     gquota[c] = hist[c];

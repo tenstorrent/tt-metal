@@ -48,6 +48,11 @@ AG8_PPC, AG8_QPAGES, RS2_PPC, RS_PPC = HDR["AG8_PPC"], HDR["AG8_QPAGES"], HDR["R
 AG32_PPC, AG32_QPAGES = HDR["AG32_PPC"], HDR["AG32_QPAGES"]  # 8x4 (shard_8x4_design.md section 2)
 RS2B_PPC = HDR["RS2B_PPC"]  # 8x4 round 2: 2-row slices (16 x 256 B + 2 x 256 B = 4.5 KB -> 3 pages + pad)
 TL_MAX = HDR["TL_MAX"]  # rev 60: tokens per token lane (the lane-local mailbox / kept blocks / CB_ASEL pages)
+TL_SMALL = 4  # the lane-local token slots of the t <= 4 builds (dsa_common.hpp T_MAX without MLA_DSA_TMAX)
+MSTG_PAGES = HDR["MSTG_PAGES"]  # rev 64: the KPH > 1 merge helpers' record staging pages (dsa_shard.hpp)
+KPH_MAX = 16  # rev 64: a helper's per-list tie counts fill one 16-word histogram slot (dsa_shard.hpp KPH <= 16)
+POS_BYTES = 128  # dsa_common.hpp POS_BYTES (the cur_pos page in CB_AKEY)
+SEL_HDR = 3  # dsa_common.hpp SEL_HDR (CB_ASEL words before the pool ids)
 MAX_CHUNKS = 64  # dsa_common.hpp MAX_CHUNKS
 CAND_MAX = 512  # dsa_shard.hpp CAND_MAX = mladsa::TOPK (not a plain literal there)
 CAND_PAGES = -(-(REC_HDR + CAND_MAX * REC_BYTES) // TB)
@@ -65,11 +70,17 @@ def merge_msgs(nchips: int = 8) -> int:
     return 1 + 8 + nchips * 4 // 16
 
 
-def merge_scr_bytes() -> int:
-    """dsa_shard.hpp MERGE_SCR_BYTES: a helper's chip candidate pages + keys + compacted candidates + per-core quotas"""
+def merge_scr_bytes(kph: int = 1) -> int:
+    """dsa_shard.hpp MERGE_SCR_BYTES (checked on the text): KPH = 1 a helper's chip candidate pages + keys + compacted
+    candidates + per-core quotas; rev 64, KPH > 1: MSTG_PAGES staging pages + the KPH lists' keys + per-core quotas"""
     with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
-        assert "MERGE_SCR_BYTES = CAND_PAGES * TB + 2 * CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4;" in f.read()
-    return CAND_PAGES * TB + 2 * CAND_MAX * 4 + 64 * 4
+        src = f.read()
+    assert "MERGE_SCR_BYTES1 = CAND_PAGES * TB + 2 * CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4;" in src
+    assert "MERGE_SCR_BYTESK = MSTG_PAGES * TB + KPH * CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4;" in src
+    assert "MERGE_SCR_BYTES = KPH == 1 ? MERGE_SCR_BYTES1 : MERGE_SCR_BYTESK;" in src
+    if kph == 1:
+        return CAND_PAGES * TB + 2 * CAND_MAX * 4 + MAX_CHUNKS * 4
+    return MSTG_PAGES * TB + kph * CAND_MAX * 4 + MAX_CHUNKS * 4
 
 
 PIECE_ROWS = 8  # TP8: q / o rows of one chip in a 32-head tile (dsa_shard.hpp PIECE_ROWS at LINE = 4); a build's
@@ -583,10 +594,11 @@ def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None):
 
 # ------------------------------------------------------------------ rev 60 (W): token lanes at t > 4
 def lanes_reasons(
-    t: int, lanes: int, chunks: int = 64, line: int = 1, groups: int = 1, nchips: int | None = None
+    t: int, lanes: int, chunks: int = 64, line: int = 1, groups: int = 1, nchips: int | None = None, kph: int = 1
 ) -> list:
     """why a t-row launch on `lanes` token lanes cannot run the sharded phase (tt/mk_mla.py shard_lanes_check's rules,
-    host-only): [] = it can. nchips: the merge helpers (default 2 line = the pair / the 2x4; the 8x4 passes 32)"""
+    host-only): [] = it can. nchips: the chips (default 2 line = the pair / the 2x4; the 8x4 passes 32); kph (rev 64):
+    chips per merge helper -> nchips / kph helpers per lane"""
     why = []
     if nchips is None:
         nchips = 2 * line
@@ -597,12 +609,104 @@ def lanes_reasons(
     if lanes < 1 or lanes & (lanes - 1) or chunks % lanes:
         why.append("lanes: a power of two dividing the chunk cores")
         return why
+    if kph < 1 or kph > KPH_MAX or nchips % kph:
+        why.append(f"kph: a divisor of the {nchips} chips <= {KPH_MAX}")
+        return why
+    if kph > 1 and nchips != 32:
+        why.append("kph > 1: the 8x4 only")
     if -(-t // lanes) > TL_MAX:
         why.append(f"<= {TL_MAX} tokens per lane")
     cl = chunks // lanes
-    if cl < nchips:
-        why.append(f"{nchips} merge helpers among {cl} lane chunk cores")
+    if cl < nchips // kph:
+        why.append(f"{nchips // kph} merge helpers among {cl} lane chunk cores")
     return why
+
+
+# ------------------------------------------------------------------ rev 64: KPH chips per merge helper (8x4)
+def shard_kph(nchips: int, chunks: int, lanes: int, pair: int, knob="1") -> int:
+    """chips per merge helper of a sharded build (dsa_shard.hpp KPH; tt/mk_mla.py shard_kph passes
+    GLM53_DSA_SHARD_KPH as `knob`): 1 on the pair / the 2x4 (pair <= 2: their builds unchanged) and for knob 1;
+    "auto" -> the fewest chips per helper that seat NCHIPS / KPH helpers in each lane's chunks / lanes cores
+    (ceil(nchips lanes / chunks), rounded up to a divisor of nchips: the 8x4's 64 chunk cores -> 1 / 1 / 2 / 4 at
+    1 / 2 / 4 / 8 lanes); an int -> itself (a divisor of nchips, <= KPH_MAX)"""
+    if pair <= 2:
+        return 1
+    if str(knob).strip().lower() == "auto":
+        k = max(1, -(-nchips * lanes // chunks))
+        while nchips % k:
+            k += 1
+    else:
+        k = int(knob)
+    if k < 1 or k > KPH_MAX or nchips % k:
+        raise ValueError(f"GLM53_DSA_SHARD_KPH={knob}: chips per merge helper must divide {nchips} and be <= {KPH_MAX}")
+    return k
+
+
+def shard_kph_reserve(nchips: int, pair: int, knob="1") -> int:
+    """the chips per helper the lane-core reservation plans for (tt/tp_dsa_shard.py reserve_lane_cores(rest, nchips /
+    this)): the knob's int, or KPH_MAX for "auto" (the lanes are then capped by GLM53_MLA_DSA_LANES and the free
+    cores; each t's shard_kph seats its helpers); 1 on the pair / the 2x4"""
+    if pair <= 2:
+        return 1
+    if str(knob).strip().lower() == "auto":
+        return KPH_MAX if nchips % KPH_MAX == 0 else 1
+    return shard_kph(nchips, 1, 1, pair, knob)
+
+
+def shard_tl(t: int, lanes: int = 1, kph: int = 1) -> int:
+    """dsa_shard.hpp TL (the MLA_DSA_TMAX define of a shard build; tt/mk_mla.py shard_tl): the lane-local token slots
+    of the owners' mailbox / kept blocks / the T_g probe words -- TL_SMALL up to t = 4, TL_MAX above (rev 60); rev 64:
+    with KPH > 1 (more lanes, so more keys per chunk core and larger kept blocks) TL_SMALL when the lane's tokens
+    ceil(t / lanes) <= 4 (dsa_shard.hpp static_assert TL in {4, TL_MAX})"""
+    if t <= TL_SMALL:
+        return TL_SMALL
+    if kph > 1 and -(-t // max(1, lanes)) <= TL_SMALL:
+        return TL_SMALL
+    return TL_MAX
+
+
+# the owners' L1 of the split-K phase (pure-Python mirrors; tt/mk_mla.py _akey_bytes / attention_cbs / dsa_mbox_bytes
+# delegate their shard branches here, so the host suite checks the bytes the device program allocates)
+def owner_keys(tp_tiles: int, chunks: int, lanes: int) -> int:
+    """MLA_DSA_KEYS: keys one owner holds per sparse token = its pooled-key tiles over the lane's chunk cores x 32
+    (tt/mk_mla.py MkMla._dsa_keys; tp_tiles = the slot's LOCAL pooled-key tiles)"""
+    return -(-tp_tiles // (chunks // lanes)) * 32
+
+
+def akey_bytes(keys: int, shard_t: int, tl: int, kph: int = 1) -> int:
+    """CB_AKEY bytes per owner of a shard build (att_dsa_shard_dm1.cpp UB / KW / kept / stg): [0, 64) histogram, the
+    cur_pos page, the region U = max(the keys + compacted candidates, MERGE_SCR_BYTES(kph) + 64), tl kept blocks of
+    KW = min(512, keys) (key, pool) pairs, the 64-B aligned record staging (TB + 64) + 64 slack"""
+    assert 1 <= shard_t <= tl <= TL_MAX, (shard_t, tl)
+    kw = min(CAND_MAX, keys)
+    return 64 + POS_BYTES + max(8 * keys, merge_scr_bytes(kph) + 64) + tl * 2 * kw * 4 + 64 + TB + 64 + 64
+
+
+def asel_page_bytes(keys: int) -> int:
+    """a CB_ASEL page of a shard build: SEL_HDR + min(512, keys) words + 52 B (one page per lane token)"""
+    return (SEL_HDR + min(CAND_MAX, keys)) * 4 + 52
+
+
+def mbox_bytes(tl: int, nchips: int) -> int:
+    """the owners' shard mailbox (dsa_shard.hpp MBOX_SHARD_BYTES at mladsa::T_MAX = tl): the select rounds + tie
+    (quota, offset) pairs, the global message + quotas, the merge messages (merge_msgs(nchips) slots) per lane token"""
+    return tl * 9 * 16 + tl * MAX_CHUNKS * 4 * 2 + tl * 16 + tl * MAX_CHUNKS * 4 + tl * merge_msgs(nchips) * 16
+
+
+def owner_l1(tp_tiles: int, t: int, lanes: int, kph: int = 1, chunks: int = 64, nchips: int = 32) -> dict:
+    """the split-K phase's per-owner L1 of a t-row build on `lanes` lanes: CB_AKEY, CB_ASEL (ceil(t / lanes) pages),
+    the mailbox; + the keys, TL and the lane tokens"""
+    keys = owner_keys(tp_tiles, chunks, lanes)
+    st = -(-t // lanes)
+    tl = shard_tl(t, lanes, kph)
+    return dict(
+        keys=keys,
+        shard_t=st,
+        tl=tl,
+        akey=akey_bytes(keys, st, tl, kph),
+        asel=max(1, st) * asel_page_bytes(keys),
+        mbox=mbox_bytes(tl, nchips),
+    )
 
 
 def lane_of(t: int, lanes: int) -> tuple:
@@ -658,9 +762,10 @@ def lane_records(keys_local, lq, chunks: int, lanes: int, k: int = 512) -> list:
     return [(int(keys_local[i]), int(core[i])) for i in sel.tolist()]
 
 
-def emulate_lane_merge(keys_global, C: int, chunks: int, lanes: int, k: int = 512) -> dict:
+def emulate_lane_merge(keys_global, C: int, chunks: int, lanes: int, k: int = 512, kph: int = 1) -> dict:
     """one token of a t > 4 launch on `lanes` lanes: every chip's local top-k over its lane's chunk cores, the
-    helpers' global merge (helper_merge, the replicas' T_g / helper quotas) -> dict(T_g, per-chip core quotas, lists).
+    helpers' global merge (helper_merge, the replicas' T_g / helper quotas; rev 64: kph chips per helper) -> dict(T_g,
+    per-chip core quotas, lists).
     keys_global: int64 order keys of the token's closed pools (global pool ids 0 .. n - 1; pool g on chip (g // 32) % C,
     local id (g // 32 // C) 32 + g % 32: tt/dsa_shard.py ShardMap)"""
     import torch
@@ -672,9 +777,10 @@ def emulate_lane_merge(keys_global, C: int, chunks: int, lanes: int, k: int = 51
         mine = torch.nonzero(owner == r).reshape(-1)
         lq = (mine // POOL_PAGE // C) * POOL_PAGE + mine % POOL_PAGE
         lists.append(lane_records(keys_global[mine], lq, chunks, lanes, k))
-    res = [helper_merge(lists, r, k) for r in range(C)]
+    res = [helper_merge(lists, r, k, kph=kph) for r in range(C)]
     assert len({(x["T_g"], tuple(x["helper_quota"])) for x in res}) == 1, "the replicas disagree"
-    return dict(T_g=res[0]["T_g"], core_quota=[x["core_quota"] for x in res], lists=lists)
+    return dict(T_g=res[0]["T_g"], core_quota=[x["core_quota"] for x in res], lists=lists,
+                helper_quota=res[0]["helper_quota"])  # fmt: skip
 
 
 # ------------------------------------------------------------------ the shard phase probe (rev 59)
@@ -745,50 +851,75 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
 
 
 # ------------------------------------------------------------------ the rev-59 global merge on helpers (emulation)
-def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4) -> dict:
+def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph: int = 1) -> dict:
     """ix_dm0.cpp (the coordinator) + att_dsa_shard_dm1.cpp merge_help (helper q holds chip q's list), step by step:
     lists[q] = chip q's candidate records [(key, core)] in its (core, local) order. Per round the helpers' 16-bin
     histograms of their compacted candidates are summed in helper order (sum_hist), the digit picked as the local
     select does, the helpers compact; round 0's total m <= k -> done (T_g = 0, every candidate kept); the tie round's
     counts -> per-helper quotas in helper (= chip) order; helper `rank` -> this chip's per-core quotas (its first quota
-    keys == T_g in list order). -> dict(T_g, k_rem, done, helper_quota, core_quota {core: n}, messages)."""
+    keys == T_g in list order). -> dict(T_g, k_rem, done, helper_quota (per chip), core_quota {core: n}, messages,
+    hists (the coordinator's per-round sums)).
+    Rev 64, kph > 1 (the KPH merge): helper h holds the lists of chips h kph .. h kph + kph - 1 as the kernel does --
+    their keys concatenated in one array (list i's after list i - 1's, len[i] each), ONE histogram over the union per
+    round, the compaction in place list by list (the lists stay contiguous), the tie report = the kph per-list counts
+    (words 0 .. kph - 1 of the helper's slot) -> the quotas in chip order h kph + i; helper rank // kph re-reads chip
+    rank's records for the per-core quotas."""
     bins, rounds = 1 << digit_bits, 32 // digit_bits
-    keys = [[kk for kk, _ in lst] for lst in lists]
-    src = [list(v) for v in keys]
-    prefix, mask, k_rem, msgs = 0, 0, k, 1  # (the start message)
+    assert kph >= 1 and len(lists) % kph == 0, (kph, len(lists))
+    nh = len(lists) // kph
+    mk = [[kk for i in range(kph) for kk, _ in lists[h * kph + i]] for h in range(nh)]  # the helpers' mkeys
+    ln = [[len(lists[h * kph + i]) for i in range(kph)] for h in range(nh)]  # their len[i]
+    prefix, mask, k_rem, msgs, sums = 0, 0, k, 1, []  # (the start message)
     for r in range(rounds):
         shift = 32 - digit_bits * (r + 1)
-        hist = [[0] * bins for _ in lists]
-        for q, v in enumerate(src):
-            for kk in v:
+        hist = [[0] * bins for _ in range(nh)]
+        for h in range(nh):  # one histogram over the helper's union (its whole compacted array)
+            for kk in mk[h]:
                 if (kk & mask) == prefix:
-                    hist[q][(kk >> shift) & (bins - 1)] += 1
-        h = [sum(hq[b] for hq in hist) for b in range(bins)]
+                    hist[h][(kk >> shift) & (bins - 1)] += 1
+        hs = [sum(hq[b] for hq in hist) for b in range(bins)]  # sum_hist over the nh slots, helper order
+        sums.append(hs)
         msgs += 1
-        if r == 0 and sum(h) <= k:
-            return dict(T_g=0, k_rem=0, done=True, helper_quota=[0] * len(lists), core_quota={}, messages=msgs)
+        if r == 0 and sum(hs) <= k:
+            return dict(T_g=0, k_rem=0, done=True, helper_quota=[0] * len(lists), core_quota={}, messages=msgs,
+                        hists=sums)  # fmt: skip
         d, ab = bins - 1, 0
-        while d > 0 and ab + h[d] < k_rem:
-            ab += h[d]
+        while d > 0 and ab + hs[d] < k_rem:
+            ab += hs[d]
             d -= 1
         k_rem -= ab
         prefix |= d << shift
         mask |= (bins - 1) << shift
-        src = [[kk for kk in v if (kk & mask) == prefix] for v in src]
+        for h in range(nh):  # in-place compaction, list by list: the write index never passes the read index
+            v, m, b0 = mk[h], 0, 0
+            for i in range(kph):
+                mi = 0
+                for e in range(ln[h][i]):
+                    kk = v[b0 + e]
+                    if (kk & mask) == prefix:
+                        v[m] = kk
+                        m += 1
+                        mi += 1
+                b0 += ln[h][i]
+                ln[h][i] = mi
+            del v[m:]
     rem, hq = k_rem, []
-    for v in src:  # the tie round: counts of keys == T_g per helper -> quotas in helper order
-        n = sum(1 for kk in v if kk == prefix)
-        hq.append(min(n, rem))
-        rem -= hq[-1]
+    for h in range(nh):  # the tie round: per-list counts of keys == T_g (word i of slot h) -> quotas in chip order
+        b0 = 0
+        for i in range(kph):
+            n = sum(1 for kk in mk[h][b0 : b0 + ln[h][i]] if kk == prefix)
+            b0 += ln[h][i]
+            hq.append(min(n, rem))
+            rem -= hq[-1]
     msgs += 1
-    cq, q = {}, hq[rank]
+    cq, q = {}, hq[rank]  # helper rank // kph: chip rank's records (re-read: the compaction dropped the core ids)
     for kk, core in lists[rank]:
         if q == 0:
             break
         if kk == prefix:
             cq[core] = cq.get(core, 0) + 1
             q -= 1
-    return dict(T_g=prefix, k_rem=k_rem, done=False, helper_quota=hq, core_quota=cq, messages=msgs)
+    return dict(T_g=prefix, k_rem=k_rem, done=False, helper_quota=hq, core_quota=cq, messages=msgs, hists=sums)
 
 
 def serial_merge(lists: list, rank: int, k: int = 512) -> dict:

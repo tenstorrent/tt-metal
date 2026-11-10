@@ -176,15 +176,28 @@ void kernel_main() {
     // its keys, the compacted candidates, the per-core tie quotas (dsa_shard.hpp MERGE_SCR_BYTES)
     const uint32_t mstg = (ubase + 63) & ~63u;
     static_assert(mlashard::MERGE_SCR_BYTES + 63 <= UB, "the merge scratch inside region U");
+#if defined(MLA_DSA_SHARD_KPH) && MLA_DSA_SHARD_KPH > 1
+    // rev 64 (KPH > 1): MSTG_PAGES staging pages, the KPH lists' keys (compacted in place), the per-core tie quotas
+    // (dsa_shard.hpp MERGE_SCR_BYTESK); the KPH = 1 builds keep the layout below verbatim
+    volatile tt_l1_ptr uint32_t* mkeys =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg + mlashard::MSTG_PAGES * mlashard::TB);
+    volatile tt_l1_ptr uint32_t* mgq = mkeys + mlashard::KPH * mlashard::CAND_MAX;
+    static_assert(
+        mlashard::MSTG_PAGES * mlashard::TB + mlashard::KPH * mlashard::CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4 ==
+            mlashard::MERGE_SCR_BYTES,
+        "the merge scratch layout (dsa_shard.hpp MERGE_SCR_BYTESK)");
+#else
     volatile tt_l1_ptr uint32_t* mkeys =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg + mlashard::CAND_PAGES * mlashard::TB);
     volatile tt_l1_ptr uint32_t* mcand = mkeys + mlashard::CAND_MAX;
     volatile tt_l1_ptr uint32_t* mgq = mcand + mlashard::CAND_MAX;
-    const bool helper = g == 0 && c < mlashard::NCHIPS;  // merge helper c holds chip c's list (lane-local c: per lane)
+#endif
+    // merge helper c holds chip c's list (lane-local c: per lane); rev 64: helper c < NHELP holds KPH chips' lists
+    const bool helper = g == 0 && c < mlashard::NHELP;
     // (review 2 item 7) helper `rank` writes its MAX_CHUNKS per-core quota words into the coordinator's C histogram
     // slots
     static_assert(C * mladsa::HIST_SLOT_BYTES >= mladsa::MAX_CHUNKS * 4, "the quota report inside the histogram slots");
-    static_assert(mlashard::NCHIPS <= C, "one merge helper per chip among the lane's chunk cores");
+    static_assert(mlashard::NHELP <= C, "the merge helpers (NCHIPS / KPH) among the lane's chunk cores");
     uint32_t n_kept[mlashard::TL];
     volatile tt_l1_ptr uint32_t* sel_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEL_SEM));
     const uint64_t hist_dst = get_noc_addr(cx, cy, hist_addr + c * mladsa::HIST_SLOT_BYTES);
@@ -349,6 +362,7 @@ void kernel_main() {
     MK_MARK();  // probe 1: the local select done, this core's records in x_ag
     // rev 59: merge helper c (ix_dm0.cpp): chip c's candidate list from y_ag, the radix rounds with the index core
     // (start, 8 rounds + the done flag, the tie quotas), helper `rank` the per-core quotas of this chip's records
+#if !(defined(MLA_DSA_SHARD_KPH) && MLA_DSA_SHARD_KPH > 1)
     auto merge_help = [&](uint32_t t, uint32_t j) {  // (t: the y_ag token; j: its mailbox slots)
         noc_semaphore_wait_min(sel_sem, ++msgs);     // start: every chip's records landed in y_ag
         for (uint32_t pg = 0; pg < mlashard::CAND_PAGES; ++pg) {
@@ -427,6 +441,174 @@ void kernel_main() {
         noc_semaphore_inc(h_sem, 1);
         noc_async_atomic_barrier();
     };
+#else
+    // rev 64 (KPH > 1, dsa_shard.hpp KPH): helper c holds the lists i < KPH of chips c KPH + i (y_ag blocks
+    // ag_blk(c KPH + i)). The lists' record pages stream through the MSTG_PAGES = 2 staging pages: page k + 1's read
+    // is in flight while page k's records are consumed; a list's page count follows its header (page 0 word 0: the
+    // chip's record count n, <= CAND_MAX). fn(i, n, e0, e1, rec) consumes records [e0, e1) of list i (rec[4 (e - e0)]
+    // = record e's key, + 1 its chunk core) and returns false to stop (the in-flight read is drained first).
+    auto stream_lists = [&](uint32_t t, uint32_t i0, uint32_t i1, auto&& fn) {
+        static_assert(mlashard::MSTG_PAGES == 2, "double-buffered page stream");
+        static_assert(mlashard::TB % mlashard::REC_BYTES == 0 && mlashard::REC_HDR % mlashard::REC_BYTES == 0, "recs");
+        constexpr uint32_t RPP = mlashard::TB / mlashard::REC_BYTES;        // record slots per page (128)
+        constexpr uint32_t HREC = mlashard::REC_HDR / mlashard::REC_BYTES;  // the header's slots (1)
+        auto issue = [&](uint32_t li, uint32_t pg, uint32_t s) {
+            noc_async_read_page(
+                mlashard::agx_cand_page(t_rows, mlashard::ag_blk(c * mlashard::KPH + li), t, pg * mlashard::TB),
+                xyag,
+                mstg + s * mlashard::TB);
+        };
+        if (i0 >= i1) {
+            return;
+        }
+        uint32_t i = i0, p = 0, slot = 0, n = 0, npg = 1;
+        bool go = true;
+        issue(i, 0, 0);
+        while (true) {
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            volatile tt_l1_ptr uint32_t* pw =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mstg + slot * mlashard::TB);
+            if (p == 0) {
+                n = pw[0] < mlashard::CAND_MAX ? pw[0] : mlashard::CAND_MAX;
+                npg = (mlashard::REC_HDR + n * mlashard::REC_BYTES + mlashard::TB - 1) / mlashard::TB;
+            }
+            uint32_t ni = i, np = p + 1;
+            if (np >= npg) {
+                ni = i + 1;
+                np = 0;
+            }
+            const bool more = ni < i1;
+            if (more) {
+                issue(ni, np, slot ^ 1);  // into the other staging page (consumed already)
+            }
+            // records of page p: slots [p RPP, (p + 1) RPP) of the list's byte stream, minus the header's
+            const uint32_t e0 = p * RPP > HREC ? p * RPP - HREC : 0;
+            uint32_t e1 = (p + 1) * RPP - HREC;
+            e1 = e1 < n ? e1 : n;
+            if (e0 < e1) {
+                const uint32_t ofs = mlashard::REC_HDR + e0 * mlashard::REC_BYTES - p * mlashard::TB;
+                go = fn(i, n, e0, e1, pw + ofs / 4);
+            }
+            if (!more) {
+                break;
+            }
+            if (!go) {
+                noc_async_read_barrier();  // the in-flight page lands before the scratch is reused
+                break;
+            }
+            i = ni;
+            p = np;
+            slot ^= 1;
+        }
+    };
+    auto merge_help = [&](uint32_t t, uint32_t j) {  // (t: the y_ag token; j: its mailbox slots)
+        noc_semaphore_wait_min(sel_sem, ++msgs);     // start: every chip's records landed in y_ag
+        // list i's keys at mkeys[base_i ..), base_i = the keys of lists < i; len[i] = its (surviving) count
+        uint32_t len[mlashard::KPH];
+        for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+            len[i] = 0;
+        }
+        uint32_t ntot = 0, lbase = 0;
+        stream_lists(
+            t,
+            0,
+            mlashard::KPH,
+            [&](uint32_t i, uint32_t n, uint32_t e0, uint32_t e1, volatile tt_l1_ptr uint32_t* rec) {
+                if (e0 == 0) {
+                    lbase = ntot;
+                    len[i] = n;
+                    ntot += n;
+                }
+                for (uint32_t e = e0; e < e1; ++e) {
+                    mkeys[lbase + e] = rec[4 * (e - e0)];
+                }
+                return true;
+            });
+        uint32_t prefix = 0, mask = 0;
+        uint32_t nsrc = ntot;
+        for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
+            const uint32_t shift = 32 - mladsa::DIGIT_BITS * (r + 1);
+            for (uint32_t b = 0; b < mladsa::BINS; ++b) {
+                hist[b] = 0;
+            }
+            for (uint32_t i = 0; i < nsrc; ++i) {
+                const uint32_t k = mkeys[i];
+                if ((k & mask) == prefix) {
+                    hist[(k >> shift) & (mladsa::BINS - 1)] += 1;
+                }
+            }
+            report();  // slot c of the coordinator's histogram tensor: the union of the KPH lists
+            noc_semaphore_wait_min(sel_sem, ++msgs);
+            invalidate_l1_cache();
+            volatile tt_l1_ptr uint32_t* mm =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 1 + r));
+            if (mm[2] != 0) {
+                return;  // done: fewer candidates than k (T_g = 0, every one selected; no tie round)
+            }
+            prefix = mm[0];
+            mask |= (mladsa::BINS - 1) << shift;
+            // compaction in place, list by list (stable: list i's survivors stay contiguous after list i - 1's; the
+            // write index never passes the read index)
+            uint32_t m = 0, b0 = 0;
+            for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                const uint32_t li = len[i];
+                uint32_t mi = 0;
+                for (uint32_t e = 0; e < li; ++e) {
+                    const uint32_t k = mkeys[b0 + e];
+                    if ((k & mask) == prefix) {
+                        mkeys[m++] = k;
+                        ++mi;
+                    }
+                }
+                b0 += li;
+                len[i] = mi;
+            }
+            nsrc = m;
+        }
+        // the tie report: list i's count of keys == T_g in word i (the coordinator's per-chip quotas, chip order)
+        uint32_t b0 = 0;
+        for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+            uint32_t eq = 0;
+            for (uint32_t e = 0; e < len[i]; ++e) {
+                eq += mkeys[b0 + e] == prefix ? 1 : 0;
+            }
+            b0 += len[i];
+            hist[i] = eq;
+        }
+        report();
+        noc_semaphore_wait_min(sel_sem, ++msgs);  // the per-chip tie quotas (chip order)
+        invalidate_l1_cache();
+        if (c != rank / mlashard::KPH) {
+            return;
+        }
+        // this chip's list (list rank % KPH of this helper) = its records in (core, local) order: the first `q` keys ==
+        // T_g, counted per core -- its record pages re-read (the compaction dropped the core ids)
+        uint32_t q =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 1 + mladsa::ROUNDS))[rank];
+        for (uint32_t k = 0; k < mladsa::MAX_CHUNKS; ++k) {
+            mgq[k] = 0;
+        }
+        if (q > 0) {
+            const uint32_t li = rank % mlashard::KPH;
+            stream_lists(
+                t, li, li + 1, [&](uint32_t, uint32_t, uint32_t e0, uint32_t e1, volatile tt_l1_ptr uint32_t* rec) {
+                    for (uint32_t e = e0; e < e1 && q > 0; ++e) {
+                        if (rec[4 * (e - e0)] == prefix) {
+                            mgq[rec[4 * (e - e0) + 1] & (mladsa::MAX_CHUNKS - 1)] += 1;
+                            --q;
+                        }
+                    }
+                    return q > 0;
+                });
+        }
+        invalidate_l1_cache();
+        noc_async_write(reinterpret_cast<uint32_t>(mgq), get_noc_addr(cx, cy, hist_addr), mladsa::MAX_CHUNKS * 4);
+        noc_async_write_barrier();
+        noc_semaphore_inc(h_sem, 1);
+        noc_async_atomic_barrier();
+    };
+#endif
     // ---- B: the global filter -> CB_ASEL page j
     auto sweep_b = [&]() {
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {

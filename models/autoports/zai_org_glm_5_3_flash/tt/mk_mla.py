@@ -72,7 +72,7 @@ ACB1 = {k: v + 22 for k, v in ACB.items()}  # the attention CBs of the one-progr
 # kernel revision: part of the compile signature so a long-lived process (serve.py) rebuilds after a kernel edit
 # rev 63: the decode kernels address the paged pooled-key store (StackBackend._paged_pool_state, Stage 12's host side)
 DSA_PAGED_POOLS = True
-MLA_REV = 63  # 63: the paged pooled-key store on the sequence-sharded line (GLM53_DSA_PAGED_POOLS=1, doc/ttnn/12-fast-start/paged_pooled_keys.md rev 3: one [32, 128] page per local latent block, its 16 pools at rows 0..15): att_dsa_shard_dm0 I4 reads the top halves of pages ptab_local[t][2u], [2u + 1]; ix_dm1 writes pool q at row q % 16 of page ptab_local[slot][q / 16] (the local page table: an extra accessor + runtime arg MLA_DSA_PT_ARG); att_dsa_shard_dm0 / ix_dm1 changed; 62: the spec verify on the shard WITH token lanes (GLM53_MLA_DSA_BATON=1, dsa/spec_on_shard_design.md section 6): ix_dm1 MLA_DSA_ONE_SLOT_BATON -- the one slot's ring / pooled-key writes in row order across the lane index cores (BATON / DONE semaphores 10 / 11 on the index cores), each lane keeps its select / merge / attention, so the w8 verify keeps plain w8's lane partition; ix_dm1 changed; 61: the speculative verify on the sequence-sharded DSA (Stage 17 x Stage 14, dsa/spec_on_shard_design.md): MLA_DSA_ONE_SLOT with MLA_DSA_SHARD on one index core (att_lanes(t) = 1: t <= 4, or GLM53_MLA_DSA_LANES_AT="8:1" -- the plain step of the same width must run the same lanes: the per-lane chunk partition fixes the merge tie order and the split-K sums), every row scoring the launch slot's LOCAL pooled keys (att_dsa_shard_dm0.cpp); att_dsa_shard_dm0 changed; 60: the sequence-sharded DSA with TOKEN LANES at t > 4 (W: native B=32 / widths 8 / 16, t <= 32; shard_tp8_design.md section 7): per lane the shard coordinator on the lane's index core (local select over its C / L chunk cores, records at the token's x_ag slot, the global merge of its tokens on its merge helpers), the AG producer count t (C / L + 1) + 1 and its consumers = every lane index core, the RS consumers = every lane root, the lane-local mailbox / kept blocks / CB_ASEL (j = t / L < shard_tl(t) = 8 at t > 4; kept blocks / CB_ASEL pages of min(512, keys per core)), o_T from the shard roots, the latent core's batched write on the owner chip; review 2 (tp8b/review.md) items 1 (the merge scratch over the dead phase-A keys in CB_AKEY), 4 (fs_common.hpp PROBE_FLUSH), 5 (fs kernel text hashes probe.hpp), 7 (static / runtime asserts), 8 (no y_ag accessor in ix_dm0); att_dsa_shard_dm0-1 / att_c / ix_dm0-1 / lat_dm1 / fs_common / fs_send changed; 59: shard perf + hardening (shard TP8 review): the global merge on NCHIPS merge-helper owners (ix_dm0 coordinates the radix rounds, helper q holds chip q's list: the same union histograms / T_g / tie order as 58's serial merge), the TP8 q tiles assembled once per chip by ix_dm1 into q_asm (owners read 16 pages per push), x_rs 384 wide (36-page RS round 1), the RS consumers = the roots, opt-in shard probe marks (owner NCRISC / BRISC, index core, stream lanes rows 236..239); att_dsa_shard_dm0-1 / ix_dm0-1 / fs_send changed; 58: the sequence-sharded DSA split-K phase at TP8 on the 2x4 mesh (MLA_DSA_SHARD_LINE = 4: the q-tile assembly from 4 chips' 8-row pieces, the 8-list global merge on a per-core merge-scratch CB, the 2-round reduce-scatter with the round-2 scatter of 8-row slices + the own-then-column combine; ix_dm0 / lat_dm1 / att_dsa_shard_dm0-1 / att_c / fs_send / fs_read changed; the pair path keeps its formats); 57: the sequence-sharded DSA split-K phase (dsa/shard 6043dff8af, TP2, GLM53_DSA_SHARD) merged onto rev 56 (shared kernels att_c / lat_dm1 / ix_dm0-1 / owner_dm0-1 changed: fresh JIT); 56: the DSA-capable speculative verify (Stage 17; GLM53_MLA_ATT_VERIFY with dsa=: MLA_DSA_ONE_SLOT on the index core and the owner readers -- every row is the launch's slot s0, pool q's ring rows at ring tile rows 4 (q - q0) .., kernels/mla/ix_dm1.cpp; t <= 4); 55: the owner NCRISC composite compiles mhc_pre's "dz" (GLM53_MHC_MODE=dz: its NoC headers at global scope, kernels/mla/owner_dm1.cpp); 54: PROBE_ROWS 224 -> 240 (rev 53's per-lane index-core probe rows 220..235 overflowed the probe tensor: card0 u72 hang, probe builds only); 53: review fixes (NKMAX floor without lanes, hist returned, last_mcast recorded, a probe row pair per lane index core, NOC0 assert for the multicast, comments); 52: the I5 coordinators' histogram sum with register accumulators (dsa_common.hpp sum_hist; GLM53_MLA_DSA_HSUM=0 = the old loop); 51: per-round I5 probe marks in ix_dm0 (probe builds only); 50: the DSA I5 broadcast as multicasts onto exact owner rectangles (ix_dm0 MLA_DSA_MCAST: message multicast + SEL_SEM set to the running count; GLM53_MLA_DSA_MCAST, opt-in); 49: GLM53_MLA_DSA_NKMAX (the DSA program's attention batch at t > 4: dense rows and S1; default 3 = rev 48); 48: DSA S1 gather in runs of consecutive selected pools (att_dsa_dm0 MLA_DSA_RUNS: one read of 128 k B per face; GLM53_MLA_DSA_RUNS, default on) + GLM53_MLA_DSA_QFIRST (W_uk before I3, opt-in); 47: one DSA index core per token lane at t > 4 (the lane cores run ix_dm0 / ix_c / ix_dm1 on their tokens; GLM53_MLA_DSA_IX_LANES, default on); 46: row-granular DSA index writes (ix_dm1 MLA_DSA_IX_ROWS: ring rows 0..3 + one pooled-key row per token instead of 12-tile RMWs; GLM53_MLA_DSA_IX_ROWS, default on); 45: index-core probe marks (slots 220 / 221: ix_dm0 / ix_dm1, + ix_dm1 'rows done'); 44: GLM53_MLA_DSA_SB default 1 (card0 u38: SB 4 gives no gain, I4 is DRAM-bound on the 64 MB of replicated pooled keys at 1M); 43: the lane coordinator's cur_pos scratch 64-B aligned (a DRAM read target); 42: GLM53_MLA_DSA_SB default 2 (the owners' DSA score CBs 112 -> 56 KB: 14b's served-stack L1 floor); 41: DSA score batches always take SB CB tiles (the last padded; a short batch broke the CB batch grid); 40: DSA token lanes at t > 4 (one select coordinator core per lane, dsa_coord.cpp; GLM53_MLA_DSA_LANES, default 8); 39: o_T with DSA (att_dsa_dm1.cpp MLA_ATT_OT; GLM53_MLA_DSA_OT, default on); 38: dsa_state slot base s0 (host only: the launch's rows = slots s0.. of a [S, ..] store, dsa_slot_addrs); 37: DSA I4 scoring in batches of GLM53_MLA_DSA_SB (default 4) pooled-key tiles; 36: DSA radix select on compacted candidates (GLM53_MLA_DSA_COMPACT, default on); 35: o_T + NKMAX 8 + bf16 O by default at every t > 4 (card0 t=16 515 -> 479, t=8 413 -> 386 us); 34: o_T at 4 < t < 32 (opt-in GLM53_MLA_OT_SMALL=1; W_uv zeroes rows >= T); 33: o_T + NKMAX 8 + bf16 O partials by default at t = 32 (card0 vtp8 729.3 -> 595.2 us); 32: GLM53_MLA_ATT_NKMAX (row tiles per attention batch, t > 4); 31: GLM53_MLA_ATT_FID_QK (the attention's bf16 matmuls' fidelity); 30: o_T (t = 32: the attention roots write W_uv's token-row in0, GLM53_MLA_OT); 29: gather / scatter one address per row pair, lanes 4 at t = 2..4; 25: t <= 32 (flat residual / per-tile mhc_post, 32-row DSA mailbox); 26: token lanes (t > 4);
+MLA_REV = 64  # 64: KPH chips per merge helper on the 8x4 shard (GLM53_DSA_SHARD_KPH: 1 default = rev 63's builds, an int or "auto"; doc/perf/shard_8x4_design.md): helper h < NHELP = 32 / KPH of a token lane holds chips h KPH .. h KPH + KPH - 1's candidate lists (their record pages streamed through 2 staging pages, one histogram over the union per round, in-place compaction per list, the KPH per-list tie counts in words 0 .. KPH - 1 of its slot; helper rank / KPH re-reads chip rank's records for the per-core quotas), so a lane needs 32 / KPH of its 64 / L chunk cores (KPH 4: 8 lanes); ix_dm0 sums NHELP slots and turns the per-list counts into the per-chip quotas in chip order (T_g / quotas = KPH 1's); TL = 4 when a lane holds <= 4 tokens (KPH > 1: the kept blocks / mailbox stay within the 2-lane bytes); the KPH = 1 kernels compile to rev 63's instructions; att_dsa_shard_dm1 / ix_dm0 changed; 63: the paged pooled-key store on the sequence-sharded line (GLM53_DSA_PAGED_POOLS=1, doc/ttnn/12-fast-start/paged_pooled_keys.md rev 3: one [32, 128] page per local latent block, its 16 pools at rows 0..15): att_dsa_shard_dm0 I4 reads the top halves of pages ptab_local[t][2u], [2u + 1]; ix_dm1 writes pool q at row q % 16 of page ptab_local[slot][q / 16] (the local page table: an extra accessor + runtime arg MLA_DSA_PT_ARG); att_dsa_shard_dm0 / ix_dm1 changed; 62: the spec verify on the shard WITH token lanes (GLM53_MLA_DSA_BATON=1, dsa/spec_on_shard_design.md section 6): ix_dm1 MLA_DSA_ONE_SLOT_BATON -- the one slot's ring / pooled-key writes in row order across the lane index cores (BATON / DONE semaphores 10 / 11 on the index cores), each lane keeps its select / merge / attention, so the w8 verify keeps plain w8's lane partition; ix_dm1 changed; 61: the speculative verify on the sequence-sharded DSA (Stage 17 x Stage 14, dsa/spec_on_shard_design.md): MLA_DSA_ONE_SLOT with MLA_DSA_SHARD on one index core (att_lanes(t) = 1: t <= 4, or GLM53_MLA_DSA_LANES_AT="8:1" -- the plain step of the same width must run the same lanes: the per-lane chunk partition fixes the merge tie order and the split-K sums), every row scoring the launch slot's LOCAL pooled keys (att_dsa_shard_dm0.cpp); att_dsa_shard_dm0 changed; 60: the sequence-sharded DSA with TOKEN LANES at t > 4 (W: native B=32 / widths 8 / 16, t <= 32; shard_tp8_design.md section 7): per lane the shard coordinator on the lane's index core (local select over its C / L chunk cores, records at the token's x_ag slot, the global merge of its tokens on its merge helpers), the AG producer count t (C / L + 1) + 1 and its consumers = every lane index core, the RS consumers = every lane root, the lane-local mailbox / kept blocks / CB_ASEL (j = t / L < shard_tl(t) = 8 at t > 4; kept blocks / CB_ASEL pages of min(512, keys per core)), o_T from the shard roots, the latent core's batched write on the owner chip; review 2 (tp8b/review.md) items 1 (the merge scratch over the dead phase-A keys in CB_AKEY), 4 (fs_common.hpp PROBE_FLUSH), 5 (fs kernel text hashes probe.hpp), 7 (static / runtime asserts), 8 (no y_ag accessor in ix_dm0); att_dsa_shard_dm0-1 / att_c / ix_dm0-1 / lat_dm1 / fs_common / fs_send changed; 59: shard perf + hardening (shard TP8 review): the global merge on NCHIPS merge-helper owners (ix_dm0 coordinates the radix rounds, helper q holds chip q's list: the same union histograms / T_g / tie order as 58's serial merge), the TP8 q tiles assembled once per chip by ix_dm1 into q_asm (owners read 16 pages per push), x_rs 384 wide (36-page RS round 1), the RS consumers = the roots, opt-in shard probe marks (owner NCRISC / BRISC, index core, stream lanes rows 236..239); att_dsa_shard_dm0-1 / ix_dm0-1 / fs_send changed; 58: the sequence-sharded DSA split-K phase at TP8 on the 2x4 mesh (MLA_DSA_SHARD_LINE = 4: the q-tile assembly from 4 chips' 8-row pieces, the 8-list global merge on a per-core merge-scratch CB, the 2-round reduce-scatter with the round-2 scatter of 8-row slices + the own-then-column combine; ix_dm0 / lat_dm1 / att_dsa_shard_dm0-1 / att_c / fs_send / fs_read changed; the pair path keeps its formats); 57: the sequence-sharded DSA split-K phase (dsa/shard 6043dff8af, TP2, GLM53_DSA_SHARD) merged onto rev 56 (shared kernels att_c / lat_dm1 / ix_dm0-1 / owner_dm0-1 changed: fresh JIT); 56: the DSA-capable speculative verify (Stage 17; GLM53_MLA_ATT_VERIFY with dsa=: MLA_DSA_ONE_SLOT on the index core and the owner readers -- every row is the launch's slot s0, pool q's ring rows at ring tile rows 4 (q - q0) .., kernels/mla/ix_dm1.cpp; t <= 4); 55: the owner NCRISC composite compiles mhc_pre's "dz" (GLM53_MHC_MODE=dz: its NoC headers at global scope, kernels/mla/owner_dm1.cpp); 54: PROBE_ROWS 224 -> 240 (rev 53's per-lane index-core probe rows 220..235 overflowed the probe tensor: card0 u72 hang, probe builds only); 53: review fixes (NKMAX floor without lanes, hist returned, last_mcast recorded, a probe row pair per lane index core, NOC0 assert for the multicast, comments); 52: the I5 coordinators' histogram sum with register accumulators (dsa_common.hpp sum_hist; GLM53_MLA_DSA_HSUM=0 = the old loop); 51: per-round I5 probe marks in ix_dm0 (probe builds only); 50: the DSA I5 broadcast as multicasts onto exact owner rectangles (ix_dm0 MLA_DSA_MCAST: message multicast + SEL_SEM set to the running count; GLM53_MLA_DSA_MCAST, opt-in); 49: GLM53_MLA_DSA_NKMAX (the DSA program's attention batch at t > 4: dense rows and S1; default 3 = rev 48); 48: DSA S1 gather in runs of consecutive selected pools (att_dsa_dm0 MLA_DSA_RUNS: one read of 128 k B per face; GLM53_MLA_DSA_RUNS, default on) + GLM53_MLA_DSA_QFIRST (W_uk before I3, opt-in); 47: one DSA index core per token lane at t > 4 (the lane cores run ix_dm0 / ix_c / ix_dm1 on their tokens; GLM53_MLA_DSA_IX_LANES, default on); 46: row-granular DSA index writes (ix_dm1 MLA_DSA_IX_ROWS: ring rows 0..3 + one pooled-key row per token instead of 12-tile RMWs; GLM53_MLA_DSA_IX_ROWS, default on); 45: index-core probe marks (slots 220 / 221: ix_dm0 / ix_dm1, + ix_dm1 'rows done'); 44: GLM53_MLA_DSA_SB default 1 (card0 u38: SB 4 gives no gain, I4 is DRAM-bound on the 64 MB of replicated pooled keys at 1M); 43: the lane coordinator's cur_pos scratch 64-B aligned (a DRAM read target); 42: GLM53_MLA_DSA_SB default 2 (the owners' DSA score CBs 112 -> 56 KB: 14b's served-stack L1 floor); 41: DSA score batches always take SB CB tiles (the last padded; a short batch broke the CB batch grid); 40: DSA token lanes at t > 4 (one select coordinator core per lane, dsa_coord.cpp; GLM53_MLA_DSA_LANES, default 8); 39: o_T with DSA (att_dsa_dm1.cpp MLA_ATT_OT; GLM53_MLA_DSA_OT, default on); 38: dsa_state slot base s0 (host only: the launch's rows = slots s0.. of a [S, ..] store, dsa_slot_addrs); 37: DSA I4 scoring in batches of GLM53_MLA_DSA_SB (default 4) pooled-key tiles; 36: DSA radix select on compacted candidates (GLM53_MLA_DSA_COMPACT, default on); 35: o_T + NKMAX 8 + bf16 O by default at every t > 4 (card0 t=16 515 -> 479, t=8 413 -> 386 us); 34: o_T at 4 < t < 32 (opt-in GLM53_MLA_OT_SMALL=1; W_uv zeroes rows >= T); 33: o_T + NKMAX 8 + bf16 O partials by default at t = 32 (card0 vtp8 729.3 -> 595.2 us); 32: GLM53_MLA_ATT_NKMAX (row tiles per attention batch, t > 4); 31: GLM53_MLA_ATT_FID_QK (the attention's bf16 matmuls' fidelity); 30: o_T (t = 32: the attention roots write W_uv's token-row in0, GLM53_MLA_OT); 29: gather / scatter one address per row pair, lanes 4 at t = 2..4; 25: t <= 32 (flat residual / per-tile mhc_post, 32-row DSA mailbox); 26: token lanes (t > 4);
 # 27: batched latent cache write (t > 4); 28: staging batch of the row gather / scatter (t > 4)
 PROBE_ROWS = 240  # owners 0..63, root 64, readers 65 + 2i (streamer) / 66 + 2i (mover), latent 130 / 131, owner NCRISC  # 132 + k, q-norm cores 196 + 2i / 197 + 2i (i < 12), index cores 220 + 2l / 221 + 2l (l < 8 lanes, rev 53)  # rev 54: was 224 - rev 53's per-lane index-core rows (up to 235) wrote past it and hung card0 (u72); keep <= MK_PROBE_LROWS
 SEM_QL, SEM_LAT = 13, 14  # one-program half: W_uk readers -> attention owners, latent core -> attention owners
@@ -128,7 +128,9 @@ def shard_merge_msgs(nchips: int = 8) -> int:
     return 1 + 8 + nchips * 4 // 16
 
 
-SHARD_MERGE_SCR = 5 * 2048 + 2 * 512 * 4 + 64 * 4  # dsa_shard.hpp MERGE_SCR_BYTES (the helpers' CB_AKEY scratch)
+SHARD_MERGE_SCR = (
+    5 * 2048 + 2 * 512 * 4 + 64 * 4
+)  # dsa_shard.hpp MERGE_SCR_BYTES at KPH = 1 (the helpers' CB_AKEY scratch)
 SHARD_PROBE_LANE0 = (
     236  # rev 59: probe rows of the shard stream lanes (fs_send.cpp): 236 + i, i < 4 (inside PROBE_ROWS)
 )
@@ -147,6 +149,9 @@ def _shard_header_check():
     assert not bad, f"mk_mla.py SHARD_* vs kernels/mla/dsa_shard.hpp: {bad}"
     assert SP.merge_msgs() == SHARD_MERGE_MSGS and SP.merge_scr_bytes() == SHARD_MERGE_SCR, "dsa_shard.hpp merge layout"
     assert SP.merge_msgs(32) == shard_merge_msgs(32) == 17, "dsa_shard.hpp merge layout at NCHIPS = 32"
+    # rev 64: the KPH > 1 helpers' scratch (2 staging pages + KPH x 2 KB keys + 256 B) stays under the KPH = 1 bytes up
+    # to KPH 4 (KPH 8 / 16 trade it for more lanes)
+    assert SP.merge_scr_bytes(2) < SP.merge_scr_bytes(4) <= SHARD_MERGE_SCR, "dsa_shard.hpp MERGE_SCR_BYTESK"
     # every probe row a shard kernel flushes stays inside the probe tensor and its stack-layer block (kernels/mk/probe.hpp
     # MK_PROBE_LROWS): an out-of-bounds probe row hung card0 (u72)
     lrows = SP.header_constants_define("mk/probe.hpp", "MK_PROBE_LROWS")
@@ -155,11 +160,15 @@ def _shard_header_check():
 
 def _shard_line_defs(shard) -> list:
     """the MLA_DSA_SHARD_LINE define of the 2x4 build (kernels/mla/dsa_shard.hpp LINE: the chips of a mesh row; the
-    pair builds without it, LINE = 1)"""
+    pair builds without it, LINE = 1); rev 64: MLA_DSA_SHARD_KPH on the 8x4 when the build's KPH > 1"""
     line = int((shard or {}).get("line", 1))
     pair = int((shard or {}).get("pair", 2))  # 8x4 (doc/perf/shard_8x4_design.md): the column of 8
+    kph = int((shard or {}).get("kph", 1))
+    assert kph == 1 or pair > 2, ("KPH > 1: the 8x4 only", kph, pair)
     if pair > 2:
-        return [("MLA_DSA_SHARD_LINE", str(line)), ("MLA_DSA_SHARD_PAIR", str(pair))]
+        return [("MLA_DSA_SHARD_LINE", str(line)), ("MLA_DSA_SHARD_PAIR", str(pair))] + (
+            [("MLA_DSA_SHARD_KPH", str(kph))] if kph > 1 else []
+        )
     assert line in (1, 4), line
     return [("MLA_DSA_SHARD_LINE", str(line))] if line > 1 else []
 
@@ -192,10 +201,32 @@ def _dsa_lanes_at(t: int) -> int:
     return 1 << 30
 
 
-def shard_tl(t: int) -> int:
+def shard_tl(t: int, lanes: int = 1, kph: int = 1) -> int:
     """rev 60: the lane-local token slots of a sharded t-row build (dsa_shard.hpp TL = mladsa::T_MAX, the MLA_DSA_TMAX
-    define of the shard build): 4 up to t = 4 (rev 59's layout), SHARD_TL_MAX above (token lanes: t / L tokens each)"""
-    return DSA_T_MAX if t <= DSA_T_MAX else SHARD_TL_MAX
+    define of the shard build): 4 up to t = 4 (rev 59's layout), SHARD_TL_MAX above (token lanes: t / L tokens each);
+    rev 64: with KPH > 1 (more lanes: more keys per chunk core, larger kept blocks) 4 when the lane holds <= 4 tokens
+    (tt/shard_plan.py shard_tl)"""
+    from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+    assert SP.TL_SMALL == DSA_T_MAX and SP.TL_MAX == SHARD_TL_MAX
+    return SP.shard_tl(t, lanes, kph)
+
+
+def shard_kph(nchips: int, chunks: int, lanes: int, pair: int) -> int:
+    """rev 64 (GLM53_DSA_SHARD_KPH: "1" default, an int, or "auto"): chips per merge helper of a sharded build with
+    `lanes` token lanes over `chunks` chunk cores (dsa_shard.hpp KPH; tt/shard_plan.py shard_kph): 1 on the pair / the
+    2x4; "auto" = max(1, nchips lanes / chunks) (the 8x4: 2 at 4 lanes, 4 at 8)"""
+    from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+    return SP.shard_kph(nchips, chunks, lanes, pair, os.environ.get("GLM53_DSA_SHARD_KPH", "1"))
+
+
+def shard_kph_reserve(nchips: int, pair: int) -> int:
+    """rev 64: the chips per helper the lane-core reservation plans for (the knob's int; "auto": 16, the lanes then
+    capped by GLM53_MLA_DSA_LANES; 1 on the pair / the 2x4)"""
+    from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+    return SP.shard_kph_reserve(nchips, pair, os.environ.get("GLM53_DSA_SHARD_KPH", "1"))
 
 
 def dsa_wdtype():
@@ -239,13 +270,15 @@ def dsa_slot_addrs(st: dict, t: int) -> tuple:
     return tuple(out)
 
 
-def dsa_mbox_bytes(t: int, shard: bool = False, nchips: int = 8) -> int:
+def dsa_mbox_bytes(t: int, shard: bool = False, nchips: int = 8, tl: int | None = None) -> int:
     """the owners' mailbox (kernels/mla/dsa_common.hpp MBOX_BYTES; with the shard variant dsa_shard.hpp MBOX_SHARD_BYTES:
-    (quota, offset) pairs in the tie message, the global message and the global quotas per token)"""
-    tm = shard_tl(t) if shard else dsa_tmax(t)  # rev 60: the shard mailbox holds the lane-local tokens
-    if shard:  # (rev 59: + the merge helpers' messages, dsa_shard.hpp MERGE_OFF / MERGE_MSGS)
-        return (tm * DSA_MSGS * 16 + tm * DSA_MAX_CHUNKS * 4 * 2 + tm * 16 + tm * DSA_MAX_CHUNKS * 4
-                + tm * shard_merge_msgs(nchips) * 16)  # fmt: skip
+    (quota, offset) pairs in the tie message, the global message and the global quotas per token; tl: the build's
+    lane-local token slots, default shard_tl(t))"""
+    tm = (tl or shard_tl(t)) if shard else dsa_tmax(t)  # rev 60: the shard mailbox holds the lane-local tokens
+    if shard:  # (rev 59: + the merge helpers' messages, dsa_shard.hpp MERGE_OFF / MERGE_MSGS; tt/shard_plan.py)
+        from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+        return SP.mbox_bytes(tm, nchips)
     return tm * DSA_MSGS * 16 + tm * DSA_MAX_CHUNKS * 4
 
 
@@ -1208,12 +1241,18 @@ class MkMla(_MlaBase):
     def reserve_lane_cores(self, free: list, helpers: int) -> list:
         """rev 60 (W, dsa_shard): the token lanes' index cores of the sharded split-K phase at t > 4, from `free` (the
         cores no role of this program -- nor the caller's fabric / stream lanes -- takes): GLM53_MLA_DSA_LANES (default
-        8) rounded down to a power of two <= C / helpers (every lane holds the 2 LINE merge helpers) and <= len(free);
+        8) rounded down to a power of two <= C / helpers (every lane holds the 2 LINE merge helpers; rev 64: NCHIPS /
+        KPH on the 8x4) and <= len(free) (a cap by the free cores is printed: MK_SHARD_LANES);
         -> the cores taken (1 lane: none)"""
         assert self.dsa_shard and not self.co_cores, "reserve_lane_cores: the shard variant, once"
-        v, p = int(os.environ.get("GLM53_MLA_DSA_LANES", "8")), 1
+        v, p, want = int(os.environ.get("GLM53_MLA_DSA_LANES", "8")), 1, 1
+        while want * 2 <= min(v, self.chunks // max(1, helpers)):
+            want *= 2
         while p * 2 <= min(v, self.chunks // max(1, helpers), len(free)):
             p *= 2
+        if p < want:
+            print(f"MK_SHARD_LANES capped: {p} lane cores of {want} (GLM53_MLA_DSA_LANES {v}, {helpers} merge helpers "
+                  f"per lane, {len(free)} free cores)", flush=True)  # fmt: skip
         if p > 1:
             self.co_cores = [ttnn.CoreCoord(*free[i]) for i in range(p)]
             self.used |= {tuple(free[i]) for i in range(p)}
@@ -1329,7 +1368,7 @@ class MkMla(_MlaBase):
         if self.dsa_shard != (shard is not None):
             raise ValueError("MkMla(dsa_shard=True) takes shard= (tt/tp_dsa_shard.py) and only then")
         if shard is not None:
-            self.shard_lanes_check(t, int(shard.get("line", 1)), int(shard["C"]))
+            self.shard_lanes_check(t, int(shard.get("line", 1)), int(shard["C"]), int(shard.get("kph", 1)))
         if shard is not None and dsa_state is not None and dsa_state.get("window") is not None:
             # the dense window (the caller's replicated store): the split-K phase's all-dense pass + the latent write
             win = dsa_state["window"]
@@ -1411,7 +1450,8 @@ class MkMla(_MlaBase):
             wsc = mk((1, 1, TILE, TILE), FP32, DRAM)
             kc = mhc.kcores
             mbox = _sharded_u32(self.device, kc, len(self.place["k"]),
-                                dsa_mbox_bytes(t, shard is not None, int(shard["C"]) if shard is not None else 8) // 4)  # fmt: skip
+                                dsa_mbox_bytes(t, shard is not None, int(shard["C"]) if shard is not None else 8,
+                                               self._shard_tl(t, shard) if shard is not None else None) // 4)  # fmt: skip
             ixc = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self._ix_cores(t)])
             nl = self.att_lanes(t)
             if shard is not None:  # the coordinators' merge scratch (ix_dm0.cpp MLA_DSA_SHARD; rev 60: one per lane)
@@ -1481,7 +1521,8 @@ class MkMla(_MlaBase):
         att_cbs = attention_cbs(kcores, ACB1, page_table, dsa_keys=self._dsa_k, dsa_cand=self.dsa_compact(),
                                 dsa_sb=self.dsa_sb(), nk=self.att_nkmax(t),
                                 obf16=self.att_obf16(t), shard_t=-(-t // self.att_lanes(t)) if shard is not None else 0,
-                                shard_tl=shard_tl(t))  # fmt: skip
+                                shard_tl=self._shard_tl(t, shard) if shard is not None else shard_tl(t),
+                                shard_kph=int(shard.get("kph", 1)) if shard is not None else 1)  # fmt: skip
         ix_sems = []
         if self.dsa is not None:
             ix_kernels, ix_cbs = self._index_core(t, y_ix, wsc, cur_pos, dsa_state, hist, mbox, n_r, pa=pa, shard=shard,
@@ -1597,11 +1638,12 @@ class MkMla(_MlaBase):
             p *= 2
         return p
 
-    def shard_lanes_check(self, t: int, line: int = 1, nchips: int | None = None) -> None:
+    def shard_lanes_check(self, t: int, line: int = 1, nchips: int | None = None, kph: int = 1) -> None:
         """rev 60 (W, shard_tp8_design.md section 7): the sharded split-K phase at t rows -- t <= SHARD_T_MAX, one head
         group, and with token lanes (t > 4: att_lanes(t) = L, the lane cores tt/tp_dsa_shard.py reserves) at most
         shard_tl(t) tokens per lane, one index core per lane (the shard coordinator: GLM53_MLA_DSA_IX_LANES=1), and the
-        2 LINE merge helpers among the lane's chunk cores (TP8: L <= C / 8); raises otherwise"""
+        2 LINE merge helpers among the lane's chunk cores (TP8: L <= C / 8; rev 64: NCHIPS / kph on the 8x4); raises
+        otherwise"""
         nl = self.att_lanes(t)
         why = []
         if t > SHARD_T_MAX:
@@ -1615,10 +1657,19 @@ class MkMla(_MlaBase):
         if nl > 1 and self.ix_lanes(t) != nl:
             why.append("one index core per token lane (GLM53_MLA_DSA_IX_LANES=1)")
         helpers = nchips if nchips is not None else 2 * line  # the merge helpers = NCHIPS (8x4: 32)
+        if kph < 1 or helpers % kph or kph > 16 or (kph > 1 and helpers != 32):
+            why.append(f"GLM53_DSA_SHARD_KPH {kph}: a divisor of the 32 chips of the 8x4, <= 16")
+        else:
+            helpers //= kph  # rev 64: NCHIPS / KPH merge helpers per lane
         if self.chunks // nl < helpers:
             why.append(f"{helpers} merge helpers among the lane's {self.chunks // nl} chunk cores")
         if why:
             raise ValueError(f"MkMla(dsa_shard=True) at t={t}: {'; '.join(why)}")
+
+    def _shard_tl(self, t: int, shard: dict) -> int:
+        """rev 64: the lane-local token slots of this sharded t-row build (shard_tl with its lanes and its KPH): the
+        owners' / index cores' MLA_DSA_TMAX, the mailbox, the kept blocks"""
+        return shard_tl(t, self.att_lanes(t), int(shard.get("kph", 1)))
 
     def att_nkmax(self, t: int) -> int:
         """row tiles per attention batch (att_common.hpp NKMAX; CB_AK holds one batch of K tiles). t > 4 dense:
@@ -1795,7 +1846,7 @@ class MkMla(_MlaBase):
         dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
         rev = [("MLA_REV", str(MLA_REV)), ("MLA_SRC", "0x" + mla_src()[:8])]
         tm = (
-            shard_tl(t) if shard is not None else dsa_tmax(t)
+            self._shard_tl(t, shard) if shard is not None else dsa_tmax(t)
         )  # (rev 60: the shard mailbox is lane-local, dsa_shard.hpp TL)
         if tm != DSA_T_MAX:
             rev.append(("MLA_DSA_TMAX", str(tm)))
@@ -1954,7 +2005,9 @@ class MkMla(_MlaBase):
                 defs.append(("MLA_DSA", "1"))
                 # the 32-row mailbox (kernels/mla/dsa_common.hpp T_MAX; rev 60: the shard mailbox is lane-local, its
                 # TL = shard_tl(t) lane tokens: dsa_shard.hpp)
-                tm = shard_tl(t) if getattr(self, "_shard_now", None) is not None else dsa_tmax(t)
+                tm = (
+                    self._shard_tl(t, self._shard_now) if getattr(self, "_shard_now", None) is not None else dsa_tmax(t)
+                )
                 if tm != DSA_T_MAX:
                     defs.append(("MLA_DSA_TMAX", str(tm)))
                 if (
@@ -2288,12 +2341,14 @@ def _sharded_u32(device, cores, n_cores: int, words: int):
 
 def attention_cbs(cores, acb: dict, page_table, dsa_keys: int = 0, dsa_cand: bool = False, dsa_sb: int = 1,
                   nk: int = ATT_NKMAX,
-                  obf16: bool | None = None, shard_t: int = 0, shard_tl: int = DSA_T_MAX) -> list:  # fmt: skip
+                  obf16: bool | None = None, shard_t: int = 0, shard_tl: int = DSA_T_MAX,
+                  shard_kph: int = 1) -> list:  # fmt: skip
     """the owners' attention CBs (+ the DSA ones when dsa_keys > 0: the keys one owner holds per sparse token; shard_t > 0:
     the split-K variant -- shard_t = the tokens of one token lane (rev 60; t at t <= 4): shard_t CB_ASEL pages of
     (3 + min(512, keys)) words + 52 B (a core selects <= its kept pools), in CB_AKEY the region U = max(the keys +
     candidates, the merge helpers' scratch + 64: overlaid, review 2 item 1), shard_tl kept (key, pool) blocks of
-    min(512, keys) pairs and the record staging; att_dsa_shard_dm1.cpp UB / KW / kept / stg)"""
+    min(512, keys) pairs and the record staging; att_dsa_shard_dm1.cpp UB / KW / kept / stg; rev 64: shard_kph sizes the
+    merge helpers' scratch, tt/shard_plan.py akey_bytes)"""
     cb = lambda i, dt, page, n: ttnn.CBDescriptor(
         total_size=page * n, core_ranges=cores,
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dt, page_size=page)],
@@ -2304,6 +2359,9 @@ def attention_cbs(cores, acb: dict, page_table, dsa_keys: int = 0, dsa_cand: boo
     if obf16 is None:
         obf16 = os.environ.get("GLM53_MLA_ATT_OBF16", "0") == "1"
     odt, ob = (BF16, 2048) if obf16 else (FP32, 4096)
+    from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+    asel = SP.asel_page_bytes(dsa_keys) if shard_t else (3 + DSA_TOPK) * 4 + 52  # (the shard bytes: tt/shard_plan.py)
     return [cb(acb["AQ"], BF16, 2048, 16), cb(acb["AK"], BF16, 2048, nk * 16), cb(acb["AMASK"], FP32, 4096, 1),
             cb(acb["AINFO"], ttnn.uint32, 64, 1), cb(acb["AS"], FP32, 4096, nk), cb(acb["AM"], FP32, 4096, 1),
             cb(acb["AP"], BF16, 2048, nk), cb(acb["AE"], FP32, 4096, nk), cb(acb["APA"], FP32, 4096, 2),
@@ -2314,24 +2372,24 @@ def attention_cbs(cores, acb: dict, page_table, dsa_keys: int = 0, dsa_cand: boo
             cb(acb["ASCR"], ttnn.uint32, 256 + _a64(pt_bytes), 1)] + ([
             cb(DCB["AQI"], BF16, 2048, 4), cb(DCB["AWS"], FP32, 4096, 1), cb(DCB["APK"], BF16, 2048, 8 * dsa_sb),
             cb(DCB["ASR"], FP32, 4096, dsa_sb), cb(DCB["ASC"], FP32, 4096, 2 * dsa_sb),
-            cb(DCB["ASEL"], ttnn.uint32, (3 + (min(DSA_TOPK, dsa_keys) if shard_t else DSA_TOPK)) * 4 + 52,
-               max(1, shard_t)),
-            cb(DCB["AKEY"], ttnn.uint32, _akey_bytes(dsa_keys, dsa_cand, shard_t, shard_tl), 1)]
+            cb(DCB["ASEL"], ttnn.uint32, asel, max(1, shard_t)),
+            cb(DCB["AKEY"], ttnn.uint32, _akey_bytes(dsa_keys, dsa_cand, shard_t, shard_tl, shard_kph), 1)]
            if dsa_keys else [])  # fmt: skip
 
 
-def _akey_bytes(dsa_keys: int, dsa_cand: bool, shard_t: int, shard_tl: int = DSA_T_MAX) -> int:
+def _akey_bytes(dsa_keys: int, dsa_cand: bool, shard_t: int, shard_tl: int = DSA_T_MAX, shard_kph: int = 1) -> int:
     """CB_AKEY bytes per owner: [0, 64) histogram, the cur_pos page, the keys (+ the compacted candidates); with the shard
     variant (shard_t > 0; rev 60) the region U = max(keys + candidates, SHARD_MERGE_SCR + 64) (the merge helpers'
-    scratch over the dead phase-A keys), shard_tl kept blocks of KW = min(512, keys) (key, pool) pairs, the 64-B
-    aligned record staging (TB + 64) + 64 slack (att_dsa_shard_dm1.cpp UB / KW / kept / stg / mstg)"""
+    scratch over the dead phase-A keys; rev 64: MERGE_SCR_BYTES of the build's KPH), shard_tl kept blocks of KW =
+    min(512, keys) (key, pool) pairs, the 64-B aligned record staging (TB + 64) + 64 slack (att_dsa_shard_dm1.cpp UB /
+    KW / kept / stg / mstg; the bytes: tt/shard_plan.py akey_bytes)"""
     keyb = 4 * dsa_keys * (2 if dsa_cand else 1)
     if not shard_t:
         return 64 + DSA_POS_BYTES + keyb
+    from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
     assert dsa_cand and 1 <= shard_t <= shard_tl <= SHARD_TL_MAX, (dsa_cand, shard_t, shard_tl)
-    kw = min(SHARD_CAND_MAX, dsa_keys)
-    return (64 + DSA_POS_BYTES + max(keyb, SHARD_MERGE_SCR + 64) + shard_tl * 2 * kw * 4
-            + 64 + 2048 + 64 + 64)  # fmt: skip
+    return SP.akey_bytes(dsa_keys, shard_t, shard_tl, shard_kph)
 
 
 def attention_tree(p, t0: int, chunks: int, groups: int, mhz: float = 1350.0) -> dict:

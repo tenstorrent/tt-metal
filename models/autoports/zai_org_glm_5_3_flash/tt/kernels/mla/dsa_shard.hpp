@@ -100,8 +100,8 @@ inline uint32_t piece_of(uint32_t rank) { return rank - tile_of(rank) * PIECES; 
 inline uint32_t ag_blk(uint32_t rank) { return line_pos(rank) * PAIR + pair_pos(rank); }
 
 // rev 59: the global merge's messages to the merge helpers (owner chunk cores c < NCHIPS of group 0; helper q holds
-// chip q's candidate list): per token MERGE_MSGS 16-B slots -- 0 start, 1 + r round r's (prefix, k_rem, done), then the
-// tie quotas of the NCHIPS helpers (2 slots: 8 words)
+// chip q's candidate list; rev 64: c < NHELP, KPH lists each): per token MERGE_MSGS 16-B slots -- 0 start, 1 + r round
+// r's (prefix, k_rem, done), then the tie quotas of the NCHIPS chips' lists in chip order (2 slots: 8 words)
 constexpr uint32_t QUOTA_SLOTS = NCHIPS * 4 / mladsa::MSG_BYTES;  // 16-B slots of the per-helper tie quotas (2 / 8)
 static_assert(QUOTA_SLOTS * mladsa::MSG_BYTES == NCHIPS * 4, "one quota word per merge helper, whole slots");
 constexpr uint32_t MERGE_MSGS = 1 + mladsa::ROUNDS + QUOTA_SLOTS;
@@ -193,9 +193,29 @@ inline uint32_t rs2b_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * 
 // rev 59, TP8: q_asm [2 x T x 32, 512] bf16 -- head tile g of token t assembled ONCE per chip (the index core's NCRISC,
 // behind the global merge) from the 4 pieces in y_ag; the owners read 16 whole pages per push
 inline uint32_t qasm_page(uint32_t T, uint32_t tile, uint32_t t, uint32_t d) { return (tile * T + t) * PPC + d; }
+// rev 64: KPH chips per merge helper (MLA_DSA_SHARD_KPH, tt/mk_mla.py shard_kph / tt/shard_plan.py shard_kph; the 8x4
+// only, unset = 1: every build before rev 64 unchanged). Merge helper h (lane-local chunk core h < NHELP of group 0)
+// holds the lists of chips h KPH .. h KPH + KPH - 1, so a token lane needs NHELP = NCHIPS / KPH helpers among its
+// C / LANES chunk cores (8x4, 64 chunk cores: KPH 2 -> 4 lanes, KPH 4 -> 8 lanes). Its round histogram is one 16-bin
+// histogram over the union of its lists (the coordinator's sums, digits and T_g are the KPH = 1 integers); its tie
+// report carries the KPH per-list counts of keys == T_g in words 0 .. KPH - 1 (<= 16: one histogram slot), so the
+// per-chip tie quotas stay in chip order (the same quotas as KPH = 1)
+#if defined(MLA_DSA_SHARD_KPH)
+constexpr uint32_t KPH = MLA_DSA_SHARD_KPH;
+#else
+constexpr uint32_t KPH = 1;
+#endif
+static_assert(KPH == 1 || PAIR == 8, "shard: KPH > 1 on the 8x4 only (the pair / the 2x4 keep one chip per helper)");
+static_assert(KPH >= 1 && KPH <= 16 && NCHIPS % KPH == 0, "shard: KPH divides NCHIPS; its tie counts fit one slot");
+constexpr uint32_t NHELP = NCHIPS / KPH;  // merge helpers per token lane
 // rev 59: the merge helpers' scratch in CB_AKEY: their chip's candidate pages, its keys, the compacted candidates, the
 // per-core tie quotas (helper `rank` only). Rev 60 (review 2 item 1): it overlays the phase-A keys / candidates
 // (dead once every lane token's local select is done; the merge runs after the all-gather), so CB_AKEY holds
 // max(2 MLA_DSA_KEYS words, MERGE_SCR_BYTES + 64) there instead of both
-constexpr uint32_t MERGE_SCR_BYTES = CAND_PAGES * TB + 2 * CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4;
+constexpr uint32_t MERGE_SCR_BYTES1 = CAND_PAGES * TB + 2 * CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4;
+// rev 64, KPH > 1: MSTG_PAGES staging pages (the lists' record pages stream through them, double-buffered), the KPH
+// lists' keys (compacted in place per list), the per-core tie quotas (helper rank / KPH only): 12.3 KB at KPH = 4
+constexpr uint32_t MSTG_PAGES = 2;
+constexpr uint32_t MERGE_SCR_BYTESK = MSTG_PAGES * TB + KPH * CAND_MAX * 4 + mladsa::MAX_CHUNKS * 4;
+constexpr uint32_t MERGE_SCR_BYTES = KPH == 1 ? MERGE_SCR_BYTES1 : MERGE_SCR_BYTESK;
 }  // namespace mlashard

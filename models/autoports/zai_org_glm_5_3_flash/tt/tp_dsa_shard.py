@@ -105,9 +105,11 @@ class TPMlaShard(TPM.TPMla):
         lanes_t4 = os.environ.get("GLM53_DSA_SHARD_LANES_T4", "1") == "1" and max(self.stream_ts) > 1
         if max(self.stream_ts) > MK.DSA_T_MAX or lanes_t4:
             rest = [v for v in free if tuple(v) not in {tuple(e) for e in ex}]
-            self.ix_lane_cores = self.mk.reserve_lane_cores(rest, self.n)  # NCHIPS merge helpers per lane
+            # NCHIPS merge helpers per lane; rev 64 (GLM53_DSA_SHARD_KPH, the 8x4): NCHIPS / KPH -- KPH 4 (or "auto")
+            # reserves up to 8 lane cores (GLM53_MLA_DSA_LANES, default 8; a cap by the free cores prints MK_SHARD_LANES)
+            self.ix_lane_cores = self.mk.reserve_lane_cores(rest, self.n // MK.shard_kph_reserve(self.n, self.P))
         for t in self.stream_ts:
-            self.mk.shard_lanes_check(t, self.L, self.n)
+            self.mk.shard_lanes_check(t, self.L, self.n, self.kph(t))
         self.link_audit, self.target_audit, self.header_audit, self.census, self.censuses = {}, {}, {}, {}, {}
         # GLM53_DSA_SHARD_SHARE_SYNC=1 (stream_share = the first sparse_dsa layer's TPMlaShard): every layer's stream of a
         # row count t uses that layer's sync tensor -- the counters are monotonic across launches (fs_common.hpp: launch g
@@ -120,6 +122,11 @@ class TPMlaShard(TPM.TPMla):
             assert stream_share.lane_core == self.lane_core, (stream_share.lane_core, self.lane_core)
             self._sync_from = stream_share
         self.streams = {t: self._new_streams(t) for t in self.stream_ts}
+
+    def kph(self, t: int) -> int:
+        """rev 64: chips per merge helper of the t-row build (GLM53_DSA_SHARD_KPH on the 8x4: 1 default, an int, or
+        "auto" = 32 lanes / 64; 1 on the pair / the 2x4) -- the stream dict's "kph" (MkMla's MLA_DSA_SHARD_KPH)"""
+        return MK.shard_kph(self.n, self.mk.chunks, self.mk.att_lanes(t), self.P)
 
     def _pos(self, r: int, c: int) -> int:
         """this chip's rank (the head shard / owner index: row-major mesh order)"""
@@ -155,7 +162,9 @@ class TPMlaShard(TPM.TPMla):
         # t x (the token's lane chunk cores + its lane coordinator) + the latent core's q_lat copy
         ag_wait = (MK.SEM_FSW, t * (cl + 1) + 1)
         assert ag_wait[1] == SP.ag_producers(t, self.mk.chunks, nl), (t, nl, ag_wait)  # (the plan's per-lane count)
-        assert not SP.lanes_reasons(t, nl, self.mk.chunks, self.L, self.mk.groups), SP.lanes_reasons(t, nl)
+        kph = self.kph(t)  # rev 64: chips per merge helper (NCHIPS / kph helpers per lane)
+        why = SP.lanes_reasons(t, nl, self.mk.chunks, self.L, self.mk.groups, nchips=self.n, kph=kph)
+        assert not why, why
         rs_wait = (MK.SEM_FSW, t * self.mk.groups)  # one root increment per token (its lane's root)
         lane = lambda name: [self.lane_core[name]]  # noqa: E731
         share = self._sync_from.streams.get(t, {}).get("objs", {}) if self._sync_from is not None else {}
@@ -202,7 +211,7 @@ class TPMlaShard(TPM.TPMla):
                                          cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
             assert int(ag1.y.shape[-2]) == geo.n * t * 32 and int(rs1.y.shape[-2]) == self.P * t * 32
             assert int(rs2.y.shape[-2]) == self.L * t * 32
-            return dict(C=self.n, line=self.L, pair=self.P, x_ag=x_ag, y_ag=ag1.y, x_rs=x_rs, y_rs=x_rs,
+            return dict(C=self.n, line=self.L, pair=self.P, kph=kph, x_ag=x_ag, y_ag=ag1.y, x_rs=x_rs, y_rs=x_rs,
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],
                         ag2_lane=ag2_noc, rs2_lane=rs2.lane_noc()[0], t=t, lanes=nl, ag_wait=ag_wait[1],
@@ -288,7 +297,8 @@ class TPMlaShard(TPM.TPMla):
         xy = lambda c: (int(c.x), int(c.y))  # noqa: E731
         owners = [xy(c) for c in self.mk.place["k"]]
         top = max(per.items(), key=lambda kv: kv[1])
-        return dict(t=st["t"], lanes=st.get("lanes", 1), max_cb_bytes=top[1], max_cb_core=list(top[0]),
+        return dict(t=st["t"], lanes=st.get("lanes", 1), kph=st.get("kph", 1), max_cb_bytes=top[1],
+                    max_cb_core=list(top[0]),
                     owner_max=max(per.get(o, 0) for o in owners),
                     ix_core=per.get(xy(self.mk.ix_core), 0), lat_core=per.get(xy(self.mk.lat_core), 0),
                     ix_lane_cores={f"{c.x},{c.y}": per.get(xy(c), 0) for c in self.mk._ix_cores(st["t"])}
