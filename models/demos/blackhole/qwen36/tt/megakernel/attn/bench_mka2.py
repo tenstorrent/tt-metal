@@ -60,6 +60,7 @@ for it in range(ITERS):
     t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else ([rsp] if V12 else [])) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + (list(GDN_ROLE.get('io', [])) if GDN24 else []) + [out_t], prog); ttnn.synchronize_device(dev)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
+    if GDN24 and callable(GDN_ROLE.get('gdnout_check')): GDN_ROLE['gdnout_check'](it)   # MKA_GDNOUT: gdn_out PCC (every run)
     if REAL_AR and AR_SEQ:   # this pass's golds from the residual the previous pass left (rstd stays the CB 20 stand-in)
         for L_ in range(NL):
             _g, _u, _d = vlayer(L_)

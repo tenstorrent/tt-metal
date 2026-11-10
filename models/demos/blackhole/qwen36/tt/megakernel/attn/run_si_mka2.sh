@@ -8,7 +8,9 @@ export MKA_KD=$MK2/megakernel/attn/kernels MK_MIXN=${MK_MIXN:-1}
 unset TT_METAL_SIMULATOR MESH_DEVICE TT_VISIBLE_DEVICES
 for kv in "$@"; do export "$kv"; done
 mkdir -p $TT_METAL_PROFILER_DIR; cd $MK2
-s=$(date +%s); flock -w 1800 /tmp/tt_device.lock timeout ${MK_TIMEOUT:-600} $TM/python_env/bin/python $MK2/megakernel/attn/bench_mka2.py > $MK2/$TAG.log 2>&1; rc=$?
+# MK_CHIP=<n>: single-chip run pinned to chip n (shared host lock + per-chip lock, RELAUNCH_BRIEF device policy 23:20Z)
+if [ -n "${MK_CHIP:-}" ]; then LK="flock -w 1800 -s /tmp/tt_device.lock flock -w 1800 -x /tmp/tt_chip$MK_CHIP.lock env TT_VISIBLE_DEVICES=$MK_CHIP"; else LK="flock -w 1800 /tmp/tt_device.lock"; fi
+s=$(date +%s); $LK timeout ${MK_TIMEOUT:-600} $TM/python_env/bin/python $MK2/megakernel/attn/bench_mka2.py > $MK2/$TAG.log 2>&1; rc=$?
 echo "rc=$rc wall=$(( $(date +%s)-s ))s"; grep -E "\[mka2\]|\[mk1\] iter|\[fm11\] iter|TT_THROW|TT_FATAL|Error|Timeout" $MK2/$TAG.log | head -24
 CSV=$(find $TT_METAL_PROFILER_DIR -name profile_log_device.csv 2>/dev/null | head -1)
 [ -n "$CSV" ] && $TM/python_env/bin/python $MK2/megakernel/attn/mka_prof.py "$CSV" | tail -24
