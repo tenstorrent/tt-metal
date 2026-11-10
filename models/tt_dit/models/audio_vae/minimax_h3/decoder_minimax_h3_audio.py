@@ -195,6 +195,30 @@ class MiniMaxH3AudioDecoder(Module):
             trace_key=tuple(latents_BCT.shape),
         )
 
+    def forward_deferred(self, latents_BCT: torch.Tensor, *, traced: bool = False):
+        """`forward`, but returning a callable that reads the waveform back: every device op is enqueued now (the
+        same ops on the same inputs), the host readback happens when the callable is called."""
+        _, channels, _ = latents_BCT.shape
+        assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
+        x = latents_BCT.transpose(1, 2).float().contiguous()
+        t_pad = self.decoder.t_pad_for(x.shape[1])
+        if t_pad:
+            x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
+        if self.batch_shard_axis is None:
+            x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        else:
+            x_dev = self._upload_batch_sharded(x)
+            self.decoder.batch_shard = (self.batch_shard_axis, x.shape[0])
+        projected_dev = self.dec_in_proj(x_dev)
+        if t_pad:
+            projected_dev = ttnn.multiply(projected_dev, self._pad_row_mask(x.shape[1], t_pad))
+        return self.decoder.forward_device_BTC_deferred(
+            projected_dev,
+            t_pad=t_pad,
+            traced=traced,
+            trace_key=tuple(latents_BCT.shape),
+        )
+
     def _upload_batch_sharded(self, x_BTC: torch.Tensor) -> ttnn.Tensor:
         """Mesh row r: batch r % B."""
         axis = self.batch_shard_axis

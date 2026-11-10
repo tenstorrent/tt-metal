@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+
+#include <cstdlib>
+#include <string>
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
@@ -37,6 +40,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include <unordered_map>
 
 using namespace tt::tt_metal;
 using ttnn::Tensor;
@@ -44,6 +48,7 @@ using ttnn::Tensor;
 namespace {
 
 namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
+namespace ag_dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 // Circular sliding KV slab count (0 = unbounded); validation already required whole slabs and >= 2.
@@ -191,6 +196,7 @@ RingJointInputParams resolve_ring_joint_input_params(
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
+constexpr uint32_t kSolResidentMaxSlots = 32;
 
 // Dense all-gather appends reader-forward, writer-forward, reader-backward, writer-backward.
 // Compact sliding appends only its predecessor reader/writer pair at indices 3 and 4.
@@ -553,7 +559,8 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
-    const bool enable_kv_chains = !args.has_sliding_window();
+    const bool enable_kv_chains =
+        !args.has_sliding_window() && !(tensor_args.sol_enabled() && !tensor_args.sol_streams_chunks(args.sol_mode));
     const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
     const uint32_t batch_chain_args =
@@ -627,6 +634,60 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT);
 }
 
+std::optional<ring_joint::ChunkedSlidingHaloLayout> build_runtime_halo_layout(
+    const ttnn::prim::RingJointSDPAParams& args,
+    const ttnn::prim::RingJointSDPAInputs& tensor_args,
+    uint32_t logical_nt) {
+    if (!args.has_sliding_window()) {
+        return std::nullopt;
+    }
+    auto layout = ring_joint::build_chunked_sliding_halo_layout(
+        tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+        args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
+        args.sliding_window_size.value(),
+        tt::constants::TILE_HEIGHT,
+        static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size),
+        logical_nt,
+        tensor_args.gathered_k.logical_shape()[2] / tt::constants::TILE_HEIGHT,
+        derived_kv_slab_count(args, tensor_args),
+        args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                       : std::nullopt);
+    TT_FATAL(layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
+    return layout;
+}
+
+ag_dyn::SemaphoreArgPatch record_ring_joint_semaphore_arg_patch(
+    Program& program,
+    const ttnn::prim::RingJointSDPAParams& args,
+    const ttnn::prim::RingJointSDPAInputs& tensor_args,
+    const ttnn::MeshCoordinate& coord) {
+    ag_dyn::SemaphoreArgPatch patch;
+    if (args.has_sliding_window()) {
+        const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, coord);
+        const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
+        const auto halo_layout = build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
+        const auto halo_exchanges = plan_halo_exchanges(args, *halo_layout, ring_write_plan.transport_rank);
+        for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
+            ag_dyn::record_semaphore_arg_slot(
+                patch,
+                program,
+                kNeighborHaloReaderKernelIndex + 2 * exchange,
+                ag_dyn::kHaloReaderSemaphoreArg,
+                ag_dyn::kHaloSemaphoreIdx);
+            ag_dyn::record_semaphore_arg_slot(
+                patch,
+                program,
+                kNeighborHaloWriterKernelIndex + 2 * exchange,
+                ag_dyn::kHaloWriterSemaphoreArg,
+                ag_dyn::kHaloSemaphoreIdx);
+        }
+    } else {
+        ag_dyn::record_all_gather_semaphore_arg_slots(patch, program, kFirstAllGatherKernelIndex);
+    }
+    patch.addresses = ag_dyn::semaphore_addresses(args.all_gather_operation_attributes.semaphore);
+    return patch;
+}
+
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
@@ -656,21 +717,8 @@ void apply_ring_joint_scalar_runtime_args(
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
     // One reader/writer kernel pair per halo hop, appended in hop order after the three SDPA kernels.
-    std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
-    if (uses_neighbor_halo) {
-        runtime_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
-            args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
-            args.sliding_window_size.value(),
-            tt::constants::TILE_HEIGHT,
-            static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size),
-            runtime_plan.logical_nt,
-            tensor_args.gathered_k.logical_shape()[2] / tt::constants::TILE_HEIGHT,
-            derived_kv_slab_count(args, tensor_args),
-            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
-                                           : std::nullopt);
-        TT_FATAL(runtime_halo_layout->uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
-    }
+    const std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout =
+        build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
     const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
         runtime_halo_layout ? plan_halo_exchanges(args, *runtime_halo_layout, ring_write_plan.transport_rank)
                             : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
@@ -1094,7 +1142,37 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // (validated divisible with >= 2 slabs). Wraps the local-slab derivation in
     // sliding_window_work_plan.hpp for the host halo layout, the reader, and the compute kernel.
     const uint32_t circular_kv_slab_count = derived_kv_slab_count(args, tensor_args);
-    const bool enable_kv_chains = !has_sliding_window;
+    const bool sol_enabled = tensor_args.sol_enabled();
+    const bool sol_compact = tensor_args.sol_compact_mode(args.sol_mode);
+    const bool sol_chunk_mode = tensor_args.sol_streams_chunks(args.sol_mode);
+    const bool sol_pack = tensor_args.sol_pack_mode(args.sol_mode);
+    const bool sol_resident = tensor_args.sol_resident_mode(args.sol_mode);
+    const bool sol_static_max = tensor_args.sol_static_max();
+    if (tensor_args.sol_enabled()) {
+        log_info(
+            tt::LogOp,
+            "RingJointSDPA sol mode resolved: {} (requested '{}', compact={}, chunk={}, even_up={}, even_up_all={}, "
+            "gen_bias={}, static_max={})",
+            sol_resident ? "resident"
+                         : (sol_pack ? "pack" : (sol_compact ? "compact" : (sol_chunk_mode ? "chunk" : "gather"))),
+            args.sol_mode,
+            sol_compact ? 1 : 0,
+            sol_chunk_mode && !sol_compact ? 1 : 0,
+            (sol_compact &&
+             ((std::getenv("TT_SOL_EVENUP") && std::string(std::getenv("TT_SOL_EVENUP")) == "1") ||
+              (std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")))
+                ? 1
+                : 0,
+            (sol_compact && std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")
+                ? 1
+                : 0,
+            !tensor_args.sol_bias.has_value() ? 1 : 0,
+            sol_static_max ? 1 : 0);
+    }
+    const bool sol_gen_bias = tensor_args.sol_bias_generated();
+    const uint32_t sol_chain_len =
+        std::getenv("TT_SOL_CHAIN_LEN") ? static_cast<uint32_t>(std::atoi(std::getenv("TT_SOL_CHAIN_LEN"))) : 0u;
+    const bool enable_kv_chains = !has_sliding_window && !(sol_enabled && !sol_chunk_mode);
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
     // L / L_local resolved once in resolve_ring_joint_input_params (full vs per-device joint seq).
     const uint32_t L = joint_input_params.L;
@@ -1109,7 +1187,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // The store-and-forward chains are scheduled per head, not per (batch, head).
     // Until their batch-aware scheduling is restored, multi-batch requests read K/V
     // independently on each core. This preserves the established B>1 functional path.
-    const bool build_kv_chains = enable_kv_chains && B == 1;
+    const bool sol_no_chain = std::getenv("TT_SOL_NO_CHAIN") && std::string(std::getenv("TT_SOL_NO_CHAIN")) == "1";
+    const bool build_kv_chains = enable_kv_chains && B == 1 && !sol_no_chain;
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -1138,6 +1217,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
+
+    constexpr uint32_t kSolBlockTiles = 2;
+    uint32_t sol_nb = 0, sol_nb_pad = 0, sol_n_blocks_pad = 0, sol_nqc_pad = 0, sol_pooled_chunks = 0,
+             sol_pooled_last_tiles = 0, sol_mask_row_bytes = 0, sol_nkc = 0;
+    if (sol_enabled) {
+        sol_nkc = tt::div_up(kv_local_padded_Nt, Sk_chunk_t);
+        sol_n_blocks_pad = tensor_args.sol_pooled_k->logical_shape()[2];
+        sol_nb_pad = sol_n_blocks_pad / args.all_gather_operation_attributes.ring_size;
+        sol_nb = tt::div_up(kv_local_padded_Nt, kSolBlockTiles);
+        sol_nqc_pad = tensor_args.sol_block_mask->logical_shape()[2];
+        const uint32_t pooled_tiles = sol_n_blocks_pad / tt::constants::TILE_HEIGHT;
+        sol_pooled_chunks = tt::div_up(pooled_tiles, Sk_chunk_t);
+        sol_pooled_last_tiles = pooled_tiles - (sol_pooled_chunks - 1) * Sk_chunk_t;
+        sol_mask_row_bytes =
+            (sol_compact ? sol_nb_pad : tensor_args.sol_block_mask->logical_shape()[3]) * sizeof(uint32_t);
+        TT_FATAL(!sol_chunk_mode || sol_nkc <= 64, "sol chunk mode: at most 64 K chunks per shard");
+        TT_FATAL(sol_nb <= sol_nb_pad, "sol: {} blocks per shard exceed the pooled row {}", sol_nb, sol_nb_pad);
+        TT_FATAL(Sk_chunk_t % kSolBlockTiles == 0, "sol: k chunk must hold whole blocks");
+    }
 
     // Global chunk has S Q slabs and R KV regions, with R/S extra KV stripes.
     // Kernels recover the region from this width divided by transport ring size.
@@ -1349,13 +1447,29 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
+    TT_FATAL(
+        !sol_resident || max_q_per_core <= kSolResidentMaxSlots,
+        "sol_mode=resident holds at most {} Q chunks per core, this split needs {}",
+        kSolResidentMaxSlots,
+        max_q_per_core);
+    TT_FATAL(
+        !sol_resident || tt::div_up(sol_nb, 32u) + 3 <= 16,
+        "sol_mode=resident: {} blocks per shard exceed the plan header (at most 416)",
+        sol_nb);
+    uint32_t q_tiles = Sq_chunk_t * DHt * (sol_resident ? max_q_per_core : q_buffer_factor);
     // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
     // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    const bool sol_res_mcast = sol_resident && build_kv_chains && use_head_chain && sol_chain_len == 0;
+    const uint32_t kv_cb_pages = [&]() -> uint32_t {
+        const char* env = std::getenv("TT_SOL_KV_PAGES");
+        const uint32_t default_pages = sol_res_mcast ? 3u : 2u;
+        const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : default_pages;
+        return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : default_pages;
+    }();
+    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : kv_cb_pages);
+    uint32_t v_tiles = Sk_chunk_t * vDHt * kv_cb_pages;
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
@@ -1733,6 +1847,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TensorAccessorArgs(has_logical_l_tensor ? tensor_args.logical_l_tensor->buffer() : nullptr)
             .append_to(reader_compile_time_args);
     }
+    if (sol_enabled) {
+        TensorAccessorArgs(tensor_args.sol_block_mask->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(tensor_args.sol_pooled_k->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(tensor_args.sol_pooled_v->buffer()).append_to(reader_compile_time_args);
+        if (sol_static_max) {
+            TensorAccessorArgs(tensor_args.sol_row_max->buffer()).append_to(reader_compile_time_args);
+        }
+        if (!sol_gen_bias) {
+            TensorAccessorArgs(tensor_args.sol_bias->buffer()).append_to(reader_compile_time_args);
+        }
+    }
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -2082,14 +2207,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
+    constexpr uint32_t kSolResidentGroup = 4;
+    const uint32_t qk_im_cb_tiles =
+        sol_resident ? std::max(qk_tiles, std::min(max_q_per_core, kSolResidentGroup) * Sq_chunk_t * Sk_chunk_t)
+                     : qk_tiles;
+    const uint32_t res_stats_tiles = statistics_tiles * (sol_resident ? max_q_per_core : 1u);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_max_A = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
     const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
 
     const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -2097,10 +2227,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
     // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
     const bool needs_accumulator_staging_cbs = !has_sliding_window || ksplit_count > 1;
-    const uint32_t cb_stats_in =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
+    const uint32_t fifo_entries = sol_resident ? max_q_per_core : 1;
+    const uint32_t cb_stats_in = needs_accumulator_staging_cbs
+                                     ? allocate_tile_cb(statistics_tiles * fifo_entries, im_tile_size, im_df)
+                                     : cb_max_A;
     const uint32_t cb_prev_out =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles, out_tile_size, out_df) : cb_out;
+        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles * fifo_entries, out_tile_size, out_df) : cb_out;
     const uint32_t cb_stats_out =
         needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_B;
 
@@ -2115,10 +2247,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute
             ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_A)
             : inactive_cb;
-    const uint32_t cb_sum_in =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B)
-            : inactive_cb;
+    const uint32_t cb_sum_in = use_streaming_compute
+                                   ? (needs_accumulator_staging_cbs
+                                          ? allocate_tile_cb(statistics_tiles * fifo_entries, stats_tile_size, stats_df)
+                                          : cb_sum_B)
+                                   : inactive_cb;
 
     // Signal CB: compute signals writer when last K-chunk starts.
     // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
@@ -2127,6 +2260,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    const uint32_t cb_sol_plan =
+        sol_enabled ? allocate_cb((sol_compact ? 128 : 64) + sol_mask_row_bytes, 1, tt::DataFormat::UInt32)
+                    : inactive_cb;
+    const uint32_t sol_res_rec_words = sol_resident ? tt::div_up(sol_nb, 32u) + 3 : 0;
+    const bool sol_res_plan_fits =
+        (16 + sol_nb_pad + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes;
+    const uint32_t sol_res_plan_rec_base = (sol_resident && sol_res_plan_fits) ? 16 + sol_nb_pad : 0;
+    const bool sol_res_no_dummies = sol_resident;
+    const uint32_t cb_sol_bias = sol_enabled ? allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df) : inactive_cb;
+    const uint32_t cb_k_stage = sol_pack ? allocate_tile_cb(Sk_chunk_t * DHt, k_tile_size, k_df) : inactive_cb;
+    const uint32_t cb_v_stage = sol_pack ? allocate_tile_cb(Sk_chunk_t * vDHt, v_tile_size, v_df) : inactive_cb;
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -2188,6 +2332,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
         uint32_t next_core_q_chunks = 0;
+        uint32_t chain_group = 0;
 
         // Multicast configuration (1D for V, 2D for K)
         CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
@@ -2334,7 +2479,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                                  uint32_t head,
                                  std::vector<ChainConfig>& chain_configs,
                                  const std::vector<CoreWork>& core_work,
-                                 bool require_single_head_injector = true) -> bool {
+                                 bool require_single_head_injector = true,
+                                 uint32_t chain_group = 0) -> bool {
         if (chain_segs.size() < 2) {
             return false;
         }
@@ -2357,6 +2503,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             auto& cfg = chain_configs[ci];
             cfg.participates = true;
             cfg.head = head;
+            cfg.chain_group = chain_group;
             cfg.is_injector = (idx == start);
             cfg.is_sink = (idx == chain_segs.size() - 1);
             if (idx > start) {
@@ -2848,7 +2995,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 chain_segs.emplace_back(
                     seg.core_idx, core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
             }
-            build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
+            if (sol_resident) {
+                while (!chain_segs.empty() && core_work[chain_segs.back().first].head_work.size() > 1) {
+                    chain_segs.pop_back();
+                }
+            }
+            if (sol_chain_len >= 2 && chain_segs.size() > sol_chain_len) {
+                uint32_t group = 0;
+                for (size_t start = 0; start < chain_segs.size(); start += sol_chain_len, ++group) {
+                    const size_t stop = std::min(chain_segs.size(), start + sol_chain_len);
+                    std::vector<ChainSegment> sub(chain_segs.begin() + start, chain_segs.begin() + stop);
+                    build_linear_chain(sub, head_id, head_chain_configs, core_work, true, group);
+                }
+            } else {
+                build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
+            }
         }
     }
 
@@ -2861,7 +3022,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         };
         std::vector<McastCandidate> candidates;
         candidates.reserve(head_segments.size());
-        bool all_eligible = true;
+        bool all_eligible = sol_chain_len == 0 && !sol_chunk_mode;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             const auto& segments = head_segments[head_id];
@@ -3186,6 +3347,42 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
+        {"kv_cb_pages", kv_cb_pages},
+        {"sol_enabled", sol_enabled ? 1u : 0u},
+        {"sol_chunk_mode", sol_chunk_mode ? 1u : 0u},
+        {"sol_compact", sol_compact ? 1u : 0u},
+        {"sol_pack", sol_pack ? 1u : 0u},
+        {"sol_resident", sol_resident ? 1u : 0u},
+        {"sol_resident_slots", sol_resident ? max_q_per_core : 0u},
+        {"sol_res_block_words", sol_resident ? tt::div_up(sol_nb, 32u) : 0u},
+        {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
+        {"sol_res_plan_rec_base", sol_res_plan_rec_base},
+        {"sol_res_no_dummies", sol_res_no_dummies ? 1u : 0u},
+        {"sol_static_max", sol_static_max ? 1u : 0u},
+        {"cb_k_stage", cb_k_stage},
+        {"cb_v_stage", cb_v_stage},
+        {"sol_blocks_per_page", Sk_chunk_t / kSolBlockTiles},
+        {"sol_even_up",
+         (sol_compact && ((std::getenv("TT_SOL_EVENUP") && std::string(std::getenv("TT_SOL_EVENUP")) == "1") ||
+                          (std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")))
+             ? 1u
+             : 0u},
+        {"sol_even_up_all",
+         (sol_compact && std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")
+             ? 1u
+             : 0u},
+        {"sol_nkc", sol_nkc},
+        {"sol_nb", sol_nb},
+        {"sol_nb_pad", sol_nb_pad},
+        {"sol_n_blocks_pad", sol_n_blocks_pad},
+        {"sol_nqc_pad", sol_nqc_pad},
+        {"sol_pooled_chunks", sol_pooled_chunks},
+        {"sol_pooled_last_tiles", sol_pooled_last_tiles},
+        {"sol_mask_row_bytes", sol_mask_row_bytes},
+        {"sol_gen_bias", sol_gen_bias ? 1u : 0u},
+        {"sol_logical_n", static_cast<uint32_t>(args.logical_n)},
+        {"cb_sol_plan", sol_enabled ? cb_sol_plan : cb_kv_pad_derived},
+        {"cb_sol_bias", sol_enabled ? cb_sol_bias : cb_q_in},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
@@ -3201,6 +3398,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
+    if (sol_resident) {
+        compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -3210,6 +3410,94 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
         // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
+
+    constexpr uint32_t kSolLenBiasTableWords = 33;
+    std::array<uint32_t, kSolLenBiasTableWords> sol_len_bias_table{};
+    if (sol_enabled) {
+        const auto f2bf = [](float f) -> uint32_t {
+            uint32_t u = std::bit_cast<uint32_t>(f);
+            const uint32_t lsb = (u >> 16) & 1u;
+            u += 0x7FFFu + lsb;
+            return u >> 16;
+        };
+        constexpr float kSolBiasNeg = -30000.0f;
+        for (uint32_t len = 0; len <= 65; ++len) {
+            const float v = (len == 0 || len > 64) ? kSolBiasNeg : std::log(static_cast<float>(len)) / scale_value;
+            sol_len_bias_table[len / 2] |= f2bf(v) << (16 * (len % 2));
+        }
+    }
+
+    constexpr uint32_t kSolGroupMaxRects = 8;
+    std::vector<std::vector<uint32_t>> sol_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
+    if (sol_res_mcast) {
+        for (uint32_t h = 0; h < static_cast<uint32_t>(head_segments.size()); ++h) {
+            std::vector<uint32_t> members;
+            for (const auto& seg : head_segments[h]) {
+                const auto& cfg = head_chain_configs.at(seg.core_idx);
+                if (!cfg.participates || cfg.head != h ||
+                    std::find(members.begin(), members.end(), seg.core_idx) != members.end()) {
+                    continue;
+                }
+                TT_FATAL(
+                    core_work[seg.core_idx].head_work.size() == 1,
+                    "sol resident group delivery: core {} of head {} spans two heads",
+                    seg.core_idx,
+                    h);
+                members.push_back(seg.core_idx);
+            }
+            if (members.size() < 2) {
+                continue;
+            }
+            const uint32_t producer = *std::min_element(members.begin(), members.end());
+            const CoreCoord prod_phys = core_work[producer].physical_core;
+            std::map<uint32_t, std::vector<uint32_t>> receiver_xs_by_row;
+            for (const uint32_t ci : members) {
+                if (ci != producer) {
+                    receiver_xs_by_row[core_work[ci].physical_core.y].push_back(core_work[ci].physical_core.x);
+                }
+            }
+            std::vector<std::array<uint32_t, 5>> rects;
+            for (auto& [y, xs] : receiver_xs_by_row) {
+                std::sort(xs.begin(), xs.end());
+                size_t run_start = 0;
+                for (size_t k = 1; k <= xs.size(); ++k) {
+                    if (k == xs.size() || xs[k] != xs[k - 1] + 1) {
+                        rects.push_back({xs[run_start], y, xs[k - 1], y, static_cast<uint32_t>(k - run_start)});
+                        run_start = k;
+                    }
+                }
+            }
+            TT_FATAL(
+                rects.size() <= kSolGroupMaxRects,
+                "sol resident group delivery: head {} needs {} multicast rectangles (at most {})",
+                h,
+                rects.size(),
+                kSolGroupMaxRects);
+            const uint32_t n_receivers = static_cast<uint32_t>(members.size() - 1);
+            for (const uint32_t ci : members) {
+                auto& a = sol_group_args[ci];
+                a = {
+                    ci == producer ? 1u : 2u,
+                    static_cast<uint32_t>(prod_phys.x),
+                    static_cast<uint32_t>(prod_phys.y),
+                    n_receivers,
+                    0u};
+                if (ci == producer) {
+                    a[4] = static_cast<uint32_t>(rects.size());
+                    for (const auto& r : rects) {
+                        a.insert(a.end(), r.begin(), r.end());
+                    }
+                }
+            }
+            log_debug(
+                tt::LogOp,
+                "sol resident group: head {} producer core {} -> {} receivers in {} rectangles",
+                h,
+                producer,
+                n_receivers,
+                rects.size());
+        }
     }
 
     // Set reader rt args
@@ -3314,6 +3602,61 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         if (ksplit_count > 1) {
             reader_args.push_back(ksplit_band(i));
+        }
+        if (sol_enabled) {
+            reader_args.push_back(tensor_args.sol_block_mask->buffer());
+            reader_args.push_back(tensor_args.sol_pooled_k->buffer());
+            reader_args.push_back(tensor_args.sol_pooled_v->buffer());
+            if (sol_static_max) {
+                reader_args.push_back(tensor_args.sol_row_max->buffer());
+            }
+            if (sol_gen_bias) {
+                reader_args.push_back(0u);
+            } else {
+                reader_args.push_back(tensor_args.sol_bias->buffer());
+            }
+            std::vector<std::pair<uint32_t, uint32_t>> sol_members;
+            uint32_t sol_my_start = 0;
+            if (sol_chunk_mode && use_head_chain && !head_mcast_enabled && head_chain_configs[i].participates) {
+                const uint32_t h = head_chain_configs[i].head;
+                for (const auto& seg : head_segments[h]) {
+                    const auto& cfg = head_chain_configs[seg.core_idx];
+                    if (!cfg.participates || cfg.head != h || cfg.chain_group != head_chain_configs[i].chain_group) {
+                        continue;
+                    }
+                    const auto& w = core_work[seg.core_idx];
+                    uint32_t flat = w.global_q_start;
+                    for (uint32_t s = 0; s < seg.head_work_index; ++s) {
+                        flat += w.head_work[s].q_chunk_count;
+                    }
+                    const uint32_t start_in_head = flat % num_q_chunks;
+                    const uint32_t count = w.head_work[seg.head_work_index].q_chunk_count;
+                    if (seg.core_idx == i) {
+                        sol_my_start = start_in_head;
+                    }
+                    sol_members.emplace_back(start_in_head, count);
+                }
+                TT_FATAL(
+                    sol_members.size() <= 64,
+                    "sol chunk mode: head chain of {} members is too long",
+                    sol_members.size());
+            }
+            reader_args.push_back(static_cast<uint32_t>(sol_members.size()));
+            reader_args.push_back(sol_my_start);
+            if (sol_gen_bias) {
+                for (uint32_t w = 0; w < kSolLenBiasTableWords; ++w) {
+                    reader_args.push_back(sol_len_bias_table[w]);
+                }
+            }
+            for (const auto& [start, count] : sol_members) {
+                reader_args.push_back(start);
+                reader_args.push_back(count);
+            }
+            if (sol_res_mcast) {
+                for (const uint32_t w : sol_group_args[i]) {
+                    reader_args.push_back(w);
+                }
+            }
         }
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -3767,7 +4110,15 @@ RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorklo
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
+    auto descriptor_cached =
+        descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
+        auto& shared = shared_variables[range];
+        shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
+        shared.semaphore_patch = record_ring_joint_semaphore_arg_patch(program, args, tensor_args, range.start_coord());
+    }
+    return {std::move(descriptor_cached.workload), std::move(shared_variables)};
 }
 
 void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
@@ -3775,15 +4126,24 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
-
+    if (cached_workload.shared_variables.empty()) {
+        return;
+    }
+    const auto collected = descriptor_adapter_t::collect_tensor_buffers(
+        tensor_args, output_tensors, cached_workload.shared_variables.begin()->second.descriptor.workload_descriptor);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared = cached_workload.shared_variables.at(coordinate_range);
+        if (!shared.descriptor.resolved_bindings.empty()) {
+            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+        }
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
             coord == coordinate_range.end_coord(),
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
+        ag_dyn::apply_semaphore_arg_patch(
+            shared.semaphore_patch, program, args.all_gather_operation_attributes.semaphore);
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
     }
 }

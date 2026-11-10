@@ -22,6 +22,13 @@ if TYPE_CHECKING:
 
 _OMITTED = object()
 
+_TRACE_CAPTURES = 0
+
+
+def trace_capture_count() -> int:
+    """How many traces `Tracer` has begun capturing in this process (never decreases)."""
+    return _TRACE_CAPTURES
+
 
 class StateTensor:
     """A persistent device buffer refreshed in place under tracing.
@@ -255,6 +262,8 @@ class Tracer:
 
         # capture trace
         logger.debug("capturing trace...")
+        global _TRACE_CAPTURES
+        _TRACE_CAPTURES += 1
         trace_ids = tuple(ttnn.begin_trace_capture(d, cq_id=cq_id) for d in self._devices)
         try:
             try:

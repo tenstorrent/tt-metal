@@ -7,6 +7,7 @@
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <cstdint>
@@ -20,14 +21,52 @@ namespace ttnn::experimental::prim {
 // lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
 namespace ring_attention_all_gather_async_dynamic {
 inline constexpr uint32_t kReaderForwardKernelIdx = 0;
-inline constexpr uint32_t kWriterForwardKernelIdx = 1;
-inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
-inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
 inline constexpr uint32_t kReaderSemaphoreArg = 2;
 inline constexpr uint32_t kWriterSemaphoreArg = 4;
 inline constexpr uint32_t kForwardSemaphoreIdx = 1;
 inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+inline constexpr uint32_t kHaloReaderSemaphoreArg = 0;
+inline constexpr uint32_t kHaloWriterSemaphoreArg = 2;
+inline constexpr uint32_t kHaloSemaphoreIdx = 2;
+
+struct SemaphoreArgSlot {
+    uint32_t kernel_idx = 0;
+    uint32_t arg_idx = 0;
+    uint32_t semaphore_idx = 0;
+    std::vector<CoreCoord> cores;
+};
+
+struct SemaphoreArgPatch {
+    std::vector<SemaphoreArgSlot> slots;
+    std::vector<uint32_t> addresses;
+};
+
+void record_semaphore_arg_slot(
+    SemaphoreArgPatch& patch,
+    tt::tt_metal::Program& program,
+    uint32_t kernel_idx,
+    uint32_t arg_idx,
+    uint32_t semaphore_idx);
+
+void record_all_gather_semaphore_arg_slots(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, uint32_t first_kernel_idx);
+
+std::vector<uint32_t> semaphore_addresses(const std::vector<GlobalSemaphore>& semaphores);
+
+void apply_semaphore_arg_patch(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, const std::vector<GlobalSemaphore>& semaphores);
 }  // namespace ring_attention_all_gather_async_dynamic
+
+namespace detail {
+
+struct RingAttentionAllGatherAsyncDescriptorAdapterOperation {
+    using operation_attributes_t = RingAttentionAllGatherAsyncParams;
+    using tensor_args_t = RingAttentionAllGatherAsyncInputs;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+};
+
+}  // namespace detail
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
@@ -41,14 +80,32 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+struct RingAttentionAllGatherAsyncMeshWorkloadFactory {
+    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+        detail::RingAttentionAllGatherAsyncDescriptorAdapterOperation>::
+        DescriptorMeshWorkloadAdapter<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory>;
+    struct shared_variables_t {
+        typename descriptor_adapter_t::shared_variables_t descriptor;
+        ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const RingAttentionAllGatherAsyncParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const RingAttentionAllGatherAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        cached_mesh_workload_t& cached_workload,
+        const RingAttentionAllGatherAsyncParams& operation_attributes,
+        const RingAttentionAllGatherAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 };
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingAttentionAllGatherAsyncMeshWorkloadFactory>);
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {

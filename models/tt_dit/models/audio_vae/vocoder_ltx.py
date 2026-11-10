@@ -453,6 +453,21 @@ class Vocoder(Module):
         y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
         return self._device_to_host(y_dev)
 
+    def forward_device_BTC_deferred(self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None):
+        """`forward_device_BTC` split in two: enqueue the device graph now, return a callable that reads it back.
+
+        The callable restores the per-input crop state (`_t_pad`, `batch_shard`) it was enqueued with, so other work
+        may be enqueued in between; the readback is the same `_device_to_host` on the same output tensor."""
+        self._t_pad = t_pad
+        y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
+        batch_shard = self.batch_shard
+
+        def read() -> torch.Tensor:
+            self._t_pad, self.batch_shard = t_pad, batch_shard
+            return self._device_to_host(y_dev)
+
+        return read
+
     def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
         """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.
 

@@ -121,3 +121,14 @@ def register_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> N
     # of its own core grid.
     if m in _SWEPT_BLOCKINGS and core_grid == _DEVICE_GRID:
         register_fused_mmrs_configs({core_grid: {(m, _K, _N): _SWEPT_BLOCKINGS[m]}})
+
+
+_TO_OUT_K = 1792
+
+
+def has_row_parallel_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> bool:
+    """Whether to_out's fused MM+RS+addcmul should run for this shape (pure query). Same rule as `has_mmrs_config`:
+    only when a swept entry or the rule engine resolves a blocking; the generic default is slower than not fusing."""
+    if not (k == _TO_OUT_K and n == _N and m % _TILE == 0):
+        return False
+    return resolves_fused_mmrs_config(m, k, n, core_grid)

@@ -130,7 +130,7 @@ constexpr uint32_t rotated_pack_dest(uint32_t phys_x, uint32_t phys_y) {
 constexpr uint32_t rotated_dest_x(uint32_t packed_dest) { return packed_dest >> kRotatedDestYBits; }
 constexpr uint32_t rotated_dest_y(uint32_t packed_dest) { return packed_dest & kRotatedDestYMask; }
 
-template <bool v_shares_k_buffer, bool kt_inplace_v = false>
+template <bool v_shares_k_buffer, bool kt_inplace_v = false, uint32_t kv_pages = 2>
 constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks) {
     // Reader pushes one K entry and one V entry per real chunk; compute pops the
     // same entries. The dummy count pads the iteration so the next iteration
@@ -153,6 +153,9 @@ constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks
     // Separate K and V CBs keep the legacy two-phase chain cadence. Even chunk
     // counts need one dummy K/V pair; odd counts already leave the next writer
     // on the expected phase.
+    if constexpr (kv_pages != 2) {
+        return chunks_until_next_multiple(processed_chunks, kv_pages);
+    }
     constexpr uint32_t separate_kv_phase_count = 2;
     return (processed_chunks % separate_kv_phase_count) == 0 ? 1 : 0;
 }
@@ -265,3 +268,22 @@ inline uint32_t q_global_tile_for_mask_row(
         return q_start_tile + q_tile;
     }
 }
+
+namespace sparse_blocks {
+template <uint32_t kBlockTokens>
+inline uint32_t geometric_len(uint32_t shard_tokens, uint32_t logical_n, uint32_t nb, uint32_t s, uint32_t b) {
+    if (b >= nb) {
+        return 0;
+    }
+    const uint32_t start = s * shard_tokens + b * kBlockTokens;
+    uint32_t end = start + kBlockTokens;
+    const uint32_t shard_end = s * shard_tokens + shard_tokens;
+    if (end > shard_end) {
+        end = shard_end;
+    }
+    if (end > logical_n) {
+        end = logical_n;
+    }
+    return end > start ? end - start : 0;
+}
+}  // namespace sparse_blocks

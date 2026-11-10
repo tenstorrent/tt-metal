@@ -1,0 +1,1040 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "dataflow_common.hpp"
+#include "chunked_prefill_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
+#include "ring_joint_kv_pad_derivation.hpp"
+#include "chain_link.hpp"
+#include "pooled_bias_gen.hpp"
+#include "sparse_dyn_split.hpp"
+#include "fused_op_receiver.hpp"
+#include "ring_utils.hpp"
+
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
+void kernel_main() {
+    constexpr uint32_t B = get_compile_time_arg_val(0);
+    constexpr uint32_t NH = get_compile_time_arg_val(1);
+    constexpr uint32_t NHK = get_compile_time_arg_val(2);
+    constexpr uint32_t DHt = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
+    static_assert(Sq_chunk_t == pooled_bias_gen::kBlockTiles, "one Q block (q chunk) per mask row");
+    static_assert(Sk_chunk_t % pooled_bias_gen::kBlockTiles == 0, "a K/V piece holds whole blocks");
+    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(16);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(20) == 1;
+    constexpr bool q_perm_table = get_compile_time_arg_val(20) == 2;
+    constexpr bool chunked_enabled = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t num_q_readers = get_compile_time_arg_val(22);
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(23);
+    constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
+    static_assert(
+        kv_stripe_split > 0 && q_local_padded_Nt % kv_stripe_split == 0, "Q slab must split into whole KV regions");
+    constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
+    static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
+    constexpr uint32_t NHV = get_compile_time_arg_val(26);
+    constexpr bool v_shares_k_buffer = false;
+    constexpr bool enable_kv_chains = true;
+    constexpr uint32_t gathered_padded_Nt = get_compile_time_arg_val(30);
+    constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
+    constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
+    constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
+    constexpr uint32_t q_heads_per_v = NH / NHV;
+    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(36) == 1;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(37));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(38);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(39);
+
+    constexpr uint32_t kFirstAccessorArgOffset = 43;
+    constexpr auto q_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+    constexpr auto gathered_v_args = TensorAccessorArgs<gathered_k_args.next_compile_time_args_offset()>();
+    constexpr auto attention_sink_args = TensorAccessorArgs<gathered_v_args.next_compile_time_args_offset()>();
+    constexpr auto mask_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    constexpr auto pooled_k_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
+    constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
+    constexpr auto head_weights_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = head_weights_args.next_compile_time_args_offset();
+
+    uint32_t argidx = 0;
+    const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
+    argidx++;
+    uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    argidx++;
+
+    ChainConfig head_cfg;
+    if constexpr (use_head_chain) {
+        head_cfg = ChainConfig::read_from_args(argidx);
+    }
+
+    ChainConfig batch_cfg;
+    if constexpr (enable_kv_chains && k_uses_batch_chain) {
+        batch_cfg = ChainConfig::read_from_args(argidx);
+        argidx++;
+    }
+    ChainConfig gqa_cfg;
+    if constexpr (enable_kv_chains && gqa_grouped_kv) {
+        gqa_cfg = ChainConfig::read_from_args(argidx);
+        argidx++;
+    }
+
+    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    argidx += 4;
+    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(true, argidx);
+
+    const uint32_t sparse_args_base = argidx;
+    using HeadChainArgs = ChainCompileArgs<use_head_chain, chains_base_offset>;
+    using BatchChainArgs =
+        ChainCompileArgs<enable_kv_chains && k_uses_batch_chain, chains_base_offset + HeadChainArgs::arg_count>;
+    using GqaChainArgs = ChainCompileArgs<
+        enable_kv_chains && gqa_grouped_kv,
+        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count>;
+    [[maybe_unused]] constexpr uint32_t head_sender_semaphore_id = HeadChainArgs::sender_semaphore_id;
+    [[maybe_unused]] constexpr uint32_t head_receiver_semaphore_id = HeadChainArgs::receiver_semaphore_id;
+    [[maybe_unused]] constexpr uint32_t head_valid_semaphore_id = HeadChainArgs::valid_semaphore_id;
+    constexpr bool head_mcast_enabled = HeadChainArgs::mcast_enabled;
+    constexpr bool batch_mcast_enabled = BatchChainArgs::mcast_enabled;
+    constexpr bool gqa_mcast_enabled = GqaChainArgs::mcast_enabled;
+
+    constexpr uint32_t cb_arg_offset =
+        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count + GqaChainArgs::arg_count;
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+
+    const uint32_t mask_addr = get_arg_val<uint32_t>(sparse_args_base + 0);
+    [[maybe_unused]] const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
+    [[maybe_unused]] const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
+    [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
+    uint32_t group_n_members = get_arg_val<uint32_t>(sparse_args_base + 4);
+    [[maybe_unused]] const uint32_t head_weights_addr = get_arg_val<uint32_t>(sparse_args_base + 6);
+    [[maybe_unused]] const uint32_t dyn_core_index = get_arg_val<uint32_t>(sparse_args_base + 7);
+    const uint32_t pooled_bias_table_base = sparse_args_base + 8;
+    const uint32_t group_members_base = sparse_args_base + 8 + pooled_bias_gen::kTableWords;
+    constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
+    constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
+    constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
+    constexpr uint32_t mask_n_blocks_pad = get_named_compile_time_arg_val("mask_n_blocks_pad");
+    constexpr uint32_t mask_nqb_pad = get_named_compile_time_arg_val("mask_nqb_pad");
+    constexpr uint32_t pooled_chunks = get_named_compile_time_arg_val("pooled_chunks");
+    constexpr uint32_t pooled_last_tiles = get_named_compile_time_arg_val("pooled_last_tiles");
+    constexpr uint32_t mask_row_bytes = get_named_compile_time_arg_val("mask_row_bytes");
+    constexpr uint32_t cb_sparse_plan = get_named_compile_time_arg_val("cb_sparse_plan");
+    constexpr uint32_t cb_pooled_bias = get_named_compile_time_arg_val("cb_pooled_bias");
+    constexpr bool pooled_route = get_named_compile_time_arg_val("pooled_route") == 1;
+    constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
+    static_assert(plan_block_words * 32 >= mask_nb, "block words cover the shard");
+    constexpr bool group_mcast = get_named_compile_time_arg_val("group_mcast") == 1;
+    constexpr uint32_t plan_rec_base = get_named_compile_time_arg_val("plan_rec_base");
+    constexpr uint32_t resident_slots = get_named_compile_time_arg_val("resident_slots");
+    constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
+    static_assert(num_q_passes >= 1 && resident_slots >= 1 && resident_slots <= 32, "passes of 1..32 Q blocks");
+    static_assert(GROUPED_KV_SOURCE_COUNT == 1, "no grouped K/V sources");
+    constexpr uint32_t pooled_bias_tile_bytes = pooled_route ? get_tile_size(cb_pooled_bias) : 2048u;
+    constexpr bool has_block_counts = get_named_compile_time_arg_val("has_block_counts") == 1;
+    constexpr uint32_t cb_block_counts = get_named_compile_time_arg_val("cb_block_counts");
+    constexpr uint32_t cb_key_bias = get_named_compile_time_arg_val("cb_key_bias");
+    constexpr uint32_t key_bias_tiles = get_named_compile_time_arg_val("key_bias_tiles");
+    constexpr uint32_t key_bias_tile_bytes = key_bias_tiles > 0 ? get_tile_size(cb_key_bias) : 2048u;
+
+    constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
+    constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
+    constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
+
+    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
+    constexpr uint32_t v_cb_entry_tiles = v_chunk_tiles;
+
+    Noc noc;
+
+    constexpr uint32_t dyn_mode = get_named_compile_time_arg_val("dyn_mode");
+    constexpr bool dyn_all_grouped = get_named_compile_time_arg_val("dyn_all_grouped") == 1;
+    constexpr uint32_t kDynGroupWords = 5 + 5 * 8;
+    [[maybe_unused]] uint32_t dyn_g[dyn_mode == 2 ? kDynGroupWords : 1];
+    [[maybe_unused]] bool dyn_use = false;
+    if constexpr (dyn_mode == 2) {
+        constexpr uint32_t dyn_units = get_named_compile_time_arg_val("dyn_units");
+        constexpr uint32_t dyn_n = get_named_compile_time_arg_val("dyn_n");
+        constexpr uint32_t dyn_cores = get_named_compile_time_arg_val("dyn_cores");
+        constexpr uint32_t dyn_max_q = get_named_compile_time_arg_val("dyn_max_q");
+        constexpr uint32_t dyn_min_q = get_named_compile_time_arg_val("dyn_min_q");
+        constexpr uint32_t dyn_shards = get_named_compile_time_arg_val("dyn_shards");
+        static_assert(dyn_units <= sparse_dyn_split::kMaxUnits, "dynamic split: too many (batch, head) units");
+        constexpr uint32_t kPages = dyn_units * dyn_shards;
+        constexpr uint32_t kSlot = DRAM_ALIGNMENT > 32 ? DRAM_ALIGNMENT : 32;
+        static_assert(kSlot % 32 == 0 && kSlot % DRAM_ALIGNMENT == 0, "head-weight slots: whole, aligned pages");
+        constexpr uint32_t kStageBytes = mask_row_bytes > kSlot - 16 ? mask_row_bytes - (kSlot - 16) : 0;
+        static_assert(kStageBytes >= kSlot, "head-weight staging: at least one aligned slot in the plan scratch");
+        constexpr uint32_t kBatch = kStageBytes / kSlot;
+        CircularBuffer cb_plan(cb_sparse_plan);
+        cb_plan.reserve_back(1);
+        const uint32_t stage = (cb_plan.get_write_ptr() + 64 + kSlot - 1) & ~(kSlot - 1);
+        const auto hw = TensorAccessor(head_weights_args, head_weights_addr);
+        uint32_t kept[dyn_units];
+        for (uint32_t u = 0; u < dyn_units; ++u) {
+            kept[u] = 0;
+        }
+        for (uint32_t p0 = 0; p0 < kPages; p0 += kBatch) {
+            const uint32_t np = kPages - p0 < kBatch ? kPages - p0 : kBatch;
+            for (uint32_t j = 0; j < np; ++j) {
+                noc.async_read(hw, CoreLocalMem<uint32_t>(stage + j * kSlot), 32, {.page_id = p0 + j}, {});
+            }
+            noc.async_read_barrier();
+            CoreLocalMem<volatile uint32_t> wv(stage);
+            for (uint32_t j = 0; j < np; ++j) {
+                uint32_t sum = 0;
+                for (uint32_t k = 0; k < 8; ++k) {
+                    sum += wv[j * (kSlot / 4) + k];
+                }
+                kept[(p0 + j) / dyn_shards] += sum;
+            }
+        }
+        uint32_t w[dyn_units];
+        for (uint32_t u = 0; u < dyn_units; ++u) {
+            w[u] = 4 * kept[u] + 197 * dyn_n;
+        }
+        uint16_t c[dyn_units];
+        sparse_dyn_split::Entry e;
+        for (uint32_t attempt = 0; attempt < 2; ++attempt) {
+            if (attempt == 1) {
+                for (uint32_t u = 0; u < dyn_units; ++u) {
+                    w[u] = 1;
+                }
+            }
+            e = sparse_dyn_split::entry(w, c, dyn_units, dyn_n, dyn_cores, dyn_max_q, dyn_min_q, dyn_core_index);
+            if (e.ok) {
+                break;
+            }
+        }
+        for (uint32_t k = 0; k < kDynGroupWords; ++k) {
+            dyn_g[k] = 0;
+        }
+        if (e.ok) {
+            constexpr uint32_t dyn_phys_base = get_named_compile_time_arg_val("dyn_phys_base");
+            constexpr uint32_t dyn_gx = get_named_compile_time_arg_val("dyn_gx");
+            constexpr uint32_t dyn_y_base = dyn_phys_base + (dyn_gx + 3) / 4;
+            const auto phys = [&](uint32_t ci) -> uint32_t {
+                const uint32_t col = ci % dyn_gx;
+                const uint32_t row = ci / dyn_gx;
+                const uint32_t x = (get_common_arg_val<uint32_t>(dyn_phys_base + col / 4) >> (8 * (col % 4))) & 0xFFu;
+                const uint32_t y = (get_common_arg_val<uint32_t>(dyn_y_base + row / 4) >> (8 * (row % 4))) & 0xFFu;
+                return x | (y << 16);
+            };
+            const uint32_t n = e.unit_cores;
+            const uint32_t j = e.unit_core;
+            const bool in_group = n >= 2;
+            dyn_use = true;
+            global_q_start = e.q_start;
+            global_q_end = e.q_start + e.q_count;
+            group_n_members = in_group ? n : 0;
+            if constexpr (use_head_chain) {
+                head_cfg = ChainConfig{};
+                if (in_group && dyn_all_grouped) {
+                    head_cfg.participates = true;
+                    head_cfg.head = e.unit % NH;
+                } else if (in_group) {
+                    head_cfg.participates = true;
+                    head_cfg.head = e.unit % NH;
+                    head_cfg.is_injector = j == 0;
+                    head_cfg.is_sink = j + 1 == n;
+                    if (j > 0) {
+                        const uint32_t pc = phys(e.first + j - 1);
+                        head_cfg.prev_physical_x = pc & 0xFFFFu;
+                        head_cfg.prev_physical_y = pc >> 16;
+                    }
+                    if (j + 1 < n) {
+                        const uint32_t nc = phys(e.first + j + 1);
+                        head_cfg.next_physical_x = nc & 0xFFFFu;
+                        head_cfg.next_physical_y = nc >> 16;
+                        head_cfg.next_core_q_chunks = sparse_dyn_split::unit_count(dyn_n, n, j + 1);
+                    }
+                }
+            }
+            if (in_group) {
+                const uint32_t pc = phys(e.first);
+                dyn_g[0] = j == 0 ? 1u : 2u;
+                dyn_g[1] = pc & 0xFFFFu;
+                dyn_g[2] = pc >> 16;
+                dyn_g[3] = n - 1;
+                if (j == 0) {
+                    uint32_t prev = 0;
+                    uint32_t rects = 0;
+                    for (uint32_t r = 1; r < n; ++r) {
+                        uint32_t key = 0xFFFFFFFFu;
+                        for (uint32_t m = 1; m < n; ++m) {
+                            const uint32_t km = phys(e.first + m);
+                            if ((r == 1 || km > prev) && km < key) {
+                                key = km;
+                            }
+                        }
+                        const uint32_t x = key & 0xFFFFu;
+                        const uint32_t y = key >> 16;
+                        uint32_t* last = &dyn_g[5 + 5 * (rects > 0 ? rects - 1 : 0)];
+                        if (rects > 0 && last[1] == y && last[2] + 1 == x) {
+                            last[2] = x;
+                            ++last[4];
+                        } else if (rects < 8) {
+                            uint32_t* rc = &dyn_g[5 + 5 * rects];
+                            rc[0] = x;
+                            rc[1] = y;
+                            rc[2] = x;
+                            rc[3] = y;
+                            rc[4] = 1;
+                            ++rects;
+                        }
+                        prev = key;
+                    }
+                    dyn_g[4] = rects;
+                }
+            }
+        }
+    }
+    const uint32_t q_per_core = global_q_end - global_q_start;
+
+    auto head_chain = make_chain_link<HeadChainArgs, true>(head_cfg, v_chunk_tiles, v_tile_bytes, head_cfg.head);
+    auto batch_chain = make_chain_link<BatchChainArgs, false>(batch_cfg, k_chunk_tiles, k_tile_bytes, 0);
+    auto gqa_chain = make_chain_link<GqaChainArgs, true>(gqa_cfg, v_chunk_tiles, v_tile_bytes, gqa_cfg.head);
+
+    auto& v_chain = [&]() -> auto& {
+        if constexpr (gqa_grouped_kv) {
+            return gqa_chain;
+        } else {
+            return head_chain;
+        }
+    }();
+
+    auto& k_chain = [&]() -> auto& {
+        if constexpr (gqa_grouped_kv) {
+            return gqa_chain;
+        } else if constexpr (k_uses_batch_chain) {
+            return batch_chain;
+        } else {
+            return head_chain;
+        }
+    }();
+
+    constexpr uint32_t q_heads_per_k = NH / NHK;
+
+    constexpr uint32_t q_barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_q_readers>();
+
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto local_k_reader = TensorAccessor(k_args, k_addr);
+    const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
+
+    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+    constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
+    constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
+    constexpr uint32_t v_col_offset_t = v_row_Wt - vDHt;
+    const auto input_k_tile_logical = TensorTileShape(B, NHK, kv_local_padded_Nt, k_row_Wt);
+    const auto gathered_k_input_tile_logical = TensorTileShape(B, NHK, gathered_padded_Nt, k_row_Wt);
+
+    const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
+    const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
+    const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
+    const auto local_v_reader = TensorAccessor(v_args, v_addr);
+    const auto input_v_tile_logical = TensorTileShape(B, NHV, kv_local_padded_Nt, v_row_Wt);
+    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
+    const auto gathered_v_input_tile_logical = TensorTileShape(B, NHV, gathered_padded_Nt, v_row_Wt);
+    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
+    const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
+    const auto mask_reader = TensorAccessor(mask_args, mask_addr);
+    [[maybe_unused]] bool pooled_pending = true;
+    const pooled_bias_gen::Geometry geo{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
+    [[maybe_unused]] const auto write_dyn_range = [&](uint32_t page) {
+        constexpr uint32_t dyn_range_offset = get_named_compile_time_arg_val("dyn_range_offset");
+        CoreLocalMem<volatile uint32_t> r(page + dyn_range_offset);
+        r[0] = global_q_start;
+        r[1] = global_q_end;
+    };
+    [[maybe_unused]] volatile tt_l1_ptr uint8_t* counts_table = nullptr;
+    if constexpr (has_block_counts) {
+        CircularBuffer cb_counts(cb_block_counts);
+        cb_counts.reserve_back(1);
+        counts_table = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_counts.get_write_ptr());
+        CircularBuffer cb_plan(cb_sparse_plan);
+        cb_plan.reserve_back(1);
+        const uint32_t stage = cb_plan.get_write_ptr() + 64;
+        noc.async_read(
+            TensorAccessor(block_counts_args, block_counts_addr),
+            CoreLocalMem<uint32_t>(stage),
+            mask_row_bytes,
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
+        CoreLocalMem<volatile uint32_t> given(stage);
+        for (uint32_t s = 0; s < ring_size; ++s) {
+            for (uint32_t b = 0; b < mask_nb_pad; ++b) {
+                const uint32_t g = s * mask_nb_pad + b;
+                const uint32_t len = pooled_bias_gen::block_len(geo, s, b);
+                counts_table[g] = static_cast<uint8_t>(given[g] < len ? given[g] : len);
+            }
+        }
+        if constexpr (dyn_mode == 2) {
+            write_dyn_range(cb_counts.get_write_ptr());
+        }
+        cb_counts.push_back(1);
+    } else if constexpr (dyn_mode == 2) {
+        CircularBuffer cb_counts(cb_block_counts);
+        cb_counts.reserve_back(1);
+        write_dyn_range(cb_counts.get_write_ptr());
+        cb_counts.push_back(1);
+    }
+    const auto block_count = [&](uint32_t s, uint32_t b) -> uint32_t {
+        if (b >= mask_nb) {
+            return 0;
+        }
+        if constexpr (has_block_counts) {
+            return counts_table[s * mask_nb_pad + b];
+        } else {
+            return pooled_bias_gen::block_len(geo, s, b);
+        }
+    };
+
+    [[maybe_unused]] uint32_t kb_pos = 0;
+    bool q_pushed = false;
+    [[maybe_unused]] uint32_t res_group_pieces = 0;
+
+    const uint32_t ring_index =
+        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+            fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
+    const auto ring_seq_start = fused_op_receiver.seq;
+    auto arrival_preview = fused_op_receiver.seq;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
+        GROUPED_KV_SOURCE_COUNT,
+        ring_size,
+        kv_local_padded_Nt,
+        logical_nt,
+        active_ring_iter_mask,
+        kv_region_Nt,
+        Sk_chunk_t,
+        false,
+        [&] {
+            return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+        });
+    const uint32_t source_group_size = packed_schedule.source_group_size;
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
+    const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
+        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
+        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
+        auto ring_seq_replay = ring_seq_start;
+        q_pushed = false;
+        pooled_pending = true;
+        for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+            uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
+            ring_joint::PackedKVSourceReadiness packed_readiness;
+            if (packed_sources) {
+                auto preview = fused_op_receiver.seq;
+                for (uint32_t source = 0; source < source_group_size; ++source) {
+                    packed_source_ids[source] =
+                        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                            preview.get_next_ring_id([](uint32_t, uint32_t) {}),
+                            mesh_rows,
+                            mesh_cols,
+                            snake_orientation);
+                }
+            }
+            const auto wait_packed_source = [&](uint32_t source) {
+                const uint32_t ready_id =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                ASSERT(ready_id == packed_source_ids[source]);
+            };
+            const bool ring_iter_is_active = packed_sources || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
+            const uint32_t ring_id = [&]() -> uint32_t {
+                if (q_pass > 0) {
+                    return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        ring_seq_replay.get_next_ring_id([](uint32_t, uint32_t) {}),
+                        mesh_rows,
+                        mesh_cols,
+                        snake_orientation);
+                }
+                return packed_sources
+                           ? packed_source_ids[0]
+                           : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                                 fused_op_receiver.get_next_ring_id_and_sync(),
+                                 mesh_rows,
+                                 mesh_cols,
+                                 snake_orientation);
+            }();
+            if (!ring_iter_is_active) {
+                continue;
+            }
+
+            const uint32_t do_pooled = (pooled_route && pooled_pending) ? 1u : 0u;
+            constexpr uint32_t kResMax = 32;
+            const uint32_t n_res = pass_q_end - pass_q_start;
+            ASSERT(n_res <= resident_slots);
+            uint32_t res_nb[kResMax];
+            uint32_t res_nq[kResMax];
+            uint32_t res_qc[kResMax];
+            for (uint32_t i = 0; i < n_res; ++i) {
+                const auto d = decompose_global_q_index(pass_q_start + i, num_q_chunks, NH, use_zigzag_balancing);
+                res_nb[i] = d.nb;
+                res_nq[i] = d.nq;
+                res_qc[i] = d.q_chunk;
+                if constexpr (q_perm_table) {
+                    const uint32_t w = get_common_arg_val<uint32_t>(d.q_chunk >> 1);
+                    res_qc[i] = (d.q_chunk & 1u) ? (w >> 16) : (w & 0xFFFFu);
+                }
+            }
+            if (!q_pushed) {
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    const Slice q_slice(
+                        res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
+                    read_block(
+                        q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
+                }
+                if constexpr (num_q_passes > 1) {
+                    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
+                    const uint32_t pad_tiles = (resident_slots - n_res) * q_chunk_tiles;
+                    if (pad_tiles > 0) {
+                        CircularBuffer cb_q(cb_q_in);
+                        cb_q.reserve_back(pad_tiles);
+                        cb_q.push_back(pad_tiles);
+                    }
+                }
+                q_pushed = true;
+            }
+            CircularBuffer cb_plan(cb_sparse_plan);
+            cb_plan.reserve_back(1);
+            uint32_t scratch = cb_plan.get_write_ptr() + 64;
+            const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
+                noc.async_read(
+                    mask_reader,
+                    CoreLocalMem<uint32_t>(scratch),
+                    mask_row_bytes,
+                    {.page_id = nq * mask_nqb_pad + qc},
+                    {});
+                noc.async_read_barrier();
+            };
+            const auto read_shard_slice = [&](uint32_t nq, uint32_t qc) {
+                noc.async_read(
+                    mask_reader,
+                    CoreLocalMem<uint32_t>(scratch),
+                    mask_nb_pad * sizeof(uint32_t),
+                    {.page_id = nq * mask_nqb_pad + qc, .offset_bytes = ring_id * mask_nb_pad * sizeof(uint32_t)},
+                    {});
+                noc.async_read_barrier();
+            };
+            constexpr uint32_t kBlockWords = plan_block_words;
+            constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / pooled_bias_gen::kBlockTiles;
+            uint32_t live_bits[kBlockWords];
+            for (uint32_t w = 0; w < kBlockWords; ++w) {
+                live_bits[w] = 0;
+            }
+            for (uint32_t b = 0; b < mask_nb; ++b) {
+                if (block_count(ring_id, b) != 0) {
+                    live_bits[b >> 5] |= 1u << (b & 31);
+                }
+            }
+            const auto row_block_bits = [&](uint32_t* words) {
+                CoreLocalMem<volatile uint32_t> row(scratch);
+                for (uint32_t w = 0; w < kBlockWords; ++w) {
+                    words[w] = 0;
+                }
+                for (uint32_t b = 0; b < mask_nb; ++b) {
+                    if (row[b] != 0) {
+                        words[b >> 5] |= 1u << (b & 31);
+                    }
+                }
+                for (uint32_t w = 0; w < kBlockWords; ++w) {
+                    words[w] &= live_bits[w];
+                }
+            };
+            const auto piece_bits = [&](const uint32_t* words, uint32_t& lo, uint32_t& hi) {
+                lo = 0;
+                hi = 0;
+                for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                    bool kept = false;
+                    for (uint32_t j = 0; j < kBlocksPerPiece && !kept; ++j) {
+                        const uint32_t b = k * kBlocksPerPiece + j;
+                        kept = b < mask_nb && ((words[b >> 5] >> (b & 31)) & 1u) != 0;
+                    }
+                    if (kept) {
+                        if (k < 32) {
+                            lo |= 1u << k;
+                        } else {
+                            hi |= 1u << (k - 32);
+                        }
+                    }
+                }
+            };
+            const auto row_kept_bits = [&](uint32_t& lo, uint32_t& hi) {
+                uint32_t words[kBlockWords];
+                row_block_bits(words);
+                piece_bits(words, lo, hi);
+            };
+            uint32_t res_lo[kResMax];
+            uint32_t res_hi[kResMax];
+            uint32_t seg_ulo[kResMax];
+            uint32_t seg_uhi[kResMax];
+            constexpr uint32_t kPlanRec = kBlockWords + 3;
+            [[maybe_unused]] const auto plan_rec = [&](uint32_t i) {
+                return CoreLocalMem<volatile uint32_t>(
+                    cb_plan.get_write_ptr() + (plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
+            };
+            {
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    read_shard_slice(res_nq[i], res_qc[i]);
+                    if constexpr (plan_rec_base != 0) {
+                        uint32_t words[kBlockWords];
+                        row_block_bits(words);
+                        auto rec = plan_rec(i);
+                        for (uint32_t w = 0; w < kBlockWords; ++w) {
+                            rec[w] = words[w];
+                        }
+                        piece_bits(words, res_lo[i], res_hi[i]);
+                    } else {
+                        row_kept_bits(res_lo[i], res_hi[i]);
+                    }
+                }
+            }
+            for (uint32_t i0 = 0; i0 < n_res;) {
+                uint32_t i1 = i0;
+                uint32_t ulo = 0;
+                uint32_t uhi = 0;
+                while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                    ulo |= res_lo[i1];
+                    uhi |= res_hi[i1];
+                    ++i1;
+                }
+                if (group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                    uint32_t words[kBlockWords];
+                    for (uint32_t w = 0; w < kBlockWords; ++w) {
+                        words[w] = live_bits[w];
+                    }
+                    piece_bits(words, ulo, uhi);
+                }
+                for (uint32_t i = i0; i < i1; ++i) {
+                    seg_ulo[i] = ulo;
+                    seg_uhi[i] = uhi;
+                }
+                i0 = i1;
+            }
+            if constexpr (plan_rec_base != 0) {
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    auto rec = plan_rec(i);
+                    rec[kBlockWords] = seg_ulo[i];
+                    rec[kBlockWords + 1] = seg_uhi[i];
+                    rec[kBlockWords + 2] = do_pooled;
+                }
+                cb_plan.push_back(1);
+            } else {
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    if (i > 0) {
+                        cb_plan.reserve_back(1);
+                        scratch = cb_plan.get_write_ptr() + 64;
+                    }
+                    read_shard_slice(res_nq[i], res_qc[i]);
+                    uint32_t words[kBlockWords];
+                    row_block_bits(words);
+                    CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
+                    for (uint32_t w = 0; w < kBlockWords; ++w) {
+                        plan_words[w] = words[w];
+                    }
+                    plan_words[kBlockWords] = seg_ulo[i];
+                    plan_words[kBlockWords + 1] = seg_uhi[i];
+                    plan_words[kBlockWords + 2] = do_pooled;
+                    cb_plan.push_back(1);
+                }
+            }
+            const bool source_is_local = ring_id == ring_index;
+            const uint32_t source_start_tile = ring_id * kv_local_padded_Nt;
+            const uint32_t source_valid_kv_tiles =
+                logical_nt > source_start_tile ? std::min(logical_nt - source_start_tile, kv_local_padded_Nt) : 0;
+            const uint32_t end_seq_tile =
+                source_is_local ? source_valid_kv_tiles : source_start_tile + source_valid_kv_tiles;
+            bool k_armed = false;
+            uint32_t k_armed_addr = 0;
+            [[maybe_unused]] const auto stream_piece = [&](uint32_t nb, uint32_t nq, uint32_t k, bool has_next) {
+                const uint32_t nk = nq / q_heads_per_k;
+                const uint32_t nv = nq / q_heads_per_v;
+                const uint32_t src_batch = nb;
+                const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
+                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
+                const uint32_t k_head = gqa_grouped_kv ? nk : nq;
+                const bool k_rx = k_chain.should_receive(k_head);
+                const bool v_rx = v_chain.should_receive(nv);
+                CircularBuffer cb_k(cb_k_in);
+                uint32_t k_addr;
+                if (k_armed) {
+                    ASSERT(k_rx);
+                    k_addr = k_armed_addr;
+                    k_armed = false;
+                } else {
+                    cb_k.reserve_back(k_chunk_tiles);
+                    k_addr = cb_k.get_write_ptr();
+                    if (k_rx) {
+                        k_chain.signal_ready(noc);
+                    }
+                }
+                if (k_rx) {
+                    k_chain.wait_data();
+                } else if (source_is_local) {
+                    fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                } else {
+                    fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                }
+                cb_k.push_back(k_chunk_tiles);
+                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                CircularBuffer cb_v(cb_v_in);
+                uint32_t v_addr = 0;
+                bool v_reserved = false;
+                if (v_rx && cb_v.pages_reservable_at_back(v_cb_entry_tiles)) {
+                    cb_v.reserve_back(v_cb_entry_tiles);
+                    v_addr = cb_v.get_write_ptr();
+                    v_reserved = true;
+                    v_chain.signal_ready(noc);
+                }
+                if (k_chain.should_forward(k_head, 0)) {
+                    k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
+                }
+                if (!v_reserved) {
+                    cb_v.reserve_back(v_cb_entry_tiles);
+                    v_addr = cb_v.get_write_ptr();
+                    if (v_rx) {
+                        v_chain.signal_ready(noc);
+                    }
+                }
+                if (v_rx) {
+                    v_chain.wait_data();
+                } else if (source_is_local) {
+                    fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                } else {
+                    fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                }
+                cb_v.push_back(v_cb_entry_tiles);
+                if (k_rx && has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
+                    cb_k.reserve_back(k_chunk_tiles);
+                    k_armed_addr = cb_k.get_write_ptr();
+                    k_armed = true;
+                    k_chain.signal_ready(noc);
+                }
+                if (v_chain.should_forward(nv, 0)) {
+                    v_chain.forward(noc, v_addr);
+                }
+            };
+            const auto push_key_bias = [&](uint32_t k) {
+                if constexpr (key_bias_tiles > 0) {
+                    uint32_t n = 0;
+                    for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+                        n += block_count(ring_id, k * kBlocksPerPiece + j) % 32 != 0 ? 1u : 0u;
+                    }
+                    if (n == 0) {
+                        return;
+                    }
+                    CircularBuffer cb_kb(cb_key_bias);
+                    if (kb_pos + n > key_bias_tiles) {
+                        cb_kb.reserve_back(key_bias_tiles - kb_pos);
+                        cb_kb.push_back(key_bias_tiles - kb_pos);
+                        kb_pos = 0;
+                    }
+                    for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+                        const uint32_t real_cols = block_count(ring_id, k * kBlocksPerPiece + j) % 32;
+                        if (real_cols != 0) {
+                            cb_kb.reserve_back(1);
+                            pooled_bias_gen::generate_key_bias_tile<key_bias_tile_bytes>(
+                                noc, cb_kb.get_write_ptr(), real_cols, pooled_bias_table_base);
+                            cb_kb.push_back(1);
+                        }
+                    }
+                    kb_pos = kb_pos + n == key_bias_tiles ? 0 : kb_pos + n;
+                }
+            };
+            uint32_t n_pieces = 0;
+            [[maybe_unused]] const uint32_t g_base = group_members_base + 2 * group_n_members;
+            [[maybe_unused]] const auto garg = [&](uint32_t k) -> uint32_t {
+                if constexpr (dyn_mode == 2) {
+                    return dyn_g[k];
+                } else {
+                    return get_arg_val<uint32_t>(g_base + k);
+                }
+            };
+            [[maybe_unused]] const uint32_t g_role = group_mcast ? garg(0) : 0;
+            [[maybe_unused]] uint32_t g_granted = 0;
+            [[maybe_unused]] uint32_t g_ahead = 0;
+            const auto g_try_grant = [&](bool blocking) -> bool {
+                if (g_granted >= n_pieces) {
+                    return false;
+                }
+                CircularBuffer cb_k(cb_k_in);
+                CircularBuffer cb_v(cb_v_in);
+                const uint32_t k_need = k_chunk_tiles * (g_ahead + 1);
+                const uint32_t v_need = v_cb_entry_tiles * (g_ahead + 1);
+                if (!blocking &&
+                    (g_ahead > 0 || !cb_k.pages_reservable_at_back(k_need) || !cb_v.pages_reservable_at_back(v_need))) {
+                    return false;
+                }
+                cb_k.reserve_back(k_need);
+                cb_v.reserve_back(v_need);
+                ++g_ahead;
+                ++g_granted;
+                Semaphore<>(head_sender_semaphore_id).up(noc, garg(1), garg(2), 1);
+                return true;
+            };
+            const auto g_grant_ahead = [&]() {
+                while (g_try_grant(false)) {
+                }
+            };
+            const auto stream_piece_group = [&](uint32_t nb, uint32_t nq, uint32_t k) {
+                CircularBuffer cb_k(cb_k_in);
+                CircularBuffer cb_v(cb_v_in);
+                if (g_role == 2) {
+                    if (g_ahead == 0) {
+                        g_try_grant(true);
+                    }
+                    {
+                        Semaphore<>(head_receiver_semaphore_id).wait_min(res_group_pieces + 1);
+                    }
+                    cb_k.push_back(k_chunk_tiles);
+                    cb_v.push_back(v_cb_entry_tiles);
+                    --g_ahead;
+                    ++res_group_pieces;
+                    g_grant_ahead();
+                    return;
+                }
+                const uint32_t nk = nq / q_heads_per_k;
+                const uint32_t nv = nq / q_heads_per_v;
+                const uint32_t src_batch = nb;
+                const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
+                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
+                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                cb_k.reserve_back(k_chunk_tiles);
+                cb_v.reserve_back(v_cb_entry_tiles);
+                const uint32_t k_addr = cb_k.get_write_ptr();
+                const uint32_t v_addr = cb_v.get_write_ptr();
+                {
+                    if (source_is_local) {
+                        fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                        fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                    } else {
+                        fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                        fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                    }
+                }
+                cb_k.push_back(k_chunk_tiles);
+                cb_v.push_back(v_cb_entry_tiles);
+                ++res_group_pieces;
+                const uint32_t n_recv = garg(3);
+                const uint32_t n_rects = garg(4);
+                {
+                    Semaphore<>(head_sender_semaphore_id).wait_min(n_recv * res_group_pieces);
+                    Semaphore<> count_src(head_valid_semaphore_id);
+                    count_src.set(res_group_pieces);
+                    for (uint32_t r = 0; r < n_rects; ++r) {
+                        const uint32_t a = 5 + 5 * r;
+                        const bool rev = noc.get_noc_id() == 1;
+                        const uint32_t x0 = garg(a + (rev ? 2 : 0));
+                        const uint32_t y0 = garg(a + (rev ? 3 : 1));
+                        const uint32_t x1 = garg(a + (rev ? 0 : 2));
+                        const uint32_t y1 = garg(a + (rev ? 1 : 3));
+                        const uint32_t n_dests = garg(a + 4);
+                        noc.async_write_multicast(
+                            CoreLocalMem<uint32_t>(k_addr),
+                            MulticastEndpoint{},
+                            k_chunk_tiles * k_tile_bytes,
+                            n_dests,
+                            {},
+                            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = k_addr},
+                            true);
+                        noc.async_write_multicast(
+                            CoreLocalMem<uint32_t>(v_addr),
+                            MulticastEndpoint{},
+                            v_cb_entry_tiles * v_tile_bytes,
+                            n_dests,
+                            {},
+                            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = v_addr},
+                            true);
+                        count_src.relay_multicast(
+                            noc, Semaphore<>(head_receiver_semaphore_id), x0, y0, x1, y1, n_dests, false);
+                    }
+                    noc.async_writes_flushed();
+                }
+            };
+            {
+                uint32_t j = 0;
+                for (uint32_t pass = 0; pass < 2; ++pass) {
+                    if constexpr (group_mcast) {
+                        if (pass == 1 && g_role == 2) {
+                            g_grant_ahead();
+                        }
+                    }
+                    for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                        if (!chunked_kv_chunk_is_live<
+                                false,
+                                chunked_enabled,
+                                kv_local_padded_Nt,
+                                chunk_size_t,
+                                kv_region_Nt>(ring_id, k, Sk_chunk_t, logical_nt, logical_nt)) {
+                            continue;
+                        }
+                        for (uint32_t i0 = 0; i0 < n_res;) {
+                            uint32_t i1 = i0;
+                            while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                                ++i1;
+                            }
+                            const bool union_kept =
+                                k < 32 ? ((seg_ulo[i0] >> k) & 1u) != 0 : ((seg_uhi[i0] >> (k - 32)) & 1u) != 0;
+                            if (union_kept) {
+                                if (pass == 0) {
+                                    ++n_pieces;
+                                } else {
+                                    ++j;
+                                    if constexpr (group_mcast && dyn_all_grouped) {
+                                        stream_piece_group(res_nb[i0], res_nq[i0], k);
+                                    } else if constexpr (group_mcast) {
+                                        if (g_role != 0) {
+                                            stream_piece_group(res_nb[i0], res_nq[i0], k);
+                                        } else {
+                                            stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
+                                        }
+                                    } else {
+                                        stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
+                                    }
+                                    push_key_bias(k);
+                                }
+                            }
+                            i0 = i1;
+                        }
+                    }
+                }
+            }
+            if constexpr (pooled_route) {
+                if (do_pooled) {
+                    const auto pooled_k_generator = PaddedAddrGenerator(
+                        TensorAccessor(pooled_k_args, pooled_k_addr),
+                        TensorTileShape(1, NH, mask_n_blocks_pad / 32, DHt));
+                    const auto pooled_v_generator = PaddedAddrGenerator(
+                        TensorAccessor(pooled_v_args, pooled_v_addr),
+                        TensorTileShape(1, NH, mask_n_blocks_pad / 32, vDHt));
+                    if constexpr (plan_rec_base != 0) {
+                        cb_plan.reserve_back(1);
+                        scratch = cb_plan.get_write_ptr() + 64;
+                    }
+                    constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
+                    for (uint32_t i0 = 0; i0 < n_res;) {
+                        uint32_t i1 = i0;
+                        while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                            ++i1;
+                        }
+                        const uint32_t nq = res_nq[i0];
+                        for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
+                            const uint32_t tiles = pc + 1 == pooled_chunks ? pooled_last_tiles : Sk_chunk_t;
+                            const uint32_t row0 = pc * Sk_chunk_t;
+                            CircularBuffer cb_k(cb_k_in);
+                            cb_k.reserve_back(k_chunk_tiles);
+                            pooled_k_generator.issue_reads(
+                                Slice(0, nq, row0, row0 + tiles, 0, DHt),
+                                pooled_rows_t,
+                                cb_k_in,
+                                cb_k.get_write_ptr(),
+                                k_tile_bytes,
+                                k_tile_bytes * Sk_chunk_t,
+                                0);
+                            noc.async_read_barrier();
+                            noc.write_zeros_l1_barrier();
+                            cb_k.push_back(k_chunk_tiles);
+                            CircularBuffer cb_v(cb_v_in);
+                            cb_v.reserve_back(v_cb_entry_tiles);
+                            pooled_v_generator.issue_reads(
+                                Slice(0, nq, row0, row0 + tiles, 0, vDHt),
+                                pooled_rows_t,
+                                cb_v_in,
+                                cb_v.get_write_ptr(),
+                                vDHt * v_tile_bytes,
+                                v_tile_bytes,
+                                0);
+                            noc.async_read_barrier();
+                            noc.write_zeros_l1_barrier();
+                            cb_v.push_back(v_cb_entry_tiles);
+#if defined(SPARSE_FAST_PBIAS)
+                            const uint32_t fp_slice_bytes = tiles * 32 * sizeof(uint32_t);
+                            constexpr bool fp_always = Sk_chunk_t * 32 * sizeof(uint32_t) * 3 / 2 <= mask_row_bytes;
+                            const bool fp_fast = fp_always || fp_slice_bytes + fp_slice_bytes / 2 <= mask_row_bytes;
+                            const uint32_t fp_lut = scratch + fp_slice_bytes;
+                            if (fp_fast) {
+                                pooled_bias_gen::build_chunk_lut(
+                                    fp_lut, row0, tiles, geo, pooled_bias_table_base, block_count);
+                            }
+#endif
+                            for (uint32_t i = i0; i < i1; ++i) {
+#if defined(SPARSE_FAST_PBIAS)
+                                if (fp_fast) {
+                                    noc.async_read(
+                                        mask_reader,
+                                        CoreLocalMem<uint32_t>(scratch),
+                                        fp_slice_bytes,
+                                        {.page_id = nq * mask_nqb_pad + res_qc[i],
+                                         .offset_bytes = row0 * 32 * sizeof(uint32_t)},
+                                        {});
+                                    noc.async_read_barrier();
+                                } else
+#endif
+                                {
+                                    read_chunk_row(nq, res_qc[i]);
+                                }
+                                CircularBuffer cb_bias(cb_pooled_bias);
+                                cb_bias.reserve_back(Sk_chunk_t);
+#if defined(SPARSE_FAST_PBIAS)
+                                if (fp_fast) {
+#if SPARSE_FAST_PBIAS == 2
+                                    pooled_bias_gen::generate_rows_lut<pooled_bias_tile_bytes>(
+                                        cb_bias.get_write_ptr(), tiles, scratch, fp_lut, pooled_bias_table_base);
+#else
+                                    pooled_bias_gen::generate_tiles_lut<pooled_bias_tile_bytes>(
+                                        noc, cb_bias.get_write_ptr(), tiles, scratch, fp_lut, pooled_bias_table_base);
+#endif
+                                } else
+#endif
+                                {
+                                    pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes>(
+                                        noc,
+                                        cb_bias.get_write_ptr(),
+                                        row0,
+                                        tiles,
+                                        geo,
+                                        CoreLocalMem<volatile uint32_t>(scratch),
+                                        pooled_bias_table_base,
+                                        block_count);
+                                }
+                                cb_bias.push_back(Sk_chunk_t);
+                            }
+                        }
+                        i0 = i1;
+                    }
+                }
+            }
+
+            pooled_pending = false;
+            if (packed_sources) {
+                packed_readiness.drain(source_group_size, wait_packed_source);
+            }
+        }
+    }
+}

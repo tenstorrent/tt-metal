@@ -682,6 +682,9 @@ std::string ComputeKernel::config_hash() const {
     if (this->config_.enable_trisc2_rvv) {
         hash += "_rvv";
     }
+    if (this->config_.opt_level != KernelBuildOptLevel::O3) {
+        hash += fmt::format("_{}", enchantum::to_string(this->config_.opt_level));
+    }
     return hash;
 }
 

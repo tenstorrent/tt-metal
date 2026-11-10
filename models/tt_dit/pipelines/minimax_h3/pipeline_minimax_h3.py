@@ -42,6 +42,7 @@ itself (~2.8 s), never the reload. `coresident=False` evicts each stage and disa
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -75,7 +76,8 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
-from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables, to_out_weight_tag
+from ...models.transformers.minimax_h3.lofi import weight_cache_tag as lofi_weight_cache_tag
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -83,7 +85,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
-from ...utils.tracing import StateTensor
+from ...utils.tracing import StateTensor, trace_capture_count
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
@@ -156,7 +158,6 @@ MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 # need other shifts.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
-
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
@@ -249,6 +250,9 @@ def select_bucket(seq_len: int, ladder: tuple[int, ...]) -> int:
 class SeqLen(NamedTuple):
     padded: int
     logical: int
+
+
+_LEVELS_ONCE_MAX_STEPS = 64
 
 
 @dataclass(frozen=True)
@@ -537,6 +541,24 @@ class MiniMaxH3Pipeline:
             topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
         coresident = preset.get("coresident", True) if coresident is None else coresident
         self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
+        self.lazy_trace_denoise = os.environ.get("MINIMAX_H3_TRACE_DENOISE", "0") == "1"
+        self.latent_readback_slice = os.environ.get("MINIMAX_H3_LATENT_READBACK_SLICE", "0") == "1"
+        self.preamble_overlap = os.environ.get("MINIMAX_H3_PREAMBLE_OVERLAP", "0") == "1"
+        self.refiner_persistent = os.environ.get("MINIMAX_H3_REFINER_PERSISTENT", "0") == "1"
+        self.per_forward_once = os.environ.get("MINIMAX_H3_PER_FORWARD_ONCE", "0") == "1"
+        self.latent_upload_real_rows = os.environ.get("MINIMAX_H3_LATENT_UPLOAD_REAL_ROWS", "0") == "1"
+        self.rung_video_arena = os.environ.get("MINIMAX_H3_RUNG_VIDEO_ARENA", "0") == "1"
+        self._video_streams_by_cap: dict[int, tuple[StateTensor, StateTensor]] = {}
+        self.layout_cache = os.environ.get("MINIMAX_H3_LAYOUT_CACHE", "0") == "1"
+        self._last_layout_key: tuple | None = None
+        self._last_tilerow_kwargs: dict = {}
+        self.levels_once = os.environ.get("MINIMAX_H3_LEVELS_ONCE", "0") == "1"
+        self.audio_beside_video = os.environ.get("MINIMAX_H3_AUDIO_BESIDE_VIDEO", "0") == "1"
+        self._levels_all: dict[tuple[str, int], StateTensor] = {}
+        self._levels_warm_steps = int(os.environ.get("MINIMAX_H3_LEVELS_ONCE_WARM_STEPS", "16"))
+        self._levels_warmed: set[tuple[str, int]] = set()
+        if self.lazy_trace_denoise:
+            self.trace_denoise = True
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
@@ -550,7 +572,7 @@ class MiniMaxH3Pipeline:
             if use_persistent_ccl_buffers is None
             else use_persistent_ccl_buffers
         )
-        assert self.use_persistent_ccl_buffers or not self.trace_denoise, (
+        assert self.use_persistent_ccl_buffers or not self.trace_denoise or self.lazy_trace_denoise, (
             "use_persistent_ccl_buffers=False relies on a host sync before each all-gather-matmul, which a traced "
             "denoise does not replay"
         )
@@ -709,6 +731,8 @@ class MiniMaxH3Pipeline:
             use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
         )
         self._transformer = self._build_transformer()
+        if self.lazy_trace_denoise:
+            self._transformer.enable_lazy_trace()
         yuv = self.vae_output_type == "yuv420"
         unit_pixels = self.vae_output_type in ("uint8", "yuv420")
         self._host_log("building the video VAE")
@@ -1383,7 +1407,8 @@ class MiniMaxH3Pipeline:
     # ------------------------------------------------------------------ denoiser
 
     def _dit_weight_mode(self) -> str:
-        return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+        mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+        return mode + to_out_weight_tag() + lofi_weight_cache_tag()
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
@@ -1412,6 +1437,7 @@ class MiniMaxH3Pipeline:
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
+            reload_after_create=os.environ.get("MINIMAX_H3_RELOAD_BUILT_CACHE", "1") == "1",
         )
         return self._transformer
 
@@ -1445,15 +1471,18 @@ class MiniMaxH3Pipeline:
 
         return seq_sharded(cos), seq_sharded(sin)
 
-    def _row_indices(self, values: torch.Tensor, padded_len: int) -> ttnn.Tensor:
-        """An integer per-row index tensor, ROW_MAJOR and sharded on SP along the row axis."""
+    def _row_indices(self, values: torch.Tensor, padded_len: int, *, gather: bool = False) -> ttnn.Tensor:
+        """An integer per-row index tensor, ROW_MAJOR and sharded on SP along the row axis. `gather`: the transformer
+        only reads it as `ttnn.embedding` indices, so with MINIMAX_H3_PER_FORWARD_ONCE it is uploaded as the uint32
+        those take (same values, all non-negative), instead of int32 typecast on device every forward."""
         pad = padded_len - values.shape[0]
         if pad:
             values = torch.cat([values, torch.zeros(pad, dtype=values.dtype)])
+        uint32 = gather and self.per_forward_once
         return from_torch(
             values.to(torch.int32).reshape(1, 1, 1, padded_len),
             device=self.mesh_device,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32 if uint32 else ttnn.int32,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[..., None, self.sp_axis],
         )
@@ -1469,11 +1498,12 @@ class MiniMaxH3Pipeline:
         )
 
     def _replicated_indices(self, values: torch.Tensor) -> ttnn.Tensor:
-        """An integer index tensor, ROW_MAJOR and replicated -- `_row_indices` without the shard."""
+        """An integer index tensor, ROW_MAJOR and replicated -- `_row_indices` without the shard. Only read as gather
+        indices (assembly, output rows), so uint32 under MINIMAX_H3_PER_FORWARD_ONCE, as `_row_indices(gather=True)`."""
         return from_torch(
             values.to(torch.int32).reshape(1, 1, 1, -1),
             device=self.mesh_device,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32 if self.per_forward_once else ttnn.int32,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[..., None, None],
         )
@@ -1488,6 +1518,79 @@ class MiniMaxH3Pipeline:
                 raise ValueError(f"forced bucket {rung} is smaller than the packed length {seq_len}")
             return rung
         return select_bucket(seq_len, self.bucket_ladder)
+
+    def _read_leading_rows(self, stream_1BRC: ttnn.Tensor, rows: int) -> torch.Tensor:
+        """`[1, 1, cap, C]` stream -> host torch, of at least its first `rows` rows. With `latent_readback_slice`, only
+        the tile-aligned leading rows cross to the host (sliced on device first); the values are the same bytes."""
+        if self.latent_readback_slice:
+            aligned = -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if 0 < aligned < stream_1BRC.shape[2]:
+                part = ttnn.slice(stream_1BRC, [0, 0, 0, 0], [1, 1, aligned, stream_1BRC.shape[3]])
+                try:
+                    return local_device_to_torch(part)
+                finally:
+                    ttnn.deallocate(part)
+        return local_device_to_torch(stream_1BRC)
+
+    @staticmethod
+    def _layout_digest(layout: MiniMaxH3PackedSequence) -> tuple:
+        """Everything of a packed layout the layout-only device tensors are built from, in hashable form."""
+        digest = hashlib.sha1()
+        for t in (
+            layout.position_ids,
+            layout.token_tags,
+            layout.video_indices,
+            layout.audio_indices,
+            layout.text_indices,
+        ):
+            digest.update(str(tuple(t.shape)).encode())
+            digest.update(t.contiguous().numpy().tobytes())
+        return (
+            layout.sequence_length,
+            layout.num_condition_video_rows,
+            layout.num_condition_audio_rows,
+            digest.hexdigest(),
+        )
+
+    def _video_streams(self, rung: int, caps: MiniMaxH3ArenaCaps) -> tuple[int, StateTensor, StateTensor]:
+        """(capacity, video stream, video output indices) for a request on `rung`: the shared arena-cap pair, or
+        with `rung_video_arena` a pair per capacity min(arena cap, rung). The video rows of a request on `rung` fit
+        it: they are fewer than the rung's packed length."""
+        if not self.rung_video_arena or rung >= caps.video_rows:
+            return caps.video_rows, self._tt_video, self._tt_video_out_idx
+        if rung not in self._video_streams_by_cap:
+            self._video_streams_by_cap[rung] = (StateTensor(), StateTensor())
+        return rung, *self._video_streams_by_cap[rung]
+
+    def _upload_stream(self, state: StateTensor, rows: torch.Tensor, capacity: int, traced: bool) -> None:
+        """Upload `[n, C]` latent rows as the `[1, 1, capacity, C]` bf16 stream `state`, zero tail included.
+
+        With `latent_upload_real_rows`, only the tile-aligned head (the real rows, zero-padded to a tile row) crosses
+        from the host; the zero tail is a device fill (`ttnn.zeros` fills TILE tensors of this size on device) and the
+        two are concatenated on device. The result is the same tensor, pad rows included, as the full upload.
+        """
+        aligned = -(-rows.shape[0] // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if not self.latent_upload_real_rows or not 0 < aligned < capacity:
+            state.update(
+                self._pad_host_rows(rows, capacity).reshape(1, 1, capacity, -1),
+                traced=traced,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+            )
+            return
+        head = from_torch(
+            self._pad_host_rows(rows, aligned).reshape(1, 1, aligned, -1), device=self.mesh_device, dtype=ttnn.bfloat16
+        )
+        tail = ttnn.zeros(
+            (1, 1, capacity - aligned, rows.shape[-1]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+        )
+        full = ttnn.concat([head, tail], dim=2)
+        ttnn.deallocate(head)
+        ttnn.deallocate(tail)
+        state.update(full, traced=traced)
 
     @staticmethod
     def _pad_host_rows(rows: torch.Tensor, capacity: int) -> torch.Tensor:
@@ -1534,7 +1637,7 @@ class MiniMaxH3Pipeline:
         pos += a_len
         indices[pos : pos + v_len] = torch.arange(src["video"], src["video"] + v_len)
         if self._shard_assembly_indices:
-            return self._row_indices(indices, rung)
+            return self._row_indices(indices, rung, gather=True)
         return self._replicated_indices(indices)
 
     def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
@@ -2157,14 +2260,26 @@ class MiniMaxH3Pipeline:
             )
 
         with self._track_cache_misses(on_event, "vae"):
+            audio_pending = None
+            if self.audio_beside_video and self.trace_audio:
+                audio_pending = self._decode_audio(
+                    self._prepare_audio_decoder(),
+                    audio_rows,
+                    num_audio_latents,
+                    layout.num_condition_audio_rows,
+                    deferred=True,
+                )
             video = self._decode_video(
                 self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
             )
 
         with self._track_cache_misses(on_event, "audio"):
-            audio = self._decode_audio(
-                self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
-            )
+            if audio_pending is not None:
+                audio = audio_pending()
+            else:
+                audio = self._decode_audio(
+                    self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
+                )
         dram_probe.report("end of request (after audio decode)")
 
         self._log(f"program cache misses: {self.last_program_cache_misses}")
@@ -2345,7 +2460,8 @@ class MiniMaxH3Pipeline:
         self, prompt: str, fitted: Mapping[int, dict], overrides: Mapping[int, dict], trace_audio: bool
     ) -> None:
         """Capture every trace a served request replays, after all programs are compiled."""
-        self._capture_denoise(prompt, fitted, overrides)
+        if not self.lazy_trace_denoise:
+            self._capture_denoise(prompt, fitted, overrides)
         self._capture_audio(trace_audio)
 
     def _capture_denoise(self, prompt: str, fitted: Mapping[int, dict], overrides: Mapping[int, dict]) -> None:
@@ -2784,22 +2900,43 @@ class MiniMaxH3Pipeline:
         if self.trace_denoise and not state.warm:
             self.release_traces()
 
+        video_cap, tt_video, tt_video_out_idx = self._video_streams(rung, caps)
+
+        layout_key = None
+        if self.layout_cache and traced and num_cond == 0 and num_cond_audio == 0:
+            layout_key = (
+                rung,
+                video_cap,
+                self.task,
+                repr(caps),
+                tuple(slot_roles),
+                tuple(condition_spec or ()),
+                l_len,
+                a_target,
+                v_target,
+                self._layout_digest(layout),
+            )
+        reuse_layout = layout_key is not None and layout_key == self._last_layout_key
+        self._last_layout_key = None
+
         t_rope = time.time()
-        rope_cos, rope_sin = self._device_metadata(layout, rung)
-        state.rope_cos.update(rope_cos, traced=traced)
-        state.rope_sin.update(rope_sin, traced=traced)
+        if not reuse_layout:
+            rope_cos, rope_sin = self._device_metadata(layout, rung)
+            state.rope_cos.update(rope_cos, traced=traced)
+            state.rope_sin.update(rope_sin, traced=traced)
         t_rope = time.time() - t_rope
 
         prompt_device = ttnn.reshape(prompt_embeds, (1, 1, prompt_embeds.shape[1], prompt_embeds.shape[2]))
 
-        self._tt_cond_video.update(
-            self._pad_host_rows(video_rows[:num_cond], caps.condition_video_rows).reshape(
-                1, 1, caps.condition_video_rows, -1
-            ),
-            traced=traced,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-        )
+        if not reuse_layout:
+            self._tt_cond_video.update(
+                self._pad_host_rows(video_rows[:num_cond], caps.condition_video_rows).reshape(
+                    1, 1, caps.condition_video_rows, -1
+                ),
+                traced=traced,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+            )
         if self.task == "ref2va":
             self._tt_cond_audio.update(
                 self._pad_host_rows(audio_rows[:num_cond_audio], caps.condition_audio_rows).reshape(
@@ -2810,12 +2947,59 @@ class MiniMaxH3Pipeline:
                 device=self.mesh_device,
             )
 
+        def upload_request_state() -> dict:
+            if reuse_layout:
+                upload_latents()
+                return dict(self._last_tilerow_kwargs)
+            row_adaln = adaln_indices(layout.token_tags, row_slot)
+            state.adaln.update(self._row_indices(row_adaln, rung, gather=True), traced=traced)
+            tilerow_kwargs = {}
+            padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
+            try:
+                tile_map, expanded = tilerow_remap(
+                    padded_adaln,
+                    num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                    sp_factor=self.sp_factor,
+                    max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+                )
+            except ValueError as err:
+                self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
+                tile_map = None
+            if tile_map is not None:
+                state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+                state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0], gather=True), traced=traced)
+                tilerow_kwargs = {
+                    "adaln_tile_map": state.adaln_tile_map.value,
+                    "adaln_expanded_indices": state.adaln_expanded.value,
+                }
+            state.tsi.update(self._row_indices(row_slot, rung, gather=True), traced=traced)
+            state.assembly_idx.update(
+                self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
+            )
+            self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
+            audio_start = l_len + num_cond + num_cond_audio
+            video_start = audio_start + a_target
+            tt_video_out_idx.update(self._output_indices(video_start, v_target, video_cap), traced=traced)
+            self._tt_audio_out_idx.update(self._output_indices(audio_start, a_target, caps.audio_rows), traced=traced)
+
+            upload_latents()
+            self._last_tilerow_kwargs = dict(tilerow_kwargs)
+            return tilerow_kwargs
+
+        def upload_latents() -> None:
+            self._upload_stream(tt_video, video_rows[num_cond:], video_cap, traced)
+            self._upload_stream(self._tt_audio, audio_rows[num_cond_audio:], caps.audio_rows, traced)
+
         # The refiner / projection pass runs its collectives outside the step loop's transient scope below;
         # on untraced non-persistent presets its cap-sized all-gather pairs would stay cached for the life of
         # the process and starve the VAE decoder. Free them here; traced presets keep what a capture replays.
         static_transient = (
             self.ccl_manager.transient_ping_pong_buffers()
-            if not (self.use_persistent_ccl_buffers or self.trace_denoise)
+            if not (
+                self.use_persistent_ccl_buffers
+                or self.refiner_persistent
+                or (self.trace_denoise and not self.lazy_trace_denoise)
+            )
             else nullcontext()
         )
         with static_transient:
@@ -2832,58 +3016,17 @@ class MiniMaxH3Pipeline:
                 if "Out of Memory" in str(err):
                     dram_probe.report(f"after OOM in prepare_static_sources, rung {rung}")
                 raise
+            if self.preamble_overlap:
+                tilerow_kwargs = upload_request_state()
             ttnn.synchronize_device(self.mesh_device)
         # The refiner has consumed the prompt (its rows now live in the source table); nothing reads
         # `prompt_embeds` after this point, but as a caller's local it would stay pinned in the middle of
         # the heap through the whole denoise and decode, where the DiT's pairs and activations need to fit.
         ttnn.deallocate(prompt_device)
         dram_probe.report(f"after prepare_static_sources, rung {rung}")
-
-        row_adaln = adaln_indices(layout.token_tags, row_slot)
-        state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
-        # The norms read their modulation through a per-tile-row map built once per request; a request with more
-        # run-boundary tiles than the map has slots falls back to the per-token one-hot gather.
-        tilerow_kwargs = {}
-        padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
-        try:
-            tile_map, expanded = tilerow_remap(
-                padded_adaln,
-                num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
-                sp_factor=self.sp_factor,
-                max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
-            )
-        except ValueError as err:
-            self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
-            tile_map = None
-        if tile_map is not None:
-            state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
-            state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
-            tilerow_kwargs = {
-                "adaln_tile_map": state.adaln_tile_map.value,
-                "adaln_expanded_indices": state.adaln_expanded.value,
-            }
-        state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
-        state.assembly_idx.update(
-            self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
-        )
-        self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
-        audio_start = l_len + num_cond + num_cond_audio
-        video_start = audio_start + a_target
-        self._tt_video_out_idx.update(self._output_indices(video_start, v_target, caps.video_rows), traced=traced)
-        self._tt_audio_out_idx.update(self._output_indices(audio_start, a_target, caps.audio_rows), traced=traced)
-
-        self._tt_video.update(
-            self._pad_host_rows(video_rows[num_cond:], caps.video_rows).reshape(1, 1, caps.video_rows, -1),
-            traced=traced,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-        )
-        self._tt_audio.update(
-            self._pad_host_rows(audio_rows[num_cond_audio:], caps.audio_rows).reshape(1, 1, caps.audio_rows, -1),
-            traced=traced,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-        )
+        if not self.preamble_overlap:
+            tilerow_kwargs = upload_request_state()
+        self._last_layout_key = layout_key
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
@@ -2915,14 +3058,64 @@ class MiniMaxH3Pipeline:
                     endpoint.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
                 )
 
-        upload_levels(step_levels(0))
+        def modulation_key(levels: tuple[torch.Tensor, torch.Tensor | None]) -> tuple:
+            return tuple(None if t is None else tuple(t.to(torch.float32).flatten().tolist()) for t in levels)
+
+        keyed = not self.trace_denoise or self.lazy_trace_denoise
+        modulation_keys = [modulation_key(step_levels(i)) if keyed else None for i in range(len(timesteps))]
+
+        stacks: dict = {}
+        if self.levels_once and len(timesteps) <= _LEVELS_ONCE_MAX_STEPS:
+            all_levels = [step_levels(i) for i in range(len(timesteps))]
+            rows_by_name = {"timestep": [levels[0] for levels in all_levels]}
+            if all_levels[0][1] is not None:
+                rows_by_name["endpoint"] = [levels[1] for levels in all_levels]
+            for name, rows in rows_by_name.items():
+                key = (name, rows[0].numel())
+                if key not in self._levels_all and trace_capture_count() == 0:
+                    self._levels_all[key] = StateTensor()
+                if key not in self._levels_all:
+                    stacks = {}
+                    break
+                stacks[name] = (self._levels_all[key], rows)
+            for name, (buffer, rows) in stacks.items():
+                slots = rows[0].numel()
+                host = torch.zeros(_LEVELS_ONCE_MAX_STEPS, 1, slots, 1, dtype=rows[0].dtype)
+                for i, row in enumerate(rows):
+                    host[i, 0, :, 0] = row.reshape(-1)
+                buffer.update(host, traced=buffer.value is not None, dtype=ttnn.float32, device=self.mesh_device)
+                stacks[name] = (buffer, slots)
+                key = (name, slots)
+                if key not in self._levels_warmed:
+                    self._levels_warmed.add(key)
+                    for i in range(min(self._levels_warm_steps, _LEVELS_ONCE_MAX_STEPS)):
+                        ttnn.deallocate(ttnn.slice(buffer.value, [i, 0, 0, 0], [i + 1, 1, slots, 1]))
+        levels_on_device = bool(stacks)
+        if levels_on_device:
+
+            def upload_levels_for(i: int) -> None:
+                for name, target in (("timestep", self._tt_timestep), ("endpoint", self._tt_endpoint_timestep)):
+                    if name not in stacks:
+                        continue
+                    buffer, slots = stacks[name]
+                    target.update(ttnn.slice(buffer.value, [i, 0, 0, 0], [i + 1, 1, slots, 1]), traced=traced)
+
+        else:
+
+            def upload_levels_for(i: int) -> None:
+                upload_levels(step_levels(i))
+
+        if self.lazy_trace_denoise:
+            transformer.note_request()
+        upload_levels_for(0)
         if _is_host_rank():
             _tqdm_spacer()
         # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
         # end of the scope lands the last step's CCL traffic before the pairs are freed.
+        keep_pairs = self.trace_denoise and not (self.lazy_trace_denoise and self._warming)
         transient = (
             self.ccl_manager.transient_ping_pong_buffers()
-            if not (self.use_persistent_ccl_buffers or self.trace_denoise)
+            if not (self.use_persistent_ccl_buffers or keep_pairs)
             else nullcontext()
         )
         with transient:
@@ -2938,10 +3131,10 @@ class MiniMaxH3Pipeline:
                 t_step = time.time()
                 try:
                     video_velocity, audio_velocity = transformer(
-                        video_1BVC=self._tt_video.value,
+                        video_1BVC=tt_video.value,
                         audio_1BAC=self._tt_audio.value,
                         assembly_indices=state.assembly_idx.value,
-                        video_out_indices=self._tt_video_out_idx.value,
+                        video_out_indices=tt_video_out_idx.value,
                         audio_out_indices=self._tt_audio_out_idx.value,
                         timestep=self._tt_timestep.value,
                         adaln_indices=state.adaln.value,
@@ -2953,6 +3146,7 @@ class MiniMaxH3Pipeline:
                         traced=traced,
                         **tilerow_kwargs,
                         **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
+                        modulation_key=modulation_keys[i],
                     )
                 except RuntimeError as err:
                     if "Out of Memory" in str(err):
@@ -2961,11 +3155,11 @@ class MiniMaxH3Pipeline:
                     raise
 
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
-                ttnn.add_(self._tt_video.value, video_velocity)
+                ttnn.add_(tt_video.value, video_velocity)
                 ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_audio.value, audio_velocity)
                 if i + 1 < len(timesteps):
-                    upload_levels(step_levels(i + 1))
+                    upload_levels_for(i + 1)
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
@@ -2990,12 +3184,12 @@ class MiniMaxH3Pipeline:
         if ttnn.using_distributed_env():
             ttnn.distributed_context_barrier()
         video_rows[num_cond:] = (
-            local_device_to_torch(self._tt_video.value)
+            self._read_leading_rows(tt_video.value, v_target)
             .reshape(-1, video_rows.shape[-1])[:v_target]
             .to(video_rows.dtype)
         )
         audio_rows[num_cond_audio:] = (
-            local_device_to_torch(self._tt_audio.value)
+            self._read_leading_rows(self._tt_audio.value, a_target)
             .reshape(-1, audio_rows.shape[-1])[:a_target]
             .to(audio_rows.dtype)
         )
@@ -3088,8 +3282,11 @@ class MiniMaxH3Pipeline:
         rows: torch.Tensor,
         num_audio_latents: int,
         num_condition_audio_rows: int = 0,
-    ) -> torch.Tensor:
+        *,
+        deferred: bool = False,
+    ):
         """Decode the *target* audio rows. `ref2va`'s leading reference rows are dropped, not decoded.
+        `deferred`: enqueue the decode and return a callable that reads the waveform back (same ops, split in time).
 
         The drop is not optional bookkeeping: `unpack_audio_tokens` reshapes to
         `(2, num_audio_latents, C)` and would silently mis-split a longer tensor, folding half a
@@ -3102,6 +3299,9 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
+        if deferred:
+            read = audio_decoder.forward_deferred(latents, traced=self.trace_audio)
+            return lambda: read().float().permute(1, 0, 2)
         with self._audio_ccl_transient():
             waveform = audio_decoder(latents, traced=self.trace_audio)
         # The audio VAE is mono and took the two stereo channels as two batch items.

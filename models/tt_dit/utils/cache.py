@@ -53,6 +53,7 @@ def load_model(
     is_fsdp: bool = False,
     get_torch_state_dict: Callable[[], dict] | None = None,
     create_cache: bool = True,
+    reload_after_create: bool = False,
 ) -> None:
     """
     Load model weights from cache or PyTorch state dict.
@@ -74,6 +75,12 @@ def load_model(
             evaluation - PyTorch model only loads if the cache does not exist. If `None`, cache
             must exist or `MissingCacheError` is raised.
         `create_cache`: Create cache after loading from PyTorch (default: True).
+        `reload_after_create`: After creating the cache, free the converted weights and load them back
+            from it (default: False). The bytes are the same either way (the dump verifies replicas and
+            `TT_DIT_CACHE_VERIFY=1` compares every shard), but the device allocation layout is not:
+            the conversion tilizes bf16 weights on device, and each freed row-major staging buffer
+            leaves a hole between the weights, which later allocations fill. With this set, the
+            building process ends with exactly the layout of a process that loads the cache.
 
     Raises:
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
@@ -134,6 +141,12 @@ def load_model(
             logger.error(f"cache at '{cache_dir}' did not verify; leaving it unmarked so it is rebuilt next time.")
             return
         _mark_cache_complete(cache_dir)
+        if reload_after_create:
+            logger.info(f"reloading the weights from the new cache at '{cache_dir}' (build layout == load layout).")
+            tt_model.deallocate_weights()
+            with walltime.timed("weight_load", f"{model_name}/{subfolder}/reload", cached=True):
+                tt_model.load(cache_dir)
+            ttnn.distributed_context_barrier()
 
 
 def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "") -> bool:

@@ -1,0 +1,174 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <type_traits>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+#include "dataflow_common.hpp"
+#include "chunked_prefill_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
+#include "ring_joint_kv_pad_derivation.hpp"
+#include "fused_op_receiver.hpp"
+#include "ring_utils.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
+inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint32_t Sq_chunk_t, uint32_t DHt) {
+    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+    return Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+}
+
+void kernel_main() {
+    constexpr uint32_t B = get_compile_time_arg_val(0);
+    constexpr uint32_t NH = get_compile_time_arg_val(1);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(3);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(6);
+    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(7);
+    constexpr uint32_t L = get_compile_time_arg_val(10);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(16);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(18);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
+    constexpr bool q_perm_table = get_compile_time_arg_val(24) == 2;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(25);
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(27);
+    constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
+    static_assert(kv_stripe_split == 1, "the sparse op does not split KV");
+    static_assert(L == 0, "the sparse op has no joint tokens");
+    static_assert(use_streaming_compute, "the sparse op runs the streaming compute");
+    constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
+    static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
+    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(32) == 1;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(33));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(34);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(35);
+
+    constexpr uint32_t kFirstAccessorArgOffset = 38;
+    constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
+    constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
+
+    static_assert(get_ct_arg<kernel_compile_time_args.size() - 1>() == 0, "no rotated Q split");
+    static_assert(GROUPED_KV_SOURCE_COUNT == 1, "no grouped K/V sources");
+
+    uint32_t argidx = 0;
+    const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    argidx++;
+    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(false, argidx);
+
+    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
+
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+
+    Noc noc;
+
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    constexpr bool output_has_no_padding = q_local_padded_Nt % Sq_chunk_t == 0;
+    using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
+    using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
+    const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
+    const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
+
+    {
+        Noc noc_zero;
+        fill_tile_zeros<get_tile_size(cb_col_identity)>(noc_zero, cb_col_identity, 0);
+    }
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+    {
+        constexpr uint32_t cb_sum_identity = get_named_compile_time_arg_val("cb_sum_identity");
+        Noc noc_zero;
+        fill_tile_zeros<get_tile_size(cb_sum_identity)>(noc_zero, cb_sum_identity, 0);
+        CircularBuffer cb(cb_sum_identity);
+        cb.reserve_back(1);
+        volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr());
+        const uint16_t one = identity_scalar_packed >> 16;
+        for (uint32_t r = 0; r < 16; ++r) {
+            p[r * 16 + r] = one;
+            p[3 * 256 + r * 16 + r] = one;
+        }
+        cb.push_back(1);
+    }
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+
+    auto arrival_preview = fused_op_receiver.seq;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
+        GROUPED_KV_SOURCE_COUNT,
+        ring_size,
+        kv_local_padded_Nt,
+        logical_nt,
+        active_ring_iter_mask,
+        kv_region_Nt,
+        Sk_chunk_t,
+        false,
+        [&] {
+            return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+        });
+    const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+    constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
+    if constexpr (get_named_compile_time_arg_val("dyn_mode") == 2) {
+        constexpr uint32_t cb_block_counts = get_named_compile_time_arg_val("cb_block_counts");
+        constexpr uint32_t dyn_range_offset = get_named_compile_time_arg_val("dyn_range_offset");
+        CircularBuffer cb_counts(cb_block_counts);
+        cb_counts.wait_front(1);
+        invalidate_l1_cache();
+        CoreLocalMem<volatile uint32_t> range(cb_counts.get_read_ptr() + dyn_range_offset);
+        global_q_start = range[0];
+        global_q_end = range[1];
+    }
+    const uint32_t q_per_core = global_q_end - global_q_start;
+    const RingSDPAOpReceiver receiver_start = fused_op_receiver;
+    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
+        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
+        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
+        RingSDPAOpReceiver pass_receiver = receiver_start;
+        for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+            const uint32_t ring_id =
+                ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    pass_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            if (((active_ring_iter_mask >> ring_iter) & 1u) == 0 ||
+                !is_last_active_ring_iter(active_ring_iter_mask, ring_iter)) {
+                continue;
+            }
+            const uint32_t end_seq_tile = q_local_padded_Nt * (ring_id + 1);
+            for (uint32_t q_flat = pass_q_start; q_flat < pass_q_end; ++q_flat) {
+                const auto decoded_q = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
+                uint32_t q_chunk = decoded_q.q_chunk;
+                if constexpr (q_perm_table) {
+                    const uint32_t w = get_common_arg_val<uint32_t>(q_chunk >> 1);
+                    q_chunk = (q_chunk & 1u) ? (w >> 16) : (w & 0xFFFFu);
+                }
+                write_block_row_grouped_trid<output_has_no_padding>(
+                    noc,
+                    out_generator,
+                    q_chunk_out_slice(q_chunk, decoded_q.nb, decoded_q.nq, Sq_chunk_t, vDHt),
+                    end_seq_tile,
+                    cb_out,
+                    tile_bytes,
+                    out_subblock_h,
+                    0);
+            }
+            noc.async_write_barrier();
+        }
+    }
+}

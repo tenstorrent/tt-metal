@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -17,7 +18,9 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.tensor import from_torch, pad_single
-from ....utils.tracing import StateTensor, traced_function
+from ....utils.tracing import StateTensor, trace_capture_count, traced_function
+from .modulation_cache import ModulationTableCache
+from .sol_prepass_fused import SolPrepassFused
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock
 
@@ -120,12 +123,8 @@ class MiniMaxH3AdaLayerNormOut(Module):
             else:
                 state[f"linear.{key}"] = reorder(value)
 
-    def forward(
-        self,
-        hidden: ttnn.Tensor,
-        temb: ttnn.Tensor,
-        timestep_indices: ttnn.Tensor,
-    ) -> ttnn.Tensor:
+    def modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
+        """The (shift, scale) tables, [num_timesteps, hidden_local] each: a function of `temb` only."""
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
@@ -138,6 +137,18 @@ class MiniMaxH3AdaLayerNormOut(Module):
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
             tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
+        return tables
+
+    def forward(
+        self,
+        hidden: ttnn.Tensor,
+        temb: ttnn.Tensor,
+        timestep_indices: ttnn.Tensor,
+        tables: list[ttnn.Tensor] | None = None,
+    ) -> ttnn.Tensor:
+        """`tables`: `modulation_tables(temb)` when the caller already has them (read only)."""
+        if tables is None:
+            tables = self.modulation_tables(temb)
 
         def gather(table: ttnn.Tensor) -> ttnn.Tensor:
             return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
@@ -219,6 +230,9 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
+        self.lazy_trace = False
+        self._request_index = 0
+        self._trace_first_seen: dict[tuple, int] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
         # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
         # by concat every step: a fragmented heap cannot supply a table-sized block each step. Allocated on
@@ -313,6 +327,16 @@ class MiniMaxH3Transformer3DModel(Module):
                 for _ in range(num_layers)
             ]
         )
+        self._per_forward_once = os.environ.get("MINIMAX_H3_PER_FORWARD_ONCE", "0") == "1"
+        self._modulation_cache_extras = self._per_forward_once
+        self._modulation_slot_traces = os.environ.get("MINIMAX_H3_O2_SLOT_TRACES", "0") == "1"
+        self._modulation_cache = ModulationTableCache(
+            capacity=int(os.environ.get("MINIMAX_H3_MODULATION_CACHE", "0")),
+            num_blocks=num_layers + (2 if self._modulation_cache_extras else 0),
+            mesh_device=mesh_device,
+            trace_captured=lambda: trace_capture_count() > 0,
+        )
+        self._modulation_staging: dict[tuple, list[list[ttnn.Tensor]]] = {}
 
         # 5. Shared output norm and the two per-modality heads. The heads are replicated: their output
         # widths (96 and 32) are too narrow to fracture across TP at tile granularity.
@@ -421,6 +445,7 @@ class MiniMaxH3Transformer3DModel(Module):
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        modulation_key: tuple | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -441,6 +466,10 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
+        modulation_key: hashable host-side form of the values in `timestep` (and `endpoint_timestep`), e.g. the
+            levels' float32 values. With a key, the blocks' modulation tables come from an earlier forward with the same
+            key (bit-identical, see modulation_cache.py). None computes them. Ignored by a build-time trace (`traced`
+            without `lazy_trace`); under the lazy trace the cached tables are fed to the replay as inputs.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -493,45 +522,102 @@ class MiniMaxH3Transformer3DModel(Module):
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        temb = self.time_embedder(self.time_proj(timestep))
-        if self.two_time is not None:
-            if endpoint_timestep is None:
-                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
-            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
-            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
-        self._temb_state.update(temb, traced=traced)
-        temb = self._temb_state.value
+        plan = None if (traced and not self.lazy_trace) else self._modulation_cache.plan(modulation_key)
+        extras = plan if (plan is not None and self._modulation_cache_extras) else None
+        num_layers = len(self.transformer_blocks)
+        try:
 
-        adaln_idx = as_indices(adaln_indices)
-        ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
-        ts_state.update(as_indices(timestep_indices), traced=traced)
-        timestep_idx = ts_state.value
+            def compute_temb() -> ttnn.Tensor:
+                temb = self.time_embedder(self.time_proj(timestep))
+                if self.two_time is not None:
+                    if endpoint_timestep is None:
+                        raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+                    endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+                    temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+                return temb
 
-        # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
-        # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
-        rows = temb.shape[2] * MODALITY_NUM
-        eye_state = self._eye_states.setdefault(rows, StateTensor())
-        eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+            temb = compute_temb() if extras is None else extras.tables(num_layers, lambda: [compute_temb()])[0]
+            self._temb_state.update(temb, traced=traced)
+            temb = self._temb_state.value
 
-        hidden = self.run_blocks(
-            hidden,
-            logical_n,
-            temb,
-            adaln_idx,
-            rope_cos,
-            rope_sin,
-            eye=eye_state.value,
-            adaln_tile_map=adaln_tile_map,
-            adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
-            traced=traced,
-            tracer_trace_key=(pad_to, adaln_tile_map is not None),
-        )
+            adaln_idx = as_indices(adaln_indices)
+            ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
+            ts_state.update(as_indices(timestep_indices), traced=traced)
+            timestep_idx = ts_state.value
 
-        hidden = self.norm_out(
-            hidden,
-            temb,
-            timestep_idx,
-        )
+            rows = temb.shape[2] * MODALITY_NUM
+            eye_state = self._eye_states.setdefault(rows, StateTensor())
+            eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+
+            trace_key = (pad_to, adaln_tile_map is not None)
+            run_traced, tracer_kwargs, phase = traced, {}, None
+            if traced and self.lazy_trace:
+                trace_key = (*trace_key, self._sol_graph_key(), plan is not None)
+                first = self._trace_first_seen.setdefault(trace_key, self._request_index)
+                run_traced = first < self._request_index
+                slot_traces = run_traced and self._modulation_slot_traces and plan is not None and plan.slot is not None
+                if slot_traces:
+                    trace_key = (*trace_key, "slot", plan.slot)
+                if run_traced:
+                    for block in self.transformer_blocks:
+                        if block.attn.sol_attn and block.attn.sol_active:
+                            block.attn.sol_prepare(local_rows)
+                    tracer_kwargs = {"tracer_blocking_execution": False}
+                    tracer = type(self).run_blocks._tracers_keyed.get(self, {}).get(trace_key)
+                    phase = "replay" if tracer is not None and tracer.trace_captured else "capture"
+                else:
+                    phase = "eager"
+            expanded_idx = as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None
+            if phase == "eager":
+                self._prewarm_input_copies(
+                    (
+                        hidden,
+                        logical_n,
+                        temb,
+                        adaln_idx,
+                        rope_cos,
+                        rope_sin,
+                        eye_state.value,
+                        adaln_tile_map,
+                        expanded_idx,
+                    )
+                )
+            table_kwargs = {}
+            if plan is not None and run_traced:
+                tables = [
+                    plan.tables(index, lambda block=block: block._modulation_tables(temb))
+                    for index, block in enumerate(self.transformer_blocks)
+                ]
+                if slot_traces:
+                    tables = [plan.slot_tables(index) for index in range(len(self.transformer_blocks))]
+                elif phase == "capture":
+                    tables = self._modulation_staging_for(trace_key, tables)
+                table_kwargs = {"modulation_tables": tables}
+            elif plan is not None:
+                table_kwargs = {"modulation_plan": plan}
+            hidden = self.run_blocks(
+                hidden,
+                logical_n,
+                temb,
+                adaln_idx,
+                rope_cos,
+                rope_sin,
+                eye=eye_state.value,
+                adaln_tile_map=adaln_tile_map,
+                adaln_expanded_indices=expanded_idx,
+                traced=run_traced,
+                tracer_trace_key=trace_key,
+                **tracer_kwargs,
+                **table_kwargs,
+            )
+
+            out_tables = (
+                None if extras is None else extras.tables(num_layers + 1, lambda: self.norm_out.modulation_tables(temb))
+            )
+            hidden = self.norm_out(hidden, temb, timestep_idx, tables=out_tables)
+        finally:
+            if plan is not None:
+                plan.finish()
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
 
@@ -563,10 +649,20 @@ class MiniMaxH3Transformer3DModel(Module):
         eye: ttnn.Tensor | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        modulation_plan=None,
+        modulation_tables: list[list[ttnn.Tensor]] | None = None,
     ) -> ttnn.Tensor:
-        onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
+        """Each block's modulation tables come from `modulation_tables` (traced: trace inputs), from `modulation_plan`
+        (untraced: the cross-request cache), or are computed by the block (neither)."""
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-        for block in self.transformer_blocks:
+        onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
+        for index, block in enumerate(self.transformer_blocks):
+            if modulation_tables is not None:
+                tables = modulation_tables[index]
+            elif modulation_plan is not None:
+                tables = modulation_plan.tables(index, lambda block=block: block._modulation_tables(temb))
+            else:
+                tables = None
             hidden = block(
                 hidden,
                 logical_n,
@@ -576,11 +672,76 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_sin=rope_sin,
                 onehot=onehot,
                 tilerow=tilerow,
+                modulation_tables=tables,
             )
+            del tables
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
+
+    def enable_lazy_trace(self) -> None:
+        """Trace `run_blocks` lazily (see `lazy_trace`); Sol pre-pass state survives requests, refreshed in place."""
+        self.lazy_trace = True
+        SolPrepassFused.keep_across_generations = True
+
+    def _modulation_staging_for(self, trace_key: tuple, tables: list[list[ttnn.Tensor]]) -> list[list[ttnn.Tensor]]:
+        """The trace input buffers for the tables of `trace_key`'s capture: allocated now (before the capture), filled
+        with this forward's tables. The fill is the same `ttnn.copy` a replay uses, so it also compiles that program."""
+        staging = []
+        for block_tables in tables:
+            row = []
+            for table in block_tables:
+                buffer = ttnn.allocate_tensor_on_device(table.spec, self.mesh_device)
+                ttnn.copy(table, buffer)
+                row.append(buffer)
+            staging.append(row)
+        self._modulation_staging[trace_key] = staging
+        return staging
+
+    def clear_modulation_cache(self) -> None:
+        """Forget the cached modulation tables; call after changing `adaln_proj` or the norm weights in place."""
+        self._modulation_cache.clear()
+
+    def _prewarm_input_copies(self, inputs: tuple) -> None:
+        """Run `ttnn.copy` once on each device input of `run_blocks` into a scratch buffer of the same spec, which
+        compiles exactly the copy program a replay uses to refresh that input (row-major index copies included)."""
+        for tensor in inputs:
+            if not isinstance(tensor, ttnn.Tensor) or tensor.device() is None:
+                continue
+            scratch = ttnn.allocate_tensor_on_device(tensor.spec, self.mesh_device)
+            ttnn.copy(tensor, scratch)
+            ttnn.deallocate(scratch)
+
+    def note_request(self) -> None:
+        """Mark a request boundary (the pipeline calls this once per denoise) for the lazy trace."""
+        self._request_index += 1
+
+    def _sol_graph_key(self) -> tuple:
+        """Everything host-side that changes the ops `run_blocks` issues: per block, dense or the Sol configuration.
+        `sol_logical_n` is part of it because the route program bakes 1/n_valid_blocks as a compile-time argument."""
+        key = []
+        for block in self.transformer_blocks:
+            attn = block.attn
+            if attn.sol_attn and attn.sol_active:
+                key.append(
+                    (
+                        attn.sol_mode,
+                        attn.sol_tau,
+                        attn.sol_thresh_type,
+                        attn.sol_band,
+                        attn.sol_prefix_mode,
+                        attn.sol_fused,
+                        attn.sol_mask_reuse,
+                        attn.sol_logical_n,
+                        repr(attn.sol_sink_tokens),
+                        attn._SOL_RESIDENT_PASSES,
+                        attn._SOL_RESIDENT_K_CHUNK,
+                    )
+                )
+            else:
+                key.append(None)
+        return tuple(key)
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""

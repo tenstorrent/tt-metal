@@ -101,4 +101,12 @@ struct DramBankInfo {
  */
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
 
+struct DramBankNocXyTable {
+    std::uint32_t num_nocs = 0;
+    std::uint32_t num_banks = 0;
+    std::vector<std::uint32_t> packed_xy;
+};
+
+DramBankNocXyTable get_dram_bank_to_noc_xy_table(std::uint32_t device_id);
+
 }  // namespace tt::tt_metal::internal

@@ -4,7 +4,9 @@
 
 import collections
 import hashlib
+import json
 import math
+import os
 from itertools import repeat
 from typing import NamedTuple
 
@@ -624,6 +626,22 @@ _HALO_LAST_KEYS = {
     (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15),  # ltx_s1_up (4x8)
 }
 
+_OUTPUT_BLOCKING_OVERRIDES: dict | None = None
+
+
+def _output_blocking_override(in_channels, out_channels, kernel_size):
+    global _OUTPUT_BLOCKING_OVERRIDES
+    if _OUTPUT_BLOCKING_OVERRIDES is None:
+        path = os.environ.get("TT_DIT_CONV3D_OUTPUT_BLOCKINGS")
+        table = {}
+        if path:
+            with open(path) as handle:
+                for key, value in json.load(handle).items():
+                    c_in, c_out, *kernel = (int(v) for v in key.split(","))
+                    table[(c_in, c_out, tuple(kernel))] = tuple(int(v) for v in value)
+        _OUTPUT_BLOCKING_OVERRIDES = table
+    return _OUTPUT_BLOCKING_OVERRIDES.get((in_channels, out_channels, _ntuple(kernel_size, 3)))
+
 
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
@@ -672,6 +690,14 @@ def get_conv3d_config(
                 f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
+
+    override = _output_blocking_override(in_channels, out_channels, kernel_size)
+    if override is not None:
+        C_out_block, T_out_block, H_out_block, W_out_block = override
+        logger.info(
+            f"conv3d blocking [output override] {channel_key} -> Cin={C_in_block} (kept) Cout={C_out_block} "
+            f"T={T_out_block} H={H_out_block} W={W_out_block}"
+        )
 
     return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,

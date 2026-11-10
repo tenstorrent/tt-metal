@@ -47,6 +47,7 @@ struct RingJointSDPAParams {
     bool circular_kv_cache = false;
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
+    std::string sol_mode = "auto";
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -133,7 +134,8 @@ struct RingJointSDPAParams {
         "circular_kv_cache",
         "kv_stripe_split",
         "all_gather_operation_attributes",
-        "all_gather_tensor_args");
+        "all_gather_tensor_args",
+        "sol_mode");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(joint_strategy),
@@ -155,7 +157,8 @@ struct RingJointSDPAParams {
             std::cref(circular_kv_cache),
             std::cref(kv_stripe_split),
             std::cref(all_gather_operation_attributes),
-            std::cref(all_gather_tensor_args));
+            std::cref(all_gather_tensor_args),
+            std::cref(sol_mode));
     }
 };
 
@@ -188,6 +191,31 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> logical_n_tensor;
     std::optional<Tensor> logical_l_tensor;
 
+    std::optional<Tensor> sol_block_mask;
+    std::optional<Tensor> sol_pooled_k;
+    std::optional<Tensor> sol_pooled_v;
+    std::optional<Tensor> sol_bias;
+    std::optional<Tensor> sol_row_max;
+
+    bool sol_enabled() const { return sol_block_mask.has_value(); }
+    bool sol_bias_generated() const { return sol_enabled() && !sol_bias.has_value(); }
+    bool sol_static_max() const { return sol_enabled() && sol_row_max.has_value(); }
+    bool sol_mask_is_chunk_width() const {
+        return sol_enabled() && sol_block_mask->logical_shape()[3] != sol_pooled_k->logical_shape()[2];
+    }
+    bool sol_resident_mode(const std::string& mode) const { return sol_enabled() && mode == "resident"; }
+    bool sol_chunk_mode(const std::string& mode) const {
+        return sol_enabled() &&
+               (mode == "chunk" || sol_resident_mode(mode) || (mode == "auto" && sol_mask_is_chunk_width()));
+    }
+    bool sol_pack_mode(const std::string& mode) const { return sol_enabled() && mode == "pack"; }
+    bool sol_compact_mode(const std::string& mode) const {
+        return sol_enabled() && (mode == "compact" || sol_pack_mode(mode));
+    }
+    bool sol_gather_mode(const std::string& mode) const {
+        return sol_enabled() && !sol_chunk_mode(mode) && !sol_compact_mode(mode);
+    }
+    bool sol_streams_chunks(const std::string& mode) const { return sol_chunk_mode(mode) || sol_compact_mode(mode); }
     // Global real-token count (metadata path only); attention stops at the tile holding the last real token.
     std::optional<Tensor> kv_valid_end;
 

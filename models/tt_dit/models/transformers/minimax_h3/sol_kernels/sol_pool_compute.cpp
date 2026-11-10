@@ -1,0 +1,109 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
+#include "sol_pool_units.hpp"
+
+namespace {
+constexpr uint32_t cb_x = 0, cb_ps = 2, cb_zero = 3, cb_out = 16;
+#ifdef SOL_POOL_V_BFP8
+constexpr uint32_t cb_out_v = 17;
+#endif
+constexpr uint32_t BLOCK = sol_pool::BLOCK;
+constexpr uint32_t ROWS_PER_BATCH = 4;
+inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t H = get_compile_time_arg_val(0);
+    constexpr uint32_t RT = get_compile_time_arg_val(1);
+    constexpr uint32_t DT = get_compile_time_arg_val(2);
+    constexpr uint32_t NBPT = get_compile_time_arg_val(3);
+    static_assert(DT <= 4, "DT output tiles must fit the half-sync fp32 DST (4 tiles)");
+
+    constexpr uint32_t NX = get_compile_time_arg_val(5);
+    constexpr uint32_t NY = get_compile_time_arg_val(6);
+    constexpr uint32_t UNITS = get_compile_time_arg_val(7);
+    constexpr uint32_t NCORES = NX * NY;
+    using Layout = sol_pool::Layout<H, RT, NBPT>;
+    static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
+    const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
+    uint32_t unit_start, unit_count;
+    Layout::range(ci, NCORES, unit_start, unit_count);
+    if (unit_count == 0) {
+        return;
+    }
+    CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbo(cb_out);
+
+#ifdef SOL_POOL_X_BFP8
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_ps, cb_x, cb_out);
+#else
+    compute_kernel_hw_startup(cb_ps, cb_x, cb_out);
+#endif
+    cbz.wait_front(1);
+#ifdef SOL_POOL_V_BFP8
+    uint32_t cur_ocb = cb_out;
+#endif
+
+    for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
+        const sol_pool::Unit un = Layout::decode(u);
+        const uint32_t g = un.g;
+        const uint32_t k_begin = g * BLOCK;
+        const uint32_t k_end = min_u(k_begin + BLOCK, RT);
+
+        tile_regs_acquire();
+        if (k_end <= k_begin) {
+#ifdef SOL_POOL_X_BFP8
+            reconfig_data_format_srca(cb_x, cb_zero);
+#endif
+            copy_init(cb_zero);
+            for (uint32_t n = 0; n < DT; ++n) {
+                copy_tile(cb_zero, 0, n);
+            }
+#ifdef SOL_POOL_X_BFP8
+            reconfig_data_format_srca(cb_zero, cb_x);
+#endif
+        } else {
+            matmul_init(cb_ps, cb_x);
+            for (uint32_t k0 = k_begin; k0 < k_end; k0 += ROWS_PER_BATCH) {
+                const uint32_t nk = min_u(ROWS_PER_BATCH, k_end - k0);
+                cbx.wait_front(ROWS_PER_BATCH * DT);
+                cbps.wait_front(ROWS_PER_BATCH);
+                for (uint32_t kk = 0; kk < nk; ++kk) {
+                    for (uint32_t n = 0; n < DT; ++n) {
+                        matmul_tiles(cb_ps, cb_x, kk, kk * DT + n, n);
+                    }
+                }
+                cbps.pop_front(ROWS_PER_BATCH);
+                cbx.pop_front(ROWS_PER_BATCH * DT);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+#ifdef SOL_POOL_V_BFP8
+        const uint32_t ocb = un.t == 2 ? cb_out_v : cb_out;
+        if (ocb != cur_ocb) {
+            pack_reconfig_data_format(cur_ocb, ocb);
+            cur_ocb = ocb;
+        }
+        CircularBuffer cbw(ocb);
+#else
+        constexpr uint32_t ocb = cb_out;
+        CircularBuffer& cbw = cbo;
+#endif
+        cbw.reserve_back(DT);
+        for (uint32_t n = 0; n < DT; ++n) {
+            pack_tile<true>(n, ocb, n);
+        }
+        cbw.push_back(DT);
+        tile_regs_release();
+    }
+}

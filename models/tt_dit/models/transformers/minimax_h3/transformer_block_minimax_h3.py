@@ -18,6 +18,7 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
+from . import lofi
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, register_mmrs_config
@@ -159,6 +160,9 @@ class MiniMaxH3TransformerBlock(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ff.ff1")
         rename_substate(state, "ff.net.2", "ff.ff2")
+        for name, section in (("ff.ff1.weight", "ff1"), ("ff.ff2.weight", "ff2")):
+            if name in state:
+                state[name] = lofi.round_weight(section, state[name])
 
         # The reference lays the AdaLN projection's output dim out as
         # [modality][param][hidden], and `hidden` is what TP fractures. Reordering the output dim to
@@ -284,6 +288,7 @@ class MiniMaxH3TransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        modulation_tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -294,10 +299,12 @@ class MiniMaxH3TransformerBlock(Module):
 
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
+        modulation_tables: this block's six tables as `_modulation_tables(temb)` returns them, when the caller already
+            has them (the transformer's cross-request cache); read only. None computes them from `temb`.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb)
+        tables = self._modulation_tables(temb) if modulation_tables is None else modulation_tables
 
         if onehot is None:
             onehot = self._onehot(self._gather_indices(adaln_indices), tables[0].shape[0])
@@ -376,7 +383,8 @@ class MiniMaxH3TransformerBlock(Module):
                 normed,
                 residual,
                 modulation(_GATE_MLP),
-                compute_kernel_config=self.mm_compute_kernel_config,
+                compute_kernel_config=lofi.compute_config("ff1", self.mm_compute_kernel_config),
+                ff2_compute_kernel_config=lofi.compute_config("ff2", self.mm_compute_kernel_config),
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 default_block_size=ff1_block_size,
                 force_transpose=False,
@@ -384,7 +392,8 @@ class MiniMaxH3TransformerBlock(Module):
             )
         ff_out = self.ff(
             normed,
-            compute_kernel_config=self.mm_compute_kernel_config,
+            compute_kernel_config=lofi.compute_config("ff1", self.mm_compute_kernel_config),
+            ff2_compute_kernel_config=lofi.compute_config("ff2", self.mm_compute_kernel_config),
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             default_block_size=ff1_block_size,
             force_transpose=False,

@@ -329,7 +329,9 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
     return use_blocked_pack_width;
 }
 
+template <uint32_t kPackDoneMax = 2>
 ALWI void init_sdpa_streaming_semaphores() {
+    static_assert(kPackDoneMax >= 1 && kPackDoneMax <= 15, "SEMINIT's max value is a 4-bit field");
     // reduce_trigger runs the QK row-max reduce as a split MOP gated by a PACK->UNPACK handshake on
     // two T6 tokens (firmware inits neither). FPU_SFPU, posted after pack + mask + push, gates run()#2
     // (and run()#1 on the non-overlap path). UNPACK_MATH_DONE (the first-half token) is borrowed (unused elsewhere
@@ -338,8 +340,7 @@ ALWI void init_sdpa_streaming_semaphores() {
     PACK((t6_semaphore_init(semaphore::FPU_SFPU, 0, 1)));
     PACK((t6_semaphore_init(semaphore::UNPACK_MATH_DONE, 0, 1)));
     // PACK_DONE carries pack->unpack "in-place row committed" tokens. The pipelined in-place V drain
-    // keeps up to two outstanding (column blocks kt and kt+1); every other user posts and takes one.
-    PACK((t6_semaphore_init(semaphore::PACK_DONE, 0, 2)));
+    PACK((t6_semaphore_init(semaphore::PACK_DONE, 0, kPackDoneMax)));
 }
 
 #if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
@@ -1446,7 +1447,9 @@ template <
     // inverting local cache rows (ambiguous once chunk groups alias one local slab).
     bool circular_kv_cache = false,
     // Split-KV grouped sources; off for every other caller, so its branches compile out.
-    bool packed_kv_enabled = false>
+    bool packed_kv_enabled = false,
+    bool use_col_bias = false,
+    uint32_t cb_col_bias = INVALID_CB>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1476,9 +1479,9 @@ static void sdpa_inner_loop_step(
     const uint32_t q_base_tiles = 0,
     // Packed split-KV K chunk: its column layout and mask runs. Contiguous for every other caller.
     [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {},
-    // K/V retention: the next Q chunk on this core uses the same K and V, so leave them at the
-    // front of cb_kt_in / cb_v_in; the reader does not push them again.
-    const bool keep_kv = false) {
+    [[maybe_unused]] const bool apply_col_bias = false,
+    const bool hold_kv = false,
+    const uint8_t* run_cols = nullptr) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1598,7 +1601,7 @@ static void sdpa_inner_loop_step(
                     cb_kt_in,
                     cb_qkt_im,
                     q_index_offset,
-                    kt_index_offset,
+                    run_cols != nullptr ? static_cast<uint32_t>(run_cols[kt_subblock]) : kt_index_offset,
                     q_subblock,
                     kt_subblock * actual_sbw,
                     actual_sbw,
@@ -1682,6 +1685,17 @@ static void sdpa_inner_loop_step(
                 end_mask_l1_accumulate();
             }
         }
+        if constexpr (use_col_bias) {
+            if (apply_col_bias) {
+                CircularBuffer(cb_col_bias).wait_front(Sk_chunk_t);
+                begin_mask_l1_accumulate<false>(cb_qkt_im, cb_col_bias);
+                for (uint32_t row = 0; row < qkt_subblock_h; ++row) {
+                    l1_acc_tile_run(
+                        cb_col_bias, 0, cb_qkt_im, (q_subblock * qkt_subblock_h + row) * KT_stride, active_Sk);
+                }
+                end_mask_l1_accumulate();
+            }
+        }
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
         cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
@@ -1723,8 +1737,13 @@ static void sdpa_inner_loop_step(
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
     // softmax@V matmul (handled where the materialized-V pop would normally fire).
     if constexpr (!kt_inplace_v) {
-        if (!keep_kv) {
+        if (!hold_kv) {
             CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        }
+    }
+    if constexpr (use_col_bias) {
+        if (apply_col_bias) {
+            CircularBuffer(cb_col_bias).pop_front(Sk_chunk_t);
         }
     }
 
@@ -1825,8 +1844,10 @@ static void sdpa_inner_loop_step(
                             UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                             UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                         }
+                        const uint32_t v_row0 =
+                            run_cols != nullptr ? static_cast<uint32_t>(run_cols[kt_sub]) : kt_sub * matmul_inner;
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
+                            const uint32_t qktv_in1_index = v_row0 * vDHt + v_index_offset;
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -2007,27 +2028,50 @@ static void sdpa_inner_loop_step(
                 sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
-                for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
-                    // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
-                    // single row-group — so this outer q_subblock loop is skipped entirely on that
-                    // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
-                    // with the q_subblock-0 site so the addressing forms stay paired.
-                    const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
-                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
-                        cb_qkt_im,
-                        cb_v_in,
-                        out_cb,
-                        qktv_in0_index_offset,
-                        qktv_in1_index,
-                        w_q,
-                        v_subblock * qktv_subblock_w,
-                        qktv_subblock_w,
-                        cur_h,
-                        active_Sk,
-                        KT_stride,
-                        /*skip_pack_configure=*/true);
-                    v_index_offset += qktv_subblock_w;
+                if (run_cols == nullptr) {
+                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                        const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
+                        blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            out_cb,
+                            qktv_in0_index_offset,
+                            qktv_in1_index,
+                            w_q,
+                            v_subblock * qktv_subblock_w,
+                            qktv_subblock_w,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            true);
+                        v_index_offset += qktv_subblock_w;
+                    }
+                } else {
+                    for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                        if (kt_sub > 0) {
+                            PACK((llk_pack_reconfig_l1_acc(1)));
+                        }
+                        uint32_t v_col = 0;
+                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                out_cb,
+                                qktv_in0_index_offset + kt_sub * actual_sbw,
+                                static_cast<uint32_t>(run_cols[kt_sub]) * vDHt + v_col,
+                                w_q,
+                                v_subblock * qktv_subblock_w,
+                                qktv_subblock_w,
+                                cur_h,
+                                actual_sbw,
+                                KT_stride,
+                                true);
+                            v_col += qktv_subblock_w;
+                        }
+                        if (kt_sub > 0) {
+                            PACK((llk_pack_reconfig_l1_acc(0)));
+                        }
+                    }
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
             }
@@ -2134,7 +2178,7 @@ static void sdpa_inner_loop_step(
         // For kt_inplace_v this is the deferred K^T pop: cb_v_in aliases cb_kt_in (v_shares_k_buffer),
         // and v_cb_physical_width_t == DHt, so this pops the same Sk_chunk_t*DHt entry that Phase 1
         // skipped. For the materialized path it pops the V entry as usual. Either way: one entry/chunk.
-        if (!keep_kv) {
+        if (!hold_kv) {
             CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
         }
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
@@ -2371,11 +2415,12 @@ void sdpa_standard_v2(
                 lw_mask.sliding_leading_tile_idx,
                 lw_mask.sliding_trailing_next_tile_idx,
                 apply_sliding_window,
-                0,   // mask_straddle_col
-                0,   // mask_straddle_jump
-                {},  // kv_pad_rotation
-                0,   // q_base_tiles
-                {},  // packed_mask
+                0,
+                0,
+                {},
+                0,
+                {},
+                false,
                 keep_kv && is_last);
         };
 
@@ -2579,7 +2624,17 @@ template <
     uint32_t kv_region_Nt = q_local_padded_Nt,
     // Split-KV: GROUPED_KV_SOURCE_COUNT > 1. Keeps the per-source path free of packed branches.
     bool packed_kv_enabled = false,
-    typename MaskCtx = LightweightMaskContext>
+    typename MaskCtx = LightweightMaskContext,
+    bool sol_enabled = false,
+    uint32_t cb_sol_plan = INVALID_CB,
+    uint32_t cb_sol_bias = INVALID_CB,
+    uint32_t sol_pooled_chunks = 0,
+    uint32_t sol_pooled_last_tiles = 0,
+    bool sol_chunk_mode = false,
+    bool sol_compact = false,
+    bool sol_pack = false,
+    uint32_t sol_blocks_per_page = 1,
+    uint32_t kv_cb_pages = 2>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -2852,9 +2907,42 @@ void sdpa_ring_v2(
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
         const auto sliding_band = ttnn::operations::transformer::sdpa::ring_joint::sliding_ksplit_range(
             sliding_q_plan.total_k_chunk_count, sliding_split_idx, sliding_split_count);
+        [[maybe_unused]] uint32_t sol_total_kept_blocks = 0, sol_n_pages = 0;
+        [[maybe_unused]] uint32_t sol_kept_lo = 0, sol_kept_hi = 0, sol_do_pooled = 0;
+        [[maybe_unused]] uint32_t sol_union_lo = 0xffffffffu, sol_union_hi = 0xffffffffu;
+        [[maybe_unused]] uint32_t sol_cnt_words[16] = {};
+        if constexpr (sol_chunk_mode) {
+            CircularBuffer(cb_sol_plan).wait_front(1);
+            sol_kept_lo = ckernel::read_tile_value(cb_sol_plan, 0, 0);
+            sol_kept_hi = ckernel::read_tile_value(cb_sol_plan, 0, 1);
+            sol_do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, 2);
+            sol_union_lo = ckernel::read_tile_value(cb_sol_plan, 0, 3);
+            sol_union_hi = ckernel::read_tile_value(cb_sol_plan, 0, 4);
+            if constexpr (sol_pack) {
+                sol_total_kept_blocks = ckernel::read_tile_value(cb_sol_plan, 0, 5);
+                sol_n_pages = (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
+            }
+            if constexpr (sol_compact) {
+                for (uint32_t w = 0; w < (num_local_k_chunks + 3) / 4; ++w) {
+                    sol_cnt_words[w] = ckernel::read_tile_value(cb_sol_plan, 0, 8 + w);
+                }
+            }
+            CircularBuffer(cb_sol_plan).pop_front(1);
+        }
+        const auto sol_chunk_kept = [&](uint32_t k) -> bool {
+            return k < 32 ? ((sol_kept_lo >> k) & 1u) != 0 : ((sol_kept_hi >> (k - 32)) & 1u) != 0;
+        };
+        [[maybe_unused]] const auto sol_chunk_blocks = [&](uint32_t k) -> uint32_t {
+            return (sol_cnt_words[k / 4] >> (8 * (k % 4))) & 0xffu;
+        };
+        const auto sol_chunk_streamed = [&](uint32_t k) -> bool {
+            return k < 32 ? ((sol_union_lo >> k) & 1u) != 0 : ((sol_union_hi >> (k - 32)) & 1u) != 0;
+        };
         uint32_t per_q_valid_kv =
             packed_sources ? packed_kv.chunk_count() : (has_sliding_window ? sliding_band.end - sliding_band.begin : 0);
-        for (uint32_t k = 0; !packed_sources && !has_sliding_window && k < num_kv_chunks; ++k) {
+        for (uint32_t k = 0;
+             !(sol_enabled && !sol_chunk_mode) && !packed_sources && !has_sliding_window && k < num_kv_chunks;
+             ++k) {
             const uint32_t source_ring_id = ring_id;
             const uint32_t source_k_chunk = k;
             const bool is_joint = k >= num_local_k_chunks;
@@ -2866,7 +2954,23 @@ void sdpa_ring_v2(
                     continue;
                 }
             }
+            if constexpr (sol_chunk_mode) {
+                if (!sol_chunk_kept(k)) {
+                    continue;
+                }
+            }
+            if constexpr (sol_pack) {
+                continue;
+            }
             per_q_valid_kv++;
+        }
+        if constexpr (sol_pack) {
+            per_q_valid_kv += sol_n_pages;
+        }
+        if constexpr (sol_chunk_mode) {
+            if (sol_do_pooled) {
+                per_q_valid_kv += sol_pooled_chunks;
+            }
         }
         // Use persistent accumulator state from caller (single Q-chunk),
         // restore from DRAM staging (multi Q-chunk), or pop from the L1 FIFO (head-serial passes).
@@ -2905,337 +3009,457 @@ void sdpa_ring_v2(
                 });
         }
 
-        const uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : num_kv_chunks;
-        for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
-            const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
-            // Circular cache: the mask's K origin is the plan's absolute K-chunk index (inverting local
-            // cache rows is ambiguous once several chunk groups alias one local slab); unbounded caches
-            // keep the inversion. Resolved once here, outside the [&] lambdas below: anything new they
-            // capture changes the unbounded kernels' register allocation.
-            uint32_t circular_k_origin_tile = 0;
-            if constexpr (circular_kv_cache) {
-                circular_k_origin_tile = sliding_q_plan.global_k_chunk_at(k_chunk) * Sk_chunk_t;
-            }
-            const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
-            const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
-            const bool kv_chunk_is_joint = !packed_sources && !has_sliding_window && k_chunk >= num_local_k_chunks;
-            if (!packed_sources && !has_sliding_window &&
-                try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
-                continue;
-            }
-            if (try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
-                continue;
-            }
-            KV_chunks_processed++;
-            KV_chunks_processed_in_iter++;
-
-            const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
-            const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
-
-            // Last K chunk of last ring_iter triggers per-row normalization
-            const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
-
-            // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
-            if (is_last_k && q_per_core > 1) {
-                CircularBuffer(cb_signal).reserve_back(1);
-                sdpa_cb_push_back_out_of_line(cb_signal, 1);
-            }
-
-            // Determine if this K chunk needs masking (partial tile within a tile boundary)
-            bool is_global_n_mask_chunk = false;
-            bool is_local_n_mask_chunk = false;
-            bool is_joint_n_mask_chunk = false;
-            if constexpr (global_n_mask_enabled) {
-                is_global_n_mask_chunk = ring_iter_needs_global_n_mask && source_k_chunk == global_n_mask_chunk_id;
-            }
-            if constexpr (local_n_mask_enabled) {
-                is_local_n_mask_chunk = local_n_needs_masking && source_k_chunk == local_n_mask_chunk_id;
-            }
-            if constexpr (joint_n_mask_enabled) {
-                is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
-                                        (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
-            }
-            // Straddle chunk (rix > rid balanced-causal with k_chunk_size ∤ coarse_chunk_size):
-            // only the early-half columns attend; late-half columns must be dropped. Narrow
-            // active_Sk like local_n; no partial-tile stamp needed for tile-aligned straddle.
-            bool is_straddle_mask_chunk = false;
-            if constexpr (straddle_mask_enabled) {
-                is_straddle_mask_chunk =
-                    lw_mask.straddle_num_padded_tiles > 0 && source_k_chunk == lw_mask.straddle_mask_chunk_id;
-            }
-
-            bool apply_mask = kv_pad_rotation_enabled;
-            if constexpr (global_n_mask_enabled) {
-                apply_mask = apply_mask || is_global_n_mask_chunk;
-            }
-            if constexpr (joint_n_mask_enabled) {
-                // Mirror the spatial local_n strategy for the joint chunk. The exp variant's LightweightMaskContext
-                // keeps it runtime.
-                if (lw_mask.joint_l_partial_col > 0) {
-                    apply_mask = apply_mask || is_joint_n_mask_chunk;
-                }
-            }
-
-            // Resolve lightweight mask params for partial tile masking
-            uint32_t lw_partial_tile_idx = 0;
-            if constexpr (lightweight_mask_enabled) {
-                if (apply_mask) {
-                    bool partial_tile_selected = false;
-                    // Live column 0 = tile-aligned boundary this dispatch: no partial stamp.
-                    if constexpr (global_n_mask_enabled) {
-                        if (!packed_sources && is_global_n_mask_chunk) {
-                            lw_partial_tile_idx =
-                                lw_mask.global_n_partial_col > 0 ? lw_mask.global_n_partial_tile_idx : 0u;
-                            partial_tile_selected = true;
-                        }
+        uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : num_kv_chunks;
+        if constexpr (sol_chunk_mode) {
+            q_k_loop_count = num_kv_chunks + (sol_do_pooled ? sol_pooled_chunks : 0);
+        }
+        if constexpr (sol_pack) {
+            q_k_loop_count = sol_n_pages + (sol_do_pooled ? sol_pooled_chunks : 0);
+        }
+        if constexpr (sol_enabled && !sol_chunk_mode) {
+            CircularBuffer(cb_sol_plan).wait_front(1);
+            const uint32_t sol_n_gather = ckernel::read_tile_value(cb_sol_plan, 0, 0);
+            const uint32_t sol_last_tiles = ckernel::read_tile_value(cb_sol_plan, 0, 1);
+            const uint32_t sol_do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, 2);
+            CircularBuffer(cb_sol_plan).pop_front(1);
+            const uint32_t sol_total = sol_n_gather + (sol_do_pooled ? sol_pooled_chunks : 0);
+            for (uint32_t c = 0; c < sol_total; ++c) {
+                const bool is_pooled = c >= sol_n_gather;
+                uint32_t active_Sk_param = Sk_chunk_t;
+                if (is_pooled) {
+                    if (c - sol_n_gather + 1 == sol_pooled_chunks) {
+                        active_Sk_param = sol_pooled_last_tiles;
                     }
-                    if constexpr (joint_n_mask_enabled) {
-                        if (!partial_tile_selected && is_joint_n_mask_chunk) {
-                            lw_partial_tile_idx =
-                                lw_mask.joint_l_partial_col > 0 ? lw_mask.joint_l_partial_tile_idx : 0u;
-                        }
-                    }
+                } else if (c + 1 == sol_n_gather) {
+                    active_Sk_param = sol_last_tiles;
                 }
-            }
-
-            // Tile-level matmul skip for global_n, local_n, or joint_n padding.
-            // Runtime reduce narrows to active_Sk; matmul/sub_exp/V also need narrowing.
-            // Also select pre-computed subblock width for this chunk's mask type.
-            uint32_t active_Sk_param = packed_sources ? packed_kv.valid_tiles(k_chunk) : Sk_chunk_t;
-            uint32_t chunk_sbw = packed_sources && active_Sk_param != Sk_chunk_t
-                                     ? largest_factor_le(active_Sk_param, qkt_subblock_w)
-                                     : full_sbw;
-            bool narrowed_by_mask = packed_sources;
-            if constexpr (global_n_mask_enabled) {
-                if (!packed_sources && is_global_n_mask_chunk) {
-                    active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
-                    chunk_sbw = global_n_sbw;
-                    narrowed_by_mask = true;
+                const uint32_t chunk_sbw =
+                    active_Sk_param == Sk_chunk_t ? full_sbw : largest_factor_le(active_Sk_param, qkt_subblock_w);
+                KV_chunks_processed++;
+                KV_chunks_processed_in_iter++;
+                const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+                const bool is_last_k = (KV_chunks_processed == sol_total);
+                const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+                if (is_last_k && q_per_core > 1) {
+                    CircularBuffer(cb_signal).reserve_back(1);
+                    sdpa_cb_push_back_out_of_line(cb_signal, 1);
                 }
-            }
-            if constexpr (local_n_mask_enabled) {
-                if (!narrowed_by_mask && is_local_n_mask_chunk) {
-                    active_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
-                    chunk_sbw = local_n_sbw;
-                    narrowed_by_mask = true;
+                const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+                const uint32_t step_save_out_cb = save_to_staging ? cb_out : INVALID_CB;
+                const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : INVALID_CB;
+                if (save_to_staging) {
+                    q_cur.sum = cb_sum_out;
                 }
-            }
-            if constexpr (joint_n_mask_enabled) {
-                if (!narrowed_by_mask && is_joint_n_mask_chunk) {
-                    active_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
-                    chunk_sbw = joint_n_sbw;
-                    narrowed_by_mask = true;
-                }
-            }
-            if constexpr (straddle_mask_enabled) {
-                // A short balanced shard can end inside the same K chunk as its
-                // causal half boundary. Padding does not supersede that tighter
-                // boundary: intersect both masks rather than keeping the first one.
-                const uint32_t straddle_active = Sk_chunk_t - lw_mask.straddle_num_padded_tiles;
-                if (is_straddle_mask_chunk && straddle_active < active_Sk_param) {
-                    active_Sk_param = straddle_active;
-                    chunk_sbw = straddle_sbw;
-                }
-            }
-
-            // Causal narrowing on the diagonal-crossing K-chunk: cols past the last Q-row's
-            // diag tile are -inf for every row in the Q-chunk, so skip matmul/sub_exp/V there.
-            // Composes with any prior padding narrowing via min().
-            if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled) {
-                if constexpr (has_sliding_window) {
-                    const uint32_t k_global_start =
-                        circular_kv_cache ? circular_k_origin_tile
-                                          : kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_region_Nt>(
-                                                source_ring_id, source_k_chunk * Sk_chunk_t);
-                    const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
-                    if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
-                        active_Sk_param = q_global_end - k_global_start;
-                        chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
-                    }
-                } else if (is_causal_iter && k_chunk == causal_k_limit - 1) {
-                    const uint32_t causal_active = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
-                    if (causal_active < active_Sk_param) {
-                        active_Sk_param = causal_active;
-                        chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
-                    }
-                }
-            }
-
-            // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
-            // to writer-staging CBs, eliminating post-loop copy_block calls.
-            // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
-            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
-            ASSERT(!has_sliding_window || !save_to_staging);
-            // FIFO exit: sum/out redirect into the FIFO (pack-only, write-pointer relative). max
-            // cannot — the step reads cur.max front-relative — so mirror it via step_save_max_cb.
-            const bool fifo_exit = use_l1_state_fifo && is_last_k && !is_last_ring_iter;
-            const uint32_t step_save_out_cb = save_to_staging ? cb_out : (fifo_exit ? cb_prev_out : INVALID_CB);
-            const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : (fifo_exit ? cb_max_in : INVALID_CB);
-            if (save_to_staging) {
-                q_cur.sum = cb_sum_out;
-            } else if (fifo_exit) {
-                q_cur.sum = cb_sum_in;
-            }
-
-            // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
-            const uint32_t step_k_start_tile_local = [&]() {
-                if constexpr (has_sliding_window) {
-                    return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_region_Nt>(
-                        source_ring_id, source_k_chunk * Sk_chunk_t);
-                } else if constexpr (chunked_enabled) {
-                    return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_region_Nt>(
-                        ring_id, k_chunk * Sk_chunk_t);
-                } else {
-                    return k_chunk * Sk_chunk_t;
-                }
-            }();
-            // Circular cache: the plan's absolute origin replaces the inversion above.
-            const uint32_t step_k_start_tile = circular_kv_cache ? circular_k_origin_tile : step_k_start_tile_local;
-            const bool step_apply_causal = [&]() {
-                if constexpr (has_sliding_window) {
-                    return q_start_tile < step_k_start_tile + Sk_chunk_t &&
-                           q_start_tile + Sq_chunk_t > step_k_start_tile;
-                }
-                return is_causal_iter;
-            }();
-
-            // Chunked-prefill straddle. Background: each device's K cache holds the per-chunk
-            // K region for every chunk back-to-back, kv_region_Nt tiles per region. When
-            // k_chunk_size does not divide kv_region_Nt, a single K-chunk can begin in
-            // one region (chunk j) and end one or more regions later. Because adjacent regions
-            // map to *non-adjacent* global K positions (jumping by chunk_size_t between them),
-            // the global K coord is no longer contiguous across the K-chunk's columns. We
-            // signal this to the diag stamp via:
-            //   - straddle_col: column index at which the jump happens (= tiles remaining in
-            //     region j from this K-chunk's start)
-            //   - straddle_jump: the global-K increment at that boundary
-            //     (= chunk_size_t - kv_region_Nt, i.e. the gap between region j's end and
-            //     region j+1's start in global K).
-            // When straddle_col > 0 the stamp evaluates the diagonal per column instead of
-            // per row, applying the jump at straddle_col and every kv_region_Nt tiles thereafter.
-            uint32_t step_straddle_col = 0;
-            uint32_t step_straddle_jump = 0;
-            if constexpr (chunked_enabled) {
-                if (kv_region_Nt > 0) {
-                    const uint32_t local_start = source_k_chunk * Sk_chunk_t;
-                    const uint32_t slab_end_local = (local_start / kv_region_Nt + 1) * kv_region_Nt;
-                    if (local_start + Sk_chunk_t > slab_end_local) {
-                        step_straddle_col = slab_end_local - local_start;
-                        step_straddle_jump = chunk_size_t - kv_region_Nt;
-                    }
-                }
-            }
-            KVPadRotationContext step_kv_pad_rotation = chunked.kv_pad_rotation;
-            step_kv_pad_rotation.k_local_start_tile = source_k_chunk * Sk_chunk_t;
-            step_kv_pad_rotation.ring_id = source_ring_id;
-            step_kv_pad_rotation.logical_tile_count = logical_nt;
-
-            // Packed chunks mostly hold prefix slabs that every row of this Q chunk sees in full; the
-            // plan narrows the live width and says whether the chunk needs stamping.
-            ring_joint::PackedKVMaskRun packed_runs[packed_kv_enabled ? Sk_chunk_t : 1];
-            ring_joint::PackedKVChunkMask packed_mask;
-            if (packed_sources) {
-                const ring_joint::PackedKVChunkPlan plan = ring_joint::packed_kv_chunk_plan(
-                    packed_kv,
-                    k_chunk,
-                    packed_source_ids,
-                    chunk_size_t,
-                    packed_row_bounds,
+                sdpa_inner_loop_step<
+                    false,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    Skt,
+                    DHt,
+                    vDHt,
+                    scale_fp32,
+                    qkt_subblock_h,
                     qkt_subblock_w,
+                    qktv_subblock_h,
+                    qktv_subblock_w,
+                    false,
+                    true,
+                    false,
+                    cb_q_in,
+                    cb_kt_in,
+                    cb_v_in,
+                    cb_qkt_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_normalized_out,
+                    cb_mask_in,
+                    Sk_chunk_t,
+                    false,
+                    kv_region_Nt,
+                    chunk_size_t,
+                    local_padded_Nt,
+                    v_cb_physical_width_t,
+                    kt_inplace_v,
+                    0,
+                    use_attention_sink,
+                    cb_attention_sink,
+                    false,
+                    use_l1_state_fifo,
+                    false,
+                    false,
+                    true,
+                    cb_sol_bias>(
+                    q_prev,
+                    q_cur,
+                    is_last_k_of_last_ring_iter,
+                    is_first,
+                    false,
+                    0,
                     active_Sk_param,
-                    packed_runs);
-                if (plan.active_tiles < active_Sk_param) {
-                    active_Sk_param = plan.active_tiles;
-                    chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
+                    can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !is_pooled,
+                    chunk_sbw,
+                    step_save_out_cb,
+                    step_save_max_cb,
+                    false,
+                    0,
+                    0,
+                    lw_mask.neginf_tile_idx,
+                    0,
+                    0,
+                    0,
+                    0,
+                    false,
+                    0,
+                    0,
+                    chunked.kv_pad_rotation,
+                    q_base_tiles,
+                    {},
+                    is_pooled);
+                if (!is_first) {
+                    sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
                 }
-                packed_mask = plan.mask;
+                if (is_last_k_of_last_ring_iter) {
+                    sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
+                } else {
+                    std::swap(q_prev, q_cur);
+                    if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
+                        q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                    }
+                }
             }
+        } else {
+            for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
+                const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
+                uint32_t circular_k_origin_tile = 0;
+                if constexpr (circular_kv_cache) {
+                    circular_k_origin_tile = sliding_q_plan.global_k_chunk_at(k_chunk) * Sk_chunk_t;
+                }
+                const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
+                const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
+                [[maybe_unused]] bool sol_is_pooled = false;
+                if constexpr (sol_chunk_mode) {
+                    sol_is_pooled = k_chunk >= num_kv_chunks;
+                }
+                [[maybe_unused]] uint32_t sol_page_blocks = 0;
+                if constexpr (sol_pack) {
+                    sol_is_pooled = k_chunk >= sol_n_pages;
+                    if (!sol_is_pooled) {
+                        const uint32_t remaining = sol_total_kept_blocks - k_chunk * sol_blocks_per_page;
+                        sol_page_blocks = remaining < sol_blocks_per_page ? remaining : sol_blocks_per_page;
+                    }
+                }
+                const bool kv_chunk_is_joint = !sol_pack && !sol_is_pooled && !packed_sources && !has_sliding_window &&
+                                               k_chunk >= num_local_k_chunks;
+                if (!sol_pack && !sol_is_pooled && !packed_sources && !has_sliding_window &&
+                    try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
+                    continue;
+                }
+                if (!sol_pack && !sol_is_pooled && try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
+                    continue;
+                }
+                if constexpr (sol_chunk_mode && !sol_pack) {
+                    if (!sol_is_pooled && !sol_chunk_streamed(k_chunk)) {
+                        continue;
+                    }
+                    if (!sol_is_pooled && !sol_chunk_kept(k_chunk)) {
+                        CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                        sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                        if constexpr (!kt_inplace_v) {
+                            CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                            sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                        }
+                        KV_chunks_processed_in_iter++;
+                        continue;
+                    }
+                }
+                KV_chunks_processed++;
+                KV_chunks_processed_in_iter++;
 
-            sdpa_inner_loop_step<
-                false,  // profiling_enabled
-                Sq_chunk_t,
-                Sk_chunk_t,
-                Skt,
-                DHt,
-                vDHt,
-                scale_fp32,
-                qkt_subblock_h,
-                qkt_subblock_w,
-                qktv_subblock_h,
-                qktv_subblock_w,
-                false,                              // use_padded_mask — ring uses ring mask instead
-                true,                               // ring_mode
-                is_causal_sdpa || chunked_enabled,  // chunked re-enables causal masking with absolute coords
-                cb_q_in,
-                cb_kt_in,
-                cb_v_in,
-                cb_qkt_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_normalized_out,
-                cb_mask_in,
-                Sk_chunk_t,
-                kv_pad_rotation_enabled,
-                kv_region_Nt,
-                chunk_size_t,
-                local_padded_Nt,
-                v_cb_physical_width_t,
-                kt_inplace_v,
-                sliding_window_size,
-                use_attention_sink,
-                cb_attention_sink,
-                false,              // use_provided_mask
-                use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
-                circular_kv_cache,
-                packed_kv_enabled>(
-                q_prev,
-                q_cur,
-                is_last_k_of_last_ring_iter,
-                is_first,
-                apply_mask,
-                lw_partial_tile_idx,
-                active_Sk_param,
-                can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
-                chunk_sbw,
-                step_save_out_cb,
-                step_save_max_cb,
-                step_apply_causal,
-                kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
-                step_k_start_tile,
-                lw_mask.neginf_tile_idx,
-                has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx,
-                has_sliding_window ? 2 : 0,
-                has_sliding_window ? 3 : 0,
-                has_sliding_window ? 4 : 0,
-                has_sliding_window,
-                step_straddle_col,
-                step_straddle_jump,
-                step_kv_pad_rotation,
-                q_base_tiles,
-                packed_mask);
+                const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+                const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
-            // Post-iteration cleanup: pop previous values and swap aliases
-            // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
-            if (!is_first) {
-                sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
-                sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
-            }
+                const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
 
-            if (is_last_k_of_last_ring_iter) {
-                // Normalization consumed cur.sum and cur.out; pop cur.max.
-                sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
-            } else {
-                std::swap(q_prev, q_cur);
-                // After K0's swap, q_cur holds the staging/FIFO buffers. Reset to the scratch
-                // accumulator CBs so the rest of the pass ping-pongs between scratch halves.
-                if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
-                    q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                if (is_last_k && q_per_core > 1) {
+                    CircularBuffer(cb_signal).reserve_back(1);
+                    sdpa_cb_push_back_out_of_line(cb_signal, 1);
+                }
+
+                bool is_global_n_mask_chunk = false;
+                bool is_local_n_mask_chunk = false;
+                bool is_joint_n_mask_chunk = false;
+                if constexpr (global_n_mask_enabled) {
+                    is_global_n_mask_chunk = ring_iter_needs_global_n_mask && source_k_chunk == global_n_mask_chunk_id;
+                }
+                if constexpr (local_n_mask_enabled) {
+                    is_local_n_mask_chunk = local_n_needs_masking && source_k_chunk == local_n_mask_chunk_id;
+                }
+                if constexpr (joint_n_mask_enabled) {
+                    is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
+                                            (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
+                }
+                bool is_straddle_mask_chunk = false;
+                if constexpr (straddle_mask_enabled) {
+                    is_straddle_mask_chunk =
+                        lw_mask.straddle_num_padded_tiles > 0 && source_k_chunk == lw_mask.straddle_mask_chunk_id;
+                }
+
+                bool apply_mask = kv_pad_rotation_enabled;
+                if constexpr (global_n_mask_enabled) {
+                    apply_mask = apply_mask || is_global_n_mask_chunk;
+                }
+                if constexpr (joint_n_mask_enabled) {
+                    if (lw_mask.joint_l_partial_col > 0) {
+                        apply_mask = apply_mask || is_joint_n_mask_chunk;
+                    }
+                }
+
+                uint32_t lw_partial_tile_idx = 0;
+                if constexpr (lightweight_mask_enabled) {
+                    if (apply_mask) {
+                        bool partial_tile_selected = false;
+                        if constexpr (global_n_mask_enabled) {
+                            if (!packed_sources && is_global_n_mask_chunk) {
+                                lw_partial_tile_idx =
+                                    lw_mask.global_n_partial_col > 0 ? lw_mask.global_n_partial_tile_idx : 0u;
+                                partial_tile_selected = true;
+                            }
+                        }
+                        if constexpr (joint_n_mask_enabled) {
+                            if (!partial_tile_selected && is_joint_n_mask_chunk) {
+                                lw_partial_tile_idx =
+                                    lw_mask.joint_l_partial_col > 0 ? lw_mask.joint_l_partial_tile_idx : 0u;
+                            }
+                        }
+                    }
+                }
+
+                uint32_t active_Sk_param = packed_sources ? packed_kv.valid_tiles(k_chunk) : Sk_chunk_t;
+                uint32_t chunk_sbw = packed_sources && active_Sk_param != Sk_chunk_t
+                                         ? largest_factor_le(active_Sk_param, qkt_subblock_w)
+                                         : full_sbw;
+                bool narrowed_by_mask = packed_sources;
+                if constexpr (global_n_mask_enabled) {
+                    if (!packed_sources && is_global_n_mask_chunk) {
+                        active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
+                        chunk_sbw = global_n_sbw;
+                        narrowed_by_mask = true;
+                    }
+                }
+                if constexpr (local_n_mask_enabled) {
+                    if (!narrowed_by_mask && is_local_n_mask_chunk) {
+                        active_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
+                        chunk_sbw = local_n_sbw;
+                        narrowed_by_mask = true;
+                    }
+                }
+                if constexpr (joint_n_mask_enabled) {
+                    if (!narrowed_by_mask && is_joint_n_mask_chunk) {
+                        active_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
+                        chunk_sbw = joint_n_sbw;
+                        narrowed_by_mask = true;
+                    }
+                }
+                if constexpr (straddle_mask_enabled) {
+                    const uint32_t straddle_active = Sk_chunk_t - lw_mask.straddle_num_padded_tiles;
+                    if (is_straddle_mask_chunk && straddle_active < active_Sk_param) {
+                        active_Sk_param = straddle_active;
+                        chunk_sbw = straddle_sbw;
+                    }
+                }
+
+                if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled) {
+                    if constexpr (has_sliding_window) {
+                        const uint32_t k_global_start =
+                            circular_kv_cache
+                                ? circular_k_origin_tile
+                                : kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_region_Nt>(
+                                      source_ring_id, source_k_chunk * Sk_chunk_t);
+                        const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
+                        if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
+                            active_Sk_param = q_global_end - k_global_start;
+                            chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
+                        }
+                    } else if (is_causal_iter && k_chunk == causal_k_limit - 1) {
+                        const uint32_t causal_active = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                        if (causal_active < active_Sk_param) {
+                            active_Sk_param = causal_active;
+                            chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
+                        }
+                    }
+                }
+
+                const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+                ASSERT(!has_sliding_window || !save_to_staging);
+                const bool fifo_exit = use_l1_state_fifo && is_last_k && !is_last_ring_iter;
+                const uint32_t step_save_out_cb = save_to_staging ? cb_out : (fifo_exit ? cb_prev_out : INVALID_CB);
+                const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : (fifo_exit ? cb_max_in : INVALID_CB);
+                if (save_to_staging) {
+                    q_cur.sum = cb_sum_out;
+                } else if (fifo_exit) {
+                    q_cur.sum = cb_sum_in;
+                }
+
+                const uint32_t step_k_start_tile_local = [&]() {
+                    if constexpr (has_sliding_window) {
+                        return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_region_Nt>(
+                            source_ring_id, source_k_chunk * Sk_chunk_t);
+                    } else if constexpr (chunked_enabled) {
+                        return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_region_Nt>(
+                            ring_id, k_chunk * Sk_chunk_t);
+                    } else {
+                        return k_chunk * Sk_chunk_t;
+                    }
+                }();
+                const uint32_t step_k_start_tile = circular_kv_cache ? circular_k_origin_tile : step_k_start_tile_local;
+                const bool step_apply_causal = [&]() {
+                    if constexpr (has_sliding_window) {
+                        return q_start_tile < step_k_start_tile + Sk_chunk_t &&
+                               q_start_tile + Sq_chunk_t > step_k_start_tile;
+                    }
+                    return is_causal_iter;
+                }();
+
+                uint32_t step_straddle_col = 0;
+                uint32_t step_straddle_jump = 0;
+                if constexpr (chunked_enabled) {
+                    if (kv_region_Nt > 0) {
+                        const uint32_t local_start = source_k_chunk * Sk_chunk_t;
+                        const uint32_t slab_end_local = (local_start / kv_region_Nt + 1) * kv_region_Nt;
+                        if (local_start + Sk_chunk_t > slab_end_local) {
+                            step_straddle_col = slab_end_local - local_start;
+                            step_straddle_jump = chunk_size_t - kv_region_Nt;
+                        }
+                    }
+                }
+                KVPadRotationContext step_kv_pad_rotation = chunked.kv_pad_rotation;
+                step_kv_pad_rotation.k_local_start_tile = source_k_chunk * Sk_chunk_t;
+                step_kv_pad_rotation.ring_id = source_ring_id;
+                step_kv_pad_rotation.logical_tile_count = logical_nt;
+
+                if constexpr (sol_chunk_mode) {
+                    if (sol_is_pooled) {
+                        apply_mask = false;
+                        active_Sk_param =
+                            (k_chunk - num_kv_chunks + 1 == sol_pooled_chunks) ? sol_pooled_last_tiles : Sk_chunk_t;
+                        chunk_sbw = active_Sk_param == Sk_chunk_t ? full_sbw
+                                                                  : largest_factor_le(active_Sk_param, qkt_subblock_w);
+                    }
+                }
+                if constexpr (sol_compact) {
+                    if (!sol_is_pooled) {
+                        apply_mask = false;
+                        active_Sk_param = (sol_pack ? sol_page_blocks : sol_chunk_blocks(k_chunk)) * 2;
+                        chunk_sbw = active_Sk_param == Sk_chunk_t ? full_sbw
+                                                                  : largest_factor_le(active_Sk_param, qkt_subblock_w);
+                    }
+                }
+                ring_joint::PackedKVMaskRun packed_runs[packed_kv_enabled ? Sk_chunk_t : 1];
+                ring_joint::PackedKVChunkMask packed_mask;
+                if (packed_sources) {
+                    const ring_joint::PackedKVChunkPlan plan = ring_joint::packed_kv_chunk_plan(
+                        packed_kv,
+                        k_chunk,
+                        packed_source_ids,
+                        chunk_size_t,
+                        packed_row_bounds,
+                        qkt_subblock_w,
+                        active_Sk_param,
+                        packed_runs);
+                    if (plan.active_tiles < active_Sk_param) {
+                        active_Sk_param = plan.active_tiles;
+                        chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
+                    }
+                    packed_mask = plan.mask;
+                }
+
+                sdpa_inner_loop_step<
+                    false,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    Skt,
+                    DHt,
+                    vDHt,
+                    scale_fp32,
+                    qkt_subblock_h,
+                    qkt_subblock_w,
+                    qktv_subblock_h,
+                    qktv_subblock_w,
+                    false,
+                    true,
+                    is_causal_sdpa || chunked_enabled,
+                    cb_q_in,
+                    cb_kt_in,
+                    cb_v_in,
+                    cb_qkt_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_normalized_out,
+                    cb_mask_in,
+                    Sk_chunk_t,
+                    kv_pad_rotation_enabled,
+                    kv_region_Nt,
+                    chunk_size_t,
+                    local_padded_Nt,
+                    v_cb_physical_width_t,
+                    kt_inplace_v,
+                    sliding_window_size,
+                    use_attention_sink,
+                    cb_attention_sink,
+                    false,
+                    use_l1_state_fifo,
+                    circular_kv_cache,
+                    packed_kv_enabled,
+                    sol_chunk_mode,
+                    cb_sol_bias>(
+                    q_prev,
+                    q_cur,
+                    is_last_k_of_last_ring_iter,
+                    is_first,
+                    apply_mask,
+                    lw_partial_tile_idx,
+                    active_Sk_param,
+                    can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !sol_is_pooled,
+                    chunk_sbw,
+                    step_save_out_cb,
+                    step_save_max_cb,
+                    step_apply_causal,
+                    kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
+                    step_k_start_tile,
+                    lw_mask.neginf_tile_idx,
+                    has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx,
+                    has_sliding_window ? 2 : 0,
+                    has_sliding_window ? 3 : 0,
+                    has_sliding_window ? 4 : 0,
+                    has_sliding_window,
+                    step_straddle_col,
+                    step_straddle_jump,
+                    step_kv_pad_rotation,
+                    q_base_tiles,
+                    packed_mask,
+                    sol_is_pooled);
+
+                if (!is_first) {
+                    sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
+                }
+
+                if (is_last_k_of_last_ring_iter) {
+                    sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
+                } else {
+                    std::swap(q_prev, q_cur);
+                    if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
+                        q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                    }
                 }
             }
         }
-        ASSERT(!has_sliding_window || KV_chunks_processed == per_q_valid_kv);
+        ASSERT(sol_enabled || !has_sliding_window || KV_chunks_processed == per_q_valid_kv);
 
         // Pop Q — not popped inside step since ring_mode gates the early Q pop.
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
@@ -3308,8 +3532,8 @@ void sdpa_ring_v2(
     // per-core reads so each core can prune a different K range and needs no phase padding.
     if constexpr (!has_sliding_window) {
         for (uint32_t dummy_chunk = 0;
-             dummy_chunk <
-             dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
+             dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v, kv_cb_pages>(
+                               KV_chunks_processed_in_iter);
              ++dummy_chunk) {
             CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
             sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
@@ -3318,6 +3542,1086 @@ void sdpa_ring_v2(
                 CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
                 sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
             }
+        }
+    }
+}
+
+template <uint32_t Sq_chunk_t, uint32_t cb>
+static __attribute__((noinline, noclone)) void sol_res_pack_units(
+    const uint8_t* unit_g,
+    const uint8_t* unit_c0,
+    const uint8_t* unit_cw,
+    uint32_t uu,
+    const uint16_t* off,
+    const uint8_t* W,
+    uint32_t& pk_w) {
+    uint32_t dst = 0;
+    for (uint32_t u = 0; u < uu; ++u) {
+        const uint32_t cw = unit_cw[u];
+        const bool blocked = should_use_blocked_pack_width(cw);
+        const uint32_t want = blocked ? cw : 1u;
+        if (want != pk_w) {
+            configure_pack_width(cb, want);
+            pk_w = want;
+        }
+        const uint32_t g = unit_g[u];
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            const uint32_t idx = off[g] + r * W[g] + unit_c0[u];
+            if (blocked) {
+                sdpa_pack_tile_ooo(dst, cb, idx);
+                dst += cw;
+            } else {
+                for (uint32_t c = 0; c < cw; ++c) {
+                    sdpa_pack_tile_ooo(dst++, cb, idx + c);
+                }
+            }
+        }
+    }
+}
+
+template <uint32_t kSlots, uint32_t kBlocksPerPiece, uint32_t Sq_chunk_t, uint32_t kQkCap, typename StepFn>
+static __attribute__((noinline, noclone)) void sol_res_run_groups(
+    StepFn& run_step,
+    const uint8_t* members,
+    const uint8_t* widths,
+    const uint8_t* mruns,
+    const uint8_t* mrunws,
+    const uint8_t* mnruns,
+    const uint32_t n,
+    const bool apply_col_bias) {
+    uint8_t order[kSlots];
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t j = i;
+        while (j > 0 && widths[order[j - 1]] > widths[i]) {
+            order[j] = order[j - 1];
+            --j;
+        }
+        order[j] = static_cast<uint8_t>(i);
+    }
+    uint8_t sg[kSlots];
+    uint8_t sruns[kSlots * kBlocksPerPiece];
+    uint8_t srunws[kSlots * kBlocksPerPiece];
+    uint8_t snr[kSlots];
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t m = order[i];
+        sg[i] = members[m];
+        snr[i] = mnruns[m];
+        for (uint32_t s = 0; s < mnruns[m]; ++s) {
+            sruns[i * kBlocksPerPiece + s] = mruns[m * kBlocksPerPiece + s];
+            srunws[i * kBlocksPerPiece + s] = mrunws[m * kBlocksPerPiece + s];
+        }
+    }
+    uint32_t g0 = 0;
+    while (g0 < n) {
+        uint32_t g1 = g0;
+        uint32_t tiles = 0;
+        while (g1 < n && tiles + Sq_chunk_t * widths[order[g1]] <= kQkCap) {
+            tiles += Sq_chunk_t * widths[order[g1]];
+            ++g1;
+        }
+        ASSERT(g1 > g0);
+        run_step(
+            sg + g0, g1 - g0, sruns + g0 * kBlocksPerPiece, srunws + g0 * kBlocksPerPiece, snr + g0, apply_col_bias);
+        g0 = g1;
+    }
+}
+
+template <uint32_t kDst, uint32_t kMaxMembers>
+struct SolResStepState {
+    const uint8_t* slots = nullptr;
+    const uint8_t* run_cols = nullptr;
+    const uint8_t* run_ws = nullptr;
+    const uint8_t* n_runs = nullptr;
+    const uint8_t* W = nullptr;
+    const uint16_t* off = nullptr;
+    uint32_t n_slots = 0;
+    uint32_t initialized_mask = 0;
+    uint8_t unit_g[kDst];
+    uint8_t unit_c0[kDst];
+    uint8_t unit_cw[kDst];
+    uint32_t uu = 0;
+    uint32_t uu_tiles = 0;
+    uint32_t pk_w = 0;
+    uint8_t cbatch[kMaxMembers];
+    uint32_t n_done = 0;
+    uint32_t batch_idx = 0;
+    bool batch_completes = false;
+    uint32_t init_cw = 0;
+    uint32_t pv_stride = 0;
+    bool mm_fmt = false;
+    bool v_waited = false;
+    uint32_t s6_next = 0;
+};
+
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t pv_w,
+    uint32_t kMaxRuns,
+    uint32_t cb_qkt_im,
+    uint32_t cb_v_in,
+    uint32_t cb_prev_out>
+static __attribute__((noinline, noclone)) void sol_res_pv_member(
+    const uint32_t slot,
+    const bool acc,
+    const uint32_t w,
+    const uint32_t off_g,
+    const uint8_t* run_cols,
+    const uint8_t* run_ws,
+    const uint32_t n_runs,
+    uint32_t& pv_stride,
+    uint32_t& pk_w) {
+    if (pv_stride != w) {
+        sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, pv_w, Sq_chunk_t, w);
+        pv_stride = w;
+    }
+    const bool blocked = should_use_blocked_pack_width(pv_w);
+    const uint32_t want = blocked ? pv_w : 1u;
+    const uint32_t out_row0 = slot * Sq_chunk_t;
+    for (uint32_t v0 = 0; v0 < vDHt; v0 += pv_w) {
+        tile_regs_acquire();
+        uint32_t col = 0;
+        for (uint32_t s = 0; s < n_runs; ++s) {
+            const uint32_t rw = run_ws[s];
+            for (uint32_t t = 0; t < rw; ++t) {
+                sdpa_matmul_block_no_mop(
+                    cb_qkt_im,
+                    cb_v_in,
+                    off_g + col + t,
+                    (static_cast<uint32_t>(run_cols[s]) + t) * vDHt + v0,
+                    0,
+                    false,
+                    pv_w,
+                    Sq_chunk_t,
+                    w);
+            }
+            col += rw;
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        if (want != pk_w) {
+            configure_pack_width(cb_prev_out, want);
+            pk_w = want;
+        }
+        PACK((llk_pack_reconfig_l1_acc(acc ? 1 : 0)));
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            const uint32_t idx = (out_row0 + r) * vDHt + v0;
+            if (blocked) {
+                sdpa_pack_tile_ooo(r * pv_w, cb_prev_out, idx);
+            } else {
+                for (uint32_t c = 0; c < pv_w; ++c) {
+                    sdpa_pack_tile_ooo(r * pv_w + c, cb_prev_out, idx + c);
+                }
+            }
+        }
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        tile_regs_release();
+    }
+}
+
+template <uint32_t Sq_chunk_t, uint32_t cb_qkt_im, uint32_t kDst, uint32_t kMaxMembers>
+static __attribute__((noinline, noclone)) void sol_res_s1_flush(SolResStepState<kDst, kMaxMembers>& st) {
+    if (st.uu == 0) {
+        return;
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(st.unit_g, st.unit_c0, st.unit_cw, st.uu, st.off, st.W, st.pk_w);
+    tile_regs_release();
+    st.uu = 0;
+    st.uu_tiles = 0;
+}
+
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t pv_w,
+    uint32_t kMaxRuns,
+    uint32_t kDst,
+    uint32_t kMaxMembers,
+    uint32_t v_entry_tiles,
+    uint32_t cb_qkt_im,
+    uint32_t cb_v_in,
+    uint32_t cb_prev_out>
+static __attribute__((noinline, noclone)) void sol_res_s5_flush(
+    SolResStepState<kDst, kMaxMembers>& st, const bool final) {
+    if (st.uu > 0) {
+        tile_regs_commit();
+        tile_regs_wait();
+        PACK((llk_pack_relu_config(ReluConfig::zero())));
+        constexpr int iterations = 32;
+        constexpr VectorMode vector_mode_exp = VectorMode::None;
+        for (uint32_t i = 0; i < st.uu_tiles; ++i) {
+            exp_packthread_tile<true, false, InputClamping::None, iterations>(i, vector_mode_exp);
+        }
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(st.unit_g, st.unit_c0, st.unit_cw, st.uu, st.off, st.W, st.pk_w);
+        PACK((llk_pack_relu_config(ReluConfig::none())));
+        if (st.batch_completes) {
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+        }
+        tile_regs_release();
+        st.uu = 0;
+        st.uu_tiles = 0;
+        st.batch_completes = false;
+        ++st.batch_idx;
+    }
+    while (st.s6_next < st.n_done && (final || static_cast<uint32_t>(st.cbatch[st.s6_next]) + 1u < st.batch_idx)) {
+        const uint32_t g = st.s6_next;
+        if (!st.v_waited) {
+            CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+            st.v_waited = true;
+        }
+        if (g == 0 || st.cbatch[g] != st.cbatch[g - 1]) {
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        }
+        if (!st.mm_fmt) {
+            sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_qkt_im, cb_qkt_im>();
+            st.mm_fmt = true;
+        }
+        st.init_cw = 0;
+        const uint32_t slot = st.slots[g];
+        sol_res_pv_member<Sq_chunk_t, vDHt, pv_w, kMaxRuns, cb_qkt_im, cb_v_in, cb_prev_out>(
+            slot,
+            ((st.initialized_mask >> slot) & 1u) != 0,
+            st.W[g],
+            st.off[g],
+            st.run_cols + g * kMaxRuns,
+            st.run_ws + g * kMaxRuns,
+            st.n_runs[g],
+            st.pv_stride,
+            st.pk_w);
+        ++st.s6_next;
+    }
+}
+
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t qkt_subblock_w,
+    uint32_t cb_q_in,
+    uint32_t cb_kt_in,
+    uint32_t cb_v_in,
+    uint32_t cb_qkt_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_col_identity,
+    uint32_t cb_max_scratch,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_max_in,
+    uint32_t cb_sum_in,
+    uint32_t cb_prev_out,
+    uint32_t cb_out,
+    uint32_t cb_sol_bias,
+    uint32_t v_cb_physical_width_t,
+    uint32_t qk_cap,
+    uint32_t stats_cap>
+static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
+    const uint8_t* slots,
+    const uint32_t n_slots,
+    const uint8_t* run_cols,
+    const uint8_t* run_ws,
+    const uint8_t* n_runs,
+    const uint32_t initialized_mask,
+    const bool apply_col_bias) {
+    constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t kBlockTiles = 2;
+    constexpr uint32_t kMaxRuns = Sk_chunk_t / kBlockTiles;
+    constexpr uint32_t kMaxMembers = 32;
+    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
+    constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
+    static_assert(v_cb_physical_width_t == vDHt, "resident mode addresses V rows at a vDHt tile stride");
+    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole 64-token blocks");
+    constexpr uint32_t max_cols_per_acq = kDst / Sq_chunk_t;
+    static_assert(max_cols_per_acq >= 1, "one Q chunk row of one tile column must fit DEST");
+    constexpr uint32_t qk_cw_cap = qkt_subblock_w < max_cols_per_acq ? qkt_subblock_w : max_cols_per_acq;
+    constexpr uint32_t pv_w = vDHt < max_cols_per_acq ? vDHt : max_cols_per_acq;
+    static_assert(vDHt % pv_w == 0, "vDHt must be a multiple of the P@V sub-block width");
+    constexpr uint32_t pv_unit_tiles = Sq_chunk_t * pv_w;
+    static_assert(pv_unit_tiles <= kDst, "a P@V sub-block must fit DEST");
+    constexpr uint32_t stat_slots_per_acq = kDst / Sq_chunk_t;
+    constexpr uint32_t alpha_slots_per_acq = kDst / (2 * Sq_chunk_t);
+    static_assert(alpha_slots_per_acq >= 1, "the alpha and the new max of one slot must fit DEST together");
+    static_assert(Sq_chunk_t <= kDst, "salad_correct_fused needs one Q chunk column in DEST");
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+
+    ASSERT(n_slots >= 1 && n_slots <= kMaxMembers);
+    const auto slot_init = [&](uint32_t g) -> bool { return ((initialized_mask >> slots[g]) & 1u) != 0; };
+    const auto run_col = [&](uint32_t g, uint32_t s) -> uint32_t {
+        return static_cast<uint32_t>(run_cols[g * kMaxRuns + s]);
+    };
+    const auto run_wd = [&](uint32_t g, uint32_t s) -> uint32_t {
+        return static_cast<uint32_t>(run_ws[g * kMaxRuns + s]);
+    };
+    uint8_t W[kMaxMembers];
+    uint16_t off[kMaxMembers];
+    uint32_t total = 0;
+    uint32_t q_wait_tiles = 0;
+    for (uint32_t g = 0; g < n_slots; ++g) {
+        uint32_t w = 0;
+        for (uint32_t s = 0; s < n_runs[g]; ++s) {
+            w += run_wd(g, s);
+        }
+        ASSERT(n_runs[g] >= 1 && w >= 1 && w <= Sk_chunk_t);
+        W[g] = static_cast<uint8_t>(w);
+        off[g] = static_cast<uint16_t>(total);
+        total += Sq_chunk_t * w;
+        const uint32_t t = (static_cast<uint32_t>(slots[g]) + 1) * q_chunk_tiles;
+        q_wait_tiles = t > q_wait_tiles ? t : q_wait_tiles;
+    }
+    ASSERT(total <= qk_cap);
+    const auto sidx = [&](uint32_t g, uint32_t r, uint32_t c) -> uint32_t { return off[g] + r * W[g] + c; };
+
+    CircularBuffer(cb_qkt_im).reserve_back(qk_cap);
+    CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+    CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
+    sdpa_maybe_pack_reconfig_data_format<cb_out, cb_qkt_im>();
+    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
+    SolResStepState<kDst, kMaxMembers> st{};
+    st.slots = slots;
+    st.run_cols = run_cols;
+    st.run_ws = run_ws;
+    st.n_runs = n_runs;
+    st.W = W;
+    st.off = off;
+    st.n_slots = n_slots;
+    st.initialized_mask = initialized_mask;
+    {
+        uint32_t mm_cw = 0;
+        for (uint32_t g = 0; g < n_slots; ++g) {
+            uint32_t col = 0;
+            for (uint32_t s = 0; s < n_runs[g]; ++s) {
+                const uint32_t rw = run_wd(g, s);
+                for (uint32_t q0 = 0; q0 < rw;) {
+                    const uint32_t cw = rw - q0 < qk_cw_cap ? rw - q0 : qk_cw_cap;
+                    if (st.uu_tiles + Sq_chunk_t * cw > kDst) {
+                        sol_res_s1_flush<Sq_chunk_t, cb_qkt_im, kDst, kMaxMembers>(st);
+                    }
+                    if (st.uu == 0) {
+                        tile_regs_acquire();
+                    }
+                    if (cw != mm_cw) {
+                        sdpa_mm_init(cb_q_in, cb_kt_in, true, cw, Sq_chunk_t, DHt);
+                        mm_cw = cw;
+                    }
+                    uint32_t in0 = slots[g] * q_chunk_tiles;
+                    uint32_t in1 = run_col(g, s) + q0;
+                    for (uint32_t d = 0; d < DHt; ++d) {
+                        sdpa_matmul_block_no_mop(cb_q_in, cb_kt_in, in0, in1, st.uu_tiles, true, cw, Sq_chunk_t, DHt);
+                        in0++;
+                        in1 += Sk_chunk_t;
+                    }
+                    st.unit_g[st.uu] = static_cast<uint8_t>(g);
+                    st.unit_c0[st.uu] = static_cast<uint8_t>(col + q0);
+                    st.unit_cw[st.uu] = static_cast<uint8_t>(cw);
+                    ++st.uu;
+                    st.uu_tiles += Sq_chunk_t * cw;
+                    q0 += cw;
+                }
+                col += rw;
+            }
+        }
+        sol_res_s1_flush<Sq_chunk_t, cb_qkt_im, kDst, kMaxMembers>(st);
+    }
+    sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
+    if (apply_col_bias) {
+        for (uint32_t g = 0; g < n_slots; ++g) {
+            ASSERT(n_runs[g] == 1 && run_col(g, 0) == 0);
+            CircularBuffer(cb_sol_bias).wait_front(Sk_chunk_t);
+            begin_mask_l1_accumulate<false>(cb_qkt_im, cb_sol_bias);
+            for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                l1_acc_tile_run(cb_sol_bias, 0, cb_qkt_im, sidx(g, r, 0), W[g]);
+            }
+            end_mask_l1_accumulate();
+            CircularBuffer(cb_sol_bias).pop_front(Sk_chunk_t);
+        }
+    }
+    cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
+
+    constexpr float kScale = __builtin_bit_cast(float, scale_fp32);
+    constexpr float kLazyThrRaw = 0.5f / kScale;
+    constexpr uint16_t kLazyThrBits = static_cast<uint16_t>(__builtin_bit_cast(uint32_t, kLazyThrRaw) >> 16);
+    uint32_t n_init = 0;
+    for (uint32_t g = 0; g < n_slots; ++g) {
+        n_init += slot_init(g) ? 1u : 0u;
+    }
+    bool rescale = false;
+    CircularBuffer(cb_qkt_im).wait_front(qk_cap);
+    {
+        CircularBuffer(cb_max_scratch).reserve_back(stats_cap);
+        configure_single_tile_pack(cb_max_scratch);
+        uint32_t last_w = 0;
+        for (uint32_t g0 = 0; g0 < n_slots; g0 += stat_slots_per_acq) {
+            const uint32_t n_g = n_slots - g0 < stat_slots_per_acq ? n_slots - g0 : stat_slots_per_acq;
+            tile_regs_acquire();
+            bool any_init = false;
+            for (uint32_t gg = 0; gg < n_g; ++gg) {
+                any_init |= slot_init(g0 + gg);
+            }
+            if (any_init) {
+                if (last_w != 0) {
+                    reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
+                    last_w = 0;
+                }
+                sdpa_reduce_copy_tile_to_dst_init_short(cb_max_in);
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    if (!slot_init(g0 + gg)) {
+                        continue;
+                    }
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        copy_tile(cb_max_in, slots[g0 + gg] * Sq_chunk_t + r, gg * Sq_chunk_t + r);
+                    }
+                }
+            }
+            for (uint32_t gg = 0; gg < n_g; ++gg) {
+                const uint32_t w = W[g0 + gg];
+                if (w != last_w) {
+                    if (last_w != 0) {
+                        reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
+                    }
+                    reduce_block_max_row_init_runtime(cb_max_scratch, w, cb_qkt_im, cb_identity_scale_in, false);
+                    last_w = w;
+                }
+                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                    reduce_block_max_row_runtime(
+                        cb_qkt_im, cb_identity_scale_in, sidx(g0 + gg, r, 0), gg * Sq_chunk_t + r, false, false);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t gg = 0; gg < n_g; ++gg) {
+                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                    sdpa_pack_tile_ooo(gg * Sq_chunk_t + r, cb_max_scratch, slots[g0 + gg] * Sq_chunk_t + r);
+                }
+            }
+            tile_regs_release();
+        }
+        if (last_w != 0) {
+            reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
+        }
+        cb_push_back_hold_wr_ptr(cb_max_scratch, stats_cap);
+        CircularBuffer(cb_max_scratch).wait_front(stats_cap);
+        CircularBuffer(cb_exp_max_diff).reserve_back(stats_cap);
+        cb_push_back_hold_wr_ptr(cb_exp_max_diff, stats_cap);
+        CircularBuffer(cb_exp_max_diff).wait_front(stats_cap);
+
+        if (n_init > 0) {
+            uint32_t nd = 0;
+            configure_single_tile_pack(cb_exp_max_diff);
+            for (uint32_t g = 0; g < n_slots;) {
+                uint32_t nb = 0;
+                tile_regs_acquire();
+                sub_init(cb_max_scratch, cb_max_in);
+                for (; g < n_slots && nb + Sq_chunk_t <= kDst; ++g) {
+                    if (!slot_init(g)) {
+                        continue;
+                    }
+                    const uint32_t row0 = slots[g] * Sq_chunk_t;
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        sub_tiles(cb_max_scratch, cb_max_in, row0 + r, row0 + r, nb++);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < nb; ++i) {
+                    sdpa_pack_tile_ooo(i, cb_exp_max_diff, nd + i);
+                }
+                tile_regs_release();
+                nd += nb;
+            }
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            tile_regs_acquire();
+            reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_exp_max_diff, cb_identity_scale_in, cb_exp_max_diff);
+            for (uint32_t i = 0; i < nd; ++i) {
+                reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_exp_max_diff, cb_identity_scale_in, i, 0, 0);
+            }
+            reduce_uninit();
+            tile_regs_commit();
+            tile_regs_wait();
+            configure_single_tile_pack(cb_exp_max_diff);
+            sdpa_pack_tile_ooo(0, cb_exp_max_diff, 0);
+            tile_regs_release();
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            UNPACK({
+                ckernel::tensix_sync();
+                while (ckernel::semaphore_read(semaphore::PACK_DONE) == 0) {
+                }
+                t6_semaphore_get<>(semaphore::PACK_DONE);
+                invalidate_l1_cache();
+            });
+            const uint32_t growth = ckernel::read_tile_value(cb_exp_max_diff, 0, 0);
+            rescale = (growth & 0xFFFFu) > kLazyThrBits;
+        }
+
+        if (rescale) {
+            exp_packthread_tile_init<EXP_APPROX_MODE>();
+        }
+        for (uint32_t g0 = 0; g0 < n_slots; g0 += alpha_slots_per_acq) {
+            const uint32_t n_g = n_slots - g0 < alpha_slots_per_acq ? n_slots - g0 : alpha_slots_per_acq;
+            uint32_t n_alpha = 0;
+            uint32_t n_copy = 0;
+            for (uint32_t gg = 0; gg < n_g; ++gg) {
+                const bool init = slot_init(g0 + gg);
+                n_alpha += (rescale && init) ? 1u : 0u;
+                n_copy += (rescale || !init) ? 1u : 0u;
+            }
+            if (n_copy == 0) {
+                continue;
+            }
+            tile_regs_acquire();
+            if (n_alpha > 0) {
+                sub_init(cb_max_in, cb_max_scratch);
+                uint32_t a = 0;
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    if (!slot_init(g0 + gg)) {
+                        continue;
+                    }
+                    const uint32_t row0 = slots[g0 + gg] * Sq_chunk_t;
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        sub_tiles(cb_max_in, cb_max_scratch, row0 + r, row0 + r, a * Sq_chunk_t + r);
+                    }
+                    ++a;
+                }
+            }
+            const uint32_t copy_base = n_alpha * Sq_chunk_t;
+            copy_init(cb_max_scratch);
+            {
+                uint32_t c = 0;
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    if (!rescale && slot_init(g0 + gg)) {
+                        continue;
+                    }
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        copy_tile(cb_max_scratch, slots[g0 + gg] * Sq_chunk_t + r, copy_base + c * Sq_chunk_t + r);
+                    }
+                    ++c;
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            if (n_alpha > 0) {
+                for (uint32_t i = 0; i < copy_base; ++i) {
+                    PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(i)));
+                }
+                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                configure_single_tile_pack(cb_exp_max_diff);
+                uint32_t a = 0;
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    if (!slot_init(g0 + gg)) {
+                        continue;
+                    }
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        sdpa_pack_tile_ooo(a * Sq_chunk_t + r, cb_exp_max_diff, slots[g0 + gg] * Sq_chunk_t + r);
+                    }
+                    ++a;
+                }
+            }
+            configure_single_tile_pack(cb_max_in);
+            {
+                uint32_t c = 0;
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    if (!rescale && slot_init(g0 + gg)) {
+                        continue;
+                    }
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        sdpa_pack_tile_ooo(copy_base + c * Sq_chunk_t + r, cb_max_in, slots[g0 + gg] * Sq_chunk_t + r);
+                    }
+                    ++c;
+                }
+            }
+            tile_regs_release();
+        }
+        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+
+        if (rescale) {
+            for (uint32_t g = 0; g < n_slots; ++g) {
+                if (!slot_init(g)) {
+                    continue;
+                }
+                salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
+                    cb_prev_out, cb_sum_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, slots[g], slots[g], slots[g]);
+            }
+        }
+    }
+
+    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    CircularBuffer(cb_col_identity).wait_front(1);
+    {
+        constexpr auto s5_flush = sol_res_s5_flush<
+            Sq_chunk_t,
+            vDHt,
+            pv_w,
+            kMaxRuns,
+            kDst,
+            kMaxMembers,
+            v_entry_tiles,
+            cb_qkt_im,
+            cb_v_in,
+            cb_prev_out>;
+        st.pk_w = 0;
+        for (uint32_t g = 0; g < n_slots; ++g) {
+            const uint32_t w = W[g];
+            for (uint32_t c0 = 0; c0 < w;) {
+                const uint32_t cw = w - c0 < max_cols_per_acq ? w - c0 : max_cols_per_acq;
+                if (st.uu_tiles + Sq_chunk_t * cw > kDst) {
+                    s5_flush(st, false);
+                }
+                if (cw != st.init_cw) {
+                    s5_flush(st, false);
+                    if (st.mm_fmt) {
+                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                        st.mm_fmt = false;
+                    }
+                    sub_bcast_cols_init_short_custom(cb_qkt_im, cb_max_in, cw);
+                    st.init_cw = cw;
+                    st.pv_stride = 0;
+                }
+                if (st.uu == 0) {
+                    tile_regs_acquire();
+                }
+                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                    sub_tiles_bcast_cols_custom(
+                        cb_qkt_im, cb_max_in, sidx(g, r, c0), slots[g] * Sq_chunk_t + r, st.uu_tiles + r * cw, cw);
+                }
+                st.unit_g[st.uu] = static_cast<uint8_t>(g);
+                st.unit_c0[st.uu] = static_cast<uint8_t>(c0);
+                st.unit_cw[st.uu] = static_cast<uint8_t>(cw);
+                ++st.uu;
+                st.uu_tiles += Sq_chunk_t * cw;
+                c0 += cw;
+            }
+            st.cbatch[g] = static_cast<uint8_t>(st.batch_idx);
+            st.batch_completes = true;
+            st.n_done = g + 1;
+        }
+        s5_flush(st, true);
+    }
+
+    sdpa_maybe_reconfig_data_format<cb_v_in, cb_col_identity, cb_qkt_im, cb_qkt_im>();
+    configure_single_tile_pack(cb_sum_in);
+    {
+        uint32_t rs_stride = 0;
+        for (uint32_t g0 = 0; g0 < n_slots; g0 += stat_slots_per_acq) {
+            const uint32_t n_g = n_slots - g0 < stat_slots_per_acq ? n_slots - g0 : stat_slots_per_acq;
+            tile_regs_acquire();
+            for (uint32_t gg = 0; gg < n_g; ++gg) {
+                const uint32_t g = g0 + gg;
+                if (W[g] != rs_stride) {
+                    sdpa_pv_mm_setup(cb_qkt_im, cb_col_identity, false, 1, Sq_chunk_t, W[g]);
+                    rs_stride = W[g];
+                }
+                for (uint32_t c = 0; c < W[g]; ++c) {
+                    sdpa_matmul_block_no_mop(
+                        cb_qkt_im, cb_col_identity, sidx(g, 0, c), 0, gg * Sq_chunk_t, false, 1, Sq_chunk_t, W[g]);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            bool acc_on = false;
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            for (uint32_t gg = 0; gg < n_g; ++gg) {
+                const bool acc = slot_init(g0 + gg);
+                if (acc != acc_on) {
+                    PACK((llk_pack_reconfig_l1_acc(acc ? 1 : 0)));
+                    acc_on = acc;
+                }
+                const uint32_t out_row0 = slots[g0 + gg] * Sq_chunk_t;
+                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                    sdpa_pack_tile_ooo(gg * Sq_chunk_t + r, cb_sum_in, out_row0 + r);
+                }
+            }
+            if (acc_on) {
+                PACK((llk_pack_reconfig_l1_acc(0)));
+            }
+            tile_regs_release();
+        }
+    }
+    sdpa_maybe_reconfig_data_format<cb_col_identity, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+
+    CircularBuffer(cb_qkt_im).pop_front(qk_cap);
+    CircularBuffer(cb_max_scratch).pop_front(stats_cap);
+    CircularBuffer(cb_exp_max_diff).pop_front(stats_cap);
+    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+}
+
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    uint32_t vDHt,
+    uint32_t NH,
+    uint32_t scale_fp32,
+    uint32_t qkt_subblock_h,
+    uint32_t qkt_subblock_w,
+    uint32_t qktv_subblock_h,
+    uint32_t qktv_subblock_w,
+    uint32_t cb_q_in,
+    uint32_t cb_kt_in,
+    uint32_t cb_v_in,
+    uint32_t cb_qkt_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_max_scratch,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch,
+    uint32_t cb_mask_in,
+    uint32_t cb_max_in,
+    uint32_t cb_prev_out,
+    uint32_t cb_out,
+    uint32_t cb_sum_in,
+    uint32_t local_padded_Nt,
+    uint32_t kv_region_Nt,
+    uint32_t chunk_size_t,
+    uint32_t v_cb_physical_width_t,
+    bool global_n_mask_enabled,
+    bool local_n_mask_enabled,
+    uint32_t cb_sol_plan,
+    uint32_t cb_sol_bias,
+    uint32_t sol_pooled_chunks,
+    uint32_t sol_pooled_last_tiles,
+    uint32_t sol_resident_slots,
+    uint32_t sol_res_block_words,
+    uint32_t kv_cb_pages,
+    uint32_t sol_res_plan_rec_base,
+    bool sol_res_no_dummies,
+    typename MaskCtx>
+void sdpa_ring_resident(
+    const uint32_t global_q_start,
+    const uint32_t global_q_end,
+    const uint32_t num_q_chunks,
+    const uint32_t ring_id,
+    const uint32_t num_local_k_chunks,
+    const uint32_t logical_nt,
+    const bool ring_iter_needs_global_n_mask,
+    const bool local_n_needs_masking,
+    const uint32_t global_n_mask_chunk_id,
+    const uint32_t local_n_mask_chunk_id,
+    RingAccumulatorState& acc_state,
+    const bool is_last_ring_iter,
+    const bool is_first_active_iter,
+    const MaskCtx& lw_mask) {
+    init_sdpa_streaming_semaphores<15>();
+    static_assert(sol_resident_slots >= 1 && sol_resident_slots <= 32, "resident state is tracked in a 32-bit mask");
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    static_assert(
+        !sdpa_unpack_format_changed<cb_qkt_im, cb_prev_out>() && !sdpa_unpack_format_changed<cb_qkt_im, cb_max_in>() &&
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_sum_in>() &&
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_max_scratch>() &&
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_exp_max_diff>() &&
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_identity_scale_in>(),
+        "resident mode: the state, scratch and scale CBs must use the step's intermediate format");
+#endif
+#ifdef TRISC_PACK
+    static_assert(
+        pack_dst_format[cb_prev_out] == pack_dst_format[cb_qkt_im] &&
+            pack_dst_format[cb_max_in] == pack_dst_format[cb_qkt_im] &&
+            pack_dst_format[cb_sum_in] == pack_dst_format[cb_qkt_im] &&
+            pack_dst_format[cb_max_scratch] == pack_dst_format[cb_qkt_im] &&
+            pack_dst_format[cb_exp_max_diff] == pack_dst_format[cb_qkt_im],
+        "resident mode: the state and scratch CBs must use the step's intermediate format");
+#endif
+    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
+    constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
+    constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+
+    constexpr uint32_t kBlockTiles = 2;
+    constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
+    constexpr uint32_t kBW = sol_res_block_words;
+    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole 64-token blocks");
+    static_assert(kBW >= 1 && kBW + 3 <= 16, "the plan header holds the block words, the union bits and the flag");
+    static_assert(kBlocksPerPiece <= 255 && Sk_chunk_t <= 255, "run tables are byte-indexed");
+
+    constexpr uint32_t kGroupCap = sol_resident_slots < 4 ? sol_resident_slots : 4;
+    constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
+    constexpr uint32_t kQkCap =
+        kQkTiles > kGroupCap * Sq_chunk_t * Sk_chunk_t ? kQkTiles : kGroupCap * Sq_chunk_t * Sk_chunk_t;
+    constexpr uint32_t kStatsCap = sol_resident_slots * Sq_chunk_t;
+    constexpr uint32_t kOutCap = sol_resident_slots * out_tiles;
+#ifdef TRISC_PACK
+    ASSERT(get_local_cb_interface(cb_qkt_im).fifo_num_pages == kQkCap);
+    ASSERT(get_local_cb_interface(cb_max_scratch).fifo_num_pages == kStatsCap);
+    ASSERT(get_local_cb_interface(cb_exp_max_diff).fifo_num_pages == kStatsCap);
+    ASSERT(get_local_cb_interface(cb_max_in).fifo_num_pages == kStatsCap);
+    ASSERT(get_local_cb_interface(cb_sum_in).fifo_num_pages == kStatsCap);
+    ASSERT(get_local_cb_interface(cb_prev_out).fifo_num_pages == kOutCap);
+#endif
+
+    const uint32_t n_res = global_q_end - global_q_start;
+    ASSERT(n_res >= 1 && n_res <= sol_resident_slots);
+
+    uint32_t res_head[sol_resident_slots];
+    uint32_t res_blk[sol_resident_slots][kBW];
+    uint32_t union_lo[sol_resident_slots];
+    uint32_t union_hi[sol_resident_slots];
+    uint32_t do_pooled = 0;
+    if constexpr (sol_res_plan_rec_base != 0) {
+        constexpr uint32_t kRec = kBW + 3;
+        CircularBuffer(cb_sol_plan).wait_front(1);
+        for (uint32_t i = 0; i < n_res; ++i) {
+            const uint32_t flat = global_q_start + i;
+            res_head[i] = (flat / num_q_chunks) % NH;
+            const uint32_t r = sol_res_plan_rec_base + i * kRec;
+            for (uint32_t w = 0; w < kBW; ++w) {
+                res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, r + w);
+            }
+            union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW);
+            union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW + 1);
+            do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW + 2);
+        }
+        CircularBuffer(cb_sol_plan).pop_front(1);
+    } else {
+        for (uint32_t i = 0; i < n_res; ++i) {
+            const uint32_t flat = global_q_start + i;
+            res_head[i] = (flat / num_q_chunks) % NH;
+            CircularBuffer(cb_sol_plan).wait_front(1);
+            for (uint32_t w = 0; w < kBW; ++w) {
+                res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, w);
+            }
+            union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW);
+            union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 1);
+            do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 2);
+            CircularBuffer(cb_sol_plan).pop_front(1);
+        }
+    }
+    const auto bit = [](uint32_t lo, uint32_t hi, uint32_t k) -> bool {
+        return k < 32 ? ((lo >> k) & 1u) != 0 : ((hi >> (k - 32)) & 1u) != 0;
+    };
+    const auto block_kept = [&](uint32_t i, uint32_t b) -> bool {
+        return b < kBW * 32 && ((res_blk[i][b >> 5] >> (b & 31)) & 1u) != 0;
+    };
+    uint32_t initialized = is_first_active_iter ? 0u : acc_state.last_call_k_chunks;
+
+    if (is_first_active_iter) {
+        CircularBuffer(cb_max_in).reserve_back(kStatsCap);
+        cb_push_back_hold_wr_ptr(cb_max_in, kStatsCap);
+        CircularBuffer(cb_sum_in).reserve_back(kStatsCap);
+        cb_push_back_hold_wr_ptr(cb_sum_in, kStatsCap);
+        CircularBuffer(cb_prev_out).reserve_back(kOutCap);
+        cb_push_back_hold_wr_ptr(cb_prev_out, kOutCap);
+        CircularBuffer(cb_max_in).wait_front(kStatsCap);
+        CircularBuffer(cb_sum_in).wait_front(kStatsCap);
+        CircularBuffer(cb_prev_out).wait_front(kOutCap);
+    }
+
+    uint32_t KV_chunks_processed_in_iter = 0;
+
+    const auto run_step = [&](const uint8_t* slots,
+                              const uint32_t n_slots,
+                              const uint8_t* run_cols,
+                              const uint8_t* run_ws,
+                              const uint8_t* n_runs,
+                              const bool apply_col_bias) {
+        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+        sdpa_resident_piece_step_compact<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qkt_subblock_w,
+            cb_q_in,
+            cb_kt_in,
+            cb_v_in,
+            cb_qkt_im,
+            cb_identity_scale_in,
+            cb_col_identity,
+            cb_max_scratch,
+            cb_exp_max_diff,
+            cb_max_in,
+            cb_sum_in,
+            cb_prev_out,
+            cb_out,
+            cb_sol_bias,
+            v_cb_physical_width_t,
+            kQkCap,
+            kStatsCap>(slots, n_slots, run_cols, run_ws, n_runs, initialized, apply_col_bias);
+        for (uint32_t g = 0; g < n_slots; ++g) {
+            initialized |= 1u << slots[g];
+        }
+    };
+    const auto run_groups = [&](const uint8_t* members,
+                                const uint8_t* widths,
+                                const uint8_t* mruns,
+                                const uint8_t* mrunws,
+                                const uint8_t* mnruns,
+                                const uint32_t n,
+                                const bool apply_col_bias) {
+        sol_res_run_groups<sol_resident_slots, kBlocksPerPiece, Sq_chunk_t, kQkCap>(
+            run_step, members, widths, mruns, mrunws, mnruns, n, apply_col_bias);
+    };
+    const auto pop_kv = [&]() {
+        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+        sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
+        CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+        sdpa_cb_pop_front_out_of_line(cb_v_in, v_entry_tiles);
+    };
+
+    for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+        if (!kv_chunk_starts_before_logical_end<false, false, local_padded_Nt, chunk_size_t, kv_region_Nt>(
+                ring_id, k * Sk_chunk_t, logical_nt)) {
+            continue;
+        }
+        [[maybe_unused]] uint32_t active_Sk_param = Sk_chunk_t;
+        bool narrowed = false;
+        if constexpr (global_n_mask_enabled) {
+            if (ring_iter_needs_global_n_mask && k == global_n_mask_chunk_id) {
+                active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
+                narrowed = true;
+            }
+        }
+        if constexpr (local_n_mask_enabled) {
+            if (!narrowed && local_n_needs_masking && k == local_n_mask_chunk_id) {
+                active_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
+            }
+        }
+        (void)narrowed;
+        uint32_t heads_done = 0;
+        for (uint32_t i0 = 0; i0 < n_res; ++i0) {
+            if ((heads_done >> i0) & 1u) {
+                continue;
+            }
+            uint32_t head_mask = 0;
+            for (uint32_t i = i0; i < n_res; ++i) {
+                if (res_head[i] == res_head[i0]) {
+                    head_mask |= 1u << i;
+                }
+            }
+            heads_done |= head_mask;
+            if (!bit(union_lo[i0], union_hi[i0], k)) {
+                continue;
+            }
+            uint8_t group[sol_resident_slots];
+            uint8_t gwidth[sol_resident_slots];
+            uint8_t runs[sol_resident_slots * kBlocksPerPiece];
+            uint8_t runws[sol_resident_slots * kBlocksPerPiece];
+            uint8_t n_runs[sol_resident_slots];
+            uint32_t n_group = 0;
+            uint32_t group_mask = 0;
+            for (uint32_t i = i0; i < n_res; ++i) {
+                if (((head_mask >> i) & 1u) == 0) {
+                    continue;
+                }
+                uint32_t cnt = 0;
+                uint32_t width = 0;
+                bool prev_kept = false;
+                for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+                    const bool kept = block_kept(i, k * kBlocksPerPiece + j);
+                    if (kept) {
+                        ASSERT((j + 1) * kBlockTiles <= active_Sk_param);
+                        if (prev_kept) {
+                            runws[n_group * kBlocksPerPiece + cnt - 1] += kBlockTiles;
+                        } else {
+                            runs[n_group * kBlocksPerPiece + cnt] = static_cast<uint8_t>(j * kBlockTiles);
+                            runws[n_group * kBlocksPerPiece + cnt] = kBlockTiles;
+                            ++cnt;
+                        }
+                        width += kBlockTiles;
+                    }
+                    prev_kept = kept;
+                }
+                if (cnt == 0) {
+                    continue;
+                }
+                group[n_group] = static_cast<uint8_t>(i);
+                gwidth[n_group] = static_cast<uint8_t>(width);
+                n_runs[n_group] = static_cast<uint8_t>(cnt);
+                ++n_group;
+                group_mask |= 1u << i;
+            }
+            if (n_group > 0) {
+                ASSERT(k != 0 || group_mask == head_mask);
+                ASSERT(k == 0 || (initialized & group_mask) == group_mask);
+                run_groups(group, gwidth, runs, runws, n_runs, n_group, false);
+            }
+            pop_kv();
+            KV_chunks_processed_in_iter++;
+        }
+    }
+
+    if (do_pooled) {
+        uint32_t heads_done = 0;
+        for (uint32_t i0 = 0; i0 < n_res; ++i0) {
+            if ((heads_done >> i0) & 1u) {
+                continue;
+            }
+            uint32_t head_mask = 0;
+            for (uint32_t i = i0; i < n_res; ++i) {
+                if (res_head[i] == res_head[i0]) {
+                    head_mask |= 1u << i;
+                }
+            }
+            heads_done |= head_mask;
+            uint8_t pgroup[sol_resident_slots];
+            uint8_t pwidth[sol_resident_slots];
+            uint8_t pcols[sol_resident_slots * kBlocksPerPiece];
+            uint8_t pws[sol_resident_slots * kBlocksPerPiece];
+            uint8_t pruns[sol_resident_slots];
+            uint32_t n_p = 0;
+            for (uint32_t i = i0; i < n_res; ++i) {
+                if (((head_mask >> i) & 1u) == 0) {
+                    continue;
+                }
+                pgroup[n_p] = static_cast<uint8_t>(i);
+                pcols[n_p * kBlocksPerPiece] = 0;
+                pruns[n_p] = 1;
+                ++n_p;
+            }
+            for (uint32_t pc = 0; pc < sol_pooled_chunks; ++pc) {
+                const uint32_t active_width = (pc + 1 == sol_pooled_chunks) ? sol_pooled_last_tiles : Sk_chunk_t;
+                for (uint32_t g = 0; g < n_p; ++g) {
+                    pwidth[g] = static_cast<uint8_t>(active_width);
+                    pws[g * kBlocksPerPiece] = static_cast<uint8_t>(active_width);
+                }
+                run_groups(pgroup, pwidth, pcols, pws, pruns, n_p, true);
+                pop_kv();
+                KV_chunks_processed_in_iter++;
+            }
+        }
+    }
+    acc_state.last_call_k_chunks = initialized;
+
+    if (is_last_ring_iter) {
+        for (uint32_t i = 0; i < n_res; ++i) {
+            ASSERT((initialized >> i) & 1u);
+            normalize_row_streaming<
+                false,
+                vDHt,
+                norm_dst_size,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_out,
+                scale_fp32,
+                false,
+                INVALID_CB>(cb_sum_in, cb_prev_out, Sq_chunk_t, cb_max_in);
+        }
+        if (n_res < sol_resident_slots) {
+            sdpa_cb_pop_front_out_of_line(cb_sum_in, (sol_resident_slots - n_res) * Sq_chunk_t);
+            sdpa_cb_pop_front_out_of_line(cb_prev_out, (sol_resident_slots - n_res) * out_tiles);
+        }
+        sdpa_cb_pop_front_out_of_line(cb_max_in, kStatsCap);
+        sdpa_cb_pop_front_out_of_line(cb_q_in, n_res * q_chunk_tiles);
+    }
+
+    if constexpr (!sol_res_no_dummies) {
+        for (uint32_t dummy_chunk = 0;
+             dummy_chunk < dummy_kv_chunks_for_phase_alignment<false, false, kv_cb_pages>(KV_chunks_processed_in_iter);
+             ++dummy_chunk) {
+            CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+            sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
+            CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+            sdpa_cb_pop_front_out_of_line(cb_v_in, v_entry_tiles);
         }
     }
 }
