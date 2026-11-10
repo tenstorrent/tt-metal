@@ -66,6 +66,15 @@ def per_replay_inputs(model, in_body):
     from the packed aux under QWEN36_SPEC_HOSTSET, the bucket-sliced page tables); the persistent GDN selectors come
     from the model. Only addresses go into runtime args."""
     d = dict(state_blk_idx=getattr(model, "_vfy_state_idx", None), conv_sel=getattr(model, "_vfy_conv_sel", None))
+    # The engine's page table: the PERSISTENT per-user table _vfy_kvpt_users, int32 [B, nb] ROW_MAJOR, DRAM interleaved
+    # (one row = one page of nb*4 B), replicated on every device; row u = verify-batch user slot u (the token / kvpos
+    # row order), entry b = physical block index into paged_k / paged_v dim 0, zero-padded past the user's blocks
+    # (bound reads by kvpos). Fixed address (allocated in prepare_verify_trace before warmup), rewritten in place by
+    # verify_traced(page_tables=...) before execute_trace (copy skipped when unchanged). A bucket of n_users < B reads
+    # rows 0..n_users-1 of this same buffer: use it, not the in-body pt_users (a per-trace ttnn.slice copy).
+    pt = getattr(model, "_vfy_kvpt_users", None)
+    d.update(page_table=pt, page_table_addr=(pt.buffer_address() if pt is not None else None),
+             page_table_B=getattr(model, "_vfy_B", None), page_table_nb=getattr(model, "_vfy_nb", None))
     d.update(in_body)
     return d
 
