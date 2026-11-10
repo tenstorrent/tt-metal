@@ -161,7 +161,7 @@ acc_wm = ttnn.TensorAccessorArgs(wm_all).get_compile_time_args()
 def build(out):
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, 2 * GRP * KB * 2, rect), cbd(2, ttnn.bfloat16, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
-           ttnn.cb_descriptor_from_sharded_tensor(16, out), cbd(6, ttnn.bfloat4_b, 2 * KT * MIXN, rect),
+           ttnn.cb_descriptor_from_sharded_tensor(16, out), cbd(6, ttnn.bfloat4_b, KT * MIXN, rect),
            ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect)]
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

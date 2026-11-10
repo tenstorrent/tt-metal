@@ -44,15 +44,15 @@ void kernel_main() {
 
     // CB_W2 / CB_WD are two layer slots each. Layer L + 1 is issued before layer L is pushed, so its address is the
     // OTHER slot (get_write_ptr still points at layer L's), and its reserve covers both slots (= layer L - 1 popped).
-    const uint32_t w2_base = get_write_ptr(CB_W2), wd_base = get_write_ptr(CB_WD), wm_base = get_write_ptr(CB_WM);
+    const uint32_t w2_base = get_write_ptr(CB_W2), wd_base = get_write_ptr(CB_WD), wm_base = get_write_ptr(CB_WM); (void)wm_base;
+    auto issue_mix = [&](uint32_t L) {
+        noc_async_read_set_trid(1 + (L & 1));
+        cb_reserve_back(CB_WM, MIXT);   // single slot: free once compute popped layer L - 1's mixer slice
+        noc_async_read(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * WTB);
+        noc_async_read_set_trid(0);
+    };
     auto issue = [&](uint32_t L) {
         noc_async_read_set_trid(1 + (L & 1));
-        {
-            cb_reserve_back(CB_WM, L == 0 ? MIXT : 2 * MIXT);
-            const uint32_t wpm = get_write_ptr(CB_WM);
-            const uint32_t dm = (L == 0) ? wpm : (wpm == wm_base ? wm_base + MIXT * WTB : wm_base);
-            noc_async_read(wm.get_noc_addr(wm_page + L * pwm_layer), dm, MIXT * WTB);
-        }
         if (IS_GU) {
             cb_reserve_back(CB_W2, L == 0 ? w2_tiles : 2 * w2_tiles);
             const uint32_t wp = get_write_ptr(CB_W2);
@@ -71,6 +71,7 @@ void kernel_main() {
         noc_async_read_set_trid(0);
     };
 
+    issue_mix(0);
     issue(0);
     for (uint32_t L = 0; L < NL; ++L) {
         if (L + 1 < NL) issue(L + 1);
@@ -82,8 +83,9 @@ void kernel_main() {
         cb_push_back(CB_WD, DN_TILES);
         {   // mixer projection done on every core -> chain stall (GDN step / SDPA + out-proj + all-reduce) -> MLP go
             DeviceZoneScopedN("W-MIXSTALL");
-            cb_wait_front(CB_YM, 1);
-            cb_pop_front(CB_YM, 1);
+            cb_wait_front(CB_YM, MIXT / KT);   // compute pushes MIXN = MIXT / KT mixer-output tiles per layer
+            cb_pop_front(CB_YM, MIXT / KT);
+            if (L + 1 < NL) issue_mix(L + 1);   // the next layer's mixer streams during this stall + MLP
             spin_cycles(S_MIX);
             cb_reserve_back(CB_GO, 1);
             cb_push_back(CB_GO, 1);
