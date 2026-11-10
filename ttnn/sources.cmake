@@ -26,6 +26,7 @@ set(TTNN_CORE_SRCS
     core/events.cpp
     core/global_circular_buffer.cpp
     core/global_semaphore.cpp
+    core/per_device_program_merge.cpp
     core/operation.cpp
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
