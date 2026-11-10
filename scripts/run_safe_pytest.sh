@@ -635,8 +635,10 @@ if [[ "${SAFE_PYTEST_TRACY_PY_ZONES:-0}" == "1" ]]; then
 fi
 if [[ "$PROFILE_MODE" == true ]]; then
     if [[ "$WARM_MODE" == true ]]; then
-        export TT_TRACY_CHILD_PYTHON="python3 $REPO_DIR/scripts/safe_pytest_warm.py run"
-        PYTEST_CMD=("${WARM_CLIENT[@]}" -m tracy "${TRACY_FLAGS[@]}" -m pytest)
+        # tracy starts its workload through a shell, so the launcher is quoted for one (a checkout path with a
+        # space must stay one word). It is set for the tracy process only; tracy does not pass it on.
+        printf -v _warm_launcher '%q ' "${WARM_CLIENT[@]}"
+        PYTEST_CMD=(env "TT_TRACY_CHILD_PYTHON=${_warm_launcher% }" "${WARM_CLIENT[@]}" -m tracy "${TRACY_FLAGS[@]}" -m pytest)
     else
         PYTEST_CMD=(python -m tracy "${TRACY_FLAGS[@]}" -m pytest)
     fi

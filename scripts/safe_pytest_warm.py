@@ -16,21 +16,25 @@ way that matters to a test:
   * before running anything the child takes the caller's environment, cwd, umask, rlimits, CPU affinity, argv
     and every inheritable file descriptor at the same fd numbers -- including run_safe_pytest.sh's device-lock
     fd 9, so the flock stays held until the child itself has exited, as it does for a cold pytest;
-  * signal dispositions are reset to a fresh interpreter's, numpy's global RNG is reseeded;
+  * signal dispositions are reset to a fresh interpreter's (signals the caller ignores stay ignored), numpy's
+    and torch's global RNGs are reseeded;
   * the child exits through normal interpreter finalization (atexit, C++ static destructors, Tracy's flush).
 
 Only third-party modules are preloaded, so edits to the op, its tests, the conftest or ttnn's Python are always
 imported fresh. If a preloaded file changes on disk the server retires and the client starts a new one.
 
 Failure model (the device must never see two runs at once, and a killed run must never keep running):
-  * Before the server answers "started", any problem makes the client run the command cold instead.
+  * Before the server answers "started", any problem makes the client run the command cold instead. The
+    server answers only once the forked child has finished its setup (fds, cwd, limits, stdio) and is about to
+    run the caller's command; if the setup fails, the server kills and reaps the child before it says so.
   * After "started", the client never falls back. If it loses the server it kills the child's process group and
     returns 1.
   * The child dies with the server (PR_SET_PDEATHSIG); the server kills the child's process group when the
     client's socket closes (client killed, even by SIGKILL), and also every nested job started from inside it
     (the inner workload `python -m tracy` launches in its own session under --profile).
-  * One server per socket: the server holds an exclusive flock on <sock>.lock for its whole life, and only ever
-    unlinks the socket path if it still points at its own inode.
+  * One server per socket: the server holds an exclusive flock on <sock>.lock for as long as it serves the
+    socket (it lets go when it retires, even if a run is still finishing), and only ever unlinks the socket
+    path if it still points at its own inode.
 
 Usage (from run_safe_pytest.sh):
 
@@ -50,9 +54,11 @@ import errno
 import fcntl
 import hashlib
 import importlib
+import io
 import json
 import os
 import resource
+import select
 import selectors
 import shutil
 import signal
@@ -85,16 +91,33 @@ PRELOAD = (
 
 # Environment that can change what a preloaded import does, or how the interpreter itself was configured at
 # startup. Part of the server key: a request with different values gets its own server. Everything else in the
-# environment is applied per request, in the child, before any repo code runs.
-KEY_ENV = ("LD_LIBRARY_PATH", "LD_PRELOAD", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "TORCH_HOME")
-KEY_ENV_PREFIXES = ("PYTHON", "LOGURU_", "VIRTUAL_ENV")
+# environment is applied per request, in the child, before any repo code runs. The prefixes cover what the
+# preloaded libraries read while they load: the OpenMP/BLAS runtimes (thread counts, affinity), numpy's CPU
+# feature switches, torch's settings; TZ and the locale are fixed when the interpreter starts.
+KEY_ENV = ("LD_LIBRARY_PATH", "LD_PRELOAD", "TZ", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE")
+KEY_ENV_PREFIXES = (
+    "PYTHON",
+    "LOGURU_",
+    "VIRTUAL_ENV",
+    "OMP_",
+    "GOMP_",
+    "KMP_",
+    "MKL_",
+    "OPENBLAS_",
+    "NPY_",
+    "NUMPY_",
+    "TORCH_",
+    "PYTORCH_",
+)
 
 # Resource limits the child takes from the client (UMD cares about MEMLOCK and NOFILE).
 RLIMITS = ("RLIMIT_NOFILE", "RLIMIT_MEMLOCK", "RLIMIT_CORE", "RLIMIT_STACK", "RLIMIT_AS", "RLIMIT_NPROC")
 
 IDLE_TIMEOUT_S = int(os.environ.get("SAFE_PYTEST_WARM_IDLE_S", "3600"))
 START_TIMEOUT_S = 120
-REPO_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+CHILD_SETUP_TIMEOUT_S = 30  # fd placement, chdir, limits, stdio: milliseconds unless something is wrong
+SELF_PATH = os.path.realpath(__file__)
+REPO_DIR = os.path.dirname(os.path.dirname(SELF_PATH))
 MAX_MSG = 16 * 1024 * 1024
 MAX_FDS = 250  # SCM_RIGHTS limit is 253 per message
 PR_SET_PDEATHSIG = 1
@@ -269,6 +292,26 @@ def _ours(sock_path: str, ino: int) -> bool:
         return False
 
 
+def _await_child_ready(ack_r: int) -> str | None:
+    """Wait for the forked child to finish its setup. None = it is about to run the command; else why not."""
+    data = b""
+    deadline = time.monotonic() + CHILD_SETUP_TIMEOUT_S
+    try:
+        while not data.startswith(b"ok"):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return f"child setup did not finish within {CHILD_SETUP_TIMEOUT_S}s"
+            if not select.select([ack_r], [], [], left)[0]:
+                continue
+            chunk = os.read(ack_r, 4096)
+            if not chunk:  # EOF without "ok": it reported an error, or died
+                return f"child setup failed: {data.decode(errors='replace') or 'child died'}"
+            data += chunk
+    except OSError as e:
+        return f"child setup unknown: {e}"
+    return None
+
+
 def serve(sock_path: str, key: str):
     """Server loop. Returns a request dict in a forked child (the caller runs it); never returns otherwise."""
     # One server per socket path, for its whole life.
@@ -306,12 +349,19 @@ def serve(sock_path: str, key: str):
         retiring = True
         if listening:
             sel.unregister(listener)
+            listener.close()  # a client that connects late gets "refused" and starts a server, not a queue slot
             listening = False
         if _ours(sock_path, my_ino):
             try:
                 os.unlink(sock_path)
             except FileNotFoundError:
                 pass
+        # The lock guards the socket path, which this server no longer serves. Holding it until the last live
+        # run ends would make every successor exit as "lost the startup race" and its client wait for nobody.
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
 
     def _drop(job: _Job) -> None:
         for obj in (job.conn, job.pidfd):
@@ -337,6 +387,7 @@ def serve(sock_path: str, key: str):
 
     def _reply_and_close(conn, fds, msg) -> None:
         _close_fds(fds)
+        del fds[:]
         try:
             _send_msg(conn, msg)
         except OSError:
@@ -357,21 +408,33 @@ def serve(sock_path: str, key: str):
             conn.close()
             _log(f"dropped request: {e}")
             return None
+        try:
+            return _handle(conn, req, fds)
+        except BaseException:
+            # Whatever went wrong, the caller's fds must not stay open in this long-lived process: one of them
+            # is its device-lock fd 9, and a copy here would keep the device locked after the caller is gone.
+            _close_fds(fds)
+            del fds[:]
+            conn.close()
+            raise
+
+    def _handle(conn, req: dict, fds: list[int]) -> dict | None:
         op = req.get("op")
         if op == "ping":
             _reply_and_close(conn, fds, {"op": "pong", "key": key, "pid": os.getpid()})
             return None
         if op == "stop":
-            _reply_and_close(conn, fds, {"op": "retired"})
             _retire()
+            _reply_and_close(conn, fds, {"op": "retired"})
             return None
         if retiring or req.get("key") != key:
             _reply_and_close(conn, fds, {"op": "stale", "reason": "server retiring" if retiring else "key mismatch"})
             return None
         changed = _fingerprints_changed(fingerprints)
         if changed:
-            _reply_and_close(conn, fds, {"op": "stale", "reason": f"preloaded file changed: {changed}"})
+            # Retire first: the client retries as soon as it reads the reply and must not find our socket.
             _retire()
+            _reply_and_close(conn, fds, {"op": "stale", "reason": f"preloaded file changed: {changed}"})
             return None
         fd_map = req.get("fd_numbers") or []
         if len(fd_map) != len(fds) or 0 not in fd_map or 1 not in fd_map or 2 not in fd_map:
@@ -380,32 +443,55 @@ def serve(sock_path: str, key: str):
 
         sys.stdout.flush()
         sys.stderr.flush()
-        pid = os.fork()
+        # The child reports over this pipe once its setup is done, and only then is the client told "started".
+        ack_r, ack_w = os.pipe()
+        try:
+            pid = os.fork()
+        except OSError as e:
+            _close_fds((ack_r, ack_w))
+            _log(f"fork failed: {e}")
+            _reply_and_close(conn, fds, {"op": "failed", "reason": f"fork failed: {e}"})
+            return None
         if pid == 0:
             # Child: drop every server resource, then hand the request back to main().
             try:
-                libc = ctypes.CDLL(None, use_errno=True)
-                libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
-            except Exception:
-                pass
-            if os.getppid() == 1:  # server died between fork and prctl
-                os._exit(1)
-            sel.close()
-            listener.close()
-            os.close(lock_fd)
-            for job in jobs.values():
-                job.conn.close()
-                os.close(job.pidfd)
-            req["_fds"] = list(zip(fds, fd_map))
-            conn.close()  # the server tracks this run by pid; the child needs no channel back
-            return req
+                try:
+                    libc = ctypes.CDLL(None, use_errno=True)
+                    libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
+                except Exception:
+                    pass
+                if os.getppid() == 1:  # server died between fork and prctl
+                    os._exit(1)
+                sel.close()
+                listener.close()
+                os.close(lock_fd)
+                os.close(ack_r)
+                for job in jobs.values():
+                    job.conn.close()
+                    os.close(job.pidfd)
+                req["_fds"] = list(zip(fds, fd_map))
+                req["_ack"] = ack_w
+                conn.close()  # the server tracks this run by pid; the child needs no channel back
+                return req
+            except BaseException:
+                os._exit(1)  # never fall through into the server loop as a second server
         _close_fds(fds)
-        try:
-            pidfd = os.pidfd_open(pid)
-        except OSError as e:
+        del fds[:]
+        os.close(ack_w)
+        failure = _await_child_ready(ack_r)
+        os.close(ack_r)
+        pidfd = None
+        if failure is None:
+            try:
+                pidfd = os.pidfd_open(pid)
+            except OSError as e:
+                failure = f"pidfd_open failed: {e}"
+        if failure is not None:
+            # Nothing of the caller's has run. Make sure nothing will, then let the client run cold.
             _kill_group(pid)
             os.waitpid(pid, 0)
-            _reply_and_close(conn, [], {"op": "stale", "reason": f"pidfd_open failed: {e}"})
+            _log(f"run not started: {failure}")
+            _reply_and_close(conn, [], {"op": "failed", "reason": failure})
             return None
         job = _Job(conn, pid, pidfd, req.get("parent_job"))
         jobs[pid] = job
@@ -418,13 +504,14 @@ def serve(sock_path: str, key: str):
         return None
 
     while True:
-        if retiring and not jobs:
-            break
         if not jobs and time.monotonic() - last_activity > IDLE_TIMEOUT_S:
             _retire()
-            break
         if listening and not _ours(sock_path, my_ino):  # removed by hand or replaced: stop accepting
             _retire()
+        if listening and not os.path.exists(SELF_PATH):  # the checkout was deleted: nobody can ask for us again
+            _retire()
+        if retiring and not jobs:
+            break
         for skey, _ in sel.select(timeout=5.0):
             tag = skey.data
             try:
@@ -470,15 +557,62 @@ def serve(sock_path: str, key: str):
 
 def run_child(req: dict) -> int:
     """In the forked child: become the requested process, run it, and return its exit code."""
+    ack = [req.pop("_ack")]
+    try:
+        _child_setup(req, ack)
+        os.write(ack[0], b"ok")
+        os.close(ack[0])
+    except BaseException as e:
+        # Nothing of the caller's has run yet. Tell the server why, so the client runs the command cold
+        # instead of reporting this as a failed test with no output.
+        try:
+            os.write(ack[0], f"{type(e).__name__}: {e}".encode()[:2000])
+        except OSError:
+            pass
+        os._exit(1)
+
+    argv = req["argv"]
+    if req["mode"] == "pytest":
+        import pytest
+
+        exe = req.get("pytest_exe") or "pytest"
+        sys.argv = [exe, *argv]
+        sys.path.insert(0, os.path.dirname(os.path.realpath(exe)))
+        return pytest.console_main()
+
+    import runpy
+
+    module = req["module"]
+    sys.argv = [module, *argv]
+    sys.path.insert(0, os.getcwd())
+    runpy.run_module(module, run_name="__main__", alter_sys=True)
+    return 0
+
+
+def _child_setup(req: dict, ack: list[int]) -> None:
+    """Make the forked child the process the caller asked for. `ack[0]` is the readiness pipe (it may move)."""
     os.setsid()  # own process group, so the server can kill the whole run (incl. tracy/triage subprocesses)
 
     # File descriptors: exactly the client's inheritable set, at the same numbers (fd 9 = the device lock).
     received = req["_fds"]
     wanted = {dst for _, dst in received}
-    # Move received fds out of the way first so dup2 onto a target never clobbers one not yet placed.
+    # Move received fds out of the way first so dup2 onto a target never clobbers one not yet placed. They are
+    # parked just above the highest target. F_DUPFD refuses a floor at or above RLIMIT_NOFILE, and the server
+    # often runs with the usual soft limit of 1024, so lift the soft limit for the shuffle; the caller's own
+    # limits are applied below.
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft != hard:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    except (ValueError, OSError):
+        pass
+    floor = max(wanted) + 1
+    moved = fcntl.fcntl(ack[0], fcntl.F_DUPFD_CLOEXEC, floor)  # the ack pipe may sit on a target number too
+    os.close(ack[0])
+    ack[0] = moved
     high = []
     for src, dst in received:
-        h = fcntl.fcntl(src, fcntl.F_DUPFD_CLOEXEC, 1024)
+        h = fcntl.fcntl(src, fcntl.F_DUPFD_CLOEXEC, floor)
         os.close(src)
         high.append((h, dst))
     keep = set()
@@ -518,22 +652,42 @@ def run_child(req: dict) -> int:
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.default_int_handler)
+    # A signal the caller ignores stays ignored across exec in a cold run (nohup's SIGHUP, for one).
+    for num in req.get("ignored_signals") or []:
+        try:
+            signal.signal(num, signal.SIG_IGN)
+        except (ValueError, OSError):
+            pass
 
-    # Unseeded numpy draws must differ between runs, as they do across cold processes.
+    # Unseeded draws must differ between runs, as they do across cold processes. (`random` reseeds itself
+    # after fork.) torch seeds its default generator once at import, which here was in the server.
     np = sys.modules.get("numpy")
     if np is not None:
         np.random.seed()
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        torch.seed()
+    # tempfile caches its directory on first use; the caller's TMPDIR may differ from the server's.
+    if "tempfile" in sys.modules:
+        sys.modules["tempfile"].tempdir = None
 
     # stdio: rebuild the text wrappers over the new fds with CPython's startup rules: stdout line-buffered on a
-    # tty, stderr always line-buffered, PYTHONUNBUFFERED makes both write-through.
+    # tty, stderr always line-buffered. PYTHONUNBUFFERED, as `python -u`, puts the text layer straight on the
+    # raw fd: write_through over a BufferedWriter would leave the bytes in that buffer, lost on a crash.
     unbuffered = bool(env.get("PYTHONUNBUFFERED"))
     encoding = env.get("PYTHONIOENCODING", "").split(":")[0] or "utf-8"
     sys.stdin = sys.__stdin__ = open(0, "r", closefd=False, encoding=encoding)
     for fd, name in ((1, "stdout"), (2, "stderr")):
-        stream = open(
-            fd, "w", closefd=False, encoding=encoding, errors="backslashreplace" if name == "stderr" else "strict"
-        )
-        stream.reconfigure(line_buffering=(name == "stderr" or os.isatty(fd)), write_through=unbuffered)
+        errors = "backslashreplace" if name == "stderr" else "strict"
+        line_buffering = name == "stderr" or os.isatty(fd)
+        if unbuffered:
+            raw = open(fd, "wb", buffering=0, closefd=False)
+            stream = io.TextIOWrapper(
+                raw, encoding=encoding, errors=errors, line_buffering=line_buffering, write_through=True
+            )
+        else:
+            stream = open(fd, "w", closefd=False, encoding=encoding, errors=errors)
+            stream.reconfigure(line_buffering=line_buffering)
         setattr(sys, name, stream)
         setattr(sys, f"__{name}__", stream)
 
@@ -544,23 +698,6 @@ def run_child(req: dict) -> int:
     server_dir = os.path.dirname(os.path.realpath(__file__))
     if sys.path and os.path.realpath(sys.path[0] or ".") == server_dir:
         sys.path.pop(0)
-
-    argv = req["argv"]
-    if req["mode"] == "pytest":
-        import pytest
-
-        exe = req.get("pytest_exe") or "pytest"
-        sys.argv = [exe, *argv]
-        sys.path.insert(0, os.path.dirname(os.path.realpath(exe)))
-        return pytest.console_main()
-
-    import runpy
-
-    module = req["module"]
-    sys.argv = [module, *argv]
-    sys.path.insert(0, os.getcwd())
-    runpy.run_module(module, run_name="__main__", alter_sys=True)
-    return 0
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -626,6 +763,18 @@ def _inheritable_fds() -> list[int]:
     return sorted(fds)
 
 
+def _ignored_signals() -> list[int]:
+    """Signals this process ignores: inherited that way (nohup, a parent's trap ''), or by CPython itself."""
+    out = []
+    for sig in signal.valid_signals():
+        try:
+            if signal.getsignal(sig) is signal.SIG_IGN:
+                out.append(int(sig))
+        except (ValueError, OSError):
+            pass
+    return out
+
+
 def _cold_exec(mode: str, module: str | None, argv: list[str]) -> None:
     sys.stdout.flush()
     sys.stderr.flush()
@@ -647,6 +796,7 @@ def client_run(mode: str, module: str | None, argv: list[str]) -> int:
         if hasattr(resource, name):
             rlimits[name] = list(resource.getrlimit(getattr(resource, name)))
     fds = _inheritable_fds()
+    ignored = _ignored_signals()
     req = {
         "op": "run",
         "key": key,
@@ -658,6 +808,7 @@ def client_run(mode: str, module: str | None, argv: list[str]) -> int:
         "umask": cur_umask,
         "rlimits": rlimits,
         "affinity": sorted(os.sched_getaffinity(0)),
+        "ignored_signals": ignored,
         "pytest_exe": shutil.which("pytest") if mode == "pytest" else None,
         "fd_numbers": fds,
         "parent_job": int(parent_job) if parent_job and parent_job.isdigit() else None,
@@ -687,6 +838,8 @@ def client_run(mode: str, module: str | None, argv: list[str]) -> int:
                 reason = reply.get("reason")
                 s.close()
                 continue  # the server unlinked itself if it is retiring; the next attempt starts a new one
+            if reply.get("op") == "failed":  # the server could not start the run, and made sure nothing runs
+                raise RuntimeError(reply.get("reason") or "server could not start the run")
             if reply.get("op") != "started":
                 raise ConnectionError(f"unexpected reply {reply}")
             break
@@ -714,7 +867,8 @@ def client_run(mode: str, module: str | None, argv: list[str]) -> int:
         _kill_child(signum)
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, _forward)
+        if int(sig) not in ignored:  # an ignored signal (nohup's SIGHUP) stays ignored, here and in the child
+            signal.signal(sig, _forward)
     try:
         reply = _recv_msg(s)
         return int(reply.get("code", 1))

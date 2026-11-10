@@ -379,10 +379,13 @@ def main():
 
             # TT_TRACY_CHILD_PYTHON: optional launcher that stands in for `python` when starting the workload
             # process (run_safe_pytest.sh's warm path sets it to its fork-server client; argv is identical).
+            # It is a shell command prefix, already quoted by whoever set it.
             childPython = os.environ.get("TT_TRACY_CHILD_PYTHON") or sys.executable
             testCommand = f"{childPython} -m tracy {osCmd}"
 
             envVars = dict(os.environ)
+            # For this process only: the workload (and any tracy a test starts itself) must not inherit it.
+            envVars.pop("TT_TRACY_CHILD_PYTHON", None)
             if options.device:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
             elif "TT_METAL_DEVICE_PROFILER" in envVars.keys():
