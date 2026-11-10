@@ -48,6 +48,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "combine_fabric2d_reader_ct_args.hpp"
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
@@ -376,7 +377,7 @@ struct Reader {
     void aim_at_downstream(volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata, uint32_t vc, uint32_t page) {
         metadata->cmd = ::cmbf2d::CMD_FORWARD;
         metadata->vc = vc;
-        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(vc, page));
+        metadata->this_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(dram.fwd, fwd_page(vc, page));
     }
 
     // Free space in the downstream chip's channel `vc`, in pages.
@@ -501,7 +502,10 @@ struct Reader {
         const uint32_t token_out_page = meta[1] * ct.num_experts_per_tok + meta[2];
         // Computed once and then travelling with the token for however many hops it takes. Valid on any chip
         // because the output buffer's base address and interleaved bank mapping are uniform across the mesh.
-        const uint64_t final_addr = dram.out.get_noc_addr(token_out_page);
+        // Resolved through the fabric's helper, as every address a packet carries must be: the router on the
+        // destination chip writes it on ITS NoC, and on Blackhole each DRAM bank has a different endpoint per
+        // NoC. This kernel's own NoC would name the NOC0 endpoint, which NOC1 traffic must not use (SYS-1419).
+        const uint64_t final_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(dram.out, token_out_page);
         if (is_direct(dst_chip_id)) {
             metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
             metadata->this_addr = final_addr;

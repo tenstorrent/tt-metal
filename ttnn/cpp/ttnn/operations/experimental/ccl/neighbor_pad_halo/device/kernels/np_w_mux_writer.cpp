@@ -23,6 +23,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include <cstdint>
 
 using address_t = uint32_t;
@@ -142,7 +143,9 @@ void kernel_main() {
                 }
                 cb_wait_front(send_cb_id, g);
                 const uint32_t l1_read_addr = get_read_ptr(send_cb_id);
-                const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+                // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                const uint64_t dst_noc_addr =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_accessor, base + r);
                 // Tail groups on a bank are shorter than W_COALESCE, so update PayloadSize too.
                 fabric_unicast_noc_unicast_write_with_state<
                     UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
