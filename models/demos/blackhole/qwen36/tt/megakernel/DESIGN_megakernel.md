@@ -638,3 +638,5 @@ Gate sensitivity (128 ARs per pass, ≈0.13 ms per µs of on-path AR):
 | 18 µs | 13.01 | 10.15 ✗ | 9.14 |
 
 **Consequence:** GDN_STEP_U1 is **required** for the u1 gate, not optional. u8 passes even with a fully exposed 18 µs AR.
+
+**STEP_U1 silicon budget (v0.7.3):** 48 GDN layers per pass. At 18 µs on-path AR, u1 has 0.26 ms margin, so the full u1 op (prefix + step) must be **≤26.4 µs on silicon**. At 12 µs AR the limit is ≤42 µs. The ~21 µs figure is a sim/zone estimate; with the 1.3-1.5× sim optimism seen on MK1, silicon could land at 27-31 µs, which is marginal at the top of the AR band.
