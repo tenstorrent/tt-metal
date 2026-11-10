@@ -100,6 +100,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/high_bw_all_gather/high_bw_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/sparse_kv_push/sparse_kv_push_nanobind.hpp"
+#include "ttnn/operations/experimental/moe_block/moe_block_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_padding_config/moe_padding_config_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync_nanobind.hpp"
@@ -205,6 +206,8 @@ void py_module(nb::module_& mod) {
 
     // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
     quasar::bind_quasar(mod);
+    // The MoE block's ops — creates the ttnn.experimental.moe_block submodule.
+    moe_block::bind_moe_block(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     deepseek_prefill::detail::bind_inbound_socket_service_sync(mod);
     ttnn::experimental::detail::bind_rgb_to_yuv(mod);
