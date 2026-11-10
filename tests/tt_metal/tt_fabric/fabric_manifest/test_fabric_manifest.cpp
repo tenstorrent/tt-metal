@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <regex>
 #include <set>
@@ -910,8 +911,22 @@ void check_host_clears(const json& manifest, const std::vector<RouterEntry>& rou
     }
 }
 
+// Every region and stream register under `node` that capture reads in its rounds, as path to role.
+void collect_multi_sampled(const json& node, const std::string& path, std::map<std::string, std::string>& sampled) {
+    if (!node.is_object()) {
+        return;
+    }
+    if (const auto it = node.find("multi_sampled"); it != node.end() && !it->is_null()) {
+        sampled.emplace(path, it->get<std::string>());
+    }
+    for (const auto& [key, child] : node.items()) {
+        collect_multi_sampled(child, path.empty() ? key : path + "/" + key, sampled);
+    }
+}
+
 // Base firmware's link status words exist on Blackhole and not on Wormhole, and where base firmware has a heartbeat
-// word, the router's heartbeat is that word.
+// word, the router's heartbeat is that word. Capture reads the heartbeat and the telemetry area in every round, and
+// nothing else.
 void check_arch(const json& manifest) {
     using tt::tt_metal::FWMailboxMsg;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -929,6 +944,14 @@ void check_arch(const json& manifest) {
     if (base_fw_heartbeat != 0) {
         EXPECT_EQ(areas.at("heartbeat").at("address").get<uint32_t>(), base_fw_heartbeat);
     }
+    std::map<std::string, std::string> sampled;
+    collect_multi_sampled(manifest, "", sampled);
+    EXPECT_EQ(
+        sampled,
+        (std::map<std::string, std::string>{
+            {"arch/l1_areas/heartbeat", "loop_heartbeat"},
+            {"arch/l1_areas/fabric_telemetry", "fabric_telemetry"},
+        }));
 }
 
 // Every stream register under `node`, as (address, path).

@@ -90,6 +90,12 @@ content::L1 describe_hal_l1_area(const tt::tt_metal::Hal& hal, HalL1MemAddrType 
     return register_l1_region<T>(get_hal_l1_address(hal, area_id), area_size / sizeof(T));
 }
 
+// `region`, marked for capture to read in every round as well as in its full read.
+content::L1 mark_multi_sampled(content::L1 region, MultiSampleRole role) {
+    region.multi_sampled = role;
+    return region;
+}
+
 // A base firmware word, whose address the HAL keeps among its Ethernet firmware mailbox values; null when it is 0.
 std::optional<content::L1> describe_base_fw_word(const tt::tt_metal::Hal& hal, tt::tt_metal::FWMailboxMsg word) {
     const uint32_t address = hal.get_eth_fw_mailbox_val(word);
@@ -99,12 +105,15 @@ std::optional<content::L1> describe_base_fw_word(const tt::tt_metal::Hal& hal, t
     return register_l1_region<uint32_t>(address);
 }
 
-// The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's.
+// The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's. The word moves every
+// period_iters passes of the router's loop, stuck or not, so it's multi-sampled as the loop heartbeat.
 Heartbeat describe_heartbeat(tt::ARCH arch) {
     return Heartbeat{
-        .word = register_l1_region<uint32_t>(
-            arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
-                                        : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE),
+        .word = mark_multi_sampled(
+            register_l1_region<uint32_t>(
+                arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
+                                            : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE),
+            MultiSampleRole::LOOP_HEARTBEAT),
         .magic = FABRIC_KERNEL_HEARTBEAT_MAGIC,
         .magic_mask = FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK,
         .period_iters = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS,
@@ -250,7 +259,11 @@ Arch describe_arch(const tt::tt_metal::Hal& hal) {
         .areas =
             ArchAreas{
                 .heartbeat = describe_heartbeat(hal.get_arch()),
-                .fabric_telemetry = describe_hal_l1_area<FabricTelemetry>(hal, HalL1MemAddrType::FABRIC_TELEMETRY),
+                // Multi-sampled whole: every ERISC's heartbeats and router state, and the bandwidth counts, whatever
+                // each ERISC's telemetry options say it writes.
+                .fabric_telemetry = mark_multi_sampled(
+                    describe_hal_l1_area<FabricTelemetry>(hal, HalL1MemAddrType::FABRIC_TELEMETRY),
+                    MultiSampleRole::FABRIC_TELEMETRY),
                 .routing_table = describe_hal_l1_area<routing_l1_info_t>(hal, HalL1MemAddrType::ROUTING_TABLE),
                 .eth_fw_mailbox = hal.get_supports_eth_fw_mailbox() ? std::optional(describe_hal_l1_area<uint32_t>(
                                                                           hal, HalL1MemAddrType::ETH_FW_MAILBOX))

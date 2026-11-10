@@ -27,6 +27,11 @@ using json = nlohmann::ordered_json;
 
 content::L1 word_at(uint32_t address) { return register_l1_region<uint32_t>(address); }
 
+content::L1 multi_sampled_as(content::L1 region, MultiSampleRole role) {
+    region.multi_sampled = role;
+    return region;
+}
+
 // One mesh, M0, of two chips. C0 is this rank's, with one router, E0, whose link reaches W0 on C1, another rank's chip.
 ManifestFacts make_facts() {
     const FabricNodeId local_node{MeshId{0}, 0};
@@ -96,8 +101,9 @@ ManifestFacts make_facts() {
         .arch =
             {.arch = tt::ARCH::WORMHOLE_B0,
              .areas =
-                 {.heartbeat = {.word = word_at(0x1f80)},
-                  .fabric_telemetry = register_l1_region<FabricTelemetry>(0x3000),
+                 {.heartbeat = {.word = multi_sampled_as(word_at(0x1f80), MultiSampleRole::LOOP_HEARTBEAT)},
+                  .fabric_telemetry = multi_sampled_as(
+                      register_l1_region<FabricTelemetry>(0x3000), MultiSampleRole::FABRIC_TELEMETRY),
                   .routing_table = word_at(0x4000)},
              .core_registers =
                  {.soft_reset = 0x1, .reset_masks = {0x800}, .wall_clock_low = 0x2, .wall_clock_high = 0x3}},
@@ -212,7 +218,8 @@ TEST(ManifestWriter, ContentsNameTheirType) {
              {"address", 0x200},
              {"num_elements", 1},
              {"element_size", sizeof(EDMStatus)},
-             {"type", "EDMStatus"}}));
+             {"type", "EDMStatus"},
+             {"multi_sampled", nullptr}}));
     EXPECT_EQ(
         fields.at("retrain_sync"),
         json(
@@ -221,7 +228,8 @@ TEST(ManifestWriter, ContentsNameTheirType) {
              {"stream_id", 30},
              {"address", 0xffb5e000},
              {"value_bits", 24},
-             {"type", "CoordinatedEriscContextSwitchState"}}));
+             {"type", "CoordinatedEriscContextSwitchState"},
+             {"multi_sampled", nullptr}}));
     // The enum's own name isn't written: it stays in the model, for FIELDS.md and errors.
     EXPECT_EQ(
         fields.at("my_direction"),
@@ -236,6 +244,20 @@ TEST(ManifestWriter, ContentsNameTheirType) {
     // What fabric init zeroes, as an address and a size.
     EXPECT_EQ(manifest.at("fabric").at("host_clears"), json::parse(R"([{"address": 256, "size_bytes": 4}])"));
     EXPECT_FALSE(manifest.contains("types"));
+}
+
+// A multi-sampled region names its role, and every other region and stream register is null: capture reads it only in
+// its full read.
+TEST(ManifestWriter, MultiSampledRegionsNameTheirRole) {
+    const auto manifest = make_manifest_json(make_facts(), FieldsLayout::PER_ROUTER);
+    const auto& areas = manifest.at("arch").at("l1_areas");
+    EXPECT_EQ(areas.at("heartbeat").at("multi_sampled"), "loop_heartbeat");
+    EXPECT_EQ(areas.at("fabric_telemetry").at("multi_sampled"), "fabric_telemetry");
+    EXPECT_TRUE(areas.at("routing_table").at("multi_sampled").is_null());
+    const auto& router = router_e0(manifest);
+    EXPECT_TRUE(router.at("credit_counters").at("to_sender_ack").at("multi_sampled").is_null());
+    EXPECT_TRUE(router.at("fields").at("erisc0").at("retrain_sync").at("multi_sampled").is_null());
+    EXPECT_EQ(manifest.at("vocabulary").at("multi_sample_role"), json({"loop_heartbeat", "fabric_telemetry"}));
 }
 
 // Each ERISC's values are written under its own key, as the builder gave them, even where two ERISCs differ.
@@ -295,7 +317,7 @@ TEST(ManifestModel, CreditCounterArraysResolve) {
 // ============ Reader ============
 
 // make_facts with what it leaves out: a sub-context, a sibling producer, an acked credit, a downstream edge, live
-// downstreams, and fields of every kind.
+// downstreams, fields of every kind, and a multi-sampled stream register.
 ManifestFacts make_facts_with_every_part() {
     auto facts = make_facts();
     facts.run.subcontext = Subcontext{.id = 1, .rank = 0, .size = 2};
@@ -316,6 +338,15 @@ ManifestFacts make_facts_with_every_part() {
     };
     router.fields_by_erisc.at(0).push_back(
         Field{.key = "speedy", .category = FieldCategory::KERNEL_PARAMS, .content = content::Flag{.value = true}});
+    router.fields_by_erisc.at(0).push_back(Field{
+        .key = "sampled_stream",
+        .category = FieldCategory::FLOW_CONTROL,
+        .content = content::StreamReg{
+            .stream_id = 31,
+            .address = 0xffb5f000,
+            .value_bits = 24,
+            .type = std::string(get_manifest_type_name<uint32_t>()),
+            .multi_sampled = MultiSampleRole::LOOP_HEARTBEAT}});
     router.leftover_l1 = register_l1_region<std::byte>(0x8000, 0x100, 1);
     return facts;
 }
@@ -389,6 +420,20 @@ TEST(ManifestReader, FailsOnATypeThisBuildDoesNotRegister) {
         manifest,
         R"(Fabric manifest: /meshes/M0/chips/C0/routers/E0/fields/erisc0/edm_status/type is "NotAType", a type this )"
         "build doesn't register");
+}
+
+// A multi_sampled that names no role fails, as does a region without the key.
+TEST(ManifestReader, FailsOnAMultiSampledItCannotRead) {
+    json unknown = make_manifest_json(make_facts());
+    unknown.at("arch").at("l1_areas").at("heartbeat").at("multi_sampled") = "sometimes";
+    expect_parse_fails_with(
+        unknown, R"(Fabric manifest: /arch/l1_areas/heartbeat/multi_sampled is "sometimes", which names no )");
+
+    json missing = make_manifest_json(make_facts());
+    router_e0(missing).at("credit_counters").at("to_sender_ack").erase("multi_sampled");
+    expect_parse_fails_with(
+        missing,
+        "Fabric manifest: /meshes/M0/chips/C0/routers/E0/credit_counters/to_sender_ack/multi_sampled is missing");
 }
 
 // A fields id names a block in field_sets, and in the PER_ROUTER layout there are no ids.

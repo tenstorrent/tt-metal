@@ -64,12 +64,18 @@ using manifest::sibling_router_path;
 
 // ============ Contents ============
 
+// The role's name, or null for a region capture reads only in its full read.
+json make_multi_sampled_json(const std::optional<manifest::MultiSampleRole>& multi_sampled) {
+    return multi_sampled.has_value() ? json(lower_enum_name(*multi_sampled)) : json(nullptr);
+}
+
 json make_l1_json(const manifest::content::L1& l1) {
     json out;
     out["address"] = l1.address;
     out["num_elements"] = l1.num_elements;
     out["element_size"] = l1.element_size;
     out["type"] = l1.type;
+    out["multi_sampled"] = make_multi_sampled_json(l1.multi_sampled);
     return out;
 }
 
@@ -83,6 +89,7 @@ json make_stream_reg_json(const manifest::content::StreamReg& stream) {
     out["address"] = stream.address;
     out["value_bits"] = stream.value_bits;
     out["type"] = stream.type;
+    out["multi_sampled"] = make_multi_sampled_json(stream.multi_sampled);
     return out;
 }
 
@@ -650,6 +657,15 @@ void check_key_in_sequence(std::string_view key, std::string_view prefix, size_t
     }
 }
 
+// A region's multi_sampled: its role's name, or null.
+std::optional<manifest::MultiSampleRole> take_multi_sampled(JsonObjectReader& object) {
+    const JsonValueReader value = object.take("multi_sampled");
+    if (value.is_null()) {
+        return std::nullopt;
+    }
+    return read_enum<manifest::MultiSampleRole>(value);
+}
+
 // The keys make_l1_json writes, out of an object that may hold others.
 manifest::content::L1 take_l1_keys(JsonObjectReader& object) {
     manifest::content::L1 l1;
@@ -657,6 +673,7 @@ manifest::content::L1 take_l1_keys(JsonObjectReader& object) {
     l1.num_elements = object.take<uint32_t>("num_elements");
     l1.element_size = object.take<uint32_t>("element_size");
     l1.type = take_type_name(object, "type");
+    l1.multi_sampled = take_multi_sampled(object);
     return l1;
 }
 
@@ -673,6 +690,7 @@ manifest::content::StreamReg take_stream_reg_keys(JsonObjectReader& object) {
     stream.address = object.take<uint32_t>("address");
     stream.value_bits = object.take<uint32_t>("value_bits");
     stream.type = take_type_name(object, "type");
+    stream.multi_sampled = take_multi_sampled(object);
     return stream;
 }
 

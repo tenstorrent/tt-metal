@@ -35,6 +35,15 @@
 // describe file fills the run, fabric and arch, and the writer turns the whole model into JSON.
 namespace tt::tt_fabric::manifest {
 
+// What a multi-sampled region's change across capture's rounds says about its router. Capture reads a multi-sampled
+// region once per round, as well as once in its full read.
+enum class MultiSampleRole : uint8_t {
+    // Written every pass of the router's loop, stuck or not: it moving says the loop runs.
+    LOOP_HEARTBEAT,
+    // The fabric telemetry area.
+    FABRIC_TELEMETRY,
+};
+
 // What a field or a typed member holds.
 namespace content {
 
@@ -48,6 +57,8 @@ struct L1 {
     uint32_t element_size = 0;
     // The type's registered name (fabric_manifest_type_registry.hpp).
     std::string type;
+    // Null: capture reads the region once, in its full read. Otherwise it reads it in every round too.
+    std::optional<MultiSampleRole> multi_sampled;
 };
 
 // A stream register's word. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold
@@ -60,6 +71,8 @@ struct StreamReg {
     uint32_t value_bits = 0;
     // The type's registered name (fabric_manifest_type_registry.hpp).
     std::string type;
+    // Null: capture reads the register once, in its full read. Otherwise it reads it in every round too.
+    std::optional<MultiSampleRole> multi_sampled;
 };
 
 struct Number {
@@ -419,6 +432,7 @@ struct Mesh {
 };
 
 // The word the router kernel writes every period_iters main-loop iterations: magic | its 16-bit iteration count.
+// Multi-sampled as LOOP_HEARTBEAT.
 struct Heartbeat {
     content::L1 word;
     uint32_t magic = 0;
@@ -429,6 +443,7 @@ struct Heartbeat {
 // The L1 areas on every router core that the architecture fixes, rather than the builder allocates.
 struct ArchAreas {
     Heartbeat heartbeat;
+    // Multi-sampled as FABRIC_TELEMETRY.
     content::L1 fabric_telemetry;
     content::L1 routing_table;
     // Null when the architecture has no Ethernet firmware mailbox.
@@ -595,6 +610,7 @@ inline constexpr std::tuple k_vocabulary_lists{
     VocabularyList<tt::tt_metal::DataMovementProcessor>{"erisc_processor"},
     VocabularyList<tt::tt_metal::KernelBuildOptLevel>{"kernel_opt_level"},
     VocabularyList<IntermeshVCMode>{"intermesh_vc_mode"},
+    VocabularyList<MultiSampleRole>{"multi_sample_role"},
 };
 
 }  // namespace tt::tt_fabric::manifest

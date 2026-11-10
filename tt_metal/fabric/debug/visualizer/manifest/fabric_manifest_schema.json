@@ -41,6 +41,11 @@
     "field_category": { "enum": ["lifecycle", "kernel_params", "flow_control", "control_info", "diagnostics"] },
     "field_kind": { "enum": ["l1", "stream_reg", "number", "flag", "enum"] },
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
+    "multi_sample_role": { "enum": ["loop_heartbeat", "fabric_telemetry"] },
+    "multi_sampled": {
+      "description": "Null when capture reads the region once, in its full read. Otherwise the role of a region capture also reads in every round, which says what its change across the rounds means.",
+      "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/multi_sample_role" }]
+    },
     "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
     "direction": { "enum": ["east", "west", "north", "south", "z"] },
     "live_directions": { "type": "array", "items": { "$ref": "#/$defs/direction" }, "uniqueItems": true },
@@ -209,13 +214,14 @@
         "channel_status": { "type": "array", "items": { "$ref": "#/$defs/channel_status" }, "uniqueItems": true },
         "erisc_processor": { "$ref": "#/$defs/name_list" },
         "kernel_opt_level": { "$ref": "#/$defs/name_list" },
-        "intermesh_vc_mode": { "$ref": "#/$defs/name_list" }
+        "intermesh_vc_mode": { "$ref": "#/$defs/name_list" },
+        "multi_sample_role": { "type": "array", "items": { "$ref": "#/$defs/multi_sample_role" }, "uniqueItems": true }
       },
       "required": [
         "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
         "fabric_topology", "credit_backing", "z_port_role", "edge_capability", "credit_counter_indexed_by",
         "field_category", "field_kind", "channel_status", "erisc_processor", "kernel_opt_level",
-        "intermesh_vc_mode"
+        "intermesh_vc_mode", "multi_sample_role"
       ],
       "additionalProperties": false
     },
@@ -227,9 +233,10 @@
         "address": { "$ref": "#/$defs/count" },
         "num_elements": { "type": "integer", "minimum": 1 },
         "element_size": { "type": "integer", "minimum": 1 },
-        "type": { "$ref": "#/$defs/type_name" }
+        "type": { "$ref": "#/$defs/type_name" },
+        "multi_sampled": { "$ref": "#/$defs/multi_sampled" }
       },
-      "required": ["address", "num_elements", "element_size", "type"]
+      "required": ["address", "num_elements", "element_size", "type", "multi_sampled"]
     },
     "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
     "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
@@ -240,9 +247,10 @@
         "stream_id": { "$ref": "#/$defs/count" },
         "address": { "$ref": "#/$defs/count" },
         "value_bits": { "type": "integer", "minimum": 1, "maximum": 32 },
-        "type": { "$ref": "#/$defs/type_name" }
+        "type": { "$ref": "#/$defs/type_name" },
+        "multi_sampled": { "$ref": "#/$defs/multi_sampled" }
       },
-      "required": ["stream_id", "address", "value_bits", "type"]
+      "required": ["stream_id", "address", "value_bits", "type", "multi_sampled"]
     },
     "stream_reg": { "$ref": "#/$defs/stream_reg_keys", "unevaluatedProperties": false },
     "core_register_keys": {
@@ -276,6 +284,7 @@
             "heartbeat": {
               "$ref": "#/$defs/region_keys",
               "properties": {
+                "multi_sampled": { "const": "loop_heartbeat" },
                 "magic": { "$ref": "#/$defs/count" },
                 "magic_mask": { "$ref": "#/$defs/count" },
                 "period_iters": { "$ref": "#/$defs/count" }
@@ -283,7 +292,10 @@
               "required": ["magic", "magic_mask", "period_iters"],
               "unevaluatedProperties": false
             },
-            "fabric_telemetry": { "$ref": "#/$defs/region" },
+            "fabric_telemetry": {
+              "$ref": "#/$defs/region",
+              "properties": { "multi_sampled": { "const": "fabric_telemetry" } }
+            },
             "routing_table": { "$ref": "#/$defs/region" },
             "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" },
             "base_fw_port_status": { "$ref": "#/$defs/optional_region" },

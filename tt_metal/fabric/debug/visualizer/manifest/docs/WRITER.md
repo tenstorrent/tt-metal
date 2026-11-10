@@ -87,8 +87,8 @@ writer has nothing to look up or check. It writes the name as a string, next to 
 
 | What | Written by | Keys |
 | --- | --- | --- |
-| An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type` |
-| A stream register | `make_stream_reg_json` | `stream_id`, `address`, `value_bits`, `type` |
+| An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type`, `multi_sampled` |
+| A stream register | `make_stream_reg_json` | `stream_id`, `address`, `value_bits`, `type`, `multi_sampled` |
 | A core register | `make_core_registers_json` | `name`, `address`, `type` |
 | The run's packet header | `make_fabric_json` | `fabric.packet_header`, the header type's name |
 

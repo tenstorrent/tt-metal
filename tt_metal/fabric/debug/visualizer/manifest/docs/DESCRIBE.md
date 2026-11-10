@@ -84,6 +84,22 @@ or fabric (TYPE_REGISTRY.md's "Where regions are registered"):
 
 A HAL area (`describe_hal_l1_area<T>`) must hold a whole number of its type, and that number is its `num_elements`.
 
+**Multi-sampled areas.** Describe marks two areas for capture to read in each of its rounds as well as in its full read
+(`mark_multi_sampled`), each with its role ([FORMAT.md](FORMAT.md), "Shapes that repeat"):
+
+| Area | Role | Why |
+| --- | --- | --- |
+| `heartbeat` | `loop_heartbeat` | The router writes it every `period_iters` passes of its loop, whether or not its channels move, so it moving says the loop runs |
+| `fabric_telemetry` | `fabric_telemetry` | Each ERISC's TX and RX heartbeats (`round_end_impl` in `router_telemetry.hpp`) move while that side makes progress or has nothing to do, and stop when it's stuck, which tells a stuck router from one that's running |
+
+The whole telemetry area is marked, on every router, whatever each ERISC's telemetry options are. It's one small read
+a round, and it keeps the manifest from deciding which ERISC writes which heartbeat: an ERISC writes a statistic only
+with its `telemetry_enabled` field set and the statistic's bit in its `telemetry_stats_mask`, and which side's
+heartbeat it writes depends on the loop it runs. Decode reads those fields to say which heartbeats tick. The rounds
+also catch each ERISC's router state and the bandwidth counts as they change.
+
+No region the builder allocates is marked.
+
 `arch` doesn't describe stream registers. Each stream register the manifest names carries its own address and value
 width, worked out from the HAL where it's read ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
