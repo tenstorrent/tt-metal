@@ -128,6 +128,27 @@ class DSV41Decoder:
         host_r = ttnn.from_torch(cat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mpr)
         return list(order), host_c, host_r
 
+    def prepare_packed_dev(self, token_ids, positions, fill, cw):
+        """DSV41_DEV_ENGRAM=1: ``ctrl`` only, widened to ``cw`` words per row (tt/engram_dev.py ``fill_ctrl`` writes the Engram words via ``fill(ctrl_torch)``); no host Engram rows."""
+        import torch
+
+        from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
+
+        rows, cols = tuple(self.md.shape)
+        B = token_ids.shape[0]
+        mp = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols))
+        key = ("dev", B, cw)
+        hp = self.__dict__.setdefault("_hp", {})
+        if not hostopt.on("PACK") or key not in hp:
+            ctrl = torch.zeros(B, cw, dtype=torch.int32)
+            host_c = ttnn.from_torch(ctrl, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp)
+            hp[key] = (ctrl, host_c)
+        ctrl, host_c = hp[key]
+        ctrl[:, 0] = token_ids.reshape(-1).to(torch.int32)
+        ctrl[:, 1] = positions.reshape(-1).to(torch.int32)
+        fill(ctrl)
+        return sorted(self.engram), host_c, None
+
     def upload_packed_inputs(self, prepared):
         """Device half: copy the prepared host tensors into the persistent buffers (call after the previous replay finished)."""
         self.engram_order, host_c, host_r = prepared

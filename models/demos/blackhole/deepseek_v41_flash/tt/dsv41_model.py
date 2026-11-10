@@ -329,6 +329,17 @@ class Model:
                 t1 = time.time()
                 self.host_rows.load_ram()
                 log(f"Engram tables in process memory ({time.time() - t1:.0f}s)")
+        # DSV41_DEV_ENGRAM=1 (default off): the decode verify block's Engram rows come from device-resident tables (rows sharded over the chips; tt/engram_dev.py); prefill keeps the host table
+        self.dev_engram_tabs = None
+        if os.environ.get("DSV41_DEV_ENGRAM") == "1" and self.host_rows is not None and len(engram_ids) == 2:
+            self.dev_engram_tabs = None if keep is None else keep.get("dev_tabs")
+            if self.dev_engram_tabs is None:
+                from models.demos.blackhole.deepseek_v41_flash.tt.engram_dev import DevEngramTables
+
+                t1 = time.time()
+                self.dev_engram_tabs = DevEngramTables(mesh_device, self.host_rows, engram_ids, log=log)
+                log(f"DEV_ENGRAM device tables loaded ({time.time() - t1:.0f}s)")
+                self.log_dram("after dev engram tables")
         if keep is None:
             dev_engram = {
                 l: DSV41DeviceEngram(mesh_device, l, sh, mesh_config=self.mc, ccl=self.ccl) for l in engram_ids
@@ -378,6 +389,7 @@ class Model:
             },
             "tables": None if self.host_rows is None else self.host_rows.tables,
             "dev_engram": dev_engram,
+            "dev_tabs": self.dev_engram_tabs,
             "embedding": embedding,
             "head": self.head,
         }

@@ -254,6 +254,10 @@ class SpecRunner:
         )
         self.dec.enable_sampling(model.mc, model.ccl)
         self.dec.draft_on = draft
+        if getattr(model, "dev_engram_tabs", None) is not None:  # DSV41_DEV_ENGRAM=1
+            from models.demos.blackhole.deepseek_v41_flash.tt.engram_dev import DevEngramRows
+
+            self.dec.dev_rows = DevEngramRows(model.dev_engram_tabs, self.T, n)
         # in-trace sampling of every verify row (DSV41_INTRACE_SAMPLE=1): one sampler over the T = U * n block rows of a mesh row; params uploaded per round (``sample_cfg``), allocated before any trace
         self.dec.samp = self.samp = model._make_sampler(
             self.T, spec=True
@@ -293,6 +297,26 @@ class SpecRunner:
         """X [B, n] block tokens, base [B] position of column 0."""
         m, B, n = self.m, self.B, self.n
         rows_d = {}
+        if getattr(self.dec, "dev_rows", None) is not None:
+            # DSV41_DEV_ENGRAM=1: the host only writes the token history cache + the committed lookbacks into the widened ctrl; hash / gather / dequant / combine run in the verify trace
+            from models.demos.blackhole.deepseek_v41_flash.tt.engram_dev import fill_ctrl
+
+            dv = self.dec.dev_rows
+            if getattr(self, "_dev_st", None) is None:
+                self._dev_st = dict(
+                    cache=m.host_rows.engram.hash.cache.numpy(), tmap=dv.tabs.tmap, dead=dv.tabs.dead
+                )
+            if dv.check:
+                self._dev_check(dv, X, base)
+            pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
+            prepared = self.dec.prepare_packed_dev(
+                X.reshape(-1),
+                pos,
+                lambda c: fill_ctrl(c, X, base, self._dev_st, rows=self.phys, w=dv.W),
+                dv.CW,
+            )
+            self.dec.upload_packed_inputs(prepared)
+            return
         if (
             m.host_rows is not None
             and hostopt.on("ENGRAM")
@@ -321,6 +345,44 @@ class SpecRunner:
             rows_d = {l: r.reshape(B * n, 1, -1) for l, r in m.host_rows.rows_all(hs, m.engram_ids).items()}
         pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
         self.dec.set_packed_inputs(X.reshape(-1), rows_d, pos)
+
+    def _dev_check(self, dv, X, base):
+        """DSV41_DEV_ENGRAM_CHECK=1 (debug): compare the PREVIOUS round's device ids / rows (persistent copies) with the host path's, log mismatches; then compute the host reference of this round."""
+        import numpy as np
+
+        from models.demos.blackhole.deepseek_v41_flash.tt.engram_dev import K
+
+        prev = getattr(self, "_dev_prev", None)
+        st = self.__dict__.setdefault("_dev_stat", dict(rounds=0, bad_ids=0, bad_rows=0, logged=0))
+        if prev is not None:
+            ids_h, cat_h, base_p, X_p = prev
+            T, ttot = dv.T, dv.TTOT
+            try:
+                ids_d = ttnn.to_torch(ttnn.get_device_tensors(dv.ids)[0]).reshape(ttot, 64)[:, : dv.NL * K].reshape(ttot, dv.NL, K).numpy()
+                bad_t = np.nonzero((ids_d != ids_h.reshape(ttot, dv.NL, K)).any(axis=(1, 2)))[0]
+                rows_bad = []
+                for r in range(dv.mrows):
+                    got = ttnn.to_torch(ttnn.get_device_tensors(dv.dbg_rows)[r * dv.mcols]).reshape(T, -1).view(torch.int16).clone()
+                    want = cat_h[r * T : (r + 1) * T].reshape(T, -1).view(torch.int16).clone()
+                    got[got == -32768], want[want == -32768] = 0, 0
+                    rows_bad += [r * T + t for t in torch.nonzero((got != want).any(1)).flatten().tolist()]
+                st["rounds"] += 1
+                st["bad_ids"] += int(len(bad_t) > 0)
+                st["bad_rows"] += int(len(rows_bad) > 0)
+                if (len(bad_t) or rows_bad) and st["logged"] < 12:
+                    st["logged"] += 1
+                    t0 = int(bad_t[0]) if len(bad_t) else int(rows_bad[0])
+                    self.log(
+                        f"DEV_ENGRAM_CHECK k={self.k} MISMATCH round {st['rounds']}: ids bad tokens {bad_t.tolist()[:8]}, rows bad tokens {rows_bad[:8]}; first token {t0} (user {t0 // self.n}, col {t0 % self.n}) "
+                        f"base {int(base_p[t0 // self.n])} X {X_p[t0 // self.n].tolist()} ids dev {ids_d[t0].reshape(-1)[:6].tolist()} host {ids_h.reshape(ttot, -1)[t0][:6].tolist()}"
+                    )
+                if st["rounds"] % 500 == 0:
+                    self.log(f"DEV_ENGRAM_CHECK k={self.k}: {st}")
+            except Exception as e:  # noqa: BLE001
+                self.log(f"DEV_ENGRAM_CHECK failed: {e!r}")
+        ids_h = self._fast_hash()(X, base, rows=self.phys)
+        cat_h = self._fast_rows()(ids_h).clone()
+        self._dev_prev = (np.array(ids_h).copy(), cat_h, base.clone(), X.clone())
 
     def _fast_hash(self):
         if getattr(self, "_fh", None) is None:
