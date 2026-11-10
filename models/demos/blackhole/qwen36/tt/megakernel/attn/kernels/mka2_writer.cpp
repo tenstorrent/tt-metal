@@ -267,9 +267,20 @@ void kernel_main() {
             cb_pop_front(CB_HL, 1);
         }
         if (ROOT < 2) root_bcast_layer(ROOT, L, NCORES, HCH, cbh_base + ROOT * HCH * XTB, HCH * XTB, r, self_rect, 0);
+#if defined(MK_DNPIPE) && MK_DNPIPE
+        // -mk-tail port: publish h root chunk by root chunk (fixed root order = landing-buffer order) so the down
+        // projection starts on chunk 0 while chunks 1-3 are still in flight
+        for (uint32_t i = 0; i < NROOT; ++i) {
+            DeviceZoneScopedN("W-HWAIT");
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HFLG0 + i)), L + 1);
+            cb_reserve_back(CB_H, HCH);
+            cb_push_back(CB_H, HCH);
+        }
+#else
         { DeviceZoneScopedN("W-HWAIT"); wait_hflags(L); }
         cb_reserve_back(CB_H, HT);
         cb_push_back(CB_H, HT);
+#endif
         cb_wait_front(CB_OUT, NDN);
         cb_pop_front(CB_OUT, NDN);
         { DeviceZoneScopedN("W-ARSTALL"); spin_cycles(S_AR); }
