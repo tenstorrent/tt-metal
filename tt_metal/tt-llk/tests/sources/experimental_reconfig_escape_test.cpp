@@ -30,8 +30,8 @@
 //
 // POLLUTER selects which experimental op X is:
 //   0 = matmul_custom_no_mop     (MATH: at THROTTLE_LEVEL 0 clobbers ADDR_MODs — BH full-tile path
-//                                 writes 0/1/2/4/5, WH writes 0..5; ADDR_MOD_6 is programmed only at
-//                                 nonzero throttling — and loads a replay image; empty uninit)
+//                                 writes 0/1/2/4/5, WH writes 0..5; ADDR_MOD_6 is set and restored
+//                                 in the execute only at nonzero throttling — and loads a replay image; empty uninit)
 //   1 = reduce_block_max_row     (MATH: clobbers ADDR_MOD_1/2/3 + programs a MOP template (the execute restores ADDR_MOD_6 to its invariant); empty uninit.
 //                                 UNPACK: RMWs Haloize_mode, and under fp32 DEST also
 //                                 ALU_ACC_CTRL_Zero_Flag_disabled_src + ALU_FORMAT_SPEC SrcA, none restored
@@ -190,7 +190,7 @@ static inline void math_experimental_(RUNTIME_PARAMETERS params, [[maybe_unused]
     {
         // matmul_custom_no_mop: this THROTTLE_LEVEL 0 full-tile init clobbers ADDR_MODs (BH writes
         // 0/1/2/4/5 — no ADDR_MOD_3 in the full-tile custom path; WH writes 0..5) and records the
-        // replay image; empty uninit. ADDR_MOD_6 is only programmed at nonzero throttling.
+        // replay image; empty uninit. ADDR_MOD_6 is only set (and restored) in the execute at nonzero throttling.
         _llk_math_matmul_init_no_mop_<MATH_FIDELITY, 0 /* THROTTLE_LEVEL */>(
             TILE_R_DIM /* in0_tile_r_dim */,
             TILE_C_DIM /* in0_tile_c_dim */,
