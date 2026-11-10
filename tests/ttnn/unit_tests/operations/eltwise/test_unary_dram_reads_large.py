@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# The cases of test_unary_dram_reads.py sized at 600 or more pages per core over the whole grid (see
-# unary_dram_reads_utils.py). They pass on ttsim but take hours there, so tests/pipeline_reorg/ttsim-skip-list.yaml
-# names this file and the simulator legs run only the smaller cases.
+# The large tensor cases of test_unary_dram_reads.py.
 
 import pytest
 import torch
 import ttnn
 
-from tests.ttnn.unit_tests.operations.eltwise.unary_dram_reads_utils import (
+from tests.ttnn.unit_tests.operations.eltwise.test_unary_dram_reads import (
     DEFAULT_PATH_GRID,
     HEIGHT,
     OPS,
@@ -54,15 +52,15 @@ def test_height_sharded(device, op_name, case, num_shards):
 def test_width_sharded(device, op_name, case, width, num_shards):
     num_shards = num_shards or device.dram_grid_size().x  # None: one shard per DRAM bank of this device
     width = width or num_shards * 1024
-    shape = [1, 1, large_rows(device, width, 32), width]
+    rows = large_rows(device, width, 32)
+    shape = [1, 1, rows, width]
     run_against_default_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, WIDTH, num_shards))
 
 
-# Light ops take the queue at 600 pages per core on every chip. Heavy and unmeasured ops keep the default path.
+# Light ops take the queue on every chip.
 @pytest.mark.parametrize("op_name", list(OPS))
-@pytest.mark.parametrize("case", ["large"])
-def test_interleaved(device, op_name, case):
-    shape = [1, 1, large_rows(device, 1024, 32, pages_per_core=600), 1024]
+def test_interleaved(device, op_name):
+    shape = [1, 1, large_rows(device, 1024, 32), 1024]
     run_against_default_path(OPS[op_name], random_input(shape), device, ttnn.DRAM_MEMORY_CONFIG)
 
 
@@ -78,21 +76,13 @@ def test_interleaved_very_large(device, op_name):
 
 
 # 4 KB pages (fp32) take the flows; bfp8 pages keep the default path.
-@pytest.mark.parametrize(
-    "dtype, size",
-    [
-        (ttnn.float32, "large"),
-        (ttnn.bfloat8_b, "large"),
-    ],
-    ids=["fp32-large", "bfp8-large"],
-)
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat8_b], ids=["fp32", "bfp8"])
 @pytest.mark.parametrize("op_name", ["identity", "relu", "silu", "hardswish", "gelu_accurate", "logit"])
 @pytest.mark.parametrize("layout", ["height", "width", "interleaved"])
-def test_other_formats(device, dtype, op_name, layout, size):
+def test_other_formats(device, dtype, op_name, layout):
     width = 7 * 1024 if layout == "width" else 1024
     step = 32 if layout == "width" else 32 * 7
-    rows = large_rows(device, width, step, pages_per_core=600)
-    shape = [1, 1, rows, width]
+    shape = [1, 1, large_rows(device, width, step), width]
     memory_config = memory_config_for(layout, shape)
     run_against_default_path(OPS[op_name], random_input(shape).to(torch.float32), device, memory_config, dtype)
 
