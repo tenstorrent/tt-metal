@@ -89,3 +89,22 @@ def test_from_local_host_shards_rejects_incomplete_or_foreign_shards(mesh_device
     on_device[origin] = shards[origin].to(mesh_device)
     with expect_error(RuntimeError, "not on host"):
         ttnn.from_local_host_shards(on_device, mesh_device, topology)
+
+    # A mesh host tensor is on host too, but is not a single shard.
+    mesh_host = dict(shards)
+    mesh_host[origin] = shards[origin].to(mesh_device).cpu()
+    with expect_error(RuntimeError, "multi-device"):
+        ttnn.from_local_host_shards(mesh_host, mesh_device, topology)
+
+    # A coordinate with the wrong number of dimensions. The dict holds only that key: coordinates of different
+    # dimensions cannot be ordered, so a mixed dict fails in the dict conversion before the function runs.
+    with expect_error(RuntimeError, "not inside the mesh"):
+        ttnn.from_local_host_shards({ttnn.MeshCoordinate(0, 0, 0): shards[origin]}, mesh_device, topology)
+
+    # The label is the caller's; one that does not list a populated coordinate is refused at assembly rather than
+    # when the tensor is composed or dumped.
+    wrong_label = ttnn.TensorTopology(
+        ttnn.MeshShape(2, 2), [ttnn.PlacementShard(2), ttnn.PlacementShard(3)], [origin] * 4
+    )
+    with expect_error(RuntimeError, "does not cover"):
+        ttnn.from_local_host_shards(shards, mesh_device, wrong_label)

@@ -11,6 +11,7 @@ and pins the Python object for as long as the tensor's buffer lives.
 """
 
 import gc
+import weakref
 
 import numpy as np
 import torch
@@ -42,33 +43,65 @@ def test_host_tensor_from_bytes_reinterprets_the_bytes_without_copying():
     assert view.ctypes.data == raw.ctypes.data, "the tensor borrows the buffer rather than copying it"
 
 
-def test_host_tensor_from_bytes_keeps_the_buffer_alive():
+def test_host_tensor_from_bytes_pins_the_buffer_and_releases_it_with_the_tensor():
     shape = (1, 1, 32, 32)
 
     def build():
         source = torch.randn(shape).to(torch.bfloat16)
-        return ttnn.host_tensor_from_bytes(_bf16_bytes(source), _spec(shape)), source.clone()
+        raw = _bf16_bytes(source)  # the array handed to the binding is what the pin holds
+        return ttnn.host_tensor_from_bytes(raw, _spec(shape)), source.clone(), weakref.ref(raw)
 
-    tensor, expected = build()  # the only Python reference to the raw bytes is the one the tensor pins
+    # After build() the only reference to the raw array is the tensor's pin. Reading the values back would most
+    # likely pass even without a pin (a freed block keeps its bytes until reused), so the weak reference is the
+    # assertion: alive while the tensor is, dead once it is gone.
+    tensor, expected, raw_ref = build()
     gc.collect()
-
+    assert raw_ref() is not None, "the tensor pins the buffer"
     torch.testing.assert_close(ttnn.to_torch(tensor), expected, rtol=0, atol=0)
+
+    del tensor
+    gc.collect()
+    assert raw_ref() is None, "the pin is released with the tensor"
+
+
+def test_host_tensor_from_bytes_borrows_read_only_buffers():
+    """A checkpoint's bytes arrive as an immutable ``bytes`` object; the binding borrows them without a copy."""
+    shape = (1, 1, 32, 32)
+    expected = torch.randn(shape).to(torch.bfloat16)
+    payload = _bf16_bytes(expected).tobytes()
+    frozen = np.frombuffer(payload, dtype=np.uint8)
+    assert not frozen.flags.writeable, "precondition: a read-only input"
+
+    for raw in (frozen, memoryview(payload)):
+        tensor = ttnn.host_tensor_from_bytes(raw, _spec(shape))
+        torch.testing.assert_close(ttnn.to_torch(tensor), expected, rtol=0, atol=0)
+        view = np.from_dlpack(tensor.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0)))
+        assert view.ctypes.data == frozen.ctypes.data, f"{type(raw).__name__}: borrowed, not copied"
 
 
 def test_host_tensor_from_bytes_checks_dtype_shape_and_size(expect_error):
     shape = (1, 1, 32, 32)
     raw = _bf16_bytes(torch.zeros(shape, dtype=torch.bfloat16))
 
+    # Every message from the binding starts with its name, which contains "bytes", so the size errors are matched on
+    # "needs" to tell them from the shape ones.
     with expect_error(RuntimeError, "uint8"):
         ttnn.host_tensor_from_bytes(raw.view(np.uint16), _spec(shape))
     with expect_error(RuntimeError, "uint8"):
         ttnn.host_tensor_from_bytes(raw.reshape(32, 64), _spec(shape))
-    with expect_error(RuntimeError, "bytes"):
+    # The right number of elements, but every other byte: without the stride check the first 2048 bytes would be
+    # read as the tensor, silently.
+    with expect_error(RuntimeError, "uint8"):
+        ttnn.host_tensor_from_bytes(np.zeros(2 * raw.nbytes, dtype=np.uint8)[::2], _spec(shape))
+    with expect_error(RuntimeError, "needs"):
         ttnn.host_tensor_from_bytes(raw[:-2], _spec(shape))
+    # The right bytes at an odd address cannot be read as bfloat16 in place.
+    with expect_error(RuntimeError, "not aligned"):
+        ttnn.host_tensor_from_bytes(np.zeros(raw.nbytes + 1, dtype=np.uint8)[1:], _spec(shape))
 
     # A TILE tensor takes its padded bytes: [1, 1, 1, 32] is one 32x32 tile.
     tile_spec = _spec((1, 1, 1, 32), layout=ttnn.TILE_LAYOUT)
-    with expect_error(RuntimeError, "bytes"):
+    with expect_error(RuntimeError, "needs"):
         ttnn.host_tensor_from_bytes(_bf16_bytes(torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)), tile_spec)
     tile = ttnn.host_tensor_from_bytes(np.zeros(32 * 32 * 2, dtype=np.uint8), tile_spec)
     assert list(tile.shape) == [1, 1, 1, 32]

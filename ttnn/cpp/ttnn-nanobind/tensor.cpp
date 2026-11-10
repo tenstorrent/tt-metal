@@ -29,6 +29,7 @@
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/json_class.hpp"
+#include "ttnn-nanobind/py_buffer_borrow.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/overlapped_tensor.hpp"
@@ -38,8 +39,6 @@
 #include "ttnn/tensor/topology_check.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -746,8 +745,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             )doc")
         .def(
             "host_tensor_from_bytes",
-            [](const nb::ndarray<nb::array_api>& buffer, const tt::tt_metal::TensorSpec& spec) -> Tensor {
-                using tt::tt_metal::DataType;
+            // nb::ro: a read-only buffer (np.frombuffer over bytes, a memoryview of bytes) is accepted and borrowed;
+            // the tensor must then not be written through.
+            [](const nb::ndarray<nb::array_api, nb::ro>& buffer, const tt::tt_metal::TensorSpec& spec) -> Tensor {
                 using tt::tt_metal::HostBuffer;
                 TT_FATAL(
                     buffer.dtype() == nb::dtype<uint8_t>() && buffer.ndim() == 1 &&
@@ -755,50 +755,31 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                     "host_tensor_from_bytes takes a contiguous one-dimensional uint8 buffer (got ndim {}, itemsize {})",
                     buffer.ndim(),
                     buffer.itemsize());
-                const size_t nbytes = buffer.size();
+                const auto element_size = py_buffer::borrowable_element_size(spec.data_type());
+                TT_FATAL(
+                    element_size.has_value(),
+                    "host_tensor_from_bytes: unsupported data type {} (block-float and fp8 formats are sized by the "
+                    "device runtime)",
+                    spec.data_type());
                 // Sized from the spec's cached physical shape, not compute_packed_buffer_size_bytes(): that asks the
                 // Tile for its size, which initialises the device runtime, and a host-only constructor must not open
-                // devices. Fixed-width element types only; block floats and fp8 are sized by the runtime and refused.
+                // devices. For the fixed-width types borrowable_element_size admits the two sizes are equal.
                 const auto& physical = spec.physical_shape();
                 const size_t elements = physical.height() * physical.width();
-                // The tensor borrows the buffer's memory. The pin keeps the Python object alive for as long as any
-                // copy of the HostBuffer does; the last release may run without the GIL, so it reacquires it to decref.
-                tt::tt_metal::MemoryPin pin(std::shared_ptr<nb::ndarray<nb::array_api>>(
-                    new nb::ndarray<nb::array_api>(buffer), [](nb::ndarray<nb::array_api>* pinned) {
-                        nb::gil_scoped_acquire gil;
-                        delete pinned;
-                    }));
-                std::byte* data = const_cast<std::byte*>(static_cast<const std::byte*>(buffer.data()));
-                auto borrow = [&]<typename T>() {
-                    const size_t expected = elements * sizeof(T);
-                    TT_FATAL(
-                        nbytes == expected,
-                        "host_tensor_from_bytes: the buffer holds {} bytes but a {} tensor of logical shape {} "
-                        "(physical shape {} x {}) needs {}",
-                        nbytes,
-                        spec.data_type(),
-                        spec.logical_shape(),
-                        physical.height(),
-                        physical.width(),
-                        expected);
-                    return HostBuffer(ttsl::Span<T>(reinterpret_cast<T*>(data), elements), pin);
-                };
-                HostBuffer host_buffer = [&]() {
-                    switch (spec.data_type()) {
-                        case DataType::BFLOAT16: return borrow.template operator()<bfloat16>();
-                        case DataType::FLOAT32: return borrow.template operator()<float>();
-                        case DataType::UINT32: return borrow.template operator()<uint32_t>();
-                        case DataType::INT32: return borrow.template operator()<int32_t>();
-                        case DataType::UINT16: return borrow.template operator()<uint16_t>();
-                        case DataType::UINT8: return borrow.template operator()<uint8_t>();
-                        case DataType::INT8: return borrow.template operator()<int8_t>();
-                        default:
-                            TT_THROW(
-                                "host_tensor_from_bytes: unsupported data type {} (block-float and fp8 formats are "
-                                "sized by the device runtime)",
-                                spec.data_type());
-                    }
-                }();
+                const size_t expected = elements * *element_size;
+                const size_t nbytes = buffer.size();
+                TT_FATAL(
+                    nbytes == expected,
+                    "host_tensor_from_bytes: the buffer holds {} bytes but a {} tensor of logical shape {} "
+                    "(physical shape {} x {}) needs {}",
+                    nbytes,
+                    spec.data_type(),
+                    spec.logical_shape(),
+                    physical.height(),
+                    physical.width(),
+                    expected);
+                // Borrowed, not copied: the HostBuffer pins the Python object and reads its memory in place.
+                HostBuffer host_buffer = py_buffer::borrow_py_buffer(buffer, spec.data_type(), elements);
                 return Tensor(std::move(host_buffer), spec);
             },
             nb::arg("buffer"),
@@ -809,12 +790,15 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 ``buffer`` is a contiguous one-dimensional uint8 array (a numpy array, a memoryview over bytes, or
                 any DLPack exporter) holding exactly the bytes of ``tensor_spec``: its storage dtype, in its layout,
                 at its physical shape (tile padding included for TILE layouts), i.e.
-                ``physical_shape().height() * physical_shape().width()`` elements. Fixed-width dtypes only: block-float
+                ``physical_shape().height() * physical_shape().width()`` elements, starting at an address aligned to
+                the dtype's element size. Fixed-width dtypes only: block-float
                 and fp8 specs are refused, because sizing them needs the device runtime, which this function never
                 touches. The tensor
                 keeps the Python object alive and reads its memory in place, so the bytes must not change while the
-                tensor is in use. This is the zero-copy way to build a bfloat16 host tensor from raw bytes, which
-                the ndarray constructor cannot do: numpy has no bfloat16 and the constructor converts values.
+                tensor is in use. A read-only buffer (``np.frombuffer`` over ``bytes``, a ``memoryview`` of
+                ``bytes``) is accepted and borrowed just the same; the tensor must then not be written through. This
+                is the zero-copy way to build a bfloat16 host tensor from raw bytes, which the ndarray constructor
+                cannot do: numpy has no bfloat16 and the constructor converts values.
 
                 .. code-block:: python
 

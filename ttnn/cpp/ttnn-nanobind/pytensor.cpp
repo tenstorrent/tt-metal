@@ -34,6 +34,7 @@
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
+#include "ttnn-nanobind/py_buffer_borrow.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/ttnn_dtype_traits.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -420,39 +421,12 @@ auto parse_external_operation(
 }
 
 HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py_tensor, DataType target_dtype) {
-    auto to_host_buffer_impl = []<typename T>(const nb::ndarray<nb::array_api>& contiguous_py_tensor) -> HostBuffer {
-        // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
-        // thread that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only
-        // increments / decrements the reference count on the memory pin; the last decrement to the pin should be
-        // triggered from the nanobind caller thread, which will correctly decrement the `nb::object` reference count
-        // while holding GIL.
-        // May drop without the GIL; reacquire to decref.
-        tt::tt_metal::MemoryPin pydata_pin(std::shared_ptr<nb::ndarray<nb::array_api>>(
-            new nb::ndarray<nb::array_api>(contiguous_py_tensor), [](nb::ndarray<nb::array_api>* pinned) {
-                nb::gil_scoped_acquire gil;
-                delete pinned;
-            }));
-        T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(contiguous_py_tensor.data()));
-        return HostBuffer(ttsl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
-    };
-
-    auto to_host_buffer = [&to_host_buffer_impl,
-                           &target_dtype](const nb::ndarray<nb::array_api>& contiguous_py_tensor) {
-        switch (target_dtype) {
-            case DataType::BFLOAT16: return to_host_buffer_impl.operator()<bfloat16>(contiguous_py_tensor);
-            case DataType::FLOAT32: return to_host_buffer_impl.operator()<float>(contiguous_py_tensor);
-            case DataType::UINT32: return to_host_buffer_impl.operator()<uint32_t>(contiguous_py_tensor);
-            case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
-            case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(contiguous_py_tensor);
-            case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(contiguous_py_tensor);
-            case DataType::INT8: return to_host_buffer_impl.operator()<int8_t>(contiguous_py_tensor);
-            default: TT_THROW("Unsupported target DataType: {}", target_dtype);
-        }
-    };
-
     // pytensor can return invalid data type, so we need to parse the tensor to get the data type.
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, target_dtype);
-    return to_host_buffer(preprocessed_py_tensor.contiguous_py_tensor);
+    const auto& contiguous_py_tensor = preprocessed_py_tensor.contiguous_py_tensor;
+    // The HostBuffer borrows the contiguous array's memory and pins the Python object; the pin and GIL rules are in
+    // py_buffer::borrow_py_buffer, shared with host_tensor_from_bytes.
+    return py_buffer::borrow_py_buffer(contiguous_py_tensor, target_dtype, contiguous_py_tensor.size());
 }
 
 }  // namespace
@@ -971,11 +945,16 @@ void pytensor_module(nb::module_& mod) {
                         "cpu(coords=...): coordinate {} is listed twice",
                         coord);
                 }
-                // A storage restricted to `coords` shares the mesh tensor and its label; reading it populates the
-                // host tensor at those coordinates only and labels it with the full label. Nothing on this path
-                // writes a label back to the mesh tensor (only combine_device_storages does that).
+                // A storage restricted to `coords` shares the mesh tensor; reading it populates the host tensor at
+                // those coordinates only. The subset carries no label of its own, so the read labels the host tensor
+                // with the MeshTensor's full label; relabel it with `self`'s, so that a per-device tensor
+                // (get_device_tensors) keeps its one-coordinate label as cpu() without coords does. The relabel is
+                // host-side only: nothing on this path writes a label back to the mesh tensor (only
+                // combine_device_storages does that).
                 Tensor subset(DeviceStorage(self.device_storage(), *coords));
-                return subset.cpu(blocking, cq_id);
+                Tensor host = subset.cpu(blocking, cq_id);
+                host.update_tensor_topology(self.tensor_topology());
+                return host;
             },
             nb::arg("blocking") = true,
             nb::arg("cq_id") = nb::none(),
@@ -986,8 +965,11 @@ void pytensor_module(nb::module_& mod) {
 
             With ``coords``, read only the shards at those mesh coordinates, in one command-queue batch: the host
             tensor is populated at those coordinates only (``host_buffer().get_shard(c)`` is None elsewhere) and
-            carries the device tensor's own topology label, which the device tensor keeps unchanged. Every
-            coordinate must be one the tensor holds a shard at (``device_coords()``), and none may repeat.
+            carries the device tensor's own topology label, which the device tensor keeps unchanged (a per-device
+            tensor from ``get_device_tensors`` keeps its one-coordinate label). Every coordinate must be one the
+            tensor holds a shard at (``device_coords()``), and none may repeat. The result is populated at a subset
+            of the coordinates its label lists, so it is a readback for its bytes, not a tensor to assemble, move or
+            serialize as a whole.
 
             .. code-block:: python
 

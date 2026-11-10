@@ -113,4 +113,8 @@ def test_cpu_coords_rejects_what_the_tensor_does_not_hold(mesh_device, expect_er
         shard = ttnn.get_device_tensors(tensor)[0]
         with expect_error(RuntimeError, "holds no shard"):
             shard.cpu(coords=[tensor.device_coords()[-1]])
-        assert _populated(shard.cpu(coords=[first]), mesh_device) == [first]
+        host = shard.cpu(coords=[first])
+        assert _populated(host, mesh_device) == [first]
+        # The per-device tensor carries a one-coordinate label of its own, and so must the read, as shard.cpu()
+        # does; the mesh tensor's full label would describe shards this host tensor does not hold.
+        assert _label(host.tensor_topology()) == _label(shard.cpu().tensor_topology())
