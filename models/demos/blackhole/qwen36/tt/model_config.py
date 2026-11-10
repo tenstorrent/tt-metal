@@ -160,6 +160,11 @@ class Qwen36ModelArgs(ModelArgs):
         # prefill projections at S <= this use all-gather + 1D matmul instead of the fused all-gather-matmul (which has a
         # ~100 µs floor at short S); 0 = off
         self.prefill_small_m_max = 0
+        # Where a request's image embeddings come from: "in_prefill" = the vision tower runs on this mesh
+        # (init_vision_model + get_image_features); "spliced" = a separate encoder (the tt-d-gen encoder service,
+        # models/demos/blackhole/qwen36/vision/media.py) computed them and prefill only uploads the stored rows
+        # (media_embeddings_to_device): no vision weights or vision traces on the prefill mesh.
+        self.prefill_media_source = "in_prefill"
         # Prefill options measured for a dense dim-4096 checkpoint on one (1, 4) column (Qwen3.5-9B / the FLUX.3 Klein
         # prompt upsampler); all off here, set_column_prefill_profile() turns on the measured set.
         # prefill_tokpar: token-parallel residual stream + MLP (Qwen36DecoderLayer.forward_tokpar; full MLP weights on
@@ -521,6 +526,8 @@ class Qwen36ModelArgs(ModelArgs):
             setattr(self, f"prefill_{name}", True)
         self.prefill_gdn_convsel_tail = 160  # covers the 128-token buckets
         self.prefill_agmm_config_fn = self._column_agmm_config
+        # vision stays in prefill until the spliced path (encoder service) is validated end to end
+        self.prefill_media_source = "in_prefill"
 
     def _column_agmm_config(self, S, name):
         table = self._COLUMN_AGMM_LARGE if S >= self._COLUMN_AGMM_LARGE_MIN_S else self._COLUMN_AGMM_SMALL

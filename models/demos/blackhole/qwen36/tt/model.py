@@ -497,6 +497,35 @@ class Qwen36Model:
         video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw, host_trim=True)
         return video_features  # packed 2D [num_video_tokens, H] (see get_image_features)
 
+    def media_embeddings_to_device(self, embeddings, image_grid_thw):
+        """Spliced-media prefill (prefill_media_source == "spliced"): the image embeddings an encoder outside this
+        mesh stored for the request (vision/format.py: bf16 rows of width hidden, image-token order) -> the same
+        packed, hidden-fractured ``[num_image_tokens, H]`` tensor ``get_image_features`` returns, for the prefill
+        paths' ``vision_tokens``. Stashes the image grid for M-RoPE as ``get_image_features`` does; the grid is not in
+        the stored value and must come with the media ref.
+
+        ``embeddings``: torch bf16 ``[n, H]``, or the uint16 numpy view ``vision.format.embeddings`` returns (several
+        images' values back to back in prompt order: concatenate before the call, or call per request with all rows).
+        ``image_grid_thw``: ``[num_images, 3]`` in patches, ``sum(t * h * w) / merge^2 == n``.
+        """
+        import numpy as np
+
+        if isinstance(embeddings, np.ndarray):
+            embeddings = torch.from_numpy(embeddings.view(np.int16)).view(torch.bfloat16)
+        grid = torch.as_tensor(image_grid_thw, dtype=torch.long).reshape(-1, 3)
+        merge = int(self.args.hf_config.vision_config.spatial_merge_size)
+        n = int(grid.prod(dim=1).sum()) // (merge * merge)
+        assert tuple(embeddings.shape) == (n, self.args.dim), (tuple(embeddings.shape), n, self.args.dim)
+        self._req_image_grid_thw = grid
+        self._req_video_grid_thw = None
+        host = ttnn.from_torch(
+            embeddings.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,  # host tilize: no device program keyed by the image size (see host_trim)
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+        )
+        return ttnn.to_device(host, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     def _vision_placeholder_token_id(self):
         """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
         a video request (video grid stashed), else ``image_token_id``. The vision-splice paths
