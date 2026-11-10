@@ -1089,13 +1089,60 @@ def engine_env(n_users, n_layers):
     return env
 
 
+# Cross-bucket L1 pool (spec §20 bridge, until every engine L1 tensor is a CB): each verify bucket is its own engine
+# build, and every L1 tensor reserves its address range on EVERY core, so two buckets' tensors stacked below the L1 top
+# pushed the owners' lowest buffer to 506112, under the static CB end 884608 ("clash"; one bucket alone: 993280). Bucket
+# programs never run concurrently (one verify replay at a time), so the k-th L1 tensor of the same (shape, dtype, layout,
+# memory config, initial bytes) in a later bucket's setup IS the earlier bucket's tensor: identical start state, one
+# address range. Tensors whose initial bytes differ get their own range (and may still clash: then the bucket fails to
+# build and stays op-by-op). QWEN36_R16_MK_L1POOL=0 turns the pool off.
+_L1POOL = {}  # id(mesh) -> {key: [tensor, ...]}
+_ABLOCKS = {}  # id(mesh) -> the shared integration ArgBlocks
+
+
+def _l1_key(shape, dtype, layout, mc, data=None):
+    import hashlib
+
+    h = None
+    if data is not None:
+        import torch
+
+        t = data if isinstance(data, torch.Tensor) else None
+        h = hashlib.sha1(t.detach().contiguous().cpu().view(-1).view(torch.uint8).numpy().tobytes()).hexdigest() if t is not None else "opaque"
+    return (tuple(int(x) for x in shape), str(dtype), str(layout), repr(mc), h)
+
+
+def _is_l1(mc):
+    return mc is not None and mc.buffer_type == ttnn.BufferType.L1
+
+
 @contextlib.contextmanager
 def _setup_context(mesh, env):
     """setup_bench's mesh contract (bench_mka2's MESH shims), ONLY while it runs: from_torch replicates (host tilize,
-    then to_device with the memory config), to_torch reads device 0. Plus the engine-config env. Both restored after."""
+    then to_device with the memory config), to_torch reads device 0. Plus the engine-config env, and the cross-bucket
+    L1 pool (from_torch / allocate_tensor_on_device into L1). All restored after."""
     saved_env = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
-    _ft0, _tt0 = ttnn.from_torch, ttnn.to_torch
+    _ft0, _tt0, _at0 = ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device
+    pool = _L1POOL.setdefault(id(mesh), {}) if os.environ.get("QWEN36_R16_MK_L1POOL", "1") == "1" else None
+    seen = {}  # key -> occurrences in THIS setup
+    stats = dict(reused=0, new=0, bytes_reused=0)
+
+    def _pooled(key, make):
+        if pool is None:
+            return make()
+        k = seen[key] = seen.get(key, -1) + 1
+        lst = pool.setdefault(key, [])
+        if k < len(lst) and lst[k].is_allocated():
+            stats["reused"] += 1
+            return lst[k]
+        t = make()
+        stats["new"] += 1
+        if k < len(lst):
+            lst[k] = t
+        else:
+            lst.append(t)
+        return t
 
     def _ft(*a, **k):
         d = k.pop("device", None)
@@ -1103,19 +1150,33 @@ def _setup_context(mesh, env):
         if d is None:
             return _ft0(*a, **k)
         k.setdefault("mesh_mapper", ttnn.ReplicateTensorToMesh(mesh))
-        h = _ft0(*a, **k)
-        return ttnn.to_device(h, d, memory_config=mc) if mc is not None else ttnn.to_device(h, d)
+
+        def make():
+            h = _ft0(*a, **k)
+            return ttnn.to_device(h, d, memory_config=mc) if mc is not None else ttnn.to_device(h, d)
+
+        if not _is_l1(mc):
+            return make()
+        src = a[0] if a else k.get("tensor")
+        shp = getattr(src, "shape", ())
+        return _pooled(_l1_key(shp, k.get("dtype"), k.get("layout"), mc, src), make)
+
+    def _at(shape, dtype, layout, device, memory_config=None, *a, **k):
+        make = lambda: _at0(shape, dtype, layout, device, memory_config, *a, **k)
+        if not _is_l1(memory_config):
+            return make()
+        return _pooled(_l1_key(list(shape), dtype, layout, memory_config), make)
 
     def _tt(t, *a, **k):
         if t.storage_type() == ttnn.StorageType.DEVICE:
             return _tt0(ttnn.get_device_tensors(t)[0], *a, **k)
         return _tt0(t, *a, **k)
 
-    ttnn.from_torch, ttnn.to_torch = _ft, _tt
+    ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device = _ft, _tt, _at
     try:
-        yield
+        yield stats
     finally:
-        ttnn.from_torch, ttnn.to_torch = _ft0, _tt0
+        ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device = _ft0, _tt0, _at0
         for k, v in saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -1165,25 +1226,28 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     from models.demos.blackhole.qwen36.tt.megakernel.engine import argblock as AB
 
     env = engine_env(n_users, len(layer_types))
-    with _setup_context(mesh, env):
+    with _setup_context(mesh, env) as pool_stats:
         S = setup_bench(mesh, True, lambda t: 0.0)
     io0 = _io_list(S)
     per_dev = S.get("PROG_PER_DEV")
     grid = mesh.compute_with_storage_grid_size()
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-    blocks = AB.ArgBlocks(mesh)
-    pt = kv_desc and kv_desc[0].get("page_table")
-    attn = []
-    for d in kv_desc or ():
-        attn += [d.get("k_addr", 0), d.get("v_addr", 0)]
-    kv0 = (kv_desc or [{}])[0]
-    blocks.add("attn", full, [{(c.x, c.y): [kv0.get("pt_addr", 0), kv0.get("pt_B", 0), kv0.get("pt_nb", 0),
-                                            len(kv_desc or ())] + attn + [kv0.get("block_size", 0), kv0.get("n_kv_heads", 0)]
-                               for c in AB._cores(full)}])
+    # the integration arg blocks are model-global (KV bases, page table) or rewritten per launch (replay): ONE set per
+    # mesh, shared by every bucket (each L1 tensor reserves its range on every core; see _L1POOL)
+    blocks = _ABLOCKS.get(id(mesh))
+    if blocks is None:
+        blocks = _ABLOCKS[id(mesh)] = AB.ArgBlocks(mesh)
+        attn = []
+        for d in kv_desc or ():
+            attn += [d.get("k_addr", 0), d.get("v_addr", 0)]
+        kv0 = (kv_desc or [{}])[0]
+        blocks.add("attn", full, [{(c.x, c.y): [kv0.get("pt_addr", 0), kv0.get("pt_B", 0), kv0.get("pt_nb", 0),
+                                                len(kv_desc or ())] + attn + [kv0.get("block_size", 0), kv0.get("n_kv_heads", 0)]
+                                   for c in AB._cores(full)}])
+        blocks.add("replay", full, [{}], min_payload=len(PER_REPLAY_ARGS))
     # kind 3 ('gdn') is the GDN role's own block (gdn/u1/g2_role.py); the model's GDN state goes into the role's per-layer
     # table (gdn_desc[i]['tensors'], keyed like GdnRole.tl) when the role adopts it, not into a second block here.
     wb = {k: ((weights or {}).get(k) or {}).get("tensor") for k in ("mlp", "qkv", "wo", "gdn_in", "gdn_out", "gamma")}
-    blocks.add("replay", full, [{}], min_payload=len(PER_REPLAY_ARGS))
     descs = {}
     for r in range(mesh.shape[0]):
         for c_ in range(mesh.shape[1]):
@@ -1191,7 +1255,7 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
             descs[(r, c_)] = per_dev(co) if per_dev else S["prog"]
             AB.check_cb_ids(descs[(r, c_)])
     info = dict(env=env, nl=int(env["FM_NL"]), nu=int(env["MKA_NU"]), n_io=len(io0), per_device=per_dev is not None,
-                common_args=blocks.common_args(), n_gdn=len(gdn_desc or ()), n_attn=len(kv_desc or ()),
+                common_args=blocks.common_args(), l1pool=dict(pool_stats), n_gdn=len(gdn_desc or ()), n_attn=len(kv_desc or ()),
                 weights={k: (t.buffer_address() if t is not None else 0) for k, t in wb.items()})
 
     def program(x_in, x_out, per_replay):
