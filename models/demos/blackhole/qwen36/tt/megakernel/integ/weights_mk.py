@@ -32,14 +32,20 @@ NORM_FIX = 1.25 ** 0.5  # spec §19: stored pre-multiplied in the gamma table (f
 # ---------------------------------------------------------------------------------------------------------------- #
 # 1. extraction (device -> host)
 # ---------------------------------------------------------------------------------------------------------------- #
-def device_shards(t):
-    """Per-device host float32 copies of a mesh tensor, as 2-D [rows, cols] (leading unit dims dropped)."""
+def device_shards(t, pad_tiles=True):
+    """Per-device host float32 copies of a mesh tensor, as 2-D [rows, cols] (leading unit dims dropped). With
+    ``pad_tiles`` the logical shape is zero-padded up to whole 32x32 tiles, the device's physical tile grid (e.g. GDN
+    qkvz(ab) is 2060 = 64 tiles + 12 columns wide per device; its last tile column holds 12 real columns)."""
+    import torch
     import ttnn
 
     out = []
     for dt in ttnn.get_device_tensors(t):
         x = ttnn.to_torch(dt).float()
-        out.append(x.reshape(-1, x.shape[-1]))
+        x = x.reshape(-1, x.shape[-1])
+        if pad_tiles and (x.shape[0] % TILE or x.shape[1] % TILE):
+            x = torch.nn.functional.pad(x, (0, -x.shape[1] % TILE, 0, -x.shape[0] % TILE))
+        out.append(x)
     return out
 
 
