@@ -844,14 +844,17 @@ for it in range(ITERS):
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
     if RQKV:
         qv = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
+        QRW = V_R if (QSK and V_R < 32) else M   # split-K at R < 32: only rows 0..R-1 of x / the partials travel (v12 faces)
+        qv = qv[:, :QRW]
         for L in range(NL):
             if not is_attn_layer(L): continue
             if RWO: gold_qkv[L][:, 64 * TILE:112 * TILE] = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE]) if it == 0 else gold_qkv[L][:, 64 * TILE:112 * TILE]
-            pq_ = torch.corrcoef(torch.stack([qv[L].flatten(), gold_qkv[L].flatten()]))[0, 1].item()
+            gq_ = gold_qkv[L][:QRW]
+            pq_ = torch.corrcoef(torch.stack([qv[L].flatten(), gq_.flatten()]))[0, 1].item()
             nan_ = [n for n in range(QN) if not torch.isfinite(qv[L][:, n*TILE:(n+1)*TILE]).all()]
             if nan_: print(f"[rqkv] iter {it} layer {L} non-finite tiles {nan_}", flush=True)
-            bad_ = [n for n in range(QN) if torch.corrcoef(torch.stack([qv[L][:, n*TILE:(n+1)*TILE].flatten(), gold_qkv[L][:, n*TILE:(n+1)*TILE].flatten()]))[0, 1].item() < 0.999]
-            print(f"[rqkv] iter {it} layer {L} qkv pcc {pq_:.5f} max|err| {(qv[L]-gold_qkv[L]).abs().max().item():.4f} |gold|max {gold_qkv[L].abs().max().item():.3f} bad tiles {bad_[:12]}", flush=True)
+            bad_ = [n for n in range(QN) if torch.corrcoef(torch.stack([qv[L][:, n*TILE:(n+1)*TILE].flatten(), gq_[:, n*TILE:(n+1)*TILE].flatten()]))[0, 1].item() < 0.999]
+            print(f"[rqkv] iter {it} layer {L} rows {QRW} qkv pcc {pq_:.5f} max|err| {(qv[L]-gq_).abs().max().item():.4f} |gold|max {gq_.abs().max().item():.3f} bad tiles {bad_[:12]}", flush=True)
     vs = ttnn.to_torch(outs).float().reshape(NL, NU, TILE, DHD)
     for L in range(NL):
         v_, g2 = vs[L][:, :NQH * T], golds_s[L][:, :NQH * T]
@@ -871,8 +874,9 @@ for it in range(ITERS):
         kv_ = ttnn.to_torch(kd_t).float().reshape(NL, M, -1)
         for L in range(NL):
             if not is_attn_layer(L): continue
-            pk_ = torch.corrcoef(torch.stack([kv_[L].flatten(), gold_k[L].flatten()]))[0, 1].item()
-            print(f"[rqnr] iter {it} layer {L} k head pcc {pk_:.5f} max|err| {(kv_[L] - gold_k[L]).abs().max().item():.4f}", flush=True)
+            KRW = V_R if (QSK and V_R < 32) else M
+            pk_ = torch.corrcoef(torch.stack([kv_[L][:KRW].flatten(), gold_k[L][:KRW].flatten()]))[0, 1].item()
+            print(f"[rqnr] iter {it} layer {L} rows {KRW} k head pcc {pk_:.5f} max|err| {(kv_[L][:KRW] - gold_k[L][:KRW]).abs().max().item():.4f}", flush=True)
     if RWO:
         wv_ = ttnn.to_torch(wod).float().reshape(NL, M, -1)
         for L in range(NL):
