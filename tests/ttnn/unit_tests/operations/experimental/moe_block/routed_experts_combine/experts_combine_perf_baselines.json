@@ -1,0 +1,28 @@
+{
+ "BLACKHOLE_GALAXY": {
+  "experts + combine dsv41_flash-8x4-5120 hotchip": 1181.0,
+  "experts + combine dsv41_flash-8x4-5120 uniform": 692.5,
+  "experts + combine dsv41_flash-8x4-5120 zipf": 908.3,
+  "experts + combine glm53-4x4-y-5120 hotchip": 2828.7,
+  "experts + combine glm53-4x4-y-5120 uniform": 1207.4,
+  "experts + combine glm53-4x4-y-5120 zipf": 1462.8,
+  "experts + combine glm53-8x4-5120 hotchip": 2043.1,
+  "experts + combine glm53-8x4-5120 uniform": 673.5,
+  "experts + combine glm53-8x4-5120 zipf": 1123.9,
+  "experts + combine kimi_k3-4x4-y-2560 hotchip": 3148.6,
+  "experts + combine kimi_k3-4x4-y-2560 uniform": 2724.4,
+  "experts + combine kimi_k3-4x4-y-2560 zipf": 2760.0,
+  "experts + combine kimi_k3-8x4-5120 hotchip": 2890.3,
+  "experts + combine kimi_k3-8x4-5120 uniform": 1447.1,
+  "experts + combine kimi_k3-8x4-5120 zipf": 1614.7,
+  "experts + combine minimax_m3-2x4-2048 hotchip": 1972.7,
+  "experts + combine minimax_m3-2x4-2048 uniform": 1366.5,
+  "experts + combine minimax_m3-2x4-2048 zipf": 1432.9,
+  "experts + combine minimax_m3-2x4-4096 hotchip": 3090.9,
+  "experts + combine minimax_m3-2x4-4096 uniform": 1447.5,
+  "experts + combine minimax_m3-2x4-4096 zipf": 1789.2,
+  "experts + combine minimax_m3-2x4-5120 hotchip": 3711.1,
+  "experts + combine minimax_m3-2x4-5120 uniform": 1486.9,
+  "experts + combine minimax_m3-2x4-5120 zipf": 2095.4
+ }
+}
