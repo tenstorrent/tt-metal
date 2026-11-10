@@ -104,13 +104,19 @@ class OpTestBase:
         # Structure detail per check goes into the end-of-run report (aggregated), not here, to keep logs short
         logger.info(
             f"ND device {device_idx} [{self.chip_locations().get(device_idx, 'unknown')}] pattern: "
-            f"{nd_core_map.classify(cores, getattr(self, 'nd_core_grid_size', None))}"
+            f"{self.nd_pattern(cores)}"
         )
 
     # Core coordinates above are relative to the grid the op ran on; add the grid origin for device logical coords
     def nd_abs(self, x, y):
         ox, oy = getattr(self, "nd_core_origin", (0, 0))
         return x + ox, y + oy
+
+    # classify() works on grid-relative coordinates (edges, whole grid); say so when the grid is not at (0,0)
+    def nd_pattern(self, cores):
+        pattern = nd_core_map.classify(cores, getattr(self, "nd_core_grid_size", None))
+        ox, oy = getattr(self, "nd_core_origin", (0, 0))
+        return pattern if (ox, oy) == (0, 0) else f"{pattern} [grid-relative, grid origin ({ox},{oy})]"
 
     def nd_translated(self, device_idx, x, y):
         key = (device_idx, x, y)
@@ -157,7 +163,7 @@ class OpTestBase:
         for device_idx in sorted(failing):
             hits = self.nd_core_hits.get(device_idx, {})
             grid = getattr(self, "nd_core_grid_size", None)
-            pattern = nd_core_map.classify(hits, grid) if hits else "no core mapping for this test"
+            pattern = self.nd_pattern(hits) if hits else "no core mapping for this test"
             per_core = " ".join(
                 f"({self.nd_abs(x, y)[0]},{self.nd_abs(x, y)[1]})x{n}"
                 for (x, y), n in sorted(hits.items(), key=lambda c: (-c[1], c[0][1], c[0][0]))
