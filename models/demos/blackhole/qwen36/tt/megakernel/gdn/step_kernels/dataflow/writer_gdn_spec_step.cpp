@@ -82,6 +82,34 @@ constexpr uint32_t kCoefN = 7 + kBatchMax;  // NGB G E BETA NBE EYE W + C_u
 #ifndef GDN_PREFIXED_GATES
 #define GDN_PREFIXED_GATES 0  // kernel_opts bit 22: coefficient tiles + gate page from `prefixed`
 #endif
+#ifndef GDN_EARLY_REPLAY
+#define GDN_EARLY_REPLAY 0  // engine GDN role (BATCH + PREFIXED_GATES): W / C_u built here before in_ready (see wr_rcoef)
+#endif
+#ifndef GDN_W_IN_WAIT
+#define GDN_W_IN_WAIT 0  // engine GDN role: gdn_in_wait() (the including TU) gates this writer's reads of `pre`
+#endif
+#if GDN_W_IN_WAIT
+void gdn_in_wait();
+#endif
+#if GDN_EARLY_REPLAY
+constexpr uint32_t kCoefRep = 1 + kBatchMax;  // W | C_0..C_7, pushed first; then NGB G E BETA NBE EYE
+inline float gdn_f32(uint32_t b) {
+    union {
+        uint32_t u;
+        float f;
+    } x;
+    x.u = b;
+    return x.f;
+}
+inline uint32_t gdn_bits(float f) {
+    union {
+        uint32_t u;
+        float f;
+    } x;
+    x.f = f;
+    return x.u;
+}
+#endif
 #ifndef GDN_PREFIXED
 #define GDN_PREFIXED 0  // kernel_opts bit 21 (K4): no window write (the u1 prefix owns it)
 #endif
@@ -375,6 +403,9 @@ TT_KERNEL void writer(
 #if GDN_BATCH
     const uint32_t nb = Br;  // users on this core (all of head h)
     bool hold_b[kBatchMax];
+#if GDN_EARLY_REPLAY
+    uint32_t mi_b[kBatchMax];
+#endif
 #endif
 #if GDN_LAZY
     uint32_t mi_raw;
@@ -391,6 +422,9 @@ TT_KERNEL void writer(
         for (uint32_t ub_ = 0; ub_ < kBatchMax; ++ub_) {
             if (ub_ < nb) {
                 hold_b[ub_] = p[1 + Mr + ub_ * Nv + h] == hold_sentinel;
+#if GDN_EARLY_REPLAY
+                mi_b[ub_] = p[1 + ub_];
+#endif
             }
         }
 #endif
@@ -464,6 +498,59 @@ TT_KERNEL void writer(
     // ---- lever 1: the head's 8 WY coefficient tiles (C included) and its gate page come from `prefixed` (the prefix
     //      side built them with this writer's op sequence); this verify's decay page (block 0) is built from the gate
     //      page exactly as below. No gate reads, no SFPU gates, no coefficient build on this core.
+#if GDN_EARLY_REPLAY
+    // ---- engine GDN role: the replay tiles from ctrl + the previous stash's decay pages, BEFORE the layer's in_ready
+    //      (the tg producer's op sequence, bit for bit): W (row r0_u + i = w_i for i < r_u, else 0) and C_u (the
+    //      replay decay over the whole tile); the compute's replay starts on them while the prefix still runs
+    {
+        DeviceZoneScopedN("wr_rcoef");
+        DataflowBuffer coef(dfb::coef);
+        DataflowBuffer gprev(dfb::gprev);  // staging for one decay page at a time (writer-local)
+        coef.reserve_back(kCoefN);
+        const uint32_t cb0 = coef.get_write_ptr();
+        const uint64_t zr = get_noc_addr(MEM_ZEROS_BASE);
+        for (uint32_t o = 0; o < kCoefRep * 4096u; o += MEM_ZEROS_SIZE) {
+            noc_async_read(zr, cb0 + o, MEM_ZEROS_SIZE);
+        }
+        gprev.reserve_back(1);
+        const uint32_t gpa = gprev.get_write_ptr();
+        noc.async_read_barrier();
+        volatile tt_l1_ptr uint32_t* c32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb0);
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            const uint32_t r0u = ub_ * T;
+            const uint32_t rr = (hold_b[ub_] || mi_b[ub_] >= T) ? 0u : mi_b[ub_] + 1;
+            float wrp[T];
+            float crp = 1.0f;
+            if (rr > 0) {
+                const uint32_t sr = ((1 + par) * Mr + ub_) * Nv + h;
+                noc.async_read(ring_acc, gprev, 4096, {.page_id = sr * KV + Kt + Vt}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                invalidate_l1_cache();
+                volatile tt_l1_ptr uint32_t* gp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gpa);
+                float acc = 1.0f;
+                for (uint32_t i = rr; i-- > 0;) {
+                    wrp[i] = acc;
+                    acc = acc * gdn_f32(gp[tile_elem_index(r0u + i, 0)]);
+                }
+                crp = acc;
+            }
+            for (uint32_t t = 0; t < T; ++t) {
+                const uint32_t wb = (t < rr) ? gdn_bits(wrp[t]) : 0u;
+                for (uint32_t c = 0; c < 32; ++c) {
+                    c32[tile_elem_index(r0u + t, c)] = wb;
+                }
+            }
+            const uint32_t cbits = gdn_bits(crp);
+            for (uint32_t i = 0; i < 1024; ++i) {
+                c32[(1 + ub_) * 1024 + i] = cbits;
+            }
+        }
+        coef.push_back(kCoefRep);
+    }
+#endif
+#if GDN_W_IN_WAIT
+    gdn_in_wait();
+#endif
     {
         DeviceZoneScopedN("wr_pgates");
         const auto pre_acc = TensorAccessor(tensor::pre_w);
@@ -475,12 +562,23 @@ TT_KERNEL void writer(
 #else
         constexpr uint32_t ncoef = 8;
 #endif
+#if GDN_EARLY_REPLAY
+        // the 6 WY tiles (pre's NGB G E BETA NBE EYE = its coefficient tiles 0..5) behind W / C_u
+        constexpr uint32_t nwy = kCoefN - kCoefRep;
+        coef.reserve_back(nwy);
+        read_tiles_at(pre_acc, coef, noc, pbase, nwy, 0);
+        gprev.reserve_back(1);
+        read_tiles_at(pre_acc, gprev, noc, pbase + ncoef, 1, 0);
+        noc.async_read_barrier();
+        coef.push_back(nwy);
+#else
         coef.reserve_back(ncoef);
         read_tiles_at(pre_acc, coef, noc, pbase, ncoef, 0);
         gprev.reserve_back(1);
         read_tiles_at(pre_acc, gprev, noc, pbase + ncoef, 1, 0);
         noc.async_read_barrier();
         coef.push_back(ncoef);
+#endif
 #if GDN_BATCH
         (void)gnew;  // the per-user decay pages are built at the stash write (wr_lazy), from the gate page
     }
