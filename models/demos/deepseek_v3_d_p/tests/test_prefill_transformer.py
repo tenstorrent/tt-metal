@@ -414,6 +414,7 @@ def run_model(
 
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
+        moe_impl="ttmoe",  # (TtMoe: tt/moe_impl.py)
         mesh_device=mesh_device,
         config=config,
         model_cfg=variant.model_config,

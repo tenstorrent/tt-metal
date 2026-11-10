@@ -11,6 +11,7 @@ include(sparse_dispatch_2d/sources.cmake)
 include(flat_routed_expert/sources.cmake)
 include(routed_experts_combine/sources.cmake)
 include(moe_tail/sources.cmake)
+include(block/sources.cmake)
 
 list(APPEND TTNN_OP_EXPERIMENTAL_MOE_BLOCK_NANOBIND_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/moe_block_nanobind.cpp)
 
