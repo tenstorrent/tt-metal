@@ -24,15 +24,18 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config, glm_5_3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     IndexerSelectionState,
     ReuseIndexer,
     TtIndexer,
+    index_keys_hadamard_rotated,
     indexer_layer_is_reused,
     normalized_hadamard_matrix,
     resolve_has_indexer,
+    rotate_index_keys,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
@@ -72,6 +75,22 @@ def test_normalized_hadamard_preserves_indexer_scores():
 def test_normalized_hadamard_rejects_non_power_of_two(expect_error):
     with expect_error(AssertionError, "power of two"):
         normalized_hadamard_matrix(96)
+
+
+# The index cache's key basis is a model fact (tt_metal_tracker-ao3i.5.9): GLM / DS-V3.2 decode store keys
+# Hadamard-rotated (absent field -> rotated), Kimi-K3.1's reference and decode do not.
+def test_index_key_basis_follows_the_model_config():
+    assert index_keys_hadamard_rotated(glm_5_3_hf_config())
+    assert index_keys_hadamard_rotated(SimpleNamespace())  # a DS-V3.2 HF config carries no index_hadamard
+    k31 = kimi_k3_1_hf_config()
+    assert not index_keys_hadamard_rotated(k31)
+
+    # H4 = [[1, 1, 1, 1], [1, -1, 1, -1], [1, 1, -1, -1], [1, -1, -1, 1]] / 2.
+    keys = torch.tensor([[1.0, 0.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]])
+    torch.testing.assert_close(rotate_index_keys(k31, keys), keys)
+    rotated = rotate_index_keys(glm_5_3_hf_config(), keys)
+    torch.testing.assert_close(rotated, torch.tensor([[0.5, 0.5, 0.5, 0.5], [4.0, 0.0, 0.0, 0.0]]))
+    torch.testing.assert_close(rotate_index_keys(glm_5_3_hf_config(), rotated), keys)  # its own inverse
 
 
 # NOTE: test_sp1_kvpe_slice_materializes_only_multi_slot_cache used to live here. It asserted that

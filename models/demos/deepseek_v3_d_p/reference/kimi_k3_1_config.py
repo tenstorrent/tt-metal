@@ -5,7 +5,8 @@
 """Kimi K3.1 (``moonshotai/Kimi-K3.1-Pro``): K3 with its 24 full-attention MLA layers turned into DSA layers.
 
 ``text_config.dsa_config``: top-2048, 32 index heads x 128, ``index_rope_dim`` 0 (NoPE indexer), LayerNorm
-k_norm with bias. The indexer weights match DeepSeek-V3.2 / GLM's, so the indexer is DS-V3.2's without RoPE.
+k_norm with bias. The indexer weights match DeepSeek-V3.2 / GLM's, so the indexer is DS-V3.2's without RoPE and
+without its q/k Hadamard rotation.
 No ``indexer_types``: every DSA layer owns its index slot, in the same 24-slot space as the KVPE cache.
 """
 
@@ -46,6 +47,9 @@ def kimi_k3_1_hf_config(max_seq: int = 8192):
     cfg.index_rope_interleave = True
     # vLLM's KimiK3DSAIndexerKNorm (LayerNorm) takes config.rms_norm_eps, not DS-V3.2's 1e-6.
     cfg.index_k_norm_eps = cfg.rms_norm_eps
+    # No Hadamard on the indexer q/k (vLLM PR 65685 and K3.1 decode): the index cache holds natural-basis keys
+    # (tt_metal_tracker-ao3i.5.9; DS-V3.2 / GLM keep the default, rotated).
+    cfg.index_hadamard = False
     # Overlap the indexer TopK with the sparse-KV gather, as GLM-5.3 (serial on SP=1).
     cfg.sparse_mla_overlap_profile = "auto"
     # Indexer score matmul at HiFi2, not the op's LoFi default for bf8 x bf8 (tt_metal_tracker-ao3i.2.7): LoFi was the
