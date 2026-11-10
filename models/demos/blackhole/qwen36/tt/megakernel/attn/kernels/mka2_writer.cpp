@@ -240,7 +240,7 @@ void kernel_main() {
         v_busy(vg[VG_BUSY], 2 * L + 2, vbmirror, vbrc);
     };
 #define V12_OWNER(L) v12_owner(L)
-#define V12_PLAN_MLP(L) v12_plan_mlp(L)
+#define V12_PLAN_MLP(L) do { if ((L) > 0 && !is_attn(L)) v_mlp_start(L); } while (0)
 // v12: the MLP slice is barriered + pushed at the MLP phase itself (it streams through the whole pre-MLP stall)
 #define V_MLP_PUSH() do {} while (0)
 #define V_MLP_WAIT_PUSH() do {} while (0)
@@ -303,10 +303,6 @@ void kernel_main() {
             add(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * MWTB, MIX_TRID0 + (L & 1), false);
         }
 #if defined(MK_V12)
-        if (vrole == 1 && L == 0) {   // later layers: issued by the MLP of the previous layer (single-slot CB_WV, L1)
-            cb_reserve_back(CB_WV, V_SLOT);
-            add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, V_TRID0 + (L & 1), false);
-        }
         if (false) {
 #else
         if (IS_GU) {
@@ -333,23 +329,33 @@ void kernel_main() {
     // Attention-type layers get their slice from the PREVIOUS layer's MLP tail instead (v12_prefetch_attn): inside the
     // SDPA window it competed with the KV stream (+27-36 us per attention layer). MLP slices use their own trids
     // (V_TRID0 + parity) so the SDPA throttle's per-group barriers on trids 1-3 never wait for them.
-    // non-blocking prefetch of the next attention layer's MLP slice: one 16 KB read whenever the read command buffer is
-    // free, pumped through the post-MLP AR stall and the SDPA weight-issue points; drained before that MLP's barrier
-    // (issued in one go it held the writer ~40-60 us: GDN layers before an attention layer went 125 -> 165 us)
-    uint64_t vp_src = 0; uint32_t vp_dst = 0, vp_rem = 0, vp_trid = 0;
+    // Weight-slot filler (spec v1.4): a phase's slice streams into its single-slot CB one 16 KB read at a time whenever
+    // the read command buffer is free, from every stall / wait loop (v_pump), and is drained + barriered + pushed by
+    // its consumer phase (v_slot_ready). Blocking issue held writers 20-60 us; MLP slices use trids 12/13 so the SDPA
+    // throttle's trid 1-3 barriers never wait on them. Slot V (CB_WV) = the MLP: GDN-type layers start it in their
+    // own W-GDN stall, attention-type layers at the previous layer's MLP tail (kept out of the SDPA KV window).
+    struct VSlot { uint64_t src; uint32_t dst, rem, trid; };
+    VSlot sv = {0, 0, 0, 0};
+    auto v_slot_start = [&](VSlot& s_, uint32_t cb, uint32_t pages, uint64_t src, uint32_t bytes, uint32_t trid) {
+        cb_reserve_back(cb, pages);
+        s_ = {src, get_write_ptr(cb), bytes, trid};
+    };
     auto v_pump = [&]() {
-        if (vp_rem && noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
-            const uint32_t sz = vp_rem < 16384 ? vp_rem : 16384;
-            noc_async_read_set_trid(vp_trid);
-            noc_async_read(vp_src, vp_dst, sz);
+        if (sv.rem && noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+            const uint32_t sz = sv.rem < 16384 ? sv.rem : 16384;
+            noc_async_read_set_trid(sv.trid);
+            noc_async_read(sv.src, sv.dst, sz);
             noc_async_read_set_trid(0);
-            vp_src += sz; vp_dst += sz; vp_rem -= sz;
+            sv.src += sz; sv.dst += sz; sv.rem -= sz;
         }
     };
-    auto v12_plan_mlp = [&](uint32_t L) {
-        if (vrole != 1 || L == 0 || is_attn(L)) return;   // layer 0: plan_layer(0)
-        cb_reserve_back(CB_WV, V_SLOT);
-        add(wv.get_noc_addr(vwv_page + L * vpvl), get_write_ptr(CB_WV), vnt * WTB, V_TRID0 + (L & 1), false);
+    auto v_slot_ready = [&](uint32_t cb, uint32_t pages, uint32_t trid) {
+        while (sv.rem) v_pump();
+        noc_async_read_barrier_with_trid(trid);
+        cb_push_back(cb, pages);
+    };
+    auto v_mlp_start = [&](uint32_t L) {   // layer L's MLP slice into slot V (free: the previous MLP popped it)
+        if (vrole == 1) v_slot_start(sv, CB_WV, V_SLOT, wv.get_noc_addr(vwv_page + L * vpvl), vnt * WTB, V_TRID0 + (L & 1));
     };
 #endif
     auto plan_wo = [&]() {   // layer L's wo slice + the next layer's uncovered qkv bytes (real bytes into a scratch region)
@@ -380,6 +386,9 @@ void kernel_main() {
     };
 
     if (IS_STREAM) { plan_layer(0, true); issue_some(true); npc = ip = outstanding = 0; }
+#if defined(MK_V12)
+    v_mlp_start(0);
+#endif
     constexpr uint32_t TRID_V = 5;
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
@@ -456,7 +465,7 @@ void kernel_main() {
                         noc_async_read_set_trid(pc.trid);
                         noc_async_read(pc.src, pc.dst, pc.bytes);
                         noc_async_read_set_trid(0);
-                    }
+                    } else v_pump();
                 }
                 issue_some(true);
             }
@@ -498,7 +507,6 @@ void kernel_main() {
 #if defined(MKA_WO_NOC0)
                 plan_wo();
 #endif
-                V12_PLAN_MLP(L);   // needed at the end of THIS layer: before the next layer's mixer pieces
                 if (L + 1 < NL) plan_layer(L + 1, true);
                 if (!budget) issue_some(true);
             }
@@ -648,11 +656,14 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(vgo1x, vgo1y, vg[VG_MGO]), 1);
             }
             const bool own_h = vk < vnn;
-            while (vp_rem) v_pump();
-            { noc_async_read_barrier_with_trid(V_TRID0 + (L & 1)); }   // layer L's MLP slice landed
-            cb_push_back(CB_WV, V_SLOT);
+            v_slot_ready(CB_WV, V_SLOT, V_TRID0 + (L & 1));   // layer L's MLP slice landed
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
-            { DeviceZoneScopedN("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), L + 1); noc_semaphore_wait_min(vw(vg[VG_XB]), L + 1); }
+#if defined(MK_V12_X2) || defined(MK_RS_QKV)
+            const uint32_t vxv = 2 * L + 2;   // two x deliveries per layer: mixer, MLP
+#else
+            const uint32_t vxv = L + 1;
+#endif
+            { DeviceZoneScopedN("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), vxv); noc_semaphore_wait_min(vw(vg[VG_XB]), vxv); }
             cb_reserve_back(CB_XK, 2 * V_OT);
             if (vR < 32) {   // unpack the two packed chunks (v0.8.2) into tile layout
                 DeviceZoneScopedN("W-VXU");
@@ -665,7 +676,7 @@ void kernel_main() {
             }
             cb_push_back(CB_XK, 2 * V_OT);
             noc_semaphore_wait_min(vw(vg[VG_LA]), L + 1);
-            if (vk + 1 < vnn) { v_rs_send(vabase, vk + 1, vnn, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]); }
+            v_rs_send(vabase, vk + 1, vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
             *vw(vg[VG_LB]) = L + 1;
             if (own_h) {
                 { DeviceZoneScopedN("W-VRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * (L + 1)); }
@@ -687,11 +698,7 @@ void kernel_main() {
             }
             cb_pop_front(CB_VDO, V_OT);
             { DeviceZoneScopedN("W-VMD"); noc_semaphore_wait_min(vw(vg[VG_MDONE]), 2 * (L + 1)); }   // both row owners summed
-            if (L + 1 < NL && is_attn(L + 1)) {   // the next (attention) layer's slice: the slot is free (popped before CB_VDO)
-                cb_reserve_back(CB_WV, V_SLOT);
-                vp_src = wv.get_noc_addr(vwv_page + (L + 1) * vpvl); vp_dst = get_write_ptr(CB_WV);
-                vp_rem = vnt * WTB; vp_trid = V_TRID0 + ((L + 1) & 1);
-            }
+            if (L + 1 < NL && is_attn(L + 1)) v_mlp_start(L + 1);   // slot V is free (popped before CB_VDO)
         }
 #if defined(MK_REAL_AR)
         {   // the real MLP AR: this K-row's two owners delivered x of layer L + 1 (flags = per-pass delivery count)

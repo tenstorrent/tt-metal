@@ -54,6 +54,22 @@ constexpr uint32_t CB_WV = 32, CB_XK = 33, CB_VA = 34, CB_VOWN = 35, CB_VRS = 36
 constexpr uint32_t CB_VDO = 40, CB_VDO2 = 41, CB_VI = 42, CB_VRSA = 43, CB_VRT = 44, CB_VJ = 30;
 constexpr uint32_t CB_VP = 3, CB_VXO = 4, CB_VX0 = 5;
 constexpr uint32_t V_NNM = 7, V_NTM = 14, V_KTR = 20, V_OT = 10, V_NCOL = 10, V_SLOT = 420, V_DSB = 5;
+// Shared split-K column RS, compute side (spec §18; MLP item = (gate, up), ipt 2; qkv item = 1 tile, ipt 1): exact sum
+// of owned item m (ipt tiles) over the 8 K-rows into DST d0 .. d0 + ipt - 1 as P @ I matmuls (identity in srcA, fp32
+// DST; bit-identical at LoFi / HiFi2). Own contribution: own_cb tiles own_off ..; sender s: rs_cb tiles s*V_RSO + m*ipt ..
+// (DEST_TO_SRCA reuse adds truncate: -3% on an 8-way sum, never use them for this).
+constexpr uint32_t V_RSO = 2;
+ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k, uint32_t m, uint32_t ipt, uint32_t d0) {
+    reconfig_data_format(CB_VI, own_cb);
+    matmul_block_init(own_cb, CB_VI, 0, 1, 1, 1);
+    for (uint32_t t = 0; t < ipt; ++t) matmul_block(own_cb, CB_VI, own_off + t, 0, d0 + t, 0, 1, 1, 1);
+    reconfig_data_format(CB_VI, rs_cb);
+    matmul_block_init(rs_cb, CB_VI, 0, 1, 1, 1);
+    for (uint32_t s = 0; s < 8; ++s) {
+        if (s == k) continue;
+        for (uint32_t t = 0; t < ipt; ++t) matmul_block(rs_cb, CB_VI, s * V_RSO + m * ipt + t, 0, d0 + t, 0, 1, 1, 1);
+    }
+}
 #endif
 #if defined(MKA_RQKV)
 #include "api/compute/bcast.h"
@@ -497,7 +513,7 @@ void kernel_main() {
                     for (uint32_t kk = 0; kk < V_KTR; ++kk) V_MM(CB_XK, CB_WV, kk, half * V_KTR * vnn + kk * vnn, 0, vnn, 1, V_KTR);
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t j = 0; j < vnn; ++j) pack_tile<true>(j, CB_VA, half * V_NNM + j);
+                    for (uint32_t j = 0; j < vnn; ++j) pack_tile<true>(j, CB_VA, 2 * j + half);   // item-major: (gate j, up j)
                     if (own_h) pack_tile<true>(vk, CB_VOWN, half);
                     tile_regs_release();
                 }
@@ -540,17 +556,7 @@ void kernel_main() {
                 cb_reserve_back(CB_VHO, 1);
                 cb_reserve_back(CB_VHO2, 1);
                 tile_regs_acquire();
-                reconfig_data_format(CB_VI, CB_VOWN);
-                matmul_block_init(CB_VOWN, CB_VI, 0, 1, 1, 1);
-                matmul_block(CB_VOWN, CB_VI, 0, 0, 0, 0, 1, 1, 1);
-                matmul_block(CB_VOWN, CB_VI, 1, 0, 1, 0, 1, 1, 1);
-                reconfig_data_format(CB_VI, CB_VRS);
-                matmul_block_init(CB_VRS, CB_VI, 0, 1, 1, 1);
-                for (uint32_t r = 0; r < 8; ++r) {
-                    if (r == vk) continue;
-                    matmul_block(CB_VRS, CB_VI, 2 * r, 0, 0, 0, 1, 1, 1);
-                    matmul_block(CB_VRS, CB_VI, 2 * r + 1, 0, 1, 0, 1, 1, 1);
-                }
+                v_rs_sum(CB_VOWN, 0, CB_VRS, vk, 0, 2, 0);   // (gate k, up k) -> DST 0, 1
                 reconfig_data_format(CB_VJ, CB_VRT);
                 matmul_block_init(CB_VRT, CB_VJ, 0, 1, 1, 1);
                 matmul_block(CB_VRT, CB_VJ, 0, 0, 2, 0, 1, 1, 1);
