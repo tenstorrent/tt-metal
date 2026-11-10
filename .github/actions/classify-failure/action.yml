@@ -1,0 +1,51 @@
+name: Classify failure
+description: >-
+  Turn the deterministic-failure records a job's tests wrote under CI_FAILURE_RECORDS into a single
+  `ci-no-retry` error annotation, which nightly auto-retry reads to skip re-running a job that cannot
+  pass on the same commit. Run it right after the test step with `if: failure()`, before any step that
+  re-echoes the test log. Never fails the step; does nothing without records. See README.md.
+
+inputs:
+  records-dir:
+    description: "Directory the tests wrote records to. Defaults to $CI_FAILURE_RECORDS."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        RECORDS_DIR: ${{ inputs.records-dir }}
+      run: |
+        # Never fail this step: a missing marker only costs a re-run.
+        set +e +o pipefail
+        dir="${RECORDS_DIR:-${CI_FAILURE_RECORDS:-}}"
+        reasons=()
+        if [ -n "$dir" ] && [ -d "$dir" ]; then
+          shopt -s nullglob
+          for f in "$dir"/*.txt; do
+            # Non-empty, readable records only; one line each (the recorder writes them that way).
+            line=""
+            { IFS= read -r line || true; } 2>/dev/null < "$f"
+            [ -n "${line//[[:space:]]/}" ] && reasons+=("${line//$'\r'/}")
+          done
+        fi
+        if [ ${#reasons[@]} -eq 0 ]; then
+          echo "No deterministic-failure records${dir:+ under $dir}; auto-retry may re-run this job"
+          exit 0
+        fi
+        joined=$(printf '%s; ' "${reasons[@]:0:20}")
+        msg="${#reasons[@]} deterministic failure(s), a re-run of this commit cannot pass: ${joined%; }"
+        msg=${msg:0:2000}
+        msg=${msg//'%'/'%25'}
+        # A step of its own, so the test's own annotations cannot push this past GitHub's per-step limit.
+        echo "::error title=ci-no-retry::${msg}"
+        {
+          echo "### Not retried automatically"
+          echo
+          echo "${#reasons[@]} deterministic failure(s) recorded, so auto-retry will not re-run this job:"
+          echo
+          printf -- '- %s\n' "${reasons[@]:0:20}"
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit 0

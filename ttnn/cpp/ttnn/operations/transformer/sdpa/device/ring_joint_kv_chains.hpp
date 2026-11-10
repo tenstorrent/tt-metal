@@ -4,8 +4,9 @@
 
 #pragma once
 
-// Host-side K/V chain construction shared by the ring joint SDPA and sparse ring SDPA program factories: each core's
-// flat Q range, linear store-and-forward chains, and row-wide multicast groups for the shared-K and GQA K/V chains.
+// Host-side K/V chain construction for the sparse ring SDPA program factory, in the layout the ring joint SDPA reader
+// also uses: each core's flat Q range, linear store-and-forward chains, and row-wide multicast groups for the shared-K
+// and GQA K/V chains.
 // The chain arguments' layout is in kernels/ring_joint_chain_layout.hpp.
 
 #include <algorithm>

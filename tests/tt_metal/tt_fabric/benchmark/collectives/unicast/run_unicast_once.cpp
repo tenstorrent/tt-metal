@@ -255,7 +255,7 @@ Notes:
     // This establishes the send path (routing/link identifiers) for fabric traffic.
     // The device kernel must unpack these in the same order via build_from_args(...).
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+        *mesh, src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
 

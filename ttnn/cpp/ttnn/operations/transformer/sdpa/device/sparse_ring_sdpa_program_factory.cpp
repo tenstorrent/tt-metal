@@ -1119,7 +1119,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     auto* const gathered_v_buf = gathered_input_tensor_v.buffer();
     auto* const out_buf = output_tensor.buffer();
 
-    // K/V chains and multicast groups (ring_joint_kv_chains.hpp, shared with the ring joint op).
+    // K/V chains and multicast groups (ring_joint_kv_chains.hpp).
     using ring_joint::ChainConfig;
     using ring_joint::ChainSegment;
     using ring_joint::CoreWork;
