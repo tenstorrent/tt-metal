@@ -99,8 +99,10 @@ class Stage1Verify:
 
         if self.weights_mk is None:
             try:
-                self.weights_mk = weights_mk.repack(self.model)
-            except NotImplementedError as e:  # stand-in engines take no weights; a real engine raises on None
+                mod = importlib.import_module(ENGINE_MODULE)
+                lay = getattr(mod, "weight_layouts", lambda m: None)(self.model.mesh_device)
+                self.weights_mk = weights_mk.repack(self.model, layouts=lay)
+            except NotImplementedError as e:  # no layouts = a stand-in engine; a real engine raises on None
                 self.weights_mk, self.weights_reason = None, str(e)
         kv, gdn = kv_descriptors(self.model), gdn_descriptors(self.model)
         for b in buckets:

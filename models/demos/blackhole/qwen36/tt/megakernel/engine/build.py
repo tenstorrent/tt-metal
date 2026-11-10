@@ -17,8 +17,8 @@ global semaphores at program end; the host never resets them.
 Kinds (QWEN36_R16_MK_ENGINE_KIND):
     identity (default until M3): one core per device copies x_in -> x_out (kernels/mk_ident_copy.cpp). Proves the stage1
              plumbing and the trace; outputs stay bit-identical because the layer loop still runs.
-    mixed3   the real engine (M3: mixed3 attention + v12 MLP + MLP-AR). Not assembled yet: raises with the reason, so
-             Stage1Verify falls back to op-by-op.
+    mk       the real engine (M3 on -mk-int): engine/program.py + weights_mk.repack(weight_layouts). Until program.py
+             exists it raises with the reason, so Stage1Verify falls back to op-by-op.
 """
 
 import os
@@ -87,11 +87,50 @@ class IdentityEngine(EngineProgram):
         ttnn.generic_op([x_in, x_out], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb]))
 
 
+class MkEngine(EngineProgram):
+    """The real engine (kind mk): engine/program.py (factored out of attn/bench_mka2.py after the v12 and AR merges)
+    provides
+
+        weight_layouts(mesh) -> {kind: layout}            bucket-independent; weights_mk.repack packs with them once
+        build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc)
+            -> program(x_in, x_out, per_replay) -> (io_tensors, ProgramDescriptor | MeshProgramDescriptor)
+
+    One generic_op per pass; the descriptor is rebuilt per launch only for its runtime args (x_in is a per-trace
+    tensor), the program cache keys on everything else."""
+
+    def __init__(self, mesh, n_users, T, kind, layer_types, weights, kv_desc, gdn_desc):
+        super().__init__(mesh, n_users, T, kind)
+        from models.demos.blackhole.qwen36.tt.megakernel.engine import program
+
+        if weights is None:
+            raise NotImplementedError("kind mk needs the repacked weights (weights_mk.repack with weight_layouts)")
+        self.program = program.build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc)
+
+    def launch(self, x_in, x_out, per_replay):
+        import ttnn
+
+        io, desc = self.program(x_in, x_out, per_replay)
+        self.launches += 1
+        ttnn.generic_op(io, desc)
+
+
+def weight_layouts(mesh):
+    """The per-kind weight layouts the engine of QWEN36_R16_MK_ENGINE_KIND reads (None: it reads no weights)."""
+    if engine_kind() != "mk":
+        return None
+    from models.demos.blackhole.qwen36.tt.megakernel.engine import program
+
+    return program.weight_layouts(mesh)
+
+
 def build_engine(mesh, layer_types, n_users, weights_mk, kv_desc, gdn_desc, fabric_ctx, T=4):
     kind = engine_kind()
     if kind == "identity":
         return IdentityEngine(mesh, n_users, T, kind)
-    if kind == "mixed3":
-        raise NotImplementedError(
-            "mixed3 engine not assembled yet (needs engine/layout_mlp.py, layout_attn.py, ar_phase.py; milestone M3)")
-    raise ValueError(f"QWEN36_R16_MK_ENGINE_KIND={kind}: unknown")
+    if kind == "mk":
+        try:
+            from models.demos.blackhole.qwen36.tt.megakernel.engine import program  # noqa: F401
+        except ImportError as e:
+            raise NotImplementedError(f"kind mk: engine/program.py not available yet ({e})")
+        return MkEngine(mesh, n_users, T, kind, layer_types, weights_mk, kv_desc, gdn_desc)
+    raise ValueError(f"QWEN36_R16_MK_ENGINE_KIND={kind}: unknown (identity | mk)")

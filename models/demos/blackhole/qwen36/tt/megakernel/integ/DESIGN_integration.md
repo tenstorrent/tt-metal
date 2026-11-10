@@ -160,5 +160,16 @@ build), that bucket runs op-by-op, with a logged reason (same pattern as `device
 - Stage1 is active only on the DAR residual path (`_verify_dar` not None, rows ≤ 32) and never on kv-split variants.
 
 Kinds (`QWEN36_R16_MK_ENGINE_KIND`): `identity` (default until M3) copies x_in → x_out on 8 cores per device and keeps the
-layer loop, so the ident md5 equals flag-off only if the copy ran on every replay; `mixed3` raises until M3 (mixed3 attention
+layer loop, so the ident md5 equals flag-off only if the copy ran on every replay; `mk` (the real engine, kind renamed from mixed3) raises until engine/program.py lands (mixed3 attention
 + v12 MLP + MLP-AR), and Stage1Verify falls back op-by-op with the reason.
+
+## 11. kind=mk assembly (spec: repack source = the model's TT tensors; program.py API accepted)
+- `engine/program.py` (integration track; factored out of attn/bench_mka2.py after the v12 and AR merges on -mk-int):
+  `weight_layouts(mesh) -> {kind: layout}` and `build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc)
+  -> program(x_in, x_out, per_replay) -> (io, descriptor)`.
+- `integ/weights_mk.repack(model, layouts)`: per kind one device-distinct DRAM tensor, layer L at L·pages_per_layer.
+  Sources: mlp = w_gate_up (fused-swiglu tile pairs → wg/wu) + w2; qkv = tw["wqkvg_pair"] ([q pair 0-47 | k 48-55 |
+  v 56-63 | gate pair 64-111], pair-global head-major, prepare_attn_qkvg_pair); wo = tw["wo_pair"] (pair heads × 256
+  rows). Never wqkv_fused (own heads only). Lossless tile moves; the γ fold (QWEN36_R16_MK_GAMMA_FOLD) is the only
+  re-quantization. GDN kinds join when layout_gdn lands.
+- Proof: tests/test_mk_weights_repack.py reads a tile-order repack back and compares it with the model weights.
