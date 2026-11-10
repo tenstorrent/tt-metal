@@ -32,6 +32,9 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
+    if(${TEST_SRC} STREQUAL "metal2_host_api/bench_table.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+    endif()
     if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table_serialization.cpp")
         target_link_libraries(
             ${TEST_TARGET}
