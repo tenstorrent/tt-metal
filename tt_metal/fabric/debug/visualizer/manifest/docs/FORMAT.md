@@ -27,6 +27,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 | Receiver channel | Where packets arriving over the link land, before the router forwards them to a sibling or delivers them |
 | Worker channel | The sender channel of a VC that a local worker or the tensix mux feeds, rather than a sibling |
 | Downstream edge | A router's persistent connection to one of its siblings' sender channels, which its receiver forwards packets on |
+| Live direction | A direction a 2D router forwards packets to on a VC. It ignores a packet's request for any other |
 | Ring buffer | A channel's packet slots in L1, each one channel buffer in size |
 | Credits | How a sender channel learns its packets were received (`acked`) or done with (`completed`) |
 | Credit counter | An L1 word counting one sender channel's credits, when credits travel in L1 rather than stream registers |
@@ -64,6 +65,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
               identity, link, shape, credit_counters,
               channels: { senders: { vc<v>: { ch<c>: { ..., fields: "F<n>" } } }, receivers: { ... } },
               intra_chip_downstream_edges: { vc<v>: { edge<n>: { ..., fields: "F<n>" } } },
+              live_downstreams: { vc0: [ <direction>, ... ], vc1: [ ... ] } | null,
               fields: "F<n>", eriscs: { erisc<r>: { ... } }, leftover_l1
             }
           }
@@ -249,6 +251,7 @@ these ids, and every block here is named by at least one. To read a router's, ch
 | `credit_counters` | The four L1 credit counter arrays, `to_sender_ack`, `to_sender_completion`, `receiver_ack` and `receiver_completion`, each an L1 region plus `indexed_by`: `own_sender_channel` for the `to_sender` arrays, `peer_sender_channel` for the `receiver` arrays. Each element is one sender channel's, by its compact index |
 | `channels` | `senders` and `receivers`, each keyed `vc<v>` then `ch<c>`. VCs with no channels of that kind are left out |
 | `intra_chip_downstream_edges` | Keyed `vc<v>` then `edge<n>`. VCs with no edges are left out |
+| `live_downstreams` | Null in 1D. In 2D, `vc0` and `vc1`: the router's live directions on each, such as `["west"]`, in enum order (`east`, `west`, `north`, `south`, `z`). A VC whose downstream array is empty (its `vc<v>_downstream_edm_size` field is 0) has `[]`. "Live downstreams" below says how they relate to the edges |
 | `fields` | The id of the router's fields in `field_sets` |
 | `eriscs` | Keyed `erisc<r>`, in RISC order: each with its `processor`, `physical_erisc` and `opt_level` (the level its kernel was compiled at, `o3` or `os`) |
 | `leftover_l1` | The L1 from the end of what the router places to the end of the L1 the router may load into, as `byte`, or null when there is none |
@@ -289,6 +292,25 @@ A receiver channel also has:
 
 `edge<n>` is the kernel's `EDGE_<n>`.
 
+### Live downstreams
+
+A 2D router forwards a packet only to the directions that both the packet's action and the router's
+`live_downstreams` name, and ignores the action's other bits. The router computes its live directions at compile time
+from its fields, and the manifest records what the same function (`Routing2DCodec::live_downstreams`) gives for them:
+
+- Every entry of the VC's downstream array is live: entry `n - 1` is the direction `edge<n>` names. The array has
+  `vc<v>_downstream_edm_size` entries, which the builder sets to one past the highest entry it connected, and at
+  least 1.
+- Except that an E/W-facing router never forwards onto N/S unless it can turn: its `intermesh_router` field is set (a
+  landing decodes Y first) or its `intramesh_edge` field is (an exit may leave in any direction). `live_downstreams` takes
+  both fields and decides this itself. Inside a mesh a
+  packet travels Y first, so it never turns from X onto Y.
+
+So the live directions and the edges differ both ways. On the 2D T3K mock, `M0/C1/E0` has edges to W and S, and only
+`west` is live: the S edge is never used. `M0/C0/E0`, on a corner chip, has an edge to S only, so its VC0 array has
+three entries (W, N, S); N and S are trimmed, and `west` is live with no edge behind it. A correct route never asks
+for it.
+
 ## Excerpt
 
 One router from a Blackhole 2D mock manifest, trimmed and indented:
@@ -322,6 +344,7 @@ One router from a Blackhole 2D mock manifest, trimmed and indented:
   "intra_chip_downstream_edges": { "vc0": { "edge3": {
     "downstream_channel": "M0/C0/S1/channels/senders/vc0/ch1", "through_tensix_mux": false, "fields": "F2"
   }, ... } },
+  "live_downstreams": { "vc0": ["west"], "vc1": [] },
   "fields": "F3",
   "eriscs": { "erisc0": { "processor": "riscv_0", "physical_erisc": 0, "opt_level": "o3" },
               "erisc1": { "processor": "riscv_1", "physical_erisc": 1, "opt_level": "o3" } },

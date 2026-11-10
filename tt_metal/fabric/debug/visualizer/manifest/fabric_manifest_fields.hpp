@@ -502,6 +502,24 @@ inline constexpr auto k_router_fields = [] {
                            "each packet for an inter-mesh exit.",
         },
         RouterField{
+            .key = "vc0_downstream_edm_size",
+            .source = "VC0_DOWNSTREAM_EDM_SIZE",
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The number of entries in the router's VC0 downstream array: one past the highest compact "
+                           "entry the builder connected on VC0, and at least 1, so an entry below it can have no "
+                           "sibling behind it. The router forwards on VC0 only to entries below it (the router's "
+                           "live_downstreams).",
+        },
+        RouterField{
+            .key = "vc1_downstream_edm_size",
+            .source = "VC1_DOWNSTREAM_EDM_SIZE",
+            .category = KERNEL_PARAMS,
+            .content = content::Number{},
+            .description = "The same for VC1; 0 when the router has no VC1 receiver. Only VC0 and VC1 forward to "
+                           "sibling routers, so the kernel has no other VC's size.",
+        },
+        RouterField{
             .key = "mesh_x_size",
             .source = NamedArg{"MESH_X_SIZE", ArgIndex::NONE, Emitted::FABRIC_2D},
             .category = KERNEL_PARAMS,
@@ -900,7 +918,6 @@ inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
     {"MY_ETH_CHANNEL", k_not_yet_described},
     {"NUM_SENDER_CHANNELS", k_not_yet_described},
     {"NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS", k_not_yet_described},
-    {"VC{}_DOWNSTREAM_EDM_SIZE", k_not_yet_described},
     {"EDM_NOC_VC", k_not_yet_described},
     {"FORCE_ALL_PATHS_TO_USE_SAME_NOC", k_not_yet_described},
     {"UDM_MODE", k_not_yet_described},

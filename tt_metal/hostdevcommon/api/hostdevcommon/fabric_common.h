@@ -466,6 +466,13 @@ struct Routing2DCodec {
         }
     }
 
+    // ---- Router outputs -----------------------------------------------------------
+    // The compact entry of direction `dir` (dir != facing) on a router facing `facing`: its index in fwd_dirs, which
+    // lists the other directions in enum order, skipping the facing.
+    static constexpr uint32_t compact_index_on(eth_chan_directions facing, eth_chan_directions dir) {
+        return dir < facing ? static_cast<uint32_t>(dir) : static_cast<uint32_t>(dir) - 1;
+    }
+
     // The live downstreams of a 2D router facing MY_DIR on one VC, as a mask with bit d set for direction d (an
     // action bit). `entry_count` is the size of its downstream array on that VC (the first entries of fwd_dirs). Every
     // entry is live except, on an E/W-facing router that does not turn packets, the N and S ones. A router turns
@@ -487,6 +494,32 @@ struct Routing2DCodec {
             }
         }
         return live;
+    }
+
+    // live_downstreams<FACING>, for code that knows the facing only at run time (host-side)
+    static constexpr uint32_t live_downstreams(
+        eth_chan_directions facing,
+        size_t downstream_count,
+        bool is_intermesh_router,
+        bool is_intramesh_router_on_edge) {
+        switch (facing) {
+            case eth_chan_directions::EAST:
+                return live_downstreams<eth_chan_directions::EAST>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::WEST:
+                return live_downstreams<eth_chan_directions::WEST>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::NORTH:
+                return live_downstreams<eth_chan_directions::NORTH>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::SOUTH:
+                return live_downstreams<eth_chan_directions::SOUTH>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::Z:
+                return live_downstreams<eth_chan_directions::Z>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            default: return 0;
+        }
     }
 
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.

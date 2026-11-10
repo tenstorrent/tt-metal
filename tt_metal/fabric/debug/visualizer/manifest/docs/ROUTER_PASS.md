@@ -36,8 +36,9 @@ each sender channel.
    profile the builder applied, and the channel buffer size.
 4. **Channels**, VC by VC: each sender, then each receiver.
 5. **Downstream edges**, VC by VC.
-6. **Fields**: the router's, per ERISC.
-7. **The rest**: identity, link, credit counters and leftover L1.
+6. **Live downstreams**, in 2D.
+7. **Fields**: the router's, per ERISC.
+8. **The rest**: identity, link, credit counters and leftover L1.
 
 ## Where values come from
 
@@ -46,7 +47,8 @@ where none does:
 
 - **From the arguments, once per router.** A value the builder gives every ERISC alike: the shape's counts, whether 2D
   routing is on, which sender channels are worker channels, the credit counter bases, the slot size, where each VC
-  starts in the free-slots stream table, and where VC1's teardown semaphores start.
+  starts in the free-slots stream table, where VC1's teardown semaphores start, and what the live downstreams are
+  computed from.
 - **From the arguments, per ERISC.** The kernel runs on one or more ERISCs, and the builder gives each its own named
   compile-time arguments. What differs by ERISC is read and recorded per ERISC: every field, which ERISCs run each
   channel, and the two facts that depend on an ERISC's own first-level ack and forwarding settings (a sender's
@@ -187,6 +189,19 @@ semaphore by its rank among the router's edges, VC0's before VC1's, so VC1's sta
 
 The kernel never forwards on VC2, so VC2 has no edges. Two edges in one slot fail the router pass, since they'd share
 a key.
+
+## Live downstreams
+
+`live_downstreams` is, for VC0 and VC1, the directions the router forwards packets to: what the kernel's
+`live_downstreams<VC>()` (`router_downstream.hpp`) computes at compile time. Both call `Routing2DCodec::live_downstreams`
+(`fabric_common.h`) with the same arguments, read here once per router: `MY_DIRECTION`, the VC's
+`VC<v>_DOWNSTREAM_EDM_SIZE`, `IS_INTERMESH_ROUTER` and `IS_INTRAMESH_ROUTER_ON_EDGE`. `live_downstreams` decides from the
+last two whether the router can turn.
+The rule is shared rather than copied, so it has no row in "Rules the manifest copies".
+
+The model holds each VC's directions as a mask of action bits, as `live_downstreams` returns it; the writer names them. A
+VC whose downstream array is empty (the builder gives VC1 size 0 on a router with no VC1 receiver) has no directions.
+In 1D `live_downstreams` is null: a 1D packet's route says only whether to forward, to the router's one downstream.
 
 ## Rules the manifest copies
 

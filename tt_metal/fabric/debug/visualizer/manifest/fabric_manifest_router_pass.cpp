@@ -579,6 +579,25 @@ std::vector<std::vector<manifest::DownstreamEdge>> collect_router_edges(const Ch
     return edges;
 }
 
+// The router's live downstreams on VC0 and VC1, as the kernel's live_downstreams<VC>() computes them:
+// Routing2DCodec::live_downstreams, from the same args. Null in 1D.
+std::optional<manifest::LiveDownstreamMasks> collect_live_downstreams(const ChannelContext& ctx) {
+    if (!ctx.is_2d_fabric) {
+        return std::nullopt;
+    }
+    const RouterArgs& args = ctx.inputs.args;
+    const auto facing = static_cast<eth_chan_directions>(args.read_router_arg("MY_DIRECTION"));
+    manifest::LiveDownstreamMasks masks{};
+    for (uint32_t vc = 0; vc < masks.size(); ++vc) {
+        masks[vc] = static_cast<uint8_t>(Routing2DCodec::live_downstreams(
+            facing,
+            args.read_router_arg(fmt::format("VC{}_DOWNSTREAM_EDM_SIZE", vc)),
+            args.read_router_arg("IS_INTERMESH_ROUTER") != 0,
+            args.read_router_arg("IS_INTRAMESH_ROUTER_ON_EDGE") != 0));
+    }
+    return masks;
+}
+
 }  // namespace
 
 void check_kernel_inputs_accounted(std::span<const KernelInputs> kernel_inputs_by_erisc) {
@@ -631,6 +650,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
         .credit_counters = collect_credit_counters(inputs),
         .channels = std::move(channels),
         .intra_chip_downstream_edges = std::move(edges),
+        .live_downstreams = collect_live_downstreams(ctx),
         .fields_by_erisc = std::move(fields_by_erisc),
         .eriscs = std::move(eriscs),
         .leftover_l1 = collect_leftover_l1(inputs),

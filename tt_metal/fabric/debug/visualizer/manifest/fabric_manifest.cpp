@@ -462,6 +462,26 @@ json make_downstream_edges_json(const manifest::Router& router, FabricNodeId nod
     return out;
 }
 
+// Keyed vc<N> for VC0 and VC1: the directions the router forwards to on the VC, as lower-case names in enum order,
+// empty when its downstream array is. Null in 1D.
+json make_live_downstreams_json(const std::optional<manifest::LiveDownstreamMasks>& live_downstreams) {
+    if (!live_downstreams.has_value()) {
+        return json(nullptr);
+    }
+    json out = json::object();
+    for (uint32_t vc = 0; vc < live_downstreams->size(); ++vc) {
+        json directions = json::array();
+        for (uint32_t index = 0; index < static_cast<uint32_t>(eth_chan_directions::COUNT); ++index) {
+            const auto direction = static_cast<eth_chan_directions>(index);
+            if (((*live_downstreams)[vc] & Routing2DCodec::action_bit(direction)) != 0) {
+                directions.push_back(lower_enum_name(direction));
+            }
+        }
+        out[fmt::format("vc{}", vc)] = std::move(directions);
+    }
+    return out;
+}
+
 // ============ Fields ============
 
 // Keyed erisc<N>.
@@ -520,6 +540,7 @@ json make_router_json(const manifest::Router& router, FabricNodeId node, FieldsW
         router.channels.receivers,
         [&](const manifest::ReceiverChannel& receiver) { return make_receiver_channel_json(receiver, fields_writer); });
     out["intra_chip_downstream_edges"] = make_downstream_edges_json(router, node, fields_writer);
+    out["live_downstreams"] = make_live_downstreams_json(router.live_downstreams);
     out["fields"] = fields_writer.write(router.fields_by_erisc);
     out["eriscs"] = make_eriscs_json(router.eriscs);
     out["leftover_l1"] = make_optional_l1_json(router.leftover_l1);
@@ -1054,6 +1075,29 @@ std::vector<std::vector<manifest::DownstreamEdge>> read_downstream_edges(
     return edges_by_vc;
 }
 
+// What make_live_downstreams_json writes: null, or each of VC0's and VC1's directions by name, each once and in enum
+// order.
+std::optional<manifest::LiveDownstreamMasks> read_live_downstreams(const JsonValueReader& value) {
+    return value.read_nullable_object([](JsonObjectReader& by_vc) {
+        manifest::LiveDownstreamMasks masks{};
+        for (uint32_t vc = 0; vc < masks.size(); ++vc) {
+            std::optional<eth_chan_directions> previous;
+            by_vc.take(fmt::format("vc{}", vc)).read_array([&](const JsonValueReader& name) {
+                const auto direction = read_enum<eth_chan_directions>(name);
+                if (direction >= eth_chan_directions::COUNT) {
+                    name.fail("is \"{}\", which is not a direction", lower_enum_name(direction));
+                }
+                if (previous.has_value() && direction <= *previous) {
+                    name.fail("is out of order: directions rise in enum order, each once");
+                }
+                previous = direction;
+                masks[vc] |= Routing2DCodec::action_bit(direction);
+            });
+        }
+        return masks;
+    });
+}
+
 // The counts per VC, one for each of MAX_NUM_VCS.
 std::array<uint32_t, builder_config::MAX_NUM_VCS> read_counts_per_vc(const JsonValueReader& value) {
     const auto counts = value.read_array_of<uint32_t>();
@@ -1141,6 +1185,7 @@ manifest::Router read_router(
         });
         router.intra_chip_downstream_edges = read_downstream_edges(
             router_json.take("intra_chip_downstream_edges"), node, router.identity, fields_reader);
+        router.live_downstreams = read_live_downstreams(router_json.take("live_downstreams"));
         router.fields_by_erisc = fields_reader.read(router_json.take("fields"));
         router.eriscs = read_by_erisc(router_json.take("eriscs"), read_erisc);
         router.leftover_l1 = read_optional_l1(router_json.take("leftover_l1"));

@@ -34,6 +34,7 @@ It also fails on:
 | An enum spelling that names no enumerator (`parse_lower_enum_name`) | The writer writes only names from the build's enums |
 | A key, path or `erisc<n>`, `ch<n>` or `vc<n>` the writer wouldn't write | Keys and paths parse with the parsers in `fabric_manifest_names.hpp` and `fabric_manifest_paths.hpp`, which accept only what the writer writes |
 | A `fields` id `field_sets` doesn't have | The manifest refers to a block it doesn't hold |
+| A live direction that isn't a direction, or out of enum order | The writer writes each live direction once, in enum order |
 
 ## What it checks rather than reads
 

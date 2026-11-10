@@ -42,6 +42,8 @@
     "field_kind": { "enum": ["l1", "stream_reg", "number", "flag", "enum"] },
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
     "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
+    "direction": { "enum": ["east", "west", "north", "south", "z"] },
+    "live_directions": { "type": "array", "items": { "$ref": "#/$defs/direction" }, "uniqueItems": true },
     "type_name": {
       "description": "A registered C++ type's name without its namespaces, as the build that wrote the manifest spells it (fabric_manifest_type_registry.hpp), such as HybridMeshPacketHeaderT<36> or unsigned int. Decode, built from the same commit, maps it back to the type.",
       "type": "string",
@@ -498,6 +500,21 @@
             "additionalProperties": { "$ref": "#/$defs/downstream_edge" }
           }
         },
+        "live_downstreams": {
+          "description": "Null in 1D. In 2D, VC0's and VC1's live downstreams: the directions the router forwards packets to on the VC, in enum order, empty when the VC's downstream array is. The router ignores a packet's other action bits. A live direction can have no edge behind it, and an edge can lead to a direction that isn't live.",
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "properties": {
+                "vc0": { "$ref": "#/$defs/live_directions" },
+                "vc1": { "$ref": "#/$defs/live_directions" }
+              },
+              "required": ["vc0", "vc1"],
+              "additionalProperties": false
+            }
+          ]
+        },
         "fields": { "$ref": "#/$defs/fields" },
         "eriscs": {
           "type": "object",
@@ -517,8 +534,8 @@
         "leftover_l1": { "$ref": "#/$defs/optional_region" }
       },
       "required": [
-        "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges", "fields",
-        "eriscs", "leftover_l1"
+        "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges", "live_downstreams",
+        "fields", "eriscs", "leftover_l1"
       ],
       "additionalProperties": false
     },

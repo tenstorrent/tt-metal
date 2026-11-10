@@ -294,8 +294,8 @@ TEST(ManifestModel, CreditCounterArraysResolve) {
 
 // ============ Reader ============
 
-// make_facts with what it leaves out: a sub-context, a sibling producer, an acked credit, a downstream edge, and fields
-// of every kind.
+// make_facts with what it leaves out: a sub-context, a sibling producer, an acked credit, a downstream edge, live
+// downstreams, and fields of every kind.
 ManifestFacts make_facts_with_every_part() {
     auto facts = make_facts();
     facts.run.subcontext = Subcontext{.id = 1, .rank = 0, .size = 2};
@@ -310,6 +310,10 @@ ManifestFacts make_facts_with_every_part() {
         .fields_by_erisc = {{Field{
             .key = "edge_count", .category = FieldCategory::FLOW_CONTROL, .content = content::Number{.value = 4}}}},
     });
+    router.live_downstreams = LiveDownstreamMasks{
+        Routing2DCodec::ACTION_WEST,
+        Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_NORTH | Routing2DCodec::ACTION_SOUTH,
+    };
     router.fields_by_erisc.at(0).push_back(
         Field{.key = "speedy", .category = FieldCategory::KERNEL_PARAMS, .content = content::Flag{.value = true}});
     router.leftover_l1 = register_l1_region<std::byte>(0x8000, 0x100, 1);

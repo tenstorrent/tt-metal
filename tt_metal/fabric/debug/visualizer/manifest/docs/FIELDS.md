@@ -50,6 +50,8 @@ Each `erisc<r>` of the `field_sets` block that `routers.<key>.fields` names.
 | `intermesh_router` | flag |  | kernel_params | `IS_INTERMESH_ROUTER` | Whether the router's link goes to another mesh. |
 | `intermesh_edge` | flag |  | kernel_params | `IS_INTERMESH_ROUTER_ON_EDGE` | Whether the router's channel is one of the chip's inter-mesh-facing channels (ControlPlane::get_intermesh_facing_eth_chans). |
 | `intramesh_edge` | flag |  | kernel_params | `IS_INTRAMESH_ROUTER_ON_EDGE` | Whether the router is an intra-mesh router on a chip with inter-mesh links, which checks each packet for an inter-mesh exit. |
+| `vc0_downstream_edm_size` | number |  | kernel_params | `VC0_DOWNSTREAM_EDM_SIZE` | The number of entries in the router's VC0 downstream array: one past the highest compact entry the builder connected on VC0, and at least 1, so an entry below it can have no sibling behind it. The router forwards on VC0 only to entries below it (the router's live_downstreams). |
+| `vc1_downstream_edm_size` | number |  | kernel_params | `VC1_DOWNSTREAM_EDM_SIZE` | The same for VC1; 0 when the router has no VC1 receiver. Only VC0 and VC1 forward to sibling routers, so the kernel has no other VC's size. |
 | `mesh_x_size` | number |  | kernel_params | `MESH_X_SIZE` (2D only) | The mesh's columns, which bound the router's 2D route table. |
 | `mesh_y_size` | number |  | kernel_params | `MESH_Y_SIZE` (2D only) | The mesh's rows, which bound the router's 2D route table. |
 
@@ -130,7 +132,6 @@ The named arguments and defines the router kernel is fed that the manifest does 
 | `MY_ETH_CHANNEL` | Not yet described. |
 | `NUM_SENDER_CHANNELS` | Not yet described. |
 | `NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS` | Not yet described. |
-| `VC{}_DOWNSTREAM_EDM_SIZE` | Not yet described. |
 | `EDM_NOC_VC` | Not yet described. |
 | `FORCE_ALL_PATHS_TO_USE_SAME_NOC` | Not yet described. |
 | `UDM_MODE` | Not yet described. |

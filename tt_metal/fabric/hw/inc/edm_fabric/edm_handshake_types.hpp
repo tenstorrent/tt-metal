@@ -8,6 +8,10 @@
 
 namespace erisc::datamover::handshake {
 
+// The value each end of a link writes into its own scratch[0] and sends into the other end's local_value. An end's
+// handshake with its peer has finished once its local_value holds it.
+static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
+
 // Data-Structure used for EDM to EDM Handshaking.
 // The scratch buffer is sent to the peer and overwrites the first 16 bytes of their struct,
 // populating neighbor_mesh_id and neighbor_device_id with the sender's identity.

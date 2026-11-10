@@ -42,7 +42,6 @@ namespace handshake {
  */
 
 static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
-static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
 
 FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     uint32_t handshake_register_address, uint16_t my_mesh_id, uint8_t my_device_id) {

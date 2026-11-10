@@ -327,6 +327,14 @@ struct DownstreamEdge {
     FieldsByErisc fields_by_erisc;
 };
 
+// The VCs the kernel has a downstream array for, VC0 and VC1 (VC<v>_DOWNSTREAM_EDM_SIZE): the others never forward to
+// a sibling.
+inline constexpr uint32_t k_num_vcs_with_downstream_array = 2;
+
+// One 2D router's live downstreams on each VC with a downstream array: the directions it forwards packets to, one
+// Routing2DCodec action bit per direction. The router ignores every other bit of a packet's action.
+using LiveDownstreamMasks = std::array<uint8_t, k_num_vcs_with_downstream_array>;
+
 // One RISC the router's kernel runs on.
 struct Erisc {
     // The processor the kernel is created on, among the ones the HAL defines for the ERISC mode.
@@ -347,6 +355,8 @@ struct Router {
     RouterChannels channels;
     // Indexed [vc], by edge.
     std::vector<std::vector<DownstreamEdge>> intra_chip_downstream_edges;
+    // Null in 1D, where a packet's route says only whether to forward, to the router's one downstream.
+    std::optional<LiveDownstreamMasks> live_downstreams;
     // The router's fields passed to the kernel, per ERISC.
     FieldsByErisc fields_by_erisc;
     // Indexed by ERISC id.

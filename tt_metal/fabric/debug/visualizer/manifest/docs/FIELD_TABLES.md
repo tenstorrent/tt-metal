@@ -46,7 +46,7 @@ Each table's fields make up the block that the `fields` id at its place names:
 
 | Table | Entries | Sits at |
 | --- | --- | --- |
-| `k_router_fields` | 37 | `routers.<key>.fields` |
+| `k_router_fields` | 44 | `routers.<key>.fields` |
 | `k_sender_channel_fields` | 8 | `routers.<key>.channels.senders.vc<v>.ch<c>.fields` |
 | `k_receiver_channel_fields` | 8 | `routers.<key>.channels.receivers.vc<v>.ch<c>.fields` |
 | `k_downstream_edge_fields` | 2 | `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<e>.fields` |
