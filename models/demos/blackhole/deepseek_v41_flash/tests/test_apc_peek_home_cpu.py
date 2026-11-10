@@ -39,3 +39,19 @@ def test_hook_peek_home():
     assert hook.peek_home("X", a, len(a)) == idx.peek_home(a, len(a))
     hook2 = AP.ApcPagedHook(idx, key_tokens_fn=lambda t, mm: None)
     assert hook2.peek_home("X", a, len(a)) == (0, -1, [])
+
+
+def test_peek_touch_refreshes_only_the_recency_of_the_resume_point():
+    idx = mk()
+    a = toks(6, 6 * C + 10)
+    run(idx, "A", a, user=0)
+    for i in range(2):  # later commits on the same row (all of them more recent than A)
+        run(idx, f"F{i}", toks(50 + i, 3 * C + 10), user=0)
+    row = idx._rows[0]
+    hit, home, _ = idx.peek_home(a, len(a))
+    before = (list(row.lru), list(row.a_lru), dict(idx.counters))
+    assert idx.peek_home(a, len(a)) == (hit, home, [2, 2])
+    assert (list(row.lru), list(row.a_lru)) == before[:2]  # no touch: order unchanged
+    idx.peek_home(a, len(a), touch=True)
+    assert idx.counters == before[2] and sorted(row.lru) == sorted(before[0])
+    assert list(row.lru)[-1] != before[0][-1] and list(row.a_lru)[-1] != before[1][-1]  # the resume point is now the most recent

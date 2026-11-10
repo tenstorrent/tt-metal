@@ -452,9 +452,11 @@ class BlockIndex:
         return req
 
     @_locked
-    def peek_home(self, key_tokens, num_tokens, max_hit=None, salt=b"", finished_ids=()):
+    def peek_home(self, key_tokens, num_tokens, max_hit=None, salt=b"", finished_ids=(), touch=False):
         """READ-ONLY look for the bounded home-row hold of the scheduler: -> (deepest resident hit of any row, that row (-1 = none), free users per row). Nothing is planned, pinned, reserved, dropped or
-        counted (``plan_hit`` does all of that), so it can be asked on every scheduler step. ``finished_ids`` as in ``plan_hit``."""
+        counted (``plan_hit`` does all of that), so it can be asked on every scheduler step. ``finished_ids`` as in ``plan_hit``.
+        ``touch``: refresh the LRU position of the block (and its halo slots) the hit resumes from, so that a request held for a busy home row does not lose its resume point to the halo / block
+        eviction of the commits that run meanwhile (measured: a 511 k hit gone after 31 s of hold, the halo A store being full). Only the recency order changes."""
         fin_users = {r.user for r in (self._reqs.get(i) for i in finished_ids) if r is not None and r.state == "bound"}
         num_tokens = int(num_tokens)
         top = (
@@ -466,11 +468,13 @@ class BlockIndex:
         if top <= 0 or not self.rows:
             return 0, -1, free
         digests = Chain(self.chunk, salt).extend(_as_i64(key_tokens), top).digests
-        best, home = 0, -1
+        best, home, bpath = 0, -1, None
         for ri in range(self.rows):
-            hit, _path = self._lookup_row(ri, digests, num_tokens, max_hit)
+            hit, path = self._lookup_row(ri, digests, num_tokens, max_hit)
             if hit > best:
-                best, home = hit, ri
+                best, home, bpath = hit, ri, path
+        if touch and best > 0:
+            self._touch(self._rows[home], bpath[-1], halos=True)
         return best, home, free
 
     def _log_loss(self, req_id, num_tokens, top, digests, hit, ri, any_hit, depth, home, row_info):
@@ -1148,7 +1152,7 @@ class ApcPagedHook:
         plan = self.index.plan_hit(request_id, kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids)
         return plan.hit_tokens, plan.row
 
-    def peek_home(self, request_id, tokens, num_tokens, max_hit=None, mm=None, salt=b"", finished_ids=()):
+    def peek_home(self, request_id, tokens, num_tokens, max_hit=None, mm=None, salt=b"", finished_ids=(), touch=False):
         """-> (resident hit tokens, home row, free users per row); read-only (the plugin's bounded home-row hold). Images never hold."""
         if self.key_tokens_fn is not None:
             kt = self.key_tokens_fn(tokens, mm)
@@ -1156,7 +1160,7 @@ class ApcPagedHook:
                 return 0, -1, []
         else:
             kt = tokens
-        return self.index.peek_home(kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids)
+        return self.index.peek_home(kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids, touch=touch)
 
     def cancel(self, request_id):
         self.index.cancel(request_id)
