@@ -21,12 +21,12 @@ i32, u8, bf16 = ttnn.int32, ttnn.uint8, ttnn.bfloat16
 K = et.K
 
 
-def ctrl_width(ttot, utot, w=3):
+def ctrl_width(ttot, utot, w=4):
     """ctrl words per row: [token, pos] + ttot raw ids + utot * (w - 1) compressed lookbacks, rounded up to 16 words (64 B)."""
     return -(-(2 + ttot + utot * (w - 1)) // 16) * 16
 
 
-def fill_ctrl(ctrl, X, base, st, rows=None, w=3):
+def fill_ctrl(ctrl, X, base, st, rows=None, w=4):
     """Fill the Engram words of ``ctrl`` (int32 numpy / torch [R, CW], R >= 1; every row gets the same words) for the block X [B, n] at positions base [B].
     ``st`` = numpy view of the host hash state: dict(cache=[users, max_seq] int, tmap=[V], dead=int).  Writes the block's compressed tokens into the history cache exactly like
     FastNgramHash / RaggedNgramHash do (positions base .. base + n - 1; stale speculative entries beyond the accepted ones are overwritten by the next round) and reads the w - 1 committed
@@ -51,7 +51,7 @@ def fill_ctrl(ctrl, X, base, st, rows=None, w=3):
     ctrl[:, 2 + ttot : 2 + ttot + B * (w - 1)] = lb.reshape(1, -1).astype(np.int32)
 
 
-def emu_ids(ctrl_row, ttot, n, tmap, mult, primes, offsets, pad, w=3):
+def emu_ids(ctrl_row, ttot, n, tmap, mult, primes, offsets, pad, w=4):
     """Python mirror of engram_hash_dec.cpp: ctrl page 0 (int list / array) -> ids [ttot, NL, (w-1)*H] (python int64 arithmetic, wrapping like the reference's int64).
     mult [NL, w], primes [NL, w-1, H], offsets [NL, (w-1)*H] numpy int64."""
     nl, h = mult.shape[0], primes.shape[2]
@@ -111,7 +111,7 @@ class DevEngramTables:
         primes = st.primes.numpy().astype(np.int64)
         offs = st.offsets.numpy().astype(np.int64)
         self.NL, self.H = int(mult.shape[0]), int(primes.shape[2])
-        assert self.NL == 2 and self.W == 3 and self.H * (self.W - 1) == K
+        assert self.NL == 2 and self.H * (self.W - 1) == K, (self.NL, self.W, self.H)  # real checkpoint: W = 4 (2/3/4-grams), H = 8 heads
         self.mult, self.primes, self.offs = mult, primes, offs
         # hash constants (layout of engram_hash.cpp: [mult lo/hi (l,s)] [primes (l,s-1,h)] [offsets (l,col)] [pad])
         c = np.zeros(128, dtype=np.uint32)
@@ -308,6 +308,11 @@ class DevEngramRows:
         ids = self.hash(ctrl)
         part = self.gather(ids)
         topo = ttnn.Topology.Linear
+        tiled = (self.T * self.NL * K) % 32 == 0  # tile layout combine: 98-138 us vs 360-660 us for the 512 B row-major pages (tests/test_engram_dev_comb.py)
+        if tiled:
+            part = ttnn.to_layout(part, ttnn.TILE_LAYOUT)
         rs = ttnn.reduce_scatter(part, dim=2, cluster_axis=0, num_links=self.num_links, topology=topo)
         ar = ttnn.all_reduce(rs, cluster_axis=1, num_links=self.num_links, topology=topo)
+        if tiled:
+            ar = ttnn.to_layout(ar, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.reshape(ar, [1, 1, self.T, self.NL * K * 256])

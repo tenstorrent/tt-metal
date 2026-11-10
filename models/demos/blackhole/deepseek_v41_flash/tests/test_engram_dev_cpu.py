@@ -14,7 +14,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt import engram_dev as ed
 from models.demos.blackhole.deepseek_v41_flash.tt.engram_ragged import RaggedNgramHash
 from models.demos.blackhole.deepseek_v41_flash.tt.hostopt import FastNgramHash
 
-V, NL, W, H = 2000, 2, 3, 12
+V, NL, W, H = 2000, 2, 4, 8  # the real checkpoint: 4-grams, 8 heads, 24 ids per (token, layer)
 DEAD, PAD = -2, 7
 MAXSEQ = 2000
 
@@ -24,7 +24,7 @@ def make_state(Bu, seed=0):
     st = types.SimpleNamespace()
     st.token_map = torch.randint(0, 1500, (V,), generator=g)
     st.multipliers = torch.randint(1, 2**40, (NL, W), generator=g) | 1
-    pr = torch.tensor([1009, 1013, 1019, 1021, 1031, 1033, 1039, 1049, 1051, 1061, 1063, 1069] * (NL * (W - 1)))
+    pr = torch.tensor([1009, 1013, 1019, 1021, 1031, 1033, 1039, 1049] * (NL * (W - 1)))
     st.primes = pr.reshape(NL, W - 1, H) + torch.arange(NL * (W - 1) * H).reshape(NL, W - 1, H) * 0
     st.offsets = torch.arange(NL * (W - 1) * H).reshape(NL, (W - 1) * H) * 2000
     st.pad_id, st.DEAD = PAD, DEAD
@@ -131,8 +131,8 @@ def test_hash_partition_and_ctrl_width():
             cnt = max(0, min(per, ttot - t0))
             seen[t0 : t0 + cnt] += 1
         assert (seen == 1).all()
-        assert ed.ctrl_width(ttot, ttot // 4, 3) % 16 == 0
-        assert 2 + ttot + (ttot // 4) * 2 <= ed.ctrl_width(ttot, ttot // 4, 3)
+        assert ed.ctrl_width(ttot, ttot // 4, W) % 16 == 0
+        assert 2 + ttot + (ttot // 4) * (W - 1) <= ed.ctrl_width(ttot, ttot // 4, W)
 
 
 def test_reduce_scatter_chunking():

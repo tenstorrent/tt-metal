@@ -153,15 +153,17 @@ def test_engram_dev_device(mesh_device):
         part = dv.gather(ids)
         t_h = chain_us(md, lambda: dv.hash(ctrl_dev))
         t_g = chain_us(md, lambda: dv.gather(ids))
-        t_c = chain_us(
-            md,
-            lambda: ttnn.all_reduce(
-                ttnn.reduce_scatter(part, dim=2, cluster_axis=0, num_links=2, topology=ttnn.Topology.Linear),
+        def comb():
+            p_ = ttnn.to_layout(part, ttnn.TILE_LAYOUT) if (T * 48) % 32 == 0 else part
+            r_ = ttnn.all_reduce(
+                ttnn.reduce_scatter(p_, dim=2, cluster_axis=0, num_links=2, topology=ttnn.Topology.Linear),
                 cluster_axis=1,
                 num_links=2,
                 topology=ttnn.Topology.Linear,
-            ),
-        )
+            )
+            return ttnn.to_layout(r_, ttnn.ROW_MAJOR_LAYOUT) if (T * 48) % 32 == 0 else r_
+
+        t_c = chain_us(md, comb)
         t_all = chain_us(md, lambda: dv.rows(ctrl_dev))
         line = f"DEVENG_TIME U={U} n={n} T={T} mode={mode}: hash {t_h:.1f} us, gather {t_g:.1f} us, combine {t_c:.1f} us, whole rows() {t_all:.1f} us"
         print(line, flush=True)
