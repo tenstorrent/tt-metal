@@ -15,6 +15,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
 namespace ckl = compute_kernel_lib;
@@ -232,6 +233,25 @@ void kernel_main() {
         pack_init(dfb_scale_mask);  // Quasar: retarget the packer to the scale-mask ring (see calc_numeric_stable)
 #endif
         if (Wt_unpadded_tiles > 0) {
+#if defined(FUSED_SCALE_ON_DEST) && !defined(ARCH_QUASAR)
+            // SrcA/SrcB registers only carry TF32 on Wormhole and Blackhole, so the FPU mul below
+            // would round the raw logits (and the scale) to 10 mantissa bits before the softmax
+            // runs. Copy the float32 tiles to Dest, which unpack-to-dest moves bit-exactly, and
+            // multiply there: the SFPU multiply keeps float32 precision. Every other configuration
+            // keeps the FPU mul.
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(Wt_unpadded_tiles).block_size(ndst),
+                ckl::CopyTile<ckl::input(
+                    dfb_in0,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::InputTileMapping::Block)>{dfb_in0_obj},
+                ckl::MulUnary<ckl::Dst::D0>(get_arg(args::pre_scale)),
+                // reuse exps buffer
+                ckl::PackTile<ckl::output(
+                    dfb_scale_mask, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                    dfb_scale_mask_obj});
+#else
             ckl::mul<
                 ckl::input(
                     dfb_in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
@@ -242,16 +262,23 @@ void kernel_main() {
                 dfb_in0_obj,
                 dfb_fused_scale_obj,
                 dfb_scale_mask_obj);
+#endif
         }
 #ifdef MASK_PADDED_DATA
         // The user mask does not cover the tile padding, so the last tile also gets the -inf padding mask.
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
+#if defined(FUSED_SCALE_ON_DEST) && !defined(ARCH_QUASAR)
+            // dfb_in0 is unpacked to Dest only on this path, so the last tile is scaled there too.
+            ckl::CopyTile<ckl::input(dfb_in0)>{dfb_in0_obj},
+            ckl::MulUnary<ckl::Dst::D0>(get_arg(args::pre_scale)),
+#else
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(dfb_in0),
                 ckl::input(dfb_fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
                 dfb_in0_obj, dfb_fused_scale_obj},
+#endif
             ckl::DestReuseBinary<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_mask_padded, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
