@@ -55,41 +55,66 @@ std::vector<std::byte> read_file(const std::filesystem::path& path) {
     return {bytes.begin(), bytes.end()};
 }
 
+// Each recorded read's offset finds the bytes it was captured with, and a failed read keeps its error and has no
+// offset.
+void expect_reads_find_their_bytes(
+    const std::vector<ReadRecord>& records,
+    const std::vector<CapturedRead>& captured,
+    const std::vector<std::byte>& bin) {
+    ASSERT_EQ(records.size(), captured.size());
+    for (size_t i = 0; i < records.size(); ++i) {
+        const ReadRecord& read = records[i];
+        EXPECT_EQ(read.address, captured[i].address);
+        EXPECT_EQ(read.t_ns, captured[i].t_ns);
+        if (captured[i].error.has_value()) {
+            EXPECT_FALSE(read.bin_offset.has_value());
+            EXPECT_EQ(read.error, captured[i].error);
+            continue;
+        }
+        ASSERT_TRUE(read.bin_offset.has_value());
+        const auto start = bin.begin() + static_cast<std::ptrdiff_t>(*read.bin_offset);
+        EXPECT_EQ(std::vector<std::byte>(start, start + read.size_bytes), captured[i].bytes);
+    }
+}
+
+// Every read's offset finds its bytes in the .bin, a round's as well as the full read's.
 TEST_F(CaptureFilesTest, EachReadsOffsetFindsItsBytes) {
     const RouterTarget e0{.router = {.path = "M0/C0/E0"}, .location = CoreLocation::FOUND};
     const RouterTarget e1{.router = {.path = "M0/C0/E1"}, .location = CoreLocation::FOUND};
-    // E0's register reads bracket its L1 read, and its last register read failed. E1 has one read.
+    // E0 has two rounds, the second of which failed, then a full read whose last register read failed. E1 has no
+    // rounds and one read.
+    const std::vector<CapturedRound> e0_rounds = {
+        {.round = 0,
+         .t_ns = 1,
+         .reads =
+             {{.address = 0x10, .size_bytes = 4, .t_ns = 1, .bytes = make_bytes({5, 6, 7, 8})},
+              {.address = 0x40, .size_bytes = 2, .t_ns = 2, .bytes = make_bytes({30, 31})}}},
+        {.round = 1, .t_ns = 3, .reads = {{.address = 0x10, .size_bytes = 4, .t_ns = 3, .error = "timed out"}}},
+    };
     const CapturedCore e0_core{
         .reads = {
-            {.step = ReadStep::REGISTERS_BEFORE, .address = 0x10, .size_bytes = 4, .bytes = make_bytes({1, 2, 3, 4})},
-            {.step = ReadStep::L1, .address = 0, .size_bytes = 6, .bytes = make_bytes({10, 11, 12, 13, 14, 15})},
-            {.step = ReadStep::REGISTERS_AFTER, .address = 0x10, .size_bytes = 4, .error = "timed out"},
+            {.address = 0x10, .size_bytes = 4, .t_ns = 4, .bytes = make_bytes({1, 2, 3, 4})},
+            {.address = 0, .size_bytes = 6, .t_ns = 5, .bytes = make_bytes({10, 11, 12, 13, 14, 15})},
+            {.address = 0x20, .size_bytes = 4, .t_ns = 6, .error = "timed out"},
         }};
-    const CapturedCore e1_core{
-        .reads = {{.step = ReadStep::L1, .address = 0, .size_bytes = 2, .bytes = make_bytes({20, 21})}}};
+    const CapturedCore e1_core{.reads = {{.address = 0, .size_bytes = 2, .t_ns = 7, .bytes = make_bytes({20, 21})}}};
 
     const std::filesystem::path bin_path = directory_ / "capture.bin";
     CaptureBinWriter writer(bin_path);
-    const std::vector<RouterRecord> records = {writer.append_core(e0, e0_core), writer.append_core(e1, e1_core)};
+    const RouterRecord e0_record = writer.append_router(e0, e0_rounds, e0_core);
+    const RouterRecord e1_record = writer.append_router(e1, {}, e1_core);
     const FinishedBin finished = writer.finish();
 
     const std::vector<std::byte> bin = read_file(bin_path);
-    const std::vector<const CapturedCore*> cores = {&e0_core, &e1_core};
-    for (size_t core = 0; core < records.size(); ++core) {
-        ASSERT_EQ(records[core].reads.size(), cores[core]->reads.size());
-        for (size_t i = 0; i < records[core].reads.size(); ++i) {
-            const ReadRecord& read = records[core].reads[i];
-            const CapturedRead& captured = cores[core]->reads[i];
-            if (captured.error.has_value()) {
-                EXPECT_FALSE(read.bin_offset.has_value());
-                EXPECT_EQ(read.error, captured.error);
-                continue;
-            }
-            ASSERT_TRUE(read.bin_offset.has_value());
-            const auto start = bin.begin() + static_cast<std::ptrdiff_t>(*read.bin_offset);
-            EXPECT_EQ(std::vector<std::byte>(start, start + read.size_bytes), captured.bytes);
-        }
+    ASSERT_EQ(e0_record.rounds.size(), e0_rounds.size());
+    for (size_t round = 0; round < e0_rounds.size(); ++round) {
+        EXPECT_EQ(e0_record.rounds[round].round, e0_rounds[round].round);
+        EXPECT_EQ(e0_record.rounds[round].t_ns, e0_rounds[round].t_ns);
+        expect_reads_find_their_bytes(e0_record.rounds[round].reads, e0_rounds[round].reads, bin);
     }
+    expect_reads_find_their_bytes(e0_record.reads, e0_core.reads, bin);
+    EXPECT_TRUE(e1_record.rounds.empty());
+    expect_reads_find_their_bytes(e1_record.reads, e1_core.reads, bin);
     EXPECT_EQ(finished.size_bytes, bin.size());
     EXPECT_EQ(finished.blake3, compute_blake3_hex(bin));
 }
@@ -102,9 +127,10 @@ TEST_F(CaptureFilesTest, NeverReplacesACaptureOrLeavesAHalfOne) {
     // A writer that isn't finished leaves no file behind.
     {
         CaptureBinWriter writer(paths.bin_path);
-        writer.append_core(
+        writer.append_router(
             {.router = {.path = "M0/C0/E0"}, .location = CoreLocation::FOUND},
-            {.reads = {{.step = ReadStep::L1, .size_bytes = 2, .bytes = make_bytes({1, 2})}}});
+            {},
+            {.reads = {{.size_bytes = 2, .bytes = make_bytes({1, 2})}}});
     }
     EXPECT_TRUE(std::filesystem::is_empty(paths.bin_path.parent_path()));
 

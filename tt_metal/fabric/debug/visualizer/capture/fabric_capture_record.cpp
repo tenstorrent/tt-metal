@@ -54,19 +54,8 @@ json make_manifest_identity_json(const ManifestIdentity& manifest) {
     return out;
 }
 
-json make_liveness_sample_json(const LivenessSample& sample) {
-    json out;
-    out["round"] = sample.round;
-    out["t_ns"] = sample.t_ns;
-    out["heartbeat"] = make_optional_json(sample.heartbeat);
-    out["core_registers"] = sample.core_registers;
-    out["error"] = make_optional_json(sample.error);
-    return out;
-}
-
 json make_read_record_json(const ReadRecord& read) {
     json out;
-    out["step"] = manifest::lower_enum_name(read.step);
     out["address"] = read.address;
     out["size_bytes"] = read.size_bytes;
     out["t_ns"] = read.t_ns;
@@ -75,26 +64,51 @@ json make_read_record_json(const ReadRecord& read) {
     return out;
 }
 
-// A router: where its core was found, then its liveness samples and its reads. Its path is its key and its chip's.
+json make_read_records_json(const std::vector<ReadRecord>& reads) {
+    json out = json::array();
+    for (const ReadRecord& read : reads) {
+        out.push_back(make_read_record_json(read));
+    }
+    return out;
+}
+
+json make_round_record_json(const RoundRecord& round) {
+    json out;
+    out["round"] = round.round;
+    out["t_ns"] = round.t_ns;
+    out["reads"] = make_read_records_json(round.reads);
+    return out;
+}
+
+json make_multi_sampled_region_json(const MultiSampledRegion& region) {
+    json out;
+    out["kind"] = manifest::lower_enum_name(region.kind);
+    out["address"] = region.address;
+    out["size_bytes"] = region.size_bytes;
+    return out;
+}
+
+// A router: where its core was found, then its rounds and its full read. Its path is its key and its chip's.
 json make_router_record_json(const RouterRecord& router) {
     const RouterTarget& target = router.target;
     json out;
     out["eth_chan"] = target.router.eth_chan;
     out["manifest_core"] = make_core_json(target.router.virtual_core);
     out["stream_register_addresses"] = target.router.stream_register_addresses;
+    json multi_sampled = json::array();
+    for (const MultiSampledRegion& region : target.router.multi_sampled_regions) {
+        multi_sampled.push_back(make_multi_sampled_region_json(region));
+    }
+    out["multi_sampled_regions"] = std::move(multi_sampled);
     out["reader_core"] = target.reader_core.has_value() ? make_core_json(*target.reader_core) : json(nullptr);
     out["location"] = target.location.has_value() ? json(manifest::lower_enum_name(*target.location)) : json(nullptr);
     out["discovery_skipped"] = target.discovery_skipped;
-    json liveness = json::array();
-    for (const LivenessSample& sample : router.liveness) {
-        liveness.push_back(make_liveness_sample_json(sample));
+    json rounds = json::array();
+    for (const RoundRecord& round : router.rounds) {
+        rounds.push_back(make_round_record_json(round));
     }
-    out["liveness"] = std::move(liveness);
-    json reads = json::array();
-    for (const ReadRecord& read : router.reads) {
-        reads.push_back(make_read_record_json(read));
-    }
-    out["reads"] = std::move(reads);
+    out["rounds"] = std::move(rounds);
+    out["reads"] = make_read_records_json(router.reads);
     return out;
 }
 
@@ -166,27 +180,40 @@ ManifestIdentity read_manifest_identity(const JsonValueReader& value) {
     });
 }
 
-LivenessSample read_liveness_sample(const JsonValueReader& value) {
-    return value.read_object([](JsonObjectReader& sample_json) {
-        return LivenessSample{
-            .round = sample_json.take<uint32_t>("round"),
-            .t_ns = sample_json.take<uint64_t>("t_ns"),
-            .heartbeat = sample_json.take("heartbeat").read_nullable<uint32_t>(),
-            .core_registers = sample_json.take("core_registers").read_array_of<uint32_t>(),
-            .error = sample_json.take("error").read_nullable<std::string>(),
-        };
-    });
-}
-
 ReadRecord read_read_record(const JsonValueReader& value) {
     return value.read_object([](JsonObjectReader& read_json) {
         return ReadRecord{
-            .step = read_enum<ReadStep>(read_json.take("step")),
             .address = read_json.take<uint64_t>("address"),
             .size_bytes = read_json.take<uint32_t>("size_bytes"),
             .t_ns = read_json.take<uint64_t>("t_ns"),
             .bin_offset = read_json.take("bin_offset").read_nullable<uint64_t>(),
             .error = read_json.take("error").read_nullable<std::string>(),
+        };
+    });
+}
+
+std::vector<ReadRecord> read_read_records(const JsonValueReader& value) {
+    std::vector<ReadRecord> reads;
+    value.read_array([&reads](const JsonValueReader& read) { reads.push_back(read_read_record(read)); });
+    return reads;
+}
+
+RoundRecord read_round_record(const JsonValueReader& value) {
+    return value.read_object([](JsonObjectReader& round_json) {
+        return RoundRecord{
+            .round = round_json.take<uint32_t>("round"),
+            .t_ns = round_json.take<uint64_t>("t_ns"),
+            .reads = read_read_records(round_json.take("reads")),
+        };
+    });
+}
+
+MultiSampledRegion read_multi_sampled_region(const JsonValueReader& value) {
+    return value.read_object([](JsonObjectReader& region_json) {
+        return MultiSampledRegion{
+            .kind = read_enum<RegionKind>(region_json.take("kind")),
+            .address = region_json.take<uint64_t>("address"),
+            .size_bytes = region_json.take<uint32_t>("size_bytes"),
         };
     });
 }
@@ -210,11 +237,12 @@ RouterRecord read_router_record(const JsonValueReader& value, std::string path) 
                     .discovery_skipped = router_json.take<bool>("discovery_skipped"),
                 },
         };
-        router_json.take("liveness").read_array([&router](const JsonValueReader& sample) {
-            router.liveness.push_back(read_liveness_sample(sample));
+        router_json.take("multi_sampled_regions").read_array([&router](const JsonValueReader& region) {
+            router.target.router.multi_sampled_regions.push_back(read_multi_sampled_region(region));
         });
-        router_json.take("reads").read_array(
-            [&router](const JsonValueReader& read) { router.reads.push_back(read_read_record(read)); });
+        router_json.take("rounds").read_array(
+            [&router](const JsonValueReader& round) { router.rounds.push_back(read_round_record(round)); });
+        router.reads = read_read_records(router_json.take("reads"));
         return router;
     });
 }
@@ -250,9 +278,9 @@ json make_capture_record_json(const CaptureRecord& record) {
     capture["cluster_id"] = make_optional_json(record.cluster_id);
     capture["started_at"] = record.started_at;
     capture["finished_at"] = record.finished_at;
-    capture["liveness"] = {
-        {"num_rounds", record.liveness_options.num_rounds},
-        {"interval_ms", static_cast<uint64_t>(record.liveness_options.interval.count())},
+    capture["rounds"] = {
+        {"num_rounds", record.round_options.num_rounds},
+        {"interval_ms", static_cast<uint64_t>(record.round_options.interval.count())},
     };
     out["capture"] = std::move(capture);
 
@@ -290,10 +318,10 @@ CaptureRecord parse_capture_record(const json& document) {
             record.cluster_id = capture_json.take("cluster_id").read_nullable<std::string>();
             record.started_at = capture_json.take<std::string>("started_at");
             record.finished_at = capture_json.take<std::string>("finished_at");
-            record.liveness_options = capture_json.take("liveness").read_object([](JsonObjectReader& liveness_json) {
-                return LivenessOptions{
-                    .num_rounds = liveness_json.take<uint32_t>("num_rounds"),
-                    .interval = std::chrono::milliseconds(liveness_json.take<uint64_t>("interval_ms")),
+            record.round_options = capture_json.take("rounds").read_object([](JsonObjectReader& rounds_json) {
+                return RoundOptions{
+                    .num_rounds = rounds_json.take<uint32_t>("num_rounds"),
+                    .interval = std::chrono::milliseconds(rounds_json.take<uint64_t>("interval_ms")),
                 };
             });
         });

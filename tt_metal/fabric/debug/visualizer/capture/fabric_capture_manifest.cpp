@@ -6,67 +6,49 @@
 
 #include <algorithm>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
-#include <variant>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/overloaded.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_paths.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_regions.hpp"
 
 namespace tt::tt_fabric::capture {
 
 // Private helpers for reading individual parts of the manifest.
 namespace {
 
-// Adds the address of every stream register `fields_by_erisc` names.
-void collect_stream_register_addresses(
-    const manifest::FieldsByErisc& fields_by_erisc, std::vector<uint64_t>& addresses) {
-    for (const std::vector<manifest::Field>& fields : fields_by_erisc) {
-        for (const manifest::Field& field : fields) {
-            if (!field.content.has_value()) {
-                continue;
-            }
-            if (const auto* stream = std::get_if<manifest::content::StreamReg>(&*field.content)) {
-                addresses.push_back(stream->address);
-            }
-        }
-    }
+// An L1 region as capture reads it: its elements' bytes from its address.
+MultiSampledRegion make_l1_read_region(const manifest::content::L1& l1) {
+    return MultiSampledRegion{
+        .kind = RegionKind::L1, .address = l1.address, .size_bytes = l1.num_elements * l1.element_size};
 }
 
-// Every stream register a router names, ascending, each once. Stream registers are only ever field contents: the
-// router's own fields, its channels' and its edges'.
-std::vector<uint64_t> collect_router_stream_register_addresses(const manifest::Router& router) {
-    std::vector<uint64_t> addresses;
-    collect_stream_register_addresses(router.fields_by_erisc, addresses);
-    for (const auto& senders : router.channels.senders) {
-        for (const manifest::SenderChannel& sender : senders) {
-            collect_stream_register_addresses(sender.fields_by_erisc, addresses);
-        }
-    }
-    for (const auto& receivers : router.channels.receivers) {
-        for (const manifest::ReceiverChannel& receiver : receivers) {
-            collect_stream_register_addresses(receiver.fields_by_erisc, addresses);
-        }
-    }
-    for (const auto& edges : router.intra_chip_downstream_edges) {
-        for (const manifest::DownstreamEdge& edge : edges) {
-            collect_stream_register_addresses(edge.fields_by_erisc, addresses);
-        }
-    }
-    std::ranges::sort(addresses);
-    addresses.erase(std::unique(addresses.begin(), addresses.end()), addresses.end());
-    return addresses;
+// A stream register as capture reads it: one word.
+MultiSampledRegion make_register_read_region(const manifest::content::StreamReg& stream) {
+    return MultiSampledRegion{.kind = RegionKind::REGISTER, .address = stream.address, .size_bytes = sizeof(uint32_t)};
+}
+
+// `values` ascending by `key`, each once.
+template <typename T, typename Key = std::identity>
+void sort_and_remove_duplicates(std::vector<T>& values, Key key = {}) {
+    std::ranges::sort(values, {}, key);
+    values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
 PlannedRouter collect_planned_router(const manifest::Chip& chip, const manifest::Router& router) {
-    return PlannedRouter{
+    PlannedRouter planned{
         .path = manifest::router_path({.node = chip.fabric_node_id, .key = router.identity.key}),
         .eth_chan = router.identity.eth_chan,
         .virtual_core =
@@ -74,8 +56,37 @@ PlannedRouter collect_planned_router(const manifest::Chip& chip, const manifest:
                 .x = static_cast<uint32_t>(router.identity.virtual_core.x),
                 .y = static_cast<uint32_t>(router.identity.virtual_core.y),
             },
-        .stream_register_addresses = collect_router_stream_register_addresses(router),
     };
+    // A region several ERISCs' fields name comes once per ERISC, so both lists are deduplicated below.
+    manifest::for_each_router_region(
+        router,
+        ttsl::overloaded{
+            [&](std::string_view /*path*/, const manifest::content::L1& l1) {
+                if (l1.multi_sampled.has_value()) {
+                    planned.multi_sampled_regions.push_back(make_l1_read_region(l1));
+                }
+            },
+            [&](std::string_view /*path*/, const manifest::content::StreamReg& stream) {
+                planned.stream_register_addresses.push_back(stream.address);
+                if (stream.multi_sampled.has_value()) {
+                    planned.multi_sampled_regions.push_back(make_register_read_region(stream));
+                }
+            },
+        });
+    sort_and_remove_duplicates(planned.stream_register_addresses);
+    sort_and_remove_duplicates(planned.multi_sampled_regions, &MultiSampledRegion::address);
+    return planned;
+}
+
+// The arch areas the manifest marks multi_sampled, in ArchArea's order.
+std::vector<MultiSampledRegion> collect_multi_sampled_arch_areas(const manifest::Arch& arch) {
+    std::vector<MultiSampledRegion> sampled;
+    manifest::for_each_arch_area(arch, [&](std::string_view /*name*/, const manifest::content::L1& area) {
+        if (area.multi_sampled.has_value()) {
+            sampled.push_back(make_l1_read_region(area));
+        }
+    });
+    return sampled;
 }
 
 // The chips this rank owns: the ones with a physical chip id. The reader gives each of them an asic_id.
@@ -147,7 +158,7 @@ CapturePlan collect_capture_plan(const manifest::ManifestFacts& facts) {
         .arch = facts.arch.arch,
         .l1_address = facts.arch.l1.address,
         .l1_size_bytes = facts.arch.l1.size_bytes,
-        .heartbeat_address = facts.arch.areas.heartbeat.word.address,
+        .multi_sampled_arch_areas = collect_multi_sampled_arch_areas(facts.arch),
         .core_registers = collect_core_registers(facts.arch.core_registers),
         .chips = collect_planned_chips(facts),
     };

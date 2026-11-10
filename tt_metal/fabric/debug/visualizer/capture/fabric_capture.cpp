@@ -33,10 +33,12 @@ std::string get_utc_now_iso8601() {
 
 // Whether the record says anything the manifest names on this rank wasn't read in full.
 bool has_recorded_problems(const CaptureRecord& record) {
-    const auto has_failed_read = [](const RouterRecord& router) {
-        return std::ranges::any_of(router.reads, [](const ReadRecord& read) { return read.error.has_value(); }) ||
-               std::ranges::any_of(
-                   router.liveness, [](const LivenessSample& sample) { return sample.error.has_value(); });
+    const auto is_failed = [](const ReadRecord& read) { return read.error.has_value(); };
+    const auto has_failed_read = [&](const RouterRecord& router) {
+        const auto has_failed_round = [&](const RoundRecord& round) {
+            return std::ranges::any_of(round.reads, is_failed);
+        };
+        return std::ranges::any_of(router.reads, is_failed) || std::ranges::any_of(router.rounds, has_failed_round);
     };
     return std::ranges::any_of(record.chips, [&](const ChipRecord& chip) {
         return chip.location != ChipLocation::FOUND ||
@@ -76,10 +78,12 @@ CaptureResult capture_rank(
     const CaptureFilePaths paths =
         make_capture_file_paths(run_directory, request.capture_id, identity.mpi_rank, identity.world_size);
 
-    // 4. Liveness first: every router read, a few words each, a few rounds apart, before any core's full read.
-    const auto liveness = collect_liveness_rounds(plan, targets, reader, clock, request.liveness_options);
+    // 4. The rounds first: every router read, its multi-sampled regions and core registers, a few rounds apart, before
+    // any core's full read.
+    const auto rounds = collect_rounds(plan, targets, reader, clock, request.round_options);
 
-    // 5. Each router in turn: read its core, write the bytes to the .bin, and keep only its record.
+    // 5. Each router in turn: read its core in full, write its rounds' and full read's bytes to the .bin, and keep only
+    // its record.
     CaptureBinWriter bin(paths.bin_path);
     std::vector<ChipRecord> chips;
     chips.reserve(targets.size());
@@ -92,11 +96,10 @@ CaptureResult capture_rank(
             const RouterTarget& router = chip.routers[router_index];
             RouterRecord router_record{.target = router};
             if (router.is_read()) {
-                // The core's bytes are only in memory until append_core has written them.
+                // The core's bytes are only in memory until append_router has written them.
                 const CapturedCore core = read_router_core(plan, *chip.chip, router, reader, clock);
-                router_record = bin.append_core(router, core);
+                router_record = bin.append_router(router, rounds[chip_index][router_index], core);
             }
-            router_record.liveness = liveness[chip_index][router_index];
             chip_record.routers.push_back(std::move(router_record));
         }
         chips.push_back(std::move(chip_record));
@@ -112,7 +115,7 @@ CaptureResult capture_rank(
         .cluster_id = facts.cluster_id,
         .started_at = started_at,
         .finished_at = get_utc_now_iso8601(),
-        .liveness_options = request.liveness_options,
+        .round_options = request.round_options,
         .bin_file = paths.bin_path.filename().string(),
         .bin_size_bytes = finished_bin.size_bytes,
         .bin_blake3 = finished_bin.blake3,

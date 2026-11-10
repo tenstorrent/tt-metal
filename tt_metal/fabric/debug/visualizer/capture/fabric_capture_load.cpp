@@ -72,16 +72,25 @@ LoadedCapture::LoadedCapture(CaptureRecord record, const std::filesystem::path& 
             bin_path.string(),
             blake3,
             record_.bin_blake3);
+        // Every read's bytes, its rounds' and its full read's, are inside the .bin.
+        const auto check_read_in_bin = [&](const RouterRecord& router, const ReadRecord& read) {
+            TT_FATAL(
+                !read.bin_offset.has_value() ||
+                    (*read.bin_offset <= bin_size_bytes_ && read.size_bytes <= bin_size_bytes_ - *read.bin_offset),
+                "Fabric capture: {}'s read at {:#x} runs past the end of {}",
+                router.target.router.path,
+                read.address,
+                bin_path.string());
+        };
         for (const ChipRecord& chip : record_.chips) {
             for (const RouterRecord& router : chip.routers) {
+                for (const RoundRecord& round : router.rounds) {
+                    for (const ReadRecord& read : round.reads) {
+                        check_read_in_bin(router, read);
+                    }
+                }
                 for (const ReadRecord& read : router.reads) {
-                    TT_FATAL(
-                        !read.bin_offset.has_value() || (*read.bin_offset <= bin_size_bytes_ &&
-                                                         read.size_bytes <= bin_size_bytes_ - *read.bin_offset),
-                        "Fabric capture: {}'s read at {:#x} runs past the end of {}",
-                        router.target.router.path,
-                        read.address,
-                        bin_path.string());
+                    check_read_in_bin(router, read);
                 }
             }
         }

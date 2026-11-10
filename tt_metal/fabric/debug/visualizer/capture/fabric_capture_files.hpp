@@ -9,6 +9,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_reads.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_record.hpp"
@@ -40,9 +41,9 @@ struct FinishedBin {
 };
 
 // Writes a capture's .bin one router core at a time. A core's bytes go to disk as soon as it's read, and only where
-// they went is kept, so memory holds one core's L1 at most. The bytes go to a temporary file that finish() moves to the
-// .bin's name, so a .bin under that name is always a complete one. A writer that isn't finished removes its temporary
-// file.
+// they went is kept, so memory holds one core's L1 at most, besides the rounds' few words. The bytes go to a temporary
+// file that finish() moves to the .bin's name, so a .bin under that name is always a complete one. A writer that isn't
+// finished removes its temporary file.
 class CaptureBinWriter {
 public:
     explicit CaptureBinWriter(std::filesystem::path bin_path);
@@ -50,14 +51,19 @@ public:
     CaptureBinWriter(const CaptureBinWriter&) = delete;
     CaptureBinWriter& operator=(const CaptureBinWriter&) = delete;
 
-    // Appends the bytes of each of a router core's reads that worked, in read order, and returns the router's record:
-    // its target, and each read with where its bytes start in the .bin. A read that failed has no offset.
-    RouterRecord append_core(const RouterTarget& target, const CapturedCore& core);
+    // Appends the bytes of each of a router's reads that worked, its rounds' and then its full read's, in read order,
+    // and returns the router's record: its target, and each read with where its bytes start in the .bin. A read that
+    // failed has no offset.
+    RouterRecord append_router(
+        const RouterTarget& target, const std::vector<CapturedRound>& rounds, const CapturedCore& core);
 
     // Closes the .bin and moves it to its name, failing rather than replacing a file already there.
     FinishedBin finish();
 
 private:
+    // Appends one read's bytes, when it worked, and returns its record.
+    ReadRecord append_read(const CapturedRead& read);
+
     std::filesystem::path bin_path_;
     std::filesystem::path temporary_path_;
     std::ofstream out_;

@@ -9,8 +9,8 @@ Capture reads that state and saves it, so it can be decoded and looked at after 
 [README](../manifest/README.md)). The manifest says which chips and routers the rank owned, where each router's core
 is, the L1 range to read, and the address of every register to read.
 - **What it does:** it opens the chips it can see through UMD, read only, and matches the manifest's chips and routers
-to them. It samples every router a few times to see which are still running, then reads each router core in full:
-its registers, its whole L1, and its registers again.
+to them. It reads every router's few multi-sampled regions a few rounds apart, to see which routers are still moving,
+then reads each router core in full: its core registers, its whole L1, and its stream registers.
 - **What it outputs:** two files per rank, in the run's folder:
   - a `.bin` holding the bytes it read;
   - a JSON record saying what it read and from where, where each read's bytes are in the `.bin`, and what it couldn't
@@ -32,8 +32,8 @@ build/tools/fabric_capture --capture-id <id>
 | --- | --- | --- |
 | `--manifest <file>` | This rank's manifest in the newest run (see below) | The manifest to capture |
 | `--capture-id <id>` | The UTC time now, such as `20261105T221500Z` | Names the capture's folder. Every rank captured together needs the same one |
-| `--liveness-rounds <n>` | 3 | How many times every router is sampled before any core is read |
-| `--liveness-interval-ms <ms>` | 1000 | The time between liveness rounds |
+| `--rounds <n>` | 3 | How many rounds of every router's multi-sampled regions come before any core is read in full. 0 reads each core in full only |
+| `--round-interval-ms <ms>` | 1000 | The time between rounds |
 
 Without `--manifest`, capture looks for this rank's manifest the way the run wrote it:
 
@@ -71,7 +71,7 @@ rank's chips, which the run's rank bindings give it. Several capture processes c
 ### When to run it
 
 - **After the run exits** is the main path: the run hangs or is killed, then capture runs. Routers keep running after
-the host process is gone, so liveness still shows a stuck router.
+the host process is gone, so the rounds still show a stuck router.
 - **Beside a stuck run** works too: capture opens its own UMD cluster read only, and doesn't disturb a live workload.
 - **Before any reset.** A chip reset wipes L1. On Exabox, run capture in the same job as the workload, since the next
 tt-sbatch job resets the galaxy first.
@@ -90,9 +90,9 @@ flowchart LR
     umd["UMD cluster<br/>UmdDeviceReader"]
     facts["ClusterFacts<br/>FoundChip, DiscoverySkippedCore"]
     targets["ChipTarget → RouterTarget"]
-    liveness["LivenessSample per router"]
+    rounds["CapturedRound per router"]
     core["CapturedCore<br/>CapturedRead"]
-    router_record["RouterRecord<br/>ReadRecord"]
+    router_record["RouterRecord<br/>RoundRecord, ReadRecord"]
     bin[(".bin")]
     record[("record .json<br/>CaptureRecord")]
 
@@ -101,10 +101,11 @@ flowchart LR
     umd --> facts
     plan --> targets
     facts --> targets
-    targets --> liveness
+    targets --> rounds
     targets --> core --> router_record
+    rounds -- "bytes" --> bin
     core -- "bytes" --> bin
-    liveness --> router_record --> record
+    rounds --> router_record --> record
     identity --> record
 ```
 
@@ -112,10 +113,11 @@ flowchart LR
    ([READER.md](../manifest/docs/READER.md)) and hashes the same bytes, into a `ManifestFile`, once. From it,
 
    `collect_capture_plan` takes what to read, the `CapturePlan`:
-   - the architecture, the L1 range, the heartbeat word's address, and the core registers (`CoreRegister`), which every
-   router core shares;
+   - the architecture, the L1 range, the core registers (`CoreRegister`), and the arch areas the manifest marks
+   `multi_sampled` (`MultiSampledRegion`: the heartbeat word and the telemetry area), which every router core shares;
    - the chips this rank owns (`PlannedChip`, by `asic_id`), each with its routers (`PlannedRouter`: path, Ethernet
-   channel, the core the run launched it on, and the address of every stream register its fields name).
+   channel, the core the run launched it on, the address of every stream register its fields name, and its own
+   regions the manifest marks `multi_sampled`, of which there are none yet).
 
     `collect_manifest_identity` takes which run it is from, the `ManifestIdentity`: run id, rank, world size, host, the
     run's commit, and the file's hash. Then the manifest is freed: nothing after this needs it.
@@ -129,20 +131,22 @@ flowchart LR
    `asic_id`, giving a `ChipTarget` with a `ChipLocation`, and each of its routers with the chip's core for its channel,
     giving a `RouterTarget` with a `CoreLocation`. A router whose location is `FOUND` or `CORE_MISMATCH` is read
     (`RouterTarget::is_read`), at the core the manifest names. No other router is read.
-4. **Check liveness.** `collect_liveness_rounds` samples every router that's read, a few rounds apart: its heartbeat
+4. **Take the rounds.** `collect_rounds` reads every router that's read, `--rounds` times, `--round-interval-ms`
 
-   word and its core registers, such as the wall clock (`LivenessSample`). These come before any full read, so they show
-    which routers were running when capture started.
-5. **Read each router core, one at a time.** `read_router_core` reads a core in `ReadStep` order and gives a
+   apart. Each round (`sample_router`, a `CapturedRound`) reads the core registers, such as the wall clock, then each
+    multi-sampled region: the arch areas', then the router's. The rounds come before any full read, so they show what
+    was running when capture started. A read that fails ends the round, and the router isn't read in a later round.
 
-   `CapturedCore` of `CapturedRead`s:
-   - `REGISTERS_BEFORE`: the core registers, then the router's stream registers;
-   - `L1`: the whole L1 range;
-   - `REGISTERS_AFTER`: the same registers again. A register that changed shows the router moved during the L1 read.
+   A router that moves at any point in the capture is live, and its L1 may be torn wherever its full read fell. One
+    that doesn't move is stuck, and its L1 is consistent whenever it was read. Decode tells them apart from the rounds,
+    by each region's role.
+5. **Read each router core in full, one at a time.** `read_router_core` gives a `CapturedCore` of `CapturedRead`s: the
 
-    The first read that fails is the core's last. `CaptureBinWriter::append_core` writes the core's bytes to the `.bin`
-    straight away and keeps only where they went: a `RouterRecord` of `ReadRecord`s, each with its `.bin` offset. So
-    memory holds one core's L1 at a time, never a rank's.
+   core registers, the whole L1 range, then each stream register once. The first read that fails is the core's last.
+
+   `CaptureBinWriter::append_router` writes the router's bytes to the `.bin` straight away, its rounds' and then its full
+    read's, and keeps only where they went: a `RouterRecord` with its `RoundRecord`s and `ReadRecord`s, each read with
+    its `.bin` offset. So memory holds one core's L1 at a time, and the rounds' few words, never a rank's L1.
 6. **Write the files.** `CaptureBinWriter::finish` moves the finished `.bin` into place. Then `write_capture_record`
 
    writes the `CaptureRecord`: the `ManifestIdentity`, the capture's id, commit and times, the `.bin`'s size and hash,
@@ -168,7 +172,8 @@ when it can't trust what it would write.
 | UMD puts the router's channel at another core | The manifest's core is read, since that's where the run launched the router | The router's `location` is `core_mismatch`, with both cores |
 | The chip has no core for the channel, or the manifest's core isn't an Ethernet core | Not read: a NOC read of a coordinate that isn't a core can hang the NOC | `channel_not_found` or `core_not_found` |
 | UMD's discovery skipped the core | Read as usual | `discovery_skipped` is true |
-| A read fails | Nothing more is read from that core, which bounds a remote read's timeout to one per core | The read has an `error` and no `bin_offset` |
+| A round's read fails | Nothing more is read in that round, and the router isn't read in a later round. Its full read still happens | The read has an `error` and no `bin_offset` |
+| A full read's read fails | Nothing more is read from that core, which bounds a remote read's timeout to one per core | The read has an `error` and no `bin_offset` |
 | The manifest is unreadable, or `parse_manifest_json` refuses it: another kind, version or build, or a key it doesn't read or can't find | Fails, exit 2 | No files; the message names the key's JSON pointer |
 | The manifest isn't in its run's folder | Fails: the capture's folder goes in the run's folder | No files |
 | The capture's files already exist | Fails before any chip is read | No files |
@@ -207,7 +212,7 @@ The record is JSON, with chips keyed by path and routers by key, as in the manif
                 "mpi_rank": 0, "world_size": 4, "host_name": "…", "git_sha": "…" },
   "capture": { "capture_id": "20261105T223000Z", "git_sha": "…", "cluster_id": "…",
                "started_at": "2026-11-05T22:30:00Z", "finished_at": "2026-11-05T22:30:09Z",
-               "liveness": { "num_rounds": 3, "interval_ms": 1000 } },
+               "rounds": { "num_rounds": 3, "interval_ms": 1000 } },
   "bin": { "file": "fabric_capture_rank_1_of_4.bin", "size_bytes": 201326592, "blake3": "…" },
   "discovery_skipped_cores": [],
   "chips": {
@@ -215,13 +220,19 @@ The record is JSON, with chips keyed by path and routers by key, as in the manif
       "asic_id": "0x…", "reader_chip_id": 3, "location": "found",
       "routers": {
         "E0": {
-          "eth_chan": 0, "manifest_core": [20, 25], "stream_register_addresses": [ … ],
+          "eth_chan": 0, "manifest_core": [20, 25], "stream_register_addresses": [ … ], "multi_sampled_regions": [],
           "reader_core": [20, 25], "location": "found", "discovery_skipped": false,
-          "liveness": [ { "round": 0, "t_ns": …, "heartbeat": …, "core_registers": [ … ], "error": null } ],
+          "rounds": [
+            { "round": 0, "t_ns": …, "reads": [
+                { "address": …, "size_bytes": 4, "t_ns": …, "bin_offset": 0, "error": null },
+                …,
+                { "address": …, "size_bytes": 160, "t_ns": …, "bin_offset": …, "error": null } ] },
+            …
+          ],
           "reads": [
-            { "step": "registers_before", "address": …, "size_bytes": 4, "t_ns": …, "bin_offset": 0, "error": null },
+            { "address": …, "size_bytes": 4, "t_ns": …, "bin_offset": …, "error": null },
             …,
-            { "step": "l1", "address": 0, "size_bytes": 524288, "t_ns": …, "bin_offset": …, "error": null },
+            { "address": 0, "size_bytes": 524288, "t_ns": …, "bin_offset": …, "error": null },
             …
           ]
         }
@@ -231,8 +242,11 @@ The record is JSON, with chips keyed by path and routers by key, as in the manif
 }
 ```
 
-- `liveness[].core_registers` holds the `arch.core_registers` values in the manifest's order.
-- Each read's bytes are `size_bytes` bytes at `bin_offset` in the `.bin`, as the device holds them (little endian).
+- A round's `reads` are the core registers, in the manifest's order, then each multi-sampled region (the arch areas',
+then the router's `multi_sampled_regions`). The full read's `reads` are the core registers, the whole L1, then each of
+`stream_register_addresses`. A read is only an address and a size: which pass it belongs to is where it sits, and decode
+finds what it read by its address in the manifest.
+- Each read's bytes, a round's or the full read's, are `size_bytes` bytes at `bin_offset` in the `.bin`, as the device holds them (little endian).
 A failed read has an `error` and no offset, and no bytes in the `.bin`.
 - `t_ns` is on the capture process's steady clock: only differences between them mean anything.
 - `capture.git_sha` is the commit capture was built from. The manifest's reader takes only a manifest its own build
@@ -246,7 +260,7 @@ wrote, so it's `manifest.git_sha`.
 | `fabric_capture_manifest.{hpp,cpp}` | Reading the manifest: `ManifestFile`, `CapturePlan`, `ManifestIdentity` |
 | `fabric_capture_device.hpp` | What a reader gives capture: `DeviceReader`, `ClusterFacts` |
 | `fabric_capture_targets.{hpp,cpp}` | Matching the plan to the chips: `resolve_capture_targets` |
-| `fabric_capture_reads.{hpp,cpp}` | The reads: `collect_liveness_rounds`, `read_router_core`, `CaptureClock` |
+| `fabric_capture_reads.{hpp,cpp}` | The reads: `collect_rounds`, `sample_router`, `read_router_core`, `CaptureClock` |
 | `fabric_capture_record.{hpp,cpp}` | The record and its JSON, both ways: `make_capture_record_json` and `parse_capture_record`, on the strict JSON reader |
 | `fabric_capture_files.{hpp,cpp}` | Writing the files: their paths, `CaptureBinWriter`, `write_capture_record`, `make_capture_id` |
 | `fabric_capture_load.{hpp,cpp}` | Reading a capture back: `load_capture` |
@@ -285,20 +299,25 @@ doesn't matter how the devices are numbered or which are visible. Capture fails 
 - `fabric_capture_unit_tests` (in `tests/tt_metal/tt_fabric/fabric_capture/`) are device-free and link only the
 core. They cover:
   - matching: every `ChipLocation` and `CoreLocation` case;
-  - the files: each read's offset finds its bytes, a capture never replaces another, and an unfinished `.bin` leaves
-  nothing behind;
-  - the record: one with every optional part reads back and writes again as the same JSON, and the reader fails on a
-  key it doesn't read, a key it can't find, another kind or version, and a spelling the writer wouldn't write.
+  - the files: each read's offset finds its bytes, a round's as well as the full read's, a capture never replaces
+  another, and an unfinished `.bin` leaves nothing behind;
+  - the record: one with every optional part (rounds, a failed round read, a router with no rounds) reads back and
+  writes again as the same JSON, and the reader fails on a key it doesn't read, a key it can't find, another kind or
+  version, and a spelling the writer wouldn't write.
 - **The manifest fixtures** (`Manifest*Fixture` in `fabric_unit_tests`) check capture against real manifests, on
 every mock cluster `tests/scripts/run_fabric_manifest_tests.sh` brings up:
   - `CapturePlan` reads each manifest through capture and checks the plan against the live fabric: ranks, the HAL's
-  L1 range and core registers, each router's channel, chip id and stream registers. It also matches the plan against
+  L1 range and core registers, the multi-sampled arch areas, each router's channel, chip id and stream registers. It also matches the plan against
   `collect_umd_cluster_facts` on the mock cluster's UMD driver, which must find every router.
   - `Manifest1DFixture.CaptureRank*` run `capture_rank` end to end on a T3K's manifest, with a fake reader whose bytes
-  come from each read's chip, core and address, and read the result back with `load_capture`. One checks that every
-  read's bytes come back as read; the other drops a chip and fails a core's L1 read, and checks that the capture is
-  still written and says what's missing. Both read the record they wrote back and write it again, which must give
-  the same JSON.
+  come from each read's chip, core and address, and read the result back with `load_capture`:
+    - every router's rounds read the core registers and only the multi-sampled regions, its full read reads the core
+    registers, the L1 and each stream register once, and every read's bytes come back as read;
+    - zero rounds reads each core in full only;
+    - dropping a chip and failing a core's full L1 read still writes the capture, and says what's missing;
+    - failing a round's read ends that router's rounds, and its full read still happens.
+
+  Each reads the record it wrote back and writes it again, which must give the same JSON.
 
   Mock chips don't read, so these use a fake `DeviceReader`. UMD's reads themselves need hardware, which these don't
   cover.
@@ -309,6 +328,8 @@ every mock cluster `tests/scripts/run_fabric_manifest_tests.sh` brings up:
 could be added as another way to pick manifests, without changing the library.
 - **Discovery's skipped cores are incomplete.** UMD doesn't check Blackhole's Ethernet heartbeats during discovery, so
 a Blackhole chip never reports a skipped core, and a core with a corrupt heartbeat signature is only logged.
-Liveness shows a stalled core either way.
+The rounds show a stalled core either way.
+- **One read per multi-sampled region per round.** A galaxy's rounds are a few thousand small reads each, well under a
+second. Adjacent regions could be merged into one read if rounds are ever slow.
 - **Gathering is a later stage.** Each host keeps its own captures. Bringing every host's captures to one place is
 part of joining them.

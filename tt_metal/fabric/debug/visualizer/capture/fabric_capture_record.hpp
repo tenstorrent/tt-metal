@@ -21,7 +21,6 @@ namespace tt::tt_fabric::capture {
 // One read of a router core, as the record keeps it: what was read, and where its bytes start in the .bin. The bytes
 // themselves are only in the .bin.
 struct ReadRecord {
-    ReadStep step = ReadStep::L1;
     uint64_t address = 0;
     uint32_t size_bytes = 0;
     uint64_t t_ns = 0;
@@ -32,11 +31,21 @@ struct ReadRecord {
     bool operator==(const ReadRecord&) const = default;
 };
 
-// One router in the record: where its core was found, its liveness samples, and its reads in the order they were made.
-// A router capture doesn't read has no samples and no reads.
+// One round of a router, as the record keeps it: when it started, and its reads (the core registers, then each
+// multi-sampled region), in order.
+struct RoundRecord {
+    uint32_t round = 0;
+    uint64_t t_ns = 0;
+    std::vector<ReadRecord> reads;
+
+    bool operator==(const RoundRecord&) const = default;
+};
+
+// One router in the record: where its core was found, its rounds, and its full read (the core registers, the whole L1,
+// then each stream register), each in the order made.
 struct RouterRecord {
     RouterTarget target;
-    std::vector<LivenessSample> liveness;
+    std::vector<RoundRecord> rounds;
     std::vector<ReadRecord> reads;
 
     bool operator==(const RouterRecord&) const = default;
@@ -72,7 +81,7 @@ struct CaptureRecord {
     // When the capture started and finished, in UTC, as ISO 8601.
     std::string started_at;
     std::string finished_at;
-    LivenessOptions liveness_options;
+    RoundOptions round_options;
     // The .bin beside the record: its file name, size and hash.
     std::string bin_file;
     uint64_t bin_size_bytes = 0;

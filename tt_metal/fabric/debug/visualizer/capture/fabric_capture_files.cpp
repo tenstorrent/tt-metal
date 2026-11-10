@@ -83,26 +83,38 @@ CaptureBinWriter::~CaptureBinWriter() {
     std::filesystem::remove(temporary_path_, error);
 }
 
-RouterRecord CaptureBinWriter::append_core(const RouterTarget& target, const CapturedCore& core) {
+ReadRecord CaptureBinWriter::append_read(const CapturedRead& read) {
+    ReadRecord record{
+        .address = read.address,
+        .size_bytes = read.size_bytes,
+        .t_ns = read.t_ns,
+        .error = read.error,
+    };
+    if (!read.error.has_value()) {
+        record.bin_offset = size_bytes_;
+        out_.write(reinterpret_cast<const char*>(read.bytes.data()), static_cast<std::streamsize>(read.bytes.size()));
+        hasher_.update(read.bytes);
+        size_bytes_ += read.bytes.size();
+    }
+    return record;
+}
+
+RouterRecord CaptureBinWriter::append_router(
+    const RouterTarget& target, const std::vector<CapturedRound>& rounds, const CapturedCore& core) {
     TT_FATAL(!finished_, "Fabric capture: {} is already finished", bin_path_.string());
     RouterRecord record{.target = target};
+    record.rounds.reserve(rounds.size());
+    for (const CapturedRound& round : rounds) {
+        RoundRecord round_record{.round = round.round, .t_ns = round.t_ns};
+        round_record.reads.reserve(round.reads.size());
+        for (const CapturedRead& read : round.reads) {
+            round_record.reads.push_back(append_read(read));
+        }
+        record.rounds.push_back(std::move(round_record));
+    }
     record.reads.reserve(core.reads.size());
     for (const CapturedRead& read : core.reads) {
-        ReadRecord read_record{
-            .step = read.step,
-            .address = read.address,
-            .size_bytes = read.size_bytes,
-            .t_ns = read.t_ns,
-            .error = read.error,
-        };
-        if (!read.error.has_value()) {
-            read_record.bin_offset = size_bytes_;
-            out_.write(
-                reinterpret_cast<const char*>(read.bytes.data()), static_cast<std::streamsize>(read.bytes.size()));
-            hasher_.update(read.bytes);
-            size_bytes_ += read.bytes.size();
-        }
-        record.reads.push_back(std::move(read_record));
+        record.reads.push_back(append_read(read));
     }
     return record;
 }

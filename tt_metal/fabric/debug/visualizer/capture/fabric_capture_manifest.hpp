@@ -55,6 +55,24 @@ struct CoreRegister {
     bool operator==(const CoreRegister&) const = default;
 };
 
+// Where a region's bytes are, which says how capture reads them.
+enum class RegionKind : uint8_t {
+    // In the core's L1, read with DeviceReader::read_l1.
+    L1,
+    // A 32-bit register, read with DeviceReader::read_register.
+    REGISTER,
+};
+
+// A region the manifest marks multi_sampled, which capture reads in every round as well as in its full read:
+// size_bytes bytes at address. An L1 region's size is its num_elements * element_size; a register is one word.
+struct MultiSampledRegion {
+    RegionKind kind = RegionKind::L1;
+    uint64_t address = 0;
+    uint32_t size_bytes = 0;
+
+    bool operator==(const MultiSampledRegion&) const = default;
+};
+
 // PlannedChip and PlannedRouter are the chips and routers that we get from the manifest. They are "planned" because we
 // need to validate that they exist in the physical cluster we are on, which we do by checking against ClusterFacts.
 
@@ -66,6 +84,8 @@ struct PlannedRouter {
     CoreXY virtual_core;
     // Every stream register the manifest names for the router, by address: ascending, each once.
     std::vector<uint64_t> stream_register_addresses;
+    // The router's own regions the manifest marks multi_sampled, by address: ascending, each once.
+    std::vector<MultiSampledRegion> multi_sampled_regions;
 
     bool operator==(const PlannedRouter&) const = default;
 };
@@ -87,7 +107,8 @@ struct CapturePlan {
     // The L1 of the Ethernet core a router runs on: l1_size_bytes bytes from l1_address.
     uint64_t l1_address = 0;
     uint32_t l1_size_bytes = 0;
-    uint64_t heartbeat_address = 0;
+    // The arch areas the manifest marks multi_sampled, the same on every router core, in the manifest's order.
+    std::vector<MultiSampledRegion> multi_sampled_arch_areas;
     // In the order they're read (manifest::k_core_registers): the low wall clock word latches the high one.
     std::vector<CoreRegister> core_registers;
     // The chips this rank owns, in the manifest's order. Other ranks' chips are left out.

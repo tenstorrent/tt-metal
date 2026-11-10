@@ -21,14 +21,14 @@ struct CaptureRequest {
     std::filesystem::path manifest_path;
     // Every rank captured together has the same one.
     std::string capture_id;
-    LivenessOptions liveness_options;
+    RoundOptions round_options;
     // The commit capture was built from, which the record keeps beside the manifest's.
     std::string capture_git_sha;
 };
 
 // How a capture that wrote its files went: whether everything the manifest names on this rank was read.
 enum class CaptureOutcome {
-    // Every chip was found, and every router's core read in full, with every liveness sample read.
+    // Every chip was found, and every router's core read in full, with every round read.
     COMPLETE,
     // The files were written, and the record says what's missing.
     PROBLEMS_RECORDED,

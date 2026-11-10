@@ -24,9 +24,9 @@ namespace {
 
 using json = nlohmann::ordered_json;
 
-// A record with every optional part both set and null, and every location and read step:
-//   - M0/C1, found, with a router read in full, one at another core than the manifest's, and one with no core for its
-//     channel;
+// A record with every optional part both set and null, and every location:
+//   - M0/C1, found, with a router read in full after two rounds (the second failed), one at another core than the
+//     manifest's with no rounds, and one with no core for its channel;
 //   - M0/C2, which the reader didn't find;
 //   - M0/C3, found as another architecture.
 CaptureRecord make_record_with_every_part() {
@@ -36,24 +36,33 @@ CaptureRecord make_record_with_every_part() {
                  {.path = "M0/C1/E0",
                   .eth_chan = 0,
                   .virtual_core = {20, 25},
-                  .stream_register_addresses = {0x1000, 0x1040}},
+                  .stream_register_addresses = {0x1000, 0x1040},
+                  .multi_sampled_regions =
+                      {{.kind = RegionKind::L1, .address = 0x40, .size_bytes = 160},
+                       {.kind = RegionKind::REGISTER, .address = 0x1040, .size_bytes = 4}}},
              .reader_core = CoreXY{20, 25},
              .location = CoreLocation::FOUND,
              .discovery_skipped = true},
-        .liveness =
-            {{.round = 0, .t_ns = 100, .heartbeat = 0xabcd0001, .core_registers = {1, 2, 3}},
-             {.round = 1, .t_ns = 200, .core_registers = {4}, .error = "read timed out"}},
+        .rounds =
+            {{.round = 0,
+              .t_ns = 100,
+              .reads =
+                  {{.address = 0xffb12000, .size_bytes = 4, .t_ns = 100, .bin_offset = 0},
+                   {.address = 0x40, .size_bytes = 160, .t_ns = 110, .bin_offset = 4}}},
+             {.round = 1,
+              .t_ns = 200,
+              .reads = {{.address = 0xffb12000, .size_bytes = 4, .t_ns = 200, .error = "read timed out"}}}},
         .reads =
-            {{.step = ReadStep::REGISTERS_BEFORE, .address = 0x1000, .size_bytes = 4, .t_ns = 300, .bin_offset = 0},
-             {.step = ReadStep::L1, .address = 0, .size_bytes = 262144, .t_ns = 400, .bin_offset = 4},
-             {.step = ReadStep::REGISTERS_AFTER, .address = 0x1000, .size_bytes = 4, .t_ns = 500, .error = "failed"}},
+            {{.address = 0xffb12000, .size_bytes = 4, .t_ns = 300, .bin_offset = 164},
+             {.address = 0, .size_bytes = 262144, .t_ns = 400, .bin_offset = 168},
+             {.address = 0x1000, .size_bytes = 4, .t_ns = 500, .error = "failed"}},
     };
     const RouterRecord moved_router{
         .target =
             {.router = {.path = "M0/C1/W0", .eth_chan = 1, .virtual_core = {21, 25}},
              .reader_core = CoreXY{22, 25},
              .location = CoreLocation::CORE_MISMATCH},
-        .reads = {{.step = ReadStep::L1, .address = 0, .size_bytes = 262144, .t_ns = 600, .error = "failed"}},
+        .reads = {{.address = 0, .size_bytes = 262144, .t_ns = 600, .error = "failed"}},
     };
     const RouterRecord unread_router{
         .target =
@@ -77,9 +86,9 @@ CaptureRecord make_record_with_every_part() {
         .cluster_id = "bh-glx-120-c02u14",
         .started_at = "2026-11-05T22:30:00Z",
         .finished_at = "2026-11-05T22:30:09Z",
-        .liveness_options = {.num_rounds = 2, .interval = std::chrono::milliseconds(500)},
+        .round_options = {.num_rounds = 2, .interval = std::chrono::milliseconds(500)},
         .bin_file = "fabric_capture_rank_1_of_2.bin",
-        .bin_size_bytes = 262152,
+        .bin_size_bytes = 262312,
         .bin_blake3 = std::string(64, 'b'),
         .discovery_skipped_cores = {{.asic_id = 0xa, .core = {20, 25}, .reason = "heartbeat stalled"}},
         .chips =
@@ -154,10 +163,24 @@ TEST(CaptureRecord, FailsOnAnotherFileKindOrVersion) {
 }
 
 // Enums and ASIC ids are spelled as the manifest spells them, and nothing else reads as one.
+// A round's reads are read as strictly as the full read's.
+TEST(CaptureRecord, FailsOnARoundReadItCannotRead) {
+    json record_json = make_capture_record_json(make_record_with_every_part());
+    record_json["chips"]["M0/C1"]["routers"]["E0"]["rounds"][0]["reads"][0].erase("t_ns");
+    expect_parse_fails_with(
+        record_json, "Fabric capture record: /chips/M0~1C1/routers/E0/rounds/0/reads/0/t_ns is missing");
+}
+
 TEST(CaptureRecord, FailsOnASpellingTheWriterWouldNotWrite) {
     json record_json = make_capture_record_json(make_record_with_every_part());
     record_json["chips"]["M0/C1"]["location"] = "lost";
     expect_parse_fails_with(record_json, "/chips/M0~1C1/location is \"lost\", which names no value this reader knows");
+
+    record_json = make_capture_record_json(make_record_with_every_part());
+    record_json["chips"]["M0/C1"]["routers"]["E0"]["multi_sampled_regions"][0]["kind"] = "dram";
+    expect_parse_fails_with(
+        record_json,
+        "/chips/M0~1C1/routers/E0/multi_sampled_regions/0/kind is \"dram\", which names no value this reader knows");
 
     record_json = make_capture_record_json(make_record_with_every_part());
     record_json["chips"]["M0/C1"]["asic_id"] = "0xa";

@@ -87,10 +87,10 @@ int run_capture(const cxxopts::ParseResult& options) {
         .manifest_path = manifest_path,
         .capture_id =
             options.contains("capture-id") ? options["capture-id"].as<std::string>() : capture::make_capture_id(),
-        .liveness_options =
+        .round_options =
             {
-                .num_rounds = options["liveness-rounds"].as<uint32_t>(),
-                .interval = std::chrono::milliseconds(options["liveness-interval-ms"].as<uint32_t>()),
+                .num_rounds = options["rounds"].as<uint32_t>(),
+                .interval = std::chrono::milliseconds(options["round-interval-ms"].as<uint32_t>()),
             },
         .capture_git_sha = std::string(visualizer::get_build_identity().git_sha),
     };
@@ -123,10 +123,11 @@ int main(int argc, char** argv) {
         "The capture's id, which names its folder in the run's folder. Give every rank captured together the same one. "
         "Defaults to the UTC time now",
         cxxopts::value<std::string>())(
-        "liveness-rounds",
-        "How many times to sample every router before reading any core",
+        "rounds",
+        "How many times to read every router's multi-sampled regions before reading any core in full. 0 reads each "
+        "core in full only",
         cxxopts::value<uint32_t>()->default_value("3"))(
-        "liveness-interval-ms", "The time between liveness rounds", cxxopts::value<uint32_t>()->default_value("1000"))(
+        "round-interval-ms", "The time between rounds", cxxopts::value<uint32_t>()->default_value("1000"))(
         "h,help", "Print this help");
 
     try {

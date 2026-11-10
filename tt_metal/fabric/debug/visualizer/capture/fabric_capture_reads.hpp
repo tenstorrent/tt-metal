@@ -17,7 +17,7 @@
 
 namespace tt::tt_fabric::capture {
 
-// Where capture's time comes from: when each read starts, and the wait between liveness rounds.
+// Where capture's time comes from: when each read starts, and the wait between rounds.
 class CaptureClock {
 public:
     virtual ~CaptureClock() = default;
@@ -34,71 +34,74 @@ public:
     void sleep_for(std::chrono::milliseconds duration) override;
 };
 
-// The steps of reading one router core, in order. The registers are read on both sides of the L1 read, so a register
-// that differs shows the router moved while its L1 was being read.
-enum class ReadStep {
-    REGISTERS_BEFORE,
-    L1,
-    REGISTERS_AFTER,
-};
-
-// One read of a router core.
+// One read of a router core: size_bytes bytes at address, in L1 or a register. Which pass it belongs to is where it
+// sits: in a round, or in the core's full read.
 struct CapturedRead {
-    ReadStep step = ReadStep::L1;
     uint64_t address = 0;
     uint32_t size_bytes = 0;
     // When the read started, on the capture's clock.
     uint64_t t_ns = 0;
     // The bytes read, little endian, as the device holds them. Empty when the read failed.
     std::vector<std::byte> bytes;
-    // Why the read failed. A failed read is the core's last: nothing after it is read.
+    // Why the read failed. A failed read is the last of its round, or of its core's full read.
     std::optional<std::string> error;
 
     bool operator==(const CapturedRead&) const = default;
 };
 
-// One router core's reads, in the order they were made.
+// One round of a router core: the core registers, then each multi-sampled region, the arch areas' and then the
+// router's.
+struct CapturedRound {
+    uint32_t round = 0;
+    // When the round started, on the capture's clock.
+    uint64_t t_ns = 0;
+    std::vector<CapturedRead> reads;
+
+    // Whether a read failed, which ends the round and the router's rounds.
+    bool has_failed_read() const;
+
+    bool operator==(const CapturedRound&) const = default;
+};
+
+// A router core's full read: the core registers, the whole L1, then each stream register once.
 struct CapturedCore {
     std::vector<CapturedRead> reads;
 
     bool operator==(const CapturedCore&) const = default;
 };
 
-// Reads one router core, going through all steps in ReadStep order. Stops at the first read that fails. The router
-// must be one capture reads, and `chip` the reader's id for its chip.
+// Reads one round of a router core. Stops at the first read that fails. The router must be one capture reads, and
+// `chip` the reader's id for its chip.
+CapturedRound sample_router(
+    const CapturePlan& plan,
+    int32_t chip,
+    const RouterTarget& target,
+    DeviceReader& reader,
+    CaptureClock& clock,
+    uint32_t round);
+
+// Reads a router core in full. Stops at the first read that fails. The router must be one capture reads, and `chip`
+// the reader's id for its chip.
 CapturedCore read_router_core(
     const CapturePlan& plan, int32_t chip, const RouterTarget& target, DeviceReader& reader, CaptureClock& clock);
 
-// How many liveness rounds to take, and how far apart.
-struct LivenessOptions {
+// How many rounds to take, and how far apart. Zero rounds is the full read alone.
+struct RoundOptions {
     uint32_t num_rounds = 3;
     std::chrono::milliseconds interval{1000};
 
-    bool operator==(const LivenessOptions&) const = default;
+    bool operator==(const RoundOptions&) const = default;
 };
 
-// One liveness sample of a router core: its heartbeat word, and its core registers.
-struct LivenessSample {
-    uint32_t round = 0;
-    uint64_t t_ns = 0;
-    std::optional<uint32_t> heartbeat;
-    // The core registers read before any failure, in the plan's order.
-    std::vector<uint32_t> core_registers;
-    // Why a read failed. The core isn't sampled again.
-    std::optional<std::string> error;
-
-    bool operator==(const LivenessSample&) const = default;
-};
-
-// Takes the liveness rounds: each round samples every core capture reads, a few words each, and the rounds are
-// options.interval apart. These come before any core's full read, so they show which routers are still running.
-// Returns each router's samples, indexed by chip and then router, as the targets are. A router capture doesn't read has
-// none.
-std::vector<std::vector<std::vector<LivenessSample>>> collect_liveness_rounds(
+// Takes the rounds: each round samples every router core capture reads (sample_router), and the rounds are
+// options.interval apart. They come before any core's full read, so they show what was running when capture started. A
+// router whose round failed isn't sampled again. Returns each router's rounds, indexed by chip and then router, as the
+// targets are. A router capture doesn't read has none.
+std::vector<std::vector<std::vector<CapturedRound>>> collect_rounds(
     const CapturePlan& plan,
     const std::vector<ChipTarget>& targets,
     DeviceReader& reader,
     CaptureClock& clock,
-    const LivenessOptions& options);
+    const RoundOptions& options);
 
 }  // namespace tt::tt_fabric::capture
