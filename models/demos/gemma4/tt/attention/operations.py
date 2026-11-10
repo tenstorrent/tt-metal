@@ -344,14 +344,26 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
         os.environ.get(k)
         for k in ("GEMMA4_PREFILL_SDPA_QCHUNK", "GEMMA4_PREFILL_SDPA_KCHUNK", "GEMMA4_PREFILL_SDPA_GRID")
     )
-    if (
+    narrow = (
         progcfg != "1"
         and not explicit
         and head_dim <= 256
         and num_heads
         and int(num_heads) < PREFILL_SDPA_WIDE_MIN_HEADS
         and is_blackhole()
-    ):
+    )
+    if narrow and device_grid is not None and os.environ.get("GEMMA4_PREFILL_SDPA_NARROW", "") == "wide":
+        # opt-in A/B: the whole grid at q = k = 128 (window-capped) for the narrow chips (sliding square 4.32 -> 1.52 ms
+        # on a Galaxy chip, 31B TP8 shape); accuracy-gated before any default
+        k_cap = 128 if sliding_window is None else min(128, max(32, int(sliding_window) // 2))
+        q_n, k_n = (max(32, min(c, seq_len)) // 32 * 32 for c in (128, k_cap))
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*_fit(device_grid, device_grid)),
+            q_chunk_size=q_n,
+            k_chunk_size=k_n,
+            exp_approx_mode=False,
+        )
+    if narrow:
         return None  # narrow chips (the 12B): the op defaults
     if head_dim >= 512:
         # The SDPA parallelises over (head, q-chunk) units and each unit walks the whole K on one core, so the grid
@@ -480,11 +492,11 @@ def chunked_prefill_sdpa(
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
     # Matches the non-chunked prefill SDPA so long-context (>32768) prefill keeps
     # the same accumulation precision as the short-seq path.
-    from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+    from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity, sdpa_fp32_dest_acc_en
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tt_q.device().arch(),
-        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
+        math_fidelity=global_prefill_sdpa_fidelity(),  # full-attention layers only (see the docstring)
         math_approx_mode=False,
         fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
         packer_l1_acc=False,

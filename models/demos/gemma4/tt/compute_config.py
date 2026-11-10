@@ -14,6 +14,8 @@ unicode garbage on LB 12B decode.
 
 from __future__ import annotations
 
+import os
+
 from loguru import logger
 
 import ttnn
@@ -48,6 +50,21 @@ def prefill_linear_compute_kernel_config(device):
 def sdpa_math_fidelity(default=ttnn.MathFidelity.HiFi4):
     """SDPA math fidelity (production: HiFi4; ``default`` kept for call-site clarity)."""
     return default
+
+
+GLOBAL_PREFILL_SDPA_FIDELITY_ENV = "GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY"
+_SDPA_FIDELITIES = {"hifi4": ttnn.MathFidelity.HiFi4, "hifi2": ttnn.MathFidelity.HiFi2}
+
+
+def global_prefill_sdpa_fidelity():
+    """Math fidelity of the global-layer (head_dim 512) prefill SDPA: ``GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY`` =
+    ``hifi4`` (default) or ``hifi2``. One Galaxy chip, 4 Q / 1 KV heads, bfp8 paged K/V, a 4096-token chunk on the
+    whole grid (2026-11-10): 51 -> 36 ms after a 64K cached prefix, 101 -> 71 ms after 128K, PCC against torch
+    0.99964 -> 0.99958 and 0.99928 -> 0.99923. Read at call time."""
+    name = os.environ.get(GLOBAL_PREFILL_SDPA_FIDELITY_ENV, "hifi4").strip().lower()
+    if name not in _SDPA_FIDELITIES:
+        raise ValueError(f"{GLOBAL_PREFILL_SDPA_FIDELITY_ENV}={name!r}: expected one of {sorted(_SDPA_FIDELITIES)}")
+    return _SDPA_FIDELITIES[name]
 
 
 def sdpa_fp32_dest_acc_en(default: bool = True) -> bool:

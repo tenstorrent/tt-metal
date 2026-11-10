@@ -14,7 +14,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma4.custom_ops.qkv_norm_rope_prefill import QkvNormRopePrefill
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.compute_config import (
+    global_prefill_sdpa_fidelity,
+    sdpa_fp32_dest_acc_en,
+    sdpa_math_fidelity,
+)
 
 from .continuation import (
     align_sdpa_chunks,
@@ -1817,7 +1821,9 @@ def _prefill_forward_single(
         # prefill SDPA op (unlike the decode op, where it halves dest for head_dim=512).
         sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
+            math_fidelity=(
+                global_prefill_sdpa_fidelity() if not config.is_sliding else sdpa_math_fidelity(ttnn.MathFidelity.HiFi4)
+            ),
             math_approx_mode=False,
             fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
