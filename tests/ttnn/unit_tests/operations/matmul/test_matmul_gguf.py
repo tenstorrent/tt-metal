@@ -221,6 +221,66 @@ def test_prefill_k_split_odd_units(device, dtype, m, k, n):
     _check_tiles(ttnn.to_torch(ttnn.matmul(x_tt, w)), x, blocks, dtype, k, n)
 
 
+def _l1_small_canary(device, tiles):
+    """A tensor of ones in L1_SMALL on every core of the grid, `tiles` tiles each, and its contents."""
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    spec = ttnn.ShardSpec(cores, [32, 32 * tiles], ttnn.ShardOrientation.ROW_MAJOR)
+    config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1_SMALL, spec)
+    ones = torch.ones(1, 1, 32, 32 * tiles * grid.x * grid.y).bfloat16()
+    return (
+        ttnn.from_torch(ones, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=config),
+        ones,
+    )
+
+
+# The circular buffers must stay below L1_SMALL: a tensor there keeps its contents. Decode with K just below a step in
+# the number of K bands (64 KiB of L1_SMALL), prefill with 256 KiB.
+@pytest.mark.parametrize(
+    "device_params, m, k, n",
+    [
+        ({"l1_small_size": 65536}, 1, 22304, 3520),
+        ({"l1_small_size": 262144}, 512, 2048, 11008),
+        pytest.param({"l1_small_size": 262144}, 2048, 4096, 11008, marks=pytest.mark.slow),
+    ],
+    indirect=["device_params"],
+)
+def test_l1_small_kept(device, device_params, m, k, n):
+    dtype = ttnn.gguf_q4_0
+    canary, ones = _l1_small_canary(device, (device_params["l1_small_size"] - 4096) // 2048)
+    blocks = _blocks(dtype, k, n)
+    torch.manual_seed(0)
+    x = torch.randn(1, m, k).bfloat16()
+    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.matmul(x_tt, w))
+    changed = int((ttnn.to_torch(canary) != ones).sum())
+    assert changed == 0, f"{changed} of {ones.numel()} L1_SMALL elements overwritten"
+    _check(out, x, blocks, dtype, k, n)
+
+
+# A live L1 buffer lowers the L1 left to programs: the op plans again (a new program) instead of reusing a plan whose
+# circular buffers would reach the buffer.
+def test_l1_buffer_replans(device):
+    dtype, k, n = ttnn.gguf_q4_0, 22304, 3520
+    blocks = _blocks(dtype, k, n)
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, k).bfloat16()
+    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _check(ttnn.to_torch(ttnn.matmul(x_tt, w)), x, blocks, dtype, k, n)
+    entries = device.num_program_cache_entries()
+    grid = device.compute_with_storage_grid_size()
+    zeros = torch.zeros(1, 1, 32, 32 * 64 * grid.x * grid.y).bfloat16()
+    held = ttnn.from_torch(
+        zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    _check(ttnn.to_torch(ttnn.matmul(x_tt, w)), x, blocks, dtype, k, n)
+    assert device.num_program_cache_entries() == entries + 1
+    assert torch.equal(ttnn.to_torch(held), zeros), "the L1 buffer was overwritten"
+    ttnn.deallocate(held)
+
+
 def test_leading_dims_and_bias(device):
     dtype, k, n = ttnn.gguf_q4_k, 512, 128
     blocks = _blocks(dtype, k, n)
