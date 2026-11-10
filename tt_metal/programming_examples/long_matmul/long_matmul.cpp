@@ -473,7 +473,7 @@ int main(int argc, char* argv[]) {
                 work_per_core1 = wpc1; work_per_core2 = wpc2;
             }
 
-            Program program{};
+            Program program = CreateProgram(*mesh_device);
             constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
             distributed::DeviceLocalBufferConfig dram_config{

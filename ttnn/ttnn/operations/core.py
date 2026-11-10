@@ -975,14 +975,24 @@ def as_tensor(
     if not cache_path.exists() or not cache_path.is_file():
         return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
 
+    loaded_from_cache = False
     try:
         tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
+        loaded_from_cache = True
         logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
     except RuntimeError as e:
         if not _as_tensor_cache_repair:
             raise RuntimeError(f"Failed to load cache file {cache_file_name}: {e}. Delete it to regenerate.") from e
         logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
         tensor = from_torch_and_dump(torch_tensor, dtype, layout, cache_file_name, mesh_mapper)
+
+    if loaded_from_cache and device is not None and memory_config is not None:
+        # The cache file name does not encode memory_config, so a hit is placed with the memory config the first
+        # call stored. Move it to the one this call asked for.
+        loaded_memory_config = tensor.memory_config()
+        if loaded_memory_config != memory_config:
+            logger.debug(f"Moving cache for {cache_file_name} from {loaded_memory_config} to {memory_config}")
+            tensor = ttnn.to_memory_config(tensor, memory_config)
 
     return tensor
 

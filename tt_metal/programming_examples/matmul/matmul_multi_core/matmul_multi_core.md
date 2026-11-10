@@ -27,7 +27,7 @@ auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program = CreateProgram();
+Program program = CreateProgram(*mesh_device);
 
 auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
 uint32_t num_cores_x = compute_with_storage_grid_size.x;

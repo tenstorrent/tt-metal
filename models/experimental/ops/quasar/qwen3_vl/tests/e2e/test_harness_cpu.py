@@ -711,6 +711,82 @@ def test_unshard_linear_workaround_predicate():
     assert not wa.applies((_FakeShardTensor(2, 1, True), w), {"program_config": object()})  # explicit config wins
 
 
+class _FakeArchShardTensor(_FakeShardTensor):
+    def __init__(self, sharded, quasar):
+        import ttnn
+
+        super().__init__(8, 12, sharded)
+        arch = ttnn.device.Arch.QUASAR if quasar else ttnn.device.Arch.WORMHOLE_B0
+        self._d.arch = lambda: arch
+
+
+@pytest.mark.parametrize("op", ["linear", "matmul"])
+def test_unshard_matmul_in0_workaround_predicate(op):
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == f"quasar_unshard_{op}_in0")
+    assert wa.target == f"ttnn.{op}"
+    w = object()
+    assert wa.applies((_FakeArchShardTensor(True, True), w), {})
+    assert wa.applies((_FakeArchShardTensor(True, True), w), {"program_config": object()})  # any config, any grid
+    assert not wa.applies((_FakeArchShardTensor(False, True), w), {})  # interleaved input: nothing to do
+    assert not wa.applies((_FakeArchShardTensor(True, False), w), {})  # WH/BH: stock behaviour
+
+
+def test_quasar_unshard_runs_after_small_grid_unshard():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    names = [w.name for w in O.WORKAROUNDS]
+    # Installed later = wraps outermost = sees the call first, so on Quasar the all-grid workaround wins.
+    assert names.index("small_grid_unshard_linear") < names.index("quasar_unshard_linear_in0")
+
+
+def test_quasar_unshard_refuses_to_drop_a_fused_activation(expect_error):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "quasar_unshard_linear_in0")
+    cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=ttnn.UnaryOpType.SILU,
+    )
+    original = lambda *a, **k: pytest.fail("must not run the matmul without its activation")
+    with expect_error(NotImplementedError, "fused_activation"):
+        wa.rewrite(original, (object(), object()), {"program_config": cfg})
+
+
+@pytest.mark.parametrize(
+    "grid, quasar, expect_dram",
+    [((2, 1), False, True), ((8, 12), True, True), ((8, 8), False, False)],
+)
+def test_lm_head_prefill_input_in_dram_on_quasar_or_small_grids(monkeypatch, grid, quasar, expect_dram):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt import quasar_config as Q
+    from models.tt_transformers.tt.common import Mode
+
+    class _Base:
+        def get_lm_head_input_mem_config(self, mode, prefetcher=None):
+            return "inherited"
+
+    class _Args(Q._QuasarArgsMixin, _Base):
+        pass
+
+    monkeypatch.setattr(Q, "is_quasar", lambda: quasar)
+    a = _Args.__new__(_Args)
+    a.max_grid_size = ttnn.CoreGrid(x=grid[0], y=grid[1])
+    got = a.get_lm_head_input_mem_config(Mode.PREFILL)
+    assert (got == ttnn.DRAM_MEMORY_CONFIG) if expect_dram else (got == "inherited")
+    assert a.get_lm_head_input_mem_config(Mode.DECODE) == "inherited"
+
+
 def test_uncertified_fallback_refused(monkeypatch, expect_error):
     from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
 

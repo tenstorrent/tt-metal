@@ -112,10 +112,7 @@ struct PlanInputs {
     uint32_t tA = 0;  // A / W buffer aligned page sizes
     uint32_t tW = 0;
     int32_t scatter_dim = -2;  // canonical: -1 or -2
-    uint64_t budget = 0;       // L1 bank size - the call's l1_headroom
-    // bytes per core of a caller-held staging larger than the plan without it needs (0: the op allocates the staging
-    // exactly): the footprint counts the staging at this size, and only plans whose staging fits in it qualify
-    uint64_t staging_floor = 0;
+    uint64_t budget = 0;       // free L1 below the live tensors, at most the bank - l1_headroom
 };
 
 // Planner constants the factory needs too.
@@ -125,10 +122,10 @@ constexpr uint32_t kPortGroup = 4;           // chunks per port batch (cb::PORT_
 constexpr uint32_t kPrefetchSteps = 1;       // K-block windows a sender reads ahead
 constexpr uint32_t kL1Headroom = 64 * 1024;  // default l1_headroom: bytes kept free per core beyond the footprint
 
-// The entry's plan: 1x1, else the auto (model) search over chunk_candidates. TT_THROWs when no plan fits L1 or the
-// geometry cannot be laid out. A solved plan is remembered per input, so a repeated call looks it up instead of
-// re-planning. The memo is never erased, so the reference stays valid for the process: callers keep the inputs and
-// look the plan up, never copy it.
+// The entry's plan: the cheapest (chunk_cost_us) of the unchunked plan and the chunk_candidates that fit L1; scatter on
+// M takes the unchunked plan whenever it fits. TT_THROWs when no plan fits L1 or the geometry cannot be laid out. A
+// solved plan is remembered per input, so a repeated call looks it up instead of re-planning. The memo is never erased,
+// so the reference stays valid for the process: callers keep the inputs and look the plan up, never copy it.
 const Plan& solve_plan(const PlanInputs& in);
 
 // The schedule pieces the factory walks.
