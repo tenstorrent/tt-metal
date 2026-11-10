@@ -1250,7 +1250,7 @@ ENGINE_ENV = dict(
     MK_SGDN_US="64", MK_SAR_US="18", MKA_SWO_US="10", MKA_CTX="32768", MKA_KVDT="bfp8", MKA_NBB="1",
     MKA_BUDGET="16384", MKA_EXT="1", MK_MIXN="1",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
-               "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1",
+               "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,MK_V12_CB=1",  # V12_CB: v12 landing buffers as CBs (spec §20)
     MK_EXT_DM_OS="1",  # batch 3b: needed to fit the EXT text with MK_REAL_AAR (without AAR the attention out is never reduced)
 )
 # the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
