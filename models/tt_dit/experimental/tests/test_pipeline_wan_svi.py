@@ -185,7 +185,7 @@ def _touch(path) -> str:
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, num_links, offload_weights, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 2, True, line_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
@@ -208,7 +208,7 @@ def test_long_video(
     mesh_device,
     mesh_shape,
     num_links,
-    dynamic_load,
+    offload_weights,
     topology,
     width,
     height,
@@ -226,7 +226,8 @@ def test_long_video(
             num_frames=config.num_frames,
             config_overrides={
                 "num_links": num_links,
-                "dynamic_load": dynamic_load,
+                "offload_weights": offload_weights,
+                "trace": False,
                 "topology": topology,
                 "is_fsdp": is_fsdp,
             },

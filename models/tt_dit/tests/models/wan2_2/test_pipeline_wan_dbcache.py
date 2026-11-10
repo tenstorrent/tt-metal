@@ -145,7 +145,7 @@ _TRACE_REGION_SIZE = 256 * 1024 * 1024
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, traced",
+    "mesh_device, sp_axis, tp_axis, num_links, offload_weights, device_params, topology, is_fsdp, traced",
     [
         [(4, 8), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, False],
         [
@@ -173,7 +173,7 @@ def test_wan_dbcache_ab(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: bool,
+    offload_weights: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
     traced: bool,
@@ -204,7 +204,8 @@ def test_wan_dbcache_ab(
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links,
-            dynamic_load=dynamic_load,
+            offload_weights=offload_weights,
+            trace=traced,
             topology=topology,
             is_fsdp=is_fsdp,
             checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
@@ -255,7 +256,6 @@ def test_wan_dbcache_ab(
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
                 output_type="uint8",
-                traced=traced,
                 on_event=timer,
                 cache_config=cache_config,
             )

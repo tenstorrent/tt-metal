@@ -22,7 +22,7 @@ from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.pipeline_api import Pipeline
 from models.tt_dit.pipelines.wan.dbcache import ExpertCacheRunner, WanDBCacheConfig
 from models.tt_dit.pipelines.wan.policy import served_resolutions
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
@@ -54,7 +54,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "num_links": 1,
-        "dynamic_load": True,
+        "offload_weights": True,
         "topology": ttnn.Topology.Linear,
         "is_fsdp": True,
     },
@@ -62,7 +62,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "sp_axis": 1,
         "tp_axis": 0,
         "num_links": 4,
-        "dynamic_load": False,
+        "offload_weights": False,
         "topology": ttnn.Topology.Ring,
         "is_fsdp": True,
     },
@@ -73,7 +73,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "num_links": 2,
-        "dynamic_load": False,
+        "offload_weights": False,
         "topology": ttnn.Topology.Linear,
         "is_fsdp": True,
     },
@@ -81,7 +81,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "num_links": 2,
-        "dynamic_load": False,
+        "offload_weights": False,
         "topology": ttnn.Topology.Linear,
         "is_fsdp": True,
         "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
@@ -90,7 +90,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 1,
         "tp_axis": 0,
         "num_links": 2,
-        "dynamic_load": True,
+        "offload_weights": True,
         "topology": ttnn.Topology.Linear,
         "is_fsdp": False,
         "vae_t_chunk_size": 7,
@@ -99,7 +99,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 1,
         "tp_axis": 0,
         "num_links": 2,
-        "dynamic_load": False,
+        "offload_weights": False,
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
         "vae_t_chunk_size": None,  # full-T
@@ -109,7 +109,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 1,
         "tp_axis": 0,
         "num_links": 2,
-        "dynamic_load": False,
+        "offload_weights": False,
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
         "vae_t_chunk_size": None,
@@ -130,7 +130,8 @@ class WanPipelineConfig:
 
     boundary_ratio: float | None
     expand_timesteps: bool
-    dynamic_load: bool
+    offload_weights: bool
+    trace: bool
     is_fsdp: bool
     model_type: str
     vae_dtype: ttnn.DataType
@@ -166,7 +167,8 @@ class WanPipelineConfig:
         vae_parallel_config: VaeHWParallelConfig | None = None,
         boundary_ratio: float | None = None,
         expand_timesteps: bool = False,
-        dynamic_load: bool | None = None,
+        offload_weights: bool | None = None,
+        trace: bool | None = None,
         is_fsdp: bool | None = None,
         model_type: str = "t2v",
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
@@ -240,6 +242,9 @@ class WanPipelineConfig:
         if vae_t_chunk_size is _UNSET:
             vae_t_chunk_size = preset.get("vae_t_chunk_size", 1)
 
+        if offload_weights is None:
+            offload_weights = preset["offload_weights"]
+
         return cls(
             topology=topology if topology is not None else preset["topology"],
             num_links=num_links if num_links is not None else preset["num_links"],
@@ -248,7 +253,8 @@ class WanPipelineConfig:
             vae_parallel_config=vae_parallel_config,
             boundary_ratio=boundary_ratio,
             expand_timesteps=expand_timesteps,
-            dynamic_load=dynamic_load if dynamic_load is not None else preset["dynamic_load"],
+            offload_weights=offload_weights,
+            trace=trace if trace is not None else not offload_weights,
             is_fsdp=is_fsdp if is_fsdp is not None else preset["is_fsdp"],
             model_type=model_type,
             vae_dtype=vae_dtype,
@@ -279,7 +285,7 @@ class TransformerState:
     cache_runners: dict[int, ExpertCacheRunner] = field(default_factory=dict)
 
 
-class WanPipeline(PipelineAPIMixin):
+class WanPipeline(Pipeline):
     r"""Pipeline for text-to-video generation using Wan.
 
     Args:
@@ -304,8 +310,11 @@ class WanPipeline(PipelineAPIMixin):
             boundary_timestep. If `None`, only `transformer` is used for the entire denoising process.
         expand_timesteps (`bool`, *optional*, defaults to `False`):
             Whether to expand timesteps per-token for image-to-video (Wan2.2 TI2V) conditioning.
-        dynamic_load (`bool`, *optional*, defaults to `False`):
+        offload_weights (`bool`, *optional*, defaults to the mesh preset):
             If `True`, model components are loaded/offloaded to device dynamically during inference.
+            Excludes `trace`.
+        trace (`bool`, *optional*, defaults to `not offload_weights`):
+            If `True`, calls capture the denoising step as ttnn traces and replay them.
         topology (`ttnn.Topology`, *optional*, defaults to `ttnn.Topology.Linear`):
             Fabric topology to use for CCL operations across devices.
         is_fsdp (`bool`, *optional*, defaults to `True`):
@@ -414,7 +423,7 @@ class WanPipeline(PipelineAPIMixin):
         run_warmup: bool = True,
         lora_enabled: bool = False,
     ) -> None:
-        super().__init__()
+        super().__init__(offload_weights=config.offload_weights, trace=config.trace)
 
         self.checkpoint_name = config.checkpoint_name
         self.model_type = config.model_type
@@ -449,7 +458,6 @@ class WanPipeline(PipelineAPIMixin):
         self.vae_parallel_config = config.vae_parallel_config
         self.encoder_parallel_config = config.encoder_parallel_config
         self.mesh_device = device
-        self.dynamic_load = config.dynamic_load
 
         self._text_encoder = TextEncoder(
             checkpoint_name=config.checkpoint_name,
@@ -513,19 +521,19 @@ class WanPipeline(PipelineAPIMixin):
             or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=5.0)
         )
 
-        if self.dynamic_load:
+        if self.offload_weights:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
             if ttnn.device.is_blackhole():
-                self.transformer.register_coresident_exclusions(self.transformer_2)
-                self.transformer_2.register_coresident_exclusions(self.transformer)
+                self.register_coresident_exclusions(self.transformer, self.transformer_2)
+                self.register_coresident_exclusions(self.transformer_2, self.transformer)
             else:
                 # WH T3K has tighter DRAM — include VAE in the unload chain so
                 # transformers and VAE never coexist in DRAM across pipeline runs.
-                self.transformer.register_coresident_exclusions(self.transformer_2, *vae_decoders)
-                self.transformer_2.register_coresident_exclusions(self.transformer, *vae_decoders)
+                self.register_coresident_exclusions(self.transformer, self.transformer_2, *vae_decoders)
+                self.register_coresident_exclusions(self.transformer_2, self.transformer, *vae_decoders)
                 for decoder in vae_decoders:
-                    decoder.register_coresident_exclusions(self.transformer, self.transformer_2)
+                    self.register_coresident_exclusions(decoder, self.transformer, self.transformer_2)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer(1)
@@ -589,7 +597,7 @@ class WanPipeline(PipelineAPIMixin):
         """
         for width, height in self._resolutions:
             logger.info(f"Pipeline allocation run at {width}x{height}...")
-            self(
+            self.run_untraced(
                 prompts=["warmup"],
                 num_inference_steps=2,
                 guidance_scale=2 if self._cfg_enabled else 1,
@@ -893,7 +901,7 @@ class WanPipeline(PipelineAPIMixin):
 
     @torch.no_grad()
     @cap_torch_threads_to_half_the_cpus()
-    def __call__(
+    def _run(
         self,
         *,
         prompts: Sequence[str],
@@ -907,7 +915,7 @@ class WanPipeline(PipelineAPIMixin):
         num_videos_per_prompt: int | None = 1,
         seed: int = 0,
         output_type: str | None = "uint8",
-        traced: bool = False,
+        traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
         cache_config: WanDBCacheConfig | DBCacheConfig | None = _UNSET,
         width: int | None = None,
@@ -916,8 +924,9 @@ class WanPipeline(PipelineAPIMixin):
         """Generates a video from the prompt.
 
         ``width`` and ``height`` must be one of the configured resolutions, and default to the
-        first.
+        first. ``traced`` is the pipeline's ``trace`` unless it is ``False``.
         """
+        traced = self.trace if traced is None else traced
         on_event = on_event if on_event is not None else null_callback
 
         width, height = self._resolve_size(width, height, image_prompt)
