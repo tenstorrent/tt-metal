@@ -57,20 +57,35 @@ import sys
 import time
 
 # Preloaded by the server. Third-party only: repo code must be imported fresh by the child. Never ttnn (loading
-# _ttnn.so starts Tracy threads a forked child would not have), and never a pytest plugin or anything that
-# imports one (pytest warns "Module already imported so cannot be rewritten"); _preload() reports any.
+# _ttnn.so starts Tracy threads a forked child would not have), and never a module of a distribution that ships
+# a pytest plugin, or anything that imports one (pytest warns "Module already imported so cannot be
+# rewritten"); _preload() reports any.
 PRELOAD = (
+    # pytest itself.
     "pytest",
     "_pytest.python",
     "_pytest.fixtures",
     "_pytest.junitxml",
     "_pytest.capture",
     "_pytest.terminal",
+    # What tests and conftest import. torch, numpy and loguru are also the heavy part of what ttnn imports.
     "numpy",
     "torch",
     "loguru",
     "pandas",
     "scipy",
+    # The other third-party modules `import ttnn` pulls in. ttnn itself is still imported by the child.
+    "click",
+    "yaml",
+    "networkx",
+    "graphviz",
+    # What the dash pytest plugin imports (it loads on every pytest start). Not `dash`: it ships the plugin.
+    "IPython",
+    "jupyter_client",
+    "werkzeug",
+    "flask",
+    "requests",
+    "psutil",
 )
 
 # Environment the preloaded imports or the interpreter read at startup. Part of the server key; everything else
@@ -196,7 +211,8 @@ def _preload() -> dict[str, tuple[int, int]]:
         from importlib.metadata import entry_points
 
         plugins = {ep.value.split(":")[0] for ep in entry_points(group="pytest11")}
-        leaked = sorted(p for p in plugins if p in sys.modules)
+        # A plugin's top-level package counts too: pytest wants to rewrite its whole distribution.
+        leaked = sorted({m for p in plugins for m in (p, p.split(".")[0]) if m in sys.modules})
         if leaked:
             _log(f"warning: preload imported pytest plugin module(s) {leaked}; pytest will not rewrite them")
     except Exception:
