@@ -8,6 +8,7 @@
 #include "api/compute/reg_api.h"
 
 namespace wou {
+using namespace ckernel;   // MathFidelity, state_configure, throttled_mop_status
 
 // A (.) S in place over S (cb_as aliases cb_s): wk tiles, 8 per DST round (fp32 DST, full sync). Pops A and S.
 ALWI void gate_mul(uint32_t cb_a, uint32_t cb_s, uint32_t cb_as, uint32_t wk) {
@@ -31,9 +32,37 @@ ALWI void gate_mul(uint32_t cb_a, uint32_t cb_s, uint32_t cb_as, uint32_t wk) {
     cb_pop_front(cb_s, wk);
 }
 
+// matmul_block{_init} at LoFi when kLoFi (the kernel's MATH_FIDELITY otherwise; MATH_FIDELITY exists only on the math
+// TRISC). On BFP4 weights (srcA) LoFi == HiFi2 (the weight mantissa fits the first phase), i.e. the prod BFP4 out-proj
+// numerics under QWEN36_BFP4_LAYOUT_LOFI; lets a HiFi4 kernel (the GDN role) run gdn_out at LoFi speed.
+template <bool kLoFi>
+ALWI void mm_block_init_f(uint32_t cb_a, uint32_t cb_w, uint32_t ct, uint32_t kt) {
+    if constexpr (!kLoFi) {
+        matmul_block_init(cb_a, cb_w, 0, ct, 1, kt);
+    } else {
+        state_configure(cb_w, cb_a, __builtin_LINE());
+        UNPACK((llk_unpack_AB_matmul_init(cb_a, cb_w, 0, ct, 1, kt)));
+        MATH((llk_math_matmul_init<MathFidelity::LoFi, MM_THROTTLE>(cb_a, cb_w, 0, ct, 1)));
+#ifdef ARCH_BLACKHOLE
+        MATH((throttled_mop_status = 0));
+#endif
+    }
+}
+template <bool kLoFi>
+ALWI void mm_block_f(uint32_t cb_a, uint32_t cb_w, uint32_t ia, uint32_t iw, uint32_t ct, uint32_t kt) {
+    if constexpr (!kLoFi) {
+        matmul_block(cb_a, cb_w, ia, iw, 0, 0, ct, 1, kt);
+    } else {
+        state_configure(cb_w, cb_a, __builtin_LINE());
+        UNPACK((llk_unpack_AB_matmul(cb_a, cb_w, ia, iw, ct, 1, kt)));
+        MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(0, ct, 1)));
+    }
+}
+
 // out = A @ W slice: A = wk tiles at the front of cb_a, W = the ring's k-major nt-wide slice (ring_pages slot);
 // <= max_nw output tiles per DST pass (5: fp32 DST in full-sync mode, 8 tiles; 4: half-sync, e.g. the GDN role);
 // output pushed as a full `out_slot` slot of cb_out. Pops A and the ring slot.
+template <bool kLoFi = false>
 ALWI void matmul_nt(uint32_t cb_a, uint32_t cb_w, uint32_t ring_pages, uint32_t cb_out, uint32_t out_slot, uint32_t wk, uint32_t nt,
                     uint32_t max_nw = 5) {
     cb_wait_front(cb_a, wk);
@@ -43,9 +72,9 @@ ALWI void matmul_nt(uint32_t cb_a, uint32_t cb_w, uint32_t ring_pages, uint32_t 
     pack_reconfig_data_format(cb_out);
     for (uint32_t j0 = 0; j0 < nt; j0 += max_nw) {
         const uint32_t nw = (nt - j0) < max_nw ? (nt - j0) : max_nw;
-        matmul_block_init(cb_a, cb_w, 0, nw, 1, wk);
+        mm_block_init_f<kLoFi>(cb_a, cb_w, nw, wk);
         tile_regs_acquire();
-        for (uint32_t k = 0; k < wk; ++k) matmul_block(cb_a, cb_w, k, k * nt + j0, 0, 0, nw, 1, wk);
+        for (uint32_t k = 0; k < wk; ++k) mm_block_f<kLoFi>(cb_a, cb_w, k, k * nt + j0, nw, wk);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t j = 0; j < nw; ++j) pack_tile<true>(j, cb_out, j0 + j);
