@@ -684,7 +684,7 @@ void kernel_main() {
             while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)S_AR) v_pump();
         }
 #if defined(MKA_RQKV)
-        if (is_qroot && L + 1 < NL) mcast_word(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
+        if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // x of layer L + 1 -> STREAM_EXT
 #endif
 #else
 #if defined(MKA_NOMLP)
