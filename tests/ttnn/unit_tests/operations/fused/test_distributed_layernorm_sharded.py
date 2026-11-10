@@ -16,13 +16,12 @@ import ttnn
 import torch
 import pytest
 import math
-from tests.ttnn.utils_for_testing import merge_gate_subset
 from loguru import logger
 
 from tt_py_test_utils_common.utility_functions import (
     skip_for_wormhole_b0,
 )
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     make_sharded_norm_mem_config,
     to_poisoned_sharded,
