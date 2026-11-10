@@ -18,9 +18,10 @@ def test_mk_weights_repack_lossless(mesh_device, monkeypatch):
     _env(monkeypatch)
     model, _eng, _tok, _prompts = _setup(mesh_device)
     lays = {}
-    for kind in ("mlp", "qkv", "wo"):
+    for kind in ("mlp", "qkv", "wo", "gdn_in", "gdn_out"):
         src = {"mlp": model.layers[0].feed_forward.weights.w_gate_up, "qkv": model.layers[3].attention.tw["wqkvg_pair"],
-               "wo": model.layers[3].attention.tw["wo_pair"]}[kind]
+               "wo": model.layers[3].attention.tw["wo_pair"], "gdn_in": model.layers[0].attention.tw["qkvz"],
+               "gdn_out": model.layers[0].attention.tw["out"]}[kind]
         lays[kind] = wm.TileOrderLayout(kind, str(src.dtype).split(".")[-1].lower())
     lays["gamma"] = None  # fixed layout (gamma_pages)
     rep = wm.repack(model, lays, only_layers=LAYERS)

@@ -11,6 +11,8 @@ Three layers of code, so each track owns its own piece:
        mlp : (wg [H, I], wu [H, I], wd [I, H])     from w_gate_up (prepare_for_fused_swiglu gate/up tile pairs) + w2
        qkv : [H, 112*32] = [q pair 0-47 | k 48-55 | v 56-63 | gate pair 64-111]  from tw["wqkvg_pair"]
        wo  : [6*256, H]  pair heads x hd rows, same head order as qkv          from tw["wo_pair"]
+       gdn_in : [H, local qkvz(ab)]                                            from tw["qkvz"]
+       gdn_out: [local value dim, H]                                            from tw["out"]
   2. packing (pure torch, per device per layer): LAYOUTS[kind](mats, ctx) -> pages [n, 32, 32]. These call the tracks'
      layout functions (engine/layout_mlp.py, engine/layout_attn.py, later layout_gdn / ar_phase).
   3. assembly: per kind, concatenate the layers, quantize per device on host and aggregate into one mesh tensor.
@@ -74,11 +76,30 @@ def wo_mats(layer):
     return out
 
 
+def gdn_in_mats(layer):
+    """GDN in-projection, per device [H, local qkvz(+ab) columns] exactly as the decode matmul reads it (tw["qkvz"]: the
+    fused per-device [q k v z (a b)] column block of gdn/tp.py; under proj_1d_decode a and b ride in it). The §18 split-K
+    layout (prefix agent, v12 unit) packs it."""
+    out = device_shards(layer.attention.tw["qkvz"])
+    assert all(m.shape[0] == H for m in out), [m.shape for m in out]
+    return out
+
+
+def gdn_out_mats(layer):
+    """GDN out-projection, row-parallel per device [local value dim, H] (tw["out"]); packed by the wo unit's split-N
+    layout (layout_attn wo packer applied to out_proj)."""
+    out = device_shards(layer.attention.tw["out"])
+    assert all(m.shape[1] == H for m in out), [m.shape for m in out]
+    return out
+
+
 # kind -> (which layers carry it, extractor)
 SOURCES = {
     "mlp": (lambda l: True, mlp_mats),
     "qkv": (lambda l: l.is_full_attention, qkv_mats),
     "wo": (lambda l: l.is_full_attention, wo_mats),
+    "gdn_in": (lambda l: not l.is_full_attention, gdn_in_mats),
+    "gdn_out": (lambda l: not l.is_full_attention, gdn_out_mats),
 }
 
 
@@ -132,7 +153,7 @@ class TileOrderLayout:
 
     def __init__(self, kind, dtype):
         self.kind, self.dtype = kind, dtype
-        self.pages_per_layer = {"mlp": 3 * 160 * 68, "qkv": 160 * QN, "wo": 48 * 160}[kind]
+        self.pages_per_layer = None  # set by repack from the first layer (shapes come from the model)
 
     @staticmethod
     def tiles(m):
@@ -211,6 +232,8 @@ def repack(model, layouts=None, kinds=None, only_layers=None):
                 per_dev = [[] for _ in mats]
             for d, m in enumerate(mats):
                 p = lay.pack(m, i)
+                if lay.pages_per_layer is None:
+                    lay.pages_per_layer = p.shape[0]
                 assert p.shape[0] == lay.pages_per_layer, (kind, p.shape, lay.pages_per_layer)
                 per_dev[d].append(p.to(torch.bfloat16))
         dtype = getattr(ttnn, lay.dtype)
