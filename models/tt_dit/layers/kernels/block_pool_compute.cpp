@@ -6,7 +6,7 @@
 // in fp32 DST), with the pooling tiles P[k] delivered by the reader in batches of 4 rows alongside the data; groups
 // without tile rows output zero tiles.
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS.
+// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, 7 NCORES, 8 NBGT.
 
 #include <cstdint>
 
@@ -31,14 +31,14 @@ void kernel_main() {
     constexpr uint32_t DT = get_compile_time_arg_val(2);
     constexpr uint32_t NBPT = get_compile_time_arg_val(3);
     constexpr uint32_t NX = get_compile_time_arg_val(4);
-    constexpr uint32_t NY = get_compile_time_arg_val(5);
     constexpr uint32_t UNITS = get_compile_time_arg_val(6);
+    constexpr uint32_t NCORES = get_compile_time_arg_val(7);
     static_assert(DT <= 4, "DT output tiles must fit the half-sync fp32 DST (4 tiles)");
     using Layout = block_pool::Layout<H, RT, NBPT>;
     static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     uint32_t unit_start, unit_count;
-    Layout::range(ci, NX * NY, unit_start, unit_count);
+    Layout::range(ci, NCORES, unit_start, unit_count);
     if (unit_count == 0) {
         return;
     }

@@ -26,7 +26,7 @@
 // SFPU ops use 4 and 5 as scratch.
 //
 // Compile-time args: 0 H, 1 NBPT, 2 NBGT, 3 DT, 4 KT, 5 MC, 6 NX, 7 NY, 8 UNITS, 9 COARSE, 10 SCALE (fp32 bits),
-// 11 RT (32-row tile rows per shard).
+// 11 RT (32-row tile rows per shard), 12 NCORES (the cores that take units, the first NCORES in row-major order).
 
 #include <cstdint>
 
@@ -87,17 +87,16 @@ void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(4);
     constexpr uint32_t MC = get_compile_time_arg_val(5);
     constexpr uint32_t NX = get_compile_time_arg_val(6);
-    constexpr uint32_t NY = get_compile_time_arg_val(7);
     constexpr uint32_t UNITS = get_compile_time_arg_val(8);
     constexpr bool COARSE = get_compile_time_arg_val(9) == 1;
     constexpr uint32_t SCALE = get_compile_time_arg_val(10);
     constexpr uint32_t RT = get_compile_time_arg_val(11);
+    constexpr uint32_t NCORES = get_compile_time_arg_val(12);
     constexpr uint32_t NB = (RT + 1) / 2;
     static_assert(NBGT % 8 == 0 && MC % QUAD == 0 && NBGT % MC == 0, "column tiles go in batches of 8 and 4");
     static_assert(DT < 8, "the coarse output and its row sum share DST");
     static_assert(NBPT > 0);
 
-    constexpr uint32_t NCORES = NX * NY;
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     const uint32_t unit_start = ci * UNITS / NCORES;
     const uint32_t unit_count = (ci + 1) * UNITS / NCORES - unit_start;

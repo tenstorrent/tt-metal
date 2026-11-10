@@ -4,9 +4,10 @@
 
 """BlockTopKRouting (models/tt_dit/layers/block_topk_routing.py) on device vs its torch mirror, on VSA geometries.
 
-`test_pool`: block means vs the mirror. `test_route`: the block mask against tie-robust top-k bounds, with exact
-ties in the data, `k = k_max`, a cached second call, and in-place request swaps. `test_coarse`: the coarse output vs
-the mirror.
+`test_pool`: block means vs the mirror, and their gather: every device holds every shard. `test_route`: the block mask
+against tie-robust top-k bounds, with exact ties in the data, `k = k_max`, a cached second call, and in-place request
+swaps. `test_coarse`: the coarse output vs the mirror. `test_traced_replays`: two consecutive calls captured once and
+replayed back to back reproduce eager, also after an in-place request swap.
 
 Run (Galaxy): pytest models/tt_dit/tests/models/minimax_h3/test_block_topk_routing.py -k 4x8 -s --tb=short
 """
@@ -26,7 +27,37 @@ from ....models.transformers.minimax_h3.vsa_prepass import _round_up, compute_to
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, build_vsa_geometry
 from ....utils.tensor import from_torch
-from .common import GALAXY_RING
+from .common import _BH_ONLY, GALAXY_RING, _ring_8k, _ring_8k_trace
+
+# GALAXY_RING's rows with a trace region: 4x8 gets one, 4x32 has its own.
+TRACED_RING = pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param(
+            (4, 8),
+            1,
+            0,
+            2,
+            {**_ring_8k, "trace_region_size": 50_000_000},
+            ttnn.Topology.Ring,
+            False,
+            id="4x8sp1tp0nl2_ring_is_fsdp0",
+            marks=_BH_ONLY,
+        ),
+        pytest.param(
+            (4, 32),
+            1,
+            0,
+            2,
+            _ring_8k_trace,
+            ttnn.Topology.Ring,
+            False,
+            id="4x32sp1tp0nl2_ring_is_fsdp0",
+            marks=_BH_ONLY,
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 
 HEADS = 14
 HEAD_DIM = 128
@@ -93,7 +124,7 @@ class _Case:
         return out[:, 0]
 
 
-def _routing(case: _Case, ccl_manager) -> BlockTopKRouting:
+def _routing(case: _Case, ccl_manager, column_order: str = "arrival") -> BlockTopKRouting:
     return BlockTopKRouting(
         mesh_device=case.mesh_device,
         ccl_manager=ccl_manager,
@@ -102,15 +133,22 @@ def _routing(case: _Case, ccl_manager) -> BlockTopKRouting:
         head_dim=HEAD_DIM,
         rows=case.rows,
         k_max=case.k_max,
+        column_order=column_order,
     )
+
+
+def _local_slots(case: _Case, kv_g: torch.Tensor) -> torch.Tensor:
+    """Each device's own shard of the gathered [S, 2H, S * nb_pad, D]: [S, 2H, nb_pad, D]."""
+    nb = case.nb_pad
+    return torch.stack([kv_g[s, :, s * nb : (s + 1) * nb] for s in range(kv_g.shape[0])])
 
 
 def _mirror_scores(case: _Case, routing: BlockTopKRouting) -> torch.Tensor:
     """fp32 scores from the device's own block means: [S, H, nb_pad, S * nb_pad]."""
-    q_bar, kv_bar = routing.pool(*case.device)
-    qb, kvb = case.to_host(q_bar).float(), case.to_host(kv_bar).float()
+    q_bar, kv_g = routing.pool(*case.device)
+    qb, kvb = case.to_host(q_bar).float(), _local_slots(case, case.to_host(kv_g).float())
     ttnn.deallocate(q_bar)
-    ttnn.deallocate(kv_bar)
+    ttnn.deallocate(kv_g)
     k_glob = kvb[:, :HEADS].permute(1, 0, 2, 3).reshape(HEADS, -1, HEAD_DIM)
     return torch.einsum("shbd,hcd->shbc", qb, k_glob)
 
@@ -179,8 +217,11 @@ def test_pool(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefi
     routing.update(case.request, traced=False)
     ref = torch_reference(*case.shards, case.request)
 
-    q_bar, kv_bar = routing.pool(*case.device)
-    qb, kvb = case.to_host(q_bar).float(), case.to_host(kv_bar).float()
+    q_bar, kv_g = routing.pool(*case.device)
+    gathered = case.to_host(kv_g)
+    # The gather copies bf16 tiles: every device holds the same S shards, bit for bit.
+    assert all(torch.equal(gathered[0], gathered[s]) for s in range(1, sp)), "the devices' gathered buffers differ"
+    qb, kvb = case.to_host(q_bar).float(), _local_slots(case, gathered).float()
     pad = case.request.counts == 0
     for name, dev, expected in (
         ("q", qb, ref["q_bar"]),
@@ -217,6 +258,11 @@ def test_route(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pref
     assert torch.equal(
         _routed_mask(case, routing), first
     ), "the cached program (rebound buffers) must reproduce the first call"
+    # The mask is order-independent (a block is kept when its score reaches the k-th candidate score), so scoring the
+    # shards in arrival order must reproduce global order bit for bit, every column tile at its global offset.
+    in_global_order = _routing(case, ccl_manager, column_order="global")
+    in_global_order.update(case.request, traced=False)
+    assert torch.equal(_routed_mask(case, in_global_order), first), "arrival column order differs from global order"
 
     at_k_max = dataclasses.replace(case.request, k=min(case.k_max, int(case.request.candidate.sum())))
     routing.update(at_k_max, traced=True)
@@ -248,10 +294,14 @@ def test_coarse(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pre
     routing.update(case.request, traced=False)
     ref = torch_reference(*case.shards, case.request)
 
-    out = routing(*case.device, coarse=True)
-    ttnn.deallocate(out["block_mask"])
-    rows = case.to_host(out["coarse_out"])[:, 0].float().reshape(sp, case.rows, HEADS, HEAD_DIM)
-    ttnn.deallocate(out["coarse_out"])
+    def coarse_rows(r: BlockTopKRouting) -> torch.Tensor:
+        out = r(*case.device, coarse=True)
+        ttnn.deallocate(out["block_mask"])
+        rows = case.to_host(out["coarse_out"])[:, 0].float().reshape(sp, case.rows, HEADS, HEAD_DIM)
+        ttnn.deallocate(out["coarse_out"])
+        return rows
+
+    rows = coarse_rows(routing)
     # Every row of a block carries the block's coarse output: compare all rows of the real blocks.
     block = torch.arange(case.rows) // VSA_TILE_TOKENS
     real = case.request.counts[:, block] > 0
@@ -261,3 +311,74 @@ def test_coarse(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pre
     logger.info(f"coarse vs mirror: PCC {pcc:.6f}, max abs err {float((a - b).abs().max()):.3e}")
     assert pcc >= 0.999, pcc
     torch.testing.assert_close(a, b, atol=3e-2, rtol=3e-2)
+
+    # Arrival column order only reassociates the fp32 sums of p @ v and of the row sums; the bf16 output then rounds
+    # an occasional element the other way, so the two orders agree to one bf16 ulp (or 1e-5 near zero).
+    in_global_order = _routing(case, ccl_manager, column_order="global")
+    in_global_order.update(case.request, traced=False)
+    g = coarse_rows(in_global_order)[real]
+    logger.info(
+        f"coarse, arrival vs global order: max abs diff {float((a - g).abs().max()):.3e}, "
+        f"{int((a != g).sum())} of {a.numel()} elements differ"
+    )
+    torch.testing.assert_close(a, g, atol=1e-5, rtol=2.0**-7)
+
+
+@TRACED_RING
+@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK)
+def test_traced_replays(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefix_segments, grid, rung, reset_seeds
+):
+    """Production shape: one routing call per layer, so the ping-pong buffers alternate inside the capture. Replays
+    back to back, where a fast peer's arrival increment for the next call can land before this device took its own."""
+    sp = tuple(mesh_device.shape)[sp_axis]
+    case = _Case(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung),
+        seed=0,
+        tie=False,
+    )
+    other = _Case(
+        mesh_device, sp_axis, tp_axis, build_vsa_geometry(*SWAPPED_IN, sp_factor=sp, padded_len=rung), seed=1, tie=False
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+
+    def read(c: _Case, out: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        return c.to_host(out["block_mask"]), c.to_host(out["coarse_out"])
+
+    def eager(c: _Case, routing: BlockTopKRouting) -> tuple[torch.Tensor, torch.Tensor]:
+        out = routing(*c.device, coarse=True)
+        result = read(c, out)
+        ttnn.deallocate(out["block_mask"])
+        ttnn.deallocate(out["coarse_out"])
+        return result
+
+    fresh = _routing(other, ccl_manager)
+    fresh.update(other.request, traced=False)
+    expected_other = eager(other, fresh)
+    routing = _routing(case, ccl_manager)
+    routing.update(case.request, traced=False)
+    expected = eager(case, routing)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outs = [routing(*case.device, coarse=True) for _ in range(2)]
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for _ in range(8):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    for i, out in enumerate(outs):
+        mask, coarse = read(case, out)
+        assert torch.equal(mask, expected[0]), f"call {i} of the replayed capture: mask differs from eager"
+        assert torch.equal(coarse, expected[1]), f"call {i} of the replayed capture: coarse output differs from eager"
+
+    routing.update(other.request, traced=True)
+    for src, dst in zip(other.device, case.device):
+        ttnn.copy(src, dst)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    for i, out in enumerate(outs):
+        mask, coarse = read(other, out)
+        assert torch.equal(mask, expected_other[0]), f"call {i} after the in-place swap: mask differs from eager"
+        assert torch.equal(coarse, expected_other[1]), f"call {i} after the in-place swap: coarse differs from eager"
+    ttnn.release_trace(mesh_device, trace_id)

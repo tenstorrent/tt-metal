@@ -16,8 +16,9 @@
 // third: a batch is pushed only after its own barrier, and a new batch is placed one batch past the write pointer
 // while one is pending.
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, then TensorAccessorArgs of x0 (q), x1 (k), x2 (v)
-// and counts. Common runtime args: 0..2 addresses of x0..x2, 3 counts address.
+// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, 7 NCORES (the pool cores, the first NCORES in
+// row-major order), 8 NBGT, then TensorAccessorArgs of x0 (q), x1 (k), x2 (v) and counts.
+// Common runtime args: 0..2 addresses of x0..x2, 3 counts address.
 
 #include <cstdint>
 
@@ -73,9 +74,9 @@ void kernel_main() {
     constexpr uint32_t DT = get_compile_time_arg_val(2);
     constexpr uint32_t NBPT = get_compile_time_arg_val(3);
     constexpr uint32_t NX = get_compile_time_arg_val(4);
-    constexpr uint32_t NY = get_compile_time_arg_val(5);
     constexpr uint32_t UNITS = get_compile_time_arg_val(6);
-    constexpr auto x0_args = TensorAccessorArgs<7>();
+    constexpr uint32_t NCORES = get_compile_time_arg_val(7);
+    constexpr auto x0_args = TensorAccessorArgs<9>();
     constexpr auto x1_args = TensorAccessorArgs<x0_args.next_compile_time_args_offset()>();
     constexpr auto x2_args = TensorAccessorArgs<x1_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<x2_args.next_compile_time_args_offset()>();
@@ -85,7 +86,7 @@ void kernel_main() {
     static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     uint32_t unit_start, unit_count;
-    Layout::range(ci, NX * NY, unit_start, unit_count);
+    Layout::range(ci, NCORES, unit_start, unit_count);
     if (unit_count == 0) {
         return;
     }
