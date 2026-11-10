@@ -177,3 +177,29 @@ def test_step_breakdown_4k(mesh_device, guide_examples, precompute_adaln):
     finally:
         os.environ.pop("H3_IMAGE_STEP_TIMING", None)
     _log_result(f"step_breakdown_4k_{'precomputed' if precompute_adaln else 'per_step'}", result)
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_device_latents_ab(mesh_device, guide_examples):
+    """Host Euler update (reference) vs latents kept on device: warm latency of each, and how far the images differ."""
+    import numpy as np
+
+    t2i, _, _ = guide_examples
+    prompt = t2i["prompt"]
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    for size in (4096, 2048):
+        runs = {}
+        for mode in ("0", "1"):
+            pipe.device_latents = mode == "1"
+            pipe(prompt, width=size, height=size, seed=0)  # warm this mode at this size
+            runs[mode] = [pipe(prompt, width=size, height=size, seed=s) for s in (1, 2, 3)]
+            totals = [r.timings.total for r in runs[mode]]
+            _log_result(f"device_latents={mode}_{size}", runs[mode][-1])
+            logger.info(f"RESULT device_latents={mode} {size}: mean {sum(totals) / 3:.2f}s (min {min(totals):.2f})")
+        for a, b in zip(runs["0"], runs["1"]):
+            x, y = np.asarray(a.image, dtype=np.float64), np.asarray(b.image, dtype=np.float64)
+            mse = ((x - y) ** 2).mean()
+            psnr = float("inf") if mse == 0 else 10 * np.log10(255**2 / mse)
+            logger.info(f"RESULT {size} host vs device latents: max abs {np.abs(x - y).max():.0f}, PSNR {psnr:.1f} dB")
+            assert np.array_equal(x, y), "device latents must reproduce the host Euler update exactly"
