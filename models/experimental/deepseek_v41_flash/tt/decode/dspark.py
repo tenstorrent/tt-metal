@@ -455,6 +455,8 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         slots outside the window and the padding, and the sink row's score is its per-head bias.
         """
         t = x.shape[2]
+        # wkv's B grid contains wq_a's, so its replica of x feeds both.
+        x = _decode_activation(self.wkv, x)
         q_a = _rms(_rows(self.wq_a(_decode_activation(self.wq_a, x))), self.q_norm, self.eps)
         q = _rows(self.wq_b(_decode_activation(self.wq_b, q_a)))
         q = ttnn.reshape(q, [1, 1, t * self.local_heads, self.head_dim])
