@@ -46,11 +46,6 @@ constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 constexpr uint32_t cb_du_idx = tt::CBIndex::c_14;
 constexpr uint32_t cb_slice_partial_idx = tt::CBIndex::c_15;
 constexpr uint32_t cb_gathered_partials_idx = tt::CBIndex::c_16;
-// A sliced core accumulates the scale over its slice only, and reduce_scale adds up the gathered partials of all
-// slices.
-constexpr uint32_t cb_scale_partial_idx = sliced ? cb_slice_partial_idx : cb_scale_idx;
-constexpr uint32_t cb_row_scale_partials_idx = sliced ? cb_gathered_partials_idx : cb_scale_idx;
-constexpr uint32_t num_row_partials = sliced ? num_slices : 1U;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -339,28 +334,46 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
 }
 
 inline void reduce_scale() {
-    // Reduces the accumulated scale tiles of the row along the inner dimension (C) and pushes the result to cb_scale.
-    cb_wait_front(cb_row_scale_partials_idx, num_row_partials);
+    // Reduces the accumulated scale tile of the row along the inner dimension (C) and pushes the result to cb_scale.
+    // A sliced core reduces its slice's scale only and sends it to its row-group, and the row's scale is the sum of the
+    // gathered partials of all slices.
+    cb_wait_front(cb_scale_idx, onetile);
     const uint32_t reduced_scale_register = 0U;
     tile_regs_acquire();
 
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
     // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
-    reconfig_data_format(cb_mat_mul_reduce, cb_row_scale_partials_idx);
-    matmul_init(cb_row_scale_partials_idx, cb_mat_mul_reduce, 0);
-    for (uint32_t partial = 0; partial < num_row_partials; ++partial) {
-        matmul_tiles(
-            cb_row_scale_partials_idx,
-            cb_mat_mul_reduce,
-            /* tile_idx */ partial,
-            /* tile_idx */ 0,
-            reduced_scale_register);
-    }
+    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
+    matmul_tiles(cb_scale_idx, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduced_scale_register);
     tile_regs_commit();
 
-    // Pop the non-reduced scale tiles from the CB.
-    cb_pop_front(cb_row_scale_partials_idx, num_row_partials);
+    // Pop the non-reduced scale tile from the CB.
+    cb_pop_front(cb_scale_idx, onetile);
+    if constexpr (!sliced) {
+        pack_and_push(reduced_scale_register, cb_scale_idx);
+        return;
+    }
+    pack_and_push(reduced_scale_register, cb_slice_partial_idx);
+
+    cb_wait_front(cb_gathered_partials_idx, num_slices);
+    const uint32_t partial_register = reduced_scale_register + 1U;
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_mat_mul_reduce, cb_gathered_partials_idx);
+    copy_init(cb_gathered_partials_idx);
+    copy_tile(cb_gathered_partials_idx, /* tile_idx */ 0, reduced_scale_register);
+    for (uint32_t partial = 1; partial < num_slices; ++partial) {
+        copy_init(cb_gathered_partials_idx);
+        copy_tile(cb_gathered_partials_idx, partial, partial_register);
+        add_binary_tile_init();
+        add_binary_tile(reduced_scale_register, partial_register, reduced_scale_register);
+    }
+    // compute_dL_da expects srcA on a bf16 CB at the start of a row, as the matmul above leaves it.
+    reconfig_data_format_srca(cb_gathered_partials_idx, cb_mat_mul_reduce);
+    tile_regs_commit();
+
+    cb_pop_front(cb_gathered_partials_idx, num_slices);
     pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 
@@ -417,7 +430,7 @@ inline void compute_scale(const uint32_t row) {
     }
     tile_regs_commit();
 
-    pack_and_push(scale_register, cb_scale_partial_idx);
+    pack_and_push(scale_register, cb_scale_idx);
     reduce_scale();
 }
 #else
@@ -477,7 +490,7 @@ inline void compute_scale(const uint32_t row) {
     }
     tile_regs_commit();
 
-    pack_and_push(scale_register, cb_scale_partial_idx);
+    pack_and_push(scale_register, cb_scale_idx);
     reduce_scale();
 }
 #endif  // EVERYTHING_FITS_IN_L1
