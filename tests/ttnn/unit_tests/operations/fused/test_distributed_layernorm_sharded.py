@@ -11,12 +11,12 @@ processed as chunks) on one device, and the all-gather is stood in for by reshar
 per-slice statistics onto a single core. No real multi-device execution or collective runs — only the
 on-device pre/post all-gather op path is exercised.
 """
+
 import ttnn
 import torch
 import pytest
 import math
-from itertools import product
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
+from tests.ttnn.utils_for_testing import merge_gate_subset
 from loguru import logger
 
 from tt_py_test_utils_common.utility_functions import (
@@ -317,18 +317,18 @@ def run_pre_allgather_layernorm(
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 
-# Seed 0, 4 devices, bf16. Both RMS and both residual.
-_PRE_ALLGATHER_MERGE_GATE = (0, 4, ttnn.bfloat16)
-
-
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("input_width", [2048])
+# Seed 0, 4 devices, bf16. Both RMS and both residual.
 @pytest.mark.parametrize(
-    "seed, num_devices, input_df",
-    merge_gate_subset(
-        product([0, 1234], [4, 8], [ttnn.bfloat8_b, ttnn.bfloat16]),
-        keep=[_PRE_ALLGATHER_MERGE_GATE],
-    ),
+    *merge_gate_subset(
+        {
+            "input_df": [ttnn.bfloat8_b, ttnn.bfloat16],
+            "num_devices": [4, 8],
+            "input_width": [2048],
+            "seed": [0, 1234],
+        },
+        keep=lambda seed, num_devices, input_df, **_: seed == 0 and num_devices == 4 and input_df == ttnn.bfloat16,
+    )
 )
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((8, 4),))

@@ -24,7 +24,6 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
-from tests.ttnn.unit_tests.operations.test_utils import merge_gate_subset
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
@@ -360,21 +359,21 @@ _RMS_UNEVEN_MERGE_GATE = {
 }
 
 
+# One parametrize with explicit ids, so the ids stay those of the stacked decorators (width-dtype).
 _RMS_UNEVEN_PARAMS = [
-    ((w, cores, dtype), f"{width_id}-{dtype_id}")
+    pytest.param(
+        w,
+        cores,
+        dtype,
+        id=f"{width_id}-{dtype_id}",
+        marks=pytest.mark.merge_gate if (w, cores, dtype) in _RMS_UNEVEN_MERGE_GATE else (),
+    )
     for (w, cores), width_id in zip(UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS)
     for dtype, dtype_id in ((ttnn.bfloat16, "bfloat16"), (ttnn.float32, "float32"), (ttnn.bfloat8_b, "bfloat8_b"))
 ]
 
 
-@pytest.mark.parametrize(
-    "w, num_cores_w, dtype",
-    merge_gate_subset(
-        (case for case, _ in _RMS_UNEVEN_PARAMS),
-        keep=_RMS_UNEVEN_MERGE_GATE,
-        ids=[param_id for _, param_id in _RMS_UNEVEN_PARAMS],
-    ),
-)
+@pytest.mark.parametrize("w, num_cores_w, dtype", _RMS_UNEVEN_PARAMS)
 def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
     run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)
 
