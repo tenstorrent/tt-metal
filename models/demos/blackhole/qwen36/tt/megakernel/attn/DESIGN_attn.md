@@ -78,3 +78,29 @@ SDPA phase only (4 own users, 6 q heads / 1 KV head, T=4), PCC 0.99998 in every 
 - Today's prod verify SDPA at 32K u8 ≈ 190 µs (BFP4 KV, KV only). MKA1 with BFP8 KV does the KV + 27 MB of next-op
   weights in ~240 µs, i.e. the next layer's wo + MLP weights stream for ~50-70 µs extra instead of ~68 µs at 400 GB/s
   after it.
+
+## 6. MKA2: attention-type layers inside the megakernel engine (silicon, d27u08 chip 0, 2026-11-10)
+One generic_op on the full 12x10 grid (80 STREAM + 40 ATTN-only cores), NL attention-type layers per pass. Per layer:
+mixer (qkv stand-in, MIXN=1 BFP4 + the rest of qkv's 19.5 MB as scratch reads) -> SDPA phase (type 5, CBs 9-12, BFP8 KV,
+global semaphores, cumulative per layer) -> wo stand-in (8.4 MB real reads + 10 µs) + attention AR stall (18 µs) ->
+fm11 MLP -> MLP AR stall (18 µs). Next-layer mixer + MLP weights are issued during SDPA under the word-13 budget.
+Correct in every layer: SDPA PCC 0.99998, mixer 0.99999, MLP 0.99998 (2 and 3 layers, 4K and 32K, repeated iterations).
+
+| 32K, u8 (4 own users), BFP8 KV | layer 0 (cold) | layer 1 | layer 2 (steady) |
+|---|---|---|---|
+| v0: all weight prefetch on the writer (NOC0) | 705-722 µs | 645-655 | 581-589 |
+| + wo / extra-qkv reads moved to the reader (NOC1), budget 0 | 491 | 427 | 371 |
+| + budget 32 KB per KV group (word 13) | 484 | 407 | **368** |
+| KV shares weighted (role or measured-rate maps) | worse: 387-850 | | |
+§8 projects ~322 µs per attention layer at u8: **steady MKA2 is ~368 µs (+14%)**.
+Steady-layer budget: SDPA phase ~270 µs (bound by NoC1 column distance: left columns finish ~200 µs before the right
+columns and ATTN-only cores), post-SDPA tail ~93 µs (reduce/norm ~15, wo 10 + 2 AR stalls 36, the even gate|up groups
+streamed on the reader after SDPA, down), mixer ~24 µs.
+Bugs found and fixed on the way:
+- Double-buffer deadlock: the next layer's slots are planned after this layer's push, so reserve ONE slot at the write
+  pointer (MK1 reserved two, pre-push).
+- CB ring straddle: a short last KV group made later groups straddle the CB_K/CB_V end; every group now reserves,
+  pushes and pops the full NBB (only nb used).
+- NoC0 overload: V + all ~47 MB of weight prefetch on NOC0 vs K alone on NOC1 → 580 µs; balancing ~19 MB onto NOC1 → 370 µs.
+Next levers: overlap the post-SDPA gate|up stream (prefetch even groups during SDPA, needs ~150 KB L1), multicast-aware
+KV scheduling for the column skew, and the real qkv/wo phases replacing the stand-ins.
