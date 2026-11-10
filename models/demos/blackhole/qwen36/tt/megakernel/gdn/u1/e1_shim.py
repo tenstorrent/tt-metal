@@ -280,8 +280,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     tens = layers[0]
     os.makedirs(gen_dir, exist_ok=True)
     # st_ring: users per state / stash ring (GDN_ST_RING; 0 = all 8 resident, the full early-state prefetch). Default
-    # E1_ST_RING env, else 2 (-216 KB per GDN core: the engine's L1 tensors on the GDN rows start at ~860 KB)
-    st_ring = int(os.environ.get("E1_ST_RING", "2")) if st_ring is None else st_ring
+    # E1_ST_RING env, else 0. 2 = -216 KB per GDN core (needed only below an ~1.06 MB L1 floor on the GDN rows; QSK: 1.19 MB)
+    st_ring = int(os.environ.get("E1_ST_RING", "0")) if st_ring is None else st_ring
     tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring)
     ids = {n: (i, f) for i, (n, _, _, f) in enumerate(tab)}
     assert len(tab) <= 45, len(tab)   # CB ids 0..44 (spec v1.25 MAX_CB_ID)
