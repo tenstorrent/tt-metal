@@ -392,3 +392,12 @@ on the laptop at .claude/tmp/r16/mega/si_mixed8/.
    the next consumer. Extra reduce traffic is ~2 MB/layer vs ~25 MB of x multicast. This changes fm11's gate|up/down
    layout and the qkv/GDN in-proj layouts. Biggest remaining lever for the ≤15 µs on-path AR + delivery target.
    Needs a sim prototype first (fused MLP v12).
+
+## 13. v0.5 step 2 dropped; engine to-dos (2026-11-10, -mk-gdnext GDNEXT_RESULTS.md)
+- **Step 2 dropped:** with resident weights the GDN-type mixer compute is only 4.2 µs, so spreading GDN in/out over
+  120 cores has at most ~2-3 µs headroom. v0.5 = step 1 only (qkv/wo on 120 cores, the u1 attention lever).
+- **To integrate into the mixed engine:**
+  - MKA_MIXTRID (separate mixer trids 6/7; GDN-layer MLP slots pushed in W-GDN before plan_layer(L+1)): cold
+    layer 0 mixer 114 → 89 µs, layer 0 247 → 235 µs, PCC unchanged. From anatarajan/qwen38-r16-mk-gdnext.
+  - Port MK_DNPIPE / MK_FLAG_FLUSH (from -mk-tail, currently only in fm11_common.hpp) into mka2_writer/compute's
+    MLP tail: ~1-2 µs per layer.
