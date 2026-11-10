@@ -134,6 +134,9 @@ void kernel_main() {
     if (IS_STREAM) { plan_layer(0, true); issue_some(true); npc = ip = outstanding = 0; }
     constexpr uint32_t TRID_V = 5;
     for (uint32_t L = 0; L < NL; ++L) {
+        const bool att = is_attn(L);
+        const uint32_t A = aidx(L);
+        if (!IS_STREAM && !att) continue;   // ATTN-only cores idle through GDN-type layers
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
 #endif
@@ -147,15 +150,26 @@ void kernel_main() {
             cb_push_back(CB_WD, DN_TILES);
             cb_wait_front(CB_YM, MIXT / KT);
             cb_pop_front(CB_YM, MIXT / KT);
-            noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
+            if (att) noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_MIXDONE]), 1);
         }
+        if (!att) {   // GDN-type layer: next layer's weights stream during the GDN stand-in stall (GDN step + out-proj + AR)
+            DeviceZoneScopedN("W-GDN");
+            npc = ip = outstanding = 0;
+            if (L + 1 < NL) plan_layer(L + 1, true);
+            issue_some(true);
+            spin_cycles(MKA_S_GDN);
+            spin_cycles(S_AR);
+            cb_reserve_back(CB_GO, 1);
+            cb_push_back(CB_GO, 1);
+        }
+        if (att) 
         {   // SDPA: Q (Q root reads + multicasts, flag = L + 1), then the V stream with the throttled weight issue
             DeviceZoneScopedN("W-SDPA");
             cb_reserve_back(CB_Q, QT);
             const uint32_t qdst = get_write_ptr(CB_Q);
             if (is_qroot) {
-                noc_semaphore_wait_min(l1w(gs[GS_MIXDONE]), NSTREAM * (L + 1));
-                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), 4 * L);
+                noc_semaphore_wait_min(l1w(gs[GS_MIXDONE]), NSTREAM * (A + 1));
+                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), 4 * A);
                 for (uint32_t t = 0; t < QT; ++t) noc_async_read(qacc.get_noc_addr(L * QT + t), qdst + t * QTB, QTB);
                 noc_async_read_barrier();
                 for (uint32_t i = 0; i < 2; ++i) {
@@ -165,10 +179,10 @@ void kernel_main() {
                     else noc_async_write_multicast(qdst, m, QT * QTB, rf[i][4], false);
                 }
                 noc_async_writes_flushed();
-                mcast_word(gs[GS_QFLAG], L + 1, rf, self_rf, 0);
+                mcast_word(gs[GS_QFLAG], A + 1, rf, self_rf, 0);
                 noc_async_write_barrier();
             }
-            noc_semaphore_wait_min(l1w(gs[GS_QFLAG]), L + 1);
+            noc_semaphore_wait_min(l1w(gs[GS_QFLAG]), A + 1);
             cb_push_back(CB_Q, QT);
             if (IS_STREAM) {   // plan layer L + 1's mixer + MLP slices and layer L's wo slice
                 npc = ip = outstanding = 0;
@@ -196,14 +210,14 @@ void kernel_main() {
             if (IS_STREAM) issue_some(true);
         }
         if (!IS_STREAM) continue;
-        {   // attention done (all 4 SDPA roots) -> wo stand-in + attention AR -> MLP go
+        if (att) {   // attention done (all 4 SDPA roots) -> wo stand-in + attention AR -> MLP go
             DeviceZoneScopedN("W-WOAR");
             if (is_qroot) {
-                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), 4 * (L + 1));
-                mcast_word(gs[GS_ADFLAG], L + 1, rs, self_rect, 0);
+                noc_semaphore_wait_min(l1w(gs[GS_ADONE]), 4 * (A + 1));
+                mcast_word(gs[GS_ADFLAG], A + 1, rs, self_rect, 0);
                 noc_async_write_barrier();
             }
-            noc_semaphore_wait_min(l1w(gs[GS_ADFLAG]), L + 1);
+            noc_semaphore_wait_min(l1w(gs[GS_ADFLAG]), A + 1);
 #if defined(MKA_WO_NOC0)
             noc_async_read_barrier_with_trid(3);   // layer L's wo slice landed
 #endif

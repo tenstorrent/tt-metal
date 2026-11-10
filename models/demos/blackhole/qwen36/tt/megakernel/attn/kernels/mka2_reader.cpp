@@ -62,13 +62,16 @@ void kernel_main() {
     const uint32_t o_base = get_read_ptr(CB_O);
     constexpr uint32_t TRID_K = 6;
     for (uint32_t L = 0; L < NL; ++L) {
+        const bool att = is_attn(L);
+        const uint32_t A = aidx(L);
+        if (!IS_STREAM && !att) continue;   // ATTN-only cores idle through GDN-type layers
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
 #endif
 #if defined(MKA_GUPRE)
         constexpr uint32_t TRID_GU = 8;
         uint32_t even_t = 0;
-        if (IS_STREAM && IS_GU) {   // layer L's even gate|up groups land in L1 during SDPA (CB_W holds the whole even half)
+        if (att && IS_STREAM && IS_GU) {   // layer L's even gate|up groups land in L1 during SDPA (CB_W holds the whole even half)
             for (uint32_t g0 = 0; g0 < NBG; g0 += 2 * GRP) even_t += ((NBG - g0) < GRP ? (NBG - g0) : GRP) * BLK;
             cb_reserve_back(CB_W, even_t);
             const uint64_t base = wgu.get_noc_addr(gu_page + L * pgu_layer);
@@ -82,7 +85,7 @@ void kernel_main() {
             noc_async_read_set_trid(0);
         }
 #endif
-        {   // SDPA: K stream
+        if (att) {   // SDPA: K stream
             DeviceZoneScopedN("R-KV");
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
             const uint32_t wtot = IS_STREAM ? wo_tiles + extra_tiles : 0;
@@ -115,11 +118,11 @@ void kernel_main() {
             }
             noc_async_read_barrier_with_trid(TRID_WO);
         }
-        {   // SDPA: tree reduce (pull), cumulative global semaphores
+        if (att) {   // SDPA: tree reduce (pull), cumulative global semaphores (over attention layers: A)
             DeviceZoneScopedN("R-RED");
             auto pull = [&](uint32_t sem_addr, uint32_t n, const uint32_t* cx, const uint32_t* cy) {
                 if (n == 0) return;
-                noc_semaphore_wait_min(l1w(sem_addr), n * (L + 1));
+                noc_semaphore_wait_min(l1w(sem_addr), n * (A + 1));
                 for (uint32_t i = 0; i < n; ++i) {
                     cb_reserve_back(CB_R, NO);
                     noc_async_read(get_noc_addr(cx[i], cy[i], o_base), get_write_ptr(CB_R), NO * OTB);
@@ -133,7 +136,7 @@ void kernel_main() {
             if (has_parent) {
                 cb_wait_front(CB_O, NO);
                 noc_semaphore_inc(get_noc_addr(par_x, par_y, par_lvl ? gs[GS_LVL1] : gs[GS_LVL0]), 1);
-                noc_semaphore_wait_min(l1w(gs[GS_DONE]), L + 1);
+                noc_semaphore_wait_min(l1w(gs[GS_DONE]), A + 1);
                 cb_pop_front(CB_O, NO);
             }
             if (is_root) {
@@ -146,10 +149,13 @@ void kernel_main() {
             }
         }
 #if defined(MKA_GUPRE)
-        if (IS_STREAM && IS_GU) { noc_async_read_barrier_with_trid(TRID_GU); cb_push_back(CB_W, even_t); }
+        if (att && IS_STREAM && IS_GU) { noc_async_read_barrier_with_trid(TRID_GU); cb_push_back(CB_W, even_t); }
+        constexpr bool kGupre = true;
+#else
+        constexpr bool kGupre = false;
 #endif
-#if !defined(MKA_NOMLP) && !defined(MKA_GUPRE)
-        if (IS_STREAM && IS_GU) {
+#if !defined(MKA_NOMLP)
+        if (IS_STREAM && IS_GU && !(kGupre && att)) {   // GDN-type layers (and non-GUPRE builds) stream the even groups here
             DeviceZoneScopedN("R-GU");
             const uint64_t base = wgu.get_noc_addr(gu_page + L * pgu_layer);
             for (uint32_t g0 = 0; g0 < NBG; g0 += 2 * GRP) {

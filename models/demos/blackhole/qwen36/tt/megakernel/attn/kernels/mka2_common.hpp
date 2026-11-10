@@ -29,3 +29,15 @@ FORCE_INLINE void mcast_word(uint32_t addr, uint32_t val, const uint32_t (*rc)[5
         else noc_semaphore_set_multicast(addr, m, rc[i][4], false, noc);
     }
 }
+
+// Mixed layer groups (MK mixed): bit L of MKA_AMASK = 1 -> attention-type layer, 0 -> GDN-type layer (GDN step +
+// out-proj modelled as a MKA_S_GDN-cycle stall on the STREAM chain until the -mk-gdn phases land). Attention
+// counters (Q flag, MIXDONE, ADONE, ADFLAG, tree sems) are cumulative over ATTENTION layers only: aidx(L).
+#ifndef MKA_AMASK
+#define MKA_AMASK 0xFFFFFFFFu
+#endif
+#ifndef MKA_S_GDN
+#define MKA_S_GDN 0
+#endif
+FORCE_INLINE bool is_attn(uint32_t L) { return ((uint32_t)(MKA_AMASK) >> L) & 1u; }
+FORCE_INLINE uint32_t aidx(uint32_t L) { return (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)); }
