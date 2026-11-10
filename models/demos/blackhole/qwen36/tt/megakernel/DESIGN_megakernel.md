@@ -617,3 +617,13 @@ Owner-core L1 map (~1.45 MB usable):
 The AR slots never overlap SDPA/EXT: a faster remote device can write attention-AR(L) while we are still in SDPA(L).
 Alternatives not taken: credit-based streaming (adds a fabric round trip on the late sources); separate
 attention-AR owners (needs a second in-row placement); BFP8 slots (gated).
+
+**§15 amendments (v0.7.1):**
+- *rot-order contract, clarified:* in the v0.6 down layout all 16 owners finish together, 2-4 µs after h lands. No K-row is delayed on purpose; that would add latency, not hide AR. The contract is now:
+  - (a) Each owner releases (flag + multicast) the moment its own 10-partial sum is done, with no stage-end barrier.
+  - (b) Within a K-row, the sub-block order of 2k / 2k+1 is a per-device runtime arg: the chunk whose RS destination is farther around the ring goes first.
+  - (c) The AR side polls owner flags and issues RS sends in rot order, so among chunks that finish together, the farthest destinations go first.
+  - The attention wo producer follows (a)-(c) the same way.
+- *Owner-core L1, revised with the EXT x shard:*
+  - The x shard on the ext cores (320 KB bf16, at the same lockstep address as the STREAM x) is separate from the AR slots. A faster remote device can write attention-AR(L) while we are still in qkv(L), so they cannot alias.
+  - Owner-core totals: EXT ring 348 + SDPA ~250 + misc 28 + x 320 + AR 160 ≈ **1.11 MB of ~1.45 MB**. The 2-tile ext ring stays.
