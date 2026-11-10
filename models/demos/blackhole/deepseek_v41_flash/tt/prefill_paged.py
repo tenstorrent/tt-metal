@@ -147,7 +147,14 @@ class PagedCtx:
         i = torch.arange(C).view(-1, 1)
         c = torch.arange(WINDOW).view(1, -1)
         ws = {}
+        memo = getattr(self, "_ws_memo", None)
+        if os.environ.get("DSV41_PF_POS_DEV", "0") == "1":  # (the ids depend on "first or not" only: built once, not per distinct start)
+            memo = self._ws_memo = {} if memo is None else memo
         for x in set(s0s) | {0, -1}:  # (-1: the not-first window)
+            key = 0 if x == 0 else -1
+            if memo is not None and key in memo:
+                ws[x] = memo[key]
+                continue
             if x == 0:  # kv of position p at scratch row base + 128 + p; valid positions max(0, i - 127) .. i
                 p = (i - (WINDOW - 1)).clamp(min=0) + c
                 rel = torch.where(p <= i, WINDOW + p, torch.full_like(p, -1))
@@ -157,6 +164,8 @@ class PagedCtx:
                 [torch.where(rel >= 0, self.scratch_base(u) + rel, torch.full_like(rel, -1)) for u in range(U)]
             ).reshape(U, 1, C, WINDOW)
             ws[x] = torch.where(w < 0, torch.full_like(w, -1), w).to(torch.int64).to(torch.int32)  # -1 -> 0xFFFFFFFF
+            if memo is not None:
+                memo[key] = ws[x]
         if self.per_row:  # slot k = row * U + u: its own start and its own scratch rows
             w = torch.cat([ws[x][k % U : k % U + 1] for k, x in enumerate(s0s)], dim=0)
         else:

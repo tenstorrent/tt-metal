@@ -28,6 +28,14 @@ REPS = int(os.environ.get("PROBE_REPS", "2"))
 B = int(os.environ.get("PROBE_B", "4"))
 
 
+def _stale_halo(name):
+    """halo of a layer >= REPLAY_BACK (21) in a snapshot: with the bounded replay the chunks before the replay zone do not run these layers, their halo is unspecified (it differs between two identical runs)"""
+    import re
+
+    m = re.match(r"L(\d+)\.halo", name)
+    return bool(m) and int(m.group(1)) >= 21
+
+
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -392,6 +400,8 @@ def test_chunk_probe(mesh_device):
                     keys_,
                     (res[USERS[0]][1].float().clone() if res[USERS[0]][1] is not None else None),
                 )
+        if cmp_ and os.environ.get("PROBE_CMP_SAVE"):  # (cross-process comparison of two runs, e.g. DSV41_PF_POS_DEV on / off: tools/cmp_probe_saves.py)
+            torch.save({"cmp": cmp_, "snaps": cmp_snaps}, f"{os.environ['PROBE_CMP_SAVE']}.E{E}")
         if cmp_:
             ref_ = cmp_[0]
             for rep, c_ in cmp_.items():
@@ -401,7 +411,11 @@ def test_chunk_probe(mesh_device):
                 eq_lg = c_[3] is None or bool((c_[3] == ref_[3]).all())
                 sn_, sr_ = cmp_snaps[rep], cmp_snaps[0]
                 eq_snap = sn_.keys() == sr_.keys() and all(
-                    all(all(torch.equal(x, y) for x, y in zip(sn_[k_][0][n_], sr_[k_][0][n_])) for n_ in sr_[k_][0])
+                    all(
+                        all(torch.equal(x, y) for x, y in zip(sn_[k_][0][n_], sr_[k_][0][n_]))
+                        for n_ in sr_[k_][0]
+                        if not _stale_halo(n_)
+                    )
                     and all(torch.equal(sn_[k_][1][n_], sr_[k_][1][n_]) for n_ in sr_[k_][1])
                     for k_ in sr_
                 )
