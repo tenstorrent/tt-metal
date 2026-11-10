@@ -22,7 +22,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, MochiVAEParallelCon
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.mochi.text_encoder import TextEncoder
-from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.pipeline_api import Pipeline
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils import cache
 from models.tt_dit.utils.mesh import reshape_device
@@ -104,6 +104,9 @@ class MochiPipelineConfig:
     num_frames: int
     max_sequence_length: int
 
+    # Capture traces and replay them.
+    trace: bool
+
     checkpoint_name: str
 
     @classmethod
@@ -123,6 +126,7 @@ class MochiPipelineConfig:
         width: int = 848,
         num_frames: int = 168,
         max_sequence_length: int = 256,
+        trace: bool = False,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> MochiPipelineConfig:
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
@@ -166,11 +170,12 @@ class MochiPipelineConfig:
             width=width,
             num_frames=num_frames,
             max_sequence_length=max_sequence_length,
+            trace=trace,
             checkpoint_name=checkpoint_name,
         )
 
 
-class MochiPipeline(PipelineAPIMixin):
+class MochiPipeline(Pipeline):
     r"""The mochi pipeline for text-to-video generation.
 
     Reference: https://github.com/genmoai/models
@@ -185,6 +190,7 @@ class MochiPipeline(PipelineAPIMixin):
         width: int = 848,
         num_frames: int = 168,
         max_sequence_length: int = 256,
+        trace: bool = False,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> MochiPipeline:
         config = MochiPipelineConfig.default(
@@ -193,6 +199,7 @@ class MochiPipeline(PipelineAPIMixin):
             width=width,
             num_frames=num_frames,
             max_sequence_length=max_sequence_length,
+            trace=trace,
             checkpoint_name=checkpoint_name,
         )
         return cls(device=mesh_device, config=config)
@@ -203,6 +210,7 @@ class MochiPipeline(PipelineAPIMixin):
         device: ttnn.MeshDevice,
         config: MochiPipelineConfig,
     ) -> None:
+        super().__init__(offload_weights=False, trace=config.trace)
         # TODO: determine these scaling factors from model parameters
         self.vae_spatial_scale_factor = 8
         self.vae_temporal_scale_factor = 6
@@ -286,7 +294,7 @@ class MochiPipeline(PipelineAPIMixin):
                 self._vae.reload_weights()
 
         logger.info("Pipeline allocation run...")
-        self(prompts=[""], num_inference_steps=2, guidance_scale=2, traced=False)
+        self.run_untraced(prompts=[""], num_inference_steps=2, guidance_scale=2)
 
     def _reshape_vae(self) -> AbstractContextManager[None]:
         return reshape_device(self._device, self._vae_mesh_shape)
@@ -300,7 +308,7 @@ class MochiPipeline(PipelineAPIMixin):
         return torch.randn(shape, dtype=torch.float32).to(dtype)
 
     @torch.no_grad()
-    def __call__(
+    def _run(
         self,
         *,
         prompts: Sequence[str],
@@ -309,13 +317,14 @@ class MochiPipeline(PipelineAPIMixin):
         guidance_scale: float = 4.5,
         num_videos_per_prompt: int | None = 1,
         seed: int = 0,
-        traced: bool = False,
+        traced: bool | None = None,
         vae_traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
     ) -> torch.Tensor:
         on_event = on_event if on_event is not None else null_callback
         negative_prompts = negative_prompts if negative_prompts is not None else [""] * len(prompts)
 
+        traced = self.trace if traced is None else traced
         vae_traced = vae_traced if vae_traced is not None else traced
 
         batch_size = len(prompts)

@@ -188,8 +188,11 @@ def test_tt_dit_accuracy(
     logger.info(f"  Inference steps: {num_inference_steps}")
 
     # Create pipeline similar to test_performance_flux1.py
+    # Traced exactly for the targets whose device params reserve a trace region; the others (Mochi, Wan) run
+    # eager, which is their pipelines' default.
+    trace = {"trace": True} if model_metadata["device_params"].get("trace_region_size") else {}
     pipeline = dit_pipeline.create_pipeline(
-        mesh_device=mesh_device, checkpoint_name=model_location_generator(model_metadata["hf_id"])
+        mesh_device=mesh_device, checkpoint_name=model_location_generator(model_metadata["hf_id"]), **trace
     )
 
     images = []

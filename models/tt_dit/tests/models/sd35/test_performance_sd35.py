@@ -117,6 +117,7 @@ def test_sd35_new_pipeline_performance(
     pipeline = StableDiffusion3Pipeline(
         device=mesh_device,
         config=StableDiffusion3PipelineConfig.default(
+            trace=True,
             mesh_shape=mesh_device.shape,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
             topology=topology,
@@ -147,7 +148,6 @@ def test_sd35_new_pipeline_performance(
             prompts=[prompts[0]],
             negative_prompts=[negative_prompt],
             num_inference_steps=num_inference_steps,
-            traced=True,
         )
     images[0].save(f"sd35_new_{image_w}_{image_h}_warmup.png")
 
@@ -179,7 +179,6 @@ def test_sd35_new_pipeline_performance(
                     prompts=[prompts[prompt_idx]],
                     negative_prompts=[negative_prompt],
                     num_inference_steps=num_inference_steps,
-                    traced=True,
                     on_event=profiler_event_callback(benchmark_profiler, i),
                 )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")

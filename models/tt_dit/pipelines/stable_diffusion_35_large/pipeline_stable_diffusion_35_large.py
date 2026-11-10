@@ -23,7 +23,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConf
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribute_cfg
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.pipeline_api import Pipeline
 from models.tt_dit.pipelines.stable_diffusion_35_large.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils.mesh import reshape_device
@@ -62,6 +62,9 @@ class StableDiffusion3PipelineConfig:
     cfg_enabled: bool
     max_t5_sequence_length: int
 
+    # Capture traces and replay them.
+    trace: bool
+
     checkpoint_name: str
 
     @classmethod
@@ -79,6 +82,7 @@ class StableDiffusion3PipelineConfig:
         width: int = 1024,
         cfg_enabled: bool = True,
         max_t5_sequence_length: int = 256,
+        trace: bool | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> StableDiffusion3PipelineConfig:
         preset = _PRESETS.get(tuple(mesh_shape), {})
@@ -113,11 +117,12 @@ class StableDiffusion3PipelineConfig:
             width=width,
             cfg_enabled=cfg_enabled,
             max_t5_sequence_length=max_t5_sequence_length,
+            trace=True if trace is None else trace,
             checkpoint_name=checkpoint_name,
         )
 
 
-class StableDiffusion3Pipeline(PipelineAPIMixin):
+class StableDiffusion3Pipeline(Pipeline):
     @classmethod
     def create_pipeline(
         cls,
@@ -127,6 +132,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         height: int = 1024,
         cfg_enabled: bool = True,
         max_t5_sequence_length: int = 256,
+        trace: bool | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> StableDiffusion3Pipeline:
         config = StableDiffusion3PipelineConfig.default(
@@ -135,6 +141,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
             height=height,
             cfg_enabled=cfg_enabled,
             max_t5_sequence_length=max_t5_sequence_length,
+            trace=trace,
             checkpoint_name=checkpoint_name,
         )
         return cls(device=mesh_device, config=config)
@@ -145,6 +152,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         device: ttnn.MeshDevice,
         config: StableDiffusion3PipelineConfig,
     ) -> None:
+        super().__init__(offload_weights=False, trace=config.trace)
         self._mesh_device = device
         self.dit_parallel_config = config.dit_parallel_config
         self.encoder_parallel_config = config.encoder_parallel_config
@@ -223,12 +231,12 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         ttnn.synchronize_device(self.encoder_device)
 
         logger.info("Pipeline allocation run...")
-        self(prompts=[""], num_inference_steps=2, guidance_scale=2 if config.cfg_enabled else 1, traced=False)
+        self.run_untraced(prompts=[""], num_inference_steps=2, guidance_scale=2 if config.cfg_enabled else 1)
 
     def _reshape_encoder(self) -> AbstractContextManager[None]:
         return reshape_device(self.encoder_device, self.encoder_mesh_shape)
 
-    def __call__(
+    def _run(
         self,
         *,
         prompts: Sequence[str],
@@ -241,7 +249,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         seed: int = 0,
         num_images_per_prompt: int = 1,
         guidance_scale: float = 3.5,
-        traced: bool = False,
+        traced: bool | None = None,
         # currently defaults to off due to ttnn.synchronize_device inside vae_all_gather
         vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
@@ -255,6 +263,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         negative_prompts_2 = negative_prompts_2 if negative_prompts_2 is not None else negative_prompts
         negative_prompts_3 = negative_prompts_3 if negative_prompts_3 is not None else negative_prompts
 
+        traced = self.trace if traced is None else traced
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         if guidance_scale > 1 and not self._cfg_enabled:
