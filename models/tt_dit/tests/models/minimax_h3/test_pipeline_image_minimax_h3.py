@@ -208,12 +208,12 @@ def test_device_latents_ab(mesh_device, guide_examples):
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
 def test_zero_jit_across_prompts(mesh_device, guide_examples):
-    """Warm as the server does (4K t2i + 2K edit, both with the prompt "warmup"), then vary the prompt length:
-    which stages still compile programs for a prompt or presentation length they have not seen?"""
+    """After `warmup()` (what the server runs), vary the prompt length: no stage may compile a program for a prompt or
+    presentation length it has not seen."""
     t2i, edit_prompt, reference = guide_examples
     pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
-    pipe("warmup", width=4096, height=4096, seed=0)
-    pipe("warmup", width=2048, height=2048, seed=0, images=[Image.new("RGB", (1024, 1024), (128, 128, 128))])
+    logger.info(f"RESULT warmup: {pipe.warmup():.1f}s, presentation ladder {pipe.presentation_ladder}")
+    total_misses = 0
     prompts = {
         "short": "A red apple on a white table.",
         "medium": t2i["prompt"],
@@ -228,3 +228,5 @@ def test_zero_jit_across_prompts(mesh_device, guide_examples):
                 f"RESULT zero_jit_prompt {task} {name} ({len(prompt)} chars): misses {sum(misses.values())} {misses} "
                 f"| prompt stage {result.timings.encode_prompt:.2f}s"
             )
+            total_misses += sum(misses.values())
+    assert total_misses == 0, f"{total_misses} programs compiled on the serving path after warmup()"

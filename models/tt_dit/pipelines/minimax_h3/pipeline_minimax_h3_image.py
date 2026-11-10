@@ -59,6 +59,9 @@ IMAGE_BUCKET_LADDER_4X8 = (4608, 5376, 6656, 8192, 10240, 12800, 16384, 17920, 2
 # Qwen presentation: 4096 prompt tokens + ~1024 vision tokens per 1024-short-edge reference (more for wide ones).
 IMAGE_PROMPT_CAP = 12288
 IMAGE_VISION_PATCH_CAP = 4 * 8192  # unmerged patches across all references
+# Presentation rungs (text + vision tokens) below the prompt arena cap: a short t2i prompt, a 1024^2 reference
+# (1024 vision tokens) plus text, two references, then the long tail.
+IMAGE_PRESENTATION_LADDER = (1024, 2048, 4096, 8192)
 IMAGE_ARENA_CAPS = MiniMaxH3ArenaCaps(
     prompt=IMAGE_PROMPT_CAP,
     video_rows=17152,  # target rows: 6272x2688 (21:9) is 16464; 4096^2 is 16384
@@ -155,7 +158,11 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         self._dit_kv_capacity = self.max_sequence_length if dynamic_length else self.bucket_ladder[-1]
         self.arena_caps = arena_caps
         self.arena_caps.validate()
-        self.presentation_ladder = (self.arena_caps.prompt,)
+        # The Qwen3-VL encoder compiles one program set per presentation length, so prompts pad up to a rung of this
+        # ladder (warmed by `warmup`); it is weight-bound at these lengths, so the padding costs ~nothing.
+        self.presentation_ladder = tuple(r for r in IMAGE_PRESENTATION_LADDER if r < self.arena_caps.prompt) + (
+            self.arena_caps.prompt,
+        )
         self.vision_patch_ladder = None
         self._force_bucket = self._force_prompt_pad = self._force_vision_pad = None
         self._log_generation = True
@@ -643,6 +650,30 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         return v
 
     # ------------------------------------------------------------------ warmup
+
+    def warmup(self) -> float:
+        """Compile every program a served request can reach, so none compiles on the serving path; returns seconds.
+
+        The DiT and the VAE are length-agnostic once one request has run (dynamic length), but the text encoder keys
+        programs on the presentation length: each rung of `presentation_ladder` is encoded once, text-only and (where
+        a 1024^2 reference fits) with one, which is what an edit merges. Then a 4K t2i (the default size; the most
+        VAE decode waves) and a 2K edit (the vision tower and the VAE encoder) run end to end.
+        """
+        started = time.perf_counter()
+        reference = Image.new("RGB", (1024, 1024), (128, 128, 128))
+        for rung in self.presentation_ladder:
+            for keyframes in ((), (reference,)):
+                if keyframes and rung < 2048:  # 1024 vision tokens + the template do not fit a 1024 rung
+                    continue
+                self._force_prompt_pad = rung
+                try:
+                    embeds, _ = self.encode_prompt("warmup", keyframes=list(keyframes))
+                finally:
+                    self._force_prompt_pad = None
+                ttnn.deallocate(embeds)
+        self("warmup", width=4096, height=4096, seed=0)
+        self("warmup", width=2048, height=2048, seed=0, images=[reference])
+        return time.perf_counter() - started
 
     def warm_rungs(self, rungs: Sequence[int] | None = None) -> dict[int, float]:
         """Run one tiny request forced to each rung so its DiT programs are compiled before serving."""
