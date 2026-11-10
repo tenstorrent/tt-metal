@@ -36,7 +36,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores) {
-    auto* output_buffer = output_tensor.buffer();
+    const auto* output_buffer = &output_tensor.mesh_buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < actual_input_shape.rank(); i++) {
@@ -320,7 +320,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
     // ---- Per-core runtime args ----
     auto per_core = get_slice_write_runtime_args_tiled_sharded_input(
         input, output, output_tensor_start, output_tensor_end, iter_cores);
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     ProgramRunArgs run_args;
     KernelRunArgs reader_run{.kernel = SWT_READER};

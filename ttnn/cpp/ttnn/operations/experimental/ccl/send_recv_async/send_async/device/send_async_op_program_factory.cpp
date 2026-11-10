@@ -322,7 +322,7 @@ void SendAsyncProgramFactory::override_runtime_arguments(
     tt::tt_metal::IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(input_tensor, mesh_dispatch_coordinate, "send_async");
 
-    auto* input_buffer = input_tensor.buffer();
+    const auto* input_buffer = &input_tensor.mesh_buffer();
     TT_FATAL(input_buffer != nullptr, "send_async: input tensor buffer is null");
 
     // Everything else in the runtime args (page counts, offsets, bank ids, fabric connection
