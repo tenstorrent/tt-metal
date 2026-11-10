@@ -1283,7 +1283,7 @@ def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tupl
 
 
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import rotate_index_keys
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
         _load_golden_index_k,
         _load_golden_kv_post,
@@ -1410,7 +1410,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         mins["mtp"] = mtp_min
     if _has_index_config(table):
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
-        index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
+        hf_config = ADAPTER.load_hf_config()
         n_index_layers = table.config(1).num_layers
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
         index_rows = []
@@ -1475,7 +1475,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 rope_layout=mtp_index_layout if is_mtp_row else "interleaved",
                 position0=first_pos + skip_rows,
             )
-            dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
+            dev_ik = rotate_index_keys(hf_config, dev_ik.float()).to(torch.bfloat16)  # the golden's natural basis
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index

@@ -72,7 +72,6 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weigh
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
@@ -480,10 +479,10 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
 #
 # The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
 #
-# * Key cache (tt_metal_tracker-ao3i.5.3): the device stores each key in the orthonormal Hadamard basis
-#   (`TtIndexer.write_k`), the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in the natural
-#   basis (its own fp8 cache dequantizes to it at PCC 0.9996). Undo the rotation (H is symmetric and its own
-#   inverse) and PCC on the prompt rows, as the producer's index check does; raw, the two read PCC -0.22..0.17.
+# * Key cache (tt_metal_tracker-ao3i.5.3): the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in
+#   the natural basis (its own fp8 cache dequantizes to it at PCC 0.9996). K3.1's decode reads its cache in that
+#   basis, so the device key is compared as stored (`index_hadamard=False`, tt_metal_tracker-ao3i.5.9): a
+#   Hadamard-rotated cache reads PCC -0.22..0.17 and fails. PCC on the prompt rows, as the producer's index check does.
 #   Bar KV_CACHE_PCC, the KV cache's (the producer holds the index cache to the same threshold as the kvpe).
 # * Top-k (tt_metal_tracker-ao3i.5.2): each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
 #   scored as set recall |device ∩ trace| / |trace| per query row (test_ttnn_csa*.py's measure), averaged
@@ -729,7 +728,6 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         )
 
     kv_failures = []
-    hadamard = normalized_hadamard_matrix(KimiK31Config.INDEX_HEAD_DIM).float()
     for slot, layer in sorted(slots.items()):
         golden = trace.kv_cache(layer, 0, real_len)
         got = kv["kvpe"][slot, : golden.shape[0]]
@@ -741,9 +739,8 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         )
         line = f"K31 {rung} kvpe slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}"
         line += f"  decode lora={dec_lora:.6f} rope={dec_rope:.6f}"
-        # The key in the trace's (natural) basis: the device stores it Hadamard-rotated.
         want_index = trace.rows("indexer", f"indexer_k_layer_{layer}", 0, real_len)
-        got_index = kv["index"][slot, : want_index.shape[0]] @ hadamard
+        got_index = kv["index"][slot, : want_index.shape[0]]
         index = pcc(want_index[:prompt_len], got_index[:prompt_len])
         line += f"  index key={index:.6f}  decode {pcc(want_index[prompt_len:], got_index[prompt_len:]):.6f}"
         logger.info(line)

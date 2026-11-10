@@ -588,20 +588,6 @@ MLA_MATMUL_CONFIG = {
                     fused_activation=None,
                 ),
             },
-            {
-                **_K31_INDEXER_TAGS,
-                "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=4,
-                    out_subblock_h=2,
-                    out_subblock_w=1,
-                    per_core_M=2,
-                    per_core_N=1,
-                    transpose_mcast=False,
-                    fuse_batch=False,
-                    fused_activation=None,
-                ),
-            },
         ],
     },
     "indexer.q_hadamard": {
@@ -621,36 +607,10 @@ MLA_MATMUL_CONFIG = {
                     mcast_in0=False,
                 ),
             },
-            {
-                **_K31_INDEXER_TAGS,
-                "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=2,
-                    out_subblock_h=2,
-                    out_subblock_w=4,
-                    per_core_M=2,
-                    per_core_N=4,
-                    fuse_batch=True,
-                    mcast_in0=False,
-                ),
-            },
         ],
         640: [
             {
                 **_GLM_INDEXER_TAGS,
-                "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=2,
-                    out_subblock_h=2,
-                    out_subblock_w=4,
-                    per_core_M=8,
-                    per_core_N=4,
-                    fuse_batch=True,
-                    mcast_in0=False,
-                ),
-            },
-            {
-                **_K31_INDEXER_TAGS,
                 "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=COMPUTE_GRID,
                     in0_block_w=2,

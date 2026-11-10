@@ -335,14 +335,14 @@ def test_driver_cache_plan_follows_cache_kind(model, tmp_path, monkeypatch):
 def test_producer_scores_the_k31_index_cache_against_the_trace(tmp_path, monkeypatch):
     """The runner gate's index check on K3.1 (tt_metal_tracker-ao3i.5.3): it reads the trace's single-file
     `indexer/indexer_k_layer_N` golden, walks config 1 at the DSA layers only (K3.1 has no `indexer_types`, and
-    its other rows hold KDA state), and scores the device keys after undoing their Hadamard rotation."""
+    its other rows hold KDA state), and scores the device keys in the trace's natural basis (K3.1's index cache holds
+    unrotated keys, tt_metal_tracker-ao3i.5.9)."""
     import json
 
     import torch
     from safetensors.torch import save_file
 
     from models.demos.common.prefill.runners import prefill_producer
-    from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
 
     real_len = 64
     adapter = get_adapter("kimi_k3_1")
@@ -360,7 +360,6 @@ def test_producer_scores_the_k31_index_cache_against_the_trace(tmp_path, monkeyp
     (trace / "indexer").mkdir()
     (trace / "metadata.json").write_text(json.dumps({"n_prompt_tokens": real_len}))
     generator = torch.Generator().manual_seed(531)
-    hadamard = normalized_hadamard_matrix(128).float()
     device = {}
     mla = [layer for layer in KimiK3Config.mla_layer_ids() if layer < 24]
     for layer in mla:
@@ -372,7 +371,7 @@ def test_producer_scores_the_k31_index_cache_against_the_trace(tmp_path, monkeyp
             {f"indexer_k_layer_{layer}": key.bfloat16()}, trace / "indexer" / f"indexer_k_layer_{layer}.safetensors"
         )
         device[0, layer] = kvpe.bfloat16().float()
-        device[1, layer] = key.bfloat16().float() @ hadamard  # as TtIndexer.write_k stores it
+        device[1, layer] = key.bfloat16().float()  # as TtIndexer.write_k stores it: unrotated
 
     reads = []
 
