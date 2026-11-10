@@ -98,7 +98,8 @@ class TtnnBackend:
         return self.ttnn.from_torch(x, dtype=self.ttnn.bfloat16)
 
     def _nhwc(self, t, b, h, w):
-        return self.ttnn.reshape(t, (b, h // 2, w // 2, 12))
+        # Into L1: the first conv reshards it from there instead of from DRAM.
+        return self.ttnn.reshape(t, (b, h // 2, w // 2, 12), memory_config=self.ttnn.L1_MEMORY_CONFIG)
 
     def _det_fn(self, b, h, w):
         return lambda t: self.det(self._nhwc(t, b, h, w), b, h, w)[0]

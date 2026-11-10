@@ -4,6 +4,8 @@
 
 # Shared ttnn blocks for PP-OCRv6. Activations are flattened NHWC: [1, 1, B*H*W, C].
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 
@@ -20,12 +22,24 @@ def fold_bn(weight, bias, bn: nn.BatchNorm2d):
     return weight, (bias - bn.running_mean) * scale + bn.bias
 
 
+@dataclass
+class Precision:
+    """Numerics for every conv and matmul of a model; read when its layers are built."""
+
+    math_fidelity: object = ttnn.MathFidelity.HiFi4
+    weights_dtype: object = ttnn.bfloat16
+    fp32_dest_acc_en: bool = True
+
+
+PRECISION = Precision()
+
+
 def compute_config(device):
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=PRECISION.math_fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=PRECISION.fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -70,7 +84,7 @@ class Conv:
         # Device-prepared weights depend on the input shape (sharding), so keep one copy per shape.
         self.prepared = {}
         self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat16,
+            weights_dtype=PRECISION.weights_dtype,
             activation=activation,
             output_layout=ttnn.TILE_LAYOUT,
         )
@@ -108,7 +122,7 @@ class Linear:
 
     def __init__(self, device, weight, bias=None, activation=None):
         w = weight.detach().float().reshape(weight.shape[0], -1).t().contiguous()
-        self.weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.weight = ttnn.from_torch(w, dtype=PRECISION.weights_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         self.bias = (
             None
             if bias is None
@@ -211,8 +225,10 @@ class LargeStem:
         a, _, _ = self.stem2a(s1, batch, h1, w1)
         a, _, _ = self.stem2b(a, batch, h1, w1)
         # Zero padding before the pool equals -inf padding here because s1 is post-ReLU.
+        # The pool takes s1 tiled and leaves its output sharded in L1 for stem3_pool: an
+        # untilize before it and a DRAM round trip after it were ~0.6 ms of the detector.
         p = ttnn.max_pool2d(
-            to_row_major(s1),
+            s1,
             batch_size=batch,
             input_h=h1,
             input_w=w1,
@@ -221,12 +237,12 @@ class LargeStem:
             stride=[1, 1],
             padding=[0, 1, 0, 1],
             dilation=[1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         x, h, w = self.stem3_pool(p, batch, h1, w1)
         y, _, _ = self.stem3_branch(a, batch, h1, w1)
-        x = ttnn.relu(ttnn.add(x, y))
+        # In DRAM: stem4's fused ReLU cannot run on a sharded matmul input.
+        x = ttnn.relu(ttnn.add(x, y, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return self.stem4(x), h, w
 
 

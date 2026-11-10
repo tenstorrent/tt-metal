@@ -11,7 +11,7 @@ from safetensors.torch import load_file
 
 DET_REPO = "PaddlePaddle/PP-OCRv6_small_det_safetensors"
 REC_REPO = "PaddlePaddle/PP-OCRv6_small_rec_safetensors"
-DET_L1_SMALL_SIZE = 32768
+DET_L1_SMALL_SIZE = 49152  # conv and pool configs of every traced shape stay resident
 TRACE_REGION_SIZE = 32 << 20
 DEVICE_PARAMS = {"l1_small_size": DET_L1_SMALL_SIZE, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 2}
 
