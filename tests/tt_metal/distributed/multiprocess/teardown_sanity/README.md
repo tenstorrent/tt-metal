@@ -1,4 +1,4 @@
-# Teardown litmus — structure and groupings
+# Teardown sanity — structure and groupings
 
 A dedicated test suite for the distributed-teardown plan (tt-metal #56902, tt-blaze `tools/teardown_probe`). It
 is **not a fabric test**: it does not exercise the fabric or a device. It asks one question — *after a single
@@ -15,10 +15,10 @@ This suite is built in two stacked PRs. This document is the map; each PR fills 
 
 ## Part 1 — tt-run, the launcher (PR #65121, base)
 
-*Does tt-run address each MPI/launcher failure?* Every row launches the raw C probe (`litmus_mpi_probe.c`)
+*Does tt-run address each MPI/launcher failure?* Every row launches the raw C probe (`sanity_mpi_probe.c`)
 **through tt-run** (no ttnn import, seconds per row) and asserts tt-run ends the job correctly: the right exit
-code, every rank gone, nothing left in `/dev/shm`. Files: `test_teardown_litmus_mpi.py`, `litmus_mpi_probe.c`,
-`litmus_mpi_binding.yaml`, `litmus_common.py`.
+code, every rank gone, nothing left in `/dev/shm`. Files: `test_teardown_sanity_mpi.py`, `sanity_mpi_probe.c`,
+`sanity_mpi_binding.yaml`, `sanity_common.py`.
 
 ### Group A — fault classes (does tt-run end the job right on each failure?)
 | test | tt-run behavior | plan |
@@ -53,7 +53,7 @@ are forwarded, and a leftover rank makes the job fail.
 
 *Does tt-metal's own distributed stack tear down?* Added in the stacked PR, continuing the same structure.
 
-### Group D — DistributedContext rows (`test_teardown_litmus.py`, `litmus_probe.py`)
+### Group D — DistributedContext rows (`test_teardown_sanity.py`, `sanity_probe.py`)
 Two tt-metal ranks on the mock dual galaxy, launched by tt-run; one fault at each stage. Grouped by the piece
 that fails: the per-collective timeout (barrier / send / all_gather / recv, P16) and its false-positive guard,
 the control plane's init (shape, fabric config), the solver, descriptor loading, and the user's signals.
@@ -75,11 +75,11 @@ daemon is the P19 shape.
 
 Locally (a built tree and the python environment):
 ```
-pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v -p no:benchmark
+pytest tests/tt_metal/distributed/multiprocess/teardown_sanity -v -p no:benchmark
 ```
 
-In CI the single-host groups run as `teardown-litmus-mpi` (Part 1) and `teardown-litmus-ttmetal` (Part 2); each is
+In CI the single-host groups run as `teardown-sanity-mpi` (Part 1) and `teardown-sanity-ttmetal` (Part 2); each is
 its own matrix entry, so they are reported as teardown, not folded into the fabric suite. The multi-host group
-(Part 2, F) runs on the SC4 lane. Deadlines: `TT_LITMUS_DEADLINE` (a row that must end) and
-`TT_LITMUS_DEADLINE_HANG` (a row that hangs today). `TT_LITMUS_MPI_PREFIX=/opt/openmpi-<version>` reruns the MPI
+(Part 2, F) runs on the SC4 lane. Deadlines: `TT_SANITY_DEADLINE` (a row that must end) and
+`TT_SANITY_DEADLINE_HANG` (a row that hangs today). `TT_SANITY_MPI_PREFIX=/opt/openmpi-<version>` reruns the MPI
 rows against another install.

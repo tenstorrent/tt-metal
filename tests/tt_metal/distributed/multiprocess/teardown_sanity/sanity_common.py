@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Shared by the teardown litmus rows: paths, the census, the launch, the deadline, the assertions.
+"""Shared by the teardown sanity rows: paths, the census, the launch, the deadline, the assertions.
 
 Two launchers: tt-run with tt-metal ranks (``legacy_cmd``, ``solve_cmd``, the Python probe) and plain mpirun with
-the C probe (``mpi_cmd``, ``litmus_mpi_probe.c``). The MPI install is ``TT_LITMUS_MPI_PREFIX`` when set (its
+the C probe (``mpi_cmd``, ``sanity_mpi_probe.c``). The MPI install is ``TT_SANITY_MPI_PREFIX`` when set (its
 bin/mpirun and bin/mpicc, the probe recompiled against it, so another OpenMPI version or build can be tried),
 else the mpirun on PATH and the probe binary the build made (``build/test/tt_metal/distributed/teardown_mpi_probe``).
 """
@@ -27,19 +27,19 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("TT_METAL_HOME", HERE.parents[4]))
-PROBE = HERE / "litmus_probe.py"
+PROBE = HERE / "sanity_probe.py"
 BINDING = ROOT / "tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
 MAPPING = (
     ROOT / "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc_mapping.yaml"
 )
 T3K_DESC = "tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml"
 MGD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
-PYTHON = os.environ.get("TT_LITMUS_PYTHON", "python3")
+PYTHON = os.environ.get("TT_SANITY_PYTHON", "python3")
 TTRUN = shutil.which("tt-run") or "tt-run"
 
 # a row that must end gets this long; a row expected to hang today is given up on sooner, it is the whole budget
-DEADLINE_END = float(os.environ.get("TT_LITMUS_DEADLINE", "90"))
-DEADLINE_HANG = float(os.environ.get("TT_LITMUS_DEADLINE_HANG", "60"))
+DEADLINE_END = float(os.environ.get("TT_SANITY_DEADLINE", "90"))
+DEADLINE_HANG = float(os.environ.get("TT_SANITY_DEADLINE_HANG", "60"))
 SETTLE_S = 3.0  # after the launcher returns, before the census
 
 LAUNCHER_COMMS = {"prterun", "prted", "mpirun", "mpirun-ulfm", "tt-run"}
@@ -62,7 +62,7 @@ def _procs() -> dict:
         except OSError:
             continue
         if (
-            comm in LAUNCHER_COMMS or "litmus_probe.py" in args or comm.startswith("generate_rank_b")
+            comm in LAUNCHER_COMMS or "sanity_probe.py" in args or comm.startswith("generate_rank_b")
         ):  # comm is 15 chars
             out[int(p.rsplit("/", 1)[1])] = (comm, args[:120])
     return out
@@ -152,8 +152,8 @@ def solve_cmd(mpi_extra: str = "", mgd: Path = MGD) -> list:
     ]
 
 
-MPI_PREFIX = os.environ.get("TT_LITMUS_MPI_PREFIX", "")
-MPI_PROBE_SRC = HERE / "litmus_mpi_probe.c"
+MPI_PREFIX = os.environ.get("TT_SANITY_MPI_PREFIX", "")
+MPI_PROBE_SRC = HERE / "sanity_mpi_probe.c"
 MPI_PROBE_BUILT = ROOT / "build/test/tt_metal/distributed/teardown_mpi_probe"
 _MPI_PROBE_CACHE: dict = {}
 
@@ -171,14 +171,14 @@ def mpi_probe_path() -> str:
     if not MPI_PREFIX and MPI_PROBE_BUILT.exists():
         _MPI_PROBE_CACHE["path"] = str(MPI_PROBE_BUILT)
         return _MPI_PROBE_CACHE["path"]
-    mpicc = os.environ.get("TT_LITMUS_MPICC") or (
+    mpicc = os.environ.get("TT_SANITY_MPICC") or (
         str(Path(MPI_PREFIX) / "bin" / "mpicc") if MPI_PREFIX else shutil.which("mpicc")
     )
     if not mpicc or not Path(mpicc).exists():
         pytest.skip(
-            "no teardown_mpi_probe binary in the build and no mpicc to compile litmus_mpi_probe.c (set TT_LITMUS_MPI_PREFIX or TT_LITMUS_MPICC)"
+            "no teardown_mpi_probe binary in the build and no mpicc to compile sanity_mpi_probe.c (set TT_SANITY_MPI_PREFIX or TT_SANITY_MPICC)"
         )
-    out = Path(tempfile.mkdtemp(prefix="litmus_mpi_")) / "teardown_mpi_probe"
+    out = Path(tempfile.mkdtemp(prefix="sanity_mpi_")) / "teardown_mpi_probe"
     subprocess.run([mpicc, "-O2", "-o", str(out), str(MPI_PROBE_SRC)], check=True)
     _MPI_PROBE_CACHE["path"] = str(out)
     return _MPI_PROBE_CACHE["path"]
@@ -198,7 +198,7 @@ def mpi_cmd(ulfm: bool = True, extra: str = "", btl: str = "self,tcp", np: int =
     return cmd + [mpi_probe_path()]
 
 
-MPI_BINDING = HERE / "litmus_mpi_binding.yaml"
+MPI_BINDING = HERE / "sanity_mpi_binding.yaml"
 
 
 def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3) -> list:
@@ -235,7 +235,7 @@ def run_case(
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
 ) -> Result:
     cmd = cmd or legacy_cmd()
-    piddir = tempfile.mkdtemp(prefix="litmus_pids_")
+    piddir = tempfile.mkdtemp(prefix="sanity_pids_")
     env = dict(os.environ, PROBE_PIDDIR=piddir, **env_over)
     before = _procs()
     before_shm = _shm()
@@ -310,7 +310,7 @@ def run_case(
     shutil.rmtree(piddir, ignore_errors=True)
     reached, rcs = _parse(out)
     res = Result(name, " ".join(cmd), rc, wall, timed_out, "; ".join(sent), alive, left, shm, reached, rcs, out)
-    print(f"\n[litmus] {name}: {res}")
+    print(f"\n[sanity] {name}: {res}")
     return res
 
 
