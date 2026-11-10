@@ -536,7 +536,21 @@ class Conv2d(Module):
         return cache[(i, n)]
 
     def _conv_at_level(
-        self, x, b, h, w, in_channels, out_channels, slice_config, num_slices, level, split=None, shard_layout=None
+        self,
+        x,
+        b,
+        h,
+        w,
+        in_channels,
+        out_channels,
+        slice_config,
+        num_slices,
+        level,
+        split=None,
+        shard_layout=None,
+        prologue=None,
+        halo_boundary=None,
+        epilogue_stats=None,
     ):
         """One conv2d at a fallback level: 0 = shard layout + double buffering (as configured), 1 = shard layout
         without double buffering, 2 = no shard layout (today's behaviour). `split` = (i, n): output-channel part i
@@ -616,10 +630,38 @@ class Conv2d(Module):
             slice_config=slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            # the preceding norm's affine + SiLU inside the halo pass
+            **({"prologue_scale": prologue[0], "prologue_shift": prologue[1]} if prologue is not None else {}),
+            # the neighbour devices' boundary sticks for the border padding
+            **({"halo_boundary": halo_boundary} if halo_boundary is not None else {}),
+            # output GroupNorm statistics: (stats tensor, pages per slice)
+            **(
+                {"epilogue_stats": epilogue_stats[0], "epilogue_stats_slice_stride": epilogue_stats[1]}
+                if epilogue_stats is not None
+                else {}
+            ),
         )
         return out, out_height, out_width, prepared_key, prepared_weight, prepared_bias
 
-    def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
+    def cout_parts(self, h: int, w: int) -> int:
+        """How many output-channel parts a conv on an (h, w) input runs as (1 = unsplit)."""
+        out_channels = self.weight.data.shape[0]
+        n_split = self.cout_split if self.cout_split > 1 and self.in_mesh_axis is None else 1
+        if n_split > 1 and (h * w < self.split_min_pixels or out_channels % n_split):
+            n_split = 1
+        return n_split
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        /,
+        *,
+        use_persistent_buffer: bool = True,
+        prologue=None,
+        halo_boundary=None,
+        slice_shape: tuple[int, int] | None = None,
+        epilogue_stats=None,
+    ) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
 
         Args:
@@ -660,18 +702,20 @@ class Conv2d(Module):
                 raise ValueError(msg)
 
         slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-        num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
+        # `slice_shape`: the (h, w) to look the slice count up by (the external halo's neighbour-padded shape)
+        num_slices = slice_params.get((*(slice_shape or (h, w)), self.in_channels, self.out_channels))
         slice_config = (
             ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
             if num_slices is not None
             else None
         )
+        if halo_boundary is not None and num_slices in (None, 1):
+            # the external halo runs on the conv's L1 path when unsliced
+            slice_config = ttnn.Conv2dL1FullSliceConfig
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
-        n_split = self.cout_split if self.cout_split > 1 and self.in_mesh_axis is None else 1
-        if n_split > 1 and (h * w < self.split_min_pixels or out_channels % n_split):
-            n_split = 1
+        n_split = self.cout_parts(h, w)
         shape_key = (h, w, self.in_channels, self.out_channels)
         if n_split > 1:
             shape_key = (*shape_key, n_split)  # its own fallback level
@@ -683,7 +727,18 @@ class Conv2d(Module):
             try:
                 if n_split == 1:
                     x_out, out_height, out_width, prepared_key, prepared_weight, prepared_bias = self._conv_at_level(
-                        x, b, h, w, in_channels, out_channels, slice_config, num_slices, level
+                        x,
+                        b,
+                        h,
+                        w,
+                        in_channels,
+                        out_channels,
+                        slice_config,
+                        num_slices,
+                        level,
+                        prologue=prologue,
+                        halo_boundary=halo_boundary,
+                        epilogue_stats=epilogue_stats[0] if isinstance(epilogue_stats, list) else epilogue_stats,
                     )
                 else:
                     parts = []
@@ -700,6 +755,14 @@ class Conv2d(Module):
                             level,
                             split=(i, n_split),
                             shard_layout=self.split_shard_layout,
+                            prologue=prologue,
+                            halo_boundary=halo_boundary,  # every cout part reads the same input + border
+                            # one (pages, stride) per cout part
+                            epilogue_stats=(
+                                epilogue_stats[i]
+                                if isinstance(epilogue_stats, list) and len(epilogue_stats) == n_split
+                                else None
+                            ),
                         )
                         self._prepared[k_i] = (w_i, b_i)
                         if o.is_sharded():

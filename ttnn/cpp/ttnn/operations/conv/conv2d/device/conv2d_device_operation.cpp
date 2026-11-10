@@ -98,6 +98,17 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.b;
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Activation tensor should be sharded.");
     TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
+    if (args.epilogue_stats) {
+        TT_FATAL(tensor_args.epilogue_stats.has_value(), "conv2d epilogue_stats: the stats tensor is missing");
+        const auto& st = tensor_args.epilogue_stats.value();
+        TT_FATAL(
+            st.dtype() == DataType::FLOAT32 && st.layout() == Layout::TILE && !st.memory_config().is_sharded(),
+            "conv2d epilogue_stats needs an fp32 TILE DRAM-interleaved tensor");
+        TT_FATAL(!args.untilize_out, "conv2d epilogue_stats needs a TILE output");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "conv2d epilogue_stats is implemented for the height-sharded path only");
+    }
     if (args.untilize_out) {
         TT_FATAL(
             (args.dtype == DataType::BFLOAT16) || (args.dtype == DataType::FLOAT32),
@@ -210,7 +221,10 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader) {
+    std::optional<bool> force_split_reader,
+    const std::optional<const Tensor>& epilogue_stats,
+    uint32_t epilogue_stats_slice,
+    uint32_t epilogue_stats_slice_stride) {
     using OperationType = Conv2dDeviceOperation;
 
     TT_FATAL(b.layout() == Layout::TILE, "Weights should be in TILE layout.");
@@ -234,11 +248,15 @@ Tensor conv2d(
         .enable_activation_reuse = enable_activation_reuse,
         .config_tensors_in_dram = config_tensors_in_dram,
         .force_split_reader = force_split_reader,
+        .epilogue_stats = epilogue_stats.has_value(),
+        .epilogue_stats_slice = epilogue_stats_slice,
+        .epilogue_stats_slice_stride = epilogue_stats_slice_stride,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .a = a,
         .b = b,
         .bias = bias,
+        .epilogue_stats = epilogue_stats.has_value() ? std::optional<Tensor>(epilogue_stats.value()) : std::nullopt,
     };
 
     auto* device = a.device();

@@ -782,6 +782,18 @@ void emit_cb_descriptors(
     }
 }
 
+// The three plain CBs the sharded factory adds for the epilogue statistics
+// (the 2N-tile fp32 page, two fp32 scratch tiles, the bf16 reduce scaler and row-mask tiles); not in the CBInfo
+// prediction
+static uint32_t epilogue_stats_cb_bytes(const Conv2dParams& operation_attributes) {
+    if (!operation_attributes.epilogue_stats) {
+        return 0;
+    }
+    const uint32_t n = operation_attributes.parallelization_config.per_core_out_matrix_width_ntile;
+    // the 2N-tile page + 2 scratch tiles (fp32), the scaler + the row mask (bf16)
+    return (2 * n + 2) * tt::tile_size(tt::DataFormat::Float32) + 2 * tt::tile_size(tt::DataFormat::Float16_b);
+}
+
 void post_conv2d_op_memory_checks_descriptor(
     const tt::tt_metal::ProgramDescriptor& desc,
     const Conv2dParams& operation_attributes,
@@ -801,10 +813,12 @@ void post_conv2d_op_memory_checks_descriptor(
     const conv_op_l1_usage l1_usage =
         predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
 
+    const uint32_t predicted_cb_size =
+        l1_usage.CB_allocation_size + epilogue_stats_cb_bytes(operation_attributes);
     TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
+        actual_cb_size == predicted_cb_size,
         "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
+        predicted_cb_size,
         actual_cb_size);
 
     // NOTE: the legacy post_conv2d_op_memory_checks() also verifies that the
@@ -834,10 +848,12 @@ void post_conv2d_op_memory_checks(
     const conv_op_l1_usage l1_usage =
         predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
 
+    const uint32_t predicted_cb_size =
+        l1_usage.CB_allocation_size + epilogue_stats_cb_bytes(operation_attributes);
     TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
+        actual_cb_size == predicted_cb_size,
         "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
+        predicted_cb_size,
         actual_cb_size);
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <map>
 #include <functional>
 #include <array>
 #include <cstdint>
@@ -692,6 +693,47 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // override needed.
     emit_cb_descriptors(cb_info, desc, all_cores, a.buffer(), output.buffer(), conv_reader_indices_buffer);
 
+    // The epilogue statistics page (fp32, 2N tiles: sums of x, sums of x*x),
+    // the reduce scaler tile and one fp32 scratch tile, as plain L1 CBs after the standard ones
+    const bool epilogue_stats = operation_attributes.epilogue_stats;
+    const uint32_t stats_ntiles = per_core_out_matrix_width_ntiles;
+    uint32_t stats_cb_index = 0, scaler_cb_index = 0, scratch_cb_index = 0, mask_cb_index = 0;
+    // The valid output rows of each core's shard (the rest of the shard is padding the conv fills);
+    // the shards are contiguous in input_cores order
+    const uint32_t stats_rows_per_core = per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
+    const uint32_t stats_total_rows = batch * sliding_window_config.get_output_shape()[1] * output_image_width;
+    auto stats_valid_rows = [&](uint32_t core_index) -> uint32_t {
+        const uint32_t start = core_index * stats_rows_per_core;
+        return start >= stats_total_rows ? 0 : std::min(stats_rows_per_core, stats_total_rows - start);
+    };
+    if (epilogue_stats) {
+        TT_FATAL(tensor_args.epilogue_stats.has_value(), "epilogue_stats without the stats tensor");
+        uint32_t next_cb = 0;
+        for (const auto& cb : cb_info) {
+            if (cb.num_pages > 0) {
+                next_cb++;
+            }
+        }
+        stats_cb_index = next_cb;
+        scaler_cb_index = next_cb + 1;
+        scratch_cb_index = next_cb + 2;
+        mask_cb_index = next_cb + 3;
+        const uint32_t fp32_tile = tt::tile_size(tt::DataFormat::Float32);
+        const uint32_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
+        auto add_plain_cb = [&](uint32_t index, uint32_t pages, uint32_t page_size, tt::DataFormat df) {
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = pages * page_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(index), .data_format = df, .page_size = page_size}}},
+            });
+        };
+        add_plain_cb(stats_cb_index, 2 * stats_ntiles, fp32_tile, tt::DataFormat::Float32);
+        add_plain_cb(scaler_cb_index, 1, bf16_tile, tt::DataFormat::Float16_b);
+        add_plain_cb(scratch_cb_index, 2, fp32_tile, tt::DataFormat::Float32);  // masked copy + square
+        add_plain_cb(mask_cb_index, 1, bf16_tile, tt::DataFormat::Float16_b);   // the partial tile's row mask
+    }
+
     const CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
     const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
 
@@ -946,6 +988,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_defines["SPLIT_READER"] = "1";
     }
 
+    if (epilogue_stats) {
+        for (auto* defs : {&compute_defines, &reader_defines, &writer_defines, &writer_mcast_sender_defines}) {
+            (*defs)["EPILOGUE_STATS"] = "1";
+            (*defs)["STATS_CB"] = std::to_string(stats_cb_index);
+            (*defs)["SCALER_CB"] = std::to_string(scaler_cb_index);
+            (*defs)["SCRATCH_CB"] = std::to_string(scratch_cb_index);
+            (*defs)["MASK_CB"] = std::to_string(mask_cb_index);
+            (*defs)["STATS_NTILES"] = std::to_string(stats_ntiles);
+        }
+    }
+
     if (enable_activation_reuse) {
         reader_defines["ACTIVATION_REUSE"] = "1";
         writer_mcast_sender_defines["ACTIVATION_REUSE"] = "1";
@@ -1050,6 +1103,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
+    if (epilogue_stats) {
+        writer_defines["STATS_CTA"] = std::to_string(writer_compile_time_args.size());
+        writer_mcast_sender_defines["STATS_CTA"] = std::to_string(writer_compile_time_args.size());
+        tt::tt_metal::TensorAccessorArgs(tensor_args.epilogue_stats.value().buffer())
+            .append_to(writer_compile_time_args);
+    }
 
     const bool check_skip_compute = input_cores != output_cores;
 
@@ -1302,10 +1361,29 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     }
                 }
                 std::vector<uint32_t> reader_rt_args{core_index, reader_remaining_tiles_to_push};
+                if (epilogue_stats) {
+                    reader_rt_args.push_back(stats_valid_rows(core_index));
+                }
                 reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
                 core_index++;
             }
         }
+    }
+
+    // This call's stats pages: slice * stride + core * 2N (+ t); the core order is the reader's input_cores
+    // order
+    std::map<CoreCoord, uint32_t> stats_core_index;
+    tt::tt_metal::Buffer* stats_buffer = nullptr;
+    uint32_t stats_page_base0 = 0;
+    if (epilogue_stats) {
+        uint32_t ci = 0;
+        for (const CoreRange& r : input_cores.ranges()) {
+            for (const CoreCoord& c : r) {
+                stats_core_index[c] = ci++;
+            }
+        }
+        stats_buffer = tensor_args.epilogue_stats.value().buffer();
+        stats_page_base0 = operation_attributes.epilogue_stats_slice * operation_attributes.epilogue_stats_slice_stride;
     }
 
     // Setup writer mcast arguments
@@ -1370,6 +1448,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     }
                 }
                 sender_rt_args.push_back(writer_remaining_tiles_to_push);
+                if (epilogue_stats) {
+                    sender_rt_args.push_back(stats_buffer);
+                    // a core outside the input shard grid does no work and never writes a page
+                    sender_rt_args.push_back(
+                        stats_page_base0 +
+                        (input_cores.contains(core) ? stats_core_index.at(core) : 0) * 2 * stats_ntiles);
+                }
                 writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             }
         }
@@ -1398,7 +1483,19 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     }
                     receiver_args.push_back(writer_remaining_tiles_to_push);
                 }
-                writer_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(receiver_args));
+                if (epilogue_stats) {
+                    KernelDescriptor::RTArgList args;
+                    for (uint32_t v : receiver_args) {
+                        args.push_back(v);
+                    }
+                    args.push_back(stats_buffer);
+                    args.push_back(
+                        stats_page_base0 +
+                        (input_cores.contains(core) ? stats_core_index.at(core) : 0) * 2 * stats_ntiles);
+                    writer_mcast_receiver_desc.emplace_runtime_args(core, args);
+                } else {
+                    writer_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(receiver_args));
+                }
             }
         }
     }
@@ -1412,6 +1509,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
                 compute_kernel_desc.runtime_args.emplace_back(
                     core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
+            }
+        }
+    }
+
+    if (epilogue_stats) {
+        // The compute kernel skips the statistics of the padded rows (runtime arg 0; the height-sharded
+        // compute kernel has no skip_compute arg, its cores are the input cores)
+        TT_FATAL(input_cores == output_cores, "epilogue_stats needs the height-sharded conv");
+        uint32_t ci = 0;
+        for (const CoreRange& r : input_cores.ranges()) {
+            for (const CoreCoord& c : r) {
+                compute_kernel_desc.runtime_args.emplace_back(c, std::vector<uint32_t>{stats_valid_rows(ci++)});
             }
         }
     }

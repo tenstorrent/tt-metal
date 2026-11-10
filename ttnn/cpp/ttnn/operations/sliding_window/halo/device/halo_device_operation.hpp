@@ -19,7 +19,7 @@ namespace ttnn::prim {
 struct HaloDeviceOperation {
     thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
     using operation_attributes_t = HaloParams;
-    using tensor_args_t = Tensor;
+    using tensor_args_t = HaloInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<UntilizeWithHaloProgramFactory>;
@@ -38,6 +38,10 @@ Tensor halo(
     bool remote_read,
     bool transpose_mcast,
     bool is_out_tiled,
-    bool config_tensors_in_dram);
+    bool config_tensors_in_dram,
+    const std::optional<Tensor>& prologue_scale = std::nullopt,
+    const std::optional<Tensor>& prologue_shift = std::nullopt,
+    const std::optional<Tensor>& halo_boundary = std::nullopt,
+    const ttnn::operations::sliding_window::ExternalHaloWindow& external_window = {});
 
 }  // namespace ttnn::prim

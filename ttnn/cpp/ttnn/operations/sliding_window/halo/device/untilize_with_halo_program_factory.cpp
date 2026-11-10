@@ -45,6 +45,9 @@ struct CBIndices {
     uint32_t gather_config1 = 32;
     uint32_t untilize_out_cb_id0 = 32;
     uint32_t untilize_out_cb_id1 = 32;
+    uint32_t affine_scale_cb_id = 32;
+    uint32_t affine_shift_cb_id = 32;
+    uint32_t external_config_cb_id = 32;  // this core's external-route page
     uint32_t get_next_cb_id() { return next_cb_id++; }
 
 private:
@@ -89,8 +92,14 @@ ProgramDescriptor build_halo_program(
     Buffer* padding_config_buffer1,
     Buffer* gather_config_buffer0,
     Buffer* gather_config_buffer1,
-    const std::vector<uint16_t>& number_of_blocks_per_core) {
+    const std::vector<uint16_t>& number_of_blocks_per_core,
+    const std::optional<Tensor>& prologue_scale,
+    const std::optional<Tensor>& prologue_shift,
+    Buffer* external_config_buffer,
+    const std::optional<Tensor>& halo_boundary) {
     const auto& pad_val = operation_attributes.pad_val;
+    const bool external_halo = operation_attributes.external_halo;
+    const bool prologue_affine = operation_attributes.prologue_affine;
     const int block_size = UNTILIZE_BLOCK_SIZE;
     const uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
     const uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core;
@@ -191,13 +200,20 @@ ProgramDescriptor build_halo_program(
         add_cb(desc, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
         add_cb(desc, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
 
+        if (prologue_affine) {
+            cb_indices.affine_scale_cb_id = cb_indices.get_next_cb_id();
+            cb_indices.affine_shift_cb_id = cb_indices.get_next_cb_id();
+            add_cb(desc, all_cores, cb_indices.affine_scale_cb_id, out_df, ntiles_per_block, out_tile_size);
+            add_cb(desc, all_cores, cb_indices.affine_shift_cb_id, out_df, ntiles_per_block, out_tile_size);
+        }
         const std::vector<uint32_t> compute_ct_args = {
             cb_indices.src_cb_id,
             input_to_writer_cb_id0,
             input_to_writer_cb_id1,
-            ntiles_per_block,                        // number of tiles in the width dimension (channels)
-            clamped_block_size_height / TILE_HEIGHT  // number of tiles in height dimension that make up a block
-
+            ntiles_per_block,                         // number of tiles in the width dimension (channels)
+            clamped_block_size_height / TILE_HEIGHT,  // number of tiles in height dimension that make up a block
+            prologue_affine ? cb_indices.affine_scale_cb_id : 0,  // per-channel scale tiles
+            prologue_affine ? cb_indices.affine_shift_cb_id : 0,  // per-channel shift tiles
         };
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
@@ -208,6 +224,9 @@ ProgramDescriptor build_halo_program(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
         compute_desc.compile_time_args = compute_ct_args;
+        if (prologue_affine) {
+            compute_desc.defines.emplace_back("PROLOGUE_AFFINE", "1");
+        }
         compute_desc.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -268,6 +287,18 @@ ProgramDescriptor build_halo_program(
         gather_config_buffer1->page_size(),
         config_tensors_in_dram ? nullptr : gather_config_buffer1);
 
+    if (external_halo) {
+        TT_ASSERT(external_config_buffer != nullptr && halo_boundary.has_value());
+        cb_indices.external_config_cb_id = cb_indices.get_next_cb_id();
+        add_cb(
+            desc,
+            all_cores,
+            cb_indices.external_config_cb_id,
+            kernel_config_df,
+            1,
+            external_config_buffer->page_size());
+    }
+
     const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
@@ -323,6 +354,38 @@ ProgramDescriptor build_halo_program(
         tt::tt_metal::TensorAccessorArgs(padding_config_buffer1).append_to(core_1_reader_ct_args);
         tt::tt_metal::TensorAccessorArgs(gather_config_buffer1).append_to(core_1_reader_ct_args);
     }
+    KernelDescriptor::Defines reader_0_extra_defines;
+    if (prologue_affine) {
+        // the block_start_offset == 0 reader fills the scale / shift CBs from the two [1, C] TILE tensors
+        const Buffer* scale_buffer = prologue_scale.value().buffer();
+        const Buffer* shift_buffer = prologue_shift.value().buffer();
+        reader_0_extra_defines.emplace_back("PROLOGUE_AFFINE", "1");
+        reader_0_extra_defines.emplace_back("PROLOGUE_AFFINE_CTA", std::to_string(core_0_reader_ct_args.size()));
+        reader_0_extra_defines.emplace_back("PROLOGUE_SCALE_CB", std::to_string(cb_indices.affine_scale_cb_id));
+        reader_0_extra_defines.emplace_back("PROLOGUE_SHIFT_CB", std::to_string(cb_indices.affine_shift_cb_id));
+        reader_0_extra_defines.emplace_back("PROLOGUE_NTILES", std::to_string(ntiles_per_block));
+        reader_0_extra_defines.emplace_back("PROLOGUE_TILE_BYTES", std::to_string(out_tile_size));
+        tt::tt_metal::TensorAccessorArgs(scale_buffer).append_to(core_0_reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(shift_buffer).append_to(core_0_reader_ct_args);
+    }
+    if (external_halo) {
+        // The block_start_offset == 0 reader copies the external routes from the boundary buffer
+        const Buffer* boundary_buffer = halo_boundary.value().buffer();
+        TT_FATAL(
+            boundary_buffer->page_size() == stick_nbytes,
+            "halo_boundary page ({} B) must be one stick ({} B)",
+            boundary_buffer->page_size(),
+            stick_nbytes);
+        reader_0_extra_defines.emplace_back("EXTERNAL_HALO", "1");
+        reader_0_extra_defines.emplace_back("EXTERNAL_HALO_CTA", std::to_string(core_0_reader_ct_args.size()));
+        reader_0_extra_defines.emplace_back("EXTERNAL_HALO_CFG_CB", std::to_string(cb_indices.external_config_cb_id));
+        reader_0_extra_defines.emplace_back(
+            "EXTERNAL_HALO_CFG_PAGE_BYTES", std::to_string(external_config_buffer->page_size()));
+        reader_0_extra_defines.emplace_back("EXTERNAL_HALO_STICK_BYTES", std::to_string(stick_nbytes));
+        reader_0_extra_defines.emplace_back("EXTERNAL_HALO_RTA", std::to_string(prologue_affine ? 3 : 1));
+        tt::tt_metal::TensorAccessorArgs(external_config_buffer).append_to(core_0_reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(boundary_buffer).append_to(core_0_reader_ct_args);
+    }
     const uint32_t EMPTY_PADDING_CONFIG_BUFFER_SIZE = 4;
     const bool enable_padding = config_tensors_in_dram ||
                                 padding_config_buffer0->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
@@ -344,6 +407,9 @@ ProgramDescriptor build_halo_program(
     reader_0_desc.core_ranges = all_cores;
     reader_0_desc.compile_time_args = std::move(core_0_reader_ct_args);
     reader_0_desc.defines = reader_defines;
+    for (const auto& d : reader_0_extra_defines) {
+        reader_0_desc.defines.push_back(d);
+    }
     reader_0_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
@@ -360,20 +426,38 @@ ProgramDescriptor build_halo_program(
         .noc = NOC::RISCV_1_default,
     };
 
-    if (config_tensors_in_dram) {
+    if (config_tensors_in_dram || prologue_affine || external_halo) {
         uint32_t core_index = 0;
         for (const auto& core : cores) {
+            uint32_t index = 0;
             if (is_height_sharded) {
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{core_index});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{core_index});
-            } else if (is_width_sharded) {
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0});
+                index = core_index;
             } else if (is_block_sharded) {
-                const auto nhw_index = is_rm_orientation ? core.y : core.x;
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{nhw_index});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{nhw_index});
+                index = is_rm_orientation ? core.y : core.x;
             }
+            if (prologue_affine && external_halo) {
+                // 0 = the config page index, 1 / 2 = the prologue scale / shift, 3 / 4 = the external
+                // config and boundary buffers (all buffer addresses patched on cache hits)
+                reader_0_desc.emplace_runtime_args(
+                    core,
+                    {index,
+                     prologue_scale.value().buffer(),
+                     prologue_shift.value().buffer(),
+                     external_config_buffer,
+                     halo_boundary.value().buffer()});
+            } else if (prologue_affine) {
+                // runtime arg 0 = the config page index (read only with CONFIG_TENSOR_IN_DRAM), 1 / 2 = the scale /
+                // shift buffer addresses (patched on cache hits)
+                reader_0_desc.emplace_runtime_args(
+                    core, {index, prologue_scale.value().buffer(), prologue_shift.value().buffer()});
+            } else if (external_halo) {
+                // 0 = the config page index, 1 / 2 = the external config and boundary buffers
+                reader_0_desc.emplace_runtime_args(
+                    core, {index, external_config_buffer, halo_boundary.value().buffer()});
+            } else {
+                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{index});
+            }
+            reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{index});
             core_index++;
         }
     }
@@ -388,10 +472,12 @@ ProgramDescriptor build_halo_program(
 
 tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload_descriptor(
     const HaloParams& operation_attributes,
-    const Tensor& tensor_args,
+    const HaloInputs& tensor_args,
     Tensor& output_tensor,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    const auto& input_tensor = tensor_args;
+    const auto& input_tensor = tensor_args.input;
+    const bool prologue_affine = operation_attributes.prologue_affine;
+    TT_FATAL(!prologue_affine || input_tensor.layout() == Layout::TILE, "halo prologue_affine needs a TILE input");
     auto* device = input_tensor.device();
 
     const bool is_in_tiled = input_tensor.layout() == Layout::TILE;
@@ -420,7 +506,10 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         is_in_tiled,
         UNTILIZE_BLOCK_SIZE,
         shard_grid,
-        shard_spec.orientation);
+        shard_spec.orientation,
+        operation_attributes.external_halo ? std::optional(sliding_window::external_halo_spec(
+                                                 operation_attributes.config, operation_attributes.external_window()))
+                                           : std::nullopt);
 
     const auto& pad_config0 = kernel_config.pad_config0;
     const auto& pad_config1 = kernel_config.pad_config1;
@@ -489,6 +578,18 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
     Buffer* gather1_buf = gather1_owner->buffer();
     workload_descriptor.buffers.push_back({gather1_owner, gather1_buf});
 
+    // The external routes, one DRAM page per core (always in DRAM: read once per call by one reader)
+    Buffer* external_config_buf = nullptr;
+    if (operation_attributes.external_halo) {
+        const auto external_config_tensor = sliding_window::construct_on_host_config_tensor(
+            kernel_config.external_config, operation_attributes.parallel_config, /*store_in_dram=*/true);
+        Tensor external_config_device_tensor = sliding_window::move_config_tensor_to_device(
+            external_config_tensor, operation_attributes.parallel_config, is_block_sharded, device, true);
+        auto external_owner = std::make_shared<Tensor>(std::move(external_config_device_tensor));
+        external_config_buf = external_owner->buffer();
+        workload_descriptor.buffers.push_back({external_owner, external_config_buf});
+    }
+
     const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
         kernel_config.number_of_blocks_per_core, operation_attributes.parallel_config);
 
@@ -504,7 +605,11 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         pad1_buf,
         gather0_buf,
         gather1_buf,
-        number_of_blocks_per_core);
+        number_of_blocks_per_core,
+        tensor_args.prologue_scale,
+        tensor_args.prologue_shift,
+        external_config_buf,
+        tensor_args.halo_boundary);
 
     auto ranges = tensor_coords.ranges();
     workload_descriptor.programs.reserve(ranges.size());

@@ -52,6 +52,10 @@ void kernel_main() {
     uint32_t i = 0;
     const uint32_t noop = get_arg_val<uint32_t>(i++);
     const uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
+#ifdef EPILOGUE_STATS
+    const uint32_t stats_addr = get_arg_val<uint32_t>(i++);
+    const uint32_t stats_page_base = get_arg_val<uint32_t>(i++);
+#endif
 
     if (noop) {
         return;
@@ -198,6 +202,22 @@ void kernel_main() {
     }  // out_num_blocks_h
 
     noc.async_write_barrier();
+
+#ifdef EPILOGUE_STATS
+    {
+        // The compute kernel's finished statistics page -> this core's DRAM pages
+        constexpr auto stats_args = TensorAccessorArgs<STATS_CTA>();
+        const auto stats_accessor = TensorAccessor(stats_args, stats_addr, 4096);
+        constexpr uint32_t stats_pages = 2 * STATS_NTILES;
+        cb_wait_front(STATS_CB, stats_pages);
+        const uint32_t stats_l1 = get_read_ptr(STATS_CB);
+        for (uint32_t t = 0; t < stats_pages; ++t) {
+            noc_async_write_page(stats_page_base + t, stats_accessor, stats_l1 + t * 4096);
+        }
+        noc_async_write_barrier();
+        cb_pop_front(STATS_CB, stats_pages);
+    }
+#endif
 
 #ifdef CONFIG_TENSOR_IN_DRAM
     if constexpr (split_reader_enabled) {

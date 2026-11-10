@@ -49,8 +49,47 @@ void kernel_main() {
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(40) == 1;
 
     uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(runtime_arg_idx++);
+#ifdef EPILOGUE_STATS
+    const uint32_t stats_valid_rows = get_arg_val<uint32_t>(runtime_arg_idx++);
+#endif
 
     Noc noc;
+#ifdef EPILOGUE_STATS
+    {
+        // The statistics page starts at zero (the compute kernel accumulates into it) and the reduce
+        // scaler tile holds bf16 1.0 in the first row of every face
+        DataflowBuffer dfb_stats(STATS_CB);
+        zero_out_tiles<STATS_CB>(noc, dfb_stats);
+        DataflowBuffer dfb_scaler(SCALER_CB);
+        dfb_scaler.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* sp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_scaler.get_write_ptr());
+        for (uint32_t k = 0; k < 512; ++k) {
+            sp[k] = 0;
+        }
+        for (uint32_t face = 0; face < 4; ++face) {
+            for (uint32_t k = 0; k < 8; ++k) {
+                sp[face * 128 + k] = 0x3f803f80u;
+            }
+        }
+        dfb_scaler.push_back(1);
+        // The row mask of the tile that straddles the valid rows: bf16 1.0 on rows < valid % 32, else 0
+        // (faces 0, 1 hold rows 0-15, faces 2, 3 rows 16-31; a face row is 8 words of two bf16)
+        DataflowBuffer dfb_mask(MASK_CB);
+        dfb_mask.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* mp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_mask.get_write_ptr());
+        const uint32_t valid_in_tile = stats_valid_rows % 32;
+        for (uint32_t face = 0; face < 4; ++face) {
+            for (uint32_t r = 0; r < 16; ++r) {
+                const uint32_t row = (face / 2) * 16 + r;
+                const uint32_t v = row < valid_in_tile ? 0x3f803f80u : 0u;
+                for (uint32_t k = 0; k < 8; ++k) {
+                    mp[face * 128 + r * 8 + k] = v;
+                }
+            }
+        }
+        dfb_mask.push_back(1);
+    }
+#endif
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act>(noc, dfb_act);
