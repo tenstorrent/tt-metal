@@ -47,17 +47,30 @@ def kv_descriptors(model):
                 nb, nh, bs, hd = (int(x) for x in k.shape)
                 d.update(num_blocks=nb, n_kv_heads=nh, block_size=bs, head_dim=hd, dtype=str(k.dtype),
                          k_addr=k.buffer_address(), v_addr=v.buffer_address())
+            pt = getattr(model, "_vfy_kvpt_users", None)  # the engine's page table (see per_replay_inputs)
+            d.update(page_table=pt, pt_addr=(pt.buffer_address() if pt is not None else 0),
+                     pt_B=int(getattr(model, "_vfy_B", 0) or 0), pt_nb=int(getattr(model, "_vfy_nb", 0) or 0))
             out.append(d)
     return out
 
 
 def gdn_descriptors(model):
-    """Per GDN layer: (layer index, recurrent state, conv states). Used once the real GDN phases replace stand-ins."""
+    """Per GDN layer: the spec-verify state the engine's GDN phases read / write (the per-token state ring and the conv
+    window of prepare_spec_verify, rec_state / conv_states), plus the shared selectors (state_blk_idx / conv_sel)."""
+    def addr(t):
+        return t.buffer_address() if t is not None and hasattr(t, "buffer_address") else 0
+
     out = []
+    sel = dict(state_idx_addr=addr(getattr(model, "_vfy_state_idx", None)),
+               conv_sel_addr=addr(getattr(model, "_vfy_conv_sel", None)),
+               ctrl_addr=addr(getattr(model, "_vfy_ctrl", None)))
     for i, l in enumerate(model.layers):
         if not l.is_full_attention:
             a = l.attention
-            out.append(dict(layer=i, rec_state=getattr(a, "rec_state", None), conv_states=getattr(a, "conv_states", None)))
+            win = getattr(a, "_verify_win_buf", None)
+            out.append(dict(layer=i, ring=getattr(a, "_spec_ring", None), ring_addr=addr(getattr(a, "_spec_ring", None)),
+                            win_addr=addr(win), rec_state_addr=addr(getattr(a, "rec_state", None)),
+                            conv_addrs=[addr(c) for c in (getattr(a, "conv_states", None) or ())], **sel))
     return out
 
 
@@ -90,6 +103,7 @@ class Stage1Verify:
         self.ready = False
         self.replaces_layers = False
         self.weights_reason = None
+        self.skipped = {}  # bucket -> reason (out of the engine's scope: op-by-op)
 
     def prepare(self, buckets, T):
         """Before capture: repack weights once, then build each bucket's engine program and its persistent x_out."""
@@ -108,7 +122,12 @@ class Stage1Verify:
         for b in buckets:
             try:
                 prog = self.builder(self.model.mesh_device, self.layer_types, b, self.weights_mk, kv, gdn, None, T=T)
-            except (NotImplementedError, ValueError) as e:
+            except Exception as e:  # noqa: BLE001 -- engine.build.OutOfScope: this bucket stays op-by-op
+                if type(e).__name__ == "OutOfScope":
+                    self.skipped[b] = str(e)
+                    continue
+                if not isinstance(e, (NotImplementedError, ValueError)):
+                    raise
                 self.programs.clear()
                 self.reason = f"bucket {b}: {e}"
                 return {"ready": False, "reason": self.reason}
@@ -117,10 +136,14 @@ class Stage1Verify:
                 self.programs.clear()
                 return {"ready": False, "reason": "EngineProgram has no alloc_x_out()"}
             self.programs[b], self.x_out[b] = prog, alloc()
+        if not self.programs:
+            self.reason = f"no bucket in scope ({self.skipped})"
+            return {"ready": False, "reason": self.reason}
         self.ready = True
         self.replaces_layers = all(p.replaces_layers for p in self.programs.values())
         return {"ready": True, "buckets": sorted(self.programs), "replaces_layers": self.replaces_layers,
-                "kind": type(next(iter(self.programs.values()))).__name__}
+                "kind": type(next(iter(self.programs.values()))).__name__, "out_of_scope": sorted(self.skipped),
+                "info": {b: getattr(p, "info", None) for b, p in self.programs.items()}}
 
     def forward(self, x, n_users, T, in_body):
         """Inside the traced verify body, on the replicated RES40 residual ``x`` [1,1,rows,5120] (consumed). Runs the

@@ -14,7 +14,7 @@ namespace mk {
 constexpr uint32_t ARGBLOCK_MAGIC = 0x4D4B4142u;
 constexpr uint32_t ARGBLOCK_HEADER = 4;
 // kind ids = common runtime arg slots (keep in sync with engine/argblock.py KINDS)
-constexpr uint32_t AB_PHASE = 0, AB_AR = 1, AB_V12 = 2, AB_GDN = 3, AB_ATTN = 4, AB_NKINDS = 5;
+constexpr uint32_t AB_PHASE = 0, AB_AR = 1, AB_V12 = 2, AB_GDN = 3, AB_ATTN = 4, AB_REPLAY = 5, AB_NKINDS = 6;
 
 struct ArgBlock {
     volatile tt_l1_ptr uint32_t* p;

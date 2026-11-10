@@ -3433,15 +3433,6 @@ class Qwen36Model:
             if self._vfy_mk.fallback_reason:
                 logger.warning(f"megakernel: {self._vfy_mk.fallback_reason}")
         self._vfy_mk1 = None
-        if megakernel_mode() in ("stage1", "1"):
-            from models.demos.blackhole.qwen36.tt.megakernel.integ.stage1 import Stage1Verify
-
-            self._vfy_mk1 = Stage1Verify(self)
-            _r = self._vfy_mk1.prepare(range(1, B + 1), T)
-            if not _r.get("ready"):
-                logger.warning(f"megakernel stage1 not ready, layer loop stays op-by-op: {_r.get('reason')}")
-            else:
-                logger.info(f"megakernel stage1: {_r}")
         self._vfy_setup_sharded_argmax(rows)
         self._vfy_setup_device_topk()
         # QWEN36_SPEC_HOSTSET (+ _TRACE): packed aux inputs + in-trace RoPE lookup (see _vfy_inputs). Decided here, so
@@ -3592,6 +3583,18 @@ class Qwen36Model:
                 device=dev,
                 mesh_mapper=rep,
             )
+
+        # QWEN36_R16_MEGAKERNEL=stage1 / 1: build the engine programs now -- after the page tables, the GDN spec-verify
+        # state and the aux / ctrl buffers exist (their addresses go into the engine's arg blocks), before any capture.
+        if megakernel_mode() in ("stage1", "1"):
+            from models.demos.blackhole.qwen36.tt.megakernel.integ.stage1 import Stage1Verify
+
+            self._vfy_mk1 = Stage1Verify(self)
+            _r = self._vfy_mk1.prepare(range(1, B + 1), T)
+            if not _r.get("ready"):
+                logger.warning(f"megakernel stage1 not ready, layer loop stays op-by-op: {_r.get('reason')}")
+            else:
+                logger.info(f"megakernel stage1: {_r}")
 
         # Throwaway seed, only to fill the program cache. The spec loop calls seed_spec_state() again after
         # this capture (the warmup/capture passes below overwrite the ring and the window), and that call

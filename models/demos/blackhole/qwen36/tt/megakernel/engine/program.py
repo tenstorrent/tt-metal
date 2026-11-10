@@ -965,3 +965,161 @@ def setup_bench(dev, MESH, mesh_identity):
     else:
         prog = build(out_t)
     return dict(locals())
+
+
+# ================================================================================================================== #
+# Engine-ON integration API (integ/DESIGN_integration.md §11; spec step 2 plumbing). setup_bench stays the bench's body
+# untouched; the functions below run it on the model's mesh with the engine-config env, collect its io list and
+# per-device programs, and add the integration arg blocks. With today's stand-ins the program reads its own synthetic
+# weights / KV / x: the model's repacked weights, KV caches, page table and GDN ring addresses are RESIDENT and their
+# addresses are delivered (arg blocks + common args), but no engine kernel reads them yet. When M3 lands the engine
+# kernels switch to them; this file is where the swap happens.
+# ================================================================================================================== #
+import contextlib
+
+# The engine configuration used inside vLLM (the §16 v1.22 baseline of run_si_mixed.sh + the attention defines).
+# Override per key with QWEN36_R16_MK_ENV="KEY=VAL KEY=VAL ...". MKA_NU / FM_NL / MK_AMASK are set per bucket.
+ENGINE_ENV = dict(
+    MK_SGDN_US="64", MK_SAR_US="18", MKA_SWO_US="10", MKA_CTX="32768", MKA_KVDT="bfp8", MKA_NBB="1",
+    MKA_BUDGET="16384", MKA_EXT="1", MK_MIXN="1",
+    MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000",
+)
+# the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
+PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups")
+
+
+def engine_env(n_users, n_layers):
+    env = dict(ENGINE_ENV)
+    for kv in os.environ.get("QWEN36_R16_MK_ENV", "").split():
+        k, v = kv.split("=", 1)
+        env[k] = v
+    nl = min(int(env.pop("FM_NL", os.environ.get("QWEN36_R16_MK_NL", "8"))), n_layers, 32)  # MKA_AMASK is a u32
+    env["FM_NL"] = str(nl)
+    env["MKA_NU"] = str(max(1, -(-int(n_users) // 2)))  # own users per chip (u8 -> 4, u1 -> 1)
+    env.setdefault("MK_AMASK", hex(sum(1 << L for L in range(nl) if L % 4 == 3)))  # Qwen3.8: every 4th is attention
+    return env
+
+
+@contextlib.contextmanager
+def _setup_context(mesh, env):
+    """setup_bench's mesh contract (bench_mka2's MESH shims), ONLY while it runs: from_torch replicates (host tilize,
+    then to_device with the memory config), to_torch reads device 0. Plus the engine-config env. Both restored after."""
+    saved_env = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    _ft0, _tt0 = ttnn.from_torch, ttnn.to_torch
+
+    def _ft(*a, **k):
+        d = k.pop("device", None)
+        mc = k.pop("memory_config", None)
+        if d is None:
+            return _ft0(*a, **k)
+        k.setdefault("mesh_mapper", ttnn.ReplicateTensorToMesh(mesh))
+        h = _ft0(*a, **k)
+        return ttnn.to_device(h, d, memory_config=mc) if mc is not None else ttnn.to_device(h, d)
+
+    def _tt(t, *a, **k):
+        if t.storage_type() == ttnn.StorageType.DEVICE:
+            return _tt0(ttnn.get_device_tensors(t)[0], *a, **k)
+        return _tt0(t, *a, **k)
+
+    ttnn.from_torch, ttnn.to_torch = _ft, _tt
+    try:
+        yield
+    finally:
+        ttnn.from_torch, ttnn.to_torch = _ft0, _tt0
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _io_list(S):
+    """The engine generic_op io list (bench_mka2's run-loop expression, from setup_bench's names)."""
+    g = S.get
+    io = [S["x"], S["wgu_all"], S["wd_all"], S["wm_all"], S["xbuf"], S["hbuf"], S["ymix"], S["qten"], S["outs"], S["wo_dummy"]]
+    io += list(S["kvs"]) + list(S["kvvs"])
+    io += [S["wq_all"], S["rsp"], S["qkv_out"]] if g("RQKV") else []
+    io += [S["wo_all"], S["wod"]] if g("RWO") else []
+    io += [S["hg_t"], S["kd_t"]] if g("RQNR") else []
+    io += [S["mk_t"]] if g("RMASK") else []
+    io += [S[n] for n in ("wv_all", "v_xk", "v_rs", "v_h7", "v_xpk", "v_pbuf", "v_xo", "v_x0", "v_id", "v_j")] if g("V12") else []
+    io += [S["ar_out"]] if g("REAL_AR") else []
+    io += list(S["GDN_ROLE"].get("io", [])) if g("GDN24") else []
+    return io + [S["out_t"]]
+
+
+def weight_layouts(mesh):
+    """The six weight kinds the engine is fed from weights_mk.repack (spec §19): mlp via v12's layout_mlp (the real
+    STREAM layout), gamma (fixed layout), and qkv / wo / gdn_in / gdn_out in tile order until their track packers
+    (layout_attn split-K qkv, the wo unit, GDN) take over -- resident and addressable, not yet read by the kernels."""
+    from models.demos.blackhole.qwen36.tt.megakernel.integ import weights_mk as wm
+
+    bank_loc = [(c.x, c.y) for c in mesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)]
+    return {
+        "mlp": wm.MlpLayout(bank_loc),
+        "gamma": None,
+        "qkv": wm.TileOrderLayout("qkv", "bfloat8_b"),
+        "wo": wm.TileOrderLayout("wo", "bfloat8_b"),
+        "gdn_in": wm.TileOrderLayout("gdn_in", "bfloat4_b"),
+        "gdn_out": wm.TileOrderLayout("gdn_out", "bfloat4_b"),
+    }
+
+
+def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
+    """-> program(x_in, x_out, per_replay) -> (io, MeshProgramDescriptor) for one verify bucket (engine kind mk).
+
+    Builds the engine once (setup_bench on the mesh, engine_env), plus two integration arg blocks over the engine grid:
+      'attn': [page_table addr, B, nb, n_attn_layers, (k addr, v addr) per attention layer, block_size, n_kv_heads]
+      'gdn' : [state_blk_idx addr, conv_sel addr, n_gdn_layers, weight-kind base addrs (mlp, qkv, wo, gdn_in, gdn_out,
+               gamma)]
+    The per-replay in-trace tensors (kvpos, ctrl, cos, sin, page-table slices): the 'replay' arg block, rewritten by a
+    one-core writer op right before the engine op in every replay (their addresses are fixed per capture). x_in / x_out: the stand-in engine runs on its own x; x_out is left to the caller."""
+    from models.demos.blackhole.qwen36.tt.megakernel.engine import argblock as AB
+
+    env = engine_env(n_users, len(layer_types))
+    with _setup_context(mesh, env):
+        S = setup_bench(mesh, True, lambda t: 0.0)
+    io0 = _io_list(S)
+    per_dev = S.get("PROG_PER_DEV")
+    grid = mesh.compute_with_storage_grid_size()
+    full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    blocks = AB.ArgBlocks(mesh)
+    pt = kv_desc and kv_desc[0].get("page_table")
+    attn = []
+    for d in kv_desc or ():
+        attn += [d.get("k_addr", 0), d.get("v_addr", 0)]
+    kv0 = (kv_desc or [{}])[0]
+    blocks.add("attn", full, [{(c.x, c.y): [kv0.get("pt_addr", 0), kv0.get("pt_B", 0), kv0.get("pt_nb", 0),
+                                            len(kv_desc or ())] + attn + [kv0.get("block_size", 0), kv0.get("n_kv_heads", 0)]
+                               for c in AB._cores(full)}])
+    wb = [(weights or {}).get(k, {}).get("tensor") for k in ("mlp", "qkv", "wo", "gdn_in", "gdn_out", "gamma")]
+    g0 = (gdn_desc or [{}])[0]
+    blocks.add("gdn", full, [{(c.x, c.y): [g0.get("state_idx_addr", 0), g0.get("conv_sel_addr", 0), len(gdn_desc or ())]
+                               + [t.buffer_address() if t is not None else 0 for t in wb] for c in AB._cores(full)}])
+    blocks.add("replay", full, [{}], min_payload=len(PER_REPLAY_ARGS))
+    descs = {}
+    for r in range(mesh.shape[0]):
+        for c_ in range(mesh.shape[1]):
+            co = ttnn.MeshCoordinate(r, c_)
+            descs[(r, c_)] = per_dev(co) if per_dev else S["prog"]
+            AB.check_cb_ids(descs[(r, c_)])
+    info = dict(env=env, nl=int(env["FM_NL"]), nu=int(env["MKA_NU"]), n_io=len(io0), per_device=per_dev is not None,
+                common_args=blocks.common_args())
+
+    def program(x_in, x_out, per_replay):
+        """Inside the trace: (1) the 'replay' block := this replay's in-trace tensor addresses (one-core writer op),
+        (2) -> the engine's io list (+ the arg-block tensors) and mesh program. The engine kernels read the arg blocks
+        through the common-arg slots once they adopt them (info['common_args']); today's stand-ins ignore them."""
+        blocks.write_op("replay", [(per_replay.get(n).buffer_address() if per_replay.get(n) is not None else 0)
+                                   for n in PER_REPLAY_ARGS])
+        mp = ttnn.MeshProgramDescriptor()
+        for (r, c_), d in descs.items():
+            co = ttnn.MeshCoordinate(r, c_)
+            mp[ttnn.MeshCoordinateRange(co, co)] = d
+        return io0 + blocks.tensors(), mp
+
+    program.info = info
+    program.setup = S
+    program.blocks = blocks
+    return program

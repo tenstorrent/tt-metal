@@ -15,9 +15,11 @@ ring position) are built per device and assembled with from_host_shards: same sh
 Also here: ``check_cb_ids`` (CB ids < 45 keep the program-wide CB-config block small).
 """
 
+import os
+
 MAGIC = 0x4D4B4142
 HEADER = 4
-KINDS = {"phase": 0, "ar": 1, "v12": 2, "gdn": 3, "attn": 4}  # = common runtime arg slot; mk_argblock.hpp AB_*
+KINDS = {"phase": 0, "ar": 1, "v12": 2, "gdn": 3, "attn": 4, "replay": 5}  # = common runtime arg slot; mk_argblock.hpp AB_*
 MAX_CB_ID = 44
 
 
@@ -43,7 +45,7 @@ class ArgBlocks:
         self.mesh = mesh
         self.blocks = {}  # kind -> dict(tensor, addr, width, cores)
 
-    def add(self, kind, crs, per_device, version=1):
+    def add(self, kind, crs, per_device, version=1, min_payload=0):
         import torch
         import ttnn
 
@@ -53,7 +55,7 @@ class ArgBlocks:
         if len(per_device) == 1:
             per_device = per_device * ndev
         assert len(per_device) == ndev, (len(per_device), ndev)
-        nmax = max((len(d.get((c.x, c.y), ())) for d in per_device for c in cores), default=0)
+        nmax = max([min_payload] + [len(d.get((c.x, c.y), ())) for d in per_device for c in cores])
         width = -(-(HEADER + nmax) // 4) * 4
         shards = []
         for d in per_device:
@@ -63,8 +65,28 @@ class ArgBlocks:
         mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
                                ttnn.ShardSpec(crs, [1, width], ttnn.ShardOrientation.ROW_MAJOR))
         t = ttnn.to_device(ttnn.from_host_shards(shards, self.mesh.shape), self.mesh, memory_config=mc)
-        self.blocks[kind] = dict(tensor=t, addr=t.buffer_address(), width=width, cores=cores)
+        self.blocks[kind] = dict(tensor=t, addr=t.buffer_address(), width=width, cores=cores, crs=crs, version=version)
         return self.blocks[kind]
+
+    def write_op(self, kind, payload):
+        """Rewrite every core's block of ``kind`` with ``payload`` (same on every core and device) from ONE core, as a
+        device op (trace-capturable: the payload is the writer's runtime args, baked into the trace). The 'replay' kind
+        carries the per-replay in-trace tensor addresses this way, so engine kernels need no extra runtime args."""
+        import ttnn
+
+        b = self.blocks[kind]
+        words = block_words(kind, payload, b["width"], b["version"])
+        noc = [self.mesh.worker_core_from_logical_core(c) for c in b["cores"]]
+        core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        rt = ttnn.RuntimeArgs()
+        rt[0][0] = [b["addr"], b["width"], len(noc)] + [(c.x << 16) | c.y for c in noc] + words
+        cb = ttnn.CBDescriptor(total_size=b["width"] * 4, core_ranges=core, format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=24, data_format=ttnn.uint32, page_size=b["width"] * 4)])
+        k = ttnn.KernelDescriptor(
+            kernel_source=os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "mk_argblock_write.cpp"),
+            core_ranges=core, compile_time_args=[], runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
+        ttnn.generic_op([b["tensor"]], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb]))
 
     def common_args(self):
         """The common runtime args every engine kernel carries: [L1 address of kind 0, 1, ...] (0 = kind absent)."""

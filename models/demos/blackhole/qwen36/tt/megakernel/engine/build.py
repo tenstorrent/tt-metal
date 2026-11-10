@@ -89,6 +89,15 @@ class IdentityEngine(EngineProgram):
         ttnn.generic_op([x_in, x_out], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb]))
 
 
+class OutOfScope(Exception):
+    """This bucket is not served by the engine (it stays op-by-op): QWEN36_R16_MK_BUCKETS."""
+
+
+def engine_buckets():
+    v = os.environ.get("QWEN36_R16_MK_BUCKETS", "1,8").strip()
+    return None if v in ("all", "*") else {int(b) for b in v.split(",") if b}
+
+
 class MkEngine(EngineProgram):
     """The real engine (kind mk): engine/program.py (factored out of attn/bench_mka2.py after the v12 and AR merges)
     provides
@@ -107,6 +116,7 @@ class MkEngine(EngineProgram):
         if weights is None:
             raise NotImplementedError("kind mk needs the repacked weights (weights_mk.repack with weight_layouts)")
         self.program = program.build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc)
+        self.info = getattr(self.program, "info", None)
 
     def launch(self, x_in, x_out, per_replay):
         import ttnn
@@ -134,5 +144,8 @@ def build_engine(mesh, layer_types, n_users, weights_mk, kv_desc, gdn_desc, fabr
             from models.demos.blackhole.qwen36.tt.megakernel.engine import program  # noqa: F401
         except ImportError as e:
             raise NotImplementedError(f"kind mk: engine/program.py not available yet ({e})")
+        scope = engine_buckets()
+        if scope is not None and int(n_users) not in scope:
+            raise OutOfScope(f"bucket {n_users} not in QWEN36_R16_MK_BUCKETS {sorted(scope)}")
         return MkEngine(mesh, n_users, T, kind, layer_types, weights_mk, kv_desc, gdn_desc)
     raise ValueError(f"QWEN36_R16_MK_ENGINE_KIND={kind}: unknown (identity | mk)")
