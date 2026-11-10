@@ -99,20 +99,23 @@ def _make_weights(device, layout, num_layers):
         pt_weight = torch.randn(1, 1, K, N)
         pt_weights.append(pt_weight)
         tt_weights.append(make_krow_major_weight(device, pt_weight, layout.num_banks, _DTYPE))
+    return pt_weights, tt_weights, _make_addrs(device, layout, [w.buffer_address() for w in tt_weights])
 
-    addr_row = torch.tensor([w.buffer_address() for w in tt_weights], dtype=torch.int64).reshape(1, -1)
-    tt_addrs = ttnn.as_tensor(
+
+def _make_addrs(device, layout, addresses):
+    """The address table on the sender core: one row holding each layer's weight address, in order."""
+    addr_row = torch.tensor(addresses, dtype=torch.int64).reshape(1, -1)
+    return ttnn.as_tensor(
         addr_row,
         device=device,
         dtype=ttnn.uint32,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(layout.sender_cores, [1, len(tt_weights)], ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(layout.sender_cores, [1, len(addresses)], ttnn.ShardOrientation.ROW_MAJOR),
         ),
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    return pt_weights, tt_weights, tt_addrs
 
 
 class _Isolation:
@@ -195,12 +198,14 @@ def _tile_words(pt_weight):
     return halves[0::2].astype(np.uint32) | (halves[1::2].astype(np.uint32) << 16)
 
 
-def test_minimal_pipe_bytes(device):
-    """The one block that lands is the weight itself.
+@pytest.mark.parametrize("num_layers", [1, 3], ids=["1layer", "3layers"])
+def test_minimal_pipe_bytes(device, num_layers):
+    """Every block that lands is the weight itself.
 
     The discard consumer only counts entries. This receiver memcmps each one against the source tensor
-    and hangs on the first word that differs. One bank, one receiver and one block, so the expected
-    bytes are the whole weight.
+    and hangs on the first word that differs. One bank, one receiver and one block per layer, so the
+    expected bytes are the whole weight. Every layer reads the same weight, as the BH validator tests
+    do, so one source tensor checks them all. Three layers wrap the two-and-a-half-entry pipe ring.
     """
     layout = _MinimalLayout(device)
     print(
@@ -210,7 +215,8 @@ def test_minimal_pipe_bytes(device):
     )
     _space, pipes = _make_pipe(device, layout)
     print("BYTES pipe created", flush=True)
-    _pt, tt_weights, tt_addrs = _make_weights(device, layout, num_layers=1)
+    _pt, tt_weights, _ = _make_weights(device, layout, num_layers=1)
+    tt_addrs = _make_addrs(device, layout, [tt_weights[0].buffer_address()] * num_layers)
     expected = _tile_words(_pt[0])
     head = " ".join(f"0x{int(w):08x}" for w in expected[:8])
     expected_sum = 0
@@ -224,14 +230,14 @@ def test_minimal_pipe_bytes(device):
 
     with _Isolation(device, layout) as isolation:
         print("BYTES launching dram_prefetcher", flush=True)
-        ttnn.dram_prefetcher(tt_weights + [tt_addrs], 1, prefetcher_pipes=pipes)
+        ttnn.dram_prefetcher(tt_weights + [tt_addrs], num_layers, prefetcher_pipes=pipes)
         print("BYTES dram_prefetcher returned", flush=True)
         isolation.stall_on_workers()
         print("BYTES launching validator", flush=True)
         ttnn.experimental.test_tensor_prefetcher_pipe_validator(
             device,
             tt_weights[0],
-            num_layers=1,
+            num_layers=num_layers,
             print_stride=0,
             prefetcher_pipes=pipes,
             bank_to_receivers=[(0, layout.receiver_cores)],
