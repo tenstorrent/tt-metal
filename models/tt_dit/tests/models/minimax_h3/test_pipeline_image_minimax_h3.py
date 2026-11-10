@@ -203,3 +203,28 @@ def test_device_latents_ab(mesh_device, guide_examples):
             psnr = float("inf") if mse == 0 else 10 * np.log10(255**2 / mse)
             logger.info(f"RESULT {size} host vs device latents: max abs {np.abs(x - y).max():.0f}, PSNR {psnr:.1f} dB")
             assert np.array_equal(x, y), "device latents must reproduce the host Euler update exactly"
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_zero_jit_across_prompts(mesh_device, guide_examples):
+    """Warm as the server does (4K t2i + 2K edit, both with the prompt "warmup"), then vary the prompt length:
+    which stages still compile programs for a prompt or presentation length they have not seen?"""
+    t2i, edit_prompt, reference = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    pipe("warmup", width=4096, height=4096, seed=0)
+    pipe("warmup", width=2048, height=2048, seed=0, images=[Image.new("RGB", (1024, 1024), (128, 128, 128))])
+    prompts = {
+        "short": "A red apple on a white table.",
+        "medium": t2i["prompt"],
+        "long": edit_prompt,
+        "very_long": edit_prompt + " " + t2i["prompt"] + " " + edit_prompt,
+    }
+    for name, prompt in prompts.items():
+        for task, images in (("t2i", ()), ("edit", (reference,))):
+            result = pipe(prompt, width=2048, height=2048, seed=1, images=images)
+            misses = result.timings.program_misses
+            logger.info(
+                f"RESULT zero_jit_prompt {task} {name} ({len(prompt)} chars): misses {sum(misses.values())} {misses} "
+                f"| prompt stage {result.timings.encode_prompt:.2f}s"
+            )
