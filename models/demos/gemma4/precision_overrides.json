@@ -12,17 +12,12 @@
         }
       }
     },
-    "bfp8_max_context": "Context ceiling(s) for bfp8 modules: an int (all bfp8 modules) or a {module: max_seq_len} dict. Above the limit the loader downgrades that module bfp8 -> bf16, because bfp8 error accumulates with sequence length. MEASURED on 31B/tp=8 at a true 262k prompt: shared_mlp in bfp8 degenerates, attention in bfp8 stays coherent, both bfp8 degenerates; 128k is fine with both. Override with GEMMA4_BFP8_MAX_CONTEXT (0 disables). May also be MESH-SCOPED as {\"RxC\": {...}, \"default\": {...}}: the downgrade doubles those weights, so it is only declared on meshes where bf16 fits (measured on tp=8; 31B bf16 shared_mlp at 262k does not fit on 1x4)."
+    "bfp8_max_context": "Context ceiling(s) for bfp8 modules: an int (all bfp8 modules) or a {module: max_seq_len} dict. Above the limit the loader downgrades that module bfp8 -> bf16, because bfp8 error accumulates with sequence length. MEASURED on 31B/tp=8 at a true 262k prompt: shared_mlp in bfp8 degenerates, attention in bfp8 stays coherent, both bfp8 degenerates; 128k is fine with both. Override with GEMMA4_BFP8_MAX_CONTEXT (0 disables). May also be MESH-SCOPED as {\"RxC\": {...}, \"default\": {...}}: the downgrade doubles those weights, so it is only declared on meshes where bf16 fits (measured on tp=8; 31B bf16 shared_mlp at 262k does not fit on 1x4). Re-measured 2026-11-10 on the Galaxy DP4 31B entry (1x8) with the current tree: bfp8 shared_mlp passes 248K needles on every row, a 255K verbatim echo and 247K free generation, so the 31B declares no ceiling."
   },
   "gemma-4-31B-it": {
     "default": {
       "shared_mlp": "bfp8",
       "attention": "bfp8"
-    },
-    "bfp8_max_context": {
-      "1x8": {
-        "shared_mlp": 131072
-      }
     }
   },
   "gemma-4-12B-it": {

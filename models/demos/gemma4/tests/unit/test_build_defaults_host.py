@@ -537,8 +537,14 @@ def test_unknown_model_still_empty():
     assert p.get("shared_mlp", ttnn.bfloat16) == ttnn.bfloat16
 
 
-def test_the_bfp8_ceiling_applies_on_the_mesh_it_was_measured_on():
-    """31B/tp=8 at 262k degenerates with shared_mlp in bfp8, so it downgrades."""
+def test_the_bfp8_ceiling_applies_on_the_mesh_it_was_measured_on(monkeypatch):
+    """The 31B declares no ceiling: its shared MLP stays bfp8 at 262k on (1,8) (re-measured 2026-11-10 on the Galaxy
+    DP4 entry: 248K needles on every row, a 255K verbatim echo and 247K free generation coherent). The ceiling still
+    downgrades a bfp8 module above it when one is set (GEMMA4_BFP8_MAX_CONTEXT)."""
+    monkeypatch.delenv("GEMMA4_BFP8_MAX_CONTEXT", raising=False)
+    o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
+    assert o.get("shared_mlp") == ttnn.bfloat8_b
+    monkeypatch.setenv("GEMMA4_BFP8_MAX_CONTEXT", "131072")
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=262144)
     assert o.get("shared_mlp") == ttnn.bfloat16
 
