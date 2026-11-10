@@ -194,19 +194,16 @@ class TPMlaShard(TPM.TPMla):
             # page + one page of record keys) -- AG1 packs x_ag's AG32 chunks on its lane (fs_read.cpp FS_KEYPACK), AG2
             # multicasts the packed bundles: a third of the bytes of both rounds
             agk = SP.shard_agk(self.P)
-            WY = 32 * SP.AGK_PPC if agk else W32
-            kp = dict(keypack=(SP.AG32_PPC, SP.AG32_QPAGES)) if agk else {}
             # GLM53_DSA_SHARD_AGB (on AGK): y_ag as ONE 32-row chunk per block (2 t pages: the same page ids as AGK's
             # t chunks of 2 pages, so no consumer changes) -- the AG is per-chunk latency bound (AGK: 3x fewer bytes,
             # the window -21 %), and the chunks drop from 16 + 128 to 1 + 8 per source (one signal per block, AG2 in
             # 8-page batches: 32 instead of 128 at t 16; its CB 3 x 8 pages = rev 65's 48 KB)
             agb = SP.shard_agb(self.P)
-            rows1, chunks2, nb2 = t * 32, self.P * t * 32, {}
-            if agb:
-                WY, rows1, chunks2 = 32 * SP.AGK_PPC * t, 32, self.P * 32
-                kp = dict(keypack=(SP.AG32_PPC, SP.AG32_QPAGES, t))
-                yp = SP.AGK_PPC * t
-                nb2 = dict(nb=8 if yp % 8 == 0 else (4 if yp % 4 == 0 else 2), slots=3)
+            # the AG streams' rows / width / keypack / batches: shard_plan.ag_stream_args -- the plan's
+            # Geometry.streams(t, agk, agb) takes the same numbers (the block audit below compares them per chip)
+            aga = SP.ag_stream_args(t, agk=agk, agb=agb, P=self.P)
+            WY, rows1, chunks2 = aga["ag1"]["width"], aga["ag1"]["rows"], aga["ag2"]["rows"]
+            kp, nb2 = aga["ag1"]["extra"], aga["ag2"]["extra"]
             x_ag = z(t * 32, W32)
             x_rs = z(32, W_RS)
             x_rs1 = z(self.P * t * 32, W8)
@@ -287,7 +284,8 @@ class TPMlaShard(TPM.TPMla):
         for name, o in objs.items():
             p_, line = o._pos(r, c)
             src, dst, local, up, dn = o._block(p_, line)
-            want = geo.block(name, st["t"], r, c, rs1_early=bool(st.get("rs1_early")))
+            want = geo.block(name, st["t"], r, c, rs1_early=bool(st.get("rs1_early")), agk=bool(st.get("agk")),
+                             agb=bool(st.get("agb")))  # fmt: skip
             got = dict(p=p_, src=src if not o.scatter else None, dst=dst, local=bool(local), up=up, dn=dn,
                        dsts=list(o._dsts(p_)))  # fmt: skip
             if got != {k: want[k] for k in got}:

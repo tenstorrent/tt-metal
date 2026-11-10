@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import random
+import re
 import sys
 
 import pytest
@@ -796,6 +797,27 @@ def test_agb_block_chunks_keep_agk_pages(t):
         assert (base["ag1_batches"] + base["ag2_batches"], agb["ag1_batches"] + agb["ag2_batches"]) == (144, 48)
 
 
+@pytest.mark.parametrize("t", [1, 2, 3, 4, 8, 16, 32])
+def test_ag_block_audit_agk_agb(t):
+    """tt/tp_dsa_shard.py's per-chip block audit for AG1 / AG2 (shard_plan.audit_ag_blocks: the streams' blocks from
+    ag_stream_args via FabricStreamAG._block's arithmetic vs Geometry.block) passes for rev 65 / AGK / AGB on all 32
+    chips; asking the plan without agb reproduces ad057da04d8's device-build failure (chip (0, 1) ag1 dst 8 vs 16 t)"""
+    geo = SP.Geometry(8, 4)
+    for agk, agb in ((False, False), (True, False), (True, True)):
+        SP.audit_ag_blocks(geo, t, agk=agk, agb=agb)
+        a = SP.ag_stream_args(t, agk=agk, agb=agb)
+        st = geo.streams(t, agk=agk, agb=agb)
+        assert (st["ag1"]["chunks"], st["ag2"]["chunks"]) == (a["ag1"]["rows"] // 32, a["ag2"]["rows"] // 32)
+        assert st["ag2"]["chunks"] == geo.P * st["ag1"]["chunks"]
+        # every block's pages: 32 blocks x (chunks x width / 32) = the format's pages per token x t
+        assert st["ag1"]["chunks"] * st["ag1"]["width"] // 32 == (SP.AGK_PPC if agk else SP.AG32_PPC) * t
+        assert geo.holders(0, 1, t) and geo.header_budget(0, 1, t)  # (links / headers: independent of the chunks)
+    if t > 1:
+        bad = f"chip (0, 1) stream ag1: blocks {{'p': 0, 'src': 0, 'dst': 8, 'local': True, 'up': 7, 'dn': 0, 'dsts': []}} differ from the plan {{'p': 0, 'src': 0, 'dst': {8 * t},"
+        with expect_error(ValueError, re.escape(bad)):
+            SP.audit_ag_blocks(geo, t, agk=True, agb=True, plan_knobs=dict(agk=True, agb=False))
+
+
 def test_agb_knob(monkeypatch):
     """GLM53_DSA_SHARD_AGB: default off, the 8x4 only, only on top of GLM53_DSA_SHARD_AGK"""
     for k in ("GLM53_DSA_SHARD_AGK", "GLM53_DSA_SHARD_AGB"):
@@ -809,7 +831,12 @@ def test_agb_knob(monkeypatch):
 
 
 # ------------------------------------------------------------------ the shard tail knobs compose; the 8x4 defaults
-KNOB_ENV = {"comb": "GLM53_DSA_SHARD_COMB", "rs1_early": "GLM53_DSA_SHARD_RS1_EARLY", "agk": "GLM53_DSA_SHARD_AGK"}
+KNOB_ENV = {
+    "comb": "GLM53_DSA_SHARD_COMB",
+    "rs1_early": "GLM53_DSA_SHARD_RS1_EARLY",
+    "agk": "GLM53_DSA_SHARD_AGK",
+    "agb": "GLM53_DSA_SHARD_AGB",
+}
 
 
 def _knob_env(monkeypatch, on: dict) -> None:
@@ -824,22 +851,30 @@ def _knob_env(monkeypatch, on: dict) -> None:
 @pytest.mark.parametrize("t", [1, 4, 16])
 @pytest.mark.parametrize("bits", range(1 << len(KNOB_ENV)))
 def test_shard_knobs_compose(monkeypatch, bits, t):
-    """every subset of COMB / RS1_EARLY / AGK: each flag reads its own variable only (the 8x4 only), and every chip's
-    stream plan takes RS1_EARLY's destination order and AGK's packed AG independently -- RS1 early reorders the column
-    scatter's destinations and nothing else, the AG blocks / link holders / packet headers are the knob-off plan's;
-    AGK's key-packed y_ag keeps every page once and the q pieces where the merge / ix_dm1 read them"""
+    """every subset of COMB / RS1_EARLY / AGK / AGB: each flag reads its own variable only (the 8x4 only; AGB without
+    AGK is refused), and every chip's stream plan takes RS1_EARLY's destination order and AGK / AGB's AG format
+    independently -- RS1 early reorders the column scatter's destinations and nothing else, the AG blocks follow
+    the AG knobs only (the streams' blocks == the plan's: audit_ag_blocks), link holders / packet headers are the
+    knob-off plan's; AGK's key-packed y_ag keeps every page once and the q pieces where the merge / ix_dm1 read them"""
     on = {k: bool(bits >> i & 1) for i, k in enumerate(KNOB_ENV)}
     _knob_env(monkeypatch, on)
-    assert dict(comb=SP.shard_comb(8), rs1_early=SP.shard_rs1_early(8), agk=SP.shard_agk(8)) == on
-    assert not (SP.shard_comb(2) or SP.shard_rs1_early(2) or SP.shard_agk(2))  # the pair / the 2x4: none
-    g, early = SP.Geometry(8, 4), on["rs1_early"]
+    if on["agb"] and not on["agk"]:
+        with expect_error(ValueError, "GLM53_DSA_SHARD_AGB=1 needs GLM53_DSA_SHARD_AGK=1"):
+            SP.shard_agb(8)
+        return
+    got = dict(comb=SP.shard_comb(8), rs1_early=SP.shard_rs1_early(8), agk=SP.shard_agk(8), agb=SP.shard_agb(8))
+    assert got == on
+    assert not (SP.shard_comb(2) or SP.shard_rs1_early(2) or SP.shard_agk(2) or SP.shard_agb(2))  # pair / 2x4: none
+    g, early, ag = SP.Geometry(8, 4), on["rs1_early"], dict(agk=on["agk"], agb=on["agb"])
+    SP.audit_ag_blocks(g, t, **ag)
     for r in range(8):
         for c in range(4):
             SP.audit_links(g.holders(r, c, t))
             SP.audit_headers(g.header_budget(r, c, t))
-            for name in ("ag1", "ag2", "rs2"):
-                assert g.block(name, t, r, c, rs1_early=early) == g.block(name, t, r, c)
-            b, b0 = g.block("rs1", t, r, c, rs1_early=early), g.block("rs1", t, r, c)
+            for name in ("ag1", "ag2"):
+                assert g.block(name, t, r, c, rs1_early=early, **ag) == g.block(name, t, r, c, **ag)
+            assert g.block("rs2", t, r, c, rs1_early=early, **ag) == g.block("rs2", t, r, c)
+            b, b0 = g.block("rs1", t, r, c, rs1_early=early, **ag), g.block("rs1", t, r, c)
             assert sorted(b["dsts"]) == sorted(b0["dsts"])
             assert {k: v for k, v in b.items() if k != "dsts"} == {k: v for k, v in b0.items() if k != "dsts"}
             assert [d[0] for d in b["dsts"][:4]] == SP.rs1_early_first(r, 8) if early else b["dsts"] == b0["dsts"]

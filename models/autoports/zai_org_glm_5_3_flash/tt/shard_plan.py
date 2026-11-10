@@ -197,9 +197,16 @@ class Geometry:
         """pages per x_rs2 / y_rs2 chunk: 8-row slices (2x4) RS2_PPC; 2-row slices (8x4) RS2B_PPC"""
         return RS2_PPC if self.rs2_rows == 8 else RS2B_PPC
 
-    def streams(self, t: int) -> dict:
-        """name -> dict(axis, kind, chunks (per block), width, link, blocks_in_y, src_blocks_in_x)"""
-        out = {"ag1": dict(axis=self.pair_axis, kind="ag", chunks=self.ag_chunks(t), width=self.ag_width(), link=0,
+    def streams(self, t: int, agk: bool = False, agb: bool = False) -> dict:
+        """name -> dict(axis, kind, chunks (per block), width, link, blocks_in_y, src_blocks_in_x); the 8x4's AG under
+        GLM53_DSA_SHARD_AGK / _AGB (agk / agb): the chunks / width of ag_stream_args (AGB: ONE y chunk per block, so
+        AG1's dst = blk, AG2's bundle = P chunks -- the fabric streams' row_base accounting)"""
+        ag1c, ag2c, agw = self.ag_chunks(t), self.P * self.ag_chunks(t), self.ag_width()
+        if agk or agb:
+            assert self.P > 2 and (agk or not agb), ("AGK / AGB: the 8x4; AGB on AGK", self.P, agk, agb)
+            a = ag_stream_args(t, agk=agk, agb=agb, P=self.P)
+            ag1c, ag2c, agw = a["ag1"]["rows"] // 32, a["ag2"]["rows"] // 32, a["ag1"]["width"]
+        out = {"ag1": dict(axis=self.pair_axis, kind="ag", chunks=ag1c, width=agw, link=0,
                            y_blocks=self.n, x_blocks=1)}  # fmt: skip
         if self.P == 2:  # the pair exchange of the whole pass-0 partial (the pair / the 2x4 column pair)
             out["rs1"] = dict(axis=self.pair_axis, kind="rs2", chunks=t * RS_CHUNKS, width=32 * RS_PPC, link=1,
@@ -211,8 +218,8 @@ class Geometry:
             out["ag2"] = dict(
                 axis=self.line_axis,
                 kind="ag",
-                chunks=self.P * self.ag_chunks(t),
-                width=self.ag_width(),
+                chunks=ag2c,
+                width=agw,
                 link=0,
                 y_blocks=self.L,
                 x_blocks=self.L,
@@ -221,13 +228,14 @@ class Geometry:
                               y_blocks=self.L, x_blocks=self.L)  # fmt: skip
         return out
 
-    def block(self, name: str, t: int, r: int, c: int, rs1_early: bool = False) -> dict:
+    def block(self, name: str, t: int, r: int, c: int, rs1_early: bool = False, agk: bool = False,
+              agb: bool = False) -> dict:  # fmt: skip
         """chip (r, c)'s block of stream `name`: src chunk base in x, dst chunk base in y (on the receivers: the same
         address on every chip), local copy, up / down multicast ranges (the scatter: the chips above / below), and the
         scatter's destinations [(position q, src chunk base, direction 0 up / 1 down, hops)]; rev 65 rs1_early (the
         8x4 column scatter): the other half's destinations first (rs1_early_first), then the own half's"""
         assert not rs1_early or self.P > 2, "RS1 early: the 8x4 column scatter"
-        sp = self.streams(t)[name]
+        sp = self.streams(t, agk=agk, agb=agb)[name]
         p, line = self.axis_pos(r, c, sp["axis"])
         n = self.axis_len(sp["axis"])
         ch = sp["chunks"]
@@ -1475,3 +1483,53 @@ def ag_stream_counts(t: int, agk: bool = False, agb: bool = False, P: int = 8, n
         return dict(ag1_batches=t, ag2_batches=P * t, ag1_signals=t, ag2_signals=P * t)
     ppc = AGK_PPC * t
     return dict(ag1_batches=t, ag2_batches=P * ppc // nb2, ag1_signals=1, ag2_signals=P)
+
+
+def ag_stream_args(t: int, agk: bool = False, agb: bool = False, P: int = 8) -> dict:
+    """the 8x4 shard's AG1 / AG2 FabricStreamAG arguments (tt/tp_dsa_shard.py builds its streams from these, the plan
+    Geometry.streams / block from the same numbers): rows (rows_local: 32 per chunk), width (hidden) and the extras
+    (keypack=, nb=, slots=). Rev 65: AG32 chunks of t tokens; AGK: the packed 2-page chunks, keypack (6, 1); AGB: one
+    block chunk of 2 t pages (rows 32, keypack (6, 1, t), AG2 8-page batches in 3 slots)"""
+    assert agk or not agb, "GLM53_DSA_SHARD_AGB on GLM53_DSA_SHARD_AGK"
+    w32 = 32 * AG32_PPC
+    if not agk:
+        return dict(ag1=dict(rows=t * 32, width=w32, extra={}), ag2=dict(rows=P * t * 32, width=w32, extra={}))
+    if not agb:
+        return dict(ag1=dict(rows=t * 32, width=32 * AGK_PPC, extra=dict(keypack=(AG32_PPC, AG32_QPAGES))),
+                    ag2=dict(rows=P * t * 32, width=32 * AGK_PPC, extra={}))  # fmt: skip
+    yp = AGK_PPC * t
+    nb = 8 if yp % 8 == 0 else (4 if yp % 4 == 0 else 2)
+    return dict(ag1=dict(rows=32, width=32 * yp, extra=dict(keypack=(AG32_PPC, AG32_QPAGES, t))),
+                ag2=dict(rows=P * 32, width=32 * yp, extra=dict(nb=nb, slots=3)))  # fmt: skip
+
+
+def fs_ag_block(p: int, line: int, n: int, chunks: int, bundle: bool, local_copy: bool = True) -> tuple:
+    """tt/fabric_stream.py FabricStreamAG._block (checked on its text): (src chunk base, dst chunk base = row_base,
+    local write, up range, down range) of the chip at position p of line `line`, chunks = rows_local / 32"""
+    with open(os.path.join(os.path.dirname(KDIR), "fabric_stream.py")) as f:
+        src = f.read()
+    for line_ in ("return p * self.chunks, p * self.chunks, False, self.n - 1 - p, p",
+                  "return 0, (line * self.n + p) * self.chunks, self.local_copy, self.n - 1 - p, p",
+                  "super().__init__(mesh, rows_local // 32, hidden, blocks * rows_local, **kw)"):  # fmt: skip
+        assert line_ in src, ("fabric_stream.py FabricStreamAG", line_)
+    if bundle:
+        return p * chunks, p * chunks, False, n - 1 - p, p
+    return 0, (line * n + p) * chunks, bool(local_copy), n - 1 - p, p
+
+
+def audit_ag_blocks(geo, t: int, agk: bool = False, agb: bool = False, plan_knobs: dict | None = None) -> None:
+    """tt/tp_dsa_shard.py TPMlaShard._audits' block check for the AG streams, host-only: every chip's AG1 / AG2 block
+    as the fabric stream computes it from ag_stream_args (fs_ag_block) == the plan's Geometry.block; raises the
+    audit's ValueError. plan_knobs: the (agk, agb) the plan is asked with (default: the streams'), to reproduce a
+    stream / plan mismatch"""
+    a = ag_stream_args(t, agk=agk, agb=agb, P=geo.P)
+    pk = dict(agk=agk, agb=agb) if plan_knobs is None else plan_knobs
+    for r in range(geo.R):
+        for c in range(geo.C):
+            for name, axis, bundle in (("ag1", geo.pair_axis, False), ("ag2", geo.line_axis, True)):
+                p_, line = geo.axis_pos(r, c, axis)
+                src, dst, local, up, dn = fs_ag_block(p_, line, geo.axis_len(axis), a[name]["rows"] // 32, bundle)
+                got = dict(p=p_, src=src, dst=dst, local=bool(local), up=up, dn=dn, dsts=[])
+                want = geo.block(name, t, r, c, **pk)
+                if got != {k: want[k] for k in got}:
+                    raise ValueError(f"chip {(r, c)} stream {name}: blocks {got} differ from the plan {want}")
