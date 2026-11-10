@@ -34,6 +34,10 @@ struct InterHostParameters {
  */
 struct IntraMeshParameters {
     std::vector<tt::tt_metal::distributed::SocketConnection> connections;
+    // Send with the direct socket ops: the sender writes straight into the receiver's tensor instead of streaming it
+    // through the socket FIFO. Faster, but with two requirements on the caller: a direct send completes only once
+    // its peer's recv runs, and the receiving tensor must have the sender's spec and memory config.
+    bool direct = false;
 };
 
 class SocketManager {
@@ -69,14 +73,19 @@ public:
 
 private:
     std::unique_ptr<ISocket> create_socket(std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
-    std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket> create_intra_mesh_socket(
+    std::unique_ptr<ISocket> create_intra_mesh_socket(
         std::shared_ptr<DistributedContext> distributed_ctx, const IntraMeshParameters& params);
     ISocket* get_socket(Rank rank, std::shared_ptr<DistributedContext> distributed_ctx);
     ISocket* get_socket(const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params);
 
     SocketType m_type{SocketType::MPI};
     std::vector<std::unique_ptr<ttnn::distributed::ISocket>> m_inter_host_sockets;
-    std::vector<std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket>> m_intra_mesh_sockets;
+    // An intra-mesh socket with the parameters it was created for, which is how it is found again.
+    struct IntraMeshSocket {
+        IntraMeshParameters params;
+        std::unique_ptr<ISocket> socket;
+    };
+    std::vector<IntraMeshSocket> m_intra_mesh_sockets;
 };
 
 }  // namespace ttml::core::distributed

@@ -6,8 +6,45 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/recv_direct_async.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/send_direct_async.hpp"
 
 namespace {
+
+// A sender/receiver socket pair between devices of one mesh that uses the direct socket ops. The tensor does not
+// pass through the socket FIFO: the sender writes it straight into the receiver's tensor, and each op only pushes two
+// 64 B handshake pages (the sender's address, then a completion token) through the FIFO.
+class DirectFabricSocket final : public ttnn::distributed::ISocket {
+public:
+    // Room for the two handshake pages of one op.
+    static constexpr uint32_t fifo_size = 128U;
+
+    DirectFabricSocket(
+        const tt::tt_metal::distributed::MeshSocket& send_socket,
+        const tt::tt_metal::distributed::MeshSocket& recv_socket) :
+        m_send_socket(send_socket), m_recv_socket(recv_socket) {
+    }
+
+    void send(const ttnn::Tensor& tensor) override {
+        ttnn::experimental::send_direct_async(tensor, m_send_socket);
+    }
+    void recv(ttnn::Tensor& tensor) override {
+        ttnn::experimental::recv_direct_async(tensor, m_recv_socket);
+    }
+
+    // Both ends are on this host.
+    tt::tt_metal::distributed::multihost::Rank get_rank() const override {
+        return get_distributed_context()->rank();
+    }
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
+        const override {
+        return m_send_socket.get_config().distributed_context;
+    }
+
+private:
+    tt::tt_metal::distributed::MeshSocket m_send_socket;
+    tt::tt_metal::distributed::MeshSocket m_recv_socket;
+};
 
 tt::tt_metal::distributed::SocketMemoryConfig _make_socket_mem_config() {
     tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{};
@@ -105,11 +142,11 @@ ISocket* SocketManager::get_socket(
     bool is_intra_mesh = (inter_host_params.distributed_ctx->rank() == inter_host_params.rank);
 
     if (is_intra_mesh) {
-        // Lookup existing intra-mesh socket by connection config and distributed context
-        for (const auto& socket : m_intra_mesh_sockets) {
+        // Lookup existing intra-mesh socket by its parameters and distributed context
+        for (const auto& [params, socket] : m_intra_mesh_sockets) {
             if (socket->get_rank() == inter_host_params.rank &&
                 socket->get_distributed_context() == inter_host_params.distributed_ctx &&
-                socket->get_socket_connections() == intra_mesh_params.connections) {
+                params.connections == intra_mesh_params.connections && params.direct == intra_mesh_params.direct) {
                 return socket.get();
             }
         }
@@ -117,8 +154,8 @@ ISocket* SocketManager::get_socket(
         // Create new intra-mesh socket
         auto socket = create_intra_mesh_socket(inter_host_params.distributed_ctx, intra_mesh_params);
         assert(socket != nullptr && "Failed to create intra-mesh socket");
-        m_intra_mesh_sockets.push_back(std::move(socket));
-        return m_intra_mesh_sockets.back().get();
+        m_intra_mesh_sockets.push_back({intra_mesh_params, std::move(socket)});
+        return m_intra_mesh_sockets.back().socket.get();
     } else {
         // Lookup existing inter-host socket by rank and distributed context
         for (const auto& socket : m_inter_host_sockets) {
@@ -151,11 +188,13 @@ std::unique_ptr<ISocket> SocketManager::create_socket(std::shared_ptr<Distribute
         m_type, ttnn::distributed::EndpointSocketType::BIDIRECTIONAL, mesh_device, rank, socket_config);
 }
 
-std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket> SocketManager::create_intra_mesh_socket(
+std::unique_ptr<ISocket> SocketManager::create_intra_mesh_socket(
     std::shared_ptr<DistributedContext> distributed_ctx, const IntraMeshParameters& params) {
     auto mesh_device = ttml::autograd::ctx().get_device_ptr();
 
-    const auto socket_mem_config = _make_socket_mem_config();
+    const auto socket_mem_config =
+        params.direct ? tt::tt_metal::distributed::SocketMemoryConfig(ttnn::BufferType::L1, DirectFabricSocket::fifo_size)
+                      : _make_socket_mem_config();
     tt::tt_metal::distributed::SocketConfig socket_config(params.connections, socket_mem_config);
     socket_config.distributed_context = distributed_ctx;
 
@@ -163,7 +202,9 @@ std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket> SocketManager::cre
     const auto [send_socket, recv_socket] =
         tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config);
 
-    // Directly construct BidirectionalFabricSocket with the socket pair
+    if (params.direct) {
+        return std::make_unique<DirectFabricSocket>(send_socket, recv_socket);
+    }
     return std::make_unique<ttnn::distributed::BidirectionalFabricSocket>(send_socket, recv_socket);
 }
 
