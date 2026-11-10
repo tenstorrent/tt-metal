@@ -703,3 +703,8 @@ Only both flags together reach ~15 µs, and they need the output-length gate.
   - **Stale-row safety:** rows ≥R hold stale data. Two rules:
     - (i) Every activation buffer is zeroed once at engine start, so stale rows are always finite (earlier valid data or 0) and never NaN or Inf.
     - (ii) Any op that reduces ACROSS rows must mask rows ≥R. This covers the GDN state update (kᵀv over tokens), the GDN conv window, and any column reduction. Row-independent ops need no mask: matmul, SwiGLU, Σx² per row, SDPA per query row.
+
+**v0.8.1 cross-layer qkv prefetch (attention track finding):**
+- The u1 attention regression (+28 µs) is real DRAM time: the ext cores' 348 KB qkv slices total 13.9 MB of the 19.5 MB qkv per layer, read inside a DRAM-saturated SDPA window. Skipping those reads gives 231-233 µs; with them it is ~260. NoC splits and unthrottled tail reads are worse.
+- **Rule:** the ATTN-only ext cores sit idle during the 3 GDN-type layers before each attention layer, and those layers are chain-bound with DRAM slack. So the ext cores prefetch the NEXT attention layer's whole qkv slice into their 348 KB ring during the preceding GDN layers, throttled (~4.6 MB per GDN layer, 1-2 chunks in flight). Nothing reads in the SDPA window.
+- **Expected:** u1 attention returns to ~232 µs (−0.45 ms per pass vs 260, i.e. 16 × 28 µs), with no GDN-layer regression, to be confirmed.
