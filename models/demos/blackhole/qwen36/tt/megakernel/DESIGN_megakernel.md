@@ -601,3 +601,19 @@ per device which K-row the down stage finishes first.
 
 **Both gates pass at ~12 µs on-path AR. With GDN_STEP_U1, u1 has ~1 ms margin.** Remaining AR items: streaming reduce
 (L1), rotating packet headers.
+
+**AR slot L1 decision (v0.7):** no streaming reduce. The AR owners (10..11, 0..7) are not STREAM cores. They hold no
+CB_X (320 KB), weight rings, CB_H or MLP buffers, so the ~100 KB AR budget (written for STREAM cores) does not apply.
+Owner-core L1 map (~1.45 MB usable):
+
+| Region | KB |
+|---|---|
+| **AR slot region, 8 sources × 20 KB, shared by attention-AR and MLP-AR** (sound by the AR dependency chain: attention-AR(L) writes only after MLP-AR(L-1) completes everywhere, MLP-AR(L) writes only after attention-AR(L) completes everywhere) | 160 |
+| SDPA working set (NBB 1, BFP8), never aliased with AR slots | ≤300 |
+| EXT projection ring (v0.5), capped on these 16 cores | ≤500 |
+| CB_RSTD, AR flags, rstd partials, misc | ≤40 |
+| **Total** | ≤1,000 (≥~400 KB headroom) |
+
+The AR slots never overlap SDPA/EXT: a faster remote device can write attention-AR(L) while we are still in SDPA(L).
+Alternatives not taken: credit-based streaming (adds a fabric round trip on the late sources); separate
+attention-AR owners (needs a second in-row placement); BFP8 slots (gated).
