@@ -285,6 +285,47 @@ void kernel_main() {
     if (vrole == 2) ar_red.init_l1(MK_AR_BLK, MK_AR_BLK_COMP);
 #endif
     // owner: Σ of the 10 column down partials (P @ I, fp32 DST) [+ the x chunk while the AR is a stall] -> CB_VXO
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+    // one AR on the owner TRISCs: the reduce (this device's chunk; own partial read in place from own_cb at R = 32) and,
+    // with MK_AR_GAMMA, x_deliver = out ⊙ γ into CB_VXO. MLP AR: own_cb = CB_VXO; attention AR: the wo output CB_XO.
+    auto ar_step = [&](uint32_t own_cb) __attribute__((noinline)) {   // one copy for both call sites (MLP AR, attention AR): EXT text
+        if (ar_red.has_work) {
+            CZONE("C-AR");
+#if defined(MK_AR_HWSTART)
+            compute_kernel_hw_startup(MKAR_CB_RED, MKAR_CB_RED, MKAR_CB_OUT);
+#endif
+            ar_red.iter(own_cb);   // sets its own unpack / pack formats and add init (v12_osum's hw startup ran this layer)
+        }
+#if defined(MK_AR_GAMMA)
+        {   // spec §19: x_deliver = out ⊙ γ_next on every owner (owning + gather role); out stays un-scaled (residual)
+            CZONE("C-ARG");
+            cb_wait_front(MK_AR_CBG, MK_AR_GT);   // the writer pushes it once γ landed and the AR output is complete
+            cb_reserve_back(CB_VXO, V_OT);        // free once the writer popped this layer's partial (after the AR)
+            reconfig_data_format(MKAR_CB_OUT, MK_AR_CBG);
+            pack_reconfig_data_format(CB_VXO);
+#if MK_AR_GROWS == 0
+            mul_bcast_rows_init(MKAR_CB_OUT, MK_AR_CBG);
+#else
+            mul_init(MKAR_CB_OUT, MK_AR_CBG);   // packed pseudo-tiles, γ pre-replicated: element-wise
+#endif
+            for (uint32_t t = 0; t < MK_AR_GT; ++t) {
+                tile_regs_acquire();
+#if MK_AR_GROWS == 0
+                mul_tiles_bcast_rows(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
+#else
+                mul_tiles(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
+#endif
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, CB_VXO, t);
+                tile_regs_release();
+            }
+            cb_push_back(CB_VXO, V_OT);
+            cb_pop_front(MK_AR_CBG, MK_AR_GT);
+        }
+#endif
+    };
+#endif
     auto v12_osum = [&](uint32_t L) {
         if (vrole != 2) return;
         if (L == 0) cb_wait_front(CB_VI, 1);
@@ -316,41 +357,7 @@ void kernel_main() {
         cb_pop_front(CB_VP, V_NCOL * V_OT);
         // AR reduce (real AR, spec v0.9.2) follows here on the owner TRISCs
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
-        if (ar_red.has_work) {
-            CZONE("C-AR");
-#if defined(MK_AR_HWSTART)
-            compute_kernel_hw_startup(MKAR_CB_RED, MKAR_CB_RED, MKAR_CB_OUT);
-#endif
-            ar_red.iter();   // sets its own unpack / pack formats and add init (v12_osum's hw startup ran this layer)
-        }
-#if defined(MK_AR_GAMMA)
-        {   // spec §19: x_deliver = out ⊙ γ_next on every owner (owning + gather role); out stays un-scaled (residual)
-            CZONE("C-ARG");
-            cb_wait_front(MK_AR_CBG, MK_AR_GT);   // the writer pushes it once γ landed and the AR output is complete
-            cb_reserve_back(CB_VXO, V_OT);        // free once the writer popped this layer's partial (after the AR)
-            reconfig_data_format(MKAR_CB_OUT, MK_AR_CBG);
-            pack_reconfig_data_format(CB_VXO);
-#if MK_AR_GROWS == 0
-            mul_bcast_rows_init(MKAR_CB_OUT, MK_AR_CBG);
-#else
-            mul_init(MKAR_CB_OUT, MK_AR_CBG);   // packed pseudo-tiles, γ pre-replicated: element-wise
-#endif
-            for (uint32_t t = 0; t < MK_AR_GT; ++t) {
-                tile_regs_acquire();
-#if MK_AR_GROWS == 0
-                mul_tiles_bcast_rows(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
-#else
-                mul_tiles(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
-#endif
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile<true>(0, CB_VXO, t);
-                tile_regs_release();
-            }
-            cb_push_back(CB_VXO, V_OT);
-            cb_pop_front(MK_AR_CBG, MK_AR_GT);
-        }
-#endif
+        ar_step(CB_VXO);
 #endif
     };
 #define V12_OSUM(L) v12_osum(L)
@@ -729,7 +736,11 @@ void kernel_main() {
             wou::matmul_nt(CB_AS, CB_WSL, WSL_N, CB_QO, QO_SLOT, WK, wo_nt);   // A_g @ Wo slice (ring) -> CB_QO
         }
 #endif
+#if defined(MK_REAL_AAR) && defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+        if (!IS_STREAM) { if (att && vrole == 2) ar_step(MK_AR_CB_AIN); V12_OSUM(L); continue; }   // attention AR, then MLP
+#else
         if (!IS_STREAM) { V12_OSUM(L); continue; }
+#endif
 #if defined(MKA_NOMLP)
         cb_wait_front(CB_GO, 1); cb_pop_front(CB_GO, 1); cb_pop_front(CB_X, KT); continue;
 #endif

@@ -218,7 +218,11 @@ struct Recv {
     }
 
     // one all-reduce (index it within the pass)
+#if defined(MKAR_ATYPE)   // engine MK_REAL_AAR: two call sites (MLP AR, attention AR) share one copy (EXT text budget)
+    __attribute__((noinline)) void iter(uint32_t it) {
+#else
     FORCE_INLINE void iter(uint32_t it) {
+#endif
         done_iters = it + 1;
         CircularBuffer cb_out(MKAR_CB_OUT);
         if (role != kRoleOwner) {
@@ -262,6 +266,9 @@ struct Recv {
         uint32_t l1_write_addr = get_write_ptr(MKAR_CB_RED) + my_chip * MKAR_CHUNK_TILES * MKAR_IN_PAGE;
 #if defined(MKAR_TRID)   // engine: barrier on our own reads only (the host RISC has its own reads in flight)
         noc_async_read_set_trid(MKAR_TRID);
+#endif
+#if defined(MKAR_ATYPE)
+        const uint32_t in_addr = ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
 #endif
         size_t s_idx = seg_base;
         for (uint32_t s = 0; s < num_segs; s++) {
