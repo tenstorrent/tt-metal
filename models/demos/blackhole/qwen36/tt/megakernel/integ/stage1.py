@@ -83,7 +83,12 @@ class Stage1Verify:
             self.weights_mk = weights_mk.repack(self.model)
         kv, gdn = kv_descriptors(self.model), gdn_descriptors(self.model)
         for b in buckets:
-            self.programs[b] = self.builder(self.model.mesh_device, self.layer_types, b, self.weights_mk, kv, gdn, None)
+            prog = self.builder(self.model.mesh_device, self.layer_types, b, self.weights_mk, kv, gdn, None)
+            alloc = getattr(prog, "alloc_x_out", None)
+            if alloc is None:  # contract: the engine owns the residual layout (RES40 replicated), so it allocates x_out
+                self.programs.clear()
+                return {"ready": False, "reason": "EngineProgram has no alloc_x_out()"}
+            self.programs[b], self.x_out[b] = prog, alloc()
         self.ready = True
         return {"ready": True, "buckets": sorted(self.programs)}
 
