@@ -1,0 +1,404 @@
+"""E1a: run gdn_spec_step's own Metal2 kernels (prefixed + lever-1 path: K4, SFPU gates, VB 4) as a CLASSIC generic_op,
+so the GDN role binaries of the engine can host the unchanged step code (spec §17).
+
+On BH a Metal2 DataflowBuffer is the classic CB interface, so the op's kernel sources compile as-is once they see:
+  - namespace dfb: DFBBindingToken{cb id, LLKMetadata{format}} for every name they reference (unused names alias a
+    configured CB of the same format, they are never touched in this variant);
+  - namespace tensor: TensorBindingToken<CTA offset, CRTA byte offset> (accessor CTAs + addresses as common RTAs);
+  - namespace sem: SemaphoreBindingToken{id, LOCAL_NONATOMIC} (program semaphores 0, 1);
+  - a kernel_main() that calls the TT_KERNEL entry with the named compile-time values and per-core runtime args.
+The host side mirrors GdnSpecStepProgramFactory for this variant (DFB sizes / formats / UnpackToDest, defines, args).
+CB ids stay < 50 (the AR sender uses >= 50 on the combined cores)."""
+import os, struct
+import ttnn
+
+F32, B16, U32 = 0, 5, 24   # tt::DataFormat codes in LLKMetadata
+FMT = {F32: ttnn.float32, B16: ttnn.bfloat16, U32: ttnn.uint32}
+# the step kernel sources: E1_KDIR = an absolute path into the run's PRIVATE tree (the shared in-pod tree stays stock r13;
+# a relative path would resolve against the shared tree's include root)
+KDIR = os.environ.get("E1_KDIR", "")
+assert KDIR.startswith("/"), "set E1_KDIR to the private kernels dir (absolute)"
+bits = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]
+
+
+def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False):
+    """(name, entries, bytes, fmt) of every DFB the PREFIXED + PREFIXED_GATES + LAZY + VSPLIT + SFPU_GATE program uses."""
+    Vs, t32, t16 = Vt // VB, 4096, 2048
+    KVs, Ch = Kt * Vs, 2 * Kt + Vt
+    NBm = 8 if batch else 1  # GDN_BATCH: per-user slots for every user of the head (kBatchMax = 8)
+    return [
+        # reader-produced
+        ("w_in", Vt, t16, B16), ("scaler", 1, t32, F32), ("eps_l2", 1, t16, B16), ("eps_norm", 1, t16, B16),
+        ("state_in", NBm * KVs, t32, F32), ("ktp_in", NBm * Kt, t32, F32), ("up_in", NBm * Vs, t32, F32),
+        ("knq", 2 * Kt, t32, F32), ("vc", Vs, t32, F32), ("zs", Vt, t32, F32), ("ctrl_r", 1, 64, U32),
+        # compute-local
+        ("tmp", max(Kt, Vt), t32, F32), ("stats", 1, t32, F32), ("scratch", 1, t32, F32), ("inv", 1, t32, F32),
+        ("kt", Kt, t32, F32), ("gq", Vt, t32, F32), ("on", Vt, t32, F32), ("sp", NBm * KVs, t32, F32),
+        ("ksqs", 2 * Vs, t32, F32), ("kkqk", 2, t32, F32), ("npo", 4 if T > 4 else 3, t32, F32),
+        ("aa", 3 if T > 4 else 2, t32, F32), ("linv", 1, t32, F32), ("rhs", Vs, t32, F32), ("u", Vs, t32, F32),
+        ("wu", Vs, t32, F32),
+        # compute-produced
+        ("out", Vs, t16 if out_b16 else t32, B16 if out_b16 else F32), *([] if batch else [("dnew", KVs, t32, F32)]),
+        ("kt_out", (NBm * ((Kt + VB - 1) // VB)) if batch else Kt, t32, F32), ("u_out", Vs, t32, F32), ("acc_mine", Vs, t32, F32),
+        # writer
+        ("ctrl_w", 1, 64, U32), ("bounce", Ch, t16, B16), ("gprev", 1, t32, F32), ("gnew", 1, t32, F32),
+        ("acc_x", Vt, t32, F32), ("coef", 15 if batch else 8, t32, F32),
+    ] + ([("l12", 1, t32, F32)] if T > 4 else []) + ([("kmq", 4 * Kt, t32, F32), ("kts", NBm * ((Kt + VB - 1) // VB), t32, F32),
+                                                ("stg", NBm * (Vs + 1), t32, F32), ("spd", 1, 64, U32)] if batch else [])
+
+
+# names the three kernels reference but this variant never touches -> alias of a configured CB of the same format
+ALIAS = {"src_in": "w_in", "taps": "w_in", "z_in": "w_in", "sel": "w_in", "mask_T": "w_in", "wc": "w_in",
+         "shift": "w_in", "wout": "w_in", "ab_w": "w_in", "cv": "tmp", "qc": "tmp", "kc": "tmp", "gt": "tmp",
+         "dtb_ws": "tmp", "nea_ws": "tmp", "gsc": "ctrl_w", "e_t": "w_in", "acc_a": "tmp"}
+# the factory builds the DM kernels at Os (kernel config buffer); the classic descriptor has no opt-level field here,
+# so the wrapper asks GCC for size optimisation on everything it compiles after this line
+DM_OPT = '#pragma GCC optimize ("Os")\n' if os.environ.get("E1_DM_OS", "1") == "1" else ""
+RT_BM = os.environ.get("E1_RT_BM", "1") == "1"
+GPX = os.environ.get("E1_GPX", "")  # size diff: absolute dir of the prefix agent's gpx headers, stubbed in (never fires)   # B / M runtime (GDN_RT_BM): one binary for B = 1 and B = 8
+UNPACK_TO_DEST = ("state_in", "up_in", "coef", "ksqs", "kkqk", "vc")
+
+READER_TENSORS = ["qkv", "win_a", "win_b", "ring", "ctrl", "taps", "dtb", "nea", "weight", "pre"]
+WRITER_TENSORS = ["ring_out", "out", "win_a_w", "win_b_w", "ctrl_w", "pre_w", "qkv_w", "dtb_w", "nea_w"]
+
+
+def _bind_header(ids, tensors, cta_offs, crta0=0):
+    L = ['#pragma once', '#include "internal/template_string.h"', '#include "api/dataflow/dataflow_buffer.h"',
+         '#include "api/dataflow/semaphore_binding_token.h"', '#include "api/tensor/tensor_binding_token.h"',
+         'struct ScratchpadBindingToken;', 'namespace dfb {']
+    for name, (cb, fmt) in ids.items():
+        L.append(f'constexpr DFBBindingToken<dfb::AccessPattern::STRIDED, dfb::AccessPattern::STRIDED> {name}{{{cb}, '
+                 f'::binding_details::LLKMetadata{{.format = {fmt}u, .face_r_dim = 16u, .face_c_dim = 16u, '
+                 f'.num_faces_r_dim = 2u, .num_faces_c_dim = 2u}}}};')
+    L += ['}  // namespace dfb', 'namespace sem {',
+          'constexpr ::SemaphoreBindingToken ready{0u, ::SemScope::LOCAL_NONATOMIC};',
+          'constexpr ::SemaphoreBindingToken valid{1u, ::SemScope::LOCAL_NONATOMIC};', '}  // namespace sem',
+          'namespace tensor {']
+    for i, t in enumerate(tensors):
+        L.append(f'using {t}_t = ::tensor_accessor::TensorBindingToken<{cta_offs[i]}u, {4 * (crta0 + i)}u>;')
+        L.append(f'constexpr {t}_t {t}{{::binding_details::LLKMetadata{{.format = 0u, .face_r_dim = 16u, '
+                 f'.face_c_dim = 16u, .num_faces_r_dim = 2u, .num_faces_c_dim = 2u}}}};')
+    L += ['}  // namespace tensor']
+    return "\n".join(L) + "\n"
+
+
+def build(dev, cores, g, B, T, Kt, Vt, VB, tens, kopts, scale, l2_eps, norm_eps, gen_dir, pre_s, out_b16=True,
+          batch=False, layers=None):
+    """batch: GDN_BATCH (type 4 batched): core (h, s) runs all B users of head h; len(cores) == Nv * VB.
+    layers: GDN_LOOP -- a list of per-layer tensor dicts (same keys / shapes as tens); the step entry runs once per layer
+    inside one kernel, the tensor addresses (common runtime args) rewritten before each call."""
+    NL = len(layers) if layers else 1
+    """tens: dict qkv win_a win_b ring ctrl taps dtb nea weight pre out (device tensors). Returns a ProgramDescriptor."""
+    Nv, Nk, K = g.Nv, g.Nk, 4
+    Lw, C = K - 1 + T, g.C
+    Ct, M, Vs = C // 32, B, Vt // VB
+    assert len(cores) == (Nv * VB if batch else B * Nv * VB)
+    os.makedirs(gen_dir, exist_ok=True)
+    tab = dfb_table(Kt, Vt, T, VB, out_b16, batch)
+    ids = {n: (i, f) for i, (n, _, _, f) in enumerate(tab)}
+    assert len(tab) < 50, len(tab)
+    for a, b in ALIAS.items():
+        if a not in ids:
+            ids[a] = ids[b]
+    if "dnew" not in ids:
+        ids["dnew"] = ids["tmp"]  # GDN_BATCH: S' is written from sp (the name is still referenced, never used)
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    cbs = [ttnn.CBDescriptor(total_size=e * nb, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(
+        buffer_index=ids[n][0], data_format=FMT[f], page_size=nb)]) for n, e, nb, f in tab]
+
+    def ctas(names):
+        out, offs = [], []
+        for t in names:
+            offs.append(len(out))
+            out += ttnn.TensorAccessorArgs(tens[t]).get_compile_time_args()
+        return out, offs
+    rmap = {"qkv": "qkv", "win_a": "win_a", "win_b": "win_b", "ring": "ring", "ctrl": "ctrl", "taps": "taps",
+            "dtb": "dtb", "nea": "nea", "weight": "weight", "pre": "pre"}
+    wmap = {"ring_out": "ring", "out": "out", "win_a_w": "win_a", "win_b_w": "win_b", "ctrl_w": "ctrl",
+            "pre_w": "pre", "qkv_w": "qkv", "dtb_w": "dtb", "nea_w": "nea"}
+    rct, roff = ctas([rmap[t] for t in READER_TENSORS])
+    wct, woff = ctas([wmap[t] for t in WRITER_TENSORS])
+    hr, hw, hc = (os.path.join(gen_dir, f"bind_{k}.h") for k in ("r", "w", "c"))
+    open(hr, "w").write(_bind_header(ids, READER_TENSORS, roff))
+    open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff))
+    open(hc, "w").write(_bind_header(ids, [], []))
+    W = g.W // 32
+    z_tile0, ab_page = (2 * Nk * Kt * 32 + Nv * Vt * 32) // 32, g.QKVZ // 32
+    # one row-major uint32 page [1, N]: N*4 bytes (64 at B = 1, 256 at B = 8: 1 + B + B*Nv words padded to 16)
+    ctrl_bytes = int(tens["ctrl"].shape[-1]) * 4
+    hs = 4294967295
+    TB, TM = (1, 1) if RT_BM else (B, M)   # template B / M: fixed under GDN_RT_BM (the runtime values are args 4/5, 11/12)
+    tr = os.path.join(gen_dir, "e1_reader.cpp")
+    open(tr, "w").write(
+        f'{DM_OPT}#include "{hr}"\nvoid kernel_main();\n'
+        f'inline uint32_t gdn_rt_B() {{ return get_arg_val<uint32_t>(4); }}\n'
+        f'inline uint32_t gdn_rt_M() {{ return get_arg_val<uint32_t>(5); }}\n'
+        f'#include "{KDIR}/dataflow/reader_gdn_spec_step.cpp"\n'
+        + (f'#include "{GPX}/gpx_dm.hpp"\n' if GPX else '') +
+        f'void kernel_main() {{ volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);\n'
+        f'  for (uint32_t L = 0; L < {NL}; ++L) {{\n'
+        + (f'    for (uint32_t t = 0; t < {len(READER_TENSORS)}; ++t) crta[t] = get_arg_val<uint32_t>(8 + L * {len(READER_TENSORS)} + t);\n' if NL > 1 else '') +
+        f'    reader<{Kt}, {Vt}, {Nk}, {Nv}, {T}, {TB}, {TM}, {K}, {Lw}, {Ct}, {z_tile0}, {ab_page}, {W}, '
+        f'1, 1, {bits(l2_eps)}u, {bits(norm_eps)}u, {ctrl_bytes}, {hs}u, 0, {VB}>(get_arg_val<uint32_t>(0), '
+        f'get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3));\n  }}\n'
+        + (f'  if (get_arg_val<uint32_t>(6) == 0xC0FFEEu) {{ const uint32_t a = get_arg_val<uint32_t>(7); '
+           f'gpx::Ctrl<{B}, {T}, {M}, {Nv}> c; c.parse(a); const auto wa = TensorAccessor(tensor::win_a); '
+           f'const auto wb = TensorAccessor(tensor::win_b); gpx::read_window<{B}, {Ct}>(wa, wa, c, a, a); '
+           f'gpx::stage_window_out<{B}, {T}, {K}>(c, a, a, a); noc_async_read_barrier(); }}\n' if GPX else '')
+        + '}\n')
+    tw = os.path.join(gen_dir, "e1_writer.cpp")
+    open(tw, "w").write(
+        f'{DM_OPT}#include "{hw}"\nvoid kernel_main();\n'
+        f'inline uint32_t gdn_rt_B() {{ return get_arg_val<uint32_t>(11); }}\n'
+        f'inline uint32_t gdn_rt_M() {{ return get_arg_val<uint32_t>(12); }}\n'
+        f'#include "{KDIR}/dataflow/writer_gdn_spec_step.cpp"\n'
+        + (f'#include "{GPX}/gpx_dm.hpp"\n' if GPX else '')
+        + ('static uint32_t g_gdn_l = 0;\nuint32_t gdn_loop_k() { return g_gdn_l + 1; }\n' if NL > 1 else '') +
+        f'void kernel_main() {{ volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);\n'
+        f'  for (uint32_t L = 0; L < {NL}; ++L) {{\n'
+        + (f'    g_gdn_l = L;\n    for (uint32_t t = 0; t < {len(WRITER_TENSORS)}; ++t) crta[t] = get_arg_val<uint32_t>(15 + L * {len(WRITER_TENSORS)} + t);\n' if NL > 1 else '') +
+        f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, {TB}, {TM}, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
+        + ", ".join(f"get_arg_val<uint32_t>({i})" for i in range(11)) + ");\n  }\n"
+        + (f'  if (get_arg_val<uint32_t>(13) == 0xC0FFEEu) {{ const uint32_t a = get_arg_val<uint32_t>(14); '
+           f'gpx::Ctrl<{B}, {T}, {M}, {Nv}> c; c.parse(a); const auto wa = TensorAccessor(tensor::win_a_w); '
+           f'const auto wb = TensorAccessor(tensor::win_b_w); gpx::stage_shift<{B}, {T}, {K}>(a, a); '
+           f'gpx::write_window<{B}, {T}, {K}, {Ct}>(wa, wa, c, a, a, a); (void)wb; noc_async_write_barrier(); }}\n' if GPX else '')
+        + "}\n")
+    tc = os.path.join(gen_dir, "e1_compute.cpp")
+    open(tc, "w").write(
+        f'#include "{hc}"\nvoid kernel_main();\n'
+        f'uint32_t gdn_rt_B();\n'
+        f'#include "{KDIR}/compute/gdn_spec_step.cpp"\n'
+        f'uint32_t gdn_rt_B() {{ return get_arg_val<uint32_t>(3); }}\n'
+        + (f'#include "{GPX}/gpx_compute.hpp"\n' if GPX else '') +
+        f'void kernel_main() {{ for (uint32_t L = 0; L < {NL}; ++L) {{ compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        f'get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2)); }}\n'
+        + ('  if (get_arg_val<uint32_t>(4) == 0xC0FFEEu) { const uint32_t c = get_arg_val<uint32_t>(5); '
+           'gpx::conv<4, true>(c, c + 1, c + 2, c + 3); gpx::silu_z(c, c + 1); '
+           'gpx::l2_root<4>(gpx::L2Cbs{c, c + 1, c + 2, c + 3, c + 4, c + 5, c + 6, c + 7, c + 8}, c); }\n' if GPX else '')
+        + '}\n')
+    pre_w = Nv * pre_s
+    d_r = [("GDN_FAST", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_EARLY_SRC", "1"), ("GDN_LAZY", "1"),
+           ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s))] + ([("GDN_RT_BM", "1")] if RT_BM else [])
+    d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
+           ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
+           ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
+           ("GDN_PRE_S", str(pre_s))] + ([("GDN_RT_BM", "1")] if RT_BM else [])
+    if NL > 1:
+        d_w.append(("GDN_LOOP", "1"))
+    if batch:
+        d_r.append(("GDN_BATCH", "1"))
+        d_w.append(("GDN_BATCH", "1"))
+    d_c = ([("GDN_BATCH", "1")] if batch else []) + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY", "GDN_PREFIXED",
+                              "GDN_PREFIXED_GATES", "GDN_SFPU_GATE", "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
+    rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for i, c in enumerate(cores):
+        bh, s = i // VB, i % VB
+        u, h = (0, bh) if batch else (bh // Nv, bh % Nv)
+        peers = [dev.worker_core_from_logical_core(cores[bh * VB + p]) for p in range(VB)] + [None] * (4 - VB)
+        pxy = []
+        for p in peers:
+            pxy += [p.x, p.y] if p is not None else [0, 0]
+        rrt[c.x][c.y] = [u, h, 0, s, B, M, 0, 0] + (
+            [lt[rmap[t]].buffer_address() for lt in layers for t in READER_TENSORS] if NL > 1 else [])
+        wrt[c.x][c.y] = [u, h, s] + pxy + [B, M, 0, 0] + (
+            [lt[wmap[t]].buffer_address() for lt in layers for t in WRITER_TENSORS] if NL > 1 else [])
+        crt[c.x][c.y] = [u, 0, s, B, 0, 0]
+    utd = [ttnn.UnpackToDestMode.Default] * 64
+    for n in UNPACK_TO_DEST:
+        utd[ids[n][0]] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    ccfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+                                        math_approx_mode=False, dst_full_sync_en=False)
+    ccfg.unpack_to_dest_mode = utd
+    ks = [ttnn.KernelDescriptor(kernel_source=tr, core_ranges=crs, compile_time_args=rct, defines=d_r,
+                                common_runtime_args=[tens[rmap[t]].buffer_address() for t in READER_TENSORS],
+                                runtime_args=rrt, config=ttnn.DataMovementConfigDescriptor(
+                                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
+          ttnn.KernelDescriptor(kernel_source=tw, core_ranges=crs, compile_time_args=wct, defines=d_w,
+                                common_runtime_args=[tens[wmap[t]].buffer_address() for t in WRITER_TENSORS],
+                                runtime_args=wrt, config=ttnn.DataMovementConfigDescriptor(
+                                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
+          ttnn.KernelDescriptor(kernel_source=tc, core_ranges=crs, compile_time_args=[], defines=d_c,
+                                runtime_args=crt, config=ccfg)]
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in range(2)]
+    return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
+
+
+def gdn_role_cores(dev, n=24):
+    """§17 placement: (0..9, 8..9) + (10..11, 8..9); falls back to the first n cores of a smaller grid."""
+    gr = dev.compute_with_storage_grid_size()
+    if gr.x >= 12 and gr.y >= 10:
+        return [ttnn.CoreCoord(x, y) for y in (8, 9) for x in range(12)][:n]
+    return [ttnn.CoreCoord(i % gr.x, i // gr.x) for i in range(n)]
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# G2: the engine GDN role (spec §17 / §20, v1.33). Same step kernels, looped over the pass's GDN layers, with:
+#   * no per-core runtime args: everything per core (and the per-layer tensor addresses) in ONE arg block of kind gdn = 3
+#     (engine/argblock.py layout: [magic, kind, n, version, payload..], 16 B padded; HEIGHT_SHARDED L1 over the GDN
+#     cores, so its address is one common runtime arg, slot 3 of the engine's [phase, ar, v12, gdn, attn] common args);
+#   * the head exchange on two device-local global semaphores vb0 / vb1 (GDN_EXT_SEM; no program semaphores);
+#   * in_ready (raised +1 per GDN layer by the engine) gates the reader's `pre` reads (GDN_IN_WAIT) and the writer's
+#     layer start; the state / stash reads go out first (GDN_STATE_FIRST);
+#   * out_ready: +1 per core per layer on the engine's target core once the output rows landed (GDN_OUT_SIGNAL);
+#   * at program end the writer resets in_ready / attn_kv / vb0 / vb1 on its core (it is their last waiter, v1.33).
+AB_MAGIC, AB_KIND_GDN, AB_HDR, CRTA0 = 0x4D4B4142, 3, 4, 5
+R_ARGS, W_ARGS, C_ARGS = 8, 15, 6
+
+
+def argblock_tensor(dev, cores, payloads, kind=AB_KIND_GDN):
+    """One core's block per row (engine/argblock.py layout), HEIGHT_SHARDED in L1 over `cores` (same address on every
+    core / device). payloads: list of u32 lists, one per core in `cores` order."""
+    import torch
+    width = -(-(AB_HDR + max(len(p) for p in payloads)) // 4) * 4
+    rows = [[AB_MAGIC, kind, len(p), 1] + [int(v) & 0xFFFFFFFF for v in p] for p in payloads]
+    rows = [r + [0] * (width - len(r)) for r in rows]
+    host = torch.tensor(rows, dtype=torch.int64).to(torch.int32).reshape(len(cores), width)
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                           ttnn.ShardSpec(crs, [1, width], ttnn.ShardOrientation.ROW_MAJOR))
+    kw = {}
+    if hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+        kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(dev)
+    return ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=mc, **kw)
+
+
+def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
+                 out_b16=True, kdir=None):
+    """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
+    as build's tens). sems: {in_ready, attn_kv, vb0, vb1, out_ready} L1 addresses; out_target: (noc x, noc y) of the
+    core whose out_ready gets +1 per GDN core per layer. Core i of `cores` (row-major) = head i // VB, value block i % VB.
+    Returns dict(kernels, cbs, io, info)."""
+    kd = kdir or KDIR
+    assert kd.startswith("/"), "the step kernels' dir must be absolute"
+    NG, Nv, Nk, K = len(layers), g.Nv, g.Nk, 4
+    assert NG >= 1 and len(cores) == Nv * VB, (NG, len(cores))
+    Lw, C = K - 1 + T, g.C
+    Ct, M = C // 32, B
+    tens = layers[0]
+    os.makedirs(gen_dir, exist_ok=True)
+    tab = dfb_table(Kt, Vt, T, VB, out_b16, True)
+    ids = {n: (i, f) for i, (n, _, _, f) in enumerate(tab)}
+    assert len(tab) <= 45, len(tab)   # CB ids 0..44 (spec v1.25 MAX_CB_ID)
+    for a, b in ALIAS.items():
+        if a not in ids:
+            ids[a] = ids[b]
+    ids.setdefault("dnew", ids["tmp"])
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    cbs = [ttnn.CBDescriptor(total_size=e * nb, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(
+        buffer_index=ids[n][0], data_format=FMT[f], page_size=nb)]) for n, e, nb, f in tab]
+    rmap = {t: t for t in READER_TENSORS}
+    wmap = {"ring_out": "ring", "out": "out", "win_a_w": "win_a", "win_b_w": "win_b", "ctrl_w": "ctrl",
+            "pre_w": "pre", "qkv_w": "qkv", "dtb_w": "dtb", "nea_w": "nea"}
+
+    def ctas(names):
+        out, offs = [], []
+        for t in names:
+            offs.append(len(out))
+            out += ttnn.TensorAccessorArgs(tens[t]).get_compile_time_args()
+        return out, offs
+    rct, roff = ctas([rmap[t] for t in READER_TENSORS])
+    wct, woff = ctas([wmap[t] for t in WRITER_TENSORS])
+    hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
+    open(hr, "w").write(_bind_header(ids, READER_TENSORS, roff, CRTA0))
+    open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff, CRTA0))
+    open(hc, "w").write(_bind_header(ids, [], []))
+    W = g.W // 32
+    z_tile0, ab_page = (2 * Nk * Kt * 32 + Nv * Vt * 32) // 32, g.QKVZ // 32
+    ctrl_bytes = int(tens["ctrl"].shape[-1]) * 4
+    hs = 4294967295
+    nR, nW = len(READER_TENSORS), len(WRITER_TENSORS)
+    OW, OC, OLR = R_ARGS, R_ARGS + W_ARGS, R_ARGS + W_ARGS + C_ARGS
+    OLW = OLR + NG * nR
+    S = {k: f"{int(sems[k])}u" for k in ("in_ready", "attn_kv", "vb0", "vb1", "out_ready")}
+    ox, oy = out_target
+    AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
+    CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
+    tr = os.path.join(gen_dir, "g2_reader.cpp")
+    open(tr, "w").write(
+        f'{DM_OPT}#include "{hr}"\nvoid kernel_main();\nstatic volatile tt_l1_ptr uint32_t* g_ab;\nstatic uint32_t g_l;\n'
+        f'inline uint32_t gdn_rt_B() {{ return g_ab[4]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[5]; }}\n'
+        f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
+        f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n'
+        f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
+        f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_l = L;\n'
+        f'    for (uint32_t t = 0; t < {nR}; ++t) crta[{CRTA0} + t] = g_ab[{OLR} + L * {nR} + t];\n'
+        f'    reader<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {K}, {Lw}, {Ct}, {z_tile0}, {ab_page}, {W}, '
+        f'1, 1, {bits(l2_eps)}u, {bits(norm_eps)}u, {ctrl_bytes}, {hs}u, 0, {VB}>(g_ab[0], g_ab[1], g_ab[2], g_ab[3]);\n'
+        f'  }}\n}}\n')
+    tw = os.path.join(gen_dir, "g2_writer.cpp")
+    open(tw, "w").write(
+        f'{DM_OPT}#include "{hw}"\nvoid kernel_main();\nstatic volatile tt_l1_ptr uint32_t* g_ab;\nstatic uint32_t g_gdn_l = 0;\n'
+        f'inline uint32_t gdn_rt_B() {{ return g_ab[{OW + 11}]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[{OW + 12}]; }}\n'
+        f'#include "{kd}/dataflow/writer_gdn_spec_step.cpp"\n'
+        f'uint32_t gdn_loop_k() {{ return g_gdn_l + 1; }}\n'
+        f'uint32_t gdn_xsem_addr(uint32_t i) {{ return i ? {S["vb1"]} : {S["vb0"]}; }}\n'
+        f'void gdn_out_signal() {{ noc_semaphore_inc(get_noc_addr({ox}u, {oy}u, {S["out_ready"]}), 1); }}\n'
+        f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
+        f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_gdn_l = L;\n'
+        f'    for (uint32_t t = 0; t < {nW}; ++t) crta[{CRTA0} + t] = g_ab[{OLW} + L * {nW} + t];\n'
+        f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n'
+        f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
+        + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n  }\n"
+        f'  noc_async_atomic_barrier();\n'
+        f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached)\n'
+        + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
+        + '}\n')
+    tc = os.path.join(gen_dir, "g2_compute.cpp")
+    open(tc, "w").write(
+        f'#include "{hc}"\nvoid kernel_main();\nuint32_t gdn_rt_B();\n'
+        f'#include "{kd}/compute/gdn_spec_step.cpp"\n'
+        f'static volatile tt_l1_ptr uint32_t* g_ab;\nuint32_t gdn_rt_B() {{ return g_ab[{OC + 3}]; }}\n'
+        f'void kernel_main() {{\n  g_ab = {AB};\n'
+        f'  for (uint32_t L = 0; L < {NG}; ++L) {{ compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]); }}\n}}\n')
+    pre_w = Nv * pre_s
+    common = [("GDN_RT_BM", "1"), ("GDN_BATCH", "1")]
+    d_r = [("GDN_FAST", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_EARLY_SRC", "1"), ("GDN_LAZY", "1"),
+           ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s)), ("GDN_STATE_FIRST", "1"),
+           ("GDN_IN_WAIT", "1")] + common
+    d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
+           ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
+           ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
+           ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + common
+    d_c = [("GDN_BATCH", "1")] + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
+                                                    "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
+                                                    "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
+    fphys = dev.worker_core_from_logical_core
+    payloads = []
+    for i, c in enumerate(cores):
+        h, s = i // VB, i % VB
+        pxy = []
+        for p in range(4):
+            if p < VB:
+                q = fphys(cores[h * VB + p])
+                pxy += [q.x, q.y]
+            else:
+                pxy += [0, 0]
+        pl = [0, h, 0, s, B, M, 0, 0] + [0, h, s] + pxy + [B, M, 0, 0] + [0, 0, s, B, 0, 0]
+        pl += [lt[rmap[t]].buffer_address() for lt in layers for t in READER_TENSORS]
+        pl += [lt[wmap[t]].buffer_address() for lt in layers for t in WRITER_TENSORS]
+        payloads.append(pl)
+    abt = argblock_tensor(dev, cores, payloads)
+    ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
+    utd = [ttnn.UnpackToDestMode.Default] * 64
+    for n in UNPACK_TO_DEST:
+        utd[ids[n][0]] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    ccfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+                                        math_approx_mode=False, dst_full_sync_en=False)
+    ccfg.unpack_to_dest_mode = utd
+    ks = [ttnn.KernelDescriptor(kernel_source=tr, core_ranges=crs, compile_time_args=rct, defines=d_r,
+                                common_runtime_args=ca([tens[rmap[t]].buffer_address() for t in READER_TENSORS]),
+                                runtime_args=ttnn.RuntimeArgs(), config=ttnn.DataMovementConfigDescriptor(
+                                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
+          ttnn.KernelDescriptor(kernel_source=tw, core_ranges=crs, compile_time_args=wct, defines=d_w,
+                                common_runtime_args=ca([tens[wmap[t]].buffer_address() for t in WRITER_TENSORS]),
+                                runtime_args=ttnn.RuntimeArgs(), config=ttnn.DataMovementConfigDescriptor(
+                                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
+          ttnn.KernelDescriptor(kernel_source=tc, core_ranges=crs, compile_time_args=[], defines=d_c,
+                                common_runtime_args=ca([]), runtime_args=ttnn.RuntimeArgs(), config=ccfg)]
+    io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
+                                                lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]]
+    info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab),
+                ab_words=len(payloads[0]), NG=NG)
+    return dict(kernels=ks, cbs=cbs, io=io, info=info)
