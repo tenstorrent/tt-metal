@@ -361,20 +361,20 @@ void matmul_blocks(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
 
-            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
-                    in0_cb.get_cb_id(),
-                    in1_cb.get_cb_id(),
-                    in0_index,
-                    in1_index,
-                    dst_index,
-                    false /*transpose*/,
-                    subblock_w,
-                    subblock_h,
-                    K_block_tiles);
-                in0_index++;
-                in1_index += full_N_block_tiles;
-            }
+            // The whole inner dimension of the block in one call (bit for bit the per-tile matmul_block loop): with
+            // MM_ROW_MOP on Blackhole the K steps run back to back into the subblock's DEST tiles.
+            matmul_block_k(
+                in0_cb.get_cb_id(),
+                in1_cb.get_cb_id(),
+                in0_index,
+                in1_index,
+                dst_index,
+                false /*transpose*/,
+                subblock_w,
+                subblock_h,
+                K_block_tiles /*kt_dim*/,
+                K_block_tiles /*k_steps*/,
+                full_N_block_tiles /*in1_k_stride*/);
             tile_regs_commit();
             tile_regs_wait();
             uint32_t write_dst_index = 0;

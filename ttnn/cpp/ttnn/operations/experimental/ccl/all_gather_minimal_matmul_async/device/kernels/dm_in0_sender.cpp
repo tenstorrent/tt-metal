@@ -11,6 +11,9 @@
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#ifdef AGMM_IN0_HW_MCAST
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#endif
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -112,6 +115,16 @@ void kernel_main() {
     size_t out_ready_sem_forward = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t barrier_sem = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t M_tiles = get_common_arg_val<uint32_t>(cargidx++);
+#ifdef FABRIC_2D
+#if defined(AGMM_GATHER_SENDERS)
+    // Dedicated gather senders (on the column beside the matmul grid) push every peer's blocks here; the in0 cores
+    // only wait, one arrival per piece per source peer.
+    constexpr bool gather_senders = true;
+#else
+    constexpr bool gather_senders = false;
+#endif
+    static_assert(!gather_senders || num_devices <= 4, "Fabric2D gather senders support rings of up to 4");
+#endif
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
@@ -121,6 +134,11 @@ void kernel_main() {
 
     // Output tensor addresses from common args
     const uint32_t out_addr_common_arg_start = cargidx;
+#ifdef FABRIC_2D
+    // Trailing Fabric2D arg after the N_chunks output addresses: the arrival counter for the opposite device of a ring
+    // of 4, whose blocks the gather senders push here.
+    const uint32_t out_ready_sem_far = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks);
+#endif
 
     // Load per-core runtime args
     uint32_t argidx = 0;
@@ -263,6 +281,17 @@ void kernel_main() {
 #endif
 
     in0_valid_sem.set(VALID);
+#ifdef AGMM_IN0_HW_MCAST
+    // Hardware multicast of each in0 block along the row from its injector (x = 0), in place of the
+    // core-to-core relay (with gather senders the gather does not use the in0 chain, so the block only feeds the
+    // matmul).
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in0_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in0_mcast_rt_offset")>
+        in0_mcast_args;
+    auto in0_tx = in0_mcast_args.optional_sender(noc_obj);
+    auto in0_rx = in0_mcast_args.optional_receiver(noc_obj);
+#endif
 
     // all gather
     volatile tt_l1_ptr uint32_t* out_ready_sem_backward_addr_ptr =
@@ -290,6 +319,31 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+#ifdef FABRIC_2D
+    // Entry barrier, announce side: tell the injector of every peer this core writes into that we entered.
+    // A peer's injector reads no block (so none of its senders writes) until every writer has entered: without
+    // this a fast peer's next call lands in a gathered buffer this device is still reading. This is the relay's
+    // barrier; gather senders run their own entry handshake (dm_gather_sender.cpp).
+    if constexpr (!is_linear && num_devices > 1) {
+        if (barrier_sem != 0) {
+            const uint64_t barrier_injector_noc_addr =
+                safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, barrier_sem, 0);
+            auto announce = [&](auto* handle, PacketHeaders& hdrs) {
+                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    handle,
+                    hdrs.sem_inc_hdr,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_injector_noc_addr, 0});
+            };
+            if (in0_core_order_index == forward_in0_core_order_index) {
+                announce(mux_connection_handle_forward, pkt_hdrs_backward);
+            }
+            if (in0_core_order_index == backward_in0_core_order_index) {
+                announce(mux_connection_handle_backward, pkt_hdrs_forward);
+            }
+            noc_obj.async_writes_flushed();
+        }
+    }
+#endif
 
     // A following gather may reuse DRAM owned by the preceding collective. Its
     // remote writes must wait until every rank has entered this program. Data
@@ -298,6 +352,7 @@ void kernel_main() {
     // Every in0 core on every rank runs it symmetrically: out_ready_sem_noc0_x/y are
     // this core's own coordinates, so each core signals its counterpart on the
     // num_devices - 1 peers and waits for exactly that many arrivals in its own L1.
+#ifndef FABRIC_2D  // hop-range multicast is a 1D route; Fabric2D uses the announce barrier above
     if constexpr (topology == Topology::Ring && num_devices > 1) {
         if (barrier_sem != 0) {
             auto* barrier_connection =
@@ -320,12 +375,40 @@ void kernel_main() {
             noc_obj.async_atomic_barrier();
         }
     }
+#endif  // !FABRIC_2D
 #endif
 
     /**
      * This is a Row-Major output block ordering.
      * It enables reuse of the last in0 block when striding the output block N dimension.
      */
+
+#ifdef FABRIC_2D
+    volatile tt_l1_ptr uint32_t* out_ready_sem_far_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_far);
+    // Arrivals into this device per block: from r+1 (forward), r-1 (backward) and, for 4, r+2 (far).
+    // Writers into this device when relaying: the two neighbours.
+    constexpr uint32_t num_push_sources = 2;
+    if constexpr (!is_linear && num_devices > 1) {
+        if (!gather_senders && is_injector_core && barrier_sem != 0) {
+            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+            noc_semaphore_wait_min(barrier_ptr, num_push_sources);
+            // Consume rather than reset: a faster peer's next-launch announcement may already be here.
+            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - num_push_sources);
+            noc_obj.async_atomic_barrier();
+        }
+    }
+    // Source offset o = (source - my_rank) mod N -> its arrival counter. The left half of a K step d comes from
+    // r+d, the right half from r-d; for N == 2 both neighbours are the same device but arrive on two counters.
+    auto left_source_sem = [&](uint32_t o) {
+        return o == 1 ? out_ready_sem_forward_addr_ptr
+                      : (o == num_devices - 1 ? out_ready_sem_backward_addr_ptr : out_ready_sem_far_addr_ptr);
+    };
+    auto right_source_sem = [&](uint32_t o) {
+        return o == num_devices - 1 ? out_ready_sem_backward_addr_ptr
+                                    : (o == 1 ? out_ready_sem_forward_addr_ptr : out_ready_sem_far_addr_ptr);
+    };
+#endif
 
     bool k_forward = true;
     bool reuse_block = false;
@@ -427,8 +510,8 @@ void kernel_main() {
                 } else {
                     // Ring: bidirectional half-block. Requires K_block_tiles | K_tiles_per_device
                     // (no tail support yet — enforced upstream for Ring).
-                    k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
-                    k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
+                    k_left_tiles = ring_k_left_tiles(k_block_odd, K_block_tiles);
+                    k_right_tiles = K_block_tiles - k_left_tiles;
                 }
                 compute_actual_k_block<is_linear>(
                     k_block_iter,
@@ -439,7 +522,11 @@ void kernel_main() {
                     K_tiles_per_device,
                     num_devices,
                     k_forward,
+#ifdef FABRIC_2D
+                    !gather_senders && n_block_iter == 0,
+#else
                     n_block_iter == 0,
+#endif
                     out_ready_sem_forward_addr_ptr,
                     out_ready_sem_backward_addr_ptr,
                     sem_target_forward,
@@ -449,6 +536,27 @@ void kernel_main() {
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
+#ifdef FABRIC_2D
+                if constexpr (gather_senders) {
+                    // Per source, per M block: a neighbour sends the halves of its first-needed K step (step 1), then
+                    // those of its second (step N - 1); the opposite device of a ring of 4 sends whole blocks
+                    // (step 2). One arrival per piece, in that order (dm_gather_sender).
+                    const uint32_t step = actual_k_block / K_blocks_per_device;
+                    if (n_block_iter == 0 && is_injector_core && step > 0) {
+                        const uint32_t per_mb_neighbour = (num_devices == 2 ? 1 : 2) * K_blocks_per_device;
+                        auto target_for = [&](uint32_t o) -> uint32_t {
+                            if (num_devices == 4 && o == 2) {
+                                return m_block_iter * K_blocks_per_device + device_k_block_iter + 1;
+                            }
+                            const bool second = num_devices > 2 && step == num_devices - 1;
+                            return m_block_iter * per_mb_neighbour + (second ? K_blocks_per_device : 0) +
+                                   device_k_block_iter + 1;
+                        };
+                        noc_semaphore_wait_min(left_source_sem(step), target_for(step));
+                        noc_semaphore_wait_min(right_source_sem(num_devices - step), target_for(num_devices - step));
+                    }
+                }
+#endif
                 if constexpr (is_linear) {
                     // For Linear tail, the right half is pure zero-fill padding (no real tiles).
                     // Point past the logical K end so read_in0_block_sync's `j < logical_d1` check
@@ -479,16 +587,28 @@ void kernel_main() {
                         k_block_right_tile + k_right_tiles,
                         k_right_tiles);
                 } else {
+#ifdef AGMM_IN0_HW_MCAST
+                    in0_rx->receive();
+#else
                     // Get from previous device
                     in0_receiver_sem.set(INVALID);
                     in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_sem.wait(VALID);
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_in0.push_back(in0_block_num_tiles);
-                if (!is_sink_core) {
+#ifdef AGMM_IN0_HW_MCAST
+                if (is_injector_core) {
+                    in0_tx->send(in0_start_address, in0_start_address, current_block_bytes);
+                }
+                constexpr bool relay_chain = false;  // the multicast replaces the core-to-core relay
+#else
+                constexpr bool relay_chain = true;
+#endif
+                if (relay_chain && !is_sink_core) {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 
@@ -578,7 +698,13 @@ void kernel_main() {
                         // Ring: relay each K-block both directions every iter. Skip the last
                         // K_blocks_per_device iterations — those K-blocks have already reached
                         // all devices via wrap-around relay.
-                        if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
+#ifdef FABRIC_2D
+                        // With gather senders the in0 cores send nothing: the senders push every block.
+                        const bool relay = !gather_senders;
+#else
+                        const bool relay = true;
+#endif
+                        if (relay && k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                             if constexpr (num_targets_backward_direction > 0) {
                                 if (in0_core_order_index == forward_in0_core_order_index) {
                                     forward_half_block_to_fabric_neighbor(
@@ -771,4 +897,9 @@ void kernel_main() {
 
     noc_semaphore_set(out_ready_sem_backward_addr_ptr, 0);
     noc_semaphore_set(out_ready_sem_forward_addr_ptr, 0);
+#ifdef FABRIC_2D
+    if (out_ready_sem_far != 0) {
+        noc_semaphore_set(out_ready_sem_far_addr_ptr, 0);
+    }
+#endif
 }

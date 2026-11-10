@@ -71,9 +71,18 @@ auto make_tensor_accessor_tuple_uniform_page_size_common(
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#ifdef FABRIC_2D
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 
 using namespace tt::tt_fabric::linear::experimental;
 #endif
+
+// A Ring K block is gathered in two halves (one per direction); the left half of block b has K / 2 tiles, or
+// K - K / 2 when b is odd, the right half the rest.
+constexpr uint32_t ring_k_left_tiles(bool k_block_odd, uint32_t K_block_tiles) {
+    return k_block_odd ? K_block_tiles - K_block_tiles / 2 : K_block_tiles / 2;
+}
 
 #if defined(IS_IN0) || defined(IS_IN1)
 template <bool IsLinear>
@@ -186,10 +195,36 @@ void compute_actual_k_block(
 
 #ifdef USE_MUX
 struct PacketHeaders {
-    volatile tt::tt_fabric::LowLatencyPacketHeader* scatter_hdr;
-    volatile tt::tt_fabric::LowLatencyPacketHeader* unicast_hdr;
-    volatile tt::tt_fabric::LowLatencyPacketHeader* sem_inc_hdr;
+    volatile PACKET_HEADER_TYPE* scatter_hdr;
+    volatile PACKET_HEADER_TYPE* unicast_hdr;
+    volatile PACKET_HEADER_TYPE* sem_inc_hdr;
 };
+
+// One packet of n (1..4) whole tiles, contiguous in L1 from src, to the tiles' NoC addresses on the destination
+// device: a scatter write, or a unicast write for one tile.
+template <typename ConnectionHandleType>
+FORCE_INLINE void write_tiles_packet(
+    ConnectionHandleType connection,
+    const PacketHeaders& pkt_hdrs,
+    uint32_t src,
+    uint64_t (&noc_addrs)[4],
+    uint32_t n,
+    uint16_t page_size) {
+    if (n > 1) {
+        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+        fabric_unicast_noc_scatter_write_with_state<
+            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+            UnicastScatterWriteUpdateMask::PayloadSize>(
+            connection,
+            pkt_hdrs.scatter_hdr,
+            src,
+            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, n),
+            page_size * n);
+    } else {
+        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+            connection, pkt_hdrs.unicast_hdr, src, NocUnicastCommandHeader{noc_addrs[0]});
+    }
+}
 
 template <typename TensorAccessorType, typename ConnectionHandleType>
 FORCE_INLINE void forward_half_block_to_fabric_neighbor(
@@ -210,8 +245,6 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
     bool write_left_half,
     uint32_t m_tile_end,
     bool do_write) {
-    auto* pkt_scatter_hdr = pkt_hdrs.scatter_hdr;
-    auto* pkt_unicast_hdr = pkt_hdrs.unicast_hdr;
     auto* pkt_hdr_sem_inc = pkt_hdrs.sem_inc_hdr;
 
     uint32_t half_k_block_tiles = write_left_half ? k_left_tiles : k_right_tiles;
@@ -230,7 +263,6 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
         uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
         bool reached_half_block_end = false;
 
-        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         uint64_t noc_addrs[4] = {0, 0, 0, 0};
         for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
             uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -245,19 +277,8 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
         if (do_write) {
-            if (tiles_to_put_in_current_packet > 1) {
-                fabric_unicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                    UnicastScatterWriteUpdateMask::PayloadSize>(
-                    mux_connection_handle,
-                    pkt_scatter_hdr,
-                    l1_read_addr,
-                    NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                    page_size * tiles_to_put_in_current_packet);
-            } else {
-                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                    mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
-            }
+            write_tiles_packet(
+                mux_connection_handle, pkt_hdrs, l1_read_addr, noc_addrs, tiles_to_put_in_current_packet, page_size);
 
             noc.async_writes_flushed();
             tiles_read += tiles_to_put_in_current_packet;
@@ -1012,6 +1033,28 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
 
+#ifdef FABRIC_2D
+        // Fabric2D / TorusXY: route to the neighbour by fabric node (chip, mesh), not by hop count.
+        const auto dst_chip = static_cast<uint8_t>(unicast_route_info.dst_chip_id);
+        const auto dst_mesh = static_cast<uint16_t>(unicast_route_info.dst_mesh_id);
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            hdrs.scatter_hdr,
+            dst_chip,
+            dst_mesh,
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+            page_size * num_tiles_to_write_per_packet);
+
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_write_set_state<
+            UnicastWriteUpdateMask::PayloadSize>(hdrs.unicast_hdr, dst_chip, dst_mesh, nullptr, in3_tile_size);
+
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            hdrs.sem_inc_hdr,
+            dst_chip,
+            dst_mesh,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+#else
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             hdrs.scatter_hdr,
@@ -1027,6 +1070,7 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
             hdrs.sem_inc_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+#endif
 
         ccl_routing_utils::fabric_set_line_unicast_route(hdrs.scatter_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(hdrs.unicast_hdr, unicast_route_info);
