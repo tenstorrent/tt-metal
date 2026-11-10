@@ -163,6 +163,15 @@ into overlapping rectangles at once (fused MLP v1/v2: 150 µs stalls on silicon)
 | slack | ~90 |
 Rule: a block may use the shared working region only during its own phases. Weight prefetch must never touch it.
 
+**SDPA phase facts (attention track, silicon d30u20, 32K u8, branch -mk-attn, DESIGN_attn.md §5):**
+- K is read on the reader/NOC1 and V on the writer/NOC0. Single-NoC KV took 186 µs.
+- Interleaved KV beats bank-local: NoC distance dominates.
+- The tree reduce runs on the reader, so the writer's weight prefetch never blocks it.
+- KV dtype is set by MKA_KVDT (bfp8 default, bfp4 optional).
+- Measured at BFP8: KV-only 166-175 µs (71 MB, ~420 GB/s). With 27 MB of STREAM weight prefetch running alongside:
+  234-249 µs (98 MB, ~400 GB/s aggregate).
+- L1 at BFP8: NBB=2 uses 288 KB, inside the 300 KB working region.
+
 **BH NoC alignment rule:** DRAM→L1 NoC reads need equal source/destination offsets mod 64 B. Row moves go through
 an aligned staging buffer plus an L1 copy; otherwise the data is silently corrupted.
 
@@ -190,3 +199,7 @@ flag). The re-projection uses MK1 silicon non-stall times, r15 per-op GDN 64 / 4
 
 DRAM at u8 with BFP8 KV: ~3.5 GB / 12.3 ms ≈ 285 GB/s, under the ~400 GB/s drain. Biggest chain levers, in order:
 all-reduces (~2.3 ms), the GDN step (the prefix split targets ~−0.9 ms at u8), and the MLP down tail (13 vs 4 µs).
+
+Attention-track silicon confirms the §8 attention-layer SDPA term: ~240 µs **including** the next layer's weight
+prefetch running alongside (it was modeled as 236 µs SDPA + hidden stream). The §8 projection stands (u8 ~12.3 ms,
+u1 ~8.7 ms).
