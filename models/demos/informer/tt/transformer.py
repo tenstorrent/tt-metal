@@ -352,7 +352,7 @@ class DecoderLayer:
             rng,
             device=device,
             dtype=dtype,
-            prob_sparse=False,
+            prob_sparse=config.hf_compat and config.attention_type == "prob",
             factor=config.factor,
             mask_value=config.attn_mask_value,
             use_sdpa=config.use_sdpa,
