@@ -614,30 +614,47 @@ def _land(dst_tile, rows: int, j: int, src_tile, js: int, both: bool = True):
     return faces_to_tile(land_slice_rows(df.clone(), rows, j, (a, b)))
 
 
-def fold1_tiles(src: list, j1: int, junk, *, tf32_ops: bool = False):
-    """att_dsa_shard_dm1.cpp land_fold1 + att_c.cpp fold1 on whole tiles: src[s] = source s's shipped partial as tiles
-    (m [32, 32], l [32, 32], O [16, 32, 32]; rows 8 j1 .. = its slice for this destination), junk() a fresh tile of
-    the receive CB's stale content. -> (M, L, O [16, 32, 32]) = the send CBs: rows 8 j1 .. carry the column-combined
-    slice, O's other rows are 0"""
+def _dev_diag(v):
+    """att_c.cpp diag_of / diag_from: I x bcast_col(v) on the SFPU -- the off-diagonal entries are 0 * v[row] (NaN in a
+    row whose v is inf; torch.diag would write exact zeros there)"""
+    import torch
+
+    return torch.eye(32) * v[:, None]
+
+
+def fold1_tiles(src: list, j1: int, junk, *, tf32_ops: bool = False, stats_tf32: bool = False):
+    """att_dsa_shard_dm1.cpp land_fold1 + att_c.cpp fold1 (rev 66) on whole tiles: src[s] = source s's shipped partial as
+    tiles (m [32, 32], l [32, 32], O [16, 32, 32]; rows 8 j1 .. = its slice for this destination), junk() a fresh tile of
+    a receive CB's stale content. The m rotations (4 x 2 pages) -> M = their elementwise max, c_p = exp(rotation 0 page p
+    - M) (exact: CB_ARX unpacks to DST), X_p = c_p l_p, L = FOLD1 X_0 + FOLD1 X_1, F_p = FOLD1 diag(c_p), O = F_0 P_0 + F_1
+    P_1 (tf32_ops: every matmul operand rounded as the FPU's). stats_tf32 models rev 65's stats path (the m / l / c tiles
+    loaded from Tf32-dest CBs: cut to tf32 before every SFPU op). -> (M, L, O [16, 32, 32]) = the send CBs: rows 8 j1 ..
+    carry the column-combined slice, L's / O's other rows are 0"""
     import torch
 
     r = tf32 if tf32_ops else (lambda v: v)
-    rot = {}  # (stats tile i, page q = 2 j + p) -> the rotation page
-    for i in range(2):
-        for j in range(4):
-            for p in range(2):
-                pg = junk()
-                for k in range(4):
-                    pg = _land(pg, 8, k, src[4 * p + (k + j) % 4][i], j1, both=False)
-                rot[i, 2 * j + p] = pg
-    M = rot[0, 0]
-    for q in range(1, 8):
-        M = torch.maximum(M, rot[0, q])
-    c = [torch.exp(rot[0, q] - M) for q in range(8)]
-    L = c[0] * rot[1, 0]
-    for q in range(1, 8):
-        L = L + c[q] * rot[1, q]
-    F = [fold1_tile(j1) @ torch.diag(r(c[p][:, 0])) for p in range(2)]
+    s_ = tf32 if stats_tf32 else (lambda v: v)
+    rot = {}  # (j, p) -> the m rotation page
+    for j in range(4):
+        for p in range(2):
+            pg = junk()
+            for k in range(4):
+                pg = _land(pg, 8, k, src[4 * p + (k + j) % 4][0], j1)
+            rot[j, p] = s_(pg)
+    lp = []
+    for p in range(2):
+        pg = junk()
+        for k in range(4):
+            pg = _land(pg, 8, k, src[4 * p + k][1], j1)
+        lp.append(s_(pg))
+    M = rot[1, 0]
+    for j, p in [(1, 1), (2, 0), (2, 1), (3, 0), (3, 1), (0, 0), (0, 1)]:  # the kernel's order (rotation 0 last)
+        M = torch.maximum(M, rot[j, p])
+    c = [s_(torch.exp(rot[0, p] - M)) for p in range(2)]
+    X = [c[p] * lp[p] for p in range(2)]
+    f1 = fold1_tile(j1)
+    L = r(f1) @ r(X[0]) + r(f1) @ r(X[1])
+    F = [f1 @ _dev_diag(r(c[p][:, 0])) for p in range(2)]
     O = torch.zeros(16, 32, 32)
     for d in range(16):
         P = []
@@ -650,30 +667,33 @@ def fold1_tiles(src: list, j1: int, junk, *, tf32_ops: bool = False):
     return M, L, O
 
 
-def fold2_tiles(src: list, j1: int, lpos: int, junk, *, tf32_ops: bool = False):
-    """att_dsa_shard_dm1.cpp land_fold2 + att_c.cpp fold2: src[s] = row source s's column-combined send tiles (M, L,
-    O [16, 32, 32]; rows 8 j1 + 2 lpos .. = its slice for this destination) -> the finalised o [16, 32, 32] (rows
-    2 j2 .. = this chip's heads, j2 = 4 j1 + lpos)"""
+def fold2_tiles(src: list, j1: int, lpos: int, junk, *, tf32_ops: bool = False, stats_tf32: bool = False):
+    """att_dsa_shard_dm1.cpp land_fold2 + att_c.cpp fold2 (rev 66): src[s] = row source s's column-combined send tiles
+    (M, L, O [16, 32, 32]; rows 8 j1 + 2 lpos .. = its slice for this destination); the rows outside 8 j1 .. of every
+    landed page keep junk() (a CB's stale content). M = max of the 4 m rotations (rotation 0 included at every element),
+    c = exp(rotation 0 - M), X = c l, L = FOLD2 X, G = FOLD2 diag(c), G' = diag(1 / L) G, o = G' P -> o [16, 32, 32]
+    (rows 2 j2 .. = this chip's heads, j2 = 4 j1 + lpos; the other rows are never read)"""
     import torch
 
     r = tf32 if tf32_ops else (lambda v: v)
+    s_ = tf32 if stats_tf32 else (lambda v: v)
     j2 = 4 * j1 + lpos
     rot = {}
-    for i in range(2):
-        for j in range(4):
-            pg = junk()
-            for k in range(4):
-                pg = _land(pg, 2, 4 * j1 + k, src[(k + j) % 4][i], j2, both=False)
-            rot[i, j] = pg
-    M = rot[0, 0]
-    for j in range(1, 4):
-        M = torch.maximum(M, rot[0, j])
-    c = [torch.exp(rot[0, j] - M) for j in range(4)]
-    L = c[0] * rot[1, 0]
-    for j in range(1, 4):
-        L = L + c[j] * rot[1, j]
-    G = fold2_tile(j1, lpos) @ torch.diag(r(c[0][:, 0]))
-    G2 = torch.diag(r(1.0 / L[:, 0])) @ r(G)
+    for j in range(4):
+        pg = junk()
+        for k in range(4):
+            pg = _land(pg, 2, 4 * j1 + k, src[(k + j) % 4][0], j2)
+        rot[j] = s_(pg)
+    lp = junk()
+    for k in range(4):
+        lp = _land(lp, 2, 4 * j1 + k, src[k][1], j2)
+    lp = s_(lp)
+    M = torch.maximum(torch.maximum(torch.maximum(rot[1], rot[2]), rot[3]), rot[0])
+    c = s_(torch.exp(rot[0] - M))
+    f2 = fold2_tile(j1, lpos)
+    L = r(f2) @ r(c * lp)
+    G = f2 @ _dev_diag(r(c[:, 0]))
+    G2 = _dev_diag(r(1.0 / L[:, 0])) @ r(G)
     o = torch.zeros(16, 32, 32)
     for d in range(16):
         pg = junk()
@@ -681,6 +701,50 @@ def fold2_tiles(src: list, j1: int, lpos: int, junk, *, tf32_ops: bool = False):
             pg = _land(pg, 2, 4 * j1 + k, src[k][2][d], j2)
         o[d] = r(G2) @ r(pg)
     return o
+
+
+# rev 66, THE FORMAT RULE of the owners' compute (kernels/mla/att_c.cpp; tt/mk_mla.py attention_compute_config takes
+# this list): the attention CBs that unpack straight to DST as Float32 -- the exact fp32 stats / SFPU operands. Every
+# other fp32 attention CB (the O partials, ADIAG) unpacks to srcA / srcB as Tf32: the matmul operands. A matmul operand
+# from one of these CBs runs the FPU on a Float32-configured source (rev 65's fold combine: token 0 every decode step);
+# a stats tile from a Tf32-dest CB is cut to tf32 before exp(m - M)
+ATT_FP32_DEST = ("AMASK", "AS", "AM", "AE", "APA", "APB", "ARX", "ACOEF", "AID")
+_MM_CALL = re.compile(
+    r"\b(?:matmul_tiles|matmul_init|mm_tile_qk|mm_init_qk)\(\s*([A-Za-z_][\w.]*)\s*,\s*([A-Za-z_][\w.]*)"
+)
+_LOAD_CALL = re.compile(r"\bload\(\s*(CB_[A-Z0-9_]+)\s*,")
+
+
+def att_c_format_audit(text: str | None = None) -> list:
+    """THE FORMAT RULE on kernels/mla/att_c.cpp (or `text`): [(line, why)] for every matmul operand that is a
+    Float32-dest CB (CB_<key> with key in ATT_FP32_DEST, or a Part's stats CB `x.s`) and, inside the fold combine
+    (#if defined(MLA_DSA_SHARD_COMB) .. its #endif), every load() from a CB that is not Float32-dest (the stats)"""
+    if text is None:
+        with open(os.path.join(KDIR, "mla", "att_c.cpp")) as f:
+            text = f.read()
+    bad, comb, depth = [], False, 0
+    for n, line in enumerate(text.splitlines(), 1):
+        st = line.strip()
+        if st.startswith("#if"):
+            if comb:
+                depth += 1
+            elif st.startswith("#if defined(MLA_DSA_SHARD_COMB)"):
+                comb, depth = True, 0
+        elif st.startswith("#endif") and comb:
+            if depth == 0:
+                comb = False
+            else:
+                depth -= 1
+        for m in _MM_CALL.finditer(line):
+            for op in m.groups():
+                key = op[3:] if op.startswith("CB_") else None
+                if (key is not None and key in ATT_FP32_DEST) or op.endswith(".s"):
+                    bad.append((n, f"matmul operand {op}: a Float32-dest CB"))
+        if comb:
+            for m in _LOAD_CALL.finditer(line):
+                if m.group(1)[3:] not in ATT_FP32_DEST:
+                    bad.append((n, f"fold-combine load({m.group(1)}): a Tf32-dest CB (stats cut to tf32)"))
+    return bad
 
 
 def emulate_exchange(geo: Geometry, q, parts_fn, *, junk=None, comb: str = "pair"):

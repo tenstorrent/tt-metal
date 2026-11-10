@@ -419,21 +419,23 @@ def _rows_of(tiles_O, r0: int, rows: int):
 
 @pytest.mark.parametrize("j1", [0, 1, 2, 3])
 def test_fold1_tiles_layout(j1):
-    """att_dsa_shard_dm1.cpp land_fold1 + att_c.cpp fold1, emulated on whole face-major tiles (the rotation pages, the
-    row-packed O pages, FOLD1): rows 8 j1 .. of the send CBs = the fold combine of the 8 sources' slices (M, L
-    bit-equal in the kernel's l order; O within fp32 rounding); O's other rows exactly 0 (the RS2 ship never reads
-    them)"""
+    """att_dsa_shard_dm1.cpp land_fold1 + att_c.cpp fold1 (rev 66), emulated on whole face-major tiles (the m rotations,
+    the packed l, the row-packed O pages, FOLD1): rows 8 j1 .. of the send CBs = the fold combine of the 8 sources'
+    slices (M bit-equal; L / O within fp32 rounding: L is FOLD1's matmul sum now); L's / O's other rows exactly 0 (the RS2
+    ship never reads them)"""
     gen = torch.Generator().manual_seed(100 + j1)
     src = [_send_tiles(gen, "empty" if s == 5 else None) for s in range(8)]
     M, L, O = SP.fold1_tiles(src, j1, _junk(gen))
     rows = slice(8 * j1, 8 * j1 + 8)
     parts = [(m[rows, 0], l_[rows, 0], _rows_of(o, 8 * j1, 8)) for m, l_, o in src]
     Mf, Lf, Of = SP.fold_combine(parts, l_order=SP.fold1_l_order(j1))
-    assert torch.equal(M[rows, 0], Mf) and torch.equal(L[rows, 0], Lf)
+    assert torch.equal(M[rows, 0], Mf)
+    torch.testing.assert_close(L[rows, 0], Lf, rtol=2e-6, atol=0)
     torch.testing.assert_close(_rows_of(O, 8 * j1, 8), Of, rtol=1e-5, atol=1e-5 * float(Of.abs().max()))
     other = torch.ones(32, dtype=torch.bool)
     other[rows] = False
-    assert torch.equal(O[:, other], torch.zeros_like(O[:, other]))
+    assert torch.equal(O[:, other], torch.zeros_like(O[:, other])) and torch.equal(L[other], torch.zeros_like(L[other]))
+    assert torch.isfinite(M).all() and torch.isfinite(L).all()  # every column: both runs of the stats land
     # the pairwise chain of rev 64 (own slice first, then the column peers in position order) agrees within fp32
     for own in (j1, 4 + j1):
         order = [own] + [s for s in range(8) if s != own]
@@ -444,18 +446,26 @@ def test_fold1_tiles_layout(j1):
 
 
 @pytest.mark.parametrize("j1,lpos", [(0, 0), (1, 3), (2, 1), (3, 2)])
-def test_fold2_tiles_layout(j1, lpos):
+@pytest.mark.parametrize("stale", ["random", "huge", "empty_stats"])
+def test_fold2_tiles_layout(j1, lpos, stale):
     """att_dsa_shard_dm1.cpp land_fold2 + att_c.cpp fold2 (round 2 + the finalise): rows 2 j2 .. of the bf16-bound o
-    tiles = the fold of the 4 row sources' 2-row slices / L, against rev 64's chain + finalise within fp32 rounding"""
+    tiles = the fold of the 4 row sources' 2-row slices / L, against rev 64's chain + finalise within fp32 rounding --
+    whatever the stale rows of the landed pages hold (finite: large O values, the -1e30 of an empty partial's m)"""
     gen = torch.Generator().manual_seed(200 + 4 * j1 + lpos)
     src = [_send_tiles(gen) for _ in range(4)]
-    o = SP.fold2_tiles(src, j1, lpos, _junk(gen))
+    junk = {
+        "random": _junk(gen),
+        "huge": lambda: torch.randn(32, 32, generator=gen) * 3e4,  # noqa: E731
+        "empty_stats": lambda: torch.where(torch.rand(32, 32, generator=gen) < 0.5, NEG, 0.0),  # noqa: E731
+    }[stale]
+    o = SP.fold2_tiles(src, j1, lpos, junk)
     j2 = 4 * j1 + lpos
     rows = slice(2 * j2, 2 * j2 + 2)
     parts = [(m[rows, 0], l_[rows, 0], _rows_of(O, 2 * j2, 2)) for m, l_, O in src]
     Mf, Lf, Of = SP.fold_combine(parts, l_order=SP.fold2_l_order(lpos))
     want = Of / Lf[:, None]
     got = _rows_of(o, 2 * j2, 2)
+    assert torch.isfinite(got).all()
     torch.testing.assert_close(got, want, rtol=1e-5, atol=1e-5 * float(want.abs().max()))
     order = [lpos] + [s for s in range(4) if s != lpos]
     Mc, Lc, Oc = SP.combine_chain([parts[s] for s in order])
@@ -463,16 +473,84 @@ def test_fold2_tiles_layout(j1, lpos):
 
 
 def test_fold_tiles_tf32_close():
-    """the whole-tile emulation with tf32 operands (FOLD / diag coefficients exact in tf32, O rounded once) stays
-    within tf32 rounding of the fp32 fold"""
+    """the whole-tile emulation with tf32 matmul operands (FOLD / diag coefficients exact in tf32, O and c l rounded
+    once) stays within tf32 rounding of the fp32 fold; M never passes the FPU"""
     gen = torch.Generator().manual_seed(303)
     src = [_send_tiles(gen) for _ in range(8)]
     M, L, O = SP.fold1_tiles(src, 2, _junk(gen))
     gen = torch.Generator().manual_seed(303)
     src = [_send_tiles(gen) for _ in range(8)]
     Mt, Lt, Ot = SP.fold1_tiles(src, 2, _junk(gen), tf32_ops=True)
-    assert torch.equal(M, Mt) and torch.equal(L, Lt)  # the stats never pass the FPU
+    assert torch.equal(M, Mt)
+    torch.testing.assert_close(Lt, L, rtol=1e-3, atol=0)
     torch.testing.assert_close(Ot, O, rtol=3e-3, atol=3e-3 * float(O.abs().max()))
+
+
+def _real_send(gen, src_count: int, empty=()) -> list:
+    """send tiles with a real cache's stats: m ~ the scaled logits' row max (around 20, spread 5 between chips), l in
+    [1, 500), O = l-weighted values; `empty` sources are the device's empty partial"""
+    out = []
+    for s in range(src_count):
+        m = 20.0 + 5.0 * torch.randn(32, 1, generator=gen) + 0.01 * torch.randn(32, 32, generator=gen)
+        l_ = 1.0 + 499.0 * torch.rand(32, 1, generator=gen) + torch.zeros(32, 32)
+        O = torch.randn(16, 32, 32, generator=gen) * l_[None, :, :1]
+        if s in empty:
+            m, l_, O = torch.full((32, 32), NEG), torch.zeros(32, 32), torch.zeros(16, 32, 32)
+        out.append((m, l_, O))
+    return out
+
+
+def test_fold_real_stats_need_exact_fp32():
+    """the rev-65 failure class on the host: with a real cache's stats (m ~ 20) a stats path through Tf32-dest CBs
+    (rev 65: the m / l / c tiles loaded from CB_ARXO / CB_APAO) weighs each source by exp(m - tf32(m)) -- percent-level
+    errors in the column-combined slice; rev 66's exact stats (CB_ARX / CB_APB / CB_ACOEF) with the FPU's tf32 matmul
+    operands stay at the tf32 floor (and below rev 64's chain). A zero cache (m = 0 everywhere) hides both."""
+    gen = torch.Generator().manual_seed(6666)
+    src = _real_send(gen, 8, empty=(6,))
+    j1 = 1
+    rows = slice(8 * j1, 8 * j1 + 8)
+    parts = [(m[rows, 0], l_[rows, 0], _rows_of(o, 8 * j1, 8)) for m, l_, o in src]
+    ref = SP.fold_combine([tuple(v.double() for v in p) for p in parts])
+    o_ref = ref[2] / ref[1][:, None]
+
+    def err(stats_tf32):
+        g2 = torch.Generator().manual_seed(1)
+        M, L, O = SP.fold1_tiles(src, j1, _junk(g2), tf32_ops=True, stats_tf32=stats_tf32)
+        return _rel_err(_rows_of(O, 8 * j1, 8), L[rows, 0], o_ref)
+
+    e_v66, e_v65 = err(False), err(True)
+    Mc, Lc, Oc = SP.combine_chain(parts, tf32_ops=True)
+    e_chain = _rel_err(Oc, Lc, o_ref)
+    assert e_v66 < 1e-3 and e_v66 <= e_chain * 1.05, (e_v66, e_chain)
+    assert e_v65 > 4 * e_v66, (e_v65, e_v66)  # the exp(m - M) amplification of tf32 stats
+
+
+_REV65_FOLD_EXCERPT = """
+#if defined(MLA_DSA_SHARD_COMB)
+FORCE_INLINE void max_pages(uint32_t n) {
+    load(CB_ARXO, 0, 0);
+}
+FORCE_INLINE void fold1(Part out) {
+    matmul_init(CB_ARX, CB_ADIAG, 0);
+    matmul_tiles(CB_ARX, CB_ADIAG, 0, 0, 0);
+    matmul_tiles(CB_APB, CB_ARXO, 0, 2 * j, j);
+    load(CB_APAO, q, 1);
+}
+#endif
+"""
+
+
+def test_att_c_format_rule():
+    """THE FORMAT RULE (rev 66): att_c.cpp takes every matmul operand from a Tf32-dest CB and loads the fold combine's
+    stats from Float32-dest CBs only -- rev 65's fold (excerpt) breaks both (its device run decoded token 0 every step)
+    """
+    assert SP.att_c_format_audit() == []
+    bad = SP.att_c_format_audit(_REV65_FOLD_EXCERPT)
+    assert [n for n, _ in bad] == [4, 7, 8, 9, 10], bad
+    assert (
+        "CB_ARXO" in bad[0][1] and "operand CB_ARX:" in bad[1][1] and "CB_APB" in bad[3][1] and "CB_APAO" in bad[4][1]
+    )
+    assert SP.att_c_format_audit("matmul_tiles(CB_ADIAG, a.s, 0, 0, 0);") != []  # a Part's stats CB
 
 
 def test_exchange_fold_matches_direct_and_pairwise():

@@ -194,16 +194,17 @@ inline uint32_t rs2b_page(uint32_t T, uint32_t blk, uint32_t t) { return (blk * 
 // rev 64 unchanged). The lane root combines each round's slices in ONE pass instead of a chain of pairwise combines
 // (round 1: own + 7 = 7 combines of 32 fp32 matmul tiles each on full 32-row tiles; round 2: 3 + the finalise).
 // Round 1: the 8 column slices (8 rows each) land ROW-PACKED in CB_ARXO messages of COMB_MSG pages -- O tile d of
-// source s = 4 p + k at rows 8 k .. of page p (4 O tiles per message); their stats as 4 ROTATIONS x 2 pages per stats
-// tile (page 2 j + p, rows 8 k .. = source 4 p + (k + j) % 4: every row block of the 8 pages holds all 8 sources, so
-// the joint max M and l = sum exp(m - M) l are exact elementwise fp32 ops). Then c = exp(m - M) per page, F_p = FOLD1
-// diag(c_p) (FOLD1[8 j1 + r][8 k + r] = 1: the destination's rows gather the 4 row blocks) and the column-combined O
-// rows 8 j1 .. = F_0 P_0 + F_1 P_1 (2 matmuls per O tile; every operand rounded to tf32 once, not once per chain
-// step). Round 2: the 4 row slices (2 rows) in sub-blocks 8 j1 + 2 k of one page per O tile (stats: 4 rotations of m
-// and of l, one message), G = FOLD2 diag(c_0) (FOLD2[2 j2 + r][8 j1 + 2 k + r] = 1), G' = diag(1 / L) G and o = G' P
-// (one matmul per O tile: combine + finalise). FOLD1 / FOLD2 (fp32 0 / 1 tiles): the root NCRISC writes them into
-// CB_ARX once per launch.
-// (Both rev-65 blocks declare nothing without their define: the rev-64 builds keep their instructions.)
+// source s = 4 p + k at rows 8 k .. of page p (4 O tiles per message); their m as 4 ROTATIONS x 2 pages (page p of
+// rotation j, rows 8 k .. = source 4 p + (k + j) % 4: every element of the 8 pages' max sees all 8 sources, so the
+// joint max M and c = exp(m - M) <= 1 are exact elementwise fp32) and their l packed, in CB_ARX 2-page messages (rev
+// 66: the stats must unpack to DST exactly; att_c.cpp THE FORMAT RULE). F_p = FOLD1 diag(c_p) (FOLD1[8 j1 + r][8 k + r]
+// = 1: the destination's rows gather the 4 row blocks), the column-combined O rows 8 j1 .. = F_0 P_0 + F_1 P_1 (2
+// matmuls per O tile; every operand rounded to tf32 once, not once per chain step), L = FOLD1 (c_0 l_0) + FOLD1 (c_1
+// l_1). Round 2: the 4 row slices (2 rows) in sub-blocks 8 j1 + 2 k of one page per O tile (stats: 4 rotations of m +
+// the packed l in CB_ARX), G = FOLD2 diag(c) (FOLD2[2 j2 + r][8 j1 + 2 k + r] = 1), L = FOLD2 (c l), G' = diag(1 / L) G
+// and o = G' P (one matmul per O tile: combine + finalise). FOLD1 / FOLD2 (fp32 0 / 1 tiles): the root NCRISC writes
+// them into CB_ARX once per launch (the compute copies them to CB_APBO, a matmul-operand CB). (Both rev-65 blocks
+// declare nothing without their define: the rev-64 builds keep their instructions.)
 #if defined(MLA_DSA_SHARD_COMB)
 constexpr uint32_t COMB_MSG = 8;  // pages per CB_ARXO message of the fold combine (2 per 16-page CB: double-buffered)
 static_assert(PAIR == 8 && LINE == 4 && RS1_ROWS == 8 && RS2_ROWS == 2, "the fold combine: the 8x4 slices");

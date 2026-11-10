@@ -583,13 +583,16 @@ FORCE_INLINE void take(Part dst) {
     cb_pop_front(CB_ARXO, DT);
 }
 #if defined(MLA_DSA_SHARD_COMB)
-// rev 65, the fold combine (dsa_shard.hpp COMB; the NCRISC's row-packed landings in CB_ARXO messages of CM pages, FOLD1
-// / FOLD2 in CB_ARX pages 0 / 1, held for the phase). Scratch (the root's own CBs, idle after the passes): CB_APA (M,
-// then round 2's G'), CB_APAO (the c tiles), CB_APB (F_0 / F_1, G), CB_ACOEF (1 / L), CB_ADIAG; every one stays on its
-// page grid per token (8-page reservations of the 16-page CBs, 2-page ones of the pairs)
+// rev 65, the fold combine (dsa_shard.hpp COMB). THE FORMAT RULE (rev 66; rev 65 broke it and decoded token 0 every
+// step): every matmul operand comes from a CB whose unpack dst format is Tf32 (APAO / APBO / ARXO / ADIAG -- the O CBs,
+// tt/shard_plan.py ATT_FP32_DEST lists the others), and every stats tile is loaded from a Float32-dest CB (ARX / APB /
+// ACOEF: unpack-to-DST, exact -- an m through srcA is cut to tf32 and exp(m - M) turns that into a % weight error per
+// source). So the stats (m rotations, packed m / l) arrive in CB_ARX 2-page messages, FOLD1 / FOLD2 (CB_ARX, once) are
+// copied into CB_APBO pages 0 / 1 for the phase, X = c l / F_p / G / G' are packed into CB_APAO, the row-packed O tiles
+// arrive in CB_ARXO 8-page messages. Every CB stays on its page grid per token.
 constexpr uint32_t CM = mlashard::COMB_MSG;
 static_assert(CM == 8 && DT % (CM / 2) == 0 && ST == 2, "fold messages: 4 O tiles x 2 pages / 8 O tiles x 1 page");
-// diag(column 0 of page k of cb) -> the next page of CB_ADIAG (caller reserved)
+// diag(column 0 of page k of a Float32-dest cb) -> the next page of CB_ADIAG (caller reserved)
 FORCE_INLINE void diag_from(uint32_t cb, uint32_t k) {
     tile_regs_acquire();
     load(CB_AID, 0, 0);
@@ -598,178 +601,216 @@ FORCE_INLINE void diag_from(uint32_t cb, uint32_t k) {
     sfpu_mul_bcast_col(0, 1);
     emit(0, CB_ADIAG);
 }
-// max over pages [0, n) of the front CB_ARXO message (exact fp32) -> DST slot 0 (caller acquired)
-FORCE_INLINE void max_pages(uint32_t n) {
-    load(CB_ARXO, 0, 0);
-    for (uint32_t q = 1; q < n; ++q) {
-        load(CB_ARXO, q, 1);
+// FOLD1 / FOLD2 (CB_ARX, exact 0 / 1) -> CB_APBO pages 0 / 1, held for the phase
+FORCE_INLINE void fold_tiles_in() {
+    cb_wait_front(CB_ARX, ST);
+    cb_reserve_back(CB_APBO, ST);
+    tile_regs_acquire();
+    load(CB_ARX, 0, 0);
+    load(CB_ARX, 1, 1);
+    emit_n(ST, CB_APBO);
+    cb_push_back(CB_APBO, ST);
+    cb_pop_front(CB_ARX, ST);
+    cb_wait_front(CB_APBO, ST);
+}
+FORCE_INLINE void fold_tiles_out() {  // (CB_APBO back on its 16-page grid)
+    cb_pop_front(CB_APBO, ST);
+    pad(CB_APBO, DT - ST);
+    cb_wait_front(CB_APBO, DT - ST);
+    cb_pop_front(CB_APBO, DT - ST);
+}
+// the elementwise max of both pages of the front CB_ARX message into DST slot 0 (first: slot 0 starts there), popped
+FORCE_INLINE void max_msg(bool first) {
+    cb_wait_front(CB_ARX, ST);
+    if (first) {
+        load(CB_ARX, 0, 0);
+    } else {
+        load(CB_ARX, 0, 1);
         binary_max_tile_init();
         binary_max_tile(0, 1, 0);
     }
+    load(CB_ARX, 1, 1);
+    binary_max_tile_init();
+    binary_max_tile(0, 1, 0);
+    cb_pop_front(CB_ARX, ST);
 }
-// c_q = exp(page q of the front CB_ARXO message - M (CB_APA page 0)), q < n -> the next n pages of CB_APAO
-FORCE_INLINE void coefs(uint32_t n) {
-    for (uint32_t q = 0; q < n; ++q) {
-        tile_regs_acquire();
-        load(CB_ARXO, q, 0);
-        load(CB_APA, 0, 1);
-        sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0);
-        exp_tile_init<false>();
-        exp_tile<false>(0);
-        emit(0, CB_APAO);
-    }
-}
-// sum_q c_q (CB_APAO page q) l_q (CB_ARXO page q0 + q), q < n, in q order -> DST slot 0 (caller acquired)
-FORCE_INLINE void l_sum(uint32_t q0, uint32_t n) {
-    load(CB_APAO, 0, 0);
-    load(CB_ARXO, q0, 1);
-    mul_binary_tile_init();
-    mul_binary_tile(0, 1, 0);
-    for (uint32_t q = 1; q < n; ++q) {
-        load(CB_APAO, q, 1);
-        load(CB_ARXO, q0 + q, 2);
-        mul_binary_tile_init();
-        mul_binary_tile(1, 2, 1);
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
-    }
-}
-// round 1 of one token (8 column slices): (M, L) -> out.s, O rows 8 j1 .. = F_0 P_0 + F_1 P_1 -> out.o
+// round 1 of one token (8 column slices) -> out: (M, L) at rows 8 j1 .., O rows 8 j1 .. = F_0 P_0 + F_1 P_1 (the other
+// rows 0). CB_ARX: the m rotations 1, 2, 3, 0 (page p of rotation j: rows 8 k .. = source 4 p + (k + j) % 4; rotation 0
+// = the packed m), then the packed l (page p: rows 8 k .. = source 4 p + k)
 FORCE_INLINE void fold1(Part out) {
-    cb_wait_front(CB_ARXO, CM);  // the m rotations (page 2 j + p)
     cb_reserve_back(out.s, ST);
-    cb_reserve_back(CB_APA, 2);
+    cb_reserve_back(CB_APB, 2);
     tile_regs_acquire();
-    max_pages(CM);
+    max_msg(true);
+    max_msg(false);
+    max_msg(false);
+    cb_wait_front(CB_ARX, ST);  // rotation 0
+    load(CB_ARX, 0, 1);
+    load(CB_ARX, 1, 2);
+    binary_max_tile_init();
+    binary_max_tile(0, 1, 0);
+    binary_max_tile(0, 2, 0);  // M: >= rotation 0 at every element, so c <= 1 everywhere
+    sub_binary_tile_init();
+    sub_binary_tile(1, 0, 1);
+    sub_binary_tile(2, 0, 2);
+    exp_tile_init<false>();
+    exp_tile<false>(1);  // c_0
+    exp_tile<false>(2);  // c_1
     tile_regs_commit();
     tile_regs_wait();
-    pack_to(0, out.s);  // M (every row block)
-    pack_to(0, CB_APA);
+    pack_to(0, out.s);
+    pack_to(1, CB_APB);
+    pack_to(2, CB_APB);
     tile_regs_release();
-    cb_push_back(CB_APA, 1);
-    pad(CB_APA, 1);
-    cb_wait_front(CB_APA, 2);
-    cb_reserve_back(CB_APAO, CM);
-    coefs(CM);
-    cb_push_back(CB_APAO, CM);
-    cb_pop_front(CB_ARXO, CM);
-    cb_pop_front(CB_APA, 2);
-    cb_wait_front(CB_ARXO, CM);  // the l rotations
-    cb_wait_front(CB_APAO, CM);
-    tile_regs_acquire();
-    l_sum(0, CM);
-    emit(0, out.s);  // L
-    cb_push_back(out.s, ST);
-    cb_pop_front(CB_ARXO, CM);
-    // F_p = FOLD1 diag(c_p) (rotation 0: CB_APAO pages 0 / 1) -> CB_APB
-    cb_reserve_back(CB_ADIAG, 2);
-    diag_from(CB_APAO, 0);
-    diag_from(CB_APAO, 1);
-    cb_push_back(CB_ADIAG, 2);
-    cb_pop_front(CB_APAO, CM);
-    cb_wait_front(CB_ADIAG, 2);
-    cb_reserve_back(CB_APB, 2);
-    reconfig_data_format(CB_ADIAG, CB_ARX);
-    matmul_init(CB_ARX, CB_ADIAG, 0);
-    tile_regs_acquire();
-    matmul_tiles(CB_ARX, CB_ADIAG, 0, 0, 0);
-    matmul_tiles(CB_ARX, CB_ADIAG, 0, 1, 1);
-    emit_n(2, CB_APB);
     cb_push_back(CB_APB, 2);
-    cb_pop_front(CB_ADIAG, 2);
+    cb_pop_front(CB_ARX, ST);
+    // X_p = c_p l_p -> CB_APAO pages 0 / 1; F_p = FOLD1 diag(c_p) -> pages 2 / 3
     cb_wait_front(CB_APB, 2);
-    // the O tiles: 4 per message (pages 2 j + p), F_0 P_0 + F_1 P_1 accumulated in DST, out in groups of 4
+    cb_wait_front(CB_ARX, ST);  // the packed l
+    cb_reserve_back(CB_APAO, 4);
+    tile_regs_acquire();
+    load(CB_APB, 0, 0);
+    load(CB_ARX, 0, 1);
+    mul_binary_tile_init();
+    mul_binary_tile(0, 1, 0);
+    load(CB_APB, 1, 1);
+    load(CB_ARX, 1, 2);
+    mul_binary_tile_init();
+    mul_binary_tile(1, 2, 1);
+    emit_n(2, CB_APAO);
+    cb_pop_front(CB_ARX, ST);
+    cb_reserve_back(CB_ADIAG, 2);
+    diag_from(CB_APB, 0);
+    diag_from(CB_APB, 1);
+    cb_push_back(CB_ADIAG, 2);
+    cb_pop_front(CB_APB, 2);
+    cb_wait_front(CB_ADIAG, 2);
+    reconfig_data_format(CB_ADIAG, CB_APBO);
+    matmul_init(CB_APBO, CB_ADIAG, 0);
+    tile_regs_acquire();
+    matmul_tiles(CB_APBO, CB_ADIAG, 0, 0, 0);
+    matmul_tiles(CB_APBO, CB_ADIAG, 0, 1, 1);
+    emit_n(2, CB_APAO);
+    cb_push_back(CB_APAO, 4);
+    cb_pop_front(CB_ADIAG, 2);
+    cb_wait_front(CB_APAO, 4);
+    // L rows 8 j1 .. = FOLD1 X_0 + FOLD1 X_1 -> out.s page 1
+    reconfig_data_format(CB_APAO, CB_APBO);
+    matmul_init(CB_APBO, CB_APAO, 0);
+    tile_regs_acquire();
+    matmul_tiles(CB_APBO, CB_APAO, 0, 0, 0);
+    matmul_tiles(CB_APBO, CB_APAO, 0, 1, 0);
+    emit(0, out.s);
+    cb_push_back(out.s, ST);
+    // the O tiles: 4 per CB_ARXO message (pages 2 j + p), out in groups of 4
     cb_reserve_back(out.o, DT);
-    reconfig_data_format(CB_ARXO, CB_APB);
-    matmul_init(CB_APB, CB_ARXO, 0);
+    reconfig_data_format(CB_ARXO, CB_APAO);
+    matmul_init(CB_APAO, CB_ARXO, 0);
     for (uint32_t d0 = 0; d0 < DT; d0 += CM / 2) {
         cb_wait_front(CB_ARXO, CM);
         tile_regs_acquire();
         for (uint32_t j = 0; j < CM / 2; ++j) {
-            matmul_tiles(CB_APB, CB_ARXO, 0, 2 * j, j);
-            matmul_tiles(CB_APB, CB_ARXO, 1, 2 * j + 1, j);
+            matmul_tiles(CB_APAO, CB_ARXO, 2, 2 * j, j);
+            matmul_tiles(CB_APAO, CB_ARXO, 3, 2 * j + 1, j);
         }
         emit_n(CM / 2, out.o);
         cb_push_back(out.o, CM / 2);
         cb_pop_front(CB_ARXO, CM);
     }
-    cb_pop_front(CB_APB, 2);
+    cb_pop_front(CB_APAO, 4);
 }
-// round 2 of one token (4 row slices) + the finalise: o rows 2 j2 .. = G' P, G' = diag(1 / L) FOLD2 diag(c_0) ->
-// CB_AOUT
+// round 2 of one token (4 row slices) + the finalise: o rows 2 j2 .. = G' P (G = FOLD2 diag(c), G' = diag(1 / L) G) ->
+// CB_AOUT. CB_ARX: (rotations 1, 2), (rotation 3, rotation 0 = the packed m: rows 8 j1 + 2 k = source k), (the packed
+// l, a pad page). The rows outside 8 j1 .. are the CB's stale (finite) pages: M covers rotation 0 at every row, so
+// c <= 1 there too and no matmul meets an inf (1 / L is inf only on rows no output row reads)
 FORCE_INLINE void fold2() {
-    constexpr uint32_t NR = mlashard::LINE;  // rotations / sources
-    cb_wait_front(CB_ARXO, CM);              // pages 0 .. 3: the m rotations, 4 .. 7: the l rotations
-    cb_reserve_back(CB_APA, 2);
+    cb_reserve_back(CB_APB, 2);
     tile_regs_acquire();
-    max_pages(NR);
-    emit(0, CB_APA);
-    cb_push_back(CB_APA, 1);
-    pad(CB_APA, 1);
-    cb_wait_front(CB_APA, 2);
-    cb_reserve_back(CB_APAO, CM);
-    coefs(NR);
-    cb_push_back(CB_APAO, NR);
-    pad(CB_APAO, CM - NR);
-    cb_pop_front(CB_APA, 2);
-    cb_wait_front(CB_APAO, CM);
-    cb_reserve_back(CB_ACOEF, 2);
-    tile_regs_acquire();
-    l_sum(NR, NR);
-    recip_tile_init();
-    recip_tile(0);
-    emit(0, CB_ACOEF);  // 1 / L
-    cb_push_back(CB_ACOEF, 1);
-    pad(CB_ACOEF, 1);
-    cb_pop_front(CB_ARXO, CM);
-    cb_wait_front(CB_ACOEF, 2);
-    cb_reserve_back(CB_ADIAG, 2);
-    diag_from(CB_APAO, 0);   // diag(c_0)
-    diag_from(CB_ACOEF, 0);  // diag(1 / L)
-    cb_push_back(CB_ADIAG, 2);
-    cb_pop_front(CB_APAO, CM);
-    cb_pop_front(CB_ACOEF, 2);
-    cb_wait_front(CB_ADIAG, 2);
-    cb_reserve_back(CB_APB, 2);  // G = FOLD2 diag(c_0)
-    reconfig_data_format(CB_ADIAG, CB_ARX);
-    matmul_init(CB_ARX, CB_ADIAG, 0);
-    tile_regs_acquire();
-    matmul_tiles(CB_ARX, CB_ADIAG, 1, 0, 0);
-    emit(0, CB_APB);
+    max_msg(true);
+    cb_wait_front(CB_ARX, ST);  // rotation 3, rotation 0
+    load(CB_ARX, 0, 1);
+    binary_max_tile_init();
+    binary_max_tile(0, 1, 0);
+    load(CB_ARX, 1, 1);
+    binary_max_tile_init();
+    binary_max_tile(0, 1, 0);  // M
+    sub_binary_tile_init();
+    sub_binary_tile(1, 0, 1);
+    exp_tile_init<false>();
+    exp_tile<false>(1);  // c
+    emit(1, CB_APB);
     cb_push_back(CB_APB, 1);
     pad(CB_APB, 1);
+    cb_pop_front(CB_ARX, ST);
     cb_wait_front(CB_APB, 2);
-    cb_reserve_back(CB_APA, 2);  // G' = diag(1 / L) G
-    reconfig_data_format(CB_APB, CB_ADIAG);
-    matmul_init(CB_ADIAG, CB_APB, 0);
+    cb_wait_front(CB_ARX, ST);  // the packed l
+    cb_reserve_back(CB_APAO, 4);
     tile_regs_acquire();
-    matmul_tiles(CB_ADIAG, CB_APB, 1, 0, 0);
-    emit(0, CB_APA);
-    cb_push_back(CB_APA, 1);
-    pad(CB_APA, 1);
-    cb_pop_front(CB_ADIAG, 2);
+    load(CB_APB, 0, 0);
+    load(CB_ARX, 0, 1);
+    mul_binary_tile_init();
+    mul_binary_tile(0, 1, 0);
+    emit(0, CB_APAO);  // X: page 0
+    cb_push_back(CB_APAO, 1);
+    cb_pop_front(CB_ARX, ST);
+    cb_wait_front(CB_APAO, 1);
+    // L rows 2 j2 .. = FOLD2 X -> CB_ACOEF page 0, 1 / L -> page 1
+    cb_reserve_back(CB_ACOEF, 2);
+    reconfig_data_format(CB_APAO, CB_APBO);
+    matmul_init(CB_APBO, CB_APAO, 0);
+    tile_regs_acquire();
+    matmul_tiles(CB_APBO, CB_APAO, 1, 0, 0);
+    emit(0, CB_ACOEF);
+    cb_push_back(CB_ACOEF, 1);
+    cb_wait_front(CB_ACOEF, 1);
+    tile_regs_acquire();
+    load(CB_ACOEF, 0, 0);
+    recip_tile_init();
+    recip_tile(0);
+    emit(0, CB_ACOEF);
+    cb_push_back(CB_ACOEF, 1);
+    cb_wait_front(CB_ACOEF, 2);
+    cb_reserve_back(CB_ADIAG, 2);
+    diag_from(CB_APB, 0);    // diag(c)
+    diag_from(CB_ACOEF, 1);  // diag(1 / L)
+    cb_push_back(CB_ADIAG, 2);
     cb_pop_front(CB_APB, 2);
-    cb_wait_front(CB_APA, 2);
-    // the O tiles: 8 per message (page d - h), o = G' P (bf16) in groups of 4
+    cb_pop_front(CB_ACOEF, 2);
+    cb_wait_front(CB_ADIAG, 2);
+    // G = FOLD2 diag(c) -> CB_APAO page 1; G' = diag(1 / L) G -> page 2 (+ a pad page)
+    reconfig_data_format(CB_ADIAG, CB_APBO);
+    matmul_init(CB_APBO, CB_ADIAG, 0);
+    tile_regs_acquire();
+    matmul_tiles(CB_APBO, CB_ADIAG, 1, 0, 0);
+    emit(0, CB_APAO);
+    cb_push_back(CB_APAO, 1);
+    cb_wait_front(CB_APAO, 2);
+    reconfig_data_format(CB_APAO, CB_ADIAG);
+    matmul_init(CB_ADIAG, CB_APAO, 0);
+    tile_regs_acquire();
+    matmul_tiles(CB_ADIAG, CB_APAO, 1, 1, 0);
+    emit(0, CB_APAO);
+    cb_push_back(CB_APAO, 1);
+    pad(CB_APAO, 1);
+    cb_pop_front(CB_ADIAG, 2);
+    cb_wait_front(CB_APAO, 4);
+    // the O tiles: 8 per CB_ARXO message (page d - h), o = G' P (bf16) in groups of 4
     cb_reserve_back(CB_AOUT, DT);
-    reconfig_data_format(CB_ARXO, CB_APA);
-    matmul_init(CB_APA, CB_ARXO, 0);
+    reconfig_data_format(CB_ARXO, CB_APAO);
+    matmul_init(CB_APAO, CB_ARXO, 0);
     for (uint32_t h = 0; h < DT; h += CM) {
         cb_wait_front(CB_ARXO, CM);
         for (uint32_t j0 = 0; j0 < CM; j0 += 4) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < 4; ++j) {
-                matmul_tiles(CB_APA, CB_ARXO, 0, j0 + j, j);
+                matmul_tiles(CB_APAO, CB_ARXO, 2, j0 + j, j);
             }
             emit_n(4, CB_AOUT);
             cb_push_back(CB_AOUT, 4);
         }
         cb_pop_front(CB_ARXO, CM);
     }
-    cb_pop_front(CB_APA, 2);
-    cb_wait_front(CB_ARXO, CM);  // the pad message
-    cb_pop_front(CB_ARXO, CM);
+    cb_pop_front(CB_APAO, 4);
 }
 #endif
 }  // namespace
@@ -873,14 +914,14 @@ void kernel_main() {
         if (!sends && !all_dense) {
 #if defined(MLA_DSA_SHARD_COMB)
             // rev 65: the fold combine (dsa_shard.hpp COMB): one pass per round instead of the chains below
-            cb_wait_front(CB_ARX, ST);  // FOLD1 / FOLD2 (the NCRISC's, once per launch)
+            fold_tiles_in();  // FOLD1 / FOLD2 (the NCRISC's, once per launch) -> CB_APBO
             for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
                 fold1(send);
             }
             for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
                 fold2();
             }
-            cb_pop_front(CB_ARX, ST);
+            fold_tiles_out();
 #else
             for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
                 take(pa);

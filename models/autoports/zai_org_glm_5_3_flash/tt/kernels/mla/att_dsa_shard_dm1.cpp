@@ -966,7 +966,7 @@ void kernel_main() {
         // (the compute holds them for the phase; written before the round-1 wait); FOLD1[8 j1 + r][8 k + r],
         // FOLD2[2 j2 + r][8 j1 + 2 k + r] = 1
         constexpr uint32_t CM = mlashard::COMB_MSG;
-        ASSERT(otb == ptb && ptb == 4096);  // fp32 O: the stats rotations share CB_ARXO's pages
+        ASSERT(otb == 4096 && ptb == 4096);  // fp32 O and stats (tt/mk_mla.py refuses COMB with bf16 O partials)
         {
             cb_reserve_back(CB_ARX, ST);
             volatile tt_l1_ptr uint32_t* fw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CB_ARX));
@@ -995,85 +995,114 @@ void kernel_main() {
             const uint32_t p = mlashard::rs2b_page(t_rows, s, t) + pg;
             return s == lpos2 ? xrs2b.get_noc_addr(p, 0) : yrs2b.get_noc_addr(p, 0);
         };
-        // round 1 of token t: 2 stats messages (m, l: page 2 j + p, block k = source 4 p + (k + j) % 4; run A only --
-        // column 0 is the stats) then 4 O messages (tiles d0 .. d0 + 3: page 2 (d - d0) + p, block k = source 4 p + k)
-        const uint32_t run1 = mlashard::slice_run(mlashard::RS1_ROWS, otb), sl1 = 2 * run1;  // 512 B / 1 KB
-        auto land_fold1 = [&](uint32_t t) {
-            for (uint32_t i = 0; i < ST; ++i) {
-                cb_reserve_back(CB_ARXO, CM);
-                const uint32_t w = get_write_ptr(CB_ARXO);
-                const uint32_t b = DT * sl1 + i * sl1;  // the stats tile i of a slice (ship: DT ob + i pb, pb = ob)
-                for (uint32_t s = 0; s < mlashard::PAIR; ++s) {
-                    const uint64_t a = src1(s, t, b / PG) + b % PG;
-                    const uint32_t p = s / (mlashard::PAIR / 2), ks = s % (mlashard::PAIR / 2);
-                    for (uint32_t j = 0; j < mlashard::PAIR / 2; ++j) {
-                        const uint32_t k = (ks + mlashard::PAIR / 2 - j) % (mlashard::PAIR / 2);
-                        noc_async_read(
-                            a, w + (2 * j + p) * otb + mlashard::slice_off_rows(mlashard::RS1_ROWS, k, otb), run1);
-                    }
-                }
-                noc_async_read_barrier();
-                cb_push_back(CB_ARXO, CM);
-            }
-            for (uint32_t d0_ = 0; d0_ < DT; d0_ += CM / 2) {
-                cb_reserve_back(CB_ARXO, CM);
-                const uint32_t w = get_write_ptr(CB_ARXO);
-                for (uint32_t s = 0; s < mlashard::PAIR; ++s) {
-                    const uint32_t p = s / (mlashard::PAIR / 2), k = s % (mlashard::PAIR / 2);
-                    for (uint32_t d = d0_; d < d0_ + CM / 2; ++d) {
-                        const uint32_t b = d * sl1;
-                        const uint64_t a = src1(s, t, b / PG) + b % PG;
-                        const uint32_t dst =
-                            w + (2 * (d - d0_) + p) * otb + mlashard::slice_off_rows(mlashard::RS1_ROWS, k, otb);
-                        noc_async_read(a, dst, run1);
-                        noc_async_read(a + run1, dst + otb / 4, run1);
-                    }
-                }
-                noc_async_read_barrier();
-                cb_push_back(CB_ARXO, CM);
-            }
+        // rows `rows` of one slice tile (tb bytes per whole tile) at NoC address a, both runs (every column of a stats
+        // tile stays finite) -> rows `rows` jd of the L1 tile at dst
+        auto pull = [&](uint64_t a, uint32_t rows, uint32_t jd, uint32_t dst, uint32_t tb) {
+            const uint32_t run = mlashard::slice_run(rows, tb);
+            const uint32_t d = dst + mlashard::slice_off_rows(rows, jd, tb);
+            noc_async_read(a, d, run);
+            noc_async_read(a + run, d + tb / 4, run);
         };
-        // round 2 of token t: 1 stats message (page 4 i + j, sub-block k = rows 8 j1 + 2 k = source (k + j) % 4; run
-        // A), 2 O messages (tiles h .. h + 7: page d - h, sub-block k = source k), a pad message (10 messages of 8
-        // pages per token: CB_ARXO stays on its 16-page grid)
-        const uint32_t run2 = mlashard::slice_run(mlashard::RS2_ROWS, otb), sl2 = 2 * run2;  // 128 B / 256 B
-        auto land_fold2 = [&](uint32_t t) {
+        // rev 66 (att_c.cpp THE FORMAT RULE): the stats go to the compute through CB_ARX (2-page messages,
+        // Float32-dest: exact fp32), the O tiles through CB_ARXO (8-page messages, Tf32-dest: matmul operands). Round 1
+        // of token t: the m rotations j = 1, 2, 3, 0 (page p, block k = source 4 p + (k + j) % 4; rotation 0 = the
+        // packed m), the packed l (page p, block k = source 4 p + k); 4 O messages (tiles d0 .. d0 + 3: page 2 (d - d0)
+        // + p, block k = source 4 p + k) -- the first two land before the stats (CB_ARXO's two slots fill while the
+        // compute works them)
+        const uint32_t sl1 = 2 * mlashard::slice_run(mlashard::RS1_ROWS, otb);  // 1 KB: an 8-row slice tile
+        auto stat1 = [&](uint32_t s, uint32_t t, uint32_t i) -> uint64_t {      // stats tile i of source s's slice
+            const uint32_t b = DT * sl1 + i * sl1;
+            return src1(s, t, b / PG) + b % PG;
+        };
+        auto land_o1 = [&](uint32_t t, uint32_t d0_) {
             cb_reserve_back(CB_ARXO, CM);
-            uint32_t w = get_write_ptr(CB_ARXO);
-            for (uint32_t s = 0; s < mlashard::LINE; ++s) {
-                for (uint32_t i = 0; i < ST; ++i) {
-                    const uint32_t b = DT * sl2 + i * sl2;
-                    const uint64_t a = src2(s, t, b / PG) + b % PG;
-                    for (uint32_t j = 0; j < mlashard::LINE; ++j) {
-                        const uint32_t k = (s + mlashard::LINE - j) % mlashard::LINE;
-                        noc_async_read(
-                            a,
-                            w + (mlashard::LINE * i + j) * otb +
-                                mlashard::slice_off_rows(mlashard::RS2_ROWS, mlashard::LINE * j1 + k, otb),
-                            run2);
-                    }
+            const uint32_t w = get_write_ptr(CB_ARXO);
+            for (uint32_t s = 0; s < mlashard::PAIR; ++s) {
+                const uint32_t p = s / (mlashard::PAIR / 2), k = s % (mlashard::PAIR / 2);
+                for (uint32_t d = d0_; d < d0_ + CM / 2; ++d) {
+                    const uint32_t b = d * sl1;
+                    pull(src1(s, t, b / PG) + b % PG, mlashard::RS1_ROWS, k, w + (2 * (d - d0_) + p) * otb, otb);
                 }
             }
             noc_async_read_barrier();
             cb_push_back(CB_ARXO, CM);
+        };
+        auto land_fold1 = [&](uint32_t t) {
+            land_o1(t, 0);
+            land_o1(t, CM / 2);
+            for (uint32_t r = 1; r <= mlashard::PAIR / 2; ++r) {  // rotations 1, 2, 3, 0, then the packed l
+                const uint32_t j = r % (mlashard::PAIR / 2);
+                cb_reserve_back(CB_ARX, ST);
+                const uint32_t w = get_write_ptr(CB_ARX);
+                for (uint32_t s = 0; s < mlashard::PAIR; ++s) {
+                    const uint32_t p = s / (mlashard::PAIR / 2), ks = s % (mlashard::PAIR / 2);
+                    const uint32_t k = (ks + mlashard::PAIR / 2 - j) % (mlashard::PAIR / 2);
+                    pull(stat1(s, t, 0), mlashard::RS1_ROWS, k, w + p * ptb, ptb);
+                }
+                noc_async_read_barrier();
+                cb_push_back(CB_ARX, ST);
+            }
+            cb_reserve_back(CB_ARX, ST);
+            const uint32_t w = get_write_ptr(CB_ARX);
+            for (uint32_t s = 0; s < mlashard::PAIR; ++s) {
+                pull(
+                    stat1(s, t, 1),
+                    mlashard::RS1_ROWS,
+                    s % (mlashard::PAIR / 2),
+                    w + (s / (mlashard::PAIR / 2)) * ptb,
+                    ptb);
+            }
+            noc_async_read_barrier();
+            cb_push_back(CB_ARX, ST);
+            land_o1(t, CM);
+            land_o1(t, 3 * CM / 2);
+        };
+        // round 2 of token t: 2 O messages (tiles h .. h + 7: page d - h, sub-block k = rows 8 j1 + 2 k = source k)
+        // first, then CB_ARX: (rotations 1, 2), (rotation 3, rotation 0) (sub-block k = source (k + j) % 4; rotation 0
+        // = the packed m), (the packed l, a pad page). The rows outside 8 j1 .. keep CB_ARX's stale pages (finite)
+        const uint32_t sl2 = 2 * mlashard::slice_run(mlashard::RS2_ROWS, otb);  // 256 B: a 2-row slice tile
+        auto stat2 = [&](uint32_t s, uint32_t t, uint32_t i) -> uint64_t {
+            const uint32_t b = DT * sl2 + i * sl2;
+            return src2(s, t, b / PG) + b % PG;
+        };
+        auto land_fold2 = [&](uint32_t t) {
             for (uint32_t h = 0; h < DT; h += CM) {
                 cb_reserve_back(CB_ARXO, CM);
-                w = get_write_ptr(CB_ARXO);
+                const uint32_t w = get_write_ptr(CB_ARXO);
                 for (uint32_t s = 0; s < mlashard::LINE; ++s) {
                     for (uint32_t d = h; d < h + CM; ++d) {
                         const uint32_t b = d * sl2;
-                        const uint64_t a = src2(s, t, b / PG) + b % PG;
-                        const uint32_t dst = w + (d - h) * otb +
-                                             mlashard::slice_off_rows(mlashard::RS2_ROWS, mlashard::LINE * j1 + s, otb);
-                        noc_async_read(a, dst, run2);
-                        noc_async_read(a + run2, dst + otb / 4, run2);
+                        pull(
+                            src2(s, t, b / PG) + b % PG,
+                            mlashard::RS2_ROWS,
+                            mlashard::LINE * j1 + s,
+                            w + (d - h) * otb,
+                            otb);
                     }
                 }
                 noc_async_read_barrier();
                 cb_push_back(CB_ARXO, CM);
             }
-            cb_reserve_back(CB_ARXO, CM);
-            cb_push_back(CB_ARXO, CM);
+            for (uint32_t m = 0; m < 2; ++m) {
+                cb_reserve_back(CB_ARX, ST);
+                const uint32_t w = get_write_ptr(CB_ARX);
+                for (uint32_t pg = 0; pg < ST; ++pg) {
+                    const uint32_t j = (2 * m + pg + 1) % mlashard::LINE;  // 1, 2 / 3, 0
+                    for (uint32_t s = 0; s < mlashard::LINE; ++s) {
+                        const uint32_t k = (s + mlashard::LINE - j) % mlashard::LINE;
+                        pull(stat2(s, t, 0), mlashard::RS2_ROWS, mlashard::LINE * j1 + k, w + pg * ptb, ptb);
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(CB_ARX, ST);
+            }
+            cb_reserve_back(CB_ARX, ST);
+            const uint32_t w = get_write_ptr(CB_ARX);
+            for (uint32_t s = 0; s < mlashard::LINE; ++s) {
+                pull(stat2(s, t, 1), mlashard::RS2_ROWS, mlashard::LINE * j1 + s, w, ptb);
+            }
+            noc_async_read_barrier();
+            cb_push_back(CB_ARX, ST);
         };
 #endif
         // the column scatter's waiter: every column peer's slices landed in y_rs1. The row scatter signals the same
