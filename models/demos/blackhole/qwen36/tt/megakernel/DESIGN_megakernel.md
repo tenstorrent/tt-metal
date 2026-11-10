@@ -163,6 +163,18 @@ into overlapping rectangles at once (fused MLP v1/v2: 150 µs stalls on silicon)
 | slack | ~90 |
 Rule: a block may use the shared working region only during its own phases. Weight prefetch must never touch it.
 
+**MLP tail rules (v0.3, from the -mk-tail track, silicon d27u08; MKTAIL_RESULTS.md):**
+1. CB_H is published per root chunk (HT/4) in fixed root order, so consumers start down on chunk i (MK_DNPIPE).
+   Numerically identical.
+2. Root flags are ordered with `noc_async_writes_flushed`, not the acked barrier, between the data and flag
+   multicasts (MK_FLAG_FLUSH). Numerically identical.
+3. The h landing buffer may be BFP8 (MK_H_BFP8; CB_HL/CB_H bfloat8_b, XTB 1088). It halves the root multicast
+   (4.5-5.7 → 2.9 µs while the stream is active); PCC 0.99998 → 0.99993. **Default OFF until it passes the output-length
+   gate** (lesson from KV BFP4).
+4. Measured down tail: ~7 → 5.3-5.7 µs per layer, about −0.19 ms per pass.
+5. Cold-start MIXFIRST stays off: it improves the median but not the max, and costs ~50 µs once per pass. If revived,
+   it uses a global semaphore, not program sem 12, which is reserved for barriers.
+
 **SDPA phase facts (attention track, silicon d30u20, 32K u8, branch -mk-attn, DESIGN_attn.md §5):**
 - K is read on the reader/NOC1 and V on the writer/NOC0. Single-NoC KV took 186 µs.
 - Interleaved KV beats bank-local: NoC distance dominates.
