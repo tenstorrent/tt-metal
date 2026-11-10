@@ -111,7 +111,7 @@ def _build_pipeline(
         mesh_device=pipeline.mesh_device,
         vae_ccl_manager=pipeline.vae_ccl_manager,
         dit_parallel_config=pipeline.parallel_config,
-        traced=pipeline._traced,
+        traced=pipeline.trace,
     )
     return pipeline, parallel_config
 
@@ -138,7 +138,7 @@ def _psnr(ref: torch.Tensor, test: torch.Tensor) -> float:
         "sp_axis",
         "tp_axis",
         "num_links",
-        "dynamic_load",
+        "offload_weights",
         "device_params",
         "topology",
         "is_fsdp",
@@ -152,7 +152,7 @@ def test_audio_decode_perf(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: bool,
+    offload_weights: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
 ):
@@ -164,7 +164,7 @@ def test_audio_decode_perf(
         skip_without_checkpoint("checkpoint not found (set LTX_CHECKPOINT)")
 
     skip_if_unsupported_num_links(mesh_device, num_links)
-    _ = (dynamic_load, is_fsdp)  # parity with fast_av config schema
+    _ = (offload_weights, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -208,7 +208,7 @@ def test_audio_decode_perf(
         "sp_axis",
         "tp_axis",
         "num_links",
-        "dynamic_load",
+        "offload_weights",
         "device_params",
         "topology",
         "is_fsdp",
@@ -222,7 +222,7 @@ def test_audio_decode_e2e_psnr(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: bool,
+    offload_weights: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
 ):
@@ -234,7 +234,7 @@ def test_audio_decode_e2e_psnr(
         skip_without_checkpoint("distilled checkpoint not found (set LTX_CHECKPOINT)")
 
     skip_if_unsupported_num_links(mesh_device, num_links)
-    _ = (dynamic_load, is_fsdp)  # parity with fast_av config schema
+    _ = (offload_weights, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -713,7 +713,7 @@ def _build_tt_stage_c(
         "sp_axis",
         "tp_axis",
         "num_links",
-        "dynamic_load",
+        "offload_weights",
         "device_params",
         "topology",
         "is_fsdp",
@@ -727,14 +727,14 @@ def test_stage_a_audio_decoder(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: bool,
+    offload_weights: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
 ):
     AutoencoderKLLTX2Audio, _, _ = _require_diffusers()
 
     skip_if_unsupported_num_links(mesh_device, num_links)
-    _ = (sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp)  # parity with fast_av config schema
+    _ = (sp_axis, tp_axis, num_links, offload_weights, topology, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -781,7 +781,7 @@ def test_stage_a_audio_decoder(
         "sp_axis",
         "tp_axis",
         "num_links",
-        "dynamic_load",
+        "offload_weights",
         "device_params",
         "topology",
         "is_fsdp",
@@ -795,12 +795,12 @@ def test_stage_b_vocoder(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: bool,
+    offload_weights: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
 ):
     skip_if_unsupported_num_links(mesh_device, num_links)
-    _ = (sp_axis, tp_axis, dynamic_load, is_fsdp)  # parity with fast_av config schema
+    _ = (sp_axis, tp_axis, offload_weights, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = _audio_parallel_config(mesh_shape)
@@ -833,7 +833,7 @@ def test_stage_b_vocoder(
         "sp_axis",
         "tp_axis",
         "num_links",
-        "dynamic_load",
+        "offload_weights",
         "device_params",
         "topology",
         "is_fsdp",
@@ -847,12 +847,12 @@ def test_stage_c_vocoder_with_bwe(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: bool,
+    offload_weights: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
 ):
     skip_if_unsupported_num_links(mesh_device, num_links)
-    _ = (sp_axis, tp_axis, dynamic_load, is_fsdp)  # parity with fast_av config schema
+    _ = (sp_axis, tp_axis, offload_weights, is_fsdp)  # parity with fast_av config schema
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = _audio_parallel_config(mesh_shape)
@@ -1094,7 +1094,7 @@ def test_audio_decode_profile(mesh_device, device_params):
         num_links=2,
         topology=ttnn.Topology.Ring,
     )
-    assert not pipeline._traced, "profile expects the eager decode path (per-op programs)"
+    assert not pipeline.trace, "profile expects the eager decode path (per-op programs)"
 
     audio_latent = torch.randn(1, 256, 128, dtype=torch.float32)
     num_frames, fps = 145, 24.0

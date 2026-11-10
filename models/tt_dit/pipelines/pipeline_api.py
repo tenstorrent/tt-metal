@@ -150,7 +150,13 @@ class Pipeline:
         raise NotImplementedError
 
     def run_untraced(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        """One eager generation, whatever ``trace`` is: a warm-up, or the reference of a traced run."""
+        """One eager generation, whatever ``trace`` is: a warm-up, or the reference of a traced run.
+
+        Where the eager path runs through the pipeline's ``Tracer`` objects, this is only possible
+        before they capture: afterwards the ``Tracer`` raises ``RuntimeError``. Where the eager path
+        bypasses them, it works at any time. A pipeline whose traces are fixed at construction
+        overrides this to raise.
+        """
         self._check_component_flags(kwargs)
         return self._run(*args, traced=False, **kwargs)
 

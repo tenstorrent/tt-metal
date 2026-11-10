@@ -59,7 +59,7 @@ def test_euler_step():
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, offload_weights",
     LTX_ONE_STAGE_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
@@ -77,7 +77,7 @@ def test_pipeline_one_stage(
     sp_axis,
     tp_axis,
     num_links,
-    dynamic_load,
+    offload_weights,
     topology,
     width,
     height,
@@ -108,7 +108,7 @@ def test_pipeline_one_stage(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
-        dynamic_load=dynamic_load,
+        offload_weights=offload_weights,
         topology=topology,
         is_fsdp=is_fsdp,
         run_warmup=run_warmup,

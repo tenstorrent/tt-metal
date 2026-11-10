@@ -88,7 +88,7 @@ FAST_T2V_TIMING_LIMITS = {
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, offload_weights",
     LTX_DISTILLED_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
@@ -98,7 +98,7 @@ def test_pipeline_distilled(
     sp_axis,
     tp_axis,
     num_links,
-    dynamic_load,
+    offload_weights,
     topology,
     is_fsdp,
     no_prompt,
@@ -132,6 +132,9 @@ def test_pipeline_distilled(
     # Traced by default wherever the mesh param reserves a trace region; LTX_TRACED=0/1 overrides
     # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
     traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
+    if "LTX_TRACED" not in os.environ:
+        # A pipeline that offloads weights cannot trace; an explicit LTX_TRACED=1 there raises.
+        traced = traced and not offload_weights
 
     # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
     # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
@@ -151,11 +154,11 @@ def test_pipeline_distilled(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
-        dynamic_load=dynamic_load,
+        offload_weights=offload_weights,
         topology=topology,
         is_fsdp=is_fsdp,
         run_warmup=run_warmup,
-        traced=traced,
+        trace=traced,
         num_frames=num_frames,
         height=height,
         width=width,
@@ -166,10 +169,10 @@ def test_pipeline_distilled(
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
     # Gen #1 is the steady-state measurement, and on console every request encodes a prompt the
     # cache has never seen — so it gets its own prompt to keep the encoder in the measured path.
-    # Under dynamic_load the encoder is coresident-excluded with the DiT: a second encode would
+    # Under offload_weights the encoder is coresident-excluded with the DiT: a second encode would
     # evict the DiT and clobber the captured traces, so that path reuses the cached embedding.
-    steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
-    replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
+    steady_state_prompt = prompt if offload_weights else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
+    replay_prompt = prompt if offload_weights else STEADY_STATE_REPLAY_LTX_PROMPT
 
     def run(*, prompt, number, seed, output_path=None):
         output_filename = output_path or os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -460,11 +463,11 @@ def _temporal_seam_score(path):
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, offload_weights",
     LTX_DISTILLED_I2V_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
-def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path):
+def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, offload_weights, topology, is_fsdp, tmp_path):
     """E2E chained t2v->i2v: generate a t2v clip, then i2v continuing from its LAST frame
     (same DEFAULT_LTX_PROMPT), and splice both into one continuous ~12s clip. Asserts the
     I2V output (a) reproduces the conditioning frame at frame-0 (conditioning works) and
@@ -498,11 +501,11 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
-        dynamic_load=dynamic_load,
+        offload_weights=offload_weights,
         topology=topology,
         is_fsdp=is_fsdp,
         run_warmup=traced,  # trace capture needs warmup; eager doesn't
-        traced=traced,
+        trace=traced,
         num_frames=num_frames,
         height=height,
         width=width,
@@ -647,11 +650,11 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, offload_weights",
     LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
     indirect=["mesh_device", "device_params"],
 )
-def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
+def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, offload_weights, topology, is_fsdp):
     """Just the audio section of the AV pipeline: real checkpoint weights, real girl-clip
     latent shape (num_frames -> als.frames), no transformer/gemma (decode_audio never
     encodes prompts). Profiles cold (weight load + compile) vs warm (steady-state per-gen)
@@ -681,11 +684,11 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
-        dynamic_load=dynamic_load,
+        offload_weights=offload_weights,
         topology=topology,
         is_fsdp=is_fsdp,
         run_warmup=False,
-        traced=traced,
+        trace=traced,
         num_frames=num_frames,
         height=height,
         width=width,
@@ -696,7 +699,7 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
         mesh_device=pipeline.mesh_device,
         vae_ccl_manager=pipeline.vae_ccl_manager,
         dit_parallel_config=pipeline.parallel_config,
-        traced=pipeline._traced,
+        traced=pipeline.trace,
     )
     pipeline._prepare_audio_decoder()
 

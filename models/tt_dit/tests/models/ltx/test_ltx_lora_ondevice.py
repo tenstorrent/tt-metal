@@ -62,7 +62,7 @@ def _first_qkv_lora_module(transformer):
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, offload_weights, device_params, topology, is_fsdp",
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
@@ -76,7 +76,7 @@ def test_ondevice_lora_bind_matches_host_delta(
     sp_axis,
     tp_axis,
     num_links,
-    dynamic_load,
+    offload_weights,
     topology,
     is_fsdp,
 ):
@@ -96,7 +96,7 @@ def test_ondevice_lora_bind_matches_host_delta(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
-        dynamic_load=dynamic_load,
+        offload_weights=offload_weights,
         topology=topology,
         is_fsdp=is_fsdp,
         mode="av",
