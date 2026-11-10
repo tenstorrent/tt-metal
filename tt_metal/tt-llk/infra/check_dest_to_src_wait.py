@@ -257,16 +257,26 @@ def scan(path, providers):
 
 
 def _git_ls_files(*args):
+    # utf-8 with surrogateescape: a filename git lists that is not valid UTF-8 must not raise.
+    # This hook only warns, so a bad name has to be skipped or escaped, never abort the commit.
+    # os.fsencode turns the surrogates back into the original bytes, so the path still opens.
     res = subprocess.run(
         ["git", "-C", REPO, "ls-files", "-z", *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
     )
     if res.returncode != 0:
         return None
     return [
         os.path.normpath(os.path.join(REPO, p)) for p in res.stdout.split("\0") if p
     ]
+
+
+def _printable(path):
+    """A path that can be written to a UTF-8 stream. An undecodable name is escaped."""
+    return os.fsencode(path).decode("utf-8", "backslashreplace")
 
 
 def _copy_dir(path):
@@ -319,7 +329,7 @@ def tree_headers(files=()):
                 present = sorted(path for path in combined if os.path.isfile(path))
                 if present:
                     return present
-    except OSError:
+    except (OSError, UnicodeError):
         pass
     return sorted(
         os.path.normpath(p)
@@ -336,6 +346,19 @@ def _has_move(path):
         return False
 
 
+# A change to either moves the verdict on every header, not just the ones named on the command
+# line. check_mutex_balance.py is the lexer `_blank_noncode` and `functions` come from.
+_RESCAN_TRIGGERS = {
+    os.path.abspath(__file__),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_mutex_balance.py"),
+}
+
+
+def rescans_all(paths):
+    """True when a path is this checker or the lexer it imports."""
+    return any(os.path.abspath(p) in _RESCAN_TRIGGERS for p in paths)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -345,13 +368,17 @@ def main():
     )
     args = ap.parse_args()
 
+    # No files, or a change to this checker or its lexer: the verdict covers every header,
+    # including a kernel_includes/ directory that is not indexed yet. Passing no files is
+    # what makes tree_headers walk ttnn/ for that directory.
+    whole_tree = not args.files or rescans_all(args.files)
     # A file without a move has nothing to report, so the whole-tree provider pass is skipped.
-    if args.files and not any(
+    if not whole_tree and not any(
         f.endswith((".h", ".hpp")) and _has_move(f) for f in args.files
     ):
         return 0
-    tree = tree_headers(args.files)
-    files = args.files or tree
+    tree = tree_headers(() if whole_tree else args.files)
+    files = tree if whole_tree else args.files
     # Wait helpers live in shared headers a commit seldom touches, so find them in the whole tree.
     providers = wait_providers(sorted(set(tree) | set(files)))
 
@@ -361,9 +388,10 @@ def main():
             continue
         for line, move, vld, kind, head in scan(path, providers):
             n += 1
+            where = _printable(path)
             if kind == "vld_only":
                 print(
-                    f"{path}:{line}: warning: {move} behind a {vld} wait that does not drain"
+                    f"{where}:{line}: warning: {move} behind a {vld} wait that does not drain"
                     " math (no p_stall::MATH)"
                 )
                 print(f"  in: {head}")
@@ -374,7 +402,7 @@ def main():
                 )
             else:
                 print(
-                    f"{path}:{line}: warning: {move} with no {vld} wait before it in this function"
+                    f"{where}:{line}: warning: {move} with no {vld} wait before it in this function"
                 )
                 print(f"  in: {head}")
                 print(
