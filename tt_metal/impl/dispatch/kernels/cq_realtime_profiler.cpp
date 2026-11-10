@@ -42,10 +42,6 @@ volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfile
 // Latest end time among the dispatch_s records read so far.
 uint64_t last_record_end = 0;
 
-// Cycles dispatch_s waited for a free record slot, flagged on the last record read and reported once the next
-// record's start (the end of that wait) is known. 0 means none pending.
-uint32_t pending_stall_cycles = 0;
-
 // Enqueue a dispatch-stall marker: the host shows it as a stall ending at stall_end, stall_cycles long.
 __attribute__((noinline)) void realtime_profiler_enqueue_stall_marker(uint64_t stall_end, uint32_t stall_cycles) {
     while (rt_ring_full(ring_buffer)) {
@@ -98,7 +94,7 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t recor
         last_record_end = end;
     }
 
-    // A nonzero kernel_end.header means dispatch_s waited for a free slot just before publishing this record.
+    // A nonzero kernel_end.header is how long dispatch_s waited for a free slot, starting at this record's start.
     // Zero it in dispatch_s's slot before the slot is handed back (the ack below follows on the same NOC path),
     // so a reused slot never reports the same wait twice.
     const uint32_t stall_cycles = record->kernel_end.header;
@@ -119,11 +115,9 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t recor
         ring_buffer->write_index++;
     }
 
-    // The wait flagged on the previous record ended when dispatch_s started this record's command.
-    if (pending_stall_cycles != 0) {
-        realtime_profiler_enqueue_stall_marker(start, pending_stall_cycles);
+    if (stall_cycles != 0) {
+        realtime_profiler_enqueue_stall_marker(start + stall_cycles, stall_cycles);
     }
-    pending_stall_cycles = stall_cycles;
 }
 
 // Consumer index into the dispatch_s record ring; this kernel is its only writer.
@@ -210,16 +204,6 @@ void kernel_main() {
         invalidate_l1_cache();
 
         if (realtime_profiler_drain_records()) {
-            if (pending_stall_cycles != 0) {
-                // No later record bounds this wait; end it now.
-                volatile tt_reg_ptr uint32_t* p_reg =
-                    reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-                const uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-                const uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-                realtime_profiler_enqueue_stall_marker(
-                    (static_cast<uint64_t>(time_hi) << 32) | time_lo, pending_stall_cycles);
-                pending_stall_cycles = 0;
-            }
             noc_async_write_barrier();  // last record_rd_idx ack
             ring_buffer->terminate = 1;
             return;

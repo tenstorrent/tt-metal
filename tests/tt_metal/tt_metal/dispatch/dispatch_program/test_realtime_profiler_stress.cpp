@@ -313,6 +313,7 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
     const uint64_t num_active_devices = rt->num_active_devices();
 
     std::atomic<uint64_t> stress_records{0};
+    std::atomic<uint64_t> end_before_start{0};
     std::atomic<double> frequency{0.0};  // device cycles per ns
     ProgramRealtimeProfilerCallbackHandle handle =
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
@@ -320,6 +321,9 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
                 if (rec.runtime_id == kStressRuntimeId) {
                     stress_records.fetch_add(1, std::memory_order_relaxed);
                     frequency.store(rec.frequency, std::memory_order_relaxed);
+                    if (rec.end_timestamp < rec.start_timestamp) {
+                        end_before_start.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
             }
         });
@@ -334,6 +338,7 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
     }
     mesh_device->end_mesh_trace(cq, trace_id);
     const uint64_t records_before = stress_records.load();
+    const uint64_t end_before_start_before = end_before_start.load();
 
     // Nothing may block on the device while paused: dispatch cannot finish until the host reads again.
     rt->pause_receiver_for_testing(true);
@@ -376,12 +381,15 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
     EXPECT_GE(stress_records.load() - records_before, expected_records)
         << "records were dropped while dispatch_s waited";
     EXPECT_GT(host_stalls, 0u) << "dispatch_s waits were not reported to the host";
+    EXPECT_EQ(end_before_start.load(), end_before_start_before)
+        << "a record ended before it started: a program's end time went to another program's record while "
+           "dispatch_s waited";
     // dispatch_s waited at least from the first wait until the unpause.
     const double hold_ms = std::chrono::duration<double, std::milli>(kHoldWhileStalled).count();
     EXPECT_GE(host_stall_ms, hold_ms / 2) << "reported stall time is shorter than the time dispatch_s was held";
     if (num_active_devices == 1) {
         // record_ring_full_wait_count() is a per-device peak, so it only compares exactly on one device. The latest
-        // wait is reported once the record after it (or terminate) reaches the reader, so it may still be pending.
+        // wait is reported once its record reaches the reader, so it may still be pending.
         EXPECT_LE(host_stalls, device_waits);
         EXPECT_LE(device_waits - host_stalls, 1u) << "dispatch_s waits were not reported to the host";
     }
