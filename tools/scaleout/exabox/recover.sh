@@ -590,12 +590,21 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="${HOSTS}-$(date +%Y%m%d_%H%M%S)"
 fi
 
+# The output is read by other users and CI, but Exabox sessions can carry a private umask
+# (007, 077), which would hide the log and artifacts from them. Keep the caller's write
+# restrictions, only let group and others read and traverse.
+umask go+rx
+
 # Set log file path inside output directory (captures actual start time).
 # Resolve to an absolute path so it can be bind-mounted into Docker containers
 # (regen runs inside the image in --use-docker mode) and referenced identically
 # inside and outside the container.
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+# Ranks on the other hosts write into the output with their own session's umask, which this
+# one does not reach, so open up whatever they wrote on every exit path. Files owned by
+# someone else (root in a container) are left as they are.
+trap 'chmod -R go+rX "$OUTPUT_DIR" 2>/dev/null || true' EXIT
 LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
 
 # Tag all output; terminal keeps colors, log file gets ANSI/CR stripped.
