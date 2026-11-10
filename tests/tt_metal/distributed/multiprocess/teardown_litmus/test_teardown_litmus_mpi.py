@@ -1,13 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Teardown litmus, MPI only: the same questions asked of OpenMPI and PRRTE alone, with no tt-metal in the ranks.
+"""Teardown litmus, the launcher: does tt-run address the MPI failure modes?
 
-``litmus_mpi_probe.c`` is a C rank program that uses MPI the way tt-metal's DistributedContext does
-(MPI_Init_thread MULTIPLE, atexit MPI_Finalize, a dup of WORLD with MPI_ERRORS_RETURN, blocking collectives) and
-misbehaves on one rank. These rows say which of the failures belong to the launcher and the transport, so they are
-the rows to run again when the MPI install changes: ``TT_LITMUS_MPI_PREFIX=/opt/openmpi-<version>`` picks the
-mpirun and the mpicc, and the probe is recompiled against it. Rows that fail today are marked ``@known`` with
-the error id of the teardown plan (tt-blaze tools/teardown_probe) and fail until the fix lands.
+Every row launches the raw C probe (``litmus_mpi_probe.c``, which uses MPI the way tt-metal's DistributedContext
+does) THROUGH tt-run, then asks whether tt-run ends the job correctly: the right exit code, the ranks on every host
+gone, nothing left in ``/dev/shm``. tt-run picks the plain launcher and builds the production mpirun line
+(``--mca btl self,tcp``); a group-E configuration variation (a transport, a component, an interface) goes through
+``--mpi-args``, which reaches PRRTE and OpenMPI. These rows are the ones to run again when the MPI install changes:
+``TT_LITMUS_MPI_PREFIX=/opt/openmpi-<version>`` picks the mpirun and the mpicc and the probe is recompiled.
+
+A row that passes is a gate: tt-run already handles that failure. A row marked ``@known("P..")`` fails until the
+tt-run fix in this PR is in the tt-run on PATH (the launcher in the CI image is the one this PR changes).
 """
 
 from __future__ import annotations
@@ -17,132 +20,85 @@ import signal
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(
     0, str(Path(__file__).resolve().parent)
 )  # litmus_common lives next to this file, whatever the import mode
 from litmus_common import (
     ROOT,
-    known,
     DEADLINE_END,
     DEADLINE_HANG,
     clean,
     ended,
-    mpi_cmd,
-    mpi_probe_path,
     nonzero,
-    rank_reached,
     run_case,
+    ttrun_mpi_cmd,
 )
 
 NP = {"PROBE_NP": "3"}
 
 
-# ---- gates -----------------------------------------------------------------------------------------------------
-def test_mpi_clean():
-    """Three ranks, one barrier, finalize: exit 0, nothing left."""
-    r = run_case("mpi_clean", {**NP, "PROBE_SCENARIO": "clean"}, DEADLINE_END, cmd=mpi_cmd())
+# ---------------------------------------------------------------------------------------------------------------
+# does tt-run end the job correctly on each failure? (the fault classes, through tt-run)
+# ---------------------------------------------------------------------------------------------------------------
+def test_ttrun_clean():
+    """Baseline: three ranks through tt-run, one barrier, finalize. tt-run exits 0 and leaves nothing."""
+    r = run_case("ttrun_clean", {**NP, "PROBE_SCENARIO": "clean"}, DEADLINE_END, cmd=ttrun_mpi_cmd())
     ended(r)
     assert r.exit == 0, str(r)
     clean(r)
 
 
-def test_mpi_dead_rank_plain():
-    """The same kill under plain mpirun (no ULFM): the job ends with the victim's code, the truthful exit code."""
-    r = run_case(
-        "mpi_dead_rank_plain", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=mpi_cmd(ulfm=False)
-    )
+def test_ttrun_dead_rank():
+    """A rank is killed. Because tt-run launches the plain mpirun, the job ends with a non-zero code (not the ULFM
+    false 0, P4) and nothing is left."""
+    r = run_case("ttrun_dead_rank", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=ttrun_mpi_cmd())
     ended(r)
     nonzero(r)
     clean(r)
 
 
-def test_mpi_exit_nofinalize():
-    """A rank that _exits without finalize, on the production transport line (btl self,tcp): the job ends non-zero."""
+def test_ttrun_hang_timeout():
+    """A rank spins forever. With PRRTE's --timeout passed through --mpi-args, tt-run ends the job (exit 241) and
+    leaves nothing — the launcher wall clock reaches PRRTE through tt-run (P5)."""
     r = run_case(
-        "mpi_exit_nofinalize", {**NP, "PROBE_SCENARIO": "victim_exit1_nofinalize"}, DEADLINE_END, cmd=mpi_cmd()
-    )
-    ended(r)
-    nonzero(r)
-    clean(r)
-
-
-def test_mpi_hang_timeout():
-    """A rank that spins forever under PRRTE --timeout 20: exit 241, nothing left."""
-    r = run_case(
-        "mpi_hang+prte_timeout20",
+        "ttrun_hang_timeout",
         {**NP, "PROBE_SCENARIO": "victim_hang"},
         DEADLINE_END,
-        cmd=mpi_cmd(extra="--timeout 20"),
+        cmd=ttrun_mpi_cmd("--timeout 20 --report-state-on-timeout"),
     )
-    ended(r)
-    assert r.exit == 241, str(r)
-    clean(r)
-
-
-def test_mpi_ctrl_c_at_mpirun():
-    """SIGINT at mpirun itself while every rank hangs: PRRTE forwards it and the whole tree is gone."""
-    r = run_case(
-        "mpi_ctrl_c_at_mpirun",
-        {**NP, "PROBE_SCENARIO": "all_hang"},
-        DEADLINE_END,
-        cmd=mpi_cmd(),
-        launcher_signal=signal.SIGINT,
-        signal_after=3.0,
-    )
-    ended(r)
-    clean(r)
-
-
-# ---- rows that fail today: what the launcher and the transport do ----------------------------------------------
-@known("P4: under --with-ft ulfm a dead rank is not a job failure; the launcher returns 0")
-def test_mpi_dead_rank_ulfm_exit0():
-    r = run_case("mpi_dead_rank_ulfm_code", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=mpi_cmd())
     ended(r)
     nonzero(r)
+    clean(r)
 
 
-@known("P5: a genuine hang never ends without a wall clock")
-def test_mpi_hang_no_clock():
-    r = run_case("mpi_hang", {**NP, "PROBE_SCENARIO": "victim_hang"}, DEADLINE_HANG, cmd=mpi_cmd())
+def test_ttrun_no_shm_leak():
+    """A rank dies under tt-run. Because tt-run builds the mpirun line with --mca btl self,tcp, no shared-memory
+    segment is ever mapped, so even a failed job leaves nothing in /dev/shm (P11)."""
+    r = run_case("ttrun_no_shm_leak", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=ttrun_mpi_cmd())
     ended(r)
+    assert not r.shm_leaked, f"a job launched by tt-run left shm segments: {r.shm_leaked}"
 
 
-def test_mpi_wrong_interface():
-    """Default launcher (no ULFM) with a bogus TCP interface: every rank fails MPI_Init and the job ends fast with a
-    non-zero code. Under --with-ft ulfm this instead hangs (P14), which is why tt-run launches the plain mpirun."""
+# ---------------------------------------------------------------------------------------------------------------
+# a group-E configuration variation through tt-run: tt-run still ends the job with a known shape
+# ---------------------------------------------------------------------------------------------------------------
+def test_ttrun_bad_interface():
+    """A bogus TCP interface through --mpi-args: every rank fails MPI_Init and tt-run ends the job fast with a
+    non-zero code, not a hang (P14). The production line uses the real interface; this is the one-variable departure."""
     r = run_case(
-        "mpi_wrong_interface",
+        "ttrun_bad_interface",
         {**NP, "PROBE_SCENARIO": "clean"},
         DEADLINE_END,
-        cmd=mpi_cmd(ulfm=False, extra="--mca btl_tcp_if_include nosuchif"),
+        cmd=ttrun_mpi_cmd("--mca btl_tcp_if_include nosuchif"),
     )
     ended(r)
     nonzero(r)
     clean(r)
-
-
-# ---- the OpenMPI housekeeping rows and the launch-line rule -----------------------------------------------------
-@known("P11: a singleton (no launcher) never finalizes its shared-memory segment; tt-metal #63870")
-@known("P11: a job killed with the shared-memory layer on leaves its 16 MB sm_segment files in /dev/shm")
-def test_mpi_killed_job_shm():
-    """Default transports (shared memory on), a rank spins, SIGKILL at mpirun: whatever else is left (P7), the
-    segments must not be."""
-    r = run_case(
-        "mpi_sigkill_sm",
-        {**NP, "PROBE_SCENARIO": "victim_hang"},
-        DEADLINE_END,
-        cmd=mpi_cmd(btl=""),
-        launcher_signal=signal.SIGKILL,
-        signal_after=3,
-    )
-    assert not r.shm_leaked, f"R3: /dev/shm segments leaked: {r.shm_leaked}"
 
 
 def test_scripts_tcp_only():
-    """Static: each mpirun launch in tests/scripts/multihost/*.sh carries the tcp-only transport, on the line or
-    through the argument variable the script builds with it."""
+    """Static: every bare mpirun in tests/scripts/multihost/*.sh carries --mca btl self,tcp, the line tt-run builds,
+    so none of them maps the shared-memory layer (P15). No probe launched."""
     bad = []
     for sh in sorted((ROOT / "tests/scripts/multihost").glob("*.sh")):
         text = sh.read_text()
@@ -155,3 +111,35 @@ def test_scripts_tcp_only():
                 continue
             bad.append(f"{sh.name}:{n}: {code.strip()[:100]}")
     assert not bad, "mpirun launches without --mca btl self,tcp:\n" + "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# the signal cases: a signal at tt-run is forwarded to the launcher and leaves nothing (this PR's fix)
+# ---------------------------------------------------------------------------------------------------------------
+def test_ttrun_ctrl_c():
+    """A rank hangs, then SIGINT is sent to tt-run. tt-run forwards it to the launcher, which kills every rank;
+    nothing is left (this PR forwards the signal to the launcher)."""
+    r = run_case(
+        "ttrun_ctrl_c",
+        {**NP, "PROBE_SCENARIO": "victim_hang"},
+        DEADLINE_HANG,
+        cmd=ttrun_mpi_cmd(),
+        launcher_signal=signal.SIGINT,
+        signal_after=4,
+    )
+    ended(r)
+    clean(r)
+
+
+def test_ttrun_sigterm():
+    """A rank hangs, then SIGTERM is sent to tt-run. tt-run forwards it and waits; nothing is left."""
+    r = run_case(
+        "ttrun_sigterm",
+        {**NP, "PROBE_SCENARIO": "victim_hang"},
+        DEADLINE_HANG,
+        cmd=ttrun_mpi_cmd(),
+        launcher_signal=signal.SIGTERM,
+        signal_after=4,
+    )
+    ended(r)
+    clean(r)
