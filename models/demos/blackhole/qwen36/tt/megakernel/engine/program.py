@@ -815,20 +815,31 @@ def setup_bench(dev, MESH, mesh_identity):
         assert _gr[4] + _gr[9] == len(GDNC), _gr
         MKDEF = MKDEF + [('MKA_GDN24', '1'), ('MKA_GDN_INREADY', f"{GDN_SA['in_ready']}u"),
                          ('MKA_GDN_RECTS', '{{' + ','.join(map(str, _gr[:5])) + '},{' + ','.join(map(str, _gr[5:])) + '}}')]
-        try:
-            from models.demos.blackhole.qwen36.tt.megakernel.engine.gdn_role import gdn_role as _gdn_hook
-        except ImportError:
-            _gdn_hook = None
+        try:   # engine/ is on sys.path (bench_mka2 imports `program` from it): the pushed tree's own gdn_role first
+            from gdn_role import gdn_role as _gdn_hook
+        except ModuleNotFoundError:
+            try:
+                from models.demos.blackhole.qwen36.tt.megakernel.engine.gdn_role import gdn_role as _gdn_hook
+            except ModuleNotFoundError:
+                _gdn_hook = None
+        # MKA_GDN_WAIT=1 (G2): the GDN-type layer's stall ends when all 24 GDN cores signalled their output rows (each
+        # multicasts out_ready += 1 to every engine core, which waits >= 24 * (g + 1) and resets at program end) instead
+        # of the MK_SGDN_US spin. Needs the hook.
+        GDN_WAIT = os.environ.get('MKA_GDN_WAIT', '0') == '1'
         if _gdn_hook is not None and os.environ.get('MKA_GDN_HOOK', '1') == '1':
             import types
             b_ = types.SimpleNamespace(dev=dev, mesh=dev if MESH else None, NL=NL, AMASK=AMASK, is_attn=is_attn_layer, NU=NU, CTX=CTX,
                                        gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
-                                       cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), per_replay={},
+                                       cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), out_rects=(RECTS_F[:10] if GDN_WAIT else None), per_replay={},
                                        free_cb_ids=list(range(45)))
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
             GDN_ROLE.setdefault('io', [])
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)
+            if GDN_WAIT:
+                MKDEF = MKDEF + [('MKA_GDN_WAIT', '1'), ('MKA_GDN_OUTREADY', f"{GDN_SA['out_ready']}u"), ('MKA_GDN_NC', str(len(GDNC)))]
+                print(f"[gdn24] GDN stall = out_ready wait ({len(GDNC)} per GDN layer, multicast to RECTS_F), not the MK_SGDN_US spin", flush=True)
         else:
+            assert not GDN_WAIT, "MKA_GDN_WAIT needs the GDN hook"
             print('[gdn24] no GDN hook: the 24 GDN cores stay idle', flush=True)
     def build(out, coord=None):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),

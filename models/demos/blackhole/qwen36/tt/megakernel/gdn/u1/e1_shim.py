@@ -311,7 +311,13 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     OW, OC, OLR = R_ARGS, R_ARGS + W_ARGS, R_ARGS + W_ARGS + C_ARGS
     OLW = OLR + NG * nR
     S = {k: f"{int(sems[k])}u" for k in ("in_ready", "attn_kv", "vb0", "vb1", "out_ready")}
-    ox, oy = out_target
+    if len(out_target) == 2:   # one target core (e.g. the Q root): +1 per GDN core per layer
+        ox, oy = out_target
+        osig = f'noc_semaphore_inc(get_noc_addr({ox}u, {oy}u, {S["out_ready"]}), 1);'
+    else:   # NoC-0 multicast rects [x0, y0, x1, y1, n] * k: +1 on every engine core (each waits 24 (g + 1) itself)
+        osig = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
+                        f'{S["out_ready"]}), 1, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5))
+                        if r[4])
     AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
     CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
     tr = os.path.join(gen_dir, "g2_reader.cpp")
@@ -333,7 +339,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'#include "{kd}/dataflow/writer_gdn_spec_step.cpp"\n'
         f'uint32_t gdn_loop_k() {{ return g_gdn_l + 1; }}\n'
         f'uint32_t gdn_xsem_addr(uint32_t i) {{ return i ? {S["vb1"]} : {S["vb0"]}; }}\n'
-        f'void gdn_out_signal() {{ noc_semaphore_inc(get_noc_addr({ox}u, {oy}u, {S["out_ready"]}), 1); }}\n'
+        f'void gdn_out_signal() {{ {osig} }}\n'
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_gdn_l = L;\n'
         f'    for (uint32_t t = 0; t < {nW}; ++t) crta[{CRTA0} + t] = g_ab[{OLW} + L * {nW} + t];\n'

@@ -624,11 +624,24 @@ void kernel_main() {
             npc = ip = outstanding = 0;
             if (L + 1 < NL) plan_layer(L + 1, true);
             V12_PLAN_MLP(L);
+#if defined(MKA_GDN_WAIT)
+            // G2: the GDN role's step is the stall -- every one of the MKA_GDN_NC GDN cores multicasts out_ready += 1 to
+            // every engine core once its output rows landed; GDN layer g (= L - attention layers before L) is done at
+            // MKA_GDN_NC * (g + 1). The program-end reset is below.
+            volatile tt_l1_ptr uint32_t* gdn_or = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY);
+            const uint32_t gdn_tgt = MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1);
+#define MKA_GDN_STALL_DONE() (invalidate_l1_cache(), *gdn_or >= gdn_tgt)
+#endif
 #if defined(MK_V12)
             {   // pump the pieces through the GDN stall instead of blocking on the command buffer up front (a blocking
                 // issue_some held some writers ~20 us past the stall and delayed their MLP)
                 const uint32_t t0 = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+#if defined(MKA_GDN_WAIT)
+                (void)t0;
+                while (!MKA_GDN_STALL_DONE()) {
+#else
                 while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)MKA_S_GDN) {
+#endif
 #if defined(MK_NO_PIECES)
                     v_pump();
 #else
@@ -644,7 +657,15 @@ void kernel_main() {
             }
 #else
             issue_some(true);
+#if defined(MKA_GDN_WAIT)
+            {
+                DeviceZoneScopedN("W-GDNW");
+                while (!MKA_GDN_STALL_DONE()) {
+                }
+            }
+#else
             spin_cycles(MKA_S_GDN);
+#endif
 #endif
             spin_cycles(S_AR);
 #if defined(MKA_RQKV) && !defined(MK_REAL_AR)   // real AR: XRDY only after the MLP AR's deliveries (below)
@@ -978,6 +999,10 @@ void kernel_main() {
     if (head_id < NHEAD) *l1w(gs[GS_HCNT]) = 0;
 #endif
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
+#if defined(MKA_GDN_WAIT)
+    // out_ready: this core awaited MKA_GDN_NC * (number of GDN layers) in its last W-GDN, i.e. every increment landed
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY) = 0;
+#endif
 #if defined(MKA_RQKV)
     // XRDY: every STREAM_EXT core awaited the last multicast (NL - 1) before its last qkv, which precedes this point
     // only on that core; the reset of a late remote copy is covered by the next pass starting from 0 only after the
