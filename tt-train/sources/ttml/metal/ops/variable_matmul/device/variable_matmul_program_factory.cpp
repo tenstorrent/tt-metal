@@ -470,9 +470,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
 
     const auto cores = corerange_to_cores(core_grid, num_cores, true);
 
-    const uint32_t in0_addr = input_tensor.buffer()->address();
-    const uint32_t in1_addr = weight_tensor.buffer()->address();
-    const uint32_t out_addr = output_tensor.buffer()->address();
+    const uint32_t in0_addr = input_tensor.mesh_buffer().address();
+    const uint32_t in1_addr = weight_tensor.mesh_buffer().address();
+    const uint32_t out_addr = output_tensor.mesh_buffer().address();
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         const CoreCoord core = cores.at(core_id);
@@ -566,7 +566,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //                      M range and derives per-core M from in0_idx.
         //   InputAndWeightK:   (offsets_addr, offsets_start_index)          — K-range only.
         if (in0_needs_offsets) {
-            in0_args.push_back(tensor_args.offsets_tensor.buffer()->address());
+            in0_args.push_back(tensor_args.offsets_tensor.mesh_buffer().address());
             in0_args.push_back(operation_attributes.offsets_start_index);
             if (offset_row_mode) {
                 in0_args.push_back(in0_idx);
@@ -621,7 +621,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //   InputAndWeightK:   (offsets_addr, offsets_start_index) — K-range only.
         //   InputAndOutputRow: also append in0_idx (kernel derives per-core M).
         if (in1_needs_offsets) {
-            in1_args.push_back(tensor_args.offsets_tensor.buffer()->address());
+            in1_args.push_back(tensor_args.offsets_tensor.mesh_buffer().address());
             in1_args.push_back(operation_attributes.offsets_start_index);
             if (offset_row_mode) {
                 in1_args.push_back(in0_idx);
@@ -695,9 +695,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const uint32_t M_tiles_per_core = padded_M_tiles / sv.in0_parallel_axis_cores;
     const uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, sv.M_block_tiles);
 
-    const uint32_t in0_addr = input_tensor.buffer()->address();
-    const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
-    const uint32_t out_addr = output_tensor.buffer()->address();
+    const uint32_t in0_addr = input_tensor.mesh_buffer().address();
+    const uint32_t in1_addr = tensor_args.weight_tensor.mesh_buffer().address();
+    const uint32_t out_addr = output_tensor.mesh_buffer().address();
 
     auto& in0_sender_rt = GetRuntimeArgs(program, sv.in0_sender_kernels_id);
     auto& in0_receiver_rt = GetRuntimeArgs(program, sv.in0_receiver_kernels_id);
@@ -752,7 +752,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     // offsets_tensor is always set.
     constexpr bool in0_needs_offsets = true;
     constexpr bool in1_needs_offsets = true;
-    const uint32_t offsets_addr = tensor_args.offsets_tensor.buffer()->address();
+    const uint32_t offsets_addr = tensor_args.offsets_tensor.mesh_buffer().address();
     constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 18;  // appended after K_tiles (idx 17).
     constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 19;
     constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 17;
