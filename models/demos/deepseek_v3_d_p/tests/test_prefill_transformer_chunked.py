@@ -69,6 +69,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe_impl import (
     k3_moe_block_device_params,
     moe_block_enabled,
+    moe_block_fabric_payload,
+    model_l1_small_with_block,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
@@ -98,7 +100,18 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
 # sync with the glm_5_3 runner adapter.
-GLM_L1_SMALL_SIZE = 1536
+# GLM-5.3's MoE is the MoE block by default (tt/moe_impl.py; MOE_IMPL=ttmoe for TtMoe): room for its persistent words
+# and semaphores, which live in L1_SMALL (its first call logs the total), and a fabric payload holding one combine row.
+GLM_MOE_BLOCK = moe_block_enabled(GLM53Config)
+GLM_L1_SMALL_SIZE = model_l1_small_with_block(GLM53Config, 1536) if GLM_MOE_BLOCK else 1536
+
+
+def _glm_payload():
+    """GLM's TtMoe payload; with the MoE block at least its combine's (2 x 6144 + 32 B, 64-B aligned)."""
+    payload = moe_fabric_payload(GLM53Config)
+    if GLM_MOE_BLOCK:
+        payload = max(payload, moe_block_fabric_payload(GLM53Config.EMB_SIZE))
+    return payload
 
 
 # K3's fabric: the XY torus when the MoE block is K3's MoE (the default; on the 2D mesh fabric the block's first call
@@ -271,11 +284,19 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push in the shared layers.
-    # Cut on bh_sc1_high_power, CI run 42026848687 / job 127259026123.
-    (78, 11, 10): [0.358, 0.350, 0.352, 0.349, 0.353, 0.353, 0.349, 0.349, 0.355, 0.357, 0.364],
-}
+GLM_TRACED_BASELINE_CHUNK_TIMES_S = (
+    {
+        # C++ MoE block (ttnn.experimental.moe_block), router on the matmul cores, main 860b4917979 merged:
+        # CI run 41926693153 / job 126931997069 (bh_sc1_high_power).
+        (78, 11, 10): [0.263, 0.260, 0.267, 0.266, 0.270, 0.271, 0.268, 0.271, 0.276, 0.280, 0.284],
+    }
+    if GLM_MOE_BLOCK
+    else {
+        # TtMoe (MOE_IMPL=ttmoe). Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push
+        # in the shared layers. Cut on bh_sc1_high_power, CI run 42026848687 / job 127259026123 (main).
+        (78, 11, 10): [0.358, 0.350, 0.352, 0.349, 0.353, 0.353, 0.349, 0.349, 0.355, 0.357, 0.364],
+    }
+)
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
@@ -1353,7 +1374,7 @@ def test_kimi_prefill_transformer_chunked_padded(
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
             # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1611,7 +1632,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1627,7 +1648,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -3044,7 +3065,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -3056,9 +3077,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         # since TORUS_XY always prefers the snake. Not comparable to the torus leg (all axes go Linear).
         pytest.param(
             (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM_L1_SMALL_SIZE
-            ),
+            fabric2d_device_params(fabric_payload_size=_glm_payload(), l1_small_size=GLM_L1_SMALL_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
