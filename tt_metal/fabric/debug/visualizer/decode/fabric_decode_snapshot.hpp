@@ -15,14 +15,16 @@
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_load.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_record.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_inputs.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 
 namespace tt::tt_fabric::decode {
 
-// How much of a router capture read.
+// How much of a router's full read capture made. Its rounds don't count: a failed round read is a finding, not a gap
+// in the router's bytes.
 enum class RouterReadStatus {
-    // Registers before, L1, registers after: all read.
+    // The core registers, the whole L1 and every stream register: all read.
     COMPLETE,
-    // A read failed, and nothing after it was read (capture stops a core at its first failure).
+    // A read of the full read failed, and nothing after it was read (capture stops a core at its first failure).
     PARTIAL,
     // Capture read nothing of the router.
     NOT_READ,
@@ -43,9 +45,9 @@ enum class UnreadCode {
     CHANNEL_NOT_FOUND,
     // The manifest's core isn't an Ethernet core of the chip (capture::CoreLocation::CORE_NOT_FOUND).
     CORE_NOT_FOUND,
-    // A register read, before or after the L1 read, failed.
+    // A register read of the full read, a core register or a stream register, failed.
     REGISTER_READ_FAILED,
-    // The L1 read failed.
+    // The full read's L1 read failed.
     L1_READ_FAILED,
 
     // -- Why one region of a router that was read has no bytes. --
@@ -65,10 +67,19 @@ struct Unread {
     std::string message;
 };
 
-// A register's word on both sides of the L1 read. Either is null when it wasn't read.
-struct RegisterWords {
-    std::optional<uint32_t> before;
-    std::optional<uint32_t> after;
+// One read of a register in the full read: the read in the record (its address and t_ns), and the word it read, from
+// the .bin.
+struct RegisterRead {
+    const capture::ReadRecord* read = nullptr;
+    uint32_t word = 0;
+};
+
+// One read of a multi-sampled region in one of capture's rounds: the round, the read in the record (its address, size
+// and t_ns), and its bytes, from the .bin.
+struct RoundRead {
+    uint32_t round = 0;
+    const capture::ReadRecord* read = nullptr;
+    std::span<const std::byte> bytes;
 };
 
 // One router's capture: how much of it was read, and the bytes that were. It keeps only what the record doesn't
@@ -76,34 +87,42 @@ struct RegisterWords {
 // pointers and spans it returns are into the record and the mapped .bin, and are valid while the DecodeInputs are.
 class RouterSnapshot {
 public:
-    // Works out the router's read status, and finds its bytes in the .bin. Copies no bytes.
-    RouterSnapshot(const CapturedRouter& router, const capture::LoadedCapture& capture);
+    // Works out the router's read status from its full read, and finds its bytes in the .bin, its rounds' and its full
+    // read's. `l1` is the manifest's Ethernet core L1, which the full read's L1 read covers. Copies no bytes.
+    RouterSnapshot(
+        const CapturedRouter& router, const capture::LoadedCapture& capture, const manifest::EthCoreL1& l1);
 
-    // The router, its manifest entry, and its record entry, which has its liveness samples and where its core was
-    // found.
+    // The router, its manifest entry, and its record entry, which has its rounds and where its core was found.
     const CapturedRouter& get_router() const { return router_; }
     RouterReadStatus get_read_status() const { return status_; }
     // Why the router is NOT_READ or PARTIAL. Null when it's COMPLETE.
     const std::optional<Unread>& get_unread_reason() const { return unread_reason_; }
-    // The read that failed: its step, address and error. Null when none did.
+    // The full read's read that failed: its address and error. Null when none did.
     const capture::ReadRecord* find_failed_read() const;
-    // The L1 read: its address, size and .bin offset. Null when the L1 wasn't read.
-    const capture::ReadRecord* find_l1_read() const;
+    // The full read's L1 read: its address, size and .bin offset. Null when the L1 wasn't read.
+    const capture::ReadRecord* find_l1_read() const { return l1_read_; }
     // The L1 read's bytes. Empty when the L1 wasn't read.
     std::span<const std::byte> get_l1_bytes() const { return l1_bytes_; }
-    // The register's word at `address` before and after the L1 read. Both null when capture read no register there.
-    RegisterWords find_register_words(uint64_t address) const;
+    // The full read's read of the register at `address`. Null when capture read no register there.
+    std::optional<RegisterRead> find_register_read(uint64_t address) const;
+    // Every read that worked of the multi-sampled region at `address` in capture's rounds, in round order. Empty when
+    // the region isn't multi-sampled, or no round read it.
+    std::span<const RoundRead> find_round_reads(uint64_t address) const;
 
 private:
     CapturedRouter router_;
     RouterReadStatus status_ = RouterReadStatus::NOT_READ;
     std::optional<Unread> unread_reason_;
+    const capture::ReadRecord* l1_read_ = nullptr;
     std::span<const std::byte> l1_bytes_;
-    // Every register read, core registers and stream registers, by address.
-    std::unordered_map<uint64_t, RegisterWords> register_words_;
+    // The full read's register reads, core registers and stream registers, by address.
+    std::unordered_map<uint64_t, RegisterRead> register_reads_;
+    // The rounds' reads that worked, by address.
+    std::unordered_map<uint64_t, std::vector<RoundRead>> round_reads_;
 };
 
-// One snapshot per paired router, in the pairing's order.
-std::vector<RouterSnapshot> make_router_snapshots(const RouterPairing& pairing, const capture::LoadedCapture& capture);
+// One snapshot per paired router, in the pairing's order. `l1` is the manifest's Ethernet core L1.
+std::vector<RouterSnapshot> make_router_snapshots(
+    const RouterPairing& pairing, const capture::LoadedCapture& capture, const manifest::EthCoreL1& l1);
 
 }  // namespace tt::tt_fabric::decode

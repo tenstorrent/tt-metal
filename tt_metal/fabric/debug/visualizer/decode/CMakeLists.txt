@@ -9,6 +9,7 @@ target_sources(
     PRIVATE
         fabric_decode_inputs.cpp
         fabric_decode_snapshot.cpp
+        fabric_decode_values.cpp
 )
 target_include_directories(fabric_decode_core PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(fabric_decode_core PUBLIC fabric_capture_core)

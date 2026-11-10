@@ -54,18 +54,14 @@ std::optional<Unread> find_not_read_reason(const CapturedRouter& router) {
     TT_THROW("Fabric decode: unknown core location {}", static_cast<int>(*target.location));
 }
 
-// Why a router is PARTIAL, by the step of the read that failed.
-UnreadCode get_failed_read_code(capture::ReadStep step) {
-    switch (step) {
-        case capture::ReadStep::REGISTERS_BEFORE:
-        case capture::ReadStep::REGISTERS_AFTER: return UnreadCode::REGISTER_READ_FAILED;
-        case capture::ReadStep::L1: return UnreadCode::L1_READ_FAILED;
-    }
-    TT_THROW("Fabric decode: unknown read step {}", static_cast<int>(step));
+// Whether `read` is the full read's L1 read: the manifest's whole Ethernet core L1. Every other read of the full read
+// is a register's word.
+bool is_l1_read(const capture::ReadRecord& read, const manifest::EthCoreL1& l1) {
+    return read.address == l1.address && read.size_bytes == l1.size_bytes;
 }
 
-// A register read's word, from the .bin.
-uint32_t read_register_word(const capture::LoadedCapture& capture, const capture::ReadRecord& read) {
+// A register read, with its word from the .bin.
+RegisterRead make_register_read(const capture::LoadedCapture& capture, const capture::ReadRecord& read) {
     const std::span<const std::byte> bytes = capture.get_read_bytes(read);
     TT_FATAL(
         bytes.size() == sizeof(uint32_t),
@@ -74,74 +70,85 @@ uint32_t read_register_word(const capture::LoadedCapture& capture, const capture
         bytes.size());
     std::array<std::byte, sizeof(uint32_t)> word{};
     std::ranges::copy(bytes, word.begin());
-    return std::bit_cast<uint32_t>(word);
-}
-
-// The first of the router's reads that `matches`, or null. A router with no record entry has no reads.
-template <typename Matches>
-const capture::ReadRecord* find_read(const CapturedRouter& router, Matches matches) {
-    if (router.record == nullptr) {
-        return nullptr;
-    }
-    const auto read = std::ranges::find_if(router.record->reads, matches);
-    return read == router.record->reads.end() ? nullptr : &*read;
+    return RegisterRead{.read = &read, .word = std::bit_cast<uint32_t>(word)};
 }
 
 }  // namespace
 
-RouterSnapshot::RouterSnapshot(const CapturedRouter& router, const capture::LoadedCapture& capture) : router_(router) {
+RouterSnapshot::RouterSnapshot(
+    const CapturedRouter& router, const capture::LoadedCapture& capture, const manifest::EthCoreL1& l1) :
+    router_(router) {
     unread_reason_ = find_not_read_reason(router_);
     if (unread_reason_.has_value()) {
         return;
     }
-    // Capture read the core in ReadStep order, and stopped at the first read that failed.
-    bool read_l1 = false;
-    for (const capture::ReadRecord& read : router_.record->reads) {
-        if (read.error.has_value()) {
-            status_ = RouterReadStatus::PARTIAL;
-            unread_reason_ = Unread{.code = get_failed_read_code(read.step), .message = *read.error};
-            return;
-        }
-        switch (read.step) {
-            case capture::ReadStep::REGISTERS_BEFORE:
-                register_words_[read.address].before = read_register_word(capture, read);
-                break;
-            case capture::ReadStep::L1:
-                l1_bytes_ = capture.get_read_bytes(read);
-                read_l1 = true;
-                break;
-            case capture::ReadStep::REGISTERS_AFTER:
-                register_words_[read.address].after = read_register_word(capture, read);
-                break;
+
+    // The rounds' reads that worked, whatever the full read did. A failed round read has no bytes, and is a finding
+    // rather than a gap in the router's bytes.
+    for (const capture::RoundRecord& round : router_.record->rounds) {
+        for (const capture::ReadRecord& read : round.reads) {
+            if (!read.error.has_value()) {
+                round_reads_[read.address].push_back(
+                    RoundRead{.round = round.round, .read = &read, .bytes = capture.get_read_bytes(read)});
+            }
         }
     }
+
+    // The full read: the core registers, the whole L1, then each stream register. Capture stopped at its first read
+    // that failed.
+    for (const capture::ReadRecord& read : router_.record->reads) {
+        const bool l1_read = is_l1_read(read, l1);
+        if (read.error.has_value()) {
+            status_ = RouterReadStatus::PARTIAL;
+            unread_reason_ = Unread{
+                .code = l1_read ? UnreadCode::L1_READ_FAILED : UnreadCode::REGISTER_READ_FAILED,
+                .message = *read.error};
+            return;
+        }
+        if (l1_read) {
+            l1_read_ = &read;
+            l1_bytes_ = capture.get_read_bytes(read);
+            continue;
+        }
+        const bool first_read = register_reads_.emplace(read.address, make_register_read(capture, read)).second;
+        TT_FATAL(
+            first_read,
+            "Fabric decode: the capture record reads the register at {:#x} of {} twice in its full read",
+            read.address,
+            router_.path);
+    }
     TT_FATAL(
-        read_l1,
+        l1_read_ != nullptr,
         "Fabric decode: the capture record has no L1 read for {}, though none of its reads failed",
         router_.path);
     status_ = RouterReadStatus::COMPLETE;
 }
 
 const capture::ReadRecord* RouterSnapshot::find_failed_read() const {
-    return find_read(router_, [](const capture::ReadRecord& read) { return read.error.has_value(); });
+    if (router_.record == nullptr) {
+        return nullptr;
+    }
+    const auto read = std::ranges::find_if(
+        router_.record->reads, [](const capture::ReadRecord& read) { return read.error.has_value(); });
+    return read == router_.record->reads.end() ? nullptr : &*read;
 }
 
-const capture::ReadRecord* RouterSnapshot::find_l1_read() const {
-    return find_read(router_, [](const capture::ReadRecord& read) {
-        return read.step == capture::ReadStep::L1 && !read.error.has_value();
-    });
+std::optional<RegisterRead> RouterSnapshot::find_register_read(uint64_t address) const {
+    const auto read = register_reads_.find(address);
+    return read == register_reads_.end() ? std::nullopt : std::optional(read->second);
 }
 
-RegisterWords RouterSnapshot::find_register_words(uint64_t address) const {
-    const auto words = register_words_.find(address);
-    return words == register_words_.end() ? RegisterWords{} : words->second;
+std::span<const RoundRead> RouterSnapshot::find_round_reads(uint64_t address) const {
+    const auto reads = round_reads_.find(address);
+    return reads == round_reads_.end() ? std::span<const RoundRead>{} : std::span<const RoundRead>(reads->second);
 }
 
-std::vector<RouterSnapshot> make_router_snapshots(const RouterPairing& pairing, const capture::LoadedCapture& capture) {
+std::vector<RouterSnapshot> make_router_snapshots(
+    const RouterPairing& pairing, const capture::LoadedCapture& capture, const manifest::EthCoreL1& l1) {
     std::vector<RouterSnapshot> snapshots;
     snapshots.reserve(pairing.routers.size());
     for (const CapturedRouter& router : pairing.routers) {
-        snapshots.emplace_back(router, capture);
+        snapshots.emplace_back(router, capture, l1);
     }
     return snapshots;
 }
