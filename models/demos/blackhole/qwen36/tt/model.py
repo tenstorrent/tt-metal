@@ -3835,9 +3835,15 @@ class Qwen36Model:
         if gate is None or getattr(self, "_vfy_prepared_key", None) is None:
             return ()
         T = self._vfy_T
-        return tuple(
+        widths = tuple(
             b for b in gate.variant_buckets("verify", buckets) if b <= self._vfy_B and self._vfy_ksp_avail(b, T)
         )
+        # QWEN36_R16_MEGAKERNEL: a width the engine serves gets no split variant (the engine's SDPA is its own; a split
+        # variant would replay the op-by-op layer loop past the gate's context). QWEN36_R16_MK_KSP_KEEP=1 keeps them.
+        _mk1 = getattr(self, "_vfy_mk1", None)
+        if _mk1 is not None and _mk1.ready and os.environ.get("QWEN36_R16_MK_KSP_KEEP") != "1":
+            widths = tuple(b for b in widths if b not in _mk1.programs)
+        return widths
 
     def prepare_verify_ksp_variants(self, widths):
         """Warm the split verify variant of every width in ``widths`` (descending), after the buckets, before any capture."""

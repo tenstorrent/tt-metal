@@ -55,22 +55,31 @@ def kv_descriptors(model):
 
 
 def gdn_descriptors(model):
-    """Per GDN layer: the spec-verify state the engine's GDN phases read / write (the per-token state ring and the conv
-    window of prepare_spec_verify, rec_state / conv_states), plus the shared selectors (state_blk_idx / conv_sel)."""
+    """Per GDN layer: the spec-verify state the engine's GDN role reads / writes, keyed like the role's per-layer table
+    (gdn/u1/g2_role.py GdnRole.tl: win_a / win_b / ring / taps / dtb / nea / weight), i.e. exactly the tensors prod's
+    gdn_spec_step gets (gdn/tp.py _verify_fullbatch_fused): the window ping-pong pair _verify_win_pair (the kernels pick
+    the half by the ctrl parity), the per-token state ring _spec_ring (fp32 [T*B*Nv, Dk, Dv]), and the layer constants
+    conv_taps_rows / dt_bias_fp32 / neg_exp_A_fp32 / norm_w_1d. ctrl is ONE page for every layer, staged per replay
+    (per_replay 'ctrl'). Also the unfused path's selectors (state_blk_idx / conv_sel) and the durable rec_state /
+    conv_states (the prefill -> decode hand-off: seed_spec_state copies them into the ring / window before the loop)."""
     def addr(t):
         return t.buffer_address() if t is not None and hasattr(t, "buffer_address") else 0
 
     out = []
     sel = dict(state_idx_addr=addr(getattr(model, "_vfy_state_idx", None)),
-               conv_sel_addr=addr(getattr(model, "_vfy_conv_sel", None)),
-               ctrl_addr=addr(getattr(model, "_vfy_ctrl", None)))
+               conv_sel_addr=addr(getattr(model, "_vfy_conv_sel", None)))
     for i, l in enumerate(model.layers):
-        if not l.is_full_attention:
-            a = l.attention
-            win = getattr(a, "_verify_win_buf", None)
-            out.append(dict(layer=i, ring=getattr(a, "_spec_ring", None), ring_addr=addr(getattr(a, "_spec_ring", None)),
-                            win_addr=addr(win), rec_state_addr=addr(getattr(a, "rec_state", None)),
-                            conv_addrs=[addr(c) for c in (getattr(a, "conv_states", None) or ())], **sel))
+        if l.is_full_attention:
+            continue
+        a = l.attention
+        tw = getattr(a, "tw", {}) or {}
+        pair = getattr(a, "_verify_win_pair", None) or (getattr(a, "_verify_win_buf", None), None)
+        t = dict(win_a=pair[0], win_b=pair[1], ring=getattr(a, "_spec_ring", None), taps=tw.get("conv_taps_rows"),
+                 dtb=tw.get("dt_bias_fp32"), nea=tw.get("neg_exp_A_fp32"), weight=tw.get("norm_w_1d"),
+                 rec_state=getattr(a, "rec_state", None))
+        out.append(dict(layer=i, tensors=t, addrs={k: addr(v) for k, v in t.items()},
+                        fused=bool(getattr(a, "_spec_fused", False)), win_par=int(getattr(a, "_spec_win_par", 0)),
+                        conv_addrs=[addr(c) for c in (getattr(a, "conv_states", None) or ())], **sel))
     return out
 
 

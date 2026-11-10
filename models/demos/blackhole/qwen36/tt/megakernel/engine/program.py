@@ -1160,8 +1160,6 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
 
     Builds the engine once (setup_bench on the mesh, engine_env), plus two integration arg blocks over the engine grid:
       'attn': [page_table addr, B, nb, n_attn_layers, (k addr, v addr) per attention layer, block_size, n_kv_heads]
-      'gdn' : [state_blk_idx addr, conv_sel addr, n_gdn_layers, weight-kind base addrs (mlp, qkv, wo, gdn_in, gdn_out,
-               gamma)]
     The per-replay in-trace tensors (kvpos, ctrl, cos, sin, page-table slices): the 'replay' arg block, rewritten by a
     one-core writer op right before the engine op in every replay (their addresses are fixed per capture). x_in / x_out: the stand-in engine runs on its own x; x_out is left to the caller."""
     from models.demos.blackhole.qwen36.tt.megakernel.engine import argblock as AB
@@ -1182,10 +1180,9 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     blocks.add("attn", full, [{(c.x, c.y): [kv0.get("pt_addr", 0), kv0.get("pt_B", 0), kv0.get("pt_nb", 0),
                                             len(kv_desc or ())] + attn + [kv0.get("block_size", 0), kv0.get("n_kv_heads", 0)]
                                for c in AB._cores(full)}])
-    wb = [(weights or {}).get(k, {}).get("tensor") for k in ("mlp", "qkv", "wo", "gdn_in", "gdn_out", "gamma")]
-    g0 = (gdn_desc or [{}])[0]
-    blocks.add("gdn", full, [{(c.x, c.y): [g0.get("state_idx_addr", 0), g0.get("conv_sel_addr", 0), len(gdn_desc or ())]
-                               + [t.buffer_address() if t is not None else 0 for t in wb] for c in AB._cores(full)}])
+    # kind 3 ('gdn') is the GDN role's own block (gdn/u1/g2_role.py); the model's GDN state goes into the role's per-layer
+    # table (gdn_desc[i]['tensors'], keyed like GdnRole.tl) when the role adopts it, not into a second block here.
+    wb = {k: ((weights or {}).get(k) or {}).get("tensor") for k in ("mlp", "qkv", "wo", "gdn_in", "gdn_out", "gamma")}
     blocks.add("replay", full, [{}], min_payload=len(PER_REPLAY_ARGS))
     descs = {}
     for r in range(mesh.shape[0]):
@@ -1194,7 +1191,8 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
             descs[(r, c_)] = per_dev(co) if per_dev else S["prog"]
             AB.check_cb_ids(descs[(r, c_)])
     info = dict(env=env, nl=int(env["FM_NL"]), nu=int(env["MKA_NU"]), n_io=len(io0), per_device=per_dev is not None,
-                common_args=blocks.common_args())
+                common_args=blocks.common_args(), n_gdn=len(gdn_desc or ()), n_attn=len(kv_desc or ()),
+                weights={k: (t.buffer_address() if t is not None else 0) for k, t in wb.items()})
 
     def program(x_in, x_out, per_replay):
         """Inside the trace: (1) the 'replay' block := this replay's in-trace tensor addresses (one-core writer op),
