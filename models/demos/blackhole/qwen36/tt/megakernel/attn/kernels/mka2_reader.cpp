@@ -491,7 +491,7 @@ void kernel_main() {
         if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = L + 1;
-            if (vk > 0) { v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]); }
+            v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows above (NOC1)
             noc_semaphore_wait_min(vw(vg[VG_LB]), L + 1);
             cb_pop_front(CB_VA, V_NTM);
             if (vk < vnn) {

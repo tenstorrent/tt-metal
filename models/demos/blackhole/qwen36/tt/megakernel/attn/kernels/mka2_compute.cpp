@@ -483,7 +483,7 @@ void kernel_main() {
                     for (uint32_t kk = 0; kk < V_KTR; ++kk) V_MM(CB_XK, CB_WV, kk, half * V_KTR * vnn + kk * vnn, 0, vnn, 1, V_KTR);
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t j = 0; j < vnn; ++j) pack_tile<true>(j, CB_VA, half * V_NNM + j);
+                    for (uint32_t j = 0; j < vnn; ++j) pack_tile<true>(j, CB_VA, 2 * j + half);   // item-major: (gate j, up j)
                     if (own_h) pack_tile<true>(vk, CB_VOWN, half);
                     tile_regs_release();
                 }
