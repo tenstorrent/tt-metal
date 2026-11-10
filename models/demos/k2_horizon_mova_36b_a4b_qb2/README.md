@@ -29,9 +29,8 @@ almost everywhere, chosen on 100-token teacher forcing) reached 85.2% there and 
 
 ## Requirements
 
-- tt-metal `main`. This PR also carries two small shared fixes found during the bring-up:
-  - `ttnn.full_like` / `zeros_like` fill BFLOAT4_B tensors on device, so a BFP4 fill stays traceable.
-  - `models/common/sampling`: the top-K logprob path runs on 4-device meshes.
+- tt-metal `main` with the `models/common/sampling` change from the same PR: the top-K logprob path runs on 4-device
+  meshes.
 - vllm-tt-plugin `main` with vLLM 0.30.
 
 ## Serving
