@@ -289,12 +289,9 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongColumnsNoHostSync) {
     TestChainedRingShifts(1, 8192, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/11);
 }
 
-// The intra-mesh sockets ring_shift uses have an 80 MiB FIFO per receiver (fifo_size in
-// core/distributed/socket_manager.cpp). A 45056 x 1024 bf16 shard is 88 MiB per device, so each shift is a single
-// transfer larger than the FIFO (22528 blocks of 4096 B against 20480): within one send/recv op the FIFO wraps and
-// the sender is flow-controlled by its receiver's credits (bytes_acked), with the next shift queued behind it and
-// no host sync in between. These cases depend on that constant: raising fifo_size above 88 MiB would make them
-// stop exceeding the FIFO. 3 shifts, so the data ends 3 hops away.
+// A 45056 x 1024 bf16 shard is 88 MiB per device: larger than the 80 MiB socket FIFO these shifts used to stream
+// through, and far larger than the handshake FIFO of the direct sockets they use now. 3 shifts with no host sync in
+// between, so the data ends 3 hops away.
 TEST_F(GalaxyRingShiftTest, ChainedShiftsLargerThanSocketFifoAlongRows) {
     TestChainedRingShifts(
         1, 8 * 45056, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
