@@ -30,6 +30,10 @@ struct SDPAProgramConfig {
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
     bool streaming_fp32_dest = false;
+    // Ring joint only: also run SDPA on the cores (x .. grid.x - 1, grid.y) of the CCL row below the SDPA grid that the
+    // fused all-gather does not use (it takes num_links * 2 cores from ccl_core_grid_offset); e.g. 12 x 9 + 8 = 116
+    // cores. Only the core a (head, Q chunk) unit runs on changes: outputs are byte-identical. Unset: unchanged.
+    std::optional<uint32_t> ccl_row_sdpa_start_x = std::nullopt;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

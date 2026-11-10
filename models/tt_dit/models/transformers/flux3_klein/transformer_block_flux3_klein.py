@@ -21,22 +21,36 @@ HEADS = 24
 HEAD_DIM = 128
 MLP_RATIO = 3
 SDPA_Q_CHUNK_MAX = 128
+# Ring SDPA (q, k) chunks by per-device rows (SP8 x TP4): q fills whole rounds of (head, q chunk) units on the SDPA
+# grid, k divides the shard. Rows not listed keep the shared rule (q clamped to SDPA_Q_CHUNK_MAX).
 RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
+    # 2048x2048: 6 heads x 16 q chunks = 96 units, one round
     2560: (160, 512),
+    # 2048x2048 + 1 reference: 96 units, one round
     3072: (192, 512),
+    # 2048x2048 + 1 reference, 1024-row text bucket: 102 units, one round
     2688: (160, 512),
+    # 4096x4096, 1024-row text bucket: k 640 divides the shard
     8320: (128, 640),
+    # 2048x2048 + 1 reference, 2048-row text bucket: 108 units, one round
     2816: (160, 512),
+    # 4096x4096 + 1 reference, 2048-row text bucket: k 640 divides the shard
     8960: (128, 640),
 }
 
+# Streaming path on the 116-core grid (12 x 9 + the CCL row's 8 free cores): 2 rounds of q 224 at the 4096 rows,
+# 3 rounds of q 160 at 4096 + 1 reference (2048-row text bucket).
 RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
-    8320: (160, 640),
-    8960: (256, 512),
+    8192: (224, 512),
+    8320: (224, 512),
+    8960: (160, 512),
 }
+# SDPA also runs on the CCL row's cores from this x (the all-gather keeps x < 4 with 2 links)
+RING_SDPA_CCL_ROW_START_X = 4
 
 
 class Flux3KleinAttention(Attention):
+    # ring SDPA on the streaming compute path with fp32 dest (bf16 score block); False: the compute_common.hpp path
     ring_sdpa_streaming_fp32_dest = True
 
     def forward(self, *, sequence_1: ttnn.Tensor, **kwargs):
@@ -61,6 +75,7 @@ class Flux3KleinAttention(Attention):
                 )
             config = self.ring_sdpa_program_config[key]
         config.streaming_fp32_dest = self.ring_sdpa_streaming_fp32_dest
+        config.ccl_row_sdpa_start_x = RING_SDPA_CCL_ROW_START_X if self.ring_sdpa_streaming_fp32_dest else None
         return config
 
 

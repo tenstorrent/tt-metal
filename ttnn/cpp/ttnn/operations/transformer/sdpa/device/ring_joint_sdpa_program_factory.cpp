@@ -538,6 +538,30 @@ RingJointRuntimePlan build_runtime_plan(
     return plan;
 }
 
+// SDPAProgramConfig::ccl_row_sdpa_start_x = X0 adds the cores (X0 .. grid.x-1, grid.y) below the SDPA rectangle -- the
+// CCL row's cores that the fused all-gather does not use -- so the SDPA grid becomes non-rectangular (e.g. 12x9 + 8 =
+// 116 cores). Unset (default): unchanged. Part of the program hash through program_config.
+std::optional<uint32_t> extra_row_x0(const ttnn::prim::RingJointSDPAParams& args) {
+    return args.program_config.has_value() ? args.program_config->ccl_row_sdpa_start_x : std::nullopt;
+}
+
+// The SDPA cores in work order: the grid rectangle row-major, then the extra row (if any). Work unit i -> cores[i].
+std::vector<CoreCoord> ring_joint_logical_cores(const CoreCoord& grid_size, std::optional<uint32_t> x0_opt) {
+    std::vector<CoreCoord> cores;
+    cores.reserve(grid_size.x * (grid_size.y + 1));
+    for (uint32_t y = 0; y < grid_size.y; ++y) {
+        for (uint32_t x = 0; x < grid_size.x; ++x) {
+            cores.push_back(CoreCoord{x, y});
+        }
+    }
+    if (const auto x0 = x0_opt) {
+        for (uint32_t x = *x0; x < grid_size.x; ++x) {
+            cores.push_back(CoreCoord{x, grid_size.y});
+        }
+    }
+    return cores;
+}
+
 RingJointRuntimeArgLayout get_runtime_arg_layout(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
     const auto& k_shape = tensor_args.gathered_k.logical_shape();
@@ -701,7 +725,8 @@ void apply_ring_joint_scalar_runtime_args(
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingWorkMasks& ring_work_masks = runtime_plan.ring_work_plan.masks;
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
-    const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
+    const std::vector<CoreCoord> sdpa_cores = ring_joint_logical_cores(layout.grid_size, extra_row_x0(args));
+    const uint32_t num_cores = static_cast<uint32_t>(sdpa_cores.size());
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
 
     // Gather inputs (K, plus V when it isn't the latent-V alias of K). Shared by the indexed-slot
@@ -903,7 +928,9 @@ void apply_ring_joint_scalar_runtime_args(
     const auto validate_grid = [&](const auto& grid_args) {
         TT_FATAL(grid_args.size() >= layout.grid_size.x, "RingJoint runtime argument grid is missing columns");
         for (uint32_t x = 0; x < layout.grid_size.x; ++x) {
-            TT_FATAL(grid_args[x].size() >= layout.grid_size.y, "RingJoint runtime argument grid is missing rows");
+            TT_FATAL(
+                grid_args[x].size() >= layout.grid_size.y + (extra_row_x0(args).has_value() ? 1u : 0u),
+                "RingJoint runtime argument grid is missing rows");
         }
     };
     validate_grid(compute_grid_args);
@@ -940,7 +967,7 @@ void apply_ring_joint_scalar_runtime_args(
         runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
         ring_work_masks.active_ring_iter_mask};
     for (uint32_t i = 0; i < num_cores; ++i) {
-        const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
+        const CoreCoord core = sdpa_cores[i];
 
         // Patch EVERY core, exactly as the create-time build sets these scalars on all cores
         // unconditionally. A core with no Q chunks (global_q_start == global_q_end) is NOT dead: in the
@@ -1162,7 +1189,8 @@ struct McastCandidate {
 
 // Row-wide multicast eligibility of the query-head chains (all-or-nothing): nullopt when any multi-core chain
 // spans rows, has a non-chain core inside its rectangle, or mixes q_chunk_counts.
-std::optional<std::vector<McastCandidate>> head_chain_mcast_candidates(const RingJointQWorkPlan& plan) {
+std::optional<std::vector<McastCandidate>> head_chain_mcast_candidates(
+    const RingJointQWorkPlan& plan, uint32_t mcast_core_count) {
     const auto& core_work = plan.core_work;
     const auto& head_chain_configs = plan.head_chain_configs;
     const uint32_t num_cores = core_work.size();
@@ -1190,6 +1218,15 @@ std::optional<std::vector<McastCandidate>> head_chain_mcast_candidates(const Rin
 
         if (chain_core_indices.size() < 2) {
             continue;
+        }
+
+        // ccl_row_sdpa_start_x: a chain touching the partial row is not multicast-eligible
+        // (a row multicast rectangle there could include the all-gather's CCL cores).
+        if (std::any_of(chain_core_indices.begin(), chain_core_indices.end(), [&](uint32_t ci) {
+                return ci >= mcast_core_count;
+            })) {
+            log_debug(tt::LogOp, "Head {}: mcast ineligible - chain touches the extra row", head_id);
+            return std::nullopt;
         }
 
         // Eligibility condition 1: All physical cores share the same Y coordinate
@@ -1349,7 +1386,8 @@ RingJointQWorkPlan build_q_work_plan(
     bool enable_kv_chains,
     bool use_head_chain,
     bool build_kv_chains,
-    HeadMcastPolicy mcast_policy) {
+    HeadMcastPolicy mcast_policy,
+    uint32_t mcast_core_count) {
     const uint32_t num_cores = physical_cores.size();
     RingJointQWorkPlan plan;
     plan.core_work.resize(num_cores);
@@ -1396,7 +1434,7 @@ RingJointQWorkPlan build_q_work_plan(
             build_linear_chain(chain_segs, head_id, plan.head_chain_configs, plan.core_work);
         }
 
-        const auto candidates = head_chain_mcast_candidates(plan);
+        const auto candidates = head_chain_mcast_candidates(plan, mcast_core_count);
         plan.head_mcast_eligible = candidates.has_value() && !candidates->empty();
         const bool apply_mcast = mcast_policy == HeadMcastPolicy::IfEligible && plan.head_mcast_eligible;
         if (apply_mcast) {
@@ -1412,11 +1450,11 @@ RingJointQWorkPlan build_q_work_plan(
     return plan;
 }
 
-std::vector<CoreCoord> sdpa_physical_cores(MeshDevice* device, CoreCoord grid_size) {
+std::vector<CoreCoord> sdpa_physical_cores(MeshDevice* device, const std::vector<CoreCoord>& logical_cores) {
     std::vector<CoreCoord> cores;
-    cores.reserve(grid_size.x * grid_size.y);
-    for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
-        cores.push_back(device->worker_core_from_logical_core(CoreCoord{i % grid_size.x, i / grid_size.x}));
+    cores.reserve(logical_cores.size());
+    for (const auto& core : logical_cores) {
+        cores.push_back(device->worker_core_from_logical_core(core));
     }
     return cores;
 }
@@ -1773,8 +1811,28 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    const std::vector<CoreCoord> sdpa_cores = ring_joint_logical_cores(grid_size, extra_row_x0(args));
     CoreRangeSet core_grid_set(core_grid);
-    uint32_t num_cores = grid_size.x * grid_size.y;
+    if (const auto x0 = extra_row_x0(args)) {
+        const CoreCoord device_grid = mesh_device->compute_with_storage_grid_size();
+        const uint32_t ccl_reserved = args.all_gather_operation_attributes.num_links * 2;
+        TT_FATAL(
+            *x0 < grid_size.x && grid_size.y < device_grid.y,
+            "ccl_row_sdpa_start_x={}: the extra row {} must lie inside the device grid {}",
+            *x0,
+            grid_size.y,
+            device_grid);
+        TT_FATAL(
+            args.ccl_core_grid_offset.y == grid_size.y && *x0 >= args.ccl_core_grid_offset.x + ccl_reserved,
+            "ccl_row_sdpa_start_x={}: the extra row must be the CCL row and start after its {} all-gather cores at {}",
+            *x0,
+            ccl_reserved,
+            args.ccl_core_grid_offset);
+        core_grid_set = CoreRangeSet(
+            std::vector<CoreRange>{core_grid, CoreRange({*x0, grid_size.y}, {grid_size.x - 1, grid_size.y})});
+        log_debug(tt::LogOp, "ccl_row_sdpa_start_x={}: SDPA on {} cores", *x0, sdpa_cores.size());
+    }
+    uint32_t num_cores = static_cast<uint32_t>(sdpa_cores.size());
 
     // Init fused op signaler — descriptor-pattern equivalent of
     // RingSDPAFusedOpSignaler::init_fused_op. The signaler stores the receiver-cores
@@ -2668,7 +2726,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Per-core Q work split and the per-head store-and-forward chains (build_q_work_plan). The reader's multicast
     // flag is compile-time, so dynamic_local_n keeps the chains unicast at every length it serves.
-    const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(device, grid_size);
+    const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(device, sdpa_cores);
     const HeadMcastPolicy head_mcast_policy = dynamic_local_n ? HeadMcastPolicy::Never : HeadMcastPolicy::IfEligible;
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
     RingJointQWorkPlan q_work_plan;
@@ -2687,7 +2745,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             enable_kv_chains,
             use_head_chain,
             build_kv_chains,
-            head_mcast_policy);
+            head_mcast_policy,
+            grid_size.x * grid_size.y);
     }
     auto& core_work = q_work_plan.core_work;
     auto& head_chain_configs = q_work_plan.head_chain_configs;  // MHA K/V or separate-V V
@@ -2708,6 +2767,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
         return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
     };
+    TT_FATAL(
+        !extra_row_x0(args).has_value() || (ksplit_count == 1 && !gqa_grouped_kv && !k_uses_batch_chain),
+        "ccl_row_sdpa_start_x supports neither K split nor the row-wide (GQA / shared-K) multicast paths");
     for (uint32_t i = 0; ksplit_count > 1 && i < num_cores; ++i) {
         const uint32_t x = i % grid_size.x;
         const uint32_t y = i / grid_size.x;
@@ -3412,7 +3474,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        CoreCoord core = sdpa_cores[i];
 
         // Prefer the computed even distribution above for chain construction
         const auto& work = core_work.at(i);
@@ -3949,7 +4011,8 @@ void apply_dynamic_local_n_runtime_args(
     }
 
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
-    const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
+    const std::vector<CoreCoord> sdpa_cores = ring_joint_logical_cores(layout.grid_size, extra_row_x0(args));
+    const uint32_t num_cores = static_cast<uint32_t>(sdpa_cores.size());
     const uint32_t B = tensor_args.input_q.logical_shape()[0];
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const uint32_t NHK = tensor_args.gathered_k.logical_shape()[1];
@@ -3965,7 +4028,7 @@ void apply_dynamic_local_n_runtime_args(
         "dynamic_local_n cannot serve a new length through the shared-K batch chain (one K head per chip)");
     const uint32_t Sq_chunk_t = args.get_q_chunk_size() / tt::constants::TILE_HEIGHT;
     const uint32_t num_q_chunks = tt::div_up(n_local_tiles, Sq_chunk_t);  // no joint chunks on this path
-    const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(tensor_args.input_q.device(), layout.grid_size);
+    const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(tensor_args.input_q.device(), sdpa_cores);
     const RingJointQWorkPlan plan = build_q_work_plan(
         physical_cores,
         B,
@@ -3975,7 +4038,8 @@ void apply_dynamic_local_n_runtime_args(
         enable_kv_chains,
         use_head_chain,
         build_kv_chains,
-        HeadMcastPolicy::Never);  // the reader was compiled unicast
+        HeadMcastPolicy::Never,  // the reader was compiled unicast
+        layout.grid_size.x * layout.grid_size.y);
     TT_FATAL(!plan.head_mcast_enabled, "dynamic_local_n rebuilt a multicast head chain for a reader compiled unicast");
 
     auto& reader_grid_args = GetRuntimeArgs(program, kReaderKernelIndex);
@@ -3987,7 +4051,7 @@ void apply_dynamic_local_n_runtime_args(
     const uint32_t compute_static_mcast_q_count = layout.compute_active_ring_iter_mask + 1;
     std::vector<uint32_t> chain_args;
     for (uint32_t i = 0; i < num_cores; ++i) {
-        const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
+        const CoreCoord core = sdpa_cores[i];
         const auto& work = plan.core_work[i];
         const uint32_t global_q_end = work.global_q_start + work.global_q_count;
 
