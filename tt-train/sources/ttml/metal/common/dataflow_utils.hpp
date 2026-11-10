@@ -704,6 +704,9 @@ inline void mcast_sender_signal_receivers_loopback(
  *
  * Semaphore `sem_id` counts the tiles the other peers delivered, so round `round` (counted from 0) is complete at
  * (round + 1) * (num_peers - 1). Call all_gather_tile_finish after the last round.
+ *
+ * With `in_one_column`, the peers are one column of the NOC in slice order, from peer 0 to peer num_peers - 1, so the
+ * tile and the semaphore increments each go out as one multicast instead of one write per peer.
  */
 template <uint32_t num_peers>
 inline void all_gather_tile(
@@ -713,22 +716,44 @@ inline void all_gather_tile(
     const uint32_t (&peer_noc_x)[num_peers],
     const uint32_t (&peer_noc_y)[num_peers],
     const uint32_t sem_id,
-    const uint32_t round) {
+    const uint32_t round,
+    const bool in_one_column) {
     const uint32_t tile_bytes = get_tile_size(cb_gathered);
     const uint32_t sem_addr = get_semaphore(sem_id);
     cb_wait_front(cb_local, onetile);
     cb_reserve_back(cb_gathered, 2U * num_peers);
     const uint32_t src_addr = get_read_ptr(cb_local);
     const uint32_t dst_addr = get_write_ptr(cb_gathered) + slot * tile_bytes;
-    for (uint32_t peer = 0; peer < num_peers; ++peer) {
-        noc_async_write(src_addr, get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], dst_addr), tile_bytes);
+    // NOC 1 runs the other way, so its multicast rectangle starts at the far corner.
+    const uint32_t first = noc_index == 0U ? 0U : num_peers - 1U;
+    const uint32_t last = num_peers - 1U - first;
+    if (in_one_column) {
+        noc_async_write_multicast_loopback_src(
+            src_addr,
+            get_noc_multicast_addr(
+                peer_noc_x[first], peer_noc_y[first], peer_noc_x[last], peer_noc_y[last], dst_addr),
+            tile_bytes,
+            num_peers);
+    } else {
+        for (uint32_t peer = 0; peer < num_peers; ++peer) {
+            noc_async_write(src_addr, get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], dst_addr), tile_bytes);
+        }
     }
     // The tile must land before the semaphore increment that announces it.
     noc_async_write_barrier();
     cb_pop_front(cb_local, onetile);
-    for (uint32_t peer = 0; peer < num_peers; ++peer) {
-        if (peer != slot) {
-            noc_semaphore_inc(get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], sem_addr), 1U);
+    if (in_one_column) {
+        // Without loopback, so this core's own counter is left out.
+        noc_semaphore_inc_multicast(
+            get_noc_multicast_addr(
+                peer_noc_x[first], peer_noc_y[first], peer_noc_x[last], peer_noc_y[last], sem_addr),
+            1U,
+            num_peers - 1U);
+    } else {
+        for (uint32_t peer = 0; peer < num_peers; ++peer) {
+            if (peer != slot) {
+                noc_semaphore_inc(get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], sem_addr), 1U);
+            }
         }
     }
     noc_semaphore_wait_min(get_sem_ptr(sem_id), (round + 1U) * (num_peers - 1U));

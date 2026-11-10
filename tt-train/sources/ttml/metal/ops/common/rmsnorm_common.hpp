@@ -206,21 +206,38 @@ inline void for_each_row_slice_core(const RowSlicePlan& plan, Fn&& fn) {
     });
 }
 
-// The writer's exchange arguments: the core's slice, then the NOC x and y of each core of its row-group in slice
-// order. Empty without slicing.
+// Whether the cores of a row-group are all in one column of the logical grid, which they are unless the group wraps
+// from the bottom of one column to the top of the next.
+inline bool row_group_in_one_column(const RowSlicePlan& plan, const uint32_t group) {
+    const uint32_t first = group * plan.num_slices;
+    const uint32_t last = first + plan.num_slices - 1U;
+    return first / plan.num_cores_y == last / plan.num_cores_y;
+}
+
+// The writer's exchange arguments: the core's slice, whether its row-group's cores are one column of consecutive NOC
+// coordinates (so the exchange can multicast), then the NOC x and y of each core of the row-group in slice order. Empty
+// without slicing.
 inline std::vector<uint32_t> row_slice_exchange_args(
     const RowSlicePlan& plan, const RowSliceWork& work, const tt::tt_metal::IDevice& device) {
     if (plan.num_slices == 1U) {
         return {};
     }
-    std::vector<uint32_t> args{work.slice};
-    args.reserve(1U + 2U * plan.num_slices);
+    std::vector<uint32_t> args{work.slice, 0U};
+    args.reserve(2U + 2U * plan.num_slices);
+    bool in_one_column = row_group_in_one_column(plan, work.group);
+    tt::tt_metal::CoreCoord first_noc;
     for (uint32_t slice = 0; slice < plan.num_slices; ++slice) {
         const uint32_t peer = work.group * plan.num_slices + slice;
         const auto noc = device.worker_core_from_logical_core({peer / plan.num_cores_y, peer % plan.num_cores_y});
+        if (slice == 0U) {
+            first_noc = noc;
+        }
+        // The multicast covers the rectangle from the first core to the last, so it must be exactly these cores.
+        in_one_column = in_one_column && noc.x == first_noc.x && noc.y == first_noc.y + slice;
         args.push_back(noc.x);
         args.push_back(noc.y);
     }
+    args[1] = in_one_column ? 1U : 0U;
     return args;
 }
 

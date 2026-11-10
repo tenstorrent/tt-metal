@@ -374,7 +374,7 @@ tt::tt_metal::ProgramDescriptor RMSNormBackwardProgramFactory::create_descriptor
              work.num_rows,
              work.start_row,
              work.slice * St});
-        // Writer kernel: (da_addr, dgamma_addr, dgate_addr, num_rows, offset, [slice, peer NOC x/y...])
+        // Writer kernel: (da_addr, dgamma_addr, dgate_addr, num_rows, offset, [slice, in_one_column, peer NOC x/y...])
         tt::tt_metal::KernelDescriptor::RTArgList writer_args;
         writer_args.push_back(buffers.da);
         writer_args.push_back(buffers.dgamma_components);

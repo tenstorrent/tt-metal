@@ -9,7 +9,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,6 +26,7 @@ using ttml::metal::ops::rmsnorm::kMaxRowSlices;
 using ttml::metal::ops::rmsnorm::plan_row_slices;
 using ttml::metal::ops::rmsnorm::row_slice_cores;
 using ttml::metal::ops::rmsnorm::RowSlicePlan;
+using ttml::metal::ops::rmsnorm::row_group_in_one_column;
 using ttml::metal::ops::rmsnorm::RowSliceWork;
 
 const CoreCoord kGrid8x8{8U, 8U};
@@ -304,6 +307,47 @@ TEST(RMSNormPlannerTest, CoreRangesMatchTheWalk) {
             EXPECT_EQ(cores.core_group_1.num_cores(), num_cores_1);
             EXPECT_EQ(cores.core_group_2.num_cores(), num_cores_2);
             EXPECT_EQ(next_row, total_rows);
+        }
+    }
+}
+
+// A row-group stays in one column of 10 cores, so its exchange can multicast, unless it wraps into the next column.
+TEST(RMSNormPlannerTest, RowGroupsInOneColumn) {
+    const auto groups_in_one_column = [](const uint32_t num_slices, const uint32_t num_groups) {
+        const RowSlicePlan p{.num_slices = num_slices, .num_cores_y = 10U};
+        std::vector<bool> in_one_column;
+        for (uint32_t group = 0; group < num_groups; ++group) {
+            in_one_column.push_back(row_group_in_one_column(p, group));
+        }
+        return in_one_column;
+    };
+    // Slice counts that divide the column height never wrap.
+    for (const uint32_t num_slices : {1U, 2U, 5U, 10U}) {
+        EXPECT_EQ(groups_in_one_column(num_slices, 130U / num_slices), std::vector<bool>(130U / num_slices, true))
+            << num_slices << " slices";
+    }
+    // 4 slices: groups 2 (cores 8-11) and 7 (cores 28-31) wrap.
+    const std::vector<bool> four_slices = {true, true, false, true, true, true, true, false, true, true};
+    EXPECT_EQ(groups_in_one_column(4U, 10U), four_slices);
+    // 16 slices are taller than the column.
+    EXPECT_EQ(groups_in_one_column(16U, 8U), std::vector<bool>(8U, false));
+}
+
+// row_group_in_one_column() agrees with the cores for_each_row_slice_core() gives each row-group.
+TEST(RMSNormPlannerTest, RowGroupInOneColumnMatchesTheWalk) {
+    const std::vector<std::pair<uint32_t, uint32_t>> shapes = {{32U, 160U}, {128U, 160U}, {37U, 77U}, {1U, 512U}};
+    for (const auto& grid : kGrids) {
+        for (const auto& [total_rows, Wt] : shapes) {
+            SCOPED_TRACE(describe(grid, total_rows, Wt));
+            const auto p = plan(grid, total_rows, Wt);
+            std::map<uint32_t, std::vector<CoreCoord>> group_cores;
+            for_each_row_slice_core(
+                p, [&](const RowSliceWork& work) { group_cores[work.group].push_back(work.core); });
+            for (const auto& [group, cores] : group_cores) {
+                const bool same_x = std::all_of(
+                    cores.begin(), cores.end(), [&](const CoreCoord& core) { return core.x == cores.front().x; });
+                EXPECT_EQ(row_group_in_one_column(p, group), same_x) << "group " << group;
+            }
         }
     }
 }

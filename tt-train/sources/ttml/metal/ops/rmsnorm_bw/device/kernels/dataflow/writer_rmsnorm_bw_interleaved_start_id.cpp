@@ -54,12 +54,15 @@ void kernel_main() {
     uint32_t dgate_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
-    // With slicing: this core's slice, then the NOC coordinates of the cores of its row-group in slice order.
+    // With slicing: this core's slice, whether its row-group is one NOC column it can multicast to, then the NOC
+    // coordinates of the cores of its row-group in slice order.
     uint32_t slice = 0U;
+    bool in_one_column = false;
     uint32_t peer_noc_x[num_slices];
     uint32_t peer_noc_y[num_slices];
     if constexpr (sliced) {
         slice = get_arg_val<uint32_t>(runtime_args_counter++);
+        in_one_column = get_arg_val<uint32_t>(runtime_args_counter++) != 0U;
         for (uint32_t peer = 0; peer < num_slices; ++peer) {
             peer_noc_x[peer] = get_arg_val<uint32_t>(runtime_args_counter++);
             peer_noc_y[peer] = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -85,7 +88,8 @@ void kernel_main() {
                 peer_noc_x,
                 peer_noc_y,
                 partials_sem_id,
-                r - start_row);
+                r - start_row,
+                in_one_column);
         }
         // Write dL_dgate (GATED), dL_da and dL_dgamma_components (COMPUTE_DGAMMA) in blocks. Compute produces the
         // whole row's dL_dgate before the row's first dL_da, so dL_dgate is drained first; dL_da and

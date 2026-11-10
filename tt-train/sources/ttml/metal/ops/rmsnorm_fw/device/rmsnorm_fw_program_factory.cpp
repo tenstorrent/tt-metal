@@ -343,7 +343,7 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
         reader.emplace_runtime_args(
             work.core,
             {buffers.input, buffers.gamma, buffers.gate, work.num_rows, work.start_row, work.slice * St});
-        // Writer kernel: (dst_addr, dst_rms_addr, number_of_rows, offset_in_rows, [slice, peer NOC x/y...])
+        // Writer kernel: (dst_addr, dst_rms_addr, num_rows, offset_in_rows, [slice, in_one_column, peer NOC x/y...])
         tt::tt_metal::KernelDescriptor::RTArgList writer_args;
         writer_args.push_back(buffers.output);
         writer_args.push_back(buffers.rms);
