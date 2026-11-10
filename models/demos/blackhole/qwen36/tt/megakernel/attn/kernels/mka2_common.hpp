@@ -51,6 +51,36 @@ FORCE_INLINE uint32_t kv_page(uint32_t user, uint32_t blk, uint32_t bpu, bool /*
 #else
 FORCE_INLINE uint32_t kv_page(uint32_t user, uint32_t blk, uint32_t nbk, bool v) { return ((user * nbk + blk) * 2 + (v ? 1 : 0)) * 8; }
 #endif   // full-grid multicast rectangles (left block, right block rows 0-7, right block rows 8-9 minus AR corner)   // ATTN scratch range 24-31 (spec)
+// MKA_KVA (stream E, spec v0.9.16): paged KV append of all users' T rows into the prod paged_k / paged_v (BFP8) on the
+// 16 owners: owner (10, c) appends K dim tile c, (11, c) V dim tile c. The source bf16 tile (k head CB_XO tile c / qkv
+// tile 56 + c) is written into CB_KVS by its producer; compute packs it to BFP8 (CB_KVB page 0: the packer conversion of
+// paged_update_cache). BFP8 rows are independent (one exponent per 16-datum face row), so the writer splices each row
+// (2 exponent bytes + 2 x 16 mantissa bytes) into the target tiles prefetched into CB_KVB pages 1.. and writes them back.
+// Defines (engine/program.py): MKA_KVA_NU users, MKA_KVA_T rows per user, MKA_KVA_NB page-table width, MKA_KVA_POS /
+// MKA_KVA_PT kvpos (int32 [NU*T]) / page table (int32 [NU, NB]) DRAM addresses, MKA_KVA_PTS page-table stick bytes,
+// MKA_KVA_GS {done, src, addr} global semaphores, MKA_KVA_KXY / VXY append-core NoC xy (x | y << 8), MKA_KVA_WXY /
+// MKA_KVA_NW waiters of KVA_DONE (the Q root first, then the readers of each own user's last 2 KV blocks).
+#if defined(MKA_KVA)
+#if !defined(MKA_KVPROD) || !defined(MKA_RQNR)
+#error "MKA_KVA needs MKA_KVPROD (prod paged caches) and MKA_RQNR (the k head output)"
+#endif
+constexpr uint32_t CB_KVS = 6, CB_KVB = 8;   // owners only (both ids are STREAM-rect-only otherwise)
+constexpr uint32_t KVA_NU = MKA_KVA_NU, KVA_T = MKA_KVA_T, KVA_R = KVA_NU * KVA_T, KVA_NP = 1 + MKA_KVA_PPU * KVA_NU;   // PPU: target tiles per user (verify: 2)
+constexpr uint32_t KVA_GS_DONE = MKA_KVA_GS_DONE, KVA_GS_SRC = MKA_KVA_GS_SRC, KVA_GS_AD = MKA_KVA_GS_AD;
+constexpr uint32_t KVA_PER_LAYER = 16;   // append cores incrementing each waiter per attention layer
+constexpr uint32_t KVA_TRID = 15;
+// KVA_DONE waiters (the readers of each own user's last 2 KV blocks) are always non-STREAM cores (the RMASK member order
+// puts each user's last block on an ext core; engine/program.py asserts it), so the wait code compiles out of STREAM
+#if !defined(MKA_ROLE_STREAM)
+#define MKA_KVA_WAITER 1
+#endif
+#if defined(MKA_KVA_PROF)   // KV append zones (W-KVAT / W-KVAS / W-KVA / R-KVAW) are opt-in: code budget (STREAM / EXT text)
+#define KVA_ZONE(n) DeviceZoneScopedN(n)
+#else
+#define KVA_ZONE(n)
+#endif
+static_assert(KVA_R <= 32, "KV append: users x T rows must fit one tile");
+#endif
 // qkv roles: 0 none, 1 K-half owner (STREAM), 2 K-half partner (STREAM), 3 STREAM_EXT (2 tiles, full K)
 constexpr uint32_t QR_NONE = 0, QR_OWNER = 1, QR_PARTNER = 2, QR_EXT = 3;
 // CB_QO slot: qkv output (1-2 tiles) and, under MKA_RWO, the wo output (4-5 tiles) share CB 17; every use reserves /

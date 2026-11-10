@@ -129,6 +129,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < 2 * FANOUT; ++i) l1w(tfl)[i] = 0;
 #endif
     const bool rd_k = kv_mode == 0 || kv_mode == 2, rd_v = kv_mode == 1 || kv_mode == 2;
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+    // KV append: this core holds one of its user's last 2 KV blocks (where the new rows land); its reader waits the 16
+    // append cores (KVA_DONE) before that group, then raises GS_KVPROG = A + 1 for the writer's reads (kv_mode != 2)
+    const bool kva_w = b1 + 2 > NBK;
+#endif
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
 #if defined(MKA_EXTLEAN) && defined(MKA_QSK)
@@ -586,6 +591,13 @@ void kernel_main() {
                     noc_async_read_set_trid(0);
                     wdone += n;
                 }
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+                if (kva_w && b + nb + 2 > NBK) {
+                    KVA_ZONE("R-KVAW");
+                    noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * (A + 1));
+                    if (kv_mode != 2) *l1w(gs[GS_KVPROG]) = A + 1;
+                }
+#endif
                 if (!(rd_k || rd_v)) continue;
                 // always a full group: CB_K / CB_V hold a whole number of groups, so groups never straddle the ring end
                 if (rd_k) cb_reserve_back(CB_K, NBB * DH);
@@ -790,6 +802,9 @@ void kernel_main() {
     // reset the tree's global semaphores for the next pass: every inc into them for layer NL - 1 happened before the
     // matching wait above returned, so nothing arrives after this point
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+    if (kva_w) { noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * aidx(NL)); *l1w(KVA_GS_DONE) = 0; }   // drain, reset
+#endif
 #if defined(MKA_RWO)
     if (rw_hlp) *l1w(gs[GS_WOHC]) = 0;
 #endif
