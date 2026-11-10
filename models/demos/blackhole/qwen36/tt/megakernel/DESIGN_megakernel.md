@@ -422,3 +422,13 @@ on the laptop at .claude/tmp/r16/mega/si_mixed8/.
   each K-row waits only for its own chunk.
 - Next: fused MLP v12 (split-K gate|up + N-column reduce + SwiGLU at the column root, split-K down) in sim, then
   silicon.
+
+**v0.6 down-stage layout (adopted, -mk-v12 agent's proposal):** gate|up gives h_n at column root n (68 (g,u) pairs
+over 10 columns: 7×8 + 6×2). Root n multicasts h_n down its own N-column (10 non-overlapping column rectangles).
+Core (k, n) computes out[:, N-slice k (20 tiles)] over K = h_n, then sends its 2 × 10-tile halves to K-row k's 2
+owners, which sum the 10 column partials. **The down output lands directly in the next layer's x chunk layout**, so no h
+redistribution and no separate x gather: the AR's reduce-scatter input is already per owner.
+Partials bf16 first; fp32 if PCC needs it. Branch anatarajan/qwen38-r16-mk-v12 (stage A kernels from the coordinator;
+silicon, down stage and persistence by the -mk-v12 agent; sim by the coordinator).
+- MLP tail port merged-ready (-mk-gdnext top): DNPIPE in mka2 + MIXTRID, numerically identical, GDN-type layer
+  ~-2 to -2.5 µs. Default ON at integration.
