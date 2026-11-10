@@ -21,8 +21,8 @@ thread_local std::unordered_map<std::size_t, std::uint32_t>
 // TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
 
 void HaloDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args;
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
 
     // validate input data tensor
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -45,11 +45,50 @@ void HaloDeviceOperation::validate_on_program_cache_miss(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     ttnn::operations::sliding_window::validate_sliding_window_shard_grid(
         shard_spec.grid, is_block_sharded, shard_spec.orientation);
+    if (args.prologue_affine) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "halo prologue_affine needs a TILE input (it runs in the untilize pass)");
+        TT_FATAL(
+            tensor_args.prologue_scale.has_value() && tensor_args.prologue_shift.has_value(),
+            "halo prologue_affine needs the scale and shift tensors");
+        for (const auto& t : {tensor_args.prologue_scale.value(), tensor_args.prologue_shift.value()}) {
+            TT_FATAL(
+                t.layout() == Layout::TILE && t.dtype() == input_tensor.dtype(),
+                "prologue scale / shift must be TILE tensors of the input's dtype");
+            TT_FATAL(
+                t.padded_shape()[-1] == shard_spec.shape[1] && t.padded_shape()[-2] == tt::constants::TILE_HEIGHT,
+                "prologue scale / shift must be [1, C] padded to one tile row with C = the shard width ({}), got {}",
+                shard_spec.shape[1],
+                t.padded_shape());
+        }
+    }
+    if (args.external_halo) {
+        TT_FATAL(tensor_args.halo_boundary.has_value(), "halo external_halo needs the halo_boundary tensor");
+        const auto& b = tensor_args.halo_boundary.value();
+        TT_FATAL(
+            !is_block_sharded && input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "halo external_halo supports height-sharded inputs");
+        TT_FATAL(
+            b.layout() == Layout::ROW_MAJOR && b.dtype() == input_tensor.dtype() &&
+                b.memory_config().buffer_type() == BufferType::DRAM &&
+                b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "halo_boundary must be a ROW_MAJOR DRAM interleaved tensor of the input's dtype");
+        const auto spec = ttnn::operations::sliding_window::external_halo_spec(args.config, args.external_window());
+        TT_FATAL(
+            b.padded_shape()[-1] == shard_spec.shape[1] && b.physical_volume() == static_cast<uint64_t>(spec.batch) *
+                                                                                      spec.sticks_per_image() *
+                                                                                      shard_spec.shape[1],
+            "halo_boundary must hold {} sticks of {} channels (got shape {})",
+            spec.batch * spec.sticks_per_image(),
+            shard_spec.shape[1],
+            b.padded_shape());
+    }
 }
 
 HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args;
+    const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
     ttnn::Shape output_shape = ttnn::Shape(input_shape.to_array_4D());
 
@@ -99,7 +138,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
 HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.device());
+    return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
 Tensor halo(
@@ -110,7 +149,11 @@ Tensor halo(
     bool remote_read,
     bool transpose_mcast,
     bool is_out_tiled,
-    bool config_tensors_in_dram) {
+    bool config_tensors_in_dram,
+    const std::optional<Tensor>& prologue_scale,
+    const std::optional<Tensor>& prologue_shift,
+    const std::optional<Tensor>& halo_boundary,
+    const ttnn::operations::sliding_window::ExternalHaloWindow& external_window) {
     using OperationType = HaloDeviceOperation;
 
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
@@ -148,7 +191,13 @@ Tensor halo(
             .in_nsticks_per_core = in_nsticks_per_core,
             .is_out_tiled = is_out_tiled,
             .config_tensors_in_dram = config_tensors_in_dram,
-            .compute_kernel_config = compute_kernel_config},
-        input_tensor);
+            .compute_kernel_config = compute_kernel_config,
+            .prologue_affine = prologue_scale.has_value(),
+            .external_halo = halo_boundary.has_value(),
+            .external_col_offset = external_window.col_offset,
+            .external_boundary_w = external_window.boundary_w,
+            .external_dev_pad_left = external_window.dev_pad_left,
+            .external_dev_pad_right = external_window.dev_pad_right},
+        HaloInputs{input_tensor, prologue_scale, prologue_shift, halo_boundary});
 }
 }  // namespace ttnn::prim

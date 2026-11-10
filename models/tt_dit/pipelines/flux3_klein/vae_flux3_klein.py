@@ -120,9 +120,14 @@ CONV_FULL_K_L1_BYTES = 1_350_000
 COUT_SPLIT_MIN_PIXELS = 100_000
 
 
-def _full_inner_dim_fits(conv: Conv2d, out_channels: int | None = None) -> bool:
+def _full_inner_dim_fits(conv: Conv2d, out_channels: int | None = None, act_rows: int = 64) -> bool:
     cout = conv.out_channels if out_channels is None else out_channels
-    return 2 * 9 * conv.in_channels * (cout + 64) <= CONV_FULL_K_L1_BYTES
+    return 2 * 9 * conv.in_channels * (cout + act_rows) <= CONV_FULL_K_L1_BYTES
+
+
+def decoder_cache_subfolder(subfolder: str = SUBFOLDER) -> str:
+    """The decoder's weight-cache subfolder: the local attention norm (norm_local, TILE) renames parameters."""
+    return f"{subfolder}_attnlocal"
 
 
 def _cout_split_for(conv: Conv2d) -> int:
@@ -215,7 +220,9 @@ class Flux3KleinVae:
             return module
 
         decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=None, h_axis=h_axis, w_axis=tp_axis)
-        self._decoder = Flux2VaeDecoder(parallel_config=decoder_parallel, use_conv3d=False, **common)
+        self._decoder = Flux2VaeDecoder(
+            parallel_config=decoder_parallel, use_conv3d=False, fused_spatial_decode=True, **common
+        )
         configure_conv2d(
             self._decoder,
             slice_params={
@@ -224,7 +231,7 @@ class Flux3KleinVae:
         )
         _decoder_conv_blocking(self._decoder)
         _local_query_attention(self._decoder)
-        load(self._decoder, decoder_parallel, SUBFOLDER)
+        load(self._decoder, decoder_parallel, decoder_cache_subfolder())
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
         self._encoder = Flux2VaeEncoder(parallel_config=encoder_parallel, **common)
