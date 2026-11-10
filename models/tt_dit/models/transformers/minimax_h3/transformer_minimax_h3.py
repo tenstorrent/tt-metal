@@ -76,12 +76,14 @@ class MiniMaxH3AdaLayerNormOut(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         fsdp_mesh_axis: int | None = None,
+        adaln_curve: bool = False,
     ) -> None:
         super().__init__()
 
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
         self.hidden_local = hidden_size // self.tp_factor
+        self.adaln_curve = adaln_curve
 
         self.norm = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -95,6 +97,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             time_embed_dim,
             NUM_OUT_MODULATION_PARAMS * hidden_size,
             bias=True,
+            dtype=ttnn.float32 if adaln_curve else ttnn.bfloat16,
             mesh_device=mesh_device,
             mesh_axis=self.tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
@@ -126,10 +129,13 @@ class MiniMaxH3AdaLayerNormOut(Module):
         temb: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        activated = ttnn.silu(temb)
-        if activated.dtype != ttnn.bfloat16:
-            activated = ttnn.typecast(activated, ttnn.bfloat16)
-        projected = self.linear(activated)  # [1, 1, num_timesteps, 2 * hidden_local]
+        if self.adaln_curve:
+            projected = ttnn.typecast(self.linear(temb), ttnn.bfloat16)
+        else:
+            activated = ttnn.silu(temb)
+            if activated.dtype != ttnn.bfloat16:
+                activated = ttnn.typecast(activated, ttnn.bfloat16)
+            projected = self.linear(activated)  # [1, 1, num_timesteps, 2 * hidden_local]
 
         rows = projected.shape[2]
         tables = []
@@ -209,11 +215,15 @@ class MiniMaxH3Transformer3DModel(Module):
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        adaln_curve: bool = False,
     ) -> None:
         super().__init__()
 
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
+        # Pruned ComfyUI checkpoints replace the time embedder with `adaln_t_table`; the caller then
+        # passes the interpolated curve, zero-padded to `time_embed_dim`, as `timestep`.
+        self.adaln_curve = adaln_curve
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
@@ -254,22 +264,30 @@ class MiniMaxH3Transformer3DModel(Module):
         self.context_embedder = ColParallelLinear(text_dim, hidden_size, **col_kwargs)
 
         # 2. Timestep embedding, shared by every AdaLN projection.
-        self.time_proj = Timesteps(
-            num_channels=freq_dim,
-            cos_first=True,  # == diffusers flip_sin_to_cos=True
-            # The reference constructs `Timesteps` with diffusers' default max_period; this is
-            # unrelated to rope_theta, which happens to have the same value.
-            max_period=10000,
-            downscale_freq_shift=0,
-            scale=1,
-            dtype=ttnn.float32,
-            mesh_device=mesh_device,
+        self.time_proj = (
+            None
+            if adaln_curve
+            else Timesteps(
+                num_channels=freq_dim,
+                cos_first=True,  # == diffusers flip_sin_to_cos=True
+                # The reference constructs `Timesteps` with diffusers' default max_period; this is
+                # unrelated to rope_theta, which happens to have the same value.
+                max_period=10000,
+                downscale_freq_shift=0,
+                scale=1,
+                dtype=ttnn.float32,
+                mesh_device=mesh_device,
+            )
         )
-        self.time_embedder = MiniMaxH3TimestepEmbedding(
-            in_channels=freq_dim,
-            hidden_dim=time_embed_hidden_dim,
-            out_dim=time_embed_dim,
-            mesh_device=mesh_device,
+        self.time_embedder = (
+            None
+            if adaln_curve
+            else MiniMaxH3TimestepEmbedding(
+                in_channels=freq_dim,
+                hidden_dim=time_embed_hidden_dim,
+                out_dim=time_embed_dim,
+                mesh_device=mesh_device,
+            )
         )
         self.two_time: MiniMaxH3TwoTime | None = None
 
@@ -301,6 +319,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     rotary_dim=rotary_dim,
                     ffn_dim=ffn_dim,
                     time_embed_dim=time_embed_dim,
+                    adaln_curve=adaln_curve,
                     norm_eps=norm_eps,
                     qk_norm_eps=qk_norm_eps,
                     mesh_device=mesh_device,
@@ -319,6 +338,7 @@ class MiniMaxH3Transformer3DModel(Module):
         self.norm_out = MiniMaxH3AdaLayerNormOut(
             hidden_size=hidden_size,
             time_embed_dim=time_embed_dim,
+            adaln_curve=adaln_curve,
             eps=final_norm_eps,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
@@ -432,6 +452,8 @@ class MiniMaxH3Transformer3DModel(Module):
             packed row of each target row.
         timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
         endpoint_timestep: like `timestep`, each slot's step endpoint `r`. Required when `two_time` is set.
+            With `adaln_curve`, `timestep` is the curve embedding instead:
+            [1, 1, num_slots, CURVE_PAD] float32, see `adaln_curve_embedding`.
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
@@ -493,12 +515,18 @@ class MiniMaxH3Transformer3DModel(Module):
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        temb = self.time_embedder(self.time_proj(timestep))
-        if self.two_time is not None:
-            if endpoint_timestep is None:
-                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
-            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
-            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        if self.adaln_curve:
+            # Pruned ComfyUI weights: `timestep` already carries the curve embedding.
+            if self.two_time is not None:
+                raise ValueError("two-time conditioning needs the time embedder, which pruned weights drop")
+            temb = timestep
+        else:
+            temb = self.time_embedder(self.time_proj(timestep))
+            if self.two_time is not None:
+                if endpoint_timestep is None:
+                    raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+                endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+                temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
         self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 

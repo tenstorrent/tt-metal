@@ -71,6 +71,7 @@ class MiniMaxH3TransformerBlock(Module):
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        adaln_curve: bool = False,
     ) -> None:
         super().__init__()
 
@@ -78,6 +79,9 @@ class MiniMaxH3TransformerBlock(Module):
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
         self.time_embed_dim = time_embed_dim
+        # Pruned (ComfyUI) checkpoints: `temb` is the interpolated `adaln_t_table` curve, fed to the
+        # projection in float32 with no SiLU (see convert_comfy_minimax_h3).
+        self.adaln_curve = adaln_curve
 
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -135,6 +139,7 @@ class MiniMaxH3TransformerBlock(Module):
             time_embed_dim,
             NUM_MODULATION_PARAMS * hidden_size * MODALITY_NUM,
             bias=True,
+            dtype=ttnn.float32 if adaln_curve else ttnn.bfloat16,
             mesh_device=mesh_device,
             mesh_axis=self.tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
@@ -195,13 +200,18 @@ class MiniMaxH3TransformerBlock(Module):
         num_timesteps = temb.shape[2]
         # silu at temb's precision, then cast to the projection's dtype -- the reference's
         # `self.linear(silu(temb).to(self.linear.weight.dtype))`. Casting here also keeps the
-        # resulting tables bfloat16, so the bf16 one-hot gathers below reproduce their rows exactly.
-        activated = ttnn.silu(temb)
-        if activated.dtype != ttnn.bfloat16:
-            activated = ttnn.typecast(activated, ttnn.bfloat16)
+        # resulting tables bfloat16, which `ttnn.embedding` requires of its weights.
+        if self.adaln_curve:
+            # Float32 throughout, as ComfyUI computes it; only the tables are cast for the gather.
+            projected = self.adaln_proj(temb)
+            projected = ttnn.typecast(projected, ttnn.bfloat16)
+        else:
+            activated = ttnn.silu(temb)
+            if activated.dtype != ttnn.bfloat16:
+                activated = ttnn.typecast(activated, ttnn.bfloat16)
 
-        # [1, 1, num_timesteps, MODALITY_NUM * 6 * hidden_local] per device
-        projected = self.adaln_proj(activated, compute_kernel_config=self.mm_compute_kernel_config)
+            # [1, 1, num_timesteps, MODALITY_NUM * 6 * hidden_local] per device
+            projected = self.adaln_proj(activated, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Fold the modality axis into rows: [num_timesteps, mod, param, h] -> [t * mod, param * h].
         # Done in row-major because the row count changes and num_timesteps is tiny (a handful of
