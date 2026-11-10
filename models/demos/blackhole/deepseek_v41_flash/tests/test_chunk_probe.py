@@ -78,16 +78,20 @@ def test_chunk_probe(mesh_device):
         oprec.install()
         oprec.rows, oprec.zero, oprec.marks = [], {}, []
         oprec.enabled = True
+        pm._lmark = lambda lid_: oprec.mark(f"L{lid_}")
     rec = []
     orig_rw = pm.replay_window
 
     def rw(tokens, hashes, s0, C, active, vis=None, **kw):  # (prepped / overlap / ops of the host-overlap path)
         th, td = orig_rw(tokens, hashes, s0, C, active, vis=vis, **kw)
-        if (
-            os.environ.get("PROBE_PROFREAD") == "1"
-        ):  # device profiler: drain after every replayed window (trace ops are only logged when read per replay)
-            ttnn.synchronize_device(md)
-            ttnn.ReadDeviceProfiler(md)
+        if os.environ.get("PROBE_PROFREAD") == "1" or os.environ.get("PROBE_PROFAT"):
+            # device profiler: drain after every replayed window (trace ops are only logged when read per replay); PROBE_PROFAT=s0,s0,..: only after
+            # the windows starting at those positions and the window before each (the throw-away drain keeps the profiler buffer empty for the target)
+            _s0 = s0[0] if isinstance(s0, (list, tuple)) else s0
+            _at = [int(x) for x in os.environ.get("PROBE_PROFAT", "").split(",") if x]
+            if not _at or any(_s0 in (a_, a_ - CHUNK) for a_ in _at):
+                ttnn.synchronize_device(md)
+                ttnn.ReadDeviceProfiler(md)
         if os.environ.get(
             "PROBE_DUMPIDS"
         ):  # selected row ids of every sparse layer of the replayed window (device 0, users 0..Up-1); needs DSV41_PF_LAYER_DUMP=1
@@ -97,9 +101,9 @@ def test_chunk_probe(mesh_device):
             if s0k in [int(x) for x in os.environ.get("PROBE_DUMPIDS_AT", "2048,4096,7680").split(",")]:
                 ttnn.synchronize_device(md)
                 for name_, t_ in _TDD.D.items():
-                    if name_.endswith(".ids"):
+                    if name_.endswith(".ids") or (os.environ.get("PROBE_DUMPOUT") == "1" and name_.endswith(".out")):
                         torch.save(
-                            ttnn.to_torch(ttnn.get_device_tensors(t_)[0]).to(torch.int64),
+                            ttnn.to_torch(ttnn.get_device_tensors(t_)[0]).to(torch.float32 if name_.endswith(".out") else torch.int64),
                             f"{os.environ['PROBE_DUMPIDS']}/w{s0k}_{name_}.pt",
                         )
         rec.append((s0, th, td))
@@ -557,5 +561,6 @@ def test_chunk_probe(mesh_device):
 
         oprec.enabled = False
         json.dump(oprec.rows, open(os.path.join(os.environ.get("PO_OUT", "/tmp"), "oprows.json"), "w"))
+        json.dump(oprec.marks, open(os.path.join(os.environ.get("PO_OUT", "/tmp"), "opmarks.json"), "w"))
         log(f"PROBE recorded {len(oprec.rows)} op calls")
     log("PROBE DONE")

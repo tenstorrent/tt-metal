@@ -519,6 +519,9 @@ class DSV41PrefillModel:
         for lid, pl in self.layers:
             if (part == "front" and lid >= REPLAY_BACK) or (part == "back" and lid < REPLAY_BACK):
                 continue
+            lm_ = self.__dict__.get("_lmark")
+            if lm_ is not None:  # layer-loop profiling (t10): the probe marks the device-op id at the start of every layer
+                lm_(lid)
             if dyn and split_enabled():
                 self.dyn.back = lid >= REPLAY_BACK  # (the layers of trace B read the first-replay-chunk window tensors)
             if lid in self.engram:
