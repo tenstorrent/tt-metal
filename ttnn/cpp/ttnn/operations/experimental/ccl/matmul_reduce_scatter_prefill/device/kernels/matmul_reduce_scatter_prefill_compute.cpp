@@ -277,14 +277,19 @@ void kernel_main() {
                             ca.fifo_rd_ptr = pa;
                             cw.fifo_rd_ptr = pw;
                         }));
-                        uint32_t in0_index = sr * sb_h * kb;
-                        uint32_t in1_index = sc * sb_w;
-                        for (uint32_t kk = 0; kk < kb; ++kk) {
-                            ckernel::matmul_block(
-                                cb_act_k_window, cb_weight_k_window, in0_index, in1_index, 0, false, sb_w, sb_h, kb);
-                            ++in0_index;
-                            in1_index += win_n;
-                        }
+                        // All kb inner-dim steps of the window in one call (one MOP per step with MM_ROW_MOP).
+                        ckernel::matmul_block_k(
+                            cb_act_k_window,
+                            cb_weight_k_window,
+                            sr * sb_h * kb /*in0_tile_index*/,
+                            sc * sb_w /*in1_tile_index*/,
+                            0 /*idst*/,
+                            false /*transpose*/,
+                            sb_w /*ct_dim*/,
+                            sb_h /*rt_dim*/,
+                            kb /*kt_dim*/,
+                            kb /*k_steps*/,
+                            win_n /*in1_k_stride*/);
                         if (last_sb) {  // frees each window as soon as it is consumed (fifo_rd_ptr is exact here)
                             act_buf.pop_front(a_win);
                             weight_buf.pop_front(w_win);
