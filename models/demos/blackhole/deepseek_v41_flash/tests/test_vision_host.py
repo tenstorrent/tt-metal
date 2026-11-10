@@ -48,6 +48,23 @@ def test_ragged_hash_token_mask_matches_checkpoint():
     assert torch.equal(want, torch.cat([a, b], dim=1))
 
 
+def test_fast_hash_token_mask_matches_ragged_real_state():
+    from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
+
+    B, L = 3, 120
+    g = torch.Generator().manual_seed(3)
+    ids = torch.randint(1000, 100000, (B, L), generator=g)
+    mask = torch.ones(B, L, dtype=torch.bool)
+    mask[0, 30:70] = False
+    mask[1, 0:10] = False
+    mask[2, 100:] = False
+    old, new = RaggedNgramHash(_hash_state(B, 256)), hostopt.TorchFastNgramHash(_hash_state(B, 256))
+    for s0, s1 in ((0, 50), (50, L)):
+        z = torch.full((B,), s0)
+        assert torch.equal(old(ids[:, s0:s1], z, token_mask=mask[:, s0:s1]), new(ids[:, s0:s1], z, token_mask=mask[:, s0:s1]))
+    assert torch.equal(old.st.cache[:, :L], new.st.cache[:, :L])  # (the rest of the buffer is uninitialised)
+
+
 def test_vision_seq_windows():
     D = 8
     types = torch.full((40,), -1)
