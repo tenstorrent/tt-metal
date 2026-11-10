@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -42,6 +43,7 @@ namespace tt::tt_metal::experimental {
 
 // A key -> value map with unique keys.
 //
+//  - K must be hashable with std::hash and comparable with ==.
 //  - Each key appears at most once.
 //  - Iteration order is unspecified.
 //  - Iterates as std::pair<const K, V>, so keys can't be mutated through an
@@ -73,6 +75,12 @@ private:
     // avoids a heap allocation in the common case. Larger Tables spill to the heap with identical
     // semantics, so correctness never depends on the inline capacity.
     using Storage = ttsl::SmallVector<std::pair<K, V>, 8>;
+
+    // Open-addressing hash index over entries_, with linear probing. A slot holds 0 when empty, or
+    // p when it refers to entries_[p - 1]. The inline capacity holds the index of a full inline
+    // Storage at the maximum load factor, so small Tables stay heap-free.
+    using Index = ttsl::SmallVector<std::uint32_t, 16>;
+    static constexpr std::size_t kMinIndexSlots = 16;
 
 public:
     // Wraps a backing iterator and re-presents the stored pair it points at as the
@@ -152,7 +160,10 @@ public:
 
     [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
     [[nodiscard]] size_type size() const noexcept { return entries_.size(); }
-    void clear() noexcept { entries_.clear(); }
+    void clear() noexcept {
+        entries_.clear();
+        index_.clear();
+    }
 
     // Returns an iterator to the entry for `key`, or end() if the key is absent.
     [[nodiscard]] iterator find(const K& key) { return iterator{entries_.begin() + lookup(key).position}; }
@@ -188,6 +199,7 @@ public:
             return 0;
         }
         entries_.erase(entries_.begin() + found.position);
+        index_ = make_index(entries_, index_.size());
         return 1;
     }
 
@@ -246,12 +258,25 @@ private:
     struct Lookup {
         // The position of the key in entries_, or entries_.size() if the key is absent.
         size_type position;
+        // The index slot that refers to the key, or the empty slot where the key would go.
+        std::size_t slot;
     };
 
     // Returns where `key` is in the table.
     [[nodiscard]] Lookup lookup(const K& key) const {
-        const auto it = std::ranges::find(entries_, key, &Storage::value_type::first);
-        return {static_cast<size_type>(it - entries_.begin())};
+        if (index_.empty()) {
+            return {entries_.size(), 0};
+        }
+        const std::size_t mask = index_.size() - 1;
+        for (std::size_t slot = home_slot(key, index_.size());; slot = (slot + 1) & mask) {
+            const std::uint32_t value = index_[slot];
+            if (value == 0) {
+                return {entries_.size(), slot};
+            }
+            if (entries_[value - 1].first == key) {
+                return {value - 1, slot};
+            }
+        }
     }
 
     // Appends an entry built from `args` and returns an iterator to it.
@@ -260,10 +285,42 @@ private:
     iterator append(const Lookup& absent, Args&&... args) {
         TT_ASSERT(absent.position == entries_.size());
         entries_.emplace_back(std::forward<Args>(args)...);
+        if (2 * entries_.size() > index_.size()) {
+            index_ = make_index(entries_, std::max(kMinIndexSlots, 2 * index_.size()));
+        } else {
+            index_[absent.slot] = static_cast<std::uint32_t>(entries_.size());
+        }
         return iterator{std::prev(entries_.end())};
     }
 
+    // Returns the slot where a search for `key` starts, in an index of `slot_count` slots.
+    // precondition: slot_count is a power of two, at least 2.
+    [[nodiscard]] static std::size_t home_slot(const K& key, std::size_t slot_count) {
+        constexpr std::uint64_t kFibonacciMultiplier = 0x9E3779B97F4A7C15ULL;
+        const int shift = 64 - std::countr_zero(slot_count);
+        return static_cast<std::size_t>(
+            (static_cast<std::uint64_t>(std::hash<K>{}(key)) * kFibonacciMultiplier) >> shift);
+    }
+
+    // Returns an index of `slot_count` slots that refers to every entry of `entries`.
+    // precondition: slot_count is a power of two, and is larger than entries.size().
+    [[nodiscard]] static Index make_index(const Storage& entries, std::size_t slot_count) {
+        Index index(slot_count, 0);
+        const std::size_t mask = slot_count - 1;
+        for (size_type position = 0; position < entries.size(); ++position) {
+            std::size_t slot = home_slot(entries[position].first, slot_count);
+            while (index[slot] != 0) {
+                slot = (slot + 1) & mask;
+            }
+            index[slot] = static_cast<std::uint32_t>(position + 1);
+        }
+        return index;
+    }
+
     Storage entries_;
+    // invariant: index_ refers to every entry of entries_, and is at most half full.
+    // invariant: index_ is empty only when entries_ is empty.
+    Index index_;
 };
 
 }  // namespace tt::tt_metal::experimental
