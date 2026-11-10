@@ -36,11 +36,10 @@
 constexpr uint32_t FWD_SIGNAL_CAP = 32;
 constexpr dspf2d::SenderCtArgs ct{};
 
-// A batch comparable to the channel's depth is the trap this op's own forwarding region used to avoid by
-// bumping on a chunk's last page: fill 32 pages of a 34-page channel before announcing any and the consumer
-// sits idle while the producer stalls for credits it is the only source of. Capacity is a free parameter
-// now, so every constant measured in pages has to scale with it -- a quarter of the channel, exactly as the
-// reader's credit return does.
+// A batch comparable to the channel's depth starves both sides: fill 32 pages of a 34-page channel before
+// announcing any and the consumer sits idle while the producer stalls for credits it is the only source of.
+// Every constant measured in pages has to scale with the depth -- a quarter of the channel, as the reader's
+// credit return does.
 constexpr uint32_t fwd_signal_at() {
     const uint32_t quarter = ct.vc_pages / 4;
     return quarter < 1 ? 1u : (quarter < FWD_SIGNAL_CAP ? quarter : FWD_SIGNAL_CAP);
@@ -204,14 +203,10 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         if (avail > 0) {
             return avail;
         }
-        // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
-        // the bump batch is fwd_signal_at(), so a producer that fills a channel without completing a batch
-        // would never tell the consumer those pages are there -- and that consumer is the only source of the
-        // credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward used
-        // to rule out by forcing a signal on a chunk's last page. Channels have no chunk ends, so this
-        // announce is what rules it out instead.
-        //
-        // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
+        // Nothing of ours to send, so announce what we already sent. A producer that fills a channel without
+        // completing a bump batch would never tell the consumer those pages are there -- and that consumer is
+        // the only source of the credits the producer is then waiting on. This announce is what rules out
+        // that deadlock. Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
             for (uint32_t v = 0; v < ct.num_vcs; v++) {
                 if (fwd_since_signal[v] > 0) {
@@ -225,13 +220,14 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
     }
 }
 
-// Add `count` to a counter on the downstream reader's core: the arrival count of one of its channels.
-// The flush makes the far router drain the writes ahead of the bump first.
+// Add `count` to a counter on the downstream reader's core: the arrival count of one of its channels, or
+// `final_sem_addr` for tokens written straight into its chip's output. The flush makes the far router drain the
+// writes ahead of the bump first.
 template <typename FabricSender>
 void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
     volatile PACKET_HEADER_TYPE* hdr_signal = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
     // downstream_noc_x/y are the downstream stream core's coordinates. A header-only atomic inc. The fused
-    // write + inc hangs Blackhole when the payload destination is DRAM, and the section is in DRAM.
+    // write + inc hangs Blackhole when the payload destination is DRAM, and the section and the output are in DRAM.
     hdr_signal->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, sem_addr), /*val=*/count, /*flush=*/true});
     fabric.wait_for_empty_write_slot();
@@ -240,7 +236,7 @@ void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
 
 // Put one entry's token on the cable. Returns its command word so the caller can spot the end of stream.
 template <typename FabricSender>
-uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t* fwd_since_signal) {
+uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t* fwd_since_signal, uint32_t& finals_sent) {
     volatile tt_l1_ptr dspf2d::FwdMetadata* metadata = entry_meta(entry);
     const uint64_t cmd = metadata->cmd;
     if (cmd == dspf2d::CMD_END) {
@@ -269,6 +265,7 @@ uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t* fwd_since_si
         // Last hop. Both addresses were computed on the token's source chip and came with it, so this hop
         // needs no address generator.
         send_token_with_inline_meta(fabric, metadata->final_payload_addr, metadata->final_meta_addr, entry_base, hdr);
+        finals_sent++;
     }
     return cmd;
 }
@@ -282,6 +279,7 @@ void pump_stream(FabricSender& fabric) {
     // chips. The reader ends the stream with a CMD_END entry.
     bool end_of_stream = false;
     uint32_t fwd_since_signal[dspf2d::MAX_VCS] = {};
+    uint32_t finals_sent = 0;
     while (!end_of_stream) {
         const uint32_t avail = wait_for_filled(fabric, sent, fwd_since_signal);
         const uint32_t n = avail < ct.batch ? avail : ct.batch;
@@ -289,7 +287,7 @@ void pump_stream(FabricSender& fabric) {
         uint32_t processed = 0;
         for (uint32_t i = 0; i < n; i++) {
             processed++;
-            if (send_entry(fabric, (sent + i) % ct.queue_depth, fwd_since_signal) == dspf2d::CMD_END) {
+            if (send_entry(fabric, (sent + i) % ct.queue_depth, fwd_since_signal, finals_sent) == dspf2d::CMD_END) {
                 end_of_stream = true;
                 break;
             }
@@ -306,6 +304,11 @@ void pump_stream(FabricSender& fabric) {
         if (fwd_since_signal[v] > 0) {
             bump_downstream(fabric, ct.vc_arrived_addr(v), fwd_since_signal[v]);
         }
+    }
+    // The downstream reader reads its receive count once, after its own stream has ended, so one signal for the
+    // whole stream is enough; a signal per batch would only add flushes to the cable the tokens share.
+    if (finals_sent > 0) {
+        bump_downstream(fabric, ct.final_sem_addr, finals_sent);
     }
 }
 
@@ -360,8 +363,8 @@ void kernel_main() {
     fabric_connections.close();
 
     // Reset both queue counters for the next launch, which counts from zero. This is safe only here: the
-    // reader's last act was publishing the CMD_END entry drained above, so nothing still reads or signals
-    // either counter.
+    // reader neither publishes nor signals either counter after the CMD_END entry drained above, so nothing
+    // still reads or signals them.
     //
     // `freed` is incremented by NoC atomics, which noc_async_writes_flushed does not wait for. Without the
     // barrier an increment can land after the reset, and the next launch computes the reader's

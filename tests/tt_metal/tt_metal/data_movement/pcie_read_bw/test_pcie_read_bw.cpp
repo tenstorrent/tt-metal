@@ -40,7 +40,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const PCIeReadBwConfig& test_c
     auto device_id = mesh_device.get_device_ids().front();
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
 

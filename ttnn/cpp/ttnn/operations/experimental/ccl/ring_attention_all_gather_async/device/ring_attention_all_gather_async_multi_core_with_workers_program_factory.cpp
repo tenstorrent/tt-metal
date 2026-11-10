@@ -225,6 +225,7 @@ void RingAttentionAllGatherAsyncMeshWorkloadFactory::override_runtime_arguments(
     if (cached_workload.shared_variables.empty()) {
         return;
     }
+    // Every coordinate's descriptor copy holds the same workload resources, so collect once.
     const auto collected = descriptor_adapter_t::collect_tensor_buffers(
         tensor_args,
         tensor_return_value,
@@ -540,7 +541,8 @@ void ring_attention_neighbor_halo_exchange_helper(
     const auto& halo_semaphore = semaphores.at(2);
     for (uint32_t link = 0; link < num_links; ++link) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(static_cast<uint32_t>(halo_semaphore.address()));
+        reader_args.push_back(static_cast<uint32_t>(
+            halo_semaphore.address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         reader_args.push_back(link);
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
@@ -555,7 +557,8 @@ void ring_attention_neighbor_halo_exchange_helper(
         const CoreCoord arrival_core = halo.has_rendezvous() ? halo.rendezvous_noc[link] : worker_physical;
         writer_args.push_back(arrival_core.x);
         writer_args.push_back(arrival_core.y);
-        writer_args.push_back(static_cast<uint32_t>(halo_semaphore.address()));
+        writer_args.push_back(static_cast<uint32_t>(
+            halo_semaphore.address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
 
         writer_args.push_back(link);
 
@@ -721,6 +724,7 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(1u);
         }
         tt::tt_fabric::append_fabric_connection_rt_args(
+            *mesh_device,
             mesh_device->get_fabric_node_id(target_device_coord),
             mesh_device->get_fabric_node_id(transport_device_coord),
             halo.link_base + link,
@@ -1418,6 +1422,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_args.push_back(static_cast<uint32_t>(neighbor_coord.has_value()));
         if (neighbor_coord.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh_device,
                 mesh_device->get_fabric_node_id(target_device_coord),
                 mesh_device->get_fabric_node_id(*neighbor_coord),
                 placement.link,

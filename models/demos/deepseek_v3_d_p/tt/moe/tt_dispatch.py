@@ -37,6 +37,7 @@ original token ordering after expert processing.
 TtDispatch2dModule, below, does the same job with the dispatch_fabric2d op.
 """
 
+
 import torch
 from loguru import logger
 
@@ -335,10 +336,12 @@ class TtDispatch2dModule(LightweightModule):
         num_experts_per_tok: int,
         max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
+        fwd_vc_pages: int,
         emb_dim: int = 7 * 1024,
         cluster_axis: int = 0,
         num_links: int = 1,
         subdevice_id=None,
+        buffers=None,
     ):
         """
         Initialize the fabric2d dispatch module.
@@ -354,6 +357,8 @@ class TtDispatch2dModule(LightweightModule):
                 chip. Tokens past it are dropped, as in TtDispatchModule; TtCombine2dModule clamps to
                 the same capacity and leaves the dropped picks' slots unwritten.
             seq_len_per_chip: Number of tokens on each source device.
+            fwd_vc_pages: Pages one forwarding channel holds, the model's MOE_FWD_VC_PAGES. `buffers` must
+                be sized for the same value.
             emb_dim: Embedding dimension of each token. Used to check that a token, padded to 64 B,
                 fits in one fabric packet with its 64 B routing tail. A TILE x also needs it to be a
                 multiple of 32.
@@ -362,6 +367,9 @@ class TtDispatch2dModule(LightweightModule):
             subdevice_id: Sub-device whose cores the op may use. None means the first sub-device.
                 It must hold the worker core nearest each ethernet core the op sends on. For a TILE
                 x it must also hold the core row under those cores, where the op untilizes x.
+            buffers: (forwarding, staging) DRAM buffers the op stages tokens in, from
+                TT_CCL.get_dispatch_fabric2d_buffers for these arguments. None leaves them to the op,
+                which allocates them at its first cache miss and keeps one pair per cached program.
 
         Note there is no dispatch_group_size (the op takes the ring from cluster_axis and the mesh
         shape), no metadata_len (always 3) and no topology (always Ring).
@@ -377,6 +385,8 @@ class TtDispatch2dModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.subdevice_id = subdevice_id
+        self.forwarding_buffer, self.staging_buffer = buffers if buffers is not None else (None, None)
+        self.fwd_vc_pages = fwd_vc_pages
 
     def forward(
         self,
@@ -462,5 +472,8 @@ class TtDispatch2dModule(LightweightModule):
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=self.subdevice_id,
+            forwarding_buffer=self.forwarding_buffer,
+            staging_buffer=self.staging_buffer,
+            fwd_vc_pages=self.fwd_vc_pages,
         )
         return (dispatched_buffer, metadata)

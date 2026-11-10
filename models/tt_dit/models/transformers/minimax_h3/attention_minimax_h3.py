@@ -21,11 +21,16 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from . import lofi
-from .agmm_config import agmm_block_size
+from .agmm_config import agmm_kwargs, agmm_pins
+from .length_classes import LENGTH_CLASSES, length_class
 from .mmrs_config import has_row_parallel_mmrs_config
 from .sol_prepass import BLOCK as SOL_BLOCK
 from .sol_prepass import SolGeometry, SolPrepass, sink_block_mask
 from .sol_prepass_fused import SolPrepassFused
+
+# Ring SDPA chunk pair of the dynamic-length path per length class, one program each. Measured per block
+# on 4x8: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
+DYNAMIC_RING_SDPA_CHUNKS: dict[str, tuple[int, int]] = {"short": (320, 384), "long": (256, 512)}
 
 _TO_OUT_ROW_PARALLEL = os.environ.get("MINIMAX_H3_TO_OUT_ROW_PARALLEL", "0") == "1"
 _TO_OUT_BFP8_WEIGHT = os.environ.get("MINIMAX_H3_TO_OUT_BFP8_WEIGHT", "0") == "1"
@@ -146,7 +151,11 @@ class MiniMaxH3Attention(Module):
         sol_mode: str = "gather",
         sol_fused: bool = False,
         sol_mask_reuse: int = 1,
+        dynamic_length: bool = False,
+        norm_row_capacity: int | None = None,
     ) -> None:
+        """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
+        length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path."""
         super().__init__()
 
         self.sol_attn = sol_attn
@@ -177,6 +186,7 @@ class MiniMaxH3Attention(Module):
 
         self.kv_gather_capacity = kv_gather_capacity
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
+        self.dynamic_length = dynamic_length
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -254,6 +264,7 @@ class MiniMaxH3Attention(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            **({"row_capacity": norm_row_capacity} if dynamic_length else {}),
         )
         self.norm_q = DistributedRMSNorm(**qk_norm_kwargs)
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
@@ -271,6 +282,23 @@ class MiniMaxH3Attention(Module):
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
 
+        # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
+        self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
+        if dynamic_length and self.use_fused_agmm:
+            pin_kwargs = dict(full_grid=full_grid, num_links=ccl_manager.num_links)
+            self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
+            self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
+        if dynamic_length and self.use_ring:
+            self._ring_sdpa_configs = {
+                cls.name: ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
+                    q_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][0],
+                    k_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][1],
+                    exp_approx_mode=False,
+                )
+                for cls in LENGTH_CLASSES
+            }
+
         # The exp ring op walks head-SEGMENTS (a head's Q chunks split over segs_per_head rows) as
         # serial passes, ceil(n_local_heads * segs / rows) passes per row. Segmentation is what
         # balances 14 local heads over 10 rows: segs=1 gives 2 passes of 10-tile chunks with 6 rows
@@ -282,6 +310,7 @@ class MiniMaxH3Attention(Module):
         self.use_exp_ring_sdpa = (
             self.use_ring
             and ccl_manager.topology == ttnn.Topology.Ring
+            and not dynamic_length  # the exp ring op keys its program on the length
             and is_blackhole()
             and tp_factor == 4
             and parallel_config.sequence_parallel.factor == 32
@@ -892,12 +921,12 @@ class MiniMaxH3Attention(Module):
     ) -> ttnn.Tensor:
         """One ring-joint SDPA call over the local Q rows (dense, or Sol-Attn with `sol_kwargs`)."""
         spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-            q_BHNE,
-            k_BHNE,
-            v_BHNE,
-            self.dummy_joint_input,
-            self.dummy_joint_input,
-            self.dummy_joint_input,
+            input_tensor_q=q_BHNE,
+            input_tensor_k=k_BHNE,
+            input_tensor_v=v_BHNE,
+            joint_tensor_q=self.dummy_joint_input,
+            joint_tensor_k=self.dummy_joint_input,
+            joint_tensor_v=self.dummy_joint_input,
             persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                 k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
             ),
@@ -1135,13 +1164,9 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=lofi.compute_config("qkv", self.mm_compute_kernel_config),
             parallel_config=matmul_parallel_config,
-            default_block_size=(
-                agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2])
-                if self.use_fused_agmm
-                else None
-            ),
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -1150,6 +1175,7 @@ class MiniMaxH3Attention(Module):
                 num_heads=self.n_local_heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
+                runtime_rows=self.dynamic_length,
             )
             return out
 
@@ -1222,13 +1248,16 @@ class MiniMaxH3Attention(Module):
                     k_BHNE,
                     v_BHNE,
                     logical_n,
-                    self._sdpa_program_config(
-                        q_BHNE.shape[2],
-                        ring=True,
-                        q_chunk=self._sol_q_chunk if sol_kwargs else None,
-                        k_chunk=self._sol_k_chunk if sol_kwargs else None,
+                    (
+                        self._sdpa_program_config(
+                            q_BHNE.shape[2], ring=True, q_chunk=self._sol_q_chunk, k_chunk=self._sol_k_chunk
+                        )
+                        if sol_kwargs
+                        else self._ring_sdpa_program_config(q_BHNE.shape[2])
                     ),
                     sol_kwargs,
+                    # The Sol paths keep the static-length program (the op's dynamic_local_n path has no Sol).
+                    dynamic_local_n=self.dynamic_length and not sol_kwargs,
                 )
             if sol_kwargs and self.sol_prefix_mode == "separate":
                 spatial_BHNE = self._sol_prefix_dense_rows(q_BHNE, k_BHNE, v_BHNE, spatial_BHNE)
@@ -1244,7 +1273,7 @@ class MiniMaxH3Attention(Module):
                 ),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
-        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
+        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE, runtime_rows=self.dynamic_length)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
         if self.to_out_row_parallel:
@@ -1265,16 +1294,25 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=lofi.compute_config("to_out", self.mm_compute_kernel_config),
             parallel_config=matmul_parallel_config,
-            default_block_size=(
-                agmm_block_size(self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2])
-                if self.use_fused_agmm
-                else None
-            ),
             force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            **self._agmm_kwargs(self._out_pins, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND),
         )
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
+
+    def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor) -> dict:
+        """The fused all-gather matmul's blocking kwargs at `x`'s per-device rows (class pin or swept table);
+        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+        if not self.use_fused_agmm:
+            return {}
+        return agmm_kwargs(pins, k, n, x.padded_shape[-2])
+
+    def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
+        """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""
+        if self._ring_sdpa_configs is None:
+            return self._sdpa_program_config(seq_local, ring=True)
+        return self._ring_sdpa_configs[length_class(seq_local).name]

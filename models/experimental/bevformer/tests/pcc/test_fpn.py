@@ -8,6 +8,7 @@ import torch
 from models.experimental.bevformer.model_config import FPN_KWARGS, NUM_CAMS, SPATIAL_SHAPES
 from models.experimental.bevformer.tests.common import (
     BACKBONE_OUTPUT_DTYPES,
+    BACKBONE_OUTPUT_LAYOUTS,
     assert_pcc,
     build_reference_fpn,
     from_conv_layout,
@@ -21,7 +22,8 @@ from models.experimental.bevformer.tt.tt_fpn import TTFPN
 def test_fpn(device, reset_seeds):
     torch_model = build_reference_fpn()
 
-    # C3-C5 have the sizes of the FPN's first three levels; its extra conv makes the fourth.
+    # Each backbone output has the size of one of the FPN's first levels; the FPN's extra convs, if
+    # any, make the rest.
     input_tensors = [
         torch.randn(NUM_CAMS, channels, h, w)
         for channels, (h, w) in zip(FPN_KWARGS["in_channels"], SPATIAL_SHAPES, strict=False)
@@ -31,7 +33,10 @@ def test_fpn(device, reset_seeds):
 
     tt_model = TTFPN(parameters, device, input_dtypes=BACKBONE_OUTPUT_DTYPES)
     tt_outputs = tt_model(
-        [to_conv_layout(tensor, device, dtype) for tensor, dtype in zip(input_tensors, BACKBONE_OUTPUT_DTYPES)]
+        [
+            to_conv_layout(tensor, device, dtype, layout)
+            for tensor, dtype, layout in zip(input_tensors, BACKBONE_OUTPUT_DTYPES, BACKBONE_OUTPUT_LAYOUTS)
+        ]
     )
 
     for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):

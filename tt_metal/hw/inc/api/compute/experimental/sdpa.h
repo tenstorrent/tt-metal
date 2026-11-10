@@ -215,16 +215,16 @@ inline void init_fast_approx_exp_constants() {
     constexpr float A_scaled = A * scale_fp32;
     constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(THRESHOLD_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::Converter::lo16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::Converter::hi16(THRESHOLD_scaled));
     TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(A_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(A_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::Converter::lo16(A_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::Converter::hi16(A_scaled));
     TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(B_minus_C));
-    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(B_minus_C));
+    TTI_SFPLOADI(0, 0xA, sfpu::Converter::lo16(B_minus_C));
+    TTI_SFPLOADI(0, 0x8, sfpu::Converter::hi16(B_minus_C));
     TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 }
 

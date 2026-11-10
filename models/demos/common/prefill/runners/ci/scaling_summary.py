@@ -37,7 +37,8 @@ def _load(root):
             print(f"::warning::unreadable metrics sidecar {path}: {exc}")
             continue
         model, config = rec.get("model"), rec.get("config")
-        if not model or not config:
+        # Single-test perf records (prefill_summary_utils.emit_perf_metrics) share the artifact; skip them.
+        if not model or not config or rec.get("kind") == "test_perf":
             continue
         by_model.setdefault(model, {})[config] = rec
     return by_model
@@ -107,11 +108,26 @@ def _comparable(base, ref):
     return None
 
 
+def _plot_links(args):
+    links = [
+        (label, url)
+        for label, url in (
+            ("4 Galaxy Pipeline gantt (PNG)", args.gantt_url),
+            ("SC4 chunk_time@ISL (PNG)", args.chunk_time_url),
+        )
+        if url
+    ]
+    if not links:
+        return []
+    return [" · ".join(f"[{label}]({url})" for label, url in links), ""]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--metrics-dir", required=True, help="dir of *.json metrics sidecars (searched recursively)")
     ap.add_argument("--model", default=None, help="render only this model (default: every model found)")
     ap.add_argument("--gantt-url", default=None, help="link the pipeline gantt artifact under the table")
+    ap.add_argument("--chunk-time-url", default=None, help="link the sc4 chunk_time@ISL plot artifact beside the gantt")
     ap.add_argument(
         "--sc4-only",
         action="store_true",
@@ -144,9 +160,7 @@ def main():
             lines += _occupancy_lines(ref)
             lines.append("```")
             lines.append("")
-            if args.gantt_url:
-                lines.append(f"[4 Galaxy Pipeline gantt (PNG)]({args.gantt_url})")
-                lines.append("")
+            lines += _plot_links(args)
             continue
         note = None
         if not base or not ref:
@@ -172,9 +186,7 @@ def main():
         lines += _occupancy_lines(ref)
         lines.append("```")
         lines.append("")
-        if args.gantt_url:
-            lines.append(f"[4 Galaxy Pipeline gantt (PNG)]({args.gantt_url})")
-            lines.append("")
+        lines += _plot_links(args)
 
     title = (
         f"disaggregated prefill perf -- {_REF}"

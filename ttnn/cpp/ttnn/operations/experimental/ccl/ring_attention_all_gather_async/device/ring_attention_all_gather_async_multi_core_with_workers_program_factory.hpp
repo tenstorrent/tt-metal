@@ -25,10 +25,13 @@ inline constexpr uint32_t kReaderSemaphoreArg = 2;
 inline constexpr uint32_t kWriterSemaphoreArg = 4;
 inline constexpr uint32_t kForwardSemaphoreIdx = 1;
 inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+// Sliding-window halo kernels carry semaphores[2] in reader arg 0 and writer arg 2.
 inline constexpr uint32_t kHaloReaderSemaphoreArg = 0;
 inline constexpr uint32_t kHaloWriterSemaphoreArg = 2;
 inline constexpr uint32_t kHaloSemaphoreIdx = 2;
 
+// One GlobalSemaphore address baked into a kernel's runtime args, with the cores that run that kernel.
+// The cores are recorded once at create time, so a cache hit writes only them.
 struct SemaphoreArgSlot {
     uint32_t kernel_idx = 0;
     uint32_t arg_idx = 0;
@@ -36,11 +39,14 @@ struct SemaphoreArgSlot {
     std::vector<CoreCoord> cores;
 };
 
+// Cache-hit state of one program: its semaphore slots and the addresses they hold now. The caller's
+// semaphores are not in the program hash (a CCLManager pool hands out a different slot per call).
 struct SemaphoreArgPatch {
     std::vector<SemaphoreArgSlot> slots;
     std::vector<uint32_t> addresses;
 };
 
+// Records the cores of kernel_idx that have runtime args; each must reach arg_idx.
 void record_semaphore_arg_slot(
     SemaphoreArgPatch& patch,
     tt::tt_metal::Program& program,
@@ -48,11 +54,13 @@ void record_semaphore_arg_slot(
     uint32_t arg_idx,
     uint32_t semaphore_idx);
 
+// Records the out_ready slots of the four all-gather worker kernels starting at first_kernel_idx.
 void record_all_gather_semaphore_arg_slots(
     SemaphoreArgPatch& patch, tt::tt_metal::Program& program, uint32_t first_kernel_idx);
 
 std::vector<uint32_t> semaphore_addresses(const std::vector<GlobalSemaphore>& semaphores);
 
+// Writes the current semaphore addresses into the recorded slots. Returns at once when they are unchanged.
 void apply_semaphore_arg_patch(
     SemaphoreArgPatch& patch, tt::tt_metal::Program& program, const std::vector<GlobalSemaphore>& semaphores);
 }  // namespace ring_attention_all_gather_async_dynamic
@@ -82,6 +90,8 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
+// Wraps the descriptor adapter to re-apply the out_ready semaphore addresses on cache hits through
+// the worker cores recorded at create time.
 struct RingAttentionAllGatherAsyncMeshWorkloadFactory {
     using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
         detail::RingAttentionAllGatherAsyncDescriptorAdapterOperation>::

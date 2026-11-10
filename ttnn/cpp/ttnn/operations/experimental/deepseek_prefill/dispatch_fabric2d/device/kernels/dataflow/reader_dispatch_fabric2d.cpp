@@ -570,6 +570,45 @@ void local_phase(
     queue.release_unready();
 }
 
+// Tokens the upstream chip on this stream writes straight into this chip's output over the whole launch. The
+// host lists those chunks from the assignments and descriptors the upstream chip's program is built from
+// (incoming_final_descriptors), and their lengths come from the same replicated tables the upstream chip sizes its
+// sends with, so this equals what the upstream sender counts. Short of it, the wait below never ends.
+uint32_t expected_final_writes(const Scratch& c) {
+    uint32_t total = 0;
+    for (uint32_t d = 0; d < ct.num_final; d++) {
+        const uint32_t base = ct.final_descriptors_base + d * dspf2d::CHUNK_DESCRIPTOR_WORDS;
+        const uint32_t origin = kernel_compile_time_args[base + 0];
+        const uint32_t dst = kernel_compile_time_args[base + 1];
+        const uint32_t idx = kernel_compile_time_args[base + 2];
+        const uint32_t cnt = kernel_compile_time_args[base + 3];
+        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
+            total += chunk_len(c, origin, c.chip_experts[dst * ct.experts_per_chip + j], idx, cnt);
+        }
+    }
+    return total;
+}
+
+// Block until the upstream sender has counted every token it wrote straight into this chip's output. The
+// sender's drain only holds back the upstream chip's own program, so without this the next op on this chip
+// could read an output whose last tokens are still on the way. The signal is a flushing atomic, so the far
+// router has finished the writes ahead of it before they are counted.
+//
+// `>=` and a subtraction rather than `==` and a reset: like the channel counters, this stays right without
+// relying on the launch credit to keep the next launch's signals out.
+void wait_for_final_writes(const Scratch& c) {
+    const uint32_t expected = expected_final_writes(c);
+    volatile tt_l1_ptr uint32_t* final_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.final_sem_addr);
+    while (true) {
+        // The upstream chip increments this counter, so drop any cached copy before each read.
+        invalidate_l1_cache();
+        if (*final_arrived >= expected) {
+            break;
+        }
+    }
+    noc_semaphore_inc(get_noc_addr(ct.final_sem_addr), 0u - expected);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -645,6 +684,14 @@ void kernel_main() {
         channels.flush_credits();
         noc_async_atomic_barrier();
         noc_semaphore_inc(get_noc_addr(ct.credit_outbox_noc_x, ct.credit_outbox_noc_y, ct.credit_done_addr), 1);
+
+        // After CMD_END and credit_done, so neither our own sender nor the courier waits on this. The upstream
+        // sender we wait on needs only its own reader and the credits already posted, never this reader's end,
+        // so this cannot close a cycle around the ring.
+        {
+            DeviceZoneScopedN("dspf2d_wait_final");
+            wait_for_final_writes(c);
+        }
 
         // Leave the cross-chip counters as the next launch expects them. Both are bumped from another chip,
         // so they are drained by subtraction rather than zeroed: the NoC only has an atomic add, so this

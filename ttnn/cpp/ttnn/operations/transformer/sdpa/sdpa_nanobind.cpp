@@ -65,6 +65,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    bool dynamic_local_n,
     const std::optional<ttnn::Tensor>& sol_block_mask,
     const std::optional<ttnn::Tensor>& sol_pooled_k,
     const std::optional<ttnn::Tensor>& sol_pooled_v,
@@ -113,6 +114,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_num_layers,
         kv_cache_layer_idx,
         kv_valid_end_tensor,
+        dynamic_local_n,
         sol_block_mask,
         sol_pooled_k,
         sol_pooled_v,
@@ -497,6 +499,8 @@ void bind_sdpa(nb::module_& mod) {
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
             block_cyclic_cache_tp_sharded (bool): True = the cache is striped across ALL sp*tp devices (linear chip =
                 sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict work to these cores (default: all cores of the
+                first subdevice). Part of the program-cache key.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -514,7 +518,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
@@ -647,7 +652,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::kw_only(),
         nb::arg("chunk_start_idx_tensor") = nb::none(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
@@ -699,7 +704,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("joint_strategy"),
         nb::arg("program_config").noconvert(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 
     const auto* const ring_joint_doc = R"doc(
@@ -800,6 +805,11 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            dynamic_local_n (bool): Treat the per-chip padded sequence length as a runtime quantity: the program
+                hash ignores it, so one cached program serves every per-chip length up to the persistent
+                buffers' capacity, and a cache hit rewrites the per-core work split only when the length changed.
+                Requires logical_n as a tensor, non-causal MHA with a separate V and no joint tensors. The
+                program config should then be fixed per capacity, not per length. Defaults to False.
             kv_valid_end_tensor (ttnn.Tensor, optional): Global count of real tokens, read on-device;
                 attention stops at the tile holding the last real token of a partially filled chunk. Output
                 rows in the tiles past it are not written and hold unspecified values. Same one-element
@@ -874,6 +884,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
         nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
+        nb::arg("dynamic_local_n") = false,
         nb::arg("sol_block_mask").noconvert() = nb::none(),
         nb::arg("sol_pooled_k").noconvert() = nb::none(),
         nb::arg("sol_pooled_v").noconvert() = nb::none(),

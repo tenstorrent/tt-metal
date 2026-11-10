@@ -139,6 +139,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     // Metadata path only: global real-token count, so attention stops at the tile holding the last real token.
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
+    // The per-chip padded length is a runtime quantity: one cached program serves every length up to the
+    // gathered buffers' capacity. Needs logical_n as a tensor; non-causal MHA without joint tensors.
+    bool dynamic_local_n = false,
     const std::optional<ttnn::Tensor>& sol_block_mask = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_pooled_k = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_pooled_v = std::nullopt,

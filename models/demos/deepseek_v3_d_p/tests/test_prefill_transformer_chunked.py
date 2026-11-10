@@ -37,6 +37,7 @@ from safetensors import safe_open
 from tracy import signpost
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
@@ -50,6 +51,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     moe_fabric_payload,
     torus_xy_device_params,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -197,9 +200,11 @@ LAYER_PCC_THRESHOLD = 0.88
 # ~0.86 (glm_5_3 @L75); indexer-K nope 0.980 (glm_5_3 captures layers 0-2 + every 4th).
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
-# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.848, below the bf16 floor).
+# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.857, below the bf16 floor). Raised 0.82 -> 0.83
+# with the mean-centred gate bias (MOE_GATE_BIAS_CENTERED), which took that row from 0.849 to 0.857 and the
+# warm-cache 55k row from 0.9841 to 0.9850; the margin stays ~0.027.
 GLM_KV_CACHE_FORMAT = MlaKvCacheFormat.SCALED_FP8
-KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.82
+KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.83
 
 
 def _sparse_cache_format(has_indexer, kv_cache_format):
@@ -221,13 +226,14 @@ def _sparse_cache_format(has_indexer, kv_cache_format):
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), TP-deduped KV cache. CI run 39223403349 / job 117967468990.
-    (61, 11, 10): [0.324, 0.336, 0.367, 0.397, 0.426, 0.456, 0.485, 0.515, 0.553, 0.590, 0.624],
+    # (55k / code_debug), TP-deduped KV cache. Per-chunk median of CI run 42221158458 / job 127907825353.
+    (61, 11, 10): [0.302, 0.317, 0.348, 0.378, 0.409, 0.440, 0.464, 0.499, 0.537, 0.576, 0.612],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
-    (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations, with the routed
+    # expert overlapped with combine_fabric2d. CI run 42214174243 / job 127885734290.
+    (61, 11, 10): [0.310, 0.319, 0.351, 0.381, 0.413, 0.444, 0.468, 0.503, 0.543, 0.582, 0.616],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -241,9 +247,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
-    # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
-    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
+    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push in the shared layers.
+    # Cut on bh_sc1_high_power, CI run 42026848687 / job 127259026123.
+    (78, 11, 10): [0.358, 0.350, 0.352, 0.349, 0.353, 0.353, 0.349, 0.349, 0.355, 0.357, 0.364],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -258,55 +264,57 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
 # from a CI run, not a galaxy box.
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power (run 39359928012), with the routed expert overlapped with combine_fabric2d.
+    # Cut on bh_sc1_high_power (run 40610708699 / job 122574403753), with the routed expert overlapped with
+    # combine_fabric2d.
     # On plain bh_sc1 the same rows split into two clusters 1.5x apart depending on the box.
     (36, 20, 10): [
-        0.080,
-        0.085,
-        0.089,
-        0.096,
-        0.100,
-        0.106,
+        0.076,
+        0.081,
+        0.086,
+        0.092,
+        0.097,
+        0.102,
+        0.110,
         0.113,
-        0.117,
-        0.120,
-        0.127,
-        0.134,
-        0.135,
-        0.141,
-        0.146,
-        0.151,
-        0.157,
-        0.162,
-        0.169,
-        0.173,
-        0.178,
+        0.118,
+        0.124,
+        0.131,
+        0.132,
+        0.138,
+        0.143,
+        0.148,
+        0.154,
+        0.159,
+        0.166,
+        0.170,
+        0.175,
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 36924348392. Host-dispatch bound and flat with depth, so this
-    # row catches an eager-dispatch regression and cannot see MLA.
+    # Cut on bh_sc1_high_power (run 41067008100 / job 124125611317), with the routed expert overlapped
+    # with combine_fabric2d. Host-dispatch bound and flat with depth, so this row catches an
+    # eager-dispatch regression and cannot see MLA.
     (36, 20, 10): [
-        0.380,
-        0.379,
-        0.379,
-        0.377,
-        0.376,
-        0.376,
-        0.380,
-        0.383,
-        0.393,
-        0.379,
-        0.379,
-        0.383,
-        0.381,
-        0.381,
-        0.378,
-        0.384,
-        0.378,
-        0.381,
-        0.386,
-        0.381,
+        0.266,
+        0.266,
+        0.263,
+        0.263,
+        0.264,
+        0.264,
+        0.260,
+        0.264,
+        0.259,
+        0.261,
+        0.264,
+        0.266,
+        0.263,
+        0.264,
+        0.261,
+        0.262,
+        0.263,
+        0.260,
+        0.260,
+        0.261,
     ],
 }
 
@@ -1961,6 +1969,10 @@ def run_chunked_transformer_updated(
         tp_shard_kv=tp_shard_kv,
         **({"sparse_kv_cache_format": cache_format} if has_indexer else {}),
     )
+    # Kimi-K3's KDA carries live only in the engine's slabs, which the runner hands the model at compile();
+    # this harness builds the model itself, so it attaches them here, once: a reused model keeps its slabs.
+    if isinstance(transformer, TtKimiK3Transformer) and transformer.kda_states is None:
+        attach_kda_states(mesh_device, transformer, sp_axis=sp_axis, tp_axis=tp_axis)
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
     # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
@@ -2164,17 +2176,6 @@ def run_chunked_transformer_updated(
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
     # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
     # (no host readback), so it is capturable.
-    # The KDA recurrent/conv carries are the one piece of state a replay MUTATES, so they have to be
-    # zeroed in two places: after capture (which costs chunk 0 two extra forwards) and before each
-    # iteration, which would otherwise start where the previous one finished.
-    def _reset_kda_carries(reason):
-        kda_states = getattr(transformer, "kda_states", None)
-        if kda_states is None:
-            return
-        for slot in range(kda_states.num_slots):
-            kda_states.reset(slot)
-        ttnn.synchronize_device(mesh_device)
-        logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
 
     trace_controller = None
     trace_input = None
@@ -2249,14 +2250,6 @@ def run_chunked_transformer_updated(
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
-        # Capture cost chunk 0 two EXTRA forwards (the warm/compile pass and the recorded pass).
-        # For a KV cache that is idempotent -- same positions, same tokens, same values. For a
-        # RECURRENT carry it is not: every forward advances it, so by the measured loop the carry
-        # has absorbed chunk 0 three times instead of once, and the error rides into every later
-        # chunk. Dense models never see this; Kimi-K3's KDA carries are the first recurrence here.
-        # Zero them so the replay starts from the same state the untraced path starts from.
-        _reset_kda_carries("after capture")
-
     if determinism_check and num_iters < 2:
         pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
     det_baseline = None
@@ -2264,11 +2257,6 @@ def run_chunked_transformer_updated(
 
     profiler.start("tt_forward")
     for it in range(num_iters):
-        # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
-        # otherwise starts where N-1 finished: a false failure under determinism_check, and worse
-        # under check_pcc, where the post-loop KV PCC then scores a cache conditioned on the prefix
-        # twice. num_iters=1 is unaffected (the carry is already zero at this point).
-        _reset_kda_carries(f"before iter {it}")
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
@@ -2596,7 +2584,7 @@ def run_chunked_transformer_updated(
     finish_transformer(transformer)
 
     # Assert AFTER the table is logged so the full per-chunk breakdown is always visible on failure.
-    assert not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures)
+    assert_perf_gate(not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures))
 
 
 def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):

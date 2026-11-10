@@ -71,7 +71,7 @@ void run_block_max8(distributed::MeshDevice& mesh, bool fpu) {
     const auto golden = pack_bfloat16_vec_into_uint32_vec(expected);
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     const uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t buffer_bytes = tiles * tile_bytes;
     auto src_buffer = distributed::MeshBuffer::create(
