@@ -59,6 +59,8 @@ struct PerDeviceRuntimeArgs {
     // Each local device's copy of the region of the packed command that holds the fields (fast-dispatch eager
     // enqueue): words outside the fields track the packed command by delta, so a hit writes each device's command as
     // packed prefix + its region + packed suffix with no per-field work.
+    // Like resolved_cache, it is only touched by enqueue, which holds the mesh device's API lock on every command
+    // queue, and by the setters, which must be serialized with enqueue.
     struct DeviceImages {
         uint64_t assembly_id = 0;
         uint64_t generation = 0;
