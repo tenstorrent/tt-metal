@@ -256,3 +256,33 @@ Mitigations:
     across a norm without a 2-stage AR);
 (d) fallback: per-sub-block programs with today's AR op between them. That costs ~7 µs launch per boundary
     (×128 ≈ 0.9 ms) on top of 18-20 µs ARs, about 14 ms at u8, which misses the gate.
+
+## 9. Spec v0.4: deferred RMSNorm (block contract change, AR track proposal, 2026-11-10)
+Measured (AR track): the one-shot AR phase is **21.7 µs**, bit-identical to all_reduce_async. With the RMSNorm on the
+owners plus 4-root x delivery it was 71.9 µs (norm chain ~25 µs, x multicast ~16-30 µs). The norm chain must leave the
+critical path.
+
+**New block contract:**
+- The AR delivers the **un-normed residual x** (bf16 32×5120) straight into the STREAM cores' CB_X via the 4-root
+  rule. Alongside it come **rstd partials**: each AR owner computes Σx² over its reduced slice and appends fp32 32 rows
+  × n_owners to the all-gather payload (CB 20, renamed CB_RSTD).
+- Consumers (MLP gate_up, attention qkv, GDN in-proj) use weights with **γ (× NORM_FIX) folded into the rows**
+  (diag(γ)W, done at load). They compute rstd = 1/sqrt(ΣΣx²/5120 + eps) from the partials (a few ops) and **scale
+  each output row by rstd at pack time**.
+- Exact in real arithmetic: RMSNorm(x)·γ @ W = rstd ⊙ (x @ diag(γ)W).
+- The residual add stays with the AR owners (they hold the residual).
+- **Numerics gate:** folding γ re-quantizes the BFP4/BFP8 weights (different rounding), so it must pass the GPQA
+  output-length gate before it becomes default. Fallback: unchanged weights + x ⊙ γ on the consumer (~7 µs per
+  projection phase on the critical path).
+
+**§8b re-run with the AR split into on-path vs overlappable** (base + 0.128 ms per on-path µs):
+
+| On-path µs per AR | 21.7 (all on path) | 18 | 15 | 12 |
+|---|---|---|---|---|
+| u8 (gate 13.7) | 13.49 ✓ (0.2 margin) | 13.01 | 12.63 | 12.25 |
+| u1 (gate 9.4) | 9.20 ✓ (0.2 margin) | 8.72 | 8.34 | 7.96 |
+| u1 if attention +46 µs | 9.94 ✗ | 9.46 ✗ | 9.08 ✓ | 8.70 ✓ |
+
+Overlappable candidates: the MLP AR send starts per down chunk (DNPIPE publication), hiding part of the
+reduce-scatter under the down tail. The gather multicast for the next phase can overlap the consumer's γ-folded
+weight prefetch, which is already resident. Target on-path **≤ 15 µs** for a real margin at both u8 and u1.
