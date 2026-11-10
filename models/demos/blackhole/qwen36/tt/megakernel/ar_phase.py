@@ -139,9 +139,10 @@ class ArPhase(OneShotARP):
                     semaphores=list(prog.semaphores), program=prog)
 
     # ---------------------------------------------------------------- per-core L1 arg table (spec v1.25)
-    BLK_NW, BLK_COMP, BLK_RECV = 64, 16, 20  # words per owner; [ar_on, n_ready, (xy, READY) x n | comp @16 | recv @20]
+    # words per owner; [ar_on, n_ready, (xy, READY) x n | comp @16..18 | γ table DRAM address @19 | recv @20]
+    BLK_NW, BLK_COMP, BLK_GAMMA, BLK_RECV = 64, 16, 19, 20
 
-    def arg_table(self, parts_by_coord):
+    def arg_table(self, parts_by_coord, gamma_addr=0):
         """The owners' AR args as a per-core L1 table (uint32, width-sharded over the owners, one row of BLK_NW words per
         core; per-device contents). parts_by_coord: {mesh column: engine_parts(...)}. Returns the tensor; its L1 address
         is uniform (MKAR_ARGS_L1 / the engine's MK_AR_BLK define). The kernels read it at init: no runtime args."""
@@ -161,6 +162,7 @@ class ArPhase(OneShotARP):
                 for i, (xy, ra) in enumerate(rt):
                     w[2 + 2 * i], w[3 + 2 * i] = xy, ra
                 w[self.BLK_COMP:self.BLK_COMP + 3] = P["comp_args"][k]
+                w[self.BLK_GAMMA] = gamma_addr  # runtime data (no recompile when the table moves)
                 ra = P["recv_args"][k]
                 assert self.BLK_RECV + len(ra) <= self.BLK_NW, len(ra)
                 w[self.BLK_RECV:self.BLK_RECV + len(ra)] = ra

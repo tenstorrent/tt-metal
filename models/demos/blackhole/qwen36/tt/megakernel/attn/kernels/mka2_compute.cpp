@@ -153,6 +153,34 @@ void kernel_main() {
             compute_kernel_hw_startup(MKAR_CB_RED, MKAR_CB_RED, MKAR_CB_OUT);
             ar_red.iter();
         }
+#if defined(MK_AR_GAMMA)
+        {   // spec §19: x_deliver = out ⊙ γ_next on every owner (owning + gather role); out stays un-scaled (residual)
+            CZONE("C-ARG");
+            cb_wait_front(MK_AR_CBG, MK_AR_GT);   // the writer pushes it once γ landed and the AR output is complete
+            cb_reserve_back(CB_VXO, V_OT);        // free once the writer popped this layer's partial (after the AR)
+            reconfig_data_format(MKAR_CB_OUT, MK_AR_CBG);
+            pack_reconfig_data_format(CB_VXO);
+#if MK_AR_GROWS == 0
+            mul_bcast_rows_init(MKAR_CB_OUT, MK_AR_CBG);
+#else
+            mul_init(MKAR_CB_OUT, MK_AR_CBG);   // packed pseudo-tiles, γ pre-replicated: element-wise
+#endif
+            for (uint32_t t = 0; t < MK_AR_GT; ++t) {
+                tile_regs_acquire();
+#if MK_AR_GROWS == 0
+                mul_tiles_bcast_rows(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
+#else
+                mul_tiles(MKAR_CB_OUT, MK_AR_CBG, t, t, 0);
+#endif
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, CB_VXO, t);
+                tile_regs_release();
+            }
+            cb_push_back(CB_VXO, V_OT);
+            cb_pop_front(MK_AR_CBG, MK_AR_GT);
+        }
+#endif
 #endif
     };
 #define V12_OSUM(L) v12_osum(L)

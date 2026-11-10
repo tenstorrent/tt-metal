@@ -144,7 +144,9 @@ void kernel_main() {
         if (vrole != 2) return;
         { DeviceZoneScopedN("R-ARDLVW"); noc_semaphore_wait_min(vw(MK_AR_DLV), L + 1); }
         DeviceZoneScopedN("R-ARDLV");
-#if defined(MK_AR_OUT)
+#if defined(MK_AR_GAMMA)
+        const uint32_t sp = get_read_ptr(CB_VXO);   // x_deliver = out ⊙ γ (the owner compute, spec §19)
+#elif defined(MK_AR_OUT)
         const uint32_t sp = MK_AR_OUT;
 #else
         const uint32_t sp = get_read_ptr(CB_VX0);

@@ -171,3 +171,13 @@ next program cannot start before its own previous one ends).
   `Reduce::init_l1`, engine defines `MK_AR_BLK` / `MK_AR_BLK_COMP` / `MK_AR_BLK_RECV`. The owner writer / compute
   carry no AR runtime args. (The AR-only sender kernels keep theirs: the fabric connection args are runtime args, and
   the sender group is not the program's largest.)
+- v1.3 MK_AR_GAMMA (spec §19, default off): the AG carries the un-scaled residual; every owner (owning + gather role)
+  computes x_deliver = out ⊙ γ_next (layer L + 1's input_layernorm, √1.25 folded) in compute right after the AR:
+  R = 32 bcast-rows multiply with the row-0 γ tiles; R < 32 element-wise with a host-built packed, row-replicated γ
+  table (one page per (layer, norm, chunk)). γ lands in CB 32 = pbuf+0 (dead from C-OSUM(L) until the next MLP's
+  partials; never across ARs: real wo aliases A / S there), read on trid 14 right after the READY incs (issuing it
+  before them stalled every device's RS under the weight pump). x_deliver goes into v_xo (dead after the AR; the
+  writer's pop of the partial gates the compute's reserve), then the writer posts MK_AR_DLV and the NOC1 reader
+  delivers it. The γ table's DRAM address is arg-table word 19 (runtime data). Recv: MKAR_DLV_NONE; its own-chunk
+  reads use MKAR_TRID (15) instead of a global read barrier. MK_AR_GEARLY (u1 only, L1): a dedicated γ CB filled at
+  the MLP start (no gain measured).

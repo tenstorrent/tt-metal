@@ -15,6 +15,8 @@
 //     (runtime-arg space is sized by the largest core of the program, spec v1.25)
 //   MKAR_DLV_SIGNAL (engine): L1 address of a local word; instead of delivering x itself, post it = it + 1 when the
 //     output chunk is complete (the engine's owner reader multicasts it on NOC1)
+//   MKAR_TRID (engine): transaction id for this phase's own-chunk reads (barrier on it, not on all reads)
+//   MKAR_DLV_NONE (engine, MK_AR_GAMMA): no delivery and no post here (the engine scales the output first)
 //   MKAR_ALL_RT: 1 = the "common" block is read from the runtime args at cbase (engine), 0 = from the common args
 //   MKAR_SEM_BASE (with MK_PS_GSEM, v0.9.14): uniform L1 address of a persistent per-core word holding how many RS / AG
 //     arrival increments earlier programs consumed. The arrival semaphore is then NEVER reset: trace replays are not
@@ -219,7 +221,8 @@ struct Recv {
             cb_out.push_back(MKAR_CHUNK_TILES);
             if constexpr (MKAR_DELIVER != 0) {
                 cb_out.wait_front(MKAR_CHUNK_TILES);
-#if defined(MKAR_DLV_SIGNAL)
+#if defined(MKAR_DLV_NONE)   // the engine scales x (MK_AR_GAMMA) and hands it to its delivery RISC itself
+#elif defined(MKAR_DLV_SIGNAL)
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_DLV_SIGNAL) = it + 1;   // another RISC delivers
 #else
                 deliver_x(cb_out.get_read_ptr(), tail_base);
@@ -247,6 +250,9 @@ struct Recv {
         PW(2, it, 3);
 #if !defined(MKAR_NOOWN)   // MKAR_NOOWN: no own slot; the compute reads this device's partial in place (MKAR_CB_OWN)
         uint32_t l1_write_addr = get_write_ptr(MKAR_CB_RED) + my_chip * MKAR_CHUNK_TILES * MKAR_IN_PAGE;
+#if defined(MKAR_TRID)   // engine: barrier on our own reads only (the host RISC has its own reads in flight)
+        noc_async_read_set_trid(MKAR_TRID);
+#endif
         size_t s_idx = seg_base;
         for (uint32_t s = 0; s < num_segs; s++) {
             const uint32_t xy = rarg(s_idx++);
@@ -276,7 +282,12 @@ struct Recv {
                 z += b;
             }
         }
+#if defined(MKAR_TRID)
+        noc_async_read_set_trid(0);
+        noc_async_read_barrier_with_trid(MKAR_TRID);
+#else
         noc_async_read_barrier();
+#endif
 #endif
         if constexpr (MKAR_SRED) {
             const uint32_t flag_base = rarg(after_segs);
@@ -320,7 +331,8 @@ struct Recv {
             noc_semaphore_inc(get_noc_addr(sender_xy >> 16, sender_xy & 0xFFFF, MK_PS_SEM(MKAR_SEM_AG_READY)), 1);
         }
         if constexpr (MKAR_DELIVER != 0) {
-#if defined(MKAR_DLV_SIGNAL)
+#if defined(MKAR_DLV_NONE)
+#elif defined(MKAR_DLV_SIGNAL)
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_DLV_SIGNAL) = it + 1;   // another RISC delivers
 #else
             deliver_x(cb_out.get_read_ptr(), tail_base);
