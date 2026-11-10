@@ -1188,12 +1188,13 @@ import contextlib
 # The engine configuration used inside vLLM (the §16 v1.22 baseline of run_si_mixed.sh + the attention defines).
 # Override per key with QWEN36_R16_MK_ENV="KEY=VAL KEY=VAL ...". MKA_NU / FM_NL / MK_AMASK are set per bucket.
 ENGINE_ENV = dict(
-    # spec owner, canonical vLLM 1x8-mesh env until batch 3 = batch-1 config B + real wo (B8rwo, u8 1460.6 / 1475.4 us per
-    # 8 layers, d26u02). GDN = the MK_SGDN_US stand-in (MKA_GDN24 off until gdnar). MKA_GDN_L1 must stay off (per bucket).
+    # spec owner, canonical vLLM 1x8-mesh env (batch 3b, -mk-int b1d67e77745): config B + real wo + real attention AR
+    # (u8 1470.6 / u1 1186.3 us per 8 layers, d26u02 mesh). GDN = the MK_SGDN_US stand-in (MKA_GDN24 off until gdnar). MKA_GDN_L1 must stay off (per bucket).
     MK_SGDN_US="64", MK_SAR_US="18", MKA_SWO_US="10", MKA_CTX="32768", MKA_KVDT="bfp8", MKA_NBB="1",
     MKA_BUDGET="16384", MKA_EXT="1", MK_MIXN="1",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
-               "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1",
+               "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1",
+    MK_EXT_DM_OS="1",  # batch 3b: needed to fit the EXT text with MK_REAL_AAR (without AAR the attention out is never reduced)
 )
 # the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
 PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups")
