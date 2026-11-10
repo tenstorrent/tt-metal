@@ -179,7 +179,7 @@ pxf = [dev.worker_core_from_logical_core(ttnn.CoreCoord(i, 0)).x for i in range(
 fsplit = next((i for i in range(1, GXF) if pxf[i] != pxf[i - 1] + 1), GXF)
 RECTS_F = frect(0, fsplit - 1) + frect(fsplit, GXF - 1)
 NU, NQH, T, DHD = 4, 6, 4, 256
-CTX = int(os.environ.get("MKA_CTX", "32768")); NBK = CTX // TILE; NBB = int(os.environ.get("MKA_NBB", "2"))
+CTX = int(os.environ.get("MKA_CTX", "32768")); NBK = CTX // TILE; NBB = int(os.environ.get("MKA_NBB", "1"))   # 1 beats 2 by ~6 µs/layer (less NoC/DRAM congestion); 3 overflows STREAM L1 with GUPRE
 KVDT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[os.environ.get("MKA_KVDT", "bfp8")]
 KVTB = ttnn.Tile([TILE, TILE]).get_tile_size(KVDT); QTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
 OTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.float32); WOTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat8_b)
@@ -189,6 +189,7 @@ BUDGET = int(os.environ.get("MKA_BUDGET", "0")); FAN = 6
 EXTRA_T = max(0, int((19.5e6 - NC * KT * MIXN * WTB) / NC / ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat8_b)))
 S_WO = int(float(os.environ.get("MKA_SWO_US", "10")) * MHZ)
 grp = [i * NU // NCF for i in range(NCF)]; members = [[i for i in range(NCF) if grp[i] == u] for u in range(NU)]
+if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
 rank = {i: members[grp[i]].index(i) for i in range(NCF)}
 stream_idx = {}   # full-grid core -> STREAM index (mk1 numbering, x + 10*y on the 10x8 rect)
 for i, c in enumerate(fcores):
@@ -221,6 +222,16 @@ print(f"[mka2] full grid {GXF}x{GYF} ({NCF} cores, {len(stream_idx)} STREAM) gro
 # KV share per core: STREAM cores carry the weight stream (~47 MB/layer on their writers + gate|up on their readers),
 # so ATTN-only cores take MKA_WNS x the blocks of a STREAM core (every core >= 1 block)
 WNS = float(os.environ.get("MKA_WNS", "1"))
+GUPRE = ('MKA_GUPRE', '1') in MKDEF
+# MKA_SWAP: per-core K/V NoC swap policy ('none' | 'x<thr>' = cores with phys x >= thr | 'y<thr>' = phys y >= thr)
+_sw = os.environ.get('MKA_SWAP', 'none')
+def SWAP(fi):
+    if _sw.startswith('x'): return 1 if fphys[fi].x >= int(_sw[1:]) else 0
+    if _sw.startswith('y'): return 1 if fphys[fi].y >= int(_sw[1:]) else 0
+    if _sw == 'stream': return 1 if fi in stream_idx else 0
+    if _sw == 'attn': return 0 if fi in stream_idx else 1
+    return 0
+EVEN_T = sum(min(GRP, KT // KB - b0) * KB * 2 for b0 in range(0, KT // KB, 2 * GRP))   # even gate|up half per GU core
 RNG = {}
 for u in range(NU):
     m_ = members[u]
@@ -240,7 +251,7 @@ for u in range(NU):
     RNG[m_[-1]] = (RNG[m_[-1]][0], NBK)
 print(f"[mka2] KV share weight non-STREAM x{WNS}: blocks STREAM {RNG[0][1]-RNG[0][0]} / ATTN-only {RNG[max(i for i in range(NCF) if i not in stream_idx)][1]-RNG[max(i for i in range(NCF) if i not in stream_idx)][0]}", flush=True)
 def build(out):
-    cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, 2 * GRP * KB * 2, rect), cbd(2, HDT, 1, rect),
+    cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
            ttnn.cb_descriptor_from_sharded_tensor(16, out), cbd(6, ttnn.bfloat4_b, KT * MIXN, rect),
            ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
@@ -282,9 +293,9 @@ def build(out):
             w_mk = [0] + z10 + [0] + [0] * 8 + [0] * 5 + [255] + [0] * 6
         selff = 0 if c.x < fsplit else 1
         i_s = stream_idx.get(fi, 0)
-        rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), i_s * WO_T, WO_T if (isS and not WO_NOC0) else 0, EXTRA_T if (isS and not WO_NOC0) else 0]
+        rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), i_s * WO_T, WO_T if (isS and not WO_NOC0) else 0, EXTRA_T if (isS and not WO_NOC0) else 0, SWAP(fi)]
         wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
-            [kv.buffer_address() for kv in kvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, len(stream_idx), QRP.x, QRP.y, EXTRA_T if isS else 0]
+            [kv.buffer_address() for kv in kvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, len(stream_idx), QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)]
         nrecv = len(ch0) + len(ch1)
         crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0]
     acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()

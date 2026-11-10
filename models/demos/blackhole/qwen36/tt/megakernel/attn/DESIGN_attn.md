@@ -102,5 +102,35 @@ Bugs found and fixed on the way:
 - CB ring straddle: a short last KV group made later groups straddle the CB_K/CB_V end; every group now reserves,
   pushes and pops the full NBB (only nb used).
 - NoC0 overload: V + all ~47 MB of weight prefetch on NOC0 vs K alone on NOC1 → 580 µs; balancing ~19 MB onto NOC1 → 370 µs.
+### 6.1 Steady-layer correction and tuning (2026-11-10, d27u08 chip 0)
+The "layer 2 (steady)" column above (and the GUPRE 355.8 µs first reported) is the LAST layer of a 3-layer pass. The last
+layer is ~40-60 µs cheaper than a true middle layer. Its MLP has no contention, because the ATTN-only cores (which start the
+next layer's KV reads ~200 µs early, during the STREAM cores' MLP) have no next layer. Steady numbers now come from 5-layer
+passes (FM_NL=5), as the mean of layers 1-3:
+
+| 32K u8, BFP8 KV, 5 layers | layers 1 / 2 / 3 µs | mid mean | last layer |
+|---|---|---|---|
+| GUPRE, NBB 2, budget 32 KB | 401.5 / 404.0 / 399.5 | 401.7 | 358.2 |
+| GUPRE, NBB 1, budget 32 KB | 394.5 / 396.4 / 397.2 | 396.0 | 340.2 |
+| GUPRE, NBB 1, budget 0 | 398.3 / 396.1 / 390.6 | 395.0 | 339.0 |
+| GUPRE, NBB 1, budget 8 KB | 378.1 / 373.8 / 382.0 | 378.0 | 336.4 |
+| **GUPRE, NBB 1, budget 16 KB** | 377.7 / 375.8 / 377.7 | **377.1** | 338.5 |
+
+- MKA_GUPRE (prefetch layer L's even gate|up groups on the reader during SDPA, TRID 8): -13 µs on the 3-layer last layer.
+- NBB 1 (one KV block per group, 8 K + 8 V tiles in flight per core) beats NBB 2: the reads are congestion-bound, not
+  latency-bound. NBB 3 overflows STREAM L1 by 33 KB when GUPRE is on, and is 40 µs slower without GUPRE.
+- The 16 KB word-13 budget beats 32 KB at NBB 1. Best steady: **377 µs vs §8's 322 µs (+17%)**, i.e. ~118 MB/layer at ~313 GB/s.
+- Column skew (left KV readers finish ~120-200 µs before the right ones). It follows physical x, not KV address or tree rank
+  (MKA_MREV=1 reverses rank order and the skew stays with x). Swapping K/V NoCs per core (MKA_SWAP=x10|x5|attn|stream)
+  changes nothing (354-361 µs, noise). Each core still uses both NoCs, so swapping is symmetric. Weighted shares (WNS/WMAP)
+  were worse. The skew shrinks with NBB 1, which agrees with a congestion cause. Open: K and V both on one NoC per column half,
+  and a dynamic group hand-out.
+
+## 7. Spec v0.4 (DESIGN_megakernel §9): CB_X is the UN-NORMED residual
+The real qkv projection (it replaces the MIXN stand-in) must: (1) use qkv weights with input-norm γ (×NORM_FIX) folded
+into the rows (megakernel/weights.py), flag-gated until the output-length gate; (2) read the AR owners' fp32 Σx² partials
+from CB 20 (CB_RSTD), rstd = rsqrt(ΣΣx²/5120 + eps) per row; (3) scale the qkv output rows by rstd at pack, before the
+q/k norm and RoPE. Fallback when the flag is off: x⊙γ on the consumer. Not wired yet: the MKA2 mixer is still the stand-in.
+
 Next levers: overlap the post-SDPA gate|up stream (prefetch even groups during SDPA, needs ~150 KB L1), multicast-aware
 KV scheduling for the column skew, and the real qkv/wo phases replacing the stand-ins.

@@ -50,6 +50,8 @@ void kernel_main() {
     // STREAM: layer L's wo slice + the next layer's uncovered qkv bytes stream on NOC1 here (scratch), balancing the NoCs
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++), wo_tiles = get_arg_val<uint32_t>(a++);
     const uint32_t extra_tiles = get_arg_val<uint32_t>(a++);
+    const uint32_t kv_swap = get_arg_val<uint32_t>(a++);   // 1: this core's reader streams V (NOC1) and its writer K (NOC0)
+    const uint32_t rcb = kv_swap ? CB_V : CB_K, roff = kv_swap ? DH : 0;
     const auto wo = TensorAccessor(wo_args, wo_addr, WOTB);
     const uint32_t scr = get_write_ptr(CB_SCR);
     constexpr uint32_t TRID_WO = 7;
@@ -62,6 +64,23 @@ void kernel_main() {
     for (uint32_t L = 0; L < NL; ++L) {
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
+#endif
+#if defined(MKA_GUPRE)
+        constexpr uint32_t TRID_GU = 8;
+        uint32_t even_t = 0;
+        if (IS_STREAM && IS_GU) {   // layer L's even gate|up groups land in L1 during SDPA (CB_W holds the whole even half)
+            for (uint32_t g0 = 0; g0 < NBG; g0 += 2 * GRP) even_t += ((NBG - g0) < GRP ? (NBG - g0) : GRP) * BLK;
+            cb_reserve_back(CB_W, even_t);
+            const uint64_t base = wgu.get_noc_addr(gu_page + L * pgu_layer);
+            uint32_t dst = get_write_ptr(CB_W);
+            noc_async_read_set_trid(TRID_GU);
+            for (uint32_t g0 = 0; g0 < NBG; g0 += 2 * GRP) {
+                const uint32_t nb = (NBG - g0) < GRP ? (NBG - g0) : GRP;
+                noc_async_read(base + (uint64_t)g0 * BLK * WTB, dst, nb * BLK * WTB);
+                dst += nb * BLK * WTB;
+            }
+            noc_async_read_set_trid(0);
+        }
 #endif
         {   // SDPA: K stream
             DeviceZoneScopedN("R-KV");
@@ -83,16 +102,16 @@ void kernel_main() {
                     noc_async_read_set_trid(0);
                     wdone += n;
                 }
-                cb_reserve_back(CB_K, NBB * DH);   // always a full group: CB_K is a whole number of groups, so groups never straddle the ring end
-                const uint32_t wk = get_write_ptr(CB_K);
+                cb_reserve_back(rcb, NBB * DH);   // always a full group: CB_K is a whole number of groups, so groups never straddle the ring end
+                const uint32_t wk = get_write_ptr(rcb);
                 noc_async_read_set_trid(TRID_K);
                 for (uint32_t i = 0; i < nb; ++i) {
                     const uint32_t pk = ((user * NBK + b + i) * 2) * DH;
-                    for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + t), wk + (i * DH + t) * KVTB, KVTB);
+                    for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + roff + t), wk + (i * DH + t) * KVTB, KVTB);
                 }
                 noc_async_read_set_trid(0);
                 noc_async_read_barrier_with_trid(TRID_K);
-                cb_push_back(CB_K, NBB * DH);
+                cb_push_back(rcb, NBB * DH);
             }
             noc_async_read_barrier_with_trid(TRID_WO);
         }
@@ -126,7 +145,10 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_ADONE]), 1);
             }
         }
-#if !defined(MKA_NOMLP)
+#if defined(MKA_GUPRE)
+        if (IS_STREAM && IS_GU) { noc_async_read_barrier_with_trid(TRID_GU); cb_push_back(CB_W, even_t); }
+#endif
+#if !defined(MKA_NOMLP) && !defined(MKA_GUPRE)
         if (IS_STREAM && IS_GU) {
             DeviceZoneScopedN("R-GU");
             const uint64_t base = wgu.get_noc_addr(gu_page + L * pgu_layer);
@@ -138,6 +160,8 @@ void kernel_main() {
                 cb_push_back(CB_W, nb * BLK);
             }
         }
+#endif
+#if !defined(MKA_NOMLP)
         if (IS_STREAM && (ROOT == 2 || ROOT == 3)) {
             DeviceZoneScopedN("R-HROOT");
             root_bcast_layer(ROOT, L, NCORES, HCH, cbh_base + ROOT * HCH * XTB, HCH * XTB, r, self_rect, 1);

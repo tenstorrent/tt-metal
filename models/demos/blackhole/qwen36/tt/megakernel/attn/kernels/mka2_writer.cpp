@@ -60,6 +60,8 @@ void kernel_main() {
     const uint32_t budget = get_arg_val<uint32_t>(a++), NSTREAM = get_arg_val<uint32_t>(a++);
     const uint32_t qr_x = get_arg_val<uint32_t>(a++), qr_y = get_arg_val<uint32_t>(a++);
     const uint32_t extra_tiles = get_arg_val<uint32_t>(a++);   // qkv bytes the MIXN mixer stand-in does not cover (scratch reads)
+    const uint32_t kv_swap = get_arg_val<uint32_t>(a++);
+    const uint32_t wcb = kv_swap ? CB_K : CB_V, woff = kv_swap ? 0 : DH;
 
     const auto wm = TensorAccessor(wm_args, wm_addr, WTB);
     const auto wd = TensorAccessor(wd_args, wd_addr, WTB);
@@ -179,17 +181,17 @@ void kernel_main() {
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
             for (uint32_t b = vb0; b < vb1; b += NBB) {
                 const uint32_t nb = (vb1 - b) < NBB ? (vb1 - b) : NBB;
-                cb_reserve_back(CB_V, NBB * DH);   // full group (see reader)
-                const uint32_t wv = get_write_ptr(CB_V);
+                cb_reserve_back(wcb, NBB * DH);   // full group (see reader)
+                const uint32_t wv = get_write_ptr(wcb);
                 noc_async_read_set_trid(TRID_V);
                 for (uint32_t i = 0; i < nb; ++i) {
                     const uint32_t pk = ((user * NBK + b + i) * 2) * DH;
-                    for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + DH + t), wv + (i * DH + t) * KVTB, KVTB);
+                    for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + woff + t), wv + (i * DH + t) * KVTB, KVTB);
                 }
                 noc_async_read_set_trid(0);
                 if (IS_STREAM) issue_some(false);   // one budget's worth of weight chunks per KV group
                 noc_async_read_barrier_with_trid(TRID_V);
-                cb_push_back(CB_V, NBB * DH);
+                cb_push_back(wcb, NBB * DH);
             }
             if (IS_STREAM) issue_some(true);
         }
