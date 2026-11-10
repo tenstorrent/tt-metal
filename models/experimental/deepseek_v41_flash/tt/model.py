@@ -1763,7 +1763,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         that order. Leaving sends the same. The global-last layer collapses, normalises, applies
         ``lm_head`` and pushes the logits out the D2H socket. With a drafter, the output stage stashes the
         stream means at its target layers and, after the last, sends them to the drafter
-        (:meth:`_send_step_row`), then its logits (:meth:`_send_step_logits`).
+        (:meth:`_send_step_row`), then, for a device accept, its logits (:meth:`_send_step_logits`).
         """
         r2_pool = bool(pool_flags.get(2, False))
         mode, split, image = index_sparse
@@ -1848,7 +1848,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     hidden = self._lm_head_traced(hidden)
                 out = hidden
                 self._send_output(out)
-                if "taps" in sm:
+                if "taps" in sm and self.spec_device_accept:
                     self._send_step_logits(out)
             elif ids[li + 1] != stage:
                 sender, _ = self.submesh_socket_pairs[(stage, ids[li + 1])]
@@ -2255,7 +2255,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         )
 
     # -- DSpark speculative decode -- #
-    def prepare_spec_decode(self, rope_main, drafter: bool = True, **drafter_kwargs) -> None:
+    def prepare_spec_decode(
+        self, rope_main, drafter: bool = True, device_accept: bool = False, **drafter_kwargs
+    ) -> None:
         """Allocate what speculative decode adds to :meth:`prepare_static_decode`. Call it after that and
         before anything is compiled.
 
@@ -2274,7 +2276,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         The output stage taps the stream mean at the target layers into the stash every step; the stash
         stays there, and each :meth:`spec_write_main` sends the rows it gathers over one D2D socket. The
         drafter's prefetcher rings are on its own row, so the caller opens a prefetcher session on
-        ``dspark.device`` (the model's session predates it).
+        ``dspark.device`` (the model's session predates it). ``device_accept`` also hands every step's logits to
+        the drafter and captures the accept traces, for :meth:`spec_accept_draft`; a host accept needs neither,
+        and the logits' send and logits-ring write would cost every step.
 
         A model built with ``verify_rows > 1`` also gets what :meth:`decode_verify` needs: every compressed
         group's ``verify_rows``-row selections on each stage, the stages' verify streams layout and the
@@ -2361,6 +2365,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._spec_tids = {}
         self._spec_verified_in = None
         self._spec_step_in = None
+        self.spec_device_accept = drafter and device_accept
         if not drafter:
             return
         if self._lm_head_traced is None:
@@ -2413,7 +2418,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._spec_step_in = (
             _device_zeros((1, 1, 1, len(taps) * cfg.hidden_size), drafter, layout=ttnn.ROW_MAJOR_LAYOUT),
             _device_zeros((1, 1, 1, self._pkt_w), drafter, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-            _device_zeros((1, 1, vocab // _LOGIT_PAGE, _LOGIT_PAGE), drafter, layout=ttnn.ROW_MAJOR_LAYOUT),
+            (
+                _device_zeros((1, 1, vocab // _LOGIT_PAGE, _LOGIT_PAGE), drafter, layout=ttnn.ROW_MAJOR_LAYOUT)
+                if device_accept
+                else None
+            ),
         )
         if t > 1:
             # Where the verify step's taps and packet land on the drafter (_spec_write_verified).
@@ -2456,10 +2465,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self.dspark is not None:
             self.dspark.send_main()
             self.dspark.write_main()
-            self.dspark.refresh_uniforms(1)
+            self.dspark.refresh_uniforms(1, accept=self.spec_device_accept)
             self.dspark.draft()
-            for sampled in (False, True):
-                self.dspark.accept_draft(sampled)
+            if self.spec_device_accept:
+                for sampled in (False, True):
+                    self.dspark.accept_draft(sampled)
             ttnn.synchronize_device(self.dspark.device)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
@@ -2488,7 +2498,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self.dspark.draft()
             ttnn.end_trace_capture(device, tid, cq_id=0)
             self._spec_tids["draft"] = tid
-            for sampled in (False, True):
+            for sampled in (False, True) if self.spec_device_accept else ():
                 tid = ttnn.begin_trace_capture(device, cq_id=0)
                 with _trace_capture_guard():
                     self.dspark.accept_draft(sampled)
@@ -2735,9 +2745,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         pages.deallocate(True)
 
     def _spec_write_step(self) -> None:
-        """On the drafter: receive one decode step's row, packet and logits (:meth:`_send_step_row`,
-        :meth:`_send_step_logits`), write the row's ``main_kv`` into the drafter rings at the packet's position and
-        drafter ring row (:meth:`_build_packet`) and keep the logits for the accept."""
+        """On the drafter: receive one decode step's row, packet and (with ``device_accept``) logits
+        (:meth:`_send_step_row`, :meth:`_send_step_logits`), write the row's ``main_kv`` into the drafter rings at
+        the packet's position and drafter ring row (:meth:`_build_packet`) and keep the logits for the accept."""
         rows, pkt, logits = self._spec_step_in
         receiver = self.dspark.link[1]
         ttnn.experimental.recv_direct_async(rows, receiver)
@@ -2745,8 +2755,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         positions = ttnn.typecast(ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1, 1]), ttnn.uint32)
         ring_row = ttnn.slice(pkt, [0, 0, 0, 6], [1, 1, 1, 7])
         self.dspark.write_rows(rows, positions, ttnn.reshape(ring_row, [1]))
-        ttnn.experimental.recv_direct_async(logits, receiver)
-        self.dspark.write_logits(ttnn.reshape(logits, [1, 1, 1, self.config.vocab_size]), ring_row)
+        if self.spec_device_accept:
+            ttnn.experimental.recv_direct_async(logits, receiver)
+            self.dspark.write_logits(ttnn.reshape(logits, [1, 1, 1, self.config.vocab_size]), ring_row)
 
     def _spec_write_verified(self) -> None:
         """On the drafter: receive what the output stage's verify step sends after its last tap (the block's
@@ -2795,6 +2806,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         from the result, on device (``dspark.accept_draft``): ``(m, token, proposals)``, ``m`` the drafts
         accepted, ``token`` the next input (at ``start + m + 1``) and the ``block_size`` proposals after it.
         ``sampled`` picks the sampled accept over the greedy one; ``seed`` draws fresh uniforms first."""
+        if not self.spec_device_accept:
+            raise RuntimeError("the device accept needs the steps' logits: prepare_spec_decode(device_accept=True)")
         self._wait_replays_dispatched()
         d = self.dspark
         d.set_round(start, drafts)
@@ -2810,10 +2823,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """The last draft's proposals, confidence logits and (with ``logits``) rows' logits, off the drafter."""
         d = self.dspark
         ids, conf = (ttnn.to_torch(ttnn.get_device_tensors(d.out[name])[0]) for name in ("ids", "conf"))
-        rows = None
-        if logits:
-            rows = ttnn.to_torch(ttnn.get_device_tensors(d.out["rows"])[0]).float().reshape(d.block, -1)
+        rows = self.spec_draft_logits() if logits else None
         return [int(i) for i in ids.flatten()], [float(c) for c in conf.flatten()], rows
+
+    def spec_draft_logits(self) -> torch.Tensor:
+        """The last draft's rows' logits ``[block_size, V]``, off the drafter. They stay there until the next
+        draft, so a caller may read them later than its proposals (say, once their verify is dispatched)."""
+        d = self.dspark
+        return ttnn.to_torch(ttnn.get_device_tensors(d.out["rows"])[0]).float().reshape(d.block, -1)
 
     # -- DSpark parallel verify: one step over verify_rows consecutive positions -- #
     def _verify_groups(self, sm: dict) -> set[int]:
