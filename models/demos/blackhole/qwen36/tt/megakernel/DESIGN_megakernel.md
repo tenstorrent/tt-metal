@@ -328,7 +328,7 @@ u1 now decides the gate: base 7.94 ms → 10.72 at 21.7 µs per AR, 9.86 at 15 �
   *projection* weights (qkv, wo, GDN in, GDN out) and streams and computes them like a STREAM core, whenever it is not
   in its own SDPA phase (before SDPA starts, after its KV slice is done, and through every GDN-type layer).
 - Step 1 (minimum, attention track): qkv/wo PROJ across all 120 cores at u1.
-- Step 2: GDN in/out across all 120 cores during GDN-type layers.
+- ~~Step 2: GDN in/out across all 120 cores during GDN-type layers.~~ DROPPED (§13): the mixer is 4.2 µs with resident weights.
 - Step 3, only if needed: MLP gate|up/down on 120 cores. fm11 assumes the 80-core rectangle (68 gate|up columns,
   4 roots), so going to 120 needs extra multicast rectangles and new h-chunk ownership. Not in v0.5.
 - Rules unchanged: bank-local placement (each STREAM_EXT slice in its nearest bank) and the 4-root rule for every
@@ -401,3 +401,9 @@ on the laptop at .claude/tmp/r16/mega/si_mixed8/.
     layer 0 mixer 114 → 89 µs, layer 0 247 → 235 µs, PCC unchanged. From anatarajan/qwen38-r16-mk-gdnext.
   - Port MK_DNPIPE / MK_FLAG_FLUSH (from -mk-tail, currently only in fm11_common.hpp) into mka2_writer/compute's
     MLP tail: ~1-2 µs per layer.
+  - **Owner:** a0992fda706a58a7c is porting DNPIPE, FLAG_FLUSH and MIXTRID into the MKA2 kernels on -mk-gdnext
+    (default-off, measured with mixed NL=8 on d30u20). The base integrates from there.
+- **GDN-type layer anatomy (silicon, steady ~145 µs):** ~100 µs of stand-ins (GDN step 64 + 2 ARs × 18) plus
+  ~35 µs of real work (mixer ~4 with resident weights, MLP, h-broadcast/down tail, syncs). The levers are the
+  **GDN step** (prefix split: ~6-8 µs prefix + reduced step vs 64) and the **AR + x delivery** (§12). Projection:
+  u8 GDN layer ≈ 35 + GDN(prefix+step) + 2·AR_on-path.
