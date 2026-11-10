@@ -23,6 +23,11 @@ KB = 16; GRP = int(os.environ.get("FM_GRP", "2")); ITERS = int(os.environ.get("F
 
 
 def setup_bench(dev, MESH, mesh_identity):
+    try:   # engine/ is on sys.path in the bench (the pushed tree's own module first)
+        import cbplan as CBP
+    except ImportError:
+        from models.demos.blackhole.qwen36.tt.megakernel.engine import cbplan as CBP
+    CBP.track(ttnn)   # spec §20 v12cb: the CB plan must know which descriptors are tensor-backed
     banks = dev.dram_grid_size().x
     cores = [ttnn.CoreCoord(i % GX, i // GX) for i in range(NC)]
     rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
@@ -478,6 +483,7 @@ def setup_bench(dev, MESH, mesh_identity):
         return 1 if (fi in stream_idx and stream_idx[fi] < GDNIN and QROLE.get(fi, (0,))[0] in (1, 2)) else 0
     # ================= MK_V12: fm12 split-K MLP phase (spec v0.6-v0.9) replacing the fm11 MLP =================
     V12 = ('MK_V12', '1') in MKDEF
+    V12CB = V12CB_PB = False
     if V12:
         import sys as _sys
         _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))
@@ -513,15 +519,30 @@ def setup_bench(dev, MESH, mesh_identity):
         # the fm11 h landing buffer (136 KB, unused by v12) is freed FIRST so the v12 landing buffers reuse its range (the L1
         # allocator is lockstep across cores, so the owners' pbuf also costs STREAM-core address space)
         ttnn.deallocate(hbuf)
-        v_xk = v_zero(rect, NC, 20); v_rs = v_zero(rect, NC, 16); v_h7 = v_zero(rect, NC, 7); v_xpk = v_zero(rect, NC, 10 if V_R < 32 else 1)
+        # MK_V12_CB=1 (spec §20, v12cb): the program-internal v12 landing buffers are CBs on their own role's cores (no persistent,
+        # lockstep L1 on all 120 cores): v_xk CB 33 / v_rs CB 36 / v_h7 CB 37 (STREAM), v_xpk = CB 16 (STREAM + owners, the owners'
+        # packing scratch), v_pbuf CB 3 (owners). Peers address them remotely, so their addresses come from the host replica of
+        # tt-metal's CB allocator (engine/cbplan.py) over the final CB list (VADDR, filled by _v12_plan below); MK_V12_CBCHK=1
+        # checks every (core, CB) address on device. Stay tensors: v_xo / v_x0 (AR inp / residual = engine x I/O), v_id / v_j (2 KB
+        # constants), and v_pbuf under MK_AR_GAMMA without MK_AR_GEARLY (its γ CB 32 aliases pbuf + 0).
+        V12CB = ('MK_V12_CB', '1') in MKDEF
+        V12CB_PB = V12CB and not (('MK_REAL_AR', '1') in MKDEF and ('MK_AR_GAMMA', '1') in MKDEF and ('MK_AR_GEARLY', '1') not in MKDEF)
+        VADDR = {}
+        if V12CB:
+            v_xk = v_rs = v_h7 = v_xpk = None
+        else:
+            v_xk = v_zero(rect, NC, 20); v_rs = v_zero(rect, NC, 16); v_h7 = v_zero(rect, NC, 7); v_xpk = v_zero(rect, NC, 10 if V_R < 32 else 1)
         v_xo = v_zero(O_CRS, 16, 10)
         v_x0 = ttnn.from_torch(xb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(O_CRS, 10))   # owner j: x tiles 10j..
-        v_pbuf = v_zero(O_CRS, 16, 100)
+        v_pbuf = None if V12CB_PB else v_zero(O_CRS, 16, 100)
+        def VA(n_):   # v12 landing-buffer address: the tensor's, or the planned CB address (MK_V12_CB)
+            t_ = {'xk': v_xk, 'rs': v_rs, 'h7': v_h7, 'xpk': v_xpk, 'pbuf': v_pbuf}[n_]
+            return t_.buffer_address() if t_ is not None else VADDR[n_]
         V_ALL = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1)), ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(GX + 1, GY - 1))])
         v_id = ttnn.from_torch(torch.eye(TILE).repeat(1, NC + 16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(V_ALL, 1))
         _J = torch.zeros(TILE, TILE); _J[0, :] = 1.0
         v_j = ttnn.from_torch(_J.repeat(1, NC), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(rect, 1))
-        hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), HDT, ttnn.TILE_LAYOUT, dev, hs(rect, TILE))   # placeholder
+        hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), HDT, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12CB else hs(rect, TILE))   # placeholder (unused by v12)
         VGS = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(10)]   # never on reserved (AR / GDN) cores
         VGA = [ttnn.get_global_semaphore_address(g) for g in VGS]
         def v_prect(lx0, lx1, ly0, ly1):
@@ -541,16 +562,16 @@ def setup_bench(dev, MESH, mesh_identity):
                 hi = (2 * k + 1, 2 * k) if V_FIRST else (2 * k, 2 * k + 1)
                 ob = v_ph(GX + hi[0] % 2, k); oa = v_ph(GX + hi[1] % 2, k)
                 g0, g1 = v_ph(GX, k), v_ph(GX + 1, k)
-                w_ = [1, k, nn, n] + v_prect(n, n, 0, GY - 1) + [me.x] + cy + [v_h7.buffer_address(), v_rs.buffer_address(), oa.x, oa.y, v_pbuf.buffer_address(),
-                      V_R, v_xpk.buffer_address(), me.x, me.y, 1 if n == 0 else 0, g0.x, g0.y, g1.x, g1.y, wv_all.buffer_address(), fp, PVL, nt] + VGA + z_own
-                r_ = [1, k, nn, n, me.x] + cy + [v_rs.buffer_address(), v_h7.buffer_address(), ob.x, ob.y, v_pbuf.buffer_address(), V_R] + VGA + [0] * 15
+                w_ = [1, k, nn, n] + v_prect(n, n, 0, GY - 1) + [me.x] + cy + [VA('h7'), VA('rs'), oa.x, oa.y, VA('pbuf'),
+                      V_R, VA('xpk'), me.x, me.y, 1 if n == 0 else 0, g0.x, g0.y, g1.x, g1.y, wv_all.buffer_address(), fp, PVL, nt] + VGA + z_own
+                r_ = [1, k, nn, n, me.x] + cy + [VA('rs'), VA('h7'), ob.x, ob.y, VA('pbuf'), V_R] + VGA + [0] * 15
                 return w_, r_, [1, nn, k, V_FIRST]
             if GX <= c.x <= GX + 1 and c.y < GY:   # owner j = 2k + slot
                 k, slot = c.y, c.x - GX; me = v_ph(c.x, c.y)
-                w_ = [2, k, 0, 0] + [0] * 5 + [0] + [0] * 8 + [0, 0, 0, 0, v_pbuf.buffer_address(), V_R, 0, me.x, me.y, 0, 0, 0, 0, 0, 0, 0, 0, 0] + VGA + \
-                     [slot, v_xk.buffer_address() + slot * 10 * 2048, v_xpk.buffer_address() + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + \
+                w_ = [2, k, 0, 0] + [0] * 5 + [0] + [0] * 8 + [0, 0, 0, 0, VA('pbuf'), V_R, 0, me.x, me.y, 0, 0, 0, 0, 0, 0, 0, 0, 0] + VGA + \
+                     [slot, VA('xk') + slot * 10 * 2048, VA('xpk') + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + \
                      [v_ph(n_, k).x for n_ in range(GX)] + [v_ph(0, k).y, 1 if (k == 0 and slot == 0) else 0] + V_BRC
-                r_ = [2, k, 0, 0, 0] + [0] * 8 + [0, 0, 0, 0, 0, V_R] + VGA + [slot, v_xk.buffer_address() + slot * 10 * 2048, v_xpk.buffer_address() + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + [me.x, me.y]
+                r_ = [2, k, 0, 0, 0] + [0] * 8 + [0, 0, 0, 0, 0, V_R] + VGA + [slot, VA('xk') + slot * 10 * 2048, VA('xpk') + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + [me.x, me.y]
                 return w_, r_, [2, 0, k, 0]
             w_ = [0] * 4 + [0] * 5 + [0] + [0] * 8 + [0] * 18 + VGA + z_own
             r_ = [0] * 5 + [0] * 8 + [0] * 6 + VGA + [0] * 15
@@ -610,8 +631,10 @@ def setup_bench(dev, MESH, mesh_identity):
         # AR CB ids: v12 STREAM-only ids (free on the owners and the AR-only senders) so the program's max CB index stays 44
         # (each index above it costs every core 16 B of kernel config buffer); MK_AR_CBHI=1: the 50..60 block
         _arcb = None if os.environ.get('MK_AR_CBHI', '0') == '1' else [34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 30]
+        # x_targets is read lazily (engine_parts); under MK_V12_CB the v_xk / v_xpk addresses come from the CB plan, after build()'s list
+        AR_XT = dict(xk=None if V12CB else VA('xk'), xpk=None if V12CB else VA('xpk'), xflag=[ttnn.get_global_semaphore_address(g) for g in AR_XF], rstd=0)
         AR = ArPhase(dev, n_ar=AR_NAR, rows=0 if V_R == 32 else V_R, stats=False, own_cb=4 if os.environ.get('MK_AR_NOOWN', '1') == '1' else None, cb_ids=_arcb, deliver_ext=AR_DLVR,
-                     x_targets=dict(xk=v_xk.buffer_address(), xpk=v_xpk.buffer_address(), xflag=[ttnn.get_global_semaphore_address(g) for g in AR_XF], rstd=0))
+                     x_targets=AR_XT)
         AR_PT = AR.pt
         _ow = AR.owners_grid()
         def _arw(tiles): return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(_ow, [TILE, tiles * TILE], ttnn.ShardOrientation.ROW_MAJOR))
@@ -651,12 +674,16 @@ def setup_bench(dev, MESH, mesh_identity):
         _snd = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c_), ttnn.CoreCoord(*c_)) for c_ in ((10, 8), (11, 8), (10, 9), (11, 9))])
         ar_sem = ttnn.create_global_semaphore(dev, _ow.merge(_snd), 0)
         # per-device AR parts up front (the owners' L1 arg table needs every device's args); build() reuses them
-        ARP = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), v_xo, ar_buf, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
-        ar_blk = AR.arg_table(ARP, gamma_addr=ar_gam.buffer_address() if AR_GAMMA else 0)
-        MKDEF = MKDEF + [('MK_AR_BLK', str(ar_blk.buffer_address())), ('MK_AR_BLK_COMP', str(AR.BLK_COMP)), ('MK_AR_BLK_RECV', str(AR.BLK_RECV)),
-                         ('MK_AR_BLK_GAMMA', str(AR.BLK_GAMMA))]
-        print(f"[ar] arg table at L1 {ar_blk.buffer_address()} ({AR.BLK_NW} words / owner)", flush=True)
-        print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {ar_buf.buffer_address()} out {ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)}", flush=True)
+        def _ar_parts():   # (MK_V12_CB: called after the CB plan filled AR_XT)
+            ARP_ = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), v_xo, ar_buf, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
+            blk_ = AR.arg_table(ARP_, gamma_addr=ar_gam.buffer_address() if AR_GAMMA else 0)
+            print(f"[ar] arg table at L1 {blk_.buffer_address()} ({AR.BLK_NW} words / owner)", flush=True)
+            print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {ar_buf.buffer_address()} out {ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)} xk {AR_XT['xk']} xpk {AR_XT['xpk']}", flush=True)
+            return ARP_, blk_, [('MK_AR_BLK', str(blk_.buffer_address())), ('MK_AR_BLK_COMP', str(AR.BLK_COMP)), ('MK_AR_BLK_RECV', str(AR.BLK_RECV)),
+                                ('MK_AR_BLK_GAMMA', str(AR.BLK_GAMMA))]
+        if not V12CB:
+            ARP, ar_blk, _ardefs = _ar_parts()
+            MKDEF = MKDEF + _ardefs
 
     def q_wargs(fi):
         if not RQKV: return []
@@ -973,9 +1000,9 @@ def setup_bench(dev, MESH, mesh_identity):
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
                                              defines=dfs, runtime_args=rt, **base))
         return out
-    def build(out, coord=None):
+    def build(out, coord=None, plan_only=False):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
-               ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
+               (cbd(3, HDT, 1, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(3, hbuf)), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
                (cbd(16, ttnn.bfloat16, 1, rect) if V12 else ttnn.cb_descriptor_from_sharded_tensor(16, out)), (cbd(6, ttnn.bfloat8_b, 240 if QSK else QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
                ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
                # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
@@ -1012,18 +1039,22 @@ def setup_bench(dev, MESH, mesh_identity):
                 if idx_ == 2: d_ = cbd(2, HDT, 1, rect)
                 keep.append(d_)
             cbs = [cbd(32, ttnn.bfloat4_b, LM.SLOT, rect)] + keep + [
-                ttnn.cb_descriptor_from_sharded_tensor(33, v_xk), cbd(34, ttnn.bfloat16, 14, rect), cbd(35, ttnn.bfloat16, 2, rect),
-                ttnn.cb_descriptor_from_sharded_tensor(36, v_rs), ttnn.cb_descriptor_from_sharded_tensor(37, v_h7), cbd(38, ttnn.bfloat16, 1, rect),
+                cbd(33, ttnn.bfloat16, 20, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(33, v_xk), cbd(34, ttnn.bfloat16, 14, rect), cbd(35, ttnn.bfloat16, 2, rect),
+                cbd(36, ttnn.bfloat16, 16, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(36, v_rs),
+                cbd(37, ttnn.bfloat16, 7, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(37, v_h7), cbd(38, ttnn.bfloat16, 1, rect),
                 cbd(39, ttnn.bfloat16, 1, rect), cbd(40, ttnn.bfloat16, 10, rect), cbd(41, ttnn.bfloat16, 10, rect), ttnn.cb_descriptor_from_sharded_tensor(42, v_id),
                 ttnn.cb_descriptor_from_sharded_tensor(43, rsp), cbd(44, ttnn.float32, 1, rect), ttnn.cb_descriptor_from_sharded_tensor(30, v_j),
-                ttnn.cb_descriptor_from_sharded_tensor(3, v_pbuf), ttnn.cb_descriptor_from_sharded_tensor(4, v_xo), ttnn.cb_descriptor_from_sharded_tensor(5, v_x0),
-                cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, O_CRS)]   # CB_VPK: the stand-in's packing scratch (R < 32 only)
+                cbd(3, ttnn.bfloat16, 100, O_CRS) if v_pbuf is None else ttnn.cb_descriptor_from_sharded_tensor(3, v_pbuf),
+                ttnn.cb_descriptor_from_sharded_tensor(4, v_xo), ttnn.cb_descriptor_from_sharded_tensor(5, v_x0),
+                # CB_VPK: the stand-in's packing scratch (R < 32 only); MK_V12_CB: the same descriptor is v_xpk on STREAM (both 10 tiles)
+                cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, rect.merge(O_CRS) if V12CB else O_CRS)]
+        if plan_only: return _order(cbs)   # MK_V12_CB: the list prefix that fixes the v12 addresses (AR / GDN-role CBs follow it)
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
         if REAL_AR:   # this device's AR parts: sender kernels / CBs / fabric semaphores, the shared RS slot CB, owner CBs
             arp = ARP[coord[1]]
             assert dict(arp['recv_defines']).get('MKAR_DELIVER', '0') != '0', "MK_REAL_AR: the AR must deliver x (STREAM waits its flags)"
             sems = sems + arp['semaphores']
-            _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=(O_CRS if GDN24 else d_.core_ranges), format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
+            _red = [CBP.mark_static(ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=(O_CRS if GDN24 else d_.core_ranges), format_descriptors=list(d_.format_descriptors))) for d_ in arp['shared_cbs']]
             cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
             if AR_GAMMA and AR_GEARLY:   # MK_AR_GEARLY: a dedicated γ CB (owners' CB region), filled from the MLP start
                 cbs = cbs + [cbd(32, ttnn.bfloat16, AR_GT, O_CRS)]
@@ -1107,20 +1138,7 @@ def setup_bench(dev, MESH, mesh_identity):
         else:
             assert not REAL_AR, "MK_REAL_AR needs the per-role binaries (MKA_ROLESPLIT=1)"
             ks = _ks(kgrid, [], rrt, wrt, crt)
-        if RWO and GDN24:   # GDN24: kgrid is ONE core range (x 0-11, rows 0-7) intersecting both the STREAM rect and the ext
-            # (owner) range. tt-metal places a CB at the end of its own range's allocator and raises every intersecting allocator, so
-            # an ext-only CB listed before a kgrid CB lifts that kgrid CB (on STREAM too) above it: the 522 KB Wo ring put STREAM
-            # 71 KB into the L1 buffers. Order: CBs on both roles first, then the role-disjoint ones (each lands on its own top).
-            _both = lambda c_: any(r_.start.x < GX for r_ in c_.core_ranges.ranges()) and any(r_.end.x >= GX for r_ in c_.core_ranges.ranges())
-            cbs = [c_ for c_ in cbs if _both(c_)] + [c_ for c_ in cbs if not _both(c_)]
-        elif RWO:   # placement: a CB on kgrid sits above BOTH the STREAM-rect and the ext CBs; ext-only CBs listed FIRST land
-            # at low addresses on the ext cores (beside the STREAM rect's own CBs, which they never share a core with)
-            _ext_only = lambda c_: c_.core_ranges == ext_crs
-            cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
-        if REAL_AR and REAL_AAR:   # CB 23 (ext + the AR corner) FIRST: a multi-range CB lands at the max of its ranges' current
-            # tops, and the corner's AR CBs (RS / AG staging, RS slots) would otherwise push it ~100 KB up on the owners
-            _w23 = lambda c_: any(f_.buffer_index == 23 for f_ in c_.format_descriptors)
-            cbs = [c_ for c_ in cbs if _w23(c_)] + [c_ for c_ in cbs if not _w23(c_)]
+        cbs = _order(cbs)
         print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
         if GDN24:
             _gk = list(GDN_ROLE.get('kernels', []))
@@ -1135,10 +1153,36 @@ def setup_bench(dev, MESH, mesh_identity):
                         return None
                 return n_
             print(f"[gdn24] CB bytes per core: STREAM (0,0) {_cbsum(0, 0)}  ext (10,0) {_cbsum(10, 0)}  GDN (0,{GY}) {_cbsum(0, GY)}", flush=True)
+        if V12CB:   # the full list (AR + GDN-role CBs appended after the v12 prefix) must leave the planned v12 addresses unchanged
+            _vchk = _v12_addrs(cbs)
+            assert _vchk == {k_: VADDR[k_] for k_ in _vchk}, f"[v12cb] v12 CB addresses moved in the full list: {_vchk} vs plan {VADDR}"
+            _e = CBP.end_per_core(CBP.plan(cbs))
+            print(f"[v12cb] CB region end: STREAM (0,0) {_e.get((0, 0))}  owner (10,0) {_e.get((GX, 0))}  GDN (0,{GY}) {_e.get((0, GY))}", flush=True)
         if os.environ.get('MKA_CBDUMP') == '1':
             for d_ in cbs:
                 print(f"[cbdump] ids {[f_.buffer_index for f_ in d_.format_descriptors]} size {d_.total_size} ranges {[(r_.start.x, r_.start.y, r_.end.x, r_.end.y) for r_ in d_.core_ranges.ranges()]}", flush=True)
         return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
+    def _order(cbs):
+        if RWO and GDN24:   # GDN24: kgrid is ONE core range (x 0-11, rows 0-7) intersecting both the STREAM rect and the ext
+            # (owner) range. tt-metal places a CB at the end of its own range's allocator and raises every intersecting allocator, so
+            # an ext-only CB listed before a kgrid CB lifts that kgrid CB (on STREAM too) above it: the 522 KB Wo ring put STREAM
+            # 71 KB into the L1 buffers. Order: CBs on both roles first, then the role-disjoint ones (each lands on its own top).
+            _both = lambda c_: any(r_.start.x < GX for r_ in c_.core_ranges.ranges()) and any(r_.end.x >= GX for r_ in c_.core_ranges.ranges())
+            cbs = [c_ for c_ in cbs if _both(c_)] + [c_ for c_ in cbs if not _both(c_)]
+        elif RWO:   # placement: a CB on kgrid sits above BOTH the STREAM-rect and the ext CBs; ext-only CBs listed FIRST land
+            # at low addresses on the ext cores (beside the STREAM rect's own CBs, which they never share a core with)
+            _ext_only = lambda c_: c_.core_ranges == ext_crs
+            cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
+        if REAL_AR and REAL_AAR:   # CB 23 (ext + the AR corner) FIRST: a multi-range CB lands at the max of its ranges' current
+            # tops, and the corner's AR CBs (RS / AG staging, RS slots) would otherwise push it ~100 KB up on the owners
+            _w23 = lambda c_: any(f_.buffer_index == 23 for f_ in c_.format_descriptors)
+            cbs = [c_ for c_ in cbs if _w23(c_)] + [c_ for c_ in cbs if not _w23(c_)]
+        return cbs
+    def _v12_addrs(cbs):   # planned v12 landing-buffer addresses (MK_V12_CB)
+        p_ = CBP.plan(cbs)
+        a_ = dict(xk=CBP.address_of(p_, 33, (0, 0)), rs=CBP.address_of(p_, 36, (0, 0)), h7=CBP.address_of(p_, 37, (0, 0)), xpk=CBP.address_of(p_, 16, (0, 0)))
+        if v_pbuf is None: a_['pbuf'] = CBP.address_of(p_, 3, (GX, 0))
+        return a_
     # V12 drops the fm11 output CB 16 (re-used as CB_VPK on the owners): keep the unused fm11 output out of L1 (it was the L1 floor)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12 else ws(rect, NDN * TILE))
     if os.environ.get("MK_L1DUMP") == "1":  # debug: every live L1 tensor's address
@@ -1146,6 +1190,13 @@ def setup_bench(dev, MESH, mesh_identity):
             for _i, _t in enumerate(_v if isinstance(_v, list) else [_v]):
                 if isinstance(_t, ttnn.Tensor) and _t.storage_type() == ttnn.StorageType.DEVICE and _t.memory_config().buffer_type == ttnn.BufferType.L1:
                     print(f"[l1dump] {_n}[{_i}] addr {_t.buffer_address()} shape {list(_t.shape)}", flush=True)
+    if V12CB:   # spec §20 v12cb: plan the v12 CB addresses from the list prefix, then the AR parts that deliver into them
+        VADDR.update(_v12_addrs(build(out_t, None, plan_only=True)))
+        print(f"[v12cb] planned (CB base {CBP.CB_BASE}): {VADDR}; tensors kept: v_xo v_x0 v_id v_j{' v_pbuf (AR gamma alias)' if v_pbuf is not None else ''}", flush=True)
+        if REAL_AR:
+            AR_XT['xk'], AR_XT['xpk'] = VADDR['xk'], VADDR['xpk']
+            ARP, ar_blk, _ardefs = _ar_parts()
+            MKDEF = MKDEF + _ardefs
     if REAL_AR:   # per-device programs (fabric connections, owner / gather roles differ by ring position)
         _pcache = {}
         def PROG_PER_DEV(co):
@@ -1155,6 +1206,12 @@ def setup_bench(dev, MESH, mesh_identity):
         prog = PROG_PER_DEV(ttnn.MeshCoordinate(0, 0))
     else:
         prog = build(out_t)
+    if ('MK_V12_CBCHK', '1') in MKDEF:   # every (core, CB) address of the program on device vs the host plan; raises on a mismatch
+        if REAL_AR:   # per-device programs: identical CB lists (same plan) on every ring position
+            _p0 = CBP.plan(list(prog.cbs))
+            for c_ in range(1, AR.ring):
+                assert CBP.plan(list(PROG_PER_DEV(ttnn.MeshCoordinate(0, c_)).cbs)) == _p0, f"[cbplan] device {c_} CB plan differs from device 0"
+        CBP.verify(dev, prog, tag=' v12cb')
     if GDN24:   # GDN-core CB headroom (spec rule): every L1 tensor reserves its range on ALL cores, CBs grow from the bottom
         _l1 = []
         for _n, _v in list(locals().items()):
