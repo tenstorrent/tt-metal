@@ -36,11 +36,12 @@ def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device, expect_e
     channel_type = fabric_mux.ChannelType.FULL_SIZE
     base_l1_address = ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1)
     mux_config = fabric_mux.Config(
+        mesh_device=mesh_device,
         num_full_size_channels=1,
         num_header_only_channels=0,
         num_buffers_per_full_size_channel=2,
         num_buffers_per_header_only_channel=0,
-        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(),
+        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh_device),
         base_l1_address=base_l1_address,
     )
 
@@ -65,12 +66,12 @@ def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device, expect_e
 
     kernel_compile_time_args = mux_config.kernel_compile_time_args()
     assert (
-        len(kernel_compile_time_args) == 19
-    ), f"mux kernel CT-arg count: expected 19, got {len(kernel_compile_time_args)}"
+        len(kernel_compile_time_args) == 22
+    ), f"mux kernel CT-arg count: expected 22, got {len(kernel_compile_time_args)}"
     expected_kernel_ct_prefix = [
         1,
         2,
-        fabric_mux.channel_buffer_size_bytes(),
+        fabric_mux.channel_buffer_size_bytes(mesh_device),
         0,
         8,
     ]
@@ -80,10 +81,16 @@ def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device, expect_e
     assert (
         kernel_compile_time_args[5:7] == compile_time_args[2:4]
     ), f"mux and client must agree on channel addresses: {kernel_compile_time_args[5:7]} vs {compile_time_args[2:4]}"
+    assert kernel_compile_time_args[18:21] == [
+        0,
+        0,
+        0,
+    ], f"program-local L1 placement CT args of a fixed-address mux: expected [0, 0, 0], got {kernel_compile_time_args[18:21]}"
     assert kernel_compile_time_args[-1] == 0, f"last mux kernel CT arg: expected 0, got {kernel_compile_time_args[-1]}"
 
     mux_program_descriptor = ttnn.ProgramDescriptor()
     kernel_runtime_args = mux_config.kernel_runtime_args(
+        mesh_device=mesh_device,
         source_node_id=mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, 0)),
         destination_node_id=mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, 1)),
         link_index=0,
@@ -188,8 +195,9 @@ def test_fabric_mux_channel_type_selects_channel_region(
     channel_type = getattr(fabric_mux.ChannelType, channel_type_name)
     logical_core = ttnn.CoreCoord(0, 0)
     virtual_core = mesh_device.worker_core_from_logical_core(logical_core)
-    full_size_buffer_size_bytes = fabric_mux.channel_buffer_size_bytes()
+    full_size_buffer_size_bytes = fabric_mux.channel_buffer_size_bytes(mesh_device)
     mux_config = fabric_mux.Config(
+        mesh_device=mesh_device,
         num_full_size_channels=1,
         num_header_only_channels=1,
         num_buffers_per_full_size_channel=NUM_FULL_SIZE_BUFFERS,
@@ -238,11 +246,12 @@ def test_fabric_mux_channel_type_selects_channel_region(
 def test_fabric_mux_config_enforces_usable_l1_end_address(mesh_device, expect_error):
     fabric_mux = ttnn.experimental.fabric_mux
     config_args = dict(
+        mesh_device=mesh_device,
         num_full_size_channels=1,
         num_header_only_channels=0,
         num_buffers_per_full_size_channel=2,
         num_buffers_per_header_only_channel=0,
-        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(),
+        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh_device),
         base_l1_address=ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1),
     )
     memory_map_end_address = fabric_mux.Config(**config_args).memory_map_end_address()

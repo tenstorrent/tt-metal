@@ -71,3 +71,20 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 )
 def test_moe(N, C, H, W, k, E, e, dtype, device):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)
+
+
+@pytest.mark.parametrize("bad_tensor", ["input", "expert_mask", "topk_mask"])
+def test_moe_rejects_non_bfloat16(bad_tensor, device, expect_error):
+    N, C, H, W, k = 1, 1, 32, 64, 32
+    shapes = {"input": [N, C, H, W], "expert_mask": [N, C, 1, W], "topk_mask": [N, C, 1, k]}
+    tensors = {
+        name: ttnn.from_torch(
+            torch.zeros(shape),
+            ttnn.float32 if name == bad_tensor else ttnn.bfloat16,
+            layout=ttnn.Layout.TILE,
+            device=device,
+        )
+        for name, shape in shapes.items()
+    }
+    with expect_error(RuntimeError, "must be BFLOAT16"):
+        ttnn.moe(tensors["input"], tensors["expert_mask"], tensors["topk_mask"], k)

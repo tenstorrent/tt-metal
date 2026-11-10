@@ -36,3 +36,5 @@ compile_flags.txt
 ulp_measurements.jsonl
 ulp_headroom_report.md
 ulp_sweep_junit.xml
+.test_durations
+.perf_split_durations

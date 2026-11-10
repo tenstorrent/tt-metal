@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -78,12 +79,45 @@ FORCE_INLINE void issue_contiguous_row_write(
     noc.async_write(src_cb, tensor, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
 }
 
+template <
+    uint32_t source_slices_per_row,
+    uint32_t output_slices_per_row,
+    uint32_t slice_bytes,
+    typename TensorAccessorT>
+FORCE_INLINE void write_row_indices(
+    CircularBuffer& indices_cb,
+    CircularBuffer& indices_scratch_cb,
+    const Noc& noc,
+    const TensorAccessorT& indices,
+    uint32_t row,
+    uint32_t row_bytes) {
+    if constexpr (source_slices_per_row == 32) {
+        issue_contiguous_row_write(indices_cb, noc, indices, row, row_bytes);
+        noc.async_writes_flushed();
+        indices_cb.pop_front(1);
+    } else {
+        issue_reordered_row_write<source_slices_per_row, output_slices_per_row, slice_bytes>(
+            indices_cb, indices_scratch_cb, noc, indices, row, row_bytes);
+        noc.async_writes_flushed();
+        indices_scratch_cb.pop_front(1);
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
     const uint32_t indices_addr = get_common_arg_val<uint32_t>(topk_common_args::output_address);
-    const uint32_t start_row = get_arg_val<uint32_t>(0);
-    const uint32_t num_rows = get_arg_val<uint32_t>(1);
+    const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::writer_start_row);
+    const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::writer_num_rows);
+    constexpr bool row_split = get_named_compile_time_arg_val("row_split") != 0;
+    const bool has_split = row_split && get_arg_val<uint32_t>(topk_core_args::writer_has_split) != 0;
+    const bool second_half = row_split && get_arg_val<uint32_t>(topk_core_args::writer_second_half) != 0;
+    // The second half ships its survivor to the first, which merges it and writes the row.
+    const bool receives_survivor = has_split && !second_half;
+    const bool sends_survivor = has_split && second_half;
+    const uint32_t partner_noc_x = row_split ? get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_x) : 0;
+    const uint32_t partner_noc_y = row_split ? get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_y) : 0;
+    const uint32_t split_row = row_split ? get_arg_val<uint32_t>(topk_core_args::writer_split_row) : 0;
 
     constexpr uint32_t cb_indices = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_scratch = get_compile_time_arg_val(1);
@@ -92,29 +126,62 @@ void kernel_main() {
     constexpr uint32_t output_slices_per_row = get_compile_time_arg_val(4);
     constexpr uint32_t indices_slice_bytes = get_compile_time_arg_val(5);
     constexpr auto indices_args = TensorAccessorArgs<6>();
+    constexpr uint32_t split_args_base = indices_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_landing = get_compile_time_arg_val(split_args_base);
+    constexpr uint32_t cb_send = get_compile_time_arg_val(split_args_base + 1);
+    constexpr uint32_t credit_sem_id = get_compile_time_arg_val(split_args_base + 2);
+    constexpr uint32_t data_sem_id = get_compile_time_arg_val(split_args_base + 3);
+    constexpr uint32_t survivor_tiles = get_compile_time_arg_val(split_args_base + 4);
+    constexpr uint32_t survivor_bytes = get_compile_time_arg_val(split_args_base + 5);
 
     const auto indices = TensorAccessor(indices_args, indices_addr, indices_page_bytes);
     CircularBuffer indices_cb(cb_indices);
+    CircularBuffer indices_scratch_cb(cb_indices_scratch);
+    CircularBuffer landing_cb(cb_landing);
+    CircularBuffer send_cb(cb_send);
+    Semaphore<> credit_sem(credit_sem_id);
+    Semaphore<> data_sem(data_sem_id);
     Noc noc;
 
-    if constexpr (source_slices_per_row == 32) {
-        for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-            const uint32_t row = start_row + local_row;
-            issue_contiguous_row_write(indices_cb, noc, indices, row, indices_page_bytes);
-            noc.async_writes_flushed();
-            indices_cb.pop_front(1);
-        }
-    } else {
-        CircularBuffer indices_scratch_cb(cb_indices_scratch);
-        for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-            const uint32_t row = start_row + local_row;
-            issue_reordered_row_write<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
-                indices_cb, indices_scratch_cb, noc, indices, row, indices_page_bytes);
+    // The landing CB is one survivor slot cycled whole, so its base is the same address on every core -- every CB
+    // here is created over the whole grid, so the allocator gives each core the same layout.
+    const uint32_t landing_base = row_split ? landing_cb.get_write_ptr() : 0;
 
-            noc.async_writes_flushed();
-            indices_scratch_cb.pop_front(1);
+    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
+    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+        const bool is_split = has_split && local_row == num_whole_rows;
+        const uint32_t row = is_split ? split_row : start_row + local_row;
+
+        if (is_split && receives_survivor) {
+            // The slot is free once the compute has consumed it: tell the partner to write.
+            landing_cb.reserve_back(survivor_tiles);
+            credit_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+            // The partner increments data_sem only after its write is drained, so the slot is complete here.
+            data_sem.wait_min(1);
+            landing_cb.push_back(survivor_tiles);
+        }
+
+        if (is_split && sends_survivor) {
+            credit_sem.wait_min(1);
+            send_cb.wait_front(survivor_tiles);
+            noc.async_write(
+                send_cb,
+                UnicastEndpoint{},
+                survivor_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = partner_noc_x, .noc_y = partner_noc_y, .addr = landing_base});
+            noc.async_write_barrier();
+            send_cb.pop_front(survivor_tiles);
+            data_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+            noc.async_atomic_barrier();
+        } else {
+            write_row_indices<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
+                indices_cb, indices_scratch_cb, noc, indices, row, indices_page_bytes);
         }
     }
 
     noc.async_write_barrier();
+    if constexpr (row_split) {
+        noc.async_atomic_barrier();
+    }
 }

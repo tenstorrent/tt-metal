@@ -39,6 +39,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/command_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/mesh_device_properties.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_router.cpp
 )

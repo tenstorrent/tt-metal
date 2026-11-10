@@ -10,13 +10,15 @@ parallelism in production (`is_prefetcher_supported` returns False at lower devi
 counts), tensor shapes are computed at the smallest device count where the worker
 prefetcher fits: 1B/3B at 1 device, 8B at 2 devices, 70B at 8 devices.
 
-Both paths share the same gather_in0 matmul kernels and the same production scattered
-receiver layout / receiver sub-device / stall group setup. The only difference is
-which prefetcher is used:
+Both paths run a gather_in0 matmul on the same production scattered receiver layout /
+receiver sub-device / stall group setup. What differs is the prefetcher and what it
+delivers into:
 - DRAM-core: DRISC kernel on DRAM cores, started once via
-  `start_tensor_prefetcher(num_layers=N+1)` before the trace, stopped after.
+  `start_tensor_prefetcher(num_layers=N+1)` before the trace, stopped after; it delivers
+  into PrefetcherPipes, which the matmul reads through its Metal 2.0 factory.
 - Worker-core: BRISC+NCRISC kernels on worker cores, dispatched once via
-  `ttnn.dram_prefetcher(num_layers=N+1)` before the trace.
+  `ttnn.dram_prefetcher(num_layers=N+1)` before the trace; it delivers into a
+  GlobalCircularBuffer.
 
 Both push N+1 layers (1 warmup + N traced); both traces contain only N matmul
 launches. Sender/receiver layout from `models/tt_transformers/tt/prefetcher/prefetcher_config.yaml`
@@ -54,6 +56,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     ring_grid_cols as _ring_grid_cols,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_tensor_prefetcher_pipes as _make_tensor_prefetcher_pipes,
     bank_receivers_contiguous as _bank_receivers_contiguous,
     bytes_per_tile as _bytes_per_tile,
     tensor_prefetcher_session as _tensor_prefetcher_session,
@@ -174,8 +177,8 @@ def _apply_shape(shape: dict) -> None:
     _DTYPE_BYTES = _DTYPE_BYTES_FROM_NAME[_DTYPE_NAME]
 
 
-# Cap GCB to leave headroom in L1 for the matmul CBs (in1 double-buffered, in2 ring history,
-# in0, out, interm0). The worker-core path also requires gcb_size >= one full per-receiver
+# Cap the GCB / pipe ring to leave headroom in L1 for the matmul CBs (in1 double-buffered, in2 ring
+# history, in0, out, interm0). The worker-core path also requires gcb_size >= one full per-receiver
 # tensor, so we clamp from below to that.
 _L1_BANK_HEADROOM_BYTES = 256 * 1024  # leave 256 KB for matmul + activation + output L1
 
@@ -188,7 +191,7 @@ def _matmul_in1_block_size_bytes(k: int, ring_size: int) -> int:
     return k_per_shard_tiles * n_per_recv_tiles * int(_DTYPE_BYTES * ttnn.TILE_SIZE * ttnn.TILE_SIZE)
 
 
-def _gcb_size_capped(block_size_bytes: int, k: int, ring_size: int, max_buffered_blocks: int = 4) -> int:
+def _ring_size_capped(block_size_bytes: int, k: int, ring_size: int, max_buffered_blocks: int = 4) -> int:
     # Matmul receiver needs ~block_size_bytes of L1 for in1_CB (the per-receiver weight slice
     # fully buffered for gather_in0). To fit GCB + in1_CB + other matmul CBs in ~1.4 MB L1,
     # the GCB itself can't exceed ~(1.4 MB - block_size_bytes - matmul overhead).
@@ -369,12 +372,12 @@ def test_bench_dram_core_repeats(device, op_name, shape):
 
     # bytes/elem: bf16=2, bf8_b≈1.0625 (1088B/tile / 1024 elems/tile)
     block_size_bytes = int((k_padded * (_N // num_dram_banks) // num_receivers_per_bank) * _DTYPE_BYTES)
-    # max_buffered_blocks=1 keeps GCB ~= one fifo-page, leaving room for matmul receiver
-    # CBs in worker L1 (1.4 MB). Larger shapes (70B FF1/FF2) overflow at deeper GCBs.
-    gcb_size = _gcb_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
+    # max_buffered_blocks=1 keeps the ring ~= one layer per receiver, which the batched gather needs
+    # resident and which leaves room for the matmul's CBs in worker L1 (1.4 MB).
+    pipe_ring_size = _ring_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
     # Pair DRAM bank i with the receivers of the i-th sorted y-row so bank i pushes to
     # ring positions [i*recv_per_bank, (i+1)*recv_per_bank) — required by the gather_in0
-    # matmul's bank-to-receivers ordering assertion.
+    # matmul's bank-to-receivers ordering check.
     bank_to_receivers = [
         (
             bank_idx,
@@ -388,13 +391,8 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         ring_rows=ring_rows,
         num_global_cb_receivers=num_receivers_per_bank,
     )
-    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
-        device,
-        [cc_program_config],
-        [tt_weight],
-        bank_to_receivers=bank_to_receivers,
-        size=gcb_size,
-    )
+    # A K-row-major weight needs one pipe per bank: one read of a bank's shard feeds all its receivers.
+    _pipe_space, pipes = _make_tensor_prefetcher_pipes(device, bank_to_receivers, pipe_ring_size, single_sender=True)
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),
         core_grid=receiver_core_range_set,
@@ -427,7 +425,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            global_cb=gcb,
+            prefetcher_pipes=pipes,
             optional_output_tensor=optional_output_tensor,
             sub_device_id=receiver_sub_device_id,
         )
@@ -437,7 +435,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, ring_size)] * num_prefetch_layers,
-        global_cb=gcb,
+        prefetcher_pipes=pipes,
     )
 
     # Correctness + program-cache warmup: one real one-matmul launch.
@@ -496,7 +494,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
       - shard-contiguous (CONTIGUOUS_1D): bank b feeds the CONTIGUOUS arc [b*R, b*R+R-1] (row b of
         receivers_per_y) -- each bank's writes stay on a local ring segment.
     The matmul topology (receiver cores, ring order, program config) is identical; only
-    the shard->bank placement and the GCB pairing change, so PCC holds for both. Compare
+    the shard->bank placement and the pipes' bank pairing change, so PCC holds for both. Compare
     the logged GB/s across the two ids for the same shape.
 
     Why this is matmul-correct: in a gather_in0 matmul, ring core r computes output
@@ -509,9 +507,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
         ring positions [b, b+num_banks, b+2*num_banks, ...]. Under BDS round-robin,
         bank b's slab s == shard (b + s*num_banks), so this delivers shard r to ring
         position r (PCC-verified below).
-      - GCB built via create_global_circular_buffer_for_matmul_1d, which auto-detects the
-        weight's DRAM layout (here receiver-contiguous NdShardSpec) and sizes/builds the GCB
-        accordingly.
+      - The pipes' ring holds one layer per receiver, as the batched gather needs.
     """
     _apply_shape(shape)
 
@@ -585,7 +581,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     )
 
     block_size_bytes = int((k_padded * n_per_recv) * _DTYPE_BYTES)
-    gcb_size = _gcb_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
+    pipe_ring_size = _ring_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
 
     cc_program_config = _build_program_config(
         ring_size=ring_size,
@@ -625,16 +621,8 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
             for b in range(num_dram_banks)
         ]
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    # Centralized recv-contig GCB builder: validates the (program_config, weight, bank_to_receivers)
-    # triple (num_shards == ring_size, K % ring_size == 0, per_core_N == per-receiver N) and sizes/builds
-    # the GCB in one place.
-    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
-        device,
-        [cc_program_config],
-        [tt_weight],
-        bank_to_receivers,
-        gcb_size,
-        support_multi_receiver_shards=not dual_senders,
+    _pipe_space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, pipe_ring_size, single_sender=not dual_senders
     )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),
@@ -668,19 +656,21 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            global_cb=gcb,
+            prefetcher_pipes=pipes,
             optional_output_tensor=optional_output_tensor,
             sub_device_id=receiver_sub_device_id,
         )
 
     # Centralized recv-contig param + cross-check: returns the validated block_count
-    # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
-    block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
+    # (== ring_size) and TT_FATALs on a weight/program_config/pipes mismatch.
+    block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
+        cc_program_config, tt_weight, prefetcher_pipes=pipes
+    )
     ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, block_count)] * num_prefetch_layers,
-        global_cb=gcb,
+        prefetcher_pipes=pipes,
     )
 
     # Correctness + program-cache warmup: one real one-matmul launch.
@@ -797,7 +787,7 @@ def test_bench_workercore_repeats(device, op_name, shape):
 
     # Per-sender, per-block bytes (each sender pushes its share of the weight).
     block_size_bytes = int((_K * (_N // num_senders) // _NUM_RECV_PER_BANK) * _DTYPE_BYTES)
-    gcb_size = _gcb_size_capped(block_size_bytes, k=_K, ring_size=ring_size)
+    gcb_size = _ring_size_capped(block_size_bytes, k=_K, ring_size=ring_size)
     gcb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, gcb_size)
 
     torch.manual_seed(0xBE8)
@@ -961,15 +951,9 @@ def test_bench_traced_prefetch_and_linear(device, k, n, requests):
     k_block_tiles = k // ttnn.TILE_SIZE // ring_size
     per_core_n = n // ttnn.TILE_SIZE // ring_size
     block_bytes = k_block_tiles * per_core_n * _bytes_per_tile(ttnn.bfloat8_b)
-    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet([]),
-        receiver_domain=ring_cores,
-        ring_size=_TRACED_RING_BUDGET_BYTES // block_bytes * block_bytes,
-        max_receivers_per_pipe=_TRACED_RECV_PER_BANK,
-        num_dram_senders=2 * _NUM_DRAM_BANKS,
+    _pipe_space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, _TRACED_RING_BUDGET_BYTES // block_bytes * block_bytes
     )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(pipe_space, bank_to_receivers)
 
     torch.manual_seed(0)
     pt_weight = torch.randn(1, 1, k, n)
