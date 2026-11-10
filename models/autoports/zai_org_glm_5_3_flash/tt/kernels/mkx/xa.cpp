@@ -124,6 +124,22 @@ void kernel_main() {
         }
 #endif
         noc_async_read_barrier();  // the zeros land before the row reads into the same tiles
+#if defined(MKX_XROWS_COAL)
+        // GLM53_MKX_XROWS_COAL=1: a face's rows are contiguous 32-B rows, so rows 0..T-1 of face 0 are bytes [0, 32 T)
+        // of the tile and those of face 1 [512, 512 + 32 T): ONE read per face (T = 16: both faces = the tile's first
+        // 1 KB, one read). The same bytes land at the same L1 offsets as the per-row reads of the #else branch (2 T
+        // reads of 32 B per tile = 4,096 issues per reader at T = 16, ~18 ns each: ~75 us of the expert phase).
+        constexpr uint32_t XROW_BYTES = MKX_XROWS * 32;
+        for (uint32_t k = 0; k < KT_GU; ++k) {
+            const uint32_t dst = xl1 + k * xpage;
+            if constexpr (MKX_XROWS == 16) {
+                noc_async_read(x.get_noc_addr(k, 0), dst, 2 * XROW_BYTES);
+            } else {
+                noc_async_read(x.get_noc_addr(k, 0), dst, XROW_BYTES);
+                noc_async_read(x.get_noc_addr(k, 512), dst + 512, XROW_BYTES);
+            }
+        }
+#else
         for (uint32_t k = 0; k < KT_GU; ++k) {
             const uint32_t dst = xl1 + k * xpage;
             for (uint32_t r = 0; r < MKX_XROWS; ++r) {
@@ -131,6 +147,7 @@ void kernel_main() {
                 noc_async_read(x.get_noc_addr(k, 512 + r * 32), dst + 512 + r * 32, 32);
             }
         }
+#endif
         noc_async_read_barrier();
         cb_push_back(CB_X, KT_GU);
     }

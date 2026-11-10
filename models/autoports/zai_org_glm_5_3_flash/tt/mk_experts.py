@@ -49,11 +49,18 @@ MKX_REV = 24  # kernel revision (compile signature: a long-lived process rebuild
 # 20 MKX_RW_XA: the routing weights' scatter on xa (off the stream-start path; GLM53_MKX_RW_XA=1)
 # 21 MKX_XSL: batched expert TP (slice c of every selected expert, the union in groups of 8 = one EP-shaped pass each)
 # 22 fold_y2 (MKX_Y2_INIT): y2 added to the finished routed sum in its own pass (batch invariance; Stage 14)
+# (MKX_XROWS_COAL, opt-in GLM53_MKX_XROWS_COAL=1: xa's T x rows read as one span per face; no revision bump: the knob
+# is its own define on xa alone, so a knob-off build keeps every kernel's defines and binaries)
 TPT = 8  # tiles per NoC read transaction (8 x 576 B)
 
 
 def f32_bits(x: float) -> int:
     return struct.unpack("<I", struct.pack("<f", float(x)))[0]
+
+
+def xcoal(xdefs: list) -> bool:
+    """GLM53_MKX_XROWS_COAL=1 and xa reads x by rows (MKX_XROWS among xdefs): xa's MKX_XROWS_COAL define is added"""
+    return os.environ.get("GLM53_MKX_XROWS_COAL", "0") == "1" and any(k == "MKX_XROWS" for k, _ in xdefs)
 
 
 class ReaderExperts:
@@ -234,6 +241,11 @@ class ReaderExperts:
                 ("MKX_TPT", str(self.tpt)), ("MKX_INFLIGHT", str(self.inflight)), ("MKX_REV", str(MKX_REV)),
                 ("MKX_MMBLOCK", os.environ.get("GLM53_MKX_MMBLOCK", "1"))]  # fmt: skip
         wdefs, adefs = list(defs), list(defs)
+        # GLM53_MKX_XROWS_COAL=1 (opt-in; xa.cpp MKX_XROWS_COAL): the MKX_XROWS reads as one span per face (rows 0..T-1
+        # of a face are contiguous): 2 KT_GU reads per reader (KT_GU at T = 16) instead of 2 T KT_GU (4,096 at T = 16,
+        # ~75 us of every MoE layer's expert phase at B = 16); the same bytes at the same L1 offsets (bitwise)
+        if xcoal(xprog):
+            adefs.append(("MKX_XROWS_COAL", "1"))
         wtail, atail = [], []
         if wait is not None:
             wdefs.append(("MKX_WAIT_SEM", str(wait[0])))
