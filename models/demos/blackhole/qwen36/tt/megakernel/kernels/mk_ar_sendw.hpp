@@ -27,7 +27,7 @@ FORCE_INLINE void send_pkt(tt::tt_fabric::WorkerToFabricEdmSender& connection, v
 
 struct SendWriter {
     uint32_t cbase = 0, rbase = 0, num_rs = 0, num_ag = 0, fwd_range = 0, bwd_range = 0;
-    uint32_t rs_arg_base = 0, ag_arg_base = 0, sem_addr = 0, out_addr = 0, slot_addr = 0;
+    uint32_t rs_arg_base = 0, ag_arg_base = 0, sem_addr = 0, out_addr = 0, slot_addr = 0, red_base = 0;
     FabricConnectionManager fab;
     volatile PACKET_HEADER_TYPE* hf = nullptr;
     volatile PACKET_HEADER_TYPE* hb = nullptr;
@@ -55,7 +55,16 @@ struct SendWriter {
         fab = FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(a);
         sem_addr = carg(ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore);
         out_addr = carg(1);
-        slot_addr = get_write_ptr(MKAR_S_CB_RED) + MKAR_S_MY_CHIP * MKAR_S_CHUNK_TILES * MKAR_S_IN_PAGE;
+#if defined(MKAR_S_PUB)   // hosted (GDN24): this core does not span CB_RED; the owners publish its address at init
+        {
+            volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_S_PUB);
+            while (*pw == 0) {}
+            red_base = *pw;
+        }
+#else
+        red_base = get_write_ptr(MKAR_S_CB_RED);
+#endif
+        slot_addr = red_base + MKAR_S_MY_CHIP * MKAR_S_CHUNK_TILES * MKAR_S_IN_PAGE;
         CircularBuffer cb_hdr(MKAR_S_CB_HDR);
         cb_hdr.reserve_back(1);
         hf = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cb_hdr.get_write_ptr());
@@ -95,6 +104,9 @@ struct SendWriter {
     }
 
     FORCE_INLINE void iter(uint32_t it) {
+#if defined(MKAR_SZONE)
+        DeviceZoneScopedN("S-WIT");
+#endif
         CircularBuffer cb_rs(MKAR_S_CB_RS), cb_ag(MKAR_S_CB_AG);
         uint32_t ag_sent = 0;
         for (uint32_t i = 0; i < num_rs; i++) {
@@ -111,7 +123,7 @@ struct SendWriter {
             const uint8_t noc_x = xy >> 16, noc_y = xy & 0xFFFF;
             const bool forward = ((route >> 8) & 0xFF) == 0;
 #if defined(MKAR_NOOWN)   // the destination owner has no slot for itself: slot index (route >> 16) from the host
-            const uint32_t slot_addr = get_write_ptr(MKAR_S_CB_RED) + (route >> 16) * MKAR_S_CHUNK_TILES * MKAR_S_IN_PAGE;
+            const uint32_t slot_addr = red_base + (route >> 16) * MKAR_S_CHUNK_TILES * MKAR_S_IN_PAGE;
 #endif
             auto& connection = forward ? fab.get_forward_connection() : fab.get_backward_connection();
             volatile PACKET_HEADER_TYPE* h = forward ? hf : hb;

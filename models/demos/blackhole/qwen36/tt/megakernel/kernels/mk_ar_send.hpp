@@ -88,9 +88,21 @@ struct SendReader {
     }
 
     FORCE_INLINE void iter(uint32_t it) const {
+#if defined(MKAR_SZONE)
+        DeviceZoneScopedN("S-RIT");
+#endif
 #if defined(MKAR_ATYPE)   // engine (MK_REAL_AAR): bit it set = an attention AR, its input is the wo output CB on the owners
         // (the CB also spans these sender cores, so its local address is the owners' address)
+#if defined(MKAR_S_PUBA)   // hosted (GDN24): no CB_AIN on this core; the owners publish its address at init
+        uint32_t in_addr = this->in_addr;
+        if ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) {
+            volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_S_PUBA);
+            while (*pw == 0) {}
+            in_addr = *pw;
+        }
+#else
         const uint32_t in_addr = ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
+#endif
 #endif
         CircularBuffer cb_rs(MKAR_S_CB_RS);
         auto* done_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_PS_SEM(MKAR_S_SEM_DONE));
@@ -187,6 +199,10 @@ struct SendReader {
         noc_semaphore_wait_min(done_sem, MKAR_S_NOUT * n_iters);
         *done_sem = 0;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_PS_SEM(MKAR_S_SEM_AG_READY)) = 0;
+#if defined(MKAR_S_PUB)   // device-local publication words (the owners rewrite them at the next program's init)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_S_PUB) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_S_PUBA) = 0;
+#endif
         if constexpr (MKAR_S_PROG && !MKAR_S_READYP) {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_PS_SEM(MKAR_S_SEM_READY)) = 0;
         }

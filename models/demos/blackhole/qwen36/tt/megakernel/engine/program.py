@@ -595,6 +595,17 @@ def setup_bench(dev, MESH, mesh_identity):
         if AR_DLVR: MKDEF = MKDEF + [('MK_AR_DLV', str(ttnn.get_global_semaphore_address(AR_DLV)))]
         MKDEF = MKDEF + [('MK_AR_XF0', str(ttnn.get_global_semaphore_address(AR_XF[0]))), ('MK_AR_XF1', str(ttnn.get_global_semaphore_address(AR_XF[1]))),
                          ('MK_AR_XCNT', str(ttnn.get_global_semaphore_address(AR_XCNT)))]
+        # GDN24 (AR sender hosted in the GDN role on the corner, spec v1.44): the corner cores do NOT span the owners' RS slot
+        # CB (CB_RED, 140-160 KB) or the wo output CB 23 (their GDN-role CB stack would be lifted above the owners' whole CB
+        # region). Owners publish both addresses at init into 2 words on the 4 corner cores (MK_AR_PUB / MK_AR_PUBA); the
+        # hosted SendWriter / SendReader wait for them non-zero; the reader zeroes them at fini (device-local).
+        AR_PUB = None
+        if GDN24:
+            _corner_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, GY), ttnn.CoreCoord(GX + 1, GY + 1))])
+            AR_PUB = [ttnn.create_global_semaphore(dev, _corner_crs, 0) for _ in range(2)]
+            _pxy = [dev.worker_core_from_logical_core(ttnn.CoreCoord(*xy_)) for xy_ in ((GX, GY), (GX + 1, GY), (GX, GY + 1), (GX + 1, GY + 1))]
+            AR_PUB_D = [('MK_AR_PUB', str(ttnn.get_global_semaphore_address(AR_PUB[0]))), ('MK_AR_PUBA', str(ttnn.get_global_semaphore_address(AR_PUB[1])))]
+            MKDEF = MKDEF + AR_PUB_D + [(f'MK_AR_PUBXY{i_}', f'{(c_.x << 16) | c_.y}u') for i_, c_ in enumerate(_pxy)]
         # own_cb (R = 32): no own slot in the AR's RS slot CB; the reduce reads this device's partial from CB_VXO (CB 4)
         # AR CB ids: v12 STREAM-only ids (free on the owners and the AR-only senders) so the program's max CB index stays 44
         # (each index above it costs every core 16 B of kernel config buffer); MK_AR_CBHI=1: the 50..60 block
@@ -957,6 +968,8 @@ def setup_bench(dev, MESH, mesh_identity):
             for c in corner:
                 rt[c.x][c.y] = (sp['rd_args'] if role == 'r' else sp['wr_args'])[(c.x, c.y)]
             dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines'])
+            dfs = dfs + [('MKAR_S_PUB', dict(AR_PUB_D)['MK_AR_PUB']), ('MKAR_S_PUBA', dict(AR_PUB_D)['MK_AR_PUBA'])]
+            if os.environ.get('MKAR_SZONE', '0') == '1': dfs = dfs + [('MKAR_SZONE', '1')]   # hosted sender iteration zones (S-RIT / S-WIT)
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
                                              defines=dfs, runtime_args=rt, **base))
         return out
@@ -1010,7 +1023,7 @@ def setup_bench(dev, MESH, mesh_identity):
             arp = ARP[coord[1]]
             assert dict(arp['recv_defines']).get('MKAR_DELIVER', '0') != '0', "MK_REAL_AR: the AR must deliver x (STREAM waits its flags)"
             sems = sems + arp['semaphores']
-            _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=d_.core_ranges, format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
+            _red = [ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=(O_CRS if GDN24 else d_.core_ranges), format_descriptors=list(d_.format_descriptors)) for d_ in arp['shared_cbs']]
             cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
             if AR_GAMMA and AR_GEARLY:   # MK_AR_GEARLY: a dedicated γ CB (owners' CB region), filled from the MLP start
                 cbs = cbs + [cbd(32, ttnn.bfloat16, AR_GT, O_CRS)]

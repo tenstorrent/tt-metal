@@ -285,6 +285,18 @@ void kernel_main() {
     static mkar::Recv ar;
     uint32_t ar_it = 0;   // running AR index of the pass (attention ARs and MLP ARs in program order)
     if (ar_on) ar.init(MK_AR_BLK_RECV, MK_AR_BLK_RECV + MKAR_NCOMMON);
+#if defined(MK_AR_PUB)   // GDN24: publish CB_RED (+ CB_AIN) owner addresses to the 4 hosted AR senders (corner cores)
+    if (vrole == 2) {
+        constexpr uint32_t pxy[4] = {MK_AR_PUBXY0, MK_AR_PUBXY1, MK_AR_PUBXY2, MK_AR_PUBXY3};
+        for (uint32_t i = 0; i < 4; ++i) {
+#if defined(MKAR_ATYPE)
+            noc_inline_dw_write(get_noc_addr(pxy[i] >> 16, pxy[i] & 0xFFFF, MK_AR_PUBA), get_read_ptr(MKAR_CB_AIN));
+#endif
+            noc_inline_dw_write(get_noc_addr(pxy[i] >> 16, pxy[i] & 0xFFFF, MK_AR_PUB), get_write_ptr(MKAR_CB_RED));
+        }
+        noc_async_write_barrier();
+    }
+#endif
 #endif
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_GAMMA)
 #ifndef MK_AR_GTRID
