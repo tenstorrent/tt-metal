@@ -111,7 +111,6 @@ def _build_generator_model(
         tt_data_parallel=tt_data_parallel,
         dtype=ttnn.bfloat8_b,
         model_name=model_name,
-        sentence_pooling_method="cls",
         return_dense=True,
         return_sparse=True,
         return_colbert=True,
@@ -153,7 +152,6 @@ def _run_generator_embeddings(
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "dense_vecs": dense_vecs,
-        "dense_vecs_norm": F.normalize(dense_vecs, dim=-1),
         "sparse_vecs": sparse_vecs,
         "colbert_vecs": colbert_vecs,
         "colbert_vecs_norm": F.normalize(colbert_vecs, dim=-1),
@@ -176,8 +174,8 @@ def _load_reference_outputs(device, model_name, sequence_length, model_location_
 def test_bge_m3_vllm_dense_embedding(device, model_name, sequence_length, model_location_generator):
     outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
     similarity = compute_dense_score_torch(
-        outputs["sentences_1"]["dense_vecs_norm"],
-        outputs["sentences_2"]["dense_vecs_norm"],
+        outputs["sentences_1"]["dense_vecs"],
+        outputs["sentences_2"]["dense_vecs"],
     )
     for i in range(similarity.shape[0]):
         for k in range(similarity.shape[1]):

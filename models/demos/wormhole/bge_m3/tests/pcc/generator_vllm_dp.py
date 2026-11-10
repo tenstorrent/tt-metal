@@ -109,7 +109,7 @@ def test_wrapper_dp2_matches_hf(mesh_device, encoded, reference, reset_seeds):
     """The wrapper selects the data-parallel path and agrees with HF."""
     assert tuple(mesh_device.shape) == (2, 1)
 
-    model = _build(mesh_device)
+    model = _build(mesh_device, sentence_pooling_method="mean")
     try:
         first = model.forward(
             input_ids=encoded["input_ids"],
@@ -137,7 +137,7 @@ def test_replay_follows_the_valid_lengths(mesh_device, reset_seeds):
     them once at capture, so this second request reused the first request's lengths
     and pooled over the wrong span. The trace replay must refill them.
     """
-    model = _build(mesh_device)
+    model = _build(mesh_device, sentence_pooling_method="mean")
     try:
         short_ids, short_mask = _fixed_length_batch(64)
         long_ids, long_mask = _fixed_length_batch(2048)
@@ -148,7 +148,7 @@ def test_replay_follows_the_valid_lengths(mesh_device, reset_seeds):
 
         # A fresh wrapper pools the long batch with no earlier state to inherit.
         model.release()
-        reference_model = _build(mesh_device)
+        reference_model = _build(mesh_device, sentence_pooling_method="mean")
         try:
             expected = reference_model.forward(input_ids=long_ids, attention_mask=long_mask)["dense_vecs"].clone()
         finally:

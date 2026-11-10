@@ -36,8 +36,8 @@ class BgeM3ForEmbedding:
         tt_data_parallel: int = 1,
         **kwargs,
     ):
-        self.sentence_pooling_method = kwargs.pop("sentence_pooling_method", "mean")
-        self.normalize_embeddings = kwargs.pop("normalize_embeddings", False)
+        self.sentence_pooling_method = kwargs.pop("sentence_pooling_method", "cls")
+        self.normalize_embeddings = kwargs.pop("normalize_embeddings", True)
         self.return_dense = kwargs.pop("return_dense", True)
         self.return_sparse = kwargs.pop("return_sparse", False)
         self.return_colbert = kwargs.pop("return_colbert", False)
@@ -544,7 +544,10 @@ class BgeM3ForEmbedding:
         pooled = to_torch_auto_compose(pooled_tt, device=self.device)
         if pooled.dim() == 3 and pooled.shape[1] == 1:
             pooled = pooled.squeeze(1)
-        return pooled.to(torch.float32)
+        pooled = pooled.to(torch.float32)
+        if self.normalize_embeddings:
+            pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
+        return pooled
 
     def _sparse_embedding(
         self,
