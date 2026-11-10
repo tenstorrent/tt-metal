@@ -57,12 +57,22 @@ def ungroup_gate_up(gu):
 
 
 def mlp_mats(layer):
+    """Per device (wg [H, I], wu [H, I], wd [I, H]) via v12's engine/layout_mlp.from_tt (spec §19 default path: the
+    lossless tile-granular repack of prod's GPTQ BFP4 w_gate_up / w2, fused-swiglu tile pairs split). Falls back to the
+    local ungroup when layout_mlp is not in the tree (identical result)."""
     w = layer.feed_forward.weights
     assert w.w_gate_up is not None, "megakernel repack needs the packed gate|up weight (prod dsmc path)"
     gus, wds = device_shards(w.w_gate_up), device_shards(w.w2)
+    try:
+        from models.demos.blackhole.qwen36.tt.megakernel.engine.layout_mlp import from_tt
+    except ImportError:
+        from_tt = None
     out = []
     for gu, wd in zip(gus, wds):
-        wg, wu = ungroup_gate_up(gu)
+        if from_tt is not None:
+            wg, wu, wd = from_tt(gu, wd)
+        else:
+            wg, wu = ungroup_gate_up(gu)
         assert wg.shape[0] == H and wd.shape == (wg.shape[1], H), (wg.shape, wd.shape)
         out.append((wg, wu, wd))
     return out
@@ -113,23 +123,24 @@ SOURCES = {
 # 2. packing (pure torch): the tracks' layout functions
 # ---------------------------------------------------------------------------------------------------------------- #
 class MlpLayout:
-    """v12 split-K MLP pages (engine/layout_mlp.py). ctx: core_xy (80 STREAM cores, STREAM index order), bank_loc."""
+    """v12 split-K MLP pages via engine/layout_mlp.build_device_pages (one layer per call; DRAM page order). No gamma
+    fold: the AR owner applies gamma * NORM_FIX at x delivery (kind 'gamma'). ``fields`` (pvl, per-core first_page /
+    ntiles / nn) are the STREAM runtime args (bench_mka2 v_args)."""
 
     dtype = "bfloat4_b"
 
-    def __init__(self, core_xy, bank_loc, gamma_fold=None):
+    def __init__(self, bank_loc):
         from models.demos.blackhole.qwen36.tt.megakernel.engine import layout_mlp as lm
 
-        self.lm = lm
-        self.banks = len(bank_loc)
-        self.bank_of, self.rank, self.nslot_b = lm.assign_banks(core_xy, bank_loc)
-        self.pages_per_layer = lm.pages_per_layer(self.nslot_b, self.banks)
-        self.gamma_fold = gamma_fold  # None, or (layer_idx -> (gamma [H], norm_fix))
+        self.lm, self.bank_loc = lm, bank_loc
+        self.fields = None
+        self.pages_per_layer = None
 
     def pack(self, mats, layer_idx):
-        wg, wu, wd = mats
-        g = self.gamma_fold(layer_idx) if self.gamma_fold else (None, 1.0)
-        return self.lm.pack_layer(wg, wu, wd, self.bank_of, self.rank, self.nslot_b, self.banks, gamma=g[0], norm_fix=g[1])
+        pages, fields = self.lm.build_device_pages([mats], self.bank_loc)
+        if self.fields is None:
+            self.fields, self.pages_per_layer = fields, fields["pvl"]
+        return pages
 
 
 class QkvLayout:
