@@ -34,6 +34,12 @@ DEFAULT_MIN_GENERATION_AREA = 2048 * 2048
 MIN_GENERATION_AREA_RANGE = (1024, 16777216)
 QWEN_REFERENCE_SHORT_EDGE = (1024, 1024)
 VAE_REFERENCE_SHORT_EDGE = (1024, 2048)
+# What one Galaxy carries across ALL references of a request (MiniMax's API allows 1-16 references of up to 8192 px a
+# side with no total budget). Under these the per-reference sizing above is exact; over them every copy of that kind
+# is shrunk by one common factor, keeping its aspect ratio: 32768 reference rows = eight 2048^2 VAE copies, 24576
+# vision tokens = sixteen 1536x1024 Qwen copies (and with a 4096-token prompt the presentation stays under 32768).
+REFERENCE_ROW_BUDGET = 32768
+VISION_TOKEN_BUDGET = 24576
 VAE_RATIO = 16
 LATENT_CHANNELS = 24
 PATCH = (1, 2, 2)
@@ -127,6 +133,36 @@ class ReferenceGeometry:
 def reference_geometry(vae_image: Image.Image) -> ReferenceGeometry:
     w, h = vae_image.size
     return ReferenceGeometry(posterior_h=h // VAE_RATIO, posterior_w=w // VAE_RATIO)
+
+
+def vae_reference_rows(vae_image: Image.Image) -> int:
+    """Packed rows one VAE reference copy adds."""
+    return reference_geometry(vae_image).num_rows
+
+
+def qwen_vision_tokens(qwen_image: Image.Image) -> int:
+    """Merged vision tokens one Qwen reference copy adds (16-px patches, 2x2 merge: one token per 32x32 px)."""
+    w, h = qwen_image.size
+    return max(1, round(w / 32)) * max(1, round(h / 32))
+
+
+def fit_reference_budget(images: list[Image.Image], count, budget: int) -> tuple[list[Image.Image], float]:
+    """`images` unchanged when `sum(count(image))` fits `budget`; else every image shrunk by one common factor
+    (aspect kept, sides floored to the 32-px grid, LANCZOS) until it does. Returns the images and the factor."""
+    total = sum(count(im) for im in images)
+    if total <= budget:
+        return list(images), 1.0
+    scale = math.sqrt(budget / total)
+    while True:
+        out = []
+        for im in images:
+            w, h = im.size
+            size = (max(CANVAS_GRID, int(w * scale) // CANVAS_GRID * CANVAS_GRID),
+                    max(CANVAS_GRID, int(h * scale) // CANVAS_GRID * CANVAS_GRID))
+            out.append(im.convert("RGB").resize(size, Image.Resampling.LANCZOS))
+        if sum(count(im) for im in out) <= budget:
+            return out, scale
+        scale *= 0.97
 
 
 # ----------------------------------------------------------------------------------------------------- latents / RNG

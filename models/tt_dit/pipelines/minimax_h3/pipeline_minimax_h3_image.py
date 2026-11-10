@@ -57,16 +57,19 @@ MODEL_NAME_IMAGE = "minimax-h3-image"  # DiT + VAE cache namespace; the Qwen con
 IMAGE_BUCKET_LADDER_4X8 = (4608, 5376, 6656, 8192, 10240, 12800, 16384, 17920, 20480, 25600, 32768)
 
 # Qwen presentation: 4096 prompt tokens + ~1024 vision tokens per 1024-short-edge reference (more for wide ones).
-IMAGE_PROMPT_CAP = 12288
-IMAGE_VISION_PATCH_CAP = 4 * 8192  # unmerged patches across all references
+# Presentation cap: a 4096-token prompt plus `host.VISION_TOKEN_BUDGET` vision tokens (16 references) and labels.
+IMAGE_PROMPT_CAP = 32768
+IMAGE_VISION_PATCH_CAP = 4 * host.VISION_TOKEN_BUDGET  # unmerged patches across all references
 # Presentation rungs (text + vision tokens) below the prompt arena cap: a short t2i prompt, a 1024^2 reference
-# (1024 vision tokens) plus text, two references, then the long tail.
-IMAGE_PRESENTATION_LADDER = (1024, 2048, 4096, 8192)
+# (1024 vision tokens) plus text, two to four references, then up to sixteen.
+IMAGE_PRESENTATION_LADDER = (1024, 2048, 4096, 8192, 16384)
+# Vision-tower pad rungs, in unmerged patches: one 1024^2 Qwen copy is 4096; the top is the vision-token budget.
+IMAGE_VISION_PATCH_LADDER = (4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536, IMAGE_VISION_PATCH_CAP)
 IMAGE_ARENA_CAPS = MiniMaxH3ArenaCaps(
     prompt=IMAGE_PROMPT_CAP,
     video_rows=17152,  # target rows: 6272x2688 (21:9) is 16464; 4096^2 is 16384
     audio_rows=32,  # unused (audio-free); kept non-zero for MiniMaxH3ArenaCaps.validate
-    condition_video_rows=16384,  # reference rows: four 2048^2-class refs, or one long one
+    condition_video_rows=host.REFERENCE_ROW_BUDGET,  # all references' rows (eight 2048^2 copies)
     condition_audio_rows=32,
 )
 
@@ -109,7 +112,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         dit_fsdp: bool = False,
         load_dit: bool = True,
         dynamic_length: bool | None = None,
-        max_sequence_length: int = 32768,
+        max_sequence_length: int = IMAGE_PROMPT_CAP + host.REFERENCE_ROW_BUDGET + 17152,  # = the arena caps
         precompute_adaln: bool = True,
         use_persistent_ccl_buffers: bool = True,
         device_latents: bool = True,
@@ -163,7 +166,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         self.presentation_ladder = tuple(r for r in IMAGE_PRESENTATION_LADDER if r < self.arena_caps.prompt) + (
             self.arena_caps.prompt,
         )
-        self.vision_patch_ladder = None
+        self.vision_patch_ladder = IMAGE_VISION_PATCH_LADDER  # the tower pads its patches to a warmed rung
         self._force_bucket = self._force_prompt_pad = self._force_vision_pad = None
         self._log_generation = True
         # Each SP device gathers only its own rows, so forward skips `mesh_partition` -- the one op whose program was
@@ -396,6 +399,13 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         refs_rgb = [host.load_reference_image(image) for image in images]
         qwen_refs = [host.bound_short_edge(im, *host.QWEN_REFERENCE_SHORT_EDGE) for im in refs_rgb]
         vae_refs = [host.bound_short_edge(im, *host.VAE_REFERENCE_SHORT_EDGE) for im in refs_rgb]
+        qwen_refs, q_scale = host.fit_reference_budget(qwen_refs, host.qwen_vision_tokens, host.VISION_TOKEN_BUDGET)
+        vae_refs, v_scale = host.fit_reference_budget(vae_refs, host.vae_reference_rows, host.REFERENCE_ROW_BUDGET)
+        if q_scale < 1 or v_scale < 1:
+            self._log(
+                f"{len(refs_rgb)} references over the per-request budget: Qwen copies x{q_scale:.2f}, VAE copies "
+                f"x{v_scale:.2f}"
+            )
         geometry = [host.reference_geometry(im) for im in vae_refs]
         noise = host.draw_request_noise(seed, canvas, geometry)
 
@@ -687,8 +697,20 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
                         ttnn.synchronize_device(self.mesh_device)
                     ttnn.deallocate(prompt_device)
                 ttnn.deallocate(embeds)
+        # The vision tower pads its patches to a rung of `vision_patch_ladder`: one encode per rung (one 1024^2
+        # reference padded up to it), then every reachable (presentation rung, tower rung) pair of the vision merge.
+        for vision_pad in self.vision_patch_ladder:
+            self._force_vision_pad, self._force_prompt_pad = vision_pad, 2048
+            try:
+                embeds, _ = self.encode_prompt("warmup", keyframes=[reference])
+            finally:
+                self._force_vision_pad = self._force_prompt_pad = None
+            ttnn.deallocate(embeds)
+        self._warm_vision_merge(self.presentation_ladder, self.vision_patch_ladder)
         self("warmup", width=4096, height=4096, seed=0)
         self("warmup", width=2048, height=2048, seed=0, images=[reference])
+        # Sixteen references put the DiT past 6144 rows a device, its "long" length class (its own programs).
+        self("warmup", width=4096, height=4096, seed=0, images=[reference] * 16)
         return time.perf_counter() - started
 
     def warm_rungs(self, rungs: Sequence[int] | None = None) -> dict[int, float]:

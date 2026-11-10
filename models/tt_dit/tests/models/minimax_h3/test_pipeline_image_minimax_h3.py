@@ -262,13 +262,19 @@ def test_served_envelope(mesh_device, guide_examples):
         logger.info(
             f"RESULT envelope {tag}: ok {result.image.size[0]}x{result.image.size[1]} packed {result.packed_length} | "
             f"{t.total:.2f}s (prompt {t.encode_prompt:.2f}, refs {t.encode_references:.2f}, denoise {t.denoise:.2f}, "
-            f"decode {t.decode:.2f}) | misses {sum(t.program_misses.values())}"
+            f"decode {t.decode:.2f}) | misses {sum(t.program_misses.values())} "
+            f"{ {k: v for k, v in t.program_misses.items() if v} }"
         )
 
     for w, h in SERVED_SIZES:
         run(f"t2i {w}x{h}", prompt=t2i["prompt"], width=w, height=h, seed=1)
-    for ref_w, ref_h in ((1024, 1024), (3000, 2000)):
-        for count in (1, 2, 4, 8, 16):
+    for ref_w, ref_h, counts in (
+        (1024, 1024, (1, 2, 4, 8, 16)),
+        (3000, 2000, (1, 2, 4, 8, 16)),
+        (2048, 2048, (8,)),
+        (8192, 2048, (16,)),  # MiniMax's limits: 8192 px a side, 4:1, 16 references -- over budget, shrunk
+    ):
+        for count in counts:
             refs = [Image.new("RGB", (ref_w, ref_h), (40 + 13 * i, 90, 160 - 7 * i)) for i in range(count)]
             labels = " ".join(f"<Picture {i + 1}>" for i in range(count))
             run(
@@ -279,4 +285,7 @@ def test_served_envelope(mesh_device, guide_examples):
                 seed=1,
                 images=refs,
             )
+    refs = [Image.new("RGB", (1600, 1200), (90, 120, 60)), Image.new("RGB", (1200, 1600), (60, 90, 120))]
+    run("edit 2 refs -> 2720x1536", prompt="Put <Picture 1> beside <Picture 2>.", width=2720, height=1536, seed=1,
+        images=refs)
     assert not failures, f"{len(failures)} envelope cases failed: {failures}"
