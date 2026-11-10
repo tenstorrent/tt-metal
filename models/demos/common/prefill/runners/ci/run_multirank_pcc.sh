@@ -161,7 +161,7 @@ case "${MODEL}" in
     PRODUCER_CHECK_PCC=0
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized; \
       ${PREFILL_TTNN_CACHE:+export PREFILL_TTNN_CACHE='${PREFILL_TTNN_CACHE}';} \
-      export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+      export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=INFO; export TT_SPARSE_MLA_OVERLAP_PROFILE=off;"
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     PERF_BASELINES=""
     ;;
