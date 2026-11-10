@@ -102,6 +102,12 @@ void kernel_main() {
     uint32_t ow_x[16], ow_y[16];
     for (uint32_t i = 0; i < 16; ++i) { ow_x[i] = get_arg_val<uint32_t>(a++); ow_y[i] = get_arg_val<uint32_t>(a++); }
     const uint32_t wod_addr = get_arg_val<uint32_t>(a++);
+#if defined(MKA_RQNR)
+    const uint32_t head_id = get_arg_val<uint32_t>(a++);   // 0-5 q heads, 6 k head, 255 none
+    uint32_t hd_x[NHEAD], hd_y[NHEAD];
+    for (uint32_t i = 0; i < NHEAD; ++i) { hd_x[i] = get_arg_val<uint32_t>(a++); hd_y[i] = get_arg_val<uint32_t>(a++); }
+    const uint32_t kd_addr = get_arg_val<uint32_t>(a++);   // DRAM debug copy of the k head output
+#endif
     const auto wod = TensorAccessor(qo_args, wod_addr, 2048);   // debug copy of every owner's CB_XO (bf16 tiles)
     auto mcast_ext = [&](uint32_t src, uint32_t dst, uint32_t bytes) {
         for (uint32_t i = 0; i < 3; ++i) {
@@ -142,6 +148,22 @@ void kernel_main() {
         for (uint32_t j = 0; j < qnt; ++j) noc_async_write(get_read_ptr(CB_QO) + j * QOTB, qo.get_noc_addr(L * QN + qn + j), QOTB);
 #if defined(MKA_RWO)
         uint32_t n_gate = 0;
+#if defined(MKA_RQNR)
+        {
+            noc_semaphore_wait_min(l1w(gs[GS_AADDR]), 1);
+            const uint32_t a_base = *l1w(gs[GS_AADDR]);
+            uint32_t hcnt[NHEAD];
+            for (uint32_t i = 0; i < NHEAD; ++i) hcnt[i] = 0;
+            for (uint32_t j = 0; j < qnt; ++j) {
+                const uint32_t n = qn + j;
+                if (n >= 56) continue;
+                noc_async_write(get_read_ptr(CB_QO) + j * QOTB, get_noc_addr(hd_x[n / 8], hd_y[n / 8], a_base + (n % 8) * QOTB), QOTB);
+                ++hcnt[n / 8];
+            }
+            noc_async_write_barrier();
+            for (uint32_t i = 0; i < NHEAD; ++i) if (hcnt[i]) noc_semaphore_inc(get_noc_addr(hd_x[i], hd_y[i], gs[GS_HCNT]), hcnt[i]);
+        }
+#endif
         if (qn + qnt > 64) {   // sig(gate) tiles -> the concat core's CB_S slot n - 64 (it multicasts S after its V loop)
             noc_semaphore_wait_min(l1w(gs[GS_SADDR]), 1);
             const uint32_t s_base = *l1w(gs[GS_SADDR]);
@@ -284,6 +306,34 @@ void kernel_main() {
             cb_reserve_back(CB_RSP, MKA_NOWN);
             cb_push_back(CB_RSP, MKA_NOWN);
             qkv_tail(L, A);
+#if defined(MKA_RQNR)
+            if (head_id < NHEAD) {
+                DeviceZoneScopedN("W-HEAD");
+                noc_semaphore_wait_min(l1w(gs[GS_HCNT]), 8 * (A + 1));
+                cb_reserve_back(CB_A, WK);   // full slot, slots 0-7 valid
+                cb_push_back(CB_A, WK);
+                cb_wait_front(CB_XO, 10);
+                const uint32_t yo = get_read_ptr(CB_XO);
+                if (head_id < 6) {   // own users' rows 4u..4u+3 -> the Q root's CB_Q tile u*8+t, rows 4h..4h+3
+                    const uint32_t qb = get_write_ptr(CB_Q);   // uniform CB_Q address, full-slot ring (base)
+                    const uint32_t drow = (4 * head_id) % 16, dface = head_id < 4 ? 0 : 2;
+                    for (uint32_t u = 0; u < NUSR; ++u)
+                        for (uint32_t t = 0; t < 8; ++t)
+                            for (uint32_t c = 0; c < 2; ++c) {
+                                const uint32_t src = yo + t * 2048 + ((u < 4 ? 0 : 2) + c) * 512 + ((4 * u) % 16) * 32;
+                                const uint32_t dst = qb + (u * 8 + t) * 2048 + (dface + c) * 512 + drow * 32;
+                                noc_async_write(src, get_noc_addr(qr_x, qr_y, dst), 128);
+                            }
+                    noc_async_write_barrier();
+                    noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_QHD]), 1);
+                } else {   // k head: debug copy (KV append consumes it in step 3)
+                    const auto kd = TensorAccessor(qo_args, kd_addr, 2048);
+                    for (uint32_t t = 0; t < 8; ++t) noc_async_write(yo + t * 2048, kd.get_noc_addr(L * 8 + t), 2048);
+                    noc_async_write_barrier();
+                }
+                cb_pop_front(CB_XO, 10);
+            }
+#endif
         }
 #else
         if (IS_STREAM) {
@@ -336,8 +386,12 @@ void kernel_main() {
             if (is_qroot) {
                 noc_semaphore_wait_min(l1w(gs[GS_MIXDONE]), NSTREAM * (A + 1));
                 noc_semaphore_wait_min(l1w(gs[GS_ADONE]), NUSR * A);
+#if defined(MKA_RQNR)
+                noc_semaphore_wait_min(l1w(gs[GS_QHD]), 6 * (A + 1));   // Q rows written in place by the 6 q head cores
+#else
                 for (uint32_t t = 0; t < QT; ++t) noc_async_read(qacc.get_noc_addr(L * QT + t), qdst + t * QTB, QTB);
                 noc_async_read_barrier();
+#endif
                 for (uint32_t i = 0; i < NRF; ++i) {
                     if (rf[i][4] == 0) continue;
                     const uint64_t m = get_noc_multicast_addr(rf[i][0], rf[i][1], rf[i][2], rf[i][3], qdst);
@@ -562,6 +616,10 @@ void kernel_main() {
 #endif
     }
     if (is_qroot) { *l1w(gs[GS_MIXDONE]) = 0; *l1w(gs[GS_ADONE]) = 0; }
+#if defined(MKA_RQNR)
+    if (is_qroot) *l1w(gs[GS_QHD]) = 0;
+    if (head_id < NHEAD) *l1w(gs[GS_HCNT]) = 0;
+#endif
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
 #if defined(MKA_RQKV)
     // XRDY: every STREAM_EXT core awaited the last multicast (NL - 1) before its last qkv, which precedes this point

@@ -27,6 +27,9 @@ void kernel_main() {
     constexpr auto wo_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 #if defined(MKA_RQKV)
     constexpr auto wq_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+#if defined(MKA_RQNR)
+    constexpr auto qo_args_r = TensorAccessorArgs<wq_args.next_compile_time_args_offset()>();   // bf16 DRAM tiles
+#endif
     constexpr uint32_t MWTB = MKA_MWTB, QSL = 2 * KT;   // STREAM_EXT slice: 2 output tiles x full K, BFP8
     constexpr uint32_t TRID_PQ = 9;
 #endif
@@ -94,6 +97,18 @@ void kernel_main() {
     const uint32_t rw_own = get_arg_val<uint32_t>(a++), rw_hlp = get_arg_val<uint32_t>(a++);
     const uint32_t h_x = get_arg_val<uint32_t>(a++), h_y = get_arg_val<uint32_t>(a++), h_page = get_arg_val<uint32_t>(a++);
     const uint32_t h_np = get_arg_val<uint32_t>(a++), h_off = get_arg_val<uint32_t>(a++);
+#if defined(MKA_RQNR)
+    {   // head constants (gamma x 8, cos, sin): 10 bf16 tiles from DRAM, once per pass
+        const uint32_t hg_addr = get_arg_val<uint32_t>(a++), hg_page = get_arg_val<uint32_t>(a++);
+        if (hg_addr) {
+            const auto hg = TensorAccessor(qo_args_r, hg_addr, 2048);
+            cb_reserve_back(CB_HG, 10);
+            for (uint32_t t = 0; t < 10; ++t) noc_async_read(hg.get_noc_addr(hg_page + t), get_write_ptr(CB_HG) + t * 2048, 2048);
+            noc_async_read_barrier();
+            cb_push_back(CB_HG, 10);
+        }
+    }
+#endif
     const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
     constexpr uint32_t TRID_WOR = 10;
 #endif
