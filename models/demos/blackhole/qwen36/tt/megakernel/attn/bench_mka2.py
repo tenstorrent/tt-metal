@@ -535,6 +535,7 @@ for it in range(ITERS):
     t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + ([wq_all, rsp, qkv_out] if RQKV else []) + ([wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j] if V12 else []) + [out_t], prog); ttnn.synchronize_device(dev)
     if V12:
         _v = ttnn.to_torch(v_xo).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
+        if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(v_xo), os.environ['V12_SAVE'])
         _bad = [j_ for j_ in range(16) if torch.corrcoef(torch.stack([_v[:, j_*320:(j_+1)*320].flatten(), _g2[:, j_*320:(j_+1)*320].flatten()]))[0, 1].item() < 0.999]
         print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
     p, e = pcc_of(y, gold_last)
