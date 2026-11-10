@@ -230,3 +230,53 @@ def test_zero_jit_across_prompts(mesh_device, guide_examples):
             )
             total_misses += sum(misses.values())
     assert total_misses == 0, f"{total_misses} programs compiled on the serving path after warmup()"
+
+
+# The served envelope (bring-up record, Stage 2): five ratios and their portrait flips at ~16 MP and ~4 MP (2K), and
+# 1 to 16 edit references, in order <Picture 1>..<Picture N>.
+SERVED_SIZES_16MP = ((4096, 4096), (4736, 3552), (5024, 3360), (5472, 3072), (6272, 2688))
+SERVED_SIZES_2K = ((2048, 2048), (2368, 1760), (2496, 1664), (2720, 1536), (3136, 1344))
+SERVED_SIZES = tuple(
+    dict.fromkeys(s for w, h in SERVED_SIZES_16MP + SERVED_SIZES_2K for s in ((w, h), (h, w)))
+)  # 18 sizes: 1:1 has no flip
+
+
+@pytest.mark.timeout(4 * 3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_served_envelope(mesh_device, guide_examples):
+    """Every served size (t2i) and 1..16 edit references at two reference sizes, after `warmup()`: pass or the error,
+    latency, and programs compiled. Runs every case even when one fails, then fails if any did."""
+    t2i, _, _ = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    logger.info(f"RESULT warmup {pipe.warmup():.1f}s")
+    failures = []
+
+    def run(tag, **kwargs):
+        try:
+            result = pipe(**kwargs)
+        except Exception as err:  # keep going: the matrix is the deliverable
+            failures.append(tag)
+            logger.info(f"RESULT envelope {tag}: FAIL {type(err).__name__}: {str(err)[:240]}")
+            return
+        t = result.timings
+        logger.info(
+            f"RESULT envelope {tag}: ok {result.image.size[0]}x{result.image.size[1]} packed {result.packed_length} | "
+            f"{t.total:.2f}s (prompt {t.encode_prompt:.2f}, refs {t.encode_references:.2f}, denoise {t.denoise:.2f}, "
+            f"decode {t.decode:.2f}) | misses {sum(t.program_misses.values())}"
+        )
+
+    for w, h in SERVED_SIZES:
+        run(f"t2i {w}x{h}", prompt=t2i["prompt"], width=w, height=h, seed=1)
+    for ref_w, ref_h in ((1024, 1024), (3000, 2000)):
+        for count in (1, 2, 4, 8, 16):
+            refs = [Image.new("RGB", (ref_w, ref_h), (40 + 13 * i, 90, 160 - 7 * i)) for i in range(count)]
+            labels = " ".join(f"<Picture {i + 1}>" for i in range(count))
+            run(
+                f"edit {count} refs {ref_w}x{ref_h} -> 4096x4096",
+                prompt=f"Combine the subjects of {labels} into one photorealistic scene.",
+                width=4096,
+                height=4096,
+                seed=1,
+                images=refs,
+            )
+    assert not failures, f"{len(failures)} envelope cases failed: {failures}"
