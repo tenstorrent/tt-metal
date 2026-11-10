@@ -698,3 +698,8 @@ Only both flags together reach ~15 µs, and they need the output-length gate.
   - Rows ≥R are don't-care, and Σx² is taken over rows <R. The numerics are exact.
 - **Expected:** the u1 AR becomes latency-bound at ~8-10 µs (to be measured). At a 10 µs u1 AR, u1 + STEP_U1@21 ≈ 8.40 ms, and STEP_U1's silicon budget widens to ≤~41 µs.
 - **Consequence:** u1 is no longer AR-bound. u8 stays at 13.55 ms (0.15 margin) on the exact bf16 AR; the pipelined K=2 chain is the exact u8 lever, and BFP8 is the gated one.
+- *v0.8 refinement (from v12):*
+  - On-chip transfers need no pack step. Issue two NoC writes per bf16 tile (R×32 B at offsets 0 and 512) straight into the receiver's tile layout. Measure whether 20 small writes beat one 20 KB write. Fabric packets still pack.
+  - **Stale-row safety:** rows ≥R hold stale data. Two rules:
+    - (i) Every activation buffer is zeroed once at engine start, so stale rows are always finite (earlier valid data or 0) and never NaN or Inf.
+    - (ii) Any op that reduces ACROSS rows must mask rows ≥R. This covers the GDN state update (kᵀv over tokens), the GDN conv window, and any column reduction. Row-independent ops need no mask: matmul, SwiGLU, Σx² per row, SDPA per query row.
