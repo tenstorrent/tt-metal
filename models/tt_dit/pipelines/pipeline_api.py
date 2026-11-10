@@ -7,6 +7,8 @@ from __future__ import annotations
 import weakref
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -78,6 +80,9 @@ class Pipeline:
         self._evictable: weakref.WeakSet[Module] = weakref.WeakSet()
         self.trace = bool(trace)
         self._check_trace_rule()
+        if not self._offload_weights_requested and not self.trace:
+            # A resident pipeline could trace; operators look for this line when a serving config forgot to ask.
+            logger.info(f"{type(self).__name__}: static mesh, running untraced (offload_weights=False, trace=False)")
 
     @property
     def offload_weights(self) -> bool:
