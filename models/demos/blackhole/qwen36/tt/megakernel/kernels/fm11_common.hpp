@@ -4,6 +4,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 constexpr uint32_t CB_X = 0, CB_W = 1, CB_HL = 2, CB_H = 3, CB_WD = 4, CB_W2 = 5, CB_OUT = 16;
 constexpr uint32_t NROOT = 4;
 // semaphores: h counters 0-3, h flags 4-7, down-done counters 8-11
@@ -36,10 +37,20 @@ FORCE_INLINE void root_bcast_layer(uint32_t k, uint32_t L, uint32_t ncores, uint
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_DONE0 + k));
     volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HCNT0 + k));
     volatile tt_l1_ptr uint32_t* flg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HFLG0 + k));
-    noc_semaphore_wait_min(done, ncores * L);
-    noc_semaphore_wait_min(cnt, expect_per_layer * (L + 1));
+    {
+        DeviceZoneScopedN("ROOT-WAIT");
+        noc_semaphore_wait_min(done, ncores * L);
+        noc_semaphore_wait_min(cnt, expect_per_layer * (L + 1));
+    }
+    DeviceZoneScopedN("ROOT-MC");
     bcast_rects(chunk_l1, bytes, r, self_rect, noc);
+#if defined(MK_FLAG_FLUSH) && MK_FLAG_FLUSH
+    // -mk-tail: the flag multicast follows the data multicast on the same NOC from the same core; wait only until the
+    // data has left this core (flushed), not for every receiver's ack, before publishing the flag.
+    noc_async_writes_flushed(noc);
+#else
     noc_async_write_barrier(noc);
+#endif
     *flg = L + 1;
     flag_rects((uint32_t)flg, r, self_rect, noc);
     noc_async_write_barrier(noc);

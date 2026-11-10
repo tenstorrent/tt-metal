@@ -113,8 +113,10 @@ xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, H]), ttnn.bfl
 XPRE = 1 if os.environ.get("FM_XPRE", "1") == "1" else 0
 if XPRE:
     xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, NC, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(rect, H))
-hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, I]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, I))
-WTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b); XTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
+HDT = ttnn.bfloat8_b if os.environ.get('MK_H_BFP8') == '1' else ttnn.bfloat16  # -mk-tail: h broadcast in BFP8 halves its bytes
+print(f'[mk1] h dtype {HDT}', flush=True)
+hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, I]), HDT, ttnn.TILE_LAYOUT, dev, hs(rect, I))
+WTB = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b); XTB = ttnn.Tile([TILE, TILE]).get_tile_size(HDT)
 def cbd(idx, dt, pages, r):
     page = ttnn.Tile([TILE, TILE]).get_tile_size(dt)
     return ttnn.CBDescriptor(total_size=pages * page, core_ranges=r, format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dt, page_size=page)])
@@ -158,12 +160,14 @@ ROLE = {ROOTS[k]: k for k in range(4)}
 HCH = HT // 4
 acc_gu = ttnn.TensorAccessorArgs(wgu_all).get_compile_time_args(); acc_dn = ttnn.TensorAccessorArgs(wd_all).get_compile_time_args()
 acc_wm = ttnn.TensorAccessorArgs(wm_all).get_compile_time_args()
+MKDEF = [tuple(kv.split('=', 1)) for kv in os.environ.get('MK_DEFINES', '').split(',') if kv]  # -mk-tail: e.g. MK_DNPIPE=1,MK_FLAG_FLUSH=1
+print(f'[mk1] defines {MKDEF}', flush=True)
 def build(out):
-    cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, 2 * GRP * KB * 2, rect), cbd(2, ttnn.bfloat16, 1, rect),
+    cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, 2 * GRP * KB * 2, rect), cbd(2, HDT, 1, rect),
            ttnn.cb_descriptor_from_sharded_tensor(3, hbuf), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
            ttnn.cb_descriptor_from_sharded_tensor(16, out), cbd(6, ttnn.bfloat4_b, KT * MIXN, rect),
            ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect)]
-    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(13)]
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for i, c in enumerate(cores):
         g_ = 1 if i < NGU else 0; rk = ROLE.get(i, 255)
@@ -173,11 +177,11 @@ def build(out):
         mb, ms0 = mx_slot(i)
         rrt[c.x][c.y] = [wgu_all.buffer_address(), gp] + RECTS + [selfr, hbuf.buffer_address(), rk if rk >= 2 else 255, g_, PGU]
         wrt[c.x][c.y] = [i] + RECTS + [selfr] + RXY + [hbuf.buffer_address(), wd_all.buffer_address(), s0 * banks + b, wgu_all.buffer_address(), gp, rk if rk < 2 else 255, g_, PGU, PDN, wm_all.buffer_address(), ms0 * banks + mb, PWM]
-    ks = [ttnn.KernelDescriptor(kernel_source=f"{KD}/mk1_reader.cpp", core_ranges=rect, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC] + acc_gu,
+    ks = [ttnn.KernelDescriptor(kernel_source=f"{KD}/mk1_reader.cpp", core_ranges=rect, defines=MKDEF, compile_time_args=[KT, KB, WTB, GRP, HCH, XTB, NL, NC] + acc_gu,
                                 runtime_args=rrt, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)),
-          ttnn.KernelDescriptor(kernel_source=f"{KD}/mk1_writer.cpp", core_ranges=rect, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, KT * MIXN, S_MIX, S_AR] + acc_dn + acc_gu + acc_wm,
+          ttnn.KernelDescriptor(kernel_source=f"{KD}/mk1_writer.cpp", core_ranges=rect, defines=MKDEF, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, KT * MIXN, S_MIX, S_AR] + acc_dn + acc_gu + acc_wm,
                                 runtime_args=wrt, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
-          ttnn.KernelDescriptor(kernel_source=f"{KD}/mk1_compute.cpp", core_ranges=rect, compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN], runtime_args=crt,
+          ttnn.KernelDescriptor(kernel_source=f"{KD}/mk1_compute.cpp", core_ranges=rect, defines=MKDEF, compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN], runtime_args=crt,
                                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
     return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
 out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, NDN * TILE))

@@ -71,10 +71,22 @@ void kernel_main() {
         reconfig_data_format(CB_WD, CB_H);
         matmul_block_init(CB_H, CB_WD, 0, NDN, 1, HT);
         cb_wait_front(CB_WD, HT * NDN);
+#if defined(MK_DNPIPE) && MK_DNPIPE
+        DeviceZoneScopedN("C-DN");
+        tile_regs_acquire();
+        {   // -mk-tail: accumulate the down K-dim root chunk by root chunk as h arrives (4 roots x HT/4 tiles)
+            constexpr uint32_t HCHC = HT / 4;
+            for (uint32_t i = 0; i < 4; ++i) {
+                cb_wait_front(CB_H, HCHC * (i + 1));
+                for (uint32_t k = i * HCHC; k < (i + 1) * HCHC; ++k) matmul_block(CB_H, CB_WD, k, k * NDN, 0, 0, NDN, 1, HT);
+            }
+        }
+#else
         cb_wait_front(CB_H, HT);
         DeviceZoneScopedN("C-DN");
         tile_regs_acquire();
         for (uint32_t k = 0; k < HT; ++k) matmul_block(CB_H, CB_WD, k, k * NDN, 0, 0, NDN, 1, HT);
+#endif
         tile_regs_commit();
         cb_reserve_back(CB_OUT, NDN);
         tile_regs_wait();

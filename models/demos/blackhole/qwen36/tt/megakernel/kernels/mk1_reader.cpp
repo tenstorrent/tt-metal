@@ -24,6 +24,10 @@ void kernel_main() {
     const uint32_t pgu_layer = get_arg_val<uint32_t>(a++);  // pages per layer in the gate|up tensor
     const auto wgu = TensorAccessor(wgu_args, wgu_addr, WTB);
     constexpr uint32_t BLK = KB * 2, NB = KT / KB;
+#if defined(MK_COLD_MIXFIRST) && MK_COLD_MIXFIRST
+    // -mk-tail cold start: hold this core's gate|up stream until its writer has landed layer 0's mixer slice
+    if (IS_GU) noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_COLD)), 1);
+#endif
     if (IS_GU) {
         DeviceZoneScopedN("R-GU");
         for (uint32_t L = 0; L < NL; ++L) {
