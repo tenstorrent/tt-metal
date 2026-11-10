@@ -263,6 +263,9 @@ struct Recv {
 #if defined(MKAR_TRID)   // engine: barrier on our own reads only (the host RISC has its own reads in flight)
         noc_async_read_set_trid(MKAR_TRID);
 #endif
+#if defined(MKAR_ATYPE)
+        const uint32_t in_addr = ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
+#endif
         size_t s_idx = seg_base;
         for (uint32_t s = 0; s < num_segs; s++) {
             const uint32_t xy = rarg(s_idx++);
