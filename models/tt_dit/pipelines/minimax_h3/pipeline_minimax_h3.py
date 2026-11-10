@@ -37,7 +37,8 @@ replicates ~9.8 GB of fp32 weights per device for its data-parallel fan-out. The
 registered as ``Module`` coresident exclusions: loading one stage evicts the others. The text
 encoder is the cheap one --- FSDP over the non-TP axis puts it at ~1.6 GB/device --- but its 50 GB
 disk read is not, which is why it is kept co-resident by default: every request pays the encode
-itself (~2.8 s), never the reload. `coresident=False` evicts each stage and disables tracing.
+itself (~2.8 s), never the reload. `coresident=False` evicts each stage, which is the pipeline's
+`offload_weights`; `trace_denoise` is ignored with it, and `trace_audio` cannot be combined with it.
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
+from ..pipeline_api import Pipeline
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
@@ -247,6 +249,7 @@ def _resolve_denoise_path(
     dynamic request with `trace_denoise` or `bucket_denoise=True` is contradictory and raises; a ladder beside it
     only supplies the default `max_sequence_length`.
     """
+    # An evicting pipeline cannot trace: the preset's trace yields to it, and so does an explicit request.
     trace = (preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise) and coresident
     pinned = trace_denoise is not None or bucket_denoise is not None or bucket_ladder is not None
     dynamic, from_env = _requested_dynamic_length(dynamic_length, preset.get("dynamic_length", False) and not pinned)
@@ -599,7 +602,7 @@ def _tqdm_spacer() -> None:
     sys.stderr.flush()
 
 
-class MiniMaxH3Pipeline:
+class MiniMaxH3Pipeline(Pipeline):
     """`t2va` and `fl2va` on a Blackhole mesh. Build with `create_pipeline`."""
 
     def __init__(
@@ -663,6 +666,34 @@ class MiniMaxH3Pipeline:
         self.trace_denoise = path.trace_denoise
         self.bucket_denoise = path.bucket_denoise
         self.dynamic_length = path.dynamic_length
+        if self.dynamic_length:
+            # The dynamic-length path is eager end to end: no stage of it is traced, so the preset's audio
+            # trace is not captured, and asking for one explicitly is an error.
+            if trace_audio:
+                raise ValueError("dynamic_length is eager-only: trace_audio cannot be combined with it")
+            self.trace_audio = False
+            if preset.get("trace_audio", False):
+                self._host_log("audio decode: eager (the dynamic-length path takes no traces)")
+        elif trace_audio is None:
+            # Like the denoise trace, the preset's audio trace yields to an evicting pipeline.
+            self.trace_audio = preset.get("trace_audio", False) and coresident
+        else:
+            self.trace_audio = bool(trace_audio)
+        if not coresident:
+            requested = {"trace_denoise": trace_denoise, "trace_audio": trace_audio}
+            yielded = [flag for flag, value in requested.items() if value is None and preset.get(flag, False)]
+            if yielded:
+                self._host_log(f"coresident=False: the preset's {' and '.join(yielded)} yield to evicting stages")
+            if trace_denoise:
+                logger.warning(
+                    f"{type(self).__name__}: trace_denoise=True IGNORED: coresident=False evicts each stage, and "
+                    "a pipeline that evicts weights cannot trace (TDM-130). The denoise runs eager."
+                )
+        # `coresident=False` is the pipeline's `offload_weights`; `trace_denoise` and `trace_audio` are the two
+        # parts of its `trace`.
+        super().__init__(offload_weights=not coresident, trace=self.trace_denoise or self.trace_audio)
+        # The audio traces are captured by `warmup`, which only a bucketed pipeline runs.
+        assert not self.trace_audio or self.bucket_denoise, "trace_audio requires bucket_denoise"
         self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
             preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
         )
@@ -719,18 +750,6 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full", "kernel"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        if self.dynamic_length:
-            # The dynamic-length path is eager end to end: no stage of it is traced, so the preset's audio
-            # trace is not captured, and asking for one explicitly is an error.
-            if trace_audio:
-                raise ValueError("dynamic_length is eager-only: trace_audio cannot be combined with it")
-            self.trace_audio = False
-            if preset.get("trace_audio", False):
-                self._host_log("audio decode: eager (the dynamic-length path takes no traces)")
-        else:
-            self.trace_audio = preset.get("trace_audio", False) if trace_audio is None else bool(trace_audio)
-        # The audio traces are captured by `warmup`, which only a bucketed pipeline runs.
-        assert not self.trace_audio or self.bucket_denoise, "trace_audio requires bucket_denoise"
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
         )
@@ -864,14 +883,14 @@ class MiniMaxH3Pipeline:
         self._vae.load_state(self._read_safetensors("vae"))
 
         if not self.coresident:
-            self._text_encoder.register_coresident_exclusions(self._transformer, *self._vae.modules)
-            self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
+            self.register_coresident_exclusions(self._text_encoder, self._transformer, *self._vae.modules)
+            self.register_coresident_exclusions(self._transformer, self._text_encoder, *self._vae.modules)
             for module in self._vae.modules:
-                module.register_coresident_exclusions(self._text_encoder, self._transformer)
+                self.register_coresident_exclusions(module, self._text_encoder, self._transformer)
             # The video VAE decoder needs most of DRAM, so the ref2va reference encoders yield to it and reload
             # on demand via `MiniMaxH3Vae._ensure_loaded`.
-            self._vae.decoder.register_coresident_exclusions(
-                *(module for module in self._vae.modules if module is not self._vae.decoder)
+            self.register_coresident_exclusions(
+                self._vae.decoder, *(module for module in self._vae.modules if module is not self._vae.decoder)
             )
 
         if self.coresident:
@@ -1811,8 +1830,8 @@ class MiniMaxH3Pipeline:
         """
         if self.coresident:
             return
-        self._transformer.register_coresident_exclusions(module)
-        self._vae.decoder.register_coresident_exclusions(module)
+        self.register_coresident_exclusions(self._transformer, module)
+        self.register_coresident_exclusions(self._vae.decoder, module)
 
     def _encode_keyframes(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
         """Prepared keyframes to packed conditioning rows, via the device VAE encoder.
@@ -1970,8 +1989,18 @@ class MiniMaxH3Pipeline:
 
     # ------------------------------------------------------------------ the call
 
+    def run_untraced(self, *args: object, **kwargs: object) -> MiniMaxH3Output:
+        """Not supported: the traces are part of the pipeline's state, taken by `warmup` and replayed by every
+        generation. Build the pipeline with `trace_denoise=False` and `trace_audio=False` for an eager one."""
+        del args, kwargs
+        msg = (
+            "MiniMaxH3Pipeline has no per-call eager run: construct it with trace_denoise=False and "
+            "trace_audio=False instead"
+        )
+        raise NotImplementedError(msg)
+
     @torch.no_grad()
-    def __call__(
+    def _run(
         self,
         prompt: str,
         *,
