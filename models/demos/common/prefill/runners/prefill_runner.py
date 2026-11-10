@@ -960,6 +960,9 @@ def run_request_loop(
             raise
         # The top-k is the inbound's last segment; what is left are the MTP ids.
         indices = mtp_id_segments.pop() if recv_indices else None
+        warmup = _is_warmup_sentinel(meta)
+        if stage_metadata is not None and (warmup or _is_shutdown_sentinel(meta)):
+            runtime.discard_staged_metadata()
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} forwards; exiting request loop")
             if sockets.tokens is None:
@@ -974,7 +977,6 @@ def run_request_loop(
                     ttnn.deallocate(t)
             forward_shutdown()
             break
-        warmup = _is_warmup_sentinel(meta)
         if warmup:
             if sockets.tokens is None:
                 ttnn.deallocate(inp)

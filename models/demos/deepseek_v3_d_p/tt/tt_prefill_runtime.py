@@ -850,6 +850,10 @@ class TtPrefillRuntime:
         self._metadata_from_msg(metadata_msg)
         self._metadata_staged = True
 
+    def discard_staged_metadata(self) -> None:
+        """Drop a staged record that no prefill_chunk will consume (a sentinel), so the next chunk restages."""
+        self._metadata_staged = False
+
     def _stage_trace_inputs(
         self,
         input_tensor: ttnn.Tensor,
@@ -862,9 +866,14 @@ class TtPrefillRuntime:
         if self.config.mtp_levels:
             staged = []
             if not self.config.is_first_rank:
-                if not self._extras_are_caller_filled:
-                    assert len(mtp_id_segments) == 2, "MTP is on but the id segments did not arrive with this chunk"
-                    staged = list(zip(mtp_id_segments, (self._trace_mtp_chunk_ids, self._trace_mtp_tokens)))
+                id_buffers = (self._trace_mtp_chunk_ids, self._trace_mtp_tokens)
+                assert len(mtp_id_segments) == 2, "MTP is on but the id segments did not arrive with this chunk"
+                if self._extras_are_caller_filled:
+                    assert all(
+                        s is b for s, b in zip(mtp_id_segments, id_buffers)
+                    ), "claimed MTP id segments must be the persistent buffers the drain writes"
+                else:
+                    staged = list(zip(mtp_id_segments, id_buffers))
             elif not self._mtp_is_caller_filled:
                 assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
                 staged = [(mtp_tokens, self._trace_mtp_tokens)]
@@ -1296,9 +1305,14 @@ class TtPrefillRuntime:
                     )
                 ttnn.copy(src, self._trace_metadata.llama4_scale)
             self._stage_trace_inputs(input_tensor, metadata_msg, mtp_tokens, mtp_id_segments)
-            if indexer_indices is not None and not self._extras_are_caller_filled:
-                ttnn.copy(indexer_indices, self._trace_indices_in)
-                ttnn.deallocate(indexer_indices)
+            if indexer_indices is not None:
+                if self._extras_are_caller_filled:
+                    assert (
+                        indexer_indices is self._trace_indices_in
+                    ), "claimed indexer top-k must be the persistent buffer the drain writes"
+                else:
+                    ttnn.copy(indexer_indices, self._trace_indices_in)
+                    ttnn.deallocate(indexer_indices)
             self._controller.replay(variant=mtp_variant)
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
@@ -1306,7 +1320,7 @@ class TtPrefillRuntime:
             if self.config.is_last_rank:
                 return None
             if self.config.mtp_levels:
-                return [self._trace_output, *self._mtp_id_buffers()]
+                return self.trace_send_segments
             return self._trace_output
 
         on_layer_complete = self._layer_complete_cb(slot_id, actual_start, actual_end)
