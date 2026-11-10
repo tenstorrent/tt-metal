@@ -19,10 +19,12 @@ uniforms drawn on device, :meth:`~.model.DeepSeekV41Model.spec_draft`) without t
 softmax(logits_j / temperature)``; a ``propose`` override is deterministic, a one-hot ``p_j``.
 
 The pipelined verify is streamed (:meth:`~.model.DeepSeekV41Model.spec_verify_async`): the host applies the
-rule to each step's logits as they come out, and at the first reject (or after the last row) it drafts the
-next round at once, while the rows past the reject are still in the pipeline; their outputs are dropped and
-the next round's steps queue behind them. So a round takes the pipeline's latency plus a step per accepted
-draft, plus the draft. Each decode step's row reaches the drafter's rings only when the host releases its
+rule to each step's logits as they come out, and at the first reject (or after the last row) it queues the
+fixup and the next round's first row ``a_m``, which needs no draft, then drafts its successors, while the rows
+past the reject are still in the pipeline; their outputs are dropped and the next round's steps queue behind
+them. So a round takes the pipeline's latency plus a step per accepted draft, plus whatever of the draft is
+not hidden behind ``a_m``'s step (only the caller's last round, see :meth:`DSparkSpeculator.step`, leaves its
+fixup to the next round). Each decode step's row reaches the drafter's rings only when the host releases its
 receive, one row ahead of the accept, so the draft sees the round's rows up to the reject and no further.
 
 With ``device_accept`` (the drafter, pipelined verify and no top-p / top-k) the accept runs on the drafter
@@ -247,6 +249,9 @@ class DSparkSpeculator:
         # The drafter's logits [k, V] for the proposals, when it sampled them; None for one-hot proposals.
         self._proposal_logits: Optional[torch.Tensor] = None
         self._rejected: list[int] = []
+        # A streamed round's first row (``self._next`` at ``self._pos``) is already in the pipeline, with the
+        # fixup of the round before it: the previous round dispatched it at its reject, ahead of its draft.
+        self._row0_dispatched = False
 
     def _seed(self) -> Optional[int]:
         """A nonzero seed for the drafter's next uniforms when sampling, else None (greedy draws none)."""
@@ -342,6 +347,7 @@ class DSparkSpeculator:
         self._next = self._next_token(out)
         self._pos = end
         self._rejected = []
+        self._row0_dispatched = False
         self._stall.enter("prefill: draft")
         try:
             self._proposals = self._draft(self._next, end - 1)
@@ -350,17 +356,22 @@ class DSparkSpeculator:
         logger.info(f"[spec] prefilled to {self._pos}: first token {self._next}, drafts {self._proposals}")
         return self._next
 
-    def step(self) -> list[int]:
-        """One verify round; returns the tokens it emits (1 to ``drafts + 1``)."""
+    def step(self, budget: Optional[int] = None, stop_ids: Sequence[int] = ()) -> list[int]:
+        """One verify round; returns the tokens it emits (1 to ``drafts + 1``).
+
+        ``budget`` (tokens the caller still wants) and ``stop_ids`` say which round is the caller's last: a
+        streamed round that is not dispatches the next round's first row at its reject (see :meth:`_streamed`).
+        """
         model, k = self.model, self.drafts
         t0 = time.perf_counter()
         p = self._pos
         inputs = [self._next] + self._proposals
-        self._stall.enter(f"round p={p}: spec_fixup({self._rejected})")
-        try:
-            model.spec_fixup(self._rejected)
-        finally:
-            self._stall.cancel()
+        if not self._row0_dispatched:
+            self._stall.enter(f"round p={p}: spec_fixup({self._rejected})")
+            try:
+                model.spec_fixup(self._rejected)
+            finally:
+                self._stall.cancel()
         t1 = time.perf_counter()
         if self.device_accept:
             self._stall.enter(f"round p={p}: device-accept verify")
@@ -390,11 +401,14 @@ class DSparkSpeculator:
             return emitted
         if self.streaming:
             held = model.dspark is not None
-            self._stall.enter(f"round p={p}: spec_verify_async ({len(inputs)} steps)")
+            # Row 0 went in at the previous round's reject; its drafts follow it now.
+            first = 1 if self._row0_dispatched else 0
+            self._stall.enter(f"round p={p}: spec_verify_async ({len(inputs) - first} steps)")
             try:
-                model.spec_verify_async(inputs, p)
+                model.spec_verify_async(inputs[first:], p + first)
             finally:
                 self._stall.cancel()
+            self._row0_dispatched = False
             for m in range(k + 1):
                 if held:
                     self._stall.enter(f"round p={p}: release_writes(row {m})")
@@ -423,6 +437,19 @@ class DSparkSpeculator:
             self._rejected = list(range(p + m + 1, p + len(inputs)))
             self._next = token
             self._pos = p + m + 1
+            emitted = inputs[1 : m + 1] + [token]
+            last = any(t in stop_ids for t in emitted) or (budget is not None and len(emitted) >= budget)
+            if not last:
+                # The next round's first row needs no draft: queue it (behind the fixup of this round's
+                # rejects) now, so it runs through the pipeline while the drafter drafts its successors.
+                self._stall.enter(f"round p={p}: early row 0 at {self._pos} (fixup {self._rejected})")
+                try:
+                    model.spec_fixup(self._rejected)
+                    model.spec_verify_async([token], self._pos)
+                finally:
+                    self._stall.cancel()
+                self._rejected = []
+                self._row0_dispatched = True
             self._stall.enter(f"round p={p}: draft (frontier {p + m})")
             try:
                 self._proposals = self._draft(token, p + m)
@@ -442,7 +469,6 @@ class DSparkSpeculator:
                 self.stats.add(phase, seconds)
             self.stats.accepted.append(m)
             self.stats.seconds += t3 - t0
-            emitted = inputs[1 : m + 1] + [token]
             if _VERBOSE:
                 _log_round(self, p, emitted, phases)
             return emitted
@@ -490,7 +516,7 @@ class DSparkSpeculator:
         stop = set(stop_ids)
         done = self._next in stop
         while not done and len(out) < max_new_tokens:
-            emitted = self.step()
+            emitted = self.step(max_new_tokens - len(out), stop)
             for keep, token in enumerate(emitted, start=1):
                 out.append(token)
                 if token in stop or len(out) == max_new_tokens:
