@@ -59,7 +59,6 @@ constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(20
 constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(21);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(22);
 constexpr uint32_t barrier_target_count = get_compile_time_arg_val(23);
-// Row-free program: the row count arrives in the common args, the plane is split across the workers on device.
 constexpr bool runtime_rows = get_compile_time_arg_val(24);
 
 constexpr uint32_t num_ct_args = 25;
@@ -111,7 +110,6 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
-    // Worker identity: every non-dim-0 line program carries it; the row-free program splits the work on device.
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -287,10 +285,6 @@ void kernel_main() {
                 static_cast<uint32_t>(1)});  // increment 1
     }
 
-    // The intermediate holds a forward and a backward half; BWD indexes the second one.
-    // Row-dependent counts. The row-keyed program compiled them in; the row-free program (runtime_rows: scatter
-    // dim 3 of a single-batch, single-channel input) derives them from the row word in the common args and
-    // splits the plane across the workers on device, so one program serves every row count of a width.
     uint32_t input_num_pages = ct_input_num_pages;
     uint32_t input_batch_num_pages = ct_input_batch_num_pages;
     uint32_t input_channel_num_pages = ct_input_channel_num_pages;

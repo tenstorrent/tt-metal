@@ -29,8 +29,6 @@ NUM_OUT_MODULATION_PARAMS = 2
 # Any served per-device row count gives the output heads the same generic blocking (M_tiles >= 8).
 _HEAD_CONFIG_ROWS = 4736
 
-_DYNAMIC_AG_WORKERS_PER_LINK = DYNAMIC_AG_WORKERS_PER_LINK
-
 
 class MiniMaxH3TimestepEmbedding(Module):
     """`linear_1 -> silu -> linear_2`, matching the checkpoint's `time_embedder` keys.
@@ -584,7 +582,7 @@ class MiniMaxH3Transformer3DModel(Module):
             temb,
             timestep_idx,
         )
-        ag_kwargs = {"num_workers_per_link": _DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
+        ag_kwargs = {"num_workers_per_link": DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(
                 hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs

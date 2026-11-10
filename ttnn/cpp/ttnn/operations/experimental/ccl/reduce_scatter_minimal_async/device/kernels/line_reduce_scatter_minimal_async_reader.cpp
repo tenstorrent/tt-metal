@@ -42,7 +42,6 @@ constexpr uint32_t slice_Wt = get_compile_time_arg_val(16);
 constexpr uint32_t fuse_op = get_compile_time_arg_val(17);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
 constexpr uint32_t dim = get_compile_time_arg_val(19);
-// Row-free program: the row count arrives in the common args, the plane is split across the workers on device.
 constexpr bool runtime_rows = get_compile_time_arg_val(20);
 
 void kernel_main() {
@@ -67,7 +66,6 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    // Worker identity: every non-dim-0 line program carries it; the row-free program splits the work on device.
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
@@ -158,10 +156,10 @@ void kernel_main() {
     CircularBuffer cb_intermediate(cb_intermediate_id);
     CircularBuffer cb_reader_output(cb_reader_output_id);
 
-    // Intermediate buffer is double-sized (shape [2, *input_shape]) for forward and backward; BWD indexes its second
-    // half. Row-dependent counts. The row-keyed program compiled them in; the row-free program (runtime_rows: scatter
-    // dim 3 of a single-batch, single-channel input) derives them from the row word in the common args and
-    // splits the plane across the workers on device, so one program serves every row count of a width.
+    /**
+     * Intermediate buffer is double-sized (shape [2, *input_shape]) to accommodate forward and backward.
+     * BWD indexes into second half of intermediate buffer.
+     */
     uint32_t input_num_pages = ct_input_num_pages;
     uint32_t input_batch_num_pages = ct_input_batch_num_pages;
     uint32_t input_channel_num_pages = ct_input_channel_num_pages;

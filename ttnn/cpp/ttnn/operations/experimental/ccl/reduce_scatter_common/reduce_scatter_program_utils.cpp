@@ -506,14 +506,10 @@ bool reduce_scatter_line_runtime_rows(
     uint32_t input_tensor_B,
     uint32_t slice_C,
     bool tiled_interleaved,
-    bool fuse_op,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link) {
-    // The kernels derive every row-dependent count from one row word, which the single-batch, single-channel
-    // dim-3 scatter makes possible: every slice keeps the rows, and the per-worker split is over one plane.
-    // Pinned worker and chunk counts keep the host's only other row-derived choices out of the key.
     return topology == ttnn::ccl::Topology::Linear && normalized_dim == 3 && input_tensor_B == 1 && slice_C == 1 &&
-           tiled_interleaved && !fuse_op && chunks_per_sync.has_value() && num_workers_per_link.has_value();
+           tiled_interleaved && chunks_per_sync.has_value() && num_workers_per_link.has_value();
 }
 
 }  // namespace ttnn::experimental::ccl

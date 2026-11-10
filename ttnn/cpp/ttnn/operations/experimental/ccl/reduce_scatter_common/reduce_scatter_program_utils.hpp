@@ -253,17 +253,14 @@ void append_fabric_mux_connection_rt_args(
     tt::tt_metal::ProgramDescriptor& desc,
     tt::tt_metal::KernelDescriptor::RTArgList& worker_rt_args);
 
-// Row-free line reduce-scatter: scatter dim 3 of a tiled, interleaved [1, 1, rows, W] input, worker and chunk
-// counts pinned, no fused producer. The program then takes the row count as a runtime word and its key leaves
-// the rows out, so one program serves every row count of a width. The op's hash and the line builder both
-// decide through this one function.
+// Row-free line reduce-scatter: a dim-3 scatter of a tiled interleaved [1, 1, rows, W] input with pinned worker and
+// chunk counts; the op's hash and the line builder both decide through this function.
 bool reduce_scatter_line_runtime_rows(
     ttnn::ccl::Topology topology,
     uint32_t normalized_dim,
     uint32_t input_tensor_B,
     uint32_t slice_C,
     bool tiled_interleaved,
-    bool fuse_op,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link);
 

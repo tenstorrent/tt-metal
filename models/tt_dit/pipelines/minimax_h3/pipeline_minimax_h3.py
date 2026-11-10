@@ -243,12 +243,9 @@ def _resolve_denoise_path(
 
     `dynamic_length` resolves kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset, and the preset's dynamic default
     yields to a caller that pinned the bucketed path by any of `trace_denoise`, `bucket_denoise` or
-    `bucket_ladder`. The topology does not enter: a ring runs the fused AGMM / MMRS pins, a line the unfused
-    projections, whose collectives key their programs without the row count (the reduce-scatter with the worker
-    and chunk counts `CCLManager` pins, the all-gathers with the model's worker pin), so both serve every length
-    from one program set. A dynamic request with
-    `trace_denoise` or `bucket_denoise=True` is contradictory and raises; a ladder beside it only supplies the
-    default `max_sequence_length`.
+    `bucket_ladder`; the topology does not enter (a line's unfused collectives key without the row count too). A
+    dynamic request with `trace_denoise` or `bucket_denoise=True` is contradictory and raises; a ladder beside it
+    only supplies the default `max_sequence_length`.
     """
     trace = (preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise) and coresident
     pinned = trace_denoise is not None or bucket_denoise is not None or bucket_ladder is not None

@@ -73,14 +73,12 @@ bool ReduceScatterMinimalAsyncDeviceOperation::line_runtime_rows(
                                      operation_attributes.optional_intermediate_mem_config->is_sharded()) &&
                                    !sharded(tensor_args.optional_intermediate_tensor) &&
                                    !sharded(tensor_args.optional_output_tensor);
-    // The standalone op never fuses a producer (the fused variants are their own ops).
     return ttnn::experimental::ccl::reduce_scatter_line_runtime_rows(
         operation_attributes.topology,
         normalized_dim,
         input_tensor_B,
         input_tensor_C,
         tiled_interleaved,
-        /*fuse_op=*/false,
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link);
 }
@@ -88,12 +86,8 @@ bool ReduceScatterMinimalAsyncDeviceOperation::line_runtime_rows(
 ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (!line_runtime_rows(operation_attributes, tensor_args)) {
-        // The reflection hash the op always had: every attribute and every tensor spec, rows included.
         return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args);
     }
-    // Row-free: the rows are a runtime word of the program (ReduceScatterCommonArgs::input_Ht), so the key
-    // keeps everything about the tensors but their row count. The semaphores stay out as before (re-applied
-    // on every hit); the penult intermediate never exists on a line.
     using ttnn::operations::common::hash_spec_without_rows;
     return ttsl::hash::hash_objects_with_default_seed(
         operation_attributes.attribute_values(),
@@ -122,8 +116,6 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
             "Persistent penult intermediate tensor must be allocated on the same mesh device as the input tensor");
     }
     if (line_runtime_rows(operation_attributes, tensor_args)) {
-        // A row-free program is reused across row counts, so the row-dependent checks the miss path ran on the
-        // first shape run again here for the current one.
         const auto& shape = input_tensor.padded_shape();
         TT_FATAL(
             shape[-2] % tt::constants::TILE_HEIGHT == 0,

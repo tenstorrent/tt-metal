@@ -618,10 +618,7 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         input_c.has_value() ? std::optional{input_c->tensor_spec()} : std::nullopt,
         output_spec);
 
-    // The logical W and whether the logical H is a single row drive the SRC_BCAST_* / SRC_ROW_BCAST_* /
-    // SRC_SCALAR_* reader defines; the height itself is a runtime quantity (the per-core args re-derive it on
-    // every hit), so it stays out of the key and one program serves every row count of a width -- the
-    // dynamic-length path's gated residual changes rows per request.
+    // Logical W and whether logical H is a single row drive the SRC_BCAST_* / SRC_ROW_BCAST_* / SRC_SCALAR_* defines.
     const auto hw = [](const Tensor& t) {
         const auto& s = t.logical_shape();
         const uint32_t h = s.rank() >= 2 ? s[-2] : 1u;

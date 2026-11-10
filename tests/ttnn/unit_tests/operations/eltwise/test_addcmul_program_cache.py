@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ternary ops key their program on each input's width and broadcast pattern, not on its height: the
-dynamic-length path's gated residual (`addcmul`) changes rows per request and must not compile per length."""
+"""The ternary ops key their program on width and broadcast pattern, not on height: addcmul must not compile per length."""
 
 import pytest
 import torch
@@ -26,12 +25,11 @@ def test_addcmul_program_cache_is_row_free(device, width):
     def run(rows):
         _addcmul(device, [(1, 1, rows, width)] * 3)
 
-    # Warm at the longest row count, then shorter and non-multiple-of-64 ones must hit.
     assert assert_program_cache_flat(device, run, [4096, 2048, 96, 32]) == 1
 
 
 def test_addcmul_program_cache_separates_row_broadcast(device):
-    """A single-row operand is a different program (its reader defines differ), as before."""
+    """A single-row operand is still its own program."""
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
     def run(case):

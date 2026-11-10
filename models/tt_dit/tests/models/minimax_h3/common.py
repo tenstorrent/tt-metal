@@ -208,7 +208,7 @@ GALAXY_RING = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
-# The ring rows plus the line-fabric row (opt-in like MESH_4X8_LINE): the dynamic-length block serves a line too.
+# The ring rows plus the opt-in line-fabric row.
 GALAXY_RING_AND_LINE = pytest.mark.parametrize(
     GALAXY_RING.args[0],
     [

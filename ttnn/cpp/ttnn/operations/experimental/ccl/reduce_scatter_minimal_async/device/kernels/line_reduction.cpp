@@ -17,14 +17,12 @@ void kernel_main() {
     constexpr uint32_t input_tensor_B = get_compile_time_arg_val(4);
     constexpr uint32_t slice_C = get_compile_time_arg_val(5);
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(6);
-    // Row-free program: the row count arrives in the common args, the plane is split across the workers on device.
     constexpr bool runtime_rows = get_compile_time_arg_val(7);
 
     uint32_t arg_idx = 0;
     const uint32_t num_total_reduction_steps = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
-    // Worker identity: every non-dim-0 line program carries it; the row-free program splits the work on device.
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 

@@ -27,8 +27,7 @@ struct ReduceScatterDescriptorArtifacts {
     static constexpr size_t no_kernel = static_cast<size_t>(-1);
     size_t reader_kernel_index = 0;
     size_t writer_kernel_index = 0;
-    // The line builder's reduction kernel takes the common args too (its row-free programs read the row word
-    // from them); the ring builder leaves it unset.
+    // Set by the line builder; the ring builder leaves it unset.
     size_t reduce_kernel_index = no_kernel;
 };
 

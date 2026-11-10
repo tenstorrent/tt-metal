@@ -888,16 +888,15 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     )
 
 
-# ---- row-free line reduce-scatter: one program per width across the H3 row counts ----
+# ---- row-free line reduce-scatter ----
 
-# Per-device tile rows the H3 pipeline serves on a 4x8: 5 s, 2.5 s, 10 s, 15 s and the capacity point.
+# Per-device tile rows H3 serves on a 4x8: 5 s, 2.5 s, 10 s, 15 s, capacity.
 H3_TILE_ROWS = [148, 74, 287, 427, 470]
 H3_FF2_WIDTH = 5376
 
 
 def _line_reduce_scatter_h3_case(mesh_device, tile_rows, width):
-    """One [1, 1, rows, width] bf16 plane per device, uploaded tiled (the upload is a device program of its own, so
-    it happens before the flat-cache window), with the reduce-scatter's expected [4, 8, rows, width / 4] result."""
+    """One [1, 1, rows, width] bf16 plane per device, uploaded before the flat-cache window, and the expected result."""
     rows = tile_rows * 32
     tp, sp = tuple(mesh_device.shape)
     torch_input = torch.randn(tp, sp, rows, width, dtype=torch.bfloat16)
@@ -921,8 +920,7 @@ def _line_reduce_scatter_h3_case(mesh_device, tile_rows, width):
     indirect=True,
 )
 def test_reduce_scatter_line_h3_rows_flat_cache(mesh_device):
-    """The dim-3 line reduce-scatter with pinned workers and chunks serves every H3 row count from one program
-    (ff2's collective on the dynamic-length path); a new width still compiles its own."""
+    """One program serves every H3 row count of the pinned dim-3 line reduce-scatter; a new width compiles its own."""
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
     compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -955,7 +953,6 @@ def test_reduce_scatter_line_h3_rows_flat_cache(mesh_device):
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, 1)),
         ).float()
         assert output.shape == case["expected"].shape, (output.shape, case["expected"].shape)
-        # Four bf16 operands summed on device against a float32 reference: bf16 rounding of the result.
         torch.testing.assert_close(output, case["expected"], rtol=1.6e-2, atol=1e-1)
 
     entries = assert_program_cache_flat(mesh_device, run, cases, miss_indices=(len(cases) - 1,))

@@ -475,8 +475,7 @@ std::array<uint32_t, 4> reduce_scatter_semaphore_args(
 
 // Common runtime args of the reduce-scatter reader and writer, in ReduceScatterCommonArgs order: input, intermediate,
 // output, penult (0 when absent), then the semaphore slots.
-// The input's row count in tiles: the runtime word the line kernels' row-free programs derive every
-// row-dependent count from (the builder's input_tensor_Ht).
+// The input's tile rows: the row word of the line kernels' row-free programs.
 uint32_t reduce_scatter_input_Ht(const Tensor& input) {
     const auto& shape = input.padded_shape();
     const uint32_t rows = shape.rank() >= 2 ? shape[-2] : 1u;
@@ -509,8 +508,6 @@ void append_reduce_scatter_common_args(
         common_args.push_back(
             semaphore_arg);  // smuggled-rta-ok: GlobalSemaphore address, workload-scoped or re-applied
     }
-    // Row words (ReduceScatterCommonArgs::input_Ht, intermediate_half_pages), read only by the line kernels'
-    // row-free programs. The forward half of the intermediate starts at 0, the backward half at its midpoint.
     common_args.push_back(reduce_scatter_input_Ht(input));
     common_args.push_back(static_cast<uint32_t>(intermediate.mesh_buffer().num_pages() / 2));
 }
@@ -1469,9 +1466,6 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
-    // Row-free program: see reduce_scatter_line_runtime_rows. Its kernels read the row count from the common
-    // args and split the plane across the workers on device, so the per-core start/end below only serve the
-    // row-keyed program.
     const bool runtime_rows = ttnn::experimental::ccl::reduce_scatter_line_runtime_rows(
         topology,
         normalized_dim,
@@ -1479,7 +1473,6 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
         slice_C,
         input_tensor.layout() == tt::tt_metal::Layout::TILE && !input_is_sharded && !intermediate_is_sharded &&
             !output_is_sharded,
-        fuse_op,
         chunks_per_sync,
         num_workers_per_direction_opt);
 
@@ -1770,7 +1763,6 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
                     start_row_offset,              // start_row_offset (unused by dim0 kernel)
                 };
                 if (normalized_dim != 0) {
-                    // Worker identity for the row-free program's on-device split (the row-keyed one ignores it).
                     reader_rt_args.push_back(worker_id);
                     reader_rt_args.push_back(num_workers);
                 }
@@ -1861,7 +1853,6 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
         std::nullopt);
     program.kernels[reader_kernel_id].emplace_common_runtime_args(common_args);
     program.kernels[writer_kernel_id].emplace_common_runtime_args(common_args);
-    // The reduction kernel's row-free programs read the row word from the same common args.
     program.kernels[reduce_kernel_id].emplace_common_runtime_args(common_args);
     return ReduceScatterDescriptorArtifacts{
         .reader_kernel_index = reader_kernel_id,

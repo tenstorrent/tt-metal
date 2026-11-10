@@ -191,8 +191,6 @@ class MiniMaxH3Attention(Module):
         # all_gather_minimal_matmul_async folds the TP all-gather into the matmul. Ring only: on a
         # line topology WanAttention measured the unfused path faster, so match that condition.
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and tp_factor > 1
-        # Unfused path (a line): the standalone gathers pin their worker count so their key cannot move with the
-        # rows; the op would otherwise pick it from the output bytes.
         self._ag_workers_per_link = DYNAMIC_AG_WORKERS_PER_LINK if dynamic_length else None
 
         # Ring SDPA reuses the joint-attention entry point with empty joint inputs, as WanAttention does.
