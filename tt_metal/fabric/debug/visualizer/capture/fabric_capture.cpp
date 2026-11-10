@@ -5,10 +5,7 @@
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture.hpp"
 
 #include <algorithm>
-#include <array>
-#include <chrono>
 #include <cstddef>
-#include <ctime>
 #include <utility>
 #include <vector>
 
@@ -16,20 +13,11 @@
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_targets.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_time.hpp"
 
 namespace tt::tt_fabric::capture {
 
 namespace {
-
-// The time now in UTC, as ISO 8601.
-std::string get_utc_now_iso8601() {
-    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm utc{};
-    gmtime_r(&now, &utc);
-    std::array<char, 32> text{};
-    std::strftime(text.data(), text.size(), "%Y-%m-%dT%H:%M:%SZ", &utc);
-    return text.data();
-}
 
 // Whether the record says anything the manifest names on this rank wasn't read in full.
 bool has_recorded_problems(const CaptureRecord& record) {
@@ -52,7 +40,7 @@ bool has_recorded_problems(const CaptureRecord& record) {
 
 CaptureResult capture_rank(
     const CaptureRequest& request, DeviceReader& reader, const ClusterFacts& facts, CaptureClock& clock) {
-    const std::string started_at = get_utc_now_iso8601();
+    const std::string started_at = visualizer::get_utc_now_iso8601();
 
     // 1. The manifest: what to read, and which run it's from.
     CapturePlan plan;
@@ -114,7 +102,7 @@ CaptureResult capture_rank(
         .capture_git_sha = request.capture_git_sha,
         .cluster_id = facts.cluster_id,
         .started_at = started_at,
-        .finished_at = get_utc_now_iso8601(),
+        .finished_at = visualizer::get_utc_now_iso8601(),
         .round_options = request.round_options,
         .bin_file = paths.bin_path.filename().string(),
         .bin_size_bytes = finished_bin.size_bytes,

@@ -4,9 +4,6 @@
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_files.hpp"
 
-#include <array>
-#include <chrono>
-#include <ctime>
 #include <ios>
 #include <string>
 #include <system_error>
@@ -17,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_time.hpp"
 
 namespace tt::tt_fabric::capture {
 
@@ -55,14 +53,7 @@ CaptureFilePaths make_capture_file_paths(
     return paths;
 }
 
-std::string make_capture_id() {
-    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm utc{};
-    gmtime_r(&now, &utc);
-    std::array<char, 32> text{};
-    std::strftime(text.data(), text.size(), "%Y%m%dT%H%M%SZ", &utc);
-    return text.data();
-}
+std::string make_capture_id() { return visualizer::get_utc_now_compact(); }
 
 CaptureBinWriter::CaptureBinWriter(std::filesystem::path bin_path) :
     bin_path_(std::move(bin_path)), temporary_path_(make_temporary_path(bin_path_)) {
