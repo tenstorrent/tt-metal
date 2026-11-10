@@ -60,8 +60,9 @@ void kernel_main() {
     const uint32_t budget = get_arg_val<uint32_t>(a++), NSTREAM = get_arg_val<uint32_t>(a++);
     const uint32_t qr_x = get_arg_val<uint32_t>(a++), qr_y = get_arg_val<uint32_t>(a++);
     const uint32_t extra_tiles = get_arg_val<uint32_t>(a++);   // qkv bytes the MIXN mixer stand-in does not cover (scratch reads)
-    const uint32_t kv_swap = get_arg_val<uint32_t>(a++);
-    const uint32_t wcb = kv_swap ? CB_K : CB_V, woff = kv_swap ? 0 : DH;
+    const uint32_t kv_mode = get_arg_val<uint32_t>(a++);   // see reader
+    const bool wr_k = kv_mode == 1 || kv_mode == 3, wr_v = kv_mode == 0 || kv_mode == 3;
+    uint32_t kv_groups = 0;
 
     const auto wm = TensorAccessor(wm_args, wm_addr, WTB);
     const auto wd = TensorAccessor(wd_args, wd_addr, WTB);
@@ -117,13 +118,18 @@ void kernel_main() {
         for (uint32_t t = 0; t < wo_tiles; t += 8) add(wo.get_noc_addr(wo_page + t), get_write_ptr(CB_SCR), (wo_tiles - t < 8 ? wo_tiles - t : 8) * WOTB, 3, true);
         for (uint32_t t = 0; t < extra_tiles; t += 8) add(wo.get_noc_addr(wo_page + (t % wo_tiles)), get_write_ptr(CB_SCR), (extra_tiles - t < 8 ? extra_tiles - t : 8) * WOTB, 3, true);
     };
-    auto issue_some = [&](bool all) {
+    auto issue_some = [&](bool all, uint32_t minp = 0) {
         // throttled: the previous KV group's interval drained the earlier chunks (wait on the weight trids), then issue
         // at most `budget` bytes for this interval; `all` issues everything left
         if (!all && budget) { for (uint32_t t = 1; t <= 3; ++t) noc_async_read_barrier_with_trid(t); outstanding = 0; }
         while (ip < npc) {
             const Piece& p = pcs[ip];
-            if (!all && budget && outstanding > 0 && outstanding + p.bytes > budget) break;
+            if (!all && minp == 0 && budget && outstanding > 0 && outstanding + p.bytes > budget) break;
+#if defined(MKA_WCAP)
+            // cap in-flight weight bytes on this writer at MKA_WCAP even when issuing many pieces at once
+            if (outstanding + p.bytes > MKA_WCAP && outstanding > 0) { for (uint32_t t = 1; t <= 3; ++t) noc_async_read_barrier_with_trid(t); outstanding = 0; }
+#endif
+            if (minp) --minp;
             noc_async_read_set_trid(p.trid);
             noc_async_read(p.src, p.dst, p.bytes);
             noc_async_read_set_trid(0);
@@ -181,17 +187,33 @@ void kernel_main() {
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
             for (uint32_t b = vb0; b < vb1; b += NBB) {
                 const uint32_t nb = (vb1 - b) < NBB ? (vb1 - b) : NBB;
-                cb_reserve_back(wcb, NBB * DH);   // full group (see reader)
-                const uint32_t wv = get_write_ptr(wcb);
+#if defined(MKA_SPREAD)
+                // spread the planned weight pieces evenly over this core's KV groups (at least `budget` per group):
+                // at small KV (u1, short context) a fixed budget left most pieces for the issue-all after the loop
+                const uint32_t gl = (vb1 - b + NBB - 1) / NBB;
+                const uint32_t minp = (npc - ip + gl - 1) / gl;
+#else
+                constexpr uint32_t minp = 0;
+#endif
+                if (!(wr_k || wr_v)) {   // kv_mode 2: the reader streams this core's K and V; pace the weight issue on its progress
+                    if (IS_STREAM) issue_some(false, minp);
+                    noc_semaphore_wait_min(l1w(gs[GS_KVPROG]), ++kv_groups);
+                    continue;
+                }
+                if (wr_k) cb_reserve_back(CB_K, NBB * DH);   // full group (see reader)
+                if (wr_v) cb_reserve_back(CB_V, NBB * DH);
+                const uint32_t wk = wr_k ? get_write_ptr(CB_K) : 0, wv = wr_v ? get_write_ptr(CB_V) : 0;
                 noc_async_read_set_trid(TRID_V);
                 for (uint32_t i = 0; i < nb; ++i) {
                     const uint32_t pk = ((user * NBK + b + i) * 2) * DH;
-                    for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + woff + t), wv + (i * DH + t) * KVTB, KVTB);
+                    if (wr_k) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + t), wk + (i * DH + t) * KVTB, KVTB);
+                    if (wr_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + DH + t), wv + (i * DH + t) * KVTB, KVTB);
                 }
                 noc_async_read_set_trid(0);
-                if (IS_STREAM) issue_some(false);   // one budget's worth of weight chunks per KV group
+                if (IS_STREAM) issue_some(false, minp);   // one budget's worth (or the even share) of weight chunks per KV group
                 noc_async_read_barrier_with_trid(TRID_V);
-                cb_push_back(wcb, NBB * DH);
+                if (wr_k) cb_push_back(CB_K, NBB * DH);
+                if (wr_v) cb_push_back(CB_V, NBB * DH);
             }
             if (IS_STREAM) issue_some(true);
         }
@@ -250,4 +272,5 @@ void kernel_main() {
 #endif
     }
     if (is_qroot) { *l1w(gs[GS_MIXDONE]) = 0; *l1w(gs[GS_ADONE]) = 0; }
+    if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
 }

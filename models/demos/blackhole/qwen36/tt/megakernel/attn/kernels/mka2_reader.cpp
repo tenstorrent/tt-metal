@@ -50,8 +50,11 @@ void kernel_main() {
     // STREAM: layer L's wo slice + the next layer's uncovered qkv bytes stream on NOC1 here (scratch), balancing the NoCs
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++), wo_tiles = get_arg_val<uint32_t>(a++);
     const uint32_t extra_tiles = get_arg_val<uint32_t>(a++);
-    const uint32_t kv_swap = get_arg_val<uint32_t>(a++);   // 1: this core's reader streams V (NOC1) and its writer K (NOC0)
-    const uint32_t rcb = kv_swap ? CB_V : CB_K, roff = kv_swap ? DH : 0;
+    // kv_mode: 0 reader K (NOC1) + writer V (NOC0); 1 reader V + writer K; 2 reader K and V (all KV on NOC1);
+    // 3 writer K and V (all KV on NOC0)
+    const uint32_t kv_mode = get_arg_val<uint32_t>(a++);
+    const bool rd_k = kv_mode == 0 || kv_mode == 2, rd_v = kv_mode == 1 || kv_mode == 2;
+    uint32_t kv_groups = 0;
     const auto wo = TensorAccessor(wo_args, wo_addr, WOTB);
     const uint32_t scr = get_write_ptr(CB_SCR);
     constexpr uint32_t TRID_WO = 7;
@@ -85,7 +88,11 @@ void kernel_main() {
         {   // SDPA: K stream
             DeviceZoneScopedN("R-KV");
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
-            const uint32_t wtot = IS_STREAM ? wo_tiles + extra_tiles : 0;
+            #if defined(MKA_EXTPOST)
+            const uint32_t wtot = IS_STREAM ? wo_tiles + extra_tiles : 0;   // STREAM_EXT cores read theirs after the tree
+#else
+            const uint32_t wtot = wo_tiles + extra_tiles;   // STREAM, and STREAM_EXT (ATTN-only) cores under MKA_EXT (spec v0.5)
+#endif
             const uint32_t ngrp = (b1 - b0 + NBB - 1) / NBB;
             const uint32_t wper = ngrp ? (wtot + ngrp - 1) / ngrp : wtot;   // weight tiles per K group, spread evenly
             uint32_t wdone = 0;
@@ -97,21 +104,31 @@ void kernel_main() {
                     const uint32_t n = (wtot - wdone) < wper ? (wtot - wdone) : wper;
                     for (uint32_t t = 0; t < n; t += 8) {
                         const uint32_t m = (n - t) < 8 ? (n - t) : 8;
+#if defined(MKA_RCAP)
+                        // cap this reader's in-flight weight bytes (NoC/DRAM congestion: fewer outstanding reads drain faster)
+                        if (t && (t % MKA_RCAP) == 0) { noc_async_read_barrier_with_trid(TRID_WO); noc_async_read_set_trid(TRID_WO); }
+#endif
                         noc_async_read(wo.get_noc_addr(wo_page + ((wdone + t) % wo_tiles)), scr, m * WOTB);
                     }
                     noc_async_read_set_trid(0);
                     wdone += n;
                 }
-                cb_reserve_back(rcb, NBB * DH);   // always a full group: CB_K is a whole number of groups, so groups never straddle the ring end
-                const uint32_t wk = get_write_ptr(rcb);
+                if (!(rd_k || rd_v)) continue;
+                // always a full group: CB_K / CB_V hold a whole number of groups, so groups never straddle the ring end
+                if (rd_k) cb_reserve_back(CB_K, NBB * DH);
+                if (rd_v) cb_reserve_back(CB_V, NBB * DH);
+                const uint32_t wk = rd_k ? get_write_ptr(CB_K) : 0, wv = rd_v ? get_write_ptr(CB_V) : 0;
                 noc_async_read_set_trid(TRID_K);
                 for (uint32_t i = 0; i < nb; ++i) {
                     const uint32_t pk = ((user * NBK + b + i) * 2) * DH;
-                    for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + roff + t), wk + (i * DH + t) * KVTB, KVTB);
+                    if (rd_k) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + t), wk + (i * DH + t) * KVTB, KVTB);
+                    if (rd_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + DH + t), wv + (i * DH + t) * KVTB, KVTB);
                 }
                 noc_async_read_set_trid(0);
                 noc_async_read_barrier_with_trid(TRID_K);
-                cb_push_back(rcb, NBB * DH);
+                if (rd_k) cb_push_back(CB_K, NBB * DH);
+                if (rd_v) cb_push_back(CB_V, NBB * DH);
+                if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = ++kv_groups;   // paces the writer's weight issue (it has no KV)
             }
             noc_async_read_barrier_with_trid(TRID_WO);
         }
@@ -145,6 +162,16 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_ADONE]), 1);
             }
         }
+#if defined(MKA_EXTPOST)
+        if (!IS_STREAM && wo_tiles + extra_tiles) {   // STREAM_EXT: projection bytes outside this core's SDPA phase
+            DeviceZoneScopedN("R-EXTW");
+            const uint32_t n = wo_tiles + extra_tiles;
+            noc_async_read_set_trid(TRID_WO);
+            for (uint32_t t = 0; t < n; t += 8)
+                noc_async_read(wo.get_noc_addr(wo_page + (t % wo_tiles)), scr, ((n - t) < 8 ? (n - t) : 8) * WOTB);
+            noc_async_read_set_trid(0);
+        }
+#endif
 #if defined(MKA_GUPRE)
         if (IS_STREAM && IS_GU) { noc_async_read_barrier_with_trid(TRID_GU); cb_push_back(CB_W, even_t); }
 #endif
@@ -175,6 +202,7 @@ void kernel_main() {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_HCNT0 + ROOT)) = 0;
     }
 #endif
+    noc_async_read_barrier();
     noc_async_atomic_barrier();
     // reset the tree's global semaphores for the next pass: every inc into them for layer NL - 1 happened before the
     // matching wait above returned, so nothing arrives after this point

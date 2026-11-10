@@ -126,6 +126,26 @@ passes (FM_NL=5), as the mean of layers 1-3:
   were worse. The skew shrinks with NBB 1, which agrees with a congestion cause. Open: K and V both on one NoC per column half,
   and a dynamic group hand-out.
 
+### 6.2 Column skew = stand-in artifact; v0.5 STEP 1 stand-in (2026-11-10, d27u08 chip 0, 5-layer mid-layer means)
+- **The column skew came from the bench, not the design.** The reader's wo / extra-qkv stand-in read 8-tile runs from
+  page `wo_page + 8k`, and all of those sit in bank `wo_page % 8`. With `wo_page = i * 96`, every STREAM core read
+  ~0.26 MB/layer from DRAM bank 0, so cores near bank 0 (left columns) won. With `MKA_WOBANK=1` (now default), core i reads
+  bank i % 8. KV reads now end within a ~100 µs row-wise band instead of the x ramp, and u1 at 4K went from 430 to 213 µs.
+  Real projection weights are bank-local sliced (spec), so the fix models them correctly.
+- kv_mode (K+V on one NoC per column half, modes 2/3, `MKA_KVHALF`) and `MKA_SPREAD` / `MKA_RCAP` / `MKA_WCAP` throttles
+  are implemented. They were built against the artifact and are kept as knobs. SPREAD and CAP gave no gain.
+- v0.5 STEP 1 stand-in (`MKA_EXT=1`): the projection bytes the 80-core mixer doesn't cover (qkv remainder + wo, ~20.5 MB)
+  are read by all 120 cores, interleaved with each core's KV groups. Interleaved repeats, after the bank fix:
+
+| 32K BFP8, GUPRE, NBB 1, budget 16 KB | base (80 cores) | MKA_EXT (120 cores) |
+|---|---|---|
+| u1 (1 own user) | 255.1 / 254.4 / 260.7 → **256.7** | 241.1 / 240.4 / 238.0 → **239.8** |
+| u8 (4 own users) | 376.8 / 372.2 → **374.5** | 371.0 / 369.1 → **370.0** |
+
+  Ext reads after the tree (`MKA_EXTPOST`) or a larger ext share (`MKA_EXTW` 2-5) are worse at u1 (+5 to +20 µs).
+  u1 EXT is now DRAM-bound in the SDPA window: ~64.5 MB in ~160 µs ≈ 400 GB/s, plus a ~74 µs chain (wo + S_WO stand-in,
+  2 × 18 µs AR stalls, MLP). 240 µs is still 10 µs over the v0.5 target of ≤230 µs.
+
 ## 7. Spec v0.4 (DESIGN_megakernel §9): CB_X is the UN-NORMED residual
 The real qkv projection (it replaces the MIXN stand-in) must: (1) use qkv weights with input-norm γ (×NORM_FIX) folded
 into the rows (megakernel/weights.py), flag-gated until the output-length gate; (2) read the AR owners' fp32 Σx² partials
