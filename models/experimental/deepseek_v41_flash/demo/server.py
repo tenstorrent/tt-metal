@@ -48,8 +48,10 @@ What V4.1 imposes on the serving side:
   (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~70 tok/s against ~45 a step at a time, for a
   sampled (temperature 1) chat reply in ``tests/decode/test_dspark_spec.py``. Its rounds restore one session's
   rings and accept against the steps' logits on the host, and its drafter has no image rows, so ``--dspark`` serves
-  one user slot (``--num-users 1``, other conversations parked in host RAM) and turns off ``--vision``,
-  ``--device-sampling`` and the Rust host runtime; a request's ``temperature`` and ``top_p`` apply.
+  one user slot (``--num-users 1``, other conversations parked in host RAM) and turns off ``--vision`` and
+  ``--device-sampling``; a request's ``temperature`` and ``top_p`` apply. The rounds run on the Rust host runtime
+  as single steps do (its threads replay the stages' traces, write the packets and Engram rows and read the
+  outputs), and the web monitor watches them.
 * Shared prefixes. A prompt that continues no conversation starts from the longest prefix of it any other slot's
   cache holds, running or parked (a common system prompt, a forked conversation): the two slots share that prefix's
   compressed KV blocks, counted per slot so either can rewind or reset without the other losing them, and the
@@ -998,8 +1000,7 @@ class V41GenerationServer(GenerationServer):
         self.engine.capture_vision()
         self.monitor_feed = None
         self._monitor_sink = None
-        # The host runtime does not run speculative decode.
-        if host_rs.enabled() and not self.engine.dspark:
+        if host_rs.enabled():
             # After every capture: from here the decode step's replays, packets, Engram rows and outputs run on the
             # Rust host runtime's threads, which keep their counters where the web monitor reads them.
             prefix = monitor.default_prefix()
@@ -1657,7 +1658,7 @@ def parse_args(argv: list[str] | None = None):
         default=os.environ.get("DEEPSEEK_V41_DSPARK", "0") == "1",
         help=f"decode every reply by DSpark speculative decode, {_DSPARK_DRAFTS} drafts a round, the drafter on the "
         f"mesh's last row (decode on the first {_DSPARK_STAGES}); one user slot (--num-users 1), host sampling at the "
-        "request's temperature / top_p, and no --vision, --device-sampling or Rust host runtime "
+        "request's temperature / top_p, and no --vision or --device-sampling "
         "(default: off; DEEPSEEK_V41_DSPARK=1 turns it on)",
     )
     for action in p._actions:
@@ -1691,7 +1692,7 @@ def parse_args(argv: list[str] | None = None):
             args.slot_idle_timeout = 1e-3
         # Each verify round's log line, read when tt/spec.py is imported; DEEPSEEK_V4_SPEC_VERBOSE=1 brings them back.
         os.environ.setdefault("DEEPSEEK_V4_SPEC_VERBOSE", "0")
-    elif host_rs.enabled():
+    if host_rs.enabled():
         args.tui = False  # the web monitor (demo/monitor.py) watches it, from a process of its own
     if args.vision and (args.image_rows % 32 or args.image_rows <= FIRST_IMAGE_ROW):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")

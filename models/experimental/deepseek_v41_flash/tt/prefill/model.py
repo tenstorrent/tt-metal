@@ -1051,9 +1051,9 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         # The received candidates are read in place: only the candidate source replaces them, and it is never on a
         # stage that receives them.
         shared = PrefillStaticShared(candidates=io.candidates_in)
-        # A copy: the stage's own index source frees the selection it replaces.
+        # Read in place, like the candidates: it is never freed, and a stage's own index source only replaces it.
         if io.sel_in is not None:
-            shared.entry_idx = ttnn.clone(io.sel_in)
+            shared.entry_idx = shared.received_idx = io.sel_in
         new_rows = {}
         for li in stage.layers:
             layer = model.layers[li]
@@ -1076,7 +1076,7 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         sel_out = None
         if stage.sel_out:
             sel_out, shared.entry_idx = shared.entry_idx, None
-        if shared.entry_idx is not None:
+        if shared.entry_idx is not None and shared.entry_idx is not io.sel_in:
             ttnn.deallocate(shared.entry_idx)
 
         if stage.last:
@@ -1101,7 +1101,8 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
                 ttnn.experimental.send_direct_async(shared.candidates, stage.send)
             if sel_out is not None:
                 ttnn.experimental.send_direct_async(sel_out, stage.send)
-                ttnn.deallocate(sel_out)
+                if sel_out is not io.sel_in:
+                    ttnn.deallocate(sel_out)
             ttnn.experimental.send_direct_async(pkt, stage.send)
             ttnn.deallocate(rows)
             _free_distinct(pre_rows, pre_flat)
@@ -1336,10 +1337,10 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
 
     def _export_states(self) -> list[PrefillAttentionState]:
         """Per-layer :class:`PrefillAttentionState` of the prompt just run, as the eager :meth:`prefill` leaves it:
-        every layer's ``kv_tail`` (cut out of the last chunk's window when it was padded), a kv source's first
-        ``prompt_len // rate`` entry and index-key rows. Free with :meth:`free_states` before the next run."""
+        every layer's ``kv_tail`` (the ``sliding_window`` rows of the last chunk's window that end at its last real
+        token), a kv source's first ``prompt_len // rate`` entry and index-key rows. Free with :meth:`free_states`
+        before the next run."""
         n, real = self._prompt_len, self._last_real
-        pad = self._chunk_size - real
 
         def rows(t: ttnn.Tensor, lo: int, hi: int) -> ttnn.Tensor:
             return ttnn.slice(t, [0, 0, lo, 0], [1, 1, hi, t.shape[3]])
@@ -1348,8 +1349,7 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         for li, layer in enumerate(self.model.layers):
             attn = layer.self_attn
             bufs = self.buffers[li]
-            tail = rows(bufs.window, real, real + attn.sliding_window) if pad else bufs.tail
-            state = PrefillAttentionState(seq_len=n, kv_tail=tail)
+            state = PrefillAttentionState(seq_len=n, kv_tail=rows(bufs.window, real, real + attn.sliding_window))
             if attn.is_kv_source:
                 entries = n // attn.rate
                 state.compressed_kv = rows(bufs.entries, 0, entries)

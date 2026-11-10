@@ -130,10 +130,18 @@ class DeepSeekV4PrefillHyperConnection(DeepSeekV4Module):
             raise ValueError("the prefill hyper-connection needs at least 2 tokens; single tokens are decode's")
 
         flat = flatten_streams(hidden_streams)  # [1, 1, T, hc*D]
-        normed = wide_rms_norm(flat, self.norm_eps)
+        # The norm is unweighted and fn is linear, so fn(x * rstd) is taken as fn(x) * rstd: the [T, (2+hc)*hc]
+        # output is scaled instead of the [T, hc*D] input. The mean of squares reduces in fp32 dest.
+        raw_w = self.fn(flat)  # [1, 1, T, (2+hc)*hc]
+        sq = ttnn.square(flat)
         ttnn.deallocate(flat)
-        fused_w = self.fn(normed)  # [1, 1, T, (2+hc)*hc]
-        ttnn.deallocate(normed)
+        mean = ttnn.mean(sq, dim=-1, keepdim=True)  # [1, 1, T, 1]
+        ttnn.deallocate(sq)
+        rstd = ttnn.rsqrt(ttnn.add(mean, self.norm_eps))
+        ttnn.deallocate(mean)
+        fused_w = ttnn.multiply(raw_w, rstd)
+        for tensor in (raw_w, rstd):
+            ttnn.deallocate(tensor)
 
         outputs = ttnn.experimental.deepseek.fused_hyperconnection(
             hidden_streams,

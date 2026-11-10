@@ -75,21 +75,54 @@ def _strip_think_tags(text: str) -> str:
 
 
 class Client:
-    """A thin OpenAI-compatible client for ``demo/server.py``."""
+    """A thin OpenAI-compatible client for ``demo/server.py``, or for the official API given an ``api_key``.
 
-    def __init__(self, base_url: str | None = None, model: str | None = None, timeout: float | None = None):
+    The server takes a bare ``http://host:port`` and its routes are absolute (``/v1/...``); the official API
+    (e.g. ``https://api.deepseek.com``) authenticates with ``Authorization: Bearer <key>``, and its routes may sit
+    under a versioned root (``/v1``), so with ``api_key`` a ``base_url`` ending in the version is kept as it is and
+    a bare one gets ``/v1`` appended.
+    """
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout: float | None = None,
+        api_key: str | None = None,
+    ):
         self.base_url = (base_url or os.environ.get("DEEPSEEK_V4_BASE_URL", _DEFAULT_BASE_URL)).rstrip("/")
         self.model = model or os.environ.get("DEEPSEEK_V4_MODEL_ID", _DEFAULT_MODEL)
         self.timeout = timeout
+        self.api_key = api_key
+        # The local server has KV-cache sessions of its own (``/v1/sessions``) and renders DeepSeek's ``thinking``
+        # template from the request; the official API picks thinking by model and has no session routes.
+        self.sessions_api = api_key is None
+        if api_key is not None:
+            self.headers = {"Authorization": f"Bearer {api_key}"}
+            # ``https://api.deepseek.com`` -> ``.../v1``; a root that already ends in a version is left alone.
+            last = self.base_url.rsplit("/", 1)[-1]
+            self.versioned = len(last) > 1 and last[0] == "v" and last[1:].isdigit()
+            if not self.versioned:
+                self.base_url += "/v1"
+                self.versioned = True
+        else:
+            self.headers = {}
+            self.versioned = False
         self._http = requests.Session()
 
     # -- transport -------------------------------------------------------------- #
     def _request(self, method: str, path: str, *, json_body: Optional[dict] = None, stream: bool = False):
-        url = self.base_url + path
+        url = self.base_url + self._path(path)
         try:
-            return self._http.request(method, url, json=json_body, stream=stream, timeout=self.timeout)
+            return self._http.request(
+                method, url, json=json_body, headers=self.headers, stream=stream, timeout=self.timeout
+            )
         except requests.RequestException as e:
             raise OpenAIError(0, f"cannot reach {url}: {e}") from e
+
+    def _path(self, path: str) -> str:
+        """``path`` without the version the configured root already ends in (see the class docstring)."""
+        return path[len("/v1") :] if self.versioned and path.startswith("/v1/") else path
 
     @staticmethod
     def _check(r) -> requests.Response:
@@ -151,6 +184,10 @@ class Client:
         return self._check(self._request("GET", "/v1/sessions")).json()
 
     def reset_session(self, user: str = "default") -> dict:
+        """Delete ``user``'s session, giving its KV pages back. On the official API, where a conversation lives in
+        the history the request sends, a new conversation starts with a new ``user`` instead: nothing to delete."""
+        if not self.sessions_api:
+            return {"id": user, "object": "session.deleted", "deleted": False}
         return self._check(self._request("DELETE", f"/v1/sessions/{quote(user, safe='')}")).json()
 
     def health(self) -> dict:
