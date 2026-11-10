@@ -131,73 +131,52 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
     ASSERT_TRUE(ensure_links(devices_));
 
     for (int i = 0; i < devices_.size(); i++) {
-        const auto& sender_mesh_device = devices_[i];
-        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
+        const auto& smesh = devices_[i];
+        auto* const sdev = smesh->impl().get_devices()[0];
 
         for (int j = i; j < devices_.size(); j++) {
-            const auto& receiver_mesh_device = devices_[j];
-            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
+            const auto& rmesh = devices_[j];
+            auto* const rdev = rmesh->impl().get_devices()[0];
 
-            log_info(
-                tt::LogTest,
-                "sender device id: {} ({}, {}), receiver device id: {} ({}, {})",
-                sender_device->id(),
-                pci_bdf_for_device_id(sender_device->id()),
-                get_ubb(sender_device),
-                receiver_device->id(),
-                pci_bdf_for_device_id(receiver_device->id()),
-                get_ubb(receiver_device));
+            log_info(tt::LogTest, "{}", format_subtest_info(sdev, rdev));
 
             std::set<CoreCoord> tested;
 
-            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
-                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
+            for (const auto& score : sdev->get_active_ethernet_cores(true)) {
+                if (!eth_core_connects_within_cluster(sdev, score)) {
                     continue;
                 }
-                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
-                if (receiver_device->id() != device_id) {
-                    continue;
-                }
-
-                if (tested.contains(sender_core)) {
-                    continue;
-                }
-                if (tested.contains(receiver_core)) {
+                auto [device_id, rcore] = sdev->get_connected_ethernet_core(score);
+                if (rdev->id() != device_id) {
                     continue;
                 }
 
-                tested.insert(sender_core);
-                tested.insert(receiver_core);
-
-                if (!programs.contains(sender_mesh_device)) {
-                    programs[sender_mesh_device] = make_shared<Program>();
-                }
-                if (!programs.contains(receiver_mesh_device)) {
-                    programs[receiver_mesh_device] = make_shared<Program>();
+                if (tested.contains(score) || tested.contains(rcore)) {
+                    continue;
                 }
 
-                log_info(
-                    tt::LogTest, "  {}", format_link_info(sender_device, sender_core, receiver_device, receiver_core));
+                tested.insert(score);
+                tested.insert(rcore);
+
+                if (!programs.contains(smesh)) {
+                    programs[smesh] = make_shared<Program>();
+                }
+                if (!programs.contains(rmesh)) {
+                    programs[rmesh] = make_shared<Program>();
+                }
+
+                log_info(tt::LogTest, "  {}", format_link_info(sdev, score, rdev, rcore));
 
                 const auto processor = static_cast<DataMovementProcessor>(0);
 
                 log_info(tt::LogTest, "    running on {}", processor);
-                string locinfo = get_locinfo(sender_device, sender_core, receiver_device, receiver_core, processor);
+                string locinfo = get_locinfo(sdev, score, rdev, rcore, processor);
 
                 run_test_stress(
-                    this,
-                    sender_mesh_device,
-                    receiver_mesh_device,
-                    sender_core,
-                    receiver_core,
-                    processor,
-                    inputs,
-                    std::move(locinfo),
-                    cores,
-                    programs);
+                    this, smesh, rmesh, score, rcore, processor, inputs, std::move(locinfo), cores, programs);
                 // if (!passed) {
                 //     errors.emplace_back(
-                //         sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
+                //         sdev->id(), rdev->id(), score, rcore, processor);
                 // }
                 n++;
             }

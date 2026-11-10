@@ -20,6 +20,7 @@ namespace tt::tt_metal {
 using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
+using namespace std::chrono_literals;
 
 template <typename FIXTURE>
 static bool run_test_bandwidth_bidir(
@@ -35,8 +36,8 @@ static bool run_test_bandwidth_bidir(
     TEST_PARAM(uint32_t, transfer_size, 160 * 1024, "ETH_TEST_TRANSFER_SIZE");
     TEST_PARAM(uint32_t, transfer_count, 20 << 10, "ETH_TEST_TRANSFER_COUNT");
 
-    uint32_t num_bytes_per_send = transfer_size / 2;
-    uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
+    uint64_t num_bytes_per_send = transfer_size / 2;
+    uint64_t total_transferred = transfer_size * transfer_count;
 
     span<uint32_t> inp = inputs.subspan(0, transfer_size / sizeof inp[0]);
 
@@ -76,11 +77,11 @@ static bool run_test_bandwidth_bidir(
             .expected_count = transfer_count,
         },
     };
-    using namespace std::chrono_literals;
     if (getenv("ETH_TEST_PRECOMPILE")) {
         precompile(fixture, cores, programs);
         return true;
     }
+
     wait_to_finish_eth_timeout_cores(fixture, cores, programs, 100ms);
 
     double threshold = get_eth_bw() * 0.7;
