@@ -9,6 +9,7 @@
 #include "dispatch_settings.hpp"
 
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 
 #include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -39,32 +40,33 @@ uint32_t read_cq_host_ptr(
     uint32_t cq_size,
     uint32_t host_addr_offset) {
     uint32_t recv;
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    MetalContext& metal_ctx = sysmem_manager.metal_context();
     if (sysmem_manager.is_dram_backed()) {
         const uint32_t dram_channel =
             metal_ctx.device_manager()->get_active_device(chip_id)->allocator_impl()->get_dram_channel_from_bank_id(
                 sysmem_manager.get_dram_region_bank_id());
-        metal_ctx.get_cluster().read_dram_vec(
+        sysmem_manager.env_impl().get_cluster().read_dram_vec(
             &recv,
             sizeof(uint32_t),
             chip_id,
             dram_channel,
             sysmem_manager.get_dram_region_base_addr() + get_relative_cq_offset(cq_id, cq_size) + host_addr_offset);
     } else {
-        ChipId mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(chip_id);
-        uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(chip_id);
+        ChipId mmio_device_id = sysmem_manager.env_impl().get_cluster().get_associated_mmio_device(chip_id);
+        uint16_t channel = sysmem_manager.env_impl().get_cluster().get_assigned_channel_for_device(chip_id);
         uint32_t sysmem_offset = host_addr_offset + get_relative_cq_offset(cq_id, cq_size);
         if constexpr (include_device_channel_offset) {
             sysmem_offset += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
         }
-        metal_ctx.get_cluster().read_sysmem(&recv, sizeof(uint32_t), sysmem_offset, mmio_device_id, channel);
+        sysmem_manager.env_impl().get_cluster().read_sysmem(
+            &recv, sizeof(uint32_t), sysmem_offset, mmio_device_id, channel);
     }
     return recv;
 }
 
 template <bool addr_16B>
-uint32_t get_cq_issue_rd_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    MetalContext& metal_ctx = MetalContext::instance(context_id);
+uint32_t get_cq_issue_rd_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
+    MetalContext& metal_ctx = ctx;
     uint32_t issue_q_rd_ptr =
         metal_ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
     const SystemMemoryManager& sysmem_manager =
@@ -76,12 +78,12 @@ uint32_t get_cq_issue_rd_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id
     return recv;
 }
 
-template uint32_t get_cq_issue_rd_ptr<true>(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_issue_rd_ptr<false>(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_rd_ptr<true>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_rd_ptr<false>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_issue_wr_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    MetalContext& metal_ctx = MetalContext::instance(context_id);
+uint32_t get_cq_issue_wr_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
+    MetalContext& metal_ctx = ctx;
     uint32_t issue_q_wr_ptr =
         metal_ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
     const SystemMemoryManager& sysmem_manager =
@@ -93,12 +95,12 @@ uint32_t get_cq_issue_wr_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id
     return recv;
 }
 
-template uint32_t get_cq_issue_wr_ptr<true>(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_issue_wr_ptr<false>(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_wr_ptr<true>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_wr_ptr<false>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_completion_wr_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    MetalContext& metal_ctx = MetalContext::instance(context_id);
+uint32_t get_cq_completion_wr_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
+    MetalContext& metal_ctx = ctx;
     uint32_t completion_q_wr_ptr =
         metal_ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
     const SystemMemoryManager& sysmem_manager =
@@ -110,13 +112,12 @@ uint32_t get_cq_completion_wr_ptr(ContextId context_id, ChipId chip_id, uint8_t 
     return recv;
 }
 
-template uint32_t get_cq_completion_wr_ptr<true>(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_completion_wr_ptr<false>(
-    ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_wr_ptr<true>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_wr_ptr<false>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_completion_rd_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    MetalContext& metal_ctx = MetalContext::instance(context_id);
+uint32_t get_cq_completion_rd_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
+    MetalContext& metal_ctx = ctx;
     uint32_t completion_q_rd_ptr =
         metal_ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
     const SystemMemoryManager& sysmem_manager =
@@ -128,14 +129,13 @@ uint32_t get_cq_completion_rd_ptr(ContextId context_id, ChipId chip_id, uint8_t 
     return recv;
 }
 
-template uint32_t get_cq_completion_rd_ptr<true>(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_completion_rd_ptr<false>(
-    ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_rd_ptr<true>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_rd_ptr<false>(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
-uint32_t get_cq_dispatch_progress(ContextId context_id, ChipId chip_id, uint8_t cq_id) {
+uint32_t get_cq_dispatch_progress(MetalContext& ctx, ChipId chip_id, uint8_t cq_id) {
     uint32_t progress = 0;
 
-    MetalContext& metal_ctx = MetalContext::instance(context_id);
+    MetalContext& metal_ctx = ctx;
     // Get the dispatcher core for this command queue
     // For remote chips: read from DISPATCH_D (on the remote chip where work actually happens)
     // For local chips: read from DISPATCH_HD (combined dispatcher on local chip)

@@ -34,7 +34,7 @@ void bind_expand(nb::module_& mod) {
         Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.
 
         Args:
-            * :attr:`input`: The tensor to be expanded.
+            * :attr:`input_tensor`: The tensor to be expanded.
             * :attr:`output_shape`: The desired output shape.
             * :attr:`memory_config`: The memory configuration for the expanded tensor.
 

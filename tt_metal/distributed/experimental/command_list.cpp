@@ -344,7 +344,7 @@ public:
     explicit CommandListBuilderImpl(MeshDevice& mesh_device);
     ~CommandListBuilderImpl();
 
-    void add(MeshWorkload& workload, const CmdListParameters& parameters);
+    void add(MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters);
     void add_tensor_prefetcher_request(
         const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
         ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
@@ -995,12 +995,13 @@ void CommandListBuilderImpl::resolve_parameters(
             auto& program = *captured.trace_node.program;
             const auto* expected_spec = program.get_tensor_parameter_layout(*info.param_name);
             TT_FATAL(expected_spec != nullptr, "TensorParameter '{}' is not declared by the program", info.param_name);
-            for (const auto& [dfb_id, borrowed_param_name] : program.get_dfb_borrowed_bindings()) {
+            for (const auto& binding : program.get_dfb_storage_bindings()) {
+                const auto* tensor_name = std::get_if<tt::tt_metal::experimental::TensorParamName>(&binding.source);
                 TT_FATAL(
-                    borrowed_param_name != *info.param_name,
+                    tensor_name == nullptr || tensor_name->get() != *info.param_name,
                     "TensorParameter '{}' backs borrowed-memory DFB {}, which command lists cannot patch",
                     info.param_name,
-                    dfb_id);
+                    binding.dfb_id);
             }
             const auto relaxations = program.get_tensor_parameter_relaxations(*info.param_name);
             bool bound = false;
@@ -1031,15 +1032,16 @@ void CommandListBuilderImpl::resolve_parameters(
     }
 }
 
-void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters& parameters) {
+void CommandListBuilderImpl::add(
+    MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters) {
     TT_FATAL(valid, "CommandListBuilder has been deallocated");
+    TT_FATAL(binary_upload_cq.device() == &mesh_device, "Command queue belongs to a different MeshDevice");
     TT_FATAL(
         mesh_device.get_active_sub_device_manager_id() == sub_device_manager_id,
         "The active sub-device manager changed while recording a command list");
     validate_no_service_cores(workload, mesh_device);
 
-    auto& binary_load_cq = mesh_device.mesh_command_queue(0);
-    auto binary_buffer = workload.impl().prepare_for_command_list(binary_load_cq);
+    auto binary_buffer = workload.impl().prepare_for_command_list(binary_upload_cq);
 
     StagedCommandListNode staged_node;
     staged_node.multicast_go_signals = workload.impl().runs_on_noc_multicast_only_cores();
@@ -1173,9 +1175,10 @@ CommandListBuilder::CommandListBuilder(CommandListBuilder&&) noexcept = default;
 CommandListBuilder& CommandListBuilder::operator=(CommandListBuilder&&) noexcept = default;
 CommandListBuilder::~CommandListBuilder() = default;
 
-void CommandListBuilder::add(MeshWorkload& workload, const CmdListParameters& parameters) {
+void CommandListBuilder::add(
+    MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters) {
     TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
-    impl_->add(workload, parameters);
+    impl_->add(binary_upload_cq, workload, parameters);
 }
 
 void CommandListBuilder::add_tensor_prefetcher_request(

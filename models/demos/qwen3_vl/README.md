@@ -21,13 +21,14 @@ MESH_DEVICE=<device_name> HF_MODEL=<model_name> pytest models/demos/qwen3_vl/dem
 
 **Notes:**
 - `<model_name>` is the HuggingFace model repo string, e.g. `Qwen/Qwen3-VL-3B-Instruct`
-- `<device_name>` is the TT device string, e.g. `N150`, `N300`, `T3K`
+- `<device_name>` is the TT device string, e.g. `N150`, `N300`, `T3K`, `P150`
 - `-k` is the pytest filter; to run a specific test, use `-k <test_name>`; additional test names are listed in `models/demos/qwen3_vl/demo/demo.py`
 - different model variants are supported on different devices:
 
 | Model Variant      | `<model_name>` (HF_MODEL)                   | `<device_name>` (MESH_DEVICE) |
 |--------------------|---------------------------------------------|-------------------------------|
 | Qwen3-VL-32B     | Qwen/Qwen3-VL-32B-Instruct                | `T3K`                         |
+| Qwen3-VL-4B      | Qwen/Qwen3-VL-4B-Instruct                 | `N150`, `P150`                |
 
 ## Details
 - On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
