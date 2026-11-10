@@ -2599,6 +2599,11 @@ class Qwen36Model:
         _ksp_attns = [l.attention for l in self.layers if l.is_full_attention] if _ksp is not None else []
         for _a in _ksp_attns:
             _a._kv_split_ctx = _ksp
+        # QWEN36_R16_MEGAKERNEL (tt/megakernel/integ): stage0 probes the bucket's phase table inside this trace; the layer
+        # loop below is unchanged until the megakernel takes it over.
+        _mk = getattr(self, "_vfy_mk", None)
+        if _mk is not None:
+            _mk.pre_layers(n_users)
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -3408,6 +3413,15 @@ class Qwen36Model:
         self._vfy_prepared_key = None
         self._vfy_T, self._vfy_B = T, B
         self._vfy_nb = nb
+        # QWEN36_R16_MEGAKERNEL: per-bucket phase tables + probe outputs, allocated before any trace capture
+        from models.demos.blackhole.qwen36.tt.megakernel.integ.verify_mk import MegakernelVerify, megakernel_mode
+
+        self._vfy_mk = None
+        if megakernel_mode():
+            self._vfy_mk = MegakernelVerify(self)
+            self._vfy_mk_summary = self._vfy_mk.prepare(range(1, B + 1))
+            if self._vfy_mk.fallback_reason:
+                logger.warning(f"megakernel: {self._vfy_mk.fallback_reason}")
         self._vfy_setup_sharded_argmax(rows)
         self._vfy_setup_device_topk()
         # QWEN36_SPEC_HOSTSET (+ _TRACE): packed aux inputs + in-trace RoPE lookup (see _vfy_inputs). Decided here, so
