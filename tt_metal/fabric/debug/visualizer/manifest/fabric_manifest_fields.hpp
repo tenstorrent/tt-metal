@@ -14,6 +14,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <hostdevcommon/fabric_common.h>
@@ -817,6 +818,39 @@ static_assert(gates_name_flag_or_number_fields(k_router_fields));
 static_assert(gates_name_flag_or_number_fields(k_sender_channel_fields));
 static_assert(gates_name_flag_or_number_fields(k_receiver_channel_fields));
 static_assert(gates_name_flag_or_number_fields(k_downstream_edge_fields));
+
+// Dummy function only used to make a compiler error when a RouterFieldKey's key isn't in k_router_fields. It isn't
+// constexpr, so calling it in a constant expression fails the build, and the error names it.
+void router_field_key_is_not_in_k_router_fields();
+
+// The key of a field in k_router_fields, checked when it's made: one the table doesn't have, such as a misspelling,
+// fails the build. Code that reads a router's fields by key names the key with this. Implicit, so a call passes the
+// key as a string literal. Example: find_erisc_field(fields, 0, "telemetry_stats_mask").
+class RouterFieldKey {
+public:
+    consteval RouterFieldKey(const char* key) : key_(key) {  // NOLINT(google-explicit-constructor)
+        if (std::ranges::find(k_router_fields, key_, [](const RouterField& field) { return field.key.value; }) ==
+            std::ranges::end(k_router_fields)) {
+            router_field_key_is_not_in_k_router_fields();
+        }
+    }
+
+    constexpr std::string_view get() const { return key_; }
+
+private:
+    std::string_view key_;
+};
+
+// The field `key` among ERISC `erisc`'s router fields, or null when the builder didn't emit it there or the router
+// has no such ERISC.
+inline const Field* find_erisc_field(const FieldsByErisc& fields_by_erisc, uint32_t erisc, RouterFieldKey key) {
+    if (erisc >= fields_by_erisc.size()) {
+        return nullptr;
+    }
+    const std::vector<Field>& fields = fields_by_erisc[erisc];
+    const auto field = std::ranges::find(fields, key.get(), &Field::key);
+    return field == fields.end() ? nullptr : &*field;
+}
 
 // Every named argument and define the router kernel is fed is read by a field table above or by the router pass, or
 // is listed as unrecorded with a reason; otherwise the router pass throws (check_kernel_inputs_accounted). Arguments

@@ -31,6 +31,12 @@ static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC = 0xDCBA0000;
 static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK = 0xFFFF0000;
 static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
 
+// Whether an ERISC writes `statistic` in its router's FabricTelemetry: its telemetry is on, and the statistic's bit is
+// in its stats mask.
+constexpr bool is_telemetry_statistic_written(bool telemetry_enabled, std::uint8_t stats_mask, DynamicStatistics statistic) {
+    return telemetry_enabled && (stats_mask & static_cast<std::uint8_t>(statistic)) != 0;
+}
+
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
