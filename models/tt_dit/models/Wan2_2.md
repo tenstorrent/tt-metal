@@ -235,7 +235,7 @@ from uncached. T2V is uncached by default: the same recipe gives 1.88x on T2V bu
 and >= 0.99 on I2V at 1.3x). Note that `flow_shift=5`
 changes the generated video relative to the official `flow_shift=12` schedule independently of caching.
 
-The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
+The traced path (`trace=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
 bit-exact as well.
 

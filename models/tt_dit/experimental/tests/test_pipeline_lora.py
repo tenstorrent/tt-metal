@@ -85,7 +85,7 @@ def _resolve_lora_args() -> Tuple[List[LoRASpec], List[LoRASpec], float]:
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, num_links, offload_weights, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 2, True, line_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 2, False, ring_params_8k, ttnn.Topology.Ring, False],
@@ -111,7 +111,7 @@ def test_pipeline_inference(
     mesh_device,
     mesh_shape,
     num_links,
-    dynamic_load,
+    offload_weights,
     topology,
     width,
     height,
@@ -158,7 +158,8 @@ def test_pipeline_inference(
             cfg_enabled=cfg_enabled,
             config_overrides={
                 "num_links": num_links,
-                "dynamic_load": dynamic_load,
+                "offload_weights": offload_weights,
+                "trace": traced,
                 "topology": topology,
                 "is_fsdp": is_fsdp,
                 "boundary_ratio": boundary_ratio,
@@ -189,7 +190,6 @@ def test_pipeline_inference(
             guidance_scale=guidance_scale,
             guidance_scale_2=guidance_scale_2,
             output_type="uint8",
-            traced=traced,
         )
         if profiler_iteration is not None:
             call_kwargs["on_event"] = profiler_event_callback(profiler, profiler_iteration)
