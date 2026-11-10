@@ -3,15 +3,21 @@
 
 """Host-only: the runner's request loop over packed forwards, with the socket and runtime faked."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from models.demos.common.prefill.prefill_chunk import (
     SHUTDOWN_WORD,
+    MediaRef,
     PrefillChunk,
     forward_metadata_words,
+    metadata_size_bytes,
+    pack_forward_metadata,
     pad_chunks,
+    sentinel_metadata,
     sentinel_words,
 )
 from models.demos.common.prefill.runners import prefill_runner as runner
@@ -91,6 +97,68 @@ def test_request_id_counts_forwards(loop):
         (1, FORWARDS[1]),
         (2, FORWARDS[2]),
     ]
+
+
+def test_first_rank_passes_media_refs_and_acks_only_the_chunks(monkeypatch):
+    _configure(monkeypatch, supports_packed_forward=True)
+    monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(runner, "_device_record", lambda words, dev: "chunks-only record")
+    refs = [MediaRef(0, 100, 150, bytes(32))]
+    forward = runner._meta_from_words(forward_metadata_words(pad_chunks(FORWARDS[0], F), F))
+    metas = iter([{**forward, "media_refs": refs}, runner._meta_from_words(sentinel_words(SHUTDOWN_WORD, F))])
+    monkeypatch.setattr(runner, "_socket_next", lambda *args: (_Tensor(), None, next(metas)))
+
+    class MediaRuntime(_PackedRuntime):
+        def prefill_forward(self, inp, kv, chunks, request_id=0, d2h_service=None, *, metadata_msg=None, **kw):
+            self.calls.append((kw.get("media_refs"), metadata_msg))
+
+    runtime = MediaRuntime()
+    runner.run_request_loop(
+        runtime,
+        None,
+        0,
+        1,
+        d2d_rows=0,
+        d2d_width=0,
+        h2d_service=object(),
+        d2h_service=object(),
+        sockets=runner.SocketBuffers(metadata=None),
+    )
+    assert runtime.calls == [(refs, "chunks-only record")]
+
+
+@pytest.mark.parametrize("forward_chunks", [1, F])
+def test_first_rank_decodes_media_refs_from_the_metadata_bytes(monkeypatch, expect_error, forward_chunks):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", forward_chunks)
+    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", metadata_size_bytes(forward_chunks))
+    monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
+    monkeypatch.setattr(runner.ttnn, "get_device_tensors", lambda raw: [raw])
+    monkeypatch.setattr(runner.ttnn, "to_torch", lambda raw: torch.frombuffer(bytearray(raw), dtype=torch.uint8))
+    chunks = pad_chunks([PrefillChunk(3, 0, C)], forward_chunks)
+
+    def decode(refs):
+        return runner._decode_metadata(pack_forward_metadata(chunks, forward_chunks, refs, 2), with_media=True)
+
+    refs = [MediaRef(0, 100, 150, bytes(32)), MediaRef(0, 900, 1100, bytes(range(32)))]
+    meta = decode(refs)
+    assert (meta["chunks"], meta["media_refs"]) == (chunks, refs)
+    assert "media_refs" not in runner._decode_metadata(
+        sentinel_metadata(SHUTDOWN_WORD, forward_chunks, 2), with_media=True
+    )
+    with expect_error(ValueError, "does not overlap"):
+        decode([MediaRef(0, C, C + 10, bytes(32))])
+    raw = bytearray(pack_forward_metadata(chunks, forward_chunks, refs, 2))
+    raw[metadata_size_bytes(forward_chunks)] = 3
+    with expect_error(ValueError, "n_refs=3"):
+        runner._decode_metadata(bytes(raw), with_media=True)
+
+
+def test_only_the_first_rank_acks_with_a_chunks_only_record(monkeypatch):
+    monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
+    sockets = runner.SocketBuffers(metadata=None)
+    sockets.metadata = "received record"
+    later_rank = SimpleNamespace(config=SimpleNamespace(is_first_rank=False))
+    assert runner._ack_metadata(later_rank, sockets, {}, d2h_service=object()) == "received record"
 
 
 def test_first_rank_refuses_a_bad_forward(loop, expect_error):
@@ -191,6 +259,23 @@ def test_per_chunk_forwards_run_each_chunk_once(loop, monkeypatch):
     runtime = _PerChunkRuntime()
     loop(runtime, FORWARDS, supports_packed_forward=False)
     assert runtime.calls == list(zip(_request_ids(FORWARDS), (c for f in FORWARDS for c in f)))
+
+
+def test_per_chunk_forwards_pass_each_chunk_its_media_refs(monkeypatch):
+    _configure(monkeypatch, supports_packed_forward=False)
+    monkeypatch.setattr(runner, "_chunk_rows", lambda inp, k, rows: _Tensor())
+    monkeypatch.setattr(runner, "_chunk_record", lambda bufs, k, chunk, dev: None)
+    image = MediaRef(0, C - 10, C + 20, bytes(32))
+
+    class MediaRuntime(_PackedRuntime):
+        def prefill_chunk(self, inp, kv, *, media_refs=None, **kw):
+            self.calls.append(media_refs)
+
+    runtime = MediaRuntime()
+    chunks = pad_chunks([PrefillChunk(0, 0, C), PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, 40)], F)
+    refs = [image, replace(image, chunk_index=1)]
+    runner._prefill_chunks(runtime, None, _Tensor(), chunks, 0, runner.PerChunkBuffers(), media_refs=refs)
+    assert runtime.calls == [[image], [image], None]
 
 
 class _Act:
