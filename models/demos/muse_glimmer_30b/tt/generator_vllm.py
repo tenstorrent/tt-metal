@@ -4,7 +4,7 @@
 
 """vLLM (vllm-tt-plugin) speculative-decode contract adapter for Muse Glimmer 30B with the DFlash2 drafter.
 
-Wraps `DFlash2BatchGenerator` (up to 8 sequences, TP4) on the plugin's spec-decode contract (vllm-tt-plugin
+Wraps `DFlash2BatchGenerator` (up to 8 sequences, TP4 or TP8) on the plugin's spec-decode contract (vllm-tt-plugin
 docs/SPEC_DECODE_CONTRACT.md): the plugin owns scheduling, sampling and the accept walk; this class owns the device
 engine, its KV cache and the drafter. K (drafts per row) follows the number of live rows (`_K_BY_ROWS`, published as
 the plan's `k_by_rows`); the engine verifies R = K + 1 rows per sequence in one 32-row step.
@@ -39,7 +39,7 @@ _ROWS = 16  # anchor + 15 drafts, verified in one target pass
 _MAX_DRAFTS = _ROWS - 1
 _SEQ_ALIGN = 256
 _MAX_CONTEXT = 131072
-_SUPPORTED_TP = (4,)
+_SUPPORTED_TP = (4, 8)
 _TIMING = os.environ.get("MUSE_VLLM_TIMING") == "1"  # read once; log one MUSE_TIMING line per adapter entry
 _K_BY_ROWS = ((2, 15), (4, 7), (8, 3))  # (max live rows, drafts per row): the plugin's draft cap and the engine's R - 1
 _MAX_SEQS = _K_BY_ROWS[-1][0]
@@ -198,8 +198,22 @@ class MuseGlimmerDFlash2ForCausalLM:
             raise ValueError("max_seq_len (the vLLM max_model_len) is required")
         seq_len = _check_served_seq_len(max_seq_len)
         shape = tuple(int(x) for x in mesh_device.shape)
+        if shape == (8, 4):
+            # The plugin opened the full Galaxy system mesh (a partial 1x8 open picks chips whose fabric links do not
+            # all train): carve one TP8 replica out of it, like the tt-metal tests (tp_submesh reshapes to (4, 8)).
+            from models.demos.muse_glimmer_30b.tt import mesh_utils
+
+            mesh_device = mesh_utils.tp_submesh(mesh_device, 8)
+            shape = tuple(int(x) for x in mesh_device.shape)
+        if shape == (8, 4):
+            # The plugin opened the full Galaxy system mesh (a partial 1x8 open picks chips whose fabric links do not
+            # all train): carve one TP8 replica out of it, like the tt-metal tests (tp_submesh reshapes to (4, 8)).
+            from models.demos.muse_glimmer_30b.tt import mesh_utils
+
+            mesh_device = mesh_utils.tp_submesh(mesh_device, 8)
+            shape = tuple(int(x) for x in mesh_device.shape)
         if shape[0] != 1 or shape[1] not in _SUPPORTED_TP:
-            raise ValueError(f"{cls.__name__} needs a 1x{_SUPPORTED_TP} mesh, got {shape}")
+            raise ValueError(f"{cls.__name__} needs a 1xTP mesh with TP in {_SUPPORTED_TP} (TP4 or TP8), got {shape}")
 
         from models.demos.muse_glimmer_30b.tt.model import MuseGlimmerModel
         from models.demos.muse_glimmer_30b.tt.model_config import (

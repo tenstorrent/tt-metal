@@ -559,3 +559,23 @@ def test_greedy_verify_with_sampling_params_uses_argmax():
     prefill(ad2, [20, 30], [0, 1])
     ref = verify(ad2, [1, 2], [[5, 6], [8]], [20, 30], "argmax_ids", n=[2, 1], width=3)
     assert torch.equal(v.argmax_ids, ref.argmax_ids)
+
+
+def test_full_galaxy_mesh_is_carved_to_one_tp8_submesh(monkeypatch, expect_error):
+    """An (8, 4) system mesh goes through tp_submesh(mesh, 8); a (1, tp) mesh is used as is."""
+    from models.demos.muse_glimmer_30b.tt import mesh_utils
+
+    calls = []
+
+    def fake_tp_submesh(mesh, tp):
+        calls.append((tuple(mesh.shape), tp))
+        return SimpleNamespace(shape=(2, 2))  # not a 1xTP mesh: stops initialize right after the carve
+
+    monkeypatch.setattr(mesh_utils, "tp_submesh", fake_tp_submesh)
+    cls = MuseGlimmerDFlash2ForCausalLM
+    with expect_error(ValueError, "mesh"):
+        cls.initialize_vllm_model(None, SimpleNamespace(shape=(8, 4)), 2, max_seq_len=8192)
+    assert calls == [((8, 4), 8)]
+    with expect_error(ValueError, "mesh"):
+        cls.initialize_vllm_model(None, SimpleNamespace(shape=(4, 8)), 2, max_seq_len=8192)
+    assert len(calls) == 1
