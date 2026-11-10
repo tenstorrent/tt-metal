@@ -883,6 +883,13 @@ void bind_sdpa(nb::module_& mod) {
         - Kept blocks only (e.g. the VSA fine branch): omit pooled_k and pooled_v. The softmax normalizes over the
           kept blocks.
 
+        The op balances the work of any mask by itself, on device, every call (so under traces too): each (head, Q
+        block) costs its kept blocks plus a fixed amount; each head's Q blocks are re-split over the cores that hold
+        the head at cost boundaries, and with a 1D fabric whole Q blocks (all heads) are swapped between devices
+        (heaviest of the most loaded device for the lightest of the least loaded) when the device loads differ: their
+        Q and mask rows travel before the ring starts and their outputs come home at the end. Without dense_blocks
+        only; dense_blocks keep the even split.
+
         Args:
             input_tensor_q (ttnn.Tensor): [1, H, N/ring_size, D] TILE, sequence-sharded on cluster_axis; bf16,
                 bfloat8_b or bfloat4_b: k, v and the pooled tensors share one dtype; q has it or is bf16.
