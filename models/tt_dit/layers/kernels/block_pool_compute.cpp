@@ -5,7 +5,8 @@
 // block_pool compute, the pool phase of the block_topk_route compute (included there). Per unit: O[n] = sum over the
 // group's tile rows k of P[k] @ X[k, n] (DT output tiles accumulated in fp32 DST), with the pooling tiles P[k]
 // delivered by the reader in batches of 4 rows alongside the data; groups without tile rows output zero tiles. The
-// caller has run compute_kernel_hw_startup; the unpack and pack formats are set here.
+// units come from the reader's CB_UNITS pages, in claim order, up to the page holding UNITS. The caller has run
+// compute_kernel_hw_startup; the unpack and pack formats are set here.
 //
 // Compile-time args from CT: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, 7 NCORES, 8 NBGT.
 
@@ -33,27 +34,31 @@ void pool() {
     constexpr uint32_t RT = get_compile_time_arg_val(CT + 1);
     constexpr uint32_t DT = get_compile_time_arg_val(CT + 2);
     constexpr uint32_t NBPT = get_compile_time_arg_val(CT + 3);
-    constexpr uint32_t NX = get_compile_time_arg_val(CT + 4);
     constexpr uint32_t UNITS = get_compile_time_arg_val(CT + 6);
-    constexpr uint32_t NCORES = get_compile_time_arg_val(CT + 7);
     static_assert(DT <= 4, "DT output tiles must fit the fp32 DST");
     using Layout = block_pool::Layout<H, RT, NBPT>;
     static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
-    const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
-    if (ci >= UNITS) {
-        return;
-    }
-    CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbo(cb_out);
+    CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbo(cb_out), cbu(CB_UNITS);
+    auto next_unit = [&]() {
+        cbu.wait_front(1);
+        const uint32_t u = cbu.read_tile_value(0, 0);
+        cbu.pop_front(1);
+        return u;
+    };
 
     reconfig_data_format<SrcOrder::Reverse>(cb_ps, cb_x);
     pack_reconfig_data_format(cb_out);
-    cbz.wait_front(1);
 
-    for (uint32_t u = ci; u < UNITS; u += NCORES) {
+    bool zero_ready = false;
+    for (uint32_t u = next_unit(); u < UNITS; u = next_unit()) {
         const uint32_t g = Layout::decode(u).g;
         const uint32_t k_begin = g * BLOCK;
         const uint32_t k_end = min_u(k_begin + BLOCK, RT);
 
+        if (k_end <= k_begin && !zero_ready) {
+            cbz.wait_front(1);
+            zero_ready = true;
+        }
         tile_regs_acquire();
         if (k_end <= k_begin) {
             copy_init(cb_zero);

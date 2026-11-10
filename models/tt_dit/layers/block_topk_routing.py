@@ -11,9 +11,10 @@ every core but the senders:
 
 * pool (``kernels/block_pool_*.cpp``): per-block means of Q, K and V from per-block valid counts, into
   ``q_bar [1, H, nb_pad, D]`` and this device's shard slot of the gathered ``kv_g [1, 2H, S * nb_pad, D]`` (K heads,
-  then V heads), the CCL manager's ping-pong buffer. K and V units are pooled first, round by round; sender cores
-  (``block_pool_send.cpp``, one per link and direction) push each round's units over the fabric to the same slot of
-  every peer's ``kv_g`` while the Q units are still pooled, then bump this shard's arrival slot on the peer.
+  then V heads), the CCL manager's ping-pong buffer. Each core starts on one unit and claims the rest from a queue on
+  the first sender core (``block_pool_queue.cpp``), K and V units first; sender cores (``block_pool_send.cpp``, one per
+  link and direction) push each K/V unit over the fabric to the same slot of every peer's ``kv_g`` as soon as its
+  writer flags it, while the Q units are still pooled, then bump this shard's arrival slot on the peer.
 * route, once every pool writer has signalled a program-wide barrier: shards are scored as they arrive, this device's
   first; per (head, 32 local Q blocks): fp32 scores against every global block, a running top-k over the candidate
   columns, the k-th value, the uint32 block mask and, optionally, the coarse attention output
@@ -366,11 +367,11 @@ class BlockTopKRouting:
         mask: ttnn.Tensor,
         coarse_out: ttnn.Tensor,
         coarse: bool,
-    ) -> tuple[ttnn.MeshProgramDescriptor, list[tuple[list[int], list[int], list[int]]]]:
+    ) -> tuple[ttnn.MeshProgramDescriptor, list[tuple[list[int], list[int], list[int], list[int]]]]:
         """The program per ring position, or per device where the fabric connection args of a ring position's devices
         differ, and, in the same order, the reader's common args after the addresses, the writer's after the addresses
-        and the writer's after ``q_bar`` and ``kv_g``. Pool and route run on every core but the senders, which push
-        this device's shard to the peers."""
+        and the writer's after ``q_bar`` and ``kv_g``, and the pool reader's after its addresses. Pool and route run on
+        every core but the senders, which push this device's shard to the peers."""
         H, D, L = self.num_heads, self.head_dim, self.num_links
         RT, DT, NBPT, NBGT, KT = self.rows // TILE, D // TILE, self.nb_pad // TILE, self.n_blocks_pad // TILE, self.kt
         MC = min(MASK_PAGE_TILES, NBGT)
@@ -386,9 +387,10 @@ class BlockTopKRouting:
         send_cores = ttnn.CoreRangeSet([ttnn.CoreRange(senders[0], senders[-1])])
         ncores = nx * ny - len(senders)
         units = H * NBPT
+        pool_units, kv_units = 3 * H * NBPT, 2 * H * NBPT
         scale = _f32_bits(1.0 / math.sqrt(D))
         ct = [H, NBPT, NBGT, DT, KT, MC, nx, ny, units, int(coarse), scale, RT, ncores]
-        pool_ct = [H, RT, DT, NBPT, nx, ny, 3 * H * NBPT, ncores, NBGT]
+        pool_ct = [H, RT, DT, NBPT, nx, ny, pool_units, ncores, NBGT]
         ins = self._route_inputs(q_bar, kv_g)
         reader_ct = ct + self._accessor_args(*ins) + pool_ct + self._accessor_args(x, x, x, self.pool_counts.value)
         outs = [mask, coarse_out, self.kth_index.value]
@@ -418,11 +420,18 @@ class BlockTopKRouting:
         cbs.append(self._cb(16, 2, cores, mask_page, ttnn.uint32))
         cbs.append(self._cb(21, 1, cores, KTH_INDEX_WORDS * 4, ttnn.uint32))
         cbs.append(self._cb(23, 1, cores, self.nb_pad * 4, ttnn.uint32))
+        # The claimed units' pages and the end page.
+        units_bytes = (pool_units + 1) * 16
+        cbs.append(self._cb(31, pool_units + 1, cores, 16, ttnn.uint32))
         packet_tiles = min(4, ttnn.get_tt_fabric_max_payload_size_bytes() // TILE_BYTES_BF16)
         assert DT <= packet_tiles, (DT, packet_tiles)
         cbs.append(self._cb(6, 2 * DT, send_cores, TILE_BYTES_BF16, bf16))
+        # The senders' page (block_pool_units.hpp SenderPage): the per-unit completion flags, the page's address in its
+        # own 16 B word, then for the queue one request word and one 16 B reply word per pool core.
+        flag_bytes = (_round_up(kv_units, 4) + 4 + _round_up(ncores, 4) + 4 * ncores) * 4
+        cbs.append(self._cb(3, 1, send_cores, flag_bytes, ttnn.uint32))
         total = sum(n * (TILE_BYTES_FP32 if dt == f32 else TILE_BYTES_BF16) for _, n, dt in sizes)
-        total += 2 * mask_page + KTH_INDEX_WORDS * 4 + self.nb_pad * 4
+        total += 2 * mask_page + KTH_INDEX_WORDS * 4 + self.nb_pad * 4 + units_bytes + flag_bytes
         if total > L1_CB_BUDGET:
             raise ValueError(f"block_topk_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET})")
         config = self._compute_config(full_sync=True)
@@ -432,21 +441,35 @@ class BlockTopKRouting:
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
         config.unpack_to_dest_mode = modes
         # 0: the gate's release count, multicast from core (0, 0) as the shards come in. 1: the pool-to-route barrier,
-        # one increment per pool core on the gate, then multicast by it. 2 on: per pool round, the K/V units written,
-        # counted on the sender cores.
-        kv_rounds = -(-2 * H * NBPT // ncores)
+        # one increment per pool core on the gate, then multicast by it. 2: one increment per sender once its page is
+        # zeroed. 3: the queue's reply to the pool reader's latest request. 4: the unit pages the pool reader has
+        # written. 5: the senders' page address. 6 (senders): the page is zeroed, for the queue. The senders' fabric
+        # connections take their next free ids.
         semaphores = [
             ttnn.SemaphoreDescriptor(id=0, core_ranges=grid, initial_value=0),
             ttnn.SemaphoreDescriptor(id=1, core_ranges=grid, initial_value=0),
-        ]
-        semaphores += [
-            ttnn.SemaphoreDescriptor(id=2 + k, core_ranges=send_cores, initial_value=0) for k in range(kv_rounds)
+            ttnn.SemaphoreDescriptor(id=2, core_ranges=cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=3, core_ranges=cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=4, core_ranges=cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=5, core_ranges=cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=6, core_ranges=send_cores, initial_value=0),
         ]
         lo = self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
         hi = self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(nx - 1, ny - 1))
         sender_nocs = [self.mesh_device.worker_core_from_logical_core(c) for c in senders]
         slots = [ttnn.get_global_semaphore_address(s) for s in self.arrived]
         send_ct = [H, RT, NBPT, NBGT, DT, ncores, L] + self._accessor_args(kv_g)
+        queue_core = ttnn.CoreRangeSet([ttnn.CoreRange(senders[0], senders[0])])
+        # The pool cores as two rectangles, each noc corners and core count: rows 0..ny-2, and the top row left of
+        # the senders.
+        pool_rects = []
+        for (x0, y0), (x1, y1), count in (
+            ((0, 0), (nx - 1, ny - 2), nx * (ny - 1)),
+            ((0, ny - 1), (senders[0].x - 1, ny - 1), senders[0].x),
+        ):
+            a = self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x0, y0))
+            b = self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x1, y1))
+            pool_rects += [a.x, a.y, b.x, b.y, count]
 
         progs, tails = [], []
         for r in range(self.sp_factor):
@@ -454,6 +477,7 @@ class BlockTopKRouting:
             reader_tail = [lo.x, lo.y, hi.x, hi.y, *hop, *slots, *self._expected_arrivals(r)]
             writer_tail = [*hop, lo.x, lo.y]
             pool_tail = [r, len(senders), *[a for c in sender_nocs for a in (c.x, c.y)]]
+            pool_reader_tail = [sender_nocs[0].x, sender_nocs[0].y]
             targets = self._targets(r)
             slot = ttnn.get_global_semaphore_address(self.arrived[r])
             built = []
@@ -468,7 +492,7 @@ class BlockTopKRouting:
                         "block_topk_route_reader.cpp",
                         cores,
                         reader_ct,
-                        [0] * (len(ins) + len(reader_tail) + 4),
+                        [0] * (len(ins) + len(reader_tail) + 4 + len(pool_reader_tail)),
                         ttnn.ReaderConfigDescriptor(),
                     ),
                     self._kernel(
@@ -483,9 +507,16 @@ class BlockTopKRouting:
                         "block_pool_send.cpp",
                         send_cores,
                         send_ct,
-                        [0, lo.x, lo.y],
+                        [0, lo.x, lo.y, *pool_rects],
                         ttnn.WriterConfigDescriptor(),
                         runtime_args=send_args,
+                    ),
+                    self._kernel(
+                        "block_pool_queue.cpp",
+                        queue_core,
+                        [H, RT, NBPT, ncores],
+                        [],
+                        ttnn.ReaderConfigDescriptor(),
                     ),
                 ]
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
@@ -506,7 +537,7 @@ class BlockTopKRouting:
                 built = [(self._ring_position(r), built[0][1], None)]
             for where, prog, _ in built:
                 progs.append((where, prog))
-                tails.append((reader_tail, writer_tail, pool_tail))
+                tails.append((reader_tail, writer_tail, pool_tail, pool_reader_tail))
         return self._mesh_program(progs), tails
 
     def _route_inputs(self, q_bar: ttnn.Tensor, kv_g: ttnn.Tensor) -> list[ttnn.Tensor]:
@@ -537,8 +568,8 @@ class BlockTopKRouting:
         pool_addresses = [t.buffer_address() for t in pool_ins]
         kth_index = self.kth_index.value
         writer_args = [mask.buffer_address(), coarse_out.buffer_address(), kth_index.buffer_address()]
-        for (_, prog), (reader_tail, writer_tail, pool_tail) in zip(mesh, tails):
-            prog.kernels[0].common_runtime_args = [*addresses, *reader_tail, *pool_addresses]
+        for (_, prog), (reader_tail, writer_tail, pool_tail, pool_reader_tail) in zip(mesh, tails):
+            prog.kernels[0].common_runtime_args = [*addresses, *reader_tail, *pool_addresses, *pool_reader_tail]
             prog.kernels[1].common_runtime_args = [*writer_args, *writer_tail, *addresses[:2], *pool_tail]
             sender = prog.kernels[3]
             sender.common_runtime_args = [addresses[1], *sender.common_runtime_args[1:]]

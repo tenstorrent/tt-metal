@@ -7,7 +7,8 @@
 `test_pool`: block means vs the mirror, and their gather: every device holds every shard. `test_route`: the block mask
 against tie-robust top-k bounds, with exact ties in the data, `k = k_max`, a cached second call, and in-place request
 swaps. `test_coarse`: the coarse output vs the mirror. `test_traced_replays`: two consecutive calls captured once and
-replayed back to back reproduce eager, also after an in-place request swap.
+replayed back to back reproduce eager, also after an in-place request swap. `test_repeated_calls`: many eager calls and
+trace replays all reproduce the first call (the per-call unit claims, unit pages and completion flags).
 
 Run (Galaxy): pytest models/tt_dit/tests/models/minimax_h3/test_block_topk_routing.py -k 4x8 -s --tb=short
 """
@@ -364,4 +365,63 @@ def test_traced_replays(
         mask, coarse = read(other, out)
         assert torch.equal(mask, expected_other[0]), f"call {i} after the in-place swap: mask differs from eager"
         assert torch.equal(coarse, expected_other[1]), f"call {i} after the in-place swap: coarse differs from eager"
+    ttnn.release_trace(mesh_device, trace_id)
+
+
+@TRACED_RING
+@pytest.mark.parametrize(("prefix_segments", "grid", "rung"), QUICK[1:])
+def test_repeated_calls(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, prefix_segments, grid, rung, reset_seeds
+):
+    """Which core pools which unit changes from call to call, the outputs must not: a flag written before its reset,
+    a unit claimed twice or lost, or a stale unit page shows up as a difference in some call. Three inputs take turns,
+    so data left from an earlier call in either ping-pong buffer or in q_bar never matches; each call is read back on
+    one device, a different one each call."""
+    sp = tuple(mesh_device.shape)[sp_axis]
+    geometry = build_vsa_geometry(prefix_segments, grid, sp_factor=sp, padded_len=rung)
+    cases = [_Case(mesh_device, sp_axis, tp_axis, geometry, seed=seed, tie=False) for seed in range(3)]
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    routing = _routing(cases[0], ccl_manager)
+    routing.update(cases[0].request, traced=False)
+
+    def per_device(out: dict) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        masks, coarse = ttnn.get_device_tensors(out["block_mask"]), ttnn.get_device_tensors(out["coarse_out"])
+        return [(ttnn.to_torch(m), ttnn.to_torch(c)) for m, c in zip(masks, coarse)]
+
+    def one_device(out: dict, d: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            ttnn.to_torch(ttnn.get_device_tensors(out["block_mask"])[d]),
+            ttnn.to_torch(ttnn.get_device_tensors(out["coarse_out"])[d]),
+        )
+
+    def drop(out: dict) -> None:
+        ttnn.deallocate(out["block_mask"])
+        ttnn.deallocate(out["coarse_out"])
+
+    expected = []
+    for c in cases:
+        out = routing(*c.device, coarse=True)
+        expected.append(per_device(out))
+        drop(out)
+    n_devices = len(expected[0])
+    assert not torch.equal(expected[0][0][1], expected[1][0][1]), "the inputs must change the coarse output"
+
+    for i in range(200):
+        out = routing(*cases[i % 3].device, coarse=True)
+        d = i % n_devices
+        mask, coarse = one_device(out, d)
+        drop(out)
+        assert torch.equal(mask, expected[i % 3][d][0]), f"eager call {i}, device {d}: mask differs"
+        assert torch.equal(coarse, expected[i % 3][d][1]), f"eager call {i}, device {d}: coarse differs"
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outs = [routing(*c.device, coarse=True) for c in cases]
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for i in range(50):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        for j, out in enumerate(outs):
+            d = (3 * i + j) % n_devices
+            mask, coarse = one_device(out, d)
+            assert torch.equal(mask, expected[j][d][0]), f"replay {i}, call {j}, device {d}: mask differs"
+            assert torch.equal(coarse, expected[j][d][1]), f"replay {i}, call {j}, device {d}: coarse differs"
     ttnn.release_trace(mesh_device, trace_id)

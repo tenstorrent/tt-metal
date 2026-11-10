@@ -4,8 +4,10 @@
 
 // block_pool writer, the pool phase of the block_topk_route writer (included there): each unit's DT output tiles go to
 // (head h, tile row g) of q_bar [1, H, NBP, D] for Q, and to this device's shard slot of the gathered kv_g
-// [1, 2H, NBG, D] for K (heads [0, H)) and V (heads [H, 2H)): tile row r * NBPT + g with r the ring index. After a K/V
-// unit's write barrier, the semaphore of its round is incremented on every sender core.
+// [1, 2H, NBG, D] for K (heads [0, H)) and V (heads [H, 2H)): tile row r * NBPT + g with r the ring index. The units
+// are the reader's CB_UNITS pages, read by index once CLAIMS_SEM counts them, up to the page holding UNITS. After a K/V
+// unit's write barrier, the unit's word of the flag array is incremented on every sender core; the first increment
+// waits until every sender has zeroed its array (FLAGS_READY_SEM) and takes the array's address from FLAGS_ADDR_SEM.
 //
 // Compile-time args from CT: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, 7 NCORES, 8 NBGT, then TensorAccessorArgs
 // of q_bar and kv_g.
@@ -14,6 +16,7 @@
 
 #include <cstdint>
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -33,26 +36,28 @@ void write(uint32_t ARG) {
     constexpr uint32_t RT = get_compile_time_arg_val(CT + 1);
     constexpr uint32_t DT = get_compile_time_arg_val(CT + 2);
     constexpr uint32_t NBPT = get_compile_time_arg_val(CT + 3);
-    constexpr uint32_t NX = get_compile_time_arg_val(CT + 4);
     constexpr uint32_t UNITS = get_compile_time_arg_val(CT + 6);
-    constexpr uint32_t NCORES = get_compile_time_arg_val(CT + 7);
     constexpr uint32_t NBGT = get_compile_time_arg_val(CT + 8);
     constexpr auto q_args = TensorAccessorArgs<CT + 9>();
     constexpr auto kv_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     using Layout = block_pool::Layout<H, RT, NBPT>;
     static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
-    const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
-    if (ci >= UNITS) {
-        return;
-    }
     const auto q_bar = TensorAccessor(q_args, get_common_arg_val<uint32_t>(ARG + 0));
     const auto kv_g = TensorAccessor(kv_args, get_common_arg_val<uint32_t>(ARG + 1));
     const uint32_t r = get_common_arg_val<uint32_t>(ARG + 2);
     const uint32_t n_senders = get_common_arg_val<uint32_t>(ARG + 3);
 
     Noc noc;
-    CircularBuffer cbo(cb_out);
-    for (uint32_t u = ci; u < UNITS; u += NCORES) {
+    CircularBuffer cbo(cb_out), cbu(CB_UNITS);
+    const uint32_t units_base = cbu.get_read_ptr();
+    volatile tt_l1_ptr uint32_t* claims = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CLAIMS_SEM));
+    uint32_t flags = 0;
+    for (uint32_t i = 0;; ++i) {
+        noc_semaphore_wait_min(claims, i + 1);
+        const uint32_t u = CoreLocalMem<volatile uint32_t>(units_base + i * UNIT_PAGE_BYTES)[0];
+        if (u >= UNITS) {
+            break;
+        }
         const Unit un = Layout::decode(u);
         cbo.wait_front(DT);
         const uint32_t head = un.t == 2 ? H + un.h : un.h;
@@ -67,11 +72,15 @@ void write(uint32_t ARG) {
         noc.async_write_barrier();
         cbo.pop_front(DT);
         if (u < Layout::KV_UNITS) {
-            const uint32_t round_addr = get_semaphore(ROUND_SEM + u / NCORES);
+            if (flags == 0) {
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FLAGS_READY_SEM)), n_senders);
+                flags = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FLAGS_ADDR_SEM));
+            }
             for (uint32_t s = 0; s < n_senders; ++s) {
                 const uint32_t x = get_common_arg_val<uint32_t>(ARG + 4 + 2 * s);
                 const uint32_t y = get_common_arg_val<uint32_t>(ARG + 5 + 2 * s);
-                noc_semaphore_inc(get_noc_addr(x, y, round_addr), 1);
+                noc_semaphore_inc(get_noc_addr(x, y, flags + 4 * u), 1);
             }
         }
     }
