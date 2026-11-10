@@ -74,6 +74,9 @@
 #if GDN_FUSED_DECAY && !GDN_FP32_STATE
 #error "GDN_FUSED_DECAY needs GDN_FP32_STATE"
 #endif
+#ifndef GDN_EARLY_REPLAY
+#define GDN_EARLY_REPLAY 0  // engine GDN role (BATCH + PREFIXED_GATES): replay before the prefix inputs
+#endif
 #ifndef GDN_ST_RING
 #define GDN_ST_RING 0  // BATCH: the state / stash DFBs are a ring of GDN_ST_RING users (popped per user)
 #endif
@@ -987,6 +990,19 @@ inline void outer_add_decay_sfpu(
 // ---- K4 helpers. fp32 DST under the half-DST sync holds 4 tiles; the SFPU binary ops take literal DST indices (loop
 // variables trip the SFPU synth pass, see phase A3). Every copy_tile source below is an UnpackToDest DFB (exact fp32).
 // (the writer negates the subtracted terms, so the compute's binary carries only the SFPU multiply and add routines)
+#if GDN_EARLY_REPLAY
+// GDN_EARLY_REPLAY (engine GDN role, BATCH): the writer builds the replay tiles (W, C_0..C_7) from ctrl + the previous
+// stash's decay pages BEFORE the layer's in_ready and pushes them first; the 6 WY tiles from `pre` follow. coef order:
+// W | C_0..C_7 | NGB G E BETA NBE EYE
+constexpr uint32_t kCoefNGB = 9;
+constexpr uint32_t kCoefG = 10;
+constexpr uint32_t kCoefE = 11;
+constexpr uint32_t kCoefBeta = 12;
+constexpr uint32_t kCoefNBE = 13;
+constexpr uint32_t kCoefEye = 14;
+constexpr uint32_t kCoefW = 0;
+constexpr uint32_t kCoefRep = 9;   // the replay's share (W + C_u), pushed first
+#else
 constexpr uint32_t kCoefNGB = 0;   // -beta_t * G[t][i] at (r0 + t, r0 + i), i < t
 constexpr uint32_t kCoefG = 1;     // G[t][i] = prod dec[i+1..t] at (r0 + t, r0 + i), i <= t
 constexpr uint32_t kCoefE = 2;     // E[t] = prod dec[0..t] over row r0 + t
@@ -994,12 +1010,17 @@ constexpr uint32_t kCoefBeta = 3;  // beta_t over row r0 + t
 constexpr uint32_t kCoefNBE = 4;   // -beta_t * E[t] over row r0 + t
 constexpr uint32_t kCoefEye = 5;   // 1 at (r0 + t, r0 + t)
 constexpr uint32_t kCoefW = 6;
+#endif
 #if GDN_BATCH
 constexpr uint32_t kBatchMax = 8;                   // users per core (B <= 8 at T = 4: one 32-row tile)
 constexpr uint32_t kCoefN = 7 + kBatchMax;          // NGB G E BETA NBE EYE W + C_u per user
 constexpr uint32_t kMskRow = 0, kMskCol = kBatchMax, kMskZero = 2 * kBatchMax, kMskN = 2 * kBatchMax + 1;
 #endif     // replay weight w_i over row r0 + i (i < r), 0 elsewhere
+#if GDN_EARLY_REPLAY
+constexpr uint32_t kCoefC = 1;
+#else
 constexpr uint32_t kCoefC = 7;     // the replay's decay c over the whole tile
+#endif
 
 // Code size (the five kernel binaries share the 70656 B kernel config buffer): LZ_FN helpers stay inline on the unpack
 // and pack threads, where a runtime DFB id costs a generic configuration path (measured: ~8 KB more unpack code).
@@ -1829,6 +1850,57 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
 #endif
     }
 #endif
+#if GDN_EARLY_REPLAY
+    // ---- R first (engine GDN role): the replay needs only the prefetched state / stash and the writer's replay tiles,
+    //      so it runs at layer start, before the prefix output (knq / vc / the WY tiles) is ready
+    {
+        DeviceZoneScopedN("c_replay");
+#if GDN_BATCH
+        coef.wait_front(kCoefRep);  // W + C_u only: pushed before in_ready
+#if GDN_ST_RING
+        // per user through the reader's GDN_ST_RING-user ring
+#pragma GCC unroll 1
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            state_in.wait_front(KVs);
+            ktp_in.wait_front(Kt);
+            up_in.wait_front(Vs);
+            lz_replay<Kt, Vs>(sp, dnew, wu, 0u, 0u, 0u, 0u, kCoefC + ub_);
+            state_in.pop_front(KVs);
+            ktp_in.pop_front(Kt);
+            up_in.pop_front(Vs);
+        }
+#else
+        state_in.wait_front(nb * KVs);
+        ktp_in.wait_front(nb * Kt);
+        up_in.wait_front(nb * Vs);
+#pragma GCC unroll 1
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            lz_replay<Kt, Vs>(sp, dnew, wu, 0u, ub_ * KVs, ub_ * Kt, ub_ * Vs, kCoefC + ub_);
+        }
+        state_in.pop_front(nb * KVs);
+        ktp_in.pop_front(nb * Kt);
+        up_in.pop_front(nb * Vs);
+#endif
+        (void)crep_bits;
+#else
+        coef.wait_front(8);
+        state_in.wait_front(KVs);
+        ktp_in.wait_front(Kt);
+        up_in.wait_front(Vs);
+#if GDN_SFPU_GATE && !GDN_PREFIXED_GATES
+        lz_replay<Kt, Vs>(sp, dnew, wu, crep_bits);
+#else
+        lz_replay<Kt, Vs>(sp, dnew, wu, 0u);
+#endif
+#if GDN_SFPU_GATE && GDN_PREFIXED_GATES
+        (void)crep_bits;
+#endif
+        state_in.pop_front(KVs);
+        ktp_in.pop_front(Kt);
+        up_in.pop_front(Vs);
+#endif  // GDN_BATCH
+    }
+#endif
 #if GDN_LAZY
     // B' (K4): k and q l2norms row-batched (q: inverse_l2 with the mask_T rows, the per-row ops of the per-token path),
     // vc kept exact for the WY right-hand side (no vm)
@@ -1933,6 +2005,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
 #if !GDN_PREFIXED_GATES
     gsc.wait_front(1);  // (the gate words; the replay's r / C / W reach the compute as coefficient tiles)
 #endif
+#if !GDN_EARLY_REPLAY
     {
         DeviceZoneScopedN("c_replay");
 #if GDN_BATCH
@@ -1980,6 +2053,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         up_in.pop_front(Vs);
 #endif  // GDN_BATCH
     }
+#endif
     {
         DeviceZoneScopedN("c_wy");
 #if GDN_BATCH

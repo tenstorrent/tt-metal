@@ -640,7 +640,11 @@ def setup_bench(dev, MESH, mesh_identity):
         return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi) + head_args_r(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
-    assert not (GDN24 and RWO), "MKA_GDN24: wo moves to the GDN role's wo unit (spec v1.5); run the wo stand-in (MKA_RWO off) until then"
+    # GDN24 bring-up: real wo on the 16 owners (10 tiles each, ring 480 pages); the 36-core split (owners + GDN cores) comes
+    # with the GDN role's include of the wo unit (spec v1.5)
+    WO_MAXT_ = int(os.environ.get('MKA_WO_MAXT', '10' if GDN24 else '5'))
+    RING_P_ = max(WO_MAXT_ * 48, 2 * KT)
+    if RWO: MKDEF = MKDEF + [('MKA_WO_MAXT', str(WO_MAXT_))]
     # MK_REAL_AR with the 50..60 CB ids (MK_AR_CBHI=1): they grow every core's CB-config block (16 B per index up to the
     # max); the u8 STREAM program was then 192 B past 70656 B with the compute zones in (default: compact ids, no LEAN_C)
     if (RWO or (('MK_REAL_AR', '1') in MKDEF and os.environ.get('MK_AR_CBHI', '0') == '1')) and ('MKA_LEAN_C', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_LEAN_C', '1')]
@@ -654,7 +658,7 @@ def setup_bench(dev, MESH, mesh_identity):
         rot = sorted(range(16), key=lambda j_: (-min(j_ // 2, 8 - j_ // 2), j_))
         flat = [n_ for j_ in rot for n_ in range(10 * j_, 10 * j_ + 10)]
         for c_, fi in enumerate(wo_cores): WOT[fi] = flat[c_::len(wo_cores)]
-        assert max(len(v) for v in WOT.values()) <= 5
+        assert max(len(v) for v in WOT.values()) <= WO_MAXT_, (max(len(v) for v in WOT.values()), WO_MAXT_)
         torch.manual_seed(11)
         wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
         # byte-balanced bank-local slices, k-major pages (k * nt + j)
@@ -686,13 +690,14 @@ def setup_bench(dev, MESH, mesh_identity):
         assert all(f_ in WOT for f_ in owner_fi), "owners must be wo cores"
         assert WCC == owner_fi[0], (WCC, owner_fi[0])   # writers reach the concat core through the owner table
         # wo-core multicast rects: ext columns (x 10-11, rows 0..y_ar-1) + bottom rows left / right of the DRAM split (x < x_ar)
-        _yb = min(fcores[f_].y for f_ in ext_list if fcores[f_].x < 10)   # first ext-only row (8)
+        _yb = min([fcores[f_].y for f_ in ext_list if fcores[f_].x < 10] or [GY])   # first ext-only row (8; GDN24: none -> rows 0-7 only)
         def _pr(lx0, ly0, lx1, ly1):
             if lx1 < lx0 or ly1 < ly0: return [0, 0, 0, 0, 0]
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (ly1 - ly0 + 1)]
         _xr = min(fcores[f_].x for f_ in ARC) if ARC else GXF   # AR corner starts here (bottom rows)
-        RECTS_E = _pr(10, 0, 11, _yb - 1) + _pr(0, _yb, fsplit - 1, GYF - 1) + _pr(fsplit, _yb, min(_xr, GXF) - 1, GYF - 1)
+        _ybe = GYF if _yb == GY and not any(fcores[f_].x < 10 for f_ in ext_list) else _yb   # GDN24: no wo cores in rows 8-9
+        RECTS_E = _pr(10, 0, 11, _yb - 1) + _pr(0, _ybe, fsplit - 1, GYF - 1) + _pr(fsplit, _ybe, min(_xr, GXF) - 1, GYF - 1)
         def self_re(fi):
             c_ = fcores[fi]
             return 0 if c_.x >= 10 and c_.y < _yb else (1 if c_.x < fsplit else 2)
@@ -811,7 +816,7 @@ def setup_bench(dev, MESH, mesh_identity):
         if not RWO: return []
         t_ = WOT.get(fi, [])
         oc = owner_fi.index(fi) if fi in owner_fi else 255
-        return [len(t_)] + (t_ + [0] * 5)[:5] + [1 if fi == WCC else 0, oc] + RECTS_E + [self_re(fi) if fi in WOT else 3] + \
+        return [len(t_)] + (t_ + [0] * WO_MAXT_)[:WO_MAXT_] + [1 if fi == WCC else 0, oc] + RECTS_E + [self_re(fi) if fi in WOT else 3] + \
             sum(([fphys[f_].x, fphys[f_].y] for f_ in owner_fi), []) + [wod.buffer_address()]
     WORING = ('MKA_WORING', '1') in MKDEF
     WOHELP = os.environ.get('MKA_WOHELP', '1') == '1' and not WORING and not QSK   # QSK: Wo fills the ext ring in the GDN layers
@@ -887,7 +892,7 @@ def setup_bench(dev, MESH, mesh_identity):
                cbd(24, ttnn.bfloat16, 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
                cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
         if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
-            cbs = ([] if (QSK and not RWO) else [cbd(19, ttnn.bfloat8_b, 2 * KT, ext_crs)]) + cbs + [cbd(13, ttnn.float32, 1, kgrid), cbd(14, ttnn.float32, 2, kgrid),
+            cbs = ([] if (QSK and not RWO) else [cbd(19, ttnn.bfloat8_b, RING_P_ if RWO else 2 * KT, ext_crs)]) + cbs + [cbd(13, ttnn.float32, 1, kgrid), cbd(14, ttnn.float32, 2, kgrid),
                    cbd(17, ttnn.bfloat16, 2, kgrid), cbd(18, ttnn.float32, 1, kgrid), ttnn.cb_descriptor_from_sharded_tensor(20, rsp)]
         if TREEFLAG: cbs = cbs + [cbd(31, ttnn.bfloat16, 1, kgrid)]
         if RWO:   # ext-only: A, sig(gate) S with the in-place A (.) S view (same memory), owner CB_XO; CB_QO grows to 5
@@ -895,12 +900,16 @@ def setup_bench(dev, MESH, mesh_identity):
             # (CB 26, the tree receive CB, keeps 2 slots on STREAM and 1 slot on the ext cores: see the ATTN set above)
             cbs = [c_ for c_ in cbs if not any(f_.buffer_index == 17 for f_ in c_.format_descriptors)]
             assert sum(1 for c_ in cbs for f_ in c_.format_descriptors if f_.buffer_index == 17) == 0
-            cbs = cbs + [cbd(17, ttnn.bfloat16, 5, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs),
+            cbs = cbs + [cbd(17, ttnn.bfloat16, WO_MAXT_, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs),
                          *([cbd(31, ttnn.bfloat8_b, 5 * 48, ext_crs)] if WORING else []),
-                         *([cbd(31, ttnn.float32, 8, ext_crs), cbd(30, ttnn.bfloat16, 11, ext_crs)] if RQNR else []),
+                         *([cbd(30, ttnn.bfloat16, 11, ext_crs)] if RQNR else []),
+                         # S / A(.)S (bf16) and, under RQNR, the head-norm fp32 scratch CB 31 share one 96 KB region: the head
+                         # cores use CB 31 at qkv time, S arrives by multicast after the concat core's V loop (the concat core,
+                         # which holds S from qkv time on, is never a head core). Saves 32 KB per ext core (owner L1, GDN24 wo)
                          ttnn.CBDescriptor(total_size=48 * _p, core_ranges=ext_crs, format_descriptors=[
                              ttnn.CBFormatDescriptor(buffer_index=21, data_format=ttnn.bfloat16, page_size=_p),
-                             ttnn.CBFormatDescriptor(buffer_index=22, data_format=ttnn.bfloat16, page_size=_p)])]
+                             ttnn.CBFormatDescriptor(buffer_index=22, data_format=ttnn.bfloat16, page_size=_p)] +
+                             ([ttnn.CBFormatDescriptor(buffer_index=31, data_format=ttnn.float32, page_size=2 * _p)] if RQNR else []))]
         if RQNR and not RWO:   # head cores without the wo set: CB_A (head tiles, full 48-page slot), CB_XO (head output), scratch, constants
             cbs = cbs + [cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs), cbd(31, ttnn.float32, 8, ext_crs), cbd(30, ttnn.bfloat16, 11, ext_crs)]
         if V12:   # drop the fm11 MLP CBs (keep 1-tile CB 1 / 2 for the hw_startup calls), add the v12 set
@@ -1003,7 +1012,13 @@ def setup_bench(dev, MESH, mesh_identity):
         else:
             assert not REAL_AR, "MK_REAL_AR needs the per-role binaries (MKA_ROLESPLIT=1)"
             ks = _ks(kgrid, [], rrt, wrt, crt)
-        if RWO:   # placement: a CB on kgrid sits above BOTH the STREAM-rect and the ext CBs; ext-only CBs listed FIRST land
+        if RWO and GDN24:   # GDN24: kgrid is ONE core range (x 0-11, rows 0-7) intersecting both the STREAM rect and the ext
+            # (owner) range. tt-metal places a CB at the end of its own range's allocator and raises every intersecting allocator, so
+            # an ext-only CB listed before a kgrid CB lifts that kgrid CB (on STREAM too) above it: the 522 KB Wo ring put STREAM
+            # 71 KB into the L1 buffers. Order: CBs on both roles first, then the role-disjoint ones (each lands on its own top).
+            _both = lambda c_: any(r_.start.x < GX for r_ in c_.core_ranges.ranges()) and any(r_.end.x >= GX for r_ in c_.core_ranges.ranges())
+            cbs = [c_ for c_ in cbs if _both(c_)] + [c_ for c_ in cbs if not _both(c_)]
+        elif RWO:   # placement: a CB on kgrid sits above BOTH the STREAM-rect and the ext CBs; ext-only CBs listed FIRST land
             # at low addresses on the ext cores (beside the STREAM rect's own CBs, which they never share a core with)
             _ext_only = lambda c_: c_.core_ranges == ext_crs
             cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
@@ -1019,6 +1034,9 @@ def setup_bench(dev, MESH, mesh_identity):
                         return None
                 return n_
             print(f"[gdn24] CB bytes per core: STREAM (0,0) {_cbsum(0, 0)}  ext (10,0) {_cbsum(10, 0)}  GDN (0,{GY}) {_cbsum(0, GY)}", flush=True)
+        if os.environ.get('MKA_CBDUMP') == '1':
+            for d_ in cbs:
+                print(f"[cbdump] ids {[f_.buffer_index for f_ in d_.format_descriptors]} size {d_.total_size} ranges {[(r_.start.x, r_.start.y, r_.end.x, r_.end.y) for r_ in d_.core_ranges.ranges()]}", flush=True)
         return ttnn.ProgramDescriptor(kernels=ks, semaphores=sems, cbs=cbs)
     # V12 drops the fm11 output CB 16 (re-used as CB_VPK on the owners): keep the unused fm11 output out of L1 (it was the L1 floor)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12 else ws(rect, NDN * TILE))
