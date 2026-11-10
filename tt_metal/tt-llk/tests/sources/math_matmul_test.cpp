@@ -509,6 +509,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
+#if defined(MATMUL_PACK_STATE) && MATMUL_PACK_STATE == 1
+                    // a pack reconfigure before every block, as between the partials and the output of a spilled matmul
+                    _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(
+                        formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces, PARTIAL_FACE_PACK);
+#endif
+#line 391
                     _llk_packer_wait_for_math_done_();
 #ifdef MATMUL_L1_FUNC
                     // packer L1 accumulate: the blocks of a group pack onto the same result tiles, the first writes and the later ones accumulate (as the ttnn bmm kernels spill partials)

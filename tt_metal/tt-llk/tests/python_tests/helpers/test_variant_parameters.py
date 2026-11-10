@@ -2181,6 +2181,10 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
                 f"\nconstexpr std::uint32_t MATMUL_PK_RT = {rt}, MATMUL_PK_CT = {ct}, MATMUL_PK_KT = {kt}, MATMUL_PK_R0 = {r0}, MATMUL_PK_C1 = {c1}, MATMUL_PK_THROTTLE = {thr};"
                 f"\nconstexpr bool MATMUL_PK_HALF = {str(half).lower()}, MATMUL_PK_DENSE = {str(dense).lower()}, MATMUL_PK_L1ACC = {str(l1).lower()};"
             )
+        # LLK_MATMUL_PACK_STATE: every block is the first of its output, 2 after another output, 1 after another output and a pack reconfigure
+        state = os.environ.get("LLK_MATMUL_PACK_STATE")
+        if state in ("1", "2"):
+            out += f"\n#define MATMUL_PACK_STATE {state}"
         return out
 
 

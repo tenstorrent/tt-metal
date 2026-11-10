@@ -6,12 +6,15 @@
 // same _llk_ calls in the same order, because a test kernel cannot include the metal API. The form of a block (T per tile, B the block that programs the output, W the
 // block with the W offset) is llk_pack_block_form with the matmul_kt overlay, generated into matmul_pack_tables.h from the API (gen_matmul_pack_tables.py, checked by
 // hardware_free/kernels/test_matmul_pack_tables.py); the first block of the run takes the init table, the next ones the next table. MATMUL_PACK_FORM 1 is the plain
-// B block, 2 the closed one (the keyed matmul form picks the block shape). Keep the rest equal to llk_pack_block and llk_pack_w_take.
+// B block, 2 the closed one (the keyed matmul form picks the block shape). Keep the rest equal to llk_pack_block and llk_pack_w_take. MATMUL_PACK_STATE makes every block the first of its output: 2 the init table, 1 the reconfigure table.
 
 #include <cstdint>
 #if defined(ARCH_BLACKHOLE)
 #include "llk_pack.h"
 #include "matmul_pack_tables.h"
+#ifndef MATMUL_PACK_STATE
+#define MATMUL_PACK_STATE 0
+#endif
 
 namespace matmul_pack_production
 {
@@ -73,11 +76,12 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         wide_format(out_format));
     constexpr bool int8     = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
     constexpr bool src32    = fp32 && key_src32;
-    const bool first        = !state.seen;
+    const bool first        = MATMUL_PACK_STATE != 0 || !state.seen;
     const char f = matmul_pack_tables::llk_pack_block_form_k<fp32, key_kt>(
         row,
         key_nt != 0 ? key_nt : num_tiles,
-        first ? (src32 ? matmul_pack_tables::llk_pack_init_form : matmul_pack_tables::llk_pack_init_form_dc)
+        first ? (MATMUL_PACK_STATE == 1 ? (src32 ? matmul_pack_tables::llk_pack_reconf_form : matmul_pack_tables::llk_pack_reconf_form_dc)
+                                        : (src32 ? matmul_pack_tables::llk_pack_init_form : matmul_pack_tables::llk_pack_init_form_dc))
               : (src32 ? matmul_pack_tables::llk_pack_next_form : matmul_pack_tables::llk_pack_next_form_dc),
         !first,
         sync == DstSync::SyncFull,

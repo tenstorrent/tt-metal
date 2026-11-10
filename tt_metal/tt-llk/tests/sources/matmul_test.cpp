@@ -605,6 +605,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+#if defined(MATMUL_PACK_STATE) && MATMUL_PACK_STATE == 1
+                // a pack reconfigure before every block, as between the partials and the output of a spilled matmul
+                _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
+#endif
+#line 366
 #if defined(ARCH_BLACKHOLE)
                 if constexpr (matmul_pack_form_v == 2 && dest_sync == DstSync::SyncFull)
                 {
