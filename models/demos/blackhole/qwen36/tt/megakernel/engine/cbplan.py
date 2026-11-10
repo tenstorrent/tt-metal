@@ -143,34 +143,51 @@ def end_per_core(p):
 
 def verify(dev, desc, base=CB_BASE, tag=""):
     """Device check (MK_V12_CBCHK): a probe program with ``desc``'s CB list writes get_write_ptr(id) of every planned
-    (non-global) CB on every core; any difference from plan(desc.cbs) raises. Runs on every device of ``dev``."""
+    (non-global) CB on every core; any difference from plan(desc.cbs) raises. ``desc``: one ProgramDescriptor (run on
+    every device of ``dev``) or a list with one per mesh device (per-device programs, e.g. MK_REAL_AR ring roles)."""
     import torch
     import ttnn
 
-    p = plan(list(desc.cbs), base)
-    pc = per_core(p)
-    cores = sorted(pc)
+    mesh = hasattr(dev, "get_num_devices")
+    ndev = dev.get_num_devices() if mesh else 1
+    descs = list(desc) if isinstance(desc, (list, tuple)) else [desc] * ndev
+    assert len(descs) == ndev, (len(descs), ndev)
+    plans = [per_core(plan(list(d.cbs), base)) for d in descs]
+    cores = sorted(set().union(*[set(pc) for pc in plans]))
+    row = {c: i for i, c in enumerate(cores)}
     W = 64
-    rep = ttnn.ReplicateTensorToMesh(dev) if hasattr(dev, "get_num_devices") else None
+    kw = {"mesh_mapper": ttnn.ReplicateTensorToMesh(dev)} if mesh else {}
     out = ttnn.from_torch(torch.zeros(len(cores), W, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
-                          device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG, **({"mesh_mapper": rep} if rep else {}))
-    rt = ttnn.RuntimeArgs()
-    for i, c in enumerate(cores):
-        ids = sorted(pc[c])
-        assert len(ids) <= W - 2
-        rt[c[0]][c[1]] = [out.buffer_address(), i, len(ids)] + ids
-    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
-    k = ttnn.KernelDescriptor(kernel_source=os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "mk_cbplan_probe.cpp"),
-                              core_ranges=crs, compile_time_args=ttnn.TensorAccessorArgs(out).get_compile_time_args(), runtime_args=rt,
-                              config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
-    ttnn.generic_op([out, out], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=list(desc.cbs)))   # generic_op needs >= 2 io tensors
+                          device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)
+    kpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "mk_cbplan_probe.cpp")
+
+    def probe(d, pc):
+        rt = ttnn.RuntimeArgs()
+        for c in sorted(pc):
+            ids = sorted(pc[c])
+            assert len(ids) <= W - 2
+            rt[c[0]][c[1]] = [out.buffer_address(), row[c], len(ids)] + ids
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in sorted(pc)])
+        k = ttnn.KernelDescriptor(kernel_source=kpath, core_ranges=crs, compile_time_args=ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                                  runtime_args=rt, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
+        return ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=list(d.cbs))
+
+    if mesh:
+        mp = ttnn.MeshProgramDescriptor()
+        for i in range(ndev):
+            co = ttnn.MeshCoordinate(i // dev.shape[1], i % dev.shape[1])
+            mp[ttnn.MeshCoordinateRange(co, co)] = probe(descs[i], plans[i])
+        ttnn.generic_op([out, out], mp)   # generic_op needs >= 2 io tensors
+    else:
+        ttnn.generic_op([out, out], probe(descs[0], plans[0]))
     ttnn.synchronize_device(dev)
-    dts = ttnn.get_device_tensors(out) if rep else [out]
-    bad = []
+    dts = ttnn.get_device_tensors(out) if mesh else [out]
+    bad, n = [], 0
     for d, dt in enumerate(dts):
         got = (ttnn.to_torch(dt).to(torch.int64) & 0xFFFFFFFF).reshape(len(cores), W)
-        for i, c in enumerate(cores):
-            ids = sorted(pc[c])
+        pc = plans[d]
+        for c in sorted(pc):
+            ids = sorted(pc[c]); i = row[c]; n += len(ids)
             if int(got[i, 0]) != 0x43424B4D:
                 bad.append((d, c, "probe did not run"))
                 continue
@@ -178,8 +195,6 @@ def verify(dev, desc, base=CB_BASE, tag=""):
                 if int(got[i, 1 + j]) != pc[c][cid]:
                     bad.append((d, c, cid, int(got[i, 1 + j]), pc[c][cid]))
     ttnn.deallocate(out)
-    n = sum(len(v) for v in pc.values())
     if bad:
-        raise RuntimeError(f"[cbplan]{tag} FAIL: {len(bad)} mismatches of {n * len(dts)} (core, CB) pairs, e.g. {bad[:6]}")
-    print(f"[cbplan]{tag} PASS: {len(dts)} device(s) x {len(cores)} cores, {n} (core, CB) addresses match the plan (base {base})", flush=True)
-    return p
+        raise RuntimeError(f"[cbplan]{tag} FAIL: {len(bad)} mismatches of {n} (device, core, CB) addresses, e.g. {bad[:6]}")
+    print(f"[cbplan]{tag} PASS: {len(dts)} device(s) x {len(cores)} cores, {n} (device, core, CB) addresses match the plan (base {base})", flush=True)
