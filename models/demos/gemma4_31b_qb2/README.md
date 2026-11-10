@@ -35,7 +35,9 @@ python -m vllm.entrypoints.openai.api_server \
     --additional-config '{"tt":{"sample_on_device_mode":"all","trace_region_size":536870912,"l1_small_size":16384}}'
 ```
 
-`HF_MODEL`, if set before checkpoint resolution, must name a local checkpoint directory. Use a new cache directory for different weights. The maximum context setting is allocation capacity; it does not establish accuracy at 262,144 tokens. Keep the default decode interleaving enabled and use a batched-token budget no greater than 8,192. Disabling interleaving exhausted DRAM in the tested 32-user configuration because more BF16 prefill histories remained live. Images, audio, speculative decoding and prefix caching are unsupported.
+`HF_MODEL`, if set before checkpoint resolution, must name a local checkpoint directory. Use a new cache directory for different weights. The maximum context setting is allocation capacity; it does not establish accuracy at 262,144 tokens. Keep the default decode interleaving enabled and use a batched-token budget no greater than 8,192. Disabling interleaving exhausted DRAM in the tested 32-user configuration because more BF16 prefill histories remained live. Images, audio and speculative decoding are unsupported.
+
+Prefix caching can be selected with `--enable-prefix-caching`. A fresh cached request reconstructs each sliding layer's preceding window from vLLM-owned BF8 pages, then retains the usual BF16 tail for its later chunks. The scheduler owns prefix hashes, page residency and eviction. Request history uses private identities so concurrent requests sharing pages remain independent. Cached continuation is numerically approximate relative to a cold BF16 prefill; greedy output need not be identical. Targeted sliding-layer HF checks pass PCC ≥ 0.995 at 128-, 1024- and 1152-token boundaries. Scored agentic quality and performance validation is pending; the benchmark table below was measured without prefix caching.
 
 ## Validation and weekly CI
 
