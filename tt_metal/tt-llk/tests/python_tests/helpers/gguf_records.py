@@ -470,14 +470,24 @@ def _pack_codes(fmt, planes, t, page):
     return _words(*words)
 
 
-# E2M1 magnitude codes 0..7 (0, 0.5, 1, 1.5, 2, 3, 4, 6) -> the page's block-float magnitude codes.
-_FP4_TO_PAGE = (0, 1, 4, 5, 6, 7, 2, 3)
+# GGUF code -> the page's block-float code. MXFP4 / NVFP4: the sign stays, E2M1 magnitudes 0..7 (0, 0.5, 1, 1.5, 2,
+# 3, 4, 6) go to 0, 1, 4, 5, 6, 7, 2, 3 (ckernel_sfpu_gguf_decode_fp4.h). IQ4_NL / IQ4_XS: the values in order go to
+# x = 1.75 .. -1.75 (codes 7 .. 1, 0, 9 .. 15) and the largest to code 8 (ckernel_sfpu_gguf_decode_iq4.h).
+_FP4_TO_PAGE = tuple((q & 8) | (0, 1, 4, 5, 6, 7, 2, 3)[q & 7] for q in range(16))
+_IQ4_TO_PAGE = tuple(7 - q if q <= 7 else q + 1 if q <= 14 else 8 for q in range(16))
+_BFP_TO_PAGE = {
+    "MXFP4": _FP4_TO_PAGE,
+    "NVFP4": _FP4_TO_PAGE,
+    "IQ4_NL": _IQ4_TO_PAGE,
+    "IQ4_XS": _IQ4_TO_PAGE,
+}
 
 
-def _pack_codes_fp4(fmt, planes, t, kt):
-    """MXFP4, NVFP4: K tile kt's codes as 4-bit block-float datums of the 32x32 [K][N] tile in face order (element e in
-    bits 4 (e % 2) .. of byte e // 2), sign kept, magnitudes permuted by _FP4_TO_PAGE (ckernel_sfpu_gguf_decode_fp4.h).
+def _pack_codes_bfp(fmt, planes, t, kt):
+    """MXFP4, NVFP4, IQ4_NL, IQ4_XS: K tile kt's codes as 4-bit block-float datums of the 32x32 [K][N] tile in face
+    order (element e in bits 4 (e % 2) .. of byte e // 2), mapped by _BFP_TO_PAGE.
     """
+    to_page = _BFP_TO_PAGE[fmt.name]
     lo_bits, lo, _, _ = planes
     out = bytearray(512)
     b = 32 * kt // fmt.block_elems
@@ -486,7 +496,7 @@ def _pack_codes_fp4(fmt, planes, t, kt):
         for n in range(32):
             q = _code(t.block(n, b), lo, lo_bits, w0 + k)
             e = 512 * (k // 16) + 256 * (n // 16) + 16 * (k % 16) + n % 16
-            out[e // 2] |= ((q & 8) | _FP4_TO_PAGE[q & 7]) << (4 * (e % 2))
+            out[e // 2] |= to_page[q] << (4 * (e % 2))
     return bytes(out)
 
 
@@ -542,7 +552,7 @@ def _scale_page_planes(fmt, t, g):
 
 def _group_planes(fmt, planes, t, g):
     scale = _scale_page_planes(fmt, t, g)
-    pack = _pack_codes_fp4 if fmt.name in ("MXFP4", "NVFP4") else _pack_codes
+    pack = _pack_codes_bfp if fmt.name in _BFP_TO_PAGE else _pack_codes
     pages = [
         pack(fmt, planes, t, fmt.pages_per_group * g + i)
         for i in range(fmt.pages_per_group)

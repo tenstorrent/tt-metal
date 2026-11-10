@@ -43,7 +43,7 @@ constexpr ckernel::gguf::PageLayout LAYOUT = test_layout();
 // MXFP4 and NVFP4 pages hold block-float codes, unpacked to the 16-bit DEST rows that the decoded tile's rows address
 // (Dst16b rows 64 tile), so the decoded tile is not tile 0: tile 1 (codes in tile 0), with matmul tiles 3 and 5
 // (codes in tiles 1 and 2); the page follows.
-constexpr bool BFP                         = ckernel::gguf::fp4_bfp<GGUF_FMT>;
+constexpr bool BFP                         = ckernel::gguf::bfp_codes<GGUF_FMT>;
 constexpr std::uint32_t OUT                = BFP ? 1 : 0; // the decoded tile without matmul (GGUF_FMT == 0: the copied tile)
 constexpr std::uint32_t PAGE_BYTES         = LAYOUT.rows * 64;
 constexpr std::uint32_t PAGE_FACES         = LAYOUT.rows / 16;
@@ -87,10 +87,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_dest_srca_mm_codes_page_(
                 L1_ADDRESS(page_address(pages_base, nt, kt)),
-                ckernel::gguf::FP4_CODES,
-                ckernel::gguf::FP4_CODE_EXP,
+                ckernel::gguf::BFP_CODES,
+                ckernel::gguf::BFP_CODE_EXP,
                 LAYOUT.scale_offset,
-                ckernel::gguf::FP4_SCALE_WORDS,
+                ckernel::gguf::bfp_scale_words<GGUF_FMT>(),
                 FACE_R_DIM * FACE_C_DIM - 1);
         }
         else

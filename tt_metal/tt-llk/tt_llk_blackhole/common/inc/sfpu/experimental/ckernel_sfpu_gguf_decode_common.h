@@ -269,14 +269,6 @@ sfpi_inline vUInt code_at(const int o, const vUInt w)
     }
 }
 
-// IQ4_NL value table: round(P4(q)), exact for q = 0..15. The constant term -127 is folded into the rounding constant
-// 1.5 * 2^23; c4..c2 go to programmable constants 0..2 (iq4_init).
-constexpr float IQ4_C4  = 0.0014480184763669968f;
-constexpr float IQ4_C3  = 0.03627324849367142f;
-constexpr float IQ4_C2  = -1.4385637044906616f;
-constexpr float IQ4_C1  = 24.500598907470703f;
-constexpr float IQ4_C0R = 12582785.0f; // -127 + 1.5 * 2^23
-
 template <int FMT, int CP>
 sfpi_inline void body()
 {
@@ -285,13 +277,6 @@ sfpi_inline void body()
     if constexpr (FMT == Q8_0)
     {
         sfpi::vConstIntPrgm1 = 0x80;
-    }
-    vFloat c1  = 0.0f;
-    vFloat c0r = 0.0f;
-    if constexpr (FMT == IQ4_NL || FMT == IQ4_XS)
-    {
-        c1  = IQ4_C1;
-        c0r = IQ4_C0R;
     }
 #pragma GCC unroll 2
     for (int a = 0; a < 2; a++)
@@ -312,46 +297,19 @@ sfpi_inline void body()
             {
                 const int pi   = pidx(a, b, T::has_h ? h : 0);
                 const vFloat S = sfpi::dst_reg[PS + pi];
-                vFloat M       = 0.0f;
-                if constexpr (T::linear)
-                {
-                    M = sfpi::dst_reg[PM + pi];
-                }
+                const vFloat M = sfpi::dst_reg[PM + pi];
 // Two outputs per step, interleaved to hide the SFPMAD latency.
 #pragma GCC unroll 2
                 for (int s = 0; s < 4; s += 2)
                 {
-                    const int oa = o0 + 2 * s + b;
-                    const int ob = oa + 2;
-                    if constexpr (T::linear)
-                    {
-                        const vFloat xa   = ufloat(code_at<FMT, CP>(oa, s < 2 ? l0 : l1));
-                        const vFloat xb   = ufloat(code_at<FMT, CP>(ob, s < 2 ? l0 : l1));
-                        const vFloat va   = xa * S + M;
-                        const vFloat vb   = xb * S + M;
-                        sfpi::dst_reg[oa] = va;
-                        sfpi::dst_reg[ob] = vb;
-                    }
-                    else
-                    {
-                        const vFloat xa = ufloat(field<4>(l0, oa % 8));
-                        const vFloat xb = ufloat(field<4>(l0, ob % 8));
-                        vFloat pa       = xa * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
-                        vFloat pb       = xb * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
-                        pa              = pa * xa + sfpi::vConstFloatPrgm2;
-                        pb              = pb * xb + sfpi::vConstFloatPrgm2;
-                        pa              = pa * xa + c1;
-                        pb              = pb * xb + c1;
-                        pa              = pa * xa + c0r;
-                        pb              = pb * xb + c0r;
-                        pa              = pa + -12582912.0f;
-                        pb              = pb + -12582912.0f;
-                        // Both products before either store (SFPMUL latency).
-                        const vFloat ra   = pa * S;
-                        const vFloat rb   = pb * S;
-                        sfpi::dst_reg[oa] = ra;
-                        sfpi::dst_reg[ob] = rb;
-                    }
+                    const int oa      = o0 + 2 * s + b;
+                    const int ob      = oa + 2;
+                    const vFloat xa   = ufloat(code_at<FMT, CP>(oa, s < 2 ? l0 : l1));
+                    const vFloat xb   = ufloat(code_at<FMT, CP>(ob, s < 2 ? l0 : l1));
+                    const vFloat va   = xa * S + M;
+                    const vFloat vb   = xb * S + M;
+                    sfpi::dst_reg[oa] = va;
+                    sfpi::dst_reg[ob] = vb;
                 }
             }
         }
