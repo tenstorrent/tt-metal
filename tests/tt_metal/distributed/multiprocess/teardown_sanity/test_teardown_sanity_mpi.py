@@ -16,9 +16,13 @@ tt-run fix in this PR is in the tt-run on PATH (the launcher in the CI image is 
 from __future__ import annotations
 
 import re
+import shutil
 import signal
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(
     0, str(Path(__file__).resolve().parent)
@@ -29,6 +33,7 @@ from sanity_common import (
     DEADLINE_HANG,
     clean,
     ended,
+    mpirun_path,
     nonzero,
     run_case,
     ttrun_mpi_cmd,
@@ -200,3 +205,76 @@ def test_ttrun_pml_ucx_known_shape():
     )
     ended(r)
     clean(r)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# MPI install & configuration requirements: does the OpenMPI / PRRTE build on this machine meet what tt-run needs?
+# Gates only — each queries or exercises the install, no fault injected. A host with the wrong MPI on PATH, or a
+# build missing a component tt-run's launch line relies on, is caught here before any teardown row runs. Honours
+# TT_SANITY_MPI_PREFIX (sanity_common.mpirun_path), so a second install can be checked with the same rows.
+# ---------------------------------------------------------------------------------------------------------------
+def _mpi_bin(name: str) -> str:
+    """The sibling tool of the mpirun tt-run would use (ompi_info, mpirun-ulfm), honouring TT_SANITY_MPI_PREFIX."""
+    cand = Path(mpirun_path()).resolve().parent / name
+    return str(cand) if cand.exists() else (shutil.which(name) or name)
+
+
+def _run(cmd: list, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def test_mpi_build_is_open_mpi_5_plus():
+    """tt-run's launch line (PRRTE --timeout, --map-by, the self,tcp btl line) is Open MPI 5.x / PRRTE. Confirm the
+    mpirun tt-run would use is that build, so an older or foreign MPI on PATH is caught early, not mid-job."""
+    out = (_run([mpirun_path(), "--version"]).stdout or "") + (_run([mpirun_path(), "--version"]).stderr or "")
+    m = re.search(r"Open MPI[)\s]+v?(\d+)\.(\d+)", out)
+    assert m, f"not an Open MPI build: {out.strip()[:120]!r}"
+    assert int(m.group(1)) >= 5, f"Open MPI >= 5.0 required (PRRTE launcher); got {m.group(1)}.{m.group(2)}"
+
+
+def test_launcher_supports_timeout():
+    """tt-run's opt-in wall clock (P5) is PRRTE's own --timeout, reachable only through --mpi-args. Confirm this
+    launcher accepts it — a trivial job with --timeout must run, not be rejected as an unknown option."""
+    r = _run([mpirun_path(), "--timeout", "10", "--allow-run-as-root", "-np", "1", "true"])
+    assert r.returncode == 0, f"the launcher does not accept --timeout (P5 backstop unreachable): {r.stderr[:200]}"
+
+
+def test_required_mca_components_available():
+    """The production line tt-run builds is pml ob1 over --mca btl self,tcp (P15). Confirm the install actually
+    carries those components, so the line is honoured rather than silently falling back to another transport."""
+    info = _run([_mpi_bin("ompi_info")]).stdout
+    assert "MCA btl: self" in info, "btl self missing from this MPI build"
+    assert "MCA btl: tcp" in info, "btl tcp missing from this MPI build"
+    assert "MCA pml: ob1" in info, "pml ob1 missing from this MPI build"
+
+
+def test_production_transport_line_runs_clean():
+    """The exact transport line tt-run adds (pml ob1, --mca btl self,tcp) must run on this install: a trivial
+    two-rank job under that line completes, so the line tt-run builds is not just present but working."""
+    r = _run(
+        [
+            mpirun_path(),
+            "--allow-run-as-root",
+            "--oversubscribe",
+            "-np",
+            "2",
+            "--mca",
+            "pml",
+            "ob1",
+            "--mca",
+            "btl",
+            "self,tcp",
+            "true",
+        ]
+    )
+    assert r.returncode == 0, f"the self,tcp / ob1 line failed on this install: {r.stderr[:200]}"
+
+
+def test_ulfm_launcher_available():
+    """tt-metal's DistributedContext recovery can opt into ULFM via --mpi-args; the install must ship it. Confirm
+    mpirun-ulfm is present and a trivial --with-ft ulfm job runs, so the capability exists when it is asked for."""
+    ulfm = _mpi_bin("mpirun-ulfm")
+    if not Path(ulfm).exists() and shutil.which("mpirun-ulfm") is None:
+        pytest.skip("mpirun-ulfm not installed in this prefix")
+    r = _run([ulfm, "--with-ft", "ulfm", "--allow-run-as-root", "-np", "1", "true"])
+    assert r.returncode == 0, f"--with-ft ulfm failed on this install: {r.stderr[:200]}"
