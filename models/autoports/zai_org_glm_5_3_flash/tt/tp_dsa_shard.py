@@ -196,16 +196,28 @@ class TPMlaShard(TPM.TPMla):
             agk = SP.shard_agk(self.P)
             WY = 32 * SP.AGK_PPC if agk else W32
             kp = dict(keypack=(SP.AG32_PPC, SP.AG32_QPAGES)) if agk else {}
+            # GLM53_DSA_SHARD_AGB (on AGK): y_ag as ONE 32-row chunk per block (2 t pages: the same page ids as AGK's
+            # t chunks of 2 pages, so no consumer changes) -- the AG is per-chunk latency bound (AGK: 3x fewer bytes,
+            # the window -21 %), and the chunks drop from 16 + 128 to 1 + 8 per source (one signal per block, AG2 in
+            # 8-page batches: 32 instead of 128 at t 16; its CB 3 x 8 pages = rev 65's 48 KB)
+            agb = SP.shard_agb(self.P)
+            rows1, chunks2, nb2 = t * 32, self.P * t * 32, {}
+            if agb:
+                WY, rows1, chunks2 = 32 * SP.AGK_PPC * t, 32, self.P * 32
+                kp = dict(keypack=(SP.AG32_PPC, SP.AG32_QPAGES, t))
+                yp = SP.AGK_PPC * t
+                nb2 = dict(nb=8 if yp % 8 == 0 else (4 if yp % 4 == 0 else 2), slots=3)
             x_ag = z(t * 32, W32)
             x_rs = z(32, W_RS)
             x_rs1 = z(self.P * t * 32, W8)
             x_rs2b = z(self.L * t * 32, W2B)
             q_asm = z(2 * t * 32, HIDDEN)
             ag2_noc = self._noc(self.lane_core["ag2"])
-            ag1 = FS.FabricStreamAG(mesh, t * 32, WY, axis=geo.pair_axis, lanes=lane("ag1"), **sy("ag1"), local_copy=True,
+            ag1 = FS.FabricStreamAG(mesh, rows1, WY, axis=geo.pair_axis, lanes=lane("ag1"), **sy("ag1"), local_copy=True,
                                     wait=ag_wait, cons=(MK.SEM_FSW, [ag2_noc]), link_base=0, after=MK.SEM_FSA, **kp)  # fmt: skip
-            ag2 = FS.FabricStreamAG(mesh, self.P * t * 32, WY, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
-                                    y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA)  # fmt: skip
+            ag2 = FS.FabricStreamAG(mesh, chunks2, WY, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
+                                    y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA,
+                                    **nb2)  # fmt: skip
             # rev 65 (GLM53_DSA_SHARD_RS1_EARLY, dsa_shard.hpp RS1 early): the roots signal after each pass; the lane
             # streams the other half's destinations (pass 0's slices) once t pass-0 signals landed, the own half's at t
             # pass-1 signals -- rev 67: in two fields of the count (pass 1 adds 1 << 16; shard_plan.rs1_early_gates).
@@ -221,9 +233,12 @@ class TPMlaShard(TPM.TPMla):
             # give rs2 its own consumer semaphore then.
             rs2 = FS.FabricStreamScatter(mesh, t * 32, W2B, axis=geo.line_axis, lanes=lane("rs2"), **sy("rs2"), wait=rs_wait,
                                          cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA)  # fmt: skip
-            assert int(ag1.y.shape[-2]) == geo.n * t * 32 and int(rs1.y.shape[-2]) == self.P * t * 32
+            assert int(ag1.y.shape[-2]) == geo.n * rows1 and int(rs1.y.shape[-2]) == self.P * t * 32
+            ypg = (SP.AGK_PPC if agk else SP.AG32_PPC) * t  # y_ag pages per block: AGB keeps AGK's page ids
+            assert int(ag1.y.shape[-2]) * int(ag1.y.shape[-1]) == geo.n * ypg * 1024, (tuple(ag1.y.shape), ypg)
             assert int(rs2.y.shape[-2]) == self.L * t * 32
-            return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, agk=agk, x_ag=x_ag, y_ag=ag1.y,
+            return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, agk=agk, agb=agb, x_ag=x_ag,
+                        y_ag=ag1.y,
                         x_rs=x_rs, y_rs=x_rs,
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],

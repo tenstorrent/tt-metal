@@ -1431,3 +1431,47 @@ def emulate_agk_launch(keys_by_token: list, pos_by_token: list, lanes: int, kph:
             res["serial"][rank] = serial_merge(lists[t], rank, CAND_MAX)
         out.append(res)
     return out
+
+
+# ------------------------------------------------------------------ the AGK block chunks (GLM53_DSA_SHARD_AGB, on AGK)
+def shard_agb(pair: int) -> bool:
+    """GLM53_DSA_SHARD_AGB (default 0; needs GLM53_DSA_SHARD_AGK=1): y_ag as one 32-row chunk per block (2 t pages, the
+    same page ids as AGK's t chunks of 2 pages) -- one fabric signal per block instead of per token, AG2 in 8-page
+    batches (tt/tp_dsa_shard.py, fabric_stream.py keypack=(.., .., t), fs_send.cpp FS_KP_XPER); the 8x4 only"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_AGB")
+    if on and not shard_agk(pair):
+        raise ValueError("GLM53_DSA_SHARD_AGB=1 needs GLM53_DSA_SHARD_AGK=1 (the block chunks hold packed keys)")
+    return on
+
+
+def agb_ag1_sends(T: int, blk: int) -> list:
+    """fs_send.cpp FS_KEYPACK + FS_KP_XPER = T on chip block `blk` (one y chunk = the block, row_base = blk): per x chunk
+    (token) c and page pair col: (y page of the pair's first page, signal) -- g0 = (row_base XPER + c) YP + col, the
+    signal on the block's last pair only"""
+    yp, out = AGK_PPC, []
+    for c in range(T):
+        for col in range(0, yp, 2):
+            out.append(((blk * T + c) * yp + col, col + 2 == yp and (c + 1) % T == 0))
+    return out
+
+
+def agb_ag2_sends(T: int, blk: int, nb: int) -> list:
+    """fs_send.cpp (plain) on AG2's bundle chunk = block `blk` of y_ag [32 x 32 rows, 32 AGK_PPC T]: PPC = AGK_PPC T pages
+    per chunk in nb-page batches -> (y page, signal) per page pair"""
+    ppc = AGK_PPC * T
+    assert ppc % nb == 0 and nb % 2 == 0, (ppc, nb)
+    out = []
+    for idx in range(0, ppc, 2):
+        col = idx % ppc
+        out.append((blk * ppc + col, col + 2 == ppc))
+    return out
+
+
+def ag_stream_counts(t: int, agk: bool = False, agb: bool = False, P: int = 8, nb2: int = 8) -> dict:
+    """staging batches (one DRAM read barrier + one send flush each) and fabric signals per source of one launch's AG1 /
+    AG2 lanes on the 8x4 (tt/tp_dsa_shard.py streams): rev 65 / AGK one chunk per batch and per signal (t, P t); AGB
+    one signal per block (1, P) and AG2 batches of nb2 pages"""
+    if not agb:
+        return dict(ag1_batches=t, ag2_batches=P * t, ag1_signals=t, ag2_signals=P * t)
+    ppc = AGK_PPC * t
+    return dict(ag1_batches=t, ag2_batches=P * ppc // nb2, ag1_signals=1, ag2_signals=P)

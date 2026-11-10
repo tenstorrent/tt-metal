@@ -22,9 +22,11 @@
 // credit-ahead hang). Runtime args after the FS_CONS block: n_dst, then (direction 0 up / 1 down, hops) per destination
 // (count-prefixed). FS_KEYPACK (rev 68, tt/fabric_stream.py keypack=): a staged batch = one x chunk that fs_read.cpp
 // packed in place; only its first FS_KEYPACK pages go out (y holds FS_KEYPACK pages per chunk, one chunk-end signal
-// each as before). MK_PROBE_ARG (tt/fabric_stream.py probe=, the shard phase probe: kernels/mk/probe.hpp): the probe
-// pair after the scatter block (before the fabric connections); marks: start, the first batch staged + the link opened,
-// the sends done, closed (DONE), the waiter's completion (lane 0) -> one row of the MkMla probe tensor.
+// each as before). FS_KP_XPER (the AGK block chunks, tt/fabric_stream.py keypack=(.., xper)): one y chunk = FS_KP_XPER
+// x chunks' packed pages in order (row_base counts y chunks), the signal only on its last x chunk. MK_PROBE_ARG
+// (tt/fabric_stream.py probe=, the shard phase probe: kernels/mk/probe.hpp): the probe pair after the scatter block
+// (before the fabric connections); marks: start, the first batch staged + the link opened, the sends done, closed
+// (DONE), the waiter's completion (lane 0) -> one row of the MkMla probe tensor.
 #include <cstddef>
 #include <cstdint>
 
@@ -180,7 +182,11 @@ void kernel_main() {
             static_assert(NB == PPC && FS_KEYPACK % 2 == 0 && FS_KEYPACK <= NB, "keypack: one chunk per batch");
             for (uint32_t i = 0; i < FS_KEYPACK; i += 2) {
                 const uint32_t chunk = c_lo + b, col = i;
+#if defined(FS_KP_XPER)  // the y chunk of x chunk `chunk` = row_base + chunk / FS_KP_XPER, its pages in x chunk order
+                const uint32_t g0 = (row_base * FS_KP_XPER + chunk) * FS_KEYPACK + col;
+#else
                 const uint32_t g0 = (row_base + chunk) * FS_KEYPACK + col;
+#endif
 #else
             for (uint32_t i = 0; i < NB; i += 2) {
                 const uint32_t idx = b * NB + i;  // this lane's page index
@@ -193,7 +199,9 @@ void kernel_main() {
                     noc_async_write_page(g0 + 1, y, src + TB);
                 }
                 const uint64_t d0 = y.get_noc_addr(g0, 0, 0), d1 = y.get_noc_addr(g0 + 1, 0, 0);
-#if defined(FS_KEYPACK)
+#if defined(FS_KEYPACK) && defined(FS_KP_XPER)
+                const bool last = col + 2 == FS_KEYPACK && (chunk + 1) % FS_KP_XPER == 0;
+#elif defined(FS_KEYPACK)
                 const bool last = col + 2 == FS_KEYPACK;
 #else
                 const bool last = col + 2 == PPC;

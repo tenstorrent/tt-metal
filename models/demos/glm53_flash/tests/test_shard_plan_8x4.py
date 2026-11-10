@@ -769,6 +769,45 @@ def test_rev68_agk_knob_and_layout(monkeypatch):
     assert hop * T * SP.AG32_PPC * SP.TB == 3 * hop * T * SP.AGK_PPC * SP.TB == 6094848  # 5.8 MB -> 1.9 MB at t 16
 
 
+@pytest.mark.parametrize("t", [1, 2, 3, 4, 8, 16, 32])
+def test_agb_block_chunks_keep_agk_pages(t):
+    """GLM53_DSA_SHARD_AGB: AG1's packed pages land on AGK's page ids (agy_q_page / agk_key_page: no consumer change),
+    every y_ag page once, one signal per block (its last token's pair); AG2's 8-page batches of the block chunk cover
+    the same pages with one signal per block; the batch / signal counts per launch"""
+    T, seen = t, {}
+    for blk in range(32):
+        sends = SP.agb_ag1_sends(T, blk)
+        assert [pg for pg, _ in sends] == [SP.agk_key_page(T, blk, c) - 1 for c in range(T)]  # the pair starts
+        assert all(SP.agy_q_page(T, blk, c, d)[0] == sends[c][0] for c in range(T) for d in (0, 15))
+        assert [sig for _, sig in sends] == [False] * (T - 1) + [True]
+        for pg, _ in sends:
+            for k in range(SP.AGK_PPC):
+                assert pg + k not in seen
+                seen[pg + k] = blk
+        yp = SP.AGK_PPC * T
+        nb = 8 if yp % 8 == 0 else (4 if yp % 4 == 0 else 2)
+        ag2 = SP.agb_ag2_sends(T, blk, nb)
+        assert [pg for pg, _ in ag2] == [pg for pg, _ in sends] and [s_ for _, s_ in ag2] == [s_ for _, s_ in sends]
+    assert sorted(seen) == list(range(32 * T * SP.AGK_PPC))
+    base, agb = SP.ag_stream_counts(t, agk=True), SP.ag_stream_counts(t, agk=True, agb=True, nb2=nb)
+    assert (base["ag1_signals"], base["ag2_signals"], agb["ag1_signals"], agb["ag2_signals"]) == (t, 8 * t, 1, 8)
+    assert agb["ag2_batches"] == 8 * SP.AGK_PPC * t // nb
+    if t == 16:
+        assert (base["ag1_batches"] + base["ag2_batches"], agb["ag1_batches"] + agb["ag2_batches"]) == (144, 48)
+
+
+def test_agb_knob(monkeypatch):
+    """GLM53_DSA_SHARD_AGB: default off, the 8x4 only, only on top of GLM53_DSA_SHARD_AGK"""
+    for k in ("GLM53_DSA_SHARD_AGK", "GLM53_DSA_SHARD_AGB"):
+        monkeypatch.delenv(k, raising=False)
+    assert not SP.shard_agb(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_AGB", "1")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_AGB=1 needs GLM53_DSA_SHARD_AGK=1"):
+        SP.shard_agb(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "1")
+    assert SP.shard_agb(8) and not SP.shard_agb(2)
+
+
 # ------------------------------------------------------------------ the shard tail knobs compose; the 8x4 defaults
 KNOB_ENV = {"comb": "GLM53_DSA_SHARD_COMB", "rs1_early": "GLM53_DSA_SHARD_RS1_EARLY", "agk": "GLM53_DSA_SHARD_AGK"}
 

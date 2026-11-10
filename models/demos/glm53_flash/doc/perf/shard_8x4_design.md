@@ -171,6 +171,23 @@ Expected: the AG at a third of its bytes, ~535 -> ~180-200 us per DSA layer at B
 one key page per list instead of up to 5 record pages in the merge at >= 64 K. The next cut is the local select +
 merge handshakes (~245 us at B 16: one report / broadcast per round carrying the lane's tokens).
 
+Device (chain_mk162, e7f7dc8443f): probe B 16 pos 4095 4022.2 -> 3867.6 us (-155 us per DSA layer); the AG window
+548 -> 431 us (-21 % for a third of the bytes). Both formats run t + 8 t = 144 staging batches and 144 chunk-end
+signals per source per launch at t 16, so the AG is per-chunk latency bound (~2.7 us a chunk), not link bound.
+e2e 4 K x 16: 41.0 ms (KPH 42.6); user 0's 128-token text is byte-identical to the 2-lane rev-63 run (67.4 ms, KPH 1)
+and differs from the two rev-64 KPH runs, which had already left the 2-lane text. AGK and rev 64 take the same T_g,
+quotas and tie order on the host (shard_plan.helper_merge / agk_merge, a page-level port of stream_lists fuzzed over
+list lengths 0 .. 512); the knob-off kernels of rev 65 - 68 equal rev 64's (att_c TRISC1: two spill slots swapped).
+The text alone does not pin a bitwise difference (user 0 has a handful of attractors across configs: the B 4 fold-
+combine run lands on the same text); the deciding runs are a second AGK row, an AGK-off row of the same tree and a
+T_g / quota dump per lane token (hist tensor words 8 + j) with AGK on vs off on one eager step.
+
+`GLM53_DSA_SHARD_AGB=1` (on AGK): y_ag [32 x 32 rows, 64 t] -- one 32-row chunk per block holding its t tokens' packed
+pages, the same page ids as AGK (no consumer change): AG1 signals once per block (fs_send.cpp FS_KP_XPER), AG2 ships
+the block chunks in 8-page batches (3 slots: rev 65's 48 KB). Per launch at t 16: 16 + 32 batches (was 144) and 1 + 8
+signals per source (was 16 + 128). Expected: the AG at ~48 / 144 of its per-chunk cost, ~431 -> ~190 us per DSA layer
+at B 16 (~-2.6 ms per 45-layer step), ~-110 us at B 8, ~-55 us at B 4.
+
 ## 10. The shard tail knobs and the 8x4 defaults (2026-11-10, MLA_REV 68)
 
 Each knob is its own kernel define / stream argument, so any subset composes: `GLM53_DSA_SHARD_COMB` the roots'

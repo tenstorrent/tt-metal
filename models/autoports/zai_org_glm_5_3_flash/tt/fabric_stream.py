@@ -167,7 +167,9 @@ class _FabricStream:
     keypack=(x pages per chunk, q pages) (rev 68, the 8x4 DSA shard's AG round 1, kernels/mla/dsa_shard.hpp AGK): x holds
     chunks of keypack[0] pages (q pages, then a record header + 16-B records), y chunks of H / 32 = q pages + 1 -- the
     lane's NCRISC packs each staged chunk's record keys into one page (fs_read.cpp FS_KEYPACK) and its BRISC ships the
-    first H / 32 pages (fs_send.cpp FS_KEYPACK); the staging CB holds slots whole x chunks."""
+    first H / 32 pages (fs_send.cpp FS_KEYPACK); the staging CB holds slots whole x chunks. keypack=(.., .., xper) (the
+    AGK block chunks): one y chunk (H / 32 = xper (q pages + 1) pages) packs xper x chunks in order -- `chunks` counts
+    y chunks, the lane reads xper x chunks per y chunk and signals once per y chunk (fs_send.cpp FS_KP_XPER)."""
 
     scatter = False  # FabricStreamScatter: per-destination unicast (fs_send.cpp / fs_read.cpp FS_SCATTER)
 
@@ -205,12 +207,13 @@ class _FabricStream:
         if (
             keypack is not None
         ):  # rev 68: x chunks of xp pages -> y chunks of qp + 1 pages (one staged x chunk per batch)
-            xp, qp = (int(v) for v in keypack)
-            assert not self.scatter and self.ppc == qp + 1 and self.ppc % 2 == 0 and xp % 2 == 0 and xp > self.ppc, (
+            xp, qp, xper = (int(v) for v in (tuple(keypack) + (1,))[:3])
+            yp = qp + 1  # y pages per x chunk
+            assert not self.scatter and self.ppc == yp * xper and yp % 2 == 0 and xp % 2 == 0 and xp > yp, (
                 keypack,
                 self.ppc,
             )
-            self.keypack = (xp, qp)
+            self.keypack = (xp, qp, xper)
         self.wait, self.cons = wait, cons
         self.link_base, self.after = int(link_base), after
         rep = ttnn.ReplicateTensorToMesh(mesh)
@@ -262,6 +265,7 @@ class _FabricStream:
         per = self.chunks // len(self.lanes)
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         xp, xnb = (self.keypack[0], self.keypack[0]) if self.keypack else (self.ppc, self.nb)  # rev 68: the x chunk
+        xper = self.keypack[2] if self.keypack else 1  # x chunks per y chunk (the AGK block chunks)
         ct_send = [xp, xnb, cb_stage] + acc(x) + acc(self.y)
         ct_read = [xp, xnb, cb_stage] + acc(x)
         rt_send, rt_read = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -281,11 +285,11 @@ class _FabricStream:
             pr = [int(probe[0]), int(probe[1])]
         for h, (lx, ly) in enumerate(self.lanes):
             args = [sync, self.l0_noc[0], self.l0_noc[1], p, up, dn, x.buffer_address(), self.y.buffer_address(),
-                    h * per, per, row_base, int(h == 0), self.n, len(self.lanes), h, int(local), src_base,
+                    h * per * xper, per * xper, row_base, int(h == 0), self.n, len(self.lanes), h, int(local), src_base,
                     0, self.n, 0, per, per] + cons_rt + sc_send  # fmt: skip
             n_base = len(args)  # (the probe pair's index: before the fabric connections connect() appends)
             rt_send[lx][ly] = args + pr
-            rt_read[lx][ly] = ([x.buffer_address(), h * per, per, src_base] + ([int(self.wait[1])] if self.wait else [])
+            rt_read[lx][ly] = ([x.buffer_address(), h * per * xper, per * xper, src_base] + ([int(self.wait[1])] if self.wait else [])
                                + sc_read)  # fmt: skip
         sdefs = [("FS_CONS", "1")] if self.cons is not None else []
         if self.after is not None:
@@ -297,8 +301,11 @@ class _FabricStream:
             if self._split_args(p, dsts):
                 rdefs.append(("FS_WAIT2", "1"))
         if self.keypack:  # rev 68: fs_read.cpp packs the staged chunk, fs_send.cpp ships its first ppc pages
-            sdefs.append(("FS_KEYPACK", str(self.ppc)))
-            rdefs += [("FS_KEYPACK", str(self.ppc)), ("FS_KP_QPAGES", str(self.keypack[1]))]
+            yp = self.keypack[1] + 1
+            sdefs.append(("FS_KEYPACK", str(yp)))
+            rdefs += [("FS_KEYPACK", str(yp)), ("FS_KP_QPAGES", str(self.keypack[1]))]
+            if xper > 1:  # the AGK block chunks: one signal per y chunk of xper x chunks
+                sdefs.append(("FS_KP_XPER", str(xper)))
         if self.n > 2 and not row_barrier_defines():  # THE PER-HOP DRAIN: a multi-hop line -> the waiter's row barrier
             sdefs.append(("FS_ROW_BARRIER", "1"))
         if pr:
@@ -381,8 +388,8 @@ class FabricStreamAG(_FabricStream):
     """All-gather of x [1, 1, R_loc, H] bf16 rows (chip p's) -> self.y [1, 1, N R_loc, H] on every chip of the line:
     block (line n + p) = position p's rows of line `line` (N = blocks = n x lines unless y= is given). bundle=True (x IS
     y, local_copy off): position p's block is y's block p, already in place, multicast to the line's other chips.
-    keypack= (rev 68, _FabricStream): x [1, 1, R_loc, 32 keypack[0]] -> y in the packed chunks of H = hidden (not with
-    bundle: AG round 2 multicasts the packed y as it is)."""
+    keypack= (rev 68, _FabricStream): x [1, 1, R_loc xper, 32 keypack[0]] -> y in the packed chunks of H = hidden (not
+    with bundle: AG round 2 multicasts the packed y as it is)."""
 
     def __init__(self, mesh, rows_local: int, hidden: int = 4096, *, local_copy: bool = True, bundle: bool = False,
                  **kw):  # fmt: skip
@@ -403,7 +410,8 @@ class FabricStreamAG(_FabricStream):
 
     def __call__(self, x):
         xh = 32 * self.keypack[0] if self.keypack else self.hidden
-        assert tuple(x.shape)[-2:] == (self.rows_local, xh) and x.dtype == ttnn.bfloat16, (x.shape, x.dtype)
+        xr = self.rows_local * (self.keypack[2] if self.keypack else 1)
+        assert tuple(x.shape)[-2:] == (xr, xh) and x.dtype == ttnn.bfloat16, (x.shape, x.dtype)
         return self.run(x)
 
 
