@@ -177,3 +177,16 @@ Blocks never call launch-level ops. They must be trace-capturable (no host round
   turns 2.0 → 1.0 s). To merge into the base before release.
 - Router image-cost routing; VLLM_ROUTER_MAX_IMAGES=4 at release.
 - Shippable set: flag batch + QWEN36_R16_KV_BFP4 + multi-user SDPA cores 16 (−8.3 % step u8; acceptance unchanged).
+
+## 8. Projection update (2026-11-10, KV BFP4 failed the GPQA output-length gate: answers 1.28× longer)
+KV is **BFP8 by default**. The attention block keeps the KV dtype configurable (BFP8 default, BFP4 optional behind a
+flag). The re-projection uses MK1 silicon non-stall times, r15 per-op GDN 64 / 42 µs (u8 / u1), SDPA at BFP8
+(236 µs u8, ~94 µs u1 per attention layer, no ×0.8), 2 all-reduces × 18 µs per layer, and 0.5 ms LM head/MTP:
+
+| | GDN layer | Attention layer | Pass | Gate | Margin |
+|---|---|---|---|---|---|
+| u8 | ~138 µs | ~322 µs | **~12.3 ms** | 13.7 | ~1.4 ms |
+| u1 | ~113 µs | ~175 µs | **~8.7 ms** | 9.4 | ~0.7 ms |
+
+DRAM at u8 with BFP8 KV: ~3.5 GB / 12.3 ms ≈ 285 GB/s, under the ~400 GB/s drain. Biggest chain levers, in order:
+all-reduces (~2.3 ms), the GDN step (the prefix split targets ~−0.9 ms at u8), and the MLP down tail (13 vs 4 µs).
