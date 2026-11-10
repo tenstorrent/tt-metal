@@ -23,6 +23,36 @@ constexpr uint32_t PACKED_FIELD_ADDRESS_UNIT_BYTES = 16;
 constexpr uint32_t CB_PAGE_ALIGNMENT = 16;
 constexpr uint32_t CB_DOUBLE_BUFFER_DEPTH = 2;
 
+// Fused dequant (scaled FP8 KV, no attention sink): compute tilizes the FP8 latent and multiplies it by the
+// per-row scale in one FPU pass. The FPU needs both sources in one exponent family, and FP8 unpacks as FP16, so
+// the scale reaches srcB as FP16. The FPU flushes FP16 subnormals, and the smallest scale the FP8 cast makes is
+// clamp(amax, 1e-4) / 448 ~= 2^-22.1, so every scale is sent as scale * 2^FUSED_DEQUANT_EXP_OFFSET to keep it a
+// normal FP16 (>= 2^-14) and the factor is removed exactly: Q's latent columns are multiplied by 2^-OFFSET (so
+// Q.K is unchanged) and the row-sum identity tile holds 2^OFFSET (so out/sum is unchanged). All are power-of-two
+// rescales: bit-exact.
+// The FPU's FP16 has no inf/NaN (exponent 31 is an ordinary binade, max 2^17 - 2^6), so the scale range is
+// [2^(-14-OFFSET), 2^(17-OFFSET)) = [2^-23, 2^8): block amax from the 1e-4 clamp up to 448 * 2^8 = 114688.
+constexpr int32_t FUSED_DEQUANT_EXP_OFFSET = 9;
+constexpr uint16_t FP16_MAX_BITS = 0x7FFF;  // largest FPU FP16 (exponent 31 is finite)
+
+// FP32 scale -> FP16 bits of scale * 2^FUSED_DEQUANT_EXP_OFFSET, rounded to nearest (even) at FP16's 10 mantissa
+// bits; a power-of-two scale is exact. Zero (padding rows) stays zero. Out-of-range scales (outside the range
+// above, which no valid cast produces) saturate to the FP16 max or flush to zero.
+constexpr uint16_t fused_dequant_fp16_scale(uint32_t scale_fp32_bits) {
+    const uint32_t biased = (scale_fp32_bits >> 23) & 0xff;
+    const int32_t e = static_cast<int32_t>(biased) - 127 + FUSED_DEQUANT_EXP_OFFSET;
+    if (biased == 0 || e < -14) {
+        return 0;
+    }
+    if (e > 16) {
+        return FP16_MAX_BITS;
+    }
+    const uint32_t mantissa = scale_fp32_bits & 0x7fffff;
+    const uint32_t rounded = (mantissa + 0xfffu + ((mantissa >> 13) & 1u)) >> 13;  // may carry into the exponent
+    const uint32_t bits = (static_cast<uint32_t>(e + 15) << 10) + rounded;
+    return static_cast<uint16_t>(bits > FP16_MAX_BITS ? FP16_MAX_BITS : bits);
+}
+
 constexpr uint32_t align_cb_page(uint32_t bytes) {
     return ((bytes + CB_PAGE_ALIGNMENT - 1) / CB_PAGE_ALIGNMENT) * CB_PAGE_ALIGNMENT;
 }
@@ -114,6 +144,7 @@ enum : uint32_t {
     CB_KREQ,
     CB_KACK,
     SPLIT_K,
+    FUSED_DEQUANT,  // scaled KV without sink: compute fuses tilize x scale (FP16 scale tiles)
     END,
 };
 }  // namespace reader_ct_arg
@@ -153,6 +184,7 @@ enum : uint32_t {
     CB_RECV_MAX,
     CB_RECV_SUM,
     CB_MERGE_CTRL,
+    FUSED_DEQUANT,
     END,
 };
 }  // namespace writer_ct_arg
@@ -202,6 +234,7 @@ enum : uint32_t {
     CB_RECV_SUM,
     CB_MERGE_CTRL,
     CB_CORR2,
+    FUSED_DEQUANT,
     END,
 };
 }  // namespace compute_ct_arg
