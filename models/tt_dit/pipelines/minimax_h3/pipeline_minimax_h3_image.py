@@ -108,6 +108,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         dynamic_length: bool | None = None,
         max_sequence_length: int = 32768,
         precompute_adaln: bool = True,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         """`dynamic_length` (default: on whenever the fabric is a ring): the DiT takes the packed length as a runtime
         word, a request pads only to SP * TILE rows, and every length within a length class reuses one program set --
@@ -138,7 +139,10 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             raise ValueError("dynamic_length needs a ring topology (its fused AGMM / MMRS pins exist for a ring)")
         self.dynamic_length = dynamic_length
         self.bucket_denoise = not dynamic_length
-        self.use_persistent_ccl_buffers = False
+        # Persistent CCL buffers: without them every all-gather-matmul host-syncs the device first (150 per DiT
+        # step at 4K, ~0.45 ms of idle device each). The eager loops run inside `transient_ping_pong_buffers`, so
+        # the per-length pairs they add are freed after each request and do not accumulate across lengths.
+        self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dit_fsdp = dit_fsdp
         self.bucket_ladder = tuple(bucket_ladder)
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
@@ -195,7 +199,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             is_fsdp=True,
             load_weights=False,
             kv_gather_capacity=padded_sequence_length(self.arena_caps.prompt, self.sp_factor),
-            use_persistent_ccl_buffers=False,
+            use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
         )
         self._transformer = self._build_transformer()
         self._vae = MiniMaxH3Vae(
@@ -231,7 +235,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
             kv_gather_capacity=self._dit_kv_capacity,
-            use_persistent_ccl_buffers=False,
+            use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
             dynamic_length=self.dynamic_length,
         )
 
@@ -305,7 +309,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
                 ),
                 ccl_manager=self.encoder_ccl_manager,
                 kv_gather_capacity=padded_sequence_length(IMAGE_VISION_PATCH_CAP, self.sp_factor),
-                use_persistent_ccl_buffers=False,
+                use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
             )
         return self._vision_tower
 
