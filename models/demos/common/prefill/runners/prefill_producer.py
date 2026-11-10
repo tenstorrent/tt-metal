@@ -204,11 +204,26 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
             _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
             _pack_metadata(p.slot_id, p.actual_start, p.actual_end),
         )
+    pushes = _partial_runs_last(pushes)
     chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
     rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
     return rows, None, pack_forward_metadata(chunks, FORWARD_CHUNKS)
+
+
+def _partial_runs_last(pushes: list) -> list:
+    """``pushes`` with the slot runs that end in a partial chunk after the others: a partial chunk ahead of a non-empty
+    one has its pad rows routed through the MoE (packed_routed_pad_rows). Whole runs move, so each slot's chunks stay
+    one run in order (validate_chunks); only a run's last chunk can be partial."""
+    runs = []
+    for p in pushes:
+        if runs and runs[-1][-1].slot_id == p.slot_id:
+            runs[-1].append(p)
+        else:
+            runs.append([p])
+    runs.sort(key=lambda run: run[-1].actual_end - run[-1].actual_start < CHUNK_SIZE)
+    return [p for run in runs for p in run]
 
 
 def _shutdown_payload() -> tuple:

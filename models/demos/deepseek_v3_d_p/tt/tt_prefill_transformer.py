@@ -199,8 +199,15 @@ class TtPrefillTransformer(LightweightModule):
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
+        # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget). This model runs one chunk per forward.
+        forward_chunks: int = 1,
     ):
         super().__init__()
+        if forward_chunks != 1:
+            raise NotImplementedError(
+                f"TtPrefillTransformer has no packed forward yet; got forward_chunks={forward_chunks}"
+            )
+        self.forward_chunks = forward_chunks
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
@@ -512,6 +519,7 @@ class TtPrefillTransformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         seed_indexer_indices: Optional[ttnn.Tensor] = None,
+        chunks: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -572,6 +580,8 @@ class TtPrefillTransformer(LightweightModule):
             "norm" for h^0), otherwise None. No token is produced: the populated KV cache is
             the output.
         """
+        if chunks is not None:
+            raise NotImplementedError("TtPrefillTransformer has no packed forward yet; chunks must be None")
         # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
         # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
         # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.

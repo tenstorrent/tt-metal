@@ -51,6 +51,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
     routing_use_l1_small_for_semaphores = True
 
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > chunk size), eager: TtKimiK3Runtime.prefill_forward. No indexer,
+    # so supports_packed_forward_indexer_indices stays off. The runtime also runs packed forwards traced and acks
+    # them per chunk over D2H (test_k3_prefill_multiuser), but no runner-level run has driven those yet (the SC4
+    # packed variant), so the runner refuses them until one has: supports_packed_forward_trace and
+    # supports_packed_forward_d2h_acks stay off.
+    supports_packed_forward = True
+
     # Dedups the MLA KV cache only. PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated cache.
     supports_tp_shard_kv = True
     tp_shard_kv_default = True
@@ -178,7 +185,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
                 mesh_shape=params.mesh_shape,
                 sp_axis=params.sp_axis,
                 num_layers=schedule.num_mla_layers,
-                num_users=params.num_users,
+                # num_users, plus the traced packed forward's scratch slot when the runtime packs under trace. The KDA
+                # slabs below stay at num_users: their copies skip the scratch slot on device.
+                num_users=self.kv_cache_slots(params),
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
                 bank_aligned=True,
             )

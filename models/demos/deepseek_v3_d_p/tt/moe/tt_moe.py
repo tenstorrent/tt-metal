@@ -826,6 +826,7 @@ class TtMoe(LightweightModule):
             self.sd_manager_id = None
 
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+    _dump_packed_warned = False  # see the packed-forward branch below; warn once per process
     _overlap_forward_logged = False  # the first overlapped forward logs once per process
 
     def _dump_routing(
@@ -835,6 +836,7 @@ class TtMoe(LightweightModule):
         actual_start: int,
         cache_user_id: int,
         traced: bool,
+        packed: bool = False,
     ) -> None:
         """Env-gated (PREFILL_DUMP_ROUTING_DIR) host dump of the gate's per-token top-k selection.
 
@@ -867,6 +869,16 @@ class TtMoe(LightweightModule):
                 logger.warning(
                     "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
                     "routing dump skipped for all layers (run with use_trace=False to collect it)"
+                )
+            return
+        if packed:
+            # A packed forward's rows belong to several slots at several starts, so no single
+            # (slot, start) file name describes them and the analysis script would un-rotate them wrongly.
+            if not TtMoe._dump_packed_warned:
+                TtMoe._dump_packed_warned = True
+                logger.warning(
+                    "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is a packed forward; "
+                    "routing dump skipped (run one chunk per forward to collect it)"
                 )
             return
         try:
@@ -935,6 +947,8 @@ class TtMoe(LightweightModule):
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
+        packed: bool = False,
+        packed_padding_config: Optional[ttnn.Tensor] = None,
         residual: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
@@ -965,6 +979,11 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
+            packed: a packed forward (several chunks' rows back to back), whose padding comes from
+                ``packed_padding_config`` instead of actual_isl / actual_start, which describe one chunk.
+            packed_padding_config: a packed forward's padding config, a caller-owned [sp, 2]
+                (local_real_tokens, pad_side) tensor built once for every MoE layer of the forward (eager) or
+                refreshed before every replay (traced); None when every row is real. Used as is.
             residual: optional block residual, added to the output inside the MoE. Not allowed with
                 return_intermediates.
 
@@ -1023,7 +1042,12 @@ class TtMoe(LightweightModule):
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
         gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
-        if actual_isl is not None and gate_marks_padding:
+        if packed:
+            assert actual_isl is None and metadata is None, "a packed forward's padding is packed_padding_config"
+            assert padding_side == "right", "a packed forward is right-padded per chunk"
+            if gate_marks_padding:
+                padding_config = packed_padding_config
+        elif actual_isl is not None and gate_marks_padding:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a
@@ -1044,7 +1068,14 @@ class TtMoe(LightweightModule):
             input_ids=input_ids,
         )
 
-        self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
+        self._dump_routing(
+            indices,
+            scores,
+            actual_start or 0,
+            cache_user_id,
+            metadata is not None,
+            packed=packed,
+        )
 
         (
             tt_expert_offsets,
