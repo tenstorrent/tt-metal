@@ -53,8 +53,10 @@ are forwarded, and a leftover rank makes the job fail.
 The two-host classes cannot run on one host, but they are still a launcher concern (no DistributedContext).
 `run_teardown_multihost_tests.sh`, wired into the SC4 (4-host) `fabric-multihost-exabox` CI, runs the C probe
 across the hosts on the production `mpirun` line and asserts the teardown shape for a clean job, a rank death on
-a remote host (P20), and a remote hang bounded by the wall clock (P22 backstop); a lost remote daemon is the P19
-shape. Asserting the right exit code and that nothing is left on **any** host is what one host cannot see.
+a remote host (P20), a remote hang bounded by the wall clock (P22 backstop), and a lost remote daemon — the
+prted on a remote host SIGKILLed while the ranks wait, which with the plain launcher (tt-metal #60468) aborts
+the job non-zero instead of ending 0 with the launch-host rank orphaned (P19). Asserting the right exit code and
+that nothing is left on **any** host is what one host cannot see.
 
 ---
 

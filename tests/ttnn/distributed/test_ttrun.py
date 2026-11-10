@@ -1398,3 +1398,36 @@ class TestJobOwnership:
         rc = run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
         assert rc != 0
         assert time.time() - t0 < 10
+
+    def test_sweep_removes_a_stale_shm_segment_but_keeps_a_mapped_one(self):
+        import mmap
+        import socket
+
+        from ttnn.distributed.ttrun import sweep_stale_shm_segments
+
+        # The third piece of P11: before launching, tt-run removes this user's Open MPI shared-memory segments
+        # that no live process maps (what a killed job leaves behind), and keeps the ones a running job still maps.
+        host, uid = socket.gethostname(), os.getuid()
+        stale = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_stale_{os.getpid()}")
+        live = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_live_{os.getpid()}")
+        mm = fd = None
+        try:
+            stale.write_bytes(b"\0" * 4096)  # a leftover nobody maps
+            fd = os.open(str(live), os.O_RDWR | os.O_CREAT, 0o600)  # a segment this process maps, like a live job
+            os.ftruncate(fd, 4096)
+            mm = mmap.mmap(fd, 4096)
+
+            sweep_stale_shm_segments()
+
+            assert not stale.exists(), "the stale segment was not removed"
+            assert live.exists(), "a segment a live process maps must be kept"
+        finally:
+            if mm is not None:
+                mm.close()
+            if fd is not None:
+                os.close(fd)
+            for p in (stale, live):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass

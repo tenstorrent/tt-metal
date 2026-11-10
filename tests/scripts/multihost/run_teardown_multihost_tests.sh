@@ -20,7 +20,7 @@ done
 
 ROOT="${TT_METAL_HOME:-$(pwd)}"
 SRC="$ROOT/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_mpi_probe.c"
-MPIRUN="$(command -v mpirun-ulfm || command -v mpirun)"
+MPIRUN="$(command -v 'mpirun-ulfm' || command -v 'mpirun')"  # resolve the launcher; invocations below add --mca btl self,tcp
 MPICC="$(command -v mpicc)"
 PROBE="$(mktemp -d)/teardown_mpi_probe"
 "$MPICC" -O1 -o "$PROBE" "$SRC" || { echo "::error::could not compile the probe"; exit 1; }
@@ -62,6 +62,14 @@ PROBE_SCENARIO=victim_sigkill PROBE_VICTIM=$((NP-1)) PROBE_NP="$NP" timeout 120 
 
 # 3. a rank hangs on a remote host, bounded by the PRRTE wall clock (P22 backstop): exit 241, nothing left
 PROBE_SCENARIO=victim_hang PROBE_VICTIM=$((NP-1)) PROBE_NP="$NP" timeout 120 "$MPIRUN" --timeout 30 --report-state-on-timeout "${BASE[@]}" "$PROBE"; check "multihost_remote_hang_timeout" 1 $?
+
+# 4. the daemon on a remote host dies (P19): with the plain launcher (tt-metal #60468) PRRTE aborts a job whose
+#    prted is lost. While the ranks wait, SIGKILL the prted on the last host; the job must end non-zero and leave
+#    nothing on EITHER host (not exit 0 with the launch-host rank orphaned, the pre-fix shape). The --timeout is a
+#    backstop so the case cannot hang CI.
+REMOTE=$(tr ',' '\n' <<<"$HOSTS" | grep . | tail -1)
+( sleep 10; ssh -o BatchMode=yes "$REMOTE" "pkill -9 -x prted || pkill -9 -f '[p]rted'" 2>/dev/null || true ) &
+PROBE_SCENARIO=victim_hang PROBE_VICTIM=$((NP-1)) PROBE_NP="$NP" timeout 120 "$MPIRUN" --timeout 60 --report-state-on-timeout "${BASE[@]}" "$PROBE"; check "multihost_remote_daemon_death" 1 $?
 
 reap
 [ "$FAIL" -eq 0 ] && echo "=== teardown multihost: all cases passed" || echo "=== teardown multihost: FAILURES above"
