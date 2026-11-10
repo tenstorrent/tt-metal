@@ -254,7 +254,6 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/hostdev/fabric_edm_packet_header.hpp
-    inc/hostdev/fabric_direction_table_interface.h
     inc/hostdev/fabric_routing_path_interface.h
     inc/internal/hw_thread.h
     inc/internal/profiler/event_metadata.hpp
