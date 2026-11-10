@@ -344,12 +344,16 @@ static std::uint32_t pack_ch1_w_stride = 0;
 [[maybe_unused]] static std::uint32_t pack_w_next       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
 [[maybe_unused]] static std::uint8_t pack_w_last        = 0xff;
+// Set by a packer reconfigure and cleared by the next llk_pack_block or pack init: the first block after a reconfigure reads another form than the first block after an init.
+[[maybe_unused]] static bool pack_reconfigured          = false;
 // An init forgets the last output instead of invalidating the base: the first block after it packs as before, which programs the destination and invalidates the base, and a pack init before every block never programs the W stride.
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
-#define LLK_PACK_W_FORGET_OUTPUT() (pack_w_last = 0xff)
+#define LLK_PACK_W_FORGET_OUTPUT() (pack_w_last = 0xff, pack_reconfigured = false)
+#define LLK_PACK_W_RECONFIGURED() (pack_reconfigured = true)
 #else
 #define LLK_PACK_W_INVALIDATE() ((void)0)
 #define LLK_PACK_W_FORGET_OUTPUT() ((void)0)
+#define LLK_PACK_W_RECONFIGURED() ((void)0)
 #endif
 
 // Set by _llk_pack_fast_untilize_init_ (with the DEST format of its strides), cleared by set_packer_strides: the fast untilize leaves the pack program, the
@@ -621,6 +625,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+    LLK_PACK_W_RECONFIGURED();
 
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
     // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole

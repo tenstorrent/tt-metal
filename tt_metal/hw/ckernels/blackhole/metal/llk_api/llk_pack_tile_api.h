@@ -354,20 +354,6 @@ inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t ad
 }
 #endif
 
-// Small tiles: one to four faces of 1 to 16 rows, at most eight PACRs, full tile width.
-inline bool llk_pack_block_is_small(const std::uint32_t output_id) {
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    return get_output_tile_c_dim(output_id) == TILE_C_DIM && num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2) <= 8;
-}
-
-// Next to HiFi math the closed block-float pack makes the op read slower than per-tile packs, except for 4 and 8 tiles at HiFi4; HiFi2 never gained.
-template <MathFidelity math_fidelity>
-constexpr bool llk_pack_block_closed_pays(const bool block_float_out, const std::uint32_t ntiles) {
-    return math_fidelity == MathFidelity::LoFi || !block_float_out ||
-           (math_fidelity == MathFidelity::HiFi4 && (ntiles == 4 || ntiles == 8));
-}
-
 // Which outputs pack block float: two constant masks, so the per-call test is a shift, not a load and a format switch.
 constexpr std::uint32_t llk_pack_dst_bfp_mask(const std::uint32_t first) {
     std::uint32_t mask = 0;
@@ -384,9 +370,239 @@ inline bool llk_pack_dst_is_bfp(const std::uint32_t output_id) {
     return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
 }
 
-#ifndef LLK_PACK_BLOCK_MIN_TILES
-#define LLK_PACK_BLOCK_MIN_TILES 4
-#endif
+// Bfp4 and Bfp2 read differently from the other block-float outputs in the sweep: a row of their own.
+constexpr std::uint32_t llk_pack_dst_bfpa_mask(const std::uint32_t first) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t i = 0; i < 32; i++) {
+        if (pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp4) ||
+            pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp2)) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+inline bool llk_pack_dst_is_bfpa(const std::uint32_t output_id) {
+    constexpr std::uint32_t low = llk_pack_dst_bfpa_mask(0);
+    constexpr std::uint32_t high = llk_pack_dst_bfpa_mask(32);
+    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
+}
+
+// Which outputs pack Bfp8_b or Bfp8: two constant masks, like llk_pack_dst_bfp_mask.
+constexpr std::uint32_t llk_pack_dst_bfp8_mask(const std::uint32_t first) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t i = 0; i < 32; i++) {
+        if (pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+            pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Bfp8)) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+inline bool llk_pack_dst_is_bfp8(const std::uint32_t output_id) {
+    constexpr std::uint32_t low = llk_pack_dst_bfp8_mask(0);
+    constexpr std::uint32_t high = llk_pack_dst_bfp8_mask(32);
+    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
+}
+
+// Rows of the form tables: tiles of 16x16, 16x32, 8x32, 4x32 and 1x32 (a face of 16, 8, 4 or fewer rows), Bfp8_b and Bfp8, Bfp4_b and Bfp2_b, Bfp4 and Bfp2, 4 byte datums, the other plain formats.
+inline std::uint32_t llk_pack_block_class(const std::uint32_t output_id) {
+    const std::uint32_t rows = get_output_face_r_dim(output_id);
+    if (get_output_num_faces(output_id) != 4 || rows != FACE_R_DIM) {
+        if (rows == FACE_R_DIM) {
+            return get_output_num_faces(output_id) == 1 ? 0 : 1;
+        }
+        return rows >= 8 ? 2 : (rows >= 4 ? 3 : 4);
+    }
+    if (llk_pack_dst_is_bfpa(output_id)) {
+        return 7;
+    }
+    if (llk_pack_dst_is_bfp(output_id)) {
+        return llk_pack_dst_is_bfp8(output_id) ? 5 : 6;
+    }
+    return llk_pack_dst_is_wide(output_id) ? 8 : 9;
+}
+
+// Which outputs pack Int8 or UInt8: two constant masks. From a 16 bit DEST the per-tile pack writes two faces of them and the block forms four, so they stay per tile there.
+constexpr std::uint32_t llk_pack_dst_int8_mask(const std::uint32_t first) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t i = 0; i < 32; i++) {
+        if (pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::Int8) ||
+            pack_dst_format[first + i] == static_cast<std::uint32_t>(DataFormat::UInt8)) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+inline bool llk_pack_dst_is_int8(const std::uint32_t output_id) {
+    constexpr std::uint32_t low = llk_pack_dst_int8_mask(0);
+    constexpr std::uint32_t high = llk_pack_dst_int8_mask(32);
+    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
+}
+
+// Which outputs, as inputs, are 32 bit (Float32, Int32, UInt32; the output CBs too, for their unpack_src_format is the output's): two constant masks.
+constexpr std::uint32_t llk_pack_src32_mask(const std::uint32_t first) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t i = 0; i < 32; i++) {
+        if (unpack_src_format[first + i] == static_cast<std::uint32_t>(DataFormat::Float32) ||
+            unpack_src_format[first + i] == static_cast<std::uint32_t>(DataFormat::Int32) ||
+            unpack_src_format[first + i] == static_cast<std::uint32_t>(DataFormat::UInt32)) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+// A 32 bit CB next to a 32 bit DEST may unpack to DEST, where the unpacker bounds the loop and a block pack steals its L1 reads: those kernels take the forms no sweep read slower, the others the datacopy tables.
+template <bool is_fp32_dest_acc_en>
+inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);
+
+// Form of a block per tile count (above 16: the entry of 16): T per-tile packs, B the block that programs the output, W the block with the W offset, where no cell of the row read slower in the tt-llk sweeps.
+// Columns: half sync 16 and 32 bit DEST, full sync 16 and 32 bit DEST; the first block of an output takes the init or the reconfigure table, the blocks that continue it the next table. The _dc tables hold the rows of the datacopy family.
+constexpr char llk_pack_init_form[10][4][17] = {
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 4x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 1x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBTBTTTTTTTTTTT"},  // Bfp4, Bfp2
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // 4 byte datums
+    {"TBBBBBBBBBBBBBBB", "TBBTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other
+};
+constexpr char llk_pack_reconf_form[10][4][17] = {
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 4x32
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 1x32
+    {"TBBBBBBBBBBBBBBB", "TBTBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
+    {"TBBBBBBBBBBBBBBB", "TBBTTTTTTTTTTTTT", "TBBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp4, Bfp2
+    {"BBBBBBBBBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // 4 byte datums
+    {"BBBBBBBBBBBBBBBB", "BBTTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other
+};
+constexpr char llk_pack_next_form[10][4][17] = {
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 16x16
+    {"TWWWBWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBBBBBWWWWW", "TWWBBBBBBBBBBBBB"},  // tile 16x32
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 8x32
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 4x32
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBWWWWWWWWW"},  // tile 1x32
+    {"TWBBBBWWWWWWWWWW", "TBWTTTTTTTTTTTTT", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp8_b, Bfp8
+    {"TWBBWWWWWWWWWWWW", "TBBBBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TBWWWWWWWWWWWWWW"},  // Bfp4_b, Bfp2_b
+    {"TWBBWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp4, Bfp2
+    {"BWWWBBBBBBBBBBBB", "TBWBBBBBBBBBBBBB", "BWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // 4 byte datums
+    {"BBBWWWWWWWWWWWWW", "TBBTTTTTTTTTTTTT", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other
+};
+constexpr char llk_pack_init_form_dc[10][4][17] = {
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 4x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 1x32
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
+    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBTBTTTTTTTTTTT"},  // Bfp4, Bfp2
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // 4 byte datums
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other
+};
+constexpr char llk_pack_reconf_form_dc[10][4][17] = {
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 8x32
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 4x32
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 1x32
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
+    {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // Bfp4, Bfp2
+    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // 4 byte datums
+    {"BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"},  // other
+};
+constexpr char llk_pack_next_form_dc[10][4][17] = {
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 16x16
+    {"TWWWBWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBBBBBBWWWWW", "TWWBBBBBBBBBBBBB"},  // tile 16x32
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 8x32
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 4x32
+    {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBWWWWWWWWW"},  // tile 1x32
+    {"TWBBBBWWWWWWWWWW", "TWBBBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp8_b, Bfp8
+    {"TWBBWWWWWWWWWWWW", "TWBBBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp4_b, Bfp2_b
+    {"TWBBWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp4, Bfp2
+    {"BWWWBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "BWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // 4 byte datums
+    {"BBBWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other
+};
+
+// Behind matmul math a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the block (no_block) or the W offset (no_w) at n tiles,
+// or, with the K given, takes the W offset (take_w). Rows: LoFi K not given, K 1, K above 1, HiFi2 to HiFi4 together (take_w without the first); one entry per row of the form tables.
+constexpr std::uint64_t llk_pack_mm_no_block[2][4][10] = {
+    {  // datacopy family
+        {0x00000000000800D8, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0x00000000000800D8, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
+        {0x00000000000A00AA, 0x00000000000A00AA, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0},  // HiFi
+    },
+    {  // 32 bit input family
+        {0x00000000000C00D8, 0x00000000000C00D8, 0, 0x0000000000040020, 0x0000000000080000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
+        {0, 0, 0, 0, 0, 0x0000000000080000, 0, 0, 0, 0},  // LoFi, K 1
+        {0x00000000000C00D8, 0x00000000000C00D8, 0, 0x0000000000040020, 0x0000000000080000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
+        {0x00000000000E00AA, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0},  // HiFi
+    },
+};
+constexpr std::uint64_t llk_pack_mm_no_w[2][4][10] = {
+    {  // datacopy family
+        {0x00000000000800D8, 0x00000000000800D8, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K not given
+        {0, 0, 0, 0, 0x0002000000000000, 0, 0, 0, 0, 0},  // LoFi, K 1
+        {0x00000000000800D8, 0x00000000000800D8, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0x0000000000000080, 0x00000000000000A0},  // LoFi, K above 1
+        {0x00000000000E00AE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
+    },
+    {  // 32 bit input family
+        {0x00000000000C00D8, 0x00000000000C00D8, 0x0000000000040000, 0x0000000000040060, 0x0002000000080080, 0x0000000A000E00B8, 0x0002000A00080028, 0x00000002000000E8, 0x00000000000A0080, 0x00000000000200A0},  // LoFi, K not given
+        {0, 0, 0, 0, 0x0002000000000000, 0x0000000000080000, 0x0000000000080000, 0, 0, 0},  // LoFi, K 1
+        {0x00000000000C00D8, 0x00000000000C00D8, 0x0000000000040000, 0x0000000000040060, 0x0002000000080080, 0x0000000A000E00B8, 0x0002000A00080028, 0x00000002000000E8, 0x00000000000A0080, 0x00000000000200A0},  // LoFi, K above 1
+        {0x00000000000E00AE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00EE, 0x00000000000E0062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002},  // HiFi
+    },
+};
+constexpr std::uint64_t llk_pack_mm_take_w[2][3][10] = {
+    {  // datacopy family
+        {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C003C, 0x00000000000C000C, 0x000000000000000C, 0x00000000000000F0, 0x0000000600000006},  // LoFi, K 1
+        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000040004, 0, 0x0000000000000004, 0x0000000000000070, 0x0000000600000000},  // LoFi, K above 1
+        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x00000000000C001C, 0, 0, 0x00000000000000B0, 0x0000000600000004},  // HiFi
+    },
+    {  // 32 bit input family
+        {0x00F8FF7800000000, 0x00F807F800000010, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000003C, 0x000200000006000C, 0x000000000000000C, 0x00000000000A00F0, 0x00000006000E0006},  // LoFi, K 1
+        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x0000000000000004, 0x0000000000060000, 0x0000000000000004, 0x0000000000000070, 0x00000006000C0000},  // LoFi, K above 1
+        {0x00F8FF7800000000, 0x00F807F800000000, 0x00F8FF3800000000, 0x00F8FF3800000000, 0x0078FF3800000000, 0x000000000000001C, 0x0002000000000000, 0, 0x00000000000A00B0, 0x00000006000C0004},  // HiFi
+    },
+};
+
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32_t ntiles, const char (*table)[4][17], const bool next) {
+    const std::uint32_t row = llk_pack_block_class(output_id);
+    const std::uint32_t column = (DST_SYNC_MODE == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);
+    const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;
+    if (!is_fp32_dest_acc_en && llk_pack_dst_is_int8(output_id)) {
+        return 'T';
+    }
+    const char form = table[row][column][count];
+    constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;
+    constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));
+    const std::uint32_t bit = column * 16 + count;
+    char out = form;
+    if (out != 'T' && ((llk_pack_mm_no_block[family][group][row] >> bit) & 1) != 0) {
+        out = 'T';
+    } else if (out == 'W' && ((llk_pack_mm_no_w[family][group][row] >> bit) & 1) != 0) {
+        out = 'B';
+    }
+    if constexpr (matmul_kt != 0) {
+        if (next && out != 'W' && ((llk_pack_mm_take_w[family][group - 1][row] >> bit) & 1) != 0) {
+            out = 'W';
+        }
+    }
+    return out;
+}
+
+template <bool is_fp32_dest_acc_en>
+inline const char (*llk_pack_form_table(const char (*u)[4][17], const char (*dc)[4][17]))[4][17] {
+    return llk_pack_src32_family<is_fp32_dest_acc_en> ? u : dc;
+}
 
 // The per-tile packs of a block that takes none of the block forms: main's loop.
 template <bool is_fp32_dest_acc_en>
@@ -398,17 +614,15 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
     }
 }
 
-// guard_dest_straddle: for a caller whose start tile index is not a constant 0: two block-float tiles that straddle a four tile boundary of DEST (tiles 3 and 4)
-// read 6 cycles slower as a closed block than packed one by one, so they take the per-tile path. Off by default, the check costs instructions in the callers that pass 0.
-// Out of line, a short block pays the call and the descriptor checks (+0.7 % on a groupnorm).
-template <bool is_fp32_dest_acc_en, bool guard_dest_straddle = false>
+// guard_dest_straddle: two block-float tiles at DEST tiles 3 and 4 read 6 cycles slower closed than per tile, so a caller with a variable start tile takes the per-tile path.
+// Off by default, the check costs instructions in the callers that pass 0.
+// matmul_kt: the K tiles per output block of the matmul that filled DEST, where the caller knows it at compile time; 0 takes the forms no K reads slower than per tile.
+template <bool is_fp32_dest_acc_en, bool guard_dest_straddle = false, std::uint32_t matmul_kt = 0>
 __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
 #ifndef LLK_PACK_W_OFFSET
     _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
 #endif
-    // Full tiles in blocks of fewer tiles read slower than the per-tile pack in the tt-llk sweep; tiny tiles read faster as a closed block from two tiles on.
-    const bool block_form = ntiles >= LLK_PACK_BLOCK_MIN_TILES || (ntiles >= 2 && llk_pack_block_is_small(output_id));
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
@@ -425,27 +639,29 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    // Block-float outputs that keep the per-tile pack (HiFi, see llk_pack_block_closed_pays) skip the layout checks of the block forms.
-    if (!block_form || (llk_pack_dst_is_bfp(output_id) && !llk_pack_block_closed_pays<MATH_FIDELITY>(true, ntiles))) {
-        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
-        return;
-    }
 #ifdef LLK_PACK_W_OFFSET
-    // Right after an init the plain block is slower than the per-tile pack for 32 bit outputs (Float32, Int32, UInt32,
-    // Tf32) up to 8 tiles and for a 4 tile block-float block, and the closed block of two small tiles is slower than
-    // their per-tile packs: the first block of an output takes the per-tile pack there (the next one the W offset).
     const bool first_block = pack_w_last != output_id;
-    if (first_block &&
-        ((ntiles <= 8 && datum_size_in_bytes(pack_dst_format[output_id]) == 4) ||
-         (ntiles == 4 && llk_pack_dst_is_bfp(output_id)) || (ntiles == 2 && llk_pack_block_is_small(output_id)))) {
-        if (pack_w_last != output_id) {
-            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
-            pack_w_last = output_id;
-        }
+    const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(
+        output_id,
+        ntiles,
+        first_block ? (pack_reconfigured ? llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc)
+                                         : llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc))
+                    : llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_next_form, llk_pack_next_form_dc),
+        !first_block);
+    pack_reconfigured = false;
+    pack_w_last = output_id;
+#else
+    const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(
+        output_id, ntiles, llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc), false);
+#endif
+    if (form == 'T') {
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
-#endif
+    const bool take_w = form == 'W';
+    if (!take_w) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+    }
     if (llk_pack_block_is_contiguous(output_id)) {
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
@@ -453,7 +669,7 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
 #ifdef LLK_PACK_W_OFFSET
         std::uint32_t out_tile = 0;
-        if (llk_pack_w_take(output_id, pack_tile_addr, get_local_cb_interface(output_id).fifo_page_size, ntiles, out_tile)) {
+        if (take_w && llk_pack_w_take(output_id, pack_tile_addr, get_local_cb_interface(output_id).fifo_page_size, ntiles, out_tile)) {
             _llk_pack_block_w_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles);
         } else {
             _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>>(start_tile_index, pack_tile_addr, ntiles);
@@ -470,18 +686,8 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
 #ifdef LLK_PACK_W_OFFSET
-        // Four Bfp8_b tiles from an fp32 DEST at half sync: the W block writes take L1 bank cycles from the unpacker's
-        // Float32 reads (+1 %), the closed block without W does not.
-        if (is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf && ntiles == 4 &&
-            pack_dst_format[output_id] == static_cast<std::uint32_t>(DataFormat::Bfp8_b)) {
-            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
-            pack_w_valid = false;
-            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(
-                start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
-            return;
-        }
         std::uint32_t out_tile = 0;
-        if (llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile)) {
+        if (take_w && llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile)) {
             _llk_pack_block_closed_w_mop_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles, get_output_num_faces(output_id));
         } else {
             _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(

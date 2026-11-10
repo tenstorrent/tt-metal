@@ -234,20 +234,16 @@ inline void pack_block_call(
     std::uint32_t num_tiles,
     std::uint32_t tile_stride,
     bool bfp,
-    std::uint32_t out_tile = 0,
-    bool closed_no_w       = false)
+    std::uint32_t out_tile = 0)
 {
     if constexpr (pack_block_far)
     {
-        if (!closed_no_w)
+        if (out_tile < w_base_tile || !_llk_pack_block_w_reach_(out_tile - w_base_tile + num_tiles, w_page_words))
         {
-            if (out_tile < w_base_tile || !_llk_pack_block_w_reach_(out_tile - w_base_tile + num_tiles, w_page_words))
-            {
-                _llk_pack_block_w_init_(address, w_page_words << 4);
-                w_base_tile = out_tile;
-            }
-            out_tile -= w_base_tile;
+            _llk_pack_block_w_init_(address, w_page_words << 4);
+            w_base_tile = out_tile;
         }
+        out_tile -= w_base_tile;
     }
 #line 216
     if constexpr (pack_block_w)
@@ -286,11 +282,7 @@ inline void pack_block_call(
     }
     else
     {
-        if (bfp && closed_no_w)
-        {
-            _llk_pack_block_closed_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
-        }
-        else if (bfp)
+        if (bfp)
         {
             _llk_pack_block_closed_w_mop_<sync, fp32>(dst_index, out_tile, num_tiles);
         }
@@ -317,9 +309,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
-    // llk_pack_block takes the closed block without W here (llk_pack_tile_api.h), so the W base is not programmed
-    [[maybe_unused]] const bool closed_no_w_cell =
-        is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
@@ -347,7 +336,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_pack_block_fast_init_<false>();
             }
-            if (!pack_block_fast && !pack_block_plain && (pack_block_w || !closed_no_w_cell))
+            if (!pack_block_fast && !pack_block_plain)
             {
                 _llk_pack_block_w_init_(L1_ADDRESS(buffer_Res[0]), (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4);
             }
@@ -381,8 +370,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
-                                    res_tile_idx,
-                                    closed_no_w_cell);
+                                    res_tile_idx);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
@@ -425,8 +413,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
-                                    res_tile_idx,
-                                    closed_no_w_cell);
+                                    res_tile_idx);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
