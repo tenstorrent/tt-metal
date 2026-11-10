@@ -2,20 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block top-k routing for block-sparse ring attention, as two ``ttnn.generic_op`` programs.
+"""Block top-k routing for block-sparse ring attention, as one ``ttnn.generic_op`` program.
 
 Per device, from the local Q/K/V shards ``[1, H, rows, D]`` of an SP ring of ``S`` devices (``rows`` a multiple of 32,
 cut into 64-row blocks, the last one possibly 32 rows), produces the inputs of ``ttnn.transformer.sparse_ring_sdpa``
-and the coarse branch:
+and the coarse branch. The program's reader, compute and writer (``kernels/block_topk_route_*.cpp``) run two phases on
+every core but the senders:
 
-* ``block_pool`` (``kernels/block_pool_*.cpp``): per-block means of Q, K and V from per-block valid counts, into
+* pool (``kernels/block_pool_*.cpp``): per-block means of Q, K and V from per-block valid counts, into
   ``q_bar [1, H, nb_pad, D]`` and this device's shard slot of the gathered ``kv_g [1, 2H, S * nb_pad, D]`` (K heads,
-  then V heads), the CCL manager's ping-pong buffer.
-* ``block_topk_route`` (``kernels/block_topk_route_*.cpp``): sender cores (``block_pool_send.cpp``, one per link and
-  direction) push this device's shard over the fabric to the same slot of every peer's ``kv_g`` and bump that shard's
-  arrival slot on the peer. The other cores score shards as they arrive, this device's first; per (head, 32 local Q
-  blocks): fp32 scores against every global block, a running top-k over the candidate columns, the k-th value, the
-  uint32 block mask and, optionally, the coarse attention output ``softmax(Q̄ K̄ᵀ / sqrt(D)) V̄`` per block.
+  then V heads), the CCL manager's ping-pong buffer. K and V units are pooled first, round by round; sender cores
+  (``block_pool_send.cpp``, one per link and direction) push each round's units over the fabric to the same slot of
+  every peer's ``kv_g`` while the Q units are still pooled, then bump this shard's arrival slot on the peer.
+* route, once every pool writer has signalled a program-wide barrier: shards are scored as they arrive, this device's
+  first; per (head, 32 local Q blocks): fp32 scores against every global block, a running top-k over the candidate
+  columns, the k-th value, the uint32 block mask and, optionally, the coarse attention output
+  ``softmax(Q̄ K̄ᵀ / sqrt(D)) V̄`` per block.
 
 Global padded block ``s * nb_pad + b`` is block ``b`` of shard ``s``. A scored Q block keeps every candidate block
 whose fp32 score reaches its k-th largest candidate score (ties at the k-th value are all kept) plus every exempt
@@ -148,13 +150,8 @@ class BlockTopKRouting:
         rows: int,
         k_max: int,
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        column_order: str = "arrival",
     ) -> None:
-        """``column_order``: "arrival" scores this device's shard first, then the others by hop distance, as they
-        arrive; "global" scores shards 0..S-1. The mask is the same either way."""
         assert rows % TILE == 0 and head_dim % TILE == 0, (rows, head_dim)
-        assert column_order in ("arrival", "global"), column_order
-        self.column_order = column_order
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
@@ -197,7 +194,6 @@ class BlockTopKRouting:
         )
 
         self._q_bar: ttnn.Tensor | None = None
-        self._pool_progs: ttnn.MeshProgramDescriptor | None = None
         self._route_progs: dict[bool, tuple] = {}
 
     # ------------------------------------------------------------------ per-request constants
@@ -342,60 +338,18 @@ class BlockTopKRouting:
             mesh[where] = prog
         return mesh
 
-    # ------------------------------------------------------------------ block_pool
-
-    def _pool_programs(self, x: ttnn.Tensor, q_bar: ttnn.Tensor, kv_g: ttnn.Tensor) -> ttnn.MeshProgramDescriptor:
-        """The pool program per ring position, in ring order."""
-        H, D = self.num_heads, self.head_dim
-        RT, DT, NBPT, NBGT = self.rows // TILE, D // TILE, self.nb_pad // TILE, self.n_blocks_pad // TILE
-        nx, ny, cores = self._cores()
-        ct = [H, RT, DT, NBPT, nx, ny, 3 * H * NBPT, nx * ny, NBGT]
-        acc_in = self._accessor_args(x, x, x, self.pool_counts.value)
-        acc_out = self._accessor_args(q_bar, kv_g)
-        bf16 = ttnn.bfloat16
-        cbs = [
-            self._cb(0, 3 * 4 * DT, cores, TILE_BYTES_BF16, bf16),
-            self._cb(2, 3 * 4, cores, TILE_BYTES_BF16, bf16),
-            self._cb(3, 1, cores, TILE_BYTES_BF16, bf16),
-            self._cb(4, 1, cores, self.nb_pad * 4, ttnn.uint32),
-            self._cb(5, 32, cores, TILE_BYTES_BF16, bf16),
-            self._cb(16, 2 * DT, cores, TILE_BYTES_BF16, bf16),
-        ]
-        progs = []
-        for r in range(self.sp_factor):
-            kernels = [
-                self._kernel("block_pool_reader.cpp", cores, ct + acc_in, [0] * 4, ttnn.ReaderConfigDescriptor()),
-                self._kernel("block_pool_writer.cpp", cores, ct + acc_out, [0, 0, r], ttnn.WriterConfigDescriptor()),
-                self._kernel("block_pool_compute.cpp", cores, ct, [], self._compute_config(full_sync=False)),
-            ]
-            progs.append((self._ring_position(r), ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)))
-        return self._mesh_program(progs)
-
-    def _run_pool(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, q_bar: ttnn.Tensor, kv_g: ttnn.Tensor) -> None:
-        assert tuple(q.shape) == (1, self.num_heads, self.rows, self.head_dim), (q.shape, self.rows)
-        if self._pool_progs is None:
-            self._pool_progs = self._pool_programs(q, q_bar, kv_g)
-        counts = self.pool_counts.value
-        reader_args = [q.buffer_address(), k.buffer_address(), v.buffer_address(), counts.buffer_address()]
-        q_bar_addr, kv_addr = q_bar.buffer_address(), kv_g.buffer_address()
-        for r, (_, prog) in enumerate(self._pool_progs):
-            prog.kernels[0].common_runtime_args = reader_args
-            prog.kernels[1].common_runtime_args = [q_bar_addr, kv_addr, r]
-        ttnn.generic_op([q, k, v, counts, q_bar, kv_g], self._pool_progs)
+    # ------------------------------------------------------------------ program
 
     def pool(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Block means and their gather into fresh tensors: ``q_bar [1, H, nb_pad, D]`` and
-        ``kv_g [1, 2H, S * nb_pad, D]``. The route program runs too, its mask dropped: its senders perform the gather
-        and its gate consumes the call's arrival counts, so the next call waits for its own shards."""
+        ``kv_g [1, 2H, S * nb_pad, D]``. The route phase runs too, its mask dropped: its gate consumes the call's arrival
+        counts, so the next call waits for its own shards."""
         H, D = self.num_heads, self.head_dim
         q_bar = self._alloc([1, H, self.nb_pad, D])
         kv_g = self._alloc([1, 2 * H, self.n_blocks_pad, D])
-        self._run_pool(q, k, v, q_bar, kv_g)
-        mask, _ = self._run_route(q_bar, kv_g, coarse=False)
+        mask, _ = self._run(q, k, v, q_bar, kv_g, coarse=False)
         ttnn.deallocate(mask)
         return q_bar, kv_g
-
-    # ------------------------------------------------------------------ block_topk_route
 
     def _sender_cores(self) -> list[ttnn.CoreCoord]:
         """The last ``2 * num_links`` cores of the grid: per link a forward and a backward sender."""
@@ -404,14 +358,21 @@ class BlockTopKRouting:
         assert n < nx and ny > 1, (n, nx, ny)
         return [ttnn.CoreCoord(x, ny - 1) for x in range(nx - n, nx)]
 
-    def _route_programs(
-        self, q_bar: ttnn.Tensor, kv_g: ttnn.Tensor, mask: ttnn.Tensor, coarse_out: ttnn.Tensor, coarse: bool
-    ) -> tuple[ttnn.MeshProgramDescriptor, list[tuple[list[int], list[int]]]]:
-        """The route program per ring position, or per device where the fabric connection args of a ring position's
-        devices differ, and, in the same order, the reader's common args after the addresses and the writer's column
-        order. The route runs on every core but the senders, which push this device's shard to the peers."""
+    def _programs(
+        self,
+        x: ttnn.Tensor,
+        q_bar: ttnn.Tensor,
+        kv_g: ttnn.Tensor,
+        mask: ttnn.Tensor,
+        coarse_out: ttnn.Tensor,
+        coarse: bool,
+    ) -> tuple[ttnn.MeshProgramDescriptor, list[tuple[list[int], list[int], list[int]]]]:
+        """The program per ring position, or per device where the fabric connection args of a ring position's devices
+        differ, and, in the same order, the reader's common args after the addresses, the writer's after the addresses
+        and the writer's after ``q_bar`` and ``kv_g``. Pool and route run on every core but the senders, which push
+        this device's shard to the peers."""
         H, D, L = self.num_heads, self.head_dim, self.num_links
-        DT, NBPT, NBGT, KT = D // TILE, self.nb_pad // TILE, self.n_blocks_pad // TILE, self.kt
+        RT, DT, NBPT, NBGT, KT = self.rows // TILE, D // TILE, self.nb_pad // TILE, self.n_blocks_pad // TILE, self.kt
         MC = min(MASK_PAGE_TILES, NBGT)
         assert NBGT % MC == 0 and DT <= 4, (NBGT, DT)
         nx, ny, grid = self._cores()
@@ -423,13 +384,15 @@ class BlockTopKRouting:
             ]
         )
         send_cores = ttnn.CoreRangeSet([ttnn.CoreRange(senders[0], senders[-1])])
+        ncores = nx * ny - len(senders)
         units = H * NBPT
         scale = _f32_bits(1.0 / math.sqrt(D))
-        ct = [H, NBPT, NBGT, DT, KT, MC, nx, ny, units, int(coarse), scale, self.rows // TILE, nx * ny - len(senders)]
+        ct = [H, NBPT, NBGT, DT, KT, MC, nx, ny, units, int(coarse), scale, RT, ncores]
+        pool_ct = [H, RT, DT, NBPT, nx, ny, 3 * H * NBPT, ncores, NBGT]
         ins = self._route_inputs(q_bar, kv_g)
-        acc_in = self._accessor_args(*ins)
+        reader_ct = ct + self._accessor_args(*ins) + pool_ct + self._accessor_args(x, x, x, self.pool_counts.value)
         outs = [mask, coarse_out, self.kth_index.value]
-        acc_out = self._accessor_args(*outs)
+        writer_ct = ct + self._accessor_args(*outs) + pool_ct + self._accessor_args(q_bar, kv_g)
         bf16, f32 = ttnn.bfloat16, ttnn.float32
         mask_page = TILE * MC * TILE * 4
         sizes = [
@@ -449,12 +412,17 @@ class BlockTopKRouting:
         if coarse:
             sizes += [(10, 2, f32), (11, 2 * DT, bf16), (12, 1, f32), (13, 1, f32), (14, 1, f32), (15, 1, f32)]
             sizes += [(17, 2 * DT, bf16), (18, 1, f32), (22, DT, bf16), (29, NBGT, f32)]
+        # The pool phase's buffers: data, pooling tiles, zero tile, full-block pooling table, output.
+        sizes += [(3, 3 * 4 * DT, bf16), (4, 3 * 4, bf16), (5, 1, bf16), (27, 32, bf16), (30, 2 * DT, bf16)]
         cbs = [self._cb(i, n, cores, TILE_BYTES_FP32 if dt == f32 else TILE_BYTES_BF16, dt) for i, n, dt in sizes]
         cbs.append(self._cb(16, 2, cores, mask_page, ttnn.uint32))
         cbs.append(self._cb(21, 1, cores, KTH_INDEX_WORDS * 4, ttnn.uint32))
+        cbs.append(self._cb(23, 1, cores, self.nb_pad * 4, ttnn.uint32))
         packet_tiles = min(4, ttnn.get_tt_fabric_max_payload_size_bytes() // TILE_BYTES_BF16)
-        cbs.append(self._cb(6, 2 * packet_tiles, send_cores, TILE_BYTES_BF16, bf16))
-        total = sum(n * (TILE_BYTES_FP32 if dt == f32 else TILE_BYTES_BF16) for _, n, dt in sizes) + 2 * mask_page
+        assert DT <= packet_tiles, (DT, packet_tiles)
+        cbs.append(self._cb(6, 2 * DT, send_cores, TILE_BYTES_BF16, bf16))
+        total = sum(n * (TILE_BYTES_FP32 if dt == f32 else TILE_BYTES_BF16) for _, n, dt in sizes)
+        total += 2 * mask_page + KTH_INDEX_WORDS * 4 + self.nb_pad * 4
         if total > L1_CB_BUDGET:
             raise ValueError(f"block_topk_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET})")
         config = self._compute_config(full_sync=True)
@@ -463,19 +431,29 @@ class BlockTopKRouting:
         for i in (7, 8, 9, 19, 20, 24, 25, 26, 28):
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
         config.unpack_to_dest_mode = modes
-        # Semaphore 0: the gate's release count, multicast from core (0, 0) to the full grid as the shards come in.
-        semaphores = [ttnn.SemaphoreDescriptor(id=0, core_ranges=grid, initial_value=0)]
+        # 0: the gate's release count, multicast from core (0, 0) as the shards come in. 1: the pool-to-route barrier,
+        # one increment per pool core on the gate, then multicast by it. 2 on: per pool round, the K/V units written,
+        # counted on the sender cores.
+        kv_rounds = -(-2 * H * NBPT // ncores)
+        semaphores = [
+            ttnn.SemaphoreDescriptor(id=0, core_ranges=grid, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=1, core_ranges=grid, initial_value=0),
+        ]
+        semaphores += [
+            ttnn.SemaphoreDescriptor(id=2 + k, core_ranges=send_cores, initial_value=0) for k in range(kv_rounds)
+        ]
         lo = self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
         hi = self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(nx - 1, ny - 1))
+        sender_nocs = [self.mesh_device.worker_core_from_logical_core(c) for c in senders]
         slots = [ttnn.get_global_semaphore_address(s) for s in self.arrived]
-        send_ct = [NBPT, NBGT, DT, packet_tiles] + self._accessor_args(kv_g)
-        shard_tiles = 2 * H * NBPT * DT
+        send_ct = [H, RT, NBPT, NBGT, DT, ncores, L] + self._accessor_args(kv_g)
 
         progs, tails = [], []
         for r in range(self.sp_factor):
             hop = self._hop_order(r)
-            order = hop if self.column_order == "arrival" else list(range(self.sp_factor))
-            reader_tail = [lo.x, lo.y, hi.x, hi.y, *hop, *order, *slots, *self._expected_arrivals(r)]
+            reader_tail = [lo.x, lo.y, hi.x, hi.y, *hop, *slots, *self._expected_arrivals(r)]
+            writer_tail = [*hop, lo.x, lo.y]
+            pool_tail = [r, len(senders), *[a for c in sender_nocs for a in (c.x, c.y)]]
             targets = self._targets(r)
             slot = ttnn.get_global_semaphore_address(self.arrived[r])
             built = []
@@ -483,28 +461,24 @@ class BlockTopKRouting:
                 send_args = ttnn.RuntimeArgs()
                 for i, core in enumerate(senders):
                     link, step = i // 2, 1 if i % 2 == 0 else -1
-                    start, end = link * shard_tiles // L, (link + 1) * shard_tiles // L
-                    mid = (start + end) // 2
-                    ranges = []
-                    for d, half in targets[step]:
-                        ranges += [d, *((start, mid) if step == 1 else (mid, end))] if half else [d, start, end]
-                    send_args[core.x][core.y] = [r, slot, start, end, len(ranges) // 3, *ranges]
+                    pairs = [a for d, half in targets[step] for a in (d, int(half))]
+                    send_args[core.x][core.y] = [r, slot, link, i % 2, len(pairs) // 2, *pairs]
                 kernels = [
                     self._kernel(
                         "block_topk_route_reader.cpp",
                         cores,
-                        ct + acc_in,
-                        [0] * len(ins) + reader_tail,
+                        reader_ct,
+                        [0] * (len(ins) + len(reader_tail) + 4),
                         ttnn.ReaderConfigDescriptor(),
                     ),
                     self._kernel(
                         "block_topk_route_writer.cpp",
                         cores,
-                        ct + acc_out,
-                        [0] * len(outs) + order,
+                        writer_ct,
+                        [0] * (len(outs) + len(writer_tail) + 2 + len(pool_tail)),
                         ttnn.WriterConfigDescriptor(),
                     ),
-                    self._kernel("block_topk_route_compute.cpp", cores, ct, [], config),
+                    self._kernel("block_topk_route_compute.cpp", cores, ct + pool_ct, [], config),
                     self._kernel(
                         "block_pool_send.cpp",
                         send_cores,
@@ -532,7 +506,7 @@ class BlockTopKRouting:
                 built = [(self._ring_position(r), built[0][1], None)]
             for where, prog, _ in built:
                 progs.append((where, prog))
-                tails.append((reader_tail, order))
+                tails.append((reader_tail, writer_tail, pool_tail))
         return self._mesh_program(progs), tails
 
     def _route_inputs(self, q_bar: ttnn.Tensor, kv_g: ttnn.Tensor) -> list[ttnn.Tensor]:
@@ -546,23 +520,29 @@ class BlockTopKRouting:
             self.pad_row.value,
         ]
 
-    def _run_route(self, q_bar: ttnn.Tensor, kv_g: ttnn.Tensor, coarse: bool) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _run(
+        self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, q_bar: ttnn.Tensor, kv_g: ttnn.Tensor, coarse: bool
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         H, D = self.num_heads, self.head_dim
+        assert tuple(q.shape) == (1, H, self.rows, D), (q.shape, self.rows)
         mask = self._alloc([1, H, self.nb_pad, self.n_blocks_pad], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         coarse_out = self._alloc([1, 1, self.rows, H * D]) if coarse else mask
         if coarse not in self._route_progs:
-            self._route_progs[coarse] = self._route_programs(q_bar, kv_g, mask, coarse_out, coarse)
+            self._route_progs[coarse] = self._programs(q, q_bar, kv_g, mask, coarse_out, coarse)
         mesh, tails = self._route_progs[coarse]
+        counts = self.pool_counts.value
+        pool_ins = [q, k, v, counts]
         ins = self._route_inputs(q_bar, kv_g)
         addresses = [t.buffer_address() for t in ins]
+        pool_addresses = [t.buffer_address() for t in pool_ins]
         kth_index = self.kth_index.value
         writer_args = [mask.buffer_address(), coarse_out.buffer_address(), kth_index.buffer_address()]
-        for (_, prog), (reader_tail, order) in zip(mesh, tails):
-            prog.kernels[0].common_runtime_args = [*addresses, *reader_tail]
-            prog.kernels[1].common_runtime_args = [*writer_args, *order]
+        for (_, prog), (reader_tail, writer_tail, pool_tail) in zip(mesh, tails):
+            prog.kernels[0].common_runtime_args = [*addresses, *reader_tail, *pool_addresses]
+            prog.kernels[1].common_runtime_args = [*writer_args, *writer_tail, *addresses[:2], *pool_tail]
             sender = prog.kernels[3]
             sender.common_runtime_args = [addresses[1], *sender.common_runtime_args[1:]]
-        ttnn.generic_op([*ins, kth_index, mask] + ([coarse_out] if coarse else []), mesh)
+        ttnn.generic_op([*pool_ins, *ins, kth_index, mask] + ([coarse_out] if coarse else []), mesh)
         return mask, coarse_out
 
     # ------------------------------------------------------------------ forward
@@ -579,20 +559,18 @@ class BlockTopKRouting:
         """``block_mask`` uint32 [1, H, nb_pad, S * nb_pad], ``block_counts`` uint32 [1, 1, 1, S * nb_pad] and
         ``coarse_out`` [1, 1, rows, H * D] (each block's coarse output on all its rows, heads concatenated; None
         without ``coarse``). The caller owns and deallocates ``block_mask`` and ``coarse_out``. ``section(name)`` wraps
-        the pool and route (with the gather) steps (for timing).
+        the one program, section ``routing`` (for timing).
 
         The gathered ``kv_g`` is the CCL manager's ping-pong buffer, fetched per call: consecutive calls alternate
         between its two buffers, so a peer's push for the next call never lands in a buffer this device still reads
-        (to push call i + 2 into call i's buffer, a peer must have finished route i + 1, which waited for this device's
-        shard i + 1, sent only after its route i)."""
+        (to push call i + 2 into call i's buffer, a peer must have finished call i + 1, which waited for this device's
+        shard i + 1, sent only after its call i)."""
         H, D = self.num_heads, self.head_dim
         if self._q_bar is None:
             self._q_bar = self._alloc([1, H, self.nb_pad, D])
         kv_g = self.ccl_manager.get_ag_ping_pong_buffer((1, 2 * H, self.nb_pad, D), 2, self.sp_axis)
-        with section("pool"):
-            self._run_pool(q, k, v, self._q_bar, kv_g)
-        with section("route"):
-            mask, coarse_out = self._run_route(self._q_bar, kv_g, coarse)
+        with section("routing"):
+            mask, coarse_out = self._run(q, k, v, self._q_bar, kv_g, coarse)
         return {
             "block_mask": mask,
             "block_counts": self.block_counts.value,

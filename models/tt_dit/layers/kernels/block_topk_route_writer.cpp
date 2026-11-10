@@ -2,18 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// block_topk_route writer. Per unit (head h, Q-block tile row it): first the threshold tile, built from the KT sorted
-// tiles compute hands over (cb_fin, transposed domain: row j of tile p = position 32 p + j, column r = Q block r) as
-// thr[r, :] = position k - 1 of Q block r, with k - 1 read once from kth_index; then NBGT / MC row-major uint32 pages
-// from compute, each the 32 mask rows of the unit over MC column tiles in the reader's column order, stored into mask
-// rows h * NBP + 32 it + r of block_mask [1, H, NBP, NBG]: column c (32 words) at its global column tile
-// order[c / NBPT] * NBPT + c % NBPT, columns that stay adjacent there written together; with COARSE, for each
-// real block b = 32 it + r, its DT row-broadcast coarse tiles at tile rows 2b and 2b + 1 (when below RT), tile
-// columns h * DT + n of coarse_out [1, 1, rows, H * D].
+// block_topk_route writer. First the pool phase (block_pool_writer.cpp), then one increment of the barrier semaphore on
+// the gate core, then the route. Per unit (head h, Q-block tile row it): first the threshold tile, built from
+// the KT sorted tiles compute hands over (cb_fin, transposed domain: row j of tile p = position 32 p + j, column r = Q
+// block r) as thr[r, :] = position k - 1 of Q block r, with k - 1 read once from kth_index; then NBGT / MC row-major
+// uint32 pages from compute, each the 32 mask rows of the unit over MC column tiles in the reader's column order,
+// stored into mask rows h * NBP + 32 it + r of block_mask [1, H, NBP, NBG]: column c (32 words) at its global column
+// tile order[c / NBPT] * NBPT + c % NBPT, columns that stay adjacent there written together; with COARSE, for each real
+// block b = 32 it + r, its DT row-broadcast coarse tiles at tile rows 2b and 2b + 1 (when below RT), tile columns h *
+// DT + n of coarse_out [1, 1, rows, H * D].
 //
-// Compile-time args: 0..12 as the compute kernel, then TensorAccessorArgs of block_mask, coarse_out and kth_index.
+// Compile-time args: 0..12 as the compute kernel, then TensorAccessorArgs of block_mask, coarse_out and kth_index, then
+// the pool writer's.
 // Common runtime args: 0 block_mask address, 1 coarse_out address, 2 kth_index address, then the S shards in column
-// order.
+// order, noc x, y of the gate core (0, 0), then the pool writer's.
 
 #include <cstdint>
 
@@ -22,6 +24,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#include "block_pool_writer.cpp"
 
 namespace {
 constexpr uint32_t cb_mask = 16, cb_co = 17, cb_fin = 19, cb_thr_raw = 20, cb_kidx = 21;
@@ -52,6 +55,17 @@ void kernel_main() {
     constexpr auto kidx_args = TensorAccessorArgs<co_args.next_compile_time_args_offset()>();
     constexpr uint32_t ROW_BYTES = MC * 32 * 4;
     constexpr uint32_t COL_BYTES = 32 * 4;
+    constexpr uint32_t S = NBGT / NBPT;
+    constexpr uint32_t GATE = 3 + S;
+
+    block_pool::write<kidx_args.next_compile_time_args_offset()>(GATE + 2);
+    noc_semaphore_inc(
+        get_noc_addr(
+            get_common_arg_val<uint32_t>(GATE),
+            get_common_arg_val<uint32_t>(GATE + 1),
+            get_semaphore(block_pool::BARRIER_SEM)),
+        1);
+    noc_async_atomic_barrier();
 
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     const uint32_t unit_start = ci * UNITS / NCORES;

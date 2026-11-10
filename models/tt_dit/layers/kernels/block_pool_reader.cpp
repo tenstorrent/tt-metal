@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// block_pool reader.
+// block_pool reader, the pool phase of the block_topk_route reader (included there).
 //
 // Unit = (tensor t, head h, output tile row g), see block_pool_units.hpp. For every tile row k of the group the reader
 // streams the DT data tiles into cb_x (batches of 4 rows = 4*DT pages, always full) and one pooling tile P[k] into
@@ -16,9 +16,9 @@
 // third: a batch is pushed only after its own barrier, and a new batch is placed one batch past the write pointer
 // while one is pending.
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, 7 NCORES (the pool cores, the first NCORES in
-// row-major order), 8 NBGT, then TensorAccessorArgs of x0 (q), x1 (k), x2 (v) and counts.
-// Common runtime args: 0..2 addresses of x0..x2, 3 counts address.
+// Compile-time args from CT: 0 H, 1 RT, 2 DT, 3 NBPT, 4 NX, 5 NY, 6 UNITS, 7 NCORES (the pool cores, the first NCORES
+// in row-major order), 8 NBGT, then TensorAccessorArgs of x0 (q), x1 (k), x2 (v) and counts.
+// Common runtime args from ARG: 0..2 addresses of x0..x2, 3 counts address.
 
 #include <cstdint>
 
@@ -30,10 +30,10 @@
 #include "api/tensor/noc_traits.h"
 #include "block_pool_units.hpp"
 
-namespace {
-constexpr uint32_t cb_x = 0, cb_ps = 2, cb_zero = 3, cb_counts = 4, cb_ptab = 5;
+namespace block_pool {
+namespace reader {
+constexpr uint32_t cb_x = 3, cb_ps = 4, cb_zero = 5, cb_counts = 23, cb_ptab = 27;
 constexpr uint32_t TILE_BYTES = 2048;
-constexpr uint32_t BLOCK = block_pool::BLOCK;
 constexpr uint32_t ROWS_PER_BATCH = 4;
 constexpr uint32_t BATCHES_IN_CB = 3;
 
@@ -66,17 +66,19 @@ inline void write_row(uint32_t addr, uint32_t r, uint32_t ncols, uint16_t v) {
 }
 
 inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
-}  // namespace
+}  // namespace reader
 
-void kernel_main() {
-    constexpr uint32_t H = get_compile_time_arg_val(0);
-    constexpr uint32_t RT = get_compile_time_arg_val(1);
-    constexpr uint32_t DT = get_compile_time_arg_val(2);
-    constexpr uint32_t NBPT = get_compile_time_arg_val(3);
-    constexpr uint32_t NX = get_compile_time_arg_val(4);
-    constexpr uint32_t UNITS = get_compile_time_arg_val(6);
-    constexpr uint32_t NCORES = get_compile_time_arg_val(7);
-    constexpr auto x0_args = TensorAccessorArgs<9>();
+template <uint32_t CT>
+void read(uint32_t ARG) {
+    using namespace reader;
+    constexpr uint32_t H = get_compile_time_arg_val(CT + 0);
+    constexpr uint32_t RT = get_compile_time_arg_val(CT + 1);
+    constexpr uint32_t DT = get_compile_time_arg_val(CT + 2);
+    constexpr uint32_t NBPT = get_compile_time_arg_val(CT + 3);
+    constexpr uint32_t NX = get_compile_time_arg_val(CT + 4);
+    constexpr uint32_t UNITS = get_compile_time_arg_val(CT + 6);
+    constexpr uint32_t NCORES = get_compile_time_arg_val(CT + 7);
+    constexpr auto x0_args = TensorAccessorArgs<CT + 9>();
     constexpr auto x1_args = TensorAccessorArgs<x0_args.next_compile_time_args_offset()>();
     constexpr auto x2_args = TensorAccessorArgs<x1_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<x2_args.next_compile_time_args_offset()>();
@@ -85,15 +87,13 @@ void kernel_main() {
     using Layout = block_pool::Layout<H, RT, NBPT>;
     static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
-    uint32_t unit_start, unit_count;
-    Layout::range(ci, NCORES, unit_start, unit_count);
-    if (unit_count == 0) {
+    if (ci >= UNITS) {
         return;
     }
-    const auto x0 = TensorAccessor(x0_args, get_common_arg_val<uint32_t>(0));
-    const auto x1 = TensorAccessor(x1_args, get_common_arg_val<uint32_t>(1));
-    const auto x2 = TensorAccessor(x2_args, get_common_arg_val<uint32_t>(2));
-    const auto counts_acc = TensorAccessor(counts_args, get_common_arg_val<uint32_t>(3));
+    const auto x0 = TensorAccessor(x0_args, get_common_arg_val<uint32_t>(ARG + 0));
+    const auto x1 = TensorAccessor(x1_args, get_common_arg_val<uint32_t>(ARG + 1));
+    const auto x2 = TensorAccessor(x2_args, get_common_arg_val<uint32_t>(ARG + 2));
+    const auto counts_acc = TensorAccessor(counts_args, get_common_arg_val<uint32_t>(ARG + 3));
 
     Noc noc;
     CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbc(cb_counts), cbt(cb_ptab);
@@ -151,8 +151,8 @@ void kernel_main() {
             local, CoreLocalMem<uint32_t>(dst), TILE_BYTES, {.noc_addr = get_noc_addr(src)}, {}, {.trid = trid});
     };
 
-    for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        const block_pool::Unit un = Layout::decode(u);
+    for (uint32_t u = ci; u < UNITS; u += NCORES) {
+        const Unit un = Layout::decode(u);
         const uint32_t t = un.t, h = un.h, g = un.g;
         const uint32_t k_begin = g * BLOCK;
         const uint32_t k_end = min_u(k_begin + BLOCK, RT);
@@ -248,6 +248,8 @@ void kernel_main() {
     if (pending) {
         finish_pending();
     }
-    // The NoC packet tag is sticky per command buffer: leave it at 0 for whatever kernel runs next on this core.
+    // The NoC packet tag is sticky per command buffer: leave it at 0 for the route phase.
     noc_async_read_set_trid(0, noc.get_noc_id());
 }
+
+}  // namespace block_pool

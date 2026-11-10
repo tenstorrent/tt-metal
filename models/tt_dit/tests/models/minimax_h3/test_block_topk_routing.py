@@ -124,7 +124,7 @@ class _Case:
         return out[:, 0]
 
 
-def _routing(case: _Case, ccl_manager, column_order: str = "arrival") -> BlockTopKRouting:
+def _routing(case: _Case, ccl_manager) -> BlockTopKRouting:
     return BlockTopKRouting(
         mesh_device=case.mesh_device,
         ccl_manager=ccl_manager,
@@ -133,7 +133,6 @@ def _routing(case: _Case, ccl_manager, column_order: str = "arrival") -> BlockTo
         head_dim=HEAD_DIM,
         rows=case.rows,
         k_max=case.k_max,
-        column_order=column_order,
     )
 
 
@@ -258,11 +257,6 @@ def test_route(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pref
     assert torch.equal(
         _routed_mask(case, routing), first
     ), "the cached program (rebound buffers) must reproduce the first call"
-    # The mask is order-independent (a block is kept when its score reaches the k-th candidate score), so scoring the
-    # shards in arrival order must reproduce global order bit for bit, every column tile at its global offset.
-    in_global_order = _routing(case, ccl_manager, column_order="global")
-    in_global_order.update(case.request, traced=False)
-    assert torch.equal(_routed_mask(case, in_global_order), first), "arrival column order differs from global order"
 
     at_k_max = dataclasses.replace(case.request, k=min(case.k_max, int(case.request.candidate.sum())))
     routing.update(at_k_max, traced=True)
@@ -311,17 +305,6 @@ def test_coarse(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pre
     logger.info(f"coarse vs mirror: PCC {pcc:.6f}, max abs err {float((a - b).abs().max()):.3e}")
     assert pcc >= 0.999, pcc
     torch.testing.assert_close(a, b, atol=3e-2, rtol=3e-2)
-
-    # Arrival column order only reassociates the fp32 sums of p @ v and of the row sums; the bf16 output then rounds
-    # an occasional element the other way, so the two orders agree to one bf16 ulp (or 1e-5 near zero).
-    in_global_order = _routing(case, ccl_manager, column_order="global")
-    in_global_order.update(case.request, traced=False)
-    g = coarse_rows(in_global_order)[real]
-    logger.info(
-        f"coarse, arrival vs global order: max abs diff {float((a - g).abs().max()):.3e}, "
-        f"{int((a != g).sum())} of {a.numel()} elements differ"
-    )
-    torch.testing.assert_close(a, g, atol=1e-5, rtol=2.0**-7)
 
 
 @TRACED_RING

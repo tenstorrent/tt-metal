@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// block_topk_route compute. Unit = (head h, local Q-block tile row it): the 32 local Q blocks [32 it, 32 it + 32)
-// against all NBGT * 32 global blocks. Per unit, all math in fp32 DST (full-sync, 8 tiles):
+// block_topk_route compute. First the pool phase (block_pool_compute.cpp), then the route. Unit = (head h, local
+// Q-block tile row it): the 32 local Q blocks [32 it, 32 it + 32) against all NBGT * 32 global blocks. Per unit, all
+// math in fp32 DST (full-sync, 8 tiles):
 //
 //   scores : S[c] = q_bar @ k_bar[c]^T for every column tile c, kept in cb_s (fp32) for the later phases.
 //   top-k  : a running sorted buffer of KT tiles (cb_acc, in the transposed domain: row j of tile p holds position
@@ -26,7 +27,8 @@
 // SFPU ops use 4 and 5 as scratch.
 //
 // Compile-time args: 0 H, 1 NBPT, 2 NBGT, 3 DT, 4 KT, 5 MC, 6 NX, 7 NY, 8 UNITS, 9 COARSE, 10 SCALE (fp32 bits),
-// 11 RT (32-row tile rows per shard), 12 NCORES (the cores that take units, the first NCORES in row-major order).
+// 11 RT (32-row tile rows per shard), 12 NCORES (the cores that take units, the first NCORES in row-major order), then
+// the pool compute's.
 
 #include <cstdint>
 
@@ -45,6 +47,7 @@
 #include "api/compute/topk.h"
 #include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
+#include "block_pool_compute.cpp"
 
 namespace {
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_const = 2, cb_cand_t = 7, cb_colbias = 8, cb_rowbias = 9, cb_pad = 10,
@@ -97,10 +100,12 @@ void kernel_main() {
     static_assert(DT < 8, "the coarse output and its row sum share DST");
     static_assert(NBPT > 0);
 
+    compute_kernel_hw_startup(cb_q, cb_k, cb_s);
+    block_pool::pool<13>();
+
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     const uint32_t unit_start = ci * UNITS / NCORES;
     const uint32_t unit_count = (ci + 1) * UNITS / NCORES - unit_start;
-    compute_kernel_hw_startup(cb_q, cb_k, cb_s);
     if (unit_count == 0) {
         return;
     }
