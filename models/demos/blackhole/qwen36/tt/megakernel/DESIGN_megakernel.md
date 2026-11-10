@@ -111,6 +111,18 @@ says, in pass order. Weight prefetch (DM RISCs) runs ahead of compute, up to dep
     prefix output. A ~16-32 core GDN set runs PREFIX then STEP back to back.
   - Why two phases: the all-users prefix does not fit in one gdn_spec_step program (the 70,656 B kernel config buffer
     overflows by ~0.5 KB at B=8).
+  - v0.5 GDN_PREFIX data rules (GDN track, milestone A on silicon: conv+silu correct at B=8/B=1, standalone
+    53.4 µs at B=8, mostly launch overhead):
+    (a) **Megakernel-owned compact conv window:** one bf16 tile per (head, chunk) holding all users' K-1=3 rows
+        (8 × 3 = 24 rows). GDN_PREFIX writes it back itself after the conv: the new window is rows t..t+2 of W per
+        user, chosen by the accepted-draft index `mi`. That is 1 read + 1 write per chunk instead of 8 + 8.
+        **The write-back must use the committed (accepted) position**, i.e. the same rollback rule as the GDN
+        state under speculative verify.
+    (b) Selector tiles (2K one-hots per (B, T)) stay resident in L1 for the whole pass (constant, inside the GDN
+        working region).
+    (c) Raw qkv rows come straight from the gdn_in phase's L1 output (STREAM cores → prefix cores by unicast at
+        the final offset, under the activation distribution rule), with no DRAM round-trip.
+    Estimated steady PREFIX phase ≈ 6-8 µs per layer at u8, replacing ~33 µs of per-user row-wise work in the step.
 - `AR` (bit 4): all-reduce send/recv cores (AR track defines; receive writes x into STREAM cores' CB_X).
 
 **Phase table** (L1, array of 16-u32 records, base address in runtime arg; `n_phases` in runtime arg):
