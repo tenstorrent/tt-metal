@@ -95,6 +95,7 @@ def test_motif_pipeline_performance(
     pipeline = MotifPipeline(
         device=mesh_device,
         config=MotifPipelineConfig.default(
+            trace=True,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
             encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
             vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),

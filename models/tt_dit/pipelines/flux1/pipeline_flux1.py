@@ -23,7 +23,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribute_cfg
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.flux1.text_encoder import TextEncoder
-from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.pipeline_api import Pipeline
 from models.tt_dit.solvers import EulerSolver, calculate_shift
 from models.tt_dit.utils.tensor import from_torch_to_devices
 from models.tt_dit.utils.tracing import Tracer
@@ -66,6 +66,9 @@ class Flux1PipelineConfig:
     width: int
     cfg_enabled: bool
 
+    # Capture traces and replay them.
+    trace: bool
+
     checkpoint_name: str
 
     @classmethod
@@ -84,6 +87,7 @@ class Flux1PipelineConfig:
         height: int = 1024,
         width: int = 1024,
         cfg_enabled: bool = False,
+        trace: bool | None = None,
         checkpoint_name: str,
     ) -> Flux1PipelineConfig:
         preset_dict = _PRESETS_BH if is_blackhole() else _PRESETS_WH
@@ -110,11 +114,12 @@ class Flux1PipelineConfig:
             height=height,
             width=width,
             cfg_enabled=cfg_enabled,
+            trace=True if trace is None else trace,
             checkpoint_name=checkpoint_name,
         )
 
 
-class Flux1Pipeline(PipelineAPIMixin):
+class Flux1Pipeline(Pipeline):
     @classmethod
     def create_pipeline(
         cls,
@@ -123,6 +128,7 @@ class Flux1Pipeline(PipelineAPIMixin):
         width: int = 1024,
         height: int = 1024,
         cfg_enabled: bool = False,
+        trace: bool | None = None,
         checkpoint_name: str,
     ) -> Flux1Pipeline:
         config = Flux1PipelineConfig.default(
@@ -130,11 +136,13 @@ class Flux1Pipeline(PipelineAPIMixin):
             width=width,
             height=height,
             cfg_enabled=cfg_enabled,
+            trace=trace,
             checkpoint_name=checkpoint_name,
         )
         return cls(device=mesh_device, config=config)
 
     def __init__(self, *, device: ttnn.MeshDevice, config: Flux1PipelineConfig) -> None:
+        super().__init__(offload_weights=False, trace=config.trace)
         self._mesh_device = device
         self._parallel_config = config.dit_parallel_config
         self._encoder_parallel_config = config.encoder_parallel_config
@@ -204,9 +212,9 @@ class Flux1Pipeline(PipelineAPIMixin):
         )
 
         logger.info("Pipeline allocation run...")
-        self(prompts=[""], num_inference_steps=2, cfg_scale=2 if config.cfg_enabled else 1, traced=False)
+        self.run_untraced(prompts=[""], num_inference_steps=2, cfg_scale=2 if config.cfg_enabled else 1)
 
-    def __call__(
+    def _run(
         self,
         *,
         num_images_per_prompt: int = 1,
@@ -218,7 +226,7 @@ class Flux1Pipeline(PipelineAPIMixin):
         negative_prompts_2: Sequence[str] | None = None,
         num_inference_steps: int,
         seed: int = 0,
-        traced: bool = False,
+        traced: bool | None = None,
         # currently defaults to off due to ttnn.synchronize_device inside vae_all_gather
         vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
@@ -230,6 +238,7 @@ class Flux1Pipeline(PipelineAPIMixin):
         negative_prompts = negative_prompts if negative_prompts is not None else [""] * len(prompts)
         negative_prompts_2 = negative_prompts_2 if negative_prompts_2 is not None else negative_prompts
 
+        traced = self.trace if traced is None else traced
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         prompt_count = len(prompts)

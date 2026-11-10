@@ -80,6 +80,7 @@ def test_sd35_pipeline(
     pipeline = StableDiffusion3Pipeline(
         device=mesh_device,
         config=StableDiffusion3PipelineConfig.default(
+            trace=traced,
             mesh_shape=mesh_device.shape,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
             topology=topology,
@@ -108,7 +109,6 @@ def test_sd35_pipeline(
                 negative_prompts=[negative_prompt],
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
-                traced=traced,
                 vae_traced=False,
                 encoder_traced=False,
                 on_event=profiler_event_callback(benchmark_profiler, 0),
@@ -148,7 +148,6 @@ def test_sd35_pipeline(
                 prompts=[prompt],
                 negative_prompts=[negative_prompt],
                 num_inference_steps=num_inference_steps,
-                traced=traced,
                 vae_traced=False,
                 encoder_traced=False,
             )

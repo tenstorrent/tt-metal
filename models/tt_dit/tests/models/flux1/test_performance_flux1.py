@@ -115,6 +115,7 @@ def test_flux1_pipeline_performance_speed(
     pipeline = Flux1Pipeline(
         device=mesh_device,
         config=Flux1PipelineConfig.default(
+            trace=True,
             mesh_shape=mesh_device.shape,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp),
             encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
@@ -414,6 +415,7 @@ def test_flux1_pipeline_performance_accuracy(
     pipeline = Flux1Pipeline(
         device=mesh_device,
         config=Flux1PipelineConfig.default(
+            trace=True,
             mesh_shape=mesh_device.shape,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp),
             encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
@@ -495,6 +497,7 @@ def test_flux1_pipeline_performance_determinism(
     pipeline = Flux1Pipeline(
         device=mesh_device,
         config=Flux1PipelineConfig.default(
+            trace=True,
             mesh_shape=mesh_device.shape,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp),
             encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
