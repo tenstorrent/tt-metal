@@ -30,6 +30,7 @@ from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch, to_torch
 from ...utils.tracing import StateTensor, Tracer
+from ..pipeline_api import Pipeline
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
@@ -136,7 +137,7 @@ class _DenoiseState:
         self.combined_rope_sin = StateTensor()
 
 
-class Flux2Pipeline:
+class Flux2Pipeline(Pipeline):
     def __init__(
         self,
         *,
@@ -151,16 +152,20 @@ class Flux2Pipeline:
         width: int = 1024,
         resolutions: Sequence[tuple[int, int]] = _DEFAULT_RESOLUTIONS,
         is_fsdp: bool = False,
-        dynamic_load: bool = False,
+        offload_weights: bool = False,
+        trace: bool = False,
         trace_warmup: bool = False,
         vae_use_conv3d: bool = False,
         shard_prompt: bool = True,
     ) -> None:
         """Build the pipeline.
 
-        ``resolutions`` are the image sizes (width, height) that ``__call__`` accepts, all warmed
-        up here; ``width`` and ``height`` give the default one.
+        ``resolutions`` are the image sizes (width, height) that a call accepts, all warmed
+        up here; ``width`` and ``height`` give the default one. With ``trace``, calls capture and
+        replay traces, and ``trace_warmup`` captures them here instead of on the first call.
         """
+        super().__init__(offload_weights=offload_weights, trace=trace)
+
         self._resolutions = tuple(resolutions)
         if (width, height) not in self._resolutions:
             msg = f"the default size {width}x{height} is not one of the resolutions {self._resolutions}"
@@ -177,7 +182,6 @@ class Flux2Pipeline:
         self._height = height
         self._width = width
         self.is_fsdp = is_fsdp
-        self.dynamic_load = dynamic_load
 
         # The denoising states by image size and whether there is a reference image, and the VAE
         # traces by image size.
@@ -270,8 +274,8 @@ class Flux2Pipeline:
             use_conv3d=self._vae_use_conv3d,
         )
 
-        # Editing is not supported with dynamic loading, which would have to evict the encoder too.
-        if self.dynamic_load:
+        # Editing is not supported with offloaded weights, which would have to evict the encoder too.
+        if self.offload_weights:
             self._vae_encoder = None
         else:
             logger.info("creating TT-NN VAE encoder...")
@@ -298,10 +302,10 @@ class Flux2Pipeline:
             self._torch_vae.bn.running_var.float() + self._torch_vae.config.batch_norm_eps
         )
 
-        if self.dynamic_load:
-            self.transformer.register_coresident_exclusions(self._prompt_encoder._encoder, self._vae_decoder)
-            self._prompt_encoder._encoder.register_coresident_exclusions(self.transformer)
-            self._vae_decoder.register_coresident_exclusions(self.transformer)
+        if self.offload_weights:
+            self.register_coresident_exclusions(self.transformer, self._prompt_encoder._encoder, self._vae_decoder)
+            self.register_coresident_exclusions(self._prompt_encoder._encoder, self.transformer)
+            self.register_coresident_exclusions(self._vae_decoder, self.transformer)
 
         # Load in reverse order of use so the first-used model (encoder) stays loaded before __call__.
         self._prepare_vae()
@@ -333,7 +337,7 @@ class Flux2Pipeline:
         for width, height in self._resolutions:
             for edit in edits:
                 self.warmup(width=width, height=height, edit=edit, warmup_info="e2e warmup")
-        if trace_warmup:
+        if self.trace and trace_warmup:
             for width, height in self._resolutions:
                 for edit in edits:
                     self.warmup(width=width, height=height, edit=edit, traced=True, warmup_info="trace warmup")
@@ -357,14 +361,14 @@ class Flux2Pipeline:
         logger.info(
             f"Warming up pipeline at {width}x{height}{' with a reference image' if edit else ''}: {warmup_info}..."
         )
-        self.__call__(
+        # A traced warm-up is an ordinary call, so that the trace rule applies to it.
+        (self if traced else self.run_untraced)(
             prompts=["warmup"],
             num_inference_steps=2,
             seed=0,
             width=width,
             height=height,
             images=[Image.new("RGB", (width, height), (128, 128, 128))] if edit else None,
-            traced=traced,
         )
 
     def _release_denoise_trace(self) -> None:
@@ -383,10 +387,6 @@ class Flux2Pipeline:
         _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
 
     def _prepare_transformer(self) -> None:
-        # A trace bakes its weights' addresses, so drop the traces this load will evict.
-        if self.dynamic_load and not self.transformer.is_loaded():
-            self._release_vae_traces()
-            _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
         cache.load_model(
             tt_model=self.transformer,
             get_torch_state_dict=self._torch_transformer.state_dict,
@@ -400,16 +400,10 @@ class Flux2Pipeline:
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_prompt_encoder(self) -> None:
-        encoder = getattr(self._prompt_encoder, "_encoder", None)
-        encoder_is_loaded = getattr(encoder, "is_loaded", None)
-        if self.dynamic_load and encoder_is_loaded is not None and not encoder_is_loaded():
-            self._release_denoise_trace()
         self._prompt_encoder.load_weights()
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_vae(self) -> None:
-        if self.dynamic_load and not self._vae_decoder.is_loaded():
-            self._release_denoise_trace()
         cache.load_model(
             tt_model=self._vae_decoder,
             get_torch_state_dict=self._torch_vae.state_dict,
@@ -437,7 +431,8 @@ class Flux2Pipeline:
         height: int = 1024,
         resolutions: Sequence[tuple[int, int]] = _DEFAULT_RESOLUTIONS,
         is_fsdp: bool = False,
-        dynamic_load: bool = False,
+        offload_weights: bool = False,
+        trace: bool | None = None,
         trace_warmup: bool = True,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
@@ -446,11 +441,13 @@ class Flux2Pipeline:
         """Build a pipeline; the parallel layout arguments left as ``None`` come from the mesh's preset.
 
         The VAE axes come from the preset only when none of them is given. The presets do not set
-        ``is_fsdp`` or ``dynamic_load``: FLUX.2-dev needs both on 2x2, Klein neither.
+        ``is_fsdp`` or ``offload_weights``: FLUX.2-dev needs both on 2x2, Klein neither.
 
-        With ``dynamic_load``, loading a component releases the traces that depend on the weights it
-        evicts, and the next traced call captures them again, so serving should run without it.
+        ``trace`` defaults to tracing exactly when the weights stay resident: a pipeline that offloads
+        weights cannot trace.
         """
+        if trace is None:
+            trace = not offload_weights
         mesh_shape = tuple(mesh_device.shape)
         preset = (_PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH).get(mesh_shape)
 
@@ -494,13 +491,14 @@ class Flux2Pipeline:
             height=height,
             resolutions=resolutions,
             is_fsdp=is_fsdp,
-            dynamic_load=dynamic_load,
+            offload_weights=offload_weights,
+            trace=trace,
             trace_warmup=trace_warmup,
             vae_use_conv3d=vae_use_conv3d,
             shard_prompt=shard_prompt,
         )
 
-    def __call__(
+    def _run(
         self,
         *,
         num_images_per_prompt: int = 1,
@@ -512,7 +510,7 @@ class Flux2Pipeline:
         width: int | None = None,
         height: int | None = None,
         images: Sequence[Image.Image] | None = None,
-        traced: bool = False,
+        traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
         """Generate an image, or edit one if ``images`` holds a reference image.
@@ -520,13 +518,16 @@ class Flux2Pipeline:
         ``width`` and ``height`` default to the size the pipeline was created with and must be one
         of ``resolutions``. The reference image is center-cropped to the output's aspect ratio and
         resized to the output size, at most one megapixel. Each size gets its own
-        traces, with and without a reference, captured on the first traced call.
+        traces, with and without a reference, captured on the first traced call. ``traced`` is the
+        pipeline's ``trace`` unless it is ``False``, which is only possible before a size's traces
+        are captured.
         """
+        traced = self.trace if traced is None else traced
         if images and len(images) > 1:
             msg = "editing with more than one reference image is not supported"
             raise NotImplementedError(msg)
         if images and self._vae_encoder is None:
-            msg = "editing is not supported with dynamic loading"
+            msg = "editing is not supported with offloaded weights"
             raise NotImplementedError(msg)
         reference_image = images[0] if images else None
 
