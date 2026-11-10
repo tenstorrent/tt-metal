@@ -89,18 +89,25 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #endif
+#if defined(MKA_RWO)
+#include "wo_unit_c.hpp"
+#endif
 
 constexpr uint32_t CB_X = 0, CB_W = 1, CB_HL = 2, CB_H = 3, CB_WD = 4, CB_W2 = 5, CB_WM = 6, CB_YM = 7, CB_GO = 8, CB_OUT = 16;
 constexpr uint32_t CB_Q = 9, CB_K = 10, CB_V = 11, CB_O = 12, CB_ONE = 24, CB_P = 25, CB_R = 26, CB_D = 27, CB_OA = 28;
 constexpr uint32_t CB_RS = 13, CB_QA = 14, CB_QO = 17, CB_QR = 18, CB_PQ = 19, CB_RSP = 20;
+#ifndef MKA_WO_MAXT
+#define MKA_WO_MAXT 5
+#endif
+constexpr uint32_t WO_MAXT = MKA_WO_MAXT;
 #if defined(MKA_RWO)
-constexpr uint32_t QO_SLOT = 5;
+constexpr uint32_t QO_SLOT = WO_MAXT;
 #else
 constexpr uint32_t QO_SLOT = 0;
 #endif
-constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = 320, CB_XO = 23, CB_HSQ = 31, CB_HG = 30;
+constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = (WO_MAXT * 48 > 320) ? WO_MAXT * 48 : 320, CB_XO = 23, CB_HSQ = 31, CB_HG = 30;
 #if defined(MKA_WORING)
-constexpr uint32_t CB_WSL = 31, WSL_N = 5 * WK;   // own Wo ring
+constexpr uint32_t CB_WSL = 31, WSL_N = WO_MAXT * WK;   // own Wo ring
 #else
 constexpr uint32_t CB_WSL = CB_PQ, WSL_N = PQ_QSL;
 #endif
@@ -718,38 +725,8 @@ void kernel_main() {
         if (!IS_STREAM && att && wo_nt) {   // real wo, split-N: A_g = A (.) sig(gate) in place over S, then A_g @ Wo slice (ext ring)
             CZONE("C-WO");
             compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_S, CB_AS);
-            cb_wait_front(CB_A, WK);
-            cb_wait_front(CB_S, WK);
-            reconfig_data_format(CB_A, CB_S);
-            mul_init(CB_A, CB_S);
-            pack_reconfig_data_format(CB_AS);
-            for (uint32_t t = 0; t < WK; t += 8) {   // 8 tiles per DST round (fp32 DST, full sync)
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < 8; ++i) mul_tiles(CB_A, CB_S, t + i, t + i, i);
-                tile_regs_commit();
-                cb_reserve_back(CB_AS, 8);
-                tile_regs_wait();
-                for (uint32_t i = 0; i < 8; ++i) pack_tile(i, CB_AS);   // S slots t..t+7, already unpacked this round
-                tile_regs_release();
-                cb_push_back(CB_AS, 8);
-            }
-            cb_pop_front(CB_A, WK);
-            cb_pop_front(CB_S, WK);
-            cb_wait_front(CB_AS, WK);
-            cb_wait_front(CB_WSL, WSL_N);
-            reconfig_data_format(CB_WSL, CB_AS);
-            matmul_block_init(CB_AS, CB_WSL, 0, wo_nt, 1, WK);
-            tile_regs_acquire();
-            for (uint32_t k = 0; k < WK; ++k) matmul_block(CB_AS, CB_WSL, k, k * wo_nt, 0, 0, wo_nt, 1, WK);
-            tile_regs_commit();
-            cb_reserve_back(CB_QO, QO_SLOT);
-            tile_regs_wait();
-            pack_reconfig_data_format(CB_QO);
-            for (uint32_t j = 0; j < wo_nt; ++j) pack_tile(j, CB_QO);
-            tile_regs_release();
-            cb_push_back(CB_QO, QO_SLOT);
-            cb_pop_front(CB_AS, WK);
-            cb_pop_front(CB_WSL, WSL_N);
+            wou::gate_mul(CB_A, CB_S, CB_AS, WK);                              // A_g = A (.) sig(gate), in place over S
+            wou::matmul_nt(CB_AS, CB_WSL, WSL_N, CB_QO, QO_SLOT, WK, wo_nt);   // A_g @ Wo slice (ring) -> CB_QO
         }
 #endif
         if (!IS_STREAM) { V12_OSUM(L); continue; }

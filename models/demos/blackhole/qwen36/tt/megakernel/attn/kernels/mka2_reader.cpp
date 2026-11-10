@@ -21,6 +21,9 @@
 #if defined(MK_V12)
 #include "v12e.hpp"
 #endif
+#if defined(MKA_RQKV)
+#include "wo_unit_dm.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
@@ -38,7 +41,7 @@ void kernel_main() {
 #if defined(MKA_RQNR)
     constexpr auto qo_args_r = TensorAccessorArgs<wq_args.next_compile_time_args_offset()>();   // bf16 DRAM tiles
 #endif
-    constexpr uint32_t MWTB = MKA_MWTB, QSL = 2 * KT;   // STREAM_EXT slice: 2 output tiles x full K, BFP8
+    constexpr uint32_t MWTB = MKA_MWTB, QSL = RING_P;   // ext ring slot: 2 qkv tiles x full K (pre-QSK) or the Wo slice, BFP8
     constexpr uint32_t TRID_PQ = 9;
 #endif
     uint32_t a = 0;
@@ -320,18 +323,11 @@ void kernel_main() {
                 spin_cycles(MKA_PQDELAY);
 #endif
                 if (j == 0) cb_reserve_back(CB_PQ, QSL);
-                const uint32_t dst = get_write_ptr(CB_PQ);
-                noc_async_read_set_trid(TRID_PQ);
-                for (uint32_t p = p0, c = 0; p < p1; p += MKA_PQCH, ++c) {
-                    if (c && (c % MKA_PQN) == 0) { noc_async_read_barrier_with_trid(TRID_PQ); noc_async_read_set_trid(TRID_PQ); }
 #if defined(MK_V12)
-                    if ((c % MKA_PQN) == 0) v_gate();
+                wou::ring_fill(CB_PQ, src, p0, p1, MKA_PQCH, MKA_PQN, TRID_PQ, [&]() { v_gate(); });   // page bytes from CB 19's format
+#else
+                wou::ring_fill(CB_PQ, src, p0, p1, MKA_PQCH, MKA_PQN, TRID_PQ, []() {});
 #endif
-                    const uint32_t n = (p1 - p) < MKA_PQCH ? (p1 - p) : MKA_PQCH;
-                    noc_async_read(src + p * MWTB, dst + p * MWTB, n * MWTB);
-                }
-                noc_async_read_set_trid(0);
-                noc_async_read_barrier_with_trid(TRID_PQ);
                 if (j + 1 == run) cb_push_back(CB_PQ, QSL);
 #if defined(MKA_RWO) && defined(MKA_WORING)
                 if (rw_nt) {   // the next attention layer's Wo slice, same share / throttle (ring popped by the last wo)
