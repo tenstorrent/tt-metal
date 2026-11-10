@@ -524,3 +524,31 @@ stage's owner sums) + the unoverlapped delivery. u1 levers:
   phase must keep the owner/partial layout of §12.
 - **Estimate:** ~42 → ~21 µs per u1 GDN op, about −1.0 ms per u1 pass. §8e u1 at 15 µs AR: 9.76 → ~**8.75 ms** (gate
   9.4, ~0.65 margin). At 18 µs: ~9.14.
+
+## 15. Split-K AR on silicon (AR track, -mk-ar @92e213cb005, d26u02 1x8, trace per call; bit-identical on 8 devices)
+
+| Config | µs/call |
+|---|---|
+| RS + AG core, in-row owners (10..11, 0..7) + residual, senders (10..11, 8..9) | 23.0 (22.6 without residual) |
+| + split-K x delivery (owner j → K-row j//2 slot j%2, NOC1 west) | 26.2 (+3.2 on path) |
+| + Σx² partials in-row | 28.4 |
+| + Σx² partials multicast to row-0 column roots | 45.5 (cross-row multicast from rows 1-7 stalls) |
+
+**Pinned (v0.7):** Σx² partials go in-row. CB_RSTD on (k,n): slot p = j%2 at p × 128 B, tag at 2048 + p × 16. Each
+(k,n) forwards its 2 partials to the column root inside its column-reduce payload (column root = row 0, end of the
+column tree), and the root sums the 16. No extra multicast.
+
+**AR cost model:** chunk sweep 10/5/2/1 tiles → 23.1/17.6/14.2/12.8 µs ≈ 11.7 µs fixed + 0.036 µs/KB. About 7 µs
+of each traced call is dispatch, so **in-megakernel device time ≈ 16 µs** (~5 fixed + ~10 bandwidth). Adding split-K
+delivery brings the on-path total to **~19 µs**. 2 links only.
+Levers:
+- persistent fabric connections, −3 to −5 µs fixed;
+- BFP8 RS/AG payload, ~−5 µs, numerics change, so it needs the gate;
+- start the RS per down-chunk, hiding it under the MLP tail.
+
+**L1:** the one-shot reduction buffer is 160 KB per owner (> ~100 KB budget), so a streaming reduce (accumulate on
+arrival) is required.
+
+**Gate arithmetic with GDN_STEP_U1 (§14, −21 µs per u1 GDN layer):** u1 break-even AR rises from 12.2 to **~20.0 µs**;
+u8 break-even stays 23.4 µs. So **~19 µs on-path AR (today's in-megakernel estimate) plus GDN_STEP_U1 passes both
+gates**, with thin u1 margin. Persistent fabric connections add margin; BFP8 payload stays gated.
