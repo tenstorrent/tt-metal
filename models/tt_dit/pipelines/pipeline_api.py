@@ -5,52 +5,13 @@
 from __future__ import annotations
 
 import weakref
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from ..layers.module import Module
     from .events import PipelineEventCallback
-
-
-_R_co = TypeVar("_R_co", covariant=True)
-
-
-class _Pipeline(Protocol[_R_co]):
-    def __call__(
-        self,
-        *,
-        prompts: Sequence[str],
-        negative_prompts: Sequence[str] | None,
-        num_inference_steps: int,
-        seed: int,
-        traced: bool,
-        on_event: PipelineEventCallback | None,
-    ) -> _R_co:
-        ...
-
-
-class PipelineAPIMixin:
-    def run_single_prompt(
-        self: _Pipeline[_R_co],
-        *,
-        prompt: str,
-        negative_prompt: str | None = None,
-        num_inference_steps: int,
-        seed: int = 0,
-        on_event: PipelineEventCallback | None = None,
-    ) -> _R_co:
-        return self(
-            prompts=[prompt],
-            negative_prompts=[negative_prompt] if negative_prompt is not None else None,
-            num_inference_steps=num_inference_steps,
-            seed=seed,
-            traced=True,
-            on_event=on_event,
-        )
 
 
 class Pipeline:
@@ -100,7 +61,7 @@ class Pipeline:
         # Checked first: a refused exclusion must not stay live on the module.
         if present and getattr(self, "trace", False):
             raise self._trace_rule_error()
-        module.register_coresident_exclusions(*present)
+        module._register_coresident_exclusions(*present)  # noqa: SLF001
         self.register_evictable(*present)
 
     def register_evictable(self, *modules: Module | None) -> None:

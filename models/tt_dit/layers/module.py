@@ -305,10 +305,13 @@ class Module(ABC):
     def is_loaded(self) -> bool:
         return self._is_loaded
 
-    def register_coresident_exclusions(self, *args: Module) -> None:
+    def _register_coresident_exclusions(self, *args: Module) -> None:
         """
         Register modules that cannot be resident in memory at the same time as this module.
         They should be deallocated before this module is loaded. See `evict_coresident_exclusions` .
+
+        Called through `Pipeline.register_coresident_exclusions`, which records the evicted modules:
+        a pipeline that evicts weights must not trace.
         Args:
             *args: Modules that cannot be co-resident in memory with this module.
         """

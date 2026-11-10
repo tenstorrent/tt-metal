@@ -92,3 +92,15 @@ def test_registering_what_the_text_encoder_offloads() -> None:
     vision = _Vision()
     with pytest.raises(ValueError, match=_RULE):
         pipeline.register_evictable(*_encoder(offload=False, offload_vision=True, vision=vision).offloaded_modules)
+
+
+@pytest.mark.parametrize(("trace", "expected"), [(None, False), (False, False), (True, True)])
+def test_create_pipeline_passes_trace_and_none_keeps_the_resolution(
+    monkeypatch: pytest.MonkeyPatch, trace: bool | None, expected: bool
+) -> None:
+    built: list[QwenImagePipelineConfig] = []
+    monkeypatch.setattr(ttnn.device, "is_blackhole", lambda: False)
+    monkeypatch.setattr(QwenImagePipeline, "__init__", lambda self, *, device, config: built.append(config))
+    # Edit on the Wormhole 2x4 offloads the vision tower, so an unset trace resolves to off.
+    QwenImagePipeline.create_pipeline(mesh_device=SimpleNamespace(shape=(2, 4)), checkpoint_name=_EDIT, trace=trace)
+    assert built[0].trace is expected

@@ -304,6 +304,7 @@ class Ideogram4PipelineConfig:
         resolutions: Sequence[tuple[int, int]] | None = None,
         weights_dir: str = _DEFAULT_WEIGHTS_DIR,
         qwen_repo: str = _DEFAULT_QWEN_REPO,
+        trace: bool | None = None,
     ) -> Ideogram4PipelineConfig:
         """The preset for ``mesh_shape``. ``resolutions`` are the (width, height) sizes the pipeline
         warms at load; by default ``policy.served_resolutions(mesh_shape)``.
@@ -329,6 +330,7 @@ class Ideogram4PipelineConfig:
             resolutions=tuple((int(w), int(h)) for w, h in resolutions),
             weights_dir=weights_dir,
             qwen_repo=qwen_repo,
+            trace=True if trace is None else trace,
         )
 
 
@@ -541,6 +543,7 @@ class Ideogram4Pipeline(Pipeline):
         num_links: int | None = None,
         resolutions: Sequence[tuple[int, int]] | None = None,
         run_warmup: bool = True,
+        trace: bool | None = None,
     ) -> Ideogram4Pipeline:
         """Build the pipeline and, by default, warm it up to serve.
 
@@ -562,6 +565,7 @@ class Ideogram4Pipeline(Pipeline):
             qwen_repo=qwen_repo,
             topology=topology,
             num_links=num_links,
+            trace=trace,
         )
         return cls(device=mesh_device, config=config, run_warmup=run_warmup)
 
