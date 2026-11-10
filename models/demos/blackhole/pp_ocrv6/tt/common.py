@@ -71,6 +71,13 @@ def _pair(v):
     return tuple(v) if isinstance(v, (tuple, list)) else (v, v)
 
 
+# Tried in order on a conv's first call with a DRAM input; the first that runs is kept.
+SLICE_CANDIDATES = (
+    ttnn.Conv2dL1FullSliceConfig,
+    *(ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=n) for n in (2, 4, 8, 16)),
+)
+
+
 class Conv:
     def __init__(self, device, weight, bias, stride=1, padding=None, groups=1, activation=None):
         self.device = device
@@ -81,8 +88,11 @@ class Conv:
         self.groups = groups
         self.host_weight = ttnn.from_torch(weight.detach().float(), dtype=ttnn.float32)
         self.host_bias = ttnn.from_torch(bias.detach().float().reshape(1, 1, 1, -1), dtype=ttnn.float32)
-        # Device-prepared weights depend on the input shape (sharding), so keep one copy per shape.
+        # Device-prepared weights depend on the input shape and slicing, so keep one copy per shape,
+        # with the slice config they were prepared for. Left to conv2d, DRAM-input slicing follows
+        # the free L1 of each call and can drift from the prepared weights without an error.
         self.prepared = {}
+        self.slicing = {}
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=PRECISION.weights_dtype,
             activation=activation,
@@ -91,7 +101,27 @@ class Conv:
         self.compute_config = compute_config(device)
 
     def __call__(self, x, batch, h, w, memory_config=None):
-        key = (batch, h, w, memory_config is None)
+        in_l1 = x.memory_config().buffer_type == ttnn.BufferType.L1
+        key = (batch, h, w, memory_config is None, in_l1)
+        if key in self.slicing:
+            return self._conv(x, batch, h, w, memory_config, key, self.slicing[key])
+        if in_l1:
+            candidates = (None,)
+        else:
+            candidates = SLICE_CANDIDATES
+        for i, slice_config in enumerate(candidates):
+            try:
+                out = self._conv(x, batch, h, w, memory_config, key, slice_config)
+            except RuntimeError:
+                if i == len(candidates) - 1:
+                    raise
+                continue
+            self.slicing[key] = slice_config
+            return out
+
+    def _conv(self, x, batch, h, w, memory_config, key, slice_config):
+        if slice_config is not None:
+            memory_config = ttnn.DRAM_MEMORY_CONFIG  # where conv2d's DRAM-input path always writes it
         weight, bias = self.prepared.get(key, (self.host_weight, self.host_bias))
         y, (oh, ow), self.prepared[key] = ttnn.conv2d(
             input_tensor=x,
@@ -110,6 +140,7 @@ class Conv:
             conv_config=self.conv_config,
             compute_config=self.compute_config,
             memory_config=memory_config,
+            slice_config=slice_config,
             dtype=ttnn.bfloat16,
             return_output_dim=True,
             return_weights_and_bias=True,

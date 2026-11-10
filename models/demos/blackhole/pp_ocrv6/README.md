@@ -160,7 +160,8 @@ Full list with estimates: [optimization_strategies.md](optimization_strategies.m
 - [ ] bfp8 weights, lower math fidelity, approximate GELU, gated on the accuracy tests and the torch agreement rate
 - [x] Pipelining across requests: `TtnnBackend.lock` with worker threads (see `gate_ocr`)
 - [x] Several crops per call: `PPOCRv6Pipeline.read_many` batches the detector (`det_batches`) and the recognizer across crops
-- [ ] Detector batch 4 reads wrong once an L1 buffer is allocated after its first run (no error raised); report with a repro
+- [x] Conv slicing fixed per input shape on the first run: conv2d's automatic DRAM slicing follows free L1 and drifted from the prepared weights (detector batch 4 read wrong, no error); worth an issue for conv2d
+- [x] `prepare()` on device inputs, so traced calls use the conv paths they were prepared for: detector 4.27 -> 3.91 ms, recognizer batch 8 4.62 -> 4.03 ms
 
 ### 2. YOLO11-small
 - [ ] Confirm with the customer how the 4K frame becomes the 640x640 input (full-frame resize, fixed lane region, larger input or tiles)

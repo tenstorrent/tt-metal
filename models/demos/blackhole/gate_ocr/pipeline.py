@@ -22,9 +22,7 @@ from models.demos.yolov11s.runner.performant_runner import YOLOv11sPerformantRun
 
 YOLO_SIZE = 640
 YOLO_TRACE_REGION_SIZE = 6434816
-# PP-OCR detector batches; a frame's vehicle crops go through in pairs. Batch 4 reads wrong once an
-# L1 buffer (YOLO's input) is allocated after its first run, so it is not traced.
-DET_BATCHES = (1, 2)
+DET_BATCHES = (1, 2, 4)  # PP-OCR detector batches: a frame's vehicle crops go through together
 DET_EXTRA_BATCH_L1_SMALL = 12 << 10  # conv and pool configs of one more detector batch size
 DEVICE_PARAMS = {
     # Every traced shape's conv configs stay resident, for both models.
@@ -60,8 +58,20 @@ class GateOCR:
         # threads, and the host work of one overlaps the device work of another.
         self.lock = threading.Lock()
         # Both models' weights are prepared before either captures a trace (see TtnnBackend.prepare).
+        # The PP-OCR convs fix their slicing on that first run, so it runs with YOLO's resident L1
+        # input already taken; YOLO allocates it into the same space once this is released.
+        yolo_input = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 16 * YOLO_SIZE, YOLO_SIZE]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            device,
+            ttnn.create_sharded_memory_config(
+                [1, 16, YOLO_SIZE, YOLO_SIZE], ttnn.CoreGrid(y=8, x=10), ttnn.ShardStrategy.HEIGHT
+            ),
+        )
         backend = TtnnBackend(device, traced=False, det_batches=DET_BATCHES)
         backend.prepare()
+        ttnn.deallocate(yolo_input)
         self.yolo = YOLOv11sPerformantRunner(
             device, 1, act_dtype=ttnn.bfloat8_b, weight_dtype=ttnn.bfloat8_b, resolution=(YOLO_SIZE, YOLO_SIZE)
         )

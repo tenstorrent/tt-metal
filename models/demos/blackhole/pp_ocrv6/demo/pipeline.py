@@ -132,9 +132,11 @@ class TtnnBackend:
 
         Must happen before any trace is captured on the device, by this model or another one
         sharing it: buffers allocated after a capture can land in that trace's scratch memory.
+        The input goes to device first, as in TracedRunner, so every conv sees the input placement
+        it will be traced with.
         """
         for fn, host in self._trace_shapes().values():
-            fn(host)
+            fn(self.ttnn.to_device(host, self.device))
         self.ttnn.synchronize_device(self.device)
 
     def capture(self):
@@ -262,12 +264,18 @@ def _bucket(n, buckets=REC_BATCH_BUCKETS):
     return buckets[-1]
 
 
-def _bucketed(run, items, buckets):
-    """run(batch) on zero-padded bucket-sized chunks of items [1, ...]; returns one output row per item."""
+def _bucketed(run, items, buckets, pad=True):
+    """run(batch) on bucket-sized chunks of items [1, ...]; returns one output row per item.
+
+    pad=True zero-pads a short chunk up to the next bucket (one call; for per-call costs).
+    pad=False splits it into the largest buckets that fit (no padded work; for per-item costs).
+    """
     out = []
     i = 0
     while i < len(items):
-        chunk = items[i : i + buckets[-1]]
+        left = len(items) - i
+        size = buckets[-1] if pad else max([b for b in buckets if b <= left] or buckets[:1])
+        chunk = items[i : i + size]
         bucket = _bucket(len(chunk), buckets)
         result = run(torch.cat(chunk + [torch.zeros_like(chunk[0])] * (bucket - len(chunk))))
         out.extend(zip(*(r[: len(chunk)] for r in result)) if isinstance(result, tuple) else result[: len(chunk)])
@@ -294,7 +302,8 @@ class PPOCRv6Pipeline:
         xs = [det_normalize_bgr(img) for img, _ in fitted]
         t["det_pre"] = time.perf_counter()
 
-        probs = _bucketed(self.backend.detect, xs, self.backend.det_batches)
+        # Detector time grows with every image, padded or not; the recognizer's is mostly per call.
+        probs = _bucketed(self.backend.detect, xs, self.backend.det_batches, pad=False)
         t["det"] = time.perf_counter()
 
         boxes, owners, crops = [], [], []
