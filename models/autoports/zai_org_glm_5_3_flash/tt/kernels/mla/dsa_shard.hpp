@@ -214,12 +214,18 @@ inline uint32_t tile_word(uint32_t row, uint32_t col) {
 }
 #endif
 // rev 65, RS1 EARLY (MLA_DSA_SHARD_RS1_EARLY, GLM53_DSA_SHARD_RS1_EARLY; the 8x4 only): the root signals the RS1
-// scatter lane after pass 0 too (2 increments per lane token). Pass 0's slices go to the OTHER half of the column --
-// all of the traffic across the column's middle link -- so the lane streams those destinations after the first t
-// increments, while pass 1 computes, and the own half's after 2 t (fs_read.cpp FS_WAIT2; tt/fabric_stream.py
-// FabricStreamScatter first= / wait2=)
+// scatter lane after pass 0 too. Pass 0's slices go to the OTHER half of the column -- all of the traffic across the
+// column's middle link -- so the lane streams those destinations once every lane token's pass 0 is shipped, while pass
+// 1 computes, and the own half's once every pass 1 is (fs_read.cpp FS_WAIT2; tt/fabric_stream.py FabricStreamScatter
+// first= / wait2=). Rev 67: the two gates count in SEPARATE FIELDS of the lane's wait semaphore -- a pass-0 signal adds
+// 1 (bits [0, 16)), a pass-1 signal RS1_PASS1_INC (bits [16, 32)). Rev 65 / 66 added 1 for both and opened the first
+// gate at a total of t: a token lane through both passes of its tokens opened it while a slower lane's pass-0 slices
+// were still unwritten, and their stale x_rs1 pages travelled (B 16 distinct users, 2 tokens per lane: user 0 off at
+// decode id 8; B 4 identical users never skewed)
 #if defined(MLA_DSA_SHARD_RS1_EARLY)
 static_assert(PAIR == 8 && LINE == 4, "RS1 early: the 8x4 column scatter");
+constexpr uint32_t RS1_PASS1_INC = 65536;  // = 1 << 16 (fs_read.cpp FS_WAIT2's field split; tt/fabric_stream.py)
+static_assert(T_MAX < 65536, "a gate's count fits its 16-bit field");
 #endif
 // rev 59, TP8: q_asm [2 x T x 32, 512] bf16 -- head tile g of token t assembled ONCE per chip (the index core's NCRISC,
 // behind the global merge) from the 4 pieces in y_ag; the owners read 16 whole pages per push

@@ -28,7 +28,13 @@ void kernel_main() {
 #if defined(FS_WAIT)  // tt/fabric_stream.py wait=: the block is complete once FS_WAIT reached runtime arg 4
     const uint32_t wait_count = get_arg_val<uint32_t>(4);
     volatile tt_l1_ptr uint32_t* wsem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FS_WAIT));
+#if defined(FS_WAIT2)  // rev 67: two producer fields -- bits [0, 16) gate the first destinations, [16, 32) the rest
+    while ((*wsem & 0xFFFFu) < wait_count) {
+        invalidate_l1_cache();
+    }
+#else
     noc_semaphore_wait_min(wsem, wait_count);
+#endif
 #endif
     const uint32_t nbat = c_n * PPC / NB;
 #if defined(FS_SCATTER)
@@ -39,7 +45,8 @@ void kernel_main() {
 #endif
     const uint32_t n_dst = get_arg_val<uint32_t>(SC0);
 #if defined(FS_WAIT2)  // tt/fabric_stream.py FabricStreamScatter first= / wait2= (rev 65, the shard's RS1 early): after
-    // the bases, (k_split, wait2) -- destinations k >= k_split are streamed only once FS_WAIT reached wait2
+    // the bases, (k_split, wait2) -- destinations k >= k_split are streamed only once FS_WAIT's field [16, 32) reached
+    // wait2 (rev 67: one count of both fields opened the first gate on the other gate's producers)
 #if !defined(FS_WAIT)
 #error "FS_WAIT2 needs FS_WAIT"
 #endif
@@ -50,7 +57,9 @@ void kernel_main() {
         const uint32_t base = get_arg_val<uint32_t>(SC0 + 1 + k);
 #if defined(FS_WAIT2)
         if (k == k_split) {
-            noc_semaphore_wait_min(wsem, wait2);
+            while ((*wsem >> 16) < wait2) {
+                invalidate_l1_cache();
+            }
         }
 #endif
 #else

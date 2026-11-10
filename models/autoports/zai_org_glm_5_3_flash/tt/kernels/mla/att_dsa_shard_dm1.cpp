@@ -650,8 +650,8 @@ void kernel_main() {
         sweep_b();
     } else if (c == 0) {  // the RS lanes' per-launch protocol: one root increment per lane token (no partial shipped)
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
-#if defined(MLA_DSA_SHARD_RS1_EARLY)  // rev 65 (dsa_shard.hpp): the RS1 lane counts 2 per lane token (after each pass)
-            noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), 1);
+#if defined(MLA_DSA_SHARD_RS1_EARLY)  // dsa_shard.hpp RS1 early: both gates' fields per lane token (rev 67)
+            noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), mlashard::RS1_PASS1_INC);
 #endif
             noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), 1);
 #if defined(MLA_DSA_SHARD_LINE)
@@ -797,15 +797,18 @@ void kernel_main() {
                     noc_async_write_barrier();
                     cb_pop_front(CB_ASEND, ST);
                     cb_pop_front(CB_ASENDO, DT);
-                    // both passes' slices are in x_rs1: the RS1 scatter lane may send. Rev 65 (dsa_shard.hpp, RS1
-                    // early): after each pass -- pass 0's slices (the other half's destinations) stream during pass 1
-#if !defined(MLA_DSA_SHARD_RS1_EARLY)
-                    if (pass == 1)
-#endif
-                    {
+#if defined(MLA_DSA_SHARD_RS1_EARLY)
+                    {  // dsa_shard.hpp RS1 early: after each pass, into its own field of the lane's count (rev 67)
+                        noc_semaphore_inc(
+                            get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), pass == 0 ? 1u : mlashard::RS1_PASS1_INC);
+                        noc_async_atomic_barrier();
+                    }
+#else
+                    if (pass == 1) {  // both passes' slices are in x_rs1: the RS1 scatter lane may send
                         noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), 1);
                         noc_async_atomic_barrier();
                     }
+#endif
                     continue;
                 }
             }

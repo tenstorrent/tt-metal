@@ -200,11 +200,12 @@ class TPMlaShard(TPM.TPMla):
                                     wait=ag_wait, cons=(MK.SEM_FSW, [ag2_noc]), link_base=0, after=MK.SEM_FSA)  # fmt: skip
             ag2 = FS.FabricStreamAG(mesh, self.P * t * 32, W32, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
                                     y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA)  # fmt: skip
-            # rev 65 (GLM53_DSA_SHARD_RS1_EARLY, dsa_shard.hpp RS1_EARLY): the roots signal after each pass (2 per lane
-            # token); the lane streams the other half's destinations (pass 0's slices) once t landed, the own half's
-            # at 2 t. GLM53_DSA_SHARD_COMB: the fold combine on the roots (the kernels' define only; same streams)
+            # rev 65 (GLM53_DSA_SHARD_RS1_EARLY, dsa_shard.hpp RS1 early): the roots signal after each pass; the lane
+            # streams the other half's destinations (pass 0's slices) once t pass-0 signals landed, the own half's at t
+            # pass-1 signals -- rev 67: in two fields of the count (pass 1 adds 1 << 16; shard_plan.rs1_early_gates).
+            # GLM53_DSA_SHARD_COMB: the fold combine on the roots (the kernels' define only; same streams)
             comb, early = SP.shard_comb(self.P), SP.shard_rs1_early(self.P)
-            split = dict(first=lambda p: SP.rs1_early_first(p, self.P), wait2=2 * rs_wait[1]) if early else {}
+            split = dict(first=lambda p: SP.rs1_early_first(p, self.P), wait2=rs_wait[1]) if early else {}
             rs1 = FS.FabricStreamScatter(mesh, t * 32, W8, axis=geo.pair_axis, lanes=lane("rs1"), **sy("rs1"), wait=rs_wait,
                                          cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA, **split)  # fmt: skip
             # both scatters signal the roots' SEM_RSC and the root reads it ordinally (wait_min 1 = round 1 landed,

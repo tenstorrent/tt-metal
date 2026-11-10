@@ -407,6 +407,9 @@ class FabricStreamRS2(_FabricStream):
         return self.run(x)
 
 
+FS_WAIT2_SHIFT = 16  # fs_read.cpp FS_WAIT2: the second gate's field of the wait semaphore (dsa_shard.hpp RS1_PASS1_INC)
+
+
 class FabricStreamScatter(_FabricStream):
     """Per-destination unicast scatter along a line of n (TP8 RS round 2, shard_tp8_design.md section 3): x [1, 1, n
     R_loc, H] bf16, block q = this chip's data for line position q -> peer q's self.y [1, 1, n R_loc, H] block p (p = this
@@ -418,10 +421,14 @@ class FabricStreamScatter(_FabricStream):
 
     def __init__(self, mesh, rows_local: int, hidden: int, *, first=None, wait2: int | None = None, **kw):
         """first= (rev 65, the shard's RS1 early): position p -> the destinations streamed first (in position order),
-        the rest only once the wait semaphore reached wait2 (fs_read.cpp FS_WAIT2; wait= gates the first ones)"""
+        the rest only once the second gate opened (fs_read.cpp FS_WAIT2). Rev 67: the wait semaphore then counts TWO
+        FIELDS -- wait= (its count) gates the first destinations on bits [0, 16), wait2 the rest on bits [16, 32): the
+        producers of the second gate add 1 << FS_WAIT2_SHIFT (one shared count let the second gate's producers open the
+        first gate early)"""
         assert rows_local % 32 == 0, rows_local
         assert (first is None) == (wait2 is None), "first= and wait2= go together"
         assert first is None or kw.get("wait") is not None, "wait2= is the second gate of wait="
+        assert first is None or (int(kw["wait"][1]) < 1 << FS_WAIT2_SHIFT and int(wait2) < 1 << FS_WAIT2_SHIFT), kw
         self.first, self.wait2 = first, wait2
         ax = kw.get("axis")
         R, C = int(mesh.shape[0]), int(mesh.shape[1])

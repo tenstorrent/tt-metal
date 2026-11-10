@@ -911,6 +911,49 @@ def shard_rs1_early(pair: int) -> bool:
     return pair > 2 and _flag("GLM53_DSA_SHARD_RS1_EARLY")
 
 
+RS1_PASS1_INC = HDR["RS1_PASS1_INC"]  # rev 67: dsa_shard.hpp -- a pass-1 signal's weight (fs_read.cpp FS_WAIT2 field)
+assert RS1_PASS1_INC == 1 << 16
+
+
+def rs1_lane_ships(pass_us: list) -> tuple:
+    """the RS1 signals of every token lane root over one launch: pass_us[l] = (pass-0 durations, pass-1 durations) of
+    lane l's tokens (the tree + the ship of each). The root runs pass 0 of all its lane tokens, then pass 1
+    (att_dsa_shard_dm1.cpp: the pass loop outside the token loop) and signals after each token's ship. -> (done0,
+    done1): per lane the signal times of its tokens' pass-0 / pass-1 slices"""
+    done0, done1 = [], []
+    for d0, d1 in pass_us:
+        t_, a = 0.0, []
+        for x in d0:
+            t_ += x
+            a.append(t_)
+        b = []
+        for x in d1:
+            t_ += x
+            b.append(t_)
+        done0.append(a)
+        done1.append(b)
+    return done0, done1
+
+
+def rs1_early_gates(done0: list, done1: list, t: int, *, fields: bool = True) -> tuple:
+    """fs_read.cpp FS_WAIT2's two gates on the RS1 lane's wait semaphore as the roots' signals land in time order (a
+    pass-0 signal before a pass-1 one at the same time): rev 67 (fields=True: pass 0 adds 1, pass 1 RS1_PASS1_INC; the
+    first gate opens at t in bits [0, 16), the second at t in bits [16, 32)) or rev 65 / 66 (fields=False: every signal
+    adds 1; the gates open at t and 2 t). -> (gate-1 time, gate-2 time); sound iff gate 1 >= every pass-0 signal and
+    gate 2 >= every pass-1 signal (the lane must not stream a destination block before its slices are written)"""
+    inc1 = RS1_PASS1_INC if fields else 1
+    ev = sorted([(x, 0) for d in done0 for x in d] + [(x, 1) for d in done1 for x in d])
+    cnt, g1, g2 = 0, None, None
+    for time, pas in ev:
+        cnt += inc1 if pas else 1
+        lo, hi = (cnt & (RS1_PASS1_INC - 1), cnt // RS1_PASS1_INC) if fields else (cnt, cnt)
+        if g1 is None and lo >= t:
+            g1 = time
+        if g2 is None and hi >= (t if fields else 2 * t):
+            g2 = time
+    return g1, g2
+
+
 def rs1_early_first(p: int, P: int) -> list:
     """the column positions chip p's pass-0 slices go to (the other half of the column: pass 0 attends with the other
     head tile, Geometry.pass_tile): the RS1 scatter's first destinations under RS1 early, in position order"""

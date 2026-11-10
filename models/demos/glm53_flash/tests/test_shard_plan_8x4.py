@@ -591,6 +591,50 @@ def test_rs1_early_plan(t):
         SP.Geometry(2, 4).block("rs1", 4, 0, 0, rs1_early=True)
 
 
+def test_rs1_early_gates_two_fields():
+    """rev 67, the RS1-early race (B 16 distinct users, 8 lanes x 2 tokens: user 0 moved at decode id 8): with one count
+    of every root signal (rev 65 / 66) the first gate opens at t signals in total -- the fast lanes' pass-1 signals open
+    it while a slow lane's pass-0 slices are unwritten; with two fields (rev 67) it opens exactly at the last pass-0
+    signal. Balanced lanes (B 4: 4 identical users x 1 token) never expose it, which is why B 4 stayed bit-identical."""
+    # 8 lanes x 2 tokens, lane 7 (more selected pools) slow in pass 0
+    pass_us = [([40.0, 40.0], [50.0, 50.0])] * 7 + [([200.0, 200.0], [50.0, 50.0])]
+    done0, done1 = SP.rs1_lane_ships(pass_us)
+    need1, need2 = max(max(d) for d in done0), max(max(d) for d in done1)
+    g1_old, g2_old = SP.rs1_early_gates(done0, done1, 16, fields=False)
+    g1, g2 = SP.rs1_early_gates(done0, done1, 16)
+    assert g1_old == 130.0 < need1 == 400.0  # lanes 0..6 through both passes: 7 x 2 + 7 > 16 signals
+    assert (g1, g2) == (need1, need2)
+    # B 4: 4 lanes x 1 token, identical users -> the one-count gate happens to be sound
+    done0, done1 = SP.rs1_lane_ships([([60.0], [55.0])] * 4)
+    assert SP.rs1_early_gates(done0, done1, 4, fields=False) == SP.rs1_early_gates(done0, done1, 4) == (60.0, 115.0)
+    # ... but one token per lane races too once the lanes skew (2 lanes through both passes = t = 4 signals)
+    done0, done1 = SP.rs1_lane_ships([([30.0], [30.0])] * 2 + [([100.0], [30.0])] * 2)
+    assert (
+        SP.rs1_early_gates(done0, done1, 4, fields=False)[0] == 60.0 < 100.0 == SP.rs1_early_gates(done0, done1, 4)[0]
+    )
+
+
+def test_rs1_early_gates_sound_random():
+    """rev 67's two-field gates are sound for any lane skew (gate 1 at the last pass-0 signal, gate 2 at the last
+    pass-1 signal); the one-count gates of rev 65 / 66 are not"""
+    gen = torch.Generator().manual_seed(67)
+    unsound_old = 0
+    for _ in range(200):
+        lanes = int(torch.randint(1, 9, (1,), generator=gen))
+        per = int(torch.randint(1, 5, (1,), generator=gen))
+        pass_us = [
+            ((torch.rand(per, generator=gen) * 100 + 1).tolist(), (torch.rand(per, generator=gen) * 100 + 1).tolist())
+            for _ in range(lanes)
+        ]
+        done0, done1 = SP.rs1_lane_ships(pass_us)
+        t = lanes * per
+        need1, need2 = max(max(d) for d in done0), max(max(d) for d in done1)
+        assert SP.rs1_early_gates(done0, done1, t) == (need1, need2)
+        g1_old, _ = SP.rs1_early_gates(done0, done1, t, fields=False)
+        unsound_old += g1_old < need1
+    assert unsound_old > 20, unsound_old
+
+
 def test_rev65_knobs(monkeypatch):
     """GLM53_DSA_SHARD_COMB / GLM53_DSA_SHARD_RS1_EARLY: default off, the 8x4 only, 0 / 1 only; the fold's message
     size is the header's"""
