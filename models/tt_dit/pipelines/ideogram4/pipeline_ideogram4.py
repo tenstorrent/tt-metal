@@ -101,7 +101,7 @@ __all__ = ["Ideogram4DecodeStage", "Ideogram4Sampler", "cfg_blend", "interleave_
 
 
 # =============================================================================
-# Full pipeline class. Follows the tt_dit pipeline mold (PipelineAPIMixin +
+# Full pipeline class. Follows the tt_dit pipeline mold (Pipeline +
 # Ideogram4PipelineConfig + create_pipeline), like the Flux1/QwenImage pipelines.
 #
 # CFG is run SEQUENTIALLY on the full submesh (cfg-parallel factor 1): the
@@ -133,7 +133,7 @@ from ...reference.ideogram4.constants import IMAGE_POSITION_OFFSET, QWEN3_VL_ACT
 from ...reference.ideogram4.dequant import dequant_fp8_state_dict
 from ..cfg import create_submeshes
 from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from ..pipeline_api import PipelineAPIMixin
+from ..pipeline_api import Pipeline
 from . import policy
 
 # Opt-out switch for the bf16 dequant cache (default on). Dequantizing the fp8
@@ -289,6 +289,8 @@ class Ideogram4PipelineConfig:
     resolutions: tuple[tuple[int, int], ...]
     weights_dir: str
     qwen_repo: str
+    # Replay the step traces that `warmup` captures; an eager request is `run_untraced`.
+    trace: bool = True
 
     @classmethod
     def default(
@@ -357,16 +359,17 @@ class _SeqBuffers:
     uncond_llm_mask: ttnn.Tensor  # all zeros
 
 
-class Ideogram4Pipeline(PipelineAPIMixin):
+class Ideogram4Pipeline(Pipeline):
     """Ideogram 4.0 text-to-image pipeline (device-resident, sequential asymmetric CFG).
 
-    Fits the tt_dit pipeline mold (PipelineAPIMixin, Ideogram4PipelineConfig, create_pipeline,
+    Fits the tt_dit pipeline mold (Pipeline, Ideogram4PipelineConfig, create_pipeline,
     event callbacks, PIL output). Ideogram's cond/uncond are distinct distilled nets, so — unlike
     the cfg-parallel Flux/QwenImage pipelines — both stay resident on the full mesh and run
     sequentially, and CFG is blended on-device (cfg_blend) rather than across submeshes.
     """
 
     def __init__(self, *, device: ttnn.MeshDevice, config: Ideogram4PipelineConfig, run_warmup: bool = True) -> None:
+        super().__init__(offload_weights=False, trace=config.trace)
         if run_warmup and config.resolutions:
             # Before loading the weights, so a server with too small a trace region fails fast.
             _check_trace_region(device, device.shape, config.resolutions)
@@ -548,7 +551,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         Galaxy (4x8) they need a mesh opened with ``trace_region_size`` >=
         ``required_trace_region_size(mesh_shape)`` (128 MB). A call that names no size runs at
         ``height`` x ``width``, by default the first resolution (512x512 without resolutions). ``run_warmup=False`` skips the warmup: then call ``warmup``
-        yourself before traced requests, or run untraced at any size.
+        yourself before traced requests, or use ``run_untraced`` at any size.
         """
         config = Ideogram4PipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -898,14 +901,14 @@ class Ideogram4Pipeline(PipelineAPIMixin):
                 st.tracer = None
 
     @torch.no_grad()
-    def __call__(
+    def _run(
         self,
         *,
         prompts: Sequence[str],
         negative_prompts: Sequence[str] | None = None,
         num_inference_steps: int | None = None,
         seed: int = 0,
-        traced: bool = True,
+        traced: bool | None = None,
         height: int | None = None,
         width: int | None = None,
         preset: str = "V4_TURBO_12",
@@ -915,10 +918,11 @@ class Ideogram4Pipeline(PipelineAPIMixin):
     ) -> list[Image.Image]:
         """Generate one image.
 
-        ``traced=True`` replays the step trace ``warmup`` captured for the size and raises for a size
-        that was not warmed up. ``traced=False`` runs the step eagerly: at a warmed size it uses the
-        warmed buffers; before any warmup it works at any size, with buffers freed afterwards.
+        A call replays the step trace ``warmup`` captured for the size and raises for a size that was
+        not warmed up. ``run_untraced`` (``traced=False``) runs the step eagerly: at a warmed size it
+        uses the warmed buffers; before any warmup it works at any size, with buffers freed afterwards.
         """
+        traced = self.trace if traced is None else traced
         on_event = on_event if on_event is not None else null_callback
         assert len(prompts) == 1, "Ideogram4 pipeline generates one image per call"
         prompt = prompts[0]
