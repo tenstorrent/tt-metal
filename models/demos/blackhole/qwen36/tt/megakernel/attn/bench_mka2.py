@@ -349,6 +349,8 @@ if V12:
     import layout_mlp as LM
     assert RQKV, "MK_V12 needs MKA_RQKV (the CB 20 rstd stand-in)"
     if not any(k_ == 'MK_OWNER_RESID' for k_, _ in MKDEF): MKDEF = MKDEF + [('MK_OWNER_RESID', '1')]
+    # LoFi on the BFP4 MLP matmuls is bit-identical to HiFi2 in the engine (owner xo torch.equal, d30u20) -> default on
+    if not any(k_ == 'MK_V12_LOFI' for k_, _ in MKDEF): MKDEF = MKDEF + [('MK_V12_LOFI', '1')]
     V_RESID = ('MK_OWNER_RESID', '1') in MKDEF
     V_R = int(os.environ.get('V12_R', '32')); V_FIRST = int(os.environ.get('V12_FIRST', '1'))
     assert V_R == 32 or 1 <= V_R <= 16
