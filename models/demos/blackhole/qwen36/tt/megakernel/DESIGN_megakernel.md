@@ -407,3 +407,18 @@ on the laptop at .claude/tmp/r16/mega/si_mixed8/.
   ~35 µs of real work (mixer ~4 with resident weights, MLP, h-broadcast/down tail, syncs). The levers are the
   **GDN step** (prefix split: ~6-8 µs prefix + reduced step vs 64) and the **AR + x delivery** (§12). Projection:
   u8 GDN layer ≈ 35 + GDN(prefix+step) + 2·AR_on-path.
+
+**v0.6 split-K: AR-side check (AR track) and decisions:**
+- **Fits the owner layout.** Keep **16 owners, 2 per K-row** (owners 2k and 2k+1, 10 tiles each, ~40 KB per core),
+  which preserves the 10-tile reduction parallelism.
+- Each K-row is 2 physical rectangles (column split at logical x=7: 7 + 3 cores), so 2 multicasts per chunk.
+  Destinations never overlap, so no destination thrash.
+- **Next bottleneck: the shared vertical link.** On NOC1 all chunks for a rectangle climb one column (logical 6 for
+  rect0, 9 for rect1), ~320 KB through one link (≥3.7 µs). Rule: alternate NoCs per K-row (even rows NOC1, odd rows
+  NOC0 entering at the x0 corner) and/or give each K-row a distinct entry column. Check in sim.
+- **rstd goes only to the 10 N-column roots** (applied after the N-column reduce): 2.3 KB to 10 cores instead of 80.
+- Pipelining with the all-gather is already the default (owners multicast each chunk as soon as it lands).
+  Landing order is not K order, so K-ordered flags in the replicated layout can stall. Split-K avoids that because
+  each K-row waits only for its own chunk.
+- Next: fused MLP v12 (split-K gate|up + N-column reduce + SwiGLU at the column root, split-K down) in sim, then
+  silicon.
