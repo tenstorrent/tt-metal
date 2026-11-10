@@ -14,7 +14,7 @@
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
 #       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc,
-#       teardown-litmus
+#       teardown-litmus-mpi
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
 #     Runs all groups in parallel via self-invocation. Each group's output is
@@ -311,7 +311,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc teardown-litmus"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc teardown-litmus-mpi"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -324,7 +324,7 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
     bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc
-    teardown-litmus )
+    teardown-litmus-mpi )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
   pids=()
@@ -1184,15 +1184,15 @@ fi # bh-misc
 ######################################
 # Teardown litmus (#56902): one fault, one assertion, on the mock dual galaxy
 ######################################
-if run_group "teardown-litmus"; then
+if run_group "teardown-litmus-mpi"; then
 
 # Does a distributed job end, end cleanly, and report it after one failure? Two tt-metal ranks on the 6U
 # dual-host mock through tt-run (the distributed context, the control plane's init, the collectives, close,
 # the user's signals) and, with the C probe, OpenMPI and PRRTE alone (TT_LITMUS_MPI_PREFIX picks another MPI
 # install); rows that fail today are xfail(strict) with the error id of the plan, so a fix flips them. Each row
 # kills what it left; the outer cap only guards the whole directory. See the README next to it.
-TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_litmus -v -p no:cacheprovider -p no:benchmark
+TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_litmus/test_teardown_litmus_mpi.py -v -p no:cacheprovider -p no:benchmark
 
-fi # teardown-litmus
+fi # teardown-litmus-mpi
 
 print_failure_summary
