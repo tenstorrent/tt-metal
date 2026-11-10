@@ -160,8 +160,13 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     auto* device = internal::get_device(*mesh_device, sender_core_.device_coord);
     auto device_id = device->id();
     auto& sysmem_mgr = device->sysmem_manager();
+    TT_FATAL(
+        sysmem_mgr.aux_region_allocator().has_d2h_fallback_reserve(),
+        "D2H socket on device {} needs the hugepage fallback (no 64-bit PCIe addressing and no IOMMU), but the "
+        "device's command queues have no fallback reserve; DRAM-backed command queues don't provide one.",
+        device_id);
 
-    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.allocate_region(fifo_size_);
+    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.aux_region_allocator().allocate(fifo_size_);
     hugepage_data_host_ptr_ = static_cast<uint32_t*>(data_host_ptr);
     std::memset(hugepage_data_host_ptr_, 0, fifo_size_);
 
@@ -361,9 +366,9 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
     // The hugepage fallback segfaults on mock (sysmem is stubbed); force the pinned path.
-    auto& ctx = mesh_device->impl().metal_context();
+    const auto& cluster = mesh_device->impl().metal_env().get_cluster();
     bool can_use_pinned_memory =
-        !d2h_uses_hugepage_fallback(ctx) || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+        !cluster.needs_d2h_hugepage_fallback() || cluster.get_target_device_type() == tt::TargetDevice::Mock;
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;
@@ -393,7 +398,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
 
         auto* device = internal::get_device(*mesh_device, sender_core_.device_coord);
         auto& sysmem_mgr = device->sysmem_manager();
-        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
+        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.aux_region_allocator().allocate(sizeof(uint32_t));
         hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
         *const_cast<uint32_t*>(hugepage_bytes_sent_host_ptr_) = 0;
 
