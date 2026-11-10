@@ -188,6 +188,7 @@ class Flux3KleinPipeline:
             ccl_manager=CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology),
             dit_ccl_manager=self._ccl,
             dit_sp_axis=sp_axis,
+            sizes=SIZES,
         )
         # the base model's unconditional sample keeps the reference's own text length
         self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None

@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: the decoder H-partitioned over one mesh axis and
-tensor-parallel over the other, the encoder tensor-parallel and replicated."""
+"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: main's Flux2VaeDecoder H-partitioned over one mesh
+axis and tensor-parallel over the other, main's Flux2VaeEncoder tensor-parallel and replicated. One instance of each
+serves every shape (a Conv2d keeps its prepared weights per input shape); their conv slicing is set per instance."""
 
 from __future__ import annotations
 
@@ -15,10 +16,9 @@ import torch
 
 import ttnn
 
-from ...layers.conv2d import Conv2d
-from ...models.vae.encoder_flux2 import Flux2VaeEncoder
+from ...layers.conv2d import Conv2d, configure_conv2d
 from ...models.vae.vae import VaeAttention
-from ...models.vae.vae_flux2 import Flux2VaeDecoder
+from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
@@ -28,10 +28,12 @@ from .weights_flux3_klein import checkpoint_id
 SUBFOLDER = "vae"
 VAE_WEIGHTS = "diffusion_pytorch_model.safetensors"
 SCALE = 8
+PATCH = 2
 LATENT_CHANNELS = 128
 BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
+Z_CHANNELS = 32
 
-# DRAM slice counts per resolution level, keyed by (in_channels, out_channels), capped at width / 32
+# decoder DRAM slice counts per resolution level, keyed by (in_channels, out_channels), capped at width / 32
 CONV_SLICES_PER_LEVEL = (
     {(3, 128): 16, (128, 128): 16, (128, 3): 8, (256, 128): 16, (256, 256): 16},
     {(128, 256): 8, (256, 256): 4, (512, 256): 16, (512, 512): 16},
@@ -47,39 +49,36 @@ PARTITIONED_DECODER_CONVS_PER_LEVEL = (
 )
 
 
-def register_conv_slices(mesh_shape: tuple[int, int], height: int, width: int, h_factor: int = 1) -> None:
-    table = Conv2d.slice_params.setdefault(tuple(mesh_shape), dict(Conv2d.slice_default))
-    h, w = height, width
-    for level, partitioned in zip(CONV_SLICES_PER_LEVEL, PARTITIONED_DECODER_CONVS_PER_LEVEL):
-        for (cin, cout), slices in level.items():
-            table.setdefault((h, w, cin, cout), min(slices, max(1, -(-w // 32))))
-        if h_factor > 1:
-            # per-device input rows: the H shard plus one halo row on each side
-            for cin, cout in partitioned:
-                table.setdefault((h // h_factor + 2, w, cin, cout), 0)
-        h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
+def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int], int]:
+    """The decoder's conv slice table for square outputs of each size (the H-partitioned convs: 0, ttnn picks)."""
+    table = {}
+    for size in sizes:
+        h = w = size
+        for level, partitioned in zip(CONV_SLICES_PER_LEVEL, PARTITIONED_DECODER_CONVS_PER_LEVEL):
+            for (cin, cout), slices in level.items():
+                table.setdefault((h, w, cin, cout), min(slices, max(1, -(-w // 32))))
+            if h_factor > 1:
+                # per-device input rows: the H shard plus one halo row on each side
+                for cin, cout in partitioned:
+                    table.setdefault((h // h_factor + 2, w, cin, cout), 0)
+            h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
+    return table
 
 
-def _vae_kwargs(mesh_device, parallel_config, ccl_manager) -> dict:
-    return dict(
-        block_out_channels=BLOCK_OUT_CHANNELS,
-        layers_per_block=2,
-        z_channels=32,
-        parallel_config=parallel_config,
-        device=mesh_device,
-        ccl_manager=ccl_manager,
-        use_conv3d=False,
-    )
-
-
-def _configure(module) -> None:
+def _auto_conv_slicing(module, mesh_shape: tuple[int, ...]) -> None:
+    """ttnn picks the slicing of every conv of this instance (a reference can have any 16-px shape): an empty
+    per-instance table for this mesh instead of the shared defaults, which are tuned for other models' shapes."""
     if isinstance(module, Conv2d):
-        # keeps the sliding-window config tensors out of L1_SMALL at 2K and 4K
-        module.config_tensors_in_dram = True
+        module.slice_params = {**Conv2d.slice_params, mesh_shape: {}}
+    for _, child in module.named_children():
+        _auto_conv_slicing(child, mesh_shape)
+
+
+def _local_query_attention(module) -> None:
     if isinstance(module, VaeAttention):
         module.local_queries = True
     for _, child in module.named_children():
-        _configure(child)
+        _local_query_attention(child)
 
 
 class Flux3KleinVae:
@@ -91,6 +90,7 @@ class Flux3KleinVae:
         ccl_manager: CCLManager,
         dit_ccl_manager: CCLManager,
         dit_sp_axis: int,
+        sizes: tuple[int, ...],
         tp_axis: int = 0,
         h_axis: int = 1,
     ) -> None:
@@ -99,53 +99,60 @@ class Flux3KleinVae:
         self._ccl = ccl_manager
         self._dit_ccl = dit_ccl_manager
         self._dit_sp_axis = dit_sp_axis
-        self._tp_axis = tp_axis
         self._h_axis = h_axis
-        self._model_name = f"flux3_klein_vae_{checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
-        # a conv prepares its weights for the first input shape it sees, so every shape gets its own instance
-        self._decoders: dict[int, Flux2VaeDecoder] = {}
-        self._encoders: dict[int, Flux2VaeEncoder] = {}
+        model_name = f"flux3_klein_vae_{checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
+        mesh_shape = tuple(device.shape)
+        common = {
+            "block_out_channels": BLOCK_OUT_CHANNELS,
+            "layers_per_block": 2,
+            "z_channels": Z_CHANNELS,
+            "device": device,
+            "ccl_manager": ccl_manager,
+        }
+        torch_vae = None
 
-    def _load(self, module, parallel_config, subfolder: str):
-        from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
+        def state_dict():
+            nonlocal torch_vae
+            if torch_vae is None:
+                from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
 
-        _configure(module)
-        cache.load_model(
-            module,
-            model_name=self._model_name,
-            subfolder=subfolder,
-            parallel_config=parallel_config,
-            mesh_shape=tuple(self._device.shape),
-            mesh_device=self._device,
-            get_torch_state_dict=lambda: AutoencoderKLFlux2.from_pretrained(
-                str(self._snapshot), subfolder=SUBFOLDER
-            ).state_dict(),
+                torch_vae = AutoencoderKLFlux2.from_pretrained(str(self._snapshot), subfolder=SUBFOLDER)
+            return torch_vae.state_dict()
+
+        def load(module, parallel_config, subfolder: str):
+            cache.load_model(
+                module,
+                model_name=model_name,
+                subfolder=subfolder,
+                parallel_config=parallel_config,
+                mesh_shape=mesh_shape,
+                mesh_device=device,
+                get_torch_state_dict=state_dict,
+            )
+            return module
+
+        decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+        self._decoder = Flux2VaeDecoder(parallel_config=decoder_parallel, use_conv3d=False, **common)
+        configure_conv2d(
+            self._decoder, slice_params={mesh_shape: decoder_slice_params(sizes, int(device.shape[h_axis]))}
         )
-        return module
+        _local_query_attention(self._decoder)
+        load(self._decoder, decoder_parallel, SUBFOLDER)
 
-    def decoder(self, size: int) -> Flux2VaeDecoder:
-        if size not in self._decoders:
-            parallel_config = Flux2VaeParallelConfig.from_axes(
-                self._device, tp_axis=self._tp_axis, h_axis=self._h_axis, w_axis=None
-            )
-            decoder = Flux2VaeDecoder(**_vae_kwargs(self._device, parallel_config, self._ccl))
-            self._decoders[size] = self._load(decoder, parallel_config, SUBFOLDER)
-        return self._decoders[size]
+        encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
+        self._encoder = Flux2VaeEncoder(parallel_config=encoder_parallel, **common)
+        _auto_conv_slicing(self._encoder, mesh_shape)
+        load(self._encoder, encoder_parallel, "vae_encoder_main")
 
-    def encoder(self, size: int) -> Flux2VaeEncoder:
-        if size not in self._encoders:
-            parallel_config = Flux2VaeParallelConfig.from_axes(
-                self._device, tp_axis=self._tp_axis, h_axis=None, w_axis=None
-            )
-            encoder = Flux2VaeEncoder(**_vae_kwargs(self._device, parallel_config, self._ccl))
-            self._encoders[size] = self._load(encoder, parallel_config, "vae_encoder")
-        return self._encoders[size]
+        # the latent BatchNorm main's encoder leaves to its caller (as pipeline_flux2.py does)
+        state = state_dict()
+        self._bn_mean = state["bn.running_mean"].float()
+        self._bn_std = torch.sqrt(state["bn.running_var"].float() + torch_vae.config.batch_norm_eps)
 
     def decode(self, state: ttnn.Tensor, *, size: int) -> ttnn.Tensor:
         """Decode the SP-sharded fp32 latent state of a size x size image to a replicated [1, size, size, 3] image."""
         h, w = latent_shape(size, size)
-        decoder = self.decoder(size)
-        register_conv_slices(tuple(self._device.shape), size, size, h_factor=self._device.shape[self._h_axis])
+        decoder = self._decoder
 
         z = ttnn.typecast(state, ttnn.bfloat16)
         gathered = self._dit_ccl.all_gather(z, dim=1, mesh_axis=self._dit_sp_axis, use_hyperparams=True)
@@ -165,9 +172,8 @@ class Flux3KleinVae:
         return out
 
     def encode(self, image) -> torch.Tensor:
-        """`[h * w, 128]` bf16 latent tokens of a PIL image."""
-        width, height = image.size
-        register_conv_slices(tuple(self._device.shape), height, width)
+        """`[h * w, 128]` bf16 latent tokens of a PIL image (sides multiples of 16): main's encoder gives the latent mean,
+        then the 2x2 patchify and the BatchNorm on the host, as pipeline_flux2.py does."""
         x = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
         x = tensor.from_torch(
             x[None].contiguous(),
@@ -176,12 +182,16 @@ class Flux3KleinVae:
             dtype=ttnn.bfloat16,
             mesh_axes=[None, None, None, None],
         )
-        out = self.encoder(width).encode(x, height=height, width=width, traced=False)
-        tokens = tensor.to_torch(out)[0]
-        ttnn.deallocate(out)
+        out = self._encoder.forward(x)
         ttnn.deallocate(x)
-        return tokens.contiguous()
+        mean = tensor.to_torch(out).float()  # [1, H / 8, W / 8, 32]
+        ttnn.deallocate(out)
+        b, h, w, c = mean.shape
+        tokens = (
+            mean.reshape(b, h // PATCH, PATCH, w // PATCH, PATCH, c).permute(0, 1, 3, 5, 2, 4).flatten(3).flatten(1, 2)
+        )
+        return ((tokens[0] - self._bn_mean) / self._bn_std).to(torch.bfloat16).contiguous()
 
     def deallocate_weights(self) -> None:
-        for module in (*self._decoders.values(), *self._encoders.values()):
-            module.deallocate_weights()
+        self._decoder.deallocate_weights()
+        self._encoder.deallocate_weights()
