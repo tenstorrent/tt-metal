@@ -376,7 +376,7 @@ def setup_bench(dev, MESH, mesh_identity):
         ext_list = [fi for fi in range(NCF) if fi not in stream_idx and fi not in RESV]
         s_by_i = {i_: fi for fi, i_ in stream_idx.items()}
         n_ext_tiles = 2 * len(ext_list); n_half = QN - n_ext_tiles
-        assert n_half >= 0 and 2 * n_half <= len(stream_idx), (n_ext_tiles, n_half)
+        assert QSK or (n_half >= 0 and 2 * n_half <= len(stream_idx)), (n_ext_tiles, n_half)   # K-half split only without QSK
         for e, fi in enumerate(ext_list): QROLE[fi] = (3, 2 * e, 2, 0, KT, fi)
         for i_ in range(0 if QSK else 2 * n_half):
             fi = s_by_i[i_]; h_ = i_ % 2
