@@ -45,7 +45,7 @@ from .attention import (
     PrefillStaticBuffers,
     PrefillStaticStep,
 )
-from .hyperconnection import DeepSeekV4PrefillHyperConnection, wide_rms_norm
+from .hyperconnection import DeepSeekV4PrefillHyperConnection
 from .moe import DeepSeekV4PrefillMoE
 
 
@@ -201,9 +201,8 @@ class DeepSeekV4PrefillDecoderLayer(DeepSeekV4Module):
     def _norm(self, collapsed: ttnn.Tensor, gamma: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, T, 1, D]`` collapsed streams -> the RMSNormed sublayer input ``[1, 1, T, D]``."""
         rows = rows_from_tokens(collapsed)
-        normed = wide_rms_norm(rows, self.eps)
-        out = ttnn.multiply(normed, gamma)
-        ttnn.deallocate(normed)
+        out = ttnn.rms_norm(rows, weight=gamma, epsilon=self.eps)
+        ttnn.deallocate(rows)
         return out
 
     def _check_chunk(self, hidden_streams: ttnn.Tensor, state: PrefillAttentionState, token_ids) -> None:

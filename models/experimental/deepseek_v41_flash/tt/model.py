@@ -1538,15 +1538,19 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self._eager_decode:
             self._run_eager_step(variant)
             return
+        if self.dspark is not None and not held and "write_step" not in self._spec_tids:
+            raise RuntimeError("the decode step sends the drafter its row: call capture_spec_traces() first")
         if self._host is not None:
             self._host.dispatch(self._host_variants[variant])
+            if self.dspark is not None and not held:
+                # The drafter's row is no stage's: its queue is this thread's, as for spec_release_writes.
+                with self._cq_lock:
+                    ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
             return
         with self._cq_lock:
             for sm in self.submeshes_io:
                 ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
             if self.dspark is not None and not held:
-                if "write_step" not in self._spec_tids:
-                    raise RuntimeError("the decode step sends the drafter its row: call capture_spec_traces() first")
                 ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
 
     def _step_context(
@@ -2216,7 +2220,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         if moved is not tail:
                             ttnn.deallocate(tail)
                         tail = moved
-                    write_rows(traced.buffers[li].tail, tail)
+                    # The prefill tail is the last sliding_window rows of the layer's window buffer.
+                    window = traced.buffers[li].window
+                    first = window.shape[2] - w
+                    ttnn.experimental.slice_write(
+                        tail, window, [0, 0, first, 0], [1, 1, first + w, window.shape[3]], [1, 1, 1, 1]
+                    )
+                    ttnn.deallocate(tail)
                 if li in self.config.kv_source_layer_ids:
                     entries, keys = entries_of(sm, li)
                     sources[li] = (entries, keys)
@@ -2552,24 +2562,25 @@ class DeepSeekV41Model(DeepSeekV4Model):
         follows them down the pipeline while they finish on the last stages. Were the dispatching thread also
         the reader, this block on top of them would overfill the pipeline and wedge the host in the packet
         writes, which block on the Engram FIFO while the device waits for a read that cannot come (see
-        :meth:`_write_engram_rows`).
+        :meth:`_write_engram_rows`). The host runtime's output thread already reads every output as it lands, so
+        with it running the outputs are read off that thread's queue instead.
         """
         if self._eager_decode:
             raise RuntimeError("a streamed verify replays the decode traces: build with traced decode")
-        if self._host is not None:
-            raise RuntimeError("the host runtime reads the outputs itself")
         tokens = list(tokens)
         positions = range(start, start + len(tokens))
         self.ensure_session_capacity(positions[-1])
-        self._ensure_spec_reader()
+        if self._host is None:
+            self._ensure_spec_reader()
         self._spec_hold_writes = True
         try:
             self.replay_traced_ahead(positions, tokens)
         finally:
             self._spec_hold_writes = False
-        self._spec_expected += len(tokens)
-        for _ in tokens:
-            self._spec_tickets.put(True)
+        if self._host is None:
+            self._spec_expected += len(tokens)
+            for _ in tokens:
+                self._spec_tickets.put(True)
         for token, pos in zip(tokens, positions):
             self.write_step_packet(token, pos)
 
@@ -2651,13 +2662,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
         address. Call once the decode traces are captured and with no step in flight; Python then only writes
         the packet and Engram sockets (or reads the output socket) with no step in flight, as prefill and the
         vision row writes already do. ``cpus`` pins the threads (output, packet, Engram layers, stages);
-        ``counters_path`` is a file the runtime keeps its counters in, for the web monitor (``demo/monitor.py``)."""
+        ``counters_path`` is a file the runtime keeps its counters in, for the web monitor (``demo/monitor.py``).
+
+        With a DSpark drafter (capture its traces first) the packets carry its ring row, and this thread keeps the
+        drafter's queue: each step's receive of its row (:meth:`_execute_traces`, or :meth:`spec_release_writes`
+        for a held one) and the draft. A round's stage work beyond the steps (:meth:`spec_fixup`,
+        :meth:`spec_write_main`) is queued here too, once the stage threads have issued every posted replay."""
         if self._host is not None:
             return
         if self._eager_decode or not self._traced_captured:
             raise RuntimeError("the host runtime replays the decode traces: capture them first")
-        if self.dspark is not None:
-            raise NotImplementedError("the host runtime does not run speculative decode")
+        if self.verify_rows > 1:
+            raise NotImplementedError("the parallel verify reads its block's logits off the socket: use verify_rows=1")
         if not isinstance(self._engram_lookup, (host_rs.RustEngramLookup, type(None))):
             raise RuntimeError("the host runtime needs the Rust Engram lookup, which DEEPSEEK_V41_RUST_HOST turned off")
         self._wait_replays_dispatched()
@@ -2681,6 +2697,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ],
             cpus=list(cpus),
             counters_path=counters_path,
+            drafter_ring_rows=self.dspark.ring_rows if self.dspark is not None else 0,
         )
         self._host_variants = {key: i for i, key in enumerate(keys)}
         logger.info(

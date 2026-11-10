@@ -12,6 +12,8 @@
 //!
 //! The sockets and submeshes are Python's (by address); while this runtime runs, Python must not write the
 //! packet and Engram sockets or read the output socket, except with nothing in flight here (see `wait_idle`).
+//! It queues work of its own on a stage only once `drain` says the stage threads have issued every replay
+//! (speculative decode's ring fixups); a DSpark drafter's row is no stage, and its queue stays Python's.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -46,6 +48,8 @@ pub struct DecodeConfig {
     pub batch: usize,
     pub sliding_window: i64,
     pub win_slot_rows: i64,
+    /// The DSpark drafter's ring depth: a step's row goes to ring row `pos % drafter_ring_rows`; 0: no drafter.
+    pub drafter_ring_rows: i64,
     pub engram: Option<Arc<Engram>>,
     pub engram_sockets: Vec<EngramSockets>,
     pub output: D2H,
@@ -119,6 +123,13 @@ fn as_bytes(values: &[u16]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(values.as_ptr().cast(), values.len() * 2) }
 }
 
+/// V4.1's packet fields after the tokens (`DeepSeekV41Model._build_packet`): the session slot's ring row, pos,
+/// slot, ring base, window base and the drafter ring row (no drafter: 0).
+fn packet_fields(pos: i64, slot: i64, window: i64, win_rows: i64, drafter_ring_rows: i64) -> [i64; 6] {
+    let drafter_row = if drafter_ring_rows > 0 { pos % drafter_ring_rows } else { 0 };
+    [slot * window + pos % window, pos, slot, slot * window, slot * win_rows, drafter_row]
+}
+
 impl DecodeHost {
     pub fn start(config: DecodeConfig) -> Result<Self, String> {
         let n_stages = config.stages.len();
@@ -182,24 +193,38 @@ impl DecodeHost {
             let shared = shared.clone();
             let output = config.output;
             let step_bytes = config.output_step_bytes;
-            let pages = step_bytes / output.page_size();
+            let page = output.page_size();
+            let pages = step_bytes / page;
             spawn(
                 "dsv41-output".into(),
                 Box::new(move || {
                     let mut idle_since: Option<Instant> = None;
+                    // A step's pages read so far: a step can be more pages than the FIFO holds (logits without
+                    // device sampling), so its pages are read as they come rather than once they are all in.
+                    let mut out = vec![0u8; step_bytes];
+                    let mut done = 0;
+                    let mut t0 = Instant::now();
                     while !shared.stop.load(Ordering::Acquire) {
                         match output.pages_available() {
                             Err(e) => return shared.fail("output reader", e),
-                            Ok(n) if n >= pages => {
-                                let t0 = Instant::now();
-                                let mut out = vec![0u8; step_bytes];
-                                if let Err(e) = output.read(&mut out) {
+                            Ok(n) if n > 0 => {
+                                if done == 0 {
+                                    t0 = Instant::now();
+                                }
+                                let k = n.min(pages - done);
+                                if let Err(e) = output.read(&mut out[done * page..(done + k) * page]) {
                                     return shared.fail("output reader", e);
                                 }
+                                done += k;
+                                idle_since = None;
+                                if done < pages {
+                                    continue;
+                                }
+                                done = 0;
+                                let out = std::mem::replace(&mut out, vec![0u8; step_bytes]);
                                 shared.c.output_read.add(t0);
                                 shared.c.last_output_ns.store(unix_ns(), Ordering::Relaxed);
                                 shared.c.outputs_read.fetch_add(1, Ordering::AcqRel);
-                                idle_since = None;
                                 if output_tx.send(out).is_err() {
                                     return;
                                 }
@@ -271,7 +296,7 @@ impl DecodeHost {
         {
             let shared = shared.clone();
             let packet = config.packet;
-            let (w, win_rows) = (config.sliding_window, config.win_slot_rows);
+            let (w, win_rows, drafter_rows) = (config.sliding_window, config.win_slot_rows, config.drafter_ring_rows);
             let engram = if engram_txs.is_empty() { None } else { engram.clone() };
             spawn(
                 "dsv41-packet".into(),
@@ -279,11 +304,9 @@ impl DecodeHost {
                     let mut page = vec![0i32; pkt_ints];
                     while let Ok(Some(step)) = packet_rx.recv() {
                         let t0 = Instant::now();
-                        // V4.1's packet (DeepSeekV41Model._build_packet): tokens, then the session slot's
-                        // ring row, pos, slot, ring base, window base and the drafter ring row (no drafter: 0).
                         page.fill(0);
                         let (pos, slot) = (step.pos, step.slot);
-                        let fields = [slot * w + pos % w, pos, slot, slot * w, slot * win_rows, 0];
+                        let fields = packet_fields(pos, slot, w, win_rows, drafter_rows);
                         for (dst, v) in page.iter_mut().zip(step.tokens.iter().chain(fields.iter())) {
                             *dst = *v as i32;
                         }
@@ -460,5 +483,20 @@ impl DecodeHost {
 impl Drop for DecodeHost {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::packet_fields;
+
+    #[test]
+    fn packet_fields_match_build_packet() {
+        // Slot 2 of 128-row rings and 32-row windows, at pos 300.
+        assert_eq!(packet_fields(300, 2, 128, 32, 0), [2 * 128 + 300 % 128, 300, 2, 256, 64, 0]);
+        // With a 160-row drafter ring.
+        assert_eq!(packet_fields(300, 0, 128, 32, 160), [300 % 128, 300, 0, 0, 0, 140]);
+        assert_eq!(packet_fields(159, 0, 128, 32, 160)[5], 159);
+        assert_eq!(packet_fields(160, 0, 128, 32, 160)[5], 0);
     }
 }

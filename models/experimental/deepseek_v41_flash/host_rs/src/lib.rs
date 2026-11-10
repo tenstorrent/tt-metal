@@ -180,12 +180,13 @@ impl PyDecodeHost {
     /// A socket argument is the address of Python's socket (`native_handle`) or the id of a named socket
     /// (`export_descriptor`), which this runtime connects to. `engram_sockets` is
     /// `[(layer_id, [socket per TP rank], local_kin)]`. `counters_path` is a file (in `/dev/shm`) to keep the
-    /// runtime's counters in, for the web monitor.
+    /// runtime's counters in, for the web monitor. `drafter_ring_rows` is the DSpark drafter's ring depth, for the
+    /// packet's drafter ring row (0: no drafter).
     #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (stages, variants, packet_socket, batch, sliding_window, win_slot_rows, output_socket,
                         output_step_bytes, engram=None, engram_sockets=Vec::new(), cpus=Vec::new(),
-                        counters_path=None))]
+                        counters_path=None, drafter_ring_rows=0))]
     fn new(
         stages: Vec<usize>,
         variants: Vec<Vec<u32>>,
@@ -199,6 +200,7 @@ impl PyDecodeHost {
         engram_sockets: Vec<(i64, Vec<Bound<'_, PyAny>>, usize)>,
         cpus: Vec<usize>,
         counters_path: Option<String>,
+        drafter_ring_rows: i64,
     ) -> PyResult<Self> {
         let engram = engram.map(|e| e.get().inner.clone());
         let mut layers = Vec::new();
@@ -217,6 +219,7 @@ impl PyDecodeHost {
             batch,
             sliding_window,
             win_slot_rows,
+            drafter_ring_rows,
             engram,
             engram_sockets: layers,
             output: d2h(output_socket)?,

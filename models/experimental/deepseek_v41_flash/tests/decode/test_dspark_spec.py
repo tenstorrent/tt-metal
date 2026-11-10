@@ -25,6 +25,8 @@ are logged.
 built with the parallel verify's traces only when a mode needs them. The parallel verify is off by default
 until its rows match the single-row decode (``test_parallel_verify_rows``).
 ``DEEPSEEK_V4_SPEC_EXACT=0`` logs a divergence from the baseline instead of failing.
+With the pipelined verify alone, every run is on the Rust host runtime (``model.start_host_runtime``) when the
+extension is built, as the server runs; ``DEEPSEEK_V41_RUST_HOST=0`` keeps the Python dispatch and reader instead.
 
 Progress logging while it runs:
 
@@ -62,6 +64,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _tokenize_chat,
     _traced_max_seq,
 )
+from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     ENGRAM_RAM_MARGIN,
@@ -151,6 +154,9 @@ def test_dspark_spec_decode(mesh_device):
             stack.enter_context(tensor_prefetcher_session(model.dspark.device))
         model.activate_session(model.open_session())
         model.capture_spec_traces(prompt[0], 0)
+        if host_rs.enabled() and modes == (False,):
+            model.start_host_runtime()
+        logger.info(f"[test] host runtime: {'Rust' if model.host_runtime_running else 'Python'}")
 
         # 1. Plain greedy decode. Each end of sentence asks the next follow-up, until n_tokens are generated
         # or the follow-ups run out.

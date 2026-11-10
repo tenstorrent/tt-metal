@@ -90,11 +90,15 @@ class PrefillStaticShared:
     own, or the stage's copy of a source on an earlier stage), ``entry_idx`` and ``candidates`` as in
     :class:`PrefillShared`. A kv source with ``keep_rows`` set also leaves the rows it wrote this chunk in
     ``new_rows`` (``(entries, keys)``, ROW_MAJOR ``[1, 1, T / rate, width]``), for the next stage.
+
+    ``received_idx`` is the stage's persistent receive buffer of a selection from an earlier stage. ``entry_idx``
+    starts out as that buffer, read in place; an index source replaces it without freeing it.
     """
 
     entries: Optional[ttnn.Tensor] = None
     idx_keys: Optional[ttnn.Tensor] = None
     entry_idx: Optional[ttnn.Tensor] = None
+    received_idx: Optional[ttnn.Tensor] = None
     keep_rows: bool = False
     new_rows: Optional[tuple] = None
     candidates: Optional[ttnn.Tensor] = None
@@ -314,7 +318,8 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         and ``start`` the chunk's start, a 1-element device tensor."""
         q, weights = self._index_inputs(latent, hidden, cos, sin)
         if shared.entry_idx is not None:
-            ttnn.deallocate(shared.entry_idx)
+            if shared.entry_idx is not getattr(shared, "received_idx", None):
+                ttnn.deallocate(shared.entry_idx)
             shared.entry_idx = None
         if self.is_candidate_source:
             if shared.candidates is not None:
@@ -403,14 +408,16 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
     # traced prefill
     # ------------------------------------------------------------------ #
     def new_static_buffers(self, chunk_size: int, entry_capacity: int = 0) -> PrefillStaticBuffers:
-        """Persistent zeroed state for :meth:`forward_static`: the K=V ``tail`` and last ``window`` of every layer,
+        """Persistent zeroed state for :meth:`forward_static`: the K=V ``window`` ``[tail | chunk]`` of every layer,
         and a kv source's ``entry_capacity`` front-anchored entry and index-key rows. V4.1 has no pooling overlap.
+
+        There is no separate ``tail`` buffer (``bufs.tail`` is ``None``): between chunks the tail is the window's
+        last ``sliding_window`` rows, which the next chunk moves to its front. Seeding and export use those rows.
 
         Allocated once, before any trace exists.
         """
-        bufs = PrefillStaticBuffers(
-            tail=self._zeros_rm(self.sliding_window), window=self._zeros_rm(self.sliding_window + chunk_size)
-        )
+        self._tail_zeros = self._zeros_rm(self.sliding_window)
+        bufs = PrefillStaticBuffers(tail=None, window=self._zeros_rm(self.sliding_window + chunk_size))
         if self.is_kv_source:
             if entry_capacity <= 0 or entry_capacity % ALIGNMENT:
                 raise ValueError(f"entry_capacity {entry_capacity} must be a positive multiple of {ALIGNMENT}")
@@ -419,12 +426,10 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         return bufs
 
     def reset_static(self, bufs: PrefillStaticBuffers) -> None:
-        """Rewind ``bufs`` to the start of a prompt: zero the tail. The entry rows are front-anchored and a prompt
-        reads only the ones it wrote (see V4's :meth:`~DeepSeekV4PrefillAttention.reset_static`)."""
-        shape = tuple(bufs.tail.shape)
-        if getattr(self, "_tail_zeros", (None, None))[0] != shape:
-            self._tail_zeros = (shape, self.host_tensor(torch.zeros(shape), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT))
-        ttnn.copy_host_to_device_tensor(self._tail_zeros[1], bufs.tail)
+        """Rewind ``bufs`` to the start of a prompt: zero the tail (the window's last ``sliding_window`` rows). The
+        entry rows are front-anchored and a prompt reads only the ones it wrote (see V4's
+        :meth:`~DeepSeekV4PrefillAttention.reset_static`)."""
+        self._write_rows(self._tail_zeros, bufs.window, bufs.window.shape[2] - self.sliding_window)
 
     def forward_static(
         self, hidden: ttnn.Tensor, bufs: PrefillStaticBuffers, step: V41PrefillStaticStep, shared: PrefillStaticShared
@@ -458,13 +463,15 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
 
         num_tokens = q.shape[2]
         sw = self.sliding_window
+        # [1, 1, sw + T, Dh], updated in place to [tail | chunk]: the last chunk's tail (its last sw rows) moves to
+        # the front through a copy, as the two row ranges overlap when T < sw.
+        window = bufs.window
+        tail = ttnn.slice(window, [0, 0, num_tokens, 0], [1, 1, num_tokens + sw, self.head_dim])
+        self._write_rows(tail, window, 0)
+        ttnn.deallocate(tail)
         chunk_rm = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
-        window = ttnn.concat([bufs.tail, chunk_rm], dim=2)  # [1, 1, sw + T, Dh]
+        self._write_rows(chunk_rm, window, sw)
         ttnn.deallocate(chunk_rm)
-        self._write_rows(window, bufs.window, 0)
-        new_tail = ttnn.slice(window, [0, 0, num_tokens, 0], [1, 1, num_tokens + sw, self.head_dim])
-        self._write_rows(new_tail, bufs.tail, 0)
-        ttnn.deallocate(new_tail)
         attn = self._attend_sdpa(
             q,
             window,
@@ -475,7 +482,6 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
             shared.entry_idx if self.rate else None,
             empty_tail=step.fresh,
         )
-        ttnn.deallocate(window)
         return self._o_proj(attn)
 
     def _attend_sdpa(
