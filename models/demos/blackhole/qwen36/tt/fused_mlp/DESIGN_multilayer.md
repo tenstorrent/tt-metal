@@ -21,6 +21,45 @@ Conclusion: delivering x from the all-reduce and broadcasting h through 4 roots 
 peak, tail-limited) and the single op pays more launch overhead. A fused MLP wins only when it is persistent across
 layers, so launch overhead is paid once per pass and the bank tail of layer L overlaps layer L+1's stream.
 
+## Milestone (a): persistent multi-layer MLP microbench, v11 (built, silicon d27u08)
+
+One generic_op loops over NL MLP layers. Each core prefetches layer L+1's odd gate|up groups and down slice into
+double-buffered L1 slots (read transaction ids 1/2) before consuming layer L. The h flags are cumulative per layer, and
+a per-layer down-done barrier stops the roots overwriting h too early. x is producer-fed (XPRE). Every layer has
+distinct weights: up scaled 2^(L%2) and down 2^-(L%3), exact in BFP4. Last-layer PCC is 0.99998 at every NL, with no
+bad cores.
+
+| Layers in one launch | us / layer | GB/s | DSMC gate_up + down, us / layer |
+|---|---|---|---|
+| 1 | 64.0 | 294 | 58.6 |
+| 2 | 67.2 | 280 | 56.4 |
+| 8 | 50.2 | 374 | 55.4 |
+| 16 | 47.4 | 397 | - |
+| 32 | **46.3** | **406** | 55.4 (x4 layers) |
+
+Steady state is about 46 us per layer at about 406 GB/s, against 55.4 us for DSMC (-16%). Bug found on the way:
+reserving the next layer's slot before the current one is pushed returns the current slot's write pointer, so the
+other slot must be addressed explicitly.
+
+### Blocker for "one persistent program per layer type" in the model
+
+In the decoder, layer L's MLP input depends on layer L's attention or GDN output, and that comes after layer L-1's MLP.
+Layer types strictly alternate (attn/GDN -> MLP -> attn/GDN -> ...), so a persistent MLP program that loops over the
+64 MLPs can't run them back to back. It would have to stay resident on its 80 cores while the attention and GDN ops
+run on the remaining ~30 cores, or be relaunched every layer, which loses the launch and prefetch benefit (NL=1 is
+64 us vs DSMC 58.6). The microbench gain is real, but only as a streaming ceiling. Delivering it in the model needs
+one of these:
+  (A) a single persistent program interleaving attention/GDN and MLP per layer (the other design option): the full
+      megakernel, weeks of work;
+  (B) the Llama-TG approach: a persistent weight prefetcher (DRAM-bank-adjacent reader cores streaming the next op's
+      weights into a global circular buffer across op boundaries) feeding per-op matmuls, so the stream never idles
+      and the launch cost of later ops overlaps the stream. This is the same streaming result as v11 without one
+      monolithic program;
+  (C) a per-layer fused MLP launch whose weights for layer L+1 are prefetched into L1 during layer L+1's
+      attention/GDN by a lightweight resident prefetch kernel on the MLP cores.
+Recommendation: (B)/(C) first. They keep today's op graph and vLLM trace, and v11 shows the achievable per-layer
+cost (~46 us) once the stream is continuous.
+
 ## Multi-layer weight-streaming design (proposal, not built)
 
 Goal: per decode pass, one persistent program per layer type (or per layer group), where each core's weight stream
