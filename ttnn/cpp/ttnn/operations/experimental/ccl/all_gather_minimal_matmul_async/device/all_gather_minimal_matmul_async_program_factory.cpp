@@ -274,7 +274,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu = false,
-    int32_t swiglu_chunk = -1) {
+    int32_t swiglu_chunk = -1,
+    bool swiglu_overlap = false) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -796,6 +797,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // kernel containing output-writer or compute code sees FUSE_SWIGLU.
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
+    }
+    if (swiglu_overlap && (fuse_swiglu || swiglu_chunk >= 0)) {
+        defines["SWIGLU_OVERLAP"] = "1";
     }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
@@ -1809,7 +1813,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu,
-    int32_t swiglu_chunk) {
+    int32_t swiglu_chunk,
+    bool swiglu_overlap) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1845,7 +1850,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_semaphore,
         fsdp_topology,
         fuse_swiglu,
-        swiglu_chunk);
+        swiglu_chunk,
+        swiglu_overlap);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -1925,7 +1931,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
         attributes.fuse_swiglu,
-        attributes.swiglu_chunk);
+        attributes.swiglu_chunk,
+        attributes.swiglu_overlap);
 }
 
 tt::tt_metal::WorkloadDescriptor AllGatherMinimalMatmulAsyncProgramFactory::create_workload_descriptor(

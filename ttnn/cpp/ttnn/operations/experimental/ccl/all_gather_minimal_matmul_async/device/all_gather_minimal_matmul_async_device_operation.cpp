@@ -648,7 +648,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
     std::optional<bool> transpose_core_grid,
-    int32_t swiglu_chunk) {
+    int32_t swiglu_chunk,
+    bool swiglu_overlap) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -698,7 +699,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fuse_swiglu,
         chunk_sizes,
         transpose_core_grid,
-        swiglu_chunk};
+        swiglu_chunk,
+        swiglu_overlap};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,

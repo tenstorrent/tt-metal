@@ -174,6 +174,9 @@ class ColParallelLinear(Module):
     Linear layer with column parallel weights
     """
 
+    # The fused SwiGLU epilogue overlapped with the next block's matmul (all-gather-matmul path, no bias)
+    swiglu_overlap: bool = False
+
     def __init__(
         self,
         in_features,
@@ -490,6 +493,7 @@ class ColParallelLinear(Module):
                 ),
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
+                swiglu_overlap=self.swiglu_overlap,
                 scalar=addcmul_scalar if addcmul_a is not None else None,
                 addcmul_input_tensor1=addcmul_a,
                 addcmul_input_tensor2=addcmul_b,
