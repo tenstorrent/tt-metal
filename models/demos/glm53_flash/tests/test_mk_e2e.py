@@ -95,6 +95,7 @@ def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_mk_e2e(mesh_device, monkeypatch):
     from models.autoports.zai_org_glm_5_3_flash.tt.generator import Glm53Generator
+    from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
     from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import StackBackend
     from models.autoports.zai_org_glm_5_3_flash.tt.tokenizer_chat import load_tokenizer
 
@@ -117,8 +118,12 @@ def test_mk_e2e(mesh_device, monkeypatch):
     # layers then carry fabric phases for every t <= 4 besides the chunk (the speculative step's MTP layer shares
     # them at ts = (1, K + 1)) and the narrow widths (GLM53_STACK_NARROW_WIDTHS) are honoured
     wcache = {} if os.environ.get("GLM53_MK_WEIGHT_CACHE") == "1" else None
-    backend = StackBackend(mesh_device, max_batch=B, layers=layers, hf_config=cfg, topk=1, sample=False, ep_weights=ep,
-                           native_t=native, weight_cache=wcache)  # fmt: skip
+    # GLM53_MK_TOPK=32 GLM53_MK_SAMPLE=1: the head's device sampler (the served construction, generator_vllm_stack
+    # DEVICE_TOP_K); default topk 1 = greedy only
+    topk = int(os.environ.get("GLM53_MK_TOPK", "1"))
+    backend = StackBackend(mesh_device, max_batch=B, layers=layers, hf_config=cfg, topk=topk,
+                           sample=os.environ.get("GLM53_MK_SAMPLE", "0") == "1", ep_weights=ep, native_t=native,
+                           weight_cache=wcache)  # fmt: skip
     logger.info(f"StackBackend built in {time.perf_counter() - t0:.0f} s: mesh {MESH}, {len(layers)} layers, B {B}")
     if isinstance(source, MkTileCacheSource) and not source.ready:
         source.complete()
@@ -134,14 +139,24 @@ def test_mk_e2e(mesh_device, monkeypatch):
     prompts = [list(chat_prompt(tok, ISL, user=u)) for u in range(live)]
     logger.info(f"prompt {len(ids)} tokens (ISL target {ISL}; per user {[len(p) for p in prompts]}); OSL {OSL}; "
                 f"cache {B} x {SEQ}; distinct {os.environ.get('GLM53_MK_DISTINCT', '0')}")  # fmt: skip
+    # GLM53_MK_TEMP=1.0 (GLM53_MK_TOP_P, GLM53_MK_TOP_K, GLM53_MK_SEED): sampled requests (GLM's generation config is
+    # temperature 1.0 / top-p 0.95, no top-k); one seed for every user, so identical prompts still decode identically;
+    # a sampled run decodes the whole OSL (no stop on EOS) so the step time covers OSL tokens
+    temp = float(os.environ.get("GLM53_MK_TEMP", "0") or 0)
+    sampling, stop = None, True
+    if temp > 0:
+        top_k = int(os.environ.get("GLM53_MK_TOP_K", "0") or 0)
+        sp = SamplingParams(temperature=temp, top_k=top_k or None, top_p=float(os.environ.get("GLM53_MK_TOP_P", "0.95")),
+                            seed=int(os.environ.get("GLM53_MK_SEED", "1234")))  # fmt: skip
+        sampling, stop = [sp] * live, False
     # TTFT: prefill of every user + the first token (the generator's prefill chunks + one sampler step)
     t0 = time.perf_counter()
-    first = gen.generate_batch(prompts, 1, enable_trace=True)
+    first = gen.generate_batch(prompts, 1, sampling=sampling, stop_on_eos=stop, enable_trace=True)
     ttnn.synchronize_device(mesh_device)
     ttft_s = time.perf_counter() - t0
     gen.reset()
     t0 = time.perf_counter()
-    outs = gen.generate_batch(prompts, OSL, enable_trace=True)
+    outs = gen.generate_batch(prompts, OSL, sampling=sampling, stop_on_eos=stop, enable_trace=True)
     ttnn.synchronize_device(mesh_device)
     total_s = time.perf_counter() - t0
     n_gen = max(len(o) for o in outs)
@@ -163,7 +178,7 @@ def test_mk_e2e(mesh_device, monkeypatch):
     if live > 1 and os.environ.get("GLM53_MK_DISTINCT", "0") != "1":
         assert same, f"identical prompts, different outputs: {[o[:12] for o in outs]}"
     expect = [int(v) for v in os.environ.get("GLM53_MK_EXPECT_IDS", "").split(",") if v.strip()]
-    if expect:
+    if expect and sampling is None:  # the validated ids are greedy ones
         assert outs[0][: len(expect)] == expect, f"ids {outs[0][: len(expect)]} != the validated {expect}"
     floor = float(os.environ.get("GLM53_MK_MIN_TOKS", "0") or 0)
     if floor:

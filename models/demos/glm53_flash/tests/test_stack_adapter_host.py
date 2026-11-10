@@ -73,8 +73,9 @@ def test_module_imports_without_ttnn():
     assert "ttnn" not in sys.modules, "importing the adapter must not import ttnn"
     caps = GLM53StackForCausalLM.model_capabilities
     assert caps["supports_chunked_prefill"] is True
-    assert caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == 1
-    assert caps["device_top_k_unbounded_as"] is None and caps["supports_device_penalties"] is False
+    assert caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == gvs.DEVICE_TOP_K == 32
+    assert caps["device_top_k_unbounded_as"] == 32  # GLM sets no top-k: default requests stay on the device
+    assert caps["supports_device_penalties"] is False
     assert caps["fabric_config"] is None
     for key in (
         "supports_prefix_caching",
@@ -652,9 +653,10 @@ def test_host_sampled_decode_route():
     assert gen.counters["logits_readback"] == 1 and gen.counters["token_refresh"] >= 1
 
 
-def test_refusals():
+def test_refusals(monkeypatch):
     """Undeclared routes fail loudly: sampled rows on the device route, selective readback, speculative kwargs, the
     legacy reload keyword, a resident-input chain, multimodal rows."""
+    monkeypatch.setattr(gvs, "DEVICE_TOP_K", 1)  # the greedy-only construction (GLM53_STACK_DEVICE_SAMPLING=0)
     ad, backend, gen, kv = _adapter()
     p = _prompt(10, 1)
     sampled = SimpleNamespace(temperature=[0.8], top_k=[50], top_p=[0.9], seed=[None])
@@ -758,3 +760,22 @@ def test_fabric_capability_uses_set_fabric_config_keywords(monkeypatch):
 def test_zz_no_ttnn_was_imported_by_the_suite():
     """Runs last (file order): every adapter path the mock exercised stayed off ttnn."""
     assert "ttnn" not in sys.modules
+
+
+def test_sampled_rows_take_the_device_route():
+    """With the device sampler (the default construction) a sampled row -- temperature 1.0 / top-p 0.95 and no top-k,
+    GLM's generation config -- is passed to the generator on the device route instead of refused."""
+    ad, backend, gen, kv = _adapter()
+    p = _prompt(10, 1)
+    sampled = SimpleNamespace(temperature=[1.0], top_k=[0], top_p=[0.95], seed=[None])
+    out = ad.prefill_forward(
+        _history([p]),
+        page_table=_table([_blocks(0, 10)], 1),
+        kv_cache=kv,
+        prompt_lens=[10],
+        start_pos=[0],
+        empty_slots=[0],
+        sampling_params=sampled,
+    )
+    assert isinstance(out, tuple) and out[0].shape == (1, 1)
+    assert gen.live_slots(kv) == [0]

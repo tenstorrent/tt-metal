@@ -46,6 +46,11 @@ from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
 ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
 LATENT_DIM = 512  # kv_lora_rank: the latent page row, the only "KV" vLLM accounts for (generator_vllm.LATENT_DIM)
+# the head's device sampler (kernels/head/topk_select.cpp): StackBackend(topk=DEVICE_TOP_K, sample=True) draws
+# temperature / top-k / top-p rows from the 32 best candidates inside the traced decode step; a request without a
+# top-k bound (GLM's generation config sets none) or above it is drawn from those 32 (device_top_k_unbounded_as).
+# GLM53_STACK_DEVICE_SAMPLING=0: greedy on device only, sampled rows on the host sampler over the full logits
+DEVICE_TOP_K = 32 if os.environ.get("GLM53_STACK_DEVICE_SAMPLING", "1") == "1" else 1
 
 
 def _mesh_shape_from_env() -> tuple[int, int]:
@@ -169,8 +174,8 @@ class GLM53StackForCausalLM:
         # (``StackBackend(topk=1, sample=False)``), so greedy rows (and top_k == 1) decode on device and every other
         # sampled row goes to the host sampler over full logits; no resident-input chain (every decode reloads)
         "supports_sample_on_device": True,
-        "max_device_top_k": 1,
-        "device_top_k_unbounded_as": None,
+        "max_device_top_k": DEVICE_TOP_K,
+        "device_top_k_unbounded_as": DEVICE_TOP_K if DEVICE_TOP_K > 1 else None,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
         "supports_async_decode": False,
@@ -252,8 +257,8 @@ class GLM53StackForCausalLM:
             max_batch=B,
             layers=layers,
             hf_config=cfg,
-            topk=1,
-            sample=False,
+            topk=DEVICE_TOP_K,
+            sample=DEVICE_TOP_K > 1,
             ep_weights=True,
             native_t=B > 4,
             weight_cache={} if narrow else None,
@@ -400,7 +405,7 @@ class GLM53StackForCausalLM:
         params = None
         if sampling_params is not None:
             params = [row_params(sampling_params, i) for i in range(B)]
-            bad = [i for i, p in enumerate(params) if not p.is_greedy]
+            bad = [] if DEVICE_TOP_K > 1 else [i for i, p in enumerate(params) if not p.is_greedy]
             if bad:
                 raise ValueError(
                     f"prefill rows {bad} are sampled (temperature > 0 without top_k 1): the stack samples greedily on "
@@ -490,7 +495,9 @@ class GLM53StackForCausalLM:
             self._alias = alias
             return logits.reshape(B, 1, -1).float(), None
         params = [row_params(sampling_params, i) for i in range(B)]
-        bad = [i for i, p in enumerate(params) if not p.is_greedy and int(positions[i]) >= 0]
+        bad = (
+            [] if DEVICE_TOP_K > 1 else [i for i, p in enumerate(params) if not p.is_greedy and int(positions[i]) >= 0]
+        )
         if bad:
             raise ValueError(
                 f"decode rows {bad} are sampled (temperature > 0 without top_k 1): the stack samples greedily on device "
