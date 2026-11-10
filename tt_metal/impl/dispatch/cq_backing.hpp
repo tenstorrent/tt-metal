@@ -21,8 +21,8 @@ namespace tt::tt_metal {
 class MetalContext;
 class MetalEnvImpl;
 
-// Where a device's command queues live and how host-side changes reach the device. SystemMemoryManager owns the ring
-// arithmetic for each CQ and calls into one backing, chosen once at construction:
+// Where a device's command queues live and how host-side changes reach the device. Each SystemMemoryCq owns its ring
+// arithmetic; all CQs of a device call into one backing, chosen once at construction:
 // - HugepageCqBacking: the CQs are in a PCIe hugepage the device reads directly.
 // - DramCqBacking: the CQs are in device DRAM; the host edits a staging copy and syncs the changed ranges. For
 //   simulators and other setups without a PCIe hugepage.

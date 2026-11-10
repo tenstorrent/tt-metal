@@ -50,7 +50,7 @@ void read_cq_memory_for_dump(
     void* dst,
     uint32_t size_bytes,
     uint64_t byte_addr,
-    ChipId mmio_device_id,
+    tt::ChipId mmio_device_id,
     uint16_t channel,
     const SystemMemoryManager& sysmem_manager) {
     MetalContext& metal_ctx = sysmem_manager.metal_context();
@@ -363,10 +363,10 @@ void print_progress_bar(float progress, bool init = false) {
 }
 
 void dump_completion_queue_entries(
-    std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
+    std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, const SystemMemoryCQInterface& cq_interface) {
     MetalContext& metal_ctx = sysmem_manager.metal_context();
     auto& cluster = sysmem_manager.env_impl().get_cluster();
-    ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
+    tt::ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = cluster.get_assigned_channel_for_device(sysmem_manager.get_device_id());
     uint32_t completion_write_ptr =
         get_cq_completion_wr_ptr<true>(
@@ -463,10 +463,10 @@ void dump_completion_queue_entries(
 }
 
 void dump_issue_queue_entries(
-    std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
+    std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, const SystemMemoryCQInterface& cq_interface) {
     MetalContext& metal_ctx = sysmem_manager.metal_context();
     auto& cluster = sysmem_manager.env_impl().get_cluster();
-    ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
+    tt::ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = cluster.get_assigned_channel_for_device(sysmem_manager.get_device_id());
     // TODO: Issue Q read ptr is not prefetcly updated 0 try to read it out from chip on dump?
     uint32_t issue_read_ptr =
@@ -610,11 +610,11 @@ enum cq_queue_t { CQ_COMPLETION_QUEUE = 0, CQ_ISSUE_QUEUE = 1 };
 void dump_command_queue_raw_data(
     std::ofstream& out_file,
     SystemMemoryManager& sysmem_manager,
-    SystemMemoryCQInterface& cq_interface,
+    const SystemMemoryCQInterface& cq_interface,
     cq_queue_t queue_type) {
     MetalContext& metal_ctx = sysmem_manager.metal_context();
     auto& cluster = sysmem_manager.env_impl().get_cluster();
-    ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
+    tt::ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = cluster.get_assigned_channel_for_device(sysmem_manager.get_device_id());
 
     // The following variables depend on completion Q vs issue Q
@@ -696,7 +696,8 @@ void dump_command_queue_raw_data(
 }
 
 void dump_cqs(std::ofstream& cq_file, std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, bool dump_raw_data) {
-    for (SystemMemoryCQInterface& cq_interface : sysmem_manager.get_cq_interfaces()) {
+    for (uint8_t cq_id = 0; cq_id < sysmem_manager.num_cqs(); cq_id++) {
+        const SystemMemoryCQInterface& cq_interface = sysmem_manager.cq(cq_id).cq_interface();
         // Dump completion queue + issue queue
         dump_completion_queue_entries(cq_file, sysmem_manager, cq_interface);
         dump_issue_queue_entries(iq_file, sysmem_manager, cq_interface);

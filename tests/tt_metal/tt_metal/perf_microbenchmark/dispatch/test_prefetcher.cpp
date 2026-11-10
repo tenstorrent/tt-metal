@@ -3225,7 +3225,7 @@ private:
     // DRAM address of the completion region base, matching SystemMemoryManager::get_completion_queue_ptr.
     uint32_t completion_dram_addr() const {
         const uint8_t cq_id = fdcq_->id();
-        const SystemMemoryCQInterface& cq_iface = mgr_->get_cq_interfaces()[cq_id];
+        const SystemMemoryCQInterface& cq_iface = mgr_->cq(cq_id).cq_interface();
         return mgr_->get_dram_region_base_addr() + tt::tt_metal::get_relative_cq_offset(cq_id, mgr_->get_cq_size()) +
                cq_iface.cq_start + cq_iface.command_issue_region_size;
     }
@@ -3564,7 +3564,7 @@ protected:
                 tail_bytes,
                 prefix_cmd_bytes);
 
-            const bool toggle_before = mgr_->get_cq_interfaces()[cq_id].issue_fifo_wr_toggle;
+            const bool toggle_before = mgr_->cq(cq_id).cq_interface().issue_fifo_wr_toggle;
             execute_generated_commands(
                 {make_command(prefix_payload, write_addr)},
                 device_data,
@@ -3573,7 +3573,7 @@ protected:
                 /*wait_for_completion=*/false);
 
             const uint32_t pre_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
-            const bool pre_wrap_toggle = mgr_->get_cq_interfaces()[cq_id].issue_fifo_wr_toggle;
+            const bool pre_wrap_toggle = mgr_->cq(cq_id).cq_interface().issue_fifo_wr_toggle;
             TT_FATAL(pre_wrap_toggle == toggle_before, "Issue queue wrapped while filling the deterministic prefix");
 
             execute_generated_commands(
@@ -3584,7 +3584,7 @@ protected:
                 /*wait_for_completion=*/true);
 
             const uint32_t post_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
-            const bool post_wrap_toggle = mgr_->get_cq_interfaces()[cq_id].issue_fifo_wr_toggle;
+            const bool post_wrap_toggle = mgr_->cq(cq_id).cq_interface().issue_fifo_wr_toggle;
             EXPECT_NE(post_wrap_toggle, pre_wrap_toggle);
             EXPECT_LT(post_wrap_write_ptr, pre_wrap_write_ptr);
         }
