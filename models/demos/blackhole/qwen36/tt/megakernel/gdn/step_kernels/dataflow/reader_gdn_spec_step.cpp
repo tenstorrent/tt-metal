@@ -31,6 +31,16 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
 
+#ifndef GDN_SP_RD
+#define GDN_SP_RD 0  // engine GDN role (BATCH + SP_LATE): S' is written by this reader (NOC1) after the kmq stream, not by
+                     // the writer (whose queue then reaches the next layer's wr_rcoef without the S' writes in front)
+#endif
+#if GDN_SP_RD
+static uint32_t g_rd_sp_lay = 0;  // GDN layers done by this reader (sp ring offset at B < 8)
+#endif
+#ifndef GDN_NO_EPS_L2
+#define GDN_NO_EPS_L2 0  // engine GDN role (PREFIXED): the l2 eps tile is neither generated nor waited (its CB id is freed)
+#endif
 #ifndef GDN_FAST
 #define GDN_FAST 0
 #endif
@@ -306,7 +316,12 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         DeviceZoneScopedN("rd_const");
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+#if !GDN_NO_EPS_L2
         generate_bcast_col_scalar(eps_l2, l2_eps_bits);
+#else
+        (void)eps_l2;
+        (void)l2_eps_bits;
+#endif
         generate_bcast_col_scalar(eps_norm, norm_eps_bits);
 #if !GDN_FAST
         load_head_scalar<dtb_fp32 != 0>(dtb_acc, dtb_s, noc, h);
@@ -684,6 +699,35 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 }
             }
         }
+#if GDN_SP_RD
+        // ---- S'_u -> ring slot 0 block (u, h) (this block's columns) from the compute's sp (waited on, never popped
+        //      here: the compute pops it at the next layer's replay after `spd`), as the writer's wr_sp did
+        {
+            DeviceZoneScopedN("rd_sp");
+            DataflowBuffer sp(dfb::sp);
+            DataflowBuffer spd(dfb::spd);
+            const uint32_t entry = sp.get_entry_size();
+            sp.wait_front(nb * KVs);
+            const uint32_t base_t = (g_rd_sp_lay * nb * KVs) % (kBatchMax * KVs);
+            const uint32_t v0 = s * Vs;
+            for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                if (hold_b[ub_]) {
+                    continue;
+                }
+                const uint32_t bh_u = ub_ * Nv + h;
+                for (uint32_t i = 0; i < Kt; ++i) {
+                    for (uint32_t j = 0; j < Vs; ++j) {
+                        noc.async_write(sp, ring_acc, entry, {.offset_bytes = (base_t + ub_ * KVs + i * Vs + j) * entry},
+                                        {.page_id = bh_u * KV + v0 + i * Vt + j});
+                    }
+                }
+            }
+            noc.async_writes_flushed();
+            spd.reserve_back(1);
+            spd.push_back(1);
+            ++g_rd_sp_lay;
+        }
+#endif
     }
     (void)read_state;
     (void)lazy_no_replay;

@@ -74,6 +74,16 @@
 #if GDN_FUSED_DECAY && !GDN_FP32_STATE
 #error "GDN_FUSED_DECAY needs GDN_FP32_STATE"
 #endif
+#ifndef GDN_SP_LATE
+#define GDN_SP_LATE 0  // engine GDN role (BATCH): sp popped at the next layer's replay, after the writer's late S' write
+#endif
+#ifndef GDN_NO_EPS_L2
+#define GDN_NO_EPS_L2 0  // engine GDN role (PREFIXED): the l2 eps tile is neither generated nor waited (its CB id is freed)
+#endif
+#ifndef GDN_ZS_LATE
+#define GDN_ZS_LATE 0  // engine GDN role (PREFIXED + EARLY_REPLAY): zs is waited right before the gated output, so the
+                       // replay no longer waits for the prefix inputs (zs arrives with them, after in_ready)
+#endif
 #ifndef GDN_EARLY_REPLAY
 #define GDN_EARLY_REPLAY 0  // engine GDN role (BATCH + PREFIXED_GATES): replay before the prefix inputs
 #endif
@@ -1015,6 +1025,19 @@ constexpr uint32_t kCoefW = 6;
 constexpr uint32_t kBatchMax = 8;                   // users per core (B <= 8 at T = 4: one 32-row tile)
 constexpr uint32_t kCoefN = 7 + kBatchMax;          // NGB G E BETA NBE EYE W + C_u per user
 constexpr uint32_t kMskRow = 0, kMskCol = kBatchMax, kMskZero = 2 * kBatchMax, kMskN = 2 * kBatchMax + 1;
+#if GDN_SP_LATE
+static uint32_t g_sp_pending = 0;  // sp tiles of the previous layer, popped once the writer's spd says S' left L1
+inline void gdn_sp_drain() {
+    if (g_sp_pending != 0) {
+        DataflowBuffer spd_(dfb::spd);
+        DataflowBuffer sp_(dfb::sp);
+        spd_.wait_front(1);
+        spd_.pop_front(1);
+        sp_.pop_front(g_sp_pending);
+        g_sp_pending = 0;
+    }
+}
+#endif
 #endif     // replay weight w_i over row r0 + i (i < r), 0 elsewhere
 #if GDN_EARLY_REPLAY
 constexpr uint32_t kCoefC = 1;
@@ -1496,7 +1519,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
 
     compute_kernel_hw_startup(dfb::src_in, dfb::state_in, dfb::out);
     scaler.wait_front(1);
+#if !GDN_NO_EPS_L2
     eps_l2.wait_front(1);
+#endif
     eps_norm.wait_front(1);
 
 #if GDN_SFPU_GATE
@@ -1504,10 +1529,12 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
 #endif
 #if GDN_PREFIXED
     // zs = silu(z) arrives from the prefix (reader)
+#if !GDN_ZS_LATE
     {
         DeviceZoneScopedN("c_silu");
         zs.wait_front(Vt);
     }
+#endif
 #else
     // zs = silu(z) first: it needs only the small early reads, so it overlaps the reader's bulk window / projection /
     // tap reads
@@ -1855,6 +1882,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     //      so it runs at layer start, before the prefix output (knq / vc / the WY tiles) is ready
     {
         DeviceZoneScopedN("c_replay");
+#if GDN_SP_LATE
+        gdn_sp_drain();  // the previous layer's S' (written out by now, behind its output rows)
+#endif
 #if GDN_BATCH
         coef.wait_front(kCoefRep);  // W + C_u only: pushed before in_ready
 #if GDN_ST_RING
@@ -2008,6 +2038,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
 #if !GDN_EARLY_REPLAY
     {
         DeviceZoneScopedN("c_replay");
+#if GDN_SP_LATE
+        gdn_sp_drain();  // the previous layer's S' (written out by now, behind its output rows)
+#endif
 #if GDN_BATCH
         coef.wait_front(kCoefN);
 #if GDN_ST_RING
@@ -2116,12 +2149,16 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         }
 
         ksqs.push_back(2 * Vs);
+#if GDN_SP_LATE
+        g_sp_pending = nb * KVs;  // popped at the next layer's replay (or gdn_sp_drain) once the writer's S' write is out
+#else
         {
             DataflowBuffer spd(dfb::spd);  // the writer has written S' out of sp
             spd.wait_front(1);
             spd.pop_front(1);
         }
         sp.pop_front(nb * KVs);
+#endif
 #else
         sp.wait_front(KVs);
         // [K S' | Q S'] and [K K^T | Q K^T] (rows r0 .. r0+T-1; others 0)
@@ -2526,6 +2563,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     inv.pop_front(1);
     acc_x.pop_front(Vt);
     on.wait_front(Vs);
+#if GDN_ZS_LATE
+    zs.wait_front(Vt);
+#endif
     gated_out_from(dfb::on, dfb::w_in, dfb::zs, v0, dfb::gq, gq, Vs);
     on.pop_front(Vs);
     gq.wait_front(Vs);
@@ -2572,7 +2612,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     zs.pop_front(Vt);
     w_in.pop_front(Vt);
     scaler.pop_front(1);
+#if !GDN_NO_EPS_L2
     eps_l2.pop_front(1);
+#endif
     eps_norm.pop_front(1);
 #if !GDN_FAST
     dtb_s.pop_front(1);
