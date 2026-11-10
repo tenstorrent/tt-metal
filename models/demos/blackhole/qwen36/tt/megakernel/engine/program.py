@@ -1117,6 +1117,10 @@ def setup_bench(dev, MESH, mesh_identity):
             # at low addresses on the ext cores (beside the STREAM rect's own CBs, which they never share a core with)
             _ext_only = lambda c_: c_.core_ranges == ext_crs
             cbs = [c_ for c_ in cbs if _ext_only(c_)] + [c_ for c_ in cbs if not _ext_only(c_)]
+        if REAL_AR and REAL_AAR:   # CB 23 (ext + the AR corner) FIRST: a multi-range CB lands at the max of its ranges' current
+            # tops, and the corner's AR CBs (RS / AG staging, RS slots) would otherwise push it ~100 KB up on the owners
+            _w23 = lambda c_: any(f_.buffer_index == 23 for f_ in c_.format_descriptors)
+            cbs = [c_ for c_ in cbs if _w23(c_)] + [c_ for c_ in cbs if not _w23(c_)]
         print('[cbs] ' + ' '.join(f'{f_.buffer_index}:{c_.total_size // 1024}K' for c_ in cbs for f_ in c_.format_descriptors), flush=True)
         if GDN24:
             _gk = list(GDN_ROLE.get('kernels', []))
