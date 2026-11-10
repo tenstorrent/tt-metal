@@ -1,0 +1,297 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""The smallest ttnn.dram_prefetcher over a worker-sender PrefetcherPipe: one sender, one receiver, one bank.
+
+A bringup vehicle for architectures whose smallest device does not fit test_prefetcher_worker_pipes'
+layouts. Those stack receivers, senders and a spare core in separate rows, so they need a grid at least
+three rows tall; the Quasar emulator exposes two worker cores in one row. Two cores is the floor for the
+op itself, since a pipe's sender must not be one of its receivers.
+
+What this still covers: the reader's DRAM reads under transaction ids, the staging ring, the writer's
+strided pipe writes and credit returns, the receiver's drain, and the reader/writer exit handshake. What
+it does not: multiple banks, more than one receiver per sender (so neither pipe fan-out nor the strided
+split of a shard across receivers), and entry re-sizing between tensors.
+"""
+
+import pytest
+import torch
+import ttnn
+import numpy as np
+from loguru import logger
+
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    bytes_per_tile,
+    make_krow_major_weight,
+    round_up,
+)
+
+# One weight: dtype and the receiver's output width in tiles.
+_DTYPE = ttnn.bfloat16
+_PER_CORE_N = 2
+# One K-block per pipe entry, in0_block_w tiles deep.
+_IN0_BLOCK_W = 2
+
+
+def _one_core(core):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+
+class _MinimalLayout:
+    """One sender feeding one receiver from one DRAM bank.
+
+    The receiver is the grid's first core and doubles as the matmul's only worker. The sender is the
+    next core along the row, or the core below when the grid is a single column.
+    """
+
+    num_banks = 1
+    num_blocks = 1
+    in0_block_w = _IN0_BLOCK_W
+
+    def __init__(self, device):
+        grid = device.compute_with_storage_grid_size()
+        assert grid.x * grid.y >= 2, f"need two worker cores for a sender and a receiver, grid is {grid}"
+        receiver = ttnn.CoreCoord(0, 0)
+        self._sender = ttnn.CoreCoord(1, 0) if grid.x >= 2 else ttnn.CoreCoord(0, 1)
+        self.receiver_cores = _one_core(receiver)
+        self.sender_cores = _one_core(self._sender)
+        self.worker_cores = self.receiver_cores
+        self.matmul_grid = (1, 1)
+
+    @property
+    def k_tiles(self):
+        return self.num_blocks * self.in0_block_w
+
+    def sender_receiver_mapping(self):
+        return [(self._sender, self.receiver_cores)]
+
+    @property
+    def entry_size(self):
+        """Bytes the receiver is delivered per block: one in1 K-block of the matmul."""
+        return self.in0_block_w * _PER_CORE_N * bytes_per_tile(_DTYPE)
+
+
+def _make_pipe(device, layout):
+    """The pipe space and its one pipe. The space must outlive the pipe, so both are returned."""
+    # Two and a half entries, as in the full tests: the matmul needs two resident K-blocks, and the half
+    # entry makes the ring a non-multiple of the entry size so each wrap skips a gap.
+    ring_size = round_up(5 * layout.entry_size // 2, ttnn.get_l1_alignment())
+    space = ttnn.experimental.create_prefetcher_pipe_space(
+        device,
+        sender_cores=layout.sender_cores,
+        receiver_domain=layout.receiver_cores,
+        ring_size=ring_size,
+        max_receivers_per_pipe=1,
+    )
+    return space, space.create_pipes(layout.sender_receiver_mapping())
+
+
+def _make_weights(device, layout, num_layers):
+    """One [K, N] weight per layer, width-sharded over the single DRAM bank, plus the address tensor."""
+    torch.manual_seed(0)
+    K = layout.k_tiles * ttnn.TILE_SIZE
+    N = layout.num_blocks * _PER_CORE_N * ttnn.TILE_SIZE
+    pt_weights, tt_weights = [], []
+    for _ in range(num_layers):
+        pt_weight = torch.randn(1, 1, K, N)
+        pt_weights.append(pt_weight)
+        tt_weights.append(make_krow_major_weight(device, pt_weight, layout.num_banks, _DTYPE))
+
+    addr_row = torch.tensor([w.buffer_address() for w in tt_weights], dtype=torch.int64).reshape(1, -1)
+    tt_addrs = ttnn.as_tensor(
+        addr_row,
+        device=device,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(layout.sender_cores, [1, len(tt_weights)], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    return pt_weights, tt_weights, tt_addrs
+
+
+class _Isolation:
+    """Keeps the prefetcher's persistent program from blocking the consumer that drains it.
+
+    Fast dispatch puts the prefetcher on its own sub-device and stalls only on the receiver. Slow
+    dispatch has no sub-devices and uses asynchronous slow dispatch instead: launches stop blocking,
+    and one waits only when its cores intersect the previous program's. Sender and receiver are
+    disjoint, so the consumer starts while the prefetcher is still pushing.
+    """
+
+    def __init__(self, device, layout):
+        self.device = device
+        self.layout = layout
+        self.worker_sub_device_id = None
+        self._manager = None
+
+    def __enter__(self):
+        if is_slow_dispatch():
+            ttnn.enable_asynchronous_slow_dispatch(self.device)
+            return self
+        self._manager = self.device.create_sub_device_manager(
+            [ttnn.SubDevice([self.layout.sender_cores]), ttnn.SubDevice([self.layout.worker_cores])], 0
+        )
+        self.device.load_sub_device_manager(self._manager)
+        self.worker_sub_device_id = ttnn.SubDeviceId(1)
+        return self
+
+    def __exit__(self, *_exc):
+        if self._manager is None:
+            ttnn.disable_asynchronous_slow_dispatch(self.device)
+            return
+        self.device.reset_sub_device_stall_group()
+        self.device.clear_loaded_sub_device_manager()
+        self.device.remove_sub_device_manager(self._manager)
+
+    def stall_on_workers(self):
+        """Stall only on the consumer. Slow dispatch's disjoint-core check already does this."""
+        if self.worker_sub_device_id is not None:
+            self.device.set_sub_device_stall_group([self.worker_sub_device_id])
+
+    def release_stall(self):
+        if self.worker_sub_device_id is not None:
+            self.device.reset_sub_device_stall_group()
+
+
+@pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+def test_minimal_pipe_completion(device, num_layers):
+    """Every block reaches the receiver: a discard consumer drains exactly what the prefetcher pushes.
+
+    Hangs rather than fails if a block is lost, which is the point: it is the cheapest signal that the
+    whole sender-to-receiver path moves data on a new architecture.
+    """
+    layout = _MinimalLayout(device)
+    _space, pipes = _make_pipe(device, layout)
+    _pt, tt_weights, tt_addrs = _make_weights(device, layout, num_layers)
+
+    with _Isolation(device, layout) as isolation:
+        ttnn.dram_prefetcher(tt_weights + [tt_addrs], num_layers, prefetcher_pipes=pipes)
+        isolation.stall_on_workers()
+        for _layer in range(num_layers):
+            ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+                device, num_iters=layout.num_blocks, page_size_bytes=layout.entry_size, prefetcher_pipes=pipes
+            )
+        ttnn.synchronize_device(device)
+
+
+def _tile_words(pt_weight):
+    """Pack a [1, 1, K, N] weight the way a row-major 32x32 tile image lays it out.
+
+    Tiles walk N first, then K. Inside a tile, elements are row-major bfloat16, and each device
+    word holds two of them, low half first. This is the byte image a contiguous DRAM read of the
+    shard would return.
+    """
+    values = pt_weight[0, 0].contiguous().to(torch.bfloat16)
+    k, n = values.shape
+    tiles = values.reshape(k // 32, 32, n // 32, 32).permute(0, 2, 1, 3).contiguous().reshape(-1)
+    halves = tiles.view(torch.int16).numpy().astype(np.uint16)
+    return halves[0::2].astype(np.uint32) | (halves[1::2].astype(np.uint32) << 16)
+
+
+def test_minimal_pipe_bytes(device):
+    """The one block that lands is the weight itself.
+
+    The discard consumer only counts entries. This receiver memcmps each one against the source tensor
+    and hangs on the first word that differs. One bank, one receiver and one block, so the expected
+    bytes are the whole weight.
+    """
+    layout = _MinimalLayout(device)
+    print(
+        f"BYTES layout sender={layout._sender} entry_size={layout.entry_size} "
+        f"blocks={layout.num_blocks} k_tiles={layout.k_tiles}",
+        flush=True,
+    )
+    _space, pipes = _make_pipe(device, layout)
+    print("BYTES pipe created", flush=True)
+    _pt, tt_weights, tt_addrs = _make_weights(device, layout, num_layers=1)
+    expected = _tile_words(_pt[0])
+    head = " ".join(f"0x{int(w):08x}" for w in expected[:8])
+    expected_sum = 0
+    for word in expected.tolist():
+        expected_sum = (expected_sum + int(word)) & 0xFFFFFFFF
+    print(
+        f"BYTES weights ready addr=0x{tt_weights[0].buffer_address():x} "
+        f"expected_sum=0x{expected_sum:08x} words={len(expected)} head={head}",
+        flush=True,
+    )
+
+    with _Isolation(device, layout) as isolation:
+        print("BYTES launching dram_prefetcher", flush=True)
+        ttnn.dram_prefetcher(tt_weights + [tt_addrs], 1, prefetcher_pipes=pipes)
+        print("BYTES dram_prefetcher returned", flush=True)
+        isolation.stall_on_workers()
+        print("BYTES launching validator", flush=True)
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device,
+            tt_weights[0],
+            num_layers=1,
+            print_stride=0,
+            prefetcher_pipes=pipes,
+            bank_to_receivers=[(0, layout.receiver_cores)],
+        )
+        print("BYTES validator returned", flush=True)
+
+
+def test_minimal_pipe_matmul(device):
+    """The delivered block is the matmul's K-block: a one-core mcast_in0 matmul checked against torch.
+
+    Completion alone cannot catch a block that arrives corrupt, at the wrong offset, or in the wrong
+    order, so this is what makes the delivery contract testable rather than just the handshake.
+    """
+    layout = _MinimalLayout(device)
+    _space, pipes = _make_pipe(device, layout)
+    pt_weights, tt_weights, tt_addrs = _make_weights(device, layout, num_layers=1)
+
+    M = ttnn.TILE_SIZE
+    K = layout.k_tiles * ttnn.TILE_SIZE
+    pt_act = torch.randn(1, 1, M, K)
+    tt_act = ttnn.from_torch(
+        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=layout.matmul_grid,
+        in0_block_w=layout.in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=_PER_CORE_N,
+        out_block_h=1,
+        out_block_w=_PER_CORE_N,
+        per_core_M=1,
+        per_core_N=_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    with _Isolation(device, layout) as isolation:
+        ttnn.dram_prefetcher(tt_weights + [tt_addrs], 1, prefetcher_pipes=pipes)
+        isolation.stall_on_workers()
+        tt_out = ttnn.matmul(
+            tt_act,
+            tt_weights[0],
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
+            sub_device_id=isolation.worker_sub_device_id,
+            prefetcher_pipes=pipes,
+        )
+        ttnn.synchronize_device(device)
+        isolation.release_stall()
+
+    expected = pt_act.float() @ pt_weights[0].float()
+    passing, output_str = comp_pcc(expected, ttnn.to_torch(tt_out), 0.999)
+    logger.info(f"[minimal worker pipe] {output_str}")
+    assert passing, output_str
