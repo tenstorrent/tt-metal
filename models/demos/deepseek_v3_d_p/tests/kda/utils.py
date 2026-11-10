@@ -653,9 +653,14 @@ def mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> tor
     return torch.tensor([position - actual_start for chip in positions for position in chip])
 
 
-def to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
+def to_sp_input(
+    hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int | None = None
+) -> ttnn.Tensor:
+    """Shard [B, T, H] over SP along T, and with ``tp_axis`` also over TP along H (the model's residual layout)."""
     mesh_dims = [None, None]
     mesh_dims[sp_axis] = 1
+    if tp_axis is not None:
+        mesh_dims[tp_axis] = 2
     return ttnn.from_torch(
         hidden,
         dtype=ttnn.bfloat16,

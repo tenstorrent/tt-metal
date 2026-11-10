@@ -260,6 +260,8 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
         setattr(layer, name, None)
     layer._history_exchange = SimpleNamespace(buffer=None, semaphores=None)
+    # The TP all-gather as its own op; test_kda_forward_slot_gathers_inside_the_input_projection sets a fused one.
+    layer._tp_gather = None
     layer._validate_forward = Mock()
     layer._validate_runtime_bound = Mock()
     projected = SimpleNamespace(projected=object(), decay_rank_offset=0, output_gate_offset=0, beta_offset=0)
@@ -300,6 +302,26 @@ def test_kda_forward_slot_imports_gathers_runs_and_exports_in_order(monkeypatch)
     )
     freed = [c.args[0] for c in calls.deallocate.call_args_list]
     assert "gathered" in freed and freed[-2:] == ["final_recurrent", "new_convolution"]
+
+
+def test_kda_forward_slot_gathers_inside_the_input_projection(monkeypatch):
+    # fuse_tp_gather: the projection takes the TP shard and gathers it in its own program, into a persistent buffer
+    # that nothing frees.
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    gathered = object()
+    layer._tp_gather = SimpleNamespace(gathered=gathered)
+    slabs, slot, scratch, start, end = Mock(), object(), Mock(), object(), object()
+    calls.attach_mock(slabs, "slabs")
+    tp_shard = SimpleNamespace(shape=(1, 64, 64), dtype=ttnn.bfloat16)
+    assert layer.forward_slot(tp_shard, scratch, slabs, slot, 7, start, end) == "output"
+    order = [c[0] for c in calls.mock_calls if not c[0].startswith("project_inputs().")]
+    assert order.index("slabs.import_layer") < order.index("project_inputs") < order.index("project_output")
+    assert order.index("project_output") < order.index("slabs.export_layer")
+    calls.all_gather.assert_not_called()
+    calls.project_inputs.assert_called_once_with(tp_shard)
+    # Neither the persistent buffer nor the caller's borrowed shard is freed.
+    freed = [c.args[0] for c in calls.deallocate.call_args_list]
+    assert gathered not in freed and tp_shard not in freed
 
 
 def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkeypatch):

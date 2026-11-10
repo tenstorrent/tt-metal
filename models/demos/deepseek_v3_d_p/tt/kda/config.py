@@ -144,8 +144,18 @@ class KDAProgramConfig:
     tuned_projection_matmuls: bool = False
     # Channels per page of the convolution tail (``KdaState.convolution``); None keeps it token-paged.
     convolution_page_channels: int | None = None
+    # Blackhole di/dt: at most this many cores run the input and decay projections at once. They take the widest
+    # full-height block of worker columns within it (matmul_grid: 11 x 10 of the 12 x 10 grid at 110). The fused TP
+    # output projection (matmul_reduce_scatter_prefill) plans its own grid.
+    max_matmul_cores: int = 110
+    # With a tuned input projection, TP > 1 and a TP-sharded input, the TP all-gather of the input runs inside the
+    # input projection's program, on the worker column beside the matmul grid, and the matmul starts with this rank's
+    # own K slice while the others arrive (ttnn.experimental.all_gather_minimal_matmul_async, tuned path).
+    fuse_tp_gather: bool = True
 
     def __post_init__(self) -> None:
+        if self.max_matmul_cores <= 0:
+            raise ValueError(f"max_matmul_cores must be positive, got {self.max_matmul_cores}")
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
             raise ValueError(
                 "qkv_channel_chunk_size must be a positive multiple of "
@@ -159,36 +169,56 @@ class KDAProgramConfig:
 _TUNED_PROJECTION_ROWS = 640
 
 
+def matmul_grid(grid: ttnn.CoreCoord, max_cores: int) -> ttnn.CoreCoord:
+    """The widest block of full-height worker columns of ``grid`` with at most ``max_cores`` cores."""
+    return ttnn.CoreCoord(max(1, min(grid.x, max_cores // grid.y)), grid.y)
+
+
+def matmul_core_grid(grid: ttnn.CoreCoord) -> ttnn.CoreGrid:
+    """``grid`` as the ttnn.CoreGrid that bounds an auto-configured ttnn.linear."""
+    return ttnn.CoreGrid(y=grid.y, x=grid.x)
+
+
 def tuned_projection_matmul_configs(
     grid: ttnn.CoreCoord,
     rows: int,
     input_n: int,
     output_k: int,
     output_n: int,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> tuple[
     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None
 ]:
-    """Return the tuned input and output projection schedules laid out on ``grid``.
+    """Return the tuned input and output projection schedules laid out on ``grid`` (the matmul_grid of the device).
 
-    Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
-    (bf16, FP32 destination accumulation) at HiFi2; not re-tuned at other fidelities. Subblocks stay within
-    the 4-tile FP32 destination limit.
+    Tuned on the 11 x 10 Blackhole matmul grid (110 cores) at 640 rows per device with the production numerics (FP32
+    destination accumulation, packer L1 accumulation) at HiFi2, not re-tuned at other fidelities; subblocks stay
+    within the 4-tile FP32 destination limit.
     Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
     """
     row_tiles = rows // ttnn.TILE_SIZE
     per_core_m = math.ceil(row_tiles / grid.y)
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
     input_per_core_n = math.ceil(math.ceil(input_n / ttnn.TILE_SIZE) / grid.x)
-    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
+    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4:
         return None, None
-    # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
-    # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
-    # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
+    # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and streams K
+    # in k_block-tile blocks. Block-float weights fit 8-tile K blocks in L1 next to the L1 output and the FP32 partials
+    # (K3 at 640 rows: 2 x 36 tiles per core, 28 K blocks), bfloat16 weights 4. With the TP gather fused, the 1 x 4
+    # subblocks take all_gather_minimal_matmul_async's single-reuse-row K-step path (row MOP).
+    k_block = 4 if weight_dtype == ttnn.bfloat16 else 8
+    input_subblock = next(
+        (
+            hw
+            for hw in ((1, 4), (2, 2), (1, 3), (1, 2), (1, 1))
+            if input_per_core_n % hw[1] == 0 and per_core_m % hw[0] == 0
+        )
+    )
     input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=3,
+        in0_block_w=k_block,
+        out_subblock_h=input_subblock[0],
+        out_subblock_w=input_subblock[1],
         out_block_h=per_core_m,
         out_block_w=input_per_core_n,
         per_core_M=per_core_m,
@@ -258,11 +288,11 @@ _DECAY_OUT_BLOCK_TILES = 32
 def decay_projection_program_config(
     grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
+    """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over ``grid`` (the matmul grid).
 
     Each core's output is computed in blocks of at most _DECAY_OUT_BLOCK_TILES tiles, which bounds the output and
     FP32 intermediate circular buffers on geometries with many rows or heads per core (one Kimi-K3 Galaxy SP8xTP4
-    core holds a single 2 x 8 block).
+    core holds a single 2 x 9 block on the 11 x 10 grid).
     """
     tile = ttnn.TILE_SIZE
     per_core_M = math.ceil(rows // tile / grid.y)
