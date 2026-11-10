@@ -103,13 +103,20 @@ says, in pass order. Weight prefetch (DM RISCs) runs ahead of compute, up to dep
   Owns bank-local weight slices for every projection: GDN in/out, attn qkv/wo, MLP gate_up/down.
 - `ROOT` (bit 1): 4 roots (logical cores 76-79) for multi-root h / activation broadcast (fm11 scheme).
 - `ATTN` (bit 2): SDPA cores. v0: all 110 cores in groups of 16 (multi-user setting), time-multiplexed with STREAM.
-- `GDN` (bit 3): GDN step cores. v0: per (head, value block), as today's spec step (96 cores at u8); GDN track defines.
+- `GDN` (bit 3): GDN cores, two phases per GDN layer (v0.2, GDN track):
+  - `GDN_PREFIX` (type 10): one core per (head, chunk). Row-wise and stateless for all users at once: conv window
+    rows, 4-tap conv + silu, q/k L2 norm, silu(z). Output is qc|kc|vc|zs tiles per head (fp32, 32 rows). Runs right
+    after gdn_in.
+  - `GDN_STEP` (type 4): one core per (user, head, value block). Replay/WY state math + gated norm, consuming the
+    prefix output. A ~16-32 core GDN set runs PREFIX then STEP back to back.
+  - Why two phases: the all-users prefix does not fit in one gdn_spec_step program (the 70,656 B kernel config buffer
+    overflows by ~0.5 KB at B=8).
 - `AR` (bit 4): all-reduce send/recv cores (AR track defines; receive writes x into STREAM cores' CB_X).
 
 **Phase table** (L1, array of 16-u32 records, base address in runtime arg; `n_phases` in runtime arg):
 | word | field |
 |---|---|
-| 0 | type: 1 PROJ, 2 MLP_GU, 3 MLP_DN, 4 GDN_STEP, 5 SDPA, 6 AR_SEND, 7 AR_RECV, 8 NORM, 9 STALL |
+| 0 | type: 1 PROJ, 2 MLP_GU, 3 MLP_DN, 4 GDN_STEP, 5 SDPA, 6 AR_SEND, 7 AR_RECV, 8 NORM, 9 STALL, 10 GDN_PREFIX |
 | 1 | layer index |
 | 2 | weight tensor id (0 gate_up, 1 down, 2 gdn_in, 3 gdn_out, 4 qkv, 5 wo, 6 kv cache, 7 gdn state) |
 | 3 | weight page base for this core (bank-local slice), or KV/state page base |
@@ -155,6 +162,9 @@ into overlapping rectangles at once (fused MLP v1/v2: 150 µs stalls on silicon)
 | AR buffers | 100 |
 | slack | ~90 |
 Rule: a block may use the shared working region only during its own phases. Weight prefetch must never touch it.
+
+**BH NoC alignment rule:** DRAM→L1 NoC reads need equal source/destination offsets mod 64 B. Row moves go through
+an aligned staging buffer plus an L1 copy; otherwise the data is silently corrupted.
 
 **Block contract:** a block's input is CB_X on its cores once wait-sem ≥ seq+1. Its output goes to CB_OUT (per-core
 shard), and it raises signal-sem. The AR track turns CB_OUT (all chips) into the next CB_X (+ residual, + norm).
