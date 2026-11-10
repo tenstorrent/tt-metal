@@ -114,48 +114,25 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet00LinkUp) {
     print_detected_devices();
     ASSERT_TRUE(ensure_links(devices_));
 
-    for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
-        for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
+    for (auto& l : get_links(devices_)) {
+        auto &sdev = l.s.chip, rdev = l.r.chip;
+        auto &score = l.s.core, rcore = l.r.core;
+        auto &smesh = l.s.mesh_device, rmesh = l.r.mesh_device;
 
-            log_info(
-                tt::LogTest,
-                "sender device id: {} ({}, {}), receiver device id: {} ({}, {})",
-                sender_device->id(),
-                pci_bdf_for_device_id(sender_device->id()),
-                get_ubb(sender_device),
-                receiver_device->id(),
-                pci_bdf_for_device_id(receiver_device->id()),
-                get_ubb(receiver_device));
+        log_info(tt::LogTest, "{}", format_subtest_info(sdev, rdev));
+        log_info(tt::LogTest, "  {}", format_link_info(sdev, score, rdev, rcore));
 
-            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
-                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
-                    continue;
-                }
-                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
-                if (receiver_device->id() != device_id) {
-                    continue;
-                }
+        for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
+            const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
 
-                log_info(
-                    tt::LogTest, "  {}", format_link_info(sender_device, sender_core, receiver_device, receiver_core));
-
-                for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
-                    const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-
-                    log_info(tt::LogTest, "    running on {}", processor);
-                    bool passed =
-                        run_test(this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
-                    if (!passed) {
-                        errors.emplace_back(
-                            sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
-                    }
-                    log_info(tt::LogTest, "    done");
-
-                    n++;
-                }
+            log_info(tt::LogTest, "    running on {}", processor);
+            bool passed = run_test(this, smesh, rmesh, score, rcore, processor);
+            if (!passed) {
+                errors.emplace_back(sdev->id(), rdev->id(), score, rcore, processor);
             }
+            log_info(tt::LogTest, "    done");
+
+            n++;
         }
     }
 

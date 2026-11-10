@@ -42,8 +42,55 @@ struct chip_core {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     IDevice* chip;
     CoreCoord core;
-    int direction;
+    int direction; /* NOTE: Relevant for distributed tests only */
 };
+
+struct link {
+    struct chip_core s, r;
+};
+
+[[maybe_unused]]
+static bool eth_core_connects_within_cluster(IDevice* device, const CoreCoord& logical_core) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(device->id());
+    EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
+    const auto& within_cluster = cluster.get_ethernet_connections();
+    auto it = within_cluster.find(device->id());
+    return it != within_cluster.end() && it->second.contains(eth_chan);
+}
+
+[[maybe_unused]]
+static std::vector<struct link> get_links(std::span<std::shared_ptr<distributed::MeshDevice>> devices) {
+    std::vector<struct link> links;
+    for (const auto& sender_mesh_device : devices) {
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
+        for (const auto& receiver_mesh_device : devices) {
+            auto* const receiver_device = receiver_mesh_device->impl().get_devices()[0];
+            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
+                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
+                    continue;
+                }
+                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
+                if (receiver_device->id() != device_id) {
+                    continue;
+                }
+
+                links.push_back((struct link){{
+                                                  .mesh_device = sender_mesh_device,
+                                                  .chip = sender_device,
+                                                  .core = sender_core,
+                                              },
+                                              {
+                                                  .mesh_device = receiver_mesh_device,
+                                                  .chip = receiver_device,
+                                                  .core = receiver_core,
+                                              }});
+            }
+        }
+    }
+
+    return links;
+}
 
 [[maybe_unused]]
 static inline void prepare_sender(
@@ -790,20 +837,6 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
     return "unknown";
 }
 
-// Returns true if the ethernet core connects to another chip within this cluster (i.e. it is safe to
-// call get_connected_ethernet_core on it). Cross-host cores (e.g. QSFP cables wired to another
-// Galaxy) show up as active/linked-up but live in the remote-device connection map, so calling
-// get_connected_ethernet_core on them fatals with "connects to a remote mmio device".
-[[maybe_unused]]
-static bool eth_core_connects_within_cluster(IDevice* device, const CoreCoord& logical_core) {
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const auto& soc_desc = cluster.get_soc_desc(device->id());
-    EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
-    const auto& within_cluster = cluster.get_ethernet_connections();
-    auto it = within_cluster.find(device->id());
-    return it != within_cluster.end() && it->second.contains(eth_chan);
-}
-
 [[maybe_unused]]
 static std::string get_ubb(IDevice* device) {
     const auto& cluster = MetalContext::instance().get_cluster();
@@ -967,6 +1000,18 @@ static std::vector<struct chip_core> get_cores_to_test(std::span<std::shared_ptr
     }
 
     return ret;
+}
+
+[[maybe_unused]]
+static std::string format_subtest_info(IDevice* sdev, IDevice* rdev) {
+    return fmt::format(
+        "sender device id: {} ({}, {}), receiver device id: {} ({}, {})",
+        sdev->id(),
+        pci_bdf_for_device_id(sdev->id()),
+        get_ubb(sdev),
+        rdev->id(),
+        pci_bdf_for_device_id(rdev->id()),
+        get_ubb(rdev));
 }
 
 [[maybe_unused]]
