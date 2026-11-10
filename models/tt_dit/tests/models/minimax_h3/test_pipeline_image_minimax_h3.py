@@ -289,3 +289,21 @@ def test_served_envelope(mesh_device, guide_examples):
     run("edit 2 refs -> 2720x1536", prompt="Put <Picture 1> beside <Picture 2>.", width=2720, height=1536, seed=1,
         images=refs)
     assert not failures, f"{len(failures)} envelope cases failed: {failures}"
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("capacity", [32768, 49152, 82688], ids=["cap32k", "cap48k", "cap81k"])
+def test_capacity_cost(mesh_device, guide_examples, capacity):
+    """Warm t2i step time against the DiT's max_sequence_length (it sizes the norms' worker split and the K/V
+    gather): what a larger multi-reference capacity costs requests that do not need it."""
+    t2i, _, _ = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir(), max_sequence_length=capacity)
+    for size in (4096, 2048):
+        pipe(t2i["prompt"], width=size, height=size, seed=0)
+        results = [pipe(t2i["prompt"], width=size, height=size, seed=s) for s in (1, 2)]
+        steps = [s for r in results for s in r.timings.denoise_steps[2:]]
+        logger.info(
+            f"RESULT capacity {capacity} {size}: total {sum(r.timings.total for r in results) / 2:.2f}s, "
+            f"steady step {1e3 * sum(steps) / len(steps):.1f} ms"
+        )
