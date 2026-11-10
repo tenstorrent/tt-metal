@@ -6,14 +6,14 @@
 // core's kb x nc weight tiles are decoded once into c_4 (Float32, [kb][nc] tiles), then multiplied against all mc rows
 // of the input (c_1: units of ur rows x kb tiles, [ur][kb]) in sh x sw subblocks. Partials accumulate in L1 (c_24,
 // Float32, packer L1 accumulation); in the last K block each unit of rows goes to c_16 as bf16 once its sums are
-// complete. Decode: per tile, the page is copied into DEST tile 1 and decoded into tile 0 on the math thread (MXFP4,
-// NVFP4: tiles 2 and 1), then packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0
-// adds the partners' (c_18); both in units of ur rows x the planned N tiles, the rows of each N tile together
-// (subblocks of ur x 1). Compile args: format id, mc, kb, M chunks, ur (sh divides it), N passes (the core's N tiles in
-// passes of up to the width below; a pass without any only consumes the input). Runtime args: N tiles of this core
-// (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that width,
-// so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add them),
-// K blocks.
+// complete. Decode: per tile, the page is copied into DEST tile 1 and decoded into tile 0 on the math thread
+// (block-float codes: tiles 2 and 1), then packed. K split (krole): band 1 packs its sums to c_17 for the writer to
+// send, band 0 adds the partners' (c_18); both in units of ur rows x the planned N tiles, the rows of each N tile
+// together (subblocks of ur x 1). Compile args: format id, mc, kb, M chunks, ur (sh divides it), N passes (the core's N
+// tiles in passes of up to the width below; a pass without any only consumes the input). Runtime args: N tiles of this
+// core (0: nothing to do), N tiles the circular buffers are sized for (c_4 and c_24 advance by whole blocks of that
+// width, so that c_24's L1 accumulation lands on the same tiles), sh, sw, krole (0: no K split, 1: send sums, 2: add
+// them), K blocks.
 
 #include <cstdint>
 
@@ -41,9 +41,9 @@ void kernel_main() {
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
     constexpr bool group_step = gguf::group_scales<fmt>;
     constexpr uint32_t block_groups = kb / L.group_tiles;
-    // Decoded tile 0, its page in tile 1. MXFP4, NVFP4: decoded tile 1, page 2, the block-float codes in the 16-bit
+    // Decoded tile 0, its page in tile 1. Block-float codes: decoded tile 1, page 2, the codes in the 16-bit
     // rows that tile 1's rows address (in tile 0, dest_srca_mm_page_unpack_codes).
-    constexpr bool bfp = gguf::fp4_bfp<fmt>;
+    constexpr bool bfp = gguf::bfp_codes<fmt>;
     constexpr uint32_t out = bfp ? 1 : 0;
     // Each page is copied before its decode starts, so no unpack to DEST runs beside one: the faster decoders.
     constexpr auto thr = GgufDecodeThread::Math;
@@ -109,10 +109,10 @@ void kernel_main() {
                                 0,
                                 out + 1,
                                 out,
-                                gguf::FP4_CODES,
-                                gguf::FP4_CODE_EXP,
+                                gguf::BFP_CODES,
+                                gguf::BFP_CODE_EXP,
                                 L.scale_offset,
-                                gguf::FP4_SCALE_WORDS);
+                                gguf::bfp_scale_words<fmt>());
                         } else {
                             dest_srca_mm_page_to_dest(cb_page, 0, out + 1);
                         }
