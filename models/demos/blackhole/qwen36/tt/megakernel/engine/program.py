@@ -1889,7 +1889,10 @@ PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_gro
 
 def engine_env(n_users, n_layers, layer_types=None):
     env = dict(ENGINE_ENV)
-    for kv in os.environ.get("QWEN36_R16_MK_ENV", "").split():
+    _ov = os.environ.get("QWEN36_R16_MK_ENV", "")
+    if os.environ.get("QWEN36_R16_MK_ENV_FILE"):  # same format, from a file (no shell quoting of spaces)
+        _ov = open(os.environ["QWEN36_R16_MK_ENV_FILE"]).read() + " " + _ov
+    for kv in _ov.split():
         k, v = kv.split("=", 1)
         env[k] = v
     nl = min(int(env.pop("FM_NL", os.environ.get("QWEN36_R16_MK_NL", "8"))), n_layers, 32)  # MKA_AMASK is a u32
