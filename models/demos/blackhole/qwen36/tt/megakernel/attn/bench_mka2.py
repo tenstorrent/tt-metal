@@ -361,6 +361,13 @@ for it in range(ITERS):
                 _pw = f" wo {torch.corrcoef(torch.stack([_wd[d_][L].flatten(), gw_.flatten()]))[0, 1].item():.5f}" if RWO else ''
                 _ln.append(f"d{d_}[{_pu}{_pw}]")
             print(f"[rqpos] iter {it} layer {L} MESH per device/user sdpa: {' '.join(_ln)}", flush=True)
+        # same-parity identity: md5 of each device's SDPA output over the attention layers' valid rows (NQH * T), by parity
+        import hashlib
+        _al = [L for L in range(NL) if is_attn_layer(L)]
+        _md = [hashlib.md5(torch.stack([o_[L][:, :NQH * T] for L in _al]).numpy().tobytes()).hexdigest()[:12] for o_ in _od]
+        _byp = {p_: sorted({_md[d_] for d_ in range(len(_md)) if d_ % 2 == p_}) for p_ in (0, 1)}
+        print(f"[rqpos] iter {it} MESH sdpa md5 by parity: p0 {_byp[0]} p1 {_byp[1]} -> same-parity identical: "
+              f"{'YES' if all(len(v_) == 1 for v_ in _byp.values()) else 'NO'}", flush=True)
     if RWO:
         wv_ = ttnn.to_torch(wod).float().reshape(NL, M, -1)
         for L in range(NL):
