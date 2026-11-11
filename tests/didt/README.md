@@ -99,6 +99,30 @@ Some tests require a full 11×10 grid (Deepseek V3, MLA SDPA).
 pytest tests/didt/test_ff1_matmul.py::test_grid_size_ff1_matmul -k "2chips and 6x8"
 ```
 
+## ND core localization (moving grid origin)
+
+`test_minimal_matmul` can run on a grid window anywhere on the chip: `--grid-size XxY` with `--grid-origin XxY`.
+Set `TT_MM_ALLOW_THIN_GRID=1` to allow a 1-wide or 1-tall window. ND cores are reported in device logical coordinates.
+
+```bash
+export TT_MM_ALLOW_THIN_GRID=1
+# Column x=6 only, on all galaxy chips
+pytest "tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]" \
+  --grid-size 1x10 --grid-origin 6x0 --didt-workload-iterations 200 --determinism-check-interval 20 --timeout=0 -s
+```
+
+`nd_origin_sweep.sh` runs a set of windows and prints PASS / HANG / ND per window. It resets the galaxy after a hang.
+
+```bash
+tests/didt/nd_origin_sweep.sh                 # col excl rows: suspect column alone, chip without it, each row alone
+BAD_X=5 tests/didt/nd_origin_sweep.sh rows    # one case only; other settings are listed at the top of the script
+```
+
+With M = N, in0 moves along each row from core (0,y) on NOC_1, and in1 moves down each column from core (x,0) on NOC_0.
+In a row window, each core reads its own in1 from DRAM. If the suspect column fails alone and every row passes,
+suspect the in1 path down that column. If one row fails at (`BAD_X`,y), suspect that core.
+A thin window gives each core 10-12x more work per iteration than the full grid, so a pass does not prove a core is good.
+
 ## Analysis Tools
 
 ```bash
