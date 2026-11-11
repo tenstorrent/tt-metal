@@ -35,6 +35,7 @@ the step harness adds only `QWEN36_FABRIC_RING=1`). KV stays BFP8 (no `QWEN36_R1
 | `QWEN36_BFP4_LAYOUT_GATEUP` | `dsmc:3:2:4` | op path (prefill, kv-split variants, out-of-scope buckets, engine-off fallback) | yes (r13 tp_common `{BFP4_LAYOUT_ENV}_{TARGET}` override; needs `QWEN36_BFP4_LAYOUT=1`, already prod) |
 | ~~`QWEN36_R16_VERIFY_SDPA_MULTI_CORES`~~ | ~~`16`~~ | **DROPPED from the RC env (main, 11-11)**: +1.08 ms verify at 128K / +0.19 at 64K on 3 users vs prod; helps only at 8x32K | (code stays, default unset) |
 | `QWEN36_GLUE` | `kvwo,guin,kvt` | op path; md5-identical | yes (integ2). The GSNK gate ran WITH it (spec_GSNK.json), so keep it in the RC env |
+| `QWEN36_R16_MK_VTAIL_IO` / `QWEN36_R16_MK_VTAIL_AG` | `1` / `1` | verify body entry with the engine on: the plain ttnn.all_gather writes the engine's DRAM x_in (no all_gather_async, RES40 copy, DRAM copy); -21 us / verify (d30u20, 4 interleaved pairs); greedy md5 identical off vs on | rc1c (VTAIL; code default 0) |
 | `QWEN36_MTP_QKV_DSMC` | `1` | drafter step's qkv pair in-projection on DSMC (MTPQKV #24; gate 2 PASS d27u08 11-11 05:18-05:31Z: draft_md5 / md5_all identical off vs on, 32K u8 drafter 2.16 -> 2.14 ms, verify unchanged) | yes (-mk-int 010285d984b; code default 0) |
 | `QWEN36_LMHEAD_DSHARD_SCOPE` / `QWEN36_LMHEAD_DSHARD_FP32_DEST` | `all` / `1` | LM head #20 (-0.1 ms / verify) | **IN rc1** (H+I gate 11-11: length x1.039 CI 0.987-1.093, GPQA 86.8 vs 88.0, acceptance +0.4%, needle 9/9); re-gated by rc_gates' own length run (H+I auto re-run with #20 off on failure) |
 
@@ -84,6 +85,8 @@ MK_AR_RSTD_RED=gdn, MKA_W_ORD=1, E1_WPRE=1, E1_WYPAIR=1, E1_WYORD=1, E1_CUTST=1,
 MK_STREAM_DM_OS=1 (must reach os.environ at _ks time: build_program applies the env around
 setup_bench and the lazy per-device builds), MKA_GDN_CHECK=0, E1_GO_DBG=0, MKA_ATT0=0 (integration builds the tables per pass).
 (ENGINE_ENV also carries the inert stall knobs MK_SGDN_US=64 / MK_SAR_US=18 / MKA_SWO_US=10.)
+vLLM process env read by the verify body (not ENGINE_ENV; rcflags checks them in os.environ): QWEN36_R16_MK_VTAIL_IO=1,
+QWEN36_R16_MK_VTAIL_AG=1 (VTAIL, rc1c: engine x_in = the plain all_gather's DRAM output, -21 us / verify, greedy md5 identical).
 
 Code defaults ON (no env): MK_V12_CB, MKA_STREAMLEAN / MKA_EXTLEAN, MKA_SCLAMP, E1_GO_RING0=hook, MK_L1P2_EXTCB / MK_L1P2_QOVXO /
 MK_L1P2_TENS / MK_L1P2_SEED (QOVXO pending the mesh identity A/B).
