@@ -1117,7 +1117,14 @@ constexpr uint32_t kCoefC = 7;     // the replay's decay c over the whole tile
 // (measured: the math binary 20.7 -> 18.0 KB at B = 8, T = 4, and the program fits). Without value blocks the inlined
 // form is the smaller one (math 20.1 vs 21.7 KB at B = 1, T = 3), so it stays.
 #define LZ_FN inline
-#if defined(TRISC_MATH) && GDN_VSPLIT
+#ifndef GDN_GTEXT
+#define GDN_GTEXT 0  // GTEXT (E1_GTEXT, default on under E1_GB): code-size trims for the corner / reducer variants (0 = old binaries)
+#endif
+#if defined(TRISC_MATH) && GDN_VSPLIT && GDN_GTEXT
+// GTEXT: noclone as well -- IPA-CP otherwise makes one constprop clone per constant-id call site (lz_copy x7, lz_mm_init
+// x4 next to the generic copy), undoing the one-shared-copy intent above
+#define LZ_MFN __attribute__((noinline, noclone))
+#elif defined(TRISC_MATH) && GDN_VSPLIT
 #define LZ_MFN __attribute__((noinline))
 #else
 #define LZ_MFN inline

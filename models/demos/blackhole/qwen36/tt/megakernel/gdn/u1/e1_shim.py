@@ -706,7 +706,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             "E1_GB: B*T == 32, early replay, lean table (eps_l2 = eps_norm: l2 eps == norm eps), VB == Vt"
         NC = len(cores)
         OGB = OGK + 6   # after the PERCORE words (k, n_fwd, 2 x (x, y))
-        XWO = 2 * B * 2048; XRC = XWO + B * 1024; XWC = XRC + CTRL_B; XDP = XWC + CTRL_B; XSC = XDP + B * 256
+        XWO = 2 * B * 2048; XRC = XWO + 2 * B * 1024; XWC = XRC + CTRL_B; XDP = XWC + CTRL_B; XSC = XDP + B * 256   # wo: one set per conv job
         XS_B = -(-(XSC + 3 * 4096) // 2048) * 2048   # + the gate page landing area (XSC + 8192)
         NPX = 6 + XS_B // 2048   # QPX pages: QIN 0..3, P 4..5, then the raw scratch
         HERE_ = os.path.dirname(os.path.abspath(__file__))
@@ -725,7 +725,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'void gdn_gb_wait(uint32_t w) {{ (void)w; noc_semaphore_wait_min(g_ab + {OGB}, {1 + Vt + VB}u * (g_l + 1)); }}\n'
                 f'void gdn_gb_knq(uint32_t a) {{ gb::pull_knq<{Kt}>(g_ab + {OGB}, g_l, a); }}\n')
         GB_RINIT = (f'  g_gb_qin = get_write_ptr({GBC["qpx"]}); g_gb_xs = g_gb_qin + 6u * 2048u;\n'
-                    f'  gb::reader_init(g_gb_xs + {XWO}u, {B * 1024}u, g_gb_qin + 4u * 2048u);\n')
+                    f'  gb::reader_init(g_gb_xs + {XWO}u, {2 * B * 1024}u, g_gb_qin + 4u * 2048u);\n')
         _q = [dev.worker_core_from_logical_core(c) for c in cores]
         GB_RN = 1 + Vt + VB   # rest arrivals per layer: vc + zs (Vt) + the head's gate rows (VB)
         GB_W = (f'static uint32_t g_gb_xs;\n#include "{HERE_}/gb_dm.hpp"\n'
@@ -868,8 +868,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         d_c = d_c + ([("GB_ZONES", "1")] if "c" in gz or gz == "1" else [])
         d_c = d_c + [("GDN_GB", "1"), ("GB_CB_MASK", str(GBC["qpx"])), ("GB_MASK_TILE", "5"),
                      ("GB_CV_PAGES", str(max(Kt, Vt))), ("GB_KT", str(Kt))]
-        gb_blocks, gb_info = _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gb["gin_map"],
-                                          {n: ids[n][0] for n in ("vc", "zs", "kq", "knq")}, scale)
+        if os.environ.get("E1_GTEXT", "1") == "1":   # GTEXT (default on under E1_GB; 0 = the old binaries): code-size trims
+            d_c = d_c + [("GDN_GTEXT", "1")]
+        gb_blocks, gb_info, gb_roots = _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gb["gin_map"],
+                                                    {n: ids[n][0] for n in ("vc", "zs", "kq", "knq")}, scale,
+                                                    noroot=gb.get("noroot", ()))
     payloads = []
     for i, c in enumerate(cores):
         h, s = i // VB, i % VB
@@ -933,6 +936,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]] + ([GO["w"], GO["dbg"]] if GO else [])
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab) + (sum(c_.total_size for c_ in cbs[-3:]) if GO else 0),
+                gb_roots=(gb_roots if GB else None),   # G-b L2 root core indices (GTEXT: program.py asserts GB_NOROOT cores hold none)
                 ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
 
@@ -964,7 +968,7 @@ def _gb_rects(fp, idx):
     return out
 
 
-def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map, cbid, scale):
+def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map, cbid, scale, noroot=()):
     """G-b job tables (gb_dm.hpp payload offsets). Core i = (head h = i // VB, block s = i % VB): conv of v tile i (vc of
     (h, s)), silu of z tile i (zs of (h, s)); cores < 2 Nk Kt also conv q / k tile i (raw, to the kn / qn slots of the
     key head's rf value heads); cores 2 Nk Kt .. + Nv - 1 the gate tiles of head i - 2 Nk Kt. Each job tile is PUSHED by
@@ -986,7 +990,13 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
     # long pole: 48 x 4 KB from one core took ~8.6 us); the raw tiles go to all RS roots, each computes the same l2
     RS = int(os.environ.get("E1_GB_RSPLIT", "1"))
     nr = 2 * Nk * RS
-    roots = {(hk, isq): [NC - nr + (2 * hk + isq) * RS + k for k in range(RS)] for hk in range(Nk) for isq in (0, 1)}
+    # GTEXT: `noroot` cores (built with GB_NOROOT: no L2-root code) hold no root -> the highest contiguous block of nr cores
+    # >= v0 that avoids them (qwen36 1x8: 18..21 instead of 20..23, the AR corners 22 / 23 excluded); none = the old 20..23
+    rb = NC - nr
+    if noroot:
+        rb = max(b_ for b_ in range(v0, NC - nr + 1) if not set(range(b_, b_ + nr)) & set(noroot))
+    roots = {(hk, isq): [rb + (2 * hk + isq) * RS + k for k in range(RS)] for hk in range(Nk) for isq in (0, 1)}
+    assert not set(rinfo_ for rs in roots.values() for rinfo_ in rs) & set(noroot), (roots, noroot)
     assert all(r >= v0 for rs in roots.values() for r in rs), roots
     rinfo = {r: (hk, isq, k) for (hk, isq), rs in roots.items() for k, r in enumerate(rs)}
     for i in range(NC):
@@ -1036,5 +1046,6 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
         for dt_, ne_ in dn:
             blk += [bits(float(dt_[h])), bits(float(ne_[h]))]
         blocks[i] = blk
-    info = f"pushes per core {[len(p_) for p_ in pushes]}, conv jobs max {maxc}"
-    return blocks, info
+    root_l = sorted(r for rs in roots.values() for r in rs)
+    info = f"pushes per core {[len(p_) for p_ in pushes]}, conv jobs max {maxc}, L2 roots {root_l}" + (f" (noroot {sorted(noroot)})" if noroot else "")
+    return blocks, info, root_l
