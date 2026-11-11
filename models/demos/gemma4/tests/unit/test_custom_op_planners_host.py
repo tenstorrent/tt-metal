@@ -465,3 +465,326 @@ def test_splitfree_golden_gathers_through_the_page_table():
                 vv = torch.stack([v[blk, g, off] for blk, off in rows])
                 want = torch.softmax(q[0, b, h] @ kk.T * 0.5, dim=-1) @ vv
                 assert torch.allclose(got[0, b, h], want, atol=1e-5), (window, ring, b, h)
+
+
+# ── sdpa_decode_lse: the stock flash-decode factory's core assignment and tree, re-expressed in python ─────────────
+from models.demos.gemma4.custom_ops.sdpa_decode_lse import planner as lp  # noqa: E402
+
+
+def test_sdpa_decode_lse_tree_merges_every_member_once_and_gives_the_lse():
+    """For every group size up to 64 cores and every chunk count around it: each member's (parent, send round) is a
+    child slot of its parent (so the parent waits exactly once per sender, at that round), parents precede their
+    children (no wait cycle), the rounds stay below ceil(log2 n), the K chunks of ``workload_for_core`` cover the
+    row once, and the kernels' merge along the tree of random per-member partials (raw-score max m, l = sum of
+    exp((s - m) * scale), unnormalised O) gives softmax(scale * s) @ V and ``scale * m + ln(l)`` = logsumexp."""
+    import torch
+
+    torch.manual_seed(0)
+    scale, chunk, D = 0.7, 2, 3
+    for n in range(1, lp.MAX_CORES_PER_HEAD + 1):
+        params = [lp.tree_reduction_params(c, n) for c in range(n)]
+        rounds = lp.tree_rounds(n)
+        assert params[0].is_root and params[0].parent == lp.NONE
+        for c in range(1, n):
+            p = params[c]
+            assert p.parent < c and p.send_at_round < rounds, (n, c)
+            assert params[p.parent].children[p.send_at_round] == c, (n, c)
+        for c in range(n):
+            assert all(ch == lp.NONE or (r < rounds and ch > c) for r, ch in enumerate(params[c].children))
+        for k in sorted({1, max(1, n - 1), n, n + 1, 2 * n + 3}):
+            s = torch.randn(k * chunk, dtype=torch.float64) * 3
+            v = torch.randn(k * chunk, D, dtype=torch.float64)
+            spans = [lp.workload_for_core(k * chunk - 1, c, n, chunk)[2:] for c in range(n)]
+            assert sorted(i for a, b in spans for i in range(a, b)) == list(range(k)), (n, k)
+
+            def merged(c):  # the member's partial after its rounds (writer receives, compute correction_block)
+                a, b = spans[c]
+                keys = slice(a * chunk, b * chunk)
+                m = s[keys].max()
+                p = torch.exp((s[keys] - m) * scale)
+                l, o = p.sum(), p @ v[keys]
+                for child in params[c].children:
+                    if child != lp.NONE and child < k:  # the kernels' "child has data" test
+                        mc, lc, oc = merged(child)
+                        mn = torch.maximum(m, mc)
+                        ea, eb = torch.exp((m - mn) * scale), torch.exp((mc - mn) * scale)
+                        m, l, o = mn, l * ea + lc * eb, o * ea + oc * eb
+                return m, l, o
+
+            m, l, o = merged(0)
+            assert torch.allclose(o / l, torch.softmax(s * scale, 0) @ v), (n, k)
+            assert torch.allclose(scale * m + torch.log(l), torch.logsumexp(s * scale, 0)), (n, k)
+
+
+@pytest.mark.parametrize("grid", GRIDS + [(12, 10), (8, 4)], ids=["wh_8x8", "bh_13x10", "bh_12x10", "glx_8x4"])
+def test_sdpa_decode_lse_plan_is_the_factory_split(grid):
+    """The core plan is the stock factory's (``grid.sdpa_decode_cores_per_head`` mirrors it), groups are contiguous
+    row-major runs with the root first, a group past 64 cores is refused, every per-core argument list has the
+    length the copied kernels parse, the reduction staging holds one block per round, and the served shapes
+    (head_dim 512 bfp8, k chunk 64, caps 16 / 32 / 64) fit the per-core L1."""
+    n_grid = g.grid_cores(grid)
+    for B in (1, 4, 8, 32):
+        for cap in (1, 3, 16, 32, 64, 128):
+            if B > n_grid:
+                continue
+            want = g.sdpa_decode_cores_per_head(n_grid, B, 1, cap)
+            if lp.tree_rounds(want) > lp.MAX_TREE_REDUCTION_ROUNDS:
+                with pytest.raises(ValueError, match="rounds"):  # allow-pytest.raises (pure)
+                    lp.plan_cores(grid, B, cap)
+                continue
+            plan = lp.plan_cores(grid, B, cap)
+            assert plan.cores_per_head == want and plan.active_cores == want * B <= n_grid
+            for b in range(B):
+                grp = plan.group(b)
+                assert [w.member for w in grp] == list(range(want)) and {w.batch for w in grp} == {b}
+                assert grp[0].do_reduce and grp[0].do_output and grp[0].tree.is_root
+            assert [w.core for w in plan.work] == [(i % grid[0], i // grid[0]) for i in range(plan.active_cores)]
+            if B <= 4 and cap in (16, 32, 64):
+                geo = lp.Geometry(
+                    batch=B,
+                    num_q_heads=4,
+                    head_dim=512,
+                    max_blocks=4096,
+                    block_size=64,
+                    num_cache_blocks=4096 * B,
+                    kv_dtype="bfloat8_b",
+                    k_chunk_size=64,
+                    scale=1.0,
+                    cur_pos_stick=64,
+                    page_table_stick=4096 * 4,
+                )
+                full = lp.plan(geo, grid, cap)
+                assert len(full.reader_ct) == lp.READER_CT_SCALARS and len(full.writer_ct) == lp.WRITER_CT_SCALARS
+                assert len(full.compute_ct) == lp.COMPUTE_CT_ARGS
+                stage = [s for s in full.cbs if s.index == lp.CB_INTERMED]
+                assert (stage[0].pages if stage else 0) == (geo.pnht * geo.dht + 2 * geo.pnht) * plan.rounds
+                assert full.cb_total_bytes <= g.sdpa_decode_cb_budget_bytes(), full.describe()
+                addrs = dict(q=1, k=2, v=3, cur_pos=4, page_table=5, out=6, stats=7)
+                rt = lp.runtime_args(geo, full.cores, lambda xy: (xy[0] + 1, xy[1] + 2), addrs)
+                assert set(rt) == {w.core for w in plan.work}
+                for w in plan.work:
+                    reader, writer, compute = rt[w.core]
+                    assert len(reader) == lp.READER_RT_FIXED + 2 * B and reader[0] == 1 and reader[10] == w.batch
+                    assert len(writer) == lp.WRITER_RT_FIXED + 2 * want + 4 * B and writer[:2] == [6, 7]
+                    assert writer[lp.WRITER_RT_FIXED : lp.WRITER_RT_FIXED + want] == [
+                        m.core[0] + 1 for m in plan.group(w.batch)
+                    ]
+                    assert len(compute) == lp.COMPUTE_RT_ARGS and compute[0] == int(w.member == 0)
+
+
+def test_sdpa_decode_lse_merge_of_two_halves_is_the_full_row():
+    """The torch side of the pair split the device test runs: the golden over keys [0, mid) and over [mid, pos]
+    through the page table shifted by mid / block blocks (cur_pos - mid), merged by the LSE formula, equals the
+    golden over [0, pos]; ``lse_from_stats`` reads m at column 0 and l at column 32; a skipped half (-inf) with a
+    garbage output carries no weight."""
+    import torch
+
+    from models.demos.gemma4.custom_ops.sdpa_decode_lse import SdpaDecodeLse
+
+    torch.manual_seed(0)
+    blocks, block, D, Hq, B, scale = 24, 32, 64, 4, 3, 0.5
+    k = torch.randn(blocks, 1, block, D)
+    v = torch.randn(blocks, 1, block, D)
+    q = torch.randn(1, B, Hq, D)
+    width = blocks // B
+    table = torch.randperm(blocks).reshape(B, width).to(torch.int32)
+    cur_pos = torch.tensor([width * block - 1, 40, 100])
+    mid = 64
+    shifted = torch.zeros_like(table)
+    shifted[:, : width - mid // block] = table[:, mid // block :]
+    pos_a = torch.where(cur_pos >= mid, torch.full_like(cur_pos, mid - 1), cur_pos)
+    pos_b = torch.where(cur_pos >= mid, cur_pos - mid, torch.full_like(cur_pos, -1))
+    full, lse_full = SdpaDecodeLse.golden(q, k, v, table, cur_pos, scale=scale)
+    out_a, lse_a = SdpaDecodeLse.golden(q, k, v, table, pos_a, scale=scale)
+    out_b, lse_b = SdpaDecodeLse.golden(q, k, v, shifted, pos_b, scale=scale)
+    out_b[0, 1] = float("nan")  # the device leaves a skipped row's output untouched
+    merged, lse_m = SdpaDecodeLse.merge_torch(out_a, lse_a, out_b, lse_b)
+    assert torch.allclose(merged, full, atol=1e-5) and torch.allclose(lse_m, lse_full, atol=1e-5)
+    # the stats layout: [1, B, 32, 64], m at column 0, l at column 32
+    m = torch.randn(1, B, 32) * 4
+    l = torch.rand(1, B, 32) * 100 + 1
+    stats = torch.zeros(1, B, 32, 64)
+    stats[..., 0], stats[..., 32] = m, l
+    got = SdpaDecodeLse.lse_from_stats(stats, Hq, scale)
+    assert torch.allclose(got, scale * m[..., :Hq] + torch.log(l[..., :Hq]))
+
+
+def _lse_geometry(**kw):
+    base = dict(
+        batch=4,
+        num_q_heads=8,
+        head_dim=512,
+        max_blocks=2048,
+        block_size=64,
+        num_cache_blocks=8192,
+        kv_dtype="bfloat8_b",
+        k_chunk_size=64,
+        scale=1.0,
+        cur_pos_stick=64,
+        page_table_stick=8192,
+    )
+    base.update(kw)
+    return lp.Geometry(**base)
+
+
+def test_sdpa_decode_lse_pair_split_refusals_and_plan():
+    """pair_split runs on a 2-D mesh with an even number of columns (the pair is columns (c, c ^ 1), the half is the
+    column's parity) and is refused on a device that is not a mesh, a single-device mesh, a non-2-D shape and an odd
+    column count. The pair plan is the stock plan plus the SDPA_LSE_PAIR_SPLIT define on every kernel and one
+    compile-time arg (the half); without pair_split no define or argument is added."""
+    assert "mesh device" in lp.pair_split_reason(None)
+    assert "single device" in lp.pair_split_reason((1, 1))
+    assert "2-D" in lp.pair_split_reason((8,))
+    for shape in [(1, 3), (2, 3), (4, 1), (8, 1)]:
+        assert "odd" in lp.pair_split_reason(shape), shape
+    for shape in [(1, 2), (1, 8), (2, 4), (8, 4), (4, 8)]:
+        assert lp.pair_split_reason(shape) is None, shape
+    assert [lp.pair_half_of(c) for c in range(8)] == [0, 1] * 4
+    assert [lp.pair_partner((3, c)) for c in range(4)] == [(3, 1), (3, 0), (3, 3), (3, 2)]
+
+    geo = _lse_geometry()
+    stock = lp.plan(geo, (13, 10), 16)
+    pair = lp.plan(geo, (13, 10), 16, pair_split=True)
+    assert not stock.pair_split and stock.dataflow_defines == () and stock.pair_ct(0) == stock.pair_ct(1) == ()
+    assert lp.PAIR_SPLIT_DEFINE not in stock.defines
+    assert pair.defines == stock.defines + (lp.PAIR_SPLIT_DEFINE,) and pair.dataflow_defines == (lp.PAIR_SPLIT_DEFINE,)
+    assert [pair.pair_ct(h) for h in (0, 1)] == [(0,), (1,)]
+    assert (pair.cores, pair.cbs, pair.reader_ct, pair.writer_ct, pair.compute_ct) == (
+        stock.cores,
+        stock.cbs,
+        stock.reader_ct,
+        stock.writer_ct,
+        stock.compute_ct,
+    )
+    assert len(pair.compute_ct) == lp.COMPUTE_CT_ARGS  # the half lands at compute arg COMPUTE_CT_ARGS
+    with pytest.raises(ValueError, match="pair half"):  # allow-pytest.raises (pure)
+        pair.pair_ct(2)
+
+
+def test_sdpa_decode_lse_pair_halves_split_the_row():
+    """The pair split's chunk ranges (``pair_workload_for_core``, the mirror of kernels/pair_split.hpp): half 0 takes
+    chunks [0, ceil(n/2)), half 1 [ceil(n/2), n), together every chunk once; on a device the members with data are a
+    prefix and ``member < half_chunks`` is exactly "has data" (the kernels' active-child test); member 0 ends its
+    half, so the row's last chunk (the causal mask's) sits on the root of the half holding it -- half 1, or half 0
+    of a one-chunk row, whose half 1 is the empty one; no core takes more than ceil(n / (2 * cores)) chunks (the
+    balance of one 2 * cores group); ``pair_key_range`` is the half's chunks clipped to cur_pos."""
+    for k in (32, 64, 128):
+        for cores in (1, 2, 3, 5, 16, 64):
+            positions = {0, 1, k - 2, k - 1, k, k + 36, 2 * k - 1, 2 * k, 3 * k + 5, 4095, 4096, 65536, 131071}
+            positions |= {2 * cores * k - 1, 2 * cores * k, 2 * cores * k + k, cores * k + 3}
+            for cur_pos in sorted(positions):
+                n = -(-(cur_pos + 1) // k)
+                first = (n + 1) // 2
+                seen = []
+                for half in (0, 1):
+                    work = [lp.pair_workload_for_core(cur_pos, c, cores, k, half) for c in range(cores)]
+                    base, cnt = (0, first) if half == 0 else (first, n - first)
+                    assert lp.pair_half_chunks(n, half) == (base, cnt)
+                    assert all(w[0] == n * k // lp.TILE and w[1] == n and w[4] == cnt for w in work), (
+                        k,
+                        cores,
+                        cur_pos,
+                    )
+                    chunks = sorted(i for w in work for i in range(w[2], w[3]))
+                    assert chunks == list(range(base, base + cnt)), (k, cores, cur_pos, half)
+                    assert [w[2] < w[3] for w in work] == [c < cnt for c in range(cores)], (k, cores, cur_pos, half)
+                    assert max(w[3] - w[2] for w in work) <= -(-n // (2 * cores)), (k, cores, cur_pos, half)
+                    if cnt:
+                        assert work[0][3] == base + cnt
+                        if base + cnt == n:  # this half holds the row's last chunk: on its root
+                            assert [c for c, w in enumerate(work) if w[2] <= n - 1 < w[3]] == [0]
+                    lo, hi = lp.pair_key_range(cur_pos, k, half)
+                    want = (base * k, min((base + cnt) * k, cur_pos + 1)) if cnt else (cur_pos + 1, cur_pos + 1)
+                    assert (lo, hi) == want, (k, cur_pos, half)
+                    seen += chunks
+                assert sorted(seen) == list(range(n))
+                assert (n == 1) == (lp.pair_half_chunks(n, 1)[1] == 0)
+    assert lp.pair_key_range(-1, 64, 0) == lp.pair_key_range(-1, 64, 1) == (0, 0)
+
+
+def test_sdpa_decode_lse_pair_split_tree_and_merge_give_the_full_row():
+    """Both chips of a pair in torch: per half, each member's chunks (the causal mask clips the last), the group tree
+    with the pair active-child test (``child < half_chunks``), the root's (m, l, O / l) -- or the empty-half sentinel
+    O = 0, m = bf16(-30000), l = 1 -- then the partner merge ``w_self = sigmoid(lse_self - lse_partner)``,
+    ``O = w_self * O_self + w_partner * O_partner``: softmax(scale * s) @ V, and logaddexp of the halves' lse is the
+    row's logsumexp."""
+    import torch
+
+    torch.manual_seed(1)
+    scale, k, D = 0.5, 32, 3
+    m_empty = float(torch.tensor(lp.PAIR_EMPTY_M).to(torch.bfloat16))
+    for cores in (1, 2, 3, 4, 5, 8):
+        params = [lp.tree_reduction_params(c, cores) for c in range(cores)]
+        for cur_pos in sorted({0, 5, 31, 32, 40, 95, 96, 200, 2 * cores * k + 7, 5 * cores * k + 70}):
+            s = torch.randn(cur_pos + 1, dtype=torch.float64) * 3
+            v = torch.randn(cur_pos + 1, D, dtype=torch.float64)
+            halves = []
+            for half in (0, 1):
+                work = [lp.pair_workload_for_core(cur_pos, c, cores, k, half) for c in range(cores)]
+                cnt = work[0][4]
+
+                def merged(c):  # the member's partial after its rounds (writer receives, compute correction_block)
+                    keys = slice(work[c][2] * k, min(work[c][3] * k, cur_pos + 1))
+                    m = s[keys].max()
+                    p = torch.exp((s[keys] - m) * scale)
+                    l, o = p.sum(), p @ v[keys]
+                    for child in params[c].children:
+                        if child != lp.NONE and child < cnt:  # the pair "child has data" test
+                            mc, lc, oc = merged(child)
+                            mn = torch.maximum(m, mc)
+                            ea, eb = torch.exp((m - mn) * scale), torch.exp((mc - mn) * scale)
+                            m, l, o = mn, l * ea + lc * eb, o * ea + oc * eb
+                    return m, l, o
+
+                if work[0][2] == work[0][3]:  # an empty half: no member has data, the root writes the sentinel
+                    assert cnt == 0 and half == 1 and cur_pos < k
+                    m, l, o = torch.tensor(m_empty, dtype=torch.float64), torch.tensor(lp.PAIR_EMPTY_L), torch.zeros(D)
+                else:
+                    m, l, o = merged(0)
+                    o = o / l
+                halves.append((scale * m + torch.log(l), o.double()))
+            (lse0, o0), (lse1, o1) = halves
+            w0, w1 = torch.sigmoid(lse0 - lse1), torch.sigmoid(lse1 - lse0)
+            assert torch.allclose(w0 * o0 + w1 * o1, torch.softmax(s * scale, 0) @ v), (cores, cur_pos)
+            assert torch.allclose(torch.logaddexp(lse0, lse1), torch.logsumexp(s * scale, 0)), (cores, cur_pos)
+
+
+def test_sdpa_decode_lse_merge_with_an_empty_half_is_the_other_half():
+    """``merge_torch`` with the empty-half sentinel (O = 0 and stats m = -30000, l = 1, read in bf16 through
+    ``lse_from_stats`` like the device's) returns the other half unchanged, in either order, at the model's scale 1
+    and at 1/sqrt(512); the sentinel's lse is finite (no NaN through a 0 weight). The planner's packed bf16
+    patterns are torch's bf16 roundings and are the ones kernels/pair_split.hpp writes."""
+    import re
+    from pathlib import Path
+
+    import torch
+
+    from models.demos.gemma4.custom_ops.sdpa_decode_lse import SdpaDecodeLse
+
+    torch.manual_seed(2)
+    B, Hq, D = 3, 4, 64
+    for scale in (1.0, 512**-0.5):
+        out_a = torch.randn(1, B, Hq, D)
+        lse_a = torch.randn(1, B, Hq) * 10 + 20
+        stats = torch.zeros(1, B, 32, lp.STATS_COLS, dtype=torch.bfloat16)
+        stats[..., 0], stats[..., lp.TILE] = lp.PAIR_EMPTY_M, lp.PAIR_EMPTY_L
+        lse_e = SdpaDecodeLse.lse_from_stats(stats, Hq, scale)
+        assert torch.isfinite(lse_e).all() and (lse_e < -1000).all()
+        empty = torch.zeros(1, B, Hq, D)
+        for out, lse in (
+            SdpaDecodeLse.merge_torch(out_a, lse_a, empty, lse_e),
+            SdpaDecodeLse.merge_torch(empty, lse_e, out_a, lse_a),
+        ):
+            assert torch.equal(out, out_a) and torch.equal(lse, lse_a), scale
+        w_self = torch.sigmoid(lse_a - lse_e)[..., None]
+        assert torch.equal(w_self * out_a + torch.sigmoid(lse_e - lse_a)[..., None] * empty, out_a)
+
+    def bf16_bits(x):
+        return int(torch.tensor([x]).to(torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+
+    assert float(torch.tensor(lp.PAIR_EMPTY_M).to(torch.bfloat16)) == -29952.0
+    assert lp.PAIR_EMPTY_M_PACKED == bf16_bits(lp.PAIR_EMPTY_M) * 0x10001
+    assert lp.PAIR_EMPTY_L_PACKED == bf16_bits(lp.PAIR_EMPTY_L) * 0x10001
+    hpp = (Path(lp.__file__).parent / "kernels" / "pair_split.hpp").read_text()
+    assert re.search(rf"PAIR_EMPTY_M_PACKED = 0x{lp.PAIR_EMPTY_M_PACKED:08X};", hpp)
+    assert re.search(rf"PAIR_EMPTY_L_PACKED = 0x{lp.PAIR_EMPTY_L_PACKED:08X};", hpp)
