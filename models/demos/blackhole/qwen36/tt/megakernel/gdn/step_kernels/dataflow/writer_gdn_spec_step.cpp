@@ -97,6 +97,9 @@ constexpr uint32_t kCoefN = 7 + kBatchMax;  // NGB G E BETA NBE EYE W + C_u
 #if GDN_W_IN_WAIT
 void gdn_in_wait();
 #endif
+#if defined(GDN_PRE_IN_HOOK)
+void gdn_pre_in_hook();
+#endif
 #if GDN_EARLY_REPLAY
 constexpr uint32_t kCoefRep = 1 + kBatchMax;  // W | C_0..C_7, pushed first; then NGB G E BETA NBE EYE
 inline float gdn_f32(uint32_t b) {
@@ -642,6 +645,9 @@ TT_KERNEL void writer(
 #endif
         coef.push_back(kCoefRep);
     }
+#endif
+#if defined(GDN_PRE_IN_HOOK)
+    gdn_pre_in_hook();  // engine (MK_RRED_LATE): the Σ reducer's mixer delivery, after wr_rcoef's replay tiles are out
 #endif
 #if GDN_W_IN_WAIT
     gdn_in_wait();

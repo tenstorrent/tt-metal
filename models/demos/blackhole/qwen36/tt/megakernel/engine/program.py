@@ -1154,6 +1154,12 @@ def setup_bench(dev, MESH, mesh_identity):
         # CB 37; its compute sums the 8 tiles, SFPU column-reduces and transposes (column 0 = per-token Σx², the consumers' format)
         # into CB 39; the writer multicasts the 4 KB tile to the STREAM rects at MK_AR_RSP, then MK_AR_RSF += 1 there.
         RRED = AR_RSTD and RED_GDN
+        # MK_RRED_LATE=1 (GINSTREAM, default off): on the reducer core the GDN layer's mixer-Σ reduce runs from the step's
+        # gdn_pre_in_hook() (after c_replay / wr_rcoef) instead of at the layer top, so the replay overlaps the MLP window like
+        # on the other 23 GDN cores (mesh RC: the reducer core's head started its step +25 µs late on most devices)
+        RRED_LATE = RRED and os.environ.get('MK_RRED_LATE', '0') == '1'
+        if RRED_LATE:
+            assert os.environ.get('E1_EARLY_REPLAY', '1') == '1', "MK_RRED_LATE: the compute hook sits in the GDN_EARLY_REPLAY branch"
         if RRED:
             assert GDN24, "MK_AR_RSTD_RED=gdn: the Σ reducer runs on a GDN-role core (MKA_GDN24)"
             RRED_HC = ttnn.CoreCoord(1, GY)
@@ -1997,9 +2003,14 @@ def setup_bench(dev, MESH, mesh_identity):
             assert txt[end] == '}', (src, txt[end - 5:end + 5])
             body = txt[loop.end():_s0].rstrip(' ')
             fn = 'rred_w' if role == 'w' else 'rred_c'
-            new_loop = (f'\n  uint32_t gL = 0;\n  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n   {fn}(2u * LL);   // delivery 2 LL: this layer\'s mixer x\n'
-                        f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
-                        f'   {fn}(2u * LL + 1u);   // delivery 2 LL + 1: this layer\'s MLP x\n  }}\n'
+            if RRED_LATE:   # GDN layers: delivery 2 LL from the step's gdn_pre_in_hook() (after the replay / wr_rcoef), not at the layer top
+                head = (f'\n  uint32_t gL = 0;\n  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
+                        f'   if (({gmask}u >> LL) & 1u) {{\n    g_rred_d = 2u * LL;   // delivery 2 LL: this layer\'s mixer x (in the hook)\n'
+                        f'    const uint32_t L = gL++;\n' + body + f'\n   }} else {fn}(2u * LL);   // attention layer: mixer x here\n')
+            else:
+                head = (f'\n  uint32_t gL = 0;\n  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n   {fn}(2u * LL);   // delivery 2 LL: this layer\'s mixer x\n'
+                        f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n')
+            new_loop = (head + f'   {fn}(2u * LL + 1u);   // delivery 2 LL + 1: this layer\'s MLP x\n  }}\n'
                         + (f'  *(volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u = 0;   // device-local: all {16 * NL} increments awaited\n' if role == 'w' else ''))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
             if role == 'w':
@@ -2021,6 +2032,8 @@ def setup_bench(dev, MESH, mesh_identity):
                         '  tile_regs_commit();\n  tile_regs_wait();\n  pack_tile(0, 39);\n  tile_regs_release();\n  cb_push_back(39, 1);\n  cb_pop_front(37, 8);\n}\n')
                 inc = ('#include "api/compute/compute_kernel_api.h"\n#include "api/compute/transpose_dest.h"\n#include "api/compute/eltwise_binary_sfpu.h"\n'
                        '#include "api/compute/tile_move_copy.h"\n#include "api/compute/reconfig_data_format.h"\n#include "api/compute/pack.h"\n')
+            if RRED_LATE:
+                fdef += f'static uint32_t g_rred_d = 0;\nvoid gdn_pre_in_hook() {{ {fn}(g_rred_d); }}\n'
             km = txt.index('void kernel_main() {')
             txt = txt[:km] + fdef + txt[km:]
             if inc:
@@ -2036,7 +2049,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 u_[37] = ttnn.UnpackToDestMode.UnpackToDestFp32
                 cfg.unpack_to_dest_mode = u_
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)]),
-                                             defines=list(kd.defines), runtime_args=ttnn.RuntimeArgs(), config=cfg, **base))
+                                             defines=list(kd.defines) + ([('GDN_PRE_IN_HOOK', '1')] if RRED_LATE else []),
+                                             runtime_args=ttnn.RuntimeArgs(), config=cfg, **base))
         assert sum(str(k_.kernel_source).endswith('_rred.cpp') for k_ in out) == 2, "_gdn_host_rred: writer + compute variants on RRED_HC"
         return out
     def _mka_ccfg():   # MKA2 compute config; MK_AR_RSTD: the Σ tile CB 43 (v_rstd) unpacks straight to DST in fp32 (exact rstd sum)
