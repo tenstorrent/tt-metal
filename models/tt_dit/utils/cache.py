@@ -10,6 +10,7 @@ import os
 import secrets
 import shutil
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -266,53 +267,121 @@ def _place_like_a_cache_hit(
     ttnn.distributed_context_barrier()
 
 
-def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "") -> bool:
-    """Reload every tensor `tt_model.save(cache_dir)` wrote and compare it, shard by shard, with the
-    resident one. Returns `False` and logs each mismatch rather than raising: the resident weights
-    are still good, so the run can go on; only the cache is untrustworthy.
+def _verification_parameters(model: Module, prefix: str):
+    for name, child in model.named_children():
+        yield from _verification_parameters(child, f"{prefix}{name}.")
+    for name, parameter in model.named_parameters():
+        yield f"{prefix}{name}", parameter
 
-    Costs one read of the cache and one device round trip per tensor, at cache creation only.
-    """
+
+@contextmanager
+def _verification_phase(stats: dict, phase: str):
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        stats[phase] += time.monotonic() - started
+
+
+def _verify_shard_pair(resident, fresh, stats: dict) -> tuple[bool, bool]:
+    # Keep decorated conversion on the caller thread, including independent blocking
+    # device readbacks. Function scope releases both decoded tensors before the next pair.
     import torch
+
+    a = b = None
+    try:
+        with _verification_phase(stats, "convert_s"):
+            a = ttnn.to_torch(resident)
+            b = ttnn.to_torch(fresh)
+        with _verification_phase(stats, "compare_s"):
+            equal = a.shape == b.shape and torch.equal(a, b)
+            finite = bool(torch.isfinite(b).all()) if equal else True
+        return equal, finite
+    finally:
+        # An escaping exception's traceback must not retain decoded storage either.
+        a = b = None
+
+
+def verify_saved_model(
+    tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "", stats: dict | None = None
+) -> bool:
+    """Independently reload and compare all logical shards, retaining one decoded pair.
+
+    All TTNN calls remain serial. Optional ``stats`` receives aggregate completed-work
+    counters and elapsed phases, including on interruption. ``load_s`` includes metadata,
+    mapping and any upload; ``convert_s`` includes readback, lazy page faults and decode.
+    Neither measures disk I/O in isolation. These nested phases are deliberately not added
+    to walltime's ledger: load_model already accounts for them in weight_load.
+    """
+    started = last_report = time.monotonic()
+    counters = dict(
+        parameters_completed=0,
+        parameters_failed=0,
+        shards_completed=0,
+        tensorbin_bytes=0,
+        load_s=0.0,
+        convert_s=0.0,
+        compare_s=0.0,
+        completed=False,
+    )
+
+    def report_progress():
+        nonlocal last_report
+        now = time.monotonic()
+        if now - last_report >= 5.0:
+            last_report = now
+            logger.info("cache verify progress: " + json.dumps(counters, sort_keys=True))
 
     cache_dir = Path(cache_dir)
     ok = True
-    for name, child in tt_model.named_children():
-        ok &= verify_saved_model(child, cache_dir, prefix=f"{prefix}{name}.")
-    for name, parameter in tt_model.named_parameters():
-        path = cache_dir / f"{prefix}{name}.tensorbin"
-        if not path.is_file():
-            # `Module.save` writes one tensorbin per parameter and `Module.load` reads every one of
-            # them back, so a missing file is an incomplete cache, not a parameter stored elsewhere
-            # (the Mochi/Wan torch fallbacks are plain torch modules, not parameters).
-            ok = False
-            logger.error(f"cache incomplete: no tensorbin for '{prefix}{name}' at '{path}'")
-            continue
-        reloaded = None
-        try:
-            # A truncated or malformed file raises here; that is a bad cache, not a bad run.
-            reloaded = ttnn.load_tensor(path, device=None if parameter.on_host else parameter.device)
-            resident = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(parameter.data)]
-            fresh = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(reloaded)]
-            bad = [i for i, (a, b) in enumerate(zip(resident, fresh)) if a.shape != b.shape or not torch.equal(a, b)]
-            if len(resident) != len(fresh) or bad:
-                ok = False
-                logger.error(
-                    f"cache mismatch in '{path.name}': shards {bad or 'count'} differ "
-                    f"({len(resident)} resident vs {len(fresh)} reloaded)"
-                )
-            elif nonfinite := [i for i, t in enumerate(fresh) if not torch.isfinite(t).all()]:
-                # Weights prepped on a faulty device read back exactly and are still garbage (#208: an
-                # ltx VAE encoder cache of inf/NaN). to_torch drops tile padding, so only real values count.
-                ok = False
-                logger.error(f"cache holds NaN or inf in '{path.name}': shards {nonfinite}")
-        except RuntimeError as err:
-            ok = False
-            logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
-        finally:
-            if reloaded is not None and not parameter.on_host:
-                ttnn.deallocate(reloaded)
-    return ok
+    try:
+        for name, parameter in _verification_parameters(tt_model, prefix):
+            path = cache_dir / f"{name}.tensorbin"
+            reloaded = resident = fresh = a = b = None
+            parameter_ok = True
+            try:
+                if not path.is_file():
+                    parameter_ok = False
+                    logger.error(f"cache incomplete: no tensorbin for '{name}' at '{path}'")
+                else:
+                    counters["tensorbin_bytes"] += path.stat().st_size
+                    with _verification_phase(counters, "load_s"):
+                        reloaded = ttnn.load_tensor(path, device=None if parameter.on_host else parameter.device)
+                    resident = ttnn.get_device_tensors(parameter.data)
+                    fresh = ttnn.get_device_tensors(reloaded)
+                    if len(resident) != len(fresh):
+                        parameter_ok = False
+                        logger.error(f"cache mismatch in '{path.name}': shard count {len(resident)} vs {len(fresh)}")
+                    # Do not deduplicate replicated storage: its ordered logical coordinates
+                    # are part of the comparison. Only native shard handles are retained here.
+                    for i, (a, b) in enumerate(zip(resident, fresh)):
+                        equal, finite = _verify_shard_pair(a, b, counters)
+                        counters["shards_completed"] += 1
+                        if not equal or not finite:
+                            parameter_ok = False
+                            reason = "mismatch" if not equal else "NaN or inf"
+                            logger.error(f"cache {reason} in '{path.name}': shard {i}")
+                        report_progress()
+                    del resident, fresh
+            except (RuntimeError, OSError, ValueError, TypeError) as err:
+                parameter_ok = False
+                logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
+            finally:
+                resident = fresh = a = b = None
+                if reloaded is not None and not parameter.on_host:
+                    ttnn.deallocate(reloaded)
+                reloaded = None
+            ok &= parameter_ok
+            counters["parameters_completed"] += 1
+            counters["parameters_failed"] += int(not parameter_ok)
+            report_progress()
+        counters["completed"] = True
+        return ok
+    finally:
+        counters["wall_s"] = time.monotonic() - started
+        if stats is not None:
+            stats.update(counters)
+        logger.info("cache verify summary: " + json.dumps(counters, sort_keys=True))
 
 
 def _verify_env_enabled() -> bool:

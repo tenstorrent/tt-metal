@@ -217,3 +217,36 @@ def test_failed_publication_keeps_unrelated_leaf_and_cleans_staging(fake, tmp_pa
     assert sentinel.read_bytes() == b"unrelated model stays intact"
     assert not (tmp_path / "candidate").exists()
     assert not list(tmp_path.glob(".candidate.staging-*"))
+
+
+@pytest.mark.parametrize("error_type", [OSError, ValueError, TypeError])
+def test_unreadable_or_invalid_tensor_returns_false(fake, tmp_path, error_type):
+    model = fake.model([torch.ones(2, 3)], error_type("bad tensor"))
+    assert not cache.verify_saved_model(model, tmp_path)
+
+
+@pytest.mark.parametrize("damage", ["truncated", "garbage"])
+def test_native_bad_files_in_a_bounded_child(tmp_path, damage):
+    # Native parser faults must never take down a publishing process in this test.
+    import subprocess
+    import sys
+
+    source = cache.ttnn.from_torch(torch.ones(32, 64), dtype=cache.ttnn.bfloat16)
+    path = tmp_path / "weight.tensorbin"
+    cache.ttnn.dump_tensor(path, source)
+    data = path.read_bytes()
+    path.write_bytes(data[: len(data) // 2] if damage == "truncated" else b"not a tensorbin")
+    script = """
+import sys
+from types import SimpleNamespace
+import torch
+from models.tt_dit.utils import cache
+resident = cache.ttnn.from_torch(torch.ones(32,64), dtype=cache.ttnn.bfloat16)
+p = SimpleNamespace(data=resident, on_host=True, device=None)
+m = SimpleNamespace(named_children=lambda: (), named_parameters=lambda: [("weight", p)])
+sys.exit(0 if cache.verify_saved_model(m, sys.argv[1]) is False else 1)
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", script, str(tmp_path)], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
