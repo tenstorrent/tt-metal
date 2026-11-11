@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Web monitor for ``demo/server.py`` on the Rust host runtime (the default; ``DEEPSEEK_V41_RUST_HOST=0`` turns it
-off, and with it the monitor).
+"""Web monitor for ``demo/server.py`` on the Rust host runtime (the default; ``--no-rust-host`` or
+``DEEPSEEK_V41_RUST_HOST=0`` turns it off, and with it the monitor).
 
 It runs as a process of its own, so watching the server costs the server nothing beyond what it publishes:
 
@@ -57,6 +57,10 @@ COUNTER_FIELDS = (
 
 # Log records each snapshot carries (the newest); the monitor keeps a longer tail, merged by sequence number.
 _FEED_LOG_LINES = 200
+# A record's text is cut here before the monitor keeps it. The server logs a request's messages whole, which for a
+# long conversation is a megabyte a record: a page's first fetch would then be some tens of megabytes, and the
+# browser would still be reading it when the next one is due.
+_LOG_MESSAGE_CHARS = 2000
 # Ended turns each snapshot carries (the newest, which also holds the running totals).
 FEED_ENDED_TURNS = 32
 # Seconds over which a turn's live decode and prefill rates are taken.
@@ -92,7 +96,10 @@ class MonitorFeed:
 
     def log_sink(self, message) -> None:
         record = message.record
-        self._log.append((next(self._log_seq), record["time"].timestamp(), record["level"].name, record["message"]))
+        text = record["message"]
+        if len(text) > _LOG_MESSAGE_CHARS:
+            text = f"{text[:_LOG_MESSAGE_CHARS]}... [+{len(text) - _LOG_MESSAGE_CHARS} chars]"
+        self._log.append((next(self._log_seq), record["time"].timestamp(), record["level"].name, text))
 
     def start(self) -> None:
         self._thread.start()
@@ -247,6 +254,8 @@ class Monitor:
         for seq, stamp, level, message in snap.get("log", []):
             if seq > self._log_seq:
                 self._log_seq = seq
+                if len(message) > _LOG_MESSAGE_CHARS:  # the feed may predate this cut (a server not restarted)
+                    message = f"{message[:_LOG_MESSAGE_CHARS]}... [+{len(message) - _LOG_MESSAGE_CHARS} chars]"
                 self.log.append([seq, stamp, level, message])
 
         point = {"t": t, "decode": 0.0, "prefill": 0.0, "users": {}}

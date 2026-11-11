@@ -39,12 +39,11 @@ std::vector<Tensor> fused_hyperconnection(
         // compute the width-sharded collapse, core 8 computes post (and pre, given
         // pre_mix), and core 9 computes comb plus Sinkhorn. Its outputs are already
         // in the order and shapes this op returns.
-        Tensor comb_bias_mat = ttnn::reshape(comb_bias, ttnn::Shape({1, 1, hc, hc}));
         return ttnn::prim::fused_hyperconnection_single_user(
             fused_w,
             pre_bias,
             post_bias,
-            comb_bias_mat,
+            comb_bias,
             hidden_streams,
             hc,
             sinkhorn_iters,

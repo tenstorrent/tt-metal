@@ -92,6 +92,7 @@
     <div class="panel"><h2>KV page pool used</h2><div class="chart" id="c-kv"></div></div>
     <div class="panel"><h2>Free KV cache (tokens)</h2><div class="chart" id="c-free"></div></div>
     <div class="panel"><h2>Users</h2><div class="chart" id="c-slots"></div></div>
+    <div class="panel"><h2>Device steps/s</h2><div class="chart" id="c-steps"></div></div>
     <div class="panel"><h2>Host runtime, mean µs per call</h2><div class="chart" id="c-timers"></div></div>
   </div>
   <div class="row2">
@@ -216,6 +217,7 @@ const charts = {
   kv: new Chart($("c-kv"), { ymax: 100, unit: "%", format: (v) => fmt(v, 0) }),
   free: new Chart($("c-free"), { format: axisLabel }),
   slots: new Chart($("c-slots"), { format: (v) => fmt(v, 0) }),
+  steps: new Chart($("c-steps"), { unit: " steps/s" }),
   timers: new Chart($("c-timers"), { unit: " µs" }),
 };
 
@@ -227,8 +229,9 @@ function drawCharts() {
   charts.decode.set([
     { name: "generated (5 s avg)", color: "#4cc38a", points: smooth(line("decode"), 5), width: 2 },
     { name: "generated (per second)", color: "#4cc38a55", points: line("decode"), width: 1 },
-    { name: "device steps/s", color: "#5aa9e6", points: smooth(line("steps"), 5), dash: [4, 3] },
   ], t0, t1);
+  // Steps are not tokens: on a shared axis a step rate of ~100 flattens decode to nothing, so they get their own.
+  charts.steps.set([{ name: "device steps/s", color: "#5aa9e6", points: smooth(line("steps"), 5), width: 2 }], t0, t1);
   const users = new Set(); for (const p of pts) for (const u in p.users) users.add(u);
   charts.users.set([...users].sort().map((u) => ({
     name: u, color: colorOf(u), points: smooth(pts.map((p) => [p.t, p.users[u] ?? null]), 5) })), t0, t1);
@@ -420,7 +423,13 @@ function drawHeader(now) {
   broken.textContent = state.broken ? `DECODE WEDGED: ${state.broken}` : "";
 }
 
+// A poll that takes longer than the interval must not overlap the next one: two requests for the same `since`
+// would each append the same points, and the duplicates draw as overlapping lines and vertical spikes.
+let polling = false;
+
 async function tick() {
+  if (polling) return;
+  polling = true;
   try {
     const r = await fetch(`/api/state?since=${since}&log_since=${logSince}&history_since=${historySince}&images_since=${imagesSince}`,
                           { cache: "no-store" });
@@ -434,7 +443,8 @@ async function tick() {
         return;
       }
     }
-    for (const p of v.series) series.push(p);
+    let lastT = series.length ? series[series.length - 1].t : -Infinity;
+    for (const p of v.series) if (p.t > lastT) { series.push(p); lastT = p.t; }
     if (series.length) since = series[series.length - 1].t;
     for (const h of v.history) history.push(h);
     if (history.length) historySince = history[history.length - 1].ended;
@@ -452,6 +462,8 @@ async function tick() {
     if (v.log.length || !$("log").innerHTML) drawLog();
   } catch (e) {
     const el = $("status"); el.className = "pill down"; el.textContent = "monitor unreachable";
+  } finally {
+    polling = false;
   }
 }
 

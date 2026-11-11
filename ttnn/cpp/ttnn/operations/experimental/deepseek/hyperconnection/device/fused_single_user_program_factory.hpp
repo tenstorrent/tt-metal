@@ -19,8 +19,10 @@ struct FusedSingleUserSharedVariables {
     tt::tt_metal::KernelHandle collapse_compute_kernel_id = 0;
     tt::tt_metal::KernelHandle post_compute_kernel_id = 0;
     tt::tt_metal::KernelHandle comb_compute_kernel_id = 0;
+    tt::tt_metal::KernelHandle collapse_writer_kernel_id = 0;
     tt::tt_metal::KernelHandle post_writer_kernel_id = 0;
     tt::tt_metal::KernelHandle comb_writer_kernel_id = 0;
+    bool hidden_row_major = false;
     tt::tt_metal::CBHandle hidden_cb = 0;
     tt::tt_metal::CBHandle collapsed_output_cb = 0;
     std::vector<CoreCoord> collapse_cores;

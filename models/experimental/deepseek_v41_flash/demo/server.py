@@ -36,9 +36,9 @@ or ``POST /v1/sessions/<user>/cancel``, and every running turn stops on the live
 
 What V4.1 imposes on the serving side:
 
-* Users. ``--num-users`` sessions (1 with ``--dspark``; else 40 with ``--prefill-all-stages``, 64 without) stay open at once, each with its own ring and window slot and its
+* Users. ``--num-users`` sessions (40 with ``--dspark`` or ``--prefill-all-stages``, else 64) stay open at once, each with its own ring and window slot and its
   own rows of the compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
-  ``num_users * 204800``). At most ``--max-running`` (8, one per stage) generate at once, the rest parked
+  ``num_users * 204800``). At most ``--max-running`` (8, one per stage; 1 with ``--dspark``) generate at once, the rest parked
   or queued; see "Users & KV cache" in the V4 server's docstring. A step decodes one user, and switching users costs no device work: the step's packet
   names the user's slot. The scheduler interleaves the active users' steps through the stages, so up to one
   decoding user per stage (``DEEPSEEK_V4_NUM_STAGES``, default eight) keeps every stage busy; seating and posting,
@@ -48,9 +48,9 @@ What V4.1 imposes on the serving side:
 * Speculative decode (``--dspark``, on by default; ``--no-dspark`` or ``DEEPSEEK_V41_DSPARK=0`` turns it off). The DSpark drafter takes the
   mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds of four drafts
   (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~70 tok/s against ~45 a step at a time, for a
-  sampled (temperature 1) chat reply in ``tests/decode/test_dspark_spec.py``. Its rounds restore one session's
-  rings and accept against the steps' logits on the host, and its drafter has no image rows, so ``--dspark`` serves
-  one user slot (``--num-users 1``, other conversations parked in host RAM) and turns off ``--vision`` and
+  sampled (temperature 1) chat reply in ``tests/decode/test_dspark_spec.py``. Its rounds restore the running
+  session's ring rows and accept against the steps' logits on the host, and its drafter has no image rows, so ``--dspark`` decodes
+  one user at a time (``--max-running 1``, the other slots parked on device) and turns off ``--vision`` and
   ``--device-sampling``; a request's ``temperature`` and ``top_p`` apply. The rounds run on the Rust host runtime
   as single steps do (its threads replay the stages' traces, write the packets and Engram rows and read the
   outputs), and the web monitor watches them.
@@ -61,6 +61,12 @@ What V4.1 imposes on the serving side:
   (``DeepSeekV41Model.attach_session_prefix``, ``_Scheduler._share_prefix`` in the V4 server). The prefix is matched
   on the tokens the other slot was fed, in multiples of 128, up to the first image token, and is counted as
   ``prompt_cache_hit_tokens``.
+* Slot reuse. A request that continues no slot's conversation, but whose tokens differ from a parked slot's cache
+  only in the cache's last 512 (``_SLOT_REUSE_TOKENS``) -- a trace replay that sends its own recording of the last
+  reply rather than the server's, an edited or regenerated last turn -- takes that slot instead of a new one: the
+  cache is rewound in place to the prefill model's grid at or before the first differing token, the compressed KV
+  before it kept and the sliding window rebuilt by a bounded replay, and the tokens past it are overwritten
+  (:class:`_V41SlotPool`, :class:`_SlotReuse`).
 * Context. ``--max-context`` is 1048576 tokens by default (prompt + reply), the model's full context. The pools
   hold ``--total-context`` tokens, by default 204800 per user (64 x 204800 is what fits in device DRAM), and are
   paged, so any one user can grow to the full context while the others leave blocks free; a user that needs a
@@ -113,9 +119,9 @@ Then talk to it as to the V4 server (``models/experimental/deepseek_v4_flash/dem
         -d '{"messages": [{"role": "user", "content": [{"type": "file", "file_id": "file-api-..."},
                                                        {"type": "text", "text": "What is this?"}]}]}'
 
-With ``DEEPSEEK_V41_RUST_HOST=0`` the decode step's host work runs on Python threads (the live console stays).
-By default, or with ``DEEPSEEK_V41_RUST_HOST=1``, it runs on the Rust host runtime (``tt/host_rs.py``), and the
-live console gives way to a web monitor in a process of its own, so watching costs the server nothing but a raw
+With ``--no-rust-host`` (or ``DEEPSEEK_V41_RUST_HOST=0``) the decode step's host work runs on Python threads (the
+live console stays). By default it runs on the Rust host runtime (``tt/host_rs.py``), which the server builds at
+startup (``host_rs/build.sh``, a no-op when up to date) and refuses to start without, and the live console gives way to a web monitor in a process of its own, so watching costs the server nothing but a raw
 snapshot a second (``DEEPSEEK_V41_MONITOR_PERIOD``) and the counters the runtime keeps anyway (see
 ``demo/monitor.py``). The server starts it on ``--monitor-port`` (8090; 0 starts none) unless one of the user's is
 already running, and leaves it running when it exits; open http://<host>:8090. By hand::
@@ -197,10 +203,13 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     GenerationServer,
     RequestError,
     _content_text,
+    _continues,
+    _conversation_key,
     _Handler,
     _normalized_messages,
     _Prefiller,
     _Scheduler,
+    _SlotPool,
     _text_content,
     _Turn,
     build_parser,
@@ -218,6 +227,8 @@ _NUM_USERS = 64  # default --num-users
 # and ~3.8 GB on stages 1 and 5-7; stage 4 also holds the layer-20 pool, so 40 x 204800 tokens (~10.5 GB of
 # its ~17 GB free) leave them room.
 _NUM_USERS_ALL_STAGES = 40
+# Default --num-users with --dspark: slots resident at once, of which one decodes at a time (--max-running 1).
+_NUM_USERS_DSPARK = 40
 # Default --max-context (prompt + reply): what one user's page tables address, the model's full context.
 _MAX_CONTEXT = 1048576
 # Default --total-context is --num-users x this. The layer-20 pool costs ~1.25 KiB per token on each chip of
@@ -230,6 +241,9 @@ _DECODE_AHEAD = 32
 # --dspark: drafts a verify round checks, and the decode stages, which leave the 8 x 4 mesh's last row to the drafter.
 _DSPARK_DRAFTS = 4
 _DSPARK_STAGES = 7
+# A request that continues no slot's conversation reuses a parked slot whose cache it differs from only in the
+# cache's last this-many tokens, overwriting them, instead of taking a new slot (_V41SlotPool, _SlotReuse).
+_SLOT_REUSE_TOKENS = 512
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -879,14 +893,193 @@ class _V41Handler(_Handler):
             self._send_error_json(e)
 
 
-class _SpecScheduler(_Scheduler):
-    """:class:`_Scheduler` that decodes each reply by DSpark speculative decode (``--dspark``).
+def _shared_messages(keys: list[str], stored: list[dict]) -> int:
+    """How many leading messages of a request, given by their :func:`_conversation_key`, equal ``stored``'s."""
+    n = 0
+    for key, old in zip(keys, stored):
+        if key != _conversation_key(old):
+            break
+        n += 1
+    return n
+
+
+class _V41SlotPool(_SlotPool):
+    """:class:`_SlotPool` that, when no slot continues a request's conversation, hands it the parked slot whose cache
+    the request shares the longest start with and differs from only in the cache's last :data:`_SLOT_REUSE_TOKENS`
+    tokens, rather than an empty or the longest-idle slot. That is judged here from messages: the request's first
+    differing message against the slot's turn marks and where its last reply started. Admission checks the tokens
+    themselves and rewinds the cache in place (:class:`_SlotReuse`), or treats the slot as a new conversation's."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.near_misses: set[int] = set()  # slots handed out for an in-place rewind, until their turn's admission
+        # slot -> (index of the assistant message its last turn stored, the position that reply started at)
+        self.reply_at: dict[int, tuple[int, int]] = {}
+
+    def _pick(self, messages: list[dict]):
+        picked = super()._pick(messages)
+        if picked is not None:
+            slot, restore = picked
+            self.near_misses.discard(slot)
+            if restore is not None or _continues(messages, self.engine.users[slot].messages):
+                return picked
+        slot = self._near_miss(messages)
+        if slot is None:
+            return picked
+        self.near_misses.add(slot)
+        return slot, None
+
+    def _near_miss(self, messages: list[dict]) -> int | None:
+        keys = [_conversation_key(m) for m in messages]
+        best, best_start = None, 0
+        for i, busy in enumerate(self._busy):
+            user = self.engine.users[i]
+            if busy or not user.pos or len(user.tokens) != user.pos:
+                continue
+            shared = _shared_messages(keys, user.messages)
+            reply = self.reply_at.get(i)
+            if reply is not None and reply[0] == shared == len(user.messages) - 1 and reply[1] <= user.pos:
+                start = reply[1]  # only the last reply differs: the cache agrees up to where it started
+            else:
+                start = max((pos for n, pos, _ in user.marks if n <= shared), default=0)
+            if start > best_start and user.pos - start <= _SLOT_REUSE_TOKENS:
+                best, best_start = i, start
+        return best
+
+
+@dataclass
+class _Rewind:
+    """An in-place rewind of a parked slot's cache for the turn being admitted (:meth:`_SlotReuse._reuse_plan`)."""
+
+    shared: int  # leading tokens the request and the cache agree on
+    resume_at: int  # the cache is cut back to here: on the prefill model's grid, a window past its start
+    ids: list[int]  # the request's tokens from resume_at on
+    device_prefill: int  # ... how many of them the prefill model takes
+    messages: int  # leading messages the request and the slot's conversation agree on
+
+
+class _SlotReuse:
+    """Mixin for a :class:`_Scheduler` served by :class:`_V41SlotPool`: a turn handed a slot whose cache it differs
+    from only in the cache's last :data:`_SLOT_REUSE_TOKENS` tokens overwrites them in place. The cache is cut back
+    (``truncate_session``) to the prefill model's grid at or before the first differing token, the sliding window
+    rebuilt by replaying the ``replay_window`` cached tokens before the cut (SWA bounded replay), and the rest of the
+    request prefilled from there, as :meth:`_Scheduler._resume` does from a turn mark. The slot's old conversation is
+    not offloaded to host RAM: the request supersedes it. A slot whose tokens differ by more is admitted as the new
+    conversation it is."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._reuse: dict[int, _Rewind] = {}  # slot -> the rewind its turn being admitted takes
+
+    def _admit(self, turn: _Turn) -> None:
+        pool = self.server.pool
+        with pool._cv:
+            near_miss = turn.slot in pool.near_misses
+            pool.near_misses.discard(turn.slot)
+        if near_miss and not turn.cancelled.is_set() and turn.restore is None and turn.slot not in self._cut_short:
+            plan = self._reuse_plan(self.engine.users[turn.slot], turn)
+            if plan is not None:
+                self._reuse[turn.slot] = plan
+        try:
+            super()._admit(turn)
+        finally:
+            self._reuse.pop(turn.slot, None)
+
+    def _reuse_plan(self, user: UserSession, turn: _Turn) -> _Rewind | None:
+        prefiller = self.server.prefiller
+        if prefiller is None or not prefiller.replay_window or not prefiller.continue_alignment:
+            return None
+        messages = turn.body["messages"]
+        if not user.pos or len(user.tokens) != user.pos or _continues(messages, user.messages):
+            return None
+        # The request rendered whole, as a new conversation in this slot would be.
+        stored = (user.messages, user._next_render, user.pending_id, user.thinking_mode, user.reasoning_effort)
+        try:
+            user.messages, user._next_render, user.pending_id = list(messages), 0, None
+            user.thinking_mode, user.reasoning_effort = self.server.thinking_mode, self.server.reasoning_effort
+            self.server._apply_options(user, turn.body)
+            ids = self.server._render_ids(user, include_assistant=True)
+        except Exception as e:  # noqa: BLE001 - admission proper reports it to the client
+            logger.debug(f"user {turn.user_key!r} (slot {turn.slot}): not rewinding in place: {type(e).__name__}: {e}")
+            return None
+        finally:
+            user.messages, user._next_render, user.pending_id, user.thinking_mode, user.reasoning_effort = stored
+        # Image rows are matched by their ids, which another image may take later: the shared start ends before one.
+        vocab = self.engine.model.config.vocab_size
+        shared = next(
+            (i for i, (new, old) in enumerate(zip(ids, user.tokens)) if new != old or new >= vocab),
+            min(len(ids), user.pos),
+        )
+        if user.pos - shared > _SLOT_REUSE_TOKENS:
+            logger.debug(
+                f"user {turn.user_key!r} (slot {turn.slot}): the request differs from the slot's last "
+                f"{user.pos - shared} cached tokens, more than {_SLOT_REUSE_TOKENS}: a new conversation"
+            )
+            return None
+        window, step = prefiller.replay_window, prefiller.continue_alignment
+        start = (shared - window) // step * step  # the replay starts on the prefill's grid
+        while start > 0:
+            n = prefiller.aligned(len(ids) - start, start, bounded=True)
+            if n:
+                return _Rewind(
+                    shared,
+                    start + window,
+                    ids[start + window :],
+                    n - window,
+                    _shared_messages([_conversation_key(m) for m in messages], user.messages),
+                )
+            start -= step
+        return None
+
+    def _offload(self, slot: int, owner: str | None) -> None:
+        if slot not in self._reuse:
+            super()._offload(slot, owner)
+
+    def _resume(self, user: UserSession, turn: _Turn) -> bool:
+        plan = self._reuse.get(turn.slot)
+        if plan is None:
+            return super()._resume(user, turn)
+        window = self.server.prefiller.replay_window
+        logger.info(
+            f"user {turn.user_key!r} (slot {turn.slot}): reusing the slot, the request differs from its last "
+            f"{user.pos - plan.shared} of {user.pos} cached tokens: rewinding the cache to {plan.resume_at} in "
+            f"place ({window} cached tokens replayed for the window, {plan.device_prefill} by the prefill model, "
+            f"{len(plan.ids) - plan.device_prefill} through decode)"
+        )
+        turn.resumed_from = plan.resume_at  # a failure from here resets the session
+        self.engine.model.truncate_session(user.sid, plan.resume_at)
+        turn.replay_ids = user.tokens[plan.resume_at - window : plan.resume_at]
+        del user.tokens[plan.resume_at :]
+        user.pos = plan.resume_at
+        user.pending_id = None
+        user.marks = [m for m in user.marks if m[1] <= plan.resume_at and m[0] <= plan.messages]
+        user.messages = list(turn.body["messages"])
+        turn.ids = plan.ids
+        turn.device_prefill = plan.device_prefill
+        turn.prefill_from = 0
+        return True
+
+    def _finish(self, turn: _Turn) -> None:
+        reply_at = turn.cached + len(turn.ids)
+        super()._finish(turn)
+        user = self.engine.users[turn.slot]
+        if user.messages and user.messages[-1].get("role") == "assistant":
+            self.server.pool.reply_at[turn.slot] = (len(user.messages) - 1, reply_at)
+
+
+class _V41Scheduler(_SlotReuse, _Scheduler):
+    """:class:`_Scheduler` with :class:`_SlotReuse`'s in-place rewinds."""
+
+
+class _SpecScheduler(_SlotReuse, _Scheduler):
+    """:class:`_Scheduler` (with :class:`_SlotReuse`'s in-place rewinds) that decodes each reply by DSpark speculative decode (``--dspark``).
 
     A turn's prompt goes in as without it (the traced prefill, then decode steps, each of which also writes its
     row into the drafter's rings). Its reply then runs on this thread in verify rounds of :data:`_DSPARK_DRAFTS`
     drafts (:class:`~..tt.spec.DSparkSpeculator`, at the request's ``temperature`` and ``top_p``) until it ends,
-    and the session is handed back as plain decode would leave it. The server has one user slot, so no other
-    turn has steps in flight meanwhile; later requests and chores wait for the reply. The last tokens before the
+    and the session is handed back as plain decode would leave it. The server runs one turn at a time
+    (``--max-running 1``), so no other turn has steps in flight meanwhile; later requests and chores wait for the
+    reply. The last tokens before the
     end of the context, where a round would run past it, are decoded a step at a time.
 
     Every verify round counts as a round of :attr:`rounds` and adds its tokens to :attr:`steps` and the rate window
@@ -998,8 +1191,10 @@ class V41GenerationServer(GenerationServer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.engine.dspark:
-            self.scheduler = _SpecScheduler(self, self.scheduler.prefill_chunk, self.scheduler.decode_ahead)
+        pool = self.pool
+        self.pool = _V41SlotPool(self.engine, pool.host_users, pool.host_bytes, pool.max_running, pool.idle_timeout)
+        scheduler = _SpecScheduler if self.engine.dspark else _V41Scheduler
+        self.scheduler = scheduler(self, self.scheduler.prefill_chunk, self.scheduler.decode_ahead)
         # serve() builds the server after the warmup and the prefill snapshot, and before the scheduler starts: the
         # point past every other device allocation of startup.
         self.engine.capture_vision()
@@ -1695,9 +1890,18 @@ def parse_args(argv: list[str] | None = None):
         action=argparse.BooleanOptionalAction,
         default=os.environ.get("DEEPSEEK_V41_DSPARK", "1") not in ("0", "", "false", "False"),
         help=f"decode every reply by DSpark speculative decode, {_DSPARK_DRAFTS} drafts a round, the drafter on the "
-        f"mesh's last row (decode on the first {_DSPARK_STAGES}); one user slot (--num-users 1), host sampling at the "
+        f"mesh's last row (decode on the first {_DSPARK_STAGES}); one user decoding at a time (--max-running 1) of "
+        f"--num-users slots (default {_NUM_USERS_DSPARK}), host sampling at the "
         "request's temperature / top_p, and no --vision or --device-sampling "
         "(default: on; --no-dspark or DEEPSEEK_V41_DSPARK=0 turns it off)",
+    )
+    p.add_argument(
+        "--rust-host",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V41_RUST_HOST", "1") not in ("0", "", "false", "False"),
+        help="run the decode step's host work on the Rust host runtime (tt/host_rs.py), built at startup by "
+        "host_rs/build.sh; a failed build stops the server (default: on; --no-rust-host or "
+        "DEEPSEEK_V41_RUST_HOST=0 serves on Python threads instead)",
     )
     p.add_argument(
         "--monitor-port",
@@ -1727,18 +1931,20 @@ def parse_args(argv: list[str] | None = None):
             )
     args = p.parse_args(argv)
     if args.dspark:
-        # Speculative decode restores one session's rings, accepts against the steps' logits and has no image rows.
-        if args.num_users not in (None, 1):
-            p.error("--dspark decodes one session: --num-users must be 1")
-        args.num_users = 1
+        # Speculative decode runs one reply at a time on the scheduler thread, accepts against the steps' logits
+        # and has no image rows. The other sessions stay resident in their slots, parked.
+        if args.max_running != 1 and args.max_running != p.get_default("max_running"):
+            p.error("--dspark decodes one session at a time: --max-running must be 1")
+        args.max_running = 1
+        if args.num_users is None:
+            args.num_users = _NUM_USERS_DSPARK
         args.vision = False
         args.device_sampling = False
-        if args.slot_idle_timeout == p.get_default("slot_idle_timeout"):
-            # The one slot would turn every other conversation away for the timeout; it moves to host RAM instead.
-            args.slot_idle_timeout = 1e-3
         # Each verify round's log line, read when tt/spec.py is imported; DEEPSEEK_V4_SPEC_VERBOSE=1 brings them back.
         os.environ.setdefault("DEEPSEEK_V4_SPEC_VERBOSE", "0")
-    if host_rs.enabled():
+    # host_rs.enabled(), which the model reads too, follows the flag.
+    os.environ["DEEPSEEK_V41_RUST_HOST"] = "1" if args.rust_host else "0"
+    if args.rust_host:
         args.tui = False  # the web monitor (demo/monitor.py) watches it, from a process of its own
     if args.vision and (args.image_rows % 32 or args.image_rows <= FIRST_IMAGE_ROW):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")
@@ -1766,8 +1972,10 @@ def main(argv: list[str] | None = None) -> int:
     if not Path(args.model_dir).expanduser().exists():
         print(f"checkpoint not found: {args.model_dir}", file=sys.stderr)
         return 1
-    if host_rs.enabled() and args.monitor_port:
-        _launch_monitor(args.monitor_port)
+    if args.rust_host:
+        host_rs.build()
+        if args.monitor_port:
+            _launch_monitor(args.monitor_port)
     if not _stage_engram_tables(args):
         return 1
     return serve(
