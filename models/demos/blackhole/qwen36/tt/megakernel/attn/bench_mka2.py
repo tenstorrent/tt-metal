@@ -270,6 +270,10 @@ for it in range(ITERS):
                 _pp.append(f"g{gu_}:{_pc(vs[L][uu, :NQH * T], o_):.6f}/{_pc(golds_s[L][uu, :NQH * T], o_):.6f}")
             print(f"[rqpos] layer {L} PROD-OP SDPA (prod q, softmax with -inf causal mask) per user engine/torch-gold vs prod: {' '.join(_pp)}", flush=True)
             for t_ in (qkt, gam, nrm, qkm, part, rop, tail): ttnn.deallocate(t_)
+    if ('MKA_RQPOS', '1') in MKDEF and it == ITERS - 1:   # bit-identity fingerprints of this iteration's SDPA / wo outputs
+        import hashlib
+        _h = lambda t_: hashlib.md5(ttnn.to_torch(t_).float().numpy().tobytes()).hexdigest()[:12]
+        print(f"[rqpos] iter {it} md5 sdpa {_h(outs)}" + (f" wo {_h(wod)}" if RWO else ''), flush=True)
     if MESH and ('MKA_RQPOS', '1') in MKDEF and os.environ.get('MKA_UPAR', '0') == '1':
         # per device d (own users g = 2u + d % 2): SDPA / wo vs that parity's golds -> every user 0-7 covered on the mesh
         _od = [_to_torch(t_).float().reshape(NL, NU, TILE, DHD) for t_ in ttnn.get_device_tensors(outs)]
