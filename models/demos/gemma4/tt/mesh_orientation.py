@@ -154,8 +154,9 @@ DENSE_DECODE_FUSION_ON = {
 # adding the name to its ON dict (tt/attention/decode.py reads it through decode_flag).
 SDPA_SPLITFREE_ENV = "GEMMA4_SDPA_DECODE_SPLITFREE"
 # GEMMA4_SDPA_PAIR_SPLIT: the global layers' decode attention split over the two chips of a KV-head pair
-# (tt/sdpa_pair_split.py, custom_ops/sdpa_decode_lse in pair mode). Off in every profile until device-validated; it is
-# read at the weight build (the pair QKV / o_proj copies) and at the decode call, both through decode_flag.
+# (tt/sdpa_pair_split.py, custom_ops/sdpa_decode_lse in pair mode). On in GALAXY_LINE_PAIR_ON (the 31B on the (1,8)
+# line), off in every other profile; it is read at the weight build (the pair QKV / o_proj copies) and at the decode
+# call, both through decode_flag.
 SDPA_PAIR_SPLIT_ENV = "GEMMA4_SDPA_PAIR_SPLIT"
 # GEMMA4_SPEC_VERIFY_PREFIX_LSE: the serving verify's global layers attend the committed prefix once per row through
 # custom_ops/sdpa_decode_lse (pair-split on a pair build) plus the candidates' own keys, merged by their LSE
