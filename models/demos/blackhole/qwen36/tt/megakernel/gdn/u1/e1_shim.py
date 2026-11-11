@@ -700,7 +700,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             "E1_GB: B*T == 32, early replay, lean table (eps_l2 = eps_norm: l2 eps == norm eps), VB == Vt"
         NC = len(cores)
         OGB = OGK + 6   # after the PERCORE words (k, n_fwd, 2 x (x, y))
-        XWO = 2 * B * 2048; XRC = XWO + 2 * B * 1024; XWC = XRC + CTRL_B; XDP = XWC + CTRL_B; XSC = XDP + B * 256   # wo: one set per conv job
+        # XS: windows (2 jobs) | window-out (one set per job) | reader ctrl page (+ dtb row @+512, nea row @+576) | ... | gate scratch
+        XWO = 2 * B * 2048; XRC = XWO + 2 * B * 1024; XWC = XRC + max(CTRL_B, 640); XDP = XWC + CTRL_B; XSC = XDP + B * 256
         XS_B = -(-(XSC + 3 * 4096) // 2048) * 2048   # + the gate page landing area (XSC + 8192)
         NPX = 6 + XS_B // 2048   # QPX pages: QIN 0..3, P 4..5, then the raw scratch
         HERE_ = os.path.dirname(os.path.abspath(__file__))
@@ -713,9 +714,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'void gdn_in_wait() {{\n  {CRD}\n'
                 f'  const auto wa = {racc("win_a", 2048)};\n  const auto wb = {racc("win_b", 2048)};\n'
                 f'  const auto tp = {racc("taps", 2048)};\n  const auto ct = {racc("ctrl", ctrl_bytes)};\n'
+                f'  const auto dt = {racc("dtb", 4096)};\n  const auto ne = {racc("nea", 4096)};\n'
                 f'  gb::reader_layer<{B}, {T}, {K}, {Ct}, {M}, {Nv}, {NC}, {Kt}>(g_ab + {OGB}, g_l, wa, wb, tp, ct, {ctrl_bytes}u, '
                 f'{("get_write_ptr(41)" if gb["gin_addr"] == "cb41" else str(int(gb["gin_addr"])) + "u")}, g_gb_qin, g_gb_xs, g_gb_xs + {XWO}u, g_gb_xs + {XRC}u, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, {GBC["kq"]}u, '
-                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n}}\n'
+                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")}, dt, ne);\n}}\n'
                 f'void gdn_gb_wait(uint32_t w) {{ (void)w; noc_semaphore_wait_min(g_ab + {OGB}, {1 + Vt + VB}u * (g_l + 1)); }}\n'
                 f'void gdn_gb_knq(uint32_t a) {{ gb::pull_knq<{Kt}>(g_ab + {OGB}, g_l, a); }}\n')
         GB_RINIT = (f'  g_gb_qin = get_write_ptr({GBC["qpx"]}); g_gb_xs = g_gb_qin + 6u * 2048u;\n'
@@ -1017,7 +1019,14 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
         blocks.append(blk)
         maxc = max(maxc, len(conv))
     import ttnn
-    dn = [(ttnn.to_torch(lt["dtb"]).float().flatten(), ttnn.to_torch(lt["nea"]).float().flatten()) for lt in layers]
+    # dt_bias / -exp(A_log): the reader loads them per device at runtime (gb_dm.hpp); the host copy only seeds the words
+    def _hv(t_):
+        try:
+            return ttnn.to_torch(t_).float().flatten()
+        except Exception:
+            return torch.zeros(Nv)
+    import torch
+    dn = [(_hv(lt["dtb"]), _hv(lt["nea"])) for lt in layers]
     assert B % VB == 0 and 16 % ((B // VB) * T) == 0, (B, VB, T)
     for i in range(NC):
         assert len(pushes[i]) <= 32, (i, len(pushes[i]))
