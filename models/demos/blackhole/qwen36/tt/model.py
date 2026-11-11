@@ -501,8 +501,8 @@ class Qwen36Model:
         """Spliced-media prefill (prefill_media_source == "spliced"): the image embeddings an encoder outside this
         mesh stored for the request (vision/format.py: bf16 rows of width hidden, image-token order) -> the same
         packed, hidden-fractured ``[num_image_tokens, H]`` tensor ``get_image_features`` returns, for the prefill
-        paths' ``vision_tokens``. Stashes the image grid for M-RoPE as ``get_image_features`` does; the grid is not in
-        the stored value and must come with the media ref.
+        paths' ``vision_tokens``. Stashes the image grid for M-RoPE as ``get_image_features`` does (the runner takes it
+        from the stored values' headers: ``media_values_to_device``).
 
         ``embeddings``: torch bf16 ``[n, H]``, or the uint16 numpy view ``vision.format.embeddings`` returns (several
         images' values back to back in prompt order: concatenate before the call, or call per request with all rows).
@@ -525,6 +525,17 @@ class Qwen36Model:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
         )
         return ttnn.to_device(host, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def media_values_to_device(self, values):
+        """Spliced prefill from the embedding store: ``values`` = the request's media in prompt order as the runner
+        fetched them, ``[(header, rows)]`` (vision/splice.py ``fetch_media``: header with ``grid_thw``, rows the uint16
+        bf16 view in place in the store segment). The grids for M-RoPE come from the headers, the rows are copied once
+        into the host staging tensor and uploaded; returns ``vision_tokens`` for the prefill paths."""
+        import numpy as np
+
+        grid = torch.tensor([list(h.grid_thw) for h, _ in values], dtype=torch.long)
+        rows = np.concatenate([r for _, r in values]) if len(values) > 1 else np.asarray(values[0][1])
+        return self.media_embeddings_to_device(rows, grid)
 
     def _vision_placeholder_token_id(self):
         """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
