@@ -376,6 +376,9 @@ class MigrationDriver:
                 # takes its first token from the last of them.
                 end = real_len + self.handoff_tail
                 if end > len(pool):
+                    # The pool holds only the positions prefill was asked for; the tail continues the same trace.
+                    pool = _trace_continuation(pool, slot_traces[src], end)
+                if end > len(pool):
                     raise ValueError(
                         f"slot {src}: a {self.handoff_tail}-token handoff tail needs prompt tokens up to {end}, but "
                         f"its pool holds {len(pool)}; shorten the request or use a longer trace"
@@ -441,6 +444,23 @@ class MigrationDriver:
                 f.write(f"{s} {d}\n")
         logger.success(f"[migration_driver] wrote DONE sentinel {done_path} ({len(pairs)} pair(s)): {pairs}")
         return pairs
+
+
+def _trace_continuation(pool, trace, end: int):
+    """``pool`` extended from its trace to at least ``end`` tokens, or ``pool`` unchanged when the trace cannot.
+
+    The producer loads a slot's pool only as deep as the request it prefills, so a handoff tail past the request
+    reads the next prompt tokens from the trace itself, after checking the trace starts with the pool."""
+    try:
+        from models.demos.common.prefill.runners import prefill_producer as producer
+
+        ids = producer.load_trace_token_ids(trace)
+    except Exception as e:  # no trace on disk, or an unreadable one: keep the pool and let the caller refuse
+        logger.warning(f"[migration_driver] could not read trace {trace!r} for the handoff tail: {e}")
+        return pool
+    if len(ids) < end or [int(t) for t in ids[: len(pool)]] != [int(t) for t in pool]:
+        return pool
+    return ids
 
 
 def _layer_runs(layers, real_len: int, position_range) -> list:
