@@ -154,6 +154,26 @@ def gdn_out_layout(cores, bank_loc, banks, maxt=7):
     return WoUnitLayout(cores, 24, bank_loc, banks, dtype="bfloat4_b", maxt=maxt)
 
 
+def engine_cores(env=None, grid=(12, 10), stream_rect=(10, 8)):
+    """The engine's core lists as a pure function of its env (so integ can build layouts before setup_bench):
+    dict(wo=[(fi, x, y)] = ext_list (the non-STREAM, non-reserved cores in fi order; GDN24: the 16 owners x 10-11, rows
+    0-7), gdn_out=[(fi, x, y)] = GDNC (GDN24: rows 8-9 row-major; else empty)). fi = y * grid_x + x (program.py fcores).
+    setup_bench asserts equality with what it computes."""
+    import os
+
+    env = os.environ if env is None else env
+    gxf, gyf = grid
+    gx, gy = stream_rect
+    gdn24 = env.get("MKA_GDN24", "0") == "1"
+    arc = env.get("MKA_ARCORES", "106,107,118,119")
+    resv = set() if (gdn24 or arc in ("", "none")) else set(int(v) for v in arc.split(","))
+    gdnc = [fi for fi in range(gxf * gyf) if gdn24 and fi // gxf >= gy]
+    resv |= set(gdnc)
+    xy = lambda fi: (fi, fi % gxf, fi // gxf)
+    ext = [fi for fi in range(gxf * gyf) if not (fi % gxf < gx and fi // gxf < gy) and fi not in resv]
+    return dict(wo=[xy(fi) for fi in ext], gdn_out=[xy(fi) for fi in gdnc])
+
+
 # ------------------------------------------------------------------------------------------------------------------- #
 # whole-pass packers (layer L at L * pages_per_layer)
 # ------------------------------------------------------------------------------------------------------------------- #

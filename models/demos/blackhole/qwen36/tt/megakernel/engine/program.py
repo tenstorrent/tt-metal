@@ -259,6 +259,7 @@ def setup_bench(dev, MESH, mesh_identity):
         # MK_REAL_AR + GDN24: the AR corner (x 10-11, rows 8-9) runs the GDN role with the AR sender phases hosted in its
         # reader / writer (see _gdn_host_ar below)
         GDNC = [i for i in range(NCF) if fcores[i].y >= GY]   # row-major: y 8 then 9, x 0..11
+        assert _wl().engine_cores(grid=(GXF, GYF), stream_rect=(GX, GY))['gdn_out'] == [(fi, fcores[fi].x, fcores[fi].y) for fi in GDNC]
         ARC = set()
     RESV = ARC | set(GDNC)
     ACT = [i for i in range(NCF) if i not in RESV]
@@ -755,6 +756,8 @@ def setup_bench(dev, MESH, mesh_identity):
         # engine/weight_layouts.py wo unit: rot chunk order (device 0: farthest owning device around the 8-ring first, own
         # last), core c -> tiles flat[c::n], byte-balanced bank-local slices, k-major pages (k * nt + j)
         WLAY = _WEIGHTS['wo']['layout'] if 'wo' in _WEIGHTS else _wl().wo_unit_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], BANK_LOC, banks, maxt=WO_MAXT_)
+        assert _wl().engine_cores(grid=(GXF, GYF), stream_rect=(GX, GY))['wo'] == [(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], "weight_layouts.engine_cores (integ's pre-build core list) != ext_list"
+        assert WLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], "injected wo layout built for other cores"
         for c_, fi in enumerate(wo_cores): WOT[fi], WOB[fi], WOP[fi] = WLAY.tiles[c_], WLAY.bank[c_], WLAY.row[c_]
         WOPL = WLAY.pages_per_layer
         woq = torch.zeros(NL, WK_ * TILE, WN_ * TILE)
