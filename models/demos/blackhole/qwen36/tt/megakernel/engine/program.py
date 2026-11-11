@@ -1213,7 +1213,7 @@ def setup_bench(dev, MESH, mesh_identity):
         return [(HC.index(fi) if fi in HC else 255) | (KVA_ROLE.get(fi, 0) << 8)] + sum(([fphys[h_].x, fphys[h_].y] for h_ in HC), []) + [kd_t.buffer_address()] + \
             ([HG_ADDR if fi in HC else 0] if ('MKA_RQPOS', '1') in MKDEF else [])
     RMASK = ('MKA_RMASK', '1') in MKDEF
-    MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if RMASK else {}   # last-block core -> user
+    MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if (RMASK and ('MKA_RQPOS', '1') not in MKDEF) else {}   # last-block core -> user (RQPOS: masks from kvpos)
     if RMASK:
         assert RQNR
         mk = torch.ones(NU, TILE, TILE)
