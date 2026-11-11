@@ -156,7 +156,11 @@ def test_mk_row_independence(mesh_device, monkeypatch):
                 changed.append(key)
         elif not torch.equal(a, b):
             changed.append(key)
-    rec = dict(k=K, seed=SEED, tokens=NEW, steps_full=len(stF), steps_padded=len(stP), row_diffs=diff[:20],
+    # idle (scratch) GDN slots must be finite after the steps: HOLD replays them with C=1 / W=0, so a non-finite slot
+    # would put NaN rows into the padded user (prod zero-inits rec_state / ring / window pair at allocation)
+    idle_nonfinite_state = [list(map(str, k_)) for k_, v in post.items()
+                            if k_[1] not in ("k", "v") and not torch.isfinite(v.float()).all()]
+    rec = dict(idle_state_nonfinite=idle_nonfinite_state[:20], k=K, seed=SEED, tokens=NEW, steps_full=len(stF), steps_padded=len(stP), row_diffs=diff[:20],
                n_row_diffs=len(diff), tokens_equal=tok, idle_nonfinite=nonfinite[:20], replicas_equal=rep,
                idle_state_changed=[list(map(str, c)) for c in changed[:20]], n_idle_state_changed=len(changed),
                owned_blocks=len(owned))
@@ -169,3 +173,4 @@ def test_mk_row_independence(mesh_device, monkeypatch):
     assert not nonfinite, f"idle rows non-finite at (step, slot) {nonfinite[:8]}"
     assert rep, "x_out differs across the 8 devices"
     assert not changed, f"idle GDN state / free KV blocks changed: {changed[:8]}"
+    assert not idle_nonfinite_state, f"idle GDN state slots non-finite: {idle_nonfinite_state[:8]}"
