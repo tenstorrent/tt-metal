@@ -23,7 +23,7 @@ DEFAULT = ";".join([
     "noGDN24|MK_GDN_INPROJ=1,MK_REAL_GAR=1|MKA_KVA=0 MKA_GDN24=0 MKA_GDN_WAIT=0 MKA_GDNOUT=0",
     "noGDN24_KVA|MK_GDN_INPROJ=1,MK_REAL_GAR=1|MKA_GDN24=0 MKA_GDN_WAIT=0 MKA_GDNOUT=0",
 ])
-SWEEP = os.environ.get("SWEEP", DEFAULT)
+SWEEP = open(os.environ["SWEEP_FILE"]).read().strip() if os.environ.get("SWEEP_FILE") else os.environ.get("SWEEP", DEFAULT)
 OUT = os.environ.get("SWEEP_OUT", "")
 
 
