@@ -771,7 +771,11 @@ void kernel_main() {
                     } else v_pump();
 #endif
                 }
+#if defined(MKA_ZGDNW)
+                { DeviceZoneScopedN("W-GDNI"); issue_some(true); }   // diagnostic: starts when the stall ended
+#else
                 issue_some(true);
+#endif
             }
 #else
             issue_some(true);

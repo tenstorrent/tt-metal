@@ -376,6 +376,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'    for (uint32_t j = 0; j < nt; ++j) noc_async_write(get_read_ptr({CO_}) + j * 2048, dg.get_noc_addr(L * 160 + tl[j]), 2048);\n'
                 f'    wou::scatter({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u);   // also retires the debug writes\n'
                 f'    {{OSIG}}\n'
+                + ('    { DeviceZoneScopedN("go_osig"); noc_async_atomic_barrier(); }\n' if os.environ.get("E1_GO_OSIGB", "0") == "1" else '') +
                 f'  }}\n')
         go_c = f'    {{ DeviceZoneScopedN("c_gomm"); wou::matmul_nt<{"true" if GO.get("lofi", True) else "false"}>({CA_}, {CR_}, {RP}, {CO_}, {MAXT}, {GO["wk"]}, g_ab[{{OGO}}], 4); }}   // short inits only; half-sync fp32 DST: 4 tiles / pass\n'
     rct, roff = ctas([rmap[t] for t in READER_TENSORS])
@@ -406,6 +407,21 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         osig = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
                         f'{S["out_ready"]}), 1, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5))
                         if r[4])
+    go_osig = osig
+    if GO and GO.get("gdnb") and os.environ.get("E1_GO_AGG", "1") == "1":
+        # gdn_out done -> out_ready through ONE aggregator (GDN core 0): every core += 1 on its gdnb word, the aggregator
+        # waits for all 24 and sends the engine signal once with value 24 (+ atomic barrier). 24 cores x 2 multicast
+        # atomics to 96 engine cores each sat ~50 us in the NoC behind the writers' next-layer traffic (u8, 11-10).
+        AX, AY = GO["gdn_xy"][0]
+        NC_ = len(cores)
+        if len(out_target) == 2:
+            sig_n = f'noc_semaphore_inc(get_noc_addr({out_target[0]}u, {out_target[1]}u, {S["out_ready"]}), {NC_});'
+        else:
+            sig_n = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
+                             f'{S["out_ready"]}), {NC_}, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5)) if r[4])
+        go_osig = (f'noc_semaphore_inc(get_noc_addr({AX}u, {AY}u, {GO["gdnb"]}u), 1);\n'
+                   f'    if (my_x[0] == {AX}u && my_y[0] == {AY}u) {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdnb"]}u, {NC_}u * (L + 1)); '
+                   f'{sig_n} noc_async_atomic_barrier(); }}')
     AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
     CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
     tr = os.path.join(gen_dir, "g2_reader.cpp")
@@ -441,13 +457,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n')
         + f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
         + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n"
-        + (go_w.replace("{OSIG}", osig) if GO else '') + "  }\n"
+        + (go_w.replace("{OSIG}", go_osig) if GO else '') + "  }\n"
         f'  noc_async_atomic_barrier();\n'
         f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached);\n'
         f'  // attn_kv: the engine raises it twice per attention layer (start, SDPA end), {attn_n} attention layers\n'
         + (f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, {2 * attn_n});\n' if attn_n else '')
         + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
         + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdna"]}u = 0;\n  *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u = 0;\n' if GO else '')
+        + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdnb"]}u = 0;\n' if GO and GO.get("gdnb") else '')
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
     open(tc, "w").write(
