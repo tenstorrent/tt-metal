@@ -81,6 +81,41 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
+def sp_kc(ratio, rows, fp8=True):
+    """k_chunk of the sparse_sdpa of a layer of compress ratio ``ratio`` on ``rows`` query rows per op. DSV41_SDPA_DEDUP=1 (default OFF; T16): one chunk = the whole index row (window 128 + top-512 = 640 keys),
+    which the T16 K-row-cache kernels (TT_METAL_KERNEL_PATH = tt/t16_kernels/sdpa, tests/test_t16_sdpa.py) turn into a gather of only the rows the previous query token of the core did not hold. Used where it
+    pays: layers whose consecutive tokens select overlapping rows (compress ratio >= 2: 76 % overlap measured; ratio 1: 17-24 %) and every layer once the op has >= DSV41_SDPA_DEDUP_ROWS (default 1024) rows (a core then
+    owns >= 8 tokens: the cold first token is amortised even with the low overlap). fp8 pool only (a bf16 pool needs twice the L1: stays on 128). Without the kernel overlay k_chunk 640 is correct but ~8 % slower than 128."""
+    if _env("DSV41_SDPA_DEDUP", "0") != "1":
+        return SP_KC_default()  # default OFF: nothing below runs
+    if fp8 and (int(ratio) >= 2 or int(rows) >= int(_env("DSV41_SDPA_DEDUP_ROWS", "1024"))):
+        _balance(False)
+        return 640
+    _balance(True)
+    return SP_KC_default()
+
+
+_BAL = {}
+
+
+def _balance(orig):
+    """The op reads DSV41_SDPA_BALANCE when its program is created (the per-core token counts of the position-dependent gather cost table of the baseline kernel). The K-row-cache kernel has a uniform
+    per-token cost: its ops are created with the balance table OFF, every other sparse_sdpa with the process value (only when DSV41_SDPA_DEDUP=1)."""
+    if "v" not in _BAL:
+        _BAL["v"] = os.environ.get("DSV41_SDPA_BALANCE")
+    if orig:
+        if _BAL["v"] is None:
+            os.environ.pop("DSV41_SDPA_BALANCE", None)
+        else:
+            os.environ["DSV41_SDPA_BALANCE"] = _BAL["v"]
+    else:
+        os.environ["DSV41_SDPA_BALANCE"] = "0"
+
+
+def SP_KC_default():
+    return int(_env("DSV41_PFA_SP_KC", "128"))
+
+
 def _flag(name, default):
     return _env(name, default) == "1"
 
