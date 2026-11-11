@@ -8,24 +8,37 @@ Both plans are pure functions of labels, shapes and transforms, so the reshardin
 
 Save: every key's label gives one box per device; devices that hold the same box form a replica group, and one of
 them, elected by a hash of the key, writes it. A file per device collects the chunks its device owns, largest first,
-at offsets fixed before any byte moves.
+at offsets fixed before any byte moves. Before that, every key's unique boxes must tile its global shape: a label that
+does not (a shard dim out of range, say) is refused at save instead of producing a checkpoint every load rejects.
 
 Load: every destination shard's box is taken to canonical coordinates through the destination transform, back to
 the checkpoint's device layout through the inverse of the saved transform, and intersected with the saved chunks.
 Each overlap is one read: a sub-box of a chunk copied into a sub-box of the destination shard. When the saved and
 destination layouts are the same (same transform and global shape) the boxes meet in device coordinates directly,
 so a same-topology resume reads every shard whole, padding rows included. Destination padding rows that no chunk
-covers are filled per the transform's ``fill``. The reads and fills must tile every destination shard exactly.
+covers are filled per the transform's ``fill``. The reads and fills must tile every destination shard exactly: the
+saved chunks are checked to tile their global shape once per key, after which a shard's reads cannot overlap and
+only their total volume is left to check.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
+from itertools import product
 from math import prod
 from typing import Callable, Iterable
 
-from ._boxes import Box, boxes_tile
-from ._errors import CoverageError, DtypeMismatch, MissingKeyError, ShapeMismatch, UnexpectedKeyError
+from ._boxes import Box, boxes_tile, grid_cell_size
+from ._errors import (
+    CoverageError,
+    DtypeMismatch,
+    MissingKeyError,
+    RoleMismatch,
+    ShapeMismatch,
+    TopologyError,
+    UnexpectedKeyError,
+)
 from ._index import ChunkRecord, Entry, Index
 from ._layouts import Compose, Pad, Transform
 from ._safetensors import ITEMSIZE, build_header
@@ -135,6 +148,42 @@ class SavePlan:
         return entries
 
 
+@lru_cache(maxsize=4096)
+def _replica_layout(label: Label, local_shape: tuple[int, ...]) -> tuple[dict[tuple[int, ...], tuple[Chunk, ...]], str]:
+    """The replica groups a label gives a tensor of ``local_shape`` (each group's chunks as a tuple, so the cached
+    value cannot be changed through it), and a description of what is wrong with them, empty when nothing is.
+
+    A key's groups depend only on its label and shape, which do not change during training, and most keys of a model
+    share a handful of them; caching here makes every save after the first, and every key after the first of each
+    kind, skip the enumeration and the tiling check."""
+    rank = len(local_shape)
+    for axis, placement in enumerate(label.placements):
+        if placement.kind == "shard" and not 0 <= placement.dim < rank:
+            return {}, f"distribution axis {axis} shards dim {placement.dim}, out of range for a rank-{rank} tensor"
+    groups = {group: tuple(chunks) for group, chunks in replica_groups(chunk_boxes(label, local_shape)).items()}
+    boxes = [chunks[0].box for chunks in groups.values()]
+    global_shape = label_global_shape(label, local_shape)
+    if not boxes_tile(boxes, Box.whole(global_shape)):
+        return groups, (
+            f"the {len(boxes)} boxes of its label {label.to_json()} do not tile its global shape {list(global_shape)}"
+        )
+    return groups, ""
+
+
+def _checked_groups(info: TensorInfo) -> dict[tuple[int, ...], tuple[Chunk, ...]]:
+    """The replica groups of a live tensor, after checking that their boxes tile its global shape.
+
+    This is the save-time assertion of the design: every shard dim lies within the tensor's rank, and the unique boxes
+    (one per replica group, duplicates kept) tile the global shape exactly. The boxes are cells of one grid, so the
+    check is linear in the device count, and it is cached per label and shape (``_replica_layout``).
+    """
+    groups, problem = _replica_layout(info.label, tuple(info.local_shape))
+    if problem:
+        error = TopologyError if problem.startswith("distribution axis") else CoverageError
+        raise error(f"{info.key}: {problem}")
+    return groups
+
+
 def create_save_plan(
     infos: Iterable[TensorInfo],
     file_for_coord: Callable[[tuple[int, ...]], str],
@@ -148,8 +197,9 @@ def create_save_plan(
     items: dict[str, list[WriteItem]] = {}
     for key, info in infos.items():
         info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
+        groups = _checked_groups(info)
         per_key: list[WriteItem] = []
-        for group in replica_groups(chunk_boxes(info.label, info.local_shape)).values():
+        for group in groups.values():
             own = elect_owner(key, group)
             item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=info.local_nbytes)
             per_key.append(item)
@@ -178,10 +228,6 @@ class ReadItem:
     src: Box
     dst: Box
     group: tuple[int, ...]
-
-    @property
-    def nbytes_needed(self) -> int:
-        return self.src.volume
 
 
 @dataclass
@@ -231,6 +277,41 @@ def _padding_fill(transform: Transform) -> str:
     return "zeros"
 
 
+class _ChunkLookup:
+    """The saved chunks of one entry, checked to tile its global shape, and found by the boxes they overlap.
+
+    Chunks that are cells of one grid (every writer here produces such) are found by cell arithmetic; anything else
+    is scanned.
+    """
+
+    def __init__(self, entry: Entry) -> None:
+        self.chunks = entry.chunks
+        boxes = [c.box for c in entry.chunks]
+        if not boxes_tile(boxes, Box.whole(entry.global_shape)):
+            raise CoverageError(
+                f"{entry.key}: the checkpoint's {len(boxes)} chunks do not tile its global shape "
+                f"{list(entry.global_shape)}; the index is inconsistent"
+            )
+        self.cell = grid_cell_size(boxes, (0,) * len(entry.global_shape))
+        self.by_cell = (
+            {tuple(o // s for o, s in zip(c.box.offsets, self.cell)): i for i, c in enumerate(entry.chunks)}
+            if self.cell is not None
+            else None
+        )
+
+    def overlapping(self, box: Box) -> list[int]:
+        """Indices of the chunks that may overlap ``box`` (a superset when the chunks are not a grid)."""
+        if self.by_cell is None:
+            return list(range(len(self.chunks)))
+        ranges = [range(o // s, (o + n - 1) // s + 1) for o, n, s in zip(box.offsets, box.sizes, self.cell)]
+        found = []
+        for cell in product(*ranges):
+            index = self.by_cell.get(cell)
+            if index is not None:
+                found.append(index)
+        return found
+
+
 def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
     """The reads and fills that build every destination shard of one key from the saved chunks."""
     if entry.dtype != info.dtype:
@@ -244,13 +325,16 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
             f"or a missing layout declaration"
         )
     same_layout = entry.transform == info.transform and tuple(entry.global_shape) == tuple(dest_global)
-    groups = replica_groups(chunk_boxes(info.label, info.local_shape))
+    groups = _checked_groups(info)
     boxes = {group: chunks[0].box for group, chunks in groups.items()}
     reads: list[ReadItem] = []
     fills: list[FillItem] = []
     fast = same_layout
+    lookup = _ChunkLookup(entry)
     saved_boxes = {c.box: i for i, c in enumerate(entry.chunks)}
     for group, dbox in boxes.items():
+        group_reads: list[ReadItem] = []
+        group_fills: list[FillItem] = []
         if same_layout:
             pieces = [(dbox, dbox)]
         else:
@@ -261,27 +345,34 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
             for pad_box in info.transform.padding_boxes(dest_global):
                 overlap = pad_box.intersect(dbox)
                 if overlap is not None:
-                    fills.append(FillItem(info.key, overlap.relative_to(dbox), group, _padding_fill(info.transform)))
+                    group_fills.append(
+                        FillItem(info.key, overlap.relative_to(dbox), group, _padding_fill(info.transform))
+                    )
         if fast and saved_boxes.get(dbox) is None:
             fast = False
         for d_piece, s_piece in pieces:
-            for ci, chunk in enumerate(entry.chunks):
+            for ci in lookup.overlapping(s_piece):
+                chunk = entry.chunks[ci]
                 overlap = s_piece.intersect(chunk.box)
                 if overlap is None:
                     continue
                 d_overlap = _sub_box(d_piece, overlap, s_piece)
-                reads.append(
+                group_reads.append(
                     ReadItem(
                         info.key, chunk.file, ci, overlap.relative_to(chunk.box), d_overlap.relative_to(dbox), group
                     )
                 )
-        local = Box.whole(dbox.sizes)
-        covered = [r.dst for r in reads if r.group == group] + [f.dst for f in fills if f.group == group]
-        if not boxes_tile(covered, local):
+        # The saved chunks tile their global shape (checked by the lookup) and a transform's pieces partition the
+        # box they map (tested with the transforms), so the reads cannot overlap. Every read and fill lies inside the
+        # shard by construction (relative_to raises otherwise), which leaves the total volume to check.
+        covered = sum(r.dst.volume for r in group_reads) + sum(f.dst.volume for f in group_fills)
+        if covered != prod(dbox.sizes):
             raise CoverageError(
                 f"{info.key}: the saved chunks do not tile destination shard {dbox} (group {group}); "
-                f"{sum(b.volume for b in covered)} of {local.volume} elements covered"
+                f"{covered} of {prod(dbox.sizes)} elements covered"
             )
+        reads.extend(group_reads)
+        fills.extend(group_fills)
     return KeyPlan(info.key, entry, info, boxes, reads, fills, fast)
 
 
@@ -290,9 +381,10 @@ def create_load_plan(
 ) -> LoadPlan:
     """A ``KeyPlan`` per live tensor. Live names resolve through the entries' recorded live keys.
 
-    ``roles`` are the entry roles the caller asked to restore ("param", "buffer", "optimizer_state"); entries of other
-    roles are neither planned nor reported as unexpected, so a model can be loaded from a checkpoint that also holds
-    optimizer state. ``None`` means every role.
+    What is restored is decided by ``infos``: every live tensor passed is planned. ``roles`` only scopes the
+    unexpected-key report: entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported
+    as unexpected, so a model alone loads from a checkpoint that also holds optimizer state. ``None`` means every
+    role. A live tensor that resolves to an entry of another role is a ``RoleMismatch``.
     """
     live_map = index.live_key_map()
     wanted = None if roles is None else set(roles)
@@ -309,8 +401,14 @@ def create_load_plan(
         if entry_key is None:
             missing.append(info.key)
             continue
+        entry = index.entries[entry_key]
+        if entry.role != info.role:
+            raise RoleMismatch(
+                f"{info.key}: resolves to checkpoint entry {entry_key!r}, a {entry.role!r}, but the live tensor is a "
+                f"{info.role!r}"
+            )
         used.add(entry_key)
-        plans[info.key] = plan_key(index.entries[entry_key], info)
+        plans[info.key] = plan_key(entry, info)
     unexpected = [
         key for key, entry in index.entries.items() if key not in used and (wanted is None or entry.role in wanted)
     ]

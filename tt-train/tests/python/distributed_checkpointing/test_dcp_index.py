@@ -23,6 +23,7 @@ from ttml.distributed_checkpointing._index import (
     parse_dir_name,
     read_header,
     read_index,
+    read_user_header,
     step_dir_name,
     write_header,
     write_index,
@@ -152,11 +153,24 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     (tmp_path / "step_0000040").mkdir()  # no index: incomplete
     assert find_latest(str(tmp_path)) == str(tmp_path / "step_0000030")
     assert find_latest(str(tmp_path), include_replaced=True) == str(tmp_path / "step_0000050.replaced-9")
+    (tmp_path / "step_0000050").mkdir()
+    (tmp_path / "step_0000050" / "index.json").write_text("{}")
+    assert find_latest(str(tmp_path), include_replaced=True) == str(
+        tmp_path / "step_0000050"
+    ), "the final name wins a step tie whatever the listing order"
     assert find_latest(str(tmp_path), prefix="other") == str(tmp_path / "other_step_0000200")
     assert find_latest(str(tmp_path / "missing")) is None
     assert is_complete(str(tmp_path / "step_0000030"))
     assert not is_complete(str(tmp_path / "step_0000100.partial-123"))
     assert not is_complete(str(tmp_path / "step_0000040"))
+
+
+def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
+    staging, _ = begin_staging(str(tmp_path / "step_0000001"))
+    write_header(staging, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
+    assert read_user_header(staging) == {"step": 1, "run": "a"}
+    write_header(staging, {"format": "ttml-dcp", "version": 1})
+    assert read_user_header(staging) == {}, "a header without a user dict reads as empty"
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
@@ -182,3 +196,75 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
         finalize_staging(staging2, final)
     finalize_staging(staging2, final, overwrite=True)
     assert is_complete(final) and not [n for n in os.listdir(tmp_path) if ".replaced-" in n]
+
+
+def test_crc_column_keeps_known_checksums_and_is_validated(expect_error):
+    index = _index()
+    chunks = index.entries["model/Llama/fc/weight"].chunks
+    chunks[1].crc32 = None
+    encoded = index.to_json()
+    assert encoded["state"]["model/Llama/fc/weight"]["chunks"]["crc32"] == ["3f0a9c11", None]
+    decoded = Index.from_json(json.loads(json.dumps(encoded)))
+    assert [c.crc32 for c in decoded.entries["model/Llama/fc/weight"].chunks] == [0x3F0A9C11, None]
+
+    short = json.loads(json.dumps(encoded))
+    short["state"]["model/Llama/fc/weight"]["chunks"]["crc32"] = ["3f0a9c11"]
+    with expect_error(CheckpointError, "columns disagree"):
+        Index.from_json(short)
+    bad = json.loads(json.dumps(encoded))
+    bad["state"]["model/Llama/fc/weight"]["chunks"]["crc32"] = ["3f0a9c11", "not-hex"]
+    with expect_error(CheckpointError, "malformed crc32"):
+        Index.from_json(bad)
+
+
+def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, expect_error):
+    final = str(tmp_path / "step_0000010")
+    staging, _ = begin_staging(final)
+    write_index(staging, _index())
+    write_header(staging, {"step": 10})
+    finalize_staging(staging, final)
+    index_path = os.path.join(final, "index.json")
+    text = open(index_path).read()
+
+    with open(index_path, "w") as f:
+        f.write(text[: len(text) // 2])  # truncated
+    with expect_error(IncompleteCheckpoint, "not a readable index"):
+        read_index(final)
+    value = json.loads(text)
+    del value["state"]["model/Llama/fc/weight"]["chunks"]["file"]
+    with open(index_path, "w") as f:
+        json.dump(value, f)  # a required column missing
+    with expect_error(IncompleteCheckpoint, "not a readable index"):
+        read_index(final)
+    with open(os.path.join(final, "header.json"), "w") as f:
+        f.write("{")
+    with expect_error(IncompleteCheckpoint, "not readable JSON"):
+        read_header(final)
+
+
+def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):
+    final = str(tmp_path / "step_0000010")
+    staging, _ = begin_staging(final)
+    write_index(staging, _index())
+    finalize_staging(staging, final)
+    previous = read_index(final).checkpoint_id
+
+    staging2, _ = begin_staging(final)
+    replacement = _index()
+    replacement.checkpoint_id = "replacement"
+    write_index(staging2, replacement)
+    real_rename = os.rename
+
+    def failing_rename(src, dst):
+        if src == staging2:
+            raise OSError("simulated NFS failure")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", failing_rename)
+    with expect_error(OSError, "simulated NFS failure"):
+        finalize_staging(staging2, final, overwrite=True)
+    monkeypatch.setattr(os, "rename", real_rename)
+
+    assert is_complete(final) and read_index(final).checkpoint_id == previous
+    assert not [n for n in os.listdir(tmp_path) if ".replaced-" in n], "nothing left aside"
+    assert os.path.isdir(staging2), "the new checkpoint is untouched for the caller to retry or delete"
