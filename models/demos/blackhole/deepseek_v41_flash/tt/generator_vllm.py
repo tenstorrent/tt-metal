@@ -1340,10 +1340,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     )
                     st = 0
             if p is None:
-                if self.bucketing and U:
+                if (self.bucketing or getattr(self.m, "_slot_ks", None)) and U:
                     p = self.slots.claim_packed(
                         slot, load, U, avoid
-                    )  # lowest in-row index: the live set stays inside the smallest decode bucket
+                    )  # lowest in-row index: the live set stays inside the smallest decode bucket (and, DSV41_PREFILL_SLOT_BUCKETS, the prefilling users inside the smallest slot bucket)
                 else:
                     p = (
                         self.slots.claim_balanced(slot, load, U, avoid)
