@@ -6,6 +6,8 @@ TM=/home/container_app_user/tt-metal
 export TT_METAL_HOME=$TM PYTHONPATH=$TM:$TM/ttnn ARCH_NAME=blackhole TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR=$MK2/prof/$TAG
 export MKA_KD=$MK2/megakernel/attn/kernels MK_MIXN=${MK_MIXN:-1}
 unset TT_METAL_SIMULATOR MESH_DEVICE TT_VISIBLE_DEVICES
+# per-run host thread cap (RELAUNCH_BRIEF, main): concurrent runs drove d30u20 to load ~274 (weight setup 1 s -> 120-200 s)
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4} MKL_NUM_THREADS=${MKL_NUM_THREADS:-4} OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-4}
 for kv in "$@"; do export "$kv"; done
 mkdir -p $TT_METAL_PROFILER_DIR; cd $MK2
 [ -n "${MK_PCACHE:-}" ] && export TT_METAL_CACHE=$MK2/cache   # private JIT cache (per-run binary sizes)
