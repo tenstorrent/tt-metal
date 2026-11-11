@@ -1757,20 +1757,13 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     _qkg = (weights or {}).get("qkg") or {}
     if _qkg.get("tensor") is not None:
         env.setdefault("MKA_QKG_ADDR", str(_qkg["tensor"].buffer_address()))
-    # cbplan's tensor-backed registry (_GKEY, filled by its cb_descriptor_from_sharded_tensor wrapper) is process-global:
-    # in the model process every other op's tensor-backed CB descriptor lands in it too, and a static engine CB with the
-    # same (core ranges, CB id) key was then planned as global (in-model cbplan FAIL, 16000 mismatches). One registry
-    # shared by both import paths of cbplan (bench "cbplan" / package), cleared right before this engine build.
-    import sys as _sys
-
+    # cbplan's tensor-backed registry (on the ttnn module since v12's 753bfdf095e, shared by both import paths) is
+    # process-global: in the model process other ops' tensor-backed CB descriptors land in it too, and a static engine CB
+    # with the same (core ranges, CB id) key would be planned as global. Clear it right before this engine build.
     from models.demos.blackhole.qwen36.tt.megakernel.engine import cbplan as _CBP
 
-    _top = _sys.modules.get("cbplan")
-    if _top is not None and _top is not _CBP:
-        _CBP._GKEY = _top._GKEY
-    _sys.modules.setdefault("cbplan", _CBP)
     _CBP.track(ttnn)
-    _CBP._GKEY.clear()
+    _CBP._reg().clear()
     _WEIGHTS.clear()
     _WEIGHTS.update({k: v for k, v in (weights or {}).items() if v and not type(v.get("layout")).__name__ == "TileOrderLayout"})
     # KV injection (QWEN36_R16_MK_KV_INJECT=1; e2e-diff, and the default once the SDPA reads the real page table): the
