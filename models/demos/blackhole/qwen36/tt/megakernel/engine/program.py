@@ -301,9 +301,23 @@ def setup_bench(dev, MESH, mesh_identity):
             return full
         def from_paged(tt):
             return ttnn.to_torch(tt).float().reshape(NU * BPU, NKVH, KVBS, DHD)[:, KVH].reshape(NU, CTX, DHD)
+    # integ KV injection (build_program, QWEN36_R16_MK_KV_INJECT=1): the model's per-attention-layer paged_k / paged_v
+    # (prod layout = KVPROD) replace the synthetic caches: no CTX-sized device / host stand-in KV, no host SDPA golds
+    # (KVQ[L] = None: the gold blocks below skip those layers).
+    KVINJ = list(_WEIGHTS.get("_kv_inject") or [])
+    if KVINJ:
+        assert KVPROD, "KV injection needs MKA_KVPROD=1 (the vLLM paged layout)"
+    _ai = 0
     for L in range(NL):
         if KVPROD and kvs and not is_attn_layer(L):   # GDN-type layers never read KV: share the previous layer's tensors
             q_t = torch.zeros(NU, TILE, DHD); kvs.append(kvs[-1]); kvvs.append(kvvs[-1]); golds_s.append(golds_s[-1]); qs_all.append(q_t); continue
+        if KVINJ and (is_attn_layer(L) or not kvs):
+            q_t = torch.zeros(NU, TILE, DHD); q_t[:, :NQH * T] = torch.randn(NU, NQH * T, DHD) / math.sqrt(DHD)
+            kv, kvv_ = KVINJ[min(_ai, len(KVINJ) - 1)]
+            _ai += 1 if is_attn_layer(L) else 0
+            kvs.append(kv); kvvs.append(kvv_); golds_s.append(torch.zeros(NU, TILE, DHD)); qs_all.append(q_t)
+            if RQNR: KVQ[L] = None
+            continue
         q_t = torch.zeros(NU, TILE, DHD); q_t[:, :NQH * T] = torch.randn(NU, NQH * T, DHD) / math.sqrt(DHD)
         k_t = torch.randn(NU, CTX, DHD); v_t = torch.randn(NU, CTX, DHD)
         if KVPROD:
@@ -520,8 +534,13 @@ def setup_bench(dev, MESH, mesh_identity):
         v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)
         PVL = LM.pages_per_layer(v_nsb, banks)
         t_v = time.time()
-        wv_all = ttnn.from_torch(torch.cat([LM.pack_layer(*vlayer(L), v_bank, v_rank, v_nsb, banks) for L in range(NL)]).reshape(1, 1, -1, TILE),
-                                 dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if "mlp" in _WEIGHTS:   # integ weight injection: the model's repacked MLP (weights_mk MlpLayout = this pack_layer, all
+            # 64 layers in model order, layer L at page L * PVL); engine layer L reads model layer L
+            wv_all = _WEIGHTS["mlp"]["tensor"]
+            assert _WEIGHTS["mlp"]["pages_per_layer"] == PVL, (_WEIGHTS["mlp"]["pages_per_layer"], PVL)
+        else:
+            wv_all = ttnn.from_torch(torch.cat([LM.pack_layer(*vlayer(L), v_bank, v_rank, v_nsb, banks) for L in range(NL)]).reshape(1, 1, -1, TILE),
+                                     dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # gold of the last layer's owner output (x static in the engine): Σ down partials (+ x while the AR is a stall)
         _g, _u, _d = vlayer(NL - 1)
         _xn = (rstd_g[:, None] * xb.double()).float()
@@ -827,6 +846,7 @@ def setup_bench(dev, MESH, mesh_identity):
             qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
             gold_k[L] = norm_rope(Xq[:, 48 * TILE:56 * TILE].float(), 6)
             g_ = torch.zeros(NU, TILE, DHD)
+            if KVQ.get(L) is None: continue   # injected KV: no host gold
             kq_, vq_ = KVQ[L]
             for u_ in range(NU):
                 Qu = torch.zeros(TILE, DHD)
@@ -864,6 +884,7 @@ def setup_bench(dev, MESH, mesh_identity):
             Xq = gold_qkv[L].double()
             qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
             g_ = torch.zeros(NU, TILE, DHD)
+            if KVQ.get(L) is None: continue   # injected KV: no host gold
             kq_, vq_ = KVQ[L]
             for u_ in range(NU):
                 Qu = torch.zeros(TILE, DHD)
@@ -891,6 +912,7 @@ def setup_bench(dev, MESH, mesh_identity):
         qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
         gold_k[L] = norm_rope(Xq[:, 48 * TILE:56 * TILE].float(), 6)
         g_ = torch.zeros(NU, TILE, DHD)
+        if KVQ.get(L) is None: return   # injected KV: no host gold
         kq_, vq_ = KVQ[L]
         for u_ in range(NU):
             Qu = torch.zeros(TILE, DHD)
@@ -1491,6 +1513,13 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
         env.setdefault("MKA_QKG_ADDR", str(_qkg["tensor"].buffer_address()))
     _WEIGHTS.clear()
     _WEIGHTS.update({k: v for k, v in (weights or {}).items() if v})
+    # KV injection (QWEN36_R16_MK_KV_INJECT=1; e2e-diff, and the default once the SDPA reads the real page table): the
+    # engine reads the model's paged caches in the prod layout instead of CTX-sized synthetic ones
+    if os.environ.get("QWEN36_R16_MK_KV_INJECT", "0") == "1" and kv_desc and all(d.get("paged") for d in kv_desc):
+        _WEIGHTS["_kv_inject"] = [(d["k"], d["v"]) for d in kv_desc]
+        kv0 = kv_desc[0]
+        env.update(MKA_KVPROD="1", MKA_NKVH=str(kv0["n_kv_heads"]), MKA_KVH="0", MKA_BS=str(kv0["block_size"]),
+                   MKA_KVDT="bfp8" if "BFLOAT8" in str(kv0.get("dtype", "")).upper() else os.environ.get("QWEN36_R16_MK_KVDT", "bfp8"))
     try:
         with _setup_context(mesh, env) as pool_stats:
             S = setup_bench(mesh, True, lambda t: 0.0)

@@ -156,6 +156,8 @@ def _long_prompt(tokenizer, n, salt):
 def test_mk_e2e_diff(mesh_device, monkeypatch):
     assert os.environ.get("QWEN36_R16_MEGAKERNEL", "").strip() == "1", "run with QWEN36_R16_MEGAKERNEL=1"
     monkeypatch.setenv("QWEN36_R16_MK_NL", str(NL))
+    monkeypatch.setenv("QWEN36_R16_MK_KV_INJECT", os.environ.get("QWEN36_R16_MK_KV_INJECT", "1"))
+    monkeypatch.setenv("QWEN36_R16_MK_ALLOW_NO_FALLBACK", os.environ.get("QWEN36_R16_MK_ALLOW_NO_FALLBACK", "0"))
     env = os.environ.get("QWEN36_R16_MK_ENV", "")
     if "MK_AR_DBG=" not in env:
         monkeypatch.setenv("QWEN36_R16_MK_ENV", (env + " MK_AR_DBG=1").strip())
