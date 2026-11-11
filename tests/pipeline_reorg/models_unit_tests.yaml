@@ -239,6 +239,8 @@
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
     # Host only: the FLUX.3 upsampler's media module (prepare / expansion vs the HF processor) and stored values.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/unit/test_vision_media.py
+    # Host only: the split as tt-d-gen runs it (stored grids, adapter splice, media refs, M-RoPE vs HF, encoder-service emulation).
+    pytest --timeout 180 models/demos/blackhole/qwen36/tests/unit/test_vision_media_service.py
     # Last on purpose: this test builds the full 64-layer 27B model from /mnt/MLPerf (the trace-region
     # property it proves needs full depth). Passing CI runs took 58-251 s, and the layer load alone
     # ranges 44 s (warm page cache) to >5 min (cold NAS), so 300 s sat below the median. Give it its

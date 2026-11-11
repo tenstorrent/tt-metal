@@ -13,9 +13,14 @@ processor of the upsampler checkpoint):
 - the processor's patch rows. The item keeps them as uint8 [rows, 768] (one temporal copy, unnormalized: 1/8 of the
   bytes of HF's fp32 pixel_values); pixel_values() restores HF's values exactly through a 256-entry table.
 
-The pixel cap depends on the number of images in the REQUEST, which prepare(kind, media) does not see: it takes it as
-n_refs (default 1). The same image bytes therefore give different embeddings in a 1-image and a 3-image request, so
-the media key must include media_key_salt(item).
+Resize by image count (tt-d-gen encoder service, agreed with d-gen 11-10): PUP is single-turn and the pixel cap depends
+on the number of images in the REQUEST, which the contract's prepare(kind, media) does not see. The resize therefore
+happens on our side, inside prepare, from the request's own image count: the service passes it as n_refs (default 1),
+i.e. ``prepare("image", rgb, n_refs=len(request_images))``. The same image bytes give different embeddings in a
+1-image and a 3-image request, so the media key must include media_key_salt(item) (the cap bucket 1 / 2 / 3-10).
+
+The stored value (format.py) is a 64-byte header with the image grid (t, h, w) + the bf16 rows: the prefill runner
+needs the grid for M-RoPE and reads it from the store, so nothing besides the media key passes through the engine.
 """
 
 import hashlib
@@ -194,8 +199,14 @@ class Qwen35Media:
         # the <|image_pad|> itself, so the run replacing it is the pads alone.
         return [(self.placeholder_token_ids["image"], item.n_tokens)]
 
-    def stored_nbytes(self, item: Qwen35Image) -> int:
+    def value_size(self, item: Qwen35Image) -> int:
+        """Bytes of the item's stored value: the 64-byte header + n_tokens bf16 rows."""
         return media_format.stored_nbytes(item.n_tokens, self.hidden)
+
+    stored_nbytes = value_size
+
+    def header(self, item: Qwen35Image) -> media_format.Header:
+        return media_format.Header(item.n_tokens, self.hidden, item.grid_thw, item.n_refs)
 
     @staticmethod
     def media_key_salt(item: Qwen35Image) -> bytes:
@@ -227,6 +238,8 @@ class Qwen35Media:
         for item, r in zip(items, rows):
             if r.shape[0] != item.n_tokens:
                 raise ValueError(f"buffer of {r.shape[0]} rows for an item of {item.n_tokens} tokens")
+        for item, buf in zip(items, out):
+            media_format.write_header(buf, self.header(item))
         if self._stub:
             import torch
 

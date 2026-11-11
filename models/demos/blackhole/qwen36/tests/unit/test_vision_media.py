@@ -139,7 +139,7 @@ def test_prepare_matches_hf(processor, sizes):
     assert torch.equal(got16.view(torch.int16), want["pixel_values"].to(torch.bfloat16).view(torch.int16))
     for it in items:
         assert media.expansion(it) == [(IMAGE_PAD, it.grid_h * it.grid_w // 4)]
-        assert media.stored_nbytes(it) == it.n_tokens * 64 * 2
+        assert media.value_size(it) == 64 + it.n_tokens * 64 * 2  # header + bf16 rows
 
 
 def test_pixel_caps_by_ref_count():

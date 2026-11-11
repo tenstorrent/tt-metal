@@ -58,7 +58,7 @@ def load_reference_visual(weights_path: str):
     from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5VisionModel
 
     config = AutoConfig.from_pretrained(weights_path)
-    visual = Qwen3_5VisionModel._from_config(config.vision_config, torch_dtype=torch.float32)
+    visual = Qwen3_5VisionModel._from_config(config.vision_config).float()
     state = {}
     for path in sorted(glob.glob(os.path.join(weights_path, "*.safetensors"))):
         with safe_open(path, "pt") as f:
