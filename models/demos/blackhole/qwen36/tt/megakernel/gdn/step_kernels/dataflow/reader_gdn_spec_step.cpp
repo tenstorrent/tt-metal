@@ -38,6 +38,15 @@
 #if GDN_SP_RD
 static uint32_t g_rd_sp_lay = 0;  // GDN layers done by this reader (sp ring offset at B < 8)
 #endif
+#ifndef GDN_OUT_RD
+#define GDN_OUT_RD 0  // engine GDN role (BATCH, nb * T == 32): this reader (NOC1) writes the gated out tiles and raises the
+                      // out signal, not the writer: at +36 us the writer's NOC0 at physical x 1-4 is saturated (weight
+                      // stream), the 2 KB out write took 20-55 us there (v1.91); the reader is idle from the kmq stream's
+                      // end to the next layer's rd_const (blocked on the compute's scaler pop anyway)
+#endif
+#if GDN_OUT_RD
+void gdn_out_signal();  // the including TU (out_ready +1 / the aggregator, issued on this kernel's NOC)
+#endif
 #ifndef GDN_CUT_FAST
 #define GDN_CUT_FAST 0  // engine GDN role (BATCH): masked K_u / Q_u slots (kts, kmq) keep their zeros across uses: only the
                         // previous occupant's T rows are re-zeroed (no full-tile zero fill + barrier per tile)
@@ -729,6 +738,27 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 }
             }
         }
+#if GDN_OUT_RD
+        // ---- the gated out tiles (all 32 rows live: whole tiles, as the writer's GDN_OUT_TILE) + the out signal, on NOC1
+        //      ahead of any S' write (the barrier must not wait for those)
+        {
+            const auto out_acc = TensorAccessor(tensor::out_r);
+            DataflowBuffer out(dfb::out);
+            {
+                DeviceZoneScopedN("rd_owait");  // the compute's gated output tiles
+                out.wait_front(Vs);
+            }
+            DeviceZoneScopedN("rd_owr");  // the out tile write + its barrier + the out signal
+            const uint32_t entry = out.get_entry_size();
+            const uint32_t page0 = tr * (Nv * Vt) + h * Vt + s * Vs;
+            for (uint32_t t = 0; t < Vs; ++t) {
+                noc.async_write(out, out_acc, entry, {.offset_bytes = t * entry}, {.page_id = page0 + t});
+            }
+            noc.async_write_barrier();
+            out.pop_front(Vs);
+            gdn_out_signal();
+        }
+#endif
 #if GDN_SP_RD
         // ---- S'_u -> ring slot 0 block (u, h) (this block's columns) from the compute's sp (waited on, never popped
         //      here: the compute pops it at the next layer's replay after `spd`), as the writer's wr_sp did

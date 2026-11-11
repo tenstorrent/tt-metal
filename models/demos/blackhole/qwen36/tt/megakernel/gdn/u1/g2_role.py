@@ -49,6 +49,9 @@ class GdnRole:
         """ref=False: no stock-op reference (no priming step, check() skipped) -- the stock op's program does not fit
         the kernel config buffer with device-profiler zones compiled in; the checked step is then FRESH."""
         self.ref = ref
+        # MKA_GDNOUT with E1_GO_LOCAL=2: the step's out tiles go straight into gdn_out's A (never to the out tensor), so
+        # check() can't compare out (got = 0); ring / window still are. E1_GO_LOCAL=1 keeps the out write for the full check.
+        self.out_unwritten = bool(gdnout) and os.environ.get("E1_GO_LOCAL", "2") == "2"
         m = self.m = _test_module()
         self.dev, self.cores, self.NG, self.B, self.T, self.K = dev, list(cores), NG, B, 4, 4
         g = self.g = m.GEOS[0]
@@ -289,6 +292,9 @@ class GdnRole:
                 print(f"[{tag}]   pairs (row, col, ref, got): {[(r, c, float(oa[r, c]), float(ob[r, c])) for r, c in idx]}", flush=True)
                 n2 = int(((iv(outA) != iv(outB)).reshape(-1, outB.shape[-1]).sum(0) > 0).reshape(-1, 32).any(1).sum())
                 print(f"[{tag}]   blocks with diffs: {n2}", flush=True)
+            if self.out_unwritten:
+                if l == 0: print(f"[{tag}]   out not compared: gdn_out E1_GO_LOCAL=2 never writes the out tensor (E1_GO_LOCAL=1 = full check)", flush=True)
+                e_out = True
             ok_all = ok_all and e_out and e_ring and e_win
             ttnn.deallocate(oAs[l])
             cA.par, cE.par = 1 - cA.par, 1 - cE.par
