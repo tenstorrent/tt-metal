@@ -152,6 +152,77 @@ def _rqbal_parity_bytes(nb, xy, NS, fan):
     return _rqbal_rows_parity(list(nb), np.array(xy, dtype=np.int64), NS, fan).tobytes()
 
 
+def l1io(dev, entries, dram_t, direction, page=None):
+    """Spec §20 phase 2: one generic_op that copies DRAM pages <-> planned engine CB addresses (kernels/mk_l1io.cpp).
+    entries: [((x, y), l1_addr, first_page, n_pages)] (logical cores); dram_t: an interleaved DRAM tensor whose pages are
+    the copy unit (page size = its tile / stick size). direction 0: DRAM -> L1 (seed, before the engine op), 1: L1 -> DRAM
+    (drain / debug readback, right after it). On a mesh the same program runs on every device (a MeshProgramDescriptor
+    built here, so the bench's per-device engine shim never substitutes it). Trace-capturable (no host reads)."""
+    kpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "mk_l1io.cpp")
+    if page is None:   # TILE layout: one page = one tile; ROW_MAJOR callers pass the page (row) bytes
+        assert dram_t.layout == ttnn.TILE_LAYOUT, "l1io: pass page= for a ROW_MAJOR DRAM tensor"
+    pb = page or ttnn.Tile([TILE, TILE]).get_tile_size(dram_t.dtype)
+    rt = ttnn.RuntimeArgs()
+    for (x, y), a, p0, n in entries:
+        rt[x][y] = [dram_t.buffer_address(), int(a), int(p0), int(n), int(pb), int(direction)]
+    cr = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y), *_ in entries])
+    k = ttnn.KernelDescriptor(kernel_source=kpath, core_ranges=cr, compile_time_args=[], runtime_args=rt,
+                              config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
+    pd = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[])
+    if hasattr(dev, "get_num_devices"):
+        mp = ttnn.MeshProgramDescriptor()
+        for r in range(dev.shape[0]):
+            for c in range(dev.shape[1]):
+                co = ttnn.MeshCoordinate(r, c)
+                mp[ttnn.MeshCoordinateRange(co, co)] = pd
+        pd = mp
+    ttnn.generic_op([dram_t, dram_t], pd)
+
+
+def _fresh_sem(*a, **k):
+    """A global semaphore the cross-build sem pool (integ program.py _setup_context, QWEN36_R16_MK_SEMPOOL) must NOT share:
+    the AR's flags / counters (epoch-based or AR-owned). The pool shim checks ttnn._mk_sem_fresh."""
+    ttnn._mk_sem_fresh = getattr(ttnn, "_mk_sem_fresh", 0) + 1
+    try:
+        return ttnn.create_global_semaphore(*a, **k)
+    finally:
+        ttnn._mk_sem_fresh -= 1
+
+
+class _L1Ref:
+    """Spec §20 phase 2: a static CB at a planned L1 address standing in for the sharded L1 tensor a consumer API expects
+    (buffer_address() + memory_config().shard_spec only; the AR's engine_parts). Inside _static_cb_refs(),
+    ttnn.cb_descriptor_from_sharded_tensor(id, ref) returns a STATIC descriptor on the ref's grid (the caller re-sizes it)."""
+
+    def __init__(self, addr, mem_cfg, nbytes):
+        self.addr, self.mc, self.nbytes = int(addr), mem_cfg, int(nbytes)
+
+    def buffer_address(self):
+        return self.addr
+
+    def memory_config(self):
+        return self.mc
+
+
+class _static_cb_refs:
+    def __enter__(self):
+        self.f = ttnn.cb_descriptor_from_sharded_tensor
+        f = self.f
+
+        def w(idx, t, *a, **k):
+            if isinstance(t, _L1Ref):
+                return ttnn.CBDescriptor(total_size=t.nbytes, core_ranges=t.mc.shard_spec.grid, format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.bfloat16, page_size=2048)])
+            return f(idx, t, *a, **k)
+
+        ttnn.cb_descriptor_from_sharded_tensor = w
+        return self
+
+    def __exit__(self, *e):
+        ttnn.cb_descriptor_from_sharded_tensor = self.f
+        return False
+
+
 def setup_bench(dev, MESH, mesh_identity):
     try:   # engine/ is on sys.path in the bench (the pushed tree's own module first)
         import cbplan as CBP
@@ -256,14 +327,19 @@ def setup_bench(dev, MESH, mesh_identity):
             for j in range(MIXN): mx_pages[(s0 + kt * MIXN + j) * banks + b] = tl(wm_t, kt, c * MIXN + j)
     def ws(r, w): return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(r, (M, w), ttnn.ShardOrientation.ROW_MAJOR))
     def hs(r, w): return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(r, (TILE, w), ttnn.ShardOrientation.ROW_MAJOR))
-    x = ttnn.from_torch(x_t.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ws(rect, XSW * TILE))
+    QSK = 'MKA_QSK=1' in os.environ.get('MK_DEFINES', '').split(',')
+    # MK_L1P2_TENS (spec §20 phase 2; default on under QSK): no engine L1 tensor that only the fm11 / MIXN stand-ins used. Every
+    # L1 tensor reserves its range on EVERY core (lockstep allocator), so these 8 KB lowered the owners' persistent floor:
+    # x (fm11 MLP input: no kernel reads it under QSK; host golds only) -> DRAM; xbuf (CB 0, QSK: a 1-tile hw_startup operand) and
+    # ymix (CB 7, the MIXN mixer output, never written under QSK) -> static CBs on the STREAM rect.
+    L1P2_T = QSK and os.environ.get('MK_L1P2_TENS', '1') == '1'
+    x = ttnn.from_torch(x_t.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG if L1P2_T else ws(rect, XSW * TILE))
     xb = ttnn.to_torch(x).float().reshape(M, H)
     gold = (torch.nn.functional.silu(xb @ wgq) * (xb @ wuq)).bfloat16().float() @ wdq
-    QSK = 'MKA_QSK=1' in os.environ.get('MK_DEFINES', '').split(',')
     # mesh: freed mesh buffers are not reliably reusable before the program runs, so with RQKV (which replaces x with a
     # full-grid copy below) the 80-core copy is never allocated
     _SKIP_XBUF80 = MESH and 'MKA_RQKV=1' in os.environ.get('MK_DEFINES', '')
-    xbuf = None if _SKIP_XBUF80 else ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE if QSK else H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, TILE if QSK else H))
+    xbuf = None if (_SKIP_XBUF80 or L1P2_T) else ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE if QSK else H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, TILE if QSK else H))
     XPRE = 1 if os.environ.get("FM_XPRE", "1") == "1" else 0
     if XPRE and not _SKIP_XBUF80 and not QSK:
         if MESH: ttnn.deallocate(xbuf)  # mesh tensors are not freed on rebinding
@@ -302,7 +378,7 @@ def setup_bench(dev, MESH, mesh_identity):
         for kt in range(KT):
             for j in range(MIXN): wmq[kt*TILE:(kt+1)*TILE, (c*MIXN+j)*TILE:(c*MIXN+j+1)*TILE] = mq[(s0 + kt*MIXN + j) * banks + b]
     gold_mix = xb @ wmq
-    ymix = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, NC * MIXN * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, MIXN * TILE))
+    ymix = None if L1P2_T else ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, NC * MIXN * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ws(rect, MIXN * TILE))
     S_MIX = int(float(os.environ.get("MK_SMIX_US", "67")) * MHZ); S_AR = int(float(os.environ.get("MK_SAR_US", "18")) * MHZ)
     print(f"[mk1] MIXN {MIXN} mixer bytes/layer {NC*KT*MIXN*WTB/1e6:.2f}MB stalls mix {S_MIX} ar {S_AR} cycles", flush=True)
     LL = NL - 1
@@ -490,6 +566,7 @@ def setup_bench(dev, MESH, mesh_identity):
     KVA = os.environ.get('MKA_KVA', '0') == '1'
     KVA_T, KVA_NUT, KVA_STEPS, KVA_EXT, KVA_PTT = 4, 0, [], {}, None
     KVA_RQ, KVA_OWNG = False, list(range(NU))
+    KVA_OWNALL = None   # mesh + UPAR: {user row g -> local KV user} for both parities
     if KVA:
         assert KVPROD, 'MKA_KVA (bench) needs MKA_KVPROD=1'   # MESH: replicated kvpos / page table (mesh path untested)
         KVA_NUT = int(os.environ.get('MKA_KVA_NU', str(2 * NU if NU == 4 else NU)))
@@ -520,6 +597,9 @@ def setup_bench(dev, MESH, mesh_identity):
             KVA_NUT = 8
             _upar, _par = os.environ.get('MKA_UPAR', '0') == '1', int(os.environ.get('MKA_UPAR_PAR', '0')) % 2
             KVA_OWNG = [2 * u + _par if _upar else u for u in range(NU)]
+            # mesh + UPAR: devices of BOTH parities attend, so every user row g is real (own user g // 2 of its parity's
+            # devices, same local KV data u = g // 2 on every device); the append's special rows (other users) only on 1 chip
+            if _upar and MESH: KVA_OWNALL = {g_: g_ // 2 for g_ in range(2 * NU)}
             _p0e = os.environ.get('MKA_RQPOS_P0', '')
             if _p0e: _p0 = [int(x_) for x_ in _p0e.split(',')]
             elif os.environ.get('MKA_RQPOS_RAG', '0') == '1': _p0 = [CTX - 4 - 226, CTX - 4, 997, CTX - 201, 5000, CTX - 4, CTX - 61, 77]
@@ -527,7 +607,7 @@ def setup_bench(dev, MESH, mesh_identity):
             _k = int(os.environ.get('MKA_RQPOS_K', '8'))
             _kp = [(_p0[g_] + j_ if (_p0[g_] >= 0 and g_ < _k) else -1) for g_ in range(8) for j_ in range(KVA_T)]
             if os.environ.get('MKA_RQPOS_RAG', '0') == '1': _kp[3 * KVA_T + 1] = _kp[3 * KVA_T + 3] = -1   # partial HOLD
-            for i_, g_ in enumerate([g_ for g_ in range(8) if g_ not in KVA_OWNG]):
+            for i_, g_ in enumerate([g_ for g_ in range(8) if g_ not in (KVA_OWNALL or KVA_OWNG)]):
                 c_ = [[(2500 + 37 * i_) * KVBS + KVBS - 2 + j for j in range(4)], [KVA_PTW * KVBS - 4 + j for j in range(4)],
                       [KVA_PTW * KVBS + j for j in range(4)], [-1] * 4][i_ % 4]
                 _kp[g_ * KVA_T:(g_ + 1) * KVA_T] = c_
@@ -540,8 +620,9 @@ def setup_bench(dev, MESH, mesh_identity):
             assert all(p_ < CTX for s_ in KVA_STEPS for p_ in s_[KVA_OWNG[u] * 4:(KVA_OWNG[u] + 1) * 4]), 'own rows past MKA_CTX'
         _pt = torch.zeros(KVA_NUT, KVA_PTW, dtype=torch.int32)
         for u in range(NU): _pt[KVA_OWNG[u], :BPU] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
+        for g_, u_ in (KVA_OWNALL or {}).items(): _pt[g_, :BPU] = torch.arange(u_ * BPU, (u_ + 1) * BPU, dtype=torch.int32)
         _nx = NU * BPU
-        for u in [g_ for g_ in range(KVA_NUT) if g_ not in KVA_OWNG]:
+        for u in [g_ for g_ in range(KVA_NUT) if g_ not in (KVA_OWNALL or KVA_OWNG)]:
             for s_ in KVA_STEPS:
                 for p_ in s_[u * 4:(u + 1) * 4]:
                     vb_ = p_ // KVBS
@@ -759,7 +840,7 @@ def setup_bench(dev, MESH, mesh_identity):
             else:
                 for k_ in range(_nr): rsp_t[k_] = (xb[:, k_ * (H // _nr):(k_ + 1) * (H // _nr)].double() ** 2).sum(-1).float()
             rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, TILE))
-            RSTD_RSF = ttnn.create_global_semaphore(dev, kgrid, 0)   # MK_AR_RSF: the producer's flag (+MK_AR_RSF_N per AR), device-local
+            RSTD_RSF = _fresh_sem(dev, kgrid, 0)   # MK_AR_RSF: the producer's flag (+MK_AR_RSF_N per AR), device-local
             MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(RSTD_RSF))), ('MK_AR_RSF_N', '1' if RED_GDN else '8')]
             if os.environ.get('MK_AR_RSTD_HOST', '0') == '1': MKDEF = MKDEF + [('MK_AR_RSTD_HOST', '1')]   # A/B without the producer: static host Σ, no waits
             print(f"[rstd] consumer: Σ tile {'final, column 0 (red=gdn)' if RED_GDN else f'rows {_nr} (row form)'}, flag @ {ttnn.get_global_semaphore_address(RSTD_RSF)}{' (host, no wait)' if os.environ.get('MK_AR_RSTD_HOST', '0') == '1' else ''}", flush=True)
@@ -807,7 +888,7 @@ def setup_bench(dev, MESH, mesh_identity):
         if not QSK:
             if xbuf is not None: ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
             xbuf = ttnn.from_torch(xb.reshape(1, 1, M, H).bfloat16().float().repeat(1, 1, len(ACT), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, H))
-        elif xbuf is None:   # QSK: CB 0 is a 1-tile placeholder (hw_startup operand)
+        elif xbuf is None and not L1P2_T:   # QSK: CB 0 is a 1-tile placeholder (hw_startup operand); MK_L1P2_TENS: a static CB
             xbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, hs(rect, TILE))
         EXTRA_T = EXTRA_TX = 0   # the qkv bytes are real now
         ext_crs = crs([fcores[fi] for fi in ext_list])
@@ -833,6 +914,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # ================= MK_V12: fm12 split-K MLP phase (spec v0.6-v0.9) replacing the fm11 MLP =================
     V12 = ('MK_V12', '1') in MKDEF
     V12CB = V12CB_PB = False
+    L1P2_EXTCB = L1P2_QOVXO = False
     if V12:
         import sys as _sys
         _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))
@@ -903,7 +985,27 @@ def setup_bench(dev, MESH, mesh_identity):
             v_xk = v_rs = v_h7 = v_xpk = None
         else:
             v_xk = v_zero(rect, NC, 20); v_rs = v_zero(rect, NC, 16); v_h7 = v_zero(rect, NC, 7); v_xpk = v_zero(rect, NC, 10 if V_R < 32 else 1)
-        v_xo = v_zero(O_CRS, 16, 10)
+        # MK_L1P2_EXTCB (spec §20 phase 2, engine-L1 owner trim; default on where it applies): the owners' (ext) CB set drops what
+        # the owner binary never touches under MKA_EXTLEAN (owners are SDPA leaves: nrecv = nc0 = nc1 = is_root = 0 constexpr; RWO +
+        # QSK: wo_tiles = extra_tiles = h_np = 0 constexpr): CB 26 (tree receive) and CB 27 (root 1/l) off the owners, CB 28 (root
+        # normalize out) cut to the 1 page the reader uses as its kvpos scratch, CB 29 (wo stand-in / helper scratch) off the owners.
+        # Mirrors the kernels' MKA_EXTLEAN condition (mka2_*.cpp: ROLE_EXT && GDN24 && !OWNPAR && MKA_NU >= 4); build() asserts the
+        # owner role args that make those paths dead (the EXTLEAN asserts: nrecv 0, not root, no wo stand-in bytes, no helpers).
+        L1P2_EXTCB = (GDN24 and NU >= 4 and ('MKA_OWNPAR', '1') not in MKDEF and ('MKA_RWO', '1') in MKDEF and QSK
+                      and os.environ.get('MKA_ROLESPLIT', '1') == '1' and os.environ.get('MK_L1P2_EXTCB', '1') == '1')
+        # MK_L1P2_QOVXO: on the owners CB_VXO (4, the MLP partial = MLP-AR input) and CB_QO (17, the wo output) share ONE 10-page bf16
+        # descriptor (each fifo pushes / pops exactly 10 pages, so each stays at the base). Never live together on an owner:
+        #  - the owner compute pushes CB_QO only in attention layers (qkv_proj needs att or gdn_on, gdn_on = 0 on the owners; C-WO
+        #    matmul_nt); every CB_QO wait / pop in the owner writer (W-QO, W-WOQO, W-GINQ) pairs with one of those pushes. Real
+        #    CB_QO data = A_g @ Wo of attention layer L, read by wou::scatter into the owners' CB_XO (23) before AR(L) can start
+        #    (AR(L) needs every owner's chunk), so it is dead before x(L) reaches STREAM and before any MLP-L partial exists;
+        #  - CB_VXO data = C-OSUM of MLP L' (after AR delivered x -> STREAM partials), read by the MLP AR's RS before its AG / x
+        #    delivery; the next CB_QO write (C-WO of the next attention layer) needs that layer's x, i.e. this AR's delivery.
+        #  - gdn_out / GAR use CB_XO (23), KVA 6 / 8; MK_AR_GAMMA (x_deliver kept in CB_VXO, read by the owner reader) is excluded.
+        # Frees v_xo (20 KB persistent L1, lockstep on every core) with no extra owner CB bytes.
+        L1P2_QOVXO = (L1P2_EXTCB and V12CB and V_R == 32 and ('MK_AR_GAMMA', '1') not in MKDEF
+                      and int(os.environ.get('MKA_WO_MAXT', '10' if GDN24 else '5')) == 10 and os.environ.get('MK_L1P2_QOVXO', '1') == '1')
+        v_xo = None if L1P2_QOVXO else v_zero(O_CRS, 16, 10)
         v_x0 = ttnn.from_torch(xb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(O_CRS, 10))   # owner j: x tiles 10j..
         v_pbuf = None if V12CB_PB else v_zero(O_CRS, 16, 100)
         def VA(n_):   # v12 landing-buffer address: the tensor's, or the planned CB address (MK_V12_CB)
@@ -959,11 +1061,11 @@ def setup_bench(dev, MESH, mesh_identity):
         assert MESH and V12, "MK_REAL_AR needs MK_MESH=1 and MK_V12=1"
         assert ('MK_OWNER_RESID', '0') in MKDEF, "MK_REAL_AR: the AR adds the residual (MK_OWNER_RESID=0)"
         from models.demos.blackhole.qwen36.tt.megakernel.ar_phase import ArPhase
-        AR_XF = [ttnn.create_global_semaphore(dev, fgrid, 0) for _ in range(2)]
-        AR_XCNT = ttnn.create_global_semaphore(dev, kgrid, 0)
+        AR_XF = [_fresh_sem(dev, fgrid, 0) for _ in range(2)]
+        AR_XCNT = _fresh_sem(dev, kgrid, 0)
         # MK_AR_DLVR=1 (default, spec v1.21): x delivery on the owner READER (NOC1) via a local handoff word
         AR_DLVR = os.environ.get('MK_AR_DLVR', '1') == '1'
-        AR_DLV = ttnn.create_global_semaphore(dev, O_CRS, 0) if AR_DLVR else None
+        AR_DLV = _fresh_sem(dev, O_CRS, 0) if AR_DLVR else None
         # MK_REAL_AAR=1 (spec §19): the real attention AR after each attention layer's wo (input: the wo unit's output CB
         # 23 on the owners, which also spans the 4 sender cores so its local address is the owners'); it delivers the
         # MLP's x (X2 flag 2L + 2) with γ_post_attn. ARs per pass: NL + attention layers, in program order.
@@ -982,7 +1084,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 if is_attn_layer(L_) or REAL_GAR: AR_ATYPE |= 1 << _k; _k += 1
                 _k += 1
             AR_NAR = _k
-            AR_ADLV = ttnn.create_global_semaphore(dev, O_CRS, 0); AR_ASRC = ttnn.create_global_semaphore(dev, O_CRS, 0)
+            AR_ADLV = _fresh_sem(dev, O_CRS, 0); AR_ASRC = _fresh_sem(dev, O_CRS, 0)
             MKDEF = MKDEF + [('MK_AR_ADLV', str(ttnn.get_global_semaphore_address(AR_ADLV))), ('MK_AR_ASRC', str(ttnn.get_global_semaphore_address(AR_ASRC))),
                              ('MK_AR_CB_AIN', '23')]
             print(f"[ar] attention AR on: {AR_NAR} ARs / pass, attention mask {AR_ATYPE:#x}", flush=True)
@@ -1031,7 +1133,7 @@ def setup_bench(dev, MESH, mesh_identity):
             RRED_HC = ttnn.CoreCoord(1, GY)
             _hcr = ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)])
             assert V12CB, "MK_AR_RSTD_RED=gdn: CB 37's address comes from the V12CB plan (static CBs 37 / 39 on RRED_HC, after GIN's CB 41)"
-            RRED_SEM = ttnn.create_global_semaphore(dev, _hcr, 0)
+            RRED_SEM = _fresh_sem(dev, _hcr, 0)   # (AR-owned: never pooled across builds)
             _hp = dev.worker_core_from_logical_core(RRED_HC)
             MKDEF = MKDEF + [('MK_AR_RRED_X', str(_hp.x)), ('MK_AR_RRED_Y', str(_hp.y)), ('MK_AR_RRED_SEM', str(ttnn.get_global_semaphore_address(RRED_SEM)))]
             # MK_AR_RRED_IN (CB 37's planned address on RRED_HC) is added after the V12CB plan
@@ -1044,7 +1146,7 @@ def setup_bench(dev, MESH, mesh_identity):
         AR_PUB = None
         if GDN24:
             _corner_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, GY), ttnn.CoreCoord(GX + 1, GY + 1))])
-            AR_PUB = [ttnn.create_global_semaphore(dev, _corner_crs, 0) for _ in range(2)]
+            AR_PUB = [_fresh_sem(dev, _corner_crs, 0) for _ in range(2)]
             _pxy = [dev.worker_core_from_logical_core(ttnn.CoreCoord(*xy_)) for xy_ in ((GX, GY), (GX + 1, GY), (GX, GY + 1), (GX + 1, GY + 1))]
             AR_PUB_D = [('MK_AR_PUB', str(ttnn.get_global_semaphore_address(AR_PUB[0]))), ('MK_AR_PUBA', str(ttnn.get_global_semaphore_address(AR_PUB[1])))]
             MKDEF = MKDEF + AR_PUB_D + [(f'MK_AR_PUBXY{i_}', f'{(c_.x << 16) | c_.y}u') for i_, c_ in enumerate(_pxy)]
@@ -1062,7 +1164,7 @@ def setup_bench(dev, MESH, mesh_identity):
         # the RS slot region (ring x PT tiles per owner, 160 KB at R = 32) is a plain program CB on owners + senders, not an L1
         # tensor: the L1 allocator is lockstep over every core, and 160 KB below the tensors would overrun the STREAM cores'
         # CB region (the senders address their own copy via get_write_ptr; v_xo is only the descriptor's placeholder)
-        ar_buf = v_xo
+        ar_buf = v_xo   # (MK_L1P2_QOVXO: v_xo is None until the CB plan: _ar_parts binds a planned-address stand-in)
         # residual stream (AR output = next AR's residual, in place). R = 32: it IS v_x0 (owner j: x tiles 10j.., unused by the
         # owner sum with MK_OWNER_RESID=0), so the stand-in x delivery feeds each MLP the real residual stream and no extra
         # lockstep L1 is spent (the owners' CB region is ~50 KB short otherwise); R < 32: a packed residual of its own
@@ -1103,13 +1205,18 @@ def setup_bench(dev, MESH, mesh_identity):
         AR_SEQ = AR_PT == 10 and not REAL_AAR   # (attention ARs: no host gold of the chain; MK_AR_DBG checks each AR) the MLP input is the evolving residual: sequential golds (x_{L+1} = x_L + ring * mlp_L(x_L))
         _xres = xb.clone()
         _snd = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c_), ttnn.CoreCoord(*c_)) for c_ in ((10, 8), (11, 8), (10, 9), (11, 9))])
-        ar_sem = ttnn.create_global_semaphore(dev, _ow.merge(_snd), 0)
+        ar_sem = _fresh_sem(dev, _ow.merge(_snd), 0)
         # per-device AR parts up front (the owners' L1 arg table needs every device's args); build() reuses them
         def _ar_parts():   # (MK_V12_CB: called after the CB plan filled AR_XT)
-            ARP_ = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), v_xo, ar_buf, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
+            if L1P2_QOVXO:   # CB_VXO is a static CB: the AR gets its planned address (+ v_xo's shard spec) instead of a tensor
+                _xo = _L1Ref(VADDR['xo'], v_wsh(O_CRS, 10), 10 * 2048)
+                with _static_cb_refs():
+                    ARP_ = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), _xo, _xo, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
+            else:
+                ARP_ = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), v_xo, ar_buf, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
             blk_ = AR.arg_table(ARP_, gamma_addr=ar_gam.buffer_address() if AR_GAMMA else 0)
             print(f"[ar] arg table at L1 {blk_.buffer_address()} ({AR.BLK_NW} words / owner)", flush=True)
-            print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {ar_buf.buffer_address()} out {ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)} xk {AR_XT['xk']} xpk {AR_XT['xpk']}", flush=True)
+            print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {VADDR['xo'] if L1P2_QOVXO else ar_buf.buffer_address()} out {ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)} xk {AR_XT['xk']} xpk {AR_XT['xpk']}", flush=True)
             return ARP_, blk_, [('MK_AR_BLK', str(blk_.buffer_address())), ('MK_AR_BLK_COMP', str(AR.BLK_COMP)), ('MK_AR_BLK_RECV', str(AR.BLK_RECV)),
                                 ('MK_AR_BLK_GAMMA', str(AR.BLK_GAMMA))]
         if not V12CB:
@@ -1310,7 +1417,7 @@ def setup_bench(dev, MESH, mesh_identity):
             RQBAL = ('MKA_RQBAL', '1') in MKDEF
             assert not RQBAL or ('MKA_RQDYN', '1') not in MKDEF, 'MKA_RQBAL includes the dynamic split (no MKA_RQDYN)'
             _smax = max(RNG[fi_][1] - RNG[fi_][0] for fi_ in ACT)
-            if RQBAL: _smax = max(_smax, -(-NU * NBK // len(ACT)) + 4)   # proportional membership: ~ total blocks / cores
+            if RQBAL: _smax = max(_smax, -(-2 * NU * NBK // len(ACT)) + 4)   # proportional membership: a 1-core user holds < 2 W / N blocks
             KVP_PTW = (_smax + BS32 - 1) // BS32 + 1 + 16
             # no persistent L1 table (engine L1 budget): two device-local global semaphores (INFO, ASGN) + CB_ONE page 3 (2 KB:
             # header 3 + T words, <= 15 words of 64 B alignment pad, the page-table window)
@@ -1532,8 +1639,9 @@ def setup_bench(dev, MESH, mesh_identity):
         def _kva_regold(L):   # SDPA (and wo) golden over the cache as the engine left it
             kq_, vq_ = KVQ[L]
             if KVA_RQ:   # ragged: refresh each own user's blocks that hold its new rows, then the RQPOS golds
-                for u_ in range(NU):
-                    for vb_ in sorted({p_ // KVBS for p_ in KVA_STEPS[0][KVA_OWNG[u_] * 4:(KVA_OWNG[u_] + 1) * 4] if p_ >= 0}):
+                for u_ in range(NU):   # (mesh + UPAR: both parities' rows land in local user u's blocks)
+                    _gs = [g_ for g_, v_ in KVA_OWNALL.items() if v_ == u_] if KVA_OWNALL else [KVA_OWNG[u_]]
+                    for vb_ in sorted({p_ // KVBS for g_ in _gs for p_ in KVA_STEPS[0][g_ * 4:(g_ + 1) * 4] if p_ >= 0}):
                         kq_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvs[L], u_ * BPU + vb_)
                         vq_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvvs[L], u_ * BPU + vb_)
                 rq_gold(L, gold_qkv[L])
@@ -1898,14 +2006,23 @@ def setup_bench(dev, MESH, mesh_identity):
             u_ = [ttnn.UnpackToDestMode.Default] * 64; u_[43] = ttnn.UnpackToDestMode.UnpackToDestFp32   # CB_VRSA (= rsp) under QSK + V12; c_.unpack_to_dest_mode = u_
         return c_
     def build(out, coord=None, plan_only=False):
-        cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
+        cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf) if xbuf is not None else cbd(0, ttnn.bfloat16, 1, rect), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
                (cbd(3, HDT, 1, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(3, hbuf)), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
                (cbd(16, ttnn.bfloat16, 1, rect) if V12 else ttnn.cb_descriptor_from_sharded_tensor(16, out)), (cbd(6, ttnn.bfloat8_b, 240 if QSK else QH, rect) if RQKV else cbd(6, ttnn.bfloat4_b, KT * MIXN, rect)),
-               ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
+               ttnn.cb_descriptor_from_sharded_tensor(7, ymix) if ymix is not None else cbd(7, ttnn.bfloat16, MIXN, rect), cbd(8, ttnn.bfloat16, 1, rect),
                # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
                cbd(9, ttnn.bfloat16, QT_ if RQNR else 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
-               cbd(24, ttnn.bfloat16, 4 if ('MKA_RQPOS', '1') in MKDEF else 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
-               cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
+               cbd(24, ttnn.bfloat16, 4 if ('MKA_RQPOS', '1') in MKDEF else 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid)]
+        assert not L1P2_QOVXO or (RWO and WO_MAXT_ == 10), ("MK_L1P2_QOVXO: CB_QO is the 10-page wo slot (RWO, WO_MAXT 10)", RWO, WO_MAXT_)
+        if L1P2_EXTCB:   # spec §20 phase 2: the owners (ext) are EXTLEAN SDPA leaves (see L1P2_EXTCB): CB 26 / 27 / 29 STREAM only,
+            # CB 28 = 1 page on the owners (the reader's 128 B kvpos scratch, get_write_ptr(CB_OA))
+            _scrs = crs([fcores[i] for i in ACT if i in stream_idx])
+            assert ext_crs == O_CRS and _scrs.merge(ext_crs) == kgrid, ("MK_L1P2_EXTCB: kgrid = STREAM rect + the 16 owners", ext_crs, _scrs, kgrid)
+            cbs = cbs + [cbd(26, ttnn.float32, 18, _scrs), cbd(27, ttnn.float32, 1, _scrs), cbd(28, ttnn.bfloat16, 8, _scrs), cbd(28, ttnn.bfloat16, 1, ext_crs),
+                         cbd(29, ttnn.bfloat8_b, 8, _scrs)]
+        else:
+            cbs = cbs + [*([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
+                         cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
         if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
             cbs = ([] if (QSK and not RWO) else [cbd(19, ttnn.bfloat8_b, RING_P_ if RWO else 2 * KT, ext_crs)]) + cbs + [cbd(13, ttnn.float32, 1, kgrid), cbd(14, ttnn.float32, 2, kgrid),
                    cbd(17, ttnn.bfloat16, 2, kgrid), cbd(18, ttnn.float32, 1, kgrid), ttnn.cb_descriptor_from_sharded_tensor(20, rsp)]
@@ -1915,7 +2032,8 @@ def setup_bench(dev, MESH, mesh_identity):
             # (CB 26, the tree receive CB, keeps 2 slots on STREAM and 1 slot on the ext cores: see the ATTN set above)
             cbs = [c_ for c_ in cbs if not any(f_.buffer_index == 17 for f_ in c_.format_descriptors)]
             assert sum(1 for c_ in cbs for f_ in c_.format_descriptors if f_.buffer_index == 17) == 0
-            cbs = cbs + [cbd(17, ttnn.bfloat16, WO_MAXT_, kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs.merge(crs([fcores[i] for i in sorted(ARC)])) if (REAL_AR and REAL_AAR and ARC) else ext_crs),
+            # (MK_L1P2_QOVXO: CB 17 on STREAM only; on the owners it shares CB_VXO's descriptor, see the V12 set)
+            cbs = cbs + [cbd(17, ttnn.bfloat16, WO_MAXT_, crs([fcores[i] for i in ACT if i in stream_idx]) if L1P2_QOVXO else kgrid), cbd(15, ttnn.bfloat16, 48, ext_crs), cbd(23, ttnn.bfloat16, 10, ext_crs.merge(crs([fcores[i] for i in sorted(ARC)])) if (REAL_AR and REAL_AAR and ARC) else ext_crs),
                          *([cbd(31, ttnn.bfloat8_b, 5 * 48, ext_crs)] if WORING else []),
                          *([cbd(30, ttnn.bfloat16, 11, ext_crs)] if RQNR else []),
                          # S / A(.)S (bf16) and, under RQNR, the head-norm fp32 scratch CB 31 share one 96 KB region: the head
@@ -1943,7 +2061,10 @@ def setup_bench(dev, MESH, mesh_identity):
                 cbd(39, ttnn.bfloat16, 1, rect), cbd(40, ttnn.bfloat16, 10, rect), cbd(41, ttnn.bfloat16, 10, rect), ttnn.cb_descriptor_from_sharded_tensor(42, v_id),
                 ttnn.cb_descriptor_from_sharded_tensor(43, rsp), cbd(44, ttnn.float32, 1, rect), ttnn.cb_descriptor_from_sharded_tensor(30, v_j),
                 cbd(3, ttnn.bfloat16, 100, O_CRS) if v_pbuf is None else ttnn.cb_descriptor_from_sharded_tensor(3, v_pbuf),
-                ttnn.cb_descriptor_from_sharded_tensor(4, v_xo), ttnn.cb_descriptor_from_sharded_tensor(5, v_x0),
+                (ttnn.CBDescriptor(total_size=10 * 2048, core_ranges=O_CRS, format_descriptors=[   # MK_L1P2_QOVXO: CB_VXO ∥ CB_QO
+                    ttnn.CBFormatDescriptor(buffer_index=4, data_format=ttnn.bfloat16, page_size=2048),
+                    ttnn.CBFormatDescriptor(buffer_index=17, data_format=ttnn.bfloat16, page_size=2048)]) if L1P2_QOVXO
+                 else ttnn.cb_descriptor_from_sharded_tensor(4, v_xo)), ttnn.cb_descriptor_from_sharded_tensor(5, v_x0),
                 # CB_VPK: the stand-in's packing scratch (R < 32 only); MK_V12_CB: the same descriptor is v_xpk on STREAM (both 10 tiles)
                 cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, rect.merge(O_CRS) if V12CB else O_CRS)]
             if GIN: cbs = cbs + [cbd(15, ttnn.bfloat4_b, 20 * 7, rect)]   # the gdn_in BFP4 slice slot (slot M's turn on GDN layers)
@@ -2129,8 +2250,17 @@ def setup_bench(dev, MESH, mesh_identity):
         a_ = dict(xk=CBP.address_of(p_, 33, (0, 0)), rs=CBP.address_of(p_, 36, (0, 0)), h7=CBP.address_of(p_, 37, (0, 0)), xpk=CBP.address_of(p_, 16, (0, 0)))
         if v_pbuf is None: a_['pbuf'] = CBP.address_of(p_, 3, (GX, 0))
         if GIN: a_['gin'] = CBP.address_of(p_, 41, (fcores[GDNC[0]].x, fcores[GDNC[0]].y))
+        if L1P2_QOVXO: a_['xo'] = CBP.address_of(p_, 4, (GX, 0))   # CB_VXO ∥ CB_QO on the owners (the AR's inp address)
         if RRED: a_['rred'] = CBP.address_of(p_, 37, (RRED_HC.x, RRED_HC.y))
         return a_
+    # MK_L1P2_QOVXO (bench / debug): CB_VXO has no tensor any more; XO_DUMP() copies the 16 owners' CB_VXO (owner j = x tiles 10j..)
+    # into a DRAM [32, 5120] bf16 tensor right after the engine op (nothing runs in between), for the v12 owner-output check
+    XO_DUMP = None
+    if L1P2_QOVXO:
+        _xo_dram = ttnn.from_torch(torch.zeros(1, 1, TILE, H).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        def XO_DUMP():
+            l1io(dev, [((GX + j_ % 2, j_ // 2), VADDR['xo'], 10 * j_, 10) for j_ in range(16)], _xo_dram, 1)
+            return _xo_dram
     # V12 drops the fm11 output CB 16 (re-used as CB_VPK on the owners): keep the unused fm11 output out of L1 (it was the L1 floor)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12 else ws(rect, NDN * TILE))
     if os.environ.get("MK_L1DUMP") == "1":  # debug: every live L1 tensor's address

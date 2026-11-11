@@ -355,6 +355,10 @@ void kernel_main() {
             if (p < pmin) pmin = p;
         }
         if (pmax < 0) pmax = pmin = 0;   // idle user: length 1 (block 0 through its zero-padded table row, finite)
+        // robustness: the engine is compiled for MKA_CTX (NBK blocks); a position past it (never routed here by the model:
+        // such steps fall back to op-by-op) is clamped so the page-table window can't overrun CB_ONE page 3
+        if (pmax >= (int32_t)(NBK * 32)) pmax = NBK * 32 - 1;
+        if (pmin > pmax) pmin = pmax;
         // per-row valid limit inside the masked blocks: HOLD rows (-1) take the user's last position (finite)
         for (uint32_t j = 0; j < MKA_RQ_T; ++j) kvp_p[j] = kp[j] < 0 ? (uint32_t)pmax : (uint32_t)kp[j];
         const uint32_t lb = (uint32_t)pmax / 32, lb0 = (uint32_t)pmin / 32;
@@ -368,7 +372,9 @@ void kernel_main() {
         b1 = b0 + nv;
         volatile tt_l1_ptr uint32_t* tab = l1w(kvp_tab_base);
         if (nv) {   // page-table window: entries [b0 / BS32, (b1 - 1) / BS32] of row g, read 64 B aligned
-            const uint32_t e0 = (b0 / KV_BS32) & ~15u, e1 = (b1 - 1) / KV_BS32 + 1;
+            const uint32_t e0 = (b0 / KV_BS32) & ~15u, cap = (kvp_tab_base + 2048 - kvp_pt_addr()) / 4;
+            uint32_t e1 = (b1 - 1) / KV_BS32 + 1;
+            if (e1 - e0 > cap) e1 = e0 + cap;   // never past CB_ONE page 3 (host asserts the window fits; belt and braces)
             const InterleavedAddrGen<true> pta{.bank_base_address = rq_attn(0), .page_size = rq_attn(2) * 4};
             noc_async_read(pta.get_noc_addr(rq_g(user)) + e0 * 4, kvp_pt_addr(), ((e1 - e0) * 4 + 63) & ~63u);
             tab[2] = e0;
