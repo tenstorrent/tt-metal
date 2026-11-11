@@ -1162,6 +1162,8 @@ def setup_bench(dev, MESH, mesh_identity):
         qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_, L) for h_ in range(6)]
         if par is None: gold_k[L] = norm_rope(Xq[:, 48 * TILE:56 * TILE].float(), 6, L)
         g_ = torch.zeros(NU, TILE, DHD)
+        if KVQ.get(L) is None:   # injected KV (vLLM engine-ON): no host gold
+            return None
         kq_, vq_ = KVQ[L]
         _ar = torch.arange(CTX).float()[None, :]
         for u_ in range(NU):
