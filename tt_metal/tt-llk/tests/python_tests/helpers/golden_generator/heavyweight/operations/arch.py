@@ -9,8 +9,14 @@ that once here and every operation takes one as an argument. Everything an
 operation needs to know about the hardware itself it asks the blocks: the FPU
 carries its own multiplier width, the packer its own edge-mask polarity.
 
-The familiar names are kept as factories at the bottom, so
-``QuasarMatmulGolden(MathFidelity.HiFi4)`` still works.
+The factories at the bottom are the package's public surface, so a test writes
+``QuasarMatmulGolden(MathFidelity.HiFi4)`` and never touches the blocks.
+
+A factory name says which architecture the golden runs on and nothing more. It
+does not promise that the pipeline is shared, nor that it is specialised: that
+is read off the first argument of its ``_factory`` call, so an architecture that
+grows its own chain changes one row here and no caller. See `README.md`, "When
+an architecture differs".
 """
 
 from dataclasses import dataclass
