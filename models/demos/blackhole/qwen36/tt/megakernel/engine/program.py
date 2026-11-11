@@ -1069,13 +1069,25 @@ def setup_bench(dev, MESH, mesh_identity):
                                     sum(([kvs[L_].buffer_address(), kvvs[L_].buffer_address()] for L_ in _att_l), []) + [KVBS, NKVH])] * _ncore, kgrid)
                 RQ_REPLAY, RQ_ATTN = _rb.buffer_address(), _ab.buffer_address()
                 RQ_TENS += [_rb, _ab]
-            # per-core KVP table: [0] info, [1] b0, [2] pt window base, [KVP_PT ..] page-table window (64 B aligned)
+            # per-core KVP table: [0] info, [1] b0, [2] pt window base, [3, 3 + T) row limits, [3 + T] RQBAL assignment
+            # (user | nrecv << 8 | root << 16), [KVP_PT ..] page-table window (64 B aligned)
+            RQBAL = ('MKA_RQBAL', '1') in MKDEF
+            assert not RQBAL or ('MKA_RQDYN', '1') not in MKDEF, 'MKA_RQBAL includes the dynamic split (no MKA_RQDYN)'
             _smax = max(RNG[fi_][1] - RNG[fi_][0] for fi_ in ACT)
+            if RQBAL: _smax = max(_smax, -(-NU * NBK // len(ACT)) + 4)   # proportional membership: ~ total blocks / cores
             KVP_PTW = (_smax + BS32 - 1) // BS32 + 1 + 16
-            kvp_t = _l1_tab([[0] * (-(-(3 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
-            KVP_PT = 3 + T + (-(kvp_t.buffer_address() + 4 * (3 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
+            kvp_t = _l1_tab([[0] * (-(-(4 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
+            KVP_PT = 4 + T + (-(kvp_t.buffer_address() + 4 * (4 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
             assert (kvp_t.buffer_address() + 4 * KVP_PT) % 64 == 0, ('KVP table alignment', kvp_t.buffer_address(), KVP_PT)
             RQ_TENS += [rq_kvpos, rq_cos, rq_sin, rq_pt, kvp_t]
+            RQB_L = sum((list(m_) for m_ in members), [])   # MKA_RQBAL global SDPA core list = the static groups concatenated
+            RQB_IDX = {f_: i_ for i_, f_ in enumerate(RQB_L)}
+            if RQBAL:
+                assert sorted(RQB_L) == sorted(ACT) and len(RQB_L) <= 255
+                _w = [fphys[f_].x | (fphys[f_].y << 8) | ((1 if f_ in stream_idx else 0) << 16) for f_ in RQB_L]
+                rqb_t = _l1_tab([_w + [0] * (-len(_w) % 4)] * _ncore, kgrid)
+                RQ_TENS.append(rqb_t)
+                MKDEF = MKDEF + [('MKA_RQB_TAB', f"{rqb_t.buffer_address()}u"), ('MKA_RQB_N', str(len(RQB_L)))]
             torch.manual_seed(17)
             qk_w = 0.1 * torch.randn(ATT0 + NATT_, 2, 256)   # checkpoint w; applied gamma = bf16(1 + w)
             qk_g = (1.0 + qk_w).bfloat16().float()
@@ -1620,6 +1632,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 for k in range(FAN - 1): o += [fphys[lst[k]].x, fphys[lst[k]].y] if k < len(lst) else [0, 0]
                 return o
             pp = fphys[par]
+            if ('MKA_RQBAL', '1') in MKDEF: sb0, sb1 = RQB_IDX[fi], len(RQB_L)   # reader: global index / list length
+            elif ('MKA_RQDYN', '1') in MKDEF: sb0, sb1 = r, n                    # reader: rank / group size (even split)
             sdpa_r = [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, has_p, pp.x, pp.y, plvl, len(ch0)] + xy(ch0) + [len(ch1)] + xy(ch1) + [1 if r == 0 else 0, outs.buffer_address(), QRP.x, QRP.y]
             isS = fi in stream_idx
             WO_NOC0 = ('MKA_WO_NOC0', '1') in MKDEF

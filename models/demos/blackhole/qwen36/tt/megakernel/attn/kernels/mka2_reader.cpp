@@ -91,34 +91,49 @@ void kernel_main() {
     for (uint32_t L = 0; L < NL; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
 #endif
 #if defined(MKA_RQPOS)
+#if defined(MKA_RQBAL)
+    uint32_t user = get_arg_val<uint32_t>(a++);   // MKA_RQBAL: assigned per pass from kvpos (below)
+#else
     const uint32_t user = get_arg_val<uint32_t>(a++);
+#endif
+    // MKA_RQDYN: (b0, b1) args = (rank, group size); MKA_RQBAL: (index in the global SDPA core list, its length)
     uint32_t b0 = get_arg_val<uint32_t>(a++), b1 = get_arg_val<uint32_t>(a++);   // bounded by kvpos at pass start (below)
     uint32_t kvp_m0 = KVP_NONE, kvp_m1 = KVP_NONE, kvp_p[MKA_RQ_T];   // masked blocks, per-row positions (pass start only)
 #else
     const uint32_t user = get_arg_val<uint32_t>(a++), b0 = get_arg_val<uint32_t>(a++), b1 = get_arg_val<uint32_t>(a++);
 #endif
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
-    const uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
-    const uint32_t par_lvl = get_arg_val<uint32_t>(a++);
+#if defined(MKA_RQBAL)
+#define RQB_MUT   // tree args assigned per pass (MKA_RQBAL)
+#else
+#define RQB_MUT const
+#endif
+    RQB_MUT uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
+    RQB_MUT uint32_t par_lvl = get_arg_val<uint32_t>(a++);
 #if defined(MKA_EXTLEAN)
     constexpr uint32_t nc0 = 0; a++;
 #else
-    const uint32_t nc0 = get_arg_val<uint32_t>(a++);
+    RQB_MUT uint32_t nc0 = get_arg_val<uint32_t>(a++);
 #endif
     uint32_t c0x[FANOUT], c0y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c0x[i] = get_arg_val<uint32_t>(a++); c0y[i] = get_arg_val<uint32_t>(a++); }
 #if defined(MKA_EXTLEAN)
     constexpr uint32_t nc1 = 0; a++;
 #else
-    const uint32_t nc1 = get_arg_val<uint32_t>(a++);
+    RQB_MUT uint32_t nc1 = get_arg_val<uint32_t>(a++);
 #endif
+#if defined(MKA_RQBAL)
+    uint32_t c1x[2 * FANOUT], c1y[2 * FANOUT];   // level-1 + level-2 children (groups > FAN^2 cores)
+#else
     uint32_t c1x[FANOUT], c1y[FANOUT];
+#endif
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c1x[i] = get_arg_val<uint32_t>(a++); c1y[i] = get_arg_val<uint32_t>(a++); }
 #if defined(MKA_EXTLEAN)
     constexpr uint32_t is_root = 0; a++;
     const uint32_t out_addr = get_arg_val<uint32_t>(a++);
 #else
-    const uint32_t is_root = get_arg_val<uint32_t>(a++), out_addr = get_arg_val<uint32_t>(a++);
+    RQB_MUT uint32_t is_root = get_arg_val<uint32_t>(a++);
+    const uint32_t out_addr = get_arg_val<uint32_t>(a++);
 #endif
     const uint32_t qr_x = get_arg_val<uint32_t>(a++), qr_y = get_arg_val<uint32_t>(a++);
     // STREAM: layer L's wo slice + the next layer's uncovered qkv bytes stream on NOC1 here (scratch), balancing the NoCs
@@ -219,6 +234,74 @@ void kernel_main() {
         const InterleavedAddrGen<true> kpa{.bank_base_address = rq_replay(0), .page_size = 128};
         noc_async_read(kpa.get_noc_addr(0), scr, 128);
         noc_async_read_barrier();
+#if defined(MKA_RQBAL)
+        // proportional cross-user membership: every SDPA core derives the same assignment of the global core list
+        // (MKA_RQB_TAB: N words phys x | y << 8 | is_stream << 16, = the static user groups concatenated) to the own
+        // users: m_u ∝ blocks (min 1, <= blocks while cores last), contiguous slices; inside a slice the tree-internal
+        // ranks (r % FAN == 0) get STREAM cores (owners stay leaves: EXTLEAN); tree = the static 2-level FAN scheme,
+        // extended by a level-2 for groups > FAN^2. Equal lengths reproduce the static groups / trees (RQDYN) exactly.
+        {
+            volatile tt_l1_ptr int32_t* ka = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
+            const uint32_t N = b1, me = b0;
+            uint32_t nb[NUSR], mu[NUSR], W = 0;
+            for (uint32_t u = 0; u < NUSR; ++u) {
+                int32_t pm = -1;
+                for (uint32_t j = 0; j < MKA_RQ_T; ++j) { const int32_t p = ka[rq_g(u) * MKA_RQ_T + j]; if (p > pm) pm = p; }
+                nb[u] = (pm < 0 ? 0u : (uint32_t)pm) / 32 + 1;
+                W += nb[u];
+            }
+            uint32_t tot = 0;
+            for (uint32_t u = 0; u < NUSR; ++u) {
+                uint32_t m = N * nb[u] / W;
+                if (m > nb[u]) m = nb[u];
+                if (m < 1) m = 1;
+                mu[u] = m; tot += m;
+            }
+            while (tot > N) {   // min-1 bumps overshot: take from the largest share
+                uint32_t k = 0;
+                for (uint32_t u = 1; u < NUSR; ++u) if (mu[u] > mu[k]) k = u;
+                --mu[k]; --tot;
+            }
+            for (bool cap = true; tot < N; ) {   // remainder: largest blocks-per-core first; past the caps, round robin
+                uint32_t k = NUSR;
+                for (uint32_t u = 0; u < NUSR; ++u)
+                    if ((!cap || mu[u] < nb[u]) && (k == NUSR || nb[u] * mu[k] > nb[k] * mu[u])) k = u;
+                if (k == NUSR) { cap = false; continue; }
+                ++mu[k]; ++tot;
+            }
+            uint32_t s0 = 0, u = 0;
+            while (me >= s0 + mu[u]) s0 += mu[u++];
+            const uint32_t m = mu[u];
+            uint8_t perm[MKA_RQB_N];   // slice position -> rank order: internal ranks take STREAM cores
+            for (uint32_t r = 0; r < m; ++r) perm[r] = r;
+            volatile tt_l1_ptr uint32_t* ct = l1w(MKA_RQB_TAB) + s0;
+            for (uint32_t r = 0; r < m; r += FANOUT) {
+                if (ct[perm[r]] >> 16) continue;
+                for (uint32_t q = r + 1; q < m; ++q)
+                    if (q % FANOUT && (ct[perm[q]] >> 16)) { const uint8_t t = perm[r]; perm[r] = perm[q]; perm[q] = t; break; }
+            }
+            uint32_t r = 0;
+            while (perm[r] != me - s0) ++r;
+            user = u;
+            b0 = r; b1 = m;   // even split of this user's blocks over its m cores (below)
+            auto xy = [&](uint32_t rr, uint32_t* x, uint32_t* y) { const uint32_t w = ct[perm[rr]]; *x = w & 0xFF; *y = (w >> 8) & 0xFF; };
+            uint32_t h = 0, f = FANOUT;   // height of rank r: the largest l with FAN^l | r (root: 3)
+            if (r == 0) h = 3;
+            else while (r % f == 0) { ++h; f *= FANOUT; }
+            has_parent = r != 0;
+            if (has_parent) { par_lvl = h ? 1 : 0; xy(r - r % f, &par_x, &par_y); }
+            uint32_t n0 = 0, n1 = 0;
+            for (uint32_t l = 0, st = 1; l < h; ++l, st *= FANOUT)
+                for (uint32_t j = 1; j < FANOUT && r + j * st < m; ++j) {
+                    if (l == 0) xy(r + j * st, &c0x[n0], &c0y[n0]), ++n0;
+                    else xy(r + j * st, &c1x[n1], &c1y[n1]), ++n1;
+                }
+#if !defined(MKA_EXTLEAN)
+            nc0 = n0; nc1 = n1; is_root = r == 0;
+#endif
+            l1w(MKA_KVP_TAB)[3 + MKA_RQ_T] = u | ((n0 + n1) << 8) | ((r == 0 ? 1u : 0u) << 16);   // compute: user, nrecv, root
+        }
+#endif
         volatile tt_l1_ptr int32_t* kp = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr) + rq_g(user) * MKA_RQ_T;
         int32_t pmax = -1, pmin = 0x7FFFFFFF;
         for (uint32_t j = 0; j < MKA_RQ_T; ++j) {
@@ -231,9 +314,9 @@ void kernel_main() {
         // per-row valid limit inside the masked blocks: HOLD rows (-1) take the user's last position (finite)
         for (uint32_t j = 0; j < MKA_RQ_T; ++j) kvp_p[j] = kp[j] < 0 ? (uint32_t)pmax : (uint32_t)kp[j];
         const uint32_t lb = (uint32_t)pmax / 32, lb0 = (uint32_t)pmin / 32;
-#if defined(MKA_RQDYN)
-        // dynamic split: the static [b0, b1) of NBK (host weights) rescaled to the user's lb + 1 blocks
-        b0 = b0 * (lb + 1) / NBK; b1 = b1 * (lb + 1) / NBK;
+#if defined(MKA_RQDYN) || defined(MKA_RQBAL)
+        // dynamic split: rank b0 of b1 cores takes [b0 * n / b1, (b0 + 1) * n / b1) of the user's n = lb + 1 blocks
+        { const uint32_t r_ = b0, m_ = b1; b0 = r_ * (lb + 1) / m_; b1 = (r_ + 1) * (lb + 1) / m_; }
 #endif
         const uint32_t nv = lb + 1 <= b0 ? 0 : (lb + 1 - b0 < b1 - b0 ? lb + 1 - b0 : b1 - b0);
         if (lb >= b0 && lb - b0 < nv) kvp_m0 = lb - b0;
