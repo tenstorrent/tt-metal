@@ -1341,14 +1341,16 @@ def setup_bench(dev, MESH, mesh_identity):
             obj = 'static mkar::SendReader ar_s;' if role == 'r' else 'mkar::SendWriter ar_s;   // kernel_main local: the fabric connection'
             loop = _re.search(r'\n  for \(uint32_t L = 0; L < (\d+); \+\+L\) \{\n', txt)
             assert loop, src
-            # the loop's matching close brace (NOT the first 2-space '}': with MKA_GDNOUT the body ends in its own '  { ... }' block,
-            # which made the splice close that block instead of the loop: AR iterations only inside the GDN branch, fini inside the
-            # loop -> the corner reader ran ahead of its writer (d26u02 hang, 11-11 01:2xZ; root cause by the GDN agent)
-            _d, _i = 1, loop.end()
-            while _d:
-                _d += (txt[_i] == '{') - (txt[_i] == '}'); _i += 1
-            end = _i - 1   # index of the loop's '}'
-            body = txt[loop.end():end].rstrip(' ')
+            # splice ONLY at the role generator's sentinel (e1_shim: '  // @@GDN_LAYER_BODY_END@@' right before the per-layer loop's '}'):
+            # a brace / indent heuristic once closed gdn_out's tail block instead of the loop (d26u02 hang, 11-11)
+            _SENT = '  // @@GDN_LAYER_BODY_END@@'
+            assert txt.count(_SENT) == 1 and len(_re.findall(r'\n  for \(uint32_t L = 0; L < (\d+); \+\+L\) \{\n', txt)) == 1, \
+                f"_gdn_host_ar: {src}: need exactly one layer loop and one {_SENT!r} sentinel (role generator out of sync)"
+            _s0 = txt.index(_SENT)
+            assert txt[_s0:].split('\n', 1)[1].startswith('  }\n'), f"_gdn_host_ar: {src}: the sentinel must directly precede the loop's '  }}'"
+            end = _s0 + len(txt[_s0:].split('\n', 1)[0]) + 1 + 2   # index of the loop's '}'
+            assert txt[end] == '}', (src, txt[end - 5:end + 5])
+            body = txt[loop.end():_s0].rstrip(' ')
             nc = sp['rd_ncommon'] if role == 'r' else sp['wr_ncommon']
             new_loop = (f'\n  {obj}\n  ar_s.init(0, {nc});\n  uint32_t ar_it = 0, gL = 0;\n'
                         f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'

@@ -540,7 +540,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (go_r.replace("(L_)", "L") if GO else '') +
         (go_rd.replace("{OGO}", str(OGO)) if GO and GO_RD else '') +
         (go_wr.replace("{OSIG}", osig_rd) if GO and GO_RDALL else '') +
-        f'  }}\n}}\n')
+        f'  // @@GDN_LAYER_BODY_END@@ (engine _gdn_host_ar splices the AR sender here; exactly once)\n  }}\n}}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
         f'{DM_OPT}#include "{hw}"\nvoid kernel_main();\nstatic volatile tt_l1_ptr uint32_t* g_ab;\nstatic uint32_t g_gdn_l = 0;\n'
@@ -558,7 +558,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n')
         + f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
         + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n"
-        + (go_w.replace("{OSIG}", osig) if GO else '') + "  }\n"
+        + (go_w.replace("{OSIG}", osig) if GO else '') + "  // @@GDN_LAYER_BODY_END@@ (engine _gdn_host_ar splices the AR sender here; exactly once)\n  }\n"
         f'  noc_async_atomic_barrier();\n'
         f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached);\n'
         f'  // attn_kv: the engine raises it twice per attention layer (start, SDPA end), {attn_n} attention layers\n'
