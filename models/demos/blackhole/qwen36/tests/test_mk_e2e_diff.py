@@ -124,6 +124,7 @@ def _diff_case(model, live, tag):
     ref, ref_in = {}, {}
     model._vfy_mk1 = None
     saved = _layer_hooks(model, ref, ref_in)
+    L_attn = [L for L in range(min(nl, NL)) if lt[L] == "attention"]
     try:
         model._forward_verify_bucket_tp(B, None, None)
         ttnn.synchronize_device(model.mesh_device)
@@ -131,10 +132,20 @@ def _diff_case(model, live, tag):
         for l, f in saved:
             l.forward = f
         model._vfy_mk1 = mk1
+    kv_ref = _kv_rows(model, L_attn, live)
     _restore(ts, snap)
     # engine
     model._forward_verify_bucket_tp(B, None, None)
     ttnn.synchronize_device(model.mesh_device)
+    kv_eng = _kv_rows(model, L_attn, live)
+    kva = {}
+    for L in L_attn:
+        if kv_ref.get(L) is None or kv_eng.get(L) is None:
+            continue
+        kva[str(L)] = dict(k_pcc=round(_pcc(kv_eng[L][0], kv_ref[L][0]), 6), v_pcc=round(_pcc(kv_eng[L][1], kv_ref[L][1]), 6),
+                           k_maxabs=float((kv_eng[L][0] - kv_ref[L][0]).abs().max()),
+                           v_maxabs=float((kv_eng[L][1] - kv_ref[L][1]).abs().max()), rows=int(kv_ref[L][0].shape[0]))
+    logger.info(f"[e2ediff] KVA {tag}: {json.dumps(kva)}")
     dbg = ttnn.to_torch(ttnn.get_device_tensors(S["ar_dbgt"])[0]).float().reshape(32, -1)
     # the post-AR residual columns (2k+1) must be identical on every device (AR contract: mesh identity 0); the input
     # partial columns (2k) are per-device by design
@@ -156,7 +167,33 @@ def _diff_case(model, live, tag):
                 bad.append(dict(case=tag, user=u, layer=L, what="nan" if not torch.isfinite(e).all() else "zero"))
             pcc[u][L] = round(_pcc(e, r), 6)
             mx[u][L] = float((e - r).abs().max())
-    return pcc, mx, bad, dbg_all_equal, tf
+    return pcc, mx, bad, dbg_all_equal, dict(tf, kva=kva) if tf else dict(kva=kva)
+
+
+def _kv_rows(model, L_attn, live):
+    """The K / V rows the step appends for the live users of attention layers L_attn: {L: (k [n, 256], v [n, 256])} read
+    from the paged caches (device 0) at kvpos rows r = u*T + j >= 0 through the host page table."""
+    aux = getattr(model, "_vfy_aux_staged", None)
+    pt = model._vfy_pt_host
+    if aux is None:
+        return {}
+    kp = [int(x) for x in torch.as_tensor(aux)[0, : B * T].tolist()]
+    out = {}
+    for L in L_attn:
+        a = model.layers[L].attention
+        kk = ttnn.to_torch(ttnn.get_device_tensors(a.paged_k)[0]).float()
+        vv = ttnn.to_torch(ttnn.get_device_tensors(a.paged_v)[0]).float()
+        ks, vs = [], []
+        for u in live:
+            for j in range(T):
+                p_ = kp[u * T + j]
+                if p_ < 0 or p_ > 2 ** 30:
+                    continue
+                blk = int(pt[u, p_ // kk.shape[2]])
+                ks.append(kk[blk, 0, p_ % kk.shape[2]])
+                vs.append(vv[blk, 0, p_ % kk.shape[2]])
+        out[L] = (torch.stack(ks), torch.stack(vs)) if ks else None
+    return out
 
 
 def _layer_tensors(model, L):
@@ -257,7 +294,8 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
         for _ in range(WARM):
             drv.step()
         pcc, mx, bad, deq, tf = _diff_case(model, live, tag)
-        if tf:
+        res.setdefault("kva", {})[tag] = tf.pop("kva", {})
+        if tf.get("pcc") is not None:
             res.setdefault("tf", {})[tag] = {str(u): {str(L): v for L, v in d.items()} for u, d in tf["pcc"].items()}
             res.setdefault("tf_err", {})[tag] = {str(L): v for L, v in tf["err"].items()}
             res["tf_types"] = {str(L): v for L, v in tf["types"].items()}
