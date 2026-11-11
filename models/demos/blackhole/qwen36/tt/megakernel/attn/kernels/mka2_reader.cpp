@@ -110,14 +110,14 @@ void kernel_main() {
 #endif
     RQB_MUT uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
     RQB_MUT uint32_t par_lvl = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN)
+#if (defined(MKA_EXTLEAN) || (defined(MKA_SV) && MKA_SV != 2 && !defined(MKA_RQBAL)))   // MKA_SV 0 / 1: tree leaf (RQBAL: per-pass trees, no fold)
     constexpr uint32_t nc0 = 0; a++;
 #else
     RQB_MUT uint32_t nc0 = get_arg_val<uint32_t>(a++);
 #endif
     uint32_t c0x[FANOUT], c0y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c0x[i] = get_arg_val<uint32_t>(a++); c0y[i] = get_arg_val<uint32_t>(a++); }
-#if defined(MKA_EXTLEAN)
+#if (defined(MKA_EXTLEAN) || (defined(MKA_SV) && MKA_SV != 2 && !defined(MKA_RQBAL)))   // MKA_SV 0 / 1: tree leaf (RQBAL: per-pass trees, no fold)
     constexpr uint32_t nc1 = 0; a++;
 #else
     RQB_MUT uint32_t nc1 = get_arg_val<uint32_t>(a++);
@@ -128,7 +128,7 @@ void kernel_main() {
     uint32_t c1x[FANOUT], c1y[FANOUT];
 #endif
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c1x[i] = get_arg_val<uint32_t>(a++); c1y[i] = get_arg_val<uint32_t>(a++); }
-#if defined(MKA_EXTLEAN)
+#if (defined(MKA_EXTLEAN) || (defined(MKA_SV) && MKA_SV != 2 && !defined(MKA_RQBAL)))   // MKA_SV 0 / 1: tree leaf (RQBAL: per-pass trees, no fold)
     constexpr uint32_t is_root = 0; a++;
     const uint32_t out_addr = get_arg_val<uint32_t>(a++);
 #else
@@ -355,6 +355,10 @@ void kernel_main() {
             if (p < pmin) pmin = p;
         }
         if (pmax < 0) pmax = pmin = 0;   // idle user: length 1 (block 0 through its zero-padded table row, finite)
+        // robustness: the engine is compiled for MKA_CTX (NBK blocks); a position past it (never routed here by the model:
+        // such steps fall back to op-by-op) is clamped so the page-table window can't overrun CB_ONE page 3
+        if (pmax >= (int32_t)(NBK * 32)) pmax = NBK * 32 - 1;
+        if (pmin > pmax) pmin = pmax;
         // per-row valid limit inside the masked blocks: HOLD rows (-1) take the user's last position (finite)
         for (uint32_t j = 0; j < MKA_RQ_T; ++j) kvp_p[j] = kp[j] < 0 ? (uint32_t)pmax : (uint32_t)kp[j];
         const uint32_t lb = (uint32_t)pmax / 32, lb0 = (uint32_t)pmin / 32;
@@ -368,7 +372,9 @@ void kernel_main() {
         b1 = b0 + nv;
         volatile tt_l1_ptr uint32_t* tab = l1w(kvp_tab_base);
         if (nv) {   // page-table window: entries [b0 / BS32, (b1 - 1) / BS32] of row g, read 64 B aligned
-            const uint32_t e0 = (b0 / KV_BS32) & ~15u, e1 = (b1 - 1) / KV_BS32 + 1;
+            const uint32_t e0 = (b0 / KV_BS32) & ~15u, cap = (kvp_tab_base + 2048 - kvp_pt_addr()) / 4;
+            uint32_t e1 = (b1 - 1) / KV_BS32 + 1;
+            if (e1 - e0 > cap) e1 = e0 + cap;   // never past CB_ONE page 3 (host asserts the window fits; belt and braces)
             const InterleavedAddrGen<true> pta{.bank_base_address = rq_attn(0), .page_size = rq_attn(2) * 4};
             noc_async_read(pta.get_noc_addr(rq_g(user)) + e0 * 4, kvp_pt_addr(), ((e1 - e0) * 4 + 63) & ~63u);
             tab[2] = e0;
