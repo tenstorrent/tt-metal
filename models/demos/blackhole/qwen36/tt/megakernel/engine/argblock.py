@@ -12,13 +12,13 @@ Block = [magic "MKAB", kind id, n payload words, version, payload..., zero pad t
 of one kind get the same block width W (the max payload over cores, padded). Per-device tables (e.g. AR roles differ by
 ring position) are built per device and assembled with from_host_shards: same shape, same address, different bytes.
 
-Also here: ``check_cb_ids`` (CB ids < 45 keep the program-wide CB-config block small).
+Also here: ``check_cb_ids`` (CB ids <= MAX_CB_ID keep the program-wide CB-config block small; 16 B per index on every core).
 """
 
 MAGIC = 0x4D4B4142
 HEADER = 4
 KINDS = {"phase": 0, "ar": 1, "v12": 2, "gdn": 3, "attn": 4}  # = common runtime arg slot; mk_argblock.hpp AB_*
-MAX_CB_ID = 44
+MAX_CB_ID = 48  # spec v1.166: 44 -> 48 for G-b's E1_GB prefix CBs 45-48 (+64 B config on every core; fit proven on the mesh)
 
 
 def _cores(crs):
