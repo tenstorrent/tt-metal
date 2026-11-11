@@ -29,6 +29,7 @@ void bind_fill_pad_op(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): cores to run on for interleaved tensors. Defaults to `None`, which uses all cores.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -41,7 +42,8 @@ void bind_fill_pad_op(nb::module_& mod) {
         nb::arg("input_tensor"),
         nb::arg("fill_value"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace

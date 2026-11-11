@@ -36,6 +36,7 @@ combine::CombineFabric2dParams combine_attributes(
         .seq_len_per_chip = op.seq_len_per_chip,
         .axis = op.combine_axis,
         .num_links = op.combine_num_links,
+        .fwd_vc_pages = op.combine_fwd_vc_pages.value(),
         .hybrid_token_threshold = op.hybrid_token_threshold,
     };
 }

@@ -506,11 +506,11 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
     constexpr uint32_t kComputeKernelIdx = 2;
 
     const auto dyn = compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
-    const uint32_t q_addr = t.q.buffer()->address();
-    const uint32_t k_addr = t.k.buffer()->address();
-    const uint32_t v_addr = t.v.buffer()->address();
-    const uint32_t idx_addr = t.indices.buffer()->address();
-    const uint32_t out_addr = tensor_return_value.buffer()->address();
+    const uint32_t q_addr = t.q.mesh_buffer().address();
+    const uint32_t k_addr = t.k.mesh_buffer().address();
+    const uint32_t v_addr = t.v.mesh_buffer().address();
+    const uint32_t idx_addr = t.indices.mesh_buffer().address();
+    const uint32_t out_addr = tensor_return_value.mesh_buffer().address();
 
     for (uint32_t i = 0; i < dyn.num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % dyn.grid.x, i / dyn.grid.x};

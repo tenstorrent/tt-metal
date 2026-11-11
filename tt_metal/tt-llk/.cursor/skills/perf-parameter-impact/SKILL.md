@@ -60,7 +60,6 @@ metrics. Classify columns as:
 - configuration;
 - marker or run metadata;
 - cycle metrics such as `mean(L1_TO_L1)` and stage isolates;
-- congestion metrics;
 - code-size metrics such as `TEXT_SIZE(...)`.
 
 For each requested configuration column, report distinct values, counts,
@@ -202,10 +201,9 @@ and pipeline overhead can add residual cost.
 
 ### 8. Quantify null results
 
-Treat “no effect” as measured evidence. For congestion, code size, indexing, or
-another suspected null, state the comparison, exact pair coverage, central
-effect, and range or dispersion. Distinguish exact equality from negligible
-change. Compare each congestion stage with its corresponding isolate. Report
+Treat “no effect” as measured evidence. For code size, indexing, or another
+suspected null, state the comparison, exact pair coverage, central effect, and
+range or dispersion. Distinguish exact equality from negligible change. Report
 text-size deltas in bytes.
 
 ### 9. Validate surprising findings
@@ -235,7 +233,7 @@ Order the report:
 4. Paired effects with explicit baselines and coverage.
 5. Interaction heatmap where meaningful.
 6. Geometry/mode coupling and confounding.
-7. Quantified congestion, code-size, or other null results.
+7. Quantified code-size or other null results.
 8. “What to actually do” with ranked conditional recommendations.
 9. Method, filtering, pairing key, and caveats.
 
@@ -334,4 +332,4 @@ End on actions, not caveats.
 - “Compare MX with `Float16_b` and explain why unpack gains do not appear end
   to end.”
 - “Show output-format sensitivity by fidelity and `k_dimm`.”
-- “Quantify whether direct indexing, congestion, and text size matter.”
+- “Quantify whether direct indexing and text size matter.”

@@ -842,8 +842,7 @@ class PerfRunType(Enum):
     UNPACK_ISOLATE = 2
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
-    L1_CONGESTION = 5
-    SFPU_ISOLATE = 6
+    SFPU_ISOLATE = 5
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one
@@ -855,7 +854,6 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.UNPACK_ISOLATE,
         PerfRunType.MATH_ISOLATE,
         PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
     ],
 ]
 

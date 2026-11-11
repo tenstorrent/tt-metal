@@ -445,6 +445,7 @@ set +e
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
+    export OMP_NUM_THREADS=\$(nproc); \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
@@ -493,7 +494,13 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
       *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
     esac
   fi
-  python3 "${PERF_GATE}" \
+  # A crashed producer or runner still leaves a partial perf JSON, and its verdict must not mark the job
+  # non-retryable (CI_FAILURE_RECORDS, see models/common/ci_failure.py): only a complete run's verdict repeats.
+  GATE_ENV=()
+  if [ "${PROD_RC}" -ne 0 ] || [ "${RUNNER_RC}" -ne 0 ]; then
+    GATE_ENV=(-u CI_FAILURE_RECORDS)
+  fi
+  env ${GATE_ENV[@]+"${GATE_ENV[@]}"} python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
     --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \

@@ -220,8 +220,8 @@ MatmulReduceScatterPrefillParams resolve_params(
         .block_n = canonical_dim == -2 ? Nt : Nt / G,
         .gx = static_cast<uint32_t>(grid.x),
         .gy = static_cast<uint32_t>(grid.y),
-        .tA = static_cast<uint32_t>(input_tensor.buffer()->aligned_page_size()),
-        .tW = static_cast<uint32_t>(weight.buffer()->aligned_page_size()),
+        .tA = static_cast<uint32_t>(input_tensor.mesh_buffer().aligned_page_size()),
+        .tW = static_cast<uint32_t>(weight.mesh_buffer().aligned_page_size()),
         .scatter_dim = canonical_dim,
         .budget = l1_bank - headroom,
     };

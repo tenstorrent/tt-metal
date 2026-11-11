@@ -20,6 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4Attention
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
@@ -90,7 +91,10 @@ def test_hca_block_perf_galaxy(mesh_device, device_params, topology, variant, mo
         f"hca {variant} {_CHUNKS}x{_CHUNK} realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
         f"expected {expected_ns:,} ns, band [{lower:,.0f}, {upper:,.0f}]"
     )
-    assert lower <= total_ns <= upper, (
-        f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
-        f"(expected {expected_ns:,} ns, margin +/- {_MARGIN * 100:.1f}%)"
+    assert_perf_gate(
+        lower <= total_ns <= upper,
+        (
+            f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+            f"(expected {expected_ns:,} ns, margin +/- {_MARGIN * 100:.1f}%)"
+        ),
     )

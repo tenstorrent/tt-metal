@@ -205,7 +205,7 @@ tt_metal/impl/experimental/offline_compile/ @ruizhangTT @tenstorrent/metalium-ru
 tt_metal/impl/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/impl/experimental/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt
-tt_metal/impl/graph/ @ayerofieiev-tt @akerteszTT @dgomezTT
+tt_metal/impl/graph/ @tenstorrent/metalium-developers-ttnn-core
 tt_metal/impl/host_api/ @abhullar-tt @jbaumanTT @akerteszTT @kstevensTT
 tt_metal/impl/host_api/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @aliuTT
 tt_metal/impl/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal impl (moved from experimental in #48638)
@@ -219,6 +219,7 @@ tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu
 tt_metal/impl/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/impl/program/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/sources.cmake @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @cfjchu @riverwuTT @akerteszTT
+tt_metal/impl/sram_arena/ @riverwuTT @akerteszTT
 tt_metal/impl/sub_device/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/tensor/ @akerteszTT @riverwuTT @aliaksei-sala
 tt_metal/impl/threading/ @cfjchu @tt-asaigal @msudumbrekar-TT @ezaiakinTT
@@ -240,6 +241,7 @@ tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/sources.cmake @tenstorrent/metalium-api-owners
 tt_metal/test @tenstorrent/metalium-developers-infra
 tt_metal/tools/* @kmabeeTT @mo-tenstorrent @yusufbashiTT @ihamer-tt
+tt_metal/tools/watcher_dump/ @tenstorrent/metalium-runtime
 tt_metal/tools/dispatch_telemetry_dump/ @tenstorrent/metalium-runtime-performance
 tt_metal/tools/dispatch_telemetry_dump/**/CMakeLists.txt @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra
 tt_metal/tools/jit_compile_server @ruizhangTT @tenstorrent/metalium-runtime
@@ -599,6 +601,7 @@ tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gdn_*.py @ten
 tests/ttnn/unit_tests/operations/transformers/gdn_decode_test_utils.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/nightly/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
+tests/ttnn/unit_tests/operations/transformers/fused_recurrent_gdn_goldens.json @tenstorrent/cse-developer-ttnn @iwroszTT
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise

@@ -127,6 +127,21 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorParameterNameFails) {
             ::testing::HasSubstr("Duplicate TensorParameter name 'input_tensor'")));
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_DuplicateSRAMArenaParameterNameFails) {
+    // Two SRAMArenaParameters declared with the same unique_id are rejected as duplicates.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}},
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate SRAMArenaParameter name 'arena'")));
+}
+
 TEST_F(ProgramSpecTestQuasar, CPU_EmptyKernelsFails) {
     ProgramSpec spec;
     spec.name = "empty_program";

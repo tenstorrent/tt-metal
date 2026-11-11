@@ -174,6 +174,12 @@ SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
     # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
 ]
 
+# The split path (channel slices, one group_norm per slice, concat) does not depend on the spatial size.
+# Sanity runs it at 128x64; the SDXL shapes above run nightly (#62486).
+SDXL_BASE_GROUP_NORM_SPLIT_SANITY_SHAPES = [
+    (1, 512, 128, 64, 32, 4),
+]
+
 GROUP_NORM_DRAM_OFT_PARAMS = [
     ### oft
     (1, 256, 159, 159, 16, 3, 4, 4, 1e-5),
@@ -766,7 +772,7 @@ def test_group_norm_non_tile_aligned_dirty_padding_is_ignored_DRAM(device):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", SDXL_BASE_GROUP_NORM_SPLIT_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", SDXL_BASE_GROUP_NORM_SPLIT_SANITY_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid):
     torch.manual_seed(0)

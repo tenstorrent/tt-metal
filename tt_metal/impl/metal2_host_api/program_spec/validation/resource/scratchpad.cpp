@@ -13,7 +13,8 @@
 
 namespace tt::tt_metal::experimental {
 
-void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch) {
+void ValidateScratchpadSpec(
+    const ScratchpadSpec& scratchpad, const CollectedSpecData& collected, uint32_t l1_alignment, tt::ARCH arch) {
     TT_FATAL(
         scratchpad.size_per_node != 0,
         "ScratchpadSpec '{}' has size_per_node == 0; a scratchpad must reserve a non-zero number of bytes "
@@ -33,6 +34,23 @@ void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch) {
             scratchpad.unique_id,
             scratchpad.data_format_metadata.value(),
             arch);
+    }
+
+    if (const auto& allocation = scratchpad.advanced_options.allocation_override) {
+        NodeRangeSet occupied_nodes;
+        if (const auto it = collected.scratchpad_binders.find(scratchpad.unique_id);
+            it != collected.scratchpad_binders.end()) {
+            for (const auto* kernel : it->second) {
+                occupied_nodes = occupied_nodes.merge(collected.kernel_node_set.at(kernel->unique_id));
+            }
+        }
+        ValidateSRAMArenaAllocation(
+            SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset},
+            collected,
+            fmt::format("ScratchpadSpec '{}'", scratchpad.unique_id),
+            occupied_nodes,
+            scratchpad.size_per_node,
+            l1_alignment);
     }
 }
 

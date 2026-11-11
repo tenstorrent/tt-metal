@@ -463,8 +463,9 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
 
     const uint32_t nkb = Kt / kb;
     const bool resident = plan.resident;
-    // Per-regime fill levers: resident 2 senders per line, W reads on NoC1, look-ahead after the read
-    // barrier, disjoint diagonal senders; stream 1 sender, both reads on NoC0, look-ahead before, diagonal senders.
+    // Per-regime fill levers: resident 2 senders per line, W reads on NoC1 (NoC0 on a thin wide grid, below),
+    // look-ahead after the read barrier, disjoint diagonal senders; stream 1 sender, both reads on NoC0, look-ahead
+    // before, diagonal senders.
     const uint32_t senders = resident ? 2 : 1;
     const uint32_t a_split = senders >= 2 && win_m >= 2 ? tt::div_up(win_m, 2u) : win_m;
     const uint32_t w_split = senders >= 2 && kb >= 2 ? tt::div_up(kb, 2u) : kb;
@@ -472,8 +473,8 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const uint32_t rW = (resident && scatter_dim == -2) ? 1 : 0;
     const uint32_t a_pages = rA != 0 ? core_m * Kt : plan.depths[0] * win_m * kb;
     const uint32_t w_pages = rW != 0 ? Kt * core_n : plan.depths[1] * kb * win_n;
-    const auto tA = static_cast<uint32_t>(a.buffer()->aligned_page_size());
-    const auto tW = static_cast<uint32_t>(w.buffer()->aligned_page_size());
+    const auto tA = static_cast<uint32_t>(a.mesh_buffer().aligned_page_size());
+    const auto tW = static_cast<uint32_t>(w.mesh_buffer().aligned_page_size());
     const uint32_t a_row_per_block = scatter_dim == -2 ? block_m : 0;
     const uint32_t w_col_per_block = scatter_dim == -1 ? block_n : 0;
 
@@ -522,7 +523,17 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_ct[args::reader_ct::PREFETCH_STEPS] = detail::kPrefetchSteps;
     reader_ct[args::reader_ct::LOOKAHEAD_AFTER_BARRIER] = resident ? 1 : 0;
     reader_ct[args::reader_ct::A_READ_NOC] = 0;
-    reader_ct[args::reader_ct::W_READ_NOC] = resident ? 1 : 0;
+    // A resident plan scattering on N streams W through every entry while A is read once, so on a thin grid W is
+    // nearly all the DRAM traffic. With N along x (>= 10 columns, M on <= 4 rows) W reads on NoC0: NoC1 ran it 1.4-3x
+    // slower (QB2 1x4 ring, traced, M=32/64 K=3584: N=2560-7168 at 0.33-0.72x the NoC1 time; Kimi K2.7 o_proj
+    // decode 181 -> 62 us). With N along y (the planner's M-on-x grids, N=1024-3072 on 6-8 lines) NoC1 stays faster
+    // (NoC0 1.01-1.59x slower), and on taller grids, where A's reads are as heavy, the NoC split is neutral: both keep
+    // NoC1. N along x on fewer than 10 columns is unmeasured and keeps NoC1.
+    // The row (<= 4) and column (>= 10) bounds are empirical: the envelope of the shapes measured so far, not a
+    // derived rule (the likely mechanism, each NoC's dimension order funnelling the DRAM responses into the W senders'
+    // rows or columns, is unverified). Subject to change as more grid shapes are measured.
+    const bool w_noc0_thin_wide = resident && scatter_dim == -1 && !m_on_x && gd.grid_m <= 4 && gd.grid_n >= 10;
+    reader_ct[args::reader_ct::W_READ_NOC] = (resident && !w_noc0_thin_wide) ? 1 : 0;
     reader_ct[args::reader_ct::NUM_WAVES] = W;
     reader_ct[args::reader_ct::NUM_CHUNKS] = num_chunks;
     reader_ct[args::reader_ct::N_INNER] = n_inner;
@@ -944,9 +955,9 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     // - the global semaphores and the mailbox: never. They are created once per mesh (ensure_mesh_resources) and live
     //   as long as the mesh and its program cache, so create_descriptor's values stay right.
     //   port_sender_rt::ARRIVAL_ADDR (per core) is the same kind of address.
-    const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
-    const auto w_addr = static_cast<uint32_t>(tensor_args.weight.buffer()->address());
-    const auto out_addr = static_cast<uint32_t>(output.buffer()->address());
+    const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.mesh_buffer().address());
+    const auto w_addr = static_cast<uint32_t>(tensor_args.weight.mesh_buffer().address());
+    const auto out_addr = static_cast<uint32_t>(output.mesh_buffer().address());
     for (const auto& [range, sv] : cached.shared_variables) {  // a walk, no lookup per program
         sv.reader.get()[args::reader_common::A_ADDR] = a_addr;
         sv.reader.get()[args::reader_common::W_ADDR] = w_addr;

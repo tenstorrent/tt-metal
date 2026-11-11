@@ -142,7 +142,8 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     bool nd_sharded = tensor_args.input.nd_shard_spec().has_value() && tensor_return_value.nd_shard_spec().has_value();
     bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
     bool divide_by_shards = false;
-    const auto& dspec = *tensor_return_value.buffer()->buffer_distribution_spec();
+    const auto& dspec =
+        *tensor_return_value.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
     if (nd_sharded && same_tiles && operation_attributes.dim == 0) {
         const NdShardSpec& input_nd_shard_spec = tensor_args.input.nd_shard_spec().value();
         const NdShardSpec& output_nd_shard_spec = tensor_return_value.nd_shard_spec().value();

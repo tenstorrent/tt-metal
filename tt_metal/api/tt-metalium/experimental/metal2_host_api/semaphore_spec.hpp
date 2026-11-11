@@ -19,7 +19,8 @@ namespace tt::tt_metal::experimental {
 // A SemaphoreSpec is a descriptor for a Tenstorrent semaphore,
 // which can be used for inter-kernel instance synchronization.
 //
-// INSTANCING: One SRAM ("L1") cell per node in the set of target_nodes.
+// INSTANCING: One semaphore cell per node in the set of target_nodes.
+//             (May be backed by a hardware semaphore register or reserved SRAM.)
 //
 // PLACEMENT: Specified directly via target_nodes. Unlike DFBs, semaphores are
 //   remote resources for kernels. Placement cannot be inferred from kernel

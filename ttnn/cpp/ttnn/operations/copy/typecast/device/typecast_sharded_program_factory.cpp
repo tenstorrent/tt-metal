@@ -8,6 +8,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -136,13 +137,13 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         args.preserve_fp32_precision,
         args.fp32_dest_acc_en);
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
     const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};

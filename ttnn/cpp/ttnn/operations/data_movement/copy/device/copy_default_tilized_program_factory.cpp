@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <cstdint>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -89,7 +90,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     const m2::KernelSpecName WRITER{"writer"};
     const m2::KernelSpecName COMPUTE{"compute"};
 
-    const auto aligned_input_page_size = input.buffer()->aligned_page_size();
+    const auto aligned_input_page_size = input.mesh_buffer().aligned_page_size();
     m2::DataflowBufferSpec in_dfb{
         .unique_id = IN,
         .entry_size = aligned_input_page_size,
@@ -100,7 +101,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     // When converting data formats through the compute kernel, output pages land in a separate DFB.
     // Double buffered, and the output page_size is aligned so the noc_write reads from an aligned
     // address in the DFB.
-    const auto aligned_output_page_size = output.buffer()->aligned_page_size();
+    const auto aligned_output_page_size = output.mesh_buffer().aligned_page_size();
     m2::DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = aligned_output_page_size,

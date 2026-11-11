@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
+    kda_device_params,
     mla_row_permutation,
     random_weights,
     read_slab_layer,
@@ -32,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     deallocate_state,
     device_scalar,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import TtK3KdaAttention
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
@@ -39,9 +41,14 @@ pytestmark = run_for_blackhole()
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1), ((2, 4), 1, 0)], indirect=["mesh_device"]
+    "mesh_device,sp_axis,tp_axis,device_params",
+    [
+        ((1, 8), 0, 1, kda_device_params((1, 8))),
+        ((2, 4), 0, 1, kda_device_params((2, 4))),
+        ((2, 4), 1, 0, kda_device_params((2, 4))),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis, tp_axis, device_params):
     sp = tuple(mesh_device.shape)[sp_axis]
     local_rows = 256
@@ -50,7 +57,16 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
     config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5)
     weights = random_weights(config)
     hidden = torch.randn(1, capacity, config.hidden_size, generator=torch.Generator().manual_seed(197)).bfloat16()
-    layer = build_layer(mesh_device, config, weights, sp_axis, tp_axis, active_seq_len=capacity, summary_group_chunks=2)
+    layer = build_layer(
+        mesh_device,
+        config,
+        weights,
+        sp_axis,
+        tp_axis,
+        active_seq_len=capacity,
+        summary_group_chunks=2,
+        convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
     geometry = KdaContractGeometry.from_kda_config(
         config, mesh_shape=tuple(mesh_device.shape), sp_axis=sp_axis, tp_axis=tp_axis
     )
@@ -128,7 +144,8 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     sp_axis,
                     tp_axis,
                     0,
-                    config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim,
+                    config,
+                    layer.convolution_page_channels,
                 ).float()
                 reference_state = KDAReferenceState(
                     recurrent=reconstruct_state_at_sp_rank(
@@ -176,6 +193,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     sp_axis=sp_axis,
                     tp_axis=tp_axis,
                     config=config,
+                    page_channels=layer.convolution_page_channels,
                     # The clean value measured at head_dim 128 is 2.6 on every mesh: rel_Linf is the
                     # largest element error over the state's RMS, so it scales with the state (0.6 was
                     # tuned at head_dim 32 and already needed a 0.604 exemption). A localised carry

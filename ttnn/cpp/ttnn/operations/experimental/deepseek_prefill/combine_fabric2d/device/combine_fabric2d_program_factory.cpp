@@ -50,53 +50,15 @@ static_assert(PKT_HDR_DRAIN_OFF < PKT_HDR_CREDIT_OFF, "credit header overlaps th
 static_assert(PKT_HDR_CREDIT_OFF < DRAIN_SINK_OFF, "drain sink overlaps the credit packet header");
 static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
 
-// Forwarding buffer: Sending data farther than to the immediate neighboring chip (e.g. 1 -> 2 -> 3)
-// is not left to fabric to do. Op manages it. Multihop data movement is broken down to single hops.
-// Fabric doesn't have enough context to properly orchestrate traffic nor deep enough buffers to not
-// block '1 -> 2' data movements if both '1 -> 2 -> 3' and '2 -> 3' movements are fighting for the
-// 2-3 link. Thus DRAM buffer for forwarding is introduced. Chip 1 sends everything going to chips
-// 2, 3, 4 and 5 to chip 2. What is destined for chip 2 is written to its final DRAM address by the
-// receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
-// "home-made" tokens and when will they send tokens from the forwarding buffer.
+// Forwarding buffer: a multihop movement (1 -> 2 -> 3) is broken into single hops and staged in DRAM here
+// rather than left to fabric, which has neither the context to order the traffic nor buffers deep enough to
+// keep a '1 -> 2' movement from blocking behind a '1 -> 2 -> 3' one contending for the same link. Chip 1
+// sends everything bound for chips 2..5 to chip 2; what is for chip 2 the receiver eRisc writes to its final
+// DRAM address and the rest lands here.
 //
-// How much smaller than the dense buffer this op used to allocate is args.fwd_reduction, a FACTOR rather
-// than a page count so it means the same thing for every model: the dense size scaled with
-// num_experts_per_tok and the experts a chip hosts, so a fixed page count would be a different reduction
-// for each of them.
-//
-// Reducing it is free of correctness risk, which is the point of splitting the region by movement class:
-// every chain of classes ends in one that delivers to the next chip's output and so needs no space
-// anywhere, meaning a blocked chip always has a legal move and no size can deadlock the ring. See the
-// channel notes in combine_fabric2d_assignments.hpp.
-//
-// What it costs is throughput, and where that curve bends is a measurement, not a derivation -- which is
-// why it is an op parameter carried in the model's config, not a constant here.
-
-// What the dense region cost per stream, which is what the factor divides. Kept verbatim from the
-// version this replaces so "8x smaller" is measured against the thing it actually replaced: a
-// destination's whole return volume is seq_len_per_chip * num_experts_per_tok, chunks to one
-// destination share it, and a stream relays half_extent - 1 of them -- the nearest reachable from an
-// origin that splits its run num_links ways, the farthest only from the opposite chip, whose run is
-// split across every stream. Plus a page per chunk for the integer slicing.
-uint32_t dense_pages_per_stream(const CombineFabric2dParams& args) {
-    const uint32_t per_destination = args.seq_len_per_chip * args.num_experts_per_tok;
-    const uint32_t half_extent = ring_extent(args) / 2;
-    return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links) +
-           relay_chunks_per_stream(ring_extent(args)) * args.experts_per_chip;
-}
-
-// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1,
-// and a channel shallower than a read batch spends all its time announcing.
-constexpr uint32_t MIN_VC_PAGES = 4;
-
-uint32_t fwd_vc_pages(const CombineFabric2dParams& args) {
-    const uint32_t per_stream = dense_pages_per_stream(args) / args.fwd_reduction;
-    const uint32_t pages = per_stream / num_vcs(ring_extent(args));
-    return pages < MIN_VC_PAGES ? MIN_VC_PAGES : pages;
-}
-
+// A channel is a pipeline buffer, so its depth is given rather than computed from a launch's traffic.
 uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
-    return num_vcs(ring_extent(args)) * fwd_vc_pages(args);
+    return num_vcs(ring_extent(args)) * args.fwd_vc_pages;
 }
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
@@ -168,15 +130,15 @@ void validate_allocations(
         TT_FATAL(tensor->is_allocated(), "combine_fabric2d: {} has no device buffer", name);
     }
     TT_FATAL(
-        output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
+        output.mesh_buffer().aligned_page_size() == token_size_bytes(tensor_args),
         "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
         "between the two",
-        output.buffer()->aligned_page_size(),
+        output.mesh_buffer().aligned_page_size(),
         token_size_bytes(tensor_args));
     TT_FATAL(
-        output.buffer()->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
+        output.mesh_buffer().num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
         "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
-        output.buffer()->num_pages(),
+        output.mesh_buffer().num_pages(),
         args.seq_len_per_chip * args.num_experts_per_tok);
 }
 
@@ -231,9 +193,12 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 //                    rides the opposite direction's sender on this chip, which already points that way.
 //   `vc_outbox[v]`   that courier's queue, filled across this chip by the opposite stream's reader.
 //
-// `credit_done` is that reader telling the courier it will queue nothing more. Counters that cross a chip
-// boundary are drained by subtraction at end of stream; the two that stay on one chip are simply zeroed,
-// because a chip's whole program finishes before its next launch starts.
+// `unt_freed` is per consumer rather than one counter they share: a group's senders take alternating halves
+// of each run and so run far apart, and a shared count would let the leading one's credit release a slot the
+// trailing one is still reading.
+//
+// Nothing zeroes any of these between launches, so each kernel undoes its own launch's count: the ones that
+// cross a chip boundary by subtraction at end of stream, the ones that stay on one chip by zeroing.
 struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore final_arrived;
     tt::tt_metal::GlobalSemaphore launch_credit;
@@ -300,12 +265,9 @@ struct ForwardingBuffer {
     uint32_t pages_per_stream = 0;
 };
 
-// Never initialised and never read back: pure staging for tokens passing through a chip. One page per token,
-// and the page is token + forwarding metadata so a single fabric write lands both. Fused into ONE page rather
-// than split across payload and metadata regions precisely because nothing outside the op reads it — so the
-// "one page = one token" property the caller's regions must keep does not apply here, and it saves a DRAM
-// read and a DRAM write per forwarded token.
-//
+// Never initialised and never read back: pure staging for tokens passing through a chip. A page is the token
+// and its forwarding metadata fused, so one fabric write lands both and a forwarded token costs one DRAM read
+// and one DRAM write.
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
@@ -347,15 +309,14 @@ KernelPlan make_kernel_plan(
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
     plan.credit_done_addr = static_cast<uint32_t>(sems.credit_done.address());
-    plan.vc_pages = fwd_vc_pages(args);
+    plan.vc_pages = args.fwd_vc_pages;
     for (uint32_t v = 0; v < sems.vc_arrived.size(); v++) {
         plan.vc_arrived_addr.push_back(static_cast<uint32_t>(sems.vc_arrived[v].address()));
         plan.vc_freed_addr.push_back(static_cast<uint32_t>(sems.vc_freed[v].address()));
         plan.vc_outbox_addr.push_back(static_cast<uint32_t>(sems.vc_outbox[v].address()));
     }
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
-    // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
-    // derivation as the production reader's compile-time `offset`.
+    // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate.
     const uint32_t experts_per_group = args.experts_per_chip * ring_extent(args);
     const uint32_t my_group = args.device->shape().dims() > 1 ? coord[static_cast<int32_t>(args.axis == 0 ? 1 : 0)] %
                                                                     num_dispatch_groups(args, tensor_args)
@@ -457,11 +418,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         KernelPlan plan = chip_plan;
         plan.stream = stream;
         const auto& downstream = placement.at(self.downstream_coord).streams.at(stream);
-        // Same link, other direction. Its sender on this chip points upstream of us, which is where our
-        // reader's credits must go; its worker on the downstream chip is where our sender posts the credits
-        // it carries. `stream ^ 1` is that stream, since make_stream_id puts the direction in bit 0, and
-        // reverse_stream() is defined as exactly that -- so the downstream chip's stream back toward us,
-        // which the launch credit releases, is the very same core. One placement, both credits.
+        // Same link, other direction: its sender on this chip points upstream of us, which is where our
+        // reader's credits must go, and its worker on the downstream chip is where our sender posts the
+        // credits it carries. One placement, both credits.
         const StreamId opposite_stream = reverse_stream(stream);
         const auto& opposite = placement.at(coord).streams.at(opposite_stream);
         const auto& downstream_opposite = placement.at(self.downstream_coord).streams.at(opposite_stream);

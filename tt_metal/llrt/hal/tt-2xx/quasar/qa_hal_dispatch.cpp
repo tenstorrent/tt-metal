@@ -104,6 +104,7 @@ HalCoreInfoType create_dispatch_mem_map(IpVariant variant) {
         MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] =
         MEM_DISPATCH_FABRIC_CONNECTION_LOCK_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RING_BUF_HEAD)] = MEM_DISPATCH_WATCHER_RING_HEAD;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         tt::align(DISPATCH_MEM_MAP_END, max_alignment);
 
@@ -134,6 +135,7 @@ HalCoreInfoType create_dispatch_mem_map(IpVariant variant) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RING_BUF_HEAD)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         l1_size - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 

@@ -215,6 +215,8 @@ class TtMoe(LightweightModule):
         n_expert_groups: int,
         n_limited_groups: int,
         route_scale: float,
+        dispatch_fwd_vc_pages: int,
+        combine_fwd_vc_pages: int,
         num_links: Union[int, tuple[int, int]] = 1,
         topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         routed_expert_weights: list[dict] = None,
@@ -246,8 +248,6 @@ class TtMoe(LightweightModule):
         max_gate_seq_len_per_chip: Optional[int] = None,
         overlap_routed_expert_with_combine: Optional[bool] = False,
         moe_transport: Optional[str] = "direct",
-        combine_fwd_reduction: Optional[int] = None,
-        dispatch_fwd_vc_pages: Optional[int] = None,
         gate_bias_centered: bool = False,
     ):
         """
@@ -361,10 +361,9 @@ class TtMoe(LightweightModule):
                 num_experts_per_tok <= DISPATCH_FABRIC2D_MAX_TOPK, and a fabric max payload that fits
                 a whole routed_emb_dim bf16 token padded to 64 B plus a 64 B routing tail: open the
                 mesh with init_helpers.moe_fabric_payload_size for a model that opts in.
-            combine_fwd_reduction: combine_fabric2d's fwd_reduction, the model's COMBINE_FWD_REDUCTION.
-                Needed only when the transport resolves to "fabric2d".
-            dispatch_fwd_vc_pages: dispatch_fabric2d's fwd_vc_pages, the model's DISPATCH_FWD_VC_PAGES.
-                None takes the op's default.
+            dispatch_fwd_vc_pages: Pages one of dispatch_fabric2d's forwarding channels holds.
+            combine_fwd_vc_pages: Pages one of combine's forwarding channels holds, for combine_fabric2d and
+                for the routed expert overlapped with combine.
             gate_bias_centered: cache and use the gate's correction bias mean-centred (the model config's
                 MOE_GATE_BIAS_CENTERED, see tt_moe_gate_prefill.centre_gate_bias).
         """
@@ -379,6 +378,8 @@ class TtMoe(LightweightModule):
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        self.dispatch_fwd_vc_pages = dispatch_fwd_vc_pages
+        self.combine_fwd_vc_pages = combine_fwd_vc_pages
         self.layer_idx = layer_idx  # GLOBAL index; only consumed by the env-gated routing dump
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
@@ -406,8 +407,6 @@ class TtMoe(LightweightModule):
                 fabric2d_error = f"fabric2d runs a ring on axis 0, but the axis-0 topology is {self.row_topology}"
             elif metadata_len != 3:
                 fabric2d_error = f"the fabric2d ops write 3 metadata fields per token, got {metadata_len=}"
-            elif combine_fwd_reduction is None:
-                fabric2d_error = "combine_fabric2d needs combine_fwd_reduction"
             else:
                 fabric2d_error = fabric2d_setup_error(
                     mesh_device,
@@ -422,27 +421,6 @@ class TtMoe(LightweightModule):
         # sub-device load/clear go through it so the trace can be split at those boundaries instead of
         # resetting worker state mid-capture. None => load/clear the mesh device directly.
         self._trace_controller = None
-
-        # The shared expert, WHEN OVERLAPPED with dispatch, runs on disjoint Tensix sub-devices that
-        # still SHARE the EDM fabric routers. In that case its TP-axis reduce-scatter must stay Linear
-        # even when the TP axis is a ring: a *ring* reduce-scatter concurrent with dispatch makes the
-        # two ops' wrap-link traffic form a cyclic EDM buffer-credit dependency and deadlocks (the
-        # shared-expert reduce_scatter wedges on its batch_ready_sem barrier at
-        # ring_reduce_scatter_minimal_async_writer.cpp). This mirrors the proven FABRIC_2D_TORUS_Y
-        # path, where the overlapped shared expert is Linear (col axis unwrapped) while dispatch
-        # rings on SP. The forcing is gated on the overlap flag: with overlap disabled the reduce-
-        # scatter runs alone (no concurrent dispatch on the shared routers), so Ring is safe and kept.
-        # Every other TP-axis collective (MLA, dense FFN, gate, pre-dispatch all-gather, post-combine
-        # reduce) is never overlapped and keeps col_topology (Ring).
-        force_shared_expert_linear = (
-            self.overlap_shared_expert_with_dispatch and self.col_topology == ttnn.Topology.Ring
-        )
-        self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
-        if force_shared_expert_linear:
-            logger.info(
-                "TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with dispatch on a "
-                "TP-ring fabric) to avoid an EDM deadlock; other TP collectives keep Ring"
-            )
 
         # Always create dispatch table at init (static tensor) - needed by gate and dispatch module
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
@@ -522,6 +500,18 @@ class TtMoe(LightweightModule):
                 logger.info(f"TtMoe: running dispatch and combine, not the fabric2d ops: {fabric2d_error}")
         self.moe_transport = moe_transport
 
+        force_shared_expert_linear = (
+            self.overlap_shared_expert_with_dispatch
+            and self.col_topology == ttnn.Topology.Ring
+            and moe_transport != "fabric2d"
+        )
+        self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
+        if force_shared_expert_linear:
+            logger.info(
+                "TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with the direct dispatch on a "
+                "TP-ring fabric) to avoid an EDM deadlock; other TP collectives keep Ring"
+            )
+
         # ========================================
         # Sub-devices: when overlap is enabled, split the Tensix grid into a "dispatch"
         # strip and a "shared expert" strip so the two ops run on disjoint cores and the
@@ -579,9 +569,9 @@ class TtMoe(LightweightModule):
                 # Fetched here, at init, so the buffers are placed before any forward's tensors, and every layer
                 # shares one pair.
                 buffers=self.tt_ccl.get_dispatch_fabric2d_buffers(
-                    self.routed_emb_dim, seq_len_per_chip, self.row_num_links, fwd_vc_pages=dispatch_fwd_vc_pages
+                    self.routed_emb_dim, seq_len_per_chip, self.row_num_links, self.dispatch_fwd_vc_pages
                 ),
-                fwd_vc_pages=dispatch_fwd_vc_pages,
+                fwd_vc_pages=self.dispatch_fwd_vc_pages,
             )
         else:
             self.dispatch_module = TtDispatchModule(
@@ -607,10 +597,10 @@ class TtMoe(LightweightModule):
                 experts_per_chip=experts_per_chip,
                 num_experts_per_tok=num_experts_per_tok,
                 seq_len_per_chip=seq_len_per_chip,
-                fwd_reduction=combine_fwd_reduction,
                 emb_dim=self.routed_emb_dim,
                 cluster_axis=0,
                 num_links=self.row_num_links,
+                fwd_vc_pages=self.combine_fwd_vc_pages,
             )
         else:
             self.combine_module = TtCombineModule(
@@ -687,6 +677,7 @@ class TtMoe(LightweightModule):
                 num_experts_per_tok,
                 self.seq_len_per_chip,
                 self.row_num_links,
+                fwd_vc_pages=self.combine_fwd_vc_pages,
             )
             if overlap_routed_expert_with_combine
             else None
@@ -900,6 +891,7 @@ class TtMoe(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
             forwarding_buffer=self.combine_forwarding_buffer,
+            combine_fwd_vc_pages=self.combine_fwd_vc_pages,
         )
 
     def forward(
@@ -912,6 +904,7 @@ class TtMoe(LightweightModule):
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
+        residual: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -940,12 +933,15 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
+            residual: optional block residual, added to the output inside the MoE. Not allowed with
+                return_intermediates.
 
         Returns:
             Tuple of (final_output, intermediates):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
+        assert residual is None or not return_intermediates, "residual is not supported with return_intermediates"
         # Preserve profiler region labels without duplicating them through Python logging.
         ttnn.tracy_message("`TT_SIGNPOST: MoE_START`")
         if DEBUG_LOGGING_ENABLED:
@@ -1077,6 +1073,7 @@ class TtMoe(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
+                num_workers_per_link=8,
             )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
@@ -1144,6 +1141,22 @@ class TtMoe(LightweightModule):
         shared_output = self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+        fold_residual = residual is not None
+        if fold_residual:
+            shared_rs_output = shared_output
+            shared_output = ttnn.add(
+                shared_rs_output,
+                residual,
+                sub_core_grids=self.shared_expert.subdevice_cores if self.overlap_shared_expert_with_dispatch else None,
+            )
+        pcr_weights = None
+        if self.overlap_shared_expert_with_dispatch and not return_intermediates:
+            pcr_weights = ttnn.reshape(
+                scores,
+                (1, scores.shape[0], scores.shape[-2], scores.shape[-1], 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                sub_core_grids=self.shared_expert.subdevice_cores,
+            )
 
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -1171,7 +1184,13 @@ class TtMoe(LightweightModule):
         else:
             routed_x = ttnn.deallocate(routed_x, force=True)
         x = ttnn.deallocate(x, force=True)
-        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
+        if fold_residual:
+            ttnn.deallocate(shared_rs_output)
+        if pcr_weights is not None:
+            ttnn.deallocate(scores)
+            scores = pcr_weights
+        else:
+            scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_end`")
@@ -1282,7 +1301,7 @@ class TtMoe(LightweightModule):
         # ========================================
         # final_output = routed_output + shared_output
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
-        final_output = ttnn.add(routed_output, shared_output)
+        final_output = ttnn.add(routed_output, shared_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 

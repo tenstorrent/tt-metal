@@ -242,15 +242,15 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
 
     OperationType::operation_attributes_t attrs;
     attrs.data_ready_sem_addr = static_cast<uint32_t>(service.get_data_ready_sem_addr());
-    attrs.page_size = static_cast<uint32_t>(backing.buffer()->page_size());
-    attrs.num_pages = static_cast<uint32_t>(backing.buffer()->num_pages());
+    attrs.page_size = static_cast<uint32_t>(backing.mesh_buffer().page_size());
+    attrs.num_pages = static_cast<uint32_t>(backing.mesh_buffer().num_pages());
     std::vector<ttnn::Tensor> extra_backings;
     if constexpr (std::is_same_v<ServiceT, ttnn::D2DStreamServiceReceiver>) {
         const auto& backings = service.get_backing_tensors();
         extra_backings.assign(backings.begin() + 1, backings.end());
         for (const auto& extra_backing : extra_backings) {
-            attrs.extra_page_sizes.push_back(static_cast<uint32_t>(extra_backing.buffer()->page_size()));
-            attrs.extra_num_pages.push_back(static_cast<uint32_t>(extra_backing.buffer()->num_pages()));
+            attrs.extra_page_sizes.push_back(static_cast<uint32_t>(extra_backing.mesh_buffer().page_size()));
+            attrs.extra_num_pages.push_back(static_cast<uint32_t>(extra_backing.mesh_buffer().num_pages()));
         }
     }
     attrs.scratch_cb_index = 0;

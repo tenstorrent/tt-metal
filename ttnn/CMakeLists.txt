@@ -250,7 +250,11 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${ttnn_kernels}
+        FILES
+            ${ttnn_kernels}
+            cpp/ttnn/operations/common/shared_with_host/runtime_length.hpp
+            cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_worker_split.hpp
+            cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/nlp_concat_heads_split.hpp
     PRIVATE
         ${TTNNCPP_SRCS}
 )
@@ -391,7 +395,6 @@ if(WITH_PYTHON_BINDINGS)
             "$<BUILD_INTERFACE:TTNN::CPP>"
         PRIVATE
             TT::Nanobind
-            Boost::algorithm
             TT::Metalium
     )
     # .. enable size optimizations

@@ -532,9 +532,9 @@ void for_each_core_runtime_args(
 
     const bool row_major_inputs =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
-    const uint32_t a_alignment = a.buffer()->alignment();
-    const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
-    const uint32_t c_alignment = c.buffer()->alignment();
+    const uint32_t a_alignment = a.mesh_buffer().alignment();
+    const uint32_t b_alignment = b.has_value() ? b->mesh_buffer().alignment() : a_alignment;
+    const uint32_t c_alignment = c.mesh_buffer().alignment();
 
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
@@ -549,9 +549,9 @@ void for_each_core_runtime_args(
     uint32_t writer_stride_size_bytes = 0;
 
     if (row_major_inputs) {
-        const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
-        const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
-        const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
+        const uint32_t c_aligned_page_size = c.mesh_buffer().aligned_page_size();
+        const uint32_t a_aligned_page_size = a.mesh_buffer().aligned_page_size();
+        const uint32_t b_aligned_page_size = b.has_value() ? b->mesh_buffer().aligned_page_size() : a_aligned_page_size;
 
         const uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
         const uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
@@ -765,7 +765,7 @@ void for_each_core_runtime_args(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    static_cast<uint32_t>(c.mesh_buffer().aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -814,7 +814,7 @@ void for_each_core_runtime_args(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    static_cast<uint32_t>(c.mesh_buffer().aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -840,8 +840,8 @@ void for_each_core_runtime_args(
         if (row_major_inputs) {
             const std::variant<uint32_t, Buffer*> b_addr =
                 b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u};
-            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
-                                                       : static_cast<uint32_t>(a.buffer()->aligned_page_size());
+            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->mesh_buffer().aligned_page_size())
+                                                       : static_cast<uint32_t>(a.mesh_buffer().aligned_page_size());
             const uint32_t bD_arg = b.has_value() ? bD : 1u;
             const uint32_t bN_arg = b.has_value() ? bN : 1u;
             const uint32_t bC_arg = b.has_value() ? bC : 1u;
@@ -866,7 +866,7 @@ void for_each_core_runtime_args(
                 current_block,
                 num_rows_per_tile,
                 common_row_width_elements,
-                static_cast<uint32_t>(a.buffer()->aligned_page_size()),
+                static_cast<uint32_t>(a.mesh_buffer().aligned_page_size()),
                 b_page_size,
                 a_alignment,
                 b_alignment,

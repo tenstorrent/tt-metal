@@ -99,6 +99,8 @@ int generate_unique_mesh_id() {
     return next_id++;
 }
 
+std::atomic<uint64_t> mesh_device_close_count{0};
+
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
     ContextId context_id, const std::vector<Device*>& physical_devices) {
@@ -1129,8 +1131,11 @@ bool MeshDeviceImpl::close() {
     return false;
 }
 
+uint64_t MeshDeviceImpl::close_count() { return mesh_device_close_count.load(std::memory_order_acquire); }
+
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     TTZoneScopedD(MISC);
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
@@ -1263,6 +1268,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         destroy_metal_context_instance_on_close_ = false;
     }
 
+    // Again after teardown: entries checked while it ran are not trusted after it.
+    mesh_device_close_count.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }
 

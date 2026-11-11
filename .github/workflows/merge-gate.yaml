@@ -456,7 +456,7 @@ jobs:
       product: tt-nn
 
   ttnn-merge-gate-tests:
-    needs: [build, find-changes]
+    needs: [build, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -467,6 +467,7 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   # ===========================================================================
@@ -497,7 +498,7 @@ jobs:
   # ===========================================================================
 
   train-merge-gate-tests:
-    needs: [build, find-changes]
+    needs: [build, find-changes, check-harbor]
     if: ${{ github.event_name == 'workflow_dispatch' ||
             github.ref_name == 'main' ||
             needs.find-changes.outputs.tt-train-changed == 'true' ||
@@ -511,6 +512,7 @@ jobs:
       test-category: merge_gate
       enabled-skus: ALL_SKUS_IN_TESTS
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
 
   # ===========================================================================

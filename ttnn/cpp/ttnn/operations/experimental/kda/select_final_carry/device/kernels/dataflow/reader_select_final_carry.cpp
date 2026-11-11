@@ -22,25 +22,31 @@ constexpr auto prefix_args = TensorAccessorArgs<tail_args.next_compile_time_args
 constexpr auto start_args = TensorAccessorArgs<prefix_args.next_compile_time_args_offset()>();
 constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
 
+// Packets whose reads are issued under one barrier: deep enough to keep a link busy, so DRAM read latency is paid once
+// per batch instead of once per packet. The tiles buffer holds two batches.
+constexpr uint32_t batch_packets = 8;
+
 template <bool last_group, typename Accessor>
 void stream_tiles(const Accessor& source, uint32_t tile, uint32_t end_tile) {
     const uint32_t page_bytes = get_tile_size(tiles_cb);
     while (tile < end_tile) {
-        cb_reserve_back(tiles_cb, packet_pages);
+        const uint32_t remaining_packets = (end_tile - tile + packet_pages - 1) / packet_pages;
+        const uint32_t packets = remaining_packets < batch_packets ? remaining_packets : batch_packets;
+        cb_reserve_back(tiles_cb, packets * packet_pages);
         uint32_t l1_address = get_write_ptr(tiles_cb);
-        const uint32_t packet_end = tile + packet_pages < end_tile ? tile + packet_pages : end_tile;
-        for (; tile < packet_end; ++tile, l1_address += page_bytes) {
+        const uint32_t batch_end = tile + packets * packet_pages < end_tile ? tile + packets * packet_pages : end_tile;
+        for (; tile < batch_end; ++tile, l1_address += page_bytes) {
             const uint32_t page =
                 last_group ? (tile / head_tiles * tail_groups + tail_groups - 1) * head_tiles + tile % head_tiles
                            : tile;
             noc_async_read_page(page, source, l1_address);
         }
         noc_async_read_barrier();
-        cb_push_back(tiles_cb, packet_pages);
+        cb_push_back(tiles_cb, packets * packet_pages);
     }
 }
 
-// Derive the chronology, publish this rank's mode to the writer, and stream the tiles it sends or copies.
+// Derive the chronology, publish this rank's mode to the writer, and stream the tiles it sends.
 void kernel_main() {
     using namespace kda_select_final_carry;
     const uint32_t tail_address = get_common_arg_val<uint32_t>(0);
@@ -48,8 +54,6 @@ void kernel_main() {
     const uint32_t start_address = get_common_arg_val<uint32_t>(2);
     const uint32_t end_address = get_common_arg_val<uint32_t>(3);
     size_t arg = 0;
-    const uint32_t copy_begin = get_arg_val<uint32_t>(arg++);
-    const uint32_t copy_end = get_arg_val<uint32_t>(arg++);
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t send_end = get_arg_val<uint32_t>(arg++);
 
@@ -68,13 +72,17 @@ void kernel_main() {
     } else {
         topology = kda_chronology::derive(actual_start, sp_rank, sp_size, local_rows);
     }
-    const Mode mode = !topology.split ? copy_prefix : (topology.final_owner == sp_rank ? broadcast : receive);
+    // The final state is the split tail's, else the prefix's, which only the last chronological rank holds.
+    const uint32_t holder = topology.split ? topology.final_owner : (topology.first_rank + sp_size - 1) % sp_size;
+    const Mode mode = holder == sp_rank ? broadcast : receive;
     words[0] = mode;
     cb_push_back(mode_cb, 1);
 
-    if (mode == copy_prefix) {
-        stream_tiles<false>(TensorAccessor(prefix_args, prefix_address), copy_begin, copy_end);
-    } else if (mode == broadcast) {
-        stream_tiles<true>(TensorAccessor(tail_args, tail_address), send_begin, send_end);
+    if (mode == broadcast) {
+        if (topology.split) {
+            stream_tiles<true>(TensorAccessor(tail_args, tail_address), send_begin, send_end);
+        } else {
+            stream_tiles<false>(TensorAccessor(prefix_args, prefix_address), send_begin, send_end);
+        }
     }
 }

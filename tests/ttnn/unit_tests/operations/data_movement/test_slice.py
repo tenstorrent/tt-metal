@@ -2501,6 +2501,15 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
 
 
+def test_slice_tensor_args_rejects_zero_num_devices(device, expect_error):
+    # The tensor-args path splits slice_dim by num_devices.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    starts = ttnn.from_torch(torch.tensor([0, 0, 0, 0]), device=device)
+    ends = ttnn.from_torch(torch.tensor([1, 1, 32, 64]), device=device)
+    with expect_error(RuntimeError, "num_devices must be greater than 0"):
+        ttnn.slice(x, starts, ends, slice_dim=2, num_devices=0)
+
+
 def test_slice_rm_wide_row_after_l1_fills(device):
     # The RM factory double-buffers a whole row when it fits the L1 free at program creation and
     # splits it into 8 KiB chunks when it does not. Slice once with L1 empty, then pin an L1 tensor

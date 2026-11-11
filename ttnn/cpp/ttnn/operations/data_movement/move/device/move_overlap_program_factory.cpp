@@ -77,7 +77,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
-    const uint32_t page_size = input.buffer()->page_size();
+    const uint32_t page_size = input.mesh_buffer().page_size();
 
     const uint32_t num_pages =
         tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
@@ -89,7 +89,10 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
 
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
+        output.mesh_buffer().device_local_size(),
+        output.mesh_buffer().page_size(),
+        num_l1_banks,
+        tt::tt_metal::hal::get_l1_alignment());
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -234,8 +237,8 @@ void MoveOverlapProgramFactory::override_runtime_arguments(
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Single reader kernel, src/dst declared at slots 0/1.
-    const uint32_t src_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t dst_addr = tensor_return_value.buffer()->address();
+    const uint32_t src_addr = tensor_args.input_tensor.mesh_buffer().address();
+    const uint32_t dst_addr = tensor_return_value.mesh_buffer().address();
     for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 0)) {
         for (auto& a : col) {
             if (a.size() < 2) {

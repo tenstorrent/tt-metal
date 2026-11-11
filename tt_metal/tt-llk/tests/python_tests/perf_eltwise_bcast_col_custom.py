@@ -8,9 +8,9 @@ from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
-    PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.stimuli_config import StimuliConfig
 from test_eltwise_bcast_col_custom import create_eltwise_bcast_col_custom_config
 
@@ -55,12 +55,7 @@ def test_perf_eltwise_bcast_col_custom(
         ),
         loop_factor=loop_factor,
         is_perf=True,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
     )
 
     configuration.run(perf_report)

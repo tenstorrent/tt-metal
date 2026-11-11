@@ -28,6 +28,10 @@ Tests
 * ``test_rmsnorm_module_corr`` — ``DistributedRMSNorm`` module (static weight) e2e.
 * ``test_layernorm_module_corr``— ``DistributedLayerNorm`` module (adaLN) e2e.
 * ``test_dit_per_head_rmsnorm_mesh_cache_rebinding`` — per-chip data, cache rebinding, and trace replay.
+* ``test_create_stats_buffer_host_input_local_norm`` — host inputs on the local-norm path need no stats buffer.
+* ``test_rmsnorm_ag_cache_hit_rebinding`` / ``test_layernorm_ag_cache_hit_rebinding`` /
+  ``test_rmsnorm_ag_cache_hit_aliased_miss`` — all-gather cache hits on new tensors,
+  semaphores and stats buffers (T3K / LoudBox).
 * ``test_traced_corr``         — traced-replay output == eager (semaphore-reset guard).
 * ``test_layernorm_module_bench``— fused LN vs composite-chain speedup (perf, dev).
 
@@ -48,6 +52,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
 from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ...parallel.manager import CCLManager
@@ -359,7 +364,22 @@ def _fused_links(op_override):
     return op_override if op_override is not None else 2  # BH bench fused = 2-link MUX default
 
 
-def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weight, bias, rope, per_head_norm=None):
+def _call_op(
+    inp,
+    submesh,
+    sem,
+    cfg,
+    topology,
+    tp_axis,
+    *,
+    pob,
+    num_links,
+    weight,
+    bias,
+    rope,
+    per_head_norm=None,
+    row_capacity=None,
+):
     if per_head_norm is None:
         per_head_norm = cfg.per_head_norm
     trans = inp["trans"] if rope else None
@@ -385,6 +405,7 @@ def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weigh
             persistent_output_buffer=pob,
             num_preferred_links=num_links,
             reciprocals=inp.get("recip"),
+            row_capacity=row_capacity,
         )
     return ttnn.experimental.dit_fused_distributed_rmsnorm(
         inp["x"],
@@ -403,6 +424,7 @@ def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weigh
         persistent_output_buffer=pob,
         num_preferred_links=num_links,
         per_head_norm=per_head_norm,
+        row_capacity=row_capacity,
     )
 
 
@@ -1447,6 +1469,224 @@ def test_dit_per_head_rmsnorm_mesh_cache_rebinding(mesh_device):
     assert mesh_device.num_program_cache_entries() == cache_entries
 
 
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_create_stats_buffer_host_input_local_norm(mesh_device):
+    # Local normalization needs no stats scratch, so a host input must return None
+    # without touching the (absent) device of the input tensor.
+    heads = 2
+    x = torch.randn(1, 1, 64, heads * 128, dtype=torch.bfloat16)
+    host_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn.SetDefaultDevice(mesh_device)
+    try:
+        assert (
+            ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(host_input, None, mesh_device) is None
+        )
+        assert (
+            ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                host_input, 1, mesh_device, num_heads_per_device=heads, per_head_norm=True
+            )
+            is None
+        )
+        assert (
+            ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(host_input, None, mesh_device) is None
+        )
+    finally:
+        ttnn.SetDefaultDevice(None)
+
+
+# ---------------------------------------------------------------------------
+# All-gather cache hits: every launch binds a different live tensor set
+# ---------------------------------------------------------------------------
+# T3K / LoudBox (2,4): TP=4 rides mesh axis 1 (a 4-chip line) and axis 0 replicates, so the
+# workload holds one program per chip. Four tile rows per chip spread over four workers, so
+# the 2-link variant gets two forwarders and exercises forwarder 1 on every hit.
+_AG_CACHE_TP = 4
+_AG_CACHE_TP_AXIS = 1
+_AG_CACHE_LINKS = 1
+_AG_CACHE_LINKS_PARAM = pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
+_AG_CACHE_ROWS = 128
+_AG_CACHE_HEADS = 2  # per device
+_AG_CACHE_HEAD_DIM = 128
+_AG_CACHE_DIM = _AG_CACHE_TP * _AG_CACHE_HEADS * _AG_CACHE_HEAD_DIM
+_AG_CACHE_MESH = pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+_AG_CACHE_FABRIC = pytest.mark.parametrize("device_params", [line_params], indirect=True)
+
+
+def _ag_cache_submesh(mesh_device):
+    return _resolve_submesh(mesh_device, _AG_CACHE_TP, _AG_CACHE_TP_AXIS, full_mesh=True)
+
+
+def _ag_cache_rms_set(submesh, ccl, seed, num_links, *, alias=False):
+    """One complete RMSNorm + weight + bias + broadcast RoPE argument set with its own
+    semaphore, stats buffer and golden. alias=True passes the weight tensor as bias and
+    the rope_cos tensor as rope_sin."""
+    torch.manual_seed(seed)
+    rows, hd, dim, axis = _AG_CACHE_ROWS, _AG_CACHE_HEAD_DIM, _AG_CACHE_DIM, _AG_CACHE_TP_AXIS
+    x = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16)
+    w = torch.randn(1, dim, dtype=torch.bfloat16)
+    b = w if alias else torch.randn(1, dim, dtype=torch.bfloat16)
+    cos_raw = torch.randn(1, rows, 1, hd // 2)
+    sin_raw = cos_raw if alias else torch.randn(1, rows, 1, hd // 2)
+    cos_f, sin_f = stack_cos_sin(cos_raw, sin_raw)  # (1, rows, 1, hd)
+    cos_host, sin_host = cos_f.permute(0, 2, 1, 3), sin_f.permute(0, 2, 1, 3)  # (1, 1, rows, hd)
+
+    s = {"x": bf16_tensor(x, device=submesh, mesh_axis=axis, shard_dim=-1)}
+    s["weight"] = bf16_tensor(w, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["bias"] = s["weight"] if alias else bf16_tensor(b, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["cos"] = from_torch(cos_host, device=submesh, dtype=ttnn.float32)
+    s["sin"] = s["cos"] if alias else from_torch(sin_host, device=submesh, dtype=ttnn.float32)
+    s["trans"] = bf16_tensor(get_rot_transformation_mat(), device=submesh)
+    s["sem"] = ccl.get_ag_ping_pong_semaphore(axis)
+    s["links"] = num_links
+    s["pob"] = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+        s["x"],
+        axis,
+        submesh,
+        num_heads_per_device=_AG_CACHE_HEADS,
+        num_links=num_links,
+        weight=s["weight"],
+        transformation_mat=s["trans"],
+        rope_cos=s["cos"],
+        rope_sin=s["sin"],
+    )
+
+    heads = dim // hd
+    xf = x.float().reshape(rows, dim)
+    y = xf * (xf.pow(2).mean(-1, keepdim=True) + NORM_EPS).rsqrt()
+    y = (y * w.float() + b.float()).reshape(rows, heads, hd)
+    cos = cos_host[0, 0].to(torch.bfloat16).float()[:, None, :]  # (rows, 1, hd), broadcast over heads
+    sin = sin_host[0, 0].to(torch.bfloat16).float()[:, None, :]
+    rot = torch.stack([-y[..., 1::2], y[..., 0::2]], dim=-1).flatten(-2)  # (-x1, x0, -x3, x2, ...)
+    s["ref"] = (y * cos + rot * sin).reshape(rows, dim)
+    return s
+
+
+def _ag_cache_ln_set(submesh, ccl, seed, num_links):
+    """One complete LayerNorm + weight + bias + reciprocal-LUT argument set with its own
+    semaphore, stats buffer and golden."""
+    torch.manual_seed(seed)
+    rows, dim, axis = _AG_CACHE_ROWS, _AG_CACHE_DIM, _AG_CACHE_TP_AXIS
+    h_local = dim // _AG_CACHE_TP
+    x = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16)
+    w = torch.randn(1, dim, dtype=torch.bfloat16)
+    b = torch.randn(1, dim, dtype=torch.bfloat16)
+    recip = torch.tensor([1.0 / (i + 1) for i in range(h_local)], dtype=torch.float32).reshape(1, 1, 1, h_local)
+
+    s = {"x": bf16_tensor(x, device=submesh, mesh_axis=axis, shard_dim=-1)}
+    s["weight"] = bf16_tensor(w, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["bias"] = bf16_tensor(b, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["recip"] = from_torch(recip, device=submesh, layout=ttnn.Layout.ROW_MAJOR, dtype=ttnn.float32)
+    s["sem"] = ccl.get_ag_ping_pong_semaphore(axis)
+    s["links"] = num_links
+    s["pob"] = ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
+        s["x"],
+        axis,
+        submesh,
+        num_heads_per_device=1,
+        num_links=num_links,
+        weight=s["weight"],
+    )
+
+    xf = x.float().reshape(rows, dim)
+    mean = xf.mean(-1, keepdim=True)
+    var = xf.var(-1, unbiased=False, keepdim=True)
+    s["ref"] = (xf - mean) * (var + NORM_EPS).rsqrt() * w.float() + b.float()
+    return s
+
+
+def _ag_cache_run(submesh, s):
+    if "recip" in s:
+        return ttnn.experimental.dit_fused_distributed_layernorm(
+            s["x"],
+            _AG_CACHE_TP_AXIS,
+            submesh,
+            s["sem"],
+            topology=ttnn.Topology.Linear,
+            epsilon=NORM_EPS,
+            num_heads_per_device=1,
+            weight=s["weight"],
+            bias=s["bias"],
+            persistent_output_buffer=s["pob"],
+            num_preferred_links=s["links"],
+            reciprocals=s["recip"],
+        )
+    return ttnn.experimental.dit_fused_distributed_rmsnorm(
+        s["x"],
+        _AG_CACHE_TP_AXIS,
+        submesh,
+        s["sem"],
+        topology=ttnn.Topology.Linear,
+        epsilon=NORM_EPS,
+        num_heads_per_device=_AG_CACHE_HEADS,
+        weight=s["weight"],
+        bias=s["bias"],
+        transformation_mat=s["trans"],
+        rope_cos=s["cos"],
+        rope_sin=s["sin"],
+        persistent_output_buffer=s["pob"],
+        num_preferred_links=s["links"],
+    )
+
+
+def _ag_cache_check(submesh, s, label):
+    pcc = _pcc(_gather(_ag_cache_run(submesh, s), _AG_CACHE_TP_AXIS), s["ref"])
+    assert pcc >= 0.999, f"{label}: PCC={pcc}"
+
+
+def _ag_cache_hit_rebinding(mesh_device, make_set, num_links):
+    submesh = _ag_cache_submesh(mesh_device)
+    ccl = CCLManager(mesh_device=submesh, num_links=num_links, topology=ttnn.Topology.Linear)
+    # Both sets stay alive so the hits bind different addresses. Consecutive launches
+    # alternate the two ping-pong semaphores and stats buffers.
+    sets = [make_set(submesh, ccl, seed, num_links) for seed in (13, 29)]
+    # Every device must finish creating its semaphores before any peer's first atomic-inc.
+    ttnn.synchronize_device(submesh)
+
+    submesh.enable_program_cache()
+    _ag_cache_check(submesh, sets[0], "miss, set 0")
+    cache_entries = submesh.num_program_cache_entries()
+    for index in (1, 0, 1):
+        _ag_cache_check(submesh, sets[index], f"hit, set {index}")
+        assert submesh.num_program_cache_entries() == cache_entries
+
+
+@_AG_CACHE_MESH
+@_AG_CACHE_FABRIC
+@_AG_CACHE_LINKS_PARAM
+def test_rmsnorm_ag_cache_hit_rebinding(mesh_device, num_links):
+    """All-gather RMSNorm + RoPE: each cache hit binds a new input, weight, bias, cos, sin,
+    transformation matrix, semaphore and stats buffer, and must match its own golden."""
+    _ag_cache_hit_rebinding(mesh_device, _ag_cache_rms_set, num_links)
+
+
+@_AG_CACHE_MESH
+@_AG_CACHE_FABRIC
+@_AG_CACHE_LINKS_PARAM
+def test_layernorm_ag_cache_hit_rebinding(mesh_device, num_links):
+    """All-gather LayerNorm with a reciprocal LUT: each cache hit binds a new input, weight,
+    bias, reciprocals, semaphore and stats buffer, and must match its own golden."""
+    _ag_cache_hit_rebinding(mesh_device, _ag_cache_ln_set, num_links)
+
+
+@_AG_CACHE_MESH
+@_AG_CACHE_FABRIC
+def test_rmsnorm_ag_cache_hit_aliased_miss(mesh_device):
+    """The miss passes one tensor as both weight and bias and one as both rope_cos and
+    rope_sin; the hit passes distinct tensors with different data and must see its own."""
+    submesh = _ag_cache_submesh(mesh_device)
+    ccl = CCLManager(mesh_device=submesh, num_links=_AG_CACHE_LINKS, topology=ttnn.Topology.Linear)
+    aliased = _ag_cache_rms_set(submesh, ccl, 13, _AG_CACHE_LINKS, alias=True)
+    distinct = _ag_cache_rms_set(submesh, ccl, 29, _AG_CACHE_LINKS)
+    ttnn.synchronize_device(submesh)
+
+    submesh.enable_program_cache()
+    submesh.clear_program_cache()
+    _ag_cache_check(submesh, aliased, "aliased miss")
+    cache_entries = submesh.num_program_cache_entries()
+    _ag_cache_check(submesh, distinct, "distinct hit")
+    assert submesh.num_program_cache_entries() == cache_entries
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_CORR_PARAMS, _CORR_IDS)],
@@ -1874,3 +2114,402 @@ def test_sweep(mesh_device, tp, topology, tp_axis, full_mesh, is_ci_env):
             logger.warning(f"SWEEP {pid} EXCEPTION: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"SWEEP [tp{tp}_{topology.name}] {len(points) - len(flagged)}/{len(points)} passed")
     assert not flagged, f"sweep failures ({len(flagged)}/{len(points)}):\n" + "\n".join(flagged)
+
+
+# MiniMax-H3 (4x8, TP=4 ring on axis 0): `row_capacity` pins the worker set and the stats scratch, so one
+# program per layer config must serve every served per-chip row count.
+
+_H3_TILE_ROWS = (148, 74, 287, 427, 470)  # per-chip tile rows (5 s warm point first, then the rest of the envelope)
+_H3_ROW_CAPACITY = 470 * 32
+_H3_DIM = 5376  # 1344 per chip at TP=4
+_H3_QK_DIM, _H3_HEAD_DIM, _H3_HEADS = 7168, 128, 56  # 14 heads x 128 per chip at TP=4
+_H3_TABLE_TILES = 25  # tile rows of the adaLN tile-row tables (800 rows)
+_H3_PARAMS = [pytest.param((4, 8), _DP_GAL_RING, id="galaxy_tp4_ring")]
+
+
+def _h3_block_inputs(
+    mesh_device, tile_rows: int, *, tile_row_map: bool, in_fp32: bool = False, map_entries: int | None = None
+):
+    """norm1/norm2 form: x [1,1,rows,5376] and per-token adaLN weight/bias, either full per-token tables
+    or a small tile-row table plus a per-chip map (`map_entries` > tile_rows gives a longer map whose
+    prefix is live). Returns the device tensors and the fp32 reference."""
+    tp_axis = 0
+    rows = tile_rows * 32
+    torch.manual_seed(1000 + tile_rows)
+    x = torch.randn((1, 1, rows, _H3_DIM), dtype=torch.float32 if in_fp32 else torch.bfloat16)
+    table_rows = _H3_TABLE_TILES * 32 if tile_row_map else rows
+    table_w = (torch.randn((1, 1, table_rows, _H3_DIM)) * 0.5 + 1.0).to(torch.bfloat16)
+    table_b = (torch.randn((1, 1, table_rows, _H3_DIM)) * 0.5).to(torch.bfloat16)
+    out = {
+        "x": (float32_tensor if in_fp32 else bf16_tensor)(x, device=mesh_device, mesh_axis=tp_axis, shard_dim=-1),
+        "weight": bf16_tensor(table_w, device=mesh_device, mesh_axis=tp_axis, shard_dim=-1),
+        "bias": bf16_tensor(table_b, device=mesh_device, mesh_axis=tp_axis, shard_dim=-1),
+        "map": None,
+    }
+    if tile_row_map:
+        entries = tile_rows if map_entries is None else map_entries
+        assert entries >= tile_rows, "the map must cover every live tile row"
+        tmap = torch.randint(0, _H3_TABLE_TILES, (entries,))
+        out["map"] = from_torch(
+            tmap.to(torch.int32).reshape(1, 1, 1, entries),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+        )
+        live = tmap[:tile_rows]
+        expand = lambda t: t.reshape(-1, 32, _H3_DIM)[live].reshape(1, 1, rows, _H3_DIM)  # noqa: E731
+        table_w, table_b = expand(table_w), expand(table_b)
+    xf = x.float()
+    normed = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + NORM_EPS)
+    out["ref"] = (normed * table_w.float() + table_b.float()).reshape(rows, _H3_DIM)
+    return out
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("tile_row_map", [False, True], ids=["per_token", "tile_row_map"])
+def test_h3_dynamic_rows_block_norm(mesh_device, tile_row_map):
+    """DistributedRMSNorm with row_capacity: warm at 148 tile rows, then every other served length must hit
+    the same programs (A/B semaphores and stats pool alternating); an fp32 input must add programs."""
+    tp_axis = 0
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norm = DistributedRMSNorm(
+        embedding_dim=_H3_DIM,
+        norm_elementwise_affine=False,
+        mesh_axis=tp_axis,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        row_capacity=_H3_ROW_CAPACITY,
+    )
+
+    variants = [(t, False) for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], True)]
+    # Built up front: from_torch tilizes on device, one program per shape, which the flat check must not see.
+    inputs = {v: _h3_block_inputs(mesh_device, v[0], tile_row_map=tile_row_map, in_fp32=v[1]) for v in variants}
+
+    def run(variant):
+        tile_rows, in_fp32 = variant
+        inp = inputs[variant]
+        out = norm(
+            inp["x"],
+            dynamic_weight=inp["weight"],
+            dynamic_bias=inp["bias"],
+            dynamic_weight_includes_static=True,
+            dynamic_tile_row_map=inp["map"],
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"{variant}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 block norm map={tile_row_map} tile_rows={tile_rows} fp32={in_fp32} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"{variant}: pcc={pcc}"
+
+    assert_program_cache_flat(mesh_device, run, variants, miss_indices=(len(variants) - 1,))
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_dynamic_rows_stats_scratch(mesh_device):
+    """Raw op with a capacity-sized, NaN-poisoned stats scratch: every length reads back only pages
+    this launch wrote (finite output, PCC), and the pages past the live need stay untouched."""
+    tp_axis = 0
+    ring, links = 4, 2
+    ccl = CCLManager(mesh_device=mesh_device, num_links=links, topology=ttnn.Topology.Ring)
+    sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+    inputs = {t: _h3_block_inputs(mesh_device, t, tile_row_map=False) for t in _H3_TILE_ROWS}  # built up front
+    probe = inputs[_H3_TILE_ROWS[0]]
+    spec = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+        probe["x"], tp_axis, mesh_device, num_links=links, weight=probe["weight"], row_capacity=_H3_ROW_CAPACITY
+    )
+    pages, page_width = spec.shape[2], spec.shape[3]
+    del spec
+    poison = torch.full((1, 1, pages, page_width), float("nan"), dtype=torch.float32)
+    poison_host = ttnn.from_torch(
+        poison, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+    pobs = [ttnn.to_device(poison_host, mesh_device) for _ in range(_PINGPONG)]
+    ttnn.synchronize_device(mesh_device)
+    num_workers = 64  # the pinned all-gather worker count on Blackhole (derive_worker_cap)
+    calls = 0
+
+    def run(tile_rows):
+        nonlocal calls
+        inp = inputs[tile_rows]
+        pob = pobs[calls % _PINGPONG]
+        out = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            inp["x"],
+            tp_axis,
+            mesh_device,
+            sems[calls % _PINGPONG],
+            topology=ttnn.Topology.Ring,
+            epsilon=NORM_EPS,
+            weight=inp["weight"],
+            bias=inp["bias"],
+            persistent_output_buffer=pob,
+            num_preferred_links=links,
+            row_capacity=_H3_ROW_CAPACITY,
+        )
+        calls += 1
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"tile_rows={tile_rows}: non-finite output (stale stats page read)"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 stats scratch tile_rows={tile_rows} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"tile_rows={tile_rows}: pcc={pcc}"
+        live_pages = ring * links * -(-tile_rows // num_workers)
+        for shard in ttnn.get_device_tensors(pob):
+            scratch = ttnn.to_torch(shard)[0, 0]
+            assert torch.isnan(scratch[live_pages:]).all(), f"tile_rows={tile_rows}: pages past the live need written"
+        ttnn.copy_host_to_device_tensor(poison_host, pob)
+        ttnn.synchronize_device(mesh_device)
+
+    assert_program_cache_flat(mesh_device, run, list(_H3_TILE_ROWS))
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("capacity_first", [False, True], ids=["none_then_capacity", "capacity_then_none"])
+def test_h3_row_capacity_separate_program(mesh_device, capacity_first):
+    """Raw op at the capacity row count with and without row_capacity, each on its own stats scratch: the
+    worker split differs, so either order must compile two programs (the capacity one also serving shorter
+    rows) and every call must match the reference."""
+    tp_axis = 0
+    links = 2
+    ccl = CCLManager(mesh_device=mesh_device, num_links=links, topology=ttnn.Topology.Ring)
+    sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+    top = _H3_ROW_CAPACITY // 32
+    inputs = {t: _h3_block_inputs(mesh_device, t, tile_row_map=False) for t in (top, 427, 148)}  # built up front
+    probe = inputs[top]
+    pobs = {
+        cap: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+            probe["x"], tp_axis, mesh_device, num_links=links, weight=probe["weight"], row_capacity=cap
+        )
+        for cap in (None, _H3_ROW_CAPACITY)
+    }
+    logger.info(f"H3 stats pages: none={pobs[None].shape[2]} capacity={pobs[_H3_ROW_CAPACITY].shape[2]}")
+    calls = 0
+
+    def run(variant):
+        nonlocal calls
+        row_capacity, tile_rows = variant
+        inp = inputs[tile_rows]
+        out = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            inp["x"],
+            tp_axis,
+            mesh_device,
+            sems[calls % _PINGPONG],
+            topology=ttnn.Topology.Ring,
+            epsilon=NORM_EPS,
+            weight=inp["weight"],
+            bias=inp["bias"],
+            persistent_output_buffer=pobs[row_capacity],
+            num_preferred_links=links,
+            row_capacity=row_capacity,
+        )
+        calls += 1
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"{variant}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 row_capacity={row_capacity} tile_rows={tile_rows} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"{variant}: pcc={pcc}"
+
+    capacity_calls = [(_H3_ROW_CAPACITY, t) for t in (top, 427, 148)]
+    if capacity_first:
+        variants, miss = capacity_calls + [(None, top)], (3,)
+    else:
+        variants, miss = [(None, top)] + capacity_calls, (1,)
+    entries = assert_program_cache_flat(mesh_device, run, variants, miss_indices=miss)
+    assert entries == 2, f"expected one program per row_capacity mode, got {entries}"
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_dynamic_rows_per_head_rope(mesh_device):
+    """norm_q/norm_k form: per-head RMSNorm over 14 x 128 per chip with fused RoPE, full grid with
+    zero-row workers at the short lengths; one program across the envelope, fp32 input must miss."""
+    tp_axis, tp = 0, 4
+    topology = ttnn.Topology.Ring
+
+    def cfg_for(tile_rows, in_dtype="bf16"):
+        return Cfg(
+            f"h3_qk_{tile_rows}",
+            FLUX,
+            tp,
+            tile_rows * 32,
+            _H3_QK_DIM,
+            _H3_HEAD_DIM,
+            True,
+            _H3_HEADS,
+            True,
+            True,
+            in_dtype,
+        )
+
+    variants = [(t, "bf16") for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], "fp32")]
+    inputs = {v: _build(mesh_device, cfg_for(*v), tp_axis) for v in variants}  # built up front (device tilize)
+
+    def run(variant):
+        tile_rows, in_dtype = variant
+        cfg = cfg_for(tile_rows, in_dtype)
+        inp = inputs[variant]
+        out = _call_op(
+            inp,
+            mesh_device,
+            [],
+            cfg,
+            topology,
+            tp_axis,
+            pob=None,
+            num_links=2,
+            weight=inp["weight"],
+            bias=None,
+            rope=True,
+            row_capacity=_H3_ROW_CAPACITY,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"{variant}: non-finite output"
+        pcc = _pcc(got, _torch_ref(cfg))
+        logger.info(f"H3 per-head rope tile_rows={tile_rows} dtype={in_dtype} pcc={pcc:.6f}")
+        assert pcc >= 0.997, f"{variant}: pcc={pcc}"
+
+    assert_program_cache_flat(mesh_device, run, variants, miss_indices=(len(variants) - 1,))
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_tile_row_map_longer_than_capacity(mesh_device):
+    """A tile-row map longer than the row capacity (the reader copies only the live entries): the first
+    length compiles, the second must hit the same program, both match the reference."""
+    tp_axis = 0
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norm = DistributedRMSNorm(
+        embedding_dim=_H3_DIM,
+        norm_elementwise_affine=False,
+        mesh_axis=tp_axis,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        row_capacity=_H3_ROW_CAPACITY,
+    )
+    long_map = _H3_ROW_CAPACITY // 32 + 130
+    variants = [_H3_TILE_ROWS[0], _H3_TILE_ROWS[1]]
+    inputs = {t: _h3_block_inputs(mesh_device, t, tile_row_map=True, map_entries=long_map) for t in variants}
+
+    def run(tile_rows):
+        inp = inputs[tile_rows]
+        out = norm(
+            inp["x"],
+            dynamic_weight=inp["weight"],
+            dynamic_bias=inp["bias"],
+            dynamic_weight_includes_static=True,
+            dynamic_tile_row_map=inp["map"],
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"tile_rows={tile_rows}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 long map ({long_map} entries) tile_rows={tile_rows} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"tile_rows={tile_rows}: pcc={pcc}"
+
+    assert_program_cache_flat(mesh_device, run, variants)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_row_capacity_pool_key(mesh_device):
+    """Two DistributedRMSNorm modules on one CCLManager, one pinned at the capacity and one without
+    row_capacity, both at the capacity row count: they take different worker splits (so different stats
+    pools and programs); the pinned module runs first, so a shared pool would be too small for the other."""
+    tp_axis = 0
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norms = {
+        row_capacity: DistributedRMSNorm(
+            embedding_dim=_H3_DIM,
+            norm_elementwise_affine=False,
+            mesh_axis=tp_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl,
+            row_capacity=row_capacity,
+        )
+        for row_capacity in (_H3_ROW_CAPACITY, None)
+    }
+    top = _H3_ROW_CAPACITY // 32
+    inp = _h3_block_inputs(mesh_device, top, tile_row_map=False)
+
+    def run(row_capacity):
+        out = norms[row_capacity](
+            inp["x"],
+            dynamic_weight=inp["weight"],
+            dynamic_bias=inp["bias"],
+            dynamic_weight_includes_static=True,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"row_capacity={row_capacity}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 pool key row_capacity={row_capacity} tile_rows={top} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"row_capacity={row_capacity}: pcc={pcc}"
+
+    entries = assert_program_cache_flat(mesh_device, run, [_H3_ROW_CAPACITY, None], miss_indices=(1,))
+    assert entries == 2, f"expected one program per row_capacity mode, got {entries}"
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_batched_rope_hit_rejects_unaligned(mesh_device, expect_error):
+    """Batched RMSNorm + fused RoPE under row_capacity: a tile-aligned N compiles the program; an unaligned
+    N of the same batch shares its row-free key, so the cache hit must refuse it as the miss does."""
+    tp_axis, tp = 0, 4
+    dim, head_dim, batch, links = 1024, 128, 2, 2
+    nh_dev = (dim // tp) // head_dim  # head-split output, as in test_rmsnorm_batched_rope_corr
+    capacity = batch * 64
+    trans = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    ccl = CCLManager(mesh_device=mesh_device, num_links=links, topology=ttnn.Topology.Ring)
+    sem = ccl.get_ag_ping_pong_semaphore(tp_axis)
+
+    def build(rows):
+        torch.manual_seed(rows)
+        x = bf16_tensor(
+            torch.randn(1, batch, rows, dim, dtype=torch.bfloat16), device=mesh_device, mesh_axis=tp_axis, shard_dim=-1
+        )
+        cos_f, sin_f = stack_cos_sin(torch.randn(1, rows, 1, head_dim // 2), torch.randn(1, rows, 1, head_dim // 2))
+        cos = from_torch(cos_f.permute(0, 2, 1, 3), device=mesh_device, dtype=ttnn.float32)
+        sin = from_torch(sin_f.permute(0, 2, 1, 3), device=mesh_device, dtype=ttnn.float32)
+        return x, cos, sin
+
+    aligned, unaligned = build(64), build(33)
+    pob = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+        aligned[0],
+        tp_axis,
+        mesh_device,
+        num_heads_per_device=nh_dev,
+        num_links=links,
+        transformation_mat=trans,
+        rope_cos=aligned[1],
+        rope_sin=aligned[2],
+        row_capacity=capacity,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    def run(x, cos, sin):
+        return ttnn.experimental.dit_fused_distributed_rmsnorm(
+            x,
+            tp_axis,
+            mesh_device,
+            sem,
+            topology=ttnn.Topology.Ring,
+            epsilon=NORM_EPS,
+            num_heads_per_device=nh_dev,
+            transformation_mat=trans,
+            rope_cos=cos,
+            rope_sin=sin,
+            persistent_output_buffer=pob,
+            num_preferred_links=links,
+            row_capacity=capacity,
+        )
+
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    out = run(*aligned)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.isfinite(_gather(out, tp_axis)).all(), "aligned batched RoPE: non-finite output"
+    assert mesh_device.num_program_cache_entries() == 1
+    with expect_error(RuntimeError, "Batched fused RoPE requires input N"):
+        run(*unaligned)
+    assert mesh_device.num_program_cache_entries() == 1, "the refused call must not add a program"

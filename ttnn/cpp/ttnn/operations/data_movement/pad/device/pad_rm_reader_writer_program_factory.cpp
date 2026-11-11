@@ -79,7 +79,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     const NodeCoord node{0, 0};
 
     uint32_t dfb_pagesize =
-        tt::round_up(padded_row_size_nbytes, std::max(a.buffer()->alignment(), tt::constants::TILE_WIDTH));
+        tt::round_up(padded_row_size_nbytes, std::max(a.mesh_buffer().alignment(), tt::constants::TILE_WIDTH));
     // 16 pages is a multibuffering choice; use fewer when 16 would overflow L1.
     const uint32_t l1_budget =
         (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);

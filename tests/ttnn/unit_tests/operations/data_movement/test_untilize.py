@@ -2932,6 +2932,61 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, shard_core_grid",
+    [
+        # Even: two shards per core. The shard spans 2 batches, so it has no 2D shard-spec equivalent.
+        (
+            [4, 128, 256],
+            ttnn.Shape([2, 64, 128]),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        # Uneven: several shards per core, unequal across cores, partial edge shards.
+        (
+            [3, 192, 160],
+            ttnn.Shape([2, 64, 64]),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))}),
+        ),
+    ],
+)
+def test_untilize_nd_shard_to_same_shard_spec_32bit_dest(device, dtype, tensor_shape, shard_shape, shard_core_grid):
+    # 32-bit input dtypes turn on fp32_dest_acc_en, which unpacks the input straight to Dest.
+    # The second run is a program-cache hit on new allocations: both borrowed DFBs must rebind to them.
+    torch.manual_seed(0)
+    tensor_spec = ttnn.TensorSpec(
+        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+    ).sharded(shard_shape, shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    keep_alive = []  # keeps the first run's tensors allocated so the second run gets new addresses
+    entries = None
+    for i in range(2):
+        if dtype == ttnn.float32:
+            input_torch_tensor = torch.randn(tensor_shape, dtype=torch.float32)
+        else:
+            input_torch_tensor = torch.randint(0, 1 << 20, tensor_shape, dtype=torch.int32)
+        input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=tensor_spec, device=device)
+
+        ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
+
+        assert ttnn_output_tensor.memory_config() == input_ttnn_tensor.memory_config()
+        assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor).to(input_torch_tensor.dtype))
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            assert device.num_program_cache_entries() == entries, "untilize must reuse the cached program"
+            assert input_ttnn_tensor.buffer_address() != keep_alive[0].buffer_address()
+            assert ttnn_output_tensor.buffer_address() != keep_alive[1].buffer_address()
+        keep_alive += [input_ttnn_tensor, ttnn_output_tensor]
+
+    device.disable_and_clear_program_cache()
+
+
 # --- Codegen-path coverage ---
 #
 # ttnn.untilize routes gate-supported cases to codegen and the rest to native, and offers no way to
@@ -3487,3 +3542,78 @@ def test_untilize_dtype_uint8(device, tensor_shape):
     t = ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
     got = ttnn.to_torch(ttnn.untilize(t))
     assert torch.equal(got, x)
+
+
+def _h3_untilize_rows():
+    # Full packed sequence lengths of the MiniMax-H3 DiT on 4x8 (8 chips x 74..470 tile rows), 148 as the warm point.
+    return [rows * 32 * 8 for rows in (148, 74, 287, 427, 470)]
+
+
+# These drive the native multi-core prim directly (what ttnn.embedding calls for a TILE table); the
+# routed ttnn.untilize may take the codegen prim, which hashes the full shape. `runtime_rows` opts in.
+@pytest.mark.parametrize("width", [96, 32])
+def test_untilize_multi_core_dynamic_rows_flat_cache(device, width):
+    """The H3 output select untilizes [pad_to, 96] / [pad_to, 32] tables: one program over every served length."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(rows):
+        torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = _force_native(
+            tt_input, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True, runtime_rows=True
+        )
+        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    # ... down to one tile row, where every core but the first returns before its compute start-up.
+    assert_program_cache_flat(device, run, _h3_untilize_rows() + [32])
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("width", [96, 32])
+def test_untilize_multi_core_default_rows_miss_bit_exact(device, width):
+    """Without the flag the row count stays in the hash (main's program and split): every new height
+    misses, down to a one-tile-row input, and the output is bit-exact."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(rows):
+        torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = _force_native(tt_input, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+    rows = _h3_untilize_rows()[:3] + [32]
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, rows, miss_indices=tuple(range(1, len(rows))))
+    assert device.num_program_cache_entries() == len(rows)
+
+
+def test_untilize_multi_core_width_or_dtype_change_misses(device):
+    """Only the row count is runtime: a new width, dtype or memory config needs its own program."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(variant):
+        rows, width, dtype, out_mem = variant
+        torch_input = torch.randn((2, rows, width), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = _force_native(tt_input, memory_config=out_mem, use_multicore=True, runtime_rows=True)
+        assert_quality(ttnn.to_torch(tt_input), ttnn.to_torch(tt_output), dtype)
+
+    variants = [
+        (256, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (32, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (4096, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (256, 256, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),  # width: new program
+        (256, 128, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),  # dtype: new program
+        (256, 128, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),  # output memory config: new program
+    ]
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, variants, miss_indices=(3, 4, 5))
