@@ -144,7 +144,8 @@ class TT_CCL:
         # layout every iteration so the op's fabric reduction order is identical -> bit-exact
         # determinism. One buffer for the whole model (layers share the shape and run sequentially)
         # keeps the memory cost flat. See TtSharedExpert.forward.
-        self.shared_rs_intermediate = None
+        # One per input shape (see get_shared_rs_intermediate).
+        self.shared_rs_intermediates = {}
 
         # Keepalive for the shared-expert reduce_scatter INPUT (output_full). The overlapped
         # dispatch must not reuse this buffer's DRAM slot mid-flight, so it is held until the next
@@ -594,19 +595,22 @@ class TT_CCL:
         return self.indexer_ring_k_buffers[key]
 
     def get_shared_rs_intermediate(self, input_tensor, topology):
-        """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
+        """Lazily allocate (once per mesh and input shape) and return the shared reduce_scatter intermediate
         accumulator. The Ring tiled path requires the persistent intermediate to have the same
         shape, dtype, and layout as its input. The Linear path retains its double-sized leading
         dimension for forward/backward halves. Interleaved DRAM, replicated across the mesh. A
-        single buffer is reused at a stable address by every shared-expert reduce_scatter — all
-        layers share the same shape and run sequentially, so one buffer for the whole model is safe."""
+        single buffer is reused at a stable address by every shared-expert reduce_scatter of one shape — all
+        layers of a model share the same shape and run sequentially, so one buffer per shape is safe. Keyed by
+        shape because models of different sequence lengths can share a mesh (a packed model, whose shared expert
+        sees forward_chunks chunks' rows, and a one-chunk model built after it on the same device)."""
         import torch
 
-        if self.shared_rs_intermediate is None:
-            intermediate_shape = list(input_tensor.shape)
-            if topology == ttnn.Topology.Linear:
-                intermediate_shape = [2] + intermediate_shape
-            self.shared_rs_intermediate = ttnn.from_torch(
+        intermediate_shape = list(input_tensor.shape)
+        if topology == ttnn.Topology.Linear:
+            intermediate_shape = [2] + intermediate_shape
+        key = (tuple(intermediate_shape), input_tensor.dtype, input_tensor.layout)
+        if key not in self.shared_rs_intermediates:
+            self.shared_rs_intermediates[key] = ttnn.from_torch(
                 torch.zeros(intermediate_shape),
                 device=self.mesh_device,
                 layout=input_tensor.layout,
@@ -614,7 +618,7 @@ class TT_CCL:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        return self.shared_rs_intermediate
+        return self.shared_rs_intermediates[key]
 
     def set_shared_rs_input_keepalive(self, input_tensor):
         """Hold the shared-expert reduce_scatter INPUT alive until the next shared-expert forward,

@@ -17,7 +17,7 @@ EMPTY = PrefillChunk(0, 0, 0)
 
 
 def brute_real_rows(chunks, sp, chunk_local):
-    """Leading real rows per chip from the rows' real flags; all rows when a pad row precedes a real one."""
+    """Rows up to and including each chip's last real row, from the rows' real flags."""
     out = []
     for c in range(sp):
         flags = []
@@ -25,8 +25,7 @@ def brute_real_rows(chunks, sp, chunk_local):
             flags += [
                 not e.is_empty and p < e.actual_end for p in rotated_chunk_positions(e.actual_start, sp, chunk_local)[c]
             ]
-        n = sum(flags)
-        out.append(n if all(flags[:n]) else len(flags))
+        out.append(max((i + 1 for i, real in enumerate(flags) if real), default=0))
     return tuple(out)
 
 
@@ -59,6 +58,7 @@ CASES = {
         PrefillChunk(2, 0, 300),
     ],
     "empty_tail": [PrefillChunk(0, 2 * C, 3 * C), PrefillChunk(1, 0, 600), EMPTY, EMPTY],
+    "partial_then_full_then_empty": [PrefillChunk(0, 0, C), PrefillChunk(1, 0, 600), PrefillChunk(2, 0, C), EMPTY],
     "mid_slab": [
         PrefillChunk(0, 2 * C + 96, 3 * C + 96),
         PrefillChunk(0, 3 * C + 96, 3 * C + 900),
@@ -81,7 +81,11 @@ def test_packed_real_rows(name):
     if name == "empty_tail":
         assert rows == tuple(S + r for r in rotated_chunk_real_counts(0, 600, SP, S))  # empties are pad: no route-all
     if name == "interleaved_partials":
-        assert 4 * S in rows  # chips whose pad rows precede a later real row route all rows
+        # chips whose pad rows precede a later real row route them, up to their last real row (chunk 3's)
+        assert rows == tuple(3 * S + r for r in rotated_chunk_real_counts(0, 300, SP, S))
+    if name == "partial_then_full_then_empty":
+        # the empty chunk's rows stay pad even though chunk 0's pad rows are routed
+        assert rows == (3 * S,) * SP
 
 
 def test_packed_real_rows_random():
@@ -110,3 +114,4 @@ def test_packed_routed_pad_rows(sp, chunk_local):
             assert packed_routed_pad_rows([full, partial], sp, chunk_local) == 0
             assert packed_routed_pad_rows([partial, full], sp, chunk_local) == chunk - n
             assert packed_routed_pad_rows([partial, EMPTY], sp, chunk_local) == 0
+            assert packed_routed_pad_rows([partial, full, EMPTY], sp, chunk_local) == chunk - n

@@ -14,8 +14,11 @@ from models.demos.common.prefill.chunk_layout import rotated_chunk_real_counts
 
 
 def packed_real_rows(chunks, sp: int, chunk_local: int) -> tuple:
-    """Per SP chip, the count of leading real rows of the packed forward, for the MoE padding config. A chip
-    whose pad rows precede a later real row counts all its rows as real."""
+    """Per SP chip, the rows up to and including its last real row, for the MoE padding config (which takes one
+    leading count per chip). Pad rows before a later real row on the chip are routed like real rows; pad rows
+    after its last real row (a final partial chunk's, or empty chunks') are not. Routing those trailing rows would
+    make the MoE's per-expert token counts, and so its output, depend on what they hold, which differs between a
+    traced forward (an empty chunk runs against a scratch slot) and an eager one (it is skipped)."""
     # TODO: per-chunk real-row ranges in the MoE padding config, so a partial chunk followed by a non-empty one
     # does not route its pad rows.
     return _packed_real_rows(tuple(chunks), sp, chunk_local)
@@ -29,20 +32,18 @@ def _packed_real_rows(chunks: tuple, sp: int, chunk_local: int) -> tuple:
     ]
     rows = []
     for chip in range(sp):
+        # Each chunk is right-padded on every chip, so its real rows lead its chunk_local-row block.
         lead = 0
         for k, count in enumerate(counts):
-            lead += count[chip]
-            if count[chip] < chunk_local:
-                if any(later[chip] for later in counts[k + 1 :]):
-                    lead = len(chunks) * chunk_local
-                break
+            if count[chip]:
+                lead = k * chunk_local + count[chip]
         rows.append(lead)
     return tuple(rows)
 
 
 def packed_routed_pad_rows(chunks, sp: int, chunk_local: int) -> int:
-    """Pad rows the MoE routes in a packed forward: those packed_real_rows counts as real because a chunk with pad
-    rows on a chip is followed by a non-empty chunk there. Zero when every partial chunk is last on its chips."""
+    """Pad rows the MoE routes in a packed forward: those packed_real_rows counts as real because they precede a later
+    real row on their chip. Zero when every partial chunk is the last non-empty one on its chips."""
     chunks = tuple(chunks)
     counts = [
         _chunk_real_counts(c.actual_start % (sp * chunk_local), c.actual_end - c.actual_start, sp, chunk_local)

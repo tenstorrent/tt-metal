@@ -1438,7 +1438,7 @@ class TtPrefillRuntime:
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE packed forward of ``forward_chunks`` ``chunks`` (PrefillChunk) into the engine-owned
         ``kv_caches``. Each layer runs attention once per non-empty chunk against its slot_id at its
-        actual_start, then ffn_norm + MoE once over every chunk's rows (the model's forward_packed).
+        actual_start, then ffn_norm + MoE once over every chunk's rows (TtPrefillTransformer.forward_packed).
 
         Chunk rules are MiniMax-M3's (validate_chunks): a slot's chunks are one run of consecutive chunks,
         only the run's last may be partial, empties only at the tail.

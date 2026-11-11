@@ -1213,7 +1213,7 @@ def test_sparse_mla_push_layers_chunked(
             ]
         # The push is on for every layer and each layer prefetches its successor's prefix, or it is off everywhere.
         assert all((layer._push is not None) == push for layer in layers)
-        assert [layer._push_prefetch_grids is not None for layer in layers] == [push, push, False]
+        assert [layer._push_next_layer for layer in layers] == [push, push, False]
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,
             hf_config=config,

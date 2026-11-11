@@ -41,9 +41,11 @@ class GLM53Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
-    MOE_FWD_VC_PAGES = 64
+    # Depth of the MoE forwarding buffers, in pages per channel. Before #63483 combine_fabric2d's depth scaled with
+    # the tokens a chip holds: about 66 pages at one 5,120-token chunk on 8x4, about 267 for a packed forward of four
+    # (2,560 rows a chip). At 64, packed 8x4 forwards hang in combine_fabric2d (one TP column never finishes the
+    # routed expert / combine op), so this keeps the depth packed forwards had.
+    MOE_FWD_VC_PAGES = 256
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1

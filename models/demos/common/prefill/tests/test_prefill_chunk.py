@@ -280,3 +280,13 @@ def test_packed_forward_capabilities_name_every_flag():
     }
     (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, indexer_indices=True, **caps)
     assert "LAYER_ACK_D2H" in reason
+
+
+def test_glm_adapter_packs_on_a_pipeline():
+    """GLM-5.3 passes indexer indices between ranks, and its prefill_forward carries them, traced, with D2H acks:
+    the manifest's PREFILL_USE_TRACE=1 + PREFILL_LAYER_ACK_D2H=1 on a multi-rank split are not refused at F > 1."""
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+    assert GLM53Adapter.passes_indexer_indices
+    caps = packed_forward_capabilities(GLM53Adapter)
+    assert packed_forward_refusals(4, use_trace=True, d2h_acks=True, indexer_indices=True, **caps) == []
