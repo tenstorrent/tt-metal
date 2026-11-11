@@ -116,6 +116,7 @@ class Qwen36DecoderLayer:
                 self.attention = TPAttention(mesh_device, args, tw, tt_ccl)
                 if attn_dtype == ttnn.bfloat4_b:  # QWEN36_MTP_LAYER_BFP4 (drafter layer): LoFi decode QKV / wo
                     self.attention.qkv_cfg = self.attention.wo_cfg = tpc.COMPUTE_LOFI
+                    self.attention.enable_qkv_pair_dsmc()  # QWEN36_MTP_QKV_DSMC=1 (default off)
             else:
                 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 
