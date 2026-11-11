@@ -362,6 +362,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     if go_rdhook:
         out_rd = True
     rtens = READER_TENSORS + (["out_r"] if out_rd else [])
+    # GDN_HOLD_SKIP (E1_HOLD_SKIP, B > 1, ST_RING 0, EARLY_REPLAY): no state / stash I/O, replay, K S' / Q S' terms or K^T
+    # transposes for HOLD users. Live rows bit-identical (block-diagonal per user); HOLD rows' out finite (not the
+    # reference's), their ring / window untouched. The live mask goes reader -> compute through an argblock word
+    # ((layer + 1) << 8 | mask, 2 parity slots, the payload's last 2 words; the compute's 3 TRISCs spin on it).
+    hold_skip = os.environ.get("E1_HOLD_SKIP", "0") == "1" and B > 1 and early and st_ring == 0
     # lean CB table (E1_LEAN, default on): 3 ids freed (LEAN_ALIAS) and kmq 4 -> 2 user slots (-32 KB)
     lean = os.environ.get("E1_LEAN", "1") == "1"
     tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring, lean=lean, kmq_users=2 if lean else 4)
@@ -589,6 +594,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     agg = os.environ.get("E1_OSIG_AGG", "1") == "1"
     OAG = OLW + NG * nW          # payload word: the aggregation counter (0 at build)
     OAG_ME = OAG + 1             # payload word: 1 on the aggregator core
+    OHM = (GRDY + 1) if GO else OAG + 2   # payload words OHM, OHM + 1 (after OAG / OAG_ME and the gdn_out words incl. GFL / GRDY): HOLD_SKIP mask
     AGX, AGY = (lambda q: (q.x, q.y))(dev.worker_core_from_logical_core(cores[0]))
     if agg:
         NC_ = len(cores)
@@ -626,7 +632,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n'
         + (GXY_DECL if GO else '')
         + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '')
-        + ((go_local_rd[:go_local_rd.rindex("}")] + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '') +
+        + ((go_local_rd[:go_local_rd.rindex("}")] + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '')
+        + (f'void gdn_hold_publish(uint32_t m) {{ g_ab[{OHM} + (g_l & 1)] = ((g_l + 1) << 8) | m; }}\n' if hold_skip else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         + ('  gdn_cut_reset();\n' if cut_fast else '') +
         (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) else '') +
@@ -646,6 +653,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'  }}\n'
         # GDN_OUT_RD: the reader's out signals retire here; the aggregator's word resets once its last wait passed
         + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not GO or GO_TAILHOOK) else '') if out_rd else '')
+        # HOLD_SKIP: every TRISC read the last layer's mask before this reader's last kmq handoff completed
+        + (f'  g_ab[{OHM}] = 0; g_ab[{OHM} + 1] = 0;\n' if hold_skip else '')
         + '}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
@@ -679,12 +688,16 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     tc = os.path.join(gen_dir, "g2_compute.cpp")
     open(tc, "w").write(
         f'#include "{hc}"\nvoid kernel_main();\nuint32_t gdn_rt_B();\n'
+        + ('uint32_t gdn_live_mask();\n' if hold_skip else '') +
         f'#include "{kd}/compute/gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_c.hpp"\n' if GO else '') +
         f'static volatile tt_l1_ptr uint32_t* g_ab;\nuint32_t gdn_rt_B() {{ return g_ab[{OC + 3}]; }}\n'
-        f'void kernel_main() {{\n  g_ab = {AB};\n'
+        + ('static uint32_t g_gl = 0;\n'
+           f'uint32_t gdn_live_mask() {{ volatile tt_l1_ptr uint32_t* w = g_ab + {OHM} + (g_gl & 1); uint32_t v; '
+           'do { invalidate_l1_cache(); v = *w; } while ((v >> 8) != g_gl + 1); return v & 0xFFu; }\n' if hold_skip else '')
+        + f'void kernel_main() {{\n  g_ab = {AB};\n'
         + ('  g_sp_pending = 0;\n' if sp_late else '')
-        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{ compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{ ' + ('g_gl = L; ' if hold_skip else '') + f'compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
         f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '') + '  }\n'
         + ('  gdn_sp_drain();\n' if sp_late else '') + '}\n')
     pre_w = Nv * pre_s
@@ -694,7 +707,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
            ("GDN_IN_WAIT", "1"), ("GDN_ST_RING", str(st_ring))] + common + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
         [("GDN_CUT_FAST", "1")] if cut_fast else []) + (
         [("GDN_SP_RD", "1")] if sp_rd else []) + ([("GDN_OUT_RD", "2" if go_rdhook else "1")] if out_rd else []) + (
-        [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else [])
+        [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else []) + (
+        [("GDN_HOLD_SKIP", "1")] if hold_skip else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
@@ -702,7 +716,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
         [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else []) + (
         [("GDN_OUT_TILE", "1")] if out_tile else []) + ([("GDN_OUT_RD", "1")] if out_rd else [])
-    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
+    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
         "E1_SP_WAIT", "0") == "1" else []) + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
         [("GDN_ZS_LATE", "1")] if zs_late else []) + ([("GDN_EARLY_REPLAY", "1")] if early else []) + (
         [("GDN_SP_LATE", "1")] if sp_late else []) + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
@@ -729,6 +743,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             pl += [GO["nt"][i], GO["page"][i]] + (list(GO["tiles"][i]) + [0] * GO["maxt"])[:GO["maxt"]]
             pl += [0, 0, 0, 0, 0]   # E1_GO_RD handoff words: src, t0, n, posted (L + 1), done (L + 1)
             pl += [0] * len(cores) + [0]   # GFL: per-source A tile ready flags (E1_GO_FLAGS), L + 1; GRDY (E1_GO_GATHER); writer resets
+        assert len(pl) == OHM, (len(pl), OHM)
+        pl += [0, 0]   # OHM x 2 (HOLD_SKIP live mask by layer parity; always present, the last 2 words)
         payloads.append(pl)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
