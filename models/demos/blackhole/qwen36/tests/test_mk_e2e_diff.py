@@ -42,6 +42,7 @@ TF_BLOCK = int(os.environ.get("E2E_TF_BLOCK", "4"))  # teacher-forced block (bot
 DBG = os.environ.get("E2E_DBG", "1") == "1"  # MK_AR_DBG per-AR residual dumps (more engine text); 0 = final x_out only
 MID = os.environ.get("E2E_MID", "1") == "1"  # with DBG + MK_REAL_GAR: also the post-mixer residual per layer (mixer AR)
 REF_MID = {}
+_CUR = [0]
 B, T = 8, tc.K + 1
 DIM = 5120
 
@@ -89,6 +90,7 @@ def _layer_hooks(model, rec, rec_in=None):
         f = l.forward
 
         def wrapped(*a, _f=f, _i=i, **k):
+            _CUR[0] = _i
             if rec_in is not None:
                 rec_in[_i] = _rows(a[0] if a else k["x"])
             y = _f(*a, **k)
@@ -97,15 +99,33 @@ def _layer_hooks(model, rec, rec_in=None):
 
         saved.append((l, f))
         l.forward = wrapped
-        if rec_in is not None and MID and hasattr(l, "ffn_norm"):   # E2E_MID: the post-mixer residual h (ffn_norm's input)
+        if rec_in is not None and MID:   # E2E_MID: the post-mixer residual h of layer i
+            dar = getattr(l, "_decode_ar", None)
+            if dar is not None and not getattr(dar, "_e2e_mid", False):   # decode: h goes to _dar.arm_residual(h)
+                ar_f = dar.arm_residual
+
+                def arm(h, *a, _f=ar_f, **k):
+                    REF_MID[_CUR[0]] = _rows(h)
+                    return _f(h, *a, **k)
+
+                dar.arm_residual, dar._e2e_mid = arm, True
+                saved.append((dar, ("arm_residual", ar_f)))
+                saved.append((dar, ("_e2e_mid", False)))
             fn = l.ffn_norm
 
-            def wrapped_fn(*a, _fn=fn, _i=i, **k):
-                REF_MID[_i] = _rows(a[0] if a else k["x"])
-                return _fn(*a, **k)
+            class _Mid:   # unfused path: ffn_norm(h); keeps .norm etc. for the fused path
+                def __init__(self, f_, i_):
+                    self._f, self._i = f_, i_
+
+                def __call__(self, *a, **k):
+                    REF_MID[self._i] = _rows(a[0] if a else k["x"])
+                    return self._f(*a, **k)
+
+                def __getattr__(self, n):
+                    return getattr(self._f, n)
 
             saved.append((l, ("ffn_norm", fn)))
-            l.ffn_norm = wrapped_fn
+            l.ffn_norm = _Mid(fn, i)
     return saved
 
 
