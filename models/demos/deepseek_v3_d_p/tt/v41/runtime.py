@@ -25,6 +25,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.prefix_reuse import split_slot_word
 
 from .kv_export import allocate_v41_kv_export, build_v41_kv_chunk_table, export_chunk
 from .prefill import V41Prefill
@@ -117,6 +118,8 @@ class V41PrefillRuntime:
         self.num_layers = int(cfg.n_layers)
         self._ack = None
         self._request_id = 0
+        # prefill-side prefix reuse H1 (V41_PREFILL_PREFIX_REUSE=1, tt/v41/prefix_reuse.py): built in compile(); None = off
+        self._prefix = None
 
     # ---- KV export ----------------------------------------------------------------------------------------------------
     def allocate_kv_cache(self):
@@ -157,12 +160,19 @@ class V41PrefillRuntime:
     def compile(self, kv_caches) -> None:
         """One warm chunk of zeros (compiles every program of a full chunk), then a clean slate."""
         t0 = time.time()
+        from . import prefix_reuse
+
+        if prefix_reuse.enabled():
+            # its checkpoint carries, export zero blocks and mask pieces must exist before any trace-island capture
+            self._prefix = prefix_reuse.V41PrefixReuse(self, kv_caches)
         self.prefill_chunk(
             [0] * self.chunk_size, kv_caches, slot_id=0, actual_start=0, actual_end=self.chunk_size, warmup=True
         )
         self.pf.reset()
         kv_caches.zero_all()
         ttnn.synchronize_device(self.mesh_device)
+        if self._prefix is not None:
+            self._prefix.reset_all("warm-up done")
         logger.info(f"[v41 runtime] compiled (one warm chunk of {self.chunk_size}) in {time.time() - t0:.1f} s")
 
     def make_chunk_input(self, token_ids: list):
@@ -198,6 +208,9 @@ class V41PrefillRuntime:
         record_dev=None,
         warmup: bool = False,
     ):
+        # tt-d-gen device.prefill.mark_last_chunk (tt-blaze G53F-0311): bit 29 of the slot word on every chunk header, bit 30 on
+        # a burst's last one. Split always (a plain slot word passes through unchanged); only prefix reuse reads `last`.
+        slot_id, last = split_slot_word(slot_id)
         assert 0 <= slot_id < self.num_users, (slot_id, self.num_users)
         self.pf.use_slot(int(slot_id))
         ids = input_tensor if isinstance(input_tensor, list) else self._token_ids_from_device(input_tensor)
@@ -208,10 +221,23 @@ class V41PrefillRuntime:
             # and a buffer allocated after a capture can sit in the islands' intermediates -- the socket's next chunk then
             # arrived as garbage ids (index 930504704 of 129280, 19:49). This chunk's ids were read above. ~6 s, once.
             self.pf.enable_islands()
+        reuse = self._prefix if not warmup else None  # prefix reuse H1 (None = off: the runner as before)
+        image_rows_done = False
+        if reuse is not None:
+            t_skip = time.time()
+            if int(actual_start) == 0:
+                self._request_image_rows(int(slot_id))  # the request's sidecar even when its chunk 0 is skipped
+                image_rows_done = True
+            if reuse.begin_chunk(int(slot_id), ids[:real], int(actual_start), int(actual_end), last, int(request_id)):
+                self._skip_chunk(int(slot_id), int(actual_start), int(actual_end), int(request_id), t_skip)
+                return None
         if int(actual_start) == 0:
             self.pf.reset()
             kv_caches.zero_slot(int(slot_id))
-            self._request_image_rows(int(slot_id))
+            if not image_rows_done:
+                self._request_image_rows(int(slot_id))
+            if self._prefix is not None:
+                self._prefix.note_zeroed(int(slot_id))
         assert self.pf.kv_actual == int(actual_start), (self.pf.kv_actual, actual_start)
         self._request_id = int(request_id)
         t0 = time.time()
@@ -219,10 +245,20 @@ class V41PrefillRuntime:
         self.pf._ids_dev = None if isinstance(input_tensor, list) else input_tensor
         try:
             self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None)
+        except BaseException:
+            if reuse is not None:
+                reuse.invalidate(int(slot_id), "a chunk failed")
+            raise
         finally:
             self.pf._ids_dev = None
         t1 = time.time()
         export_chunk(kv_caches, self.pf, slot_id, int(actual_start), int(actual_end))
+        if self._prefix is not None:
+            self._prefix.note_export(int(slot_id), int(actual_start))
+        if reuse is not None:
+            reuse.end_compute(
+                int(slot_id), ids[:real], int(actual_start), int(actual_end)
+            )  # checkpoint before the sync
         t2 = time.time()
         ttnn.synchronize_device(self.mesh_device)
         t3 = time.time()
@@ -250,6 +286,17 @@ class V41PrefillRuntime:
             + (" (warm-up)" if warmup else "")
         )
         return None
+
+    def _skip_chunk(self, slot_id: int, start: int, end: int, request_id: int, t0: float) -> None:
+        """Prefix reuse H1: a chunk the device already holds (entries, keys and export rows of the same ids through the same
+        chunk partition) -- every contract layer acknowledged at once, nothing computed."""
+        self._request_id = int(request_id)
+        if self._ack is not None:
+            for L in range(self.num_layers):
+                self._ack(L)
+        logger.info(
+            f"[v41 runtime] chunk [{start}, {end}) slot {slot_id} SKIPPED (retained prefix) in {time.time() - t0:.3f} s"
+        )
 
     def _program_cache_entries(self):
         try:
@@ -361,6 +408,9 @@ class V41PrefillRuntime:
             logger.info(f"[v41 runtime] islands warm replay at setup: {time.time() - t0:.2f} s")
         if os.environ.get("V41_PREFILL_WARM_RAGGED", "0") == "1":
             self._warm_ragged(kv_caches)
+        if self._prefix is not None:
+            # the dummy chunks above wrote slot 0's states (ids 0) outside the retention's view; the export is zero again
+            self._prefix.reset_all("islands / ragged warm-ups done")
 
     def _warm_ragged(self, kv_caches) -> None:
         """DS41F-0119 V41_PREFILL_WARM_RAGGED=1: a request's prefill part is S' = floor128(S - 2541) tokens, so its ragged chunk

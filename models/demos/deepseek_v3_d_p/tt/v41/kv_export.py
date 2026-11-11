@@ -169,9 +169,24 @@ class V41KvExport:
         Single user: the whole-tensor ``zero_all``."""
         if self.num_users == 1:
             return self.zero_all()
-        for name, t in self.tensors().items():
-            if name == "zero":
-                continue
+        self._zero_batches(slot, [name for name in self.tensors() if name != "zero"])
+
+    def zero_windows(self, slot: int) -> None:
+        """Zero ONE user's window rings (``swa`` + ``win``) only: the state ``zero_slot`` leaves them in, for a prefix-reuse
+        resume that keeps the slot's entry rows (H1; port plan: v41ax_logs/prefill_reuse_design.md on host 29, 2026-11-11).
+        """
+        if self.num_users == 1:
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import DRAMZeroFill
+
+            DRAMZeroFill.op(self.swa)
+            DRAMZeroFill.op(self.win)
+            return
+        self._zero_batches(slot, ["swa", "win"])
+
+    def _zero_batches(self, slot: int, names) -> None:
+        tensors = self.tensors()
+        for name in names:
+            t = tensors[name]
             per = int(t.shape[0]) // self.num_users
             rows, width = int(t.shape[2]), int(t.shape[3])
             dev = t.device()
@@ -311,6 +326,15 @@ def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx, chun
     keys = ttnn.slice(st.index_k, [0, 0, e0, 0], [1, 1, e0 + n, INDEX_HEAD_DIM])
     k8 = ttnn.typecast(keys, ttnn.bfloat8_b)
     ttnn.deallocate(keys)
+    _write_entry_rows(exp, attn, b, e0, n, rows, k8, ratio=ratio, ent=ent, idx=idx)
+    ttnn.deallocate(rows)
+    ttnn.deallocate(k8)
+
+
+def _write_entry_rows(exp, attn, b, e0, n, rows, k8, *, ratio, ent, idx):
+    """``rows`` [1, 1, n, 512] (TILE bf16) / ``k8`` [1, 1, n, 128] (bfp8) as entries / index keys [e0, e0 + n) of export batch
+    ``b``, in the export's layout (plain, or DS41F-0138's chip-major halves). The caller owns (and frees) both inputs.
+    """
     if not cp2_split():
         attn._write_rm(ent, rows, b, e0)
         ttnn.kv_cache.fill_cache_for_user_(idx, k8, b, update_idx=e0)
@@ -342,8 +366,99 @@ def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx, chun
             ttnn.deallocate(kr)
         ttnn.deallocate(ent_c)
         ttnn.deallocate(idx_c)
-    ttnn.deallocate(rows)
-    ttnn.deallocate(k8)
+
+
+# ---- prefill-side prefix reuse (H1, V41_PREFILL_PREFIX_REUSE=1, tt/v41/prefix_reuse.py; plan: v41ax_logs/prefill_reuse_design.md) --
+# A resumed prompt must leave the export as a cold prefill would: zero_slot at chunk 0, then every chunk's export_chunk. The
+# entry / key rows of the skipped chunks are already there (same ids, same chunk partition); what differs is (a) the window
+# rings, which hold only the LAST carry -- zero_windows + export_windows at the resume point -- and (b) rows past the new prompt
+# that an older, longer prompt wrote -- zero_export_rows over [from, the slot's high-water mark), through the export's own
+# writers (same layouts, same programs as export_chunk's), fed by the zero blocks of export_zero_blocks.
+def _ring_row0(end: int) -> int:
+    assert int(end) % 128 == 0, f"a hand-over chunk boundary must be a multiple of 128 tokens (at {end})"
+    return (int(end) - 128) % RING
+
+
+def export_windows(exp: V41KvExport, pf, slot: int, end: int, carries=None) -> None:
+    """The window rings export_chunk writes for a chunk ending at ``end``, from ``carries`` (one carry tensor per attention
+    state, in ``prefix_reuse.carry_states`` order: the blocks, then the KV-only layer) or, None, the live states."""
+    row0 = _ring_row0(end)
+    i = 0
+    for blk in pf.blocks:
+        L, attn = blk.layer, blk.attn
+        carry = blk.state.sliding_carry if carries is None else carries[i]
+        i += 1
+        if pf.cfg.role(L).mode == "swa":
+            blockt = carry if carry.dtype == ttnn.bfloat8_b else ttnn.typecast(carry, ttnn.bfloat8_b)
+            ttnn.kv_cache.fill_cache_for_user_(exp.swa, blockt, exp.swa_batch(slot, L), update_idx=row0)
+            if blockt is not carry:
+                ttnn.deallocate(blockt)
+            continue
+        _write_window(exp, attn, carry, exp.win_batch(slot, L), row0)
+    if pf.kv_attn is not None:
+        carry = pf.kv_state.sliding_carry if carries is None else carries[i]
+        _write_window(exp, pf.kv_attn, carry, exp.win_batch(slot, pf.kv_only_layer), row0)
+
+
+def _entry_sources(exp: V41KvExport, pf):
+    """(layer, attention, compress ratio, entries tensor, keys tensor) of every layer export_chunk writes entries for."""
+    out = []
+    for blk in pf.blocks:
+        r = pf.cfg.role(blk.layer)
+        if r.mode == "full":
+            ent, idx = (exp.ent2, exp.idx2) if r.compress_ratio == 2 else (exp.ent1, exp.idx1)
+            out.append((blk.layer, blk.attn, r.compress_ratio, ent, idx))
+    if pf.kv_attn is not None:
+        out.append((pf.kv_only_layer, pf.kv_attn, 1, exp.ent1, exp.idx1))
+    return out
+
+
+def export_zero_blocks(exp: V41KvExport, pf) -> dict:
+    """ratio -> (entries [1, 1, C / ratio, 512] bf16 TILE, keys [1, 1, C / ratio, 128] bfp8 TILE) of zeros, replicated: the
+    inputs zero_export_rows writes. Allocate BEFORE any trace-island capture (DS41F-0037 10-10 21:25)."""
+    dev = exp.ent1.device()
+    out = {}
+    for _L, _attn, ratio, _ent, _idx in _entry_sources(exp, pf):
+        if ratio in out:
+            continue
+        n = int(pf.chunk) // ratio
+        out[ratio] = tuple(
+            ttnn.from_torch(
+                torch.zeros(1, 1, n, width),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+            )
+            for width, dtype in ((HEAD_DIM, ttnn.bfloat16), (INDEX_HEAD_DIM, ttnn.bfloat8_b))
+        )
+    return out
+
+
+def zero_export_rows(exp: V41KvExport, pf, slot: int, pos0: int, pos1: int, zeros: dict) -> int:
+    """Zero the entry / key rows of positions [pos0, pos1) (chunk multiples) of ``slot`` in every entry-carrying layer, one
+    chunk-width block at a time through the export's own writer (``_write_entry_rows``): what zero_slot left there before a
+    cold prefill's chunks. Returns the number of block writes."""
+    C = int(pf.chunk)
+    assert pos0 % C == 0 and pos1 % C == 0, (pos0, pos1, C)
+    n_writes = 0
+    for L, attn, ratio, ent, idx in _entry_sources(exp, pf):
+        rows, k8 = zeros[ratio]
+        b = exp.ent_batch(slot, L)
+        for p in range(int(pos0), min(int(pos1), exp.max_seq_len), C):
+            e0 = p // ratio
+            n = min(C // ratio, exp.max_seq_len // ratio - e0)
+            if n == C // ratio:
+                _write_entry_rows(exp, attn, b, e0, n, rows, k8, ratio=ratio, ent=ent, idx=idx)
+            else:  # the export's capacity ends inside this block (MAXSEQ not a chunk multiple)
+                r_n = ttnn.slice(rows, [0, 0, 0, 0], [1, 1, n, HEAD_DIM])
+                k_n = ttnn.slice(k8, [0, 0, 0, 0], [1, 1, n, INDEX_HEAD_DIM])
+                _write_entry_rows(exp, attn, b, e0, n, r_n, k_n, ratio=ratio, ent=ent, idx=idx)
+                ttnn.deallocate(r_n)
+                ttnn.deallocate(k_n)
+            n_writes += 1
+    return n_writes
 
 
 # ---- the table -----------------------------------------------------------------------------------------------------------
