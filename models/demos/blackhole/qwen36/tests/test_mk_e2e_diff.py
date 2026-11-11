@@ -41,7 +41,8 @@ TF_NL = int(os.environ.get("E2E_TF_NL", str(NL)))
 TF_BLOCK = int(os.environ.get("E2E_TF_BLOCK", "4"))  # teacher-forced block (both layer types per engine pass)
 DBG = os.environ.get("E2E_DBG", "1") == "1"  # MK_AR_DBG per-AR residual dumps (more engine text); 0 = final x_out only
 MID = os.environ.get("E2E_MID", "0") == "1"  # (default off: the hooks perturb the op-by-op reference)
-GBCHK = os.environ.get("E2E_GBCHK", "0") == "1"  # G-b (d) in-model self-check (needs the -mk-gdnb-chk role)
+GBCHK = os.environ.get("E2E_GBCHK", "0") == "1"
+GBREAL = os.environ.get("E2E_GBREAL", "1" if GBCHK else "0") == "1"  # GBREAL: ref qkvzab / out capture + prod-call op + gdn_out host check  # G-b (d) in-model self-check (needs the -mk-gdnb-chk role)
 MLPCHK = os.environ.get("E2E_MLPCHK", "1") == "1"  # DBG + GAR: L0 MLP host check on the engine's own post-mixer h  # with DBG + MK_REAL_GAR: also the post-mixer residual per layer (mixer AR)
 REF_MID = {}
 _CUR = [0]
@@ -188,6 +189,92 @@ def _mlp_check(model, S, L, x_ref=None, y_ref=None):
     logger.info(f"[mlpchk] {json.dumps(out)}")
     return out
 
+def _dev_host(t):
+    return [ttnn.to_torch(d).float().reshape(32, -1) for d in ttnn.get_device_tensors(t)]
+
+
+def _gdn_capture(model, nl):
+    """GBREAL: wrap every GDN layer < nl's _gdn_spec_step for the op-by-op reference: per GDN ordinal the per-device qkvzab
+    (input) and gated out, plus the call's (T, B, max_users) and the qkvzab width -> (cap, restore)."""
+    cap, saved, g = {}, [], 0
+    for L, lay in enumerate(model.layers[:nl]):
+        if lay.is_full_attention:
+            continue
+        a = lay.attention
+        f = a._gdn_spec_step
+
+        def wrapped(qkvzab, win_a, win_b, ring, ctrl, T_, B_, max_users=None, _f=f, _g=g, _a=a):
+            q_h = _dev_host(qkvzab)
+            out = _f(qkvzab, win_a, win_b, ring, ctrl, T_, B_, max_users=max_users)
+            cap[_g] = dict(qkv=q_h, out=_dev_host(out), T=T_, B=B_, max_users=max_users, width=int(qkvzab.shape[-1]), attn=_a)
+            return out
+
+        a._gdn_spec_step = wrapped
+        saved.append(a)
+        g += 1
+
+    def restore():
+        for a_ in saved:
+            del a_._gdn_spec_step   # back to the class method
+    return cap, restore
+
+
+def _gbreal_arm(S, cap):
+    role = (S.get("GDN_ROLE") or {}).get("role")
+    if role is None:
+        logger.warning("[gbreal] no GDN role in the engine setup")
+        return
+    steps = []
+    for g_ in range(len(role.state or ())):
+        c = cap.get(g_)
+        if c is None:
+            steps.append(None)
+            continue
+
+        def st(q, wa, wb, ring, ctrl, _c=c):
+            return _c["attn"]._gdn_spec_step(q, wa, wb, ring, ctrl, _c["T"], _c["B"], max_users=_c["max_users"])
+        st.width = c["width"]
+        steps.append(st)
+    role._prod_steps = steps
+    role._ref_qkv = {g_: c["qkv"] for g_, c in cap.items()}
+    role._ref_out = {g_: c["out"] for g_, c in cap.items()}
+    logger.info(f"[gbreal] armed: {sum(s_ is not None for s_ in steps)} prod-call steps, ref qkv/out for GDN ordinals {sorted(cap)}; "
+                f"call args L0 T={cap[0]['T'] if 0 in cap else None} B={cap[0]['B'] if 0 in cap else None} "
+                f"max_users={cap[0]['max_users'] if 0 in cap else None} width={cap[0]['width'] if 0 in cap else None}")
+
+
+def _gbreal_gdnout(model, S, cap, L=0):
+    """GBREAL: layer L's (GDN) mixer per device: the engine's mixer-AR input partial (ar_dbgt column 2*(2L)) vs host
+    out_d @ W_out_d for (a) the role's checked op out (= the engine's step out when E1_GO_LOCAL=1 matched) and (b) the
+    reference's gated out; and the summed mixer (engine vs reference)."""
+    from models.demos.blackhole.qwen36.tt.megakernel.integ import weights_mk as WM
+
+    role = (S.get("GDN_ROLE") or {}).get("role")
+    if S.get("ar_dbgt") is None or role is None or 0 not in cap:
+        return
+    devs = [ttnn.to_torch(d).float().reshape(32, -1) for d in ttnn.get_device_tensors(S["ar_dbgt"])]
+    wo = WM.gdn_out_mats(model.layers[L])
+    km = 2 * L
+    part = [dv[:, km * 2 * DIM:(km * 2 + 1) * DIM] for dv in devs]
+    outs_op = getattr(role, "_chk_outs", {}).get(0) or [None] * len(devs)
+    rows = []
+    for d, (p_, w_) in enumerate(zip(part, wo)):
+        ro = cap[0]["out"][d][:, : w_.shape[0]]
+        h_ref = (ro.bfloat16().float() @ w_.float())
+        r = dict(dev=d, eng_vs_hostref=round(_pcc(p_, h_ref), 6), ratio_ref=round(float(p_.norm() / max(h_ref.norm(), 1e-9)), 4),
+                 eng_absmax=float(p_.abs().max()), ref_absmax=float(h_ref.abs().max()))
+        if outs_op[d] is not None:
+            h_op = outs_op[d][:, : w_.shape[0]].bfloat16().float() @ w_.float()
+            r.update(eng_vs_hostop=round(_pcc(p_, h_op), 6), ratio_op=round(float(p_.norm() / max(h_op.norm(), 1e-9)), 4))
+        rows.append(r)
+        logger.info(f"[gbreal] L{L} gdn_out dev {d}: {json.dumps(r)}")
+    mix_e = sum(part)
+    mix_r = sum(cap[0]["out"][d][:, : wo[d].shape[0]].bfloat16().float() @ wo[d].float() for d in range(len(wo)))
+    logger.info(f"[gbreal] L{L} mixer sum: eng vs host(ref out) pcc {_pcc(mix_e, mix_r):.6f} ratio {float(mix_e.norm() / max(mix_r.norm(), 1e-9)):.4f} "
+                f"eng |max| {float(mix_e.abs().max()):.3f} ref |max| {float(mix_r.abs().max()):.3f}; per user pcc "
+                + " ".join(f"{u}:{_pcc(mix_e[u * T:(u + 1) * T], mix_r[u * T:(u + 1) * T]):.4f}" for u in range(B)))
+
+
 def _diff_case(model, live, tag):
     mk1 = model._vfy_mk1
     prog = mk1.programs[B]
@@ -204,10 +291,12 @@ def _diff_case(model, live, tag):
     model._vfy_mk1 = None
     saved = _layer_hooks(model, ref, ref_in)
     L_attn = [L for L in range(min(nl, NL)) if lt[L] == "attention"]
+    gcap, gcap_restore = _gdn_capture(model, min(nl, NL)) if (GBREAL and tag == "k8") else ({}, lambda: None)
     try:
         model._forward_verify_bucket_tp(B, None, None)
         ttnn.synchronize_device(model.mesh_device)
     finally:
+        gcap_restore()
         for l, f in saved:
             if isinstance(f, tuple):
                 setattr(l, f[0], f[1])
@@ -219,8 +308,17 @@ def _diff_case(model, live, tag):
     # engine
     if GBCHK and tag == "k8":   # G-b (d) self-check on this (eager) engine launch
         S["_gbchk"] = True
+        if GBREAL and gcap:
+            _gbreal_arm(S, gcap)
+        elif GBREAL:
+            logger.warning("[gbreal] no _gdn_spec_step call captured in the reference (not the fused spec verify path?)")
     model._forward_verify_bucket_tp(B, None, None)
     ttnn.synchronize_device(model.mesh_device)
+    if GBREAL and gcap:
+        try:
+            _gbreal_gdnout(model, S, gcap, 0)
+        except Exception as e:  # noqa: BLE001 -- diagnostics only
+            logger.warning(f"[gbreal] gdn_out host check failed: {type(e).__name__}: {str(e)[:300]}")
     kv_eng = _kv_rows(model, L_attn, live)
     kva = {}
     for L in L_attn:

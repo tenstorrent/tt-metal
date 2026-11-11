@@ -43,6 +43,21 @@ def _host(t):
     return ttnn.to_torch(t)
 
 
+def _pcc_t(a, b):
+    a, b = a.double().reshape(-1), b.double().reshape(-1)
+    if torch.equal(a, b):
+        return 1.0
+    a, b = a - a.mean(), b - b.mean()
+    d = a.norm() * b.norm()
+    return float((a @ b) / d) if d > 0 else 0.0
+
+
+def _mx(a, b):
+    d = (a.double() - b.double()).abs()
+    d = d[torch.isfinite(d)]
+    return float(d.max()) if d.numel() else 0.0
+
+
 class GdnRole:
     def __init__(self, dev, cores, NG, B, sems, out_target, prod_cores, gen_dir, kdir=None, opt=4094, seed=901,
                  hold_users=(), ref=True, attn_n=0, gdnout=None, gin_k=None, gb_cores=None, gb=None, state=None, ctrl=None):
@@ -396,21 +411,29 @@ class GdnRole:
 
     def snapshot(self):
         """(d) in-model self-check, part 1: call right before the checked engine launch (after the model staged its ctrl).
-        Clones every GDN layer's real state (ring, window pair; constants by reference) and records the ctrl parity."""
+        Clones every GDN layer's real state (ring, window pair; constants by reference) and records the ctrl parity.
+        GBREAL: with ``self._prod_steps`` (test-set, one callable per GDN layer = the model layer's own _gdn_spec_step, i.e.
+        prod's exact call) a SECOND clone set is kept for it."""
         if self.state is None or getattr(self, "decoy", False):
             return
         import types
         cl = lambda t_: ttnn.clone(t_, memory_config=t_.memory_config())
         par = int(_host(self.LY[0]["ctrl"]).flatten()[0].item()) & 1
-        self._snap = [types.SimpleNamespace(win_a=cl(st["win_a"]), win_b=cl(st["win_b"]), ring=cl(st["ring"]), taps_d=st["taps"],
+        mk = lambda: [types.SimpleNamespace(win_a=cl(st["win_a"]), win_b=cl(st["win_b"]), ring=cl(st["ring"]), taps_d=st["taps"],
                                             dtb_d=st["dtb"], nea_d=st["nea"], w_d=st["weight"], out_dtype=b16, par=par)
                       for st in self.state]
-        print(f"[gdn24] snapshot: {len(self._snap)} GDN layers' real state cloned, ctrl parity {par}", flush=True)
+        self._snap = mk()
+        self._snap_p = mk() if getattr(self, "_prod_steps", None) else None
+        print(f"[gdn24] snapshot: {len(self._snap)} GDN layers' real state cloned, ctrl parity {par}"
+              f"{' (+ prod-call clone set)' if self._snap_p else ''}", flush=True)
 
     def _check_state_mode(self, tag):
         """(d) in-model self-check, part 2 (after ONE engine launch): the stock gdn_spec_step on the snapshot with G-a's real
         in-proj (gb['dbg']) and the same ctrl, vs the model's state the engine role wrote (ring / win[1-par]; out if written).
-        Device 0's copies (mesh: the op runs everywhere on device 0's qkv; only device 0 is compared)."""
+        GBREAL: EVERY device (the op's qkv is mesh-sharded from each device's own G-a dbg copy; was device 0 only), and, when
+        the test armed them, (i) prod's own _gdn_spec_step call (self._prod_steps) on a second snapshot vs the bench-call op,
+        (ii) G-a's in-proj vs the op-by-op reference's qkvzab (self._ref_qkv {l: [per-device [32, Wp]]}), (iii) the
+        reference's gated out (self._ref_out) vs the ops on G-a's in-proj. Per-device bench-op outs -> self._chk_outs."""
         if not getattr(self, "_snap", None):
             print(f"[{tag}] check skipped (state mode: call role.snapshot() before the checked launch)", flush=True)
             return True
@@ -422,35 +445,98 @@ class GdnRole:
             r0, c0 = (p // Vt) * 32, (p % Vt) * 32
             b[1:3, :, :, r0:r0 + 32, c0 + 1:c0 + 32] = 0
             return b
-        d = _host(self.gb["dbg"]).reshape(32, -1)
+        def hall(t_):   # every device's host copy
+            try:
+                ds = ttnn.get_device_tensors(t_)
+            except Exception:  # noqa: BLE001
+                ds = [t_]
+            return [ttnn.to_torch(x_) for x_ in ds]
+        dd = [x_.reshape(32, -1).float() for x_ in hall(self.gb["dbg"])]
+        nd = len(dd)
         W = self.g.W
         import hashlib
         _h = lambda t_: hashlib.md5(t_.contiguous().numpy().tobytes()).hexdigest()[:12]
+        seg = [("q", 0, 256), ("k", 256, 512), ("v", 512, 1280), ("z", 1280, 2048), ("a", 2048, 2054), ("b", 2054, 2060), ("pad", 2060, W)]
+        def segdiff(a_, b_):   # [32, W'] bitwise per column segment: (name, n differing, max|d|)
+            n_ = min(a_.shape[-1], b_.shape[-1])
+            a_, b_ = a_[:, :n_].float(), b_[:, :n_].float()
+            ne = (a_.bfloat16().view(torch.int16) != b_.bfloat16().view(torch.int16))
+            return [(nm, int(ne[:, c0:min(c1, n_)].sum()), float((a_[:, c0:min(c1, n_)] - b_[:, c0:min(c1, n_)]).abs().max()) if c1 <= n_ or c0 < n_ else 0.0)
+                    for nm, c0, c1 in seg if c0 < n_ and int(ne[:, c0:min(c1, n_)].sum())]
+        mesh_map = ttnn.ShardTensorToMesh(self.dev, dim=0) if nd > 1 else None
+        prod = getattr(self, "_prod_steps", None)
+        ref_qkv, ref_out = getattr(self, "_ref_qkv", None) or {}, getattr(self, "_ref_out", None) or {}
+        self._chk_outs = {}
         ok_all = True
         for l, (sn, st) in enumerate(zip(self._snap, self.state)):
-            q = ttnn.from_torch(d[:, l * W:(l + 1) * W].reshape(1, 32, W).bfloat16(), dtype=b16, layout=ttnn.TILE_LAYOUT,
-                                device=self.dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            qt = torch.stack([x_[:, l * W:(l + 1) * W] for x_ in dd]).bfloat16()   # [nd, 32, W]
+            q = ttnn.from_torch(qt if nd > 1 else qt[0].reshape(1, 32, W), dtype=b16, layout=ttnn.TILE_LAYOUT, device=self.dev,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mesh_map)
             oA = self._plain(sn, self.LY[l]["ctrl"], q)
+            oP = None
+            if prod is not None and self._snap_p is not None and l < len(prod) and prod[l] is not None:
+                sp = self._snap_p[l]
+                Wp = int(prod[l].width)
+                qp = ttnn.from_torch((qt[:, :, :Wp] if nd > 1 else qt[0, :, :Wp].reshape(1, 32, Wp)), dtype=b16, layout=ttnn.TILE_LAYOUT,
+                                     device=self.dev, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mesh_map)
+                try:
+                    oP = prod[l](qp, sp.win_a, sp.win_b, sp.ring, self.LY[l]["ctrl"])
+                except Exception as e_:  # noqa: BLE001
+                    print(f"[{tag}] (d) layer {l}: prod-call op FAILED {type(e_).__name__}: {str(e_)[:300]}", flush=True)
+                ttnn.deallocate(qp)
             ttnn.synchronize_device(self.dev)
-            rA = _host(sn.ring).reshape(T, B, Nv, m.Dk, m.Dv).float()
-            rE = _host(st["ring"]).reshape(T, B, Nv, m.Dk, m.Dv).float()
-            wA = _host([sn.win_a, sn.win_b][1 - sn.par]).float()
-            wE = _host([st["win_a"], st["win_b"]][1 - sn.par]).float()
-            e_ring, e_win = torch.equal(ringbits(rA), ringbits(rE)), torch.equal(iv(wA), iv(wE))
-            outB = _host(self.LY[l]["outE"]).float()
-            outA = _host(oA).float().reshape(outB.shape)
-            e_out = "NOT CHECKED (E1_GO_LOCAL=2)" if self.out_unwritten else torch.equal(iv(outA), iv(outB))
-            print(f"[{tag}] (d) GDN layer {l}: out {e_out} | ring {e_ring} (max|d| {(rA - rE).abs().max().item():.3e}) | "
-                  f"win {e_win} (max|d| {(wA - wE).abs().max().item():.3e}) | ref |out|max {outA.abs().max().item():.3e} "
-                  f"md5 ring {_h(ringbits(rE))} win {_h(iv(wE))}", flush=True)
-            ok_all = ok_all and e_ring and e_win and (e_out is not False)
+            rA, rE = hall(sn.ring), hall(st["ring"])
+            wA, wE = hall([sn.win_a, sn.win_b][1 - sn.par]), hall([st["win_a"], st["win_b"]][1 - sn.par])
+            oAh = hall(oA)
+            oBh = None if self.out_unwritten else hall(self.LY[l]["outE"])
+            rP = hall(self._snap_p[l].ring) if oP is not None else None
+            wP = hall([self._snap_p[l].win_a, self._snap_p[l].win_b][1 - sn.par]) if oP is not None else None
+            oPh = hall(oP) if oP is not None else None
+            self._chk_outs[l] = [x_.float().reshape(32, -1) for x_ in oAh]
+            for dv in range(nd):
+                ra, re_ = rA[dv].reshape(T, B, Nv, m.Dk, m.Dv).float(), rE[dv].reshape(T, B, Nv, m.Dk, m.Dv).float()
+                wa, we = wA[dv].float(), wE[dv].float()
+                e_ring, e_win = torch.equal(ringbits(ra), ringbits(re_)), torch.equal(iv(wa), iv(we))
+                oa = oAh[dv].float().reshape(32, -1)
+                if oBh is None:
+                    e_out = "NOT CHECKED (E1_GO_LOCAL=2)"
+                else:
+                    ob = oBh[dv].float().reshape(32, -1)[:, :oa.shape[1]]
+                    e_out = f"{torch.equal(iv(oa), iv(ob))} (max|d| {(oa - ob).abs().max().item():.3e})"
+                msg = (f"[{tag}] (d) GDN layer {l} dev {dv}: eng-vs-op out {e_out} | ring {e_ring} | win {e_win} "
+                       f"(max|d| {(wa - we).abs().max().item():.3e}) | op |out|max {oa.abs().max().item():.3e} md5 ring {_h(ringbits(re_))} win {_h(iv(we))}")
+                ok_all = ok_all and e_ring and e_win and not (isinstance(e_out, str) and e_out.startswith("False"))
+                if oPh is not None:
+                    rp = rP[dv].reshape(T, B, Nv, m.Dk, m.Dv).float()
+                    op_ = oPh[dv].float().reshape(32, -1)
+                    nc = min(op_.shape[1], oa.shape[1])
+                    msg += (f" || PROD-call vs bench-call op: out {torch.equal(iv(op_[:, :nc]), iv(oa[:, :nc]))} (max|d| {(op_[:, :nc] - oa[:, :nc]).abs().max().item():.3e}, "
+                            f"pcc {_pcc_t(op_[:, :nc], oa[:, :nc]):.6f}) ring {torch.equal(ringbits(rp), ringbits(ra))} (max|d| {_mx(rp, ra):.3e}) "
+                            f"win {torch.equal(iv(wP[dv].float()), iv(wa))}")
+                if l in ref_qkv and dv < len(ref_qkv[l]):
+                    rq = ref_qkv[l][dv].float().reshape(32, -1)
+                    gq = dd[dv][:, l * W:(l + 1) * W]
+                    sd = segdiff(gq, rq)
+                    msg += f" || G-a qkv vs REF qkvzab ({rq.shape[1]} cols): {'IDENTICAL' if not sd else sd}"
+                if l in ref_out and dv < len(ref_out[l]):
+                    ro = ref_out[l][dv].float().reshape(32, -1)
+                    nc = min(ro.shape[1], oa.shape[1])
+                    msg += f" || REF out vs bench-op out: eq {torch.equal(iv(ro[:, :nc]), iv(oa[:, :nc]))} pcc {_pcc_t(ro[:, :nc], oa[:, :nc]):.6f}"
+                    if oPh is not None:
+                        op_ = oPh[dv].float().reshape(32, -1)
+                        msg += f" vs prod-call out: eq {torch.equal(iv(ro[:, :nc]), iv(op_[:, :nc]))} pcc {_pcc_t(ro[:, :nc], op_[:, :nc]):.6f}"
+                if dv == 0 or not (e_ring and e_win) or oPh is not None or l in ref_qkv:
+                    print(msg, flush=True)
             ttnn.deallocate(oA)
             ttnn.deallocate(q)
-        for sn in self._snap:
-            for t_ in (sn.win_a, sn.win_b, sn.ring):
-                ttnn.deallocate(t_)
-        self._snap = None
-        print(f"[{tag}] (d) in-model check {'PASS' if ok_all else 'FAIL'}", flush=True)
+            if oP is not None:
+                ttnn.deallocate(oP)
+        for snl in (self._snap, getattr(self, "_snap_p", None) or []):
+            for sn in snl:
+                for t_ in (sn.win_a, sn.win_b, sn.ring):
+                    ttnn.deallocate(t_)
+        self._snap = self._snap_p = None
+        print(f"[{tag}] (d) in-model check ({nd} devices) {'PASS' if ok_all else 'FAIL'}", flush=True)
         return ok_all
 
     def check(self, tag="g2"):
