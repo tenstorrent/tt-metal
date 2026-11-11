@@ -496,7 +496,12 @@ def setup_bench(dev, MESH, mesh_identity):
         _vds = 2.0 ** -6 if (('MK_REAL_AR', '1') in MKDEF and V_R == 32) else 1.0
         def vlayer(L): return vwg, vwu * (2.0 ** (L % 2)), vwd * (2.0 ** -(L % 3)) * _vds   # distinct per layer, exact in BFP4
         s_xy = [(i % GX, i // GX) for i in range(NC)]
-        v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)
+        NOCBAL = any(k_ == 'MK_V12_NOCBAL' for k_, _ in MKDEF)   # MK80 NoC-balanced slice stream (v12e.hpp)
+        if NOCBAL and os.environ.get('MK_V12_NOCBAL_BANKS', '1') == '1':
+            v_bank, v_rank, v_nsb = LM.assign_banks_balanced(s_xy, BANK_LOC)
+        else:
+            v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)
+        print(f"[v12] nocbal {int(NOCBAL)} bank tiles/layer {LM.bank_tiles(v_bank, banks)}", flush=True)
         PVL = LM.pages_per_layer(v_nsb, banks)
         t_v = time.time()
         wv_all = ttnn.from_torch(torch.cat([LM.pack_layer(*vlayer(L), v_bank, v_rank, v_nsb, banks) for L in range(NL)]).reshape(1, 1, -1, TILE),
@@ -522,7 +527,7 @@ def setup_bench(dev, MESH, mesh_identity):
         _J = torch.zeros(TILE, TILE); _J[0, :] = 1.0
         v_j = ttnn.from_torch(_J.repeat(1, NC), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(rect, 1))
         hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), HDT, ttnn.TILE_LAYOUT, dev, hs(rect, TILE))   # placeholder
-        VGS = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(10)]   # never on reserved (AR / GDN) cores
+        VGS = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(14 if NOCBAL else 10)]   # never on reserved (AR / GDN) cores
         VGA = [ttnn.get_global_semaphore_address(g) for g in VGS]
         def v_prect(lx0, lx1, ly0, ly1):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))

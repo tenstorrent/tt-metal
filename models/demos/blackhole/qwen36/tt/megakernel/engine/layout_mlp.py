@@ -36,6 +36,33 @@ def assign_banks(core_xy, bank_loc):
     return bank_of, rank, max(rank.values()) + 1
 
 
+def assign_banks_balanced(core_xy, bank_loc):
+    """MK_V12_NOCBAL (MK80, DESIGN_mk70 §9.1): like assign_banks (nearest first, 80 / banks cores per bank) but every bank
+    also gets the same number of nn = 6 columns' cores (16 / 8 = 2), so every bank streams the same bytes per layer
+    (8 x 420 + 2 x 360 tiles). Same return value as assign_banks."""
+    banks = len(bank_loc)
+    small = [i for i, (x, y) in enumerate(core_xy) if NN[x] < NNM]
+    n = len(core_xy)
+    caps = {False: [(n - len(small)) // banks + (1 if b < (n - len(small)) % banks else 0) for b in range(banks)],
+            True: [len(small) // banks + (1 if b < len(small) % banks else 0) for b in range(banks)]}
+    pairs = sorted((abs(x - bx) + abs(y - by), i, b) for i, (x, y) in enumerate(core_xy) for b, (bx, by) in enumerate(bank_loc))
+    bank_of, sm = {}, set(small)
+    for d, i, b in pairs:
+        if i in bank_of or caps[i in sm][b] == 0: continue
+        bank_of[i] = b; caps[i in sm][b] -= 1
+    rank = {}
+    for b in range(banks):
+        for r, i in enumerate([i for i in range(len(core_xy)) if bank_of[i] == b]): rank[i] = r
+    return bank_of, rank, max(rank.values()) + 1
+
+
+def bank_tiles(bank_of, banks):
+    """tiles streamed per bank per layer (bytes balance check)"""
+    t = [0] * banks
+    for i, b in bank_of.items(): t[b] += 3 * KTR * NN[i % GX]
+    return t
+
+
 def tiles(w):
     R, C = w.shape[0] // TILE, w.shape[1] // TILE
     return w.reshape(R, TILE, C, TILE).permute(0, 2, 1, 3)
@@ -130,13 +157,14 @@ def bfp4_roundtrip_exact(pages_bf16):
     return torch.equal(ttnn.to_torch(t).float().reshape(pages_bf16.shape), pages_bf16.float())
 
 
-def build_device_pages(layers_w, bank_loc, quant=None):
+def build_device_pages(layers_w, bank_loc, quant=None, nocbal=False):
     """layers_w: list over layers of (wg, wu, wd) for ONE device. Returns (pages bf16 [NL * PVL, 32, 32] in DRAM page
     order, fields) with fields = dict(pvl, slot, core -> (first_page, ntiles, nn)). `quant(w)` optionally maps a weight
-    to its device-dequantized values (e.g. BFP4 round trip) before packing; packing itself never changes values."""
+    to its device-dequantized values (e.g. BFP4 round trip) before packing; packing itself never changes values.
+    nocbal=True: the MK_V12_NOCBAL page placement (assign_banks_balanced); must match the engine build's flag."""
     banks = len(bank_loc)
     core_xy = [(i % GX, i // GX) for i in range(GX * GY)]
-    bank_of, rank, nsb = assign_banks(core_xy, bank_loc)
+    bank_of, rank, nsb = (assign_banks_balanced if nocbal else assign_banks)(core_xy, bank_loc)
     pages = []
     for wg, wu, wd in layers_w:
         if quant is not None: wg, wu, wd = quant(wg), quant(wu), quant(wd)
