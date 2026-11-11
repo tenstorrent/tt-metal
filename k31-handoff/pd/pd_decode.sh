@@ -5,8 +5,12 @@
 set -o pipefail
 name=${1:?usage: pd_decode.sh NAME}
 source /data/bklockiewicz/k31run/pd/pd.env
+# The four hosts are four separate Slurm jobs: launch over ssh, not through this step's one-node allocation.
+for v in $(compgen -e | grep -E "^(SLURM|SLURMD|PMI|PMIX)_"); do unset "$v"; done
+export PRTE_MCA_plm=^slurm
+ulimit -Su "$(ulimit -Hu)"; ulimit -St unlimited
 HOSTS=bh-glx-120-c09u02,bh-glx-120-c09u08,bh-glx-120-c09u14,bh-glx-120-c09u20
-T=/data/bklockiewicz/k31-migration-blaze
+T=${DECODE_TREE:-/data/bklockiewicz/k31-decode-podrun}
 cd $T || exit 3
 source tt-metal/python_env/bin/activate
 mkdir -p $OUT; LOG=$OUT/$name.decode.log TRI=$OUT/$name.triage
