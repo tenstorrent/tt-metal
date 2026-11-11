@@ -287,10 +287,31 @@ ttnn::Tensor concat_native(
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
-    // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
-    // which don't currently support sub_core_grids
+    // For interleaved outputs with sub_core_grids, take the direct path only when the generic
+    // factory can consume the inputs as-is. The massaged builders used in the fallback do not
+    // forward sub_core_grids. Mirror the no-sub_core_grids behavior: mixed layouts and
+    // RM width-concat with an unaligned last dim are rejected rather than silently producing
+    // wrong data through the fast path.
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
+        const bool uniform_layout = std::all_of(input_tensors.begin(), input_tensors.end(), [&](const ttnn::Tensor& t) {
+            return t.layout() == first_tensor.layout();
+        });
+        TT_FATAL(
+            uniform_layout,
+            "ttnn.concat with sub_core_grids: all input tensors must share the same layout "
+            "(got mixed TILE/ROW_MAJOR). Convert inputs to a single layout before concat.");
+        if (first_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && dim == rank - 1) {
+            for (const auto& t : input_tensors) {
+                TT_FATAL(
+                    (static_cast<uint64_t>(t.padded_shape()[-1]) * t.element_size()) % t.buffer()->alignment() == 0,
+                    "ttnn.concat with sub_core_grids: RM width-concat requires every input's "
+                    "last dim to be buffer-aligned (got {} elements, element size {}, alignment {}).",
+                    t.padded_shape()[-1],
+                    t.element_size(),
+                    t.buffer()->alignment());
+            }
+        }
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 

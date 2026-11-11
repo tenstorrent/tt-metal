@@ -1256,6 +1256,37 @@ class TestEdgeCases:
         ttnn_out = ttnn.to_torch(ttnn_out)
         assert_equal(torch_out, ttnn_out)
 
+    def test_sub_core_grids_mixed_layout_rejected(self, device):
+        """Issue #61535: sub_core_grids fast path used to silently produce wrong data for
+        mixed TILE/ROW_MAJOR input lists (the pre-existing error without sub_core_grids was
+        bypassed). Narrowed path now rejects the same way as without sub_core_grids."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 50).bfloat16()
+        ta_tile = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+        tb_rm = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with pytest.raises(RuntimeError, match="all input tensors must share the same layout"):
+            ttnn.concat([ta_tile, tb_rm], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_rm_unaligned_rejected(self, device):
+        """Issue #61535: RM width-concat with sub_core_grids and an unaligned last dim must
+        be rejected, matching the no-sub_core_grids behavior."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 50).bfloat16()
+        ta = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        tb = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with pytest.raises(RuntimeError, match="last dim to be buffer-aligned"):
+            ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid)
+
+    def test_sub_core_grids_uniform_layout_still_works(self, device):
+        """Issue #61535: uniform-layout, aligned inputs must still take the fast path."""
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        a = torch.randn(1, 2, 32, 64).bfloat16()
+        b = torch.randn(1, 2, 32, 64).bfloat16()
+        ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+        tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
+        out = ttnn.to_torch(ttnn.concat([ta, tb], dim=-1, sub_core_grids=grid))
+        assert_equal(torch.cat([a, b], dim=-1), out)
+
 
 # ===========================================================================
 # 8. Groups parameter (height-sharded only)
