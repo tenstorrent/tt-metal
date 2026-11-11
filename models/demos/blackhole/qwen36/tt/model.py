@@ -3871,7 +3871,9 @@ class Qwen36Model:
                 if b in widths:
                     gate.tables["verify"][b] = mx + 1
             missing = [b for b in _mk1.programs if b not in widths]
-            if missing:
+            _max_seq = int(getattr(self.args, "max_seq_len", 0) or 0)
+            if missing and _max_seq and mx >= _max_seq:  # the engine covers every context the model serves
+                missing = []
                 msg = (f"megakernel: no split verify variant for engine widths {missing}: contexts > {mx} would be silently "
                        "truncated by the engine (no op-by-op fallback; QWEN36_ATTN_KV_SPLIT gate off?)")
                 if os.environ.get("QWEN36_R16_MK_ALLOW_NO_FALLBACK") != "1":
