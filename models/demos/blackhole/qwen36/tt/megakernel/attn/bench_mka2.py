@@ -159,7 +159,9 @@ for it in range(ITERS):
         _v = ttnn.to_torch(v_xo).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
         if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(v_xo), os.environ['V12_SAVE'])
         _bad = [j_ for j_ in range(16) if torch.corrcoef(torch.stack([_v[:, j_*320:(j_+1)*320].flatten(), _g2[:, j_*320:(j_+1)*320].flatten()]))[0, 1].item() < 0.999]
-        print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
+        if REAL_AR and (REAL_AAR or globals().get('GAMMA_CONS')):   # the AR_SEQ gold chains the MLPs only (no mixer ARs, no γ): meaningless here
+            print(f"[v12] iter {it} last-layer MLP (owner xo) AR_SEQ gold: NOT VALID under AAR/GAR/MK_GAMMA_CONS (no PCC reported; use the per-layer [v12] line)", flush=True)
+        else: print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
     if REAL_AR and AR_SEQ and v_xk is not None:   # x of the next pass's layer 0 as the last AR delivered it into the K-row slots (STREAM (0, k)); MK_V12_CB: CB, not readable
         _xk = ttnn.to_torch(v_xk).float().reshape(TILE, NC * 20 * TILE)
         _xd = torch.cat([_xk[:, (10 * (j_ // 2)) * 640 + (j_ % 2) * 320:(10 * (j_ // 2)) * 640 + (j_ % 2 + 1) * 320] for j_ in range(16)], 1)
@@ -214,14 +216,23 @@ for it in range(ITERS):
         _gs = (_xl * _xl).sum(-1)
         _gk = torch.stack([(_xl[:, k_ * 640:(k_ + 1) * 640] ** 2).sum(-1) for k_ in range(8)])   # [8, 32]
         _worst = 0.0
-        for ci_ in (0, 9, 37, 79):
+        for ci_ in ((0, 9, 37, 79) if not globals().get('RRED') else ()):
             S_ = _rs[ci_, :, :TILE].double()
             _worst = max(_worst, ((S_[:8] - _gk).abs() / _gk.abs().clamp_min(1e-30)).max().item())
-        S0 = _rs[0, :, :TILE].double()
-        _rel = ((S0[:8].sum(0) - _gs).abs() / _gs).max().item()
-        _rt = (1 / torch.sqrt(S0[:8].sum(0) / H + EPS)) / (1 / torch.sqrt(_gs / H + EPS)) - 1
-        print(f"[ar] iter {it} rstd Σ tile: rows 8-31 max|.| {S0[8:].abs().max().item():.3e}; K-row partial max rel err {_worst:.3e} (4 cores); "
-              f"Σ max rel err {_rel:.3e}; rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
+        if globals().get('RRED'):   # MK_AR_RSTD_RED=gdn: rsp tile 0 = the FINAL Σ in column 0 (every STREAM core); the K-row partials
+            # (the 8 un-reduced K-row tiles sit in the reducer's static CB 37: not read back)
+            _sc = torch.stack([_rs[ci_, :, 0].double() for ci_ in (0, 9, 37, 79)])
+            _rel = ((_sc - _gs[None]).abs() / _gs[None]).max().item()
+            _off = max(_rs[ci_, :, 1:TILE].abs().max().item() for ci_ in (0, 9, 37, 79))
+            _rt = (1 / torch.sqrt(_sc / H + EPS)) / (1 / torch.sqrt(_gs[None] / H + EPS)) - 1
+            print(f"[ar] iter {it} rstd Σ (red=gdn): columns 1-31 max|.| {_off:.3e}; "
+                  f"Σ max rel err {_rel:.3e} (4 cores); rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
+        else:
+            S0 = _rs[0, :, :TILE].double()
+            _rel = ((S0[:8].sum(0) - _gs).abs() / _gs).max().item()
+            _rt = (1 / torch.sqrt(S0[:8].sum(0) / H + EPS)) / (1 / torch.sqrt(_gs / H + EPS)) - 1
+            print(f"[ar] iter {it} rstd Σ tile: rows 8-31 max|.| {S0[8:].abs().max().item():.3e}; K-row partial max rel err {_worst:.3e} (4 cores); "
+                  f"Σ max rel err {_rel:.3e}; rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
     if REAL_AR and RQKV:   # qkv / k / SDPA / wo golds from the x the AR actually delivered to each attention layer (not the static x)
         _xin = {}
         if AR_DBG:   # residual after every AR of this pass (owner dumps); program order: [attention AR], MLP AR per layer

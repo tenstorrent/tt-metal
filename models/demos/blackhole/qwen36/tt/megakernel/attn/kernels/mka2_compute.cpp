@@ -23,10 +23,10 @@
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
-#if defined(MK_AR_RSTD)
+#if defined(MK_AR_RSTD) && !defined(MK_AR_RSTD_RED_GDN)   // RED_GDN (iii'): the column sum + transpose run on the GDN host core
 #include "api/compute/transpose_dest.h"
 #endif
-#if defined(MK_AR_RSTD)
+#if defined(MK_AR_RSTD) && !defined(MK_AR_RSTD_RED_GDN)
 // one copy of the SFPU fp32 column sum (sfpu_reduce is always-inline): shared by the rstd producer (X^T squares) and the consumer
 // (the Σ tile); STREAM text
 __attribute__((noinline)) static void mk_colsum(uint32_t idst) {
@@ -396,7 +396,9 @@ void kernel_main() {
             add_binary_tile_init();
             for (uint32_t i = 0; i < n_; ++i) add_binary_tile(0, 1 + i, 0);
         }
+#if !defined(MK_AR_RSTD_RED_GDN)
         mk_colsum(0);
+#endif   // RED_GDN: the elementwise Σ_t (x_t^T)^2 tile goes to the GDN host core, which sums the 8 K-rows + column-reduces
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, MK_AR_CB_SS);
