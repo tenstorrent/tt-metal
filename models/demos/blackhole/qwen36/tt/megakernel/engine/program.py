@@ -2379,6 +2379,21 @@ def setup_bench(dev, MESH, mesh_identity):
             assert _vchk == {k_: VADDR[k_] for k_ in _vchk}, f"[v12cb] v12 CB addresses moved in the full list: {_vchk} vs plan {VADDR}"
             _e = CBP.end_per_core(CBP.plan(cbs))
             print(f"[v12cb] CB region end: STREAM (0,0) {_e.get((0, 0))}  owner (10,0) {_e.get((GX, 0))}  GDN (0,{GY}) {_e.get((0, GY))}", flush=True)
+            # In-model L1 floor check (spec v1.165, batch acceptance): in the vLLM model the lowest persistent L1 tensor
+            # (ar_blk; above it the model's 64 KB DecodeResidualAllReduce buffer @ 1480448) sits BELOW the bench's, so a bench
+            # that builds can still clash in the model (gate 9 E20c: GDN cores [0-8..11-9] CB end 1516416 vs model floor
+            # 1473728). L1 tensors reserve their range on every core, so every core's static CB region end must stay <= the
+            # model floor. MK_MODEL_L1_FLOOR = the in-model floor ("[gdn24] ... lowest ar_blk @" in G's E-series logs);
+            # MK_MODEL_L1_CHK=1 raises on an overlap instead of only printing. PASS needs >= 4096 B margin.
+            _fl = int(os.environ.get('MK_MODEL_L1_FLOOR', '1473728'))
+            _wc = max(_e, key=_e.get) if _e else None
+            _mg = (_fl - _e[_wc]) if _wc is not None else None
+            _ov = sorted({(c_[1], v_) for c_, v_ in _e.items() if v_ > _fl})
+            print(f"[cbmodel] model L1 floor {_fl}; max CB end {_e.get(_wc)} @ {_wc}; margin {_mg} B; "
+                  f"{'PASS' if _mg is not None and _mg >= 4096 else ('TIGHT' if _mg is not None and _mg >= 0 else 'FAIL')}"
+                  + (f"; over (row, end) {_ov[:8]}" if _ov else ''), flush=True)
+            if os.environ.get('MK_MODEL_L1_CHK') == '1' and _mg is not None and _mg < 0:
+                raise RuntimeError(f"[cbmodel] static CB end {_e[_wc]} on core {_wc} exceeds the model L1 floor {_fl} by {-_mg} B")
         if os.environ.get('MKA_CBDUMP') == '1':
             for d_ in cbs:
                 print(f"[cbdump] ids {[f_.buffer_index for f_ in d_.format_descriptors]} size {d_.total_size} ranges {[(r_.start.x, r_.start.y, r_.end.x, r_.end.y) for r_ in d_.core_ranges.ranges()]}", flush=True)
