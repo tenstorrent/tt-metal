@@ -1938,14 +1938,16 @@ def setup_bench(dev, MESH, mesh_identity):
                         + ('  g_cgar_s = &ar_s; g_cgar_it = &ar_it;\n' if cgar else '') +
                         f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
                         f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
-                        f'   for (uint32_t k = {ar_it0}; k < 1u + (({a2}u >> LL) & 1u); ++k) ar_s.iter(ar_it++);   // this layer\'s ARs\n'
+                        f'   for (uint32_t k = {ar_it0}; k < 1u + (({a2}u >> LL) & 1u); ++k) ' + ('cgar_iter();' if cgar else 'ar_s.iter(ar_it++);') + '   // this layer\'s ARs\n'
                         + ('   g_cgar_done = 0;\n' if cgar else '') +
                         '  }\n' + ('  ar_s.fini(MKAR_ITERS);\n' if role == 'r' else '  ar_s.fini();\n'))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
             if cgar:   # the hook (called inside reader<>() of a GDN-type layer) runs this layer's first AR iteration once
                 km = txt.index('void kernel_main() {')
                 txt = (txt[:km] + 'static mkar::SendReader* g_cgar_s = nullptr;\nstatic uint32_t* g_cgar_it = nullptr;\nstatic uint32_t g_cgar_done = 0;\n'
-                       'void gdn_pre_sp_hook() { g_cgar_s->iter((*g_cgar_it)++); g_cgar_done = 1; }   // MK_CGAR_EARLY\n' + txt[km:])
+                       # one out-of-line copy of SendReader::iter (FORCE_INLINE) for the hook and the loop: two inlined copies cost +776 B corner reader text
+                       '__attribute__((noinline)) void cgar_iter() { g_cgar_s->iter((*g_cgar_it)++); }\n'
+                       'void gdn_pre_sp_hook() { cgar_iter(); g_cgar_done = 1; }   // MK_CGAR_EARLY\n' + txt[km:])
             # the AR phase headers right after the first include (the role's DM_OPT pragma, if any, stays first)
             inc = f'#include "{os.path.join(MKDIR_AR, hdr)}"\n'
             if os.environ.get('MK_AR_CORNER_NOZ', '0') == '1':   # profiled runs: the corner (GDN + hosted AR sender) kernels without zones
