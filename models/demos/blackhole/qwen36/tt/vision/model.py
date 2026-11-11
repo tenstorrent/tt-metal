@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
+
 import torch
 from loguru import logger
 
@@ -218,7 +220,13 @@ class DropInVisionTransformer(torch.nn.Module):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=1),
         )
-        return ttnn.to_device(host_rows, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dev = ttnn.to_device(host_rows, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Keep the host source of the last few uploads alive: the host->device write may still be in flight when this
+        # returns, and freed host memory reused before it lands would corrupt the tail of the rows (rc1e d30u20 11-11:
+        # the LAST image of a request read back as another image's / garbage colours).
+        keep = self.__dict__.setdefault("_upload_keepalive", collections.deque(maxlen=8))
+        keep.append((rows, host_rows))
+        return dev
 
     def forward(
         self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, host_trim: bool = False, return_host_rows=False
@@ -329,7 +337,12 @@ class DropInVisionTransformer(torch.nn.Module):
                 mesh = self.model_args.mesh_device
                 host = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=3))
                 ttnn.deallocate(tt_out)
-                final_outputs.append(host.reshape(-1, host.shape[-1])[:n_valid, :out_hidden_full].to(torch.bfloat16))
+                # .clone(): own the rows. to_torch's result (and the reshape / slice / same-dtype .to views of it) can
+                # alias a host buffer ttnn frees and reuses; the vision cache keeps these rows across requests
+                # (rc1e d30u20 11-11: cached rows later read back as another image's / garbage colours).
+                final_outputs.append(
+                    host.reshape(-1, host.shape[-1])[:n_valid, :out_hidden_full].to(torch.bfloat16).clone()
+                )
                 continue
 
             # --- Postprocessing ---

@@ -548,6 +548,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             if len(fresh) != len(miss):
                 raise RuntimeError(f"vision tower returned {len(fresh)} items for {len(miss)}")
             for k, r in zip(miss, fresh):
+                r = r.contiguous().clone()  # the cache must own its rows (never a view of a ttnn host buffer)
                 rows[k] = r
                 cache[keys[k]] = r
                 cache.move_to_end(keys[k])
