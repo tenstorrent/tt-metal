@@ -460,6 +460,7 @@ class MiniMaxH3Transformer3DModel(Module):
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        modulation_rows: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -480,6 +481,8 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
+        modulation_rows: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection: the
+            blocks take their adaLN tables from there instead of projecting `temb`.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -539,12 +542,7 @@ class MiniMaxH3Transformer3DModel(Module):
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        temb = self.time_embedder(self.time_proj(timestep))
-        if self.two_time is not None:
-            if endpoint_timestep is None:
-                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
-            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
-            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        temb = self._temb(timestep, endpoint_timestep)
         self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 
@@ -582,6 +580,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
             tracer_trace_key=(pad_to, adaln_tile_map is not None),
+            **({} if modulation_rows is None else {"modulation_rows": as_indices(modulation_rows)}),
         )
 
         hidden = self.norm_out(
@@ -615,6 +614,40 @@ class MiniMaxH3Transformer3DModel(Module):
 
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
 
+    def _temb(self, timestep: ttnn.Tensor, endpoint_timestep: ttnn.Tensor | None) -> ttnn.Tensor:
+        temb = self.time_embedder(self.time_proj(timestep))
+        if self.two_time is not None:
+            if endpoint_timestep is None:
+                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        return temb
+
+    def prepare_modulation(self, timesteps: ttnn.Tensor, endpoint_timesteps: ttnn.Tensor | None = None) -> None:
+        """Project every block's adaLN tables for a whole denoise at once (see the block's `prepare_modulation`).
+
+        timesteps / endpoint_timesteps: [1, 1, rows, 1] float32, replicated: the `timestep` (and
+        `endpoint_timestep`) forward inputs of every step stacked, plus any padding rows. A forward then passes
+        the row numbers of its step as `modulation_rows`. Release with `release_modulation`.
+        """
+        # temb a tile row at a time: the fp32 time-embedder linears are configured for a step's few rows (at 256 rows
+        # their buffers overflow L1), and a step's own shape keeps each row's temb that of the step's forward.
+        tile = ttnn.TILE_SIZE
+        chunks = []
+        for r in range(0, timesteps.shape[2], tile):
+            end = min(r + tile, timesteps.shape[2])
+            ts = ttnn.slice(timesteps, [0, 0, r, 0], [1, 1, end, 1])
+            ep = None if endpoint_timesteps is None else ttnn.slice(endpoint_timesteps, [0, 0, r, 0], [1, 1, end, 1])
+            chunks.append(self._temb(ts, ep))
+        temb = ttnn.concat(chunks, dim=2) if len(chunks) > 1 else chunks[0]
+        for block in self.transformer_blocks:
+            block.prepare_modulation(temb)
+        ttnn.deallocate(temb)
+
+    def release_modulation(self) -> None:
+        for block in self.transformer_blocks:
+            block.release_modulation()
+
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
         self,
@@ -627,6 +660,7 @@ class MiniMaxH3Transformer3DModel(Module):
         eye: ttnn.Tensor | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        modulation_rows: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
@@ -640,6 +674,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_sin=rope_sin,
                 onehot=onehot,
                 tilerow=tilerow,
+                modulation_rows=modulation_rows,
             )
         ttnn.deallocate(onehot)
         if tilerow is not None:
