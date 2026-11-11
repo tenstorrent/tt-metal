@@ -11,7 +11,7 @@ cd "$REPO"
 WT=$(mktemp -d "${TMPDIR:-/tmp}/mk-rc.XXXXXX")
 git worktree add -q --detach "$WT" "$INTEG"
 cd "$WT"
-G="git -c user.name=$(git config user.name) -c user.email=$(git config user.email)"
+G=git
 $G merge --no-edit -q "$VCACHE"
 $G merge --no-edit -q "$INT"
 for c in c8c90fe4acb 8eb9af536d8; do git merge-base --is-ancestor $c HEAD || { echo "missing $c"; exit 1; }; done
