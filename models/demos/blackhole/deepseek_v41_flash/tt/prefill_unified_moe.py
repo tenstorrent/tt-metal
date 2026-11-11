@@ -407,6 +407,7 @@ class DSV41UnifiedMoE:
                 read_x_at_offset=True,
             )
         else:
+            thr = getattr(self, "hybrid_thr", 0)
             out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 disp2,
                 region_offsets,
@@ -418,7 +419,33 @@ class DSV41UnifiedMoE:
                 max_dispatched_tokens_per_expert=sh.max_per_expert,
                 compute_kernel_config=sh.ckc,
                 activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+                **({"min_active_tokens": thr + 1} if thr else {}),
             )
+            if thr:
+                # DSV41_UNI_HYBRID=<T> (copy layers only, default OFF; T16): experts with <= T tokens run on moe_fused_swiglu (fewer, wider cores; -41 % expert op at N=1024 vs the ring) into the
+                # unified op's output buffer. Needs the T16 'fused' kernel overlay (TT_METAL_KERNEL_PATH=.../t16_kernels/fused|all): there SituGlu = clamped SiLU-GLU (limit 10). Same two-launch
+                # split as tt_routed_expert's hybrid path.
+                ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
+                    disp2,
+                    self.gate_projs,
+                    self.up_projs,
+                    self.down_projs,
+                    counts,
+                    sh.gidx,
+                    input_m_tiles=sh.max_per_expert // ttnn.TILE_SIZE,
+                    core_grid=ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                        math_fidelity=ttnn.MathFidelity.LoFi,
+                        math_approx_mode=False,
+                        fp32_dest_acc_en=os.environ.get("DSV41_UNI_HYBRID_FP32", "0") == "1",
+                        packer_l1_acc=False,
+                    ),
+                    activation=ttnn.RoutedExpertActivation.SituGlu,
+                    output=out,
+                    expert_region_offsets=region_offsets,
+                    read_x_at_offset=True,
+                    max_active_tokens=thr,
+                )
         ttnn.deallocate(disp)
         if upto == 3:
             return out, meta, counts, region_offsets

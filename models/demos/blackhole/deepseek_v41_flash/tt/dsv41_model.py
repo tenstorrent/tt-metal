@@ -527,6 +527,7 @@ class Model:
                 break
             kept = (self._keep or {}).get("umoe", {}).get(L)
             pl.umoe = DSV41UnifiedMoE(self.md, L, log=self.log, weights=kept, wdtype=ttnn.bfloat4_b)
+            pl.umoe.hybrid_thr = int(os.environ.get("DSV41_UNI_HYBRID", "0"))  # fused/unified split of the expert op on copy layers (needs the t16 fused kernel overlay)
             done.append(L)
         self.uni_copy_layers = done
         self.log(
