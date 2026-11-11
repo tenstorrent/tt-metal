@@ -630,6 +630,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     OW, OC, OLR = R_ARGS, R_ARGS + W_ARGS, R_ARGS + W_ARGS + C_ARGS
     OLW = OLR + NG * nR
     S = {k: f"{int(sems[k])}u" for k in ("in_ready", "attn_kv", "vb0", "vb1", "out_ready")}
+    # #17 (GSTEP) E1_ATTHOLD=P (default 0 = off; P = GDN layers per attention layer, 3 for Qwen3.8): a GDN layer right before an
+    # attention layer (g mod P == P - 1) holds its stash writes (writer) and its S' write-back (reader) until the engine's
+    # attn_kv reaches that attention layer's SDPA end (2 per attention layer: start, SDPA end) -> 2 (g / P + 1). Same bytes /
+    # order, issued later: they stop competing with the SDPA KV stream (the GDN step got shorter, so they landed on it).
+    atthold = int(os.environ.get("E1_ATTHOLD", "0"))
+    assert atthold >= 0
+    ATT_HOLD = lambda lv: (f'void gdn_att_hold() {{ if ({lv} % {atthold}u == {atthold - 1}u) noc_semaphore_wait_min('
+                           f'(volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, 2u * ({lv} / {atthold}u + 1u)); }}\n')
     if len(out_target) == 2:   # one target core (e.g. the Q root): +1 per GDN core per layer
         ox, oy = out_target
         osig = f'noc_semaphore_inc(get_noc_addr({ox}u, {oy}u, {S["out_ready"]}), 1);'
@@ -682,8 +690,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         else:
             sig_n = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
                              f'{S["out_ready"]}), {NC_}, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5)) if r[4])
-        osig = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1); '
-                f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {NC_}u * (g_gdn_l + 1)); {sig_n} noc_async_atomic_barrier(); }}')
+        # #17 (GSTEP) E1_OSIG_VC=2|3 (default 0 = VC 1): the 24 increments to the aggregator on a static unicast VC;
+        # E1_GSZ (bench): zones GO-AGW (the aggregator's wait) / GO-AGS (its engine signal + atomic barrier)
+        ovc = int(os.environ.get("E1_OSIG_VC", "0"))
+        assert ovc in (0, 2, 3), ("E1_OSIG_VC", ovc)
+        gsz = os.environ.get("E1_GSZ", "0") == "1"
+        zw, zs_ = ('{ DeviceZoneScopedN("GO-AGW"); ', '{ DeviceZoneScopedN("GO-AGS"); ') if gsz else ('{ ', '{ ')
+        osig = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1' + (f', noc_index, {ovc}' if ovc else '') + '); '
+                f'if (g_ab[{OAG_ME}]) {{ {zw}noc_semaphore_wait_min(g_ab + {OAG}, {NC_}u * (g_gdn_l + 1)); }} {zs_}{sig_n} noc_async_atomic_barrier(); }} }}')
     # the out_ready signal issued from the reader (NOC1): loop variable g_l, multicast corners swapped for NOC1
     osig_rd = re.sub(r"get_noc_multicast_addr\((\w+), (\w+), (\w+), (\w+), ", r"get_noc_multicast_addr(\3, \4, \1, \2, ",
                      osig.replace("g_gdn_l", "g_l"))
@@ -696,8 +710,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                 f'{S["out_ready"]}), {v}, {r[4]}u);' for r in (tgt_r[i:i + 5] for i in range(0, len(tgt_r), 5)) if r[4])
         osig_r = mc(len(cores)) if agg else mc(1)
         if agg:
-            osig_r = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1); '
-                      f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {len(cores)}u * (g_l + 1)); {osig_r} noc_async_atomic_barrier(); }}')
+            ovc = int(os.environ.get("E1_OSIG_VC", "0"))
+            zw, zs_ = ('{ DeviceZoneScopedN("GO-AGW"); ', '{ DeviceZoneScopedN("GO-AGS"); ') if os.environ.get("E1_GSZ", "0") == "1" else ('{ ', '{ ')
+            osig_r = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1' + (f', noc_index, {ovc}' if ovc else '') + '); '
+                      f'if (g_ab[{OAG_ME}]) {{ {zw}noc_semaphore_wait_min(g_ab + {OAG}, {len(cores)}u * (g_l + 1)); }} {zs_}{osig_r} noc_async_atomic_barrier(); }} }}')
     else:
         osig_r = osig.replace("g_gdn_l", "g_l")
     GB_R = GB_RINIT = GB_W = GB_WINIT = GB_WEND = GB_C = ""
@@ -751,6 +767,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'inline uint32_t gdn_rt_B() {{ return g_ab[4]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[5]; }}\n'
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '')
+        + (ATT_HOLD("g_l") if atthold else '')
         + (GB_R if GB else f'void gdn_gin_wait() {{\n  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n'
            + ('' if gin_fwdw else f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n') + '}\n'
            'void gdn_in_wait() { gdn_gin_wait(); }\n' if percore else
@@ -794,6 +811,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (GXY_DECL if GO else '') +
         f'void gdn_out_signal() {{ {go_inc if GO else osig} }}\n'
         + (f'void gdn_lazy_gate() {{ for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {GFL} + t, g_gdn_l + 1); }}\n' if lazy_gate else '')
+        + (ATT_HOLD("g_gdn_l") if atthold else '')
         + (go_local if GO and not go_rdhook else '')
         + (GB_W if GB else (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")});\n'
             f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n}}\n')
@@ -837,6 +855,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + '  // @@GDN_LAYER_BODY_END@@ (engine host splices: exactly once)\n  }\n'
         + ('  gdn_sp_drain();\n' if sp_late else '') + '}\n')
     pre_w = Nv * pre_s
+    # #17 F3 (E1_WYPAIR): c_wy on paired K_u / Q_u masked tiles (32 matmuls, not 64) + an exact DST half swap (B * T == 32)
+    wypair = os.environ.get("E1_WYPAIR", "0") == "1" and B * T == 32
+    wyord = wypair and os.environ.get("E1_WYORD", "0") == "1"   # F3b: user order 0 1 4 5 2 3 6 7 (reader + compute)
     common = [("GDN_RT_BM", "1"), ("GDN_BATCH", "1")]
     d_r = [("GDN_FAST", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_EARLY_SRC", "1"), ("GDN_LAZY", "1"),
            ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s)), ("GDN_STATE_FIRST", "1"),
@@ -844,7 +865,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_CUT_FAST", "1")] if cut_fast else []) + (
         [("GDN_SP_RD", "1")] if sp_rd else []) + ([("GDN_OUT_RD", "2" if go_rdhook else "1")] if out_rd else []) + (
         [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else []) + (
-        [("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_OUT_PRE", "1")] if go_ring0h else [])
+        [("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_OUT_PRE", "1")] if go_ring0h else []) + (
+        [("GSTEP_WPRE", "1")] if os.environ.get("E1_WPRE", "0") == "1" else []) + ([("GSTEP_ATTHOLD", "1")] if atthold else []) + (   # #17 F1: norm-W rows before in_ready
+        [("GSTEP_WYPAIR", "1")] if wypair else []) + ([("GSTEP_WYORD", "1")] if wyord else []) + ([("GSTEP_CUTST", "1")] if wypair and os.environ.get("E1_CUTST", "0") == "1" else []) + (
+        [("GSTEP_KTSLATE", "1")] if wypair and os.environ.get("E1_KTLATE", "0") == "1" and os.environ.get("E1_KTSLATE", "0") == "1" else []) + (
+        [("GSTEP_CZ", "1")] if os.environ.get("E1_GSZ", "0") == "1" else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
@@ -852,8 +877,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
         [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else []) + (
         [("GDN_OUT_TILE", "1")] if out_tile else []) + ([("GDN_OUT_RD", "1")] if out_rd else []) + (
-        [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else []) + ([("GDN_LZVC", str(lzvc))] if lzvc else [])
-    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
+        [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else []) + ([("GDN_LZVC", str(lzvc))] if lzvc else []) + ([("GSTEP_ATTHOLD", "1")] if atthold else [])
+    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GSTEP_WYPAIR", "1")] if wypair else []) + (
+        [("GSTEP_WYORD", "1")] if wyord else []) + (
+        [("GSTEP_KTLATE", "1")] if os.environ.get("E1_KTLATE", "0") == "1" else []) + (
+        [("GSTEP_CZ", "1")] if os.environ.get("E1_GSZ", "0") == "1" else []) + ([("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
         "E1_SP_WAIT", "0") == "1" else []) + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
         [("GDN_ZS_LATE", "1")] if zs_late else []) + ([("GDN_EARLY_REPLAY", "1")] if early else []) + (
         [("GDN_SP_LATE", "1")] if sp_late else []) + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
