@@ -241,8 +241,12 @@ def qkg_pages(model, layers=None):
             continue
         tw = l.attention.tw
         if "qk_norm_dense" in tw:
-            d = device_shards(tw["qk_norm_dense"])[0].reshape(-1, tw["qk_norm_dense"].shape[-1])
+            # pad_tiles=False: [1, NH+NKV, 1, HD] -> NH+NKV real rows. (With the default tile padding the rows are padded
+            # to 32 with zeros, so d[-1] was a PAD row: k_norm gamma = 0 -> the engine's k head was all zero in-model.)
+            d = device_shards(tw["qk_norm_dense"], pad_tiles=False)[0].reshape(-1, tw["qk_norm_dense"].shape[-1])
+            assert d.shape[0] == int(tw["qk_norm_dense"].shape[1]), (tuple(d.shape), tuple(tw["qk_norm_dense"].shape))
             vecs = (d[0], d[-1])  # first row = a q head, last row = the (last) k head
+            assert bool(vecs[1].abs().sum() > 0), "qk_norm_dense: k_norm row is zero"
         else:
             vecs = tuple(device_shards(tw[n])[0].reshape(-1)[: tw[n].shape[-1]].to(torch.bfloat16) for n in ("q_norm", "k_norm"))
         for v in vecs:
