@@ -2055,6 +2055,7 @@ def setup_bench(dev, MESH, mesh_identity):
             for c in corner:
                 rt[c.x][c.y] = (sp['rd_args'] if role == 'r' else sp['wr_args'])[(c.x, c.y)]
             dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines']) + ([('GDN_PRE_SP_HOOK', '1')] if cgar else []) + [('GSTEP_NO_ATTHOLD', '1')]   # #17 E1_ATTHOLD: the AR senders never hold
+            if GTEXT2: dfs = dfs + [('GB_NOROOT', '1')]   # GTEXT2: the corners hold no L2 root (asserted at the hook): G-b DM root code out
             dfs = dfs + [('MKAR_S_PUB', dict(AR_PUB_D)['MK_AR_PUB']), ('MKAR_S_PUBA', dict(AR_PUB_D)['MK_AR_PUBA'])]
             if os.environ.get('MKAR_SZONE', '0') == '1': dfs = dfs + [('MKAR_SZONE', '1')]   # hosted sender iteration zones (S-RIT / S-WIT)
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
@@ -2147,7 +2148,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 cfg.unpack_to_dest_mode = u_
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)]),
                                              defines=list(kd.defines) + ([('GDN_PRE_IN_HOOK', '1')] if RRED_LATE else [])
-                                             + ([('GB_NOROOT', '1')] if GTEXT and role == 'c' else [])   # GTEXT: holds no L2 root
+                                             + ([('GB_NOROOT', '1')] if (GTEXT and role == 'c') or (GTEXT2 and role == 'w') else [])   # GTEXT / GTEXT2: holds no L2 root
                                              + [('GSTEP_NO_ATTHOLD', '1')],   # #17 E1_ATTHOLD: the reducer's deliveries never wait
                                              runtime_args=ttnn.RuntimeArgs(), config=cfg, **base))
         assert sum(str(k_.kernel_source).endswith('_rred.cpp') for k_ in out) == 2, "_gdn_host_rred: writer + compute variants on RRED_HC"

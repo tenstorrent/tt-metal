@@ -11,6 +11,19 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
+#if defined(GDN_GTEXT2) && GDN_GTEXT2 && !defined(MKAR_GT2_SP_INLINE)
+// GTEXT2 (GDN-hosted sender, AR corner writer only): this binary's only memcpy calls are the init-time fabric connection
+// copies (FabricConnectionManager::build_from_args + the `fab =` assignment, once per program); a byte loop instead of
+// libc's 300 B memcpy (same bytes copied; no loop -> memcpy pattern rewrite)
+extern "C" __attribute__((used, optimize("no-tree-loop-distribute-patterns"))) void* memcpy(void* d, const void* s, size_t n) {
+    uint8_t* dp = static_cast<uint8_t*>(d);
+    const uint8_t* sp = static_cast<const uint8_t*>(s);
+    while (n--) {
+        *dp++ = *sp++;
+    }
+    return d;
+}
+#endif
 namespace mkar {
 
 #if defined(GDN_GTEXT2) && GDN_GTEXT2 && !defined(MKAR_GT2_SP_INLINE)
