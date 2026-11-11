@@ -25,8 +25,8 @@ block's output kept: each block gets the arguments `forward` gives it (`referenc
 `test_goldens.py` checks the loop against `encoder(...)` and the model, and `chunked_attention`
 against upstream `eager_attention`, on small inputs. A run resumes from the last saved block (a
 finished folder only redoes the final norm and the model output). `meta.json` records hashes of the
-checkpoint index, the reference code and `chunked_attention`; `load` refuses a folder made from
-different ones.
+checkpoint index, the checkpoint's `config.json`, the vision and projector shards, the reference code
+and `chunked_attention`; `load` refuses a folder made from different ones.
 
     python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid 256x256 [--blocks 1]
 """
@@ -48,7 +48,7 @@ from pathlib import Path
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.reference import modeling_kimi_k3 as upstream
-from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import checkpoint_path
+from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import CHECKPOINT_PREFIXES, checkpoint_path
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     REAL_MARK,
     build_reference,
@@ -98,8 +98,17 @@ def sha256(paths) -> str:
     digest = hashlib.sha256()
     for path in paths:
         digest.update(path.name.encode())
-        digest.update(path.read_bytes())
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 24), b""):
+                digest.update(chunk)
     return digest.hexdigest()
+
+
+def vision_shards(checkpoint: Path) -> list[Path]:
+    """The shards that hold the vision tower and projector weights."""
+    weight_map = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
+    shards = {shard for key, shard in weight_map.items() if key.startswith(CHECKPOINT_PREFIXES)}
+    return [checkpoint / shard for shard in sorted(shards)]
 
 
 def chunked_attention(
@@ -159,17 +168,35 @@ def to_fp32(reference):
     return reference
 
 
+@functools.cache
+def checkpoint_fingerprint(checkpoint: Path) -> dict:
+    """Hashes of the checkpoint files the reference reads. The shards are about 1 GB, so once per process."""
+    return {
+        "checkpoint_index_sha256": sha256([checkpoint / "model.safetensors.index.json"]),
+        "checkpoint_config_sha256": sha256([checkpoint / "config.json"]),
+        "vision_weights_sha256": sha256(vision_shards(checkpoint)),
+    }
+
+
 def fingerprint(checkpoint: Path) -> dict:
     """What a golden depends on besides the grid and seed."""
     return {
         "attention": "chunked " + hashlib.sha256(inspect.getsource(chunked_attention).encode()).hexdigest(),
-        "checkpoint_index_sha256": sha256([checkpoint / "model.safetensors.index.json"]),
+        **checkpoint_fingerprint(checkpoint),
         "reference_sha256": sha256([REFERENCE_DIR / name for name in REFERENCE_FILES]),
         "torch": torch.__version__,
     }
 
 
-IDENTITY = ("grid", "seed", "attention", "checkpoint_index_sha256", "reference_sha256")
+# The `fingerprint` keys a golden must match; `torch` is recorded only.
+FINGERPRINT_KEYS = (
+    "attention",
+    "checkpoint_index_sha256",
+    "checkpoint_config_sha256",
+    "vision_weights_sha256",
+    "reference_sha256",
+)
+IDENTITY = ("grid", "seed", *FINGERPRINT_KEYS)
 
 
 def model_output(reference, x: torch.Tensor, grid_thws: torch.Tensor) -> torch.Tensor:
@@ -199,11 +226,11 @@ def encoder_steps(reference, x: torch.Tensor, grid_thws: torch.Tensor, start: in
 
 def load(h: int, w: int, seed: int, name: str) -> torch.Tensor:
     """A saved output (`patch_embed`, `block_00`, ..., `final_layernorm`, `mm_projector`), checked
-    against the current checkpoint, reference code and `chunked_attention`."""
+    against the current checkpoint (index, config, vision weights), reference code and `chunked_attention`."""
     folder = case_dir(h, w, seed)
     meta = json.loads((folder / "meta.json").read_text())
     current = fingerprint(checkpoint_path())
-    for key in ("checkpoint_index_sha256", "reference_sha256", "attention"):
+    for key in FINGERPRINT_KEYS:
         if meta.get(key) != current[key]:
             raise RuntimeError(f"{folder} was made from a different {key}; regenerate it")
     return torch.load(folder / f"{name}.pt")
