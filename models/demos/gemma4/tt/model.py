@@ -32,6 +32,7 @@ from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.mesh_orientation import decode_flag, set_decode_fusion_profile
 from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.sdpa_pair_split import pair_split_reason
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
@@ -457,7 +458,29 @@ class Gemma4Model:
         # The 4-chip Blackhole MoE build runs the fused decode step by default (tt/mesh_orientation.py, every
         # GEMMA4_* flag still an override); recorded before the layers are built since the weight loaders and
         # the norm modules read the switches at construction.
-        set_decode_fusion_profile(tuple(mesh_device.shape), blackhole=is_blackhole(), moe=hf_config.enable_moe_block)
+        # kv_pairs: the global layers' KV heads sit on chip pairs at TP over a one-row mesh's columns (the 31B on the
+        # (1,8) line) -- the line profile then adds the pair-split decode attention and the prefix-LSE verify.
+        mesh_shape = tuple(mesh_device.shape)
+        kv_pairs = False
+        if len(mesh_shape) == 2 and mesh_shape[0] == 1:
+            for i in range(hf_config.num_hidden_layers):
+                cfg = Gemma4AttentionConfig(hf_config, i)
+                if not cfg.is_sliding:
+                    kv_pairs = (
+                        pair_split_reason(
+                            is_sliding=False,
+                            num_q_heads=cfg.num_attention_heads,
+                            num_kv_heads=cfg.num_key_value_heads,
+                            tp=mesh_shape[1],
+                            mesh_shape=mesh_shape,
+                            kv_replicated=cfg.num_key_value_heads < mesh_shape[1],
+                        )
+                        is None
+                    )
+                    break
+        set_decode_fusion_profile(
+            mesh_shape, blackhole=is_blackhole(), moe=hf_config.enable_moe_block, kv_pairs=kv_pairs
+        )
         # Keep prompt-dependent slice bounds in persistent buffers. Literal
         # offsets compile a new program after prefill traces are already live.
         self._tail_slice_start = ttnn.from_torch(

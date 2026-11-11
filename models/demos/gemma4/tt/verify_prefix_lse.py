@@ -61,9 +61,9 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
+from models.demos.gemma4.tt.mesh_orientation import VERIFY_PREFIX_LSE_ENV, decode_flag
 from models.demos.gemma4.tt.sdpa_pair_split import EMPTY_HALF_M, LOGIT_CLAMP, pair_selector
 
-VERIFY_PREFIX_LSE_ENV = "GEMMA4_SPEC_VERIFY_PREFIX_LSE"
 #: "0" keeps the 4-head verify on a GEMMA4_SDPA_PAIR_SPLIT build (default: the pair view where the layers have it)
 VERIFY_PREFIX_LSE_PAIR_ENV = "GEMMA4_SPEC_VERIFY_PREFIX_LSE_PAIR"
 #: pins the prefix call's cores per (row, KV head); unset: GEMMA4_SDPA_MAX_CORES_PER_HEAD, else the stock default 16
@@ -98,8 +98,9 @@ def log_once(message: str):
 
 
 def verify_prefix_lse_enabled() -> bool:
-    """The knob: ``GEMMA4_SPEC_VERIFY_PREFIX_LSE=1`` (default off)."""
-    return os.environ.get(VERIFY_PREFIX_LSE_ENV, "0") == "1"
+    """The knob: ``GEMMA4_SPEC_VERIFY_PREFIX_LSE`` through ``decode_flag`` (the env when set, else the build profile:
+    on for a pair-qualified dense model on the (1,8) line, ``GALAXY_LINE_PAIR_ON``; off elsewhere)."""
+    return decode_flag(VERIFY_PREFIX_LSE_ENV) == "1"
 
 
 def verify_prefix_pair_enabled() -> bool:

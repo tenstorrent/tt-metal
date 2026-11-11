@@ -237,8 +237,8 @@ def test_layers_that_qualify():
 
 
 def test_knob_is_registered_and_off_by_default(monkeypatch):
-    """GEMMA4_SDPA_PAIR_SPLIT sits in the decode-flag registry with the other off-by-default knobs; unset (and
-    under every build profile) it is off, the env turns it on."""
+    """GEMMA4_SDPA_PAIR_SPLIT sits in the decode-flag registry; unset it is off under every build profile except the
+    pair-qualified dense (1,8) line (GALAXY_LINE_PAIR_ON), and the env wins both ways."""
     assert ps.PAIR_SPLIT_ENV == mo.SDPA_PAIR_SPLIT_ENV == "GEMMA4_SDPA_PAIR_SPLIT"
     assert mo.DECODE_FUSION_OFF[ps.PAIR_SPLIT_ENV] == "0"
     monkeypatch.delenv(ps.PAIR_SPLIT_ENV, raising=False)
@@ -246,6 +246,15 @@ def test_knob_is_registered_and_off_by_default(monkeypatch):
         for shape, moe in (((1, 8), False), ((1, 4), False), ((1, 4), True), ((8, 4), True)):
             mo.set_decode_fusion_profile(shape, blackhole=True, moe=moe)
             assert not ps.pair_split_enabled()
+        mo.set_decode_fusion_profile((1, 8), blackhole=True, moe=False, kv_pairs=True)
+        assert ps.pair_split_enabled()
+        for shape, moe in (((1, 4), False), ((1, 8), True)):  # the line profile needs a dense build on (1,8)
+            mo.set_decode_fusion_profile(shape, blackhole=True, moe=moe, kv_pairs=True)
+            assert not ps.pair_split_enabled()
+        monkeypatch.setenv(ps.PAIR_SPLIT_ENV, "0")
+        mo.set_decode_fusion_profile((1, 8), blackhole=True, moe=False, kv_pairs=True)
+        assert not ps.pair_split_enabled()
+        mo.clear_decode_fusion_profile()
         monkeypatch.setenv(ps.PAIR_SPLIT_ENV, "1")
         assert ps.pair_split_enabled()
     finally:

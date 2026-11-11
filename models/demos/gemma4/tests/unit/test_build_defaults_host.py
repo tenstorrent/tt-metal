@@ -922,3 +922,23 @@ def test_hatch_env_off_keeps_guard(monkeypatch):
     monkeypatch.setattr(uf, "is_blackhole", lambda: False)
     monkeypatch.setenv("G4_FORCE_BATCH_PREFILL", "0")
     assert Gemma4ModelArgs().disable_batched_prefill is True
+
+
+def test_galaxy_line_pair_profile():
+    """A dense build on the (1,8) line whose global KV heads sit on chip pairs takes the dense set plus the pair-split
+    decode attention and the prefix-LSE verify; without kv_pairs, on (1,4) or for the MoE build it does not."""
+    assert mo.DECODE_FUSION_OFF[mo.SDPA_PAIR_SPLIT_ENV] == mo.DECODE_FUSION_OFF[mo.VERIFY_PREFIX_LSE_ENV] == "0"
+    line = mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False, kv_pairs=True)
+    assert (
+        line
+        == mo.GALAXY_LINE_PAIR_ON
+        == {
+            **mo.DENSE_DECODE_FUSION_ON,
+            mo.SDPA_PAIR_SPLIT_ENV: "1",
+            mo.VERIFY_PREFIX_LSE_ENV: "1",
+        }
+    )
+    assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=False) == mo.DENSE_DECODE_FUSION_ON
+    assert mo.decode_fusion_defaults((1, 4), blackhole=True, moe=False, kv_pairs=True) == mo.DENSE_DECODE_FUSION_ON
+    assert mo.decode_fusion_defaults((1, 8), blackhole=True, moe=True, kv_pairs=True) == mo.DECODE_FUSION_OFF
+    assert mo.decode_fusion_defaults((1, 8), blackhole=False, moe=False, kv_pairs=True) == mo.DECODE_FUSION_OFF
