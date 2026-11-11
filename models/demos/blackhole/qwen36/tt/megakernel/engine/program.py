@@ -413,6 +413,10 @@ def setup_bench(dev, MESH, mesh_identity):
     acc_gu = ttnn.TensorAccessorArgs(wgu_all).get_compile_time_args(); acc_dn = ttnn.TensorAccessorArgs(wd_all).get_compile_time_args()
     acc_wm = ttnn.TensorAccessorArgs(wm_all).get_compile_time_args()
     MKDEF = [tuple(kv.split('=', 1)) for kv in os.environ.get('MK_DEFINES', '').split(',') if kv]  # e.g. MKA_NOMLP=1  # -mk-tail: e.g. MK_DNPIPE=1,MK_FLAG_FLUSH=1
+    # MK_DNORM_SPLIT is read by the HOST (CB 19 on every STREAM core, reducer arrivals 80, _RSTDP) AND compiled into the kernels. The RC
+    # passes it inside MK_DEFINES (ENGINE_ENV), the bench as a plain env var: honour both, or the kernels split while the host plans the
+    # 8-producer layout (gate 9 E20e / E20f in-model deadlock: STREAM trisc2 at cb_reserve_back(MK_AR_CB_SS) in rstd_part, spec v1.167).
+    _DNSPLIT = os.environ.get('MK_DNORM_SPLIT', '0') == '1' or ('MK_DNORM_SPLIT', '1') in MKDEF
     AMASK = int(os.environ.get('MK_AMASK', '0xFFFFFFFF'), 0)   # mixed groups: bit L = attention-type layer
     S_GDN_US = float(os.environ.get('MK_SGDN_US', '0'))
     GIN = False   # MK_GDN_INPROJ (set in the RQKV block)
@@ -526,7 +530,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # each STREAM core runs the binary of its variant, so code a core never runs drops out of its text. Tree parents are
     # moved off the 8 rstd producers (STREAM (n = k, k)); the owners stay leaves (EXTLEAN). KV block ranges / mask: `members`.
     SVAR = os.environ.get('MKA_SVAR', '0') == '1'
-    _RSTDP = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1' and os.environ.get('MK_DNORM_SPLIT', '0') != '1'
+    _RSTDP = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1' and not _DNSPLIT
     def sv_prod(f_): return _RSTDP and fcores[f_].x < GX and fcores[f_].y < GY and fcores[f_].x == fcores[f_].y
     TMEM = members
     _SV_RQB = ('MKA_RQBAL', '1') in MKDEF   # MKA_RQBAL: trees are per pass (any STREAM core may parent): variants split by rstd producer only
@@ -1167,11 +1171,11 @@ def setup_bench(dev, MESH, mesh_identity):
         # (transposed copy + square + add + column sum) and writes that 32-float row into row n of page k of CB 37 (rows 10-31 zeroed once by
         # the reducer's writer): the reducer waits 80 arrivals per delivery; its sum + column sum + transpose are unchanged. Replaces the 8
         # diagonal producers' 20-tile C-RSS (on the matmul path of columns 0-7) by a uniform 2-tile one.
-        DNORM_SPLIT = os.environ.get('MK_DNORM_SPLIT', '0') == '1'
+        DNORM_SPLIT = _DNSPLIT
         if DNORM_SPLIT:
             assert RRED, "MK_DNORM_SPLIT: MK_AR_RSTD + MK_AR_RSTD_RED=gdn (+ MK_REAL_AR, no MK_AR_RSTD_HOST)"
             RRED_ARR = 80
-            MKDEF = MKDEF + [('MK_DNORM_SPLIT', '1')]
+            if ('MK_DNORM_SPLIT', '1') not in MKDEF: MKDEF = MKDEF + [('MK_DNORM_SPLIT', '1')]
             print("[dnorm] split Σx²: 80 STREAM cores x 2 tiles -> reducer rows (80 arrivals per delivery)", flush=True)
         # MK_RRED_LATE=1 (GINSTREAM, default off): on the reducer core the GDN layer's mixer-Σ reduce runs from the step's
         # gdn_pre_in_hook() (after c_replay / wr_rcoef) instead of at the layer top, so the replay overlaps the MLP window like
