@@ -34,6 +34,8 @@ copies the ring over rows ``[0, window)``.
 parallel verify, ``DSPARK_PARALLEL_VERIFY.md``), equal to ``S`` single-row ``decode`` steps.
 """
 
+import os
+
 import torch
 import ttnn
 
@@ -42,6 +44,7 @@ from models.experimental.deepseek_v4_flash.tt.common import (
     _HIFI4,
     _HIFI4_SDPA,
     _MASK_NEG,
+    SINGLE_USER_TILE,
     DeepSeekV4Module,
     _profile,
     _region,
@@ -73,11 +76,13 @@ from models.experimental.deepseek_v4_flash.tt.layers import (
     Linear,
     LinearDecode,
     _core_grid_contains,
+    _slab_bytes,
+    fused_rms_norm_gamma_memory_config,
 )
 from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache, _load_weight
 
-from .decode_prefetch import make_prefetch_buffers, prefetch_rings
+from .decode_prefetch import FUSED_KV_RING, FUSED_Q_A_RING, make_prefetch_buffers, prefetch_rings
 
 DECODE_LAYOUTS = {
     # 8 cores: q_a's N is 40 tiles, and the full-width cut needs a core count dividing both it and the 8 DRAM banks.
@@ -92,6 +97,14 @@ DECODE_LAYOUTS = {
     "indexer.wq_b": {"K": 1280, "N": 4096, "n_blocks": 64},
     "indexer.weights_proj": {"K": 5120, "N": 32, "n_blocks": 1},
 }
+# A layer that does not select runs one-row steps' q, kv and ring write as one ``attention_qkv_decode``
+# (``DEEPSEEK_V41_FUSED_QKV=0``: q_a, q_b, kv, their RoPE and the ring write as separate ops).
+_FUSED_QKV = os.environ.get("DEEPSEEK_V41_FUSED_QKV", "1") not in ("0", "", "false", "False")
+# attention_qkv_decode's core roles on the 12x10 grid: the tokens replica covers it, q_a's 40 and kv's 16
+# cores hold one output tile and one [K, 32] weight slab each.
+_FUSED_QKV_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))})
+_FUSED_Q_A_CORES = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 9))})
+_FUSED_KV_CORES = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(7, 9))})
 # ``fused_lightning_select_kv`` scores ``(cur_pos + 1) // 4`` keys whatever the ratio.
 _SELECT_KV_RATE = 4
 # ``flash_mqa_decode``: more S-blocks or 128-row chunks measured no faster; HiFi2 matches HiFi4's PCC.
@@ -487,7 +500,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
     (see :class:`DeepSeekV41Indexer`), so every rank still selects the same rows.
 
     ``use_prefetcher`` streams q_a, q_b, kv, o_a and o_b through the rings of
-    :func:`~.decode_prefetch.prefetch_rings`, in ``prefetch_buffers``.
+    :func:`~.decode_prefetch.prefetch_rings`, in ``prefetch_buffers``; a ``fused_qkv`` layer's one-row steps run
+    q / kv as ``attention_qkv_decode``, which takes q_a's, kv's and q_b's slabs off the
+    :data:`~.decode_prefetch.FUSED_Q_A_RING` / :data:`~.decode_prefetch.FUSED_KV_RING` and shared rings when
+    ``prefetch_buffers`` holds them, and its other steps read the three from DRAM.
     """
 
     def __init__(
@@ -524,6 +540,18 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         self.qkv_tp_strategy = "replicated"
         tp_tag = f".tp{tp_size}.{self.qkv_tp_strategy}" if tp_size > 1 else ""
 
+        # Only the select reads q_a. A layer without one runs a one-row step's q / kv as attention_qkv_decode,
+        # which takes q_a's, kv's and q_b's slabs off its own rings (or DRAM); their matmul_decodes below serve
+        # the other steps from DRAM, off the rings, so the rings still pop in prefetch order.
+        grid = device.compute_with_storage_grid_size()
+        self.fused_qkv = (
+            _FUSED_QKV
+            and layer_idx not in config.index_source_layer_ids
+            and grid.x >= _FUSED_QKV_GRID.bounding_box().end.x + 1
+            and grid.y >= _FUSED_QKV_GRID.bounding_box().end.y + 1
+        )
+        qkv_rings = {} if self.fused_qkv else rings
+
         # q_a mcasts its normalized output onto q_b's 8x8 B grid. Under the prefetcher its B cores sit on
         # their ring's receivers beside that grid, and the writer unicasts into a staging buffer there first.
         self.q_a_proj = LinearDecode(
@@ -533,7 +561,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             dtype=weight_dtype,
             mesh_mapper=replicate,
             **DECODE_LAYOUTS["q_a_proj"],
-            **ring_prefetch(rings, "q_a_proj", prefetch_buffers, device, weight_dtype),
+            **ring_prefetch(qkv_rings, "q_a_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
             dram_sharded_weight=True,
@@ -545,7 +573,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             dtype=weight_dtype,
             mesh_mapper=replicate,
             **DECODE_LAYOUTS["kv_proj"],
-            **ring_prefetch(rings, "kv_proj", prefetch_buffers, device, weight_dtype),
+            **ring_prefetch(qkv_rings, "kv_proj", prefetch_buffers, device, weight_dtype),
             use_rm_hs=True,
             dram_sharded_weight=True,
         )
@@ -560,7 +588,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             dtype=weight_dtype,
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1) if tp_size > 1 else None,
             **{**DECODE_LAYOUTS["q_b_proj"], "N": DECODE_LAYOUTS["q_b_proj"]["N"] // tp_size},
-            **ring_prefetch(rings, "q_b_proj", prefetch_buffers, device, weight_dtype),
+            **ring_prefetch(qkv_rings, "q_b_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
             dram_sharded_weight=True,
@@ -581,8 +609,52 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         # HEIGHT_SHARDED replica onto every q_b B core, which q_b reads as A.
         assert self.q_a_proj.can_fuse_rms_norm() and self.kv_proj.can_fuse_rms_norm()
         self.q_a_proj.set_output_core_grid(self.q_b_proj.b_core_grid())
-        self.q_a_proj.enable_fused_rms_norm(self.eps, weights["q_a_norm.weight"])
-        self.kv_proj.enable_fused_rms_norm(self.eps, weights["kv_norm.weight"])
+        q_a_norm, kv_norm = (w() if callable(w) else w for w in (weights["q_a_norm.weight"], weights["kv_norm.weight"]))
+        self.q_a_proj.enable_fused_rms_norm(self.eps, q_a_norm)
+        self.kv_proj.enable_fused_rms_norm(self.eps, kv_norm)
+        self.fused_pipes = None
+        self.fused_prefetch_queued = False
+        if self.fused_qkv:
+            # kv's and q_b's weights already hold one slab per kv / q_b core; q_a's is cut 32 wide, one slab per
+            # q_a core. Both gammas sit one tile per core with the outputs they scale.
+            self.fused_w_q_a = ttnn.to_memory_config(
+                self.q_a_proj.weight,
+                ttnn.MemoryConfig(
+                    ttnn.BufferType.DRAM,
+                    ttnn.NdShardSpec(
+                        ttnn.Shape([self.q_a_proj.K, ttnn.TILE_SIZE]),
+                        ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.dram_grid_size().x - 1, 0))}
+                        ),
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                    ),
+                ),
+            )
+            self.fused_q_a_gamma, self.fused_kv_gamma = (
+                ttnn.from_torch(
+                    g.reshape(1, -1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    tile=SINGLE_USER_TILE,
+                    device=device,
+                    memory_config=fused_rms_norm_gamma_memory_config(g.numel(), cores),
+                    mesh_mapper=replicate,
+                )
+                for g, cores in ((q_a_norm, _FUSED_Q_A_CORES), (kv_norm, _FUSED_KV_CORES))
+            )
+            # Under the prefetcher a one-row step's slabs stream in through their rings, q_b's through the
+            # shared ring ahead of o_a's, while it holds a whole q_b slab (TP4's, not TP1's).
+            shared = prefetch_buffers.get(rings["q_b_proj"].key) if use_prefetcher else None
+            q_b_slab = _slab_bytes(
+                weight_dtype, (self.q_b_proj.K, self.q_b_proj.N // DECODE_LAYOUTS["q_b_proj"]["n_blocks"])
+            )
+            if FUSED_Q_A_RING in (prefetch_buffers or {}) and shared and shared[0].ring_size() >= q_b_slab:
+                self.fused_pipes = {
+                    "q_a": prefetch_buffers[FUSED_Q_A_RING],
+                    "kv": prefetch_buffers[FUSED_KV_RING],
+                    "q_b": shared,
+                }
 
         # Grouped o_a, block-diagonal over o_groups: one batched matmul_decode, batch axis = group.
         in_per_group = (self.num_heads * self.head_dim) // self.o_groups
@@ -678,11 +750,23 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 tokens_grid=self._decode_activation_grid(),
             )
 
-    def prefetch_weights(self):
-        """Queue the prefetched projections in the order :meth:`decode` pops them."""
+    def prefetch_weights(self, *, one_row: bool = True):
+        """Queue the prefetched projections in the order :meth:`decode` pops them. ``one_row``: the step this is for
+        decodes one row, which a ``fused_qkv`` layer runs as attention_qkv_decode, whose slabs are then queued too."""
+        if one_row and self.fused_pipes is not None:
+            self._queue_fused_prefetch()
         for proj in (self.q_a_proj, self.q_b_proj, self.kv_proj, self.o_a_proj, self.o_b_proj):
             if proj.use_prefetcher:
                 proj.fetch_weights()
+
+    def _queue_fused_prefetch(self):
+        """Ask the DRISC senders for attention_qkv_decode's q_a, kv and q_b slabs, one whole slab per ring entry.
+        Each op call pops exactly one of each: a missing request hangs it and a doubled one desyncs the rings."""
+        for name, weight in (("q_a", self.fused_w_q_a), ("kv", self.kv_proj.weight), ("q_b", self.q_b_proj.weight)):
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                self.device, [(weight, 1)], prefetcher_pipes=self.fused_pipes[name], capture_into_trace=True
+            )
+        self.fused_prefetch_queued = True
 
     def _decode_activation_grid(self) -> ttnn.CoreRangeSet:
         """Cores that receive the decode all-gather replica of ``tokens``: q_a's B grid, or kv's if it contains it,
@@ -713,6 +797,31 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim, head_dim=self.head_dim)
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
         return q, kv, q_a
+
+    def _fused_qkv_into_ring(self, tokens, cos, sin, ring, sliding_pos):
+        """:meth:`_qkv` of one row as attention_qkv_decode, writing its kv into ``ring`` at ``sliding_pos``.
+        ``tokens`` is the replica on ``_FUSED_QKV_GRID``; returns q ``[1, 1, H_local, Dh]`` as SDPA reads it."""
+        _profile(self.device)
+        pipes = []
+        if self.fused_pipes is not None:
+            if not self.fused_prefetch_queued:
+                self._queue_fused_prefetch()
+            self.fused_prefetch_queued = False
+            pipes = [*self.fused_pipes["q_a"], *self.fused_pipes["kv"], *self.fused_pipes["q_b"]]
+        return ttnn.experimental.deepseek.attention_qkv_decode(
+            tokens,
+            self.fused_w_q_a,
+            self.kv_proj.weight,
+            self.q_b_proj.weight,
+            self.fused_q_a_gamma,
+            self.fused_kv_gamma,
+            cos,
+            sin,
+            ring,
+            sliding_pos,
+            epsilon=self.eps,
+            prefetcher_pipes=pipes,
+        )
 
     def _sdpa(self, q, kv, mask, sdpa_cur_pos, memory_config, sdpa_lengths=None, selected_kv=None):
         """SDPA-decode of ``q`` ``[1, B, H_local, Dh]`` over K == V ``kv`` ``[B or 1, 1, Skv, Dh]``.
@@ -760,8 +869,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         )
 
     def _attend(self, q, kv, mask, cos, neg_sin, sdpa_cur_pos=None, sdpa_lengths=None, selected_kv=None):
-        """SDPA-decode of packed ``q`` ``[1, 1, B, H_local*Dh]`` over the dense K == V ``kv``, output RoPE,
-        then o_a and o_b.
+        """SDPA-decode of packed ``q`` ``[1, 1, B, H_local*Dh]`` (or :meth:`_fused_qkv_into_ring`'s
+        ``[1, 1, H_local, Dh]``) over the dense K == V ``kv``, output RoPE, then o_a and o_b.
 
         ``B`` is the users, or one session's ``B`` rows (``kv`` ``[B, 1, Skv, Dh]``, row ``j``'s keys at batch
         ``j``). Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[1 or B, 1, 1, Skv]``) /
@@ -769,9 +878,13 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ``neg_sin`` are :meth:`decode`'s. Returns the block's output on packed rows, ``[1, 1, B, D]``.
         """
         h, dh = self.local_num_heads, self.head_dim
-        batch = _packed_users(q)
+        sdpa_ready = q.shape[-1] == dh
+        batch = 1 if sdpa_ready else _packed_users(q)
         out_mem = _sdpa_decode_output_config(batch, h, dh, self._sdpa_pcfg.compute_with_storage_grid_size)
-        if batch == 1:
+        if sdpa_ready:
+            assert q.memory_config() == out_mem, f"SDPA reads q as {out_mem}, got {q.memory_config()}"
+            gathered = q
+        elif batch == 1:
             gathered = ttnn.experimental.deepseek.all_gather_for_matmul(q, out_mem.shard_spec.grid)
         else:
             # The gather replicates every row onto every core; SDPA reads row b alone on core b.
@@ -787,6 +900,21 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         if gathered is not q:
             ttnn.deallocate(q)
         q = ttnn.experimental.view(gathered, [1, batch, h, dh])
+        if sdpa_lengths is not None:
+            # flash_mqa_decode writes head rows wherever the output lives, so one head per core spreads the
+            # output RoPE over H cores, and o_a's gather stacks those rows back into the packed row.
+            head_per_core = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.num_cores_to_corerangeset(h, self._sdpa_pcfg.compute_with_storage_grid_size, row_wise=True),
+                    [1, dh],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            attn = self._sdpa(q, kv, mask, sdpa_cur_pos, head_per_core, sdpa_lengths, selected_kv)
+            attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
+            return self._project_out(attn)
         attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem, sdpa_lengths=sdpa_lengths, selected_kv=selected_kv)
         # One row per core with its heads side by side, so a per-row RoPE table row covers all of them.
         attn = ttnn.experimental.view(attn, [1, 1, batch, h * dh])
@@ -795,8 +923,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
 
     def _project_out(self, attn):
         """Grouped o_a and row-parallel o_b of ``M`` rows of attention ``[1, 1, M, H_local*Dh]`` (RoPE undone),
-        ROW_MAJOR height-sharded one row per core -> ``[1, 1, M, D]``."""
-        m, width = attn.shape[-2], attn.shape[-1]
+        ROW_MAJOR height-sharded one row per core -> ``[1, 1, M, D]``. A single row may also arrive as
+        ``[1, 1, H_local, Dh]``, one head per core."""
+        width = self.local_num_heads * self.head_dim
+        m = attn.logical_volume() // width
         in_per_group = width // self.local_o_groups
         oa_dest = ttnn.CoreRangeSet({self.o_a_proj.b_core_grid().bounding_box()})
         if m > 1:
@@ -1042,23 +1172,31 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             assert s <= self.window, f"{s} rows would overwrite each other's ring slots"
             assert ring_offset is None and win_offset is None, "several sessions' rings decode one row at a time"
             assert ring_rows is not None, "decode_inputs(..., rows=S) builds the rows' ring copies"
-        tokens = ttnn.experimental.deepseek.all_gather_for_matmul(_pack_tokens(hidden), self._decode_activation_grid())
+        fused = self.fused_qkv and b == 1 and s == 1
+        assert fused or not self.fused_prefetch_queued, "attention_qkv_decode's slabs were queued for a one-row step"
+        tokens = ttnn.experimental.deepseek.all_gather_for_matmul(
+            _pack_tokens(hidden), _FUSED_QKV_GRID if fused else self._decode_activation_grid()
+        )
         if self.compress_ratio == 0:
-            q, kv, q_a = self._qkv(tokens, cos, sin)
-            ttnn.deallocate(q_a)
-            ttnn.deallocate(tokens)
-            if s > 1:
-                rings = ttnn.repeat(scache.kv, ttnn.Shape([s, 1, 1, 1]))
-                self._write_causal_rows(kv, rings, ring_rows)
-                ttnn.experimental.paged_update_cache(scache.kv, kv, update_idxs_tensor=sliding_pos)
+            if fused:
+                q = self._fused_qkv_into_ring(tokens, cos, sin, scache.kv, sliding_pos)
+                ttnn.deallocate(tokens)
+            else:
+                q, kv, q_a = self._qkv(tokens, cos, sin)
+                ttnn.deallocate(q_a)
+                ttnn.deallocate(tokens)
+                if s > 1:
+                    rings = ttnn.repeat(scache.kv, ttnn.Shape([s, 1, 1, 1]))
+                    self._write_causal_rows(kv, rings, ring_rows)
+                    ttnn.experimental.paged_update_cache(scache.kv, kv, update_idxs_tensor=sliding_pos)
+                    ttnn.deallocate(kv)
+                    out = self._attend(q, rings, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
+                    ttnn.deallocate(rings)
+                    return ttnn.reshape(out, [b, s, 1, d])
+                if b > 1:
+                    kv = _one_row_per_user(kv)
+                _update_cache_at(scache.kv, kv, sliding_pos)
                 ttnn.deallocate(kv)
-                out = self._attend(q, rings, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
-                ttnn.deallocate(rings)
-                return ttnn.reshape(out, [b, s, 1, d])
-            if b > 1:
-                kv = _one_row_per_user(kv)
-            _update_cache_at(scache.kv, kv, sliding_pos)
-            ttnn.deallocate(kv)
             ring = scache.kv
             if ring_offset is not None and sdpa_lengths is None:
                 ring = scache.ring_view
@@ -1085,10 +1223,14 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         assert latent is None or select, "a closed group is written by the select that follows it"
         assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         assert select or not candidates, "candidates are a select mode"
-        q, kv, q_a = self._qkv(tokens, cos, sin)
-        if s == 1:
-            _update_cache_at(scache.kv, kv, sliding_pos)
-            ttnn.deallocate(kv)
+        if fused:
+            q = self._fused_qkv_into_ring(tokens, cos, sin, scache.kv, sliding_pos)
+            q_a = None
+        else:
+            q, kv, q_a = self._qkv(tokens, cos, sin)
+            if s == 1:
+                _update_cache_at(scache.kv, kv, sliding_pos)
+                ttnn.deallocate(kv)
         if select:
             # The select runs on the whole grid; keep q out of its L1 until SDPA.
             q_l1 = q.memory_config()
@@ -1127,7 +1269,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             else:
                 # _attend reshards the rows one per core from DRAM.
                 ttnn.tilize(scache.sel_kv_rows, output_tensor=scache.sel_tile_rows)
-        ttnn.deallocate(q_a)
+        if q_a is not None:
+            ttnn.deallocate(q_a)
         ttnn.deallocate(tokens)
         if s > 1:
             sel = ttnn.experimental.view(scache.sel_tile_rows, [s, 1, stride, self.head_dim])

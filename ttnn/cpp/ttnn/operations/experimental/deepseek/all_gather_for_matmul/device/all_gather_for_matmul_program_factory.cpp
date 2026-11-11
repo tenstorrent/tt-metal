@@ -44,15 +44,18 @@ ProgramDescriptor create_gather_descriptor(
     const uint32_t tiles_per_block = shard_width / TILE_WIDTH;
     const uint32_t blocks_per_core = shard_height / TILE_HEIGHT;
     const uint32_t tiles_per_core = tiles_per_block * blocks_per_core;
-    const uint32_t shard_width_bytes = shard_width * output.element_size();
     const uint32_t full_width_bytes = output_shard.shape[1] * output.element_size();
-    const uint32_t untilized_shard_bytes = shard_height * shard_width_bytes;
+    const uint32_t untilized_shard_bytes = shard_height * shard_width * output.element_size();
     const uint32_t full_tensor_bytes = output_shard.shape[0] * full_width_bytes;
     const uint32_t bbox_num_cores = output_bbox.grid_size().x * output_bbox.grid_size().y;
     const bool skip_untilize = input.layout() == Layout::ROW_MAJOR;
-    const uint32_t rows_per_slice = input.logical_shape()[-2];
-    const uint32_t padded_rows_per_slice = input.padded_shape()[-2];
-    const uint32_t num_slices = output_shard.shape[0] / rows_per_slice;
+    // Height shards are consecutive full-width row blocks, so each one lands in the replica as a
+    // single contiguous run at sender_id * shard bytes.
+    const bool stacked_rows = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint32_t shard_width_bytes = stacked_rows ? untilized_shard_bytes : shard_width * output.element_size();
+    const uint32_t rows_per_slice = stacked_rows ? 1 : input.logical_shape()[-2];
+    const uint32_t padded_rows_per_slice = stacked_rows ? 1 : input.padded_shape()[-2];
+    const uint32_t num_slices = stacked_rows ? 1 : output_shard.shape[0] / rows_per_slice;
 
     ProgramDescriptor desc;
 
@@ -364,7 +367,8 @@ ProgramDescriptor create_mcast_descriptor(
 
 ProgramDescriptor AllGatherForMatmulProgramFactory::create_descriptor(
     const AllGatherForMatmulParams& operation_attributes, const AllGatherForMatmulInputs& tensor_args, Tensor& output) {
-    if (tensor_args.input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (tensor_args.input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+        tensor_args.input.shard_spec()->grid.num_cores() == 1) {
         return create_mcast_descriptor(operation_attributes, tensor_args, output);
     }
     return create_gather_descriptor(operation_attributes, tensor_args, output);

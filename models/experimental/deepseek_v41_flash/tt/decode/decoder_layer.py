@@ -144,9 +144,10 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("hc_ffn"), row_major_streams=True
         )
 
-    def prefetch_weights(self, *, index_sparse: bool = False):
+    def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True):
         """Queue this layer's ring requests: Engram's wkv, attention's q_a, q_b, kv, o_a, o_b, then the
-        shared expert's down -- the order :meth:`decode` pops them.
+        shared expert's down -- the order :meth:`decode` pops them. ``one_row``: the step decodes one row
+        (see :meth:`~.attention.DeepSeekV41Attention.prefetch_weights`); a verify block's does not.
 
         Only weights on a ring (see :func:`~.decode_prefetch.prefetch_rings`) are queued. The
         router gate and the shared gate/up are not: their matmuls read the DRAM ND-sharded
@@ -154,7 +155,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         """
         if self.engram is not None:
             self.engram.wkv.fetch_weights()
-        self.self_attn.prefetch_weights()
+        self.self_attn.prefetch_weights(one_row=one_row)
         # None when ``fused_experts`` runs the shared expert from DRAM itself.
         if self.mlp.shared_experts is None:
             return
