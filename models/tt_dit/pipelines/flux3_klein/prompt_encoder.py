@@ -30,7 +30,6 @@ class Flux3KleinPromptEncoder:
         self._processor.tokenizer.padding_side = "right"
         self._head_dim = int(text_config["head_dim"])
         self._rope_theta = flux3_klein_rope_theta(text_config)
-        # cos / sin depend only on (rows, real tokens): keep the last few on device
         self._pos_cache: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
     def tokenize(self, prompt: str, length: int | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
@@ -50,8 +49,6 @@ class Flux3KleinPromptEncoder:
         """`[1, L, 20480]` bf16 text tokens on device (replicated), their RoPE ids and the attended length (see
         `tokenize`)."""
         input_ids, attention_mask, valid = self.tokenize(prompt, length)
-        # run the layers on the attended rows only (rounded to 128) and zero-fill the bucket below: every kept row sees
-        # the same keys (causal + pad mask) and the dropped rows are masked keys in the DiT
         bucket_rows = int(attention_mask.shape[-1])
         rows = min(bucket_rows, -(-valid // 128) * 128)
         if rows < bucket_rows:
@@ -66,7 +63,7 @@ class Flux3KleinPromptEncoder:
         )
         freqs = positions.float()[:, None] * inv_freq[None, :].float()
         emb = torch.cat((freqs, freqs), dim=-1)
-        emb = emb[..., interleaved_rope_permutation(emb.shape[-1])]  # [f0, f0, f1, f1, ...] for the fused RoPE
+        emb = emb[..., interleaved_rope_permutation(emb.shape[-1])]
 
         tt_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
         tt_mask = tensor.from_torch(attention_mask.bool(), device=self._device)

@@ -603,8 +603,6 @@ class VaeAttention(Module):
         program_config = self._sdpa_program_config
         h_local = h // self._ctx.h_factor
         tp_split = self._tp_factor > 1 and h_local % self._tp_factor == 0 and h_local // self._tp_factor * w % 32 == 0
-        # 2D SP: the W mesh axis splits the local query rows like a TP axis would; the rows are gathered back and
-        # re-partitioned by columns after the projection
         w_factor = self._ctx.w_factor
         w_split = w_factor > 1 and h_local % w_factor == 0 and h_local // w_factor * w % 32 == 0
         local = self.local_queries and (
@@ -875,7 +873,6 @@ class _VaeSpatial2dGroupNorm(Module):
         self.activation_fn = None if activation_fn == "silu" else activation_fn
         self.weight = Parameter(total_shape=[1, 1, 1, num_channels], device=ctx.device)
         self.bias = Parameter(total_shape=[1, 1, 1, num_channels], device=ctx.device)
-        # fp32: it contracts the fp32 channel sums
         self.to_groups = Parameter(total_shape=[1, 1, num_channels, num_groups], device=ctx.device, dtype=ttnn.float32)
         self.from_groups = Parameter(total_shape=[1, 1, num_groups, num_channels], device=ctx.device)
 

@@ -326,8 +326,6 @@ class Qwen3VlTextEncoder(Module):
         captured: list[ttnn.Tensor] = []
         fast_path = getattr(self, "fast_path", False)
         if fast_path:
-            # [B, S, H] -> [B, 1, S, H] once (a view): every layer op accepts rank 4 and the CCL helpers then skip
-            # their reshape pair (6 view ops per layer); the taps are squeezed back below
             hidden_states = ttnn.unsqueeze(hidden_states, 1)
 
         for layer_idx, decoder_layer in enumerate(self.layers):
@@ -472,10 +470,7 @@ def interleaved_rope_permutation(head_dim: int) -> torch.Tensor:
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L590
 class Qwen3VlAttention(Module):
-    # Fused RoPE on the interleaved (adjacent-pair) layout: q / k projection rows and norm weights are permuted per
-    # head at load and the caller passes cos / sin interleaved. Set before loading (own weight-cache subfolder).
     interleaved_rope: bool = False
-    # The layer input is [B, 1, S, H]: no unsqueeze before the head split, rank 4 out of the head concat.
     rank4_input: bool = False
 
     def __init__(
@@ -688,7 +683,7 @@ class Qwen3VlAttention(Module):
             )
 
         if self.rank4_input:
-            x = ttnn.experimental.nlp_concat_heads(x)  # the same kernel as concatenate_heads, [B, 1, S, H] out
+            x = ttnn.experimental.nlp_concat_heads(x)
         else:
             x = ttnn.transformer.concatenate_heads(x)
 

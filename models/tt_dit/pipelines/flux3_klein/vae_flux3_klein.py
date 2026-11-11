@@ -58,7 +58,6 @@ def decoder_slice_params(sizes, h_factor: int, w_factor: int = 1) -> dict[tuple[
             for (cin, cout), slices in level.items():
                 table.setdefault((h, w, cin, cout), min(slices, max(1, -(-w // 32))))
             if h_factor > 1:
-                # per-device input rows (and columns): the shard plus one halo row / column on each side
                 local_w = w // w_factor + 2 if w_factor > 1 else w
                 for cin, cout in partitioned:
                     table.setdefault((h // h_factor + 2, local_w, cin, cout), 0)
@@ -112,15 +111,12 @@ def _bounded_group_norm_blocks(module) -> None:
         _bounded_group_norm_blocks(child)
 
 
-# a decoder conv whose height-sharded config finds no valid DRAM slice (per-device input at 4096)
 UNSHARDABLE_DECODER_CONVS = frozenset({(258, 2048, 512, 512)})
 
 
-# L1 budget of a conv's full-K weights plus its activation block (the TP convs reach 1.33 MB)
 CONV_FULL_K_L1_BYTES = 1_350_000
 
 
-# smallest per-device input (pixels) whose convs split their output channels when the full-K weights do not fit
 COUT_SPLIT_MIN_PIXELS = 100_000
 
 
@@ -218,7 +214,6 @@ class Flux3KleinVae:
             )
             return module
 
-        # no channel TP in the decoder: rows over h_axis, columns over the other axis
         decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=None, h_axis=h_axis, w_axis=tp_axis)
         self._decoder = Flux2VaeDecoder(parallel_config=decoder_parallel, use_conv3d=False, **common)
         configure_conv2d(
@@ -260,7 +255,6 @@ class Flux3KleinVae:
         ttnn.deallocate(rows)
         z = decoder.preprocess_and_unpatchify(parted, height=size // SCALE, width=size // SCALE)
         ttnn.deallocate(parted)
-        # the columns over the other axis; the output is gathered back to the H-partitioned contract
         rows = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(z)
         z = ttnn.mesh_partition(rows, dim=2, cluster_axis=self._tp_axis, memory_config=rows.memory_config())

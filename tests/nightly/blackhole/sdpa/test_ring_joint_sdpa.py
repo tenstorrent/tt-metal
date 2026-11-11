@@ -1234,7 +1234,7 @@ def run_ring_joint_sdpa_model_configs(
     fp32_dest_acc_en: bool = False,
     use_attention_sink: bool = False,
     streaming_fp32_dest: bool = False,
-    dst_full_sync_en: bool = False,  # needs an owned runtime
+    dst_full_sync_en: bool = False,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -5607,12 +5607,10 @@ def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
     )
 
 
-# Non-causal, 128-wide heads, bf16 K/V: the shapes DiT models (WAN, FLUX) run on the streaming path.
 STREAMING_FP32_DEST_MODELS = ["wan2_2_1xGLX"]
 
 
 def _streaming_fp32_dest_qk_configs(model):
-    # the streaming path keeps the bf16 score block, so the bf16 CB budget applies, not the fp32 one
     qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=False)
     assert qk_configs, f"{model.name}: no q/k configs"
     return qk_configs

@@ -88,7 +88,6 @@ def build_flux3_klein_text_encoder(
         is_fsdp=is_fsdp,
         high_fidelity_linears=True,
     )
-    # fused interleaved RoPE, rank-4 hidden state through the layers; the prompt encoder runs the attended rows only
     for m in _walk_modules(encoder):
         if isinstance(m, Qwen3VlAttention):
             m.interleaved_rope = True

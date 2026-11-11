@@ -194,7 +194,6 @@ class Flux3KleinPipeline:
             mesh_device=mesh_device,
             parallel_config=encoder_parallel,
             ccl_manager=CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology),
-            # the TP shard is ~1.8 GB per chip: keep it resident instead of all-gathering every weight per prompt
             is_fsdp=False,
         )
         self._text_encoder = encoder
@@ -230,8 +229,6 @@ class Flux3KleinPipeline:
             sizes=SIZES,
         )
         self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
-        # Device constants that depend only on the request's layout (RoPE tables, modulation and row-gather indices,
-        # the latent row mask), kept across requests instead of rebuilt and uploaded each time.
         self._plan_cache: dict[tuple, Flux3KleinPlan] = {}
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
@@ -294,7 +291,6 @@ class Flux3KleinPipeline:
         timings["upsample"] = time.time() - t0
         seed = caption_seed(prompt) if request.seed is None else request.seed
         h, w = latent_shape(size, size)
-        # the noise and its host tensor are built on a helper thread while this thread dispatches the text encoder
         sp = self._transformers[request.model].sp_factor
         latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, h, w, sp)
 
@@ -311,7 +307,6 @@ class Flux3KleinPipeline:
         t0 = time.time()
         image_cond = None
         if canvas is not None:
-            # the reference's own latent shape: h, w stay the generated image's (the pre-step helper's noise uses them)
             rh, rw = latent_shape(canvas.height, canvas.width)
             image_cond = (self._vae.encode(canvas), reference_ids(rh, rw, 0))
         timings["encode_reference"] = time.time() - t0
@@ -371,7 +366,6 @@ class Flux3KleinPipeline:
 
     def _upload_rows(self, rows: torch.Tensor | ttnn.Tensor, sp_factor: int) -> ttnn.Tensor:
         if isinstance(rows, ttnn.Tensor):
-            # replicated device rows (the text encoding) are split over SP on device
             if rows.shape[-2] != padded_length(rows.shape[-2], sp_factor):
                 raise ValueError(f"{rows.shape[-2]} device rows are not a multiple of {sp_factor} tiles")
             return ttnn.mesh_partition(rows, dim=1, cluster_axis=self._sp_axis)
@@ -419,7 +413,6 @@ class Flux3KleinPipeline:
             if plan is None:
                 plan = self._plan_cache[key] = transformer.prepare_plan(layout, sample_ids, sample=index)
             else:
-                # the plan keeps the logical_n buffers, not their values: another request may have written them since
                 transformer.write_logical_n(plan, sample=index)
             return plan, embedded
 

@@ -43,13 +43,8 @@ class Conv2d(Module):
     act_block_h_override: int = 32
     double_buffer: bool = False
     full_inner_dim: bool = False
-    # Sharded activations (None: ttnn picks). A shape that does not fit sharded falls back, per (h, w, in, out), to
-    # single buffering and then to the unsharded path; `no_shard` pins shapes to the unsharded path.
     shard_layout: ttnn.TensorMemoryLayout | None = None
     no_shard: frozenset = frozenset()
-    # Run a call as `cout_split` sub-convs over output-channel slices of the weights, each with `split_shard_layout`
-    # and the full inner dim resident, then concatenate on the channel dim; only for inputs of at least
-    # `split_min_pixels` (h x w) per device.
     cout_split: int = 1
     split_min_pixels: int = 0
     split_shard_layout: ttnn.TensorMemoryLayout | None = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -553,9 +548,6 @@ class Conv2d(Module):
             **({"shard_layout": shard} if shard is not None else {}),
         )
 
-        # The prepared layout depends on the input size, the slice config and the fallback level. The input memory
-        # config, layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each Conv2d
-        # instance always gets inputs with the same memory config, layout and dtype.
         prepared_key = (b, h, w, num_slices) if self.shard_layout is None else (b, h, w, num_slices, level)
         weight_data, bias_data = self.weight.data, (self.bias.data if self.bias is not None else None)
         if split is not None:
@@ -674,7 +666,7 @@ class Conv2d(Module):
             n_split = 1
         shape_key = (h, w, self.in_channels, self.out_channels)
         if n_split > 1:
-            shape_key = (*shape_key, n_split)  # its own fallback level
+            shape_key = (*shape_key, n_split)
             sharded = self.split_shard_layout is not None and shape_key[:4] not in self.no_shard
         else:
             sharded = self.shard_layout is not None and shape_key not in self.no_shard

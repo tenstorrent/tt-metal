@@ -22,19 +22,16 @@ from ....utils.tensor import bf16_tensor
 from ....utils.test import ring_params_8k
 
 HEADS, HEAD_DIM, SP, TP = 24, 128, 8, 4
-VALID_TEXT = 320  # valid caption rows; the rest of the text bucket is the masked K tail
-Q_GAIN = 3.0  # peaked scores (std ~3), so the max / exp numerics matter
+VALID_TEXT = 320
+Q_GAIN = 3.0
 SAMPLE_ROWS = 48
 
-# per-device rows, text bucket, (q, k) chunks as Klein's Flux3KleinAttention resolves them on the compute_common.hpp path
-# (the streaming path takes RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS first); 4096 + 1 ref uses the 2048-row text bucket
 CASES = {
     "2048": (2176, 1024, (128, 512)),
     "2048_ref": (2688, 1024, (160, 512)),
     "4096": (8320, 1024, (128, 640)),
     "4096_ref": (8960, 2048, (128, 640)),
 }
-# measured (exp 11): compute_common.hpp path 4.0e-2 to 4.7e-2, streaming path 3.0e-2 to 3.1e-2
 MAX_REL_ERR = {False: 0.06, True: 0.045}
 MIN_PCC = 0.998
 

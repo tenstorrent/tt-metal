@@ -11,8 +11,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-# The model calls these resolvers once per layer per step with the same shapes. The register_* functions clear the
-# caches; a direct write to a table bypasses them, so call _clear_config_caches() after one.
 _config_caches: list[dict] = []
 
 

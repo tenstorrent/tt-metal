@@ -12,9 +12,6 @@ DOWNSAMPLING_RATIO = 16
 IMAGE_ROPE_SCALE = 0.5
 TEXT_PAD_MULTIPLE = 80
 MAX_TEXT_LENGTH = 4096
-# Text rows a prompt is padded to: the smallest bucket holding its attended rows (rows past them are masked keys).
-# Per (size, reference token bucket; 0 = no reference): at 4096 with a reference in the 4096-token bucket only the 2048
-# text bucket splits into whole k = 640 chunks.
 TEXT_BUCKETS = (1024, 2048, MAX_TEXT_LENGTH)
 TEXT_BUCKETS_BY_LAYOUT = {(4096, 4096): (2048, MAX_TEXT_LENGTH)}
 
