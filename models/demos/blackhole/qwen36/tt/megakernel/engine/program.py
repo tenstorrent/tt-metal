@@ -1490,7 +1490,12 @@ def setup_bench(dev, MESH, mesh_identity):
             b_ = types.SimpleNamespace(dev=dev, mesh=dev if MESH else None, NL=NL, AMASK=AMASK, is_attn=is_attn_layer, NU=NU, CTX=CTX,
                                        gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
                                        cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), out_rects=(RECTS_F[:10] if GDN_WAIT else None), per_replay={},
-                                       free_cb_ids=list(range(45)), gdnout=GO)
+                                       free_cb_ids=list(range(45)), gdnout=GO,
+                                       # MK_GIN_PERCORE: G-a tiles per GDN layer landing on each GDN core (logical xy); column c's
+                                       # K-row r tile goes to (c, GY + r % 2), r < nt_c (gin_wargs). None = the Q-root contract
+                                       gin_k=({(c_, GY + p_): sum(1 for r_ in range(nt_) if r_ % 2 == p_)
+                                               for c_, nt_ in {k_[0]: s_.nt for k_, s_ in GSL_.items()}.items() for p_ in (0, 1)}
+                                              if GIN and ('MK_GIN_PERCORE', '1') in MKDEF else None))
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
             GDN_ROLE.setdefault('io', [])
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)

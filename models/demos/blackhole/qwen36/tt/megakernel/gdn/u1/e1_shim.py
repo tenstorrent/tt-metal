@@ -317,7 +317,7 @@ def _audit_cb_transfers(tab, layers, Kt, Vt, T, VB):
 
 
 def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
-                 out_b16=True, kdir=None, st_ring=None, attn_n=0, skip_cb_ids=(34, 35, 37, 39), gdnout=None):
+                 out_b16=True, kdir=None, st_ring=None, attn_n=0, skip_cb_ids=(34, 35, 37, 39), gdnout=None, gin_k=None):
     """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
     as build's tens). sems: {in_ready, attn_kv, vb0, vb1, out_ready} L1 addresses; out_target: (noc x, noc y) of the
     core whose out_ready gets +1 per GDN core per layer. Core i of `cores` (row-major) = head i // VB, value block i % VB.
@@ -603,6 +603,30 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     OAG = OLW + NG * nW          # payload word: the aggregation counter (0 at build)
     OAG_ME = OAG + 1             # payload word: 1 on the aggregator core
     OHM = (GRDY + 1) if GO else OAG + 2   # payload words OHM, OHM + 1 (after OAG / OAG_ME and the gdn_out words incl. GFL / GRDY): HOLD_SKIP mask
+    # MK_GIN_PERCORE (gin_k = {logical xy: G-a tiles per GDN layer on that core}): in_ready on GDN core c counts its own tiles
+    # (the owners += 1 on it, no Q-root funnel, v1.97 R2) -> wait >= k_c * (g + 1). Cores with no tiles (the 4 AR corners)
+    # get k = 1, bumped once per layer by a forwarder: the row's east-most core with tiles, right after its own wait (reader,
+    # NOC1, eastward). Payload words OGK: k, n_fwd, (x, y) x 2 (NoC of the cores this one bumps). G-b: gdn_gin_wait() is
+    # the per-core wait for its prefix stage; gdn_in_wait() (the step's) calls it until G-b retargets it.
+    percore = gin_k is not None
+    OGK = OHM + 2
+    gk_k, gk_f = [1] * len(cores), [[] for _ in cores]
+    if percore:
+        lxy = [(c_.x, c_.y) for c_ in cores]
+        for i, xy in enumerate(lxy):
+            gk_k[i] = gin_k.get(xy, 0)
+        for i, xy in enumerate(lxy):
+            if gk_k[i] == 0:
+                fw = max((j for j, q in enumerate(lxy) if q[1] == xy[1] and gk_k[j] > 0 and q[0] < xy[0]), key=lambda j: lxy[j][0], default=None)
+                assert fw is not None, ("MK_GIN_PERCORE: no forwarder west of", xy)
+                ph = dev.worker_core_from_logical_core(cores[i])
+                gk_f[fw].append((ph.x, ph.y))
+                gk_k[i] = -1   # bumped
+        assert max(len(f_) for f_ in gk_f) <= 2, gk_f
+        gk_k = [1 if k_ == -1 else k_ for k_ in gk_k]
+        print(f"[gin] PERCORE in_ready targets k {gk_k}, forwarders {[(i, f_) for i, f_ in enumerate(gk_f) if f_]}", flush=True)
+    # in_ready target of GDN layer g on this core: k_c * (g + 1) (PERCORE) else g + 1
+    IRT = (lambda l_: f'g_ab[{OGK}] * ({l_} + 1)') if percore else (lambda l_: f'{l_} + 1')
     AGX, AGY = (lambda q: (q.x, q.y))(dev.worker_core_from_logical_core(cores[0]))
     if agg:
         NC_ = len(cores)
@@ -637,7 +661,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'inline uint32_t gdn_rt_B() {{ return g_ab[4]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[5]; }}\n'
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '') +
-        f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n'
+        + (f'void gdn_gin_wait() {{\n  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n'
+           f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n}}\n'
+           'void gdn_in_wait() { gdn_gin_wait(); }\n' if percore else
+           f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n')
         + (GXY_DECL if GO else '')
         + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '')
         + ((go_local_rd[:go_local_rd.rindex("}")] + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '')
@@ -664,6 +691,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not GO or GO_TAILHOOK) else '') if out_rd else '')
         # HOLD_SKIP: every TRISC read the last layer's mask before this reader's last kmq handoff completed
         + (f'  g_ab[{OHM}] = 0; g_ab[{OHM} + 1] = 0;\n' if hold_skip else '')
+        + ('  noc_async_atomic_barrier();\n' if percore else '')   # the forwarders' corner bumps retired
         + '}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
@@ -676,11 +704,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (GXY_DECL if GO else '') +
         f'void gdn_out_signal() {{ {go_inc if GO else osig} }}\n'
         + (go_local if GO and not go_rdhook else '')
-        + (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_gdn_l + 1); }}\n' if early else '')
+        + (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")}); }}\n' if early else '')
         + f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_gdn_l = L;\n'
         f'    for (uint32_t t = 0; t < {nW}; ++t) crta[{CRTA0} + t] = g_ab[{OLW} + L * {nW} + t];\n'
-        + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n')
+        + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("L")});\n')
         + f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
         + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n"
         + (go_w.replace("{OSIG}", osig) if GO else '') + "  }\n"
@@ -753,7 +781,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             pl += [0, 0, 0, 0, 0]   # E1_GO_RD handoff words: src, t0, n, posted (L + 1), done (L + 1)
             pl += [0] * len(cores) + [0]   # GFL: per-source A tile ready flags (E1_GO_FLAGS), L + 1; GRDY (E1_GO_GATHER); writer resets
         assert len(pl) == OHM, (len(pl), OHM)
-        pl += [0, 0]   # OHM x 2 (HOLD_SKIP live mask by layer parity; always present, the last 2 words)
+        pl += [0, 0]   # OHM x 2 (HOLD_SKIP live mask by layer parity; always present)
+        assert len(pl) == OGK, (len(pl), OGK)
+        pl += [gk_k[i], len(gk_f[i])] + [v_ for xy_ in (gk_f[i] + [(0, 0)] * 2)[:2] for v_ in xy_]   # OGK: MK_GIN_PERCORE k_c, forwards
         payloads.append(pl)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
