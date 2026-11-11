@@ -934,6 +934,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                                     "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
                                                     "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
     fphys = dev.worker_core_from_logical_core
+    # GTEXT2 (E1_GTEXT2, default on under E1_GB; 0 = the old binaries byte-for-byte): GDN-role code-size trims, md5-identical
+    if os.environ.get("E1_GTEXT2", "1" if GB else "0") == "1":
+        d_r, d_w, d_c = (d_ + [("GDN_GTEXT2", "1")] for d_ in (d_r, d_w, d_c))
     if GB:
         d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]) + (
             [("GB_PULL_NOC", os.environ["E1_GB_PULL_NOC"])] if "E1_GB_PULL_NOC" in os.environ else [])
