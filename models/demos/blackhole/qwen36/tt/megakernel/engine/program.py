@@ -550,12 +550,17 @@ def setup_bench(dev, MESH, mesh_identity):
             assert QSK and ("MK_V12", "1") in MKDEF, "MK_AR_RSTD: the QSK + V12 rstd consumer v_rstd (CB 43 = rsp)"
             _nr = int(os.environ.get('MK_AR_RSTD_ROWS', '1'))
             rsp_t = torch.zeros(TILE, TILE)
-            for k_ in range(_nr): rsp_t[k_] = (xb[:, k_ * (H // _nr):(k_ + 1) * (H // _nr)].double() ** 2).sum(-1).float()
+            RED_GDN = os.environ.get('MK_AR_RSTD_RED', '') == 'gdn'   # v1.112 (iii'): a GDN-role core reduces the 8 K-row partials and
+            if RED_GDN:                                                # multicasts the FINAL Σ in column-0 format (row = token); STREAM
+                rsp_t[:, 0] = ss.sum(0).float()                        # consumers then only wait + 1/H + eps + rsqrt
+                MKDEF = MKDEF + [('MK_AR_RSTD_RED_GDN', '1')]
+            else:
+                for k_ in range(_nr): rsp_t[k_] = (xb[:, k_ * (H // _nr):(k_ + 1) * (H // _nr)].double() ** 2).sum(-1).float()
             rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, TILE))
             RSTD_RSF = ttnn.create_global_semaphore(dev, kgrid, 0)   # MK_AR_RSF: the producer's flag (+MK_AR_RSF_N per AR), device-local
             MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(RSTD_RSF))), ('MK_AR_RSF_N', '8')]
             if os.environ.get('MK_AR_RSTD_HOST', '0') == '1': MKDEF = MKDEF + [('MK_AR_RSTD_HOST', '1')]   # A/B without the producer: static host Σ, no waits
-            print(f"[rstd] consumer: Σ tile rows {_nr} (row form), flag @ {ttnn.get_global_semaphore_address(RSTD_RSF)}{' (host, no wait)' if os.environ.get('MK_AR_RSTD_HOST', '0') == '1' else ''}", flush=True)
+            print(f"[rstd] consumer: Σ tile {'final, column 0 (red=gdn)' if RED_GDN else f'rows {_nr} (row form)'}, flag @ {ttnn.get_global_semaphore_address(RSTD_RSF)}{' (host, no wait)' if os.environ.get('MK_AR_RSTD_HOST', '0') == '1' else ''}", flush=True)
         else:
             rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
         rsp_sh = rsp   # the producer's Σ tile target (the consumers read rsp tile 0 directly)
