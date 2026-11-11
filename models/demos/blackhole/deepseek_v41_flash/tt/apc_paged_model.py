@@ -26,6 +26,7 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import apc_paged as AP
 from models.demos.blackhole.deepseek_v41_flash.tt import apc_paged_store as APS
 from models.demos.blackhole.deepseek_v41_flash.tt.kv_paged import PageAllocator
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import protect_partial_on
 
 IDLE_PAGES = 2  # pages of an idle user (released / never used): the decode loop grows every user to ceil((0 + 1 + 128) / 128) = 2 pages
 GRID = 512
@@ -188,6 +189,10 @@ class PagedApc:
             free_users=self._free_users,
             strict_zone_equal=os.environ.get("DSV41_APC_PAGED_ZONE_EQ", "0") == "1",
             halo_budget=int(os.environ.get("DSV41_APC_PAGED_HALO_BUDGET", "32")),
+            halo_spacing=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING", "0")),
+            halo_spacing_min=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING_MIN", "100000")),
+            halo_spacing_max=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING_MAX", "64")),
+            protect_fn=protect_partial_on,
             xrow=os.environ.get("DSV41_APC_PAGED_XROW", "0")
             == "1",  # M3: cross-row copy of the blocks of a busy row (default off)
             xrow_min=int(os.environ.get("DSV41_APC_PAGED_XROW_MIN", "2048")),
