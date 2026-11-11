@@ -171,6 +171,12 @@ struct GdnXSem {
     void wait(uint32_t v) const { noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a), v); }
 };
 #endif
+#ifndef GDN_OUT_LOCAL
+#define GDN_OUT_LOCAL 0  // engine gdn_out: 1 = hand this core's out tiles to gdn_out_local() (the including TU) before the
+#endif               // DRAM out rows; 2 = and skip the DRAM out rows (the out tensor is then not written)
+#if GDN_OUT_LOCAL
+void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);
+#endif
 #if GDN_OUT_SIGNAL
 void gdn_out_signal();
 #endif
@@ -1564,6 +1570,15 @@ TT_KERNEL void writer(
 
     // ---- the user's T output rows of the head's Vt output tiles
     DeviceZoneScopedN("wr_out");
+#if GDN_OUT_LOCAL
+    out.wait_front(Vs);
+    gdn_out_local(out.get_read_ptr(), h * Vt + v0, Vs);  // engine gdn_out: full out tiles to every GDN core's A, local
+#endif
+#if GDN_BATCH && GDN_OUT_LOCAL == 2
+    if (true) {
+        out.pop_front(Vs);
+    } else
+#endif
 #if GDN_BATCH
     if (true) {
         write_rows(out_acc, out, noc, tr * out_w_tiles + h * Vt + v0, Vs, 0, nb * T);

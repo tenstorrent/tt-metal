@@ -350,6 +350,20 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         _used = {ids[n][0] for n in ids}
         assert not ({CR_, CA_, CO_} & _used), ("gdn_out CB ids clash with the GDN role's", sorted({CR_, CA_, CO_} & _used))
         go_inc = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])
+        GO_LOCAL = int(os.environ.get("E1_GO_LOCAL", "2"))   # 0: A from the DRAM out; 1: local A (+ DRAM out); 2: local A only
+        go_local = ""
+        if GO_LOCAL:   # every core multicasts its out tile(s) into all 24 GDN cores' A CB (uniform address), then gdna += 1
+            gr_ = GO["rects"]
+            mc_ = "\n".join(
+                f'  if (my_x[0] >= {r[0]}u && my_x[0] <= {r[2]}u && my_y[0] >= {r[1]}u && my_y[0] <= {r[3]}u) '
+                f'noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, dst), n * 2048u, {r[4]}u, false);\n'
+                f'  else noc_async_write_multicast(src, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, dst), n * 2048u, {r[4]}u, false);'
+                for r in (gr_[0:5], gr_[5:10]) if r[4])
+            go_local = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
+                        f'  DeviceZoneScopedN("go_loc");\n'
+                        f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc_}\n'
+                        f'  noc_async_write_barrier();\n  {go_inc}\n}}\n')
+            go_inc = ""   # gdn_out_signal() no longer raises gdna
         go_r = (f'  {{ DeviceZoneScopedN("go_ring"); cb_reserve_back({CR_}, {RP}); const auto gw = TensorAccessor(TensorAccessorArgs<{{GW_OFF}}>(), {GO["w_addr"]}u, '
                 f'get_tile_size({CR_}));\n'
                 f'    wou::ring_fill({CR_}, gw.get_noc_addr(g_ab[{{OGO}} + 1] + (L_) * {GO["w_stride"]}u), 0, {GO["wk"]}u * g_ab[{{OGO}}], 16, 2, 13, []() {{}});\n'
@@ -360,9 +374,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'    noc_async_atomic_barrier();\n'
                 f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdna"]}u, {len(cores)}u * (L + 1));\n'
                 f'    cb_reserve_back({CA_}, {GO["wk"]});\n'
+                + ('' if GO_LOCAL else
                 f'    const auto oa = TensorAccessor(TensorAccessorArgs<{{OUT_OFF}}>(), crta[{CRTA0} + {WRITER_TENSORS.index("out")}], 2048);\n'
                 f'    for (uint32_t t = 0; t < {GO["wk"]}u; ++t) noc_async_read(oa.get_noc_addr(t), get_write_ptr({CA_}) + t * 2048, 2048);\n'
-                f'    noc_async_read_barrier();\n'
+                f'    noc_async_read_barrier();\n') +
                 f'    cb_push_back({CA_}, {GO["wk"]}); }}\n'
                 f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["xow"]}u, 1);\n'
                 f'    const uint32_t xo = *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u;\n'
@@ -450,6 +465,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'uint32_t gdn_loop_k() {{ return g_gdn_l + 1; }}\n'
         f'uint32_t gdn_xsem_addr(uint32_t i) {{ return i ? {S["vb1"]} : {S["vb0"]}; }}\n'
         f'void gdn_out_signal() {{ {go_inc if GO else osig} }}\n'
+        + (go_local if GO else '')
         + (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_gdn_l + 1); }}\n' if early else '')
         + f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_gdn_l = L;\n'
@@ -486,7 +502,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
-           ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + common + (
+           ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + ([("GDN_OUT_LOCAL", str(GO_LOCAL))] if GO and GO_LOCAL else []) + common + (
         [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
         [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else [])
     d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
