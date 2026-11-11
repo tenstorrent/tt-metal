@@ -59,6 +59,9 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
  */
 ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
 
-ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
+ALWI void selu_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT(selu));
+}
 
 }  // namespace ckernel

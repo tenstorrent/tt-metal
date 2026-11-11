@@ -57,6 +57,9 @@ ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
  */
 ALWI void hardtanh_tile_init() { MATH(SFPU_UNARY_INIT(hardtanh)); }
 
-ALWI void hardtanh_tile_init_pack() { PACK(SFPU_UNARY_INIT(hardtanh)); }
+ALWI void hardtanh_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT(hardtanh));
+}
 
 }  // namespace ckernel

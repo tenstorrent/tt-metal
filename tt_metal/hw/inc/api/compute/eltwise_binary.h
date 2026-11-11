@@ -36,6 +36,7 @@ namespace ckernel {
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(
     std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
 
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
@@ -53,6 +54,7 @@ namespace detail {
 // at the unpacker), Quasar does not. The public {add,sub,mul}_reuse_dest_init wrappers forward here.
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_reuse_dest_init(std::uint32_t icb0, std::uint32_t call_line) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, call_line);
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);

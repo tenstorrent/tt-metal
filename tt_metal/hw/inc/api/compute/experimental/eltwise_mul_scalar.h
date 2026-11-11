@@ -36,6 +36,7 @@ namespace ckernel {
  * Short init for scalar broadcast multiply (assumes hw already configured)
  */
 ALWI void deepseek_mul_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
@@ -59,6 +60,7 @@ ALWI void deepseek_mul_tiles_bcast_scalar(
 // Reuse one scalar SrcB across a block of full 32x32 tiles. The caller owns
 // destination acquisition and must keep the block within that allocation.
 ALWI void mul_tiles_bcast_scalar_block_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH(SAN_HOOK(unsupported()));
     MATH((_llk_math_eltwise_mul_scalar_block_init_()));
@@ -87,6 +89,7 @@ ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
 ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
     // Init and execute must use the same face height: the HiFi partial-face

@@ -100,6 +100,7 @@
 #else
 #define PACK(...)
 #endif
+#include "api/compute/pack_math_context.h"
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
@@ -311,6 +312,7 @@ ALWI void square_tile_init() {
 
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
     PACK(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
 }
 
@@ -404,6 +406,7 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
 #ifndef ARCH_QUASAR  // pack-thread SFPU is BH/WH only
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
     PACK(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
 }
 
@@ -746,7 +749,10 @@ ALWI void silu_tile_pack(uint32_t idst) {
         idst,
         VectorMode::RC));
 }
-ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
+ALWI void silu_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
+}
 
 #endif  // !ARCH_QUASAR
 

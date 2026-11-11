@@ -225,7 +225,7 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize supports block_ct_dim 2, 3, or 4");
 
     pack_fast_untilize_seen = true;
-    pack_fast_untilize_open = true;
+    LLK_PACK_FAST_UNTILIZE_MARK_OPEN();
     pack_fast_untilize_src  = pack_src_format;
     LLK_PACK_W_INVALIDATE();
     TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));

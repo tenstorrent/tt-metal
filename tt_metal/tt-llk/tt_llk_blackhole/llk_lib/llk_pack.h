@@ -606,7 +606,7 @@ __attribute__((cold)) inline void pack_close_fast_untilize_slow_()
 template <DstSync Dst>
 inline void _llk_pack_close_fast_untilize_()
 {
-    if (pack_fast_untilize_seen && pack_fast_untilize_open)
+    if (pack_fast_untilize_seen && LLK_PACK_FAST_UNTILIZE_OPEN())
     {
         pack_close_fast_untilize_slow_<Dst>();
     }

@@ -23,6 +23,7 @@ namespace ckernel {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softmax_k_init(uint32_t icb) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_A_init<BroadcastType::SCALAR, false, EltwiseBinaryReuseDestType::NONE, false>(false, 1, icb)));
     MATH((llk_math_eltwise_unary_datacopy_softmax_k_init()));
     MATH((sfpu::llk_math_sfpu_softmax_k_init<is_fp32_dest_acc_en>()));

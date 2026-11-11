@@ -142,7 +142,10 @@ ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
+ALWI void relu_max_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT(relu_max));
+}
 
 ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(

@@ -121,8 +121,8 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * init, and while the packer accumulates in L1 under half sync, it packs tile by tile, as before.
  *
  * NOTE: On Blackhole a matmul kernel passes the K tiles of its output block as the second template argument (pack_block<DST_ACCUM_MODE, K>), which picks the forms behind matmul math for that K.
- * Pass it only where the block packs right behind the matmul math: without it, and at HiFi2 to HiFi4 with it, the forms that read no slower behind
- * matmul math nor behind the other math (a bias add, an activation) apply once a matmul init ran on the kernel, for any K.
+ * Pass it only where the block packs right behind the matmul math. Without it the forms behind matmul math apply while the last FPU op init was
+ * a matmul init (an SFPU init does not count), for any K; after a pack-thread SFPU init, the forms that also read no slower behind that SFPU tail.
  *
  * Return value: None
  *

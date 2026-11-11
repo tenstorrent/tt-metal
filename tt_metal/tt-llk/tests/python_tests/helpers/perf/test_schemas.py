@@ -106,7 +106,6 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "math_fidelity",
-            "matmul_stoch_rnd",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
