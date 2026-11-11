@@ -275,6 +275,72 @@ def _gbreal_gdnout(model, S, cap, L=0):
                 + " ".join(f"{u}:{_pcc(mix_e[u * T:(u + 1) * T], mix_r[u * T:(u + 1) * T]):.4f}" for u in range(B)))
 
 
+def _gbreal_inproj(model, S, cap, x_ref, L=0):
+    """GBREAL: decompose layer L's (GDN, ordinal 0) in-proj per device: host candidates from the reference's residual
+    ENTERING L (x_ref [32, H]) vs (a) the reference's captured qkvzab and (b) G-a's dbg tiles (what the engine's step read).
+    Candidates: prod rmsnorm(x)*g_attn @ W_in, gamma variants, no norm, other layers' W_in. Per-row pcc / norm ratio of
+    G-a vs the best candidate (row permutation / per-row rstd), best row match."""
+    from models.demos.blackhole.qwen36.tt.megakernel.integ import weights_mk as WM
+
+    role = (S.get("GDN_ROLE") or {}).get("role")
+    if role is None or 0 not in cap or x_ref is None:
+        return
+    W = role.g.W
+    ga = [d_.reshape(32, -1)[:, :W] for d_ in _dev_host(role.gb["dbg"])]
+    lay = model.layers[L]
+    win = WM.gdn_in_mats(lay)
+    g_att = WM.norm_gamma(lay.attention_norm.norm).float()
+    g_ffn = WM.norm_gamma(lay.ffn_norm.norm).float()
+    eps = float(getattr(lay.attention_norm.norm, "eps", 1e-6))
+    x = x_ref[:32].float()
+    rn = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    others = [i for i, l_ in enumerate(model.layers[:8]) if not l_.is_full_attention and i != L][:2]
+    w_oth = {i: WM.gdn_in_mats(model.layers[i]) for i in others}
+    xs = {"prod": rn * g_att, "noG": rn, "Gx1.118": rn * g_att * 1.25 ** 0.5, "Gffn": rn * g_ffn, "G-1": rn * (g_att - 1),
+          "G+1": rn * (g_att + 1), "nonorm": x, "nonorm*G": x * g_att}
+    np_ = 2060
+    for d in range(len(win)):
+        w = win[d][:, :np_].float()
+        rq = cap[0]["qkv"][d][:, :np_]
+        gq = ga[d][:, :np_]
+        res = {}
+        for k, xv in xs.items():
+            hv = xv.bfloat16().float() @ w
+            res[k] = (round(_pcc(hv, rq), 5), round(_pcc(hv, gq), 5), round(float(gq.norm() / max(hv.norm(), 1e-9)), 4))
+        for i in others:
+            hv = (rn * g_att).bfloat16().float() @ w_oth[i][d][:, :np_].float()
+            res[f"W_L{i}"] = (round(_pcc(hv, rq), 5), round(_pcc(hv, gq), 5), round(float(gq.norm() / max(hv.norm(), 1e-9)), 4))
+        logger.info(f"[gbreal] L{L} in-proj dev {d} (pcc vs REF, pcc vs G-a, |G-a|/|cand|): {json.dumps(res)}; "
+                    f"G-a vs REF pcc {_pcc(gq, rq):.5f} |G-a|/|REF| {float(gq.norm() / max(rq.norm(), 1e-9)):.4f}")
+        if d == 0:
+            hv = (rn * g_att).bfloat16().float() @ w
+            pr = [round(_pcc(gq[r], hv[r]), 3) for r in range(32)]
+            nr = [round(float(gq[r].norm() / max(hv[r].norm(), 1e-9)), 3) for r in range(32)]
+            C = torch.stack([torch.stack([torch.tensor(_pcc(gq[r], hv[c])) for c in range(32)]) for r in range(32)])
+            best = C.argmax(1).tolist()
+            logger.info(f"[gbreal] L{L} dev0 G-a vs prod-host per row: pcc {pr}; norm ratio {nr}; best-matching host row per G-a row {best} "
+                        f"(max pcc {[round(float(v), 3) for v in C.max(1).values]})")
+            # per-column-tile (65 tiles) pcc of G-a vs host: a tile / column permutation shows up as a block pattern
+            tp = [round(_pcc(gq[:, 32 * t:32 * t + 32], hv[:, 32 * t:32 * t + 32]), 3) for t in range((np_ + 31) // 32)]
+            logger.info(f"[gbreal] L{L} dev0 G-a vs prod-host per column tile: {tp}")
+            nt = (np_ + 31) // 32
+            hp = torch.nn.functional.pad(hv, (0, nt * 32 - np_))
+            gp = torch.nn.functional.pad(gq, (0, nt * 32 - np_))
+            CT = torch.tensor([[_pcc(gp[:, 32 * a:32 * a + 32], hp[:, 32 * b:32 * b + 32]) for b in range(nt)] for a in range(nt)])
+            logger.info(f"[gbreal] L{L} dev0 best host tile per G-a tile: {CT.argmax(1).tolist()} (pcc {[round(float(v), 3) for v in CT.max(1).values]})")
+            # column-level: best host column per G-a column for the first 64 columns of each segment start
+            for nm, c0 in (("q", 0), ("k", 256), ("v", 512), ("z", 1280), ("ab", 2048)):
+                cc = [int(torch.tensor([_pcc(gq[:, c], hv[:, j]) for j in range(np_)]).argmax()) for c in range(c0, min(c0 + 12, np_))]
+                logger.info(f"[gbreal] L{L} dev0 best host column for G-a cols {c0}..{c0 + 11} ({nm}): {cc}")
+            rp = [round(_pcc(rq[r], hv[r]), 4) for r in range(32)]
+            logger.info(f"[gbreal] L{L} dev0 REF vs prod-host per row: {rp}")
+    try:
+        torch.save(dict(x=x, ga=ga, ref=[c_ for c_ in cap[0]["qkv"]], g_att=g_att, eps=eps),
+                   os.path.join(os.environ.get("E2E_DUMP_DIR", "/tmp"), "gbreal_l0_inproj.pt"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[gbreal] dump failed: {e}")
+
+
 def _diff_case(model, live, tag):
     mk1 = model._vfy_mk1
     prog = mk1.programs[B]
@@ -315,6 +381,10 @@ def _diff_case(model, live, tag):
     model._forward_verify_bucket_tp(B, None, None)
     ttnn.synchronize_device(model.mesh_device)
     if GBREAL and gcap:
+        try:
+            _gbreal_inproj(model, S, gcap, ref_in.get(0), 0)
+        except Exception as e:  # noqa: BLE001 -- diagnostics only
+            logger.warning(f"[gbreal] in-proj decomposition failed: {type(e).__name__}: {str(e)[:300]}")
         try:
             _gbreal_gdnout(model, S, gcap, 0)
         except Exception as e:  # noqa: BLE001 -- diagnostics only
