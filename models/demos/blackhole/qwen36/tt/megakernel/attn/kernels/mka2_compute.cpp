@@ -88,7 +88,7 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#if defined(MKA_RQPOS)
+#if defined(MKA_RQPOS) && defined(MKA_RQZFILL)
 #include "api/compute/eltwise_unary/fill.h"
 #endif
 #endif
@@ -894,9 +894,11 @@ void kernel_main() {
             cb_pop_front(CB_Q, QT);
 #if defined(MKA_RQPOS)
             if (first) {   // no valid KV block on this core (short user): zero partial (O, l) for the tree
-                tile_regs_acquire();
+                tile_regs_acquire();   // DST half is zero: the packer clears it on release (ZEROACC in pack_dest_section_done)
+#if defined(MKA_RQZFILL)
                 fill_tile_init();
                 for (uint32_t t = 0; t <= DH; ++t) fill_tile(t, 0.0f);
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(CB_O);
