@@ -357,16 +357,19 @@ static std::uint32_t pack_ch1_w_stride = 0;
 #endif
 
 // Another pack program (tilize, untilize, pack rows, fast tilize) replaced the default MOP the block packs run: llk_pack_block packs per tile, as main, until
-// a default pack init. Only those inits write pack_other_program_seen, so a kernel without one folds the test away.
+// a default pack init. Only those inits write pack_other_program_seen, so a kernel without one folds the test away; no writer reads a flag, so a
+// kernel without llk_pack_block keeps none of them.
 [[maybe_unused]] static bool pack_other_program_seen = false;
 [[maybe_unused]] static bool pack_other_program      = false;
 #define LLK_PACK_OTHER_PROGRAM_SET() (pack_other_program_seen = true, pack_other_program = true)
-#define LLK_PACK_OTHER_PROGRAM_CLEAR() (pack_other_program_seen ? (void)(pack_other_program = false) : (void)0)
+#define LLK_PACK_OTHER_PROGRAM_CLEAR() (pack_other_program = false)
 #define LLK_PACK_OTHER_PROGRAM_ACTIVE() (pack_other_program_seen && pack_other_program)
 
 // Set by _llk_pack_fast_untilize_init_ (with the DEST format of its strides), cleared by set_packer_strides: the fast untilize leaves the pack program, the
 // packer strides and the DEST offset registers set for itself. The block packs of llk_pack_block close it first (_llk_pack_close_fast_untilize_), so a
-// pack_block that follows without the uninit still writes where it should. Internal linkage: a kernel without fast untilize never writes it, the test folds away.
+// pack_block that follows without the uninit still writes where it should. Only the fast untilize init writes pack_fast_untilize_seen, so a kernel
+// without one folds the test away and keeps no call in its pack loops.
+[[maybe_unused]] static bool pack_fast_untilize_seen         = false;
 [[maybe_unused]] static bool pack_fast_untilize_open         = false;
 [[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 
@@ -412,10 +415,7 @@ inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
     {
         pack_l1_acc_seen = true;
     }
-    if (pack_l1_acc_seen)
-    {
-        pack_l1_acc_on = pack_l1_acc != 0;
-    }
+    pack_l1_acc_on = pack_l1_acc != 0;
     // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
