@@ -166,8 +166,9 @@ for it in range(ITERS):
             _xin = {L_: x_ for L_, x_ in _xin_seq.items() if is_attn_layer(L_) and L_ > 0}
         for L_, x_ in _xin.items():
             if x_.shape[0] < M: x_ = torch.cat([x_, torch.zeros(M - x_.shape[0], H)], 0)   # R < 32: rows >= R are don't-care
+            _rs_ = _rstd_of(x_)   # rstd of the un-scaled residual (RMSNorm), γ applies to the normalised x
             if AR_GAMMA or GAMMA_CONS: x_ = (x_ * AR_GTAB[L_, 0][None, :]).bfloat16().float()   # MK_AR_GAMMA / MK_GAMMA_CONS: the mixer reads x (.) gamma (layer L's input_layernorm)
-            attn_regold(L_, (_rstd_of(x_)[:, None] * (x_.double() @ wfq[L_].double())).float())
+            attn_regold(L_, (_rs_[:, None] * (x_.double() @ wfq[L_].double())).float())
         print(f"[ar] iter {it} qkv/SDPA golds from the AR-delivered x for layers {sorted(_xin)}" if _xin else f"[ar] iter {it} qkv/SDPA golds: static x (no AR chain: MK_AR_DBG=1 at R = 32)", flush=True)
     if RQKV:
         qv = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
