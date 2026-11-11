@@ -441,9 +441,9 @@ constexpr int matmul_pack_form_v = matmul_pack_form_key;
 
 #if defined(ARCH_BLACKHOLE)
 // MATMUL_PACK_FORM 1 and 2: the block pack llk_pack_block runs (matmul_pack_production.h).
-inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] bool fast = false)
+template <typename TileAddr = std::nullptr_t> __attribute__((always_inline)) inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] bool fast = false, TileAddr tile_addr = nullptr)
 {
-    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format>(tile_index, address, num_tiles, tile_stride, num_faces);
+    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format, TileAddr>(tile_index, address, num_tiles, tile_stride, num_faces, tile_addr);
 }
 #endif
 
@@ -559,7 +559,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             L1_ADDRESS(buffer_Res[block * result_block_stride]),
                             NUM_TILES_IN_BLOCK,
                             (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4,
-                            num_faces MATMUL_FAST_PACK_ARG);
+                            num_faces MATMUL_FAST_PACK_ARG, [&](std::uint32_t j) { return L1_ADDRESS(buffer_Res[block * result_block_stride + j]); });
                     }
                     else
 #endif

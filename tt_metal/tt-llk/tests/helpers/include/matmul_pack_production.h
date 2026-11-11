@@ -8,7 +8,9 @@
 // hardware_free/kernels/test_matmul_pack_tables.py); the first block of the run takes the init table, the next ones the next table. MATMUL_PACK_FORM 1 is the plain
 // B block, 2 the closed one (the keyed matmul form picks the block shape). Keep the rest equal to llk_pack_block and llk_pack_w_take. MATMUL_PACK_STATE makes every block the first of its output: 2 the init table, 1 the reconfigure table. MATMUL_PACK_NOK packs without the K (pack_block's default), the agreement keeps the K.
 
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #if defined(ARCH_BLACKHOLE)
 #include "llk_pack.h"
 #include "matmul_pack_tables.h"
@@ -75,9 +77,40 @@ constexpr std::uint32_t forms_k(const std::uint32_t row, const std::uint32_t nt,
     return (a == 'T' || b == 'T' || c == 'T' ? 1 : 0) | (a == 'B' || b == 'B' || c == 'B' ? 2 : 0) | (a == 'W' || b == 'W' || c == 'W' ? 4 : 0);
 }
 
+// forms_k of tile counts 1 to 16 at compile time: a constant count reads a constant before the IPA passes, as llk_pack_form_words
+template <bool fp32, std::uint32_t kt, std::uint32_t row, bool t32, bool full, bool src32, bool int8>
+struct forms_table_t
+{
+    std::uint8_t f[17];
+    constexpr forms_table_t() : f()
+    {
+        for (std::uint32_t n = 1; n <= 16; n++)
+        {
+            f[n] = static_cast<std::uint8_t>(forms_k<fp32, kt>(row, n, t32, full, src32, int8));
+        }
+    }
+};
+template <bool fp32, std::uint32_t kt, std::uint32_t row, bool t32, bool full, bool src32, bool int8>
+inline constexpr forms_table_t<fp32, kt, row, t32, full, src32, int8> forms_table {};
+
+// tile i of a per-tile pack: the caller's address of it (the main arm's), else address + i * page
+template <typename TileAddr>
+__attribute__((always_inline)) inline std::uint32_t tile_address(const TileAddr& tile_addr, const std::uint32_t address, const std::uint32_t page, const std::uint32_t i)
+{
+    if constexpr (std::is_same_v<TileAddr, std::nullptr_t>)
+    {
+        return address + i * page;
+    }
+    else
+    {
+        return tile_addr(i);
+    }
+}
+
 // address in 16 byte words, tile_stride in bytes (the page size times 16)
-template <DstSync sync, bool fp32, int form, DataFormat out_format>
-inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
+template <DstSync sync, bool fp32, int form, DataFormat out_format, typename TileAddr = std::nullptr_t>
+__attribute__((always_inline)) inline void block(
+    std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4, TileAddr tile_addr = nullptr)
 {
     const std::uint32_t page = tile_stride >> 4;
     constexpr std::uint32_t face_rows = key_r0 < 16 ? key_r0 : 16;
@@ -91,7 +124,8 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     std::uint32_t forms = 0;
     if (__builtin_constant_p(num_tiles))
     {
-        forms = forms_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(row, num_tiles, tables32, sync == DstSync::SyncFull, src32, int8);
+        forms = num_tiles <= 16 ? forms_table<fp32, MATMUL_PACK_NOK ? 0 : key_kt, row, tables32, sync == DstSync::SyncFull, src32, int8>.f[num_tiles]
+                                : forms_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(row, num_tiles, tables32, sync == DstSync::SyncFull, src32, int8);
     }
     if (forms == 1)
     {
@@ -99,7 +133,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
-            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
+            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
         }
         return;
     }
@@ -110,7 +144,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
-            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
+            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
         }
         return;
     }
@@ -136,7 +170,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
-            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
+            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
         }
         return;
     }

@@ -551,9 +551,9 @@ constexpr int matmul_pack_form_v = matmul_pack_form_key;
 #endif
 
 #if defined(ARCH_BLACKHOLE)
-inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
+template <typename TileAddr = std::nullptr_t> __attribute__((always_inline)) inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4, TileAddr tile_addr = nullptr)
 {
-    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format>(tile_index, address, num_tiles, tile_stride, num_faces);
+    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format, TileAddr>(tile_index, address, num_tiles, tile_stride, num_faces, tile_addr);
 }
 #endif
 
@@ -614,7 +614,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
                     if constexpr (matmul_pack_form_v != 0)
                     {
-                        matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
+                        matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4, [&](std::uint32_t j) { return PERF_ADDRESS(PERF_OUTPUT, (tile_index + j) % MAX_TILES_DEST); });
                         break;
                     }
 #endif
@@ -687,7 +687,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             break;
                         }
 #endif
-                        matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
+                        matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4, [&](std::uint32_t j) { return (LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS) ? PERF_ADDRESS(PERF_OUTPUT, i + j) : L1_ADDRESS(buffer_Res[(MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0) + i + j]); });
                         break;
                     }
 #endif
