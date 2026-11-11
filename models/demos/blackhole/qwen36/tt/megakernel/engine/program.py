@@ -1447,6 +1447,15 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     from models.demos.blackhole.qwen36.tt.megakernel.engine import argblock as AB
 
     env = engine_env(n_users, len(layer_types))
+    # model-side addresses the engine's real phases read (persistent, fixed before build): exported as env for setup_bench
+    # (attention RQNR / KV append turn them into defines). MKA_AUX_*: _vfy_aux_buf (kvpos row 0, RoPE row 1, ctrl row 2);
+    # MKA_ROPE_*: the model's bf16 RM cos / sin tables.
+    kv0 = (kv_desc or [{}])[0]
+    for k_, e_ in (("aux_addr", "MKA_AUX_ADDR"), ("aux_w", "MKA_AUX_W"), ("rope_cos_addr", "MKA_ROPE_COS"),
+                   ("rope_sin_addr", "MKA_ROPE_SIN"), ("rope_max", "MKA_ROPE_MAX"), ("rope_dim", "MKA_ROPE_DIM"),
+                   ("pt_addr", "MKA_PT_ADDR"), ("pt_nb", "MKA_PT_NB")):
+        if kv0.get(k_):
+            env.setdefault(e_, str(int(kv0[k_])))
     # HARD RULE (spec owner 11-10, batch 3d): real AR has a residual blow-up at R < 32 (u1 R=4, post-RC fix): with
     # MK_REAL_AR the engine is only ever built at R = 32 rows (8 users x T = 4); fewer live users are padded onto it.
     if "MK_REAL_AR=1" in env.get("MK_DEFINES", "").split(","):

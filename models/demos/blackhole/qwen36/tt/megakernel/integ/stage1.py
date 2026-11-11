@@ -47,6 +47,20 @@ def kv_descriptors(model):
                 nb, nh, bs, hd = (int(x) for x in k.shape)
                 d.update(num_blocks=nb, n_kv_heads=nh, block_size=bs, head_dim=hd, dtype=str(k.dtype),
                          k_addr=k.buffer_address(), v_addr=v.buffer_address())
+            # per-user positions + RoPE rows for the engine (attention RQNR / KV append): the PERSISTENT packed aux
+            # _vfy_aux_buf (QWEN36_SPEC_HOSTSET, prod default): uint32 ROW_MAJOR [3, W] replicated DRAM, one page per row;
+            # row 0 = kvpos bits (int32, -1 = HOLD) at r = u*T + j, row 1 = RoPE table row (position + rope_delta: the
+            # M-RoPE delta of image prompts, so NOT kvpos), row 2 = the GDN ctrl page. RoPE tables: rope.decode_rm_tables()
+            # bf16 ROW_MAJOR [max_seq_len, rope_dim] (cos, sin), the exact rows prod's in-trace lookup reads.
+            aux = getattr(model, "_vfy_aux_buf", None)
+            if aux is not None:
+                d.update(aux_addr=aux.buffer_address(), aux_w=int(aux.shape[-1]), aux_rows=int(aux.shape[0]))
+            try:
+                cos_t, sin_t = model.rope.decode_rm_tables()
+                d.update(rope_cos_addr=cos_t.buffer_address(), rope_sin_addr=sin_t.buffer_address(),
+                         rope_max=int(cos_t.shape[0]), rope_dim=int(cos_t.shape[-1]))
+            except Exception:  # noqa: BLE001
+                pass
             pt = getattr(model, "_vfy_kvpt_users", None)  # the engine's page table (see per_replay_inputs)
             d.update(page_table=pt, pt_addr=(pt.buffer_address() if pt is not None else 0),
                      pt_B=int(getattr(model, "_vfy_B", 0) or 0), pt_nb=int(getattr(model, "_vfy_nb", 0) or 0))
