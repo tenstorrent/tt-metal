@@ -180,11 +180,14 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 *refs.l1_bank_offset_map,
                 *refs.dram_bank_to_noc_xy,
                 *refs.l1_bank_to_noc_xy);
-            // Quasar FW never loads the logical→virtual scratch table or the Tensor prefetcher signal table
-            // (WH/BH brisc/ncrisc only).
+            // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
             if (cluster_.arch() != ARCH::QUASAR) {
                 generate_worker_logical_to_virtual_map(
                     device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+            }
+            // Only BH brisc/ncrisc FW loads the Tensor prefetcher signal table; elsewhere it stays empty and
+            // nothing is written.
+            if (cluster_.arch() == ARCH::BLACKHOLE) {
                 generate_tensor_prefetcher_signal_table(
                     device_id, refs.dram_bank_offset_map->size(), *refs.tensor_prefetcher_signal_noc_xy);
             }
@@ -762,8 +765,8 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
-    // Only Tensix firmware loads the Tensor prefetcher signal table (none on Quasar, which leaves it empty), and
-    // Tensix always takes the multicast path below.
+    // Only Tensix firmware loads the Tensor prefetcher signal table (Blackhole only; empty elsewhere), and Tensix
+    // always takes the multicast path below.
     const uint32_t tensor_prefetcher_sz_in_bytes =
         core_type == HalProgrammableCoreType::TENSIX
             ? tensor_prefetcher_signal_noc_xy_[device_id].size() * sizeof(uint32_t)

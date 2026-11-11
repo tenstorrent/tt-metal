@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     assert_matches_reference,
     build_layer,
     collect_mesh_accuracy_and_determinism_results,
+    kda_device_params,
     mla_row_permutation,
     reference_case,
     to_sp_input,
@@ -32,11 +33,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
+    pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True),
 ]
 
 SEQUENCE = 1280
