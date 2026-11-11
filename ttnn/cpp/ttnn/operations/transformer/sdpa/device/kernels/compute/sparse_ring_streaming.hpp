@@ -1052,13 +1052,18 @@ void sdpa_ring_resident(
 
     constexpr uint32_t kGroupCap = resident_slots < 4 ? resident_slots : 4;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t kStepPieces = pair_steps ? 2 : 1;
+    // Pair steps (two K/V pieces per step) only with one Q pass. With several passes the kernel takes single steps:
+    // the pair path costs ~1.4-1.5 KB of text on every TRISC, and the dense-prefix 10 s geometry (2 passes) would not
+    // fit the kernel config buffer with it. The QK scratch keeps the host's CB size (kCbPieces): every step reserves,
+    // pushes and pops exactly kQkCap tiles, which must equal the CB's fifo size.
+    constexpr uint32_t kCbPieces = pair_steps ? 2 : 1;
+    constexpr uint32_t kStepPieces = (pair_steps && num_q_passes == 1) ? 2 : 1;
     constexpr uint32_t kRunStride = kBlocksPerPiece * kStepPieces;
     static_assert(kRunStride <= 255, "run tables are byte-indexed");
     static_assert(!pair_steps || kv_cb_pages >= 2, "a pair needs two K/V entries in the CB");
-    constexpr uint32_t kQkCap = kQkTiles > kGroupCap * Sq_chunk_t * Sk_chunk_t * kStepPieces
+    constexpr uint32_t kQkCap = kQkTiles > kGroupCap * Sq_chunk_t * Sk_chunk_t * kCbPieces
                                     ? kQkTiles
-                                    : kGroupCap * Sq_chunk_t * Sk_chunk_t * kStepPieces;
+                                    : kGroupCap * Sq_chunk_t * Sk_chunk_t * kCbPieces;
     constexpr uint32_t kStatsCap = resident_slots * Sq_chunk_t;
     constexpr uint32_t kOutCap = resident_slots * out_tiles;
 #ifdef TRISC_PACK
@@ -1310,7 +1315,7 @@ void sdpa_ring_resident(
     for (uint32_t i = 1; i < n_res; ++i) {
         one_head = one_head && res_head(i) == res_head(0);
     }
-    if (pair_steps && one_head && n_res > 0) {
+    if (kStepPieces == 2 && one_head && n_res > 0) {
         constexpr uint32_t kMaxPieces = 64;
         uint8_t ks[kMaxPieces];
         uint32_t n_ks = 0;
