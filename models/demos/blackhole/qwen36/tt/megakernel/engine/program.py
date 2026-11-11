@@ -457,9 +457,13 @@ def setup_bench(dev, MESH, mesh_identity):
         ss = torch.stack([(xb[:, o * (H // NOWN):(o + 1) * (H // NOWN)].double() ** 2).sum(-1) for o in range(NOWN)])   # [NOWN, M]
         rsp_t = torch.zeros(TILE, NOWN * TILE)
         for o in range(NOWN): rsp_t[:, o * TILE] = ss[o].float()
-        if os.environ.get('MK_AR_RSTD', '0') == '1':   # rstd producer: Σ tile (row j = owner j's per-row partial; host init: row 0 = Σ of x)
-            rsp_t = torch.zeros(TILE, NOWN * TILE); rsp_t[0, :TILE] = ss.sum(0).float()
+        # MK_AR_RSTD=1: rsp tile 0 = the Σ tile (rows 0-7 = the STREAM producers' K-row partials; host init: row 0 = Σ of x). Until the
+        # consumers read that format, MK_AR_RSTD_SHADOW=1 keeps rsp the static stand-in and points the producers at a shadow copy (rsp_sh)
+        _RSH = os.environ.get('MK_AR_RSTD_SHADOW', '0') == '1'
+        _sig_t = torch.zeros(TILE, NOWN * TILE); _sig_t[0, :TILE] = ss.sum(0).float()
+        if os.environ.get('MK_AR_RSTD', '0') == '1' and not _RSH: rsp_t = _sig_t
         rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
+        rsp_sh = ttnn.from_torch(_sig_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE)) if (_RSH and os.environ.get('MK_AR_RSTD', '0') == '1') else rsp
         rstd_g = 1.0 / torch.sqrt(ss.sum(0) / H + EPS)   # [M]
         gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
         qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -582,17 +586,17 @@ def setup_bench(dev, MESH, mesh_identity):
                 w_ = [1, k, nn, n] + v_prect(n, n, 0, GY - 1) + [me.x] + cy + [VA('h7'), VA('rs'), oa.x, oa.y, VA('pbuf'),
                       V_R, VA('xpk'), me.x, me.y, 1 if n == 0 else 0, g0.x, g0.y, g1.x, g1.y, wv_all.buffer_address(), fp, PVL, nt] + VGA + z_own
                 r_ = [1, k, nn, n, me.x] + cy + [VA('rs'), VA('h7'), ob.x, ob.y, VA('pbuf'), V_R] + VGA + [0] * 15
-                return w_, r_, [1, nn, k, V_FIRST]
+                return w_, r_, [1, nn, k, V_FIRST] + ([n] if os.environ.get('MK_AR_RSTD', '0') == '1' else [])
             if GX <= c.x <= GX + 1 and c.y < GY:   # owner j = 2k + slot
                 k, slot = c.y, c.x - GX; me = v_ph(c.x, c.y)
                 w_ = [2, k, 0, 0] + [0] * 5 + [0] + [0] * 8 + [0, 0, 0, 0, VA('pbuf'), V_R, 0, me.x, me.y, 0, 0, 0, 0, 0, 0, 0, 0, 0] + VGA + \
                      [slot, VA('xk') + slot * 10 * 2048, VA('xpk') + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + \
                      [v_ph(n_, k).x for n_ in range(GX)] + [v_ph(0, k).y, 1 if (k == 0 and slot == 0) else 0] + V_BRC
                 r_ = [2, k, 0, 0, 0] + [0] * 8 + [0, 0, 0, 0, 0, V_R] + VGA + [slot, VA('xk') + slot * 10 * 2048, VA('xpk') + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + [me.x, me.y]
-                return w_, r_, [2, 0, k, 0]
+                return w_, r_, [2, 0, k, 0] + ([255] if os.environ.get('MK_AR_RSTD', '0') == '1' else [])
             w_ = [0] * 4 + [0] * 5 + [0] + [0] * 8 + [0] * 18 + VGA + z_own
             r_ = [0] * 5 + [0] * 8 + [0] * 6 + VGA + [0] * 15
-            return w_, r_, [0, 0, 0, 0]
+            return w_, r_, [0, 0, 0, 0] + ([255] if os.environ.get('MK_AR_RSTD', '0') == '1' else [])
 
     # MK_REAL_AR=1 (AR integration v1, spec v0.9.2 / §18 option a): the real MLP all-reduce on the 1x8 ring replaces the MLP
     # AR stall. Owners (10..11, 0..7) run AR_RECV (mkar::Recv) on the writer after the v12 release and mkar::Reduce on the
@@ -634,16 +638,17 @@ def setup_bench(dev, MESH, mesh_identity):
         if AR_DLVR: MKDEF = MKDEF + [('MK_AR_DLV', str(ttnn.get_global_semaphore_address(AR_DLV)))]
         MKDEF = MKDEF + [('MK_AR_XF0', str(ttnn.get_global_semaphore_address(AR_XF[0]))), ('MK_AR_XF1', str(ttnn.get_global_semaphore_address(AR_XF[1]))),
                          ('MK_AR_XCNT', str(ttnn.get_global_semaphore_address(AR_XCNT)))]
-        # MK_AR_RSTD=1 (rstd producer, DESIGN v1.7x): after each AR every owner j computes its chunk's per-row Σx² (fp32, X X^T diag),
-        # multicasts it as row j of the Σ tile (rsp tile 0) to the STREAM consumers, then += 1 on MK_AR_RSF (16 per AR, device-local;
-        # the consumers wait 16 x ARs-so-far and drain it at program end). Owner CBs: 37 (x-ready token), 39 (fp32 X X^T tile).
+        # MK_AR_RSTD=1 (rstd producer, DESIGN v1.7x, STREAM-side): on every K-row x delivery (CB_XK: mixer 2L + 1, MLP 2L + 2) STREAM
+        # core (n = k, k) computes its K-row's per-row Σx² (fp32: copy + SFPU square + add over the 20 tiles, SFPU REDUCE_ROW) into
+        # CB 19 (1 fp32 tile, the 8 producers only), multicasts it as row k of the Σ tile (rsp tile 0) to the STREAM rects, then
+        # MK_AR_RSF += 1 there (8 per delivery: consumers wait >= 8 x (2L + 1) / 8 x (2L + 2), drain at program end). 0 owner text.
         AR_RSTD = os.environ.get('MK_AR_RSTD', '0') == '1'
         if AR_RSTD:
             assert V_R == 32 and RQKV, "MK_AR_RSTD: R = 32 with the rsp Σ tile (MKA_RQKV / QSK)"
             AR_RSF = ttnn.create_global_semaphore(dev, kgrid, 0)
-            MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(AR_RSF))), ('MK_AR_RSP', str(rsp.buffer_address())),
-                             ('MK_AR_CB_RSYN', '37'), ('MK_AR_CB_SS', '39')]
-            print(f"[ar] rstd producer: Σ tile = rsp tile 0 @ {rsp.buffer_address()}, flag MK_AR_RSF @ {ttnn.get_global_semaphore_address(AR_RSF)} (+16 per AR)", flush=True)
+            MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(AR_RSF))), ('MK_AR_RSP', str(rsp_sh.buffer_address())),
+                             ('MK_AR_CB_SS', '19')]
+            print(f"[ar] rstd producer: Σ tile = {'rsp_sh (shadow)' if rsp_sh is not rsp else 'rsp'} tile 0 @ {rsp_sh.buffer_address()}, flag MK_AR_RSF @ {ttnn.get_global_semaphore_address(AR_RSF)} (+8 per K-row delivery)", flush=True)
         # GDN24 (AR sender hosted in the GDN role on the corner, spec v1.44): the corner cores do NOT span the owners' RS slot
         # CB (CB_RED, 140-160 KB) or the wo output CB 23 (their GDN-role CB stack would be lifted above the owners' whole CB
         # region). Owners publish both addresses at init into 2 words on the 4 corner cores (MK_AR_PUB / MK_AR_PUBA); the
@@ -1121,12 +1126,12 @@ def setup_bench(dev, MESH, mesh_identity):
             sems = sems + arp['semaphores']
             _red = [CBP.mark_static(ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=(O_CRS if GDN24 else d_.core_ranges), format_descriptors=list(d_.format_descriptors))) for d_ in arp['shared_cbs']]
             cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
-            if AR_RSTD:   # CB 37 (x-ready token, writer -> compute) + CB 39 (fp32 X X^T tile, compute -> writer) on the owners only
-                _ocs = {(c_.x, c_.y) for c_ in ttnn.corerange_to_cores(O_CRS)}
-                _oid = {f_.buffer_index for c_ in cbs for f_ in c_.format_descriptors if any((q_.x, q_.y) in _ocs for q_ in ttnn.corerange_to_cores(c_.core_ranges))}
-                assert not ({37, 39} & _oid), ("MK_AR_RSTD CB ids 37 / 39 taken on the owners", sorted(_oid))
-                cbs = cbs + [ttnn.CBDescriptor(total_size=64, core_ranges=O_CRS, format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=37, data_format=ttnn.bfloat16, page_size=64)]),
-                             cbd(39, ttnn.float32, 1, O_CRS)]
+            if AR_RSTD:   # CB 19 (fp32 Σx² tile, compute -> writer) on the 8 producer cores (n = k, k) only
+                _pc = crs([c_ for c_ in fcores if c_.x == c_.y and c_.y < GY])
+                _pcs = {(c_.x, c_.y) for c_ in ttnn.corerange_to_cores(_pc)}
+                _pid = {f_.buffer_index for c_ in cbs for f_ in c_.format_descriptors if any((q_.x, q_.y) in _pcs for q_ in ttnn.corerange_to_cores(c_.core_ranges))}
+                assert 19 not in _pid, ("MK_AR_RSTD CB 19 taken on the STREAM producer cores", sorted(_pid))
+                cbs = cbs + [cbd(19, ttnn.float32, 1, _pc)]
             if AR_GAMMA and AR_GEARLY:   # MK_AR_GEARLY: a dedicated γ CB (owners' CB region), filled from the MLP start
                 cbs = cbs + [cbd(32, ttnn.bfloat16, AR_GT, O_CRS)]
             elif AR_GAMMA:   # CB 32 on the owners = pbuf+0 (dead from C-OSUM(L) to the next MLP's partials; spec v1.25 note)

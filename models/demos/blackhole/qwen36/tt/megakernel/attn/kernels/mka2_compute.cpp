@@ -252,6 +252,45 @@ void kernel_main() {
     const uint32_t vrole = vrole_rt;
 #endif
     const uint32_t vfirst = get_arg_val<uint32_t>(a++);
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+    // rstd producer (DESIGN v1.7x, STREAM-side): core (n = k, k) turns every K-row x delivery (CB_XK, 20 bf16 tiles) into its
+    // per-row Σx² in fp32: transposed copy (X^T, exact to fp32 DST) + SFPU square + SFPU add over the 20 tiles, then SFPU
+    // REDUCE_COL (row 0 = Σ_c x[r, c]^2 at column r: already the Σ tile's row format; same reduce instantiation as the consumers)
+    // CB_SS -> the writer, which multicasts row 0 as row k of the Σ tile. Runs before the site's hw startup (which re-inits after it).
+    const uint32_t vn_c = get_arg_val<uint32_t>(a++);
+    const bool rprod = vn_c == vk;
+    auto rstd_part = [&]() __attribute__((noinline)) {
+        CZONE("C-RSS");
+        cb_wait_front(CB_XK, V_KTR);
+        cb_reserve_back(MK_AR_CB_SS, 1);
+        reconfig_data_format_srca(CB_XK);
+        pack_reconfig_data_format(MK_AR_CB_SS);
+        tile_regs_acquire();
+        copy_init(CB_XK, 1, 1);
+        copy_tile(CB_XK, 0, 0);
+        square_tile_init();
+        square_tile(0);
+        for (uint32_t t0 = 1; t0 < V_KTR; t0 += 6) {
+            const uint32_t n_ = (V_KTR - t0) < 6 ? (V_KTR - t0) : 6;
+            copy_init(CB_XK, 1, 1);
+            for (uint32_t i = 0; i < n_; ++i) copy_tile(CB_XK, t0 + i, 1 + i);
+            square_tile_init();
+            for (uint32_t i = 0; i < n_; ++i) square_tile(1 + i);
+            add_binary_tile_init();
+            for (uint32_t i = 0; i < n_; ++i) add_binary_tile(0, 1 + i, 0);
+        }
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, MK_AR_CB_SS);
+        tile_regs_release();
+        cb_push_back(MK_AR_CB_SS, 1);
+    };
+#define MK_RSTD_PART() do { if (rprod) rstd_part(); } while (0)
+#else
+#define MK_RSTD_PART() do {} while (0)
+#endif
     // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
     auto v_rstd = [&]() {
         cb_wait_front(CB_VRSA, MKA_NOWN);
@@ -324,8 +363,8 @@ void kernel_main() {
             cb_pop_front(MK_AR_CBG, MK_AR_GT);
         }
 #endif
-#if defined(MK_AR_RSTD)
-        {   // rstd producer: per-row Σx² of this owner's residual chunk (v_x0 = CB_VX0, 10 bf16 tiles) as the diagonal of
+#if defined(MK_AR_RSTD_OWN)
+        {   // rstd producer (owner-side variant, over budget): per-row Σx² of this owner's residual chunk (v_x0 = CB_VX0, 10 bf16 tiles) as the diagonal of
             // X X^T (matmul, in1 transposed, fp32 DST accumulate over the 10 tiles) -> CB_SS; the writer extracts the diagonal
             CZONE("C-RSS");
             cb_wait_front(MK_AR_CB_RSYN, 1);      // the writer: this chunk of the residual is final (AR done)
@@ -394,6 +433,7 @@ void kernel_main() {
     auto qsk_mix = [&](bool att_layer) {
         CZONE("C-QSK");
         const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK;
+        MK_RSTD_PART();
         compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WM, CB_VA);
         cb_wait_front(CB_XK, V_KTR);
         cb_wait_front(CB_WM, QSK_SLOT);
@@ -770,6 +810,7 @@ void kernel_main() {
         if (vrole == 1) {
             const bool own_h = vk < vnn;
             if (L == 0) { cb_wait_front(CB_VI, 1); cb_wait_front(CB_VJ, 1); }
+            MK_RSTD_PART();
             compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WV, CB_VA);
             cb_wait_front(CB_WV, V_SLOT);
             cb_wait_front(CB_XK, V_KTR);

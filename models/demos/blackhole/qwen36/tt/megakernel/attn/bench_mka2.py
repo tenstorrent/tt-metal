@@ -130,19 +130,21 @@ for it in range(ITERS):
         print(f"[fm11] diag bad cores {len(bad)}: {bad[:40]}", flush=True)
     pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
-    if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the last AR of the pass left on the STREAM cores vs Σx² of its residual
-        _rs = ttnn.to_torch(rsp).float().reshape(-1, TILE, rsp.shape[-1])   # [cores, 32, NOWN*32], device 0
-        _xl = _db[:, 2 * (AR_NAR - 1) + 1].double()
-        _gs = (_xl * _xl).sum(-1)                                            # [32] per-row Σx² of the bf16 residual (fp64)
-        _gj = torch.stack([(_xl[:, j_ * 320:(j_ + 1) * 320] ** 2).sum(-1) for j_ in range(16)])   # [16, 32] per-owner partials
+    if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the pass's last K-row delivery left on the STREAM cores (rows 0-7 = the
+        # K-row partials) vs Σx² of that x: the residual after AR (NAR - 2) (the last AR feeds no delivery inside the pass)
+        _rs = ttnn.to_torch(rsp_sh).float().reshape(-1, TILE, rsp_sh.shape[-1])   # [cores, 32, NOWN*32], device 0
+        _xl = _db[:, 2 * (AR_NAR - 2) + 1].double()
+        _gs = (_xl * _xl).sum(-1)
+        _gk = torch.stack([(_xl[:, k_ * 640:(k_ + 1) * 640] ** 2).sum(-1) for k_ in range(8)])   # [8, 32]
         _worst = 0.0
         for ci_ in (0, 9, 37, 79):
             S_ = _rs[ci_, :, :TILE].double()
-            _worst = max(_worst, ((S_[:16] - _gj).abs() / _gj.abs().clamp_min(1e-30)).max().item())
+            _worst = max(_worst, ((S_[:8] - _gk).abs() / _gk.abs().clamp_min(1e-30)).max().item())
         S0 = _rs[0, :, :TILE].double()
-        _rel = ((S0[:16].sum(0) - _gs).abs() / _gs).max().item()
-        print(f"[ar] iter {it} rstd Σ tile: rows 16-31 max|.| {S0[16:].abs().max().item():.3e}; per-owner partial max rel err {_worst:.3e} (4 cores); "
-              f"Σ max rel err {_rel:.3e}; rstd max rel err {((1 / torch.sqrt(S0[:16].sum(0) / H + EPS)) / (1 / torch.sqrt(_gs / H + EPS)) - 1).abs().max().item():.3e}", flush=True)
+        _rel = ((S0[:8].sum(0) - _gs).abs() / _gs).max().item()
+        _rt = (1 / torch.sqrt(S0[:8].sum(0) / H + EPS)) / (1 / torch.sqrt(_gs / H + EPS)) - 1
+        print(f"[ar] iter {it} rstd Σ tile: rows 8-31 max|.| {S0[8:].abs().max().item():.3e}; K-row partial max rel err {_worst:.3e} (4 cores); "
+              f"Σ max rel err {_rel:.3e}; rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
     if REAL_AR and RQKV:   # qkv / k / SDPA / wo golds from the x the AR actually delivered to each attention layer (not the static x)
         _xin = {}
         if AR_DBG:   # residual after every AR of this pass (owner dumps); program order: [attention AR], MLP AR per layer

@@ -327,7 +327,7 @@ void kernel_main() {
         }
     };
 #endif
-#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_RSTD)
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_RSTD_OWN)   // owner-side variant (over the owner text budget; kept for reference)
     // rstd producer: x chunk j ready -> token to the compute (fp32 X X^T over the chunk's 10 tiles, diagonal = per-row Σx²) ->
     // row j of the STREAM consumers' Σ tile (rsp tile 0: face 0 at j*64 B, face 1 at 1024 + j*64 B) -> MK_AR_RSF += 1 on the same rects
     auto ar_rstd_send = [&]() __attribute__((noinline)) {
@@ -559,6 +559,40 @@ void kernel_main() {
         noc_async_read_barrier_with_trid(trid);
         cb_push_back(cb, pages);
     };
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+    // rstd producer (STREAM (n = k, k)): the compute's per-row Σx² (CB_SS, REDUCE_ROW column 0) -> row k of the Σ tile (rsp
+    // tile 0: face 0 at k*64 B, face 1 at 1024 + k*64 B) on every STREAM core, then MK_AR_RSF += 1 there (8 per delivery). The
+    // atomic multicast cannot include its source: the self rect is split around this core, plus a local increment.
+    auto rstd_inc = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) __attribute__((noinline)) {
+        if (x0 > x1 || y0 > y1) return;
+        noc_semaphore_inc_multicast(get_noc_multicast_addr(x0, y0, x1, y1, MK_AR_RSF), 1, (x1 - x0 + 1) * (y1 - y0 + 1));
+    };
+    auto rstd_send = [&]() __attribute__((noinline)) {
+        cb_wait_front(MK_AR_CB_SS, 1);
+        const uint32_t sp = get_read_ptr(MK_AR_CB_SS), ko = vk * 64;   // row 0 = face 0 [0, 64) + face 1 [1024, 1088)
+        for (uint32_t i = 0; i < 2; ++i) {
+            if (rs[i][4] == 0) continue;
+            for (uint32_t f = 0; f < 2; ++f) {
+                const uint64_t m = get_noc_multicast_addr(rs[i][0], rs[i][1], rs[i][2], rs[i][3], MK_AR_RSP + f * 1024 + ko);
+                if (i == self_rect) noc_async_write_multicast_loopback_src(sp + f * 1024, m, 64, rs[i][4], false);
+                else noc_async_write_multicast(sp + f * 1024, m, 64, rs[i][4], false);
+            }
+        }
+        noc_async_write_barrier();   // the row has landed everywhere before its flag
+        for (uint32_t i = 0; i < 2; ++i) {   // the atomic multicast cannot include its source: split the self rect around it
+            if (rs[i][4] == 0) continue;
+            const uint32_t x0 = rs[i][0], y0 = rs[i][1], x1 = rs[i][2], y1 = rs[i][3];
+            if (i != self_rect) { rstd_inc(x0, y0, x1, y1); continue; }
+            rstd_inc(x0, y0, x1, vmyy - 1);
+            rstd_inc(x0, vmyy + 1, x1, y1);
+            rstd_inc(x0, vmyy, vmyx - 1, vmyy);
+            rstd_inc(vmyx + 1, vmyy, x1, vmyy);
+        }
+        noc_semaphore_inc(get_noc_addr(vmyx, vmyy, MK_AR_RSF), 1);
+        noc_async_atomic_barrier();
+        cb_pop_front(MK_AR_CB_SS, 1);
+    };
+#endif
     // K-row x (two owner chunks, flag >= xv) into CB_XK; unpack when R < 32 (v0.8.2)
     auto v_xk_push = [&](uint32_t xv) {
         { MKZ("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), xv); noc_semaphore_wait_min(vw(vg[VG_XB]), xv); }
@@ -573,6 +607,9 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         cb_push_back(CB_XK, 2 * V_OT);
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+        if (vn == vk) rstd_send();   // rstd producer (n = k): this K-row's Σx² row -> every STREAM core's Σ tile
+#endif
     };
     auto v_mlp_start = [&](uint32_t L) {   // layer L's MLP slice into slot V (free: the previous MLP popped it)
         if (vrole == 1) v_slot_start(sv, CB_WV, V_SLOT, wv.get_noc_addr(vwv_page + L * vpvl), vnt * WTB, V_TRID0 + (L & 1));
