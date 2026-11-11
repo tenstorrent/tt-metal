@@ -501,6 +501,14 @@ def setup_bench(dev, MESH, mesh_identity):
         V_RESID = ('MK_OWNER_RESID', '1') in MKDEF
         V_R = int(os.environ.get('V12_R', '32')); V_FIRST = int(os.environ.get('V12_FIRST', '1'))
         assert V_R == 32 or 1 <= V_R <= 16
+        # spec v1.71 (RC rule): MK_REAL_AR at R < 32 has an open residual blow-up (u1, R=4). The RC engine is the R = 32 (8-user)
+        # program only (1-7 users padded onto it). Never inside the model (QWEN36_R16_MEGAKERNEL=1); bench debugging needs the
+        # explicit opt-in MK_ALLOW_REAL_AR_R_LT32=1.
+        if V_R < 32 and ('MK_REAL_AR', '1') in MKDEF:
+            assert os.environ.get('QWEN36_R16_MEGAKERNEL', '0') != '1', \
+                f"engine with MK_REAL_AR at R={V_R} < 32 is forbidden in the model (spec v1.71: open R<32 real-AR bug)"
+            assert os.environ.get('MK_ALLOW_REAL_AR_R_LT32', '0') == '1', \
+                f"MK_REAL_AR at R={V_R} < 32 is numerically wrong (spec v1.71); set MK_ALLOW_REAL_AR_R_LT32=1 to debug it"
         if os.environ.get('MK_V12_RCT', '1') == '1': MKDEF = MKDEF + [('MK_V12_RCT', str(V_R))]   # compile-time R (text budget)
         def q4(w): return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
         vwg, vwu, vwd = q4(wg_t), q4(wu_t), q4(wd_t)   # BFP4 values are tile-local, so layout independent
