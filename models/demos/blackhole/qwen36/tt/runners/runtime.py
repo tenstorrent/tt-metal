@@ -196,6 +196,8 @@ class TtQwen35PupPrefillRuntime:
             images=len(refs),
             tokens=n,
         )
+        logger.info("[qwen35_9b_pup] PUPPRE " + " ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}"
+                                                         for k, v in self.last_timing.items()))
         return None  # one rank: the published caches are the output
 
     # --- KV chunk table ----------------------------------------------------------------------------------------
