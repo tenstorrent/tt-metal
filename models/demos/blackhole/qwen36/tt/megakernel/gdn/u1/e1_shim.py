@@ -522,7 +522,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # gdn_out ring of layer L right after the step's reads of layer L (the slot of L - 1 was popped at the end of L - 1):
         # never blocks, and the next layer's state-first prefetch is not held behind it
         + (go_r.replace("(L_)", "L") if GO else '') +
-        + (go_rd.replace("{OGO}", str(OGO)) if GO and GO_RD else '') +
+        (go_rd.replace("{OGO}", str(OGO)) if GO and GO_RD else '') +
         f'  }}\n}}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
