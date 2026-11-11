@@ -338,9 +338,6 @@ struct NoSvc {
     void operator()() const {}
 };
 template <uint32_t T, uint32_t NV, uint32_t NU, typename Svc = NoSvc>
-#if GB_GEARLY
-__attribute__((noinline))
-#endif
 inline void gate_rows_build(uint32_t h, uint32_t u0, uint32_t gt_l1, uint32_t sc_l1, const Svc& svc = Svc{}) {
     constexpr uint32_t R = NU * T, CH = R * 64;  // rows per core, bytes per face run
     static_assert(16 % R == 0, "a core's rows inside one face row");
@@ -447,6 +444,31 @@ inline void gate_rows_send(const PAcc& pre, uint32_t u0, uint32_t pg0, uint32_t 
     noc_async_write_barrier();
 }
 
+#if GB_GEARLY
+// GEARLY service hook (out of line: one copy): conv0 out as soon as it lands, then the L2 root's ready
+inline uint32_t g_svc_st, g_svc_cb;
+inline volatile tt_l1_ptr uint32_t* g_svc_pb;
+template <uint32_t KT_>
+__attribute__((noinline)) void svc_early() {
+    volatile tt_l1_ptr uint32_t* pb = g_svc_pb;
+    if (!(g_svc_st & 1u) && cb_pages_available_at_front(g_svc_cb, 4)) {
+        GBTS(17);
+        send_out(get_read_ptr(g_svc_cb) + 3 * 4096, const_cast<const uint32_t*>(pb + kConv + 1));
+        GBTS(18);
+        g_svc_st |= 1u;
+    }
+    if ((g_svc_st & 3u) == 1u && cb_pages_available_at_front(g_svc_cb, 4 + KT_)) {
+        GBTS(19);
+        inc_all(const_cast<const uint32_t*>(pb + kRootDst), kKqCnt, 1);
+        GBTS(20);
+        g_svc_st |= 2u;
+    }
+}
+template <uint32_t KT_>
+struct SvcEarly {
+    void operator()() const { svc_early<KT_>(); }
+};
+#endif
 template <uint32_t B, uint32_t T, uint32_t NV, uint32_t VB, uint32_t RN, uint32_t KT_, uint32_t RD_, typename PAcc>
 inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc& pre, uint32_t cb_out, uint32_t sc_l1) {
     // OUT order (the compute's): gate pair, silu, conv 0, conv 1, [L2 root: Kt normalized k / q], pad to 4 per layer
@@ -466,30 +488,18 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
     // the gate pair (OUT 0..1, the compute's first job) is enough for the gate rows: build them while the convs run; conv0
     // (q / k -> the L2 roots: the long pole) and the root's ready go out from inside the build as soon as they land
     cb_wait_front(cb_out, 2);
-    bool c0 = false, rr = !root;
-    auto svc = [&]() {
-        if (!c0 && cb_pages_available_at_front(cb_out, 4)) {
-            GBTS(17);
-            send_out(get_read_ptr(cb_out) + 3 * 4096, const_cast<const uint32_t*>(pb + kConv + 1));
-            GBTS(18);
-            c0 = true;
-        }
-        if (c0 && !rr && cb_pages_available_at_front(cb_out, 4 + KT_)) {
-            GBTS(19);
-            inc_all(const_cast<const uint32_t*>(pb + kRootDst), kKqCnt, 1);
-            GBTS(20);
-            rr = true;
-        }
-    };
-    gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1, svc);
+    g_svc_st = root ? 0u : 2u;  // bit 0: conv0 sent, bit 1: root ready sent (or not a root)
+    g_svc_pb = pb;
+    g_svc_cb = cb_out;
+    gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1, SvcEarly<KT_>{});
     GBTS(22);
-    if (!c0) {
+    if (!(g_svc_st & 1u)) {
         cb_wait_front(cb_out, 4);
-        svc();
+        svc_early<KT_>();
     }
-    if (!rr) {
+    if (!(g_svc_st & 2u)) {
         cb_wait_front(cb_out, 4 + KT_);
-        svc();
+        svc_early<KT_>();
     }
     send_out(get_read_ptr(cb_out) + 2 * 4096, dz);
     GBTS(21);
