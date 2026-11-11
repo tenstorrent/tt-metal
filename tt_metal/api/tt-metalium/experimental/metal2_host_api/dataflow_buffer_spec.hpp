@@ -99,18 +99,16 @@ struct DataflowBufferSpec {
     // Backing memory
     //////////////////////////////
 
-    // Build DFB on borrowed memory.
+    // Build the DFB on storage borrowed from a tensor parameter.
+    // The DFB has a non-owning view of the tensor's storage for Program execution.
+    // The tensor parameter is declared in ProgramSpec; its MeshTensor is supplied through ProgramRunArgs.
+    // The DFB starts at the tensor's local storage base address, with no offset.
     //
-    // Instead of allocating Program execution-lifetime DFB storage in L1/SRAM (default),
-    // build the DFB on top of a user-managed memory object. The DFB gets a non-owning view
-    // of the memory for the duration of Program execution.
-    //
-    // The user-managed device memory object is declared at ProgramSpec scope and bound here.
-    // (Currently, only TensorParameter is supported.) The actual memory address is supplied
-    // at runtime via ProgramRunArgs.
-    //
-    // The bound memory object must have L1-based storage, and its allocation on each node must be
-    // large enough to hold the DFB (entry_size * num_entries).
+    // Invariants:
+    //  - The tensor has SRAM storage on every node occupied by the DFB.
+    //  - Each node's tensor storage can hold entry_size * num_entries bytes.
+    //  - Tensor storage is mutually exclusive with advanced_options.allocation_override and
+    //    advanced_options.prefetcher_pipe_relays.
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     //////////////////////////////
