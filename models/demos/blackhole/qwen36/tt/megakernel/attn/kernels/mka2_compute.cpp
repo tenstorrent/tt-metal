@@ -119,6 +119,9 @@ constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 #define MKA_AMASK 0xFFFFFFFFu
 #endif
 
+#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
+#define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
+#endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
     constexpr uint32_t HT = get_compile_time_arg_val(2), NDN = get_compile_time_arg_val(3);
@@ -132,15 +135,31 @@ void kernel_main() {
 #else
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
 #endif
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t IS_GU = 0; a++;
+#else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t u = get_arg_val<uint32_t>(a++), nblk = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t nrecv = 0, is_root = 0; a += 2;
+#else
     const uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t qoff = u * DH;
 #if defined(MKA_RQKV)
+#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+    constexpr uint32_t qrole = 3, qk0 = 0, qnk = 0, qnt = 0, gdn_on = 0; a += 5;   // QR_EXT with no qkv tiles under QSK
+#else
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_RWO) || defined(MKA_QSK)
+#if defined(MKA_EXTLEAN) && defined(MKA_QSK) && defined(MKA_RWO)
+    constexpr uint32_t qn0 = 0, wo_nt = WO_MAXT; a += 2;
+#else
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
+#endif
 #endif
 #if defined(MKA_RQNR)
     const uint32_t is_head = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
@@ -243,7 +262,12 @@ void kernel_main() {
 #endif
 #endif   // MKA_RQKV (v12 args follow the qkv / head args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t vrole_rt = 2; a++;
+    const uint32_t vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_ROLE_STREAM)
     constexpr uint32_t vrole = 1;
 #elif defined(MKA_ROLE_EXT)
@@ -626,6 +650,10 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < nb; ++i)
                     for (uint32_t t = 0; t < DH; ++t) matmul_tiles(CB_Q, CB_K, qoff + t, i * DH + t, i);
+#if defined(MKA_SCLAMP)
+                unary_min_tile_init();   // RC guard for the no-max softmax: S <= 60 (exp(60) ~ 1e26, fp32-safe sums); bit-identical
+                for (uint32_t i = 0; i < nb; ++i) unary_min_tile(i, 0x42700000u);   // when |S| < 60 (real 8-32K traces: max 21.85)
+#endif
                 exp_tile_init();
                 for (uint32_t i = 0; i < nb; ++i) exp_tile(i);
 #if defined(MKA_RQNR) && defined(MKA_RMASK)
