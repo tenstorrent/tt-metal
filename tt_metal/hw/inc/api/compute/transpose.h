@@ -35,6 +35,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     LLK_SAN_FUNCTION();
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)

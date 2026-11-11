@@ -86,6 +86,7 @@ namespace ckernel {
 // clang-format on
 template <bool normalize = true, bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, const uint32_t out_cb_id) {
+    PACK_MATH_CONTEXT(false);
     static_assert(!(normalize && fp32_dest_acc_en), "hadamard_h128 normalize=true is not supported with fp32 dest");
 
     // Configure both unpackers from h16's [16,16] single-face geometry so the
@@ -109,6 +110,7 @@ ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, 
 // synchronization or pack destination state. Used between fused micro-ops.
 template <bool normalize = true, bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void hadamard_h128_init_short(const uint32_t in_cb_id, const uint32_t h16_cb_id, const uint32_t out_cb_id) {
+    PACK_MATH_CONTEXT(false);
     static_assert(!(normalize && fp32_dest_acc_en), "hadamard_h128 normalize=true is not supported with fp32 dest");
     reconfig_full_operand<SrcOrder::Regular>(h16_cb_id, h16_cb_id);
     UNPACK((llk_unpack_hadamard_h128_init(h16_cb_id, in_cb_id, 0)));

@@ -23,6 +23,7 @@ namespace ckernel {
 
 template <EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD, uint32_t num_tiles>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_A_rmsnorm_init<num_tiles, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
         false, false, icb0)));
     MATH((llk_math_rmsnorm_bcast_scalar_dest_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY>(
@@ -55,6 +56,7 @@ template <
     MathFidelity math_fidelity,
     bool unpack_full_transpose = false>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles_init_fidelity(uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_A_rmsnorm_init<num_tiles, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
         unpack_full_transpose /*transpose_of_faces*/, unpack_full_transpose /*within_face_16x16_transpose*/, icb0)));
     MATH((llk_math_rmsnorm_bcast_scalar_dest_reuse_init_with_operands<eltwise_binary_type, num_tiles, math_fidelity>(
@@ -110,6 +112,7 @@ template <
     PoolType reduce_type = PoolType::SUM,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, float scaler = 1.0f) {
+    PACK_MATH_CONTEXT(false);
     static_assert(reduce_type == PoolType::SUM, "Only SUM reduction is currently supported");
     static_assert(dst_capacity >= 2 && dst_capacity <= 8, "Chunked reduction requires 2 to 8 DST slots");
     static_assert(
@@ -181,6 +184,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
 // _fidelity variants above.
 template <EltwiseBinaryReuseDestType reuse_dest, MathFidelity math_fidelity>
 ALWI void mul_reuse_dest_init_fidelity(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     static_assert(
         reuse_dest != EltwiseBinaryReuseDestType::NONE,
         "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call mul_init(icb0, icb1).");
@@ -203,6 +207,7 @@ ALWI void mul_reuse_dest_tiles_fidelity(uint32_t in_cb_id, uint32_t in_tile_inde
 
 template <MathFidelity math_fidelity>
 ALWI void mul_bcast_scalar_init_fidelity(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, math_fidelity>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));

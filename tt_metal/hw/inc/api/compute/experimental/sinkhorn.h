@@ -25,7 +25,10 @@ namespace ckernel {
 // Unary SFPU init (ADDR_MOD_7 dest-incr 0). This op does not call it:
 // exp_tile_init already programs the same slot immediately before
 // sinkhorn_row_max_sub / sinkhorn_4x4.
-inline void sinkhorn_4x4_init() { MATH((_llk_math_sinkhorn_4x4_init_())); }
+inline void sinkhorn_4x4_init() {
+    PACK_MATH_CONTEXT(false);
+    MATH((_llk_math_sinkhorn_4x4_init_()));
+}
 
 // Comb 4x4 per-row max-sub. Runs after exp_tile_init (ADDR_MOD_7) and before
 // exp_tile; must not clobber LREG12..14.

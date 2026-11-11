@@ -17,6 +17,7 @@ namespace ckernel {
 #if defined(ARCH_BLACKHOLE)
 
 ALWI void generic_moe_gate_init(uint32_t icb0, uint32_t icb1) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 
     // Init copy add (FPU)

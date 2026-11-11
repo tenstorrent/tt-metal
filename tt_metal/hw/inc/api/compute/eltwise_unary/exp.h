@@ -103,8 +103,10 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
 template <
     bool approx = false,
     uint32_t scale = 0x3F800000,
-    InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_packthread_tile_init() {
+    PACK_SFPU_CONTEXT();
     PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
         sfpu::exp_init<approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en>));
 }

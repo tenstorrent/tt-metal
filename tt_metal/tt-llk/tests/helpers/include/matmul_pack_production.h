@@ -71,9 +71,9 @@ template <bool fp32, std::uint32_t kt>
 constexpr std::uint32_t forms_k(const std::uint32_t row, const std::uint32_t nt, const bool t32, const bool full, const bool src32, const bool int8)
 {
     using namespace matmul_pack_tables;
-    const char a = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8, true);
-    const char b = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8, true);
-    const char c = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8, true);
+    const char a = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, 1u);
+    const char b = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, 1u);
+    const char c = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, 1u);
     return (a == 'T' || b == 'T' || c == 'T' ? 1 : 0) | (a == 'B' || b == 'B' || c == 'B' ? 2 : 0) | (a == 'W' || b == 'W' || c == 'W' ? 4 : 0);
 }
 
@@ -153,10 +153,15 @@ __attribute__((always_inline)) inline void block(
         }
         return;
     }
+    // a block of one folded form reads no state, so it closes no fast untilize either
+    const bool one_form = forms != 0 && (forms & (forms - 1)) == 0;
     // per tile after another pack program init, and while the packer accumulates in L1 under half sync
     if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (sync == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE()))
     {
-        _llk_pack_close_fast_untilize_<sync>();
+        if (!one_form)
+        {
+            _llk_pack_close_fast_untilize_<sync>();
+        }
         state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
@@ -171,13 +176,14 @@ __attribute__((always_inline)) inline void block(
         first ? (MATMUL_PACK_STATE == 1 ? (tables32 ? matmul_pack_tables::llk_pack_reconf_form : matmul_pack_tables::llk_pack_reconf_form_dc)
                                         : (tables32 ? matmul_pack_tables::llk_pack_init_form : matmul_pack_tables::llk_pack_init_form_dc))
               : (tables32 ? matmul_pack_tables::llk_pack_next_form : matmul_pack_tables::llk_pack_next_form_dc),
-        !first,
+        first ? (MATMUL_PACK_STATE == 1 ? 1u : 0u) : 2u,
         sync == DstSync::SyncFull,
         src32,
         int8,
-        true); // a matmul init ran on the kernel: the masks behind matmul math (llk_pack_matmul_context)
+        2u); // behind matmul math a variable block reads the forms of context 2 (pack_ctx[0] != 0)
     state.seen = 1;
-    if (first)
+    // a fast untilize left open marks the last output: only a first block closes it
+    if (!one_form && first)
     {
         _llk_pack_close_fast_untilize_<sync>();
     }
@@ -193,7 +199,6 @@ __attribute__((always_inline)) inline void block(
     if (f != 'W')
     {
         state.valid = 0;
-        _llk_pack_close_fast_untilize_<sync>();
         if constexpr (form == 1)
         {
             _llk_pack_block_<sync, fp32, ckernel::PackMode::Default>(tile_index, address, num_tiles);
@@ -209,7 +214,6 @@ __attribute__((always_inline)) inline void block(
     if (!cont)
     {
         // llk_pack_w_take: the output base is programmed again, the stride only when it changed
-        _llk_pack_close_fast_untilize_<sync>();
         program_packer_destination<false>(address);
         if (tile_stride != pack_ch1_w_stride)
         {
@@ -253,9 +257,13 @@ constexpr bool always_per_tile()
         constexpr bool src32 = fp32 && key_src32;
         constexpr bool t32   = src32 && unpack_to_dest;
         constexpr bool full  = sync == DstSync::SyncFull;
-        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8, true) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8, true) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8, true) == 'T';
+        // per tile in both matmul contexts (1 pure matmul, 2 with a pack-thread SFPU), as llk_matmul_pack_always_per_tile
+        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, 1u) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, 1u) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, 1u) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, 2u) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, 2u) == 'T' &&
+               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, 2u) == 'T';
     }
 }
 

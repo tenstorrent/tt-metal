@@ -198,6 +198,7 @@ ALWI void topk_xl_init() {
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_xl_copy_tile_init(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     // TOPK_LARGE_INDICES ADDITION: the low-level copy wrapper only initializes
     // the TopK XL copy LLKs. This TTNN op enters through the standard compute
     // API, so it must also configure SRCA unpack/math state for the input CB.
@@ -210,6 +211,7 @@ ALWI void topk_xl_copy_tile_init(std::uint32_t cbid, std::uint32_t call_line = _
 
 /** Initialize only the TopK copy MOP; the caller has already configured CB formats. */
 ALWI void topk_xl_copy_tile_init_short(std::uint32_t cbid) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_topk_xl_copy_init(cbid)));
     MATH((llk_math_topk_xl_copy_init(cbid)));
 }
@@ -276,6 +278,7 @@ ALWI void topk_xl_copy_tile_init_unpack(std::uint32_t cbid, std::uint32_t call_l
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_xl_copy_tile_init_math(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure<Operand::SRCA>(cbid, call_line);
     MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(cbid, cbid)));
     MATH((llk_math_topk_xl_copy_init(cbid)));
@@ -344,7 +347,10 @@ ALWI void topk_xl_add_lsb_indices(std::uint32_t idst) {
  * Return value: None
  */
 // clang-format on
-ALWI void topk_xl_pack_supplied_indices_init() { MATH((llk_math_topk_xl_pack_supplied_indices_init())); }
+ALWI void topk_xl_pack_supplied_indices_init() {
+    PACK_MATH_CONTEXT(false);
+    MATH((llk_math_topk_xl_pack_supplied_indices_init()));
+}
 
 // clang-format off
 /**

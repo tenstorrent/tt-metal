@@ -26,6 +26,8 @@
 #define PACK(...)
 #endif
 
+#include "api/compute/pack_math_context.h"
+
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
 #define UNPACK(...) __VA_ARGS__

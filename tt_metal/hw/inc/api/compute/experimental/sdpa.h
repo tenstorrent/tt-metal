@@ -44,6 +44,7 @@ template <
     std::uint32_t num_tiles,
     bool dense = false>
 ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
     MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
@@ -84,6 +85,7 @@ template <
     std::uint32_t num_tiles,
     bool skip_addrmod = false>
 ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles_init(std::uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands<
           eltwise_binary_type,
           num_tiles,
@@ -136,6 +138,7 @@ ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(std::uint32_t dst_tile_index)
 
 template <MathFidelity math_fidelity, std::uint32_t num_tiles, bool skip_addrmod = false>
 ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init_fidelity(std::uint32_t icb0) {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands<
           EltwiseBinaryType::ELWMUL,
           num_tiles,

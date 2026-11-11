@@ -40,8 +40,12 @@ def _parts():
     cls = _sub(cls, "    const std::uint32_t rows = pack_tile_face_r_dim[i];\n", "", 1)
     cls = _sub(cls, "    const std::uint32_t fmt = pack_dst_format[i];\n", "", 1)
     cls = _sub(cls, "pack_tile_num_faces[i]", "faces")
-    k_head = "constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const bool next, const bool sync_full, const bool src32, const bool int8, const bool matmul_ctx)"
-    folded = re.search(r"constexpr char llk_pack_block_form_of\(\s*const std::uint32_t row, const std::uint32_t ntiles, const char \(\*table\)\[4\]\[17\], const bool next, const bool matmul_ctx\)", s)
+    folded = re.search(r"constexpr char llk_pack_block_form_of\(\s*const std::uint32_t row, const std::uint32_t ntiles, const char \(\*table\)\[4\]\[17\], (const bool next|const std::uint32_t state), (const bool matmul_ctx|const std::uint32_t ctx)\)", s)
+    # the state (0 init, 1 reconfigure, 2 next) since the per-state masks, before them whether the block is a next one
+    k_state = folded.group(1) if folded else "const bool next"
+    # the mask context: whether a matmul init ran; since pk-ctx 0 other, 1 matmul, 2 matmul with a pack-thread SFPU
+    k_ctx = folded.group(2) if folded else "const bool matmul_ctx"
+    k_head = "constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], " + k_state + ", const bool sync_full, const bool src32, const bool int8, " + k_ctx + ")"
     if folded:
         # the forms fold into compile-time words: llk_pack_block_form_of is the rule of a table row, llk_pack_block_form adds the Int8 rule
         form = _sub(_func(s, folded.group(0)), folded.group(0), k_head, 1)

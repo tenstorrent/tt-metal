@@ -46,6 +46,7 @@ template <
     DataFormat OutFormat,
     TensorShape OutShape>
 ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutFormat, OutShape> /*out*/) {
+    PACK_MATH_CONTEXT(false);
     static_assert(is_legal_tile_shape(InShape), "pack_untilize_init: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "pack_untilize_init: illegal output tile shape.");
     static_assert(

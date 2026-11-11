@@ -68,6 +68,7 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
  */
 // clang-format on
 ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+    PACK_MATH_CONTEXT(false);
     constexpr uint32_t dest_capacity = get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
     constexpr uint32_t max_tiles = dest_capacity < 8 ? dest_capacity : 8;
     LLK_ASSERT(num_tiles <= max_tiles, "sum_reduce_scalar_tile: num_tiles exceeds min(8, DEST capacity)");

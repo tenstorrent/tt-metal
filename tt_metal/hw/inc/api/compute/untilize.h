@@ -37,6 +37,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "unpack-based untilize is deprecated; use pack_untilize instead. Scheduled for removal, see tt-metal#22904.")]]
 ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    PACK_MATH_CONTEXT(false);
     state_configure(icb, call_line);
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
