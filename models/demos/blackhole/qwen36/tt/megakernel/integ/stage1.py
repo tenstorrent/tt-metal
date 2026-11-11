@@ -147,14 +147,14 @@ def _named_tensors(root, prefix, out, depth=5, seen=None):
     return out
 
 
-def l1_dump(tag, prog=None, model=None, limit=80, cores=None):
+def l1_dump(tag, prog=None, model=None, limit=80, cores=None, mesh=None):
     """Debug (QWEN36_R16_MK_L1DUMP=1): every live L1 buffer from the device allocator (ttnn reports), lowest address
     first, sized per bank, named by the model / engine attribute that holds it ('?' = op-internal: trace intermediates,
     CCL persistent buffers, ...). ``cores`` (default the owner rect x10-11 y0-7): which sharded buffers sit there."""
     import ttnn
     from loguru import logger
 
-    mesh = model.mesh_device if model is not None else None
+    mesh = model.mesh_device if model is not None else mesh
     S = getattr(getattr(prog, "program", None), "setup", None) or {}
     names = {}
     if model is not None:
@@ -196,6 +196,117 @@ def l1_dump(tag, prog=None, model=None, limit=80, cores=None):
     return rows
 
 
+def _l1_lowest_query(mesh):
+    """-> (f, kind): f() = the lowest address of any live L1 buffer on the compute cores (None: none allocated). Prefers the
+    O(1) allocator query (ttnn LowestOccupiedComputeL1Address, the rc1d binding); else the L1 memory view's block table
+    (addresses relative to the L1 allocator base; tens of us)."""
+    import ttnn
+
+    fn = getattr(ttnn._ttnn.device, "LowestOccupiedComputeL1Address", None)
+    if fn is not None:
+        return (lambda: fn(mesh)), "allocator"
+    base = int(ttnn._ttnn.reports.get_device_info(mesh).address_at_first_l1_cb_buffer)
+
+    def _mv():
+        lo = None
+        for b in ttnn.get_memory_view(mesh, ttnn.BufferType.L1).block_table:
+            if b.get("allocated") == "yes":
+                a = int(b["address"])
+                lo = a if lo is None or a < lo else lo
+        return None if lo is None else base + lo
+
+    return _mv, "memory-view"
+
+
+class L1Guard:
+    """Engine L1 region guard (rc1d robustness; QWEN36_R16_MK_L1GUARD: 1 = raise (default), warn = log only, 0 = off).
+
+    The engine's static CB region [CB base, cb_end) is checked against the allocator by tt-metal only when its program is
+    enqueued, i.e. at trace capture. A replay re-runs the program without that check, so an L1 buffer allocated after the
+    capture (a lazily created CCL semaphore, a resume-path buffer, a prefill op's output kept alive) that is live below
+    cb_end at a replay would be overwritten by the engine on every replay, silently. ``check()`` runs before every verify
+    replay (Stage1Verify.stage_host) and raises instead. It compares the live allocator's lowest occupied L1 address with
+    cb_end: one O(1) host query (no device work). Transient L1 buffers freed before the replay are harmless and not seen.
+    It also logs every new low of the lowest live L1 address after arming (persistent L1 allocations creeping toward the
+    engine region; bounded by the number of distinct lows).
+
+    QWEN36_R16_MK_L1RESERVE=1 additionally reserves [L1 base, cb_end) in the device allocator when the guard arms (rc1d
+    binding ExperimentalReserveL1Bottom): an allocation that would land there then fails at its source with the culprit's
+    stack. Off by default: it also refuses transient L1 buffers below cb_end, which the replay never touches."""
+
+    def __init__(self, mesh, cb_end, mode="1", model=None, programs=None):
+        self.mesh, self.cb_end, self.mode = mesh, int(cb_end), mode
+        self.model, self.programs = model, programs or {}
+        self.armed = False
+        self.checks = 0
+        self.low_min = None
+        self.reserved = False
+
+    def arm(self):
+        import time
+
+        from loguru import logger
+
+        self.q, self.kind = _l1_lowest_query(self.mesh)
+        t0 = time.perf_counter()
+        for _ in range(20):
+            low = self.q()
+        us = (time.perf_counter() - t0) / 20 * 1e6
+        self._verdict(low)  # raises (mode 1) if a live L1 buffer already sits below cb_end
+        if os.environ.get("QWEN36_R16_MK_L1RESERVE", "0") == "1":
+            import ttnn
+
+            rsv = getattr(ttnn._ttnn.device, "ExperimentalReserveL1Bottom", None)
+            if rsv is None:
+                logger.warning("[mk-l1guard] QWEN36_R16_MK_L1RESERVE=1 but this ttnn build has no ExperimentalReserveL1Bottom: "
+                               "guard only")
+            else:
+                rsv(self.mesh, self.cb_end)  # raises if a live L1 buffer already sits below cb_end
+                self.reserved = True
+        self.armed = True
+        logger.info(f"[mk-l1guard] armed ({'raise' if self.mode == '1' else 'warn'}): engine CB end {self.cb_end}, lowest live "
+                    f"L1 {low}, margin {None if low is None else low - self.cb_end} B; query {self.kind} {us:.1f} us"
+                    + ("; allocator L1 reserved below the CB end" if self.reserved else ""))
+
+    def check(self):
+        if not self.armed:
+            self.arm()
+            return
+        self.checks += 1
+        low = self.q()
+        if low is not None and (low < self.cb_end or self.low_min is None or low < self.low_min):
+            self._verdict(low)
+
+    def _verdict(self, low):
+        from loguru import logger
+
+        if low is None:
+            return
+        prev = self.low_min
+        self.low_min = low if prev is None else min(prev, low)
+        if low >= self.cb_end:
+            if prev is not None and low < prev:
+                logger.info(f"[mk-l1guard] new lowest live L1 buffer {low} (was {prev}) after {self.checks} replays; engine "
+                            f"CB end {self.cb_end}, margin {low - self.cb_end} B")
+            return
+        if self.mode == "warn" and prev is not None and prev < self.cb_end and low >= prev:
+            return  # warn mode: this overlap was reported already
+        msg = (f"[mk-l1guard] a live L1 buffer at {low} sits below the engine CB region end {self.cb_end} "
+               f"({self.cb_end - low} B overlap) before verify replay {self.checks}: the engine would overwrite it on this "
+               f"replay. Allocated after the trace capture (persistent L1 allocations must precede capture or go to DRAM).")
+        try:
+            prog = next(iter(self.programs.values()), None)
+            rows = l1_dump("L1 guard: live L1 buffers", prog, self.model, limit=40, mesh=self.mesh)
+            bad = [r for r in rows if r[0] < self.cb_end]
+            msg += f" Buffers below the CB end (addr, bytes/bank, layout, name): {[(r[0], r[1], r[2], r[3][:80]) for r in bad[:8]]}"
+        except Exception as e:  # noqa: BLE001 -- the diagnosis must not mask the violation
+            msg += f" (buffer listing failed: {type(e).__name__}: {e})"
+        if self.mode == "warn":
+            logger.error(msg)
+            return
+        raise RuntimeError(msg)
+
+
 class Stage1Verify:
     def __init__(self, model):
         self.model = model
@@ -208,6 +319,7 @@ class Stage1Verify:
         self.replaces_layers = False
         self.weights_reason = None
         self.skipped = {}  # bucket -> reason (out of the engine's scope: op-by-op)
+        self.l1guard = None  # L1Guard over the engine CB region (armed at the first replay)
 
     def prepare(self, buckets, T):
         """Before capture: repack weights once, then build each bucket's engine program and its persistent x_out."""
@@ -249,6 +361,11 @@ class Stage1Verify:
             self.reason = f"no bucket in scope ({self.skipped})"
             return {"ready": False, "reason": self.reason}
         self.ready = True
+        self.l1guard = None
+        _gm = os.environ.get("QWEN36_R16_MK_L1GUARD", "1").strip().lower()
+        _cbe = [int((getattr(p, "info", None) or {}).get("cb_end") or 0) for p in self.programs.values()]
+        if _gm in ("1", "warn") and max(_cbe, default=0) > 0:  # identity / stand-in engines carry no CB end: no guard
+            self.l1guard = L1Guard(self.model.mesh_device, max(_cbe), mode=_gm, model=self.model, programs=self.programs)
         self.replaces_layers = all(p.replaces_layers for p in self.programs.values())
         if self.replaces_layers:
             # The engine REPLACES the model's whole layer loop (model.py: `for layer in () if replaces_layers`), so a program
@@ -287,6 +404,8 @@ class Stage1Verify:
     def stage_host(self, row_positions, inactive, T):
         """Before each verify replay (model.verify_stage_and_enqueue): every engine program's host-staged tables from the
         step's row positions (r = u*T + j; -1 for inactive users). No-op for programs without host tables."""
+        if self.l1guard is not None:  # the engine's CB region vs live L1 buffers, before this replay (host only)
+            self.l1guard.check()
         rows = self._rows(row_positions, inactive, T)
         for prog in self.programs.values():
             st = getattr(getattr(prog, "program", None), "stage", None)

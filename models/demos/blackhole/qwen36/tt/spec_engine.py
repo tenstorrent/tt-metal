@@ -55,6 +55,7 @@ from loguru import logger
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import failfast as _failfast
 from models.demos.blackhole.qwen36.tt import prefill_plan
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
@@ -5819,8 +5820,9 @@ class MTPSpecEngine:
                 return h._data
             if engine_thread:
                 ttnn.synchronize_device(self.mesh)
-            else:
-                ttnn.event_synchronize(h.event)
+            else:  # failfast: a dead device under this wait exits the worker instead of spinning forever (failfast.py)
+                with _failfast.watch(self.mesh, "fused step read"):
+                    ttnn.event_synchronize(h.event)
             h.t_done = time.perf_counter()
             if _MASK_PROF:  # the read-to-read period of consecutive steps, by whether the step carried a mask
                 last = self.__dict__.get("_prof_last_done")

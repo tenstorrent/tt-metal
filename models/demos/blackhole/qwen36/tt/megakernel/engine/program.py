@@ -3032,7 +3032,16 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
         raise
     except Exception as _e:  # noqa: BLE001 -- the report must never break a build unless asked to assert
         print(f"[rcflags] check skipped: {type(_e).__name__}: {_e}", flush=True)
-    info = dict(env=env, nl=int(env["FM_NL"]), nu=int(env["MKA_NU"]), n_io=len(io0), per_device=per_dev is not None,
+    # Engine L1 guard (rc1d robustness): the end of the engine's static CB region, max over every core of every per-device
+    # program (cbplan, device-checked by CBP.verify above). The trace replays the engine with this region; any L1 buffer
+    # live below it at a replay would be overwritten, so integ/stage1.py checks the allocator against it before each replay.
+    cb_end = None
+    if CBP is not None:
+        try:
+            cb_end = max(max(CBP.end_per_core(CBP.plan(list(d_.cbs))).values(), default=0) for d_ in descs.values())
+        except Exception as _e:  # noqa: BLE001 -- the guard then reports itself unarmed (stage1)
+            print(f"[mk-l1guard] engine CB end not computed: {type(_e).__name__}: {_e}", flush=True)
+    info = dict(env=env, nl=int(env["FM_NL"]), nu=int(env["MKA_NU"]), n_io=len(io0), per_device=per_dev is not None, cb_end=cb_end,
                 common_args=blocks.common_args(), l1pool=dict(pool_stats), n_gdn=len(gdn_desc or ()), n_attn=len(kv_desc or ()),
                 weights={k: (t.buffer_address() if t is not None else 0) for k, t in wb.items()})
 
