@@ -1465,7 +1465,7 @@ def setup_bench(dev, MESH, mesh_identity):
             else:
                 torch.manual_seed(17)
                 wg_all = _wl().pack_gdn_out([torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE) for _ in range(NGo)], GLAY, dev=dev)
-            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(NGo, GPL, TILE, TILE))
+            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(-1, GPL, TILE, TILE)[:NGo])   # injected: all model GDN layers
             gdbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGo * WNG * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
                       wk=WKG, maxt=GMAXT, w=wg_all, w_addr=wg_all.buffer_address(), w_stride=GPL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
