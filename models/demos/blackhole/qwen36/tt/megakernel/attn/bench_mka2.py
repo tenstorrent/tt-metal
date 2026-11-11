@@ -79,6 +79,11 @@ for it in range(ITERS):
     _rsp_t = RSP_DUMP() if RSP_DUMP is not None else rsp_sh   # MK_L1P2_SEED: CB 43 read back (the AR's rstd checks), same place
     if ENGINE_DRAIN is not None: ENGINE_DRAIN()   # MK_L1P2_SEED: residual CB 5 -> ENGINE_X0 (the next launch's seed), same place
     _res_t = ENGINE_X0 if ENGINE_X0 is not None else globals().get('ar_out')
+    if GDN24 and os.environ.get('E1_GB_TS', '0') == '1':   # E1_GB_TS probe: the GDN cores' wall-clock stamps (arg block words) of this launch
+        _ti = GDN_ROLE['role'].role['info']; _o = _ti['ts_off']; _tt_ = ttnn.to_torch(GDN_ROLE['io'][0])
+        _tt_ = _tt_.reshape(len(GDN_ROLE['role'].cores), -1)[:, _o:_o + 32 * _ti['NG']].to(torch.int64) & 0xFFFFFFFF
+        with open(os.environ.get('E1_GB_TS_OUT', 'gbts') + f'.it{it}.txt', 'w') as _f:   # per core: x y NG then NG x 32 stamps (0 = not reached)
+            for c_, r_ in zip(GDN_ROLE['role'].cores, _tt_.tolist()): _f.write(f"{c_.x} {c_.y} {_ti['NG']} " + " ".join(map(str, r_)) + "\n")
     if KVA: KVA_POST(it)   # SDPA golden over the appended cache (+ MKA_KVA_CHECK: bit-compare vs paged_fused_update_cache)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
@@ -174,9 +179,9 @@ for it in range(ITERS):
             _k += 1
         print(f"[v12] iter {it} per-layer MLP vs AR-delivered-x gold pcc min {min(_mp)} all {_mp}", flush=True)
         if _nr:
-            _ok = all(abs(r_ - 1.0) <= 0.05 for r_ in _nr)
+            _ok = all(abs(r_ - 1.0) <= 0.03 for r_ in _nr)
             print(f"[norm] iter {it} MLP |dev| / |RMSNorm(x)*gamma_model MLP| per layer {_nr} (MK_NORM_FIX {globals().get('NORM_FIX', 1.0):.6f}) "
-                  f"{'PASS' if _ok else 'FAIL'} (1.000 +- 5%, interim band)", flush=True)
+                  f"{'PASS' if _ok else 'FAIL'} (1.000 +- 3%; RC has MK_RSTD_HIFI4 + MK_GC_HIFI4)", flush=True)
     if V12 and not (REAL_AR and AR_GAMMA):   # (MK_AR_GAMMA: v_xo ends the pass holding x_deliver, not the partial)
         _v = ttnn.to_torch(_xo_t).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
         if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(_xo_t), os.environ['V12_SAVE'])
@@ -289,7 +294,7 @@ for it in range(ITERS):
             if os.environ.get('MK_NORM_DIAG') == '1': print(f"[normdiag] iter {it} layer {L} qkv cols<64T |dev|/|gold| {(qv[L][:, :64 * TILE].norm() / gq_[:, :64 * TILE].norm()).item():.4f}", flush=True)
             if globals().get('GAMMA_CONS') or globals().get('AR_GAMMA'):   # [norm] q/k/v columns (pre-sigmoid, linear in γ): |dev| / |true RMSNorm · γ_model @ W|
                 _r = (qv[L][:, :64 * TILE].norm() / (gq_[:, :64 * TILE].norm() / globals().get('NORM_FIX', 1.0))).item()
-                print(f"[norm] iter {it} layer {L} qkv |dev| / |RMSNorm(x)*gamma_model @ W| {_r:.4f} {'PASS' if abs(_r - 1.0) <= 0.05 else 'FAIL'}", flush=True)
+                print(f"[norm] iter {it} layer {L} qkv |dev| / |RMSNorm(x)*gamma_model @ W| {_r:.4f} {'PASS' if abs(_r - 1.0) <= 0.03 else 'FAIL'}", flush=True)
     vs = ttnn.to_torch(outs).float().reshape(NL, NU, TILE, DHD)
     for L in range(NL):
         v_, g2 = vs[L][:, :NQH * T], golds_s[L][:, :NQH * T]
