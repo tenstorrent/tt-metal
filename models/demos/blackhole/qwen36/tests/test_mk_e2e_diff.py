@@ -38,6 +38,7 @@ BAR = float(os.environ.get("E2E_BAR", "0.999"))
 OUT = os.environ.get("E2E_OUT", "")
 TF = os.environ.get("E2E_TF", "1") == "1"  # teacher-forced per-layer mode (spec owner 11-11)
 TF_NL = int(os.environ.get("E2E_TF_NL", str(NL)))
+DBG = os.environ.get("E2E_DBG", "1") == "1"  # MK_AR_DBG per-AR residual dumps (more engine text); 0 = final x_out only
 B, T = 8, tc.K + 1
 DIM = 5120
 
@@ -113,7 +114,7 @@ def _diff_case(model, live, tag):
     mk1 = model._vfy_mk1
     prog = mk1.programs[B]
     S = prog.program.setup
-    assert "ar_dbgt" in S and S["ar_dbgt"] is not None, "engine built without MK_AR_DBG=1 (no per-AR residual dump)"
+    has_dbg = S.get("ar_dbgt") is not None
     nl = int(prog.info["nl"])
     lt = mk1.layer_types[:nl]
     _defs = prog.info["env"].get("MK_DEFINES", "").split(",")
@@ -146,6 +147,18 @@ def _diff_case(model, live, tag):
                            k_maxabs=float((kv_eng[L][0] - kv_ref[L][0]).abs().max()),
                            v_maxabs=float((kv_eng[L][1] - kv_ref[L][1]).abs().max()), rows=int(kv_ref[L][0].shape[0]))
     logger.info(f"[e2ediff] KVA {tag}: {json.dumps(kva)}")
+    if not has_dbg:   # final layer only: the engine's x_out (drained residual after the pass's last AR)
+        xo = _rows(mk1.x_out[B])
+        _restore(ts, snap)
+        tf = _teacher_forced(model, live, ref, ref_in, ts, snap) if TF else {}
+        Lf = min(nl, NL) - 1
+        pcc, mx, bad = {}, {}, []
+        for u in live:
+            e, r = xo[u * T:(u + 1) * T], ref[Lf][u * T:(u + 1) * T]
+            if not torch.isfinite(e).all() or not e.abs().sum():
+                bad.append(dict(case=tag, user=u, layer=Lf, what="nan" if not torch.isfinite(e).all() else "zero"))
+            pcc[u], mx[u] = {Lf: round(_pcc(e, r), 6)}, {Lf: float((e - r).abs().max())}
+        return pcc, mx, bad, None, dict(tf, kva=kva) if tf else dict(kva=kva)
     dbg = ttnn.to_torch(ttnn.get_device_tensors(S["ar_dbgt"])[0]).float().reshape(32, -1)
     # the post-AR residual columns (2k+1) must be identical on every device (AR contract: mesh identity 0); the input
     # partial columns (2k) are per-device by design
@@ -273,7 +286,7 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
     monkeypatch.setenv("QWEN36_R16_MK_KV_INJECT", os.environ.get("QWEN36_R16_MK_KV_INJECT", "1"))
     monkeypatch.setenv("QWEN36_R16_MK_ALLOW_NO_FALLBACK", os.environ.get("QWEN36_R16_MK_ALLOW_NO_FALLBACK", "0"))
     env = os.environ.get("QWEN36_R16_MK_ENV", "")
-    if "MK_AR_DBG=" not in env:
+    if DBG and "MK_AR_DBG=" not in env:
         monkeypatch.setenv("QWEN36_R16_MK_ENV", (env + " MK_AR_DBG=1").strip())
     for v in ("QWEN36_SPEC_CHAIN", "VLLM_TT_SPEC_CHAIN"):
         monkeypatch.setenv(v, "0")
@@ -312,7 +325,7 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
                     res["first_bad"] = dict(case=tag, user=u, layer=L, pcc=v)
         for r in drv.live():
             drv._finish(r)
-    fin = [res["maxabs"]["k8"][str(u)][str(min(NL, len(res["maxabs"]["k8"][str(u)])) - 1)] for u in range(B)]
+    fin = [list(res["maxabs"]["k8"][str(u)].values())[-1] for u in range(B)]
     res["final_err_spread"] = round(max(fin) / max(min(fin), 1e-12), 3)
     # long context: a step with a user past the engine's max context must take the op-by-op split fallback
     mx_ctx = getattr(model, "_vfy_mk_max_ctx", None)
