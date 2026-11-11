@@ -27,11 +27,13 @@ the step harness adds only `QWEN36_FABRIC_RING=1`). KV stays BFP8 (no `QWEN36_R1
 | var | value | where it acts | in RC tree? |
 |---|---|---|---|
 | `QWEN36_R16_MEGAKERNEL` | `1` (Stage1Verify, engine kind mk, no probe) | traced verify layer loop | yes (integ2) |
+| `QWEN36_R16_MK_BUCKETS` / `QWEN36_R16_MK_PAD_MIN` | `8` / `1` (also the code defaults) | engine bucket; every live width padded onto it | yes (-mk-on) |
+| `QWEN36_MM_MAX_IMAGES` | `4` | multi-image | yes (c8c90fe) |
 | `QWEN36_MTP_LAYER_BFP4` | `1` | drafter (always active) | yes (r13) |
 | `QWEN36_DRAFT_VOCAB_TOPK` | `131072` | drafter (always active) | yes (r13) |
 | `QWEN36_MTP_SDPA_WINDOW` | `8192` | drafter (always active) | yes (r13) |
 | `QWEN36_BFP4_LAYOUT_GATEUP` | `dsmc:3:2:4` | op path (prefill, kv-split variants, out-of-scope buckets, engine-off fallback) | yes (r13 tp_common `{BFP4_LAYOUT_ENV}_{TARGET}` override; needs `QWEN36_BFP4_LAYOUT=1`, already prod) |
-| `QWEN36_R16_VERIFY_SDPA_MULTI_CORES` | `16` | op path (as above) | yes since integ2 `21910a5b87c` (cherry-pick of r16-kernels `6b6d67ecee9`; not in r13 / -mk-int before) |
+| ~~`QWEN36_R16_VERIFY_SDPA_MULTI_CORES`~~ | ~~`16`~~ | **DROPPED from the RC env (main, 11-11)**: +1.08 ms verify at 128K / +0.19 at 64K on 3 users vs prod; helps only at 8x32K | (code stays, default unset) |
 | `QWEN36_GLUE` | `kvwo,guin,kvt` | op path; md5-identical | yes (integ2). The GSNK gate ran WITH it (spec_GSNK.json), so keep it in the RC env |
 
 The GSNK gate (length ratio 1.027, CI 0.958-1.096; GPQA 87.1 vs 86.4; needle 9/9) ran these on d26u08's in-pod tree,
