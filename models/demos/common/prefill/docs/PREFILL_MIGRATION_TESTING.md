@@ -1,8 +1,8 @@
 # Prefill KV-migration — configuration and gates
 
-The prefill side on its own terms: the files that configure it, and two gates that can be run against it
-directly with **no decode side present**. The tt-llm-engine launch harness generates and invokes this
-underneath; this document is the layer beneath that. It is also the path to take when integrating a new
+The prefill side on its own terms: the files that configure it, two gates that can be run against it
+directly with **no decode side present**, and a third that adds one. The tt-llm-engine launch harness
+generates and invokes this underneath; this document is the layer beneath that. It is also the path to take when integrating a new
 model, because the gates isolate failures that the harness necessarily reports as one.
 
 Assumes the model is already integrated — adapter registered, golden trace staged, weight cache populated
@@ -12,6 +12,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 |------|-------------------|-------|
 | **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
 | **2 — loopback migration** | The real DRAM → transport → DRAM copy, and the destination slots read back by the driver (`--verify-migration`, default `dst-bytes`) | + tt-llm-engine binaries |
+| **3 — prefill → decode via KV Manager** | A real cross-pod migration through tt-d-gen's KVM fleet, checked byte for byte by `migration_chunk_digest` | + a decode side and a KVM fleet |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -539,6 +540,75 @@ against it.
 For a multi-config cache (a sparse model publishes its index cache alongside the KV cache in one merged
 table), **config-id order is the src↔dst contract**. Loopback is self-consistent by construction, but a real
 prefill→decode run needs the decode endpoint to publish its configs in the same order.
+
+---
+
+## Gate 3 — prefill → decode through tt-d-gen's KV Manager
+
+A real cross-system migration: prefill on one pod, decode on another, with tt-d-gen's KV Manager (KVM)
+fleet moving the chunks. There is no tt-llm-engine endpoint and no shared-memory queue. Both sides export
+their tables and device maps to files, the KVM processes on each host serve them, and the driver asks the
+prefill leader's KVM for one migration per layer run.
+
+**Driver KVM mode.** Setting `PREFILL_MIGRATION_KVM_URL` (the prefill leader's KVM health port, e.g.
+`http://<prefill-host-0>:18081`) switches `migration_driver` to it. `attach()` then opens no queue client;
+the driver waits for `GET /health` to answer 200 and sends one synchronous `POST /migrate` per run of
+consecutive layers that share a position range (`layer_position_range`).
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `PREFILL_MIGRATION_KVM_URL` | unset (queue mode) | KVM base URL; enables KVM mode |
+| `PREFILL_MIGRATION_KVM_RECEIVER` | unset | KVM name of the decode receiver (e.g. `decode-0`), sent as `receiver` |
+| `PREFILL_MIGRATION_KVM_MODE` | `full` | `/migrate` `mode` |
+| `PREFILL_MIGRATION_KVM_SESSION_ID` | driver pid | `command_session_id` |
+| `PREFILL_MIGRATION_KVM_HEALTH_WAIT_S` | 3600 | how long to wait for `/health` before failing |
+| `PREFILL_MIGRATION_KVM_RETRY_S` | 900 | how long to retry a `/migrate` failing with a reason in `KVM_RETRY_REASONS` (`receiver_unready`: decode has not published its table yet) |
+
+Any other reply that is not `status: SUCCESSFUL` raises. After the last layer the driver writes the handoff
+JSON (`PREFILL_MIGRATION_HANDOFF_PATH`) and the DONE sentinel (`MIGRATION_DONE_FILE`) that decode waits on.
+With `PREFILL_MIGRATION_HANDOFF_TAIL=1` the prefill stops one token short and the handoff carries the next
+prompt token for decode to apply. When that token lies past the prompt pool, the driver reads it from the
+trace (`_trace_continuation`), after checking that the trace starts with the pool.
+
+**Kimi-K3.1 on four galaxies.** `ci/run_multirank_pcc.sh` drives the prefill side:
+
+- `PREFILL_K31_SC4_SMOKE=1` runs K3.1 on sc4 (all 93 layers) with a single-rank producer that only feeds
+  tokens. `PREFILL_SC4_MAX_SEQ_LEN` (default 245760) and `PREFILL_SC4_REQUEST_LEN` set the shape; the
+  manifest's 1M × 100 shape does not fit in DRAM with the indexer cache.
+- `PREFILL_K31_PD=1` on top of it makes the runners export the table (`PREFILL_PD_TABLE_PATH`, on shared
+  storage) and each host's device map (`PREFILL_PD_DEVICE_MAP`), and runs `migration_driver` in KVM mode in
+  place of the producer, with pairs `0:1` and `PREFILL_VERIFY_MIGRATION=off`. It needs
+  `PREFILL_MIGRATION_KVM_URL`, `MIGRATION_DONE_FILE` and `PREFILL_MIGRATION_HANDOFF_PATH`.
+- The K3.1 runner env sets `TT_SPARSE_MLA_OVERLAP_PROFILE=off`: the sparse-MLA overlap profile crashes or
+  hangs trace capture.
+
+The driver's own `--verify-migration` reads destination slots through the loopback table, so it is off here.
+Check the destination with the byte digest below instead.
+
+**Byte check across pods.** `runners/migration_chunk_digest.py` compares the two sides without decoding.
+On every host of each side, after the run, with the KVM fleet down and before any board reset (device DRAM
+keeps its contents after the processes exit):
+
+```bash
+python -m models.demos.common.prefill.runners.migration_chunk_digest digest \
+    --table <side table .pb> --device-map <this host's device map> \
+    --slot <src slot on prefill, dst slot on decode> --positions <P> --configs 00,01 \
+    --out <shared dir>/<prefill|decode>_$(hostname).json
+```
+
+`digest` hashes every chunk of the named configs for positions `[0, P)` of one slot that lives on this
+host's chips, addressed through the side's own table and read with `read_dram_umd`. Keys are `config/row/
+position`, so two tables with different layouts name the same logical chunk the same way. Then, once:
+
+```bash
+python -m models.demos.common.prefill.runners.migration_chunk_digest compare \
+    --src '<shared dir>/prefill_*.json' --dst '<shared dir>/decode_*.json'
+```
+
+It prints `identical/compared` per config and exits non-zero on any byte difference or on a chunk only one
+side hashed (a host left out). Decode writes the migrated slot only at positions `>= P`, so `[0, P)` still
+holds the migrated bytes after decode has run. Leave the KDA configs out: decode advances that state after
+the handoff, so compare it by PCC on the decode side instead.
 
 ---
 
