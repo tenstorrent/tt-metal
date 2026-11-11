@@ -88,13 +88,18 @@ for it in range(ITERS):
         if it == 0: _rprev = xb.clone()[:V_R]
         _x0_pass = _rprev.clone()   # this pass's layer-0 mixer x (the residual the previous pass left; x at iter 0)
         _worst = []
+        # MKA_UPAR: an attention AR's inputs differ by device parity (own users g = 2u + d % 2): res = prev + ring/2 *
+        # (in_dev0 + in_dev1) -- every user row comes from exactly one device per KV-head pair (V_R = 32 only)
+        _UP = os.environ.get('MKA_UPAR', '0') == '1' and V_R == 32
+        _db1 = _to_torch(ttnn.get_device_tensors(ar_dbgt)[1]).float().reshape(TILE, AR_NAR * 2, H) if _UP else None
         for k_ in range(AR_NAR):
             _in, _res = _db[:, 2 * k_], _db[:, 2 * k_ + 1]
+            if _UP and (AR_ATYPE >> k_) & 1: _in = 0.5 * (_in + _db1[:, 2 * k_])
             _g = (_rprev + AR.ring * _in).bfloat16().float()
             _p = torch.corrcoef(torch.stack([_res.flatten(), _g.flatten()]))[0, 1].item()
             _worst.append((round(_p, 6), k_, 'attn' if (AR_ATYPE >> k_) & 1 else 'mlp', round((_res - _g).abs().max().item(), 4), round(_g.abs().max().item(), 3)))
             _rprev = _res
-        print(f"[ar] iter {it} per-AR check (res = prev + ring*in): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
+        print(f"[ar] iter {it} per-AR check (res = prev + ring*in{' | UPAR attn: ring/2*(in_d0+in_d1)' if _UP else ''}): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
         if it == 0:   # what the first AR's residual started from: the stand-in x (expected) or zero
             _r0, _i0 = _db[:, 1], _db[:, 0]
             _pz = torch.corrcoef(torch.stack([_r0.flatten(), (AR.ring * _i0).bfloat16().float().flatten()]))[0, 1].item()
