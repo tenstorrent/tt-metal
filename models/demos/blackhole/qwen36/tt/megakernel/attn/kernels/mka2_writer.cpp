@@ -190,10 +190,103 @@ void kernel_main() {
     }
 #endif
 #if defined(MKA_RQNR)   // q/k head-norm cores (independent of MKA_RWO since the GDN24 decouple)
+#if defined(MKA_KVA)
+    const uint32_t head_kva = get_arg_val<uint32_t>(a++);
+#if defined(MKA_ROLE_STREAM)
+    const uint32_t head_id = head_kva & 0xFF;
+    constexpr uint32_t kva = 0;   // per-role binary: the append code compiles out of STREAM (only its v routing stays)
+#else
+    const uint32_t head_id = head_kva & 0xFF, kva = head_kva >> 8;   // KV append role in bits 8+: 1 + 8 * is_v + dim tile
+#endif
+#else
     const uint32_t head_id = get_arg_val<uint32_t>(a++);   // 0-5 q heads, 6 k head, 255 none
+#endif
     uint32_t hd_x[NHEAD], hd_y[NHEAD];
     for (uint32_t i = 0; i < NHEAD; ++i) { hd_x[i] = get_arg_val<uint32_t>(a++); hd_y[i] = get_arg_val<uint32_t>(a++); }
     const uint32_t kd_addr = get_arg_val<uint32_t>(a++);   // DRAM debug copy of the k head output
+#if defined(MKA_KVA)
+    // ---- KV append (stream E): kvpos + page table are fixed for the pass, so the row -> target tile table is built
+    // once here. Rows go in increasing j (later row wins, as paged_fused_update_cache). Each user's rows span <= KVA_PPU
+    // tiles (verify: consecutive positions); a row past the page table or with position -1 is skipped, as in prod.
+    constexpr uint32_t KV_BS = KV_BS32 * 32, KVA_NPG = KVA_NP - 1;
+    constexpr uint32_t KVA_KXY[8] = MKA_KVA_KXY, KVA_VXY[8] = MKA_KVA_VXY, KVA_WXY[MKA_KVA_NW] = MKA_KVA_WXY;
+    uint32_t kva_np = 0, kva_pg[KVA_NPG];
+    uint8_t kva_rp[KVA_R], kva_ro[KVA_R];   // per source row: target pass (0xFF = skip), target tile row
+    if (kva) {
+        KVA_ZONE("W-KVAT");   // once per pass: kvpos + page-table rows -> target tile table
+        const uint32_t c = (kva - 1) & 7;
+        const uint32_t scr = (get_write_ptr(CB_KVB) + KVTB + 63) & ~63u;   // pages 1.. are free until the first prefetch
+        const InterleavedAddrGen<true> pg_pos{.bank_base_address = MKA_KVA_POS, .page_size = KVA_R * 4};
+        noc_async_read(pg_pos.get_noc_addr(0), scr, KVA_R * 4);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr int32_t* pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
+        const InterleavedAddrGen<true> pg_pt{.bank_base_address = MKA_KVA_PT, .page_size = MKA_KVA_PTS};
+        const uint32_t ptb = scr + 128;   // one 64 B page-table chunk per row
+        for (uint32_t r = 0; r < KVA_R; ++r) {
+            const int32_t p = pos[r];
+            if (p < 0 || (uint32_t)p / KV_BS >= MKA_KVA_NB) continue;
+            noc_async_read(pg_pt.get_noc_addr(r / KVA_T, ((uint32_t)p / KV_BS * 4) & ~63u), ptb + r * 64, 64);
+        }
+        noc_async_read_barrier();
+        for (uint32_t r = 0; r < KVA_R; ++r) {
+            kva_rp[r] = 0xFF;
+            const int32_t p = pos[r];
+            if (p < 0 || (uint32_t)p / KV_BS >= MKA_KVA_NB) continue;
+            const uint32_t vb = (uint32_t)p / KV_BS, pb = l1w(ptb + r * 64)[vb & 15];
+            const uint32_t page = ((pb * KV_NKVH + KV_H) * KV_BS32 + ((uint32_t)p % KV_BS) / 32) * 8 + c;
+            uint32_t q = 0;
+            while (q < kva_np && kva_pg[q] != page) ++q;
+            if (q == KVA_NPG) continue;   // pool full (a user's rows over > KVA_PPU tiles: never staged by the verify)
+            if (q == kva_np) kva_pg[kva_np++] = page;
+            kva_rp[r] = q;
+            kva_ro[r] = (uint32_t)p % 32;
+        }
+        if (kva == 1) {   // publish the (uniform) CB_KVS address to the producers
+            mcast_word<NRF>(KVA_GS_AD, get_write_ptr(CB_KVS), rf, self_rf, 0);
+            noc_async_write_barrier();
+        }
+    }
+    auto kva_tensor = [&](uint32_t L) { return TensorAccessor(kv_args, kva > 8 ? kvv_addr[L] : kv_addr[L], KVTB); };
+    auto kva_pre = [&](uint32_t L) {   // layer L's target tiles -> CB_KVB pages 1.. (in flight under KVA_TRID)
+        const auto t = kva_tensor(L);
+        const uint32_t dst = get_read_ptr(CB_KVB) + KVTB;   // full-slot ring: the base, fixed
+        noc_async_read_set_trid(KVA_TRID);
+        for (uint32_t q = 0; q < kva_np; ++q) noc_async_read(t.get_noc_addr(kva_pg[q]), dst + q * KVTB, KVTB);
+        noc_async_read_set_trid(0);
+    };
+    auto kva_fin = [&](uint32_t L, uint32_t A) {   // splice the BFP8 rows, write the tiles back, signal the readers
+        { KVA_ZONE("W-KVAS"); noc_semaphore_wait_min(l1w(KVA_GS_SRC), A + 1); }   // the producer's bf16 tile landed in CB_KVS
+        KVA_ZONE("W-KVA");   // the append's own work: pack wait, splice, write-back, signal
+#if defined(MKA_KVA_DELAY)   // ordering stress (test only): a late append must still be seen by the SDPA readers
+        spin_cycles(MKA_KVA_DELAY);
+#endif
+        cb_reserve_back(CB_KVS, 1);
+        cb_push_back(CB_KVS, 1);
+        cb_wait_front(CB_KVB, KVA_NP);   // page 0 = this layer's rows, BFP8 (compute)
+        noc_async_read_barrier_with_trid(KVA_TRID);
+        const uint32_t base = get_read_ptr(CB_KVB);
+        // BFP8_b tile: 64 exponent bytes (face f row i at f * 16 + i), then 4 faces x 16 rows x 16 mantissa bytes
+        for (uint32_t r = 0; r < KVA_R; ++r) {
+            if (kva_rp[r] == 0xFF) continue;
+            const uint32_t d = base + (1 + kva_rp[r]) * KVTB, o = kva_ro[r];
+            for (uint32_t h = 0; h < 2; ++h) {
+                const uint32_t fs = (r >> 4) * 2 + h, fd = (o >> 4) * 2 + h;
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(d)[fd * 16 + (o & 15)] =
+                    reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base)[fs * 16 + (r & 15)];
+                volatile tt_l1_ptr uint32_t* md = l1w(d + 64 + fd * 256 + (o & 15) * 16);
+                volatile tt_l1_ptr uint32_t* ms = l1w(base + 64 + fs * 256 + (r & 15) * 16);
+                md[0] = ms[0]; md[1] = ms[1]; md[2] = ms[2]; md[3] = ms[3];
+            }
+        }
+        const auto t = kva_tensor(L);
+#if !defined(MKA_KVA_NOWB)   // negative control (test only): no write-back, the cache check must FAIL
+        for (uint32_t q = 0; q < kva_np; ++q) noc_async_write(base + (1 + q) * KVTB, t.get_noc_addr(kva_pg[q]), KVTB);
+#endif
+        noc_async_write_barrier();
+        for (uint32_t w = 0; w < MKA_KVA_NW; ++w) noc_semaphore_inc(get_noc_addr(KVA_WXY[w] & 0xFF, KVA_WXY[w] >> 8, KVA_GS_DONE), 1);
+        cb_pop_front(CB_KVB, KVA_NP);
+    };
+#endif
 #if !defined(MKA_RWO)
     if (head_id == 0) {   // no concat core without RWO: head core 0 publishes the (uniform) CB_A address
         mcast_word<NRF>(gs[GS_AADDR], get_write_ptr(CB_A), rf, self_rf, 0);
@@ -220,11 +313,30 @@ void kernel_main() {
         const uint32_t a_base = *l1w(gs[GS_AADDR]);
         uint32_t hcnt[NHEAD];
         for (uint32_t i = 0; i < NHEAD; ++i) hcnt[i] = 0;
+#if defined(MKA_KVA)
+        uint32_t kv_to[2], nkv = 0;   // V append cores this core feeds (v tiles 56-63; at most 2 owned tiles)
+#endif
         for (uint32_t j = 0; j < qnt; ++j) {
             const uint32_t n = qn + j * QST;
+#if defined(MKA_KVA)
+            // q / k tiles -> their head core's CB_A slot; v tiles 56-63 -> V append core n - 56's CB_KVS (one write path:
+            // STREAM text budget)
+            if (n >= 64) continue;
+            uint32_t dx, dy, da;
+            if (n >= 56) {
+                noc_semaphore_wait_min(l1w(KVA_GS_AD), 1);
+                const uint32_t xy = kv_to[nkv++] = KVA_VXY[n - 56];
+                dx = xy & 0xFF; dy = xy >> 8; da = *l1w(KVA_GS_AD);
+            } else {
+                dx = hd_x[n / 8]; dy = hd_y[n / 8]; da = a_base + (n % 8) * QOTB;
+                ++hcnt[n / 8];
+            }
+            noc_async_write(qsrc + j * QOTB, get_noc_addr(dx, dy, da), QOTB);
+#else
             if (n >= 56) continue;
             noc_async_write(qsrc + j * QOTB, get_noc_addr(hd_x[n / 8], hd_y[n / 8], a_base + (n % 8) * QOTB), QOTB);
             ++hcnt[n / 8];
+#endif
         }
 #endif
 #if defined(MKA_RWO)
@@ -241,6 +353,9 @@ void kernel_main() {
         noc_async_write_barrier();
 #if defined(MKA_RQNR)
         for (uint32_t i = 0; i < NHEAD; ++i) if (hcnt[i]) noc_semaphore_inc(get_noc_addr(hd_x[i], hd_y[i], gs[GS_HCNT]), hcnt[i]);
+#endif
+#if defined(MKA_KVA)
+        for (uint32_t i = 0; i < nkv; ++i) noc_semaphore_inc(get_noc_addr(kv_to[i] & 0xFF, kv_to[i] >> 8, KVA_GS_SRC), 1);
 #endif
 #if defined(MKA_RWO)
         if (n_gate) noc_semaphore_inc(get_noc_addr(ow_x[0], ow_y[0], gs[GS_SCNT]), n_gate);
@@ -769,6 +884,9 @@ void kernel_main() {
             V12_OWNER(L);
             continue;
         }
+#if defined(MKA_KVA)
+        if (kva && att) kva_pre(L);   // target tiles in flight through the qkv / head phase
+#endif
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
 #endif
@@ -844,7 +962,14 @@ void kernel_main() {
                             }
                     noc_async_write_barrier();
                     noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_QHD]), 1);
-                } else {   // k head: debug copy (KV append consumes it in step 3)
+                } else {   // k head: tile t -> K append core t (MKA_KVA), debug copy
+#if defined(MKA_KVA)
+                    noc_semaphore_wait_min(l1w(KVA_GS_AD), 1);
+                    const uint32_t kvs_a = *l1w(KVA_GS_AD);
+                    for (uint32_t t = 0; t < 8; ++t) noc_async_write(yo + t * 2048, get_noc_addr(KVA_KXY[t] & 0xFF, KVA_KXY[t] >> 8, kvs_a), 2048);
+                    noc_async_write_barrier();
+                    for (uint32_t t = 0; t < 8; ++t) noc_semaphore_inc(get_noc_addr(KVA_KXY[t] & 0xFF, KVA_KXY[t] >> 8, KVA_GS_SRC), 1);
+#endif
                     const auto kd = TensorAccessor(qo_args, kd_addr, 2048);
                     for (uint32_t t = 0; t < 8; ++t) noc_async_write(yo + t * 2048, kd.get_noc_addr(L * 8 + t), 2048);
                     noc_async_write_barrier();
@@ -853,6 +978,9 @@ void kernel_main() {
             }
 #endif
         }
+#if defined(MKA_KVA)
+        if (kva && att) kva_fin(L, A);   // before this core's SDPA; the readers of the new rows wait KVA_DONE
+#endif
 #else
         if (IS_STREAM) {
             MKZ("W-MIX");
@@ -1016,6 +1144,9 @@ void kernel_main() {
                     noc_semaphore_wait_min(l1w(gs[GS_KVPROG]), ++kv_groups);
                     continue;
                 }
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+                if (vb1 + 2 > NBK && b + nb + 2 > NBK) noc_semaphore_wait_min(l1w(gs[GS_KVPROG]), A + 1);   // new rows written
+#endif
                 if (wr_k) cb_reserve_back(CB_K, NBB * DH);   // full group (see reader)
                 if (wr_v) cb_reserve_back(CB_V, NBB * DH);
                 const uint32_t wk = wr_k ? get_write_ptr(CB_K) : 0, wv = wr_v ? get_write_ptr(CB_V) : 0;
@@ -1282,7 +1413,14 @@ void kernel_main() {
     if (is_qroot) *l1w(gs[GS_QHD]) = 0;
     if (head_id < NHEAD) *l1w(gs[GS_HCNT]) = 0;
 #endif
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+    // KVPROG doubles as the reader's "KV append done" flag for this core's last-block V reads (kv_mode != 2): the
+    // reader's last write preceded our last wait. KVA_SRC: every producer inc was awaited (NA per pass).
+    if (kv_mode == 2 || vb1 + 2 > NBK) *l1w(gs[GS_KVPROG]) = 0;
+    if (kva) { noc_semaphore_wait_min(l1w(KVA_GS_SRC), aidx(NL)); *l1w(KVA_GS_SRC) = 0; }
+#else
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
+#endif
 #if defined(MKA_GDN_WAIT)
     // out_ready: this core awaited MKA_GDN_NC * (number of GDN layers) in its last W-GDN, i.e. every increment landed
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY) = 0;

@@ -106,6 +106,9 @@ constexpr uint32_t QO_SLOT = WO_MAXT;
 constexpr uint32_t QO_SLOT = 0;
 #endif
 constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = (WO_MAXT * 48 > 320) ? WO_MAXT * 48 : 320, CB_XO = 23, CB_HSQ = 31, CB_HG = 30;
+#if defined(MKA_KVA)   // KV append (mka2_common.hpp): source bf16 tile, BFP8 source + target tiles (full slot)
+constexpr uint32_t CB_KVS = 6, CB_KVB = 8, KVA_NP = 1 + MKA_KVA_PPU * MKA_KVA_NU;
+#endif
 #if defined(MKA_WORING)
 constexpr uint32_t CB_WSL = 31, WSL_N = WO_MAXT * WK;   // own Wo ring
 #else
@@ -162,7 +165,17 @@ void kernel_main() {
 #endif
 #endif
 #if defined(MKA_RQNR)
+#if defined(MKA_KVA)
+    const uint32_t is_head_kva = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
+#if defined(MKA_ROLE_STREAM)
+    const uint32_t is_head = is_head_kva & 0xFF;
+    constexpr uint32_t kva_c = 0;
+#else
+    const uint32_t is_head = is_head_kva & 0xFF, kva_c = is_head_kva >> 8;   // KV append role (0 none) in bits 8+
+#endif
+#else
     const uint32_t is_head = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_RMASK)
     const uint32_t mask_blk = get_arg_val<uint32_t>(a++);   // local block index of the user's last block, or ~0
 #endif
@@ -668,6 +681,23 @@ void kernel_main() {
 #endif
         }
 #endif  // MKA_QSK
+#if defined(MKA_KVA)
+        if (kva_c) {   // KV append: the bf16 K / V tile -> BFP8 (copy + pack, as paged_update_cache's tilize pack)
+            cb_wait_front(CB_KVS, 1);
+            cb_reserve_back(CB_KVB, KVA_NP);   // full slot (page 0 = packed source; the writer owns pages 1..)
+            reconfig_data_format_srca(CB_KVS);
+            pack_reconfig_data_format(CB_KVB);
+            copy_init(CB_KVS);
+            tile_regs_acquire();
+            copy_tile(CB_KVS, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, CB_KVB);
+            tile_regs_release();
+            cb_push_back(CB_KVB, KVA_NP);
+            cb_pop_front(CB_KVS, 1);
+        }
+#endif
         if (false) {
 #else
         if (IS_STREAM) {
@@ -697,7 +727,11 @@ void kernel_main() {
             // the previous layer's tree adds (fp32 copy_tile = unpack-to-dest) and the root's eltwise normalize leave
             // unpacker / math state that a short matmul_init does not undo: re-run the full HW init per SDPA phase
 #if defined(MKA_RQKV)
+#if defined(MKA_KVA)
+            if (L > 0 || qrole || kva_c) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul / KV pack
+#else
             if (L > 0 || qrole) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
+#endif
 #else
             if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
 #endif
