@@ -467,8 +467,8 @@ def setup_bench(dev, MESH, mesh_identity):
             rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, TILE))
             RSTD_RSF = ttnn.create_global_semaphore(dev, kgrid, 0)   # MK_AR_RSF: the producer's flag (+MK_AR_RSF_N per AR), device-local
             MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(RSTD_RSF))), ('MK_AR_RSF_N', '8')]
-            if ('MK_REAL_AR', '1') not in MKDEF: MKDEF = MKDEF + [('MK_AR_RSTD_HOST', '1')]   # no producer: the host Σ tile is static
-            print(f"[rstd] consumer: Σ tile rows {_nr} (row form), flag @ {ttnn.get_global_semaphore_address(RSTD_RSF)}{' (host, no wait)' if ('MK_REAL_AR', '1') not in MKDEF else ''}", flush=True)
+            if os.environ.get('MK_AR_RSTD_HOST', '0') == '1': MKDEF = MKDEF + [('MK_AR_RSTD_HOST', '1')]   # A/B without the producer: static host Σ, no waits
+            print(f"[rstd] consumer: Σ tile rows {_nr} (row form), flag @ {ttnn.get_global_semaphore_address(RSTD_RSF)}{' (host, no wait)' if os.environ.get('MK_AR_RSTD_HOST', '0') == '1' else ''}", flush=True)
         else:
             rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
         rstd_g = 1.0 / torch.sqrt(ss.sum(0) / H + EPS)   # [M]
@@ -1066,6 +1066,11 @@ def setup_bench(dev, MESH, mesh_identity):
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
                                              defines=dfs, runtime_args=rt, **base))
         return out
+    def _mka_ccfg():   # MKA2 compute config; MK_AR_RSTD: the Σ tile CB 20 unpacks straight to DST in fp32 (exact rstd sum)
+        c_ = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False)
+        if ('MK_AR_RSTD', '1') in MKDEF:
+            u_ = [ttnn.UnpackToDestMode.Default] * 64; u_[20] = ttnn.UnpackToDestMode.UnpackToDestFp32; c_.unpack_to_dest_mode = u_
+        return c_
     def build(out, coord=None, plan_only=False):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
                (cbd(3, HDT, 1, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(3, hbuf)), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
@@ -1188,7 +1193,7 @@ def setup_bench(dev, MESH, mesh_identity):
               ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_writer.cpp", core_ranges=rng, defines=MKDEF + defs + list(wdefs), opt_level=dmopt, compile_time_args=[XTB, NGU, NDN, KT, HT, WTB, KB, GRP, HCH, NL, NC, QH if RQKV else KT * MIXN, S_WO, S_AR, KVTB, QTB, NBB, WOTB] + acc_dn + acc_gu + (acc_wq if RQKV else acc_wm) + acc_q + acc_kv + acc_wo + (acc_qo if RQKV else []) + (ttnn.TensorAccessorArgs(wv_all).get_compile_time_args() if V12 else []) + (ttnn.TensorAccessorArgs(ar_gam).get_compile_time_args() if (REAL_AR and AR_GAMMA) else []),
                                     runtime_args=ww, config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
               ttnn.KernelDescriptor(kernel_source=f"{KD}/mka2_compute.cpp", core_ranges=rng, defines=MKDEF + defs + list(cdefs), compile_time_args=[KT, KB, HT, NDN, GRP, NL, MIXN, NBB], runtime_args=cc,
-                                    config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False))]
+                                    config=_mka_ccfg())]
         if RS:
             _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
             _aar_d = [('MKAR_ATYPE', f'{AR_ATYPE}ull'), ('MKAR_CB_AIN', '23')] if (REAL_AR and REAL_AAR) else []

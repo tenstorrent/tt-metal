@@ -89,7 +89,7 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #if defined(MK_AR_RSTD)
-#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #endif
 #endif
 #if defined(MKA_RWO)
@@ -492,29 +492,19 @@ void kernel_main() {
             cb_push_back(CB_QA, 1);
         }
 #if defined(MK_AR_RSTD)
-        // real rstd (spec rstd producer): Σ tile S = CB_RSP tile 0, row k = K-row k's per-token partial (row form). ONES @ S
-        // (data on srcA) = Σ_k S[k][c] in every row -> CB_RS (fp32 scratch); its transpose = column form (row c, every
-        // column) for the bcast-cols scale below. fp32 DST, no DEST-reuse adds.
+        // real rstd (spec rstd producer): Σ tile S = CB_RSP tile 0, row k = K-row k's per-token partial (row form, fp32).
+        // UnpackToDestFp32 on CB 20 (program.py) -> exact copy; SFPU column sum -> row 0 = Σ_k S[k][c]; in-DST transpose ->
+        // column 0 (value per token row) for the bcast-cols scale below. All fp32, no srcA truncation, no DEST-reuse adds.
         cb_wait_front(CB_RSP, 1);
-        cb_wait_front(CB_ONE, 1);   // constant, pushed once, never popped
-        reconfig_data_format(CB_RSP, CB_ONE);
-        matmul_init(CB_ONE, CB_RSP, 0);
+        reconfig_data_format_srca(CB_RSP);
+        copy_init(CB_RSP);
         tile_regs_acquire();
-        matmul_tiles(CB_ONE, CB_RSP, 0, 0, 0);
-        tile_regs_commit();
-        cb_reserve_back(CB_RS, 1);
-        tile_regs_wait();
-        pack_reconfig_data_format(CB_RS);
-        pack_tile(0, CB_RS);
-        tile_regs_release();
-        cb_push_back(CB_RS, 1);
+        copy_tile(CB_RSP, 0, 0);
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        transpose_dest_init<true>();
+        transpose_dest<true>(0);
         cb_pop_front(CB_RSP, 1);
-        cb_wait_front(CB_RS, 1);
-        reconfig_data_format_srca(CB_RS);
-        transpose_init(CB_RS);
-        tile_regs_acquire();
-        transpose_tile(CB_RS, 0, 0);
-        cb_pop_front(CB_RS, 1);
 #else
         // rstd (column 0 of each partial tile holds that owner's per-row Σx²)
         cb_wait_front(CB_RSP, MKA_NOWN);

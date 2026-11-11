@@ -32,17 +32,6 @@
 #include "../../kernels/mk_ar_recv.hpp"   // AR_RECV on the owners (AR_INTERFACE.md; MKAR_* defines from ar_phase.py)
 #endif
 
-#if defined(MK_AR_RSTD)
-// ARs completed before layer L's mixer, in program order: one MLP AR per layer, plus the attention AR of every attention
-// layer when MK_REAL_AAR. The real rstd producer raises MK_AR_RSF by MK_AR_RSF_N per AR.
-FORCE_INLINE uint32_t rstd_ars(uint32_t L) {
-#if defined(MK_REAL_AAR)
-    return L + (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK) & ((1u << L) - 1u));
-#else
-    return L;
-#endif
-}
-#endif
 void kernel_main() {
     constexpr uint32_t XTB = get_compile_time_arg_val(0), NGU = get_compile_time_arg_val(1);
     constexpr uint32_t NDN = get_compile_time_arg_val(2), KT = get_compile_time_arg_val(3);
@@ -655,9 +644,9 @@ void kernel_main() {
             cb_reserve_back(CB_X, KT);   // producer-fed x (XPRE): re-expose it to compute for this layer
             cb_push_back(CB_X, KT);
 #if defined(MK_AR_RSTD)
-            if (att && qrole == QR_OWNER) {   // partners skip the norm; real rstd: the Σ tile is final once every AR before this mixer landed
+            if (att && qrole == QR_OWNER) {   // partners skip the norm; real rstd: Σ of this mixer's x is final
 #if !defined(MK_AR_RSTD_HOST)
-                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * rstd_ars(L));
+                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 1));   // producer: +N per K-row x delivery (mixer 2L+1, MLP 2L+2)
 #endif
                 cb_reserve_back(CB_RSP, 1);
                 cb_push_back(CB_RSP, 1);
@@ -1125,12 +1114,6 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
     noc_async_write_barrier();
-#if defined(MK_AR_RSTD) && !defined(MK_AR_RSTD_HOST) && defined(MKA_QSK)
-    if (IS_STREAM && qrole == QR_OWNER) {   // drain: every AR of the pass raised the flag, then reset (device-local)
-        noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * rstd_ars(NL));
-        *l1w(MK_AR_RSF) = 0;
-    }
-#endif
     // reset for the next pass
     *l1w(gs[GS_QFLAG]) = 0;
     if (IS_STREAM) {
