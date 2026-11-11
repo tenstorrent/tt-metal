@@ -27,7 +27,7 @@ def test_block_selection_matches_api():
         "const bool one_form = forms != 0 && (forms & (forms - 1)) == 0;",
         "if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE())) { if (!one_form) { _llk_pack_close_fast_untilize_<DST_SYNC_MODE>(); } llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles); return; }",
         "const bool first_block = pack_w_last != output_id;",
-        "const char form = forms == 2 ? 'B' : forms != 0 ? (first_block ? (pack_reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0)) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2)) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2, pack_ctx[0] != 0 ? 2 : 0);",
+        "const char form = forms == 2 ? 'B' : (first_block ? (pack_reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0)) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));",
         "if (!one_form && first_block) { _llk_pack_close_fast_untilize_<DST_SYNC_MODE>(); }",
         "const bool take_w = form == 'W' && (forms == 0 || (forms & 4) != 0); if (llk_pack_block_is_contiguous(output_id)) {",
         "llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state, ctx0 + ctx * step);",

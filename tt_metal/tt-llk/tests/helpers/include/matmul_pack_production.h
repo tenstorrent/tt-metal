@@ -180,7 +180,7 @@ __attribute__((always_inline)) inline void block(
         sync == DstSync::SyncFull,
         src32,
         int8,
-        2u); // behind matmul math a variable block reads the forms of context 2 (pack_ctx[0] != 0)
+        1u); // a variable block reads its forms in the folded path's context: 1, a matmul init and no pack-thread SFPU
     state.seen = 1;
     // a fast untilize left open marks the last output: only a first block closes it
     if (!one_form && first)
