@@ -192,15 +192,17 @@ MassagedConcat build_non_aligned_last_dim_concat(
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
     auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+        // Check each input against max alignment across all inputs (mixed L1/DRAM needs the MAX).
+        uint32_t common_align = 0;
+        for (const auto& t : tensors) {
+            TT_FATAL(
+                t.storage_type() == ttnn::StorageType::DEVICE,
+                "ttnn.concat: expected device storage, got storage type {}",
+                t.storage_type());
+            common_align = std::max<uint32_t>(common_align, t.mesh_buffer().alignment());
+        }
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
-            auto storage_type = tensor.storage_type();
-            if (storage_type == ttnn::StorageType::DEVICE) {
-                return tensor.padded_shape()[dim] * tensor.element_size() % tensor.mesh_buffer().alignment() == 0;
-            }
-            TT_THROW(
-                "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
-                " {}",
-                tensor.storage_type());
+            return (tensor.padded_shape()[dim] * tensor.element_size()) % common_align == 0;
         });
     };
 
