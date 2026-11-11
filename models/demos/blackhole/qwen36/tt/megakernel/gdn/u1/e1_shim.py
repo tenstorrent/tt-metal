@@ -403,6 +403,29 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                         f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc_}\n'
                         f'  noc_async_write_barrier();\n  {go_inc}\n}}\n')
             go_inc = ""   # gdn_out_signal() no longer raises gdna
+        GO_RD = GO_LOCAL and os.environ.get("E1_GO_RD", "1") == "1"
+        go_rd = ""
+        if GO_RD:
+            # E1_GO_RD (spec v1.91): the handoff multicast + barrier + gdna incs run on the role's READER (NCRISC, NOC1;
+            # idle by then) instead of the writer on the congested NOC0: the writer hook posts (src, t0, n) in arg block
+            # words and waits for the reader's done word (the out tile is popped right after). XS / XT / XN / XF / XD
+            # = payload words after the gdn_out tile list; reset by the writer at program end (the reader's last post is done).
+            XB = "{OGO} + 2 + " + str(MAXT)
+            mc1 = "\n".join(
+                f'    if (my_x[0] >= {r[0]}u && my_x[0] <= {r[2]}u && my_y[0] >= {r[1]}u && my_y[0] <= {r[3]}u) '
+                f'noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);\n'
+                f'    else noc_async_write_multicast(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);'
+                for r in (gr_[0:5], gr_[5:10]) if r[4])
+            inc1 = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])
+            go_local = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
+                        f'  DeviceZoneScopedN("GO-LOCW");\n'
+                        f'  g_ab[{XB} + 0] = src; g_ab[{XB} + 1] = t0; g_ab[{XB} + 2] = n; g_ab[{XB} + 3] = g_gdn_l + 1;\n'
+                        f'  noc_semaphore_wait_min(g_ab + {XB} + 4, g_gdn_l + 1);\n}}\n')
+            go_rd = (f'    {{ DeviceZoneScopedN("GO-RD");\n'
+                     f'    noc_semaphore_wait_min(g_ab + {XB} + 3, L + 1);\n'
+                     f'    const uint32_t src = g_ab[{XB} + 0], n = g_ab[{XB} + 2];\n'
+                     f'    const uint32_t dst = get_write_ptr({CA_}) + g_ab[{XB} + 1] * 2048u;\n{mc1}\n'
+                     f'    noc_async_write_barrier();\n    g_ab[{XB} + 4] = L + 1;\n    {inc1}\n    noc_async_atomic_barrier(); }}\n')
         go_r = (f'  {{ DeviceZoneScopedN("GO-RING"); cb_reserve_back({CR_}, {RP}); const auto gw = TensorAccessor(TensorAccessorArgs<{{GW_OFF}}>(), {GO["w_addr"]}u, '
                 f'get_tile_size({CR_}));\n'
                 f'    wou::ring_fill({CR_}, gw.get_noc_addr(g_ab[{{OGO}} + 1] + (L_) * {GO["w_stride"]}u), 0, {GO["wk"]}u * g_ab[{{OGO}}], 16, 2, 13, []() {{}});\n'
@@ -441,7 +464,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         go_w = go_w.replace("{OUT_OFF}", str(woff[WRITER_TENSORS.index("out")])).replace("{DBG_OFF}", str(len(wct)))
         wct = wct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
         OGO = 29 + NG * (len(READER_TENSORS) + len(WRITER_TENSORS)) + 2   # gdn_out payload words: after the per-layer tensors + OAG / OAG_ME
-        go_r, go_w, go_c = (x.replace("{OGO}", str(OGO)) for x in (go_r, go_w, go_c))
+        go_r, go_w, go_c, go_local = (x.replace("{OGO}", str(OGO)) for x in (go_r, go_w, go_c, go_local))
     hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
     open(hr, "w").write(_bind_header(ids, READER_TENSORS, roff, CRTA0))
     open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff, CRTA0))
@@ -499,6 +522,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # gdn_out ring of layer L right after the step's reads of layer L (the slot of L - 1 was popped at the end of L - 1):
         # never blocks, and the next layer's state-first prefetch is not held behind it
         + (go_r.replace("(L_)", "L") if GO else '') +
+        + (go_rd.replace("{OGO}", str(OGO)) if GO and GO_RD else '') +
         f'  }}\n}}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
@@ -524,6 +548,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, {2 * attn_n});\n' if attn_n else '')
         + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
         + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdna"]}u = 0;\n  *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u = 0;\n' if GO else '')
+        + (f'  g_ab[{OGO} + 2 + {GO["maxt"]} + 3] = 0; g_ab[{OGO} + 2 + {GO["maxt"]} + 4] = 0;\n' if GO and GO_RD else '')
         + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg else '')
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
@@ -575,6 +600,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         if GO:   # [nt, slice base page, output tiles (rot order) x maxt]
             assert len(pl) == OGO, (len(pl), OGO)
             pl += [GO["nt"][i], GO["page"][i]] + (list(GO["tiles"][i]) + [0] * GO["maxt"])[:GO["maxt"]]
+            pl += [0, 0, 0, 0, 0]   # E1_GO_RD handoff words: src, t0, n, posted (L + 1), done (L + 1)
         payloads.append(pl)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
