@@ -1258,3 +1258,60 @@ def test_v41_range_scores_rows(mesh_device, device_params, layout, split):
             ttnn.synchronize_device(mesh_device)
             ms = (time.perf_counter() - t0) / 10 * 1e3
             print(f"{what} ({layout}, {n_live} live rows, {split} split rows): {ms:.3f} ms a call (with host)")
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("positions", ["lockstep", "spread"])
+@pytest.mark.parametrize("layout", ["c1", "c32"])
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
+def test_v41_range_scores_rows_wide(mesh_device, device_params, layout, positions):
+    """``range_scores(live=)`` at the production pool's width (a ratio-4 source of the 1,054,720-row pool: 263,712
+    columns, the default 32 split rows of 33 chunk slots each) against one launch a row: the 32-slot verify gate
+    hung the device with it, which the narrow pool of ``test_v41_range_scores_rows`` did
+    not. ``lockstep``: every user near its 75th compressed row and its four rows one apart (the gate's 300-token
+    prompt in every slot: one non-empty split row a live row); ``spread``: ``_LIVE_POSITIONS``. Keys past row
+    20,480 are zero (only the visible prefix is read)."""
+    rows, cap, users, prefix = 32, 1054720 // 4, 4, 20480
+    width = cap + 32
+    g = torch.Generator().manual_seed(263)
+    live_rows = _live_layout(layout, users)
+    n_live = len(live_rows)
+    newest = torch.full((rows,), -1, dtype=torch.int64)
+    for l, (t, u) in enumerate(live_rows):
+        j = sum(1 for _, other in live_rows[:l] if other == u)  # the row's place in its user's block
+        newest[t] = 74 + j if positions == "lockstep" else _LIVE_POSITIONS[l]
+    with phase("inputs", what="FP4-like query / index-K prefix, head weights, pins"):
+        q = _fp4_like((rows, 32, 128), g)
+        w = (torch.randn(rows, 32, generator=g) * 0.05).to(torch.bfloat16)
+        k = torch.zeros(users, width, 128, dtype=torch.bfloat16)
+        k[:, :prefix] = _fp4_like((users, prefix, 128), g)
+        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        row_major = dict(device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+        dev_q = ttnn.from_torch(q.reshape(1, 1, rows, -1), **row_major)
+        dev_w = ttnn.from_torch(w.reshape(1, 1, rows, 32), **row_major)
+        dev_k = ttnn.from_torch(
+            k.reshape(users, 1, width, 128),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=rep,
+        )
+        del k
+        dev_pin = _replicated(mesh_device, newest.view(1, 1, 1, rows).to(torch.int32), ttnn.uint32)
+    live = [(u, t) for t, u in live_rows]
+    n_rows, _, per_row, row_width = split_geometry(width)
+    assert n_rows == 32 and per_row == 33, (n_rows, per_row)
+    with phase("stacked", what=f"range_scores over {n_live} live rows at width {width}"):
+        out = range_scores(dev_q, dev_w, dev_k, dev_pin, 0, width, live=live)
+        ttnn.synchronize_device(mesh_device)
+        stacked_t = _chip0(out).float()
+        assert list(stacked_t.shape) == [n_live * n_rows, row_width], tuple(stacked_t.shape)
+    for l, (t, u) in enumerate(live_rows):
+        with phase(f"row{l}", what="range_scores of the row alone"):
+            one_t = _chip0(range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, row=t)).float()
+        mine = stacked_t[l * n_rows : (l + 1) * n_rows]
+        differ = (mine != one_t).nonzero()[:8].tolist()
+        assert torch.equal(mine, one_t), f"live row {l} (tile row {t}, user {u}): the scores differ at {differ}"
+        finite = int(torch.isfinite(one_t).sum())
+        assert finite == max(0, int(newest[t]) + 1), (l, finite, int(newest[t]))
+    print(f"range_scores(live=) wide {layout} {positions}: {n_live} live rows bit-equal at width {width}")
