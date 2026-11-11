@@ -34,7 +34,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.unit_tests.operations.fused.test_norm_cache_second_call import check_second_call_through_cache
+from tests.ttnn.unit_tests.operations.test_utils import check_second_call_through_cache
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 

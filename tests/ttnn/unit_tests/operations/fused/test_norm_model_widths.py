@@ -7,7 +7,8 @@
 The widest rows in the other fused Sanity tests are W=4096. Model hidden sizes of 5120 and up pick a
 different program: the large-tensor factory, when a whole row no longer fits in L1. That is where
 #53419 regressed (BH DeepSeek RMS norm, PCC 0.984), and where #52081 doubled the L1 use of the
-pre-all-gather stage by following fp32_dest_acc_en.
+pre-all-gather stage by following fp32_dest_acc_en. The distributed norm is covered end to end on one
+device: pre-all-gather statistics, then post-all-gather with the weight.
 
 These tests are skipped on the simulator (tests/pipeline_reorg/ttsim-skip-list.yaml): the rows are too
 big for its time budget.
@@ -30,14 +31,17 @@ def norm_reference(op, x, weight, bias):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + EPS) * weight.float()
 
 
+# The large-tensor path loops over the tile rows of a core, so every core gets at least this many.
+TILE_ROWS_PER_CORE = 4
+
+
 @pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
-# Where the large-tensor factory starts depends on L1, so all three widths run. 4 tile rows per core is
-# what the large-tensor path loops over; one row per core is enough at the other widths.
-@pytest.mark.parametrize("w, tile_rows_per_core", [(4096, 1), (5120, 4), (8192, 1)])
-def test_norm_model_width_hifi2_fp32_acc(device, op, w, tile_rows_per_core):
+# Where the large-tensor factory starts depends on L1, so all three widths run.
+@pytest.mark.parametrize("w", [4096, 5120, 8192])
+def test_norm_model_width_hifi2_fp32_acc(device, op, w):
     torch.manual_seed(0)
     grid = device.compute_with_storage_grid_size()
-    h = 32 * tile_rows_per_core * grid.x * grid.y
+    h = 32 * TILE_ROWS_PER_CORE * grid.x * grid.y
 
     torch_input = torch.randn((1, h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
@@ -104,3 +108,54 @@ def test_pre_all_gather_fp32_acc_fits_l1(device, op, w, with_residual):
     torch.testing.assert_close(stats[0, 0, :, 0], sum_x2, rtol=0.02, atol=1.0)
     if op == "layer_norm":
         torch.testing.assert_close(stats[0, 0, :, 32], sum_x, rtol=0.02, atol=2.0)
+
+
+# Whole-row buffers again: the input, weight, bias and fp32 intermediates are each a row long, so these are the
+# widest widths that fit L1. layer_norm (which also holds the bias) throws at allocation from W=4096 and
+# rms_norm from W=5120.
+@pytest.mark.parametrize("op, w", [("layer_norm", 2048), ("rms_norm", 2048), ("rms_norm", 4096)])
+def test_pre_then_post_all_gather_with_weight(device, op, w):
+    """The whole distributed norm on one device: with a single device the pre-all-gather statistics already
+    are the gathered ones, so they go straight into the post-all-gather op with the weight (and the bias for
+    layer_norm) on that device. Weight and bias are row-major [1, 1, W / 32, 32] as the post stage expects."""
+    torch.manual_seed(0)
+    h = 64
+    torch_input = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_weight = ttnn.from_torch(torch_weight.reshape(1, 1, w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_bias = ttnn.from_torch(torch_bias.reshape(1, 1, w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    if op == "layer_norm":
+        stats = ttnn.layer_norm_pre_all_gather(tt_input, compute_kernel_config=compute_config, dtype=ttnn.bfloat16)
+        tt_output = ttnn.layer_norm_post_all_gather(
+            tt_input,
+            stats,
+            epsilon=EPS,
+            weight=tt_weight,
+            bias=tt_bias,
+            compute_kernel_config=compute_config,
+            dtype=ttnn.bfloat16,
+        )
+    else:
+        stats = ttnn.rms_norm_pre_all_gather(tt_input, compute_kernel_config=compute_config, dtype=ttnn.bfloat16)
+        tt_output = ttnn.rms_norm_post_all_gather(
+            tt_input,
+            stats,
+            epsilon=EPS,
+            weight=tt_weight,
+            compute_kernel_config=compute_config,
+            dtype=ttnn.bfloat16,
+        )
+    output = ttnn.to_torch(tt_output).float()
+
+    assert_with_pcc(norm_reference(op, torch_input, torch_weight, torch_bias), output, 0.999)
