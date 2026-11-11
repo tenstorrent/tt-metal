@@ -3089,7 +3089,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ids, layers = self.layer_submesh_ids, sm["layers"]
         first, last = layers[0], layers[-1]
         if self.use_prefetcher:
-            self.layers[first].prefetch_weights()
+            self.layers[first].prefetch_weights(one_row=t == 1)
         for li in layers:
             if cfg.compress_ratios[li]:
                 sm["scaches"][li].new_kv_rows = sm["scaches"][li].new_key_rows = None
@@ -3134,7 +3134,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for li in layers:
             layer = self.layers[li]
             if self.use_prefetcher and li != last:
-                self.layers[li + 1].prefetch_weights()
+                self.layers[li + 1].prefetch_weights(one_row=t == 1)
             if li in sm.get("taps", {}):
                 row = self._collapse_streams(streams, sm["tap_weights"])  # [1, T, 1, D]
                 row = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, hidden])
@@ -3455,9 +3455,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if self.use_prefetcher:
                 # As the traced step: the stage's first layer, then each layer queues its successor.
                 if li == layers[0]:
-                    layer.prefetch_weights()
+                    layer.prefetch_weights(one_row=t == 1)
                 if li != layers[-1]:
-                    self.layers[li + 1].prefetch_weights()
+                    self.layers[li + 1].prefetch_weights(one_row=t == 1)
             if li in sm.get("taps", {}):
                 row = self._collapse_streams(streams, sm["tap_weights"])  # [1, T, 1, D]
                 row = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, hidden])

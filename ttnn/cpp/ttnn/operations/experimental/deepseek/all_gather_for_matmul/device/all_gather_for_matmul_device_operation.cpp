@@ -84,16 +84,28 @@ void AllGatherForMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t logical_width = logical_shape[-1];
     const uint32_t padded_width = padded_shape[-1];
     const uint32_t flattened_height = padded_shape.volume() / padded_width;
-    TT_FATAL(
-        input_shard.shape[0] == flattened_height,
-        "Input shard height {} must cover the full flattened tensor height {}",
-        input_shard.shape[0],
-        flattened_height);
-    if (height_sharded) {
+    if (height_sharded && input_shard.grid.num_cores() > 1) {
         TT_FATAL(
-            input_shard.grid.num_cores() == 1,
-            "HEIGHT_SHARDED input must reside on a single core, got {} cores",
-            input_shard.grid.num_cores());
+            input_tensor.layout() == Layout::ROW_MAJOR,
+            "HEIGHT_SHARDED input on several cores must be ROW_MAJOR, got {}",
+            input_tensor.layout());
+        TT_FATAL(
+            input_shard.orientation == ShardOrientation::ROW_MAJOR,
+            "HEIGHT_SHARDED input on several cores must use a ROW_MAJOR shard orientation");
+        TT_FATAL(
+            input_shard.shape[0] * input_shard.grid.num_cores() == flattened_height,
+            "HEIGHT_SHARDED input shards must exactly cover the flattened height {}: {} cores x shard height {}",
+            flattened_height,
+            input_shard.grid.num_cores(),
+            input_shard.shape[0]);
+    } else {
+        TT_FATAL(
+            input_shard.shape[0] == flattened_height,
+            "Input shard height {} must cover the full flattened tensor height {}",
+            input_shard.shape[0],
+            flattened_height);
+    }
+    if (height_sharded) {
         TT_FATAL(
             input_shard.shape[1] == padded_width,
             "HEIGHT_SHARDED input shard width {} must equal padded width {}",

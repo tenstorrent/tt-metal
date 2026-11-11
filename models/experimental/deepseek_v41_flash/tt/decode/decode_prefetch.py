@@ -49,7 +49,13 @@ from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     PrefetchRing,
     decode_ring_group_specs,
 )
-from models.experimental.deepseek_v4_flash.tt.layers import make_coallocated_decode_pipes, make_multi_page_decode_pipes
+from models.experimental.deepseek_v4_flash.tt.layers import (
+    _bank_to_receivers,
+    _reserve_prefetch_pipes,
+    _slab_bytes,
+    make_coallocated_decode_pipes,
+    make_multi_page_decode_pipes,
+)
 
 # Depth of the shared ring in 32-tile pages: 144 KB per core at bf4, half V4's profile default, with no
 # decode slowdown. The co-allocated range is then sized by q_a's 180 KB ring.
@@ -82,6 +88,13 @@ ENGRAM_WKV_RING_PAGES = 2
 # The shared expert's and the Engram's weight dtype (their blocks' default), which their pages on
 # WIDE_RING are sized at; attention's o_b takes the model's weight_dtype.
 SHARED_EXPERT_ENGRAM_DTYPE = ttnn.bfloat8_b
+# attention_qkv_decode's q_a (40 cores at (8, 0), 4 wide) and kv (16 at (0, 8), 8 wide) rings, one [5120, 32] slab
+# deep each. They overlap the q_a / kv rings above and WIDE_RING, so the two share a range of their own. Its q_b
+# streams through the shared ring, whose 8x8 receivers are q_b's cores.
+FUSED_Q_A_RING = "fused_q_a"
+FUSED_KV_RING = "fused_kv"
+_FUSED_RINGS = ((FUSED_Q_A_RING, 40, 4, (8, 0)), (FUSED_KV_RING, 16, 8, (0, 8)))
+_FUSED_SLAB = (5120, 32)
 
 
 def prefetch_rings(tp_size: int = 1) -> dict:
@@ -118,11 +131,17 @@ def prefetch_rings(tp_size: int = 1) -> dict:
 
 
 def make_prefetch_buffers(
-    device, weight_dtype, num_prefetch_pages: int = SHARED_RING_PAGES, tp_size: Optional[int] = None
+    device,
+    weight_dtype,
+    num_prefetch_pages: int = SHARED_RING_PAGES,
+    tp_size: Optional[int] = None,
+    fused_qkv: bool = True,
 ) -> dict:
     """The per-device ``prefetch_buffers`` mapping: V4's shared ring under the :data:`DECODE_RING_GROUP` keys
     (as :func:`~models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch.make_decode_prefetch_buffers`
     builds it) plus the q_a and kv rings, the three reserved in one L1 range, and :data:`WIDE_RING`.
+    ``fused_qkv`` adds attention_qkv_decode's :data:`FUSED_Q_A_RING` and :data:`FUSED_KV_RING` on a grid
+    that holds the op.
 
     ``weight_dtype`` is the attention projections'; :data:`WIDE_RING` is sized for o_b at it and for the shared
     expert's down and Engram's wkv at :data:`SHARED_EXPERT_ENGRAM_DTYPE`. ``num_prefetch_pages`` is the shared
@@ -152,9 +171,18 @@ def make_prefetch_buffers(
             (wkv.specs, SHARED_EXPERT_ENGRAM_DTYPE, wkv.num_pages),
         ],
     )
-    return {
+    buffers = {
         **{name: shared for name in DECODE_RING_GROUP},
         q_a.key: q_a_pipes,
         kv.key: kv_pipes,
         WIDE_RING: wide,
     }
+    grid = device.compute_with_storage_grid_size()
+    if fused_qkv and grid.x >= 12 and grid.y >= 10:
+        slab = _slab_bytes(weight_dtype, _FUSED_SLAB)
+        fused = _reserve_prefetch_pipes(
+            device,
+            [(_bank_to_receivers(cores, device, cols, origin), slab) for _, cores, cols, origin in _FUSED_RINGS],
+        )
+        buffers.update({key: pipes for (key, *_), pipes in zip(_FUSED_RINGS, fused)})
+    return buffers

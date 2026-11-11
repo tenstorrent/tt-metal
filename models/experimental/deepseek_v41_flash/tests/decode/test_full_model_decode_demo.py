@@ -80,7 +80,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_config,
     pipeline_stage_count,
 )
-from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import WIDE_RING
+from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import FUSED_KV_RING, FUSED_Q_A_RING, WIDE_RING
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     ENGRAM_RAM_MARGIN,
     engram_ram_needed,
@@ -283,19 +283,27 @@ def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
     """The ring set the prefetched decode streams through, pinned per stage device.
 
     Each device holds the shared ring, the q_a and kv rings beside it (the three in one L1 range),
-    and the wide ring o_b, Engram's wkv and the shared down stream through -- four of the DRISC
-    senders' ~six state slots. The hyper-connection ``fn`` reads its weight from L1, so it is on no ring.
+    the wide ring o_b, Engram's wkv and the shared down stream through, and attention_qkv_decode's q_a
+    and kv rings (in one more range) -- six rings in the DRISC senders' state zone. The hyper-connection
+    ``fn`` reads its weight from L1, so it is on no ring.
     """
     if not model.use_prefetcher:
         return
-    allowed = set(DECODE_RING_GROUP) | {Q_A_RING, KV_RING, WIDE_RING}
+    allowed = set(DECODE_RING_GROUP) | {Q_A_RING, KV_RING, WIDE_RING, FUSED_Q_A_RING, FUSED_KV_RING}
     for _, buffers in model._prefetch_buffers_by_device.values():
         assert set(buffers) <= allowed, f"unexpected prefetch rings {sorted(set(buffers) - allowed)}"
         rings = {id(pipes) for pipes in buffers.values()}
-        assert len(rings) <= 4, f"{len(rings)} rings on one device, expected at most 4"
+        assert len(rings) <= 6, f"{len(rings)} rings on one device, expected at most 6"
     for layer in model.layers:
-        q_a_ring = layer.self_attn.q_a_proj.prefetcher_pipes
-        assert q_a_ring is not None, "q_a must stream through the prefetcher"
+        attn = layer.self_attn
+        q_a_ring = attn.q_a_proj.prefetcher_pipes
+        if attn.fused_qkv:
+            assert (
+                q_a_ring is None
+            ), "attention_qkv_decode streams q_a's slabs itself, so q_a's matmul must be off the rings"
+            assert attn.fused_pipes is not None, "attention_qkv_decode must stream its slabs through the prefetcher"
+        else:
+            assert q_a_ring is not None, "q_a must stream through the prefetcher"
         assert not hasattr(layer.attn_hc.fn, "prefetcher_pipes"), "attention hyper-connection fn must not use a ring"
         assert not hasattr(layer.ffn_hc.fn, "prefetcher_pipes"), "FFN hyper-connection fn must not use a ring"
         proj = getattr(layer.mlp.gate, "gate", None)
