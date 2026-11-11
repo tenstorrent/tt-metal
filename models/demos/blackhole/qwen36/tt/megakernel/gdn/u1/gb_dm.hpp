@@ -93,6 +93,16 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
             gpx::read_window<B, CT>(wa, wb, c, col, win_l1 + j * B * gpx::kTB);
             noc_async_read(taps.get_noc_addr(col), get_write_ptr(cb_sht) + (4 * j + 3) * gpx::kTB, gpx::kTB);
         }
+        noc_async_read_barrier();
+        // the window-out rows 0..K-2 (window rows mi+1..) of every job, before the in-proj lands (own wo slots per job)
+        for (uint32_t j = 0; j < nconv; ++j) {
+            const uint32_t wj = win_l1 + j * B * gpx::kTB, oj = wo_l1 + j * B * gpx::kWoSlot;
+            for (uint32_t u = 0; u < B; ++u) {
+                for (uint32_t hh = 0; hh < 2; ++hh) {
+                    gpx::l1cp(oj + u * gpx::kWoSlot + hh * 512, wj + u * gpx::kTB + gpx::row_off(c.mi[u] + 1, hh), (K - 1) * 32);
+                }
+            }
+        }
     }
     {
         GBZ("GB-GIN");
@@ -122,16 +132,21 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
     cb_push_back(cb_qpx, npx);
     {
         GBZ("GB-STG");
-        for (uint32_t j = 0; j < nconv; ++j) {
-            const uint32_t col = pb[kConv + j * kConvW];
-            const uint32_t wj = win_l1 + j * B * gpx::kTB;
-            if (j) noc_async_write_barrier();  // the previous job's window write left wo_l1
-            gpx::stage_window_out<B, T, K>(c, wj, qin_l1 + j * gpx::kTB, wo_l1);
+        for (uint32_t j = 0; j < nconv; ++j) {  // rows K-1.. of the window-out = the qkv rows, then the shifted operands
+            const uint32_t q = qin_l1 + j * gpx::kTB, oj = wo_l1 + j * B * gpx::kWoSlot;
+            for (uint32_t u = 0; u < B; ++u) {
+                for (uint32_t hh = 0; hh < 2; ++hh) {
+                    gpx::l1cp(oj + u * gpx::kWoSlot + hh * 512 + (K - 1) * 32, q + gpx::row_off(u * T, hh), T * 32);
+                }
+            }
             noc_async_read_barrier();
-            gpx::stage_shift<B, T, K>(wo_l1, get_write_ptr(cb_sht));
+            gpx::stage_shift<B, T, K>(oj, get_write_ptr(cb_sht));
             noc_async_read_barrier();
             cb_push_back(cb_sht, 4);
-            gpx::write_window<B, T, K, CT>(wa, wb, c, col, wo_l1, wj);
+        }
+        for (uint32_t j = 0; j < nconv; ++j) {  // win[1 - par] (off the convs' path)
+            gpx::write_window<B, T, K, CT>(wa, wb, c, pb[kConv + j * kConvW], wo_l1 + j * B * gpx::kWoSlot,
+                                           win_l1 + j * B * gpx::kTB);
         }
         noc_async_write_barrier();
     }
@@ -372,13 +387,11 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
     // the first 4 OUT pages of a layer = [gate pair | silu | conv 0] (the layer starts at the base: 4 pages, multiple of 4 per
     // layer): conv 0 (raw q / k -> the L2 roots: the long pole) and silu go out before the gate rows are built
     constexpr uint32_t NU = B / VB;
-    cb_wait_front(cb_out, 2);  // the gate pair (computed first): build this core's gate rows while the convs run
-    gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1);
     cb_wait_front(cb_out, 4);
     {
         GBZ("GB-WOUT");
+        // conv 0 first: on the q / k cores it feeds the L2 roots (the long pole); the gate rows are built after
         send_out(get_read_ptr(cb_out) + 3 * 4096, const_cast<const uint32_t*>(pb + kConv + 1));
-        send_out(get_read_ptr(cb_out) + 2 * 4096, dz);
     }
     if (root) {  // the root's Kt normalized tiles (OUT pages 4..7 of its 8-page layer) before its gate rows
         GBZ("GB-ROOTW");
@@ -392,6 +405,9 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
         inc_all(const_cast<const uint32_t*>(pb + kRootDst), kKqCnt, 1);
 #endif
     }
+    // (L2 roots: the ready signal above went out first -- the pulls of 12 consumers wait on it)
+    send_out(get_read_ptr(cb_out) + 2 * 4096, dz);
+    gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1);
     {
         GBZ("GB-GATE");
         gate_rows_send<T, NU>(pre, pb[kGcore] * NU, pb[kGdst], sc_l1, dz, g_gb_coef, sc_l1 + 8192);

@@ -700,7 +700,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             "E1_GB: B*T == 32, early replay, lean table (eps_l2 = eps_norm: l2 eps == norm eps), VB == Vt"
         NC = len(cores)
         OGB = OGK + 6   # after the PERCORE words (k, n_fwd, 2 x (x, y))
-        XWO = 2 * B * 2048; XRC = XWO + B * 1024; XWC = XRC + CTRL_B; XDP = XWC + CTRL_B; XSC = XDP + B * 256
+        XWO = 2 * B * 2048; XRC = XWO + 2 * B * 1024; XWC = XRC + CTRL_B; XDP = XWC + CTRL_B; XSC = XDP + B * 256   # wo: one set per conv job
         XS_B = -(-(XSC + 3 * 4096) // 2048) * 2048   # + the gate page landing area (XSC + 8192)
         NPX = 6 + XS_B // 2048   # QPX pages: QIN 0..3, P 4..5, then the raw scratch
         HERE_ = os.path.dirname(os.path.abspath(__file__))
@@ -719,7 +719,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'void gdn_gb_wait(uint32_t w) {{ (void)w; noc_semaphore_wait_min(g_ab + {OGB}, {1 + Vt + VB}u * (g_l + 1)); }}\n'
                 f'void gdn_gb_knq(uint32_t a) {{ gb::pull_knq<{Kt}>(g_ab + {OGB}, g_l, a); }}\n')
         GB_RINIT = (f'  g_gb_qin = get_write_ptr({GBC["qpx"]}); g_gb_xs = g_gb_qin + 6u * 2048u;\n'
-                    f'  gb::reader_init(g_gb_xs + {XWO}u, {B * 1024}u, g_gb_qin + 4u * 2048u);\n')
+                    f'  gb::reader_init(g_gb_xs + {XWO}u, {2 * B * 1024}u, g_gb_qin + 4u * 2048u);\n')
         _q = [dev.worker_core_from_logical_core(c) for c in cores]
         GB_RN = 1 + Vt + VB   # rest arrivals per layer: vc + zs (Vt) + the head's gate rows (VB)
         GB_W = (f'static uint32_t g_gb_xs;\n#include "{HERE_}/gb_dm.hpp"\n'
