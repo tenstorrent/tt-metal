@@ -25,6 +25,9 @@
 #include "wo_unit_dm.hpp"
 #endif
 
+#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
+#define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
+#endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
     constexpr uint32_t WTB = get_compile_time_arg_val(2), GRP = get_compile_time_arg_val(3);
@@ -60,8 +63,16 @@ void kernel_main() {
     }
     const uint32_t self_rect = get_arg_val<uint32_t>(a++);
     const uint32_t cbh_base = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t ROOT = 0xFF; a++;
+#else
     const uint32_t ROOT = get_arg_val<uint32_t>(a++);   // 2/3: NOC1 root; else 0xFF
+#endif
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t IS_GU = 0; a++;
+#else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t pgu_layer = get_arg_val<uint32_t>(a++);
     uint32_t gs[NGS];
     for (uint32_t i = 0; i < NGS; ++i) gs[i] = get_arg_val<uint32_t>(a++);
@@ -75,17 +86,35 @@ void kernel_main() {
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
     const uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
     const uint32_t par_lvl = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t nc0 = 0; a++;
+#else
     const uint32_t nc0 = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t c0x[FANOUT], c0y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c0x[i] = get_arg_val<uint32_t>(a++); c0y[i] = get_arg_val<uint32_t>(a++); }
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t nc1 = 0; a++;
+#else
     const uint32_t nc1 = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t c1x[FANOUT], c1y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c1x[i] = get_arg_val<uint32_t>(a++); c1y[i] = get_arg_val<uint32_t>(a++); }
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t is_root = 0; a++;
+    const uint32_t out_addr = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t is_root = get_arg_val<uint32_t>(a++), out_addr = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t qr_x = get_arg_val<uint32_t>(a++), qr_y = get_arg_val<uint32_t>(a++);
     // STREAM: layer L's wo slice + the next layer's uncovered qkv bytes stream on NOC1 here (scratch), balancing the NoCs
+#if defined(MKA_EXTLEAN) && defined(MKA_RWO)
+    const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t wo_tiles = 0, extra_tiles = 0; a += 2;   // RWO: no wo stand-in bytes
+#else
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++), wo_tiles = get_arg_val<uint32_t>(a++);
     const uint32_t extra_tiles = get_arg_val<uint32_t>(a++);
+#endif
     // kv_mode: 0 reader K (NOC1) + writer V (NOC0); 1 reader V + writer K; 2 reader K and V (all KV on NOC1);
     // 3 writer K and V (all KV on NOC0)
     const uint32_t kv_mode = get_arg_val<uint32_t>(a++);
@@ -97,7 +126,12 @@ void kernel_main() {
     const bool rd_k = kv_mode == 0 || kv_mode == 2, rd_v = kv_mode == 1 || kv_mode == 2;
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
+#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+    constexpr uint32_t qrole = 3; a++;
+    const uint32_t wq_addr = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t qrole = get_arg_val<uint32_t>(a++), wq_addr = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
     const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
 #if defined(MKA_RWO)
@@ -107,7 +141,12 @@ void kernel_main() {
     // and forward it into the ext ring (spreads the 8.4 MB DRAM issue over 116 readers, like the stand-in's reads)
     const uint32_t rw_own = get_arg_val<uint32_t>(a++), rw_hlp = get_arg_val<uint32_t>(a++);
     const uint32_t h_x = get_arg_val<uint32_t>(a++), h_y = get_arg_val<uint32_t>(a++), h_page = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+    constexpr uint32_t h_np = 0; a++;   // no STREAM helpers under QSK
+    const uint32_t h_off = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t h_np = get_arg_val<uint32_t>(a++), h_off = get_arg_val<uint32_t>(a++);
+#endif
     const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
     constexpr uint32_t TRID_WOR = 10;
 #endif
@@ -134,7 +173,11 @@ void kernel_main() {
 #endif   // MKA_RQKV (the v12 args follow the qkv args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
     // ---- v12 MLP args (appended after every other reader arg) ----
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t vrole_rt = 2; a++;
+#else
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++);   // 0 none, 1 STREAM, 2 owner
+#endif
 #if defined(MKA_ROLE_STREAM)
     constexpr uint32_t vrole = 1;
 #elif defined(MKA_ROLE_EXT)

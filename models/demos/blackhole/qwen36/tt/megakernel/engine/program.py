@@ -1165,7 +1165,16 @@ def setup_bench(dev, MESH, mesh_identity):
             if V12:   # v12 arg tails (appended after every other arg)
                 vw_, vr_, vc_ = v_args(fi, c)
                 _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
+            if GDN24 and not isS and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_EXTLEAN: the owner binary folds these role args (kernels)
+                _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
+                assert g_ == 0 and nrecv == 0 and r != 0 and gdn_on(fi) == 0, ("MKA_EXTLEAN owner args", fi, g_, nrecv, r, gdn_on(fi))
+                assert r_mk[14] == 255 and r_mk[15] == 0, ("MKA_EXTLEAN ROOT / IS_GU", fi, r_mk[14:16])
+                if QSK: assert _qr[0] == 3 and _qr[1] == 0 and _qr[2] == 0 and _qr[3] == 0 and _qr[4] == 0, ("MKA_EXTLEAN qkv role", fi, _qr)
+                if QSK and RWO: assert HLP.get(fi, (None, 0, 0))[2] == 0 and len(WOT.get(fi, [])) == WO_MAXT_, ("MKA_EXTLEAN wo", fi)
+                if RWO: assert not rd_w
+                if V12: assert vc_[0] == 2 and vr_[0] == 2 and vw_[0] == 2, ("MKA_EXTLEAN vrole", fi, vc_[0], vr_[0], vw_[0])
             _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
+            if os.environ.get('MKA_ARGDUMP') == '1' and not isS: print(f"[argdump] fi {fi} xy ({c.x},{c.y}) R {list(_ra)} W {list(_wa)} C {list(_ca)}", flush=True)
         acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
         acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
         acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []

@@ -32,6 +32,9 @@
 #include "../../kernels/mk_ar_recv.hpp"   // AR_RECV on the owners (AR_INTERFACE.md; MKAR_* defines from ar_phase.py)
 #endif
 
+#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
+#define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
+#endif
 void kernel_main() {
     constexpr uint32_t XTB = get_compile_time_arg_val(0), NGU = get_compile_time_arg_val(1);
     constexpr uint32_t NDN = get_compile_time_arg_val(2), KT = get_compile_time_arg_val(3);
@@ -89,8 +92,16 @@ void kernel_main() {
     const uint32_t cbh_base = get_arg_val<uint32_t>(a++);
     const uint32_t wd_addr = get_arg_val<uint32_t>(a++), dn_page = get_arg_val<uint32_t>(a++);
     const uint32_t wgu_addr = get_arg_val<uint32_t>(a++), gu_page = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t ROOT = 0xFF; a++;
+#else
     const uint32_t ROOT = get_arg_val<uint32_t>(a++);
+#endif
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t IS_GU = 0; a++;
+#else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t pgu_layer = get_arg_val<uint32_t>(a++), pdn_layer = get_arg_val<uint32_t>(a++);
     const uint32_t wm_addr = get_arg_val<uint32_t>(a++), wm_page = get_arg_val<uint32_t>(a++), pwm_layer = get_arg_val<uint32_t>(a++);
     uint32_t gs[NGS];
@@ -108,17 +119,36 @@ void kernel_main() {
 #endif
     const uint32_t user = get_arg_val<uint32_t>(a++), vb0 = get_arg_val<uint32_t>(a++), vb1 = get_arg_val<uint32_t>(a++);
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN) && defined(MKA_RWO)
+    const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t wo_tiles = 0; a++;
+#else
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++), wo_tiles = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t budget = get_arg_val<uint32_t>(a++), NSTREAM = get_arg_val<uint32_t>(a++);
     const uint32_t qr_x = get_arg_val<uint32_t>(a++), qr_y = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN) && defined(MKA_RWO)
+    constexpr uint32_t extra_tiles = 0; a++;
+#else
     const uint32_t extra_tiles = get_arg_val<uint32_t>(a++);   // qkv bytes the MIXN mixer stand-in does not cover (scratch reads)
+#endif
     const uint32_t kv_mode = get_arg_val<uint32_t>(a++);   // see reader
     const bool wr_k = kv_mode == 1 || kv_mode == 3, wr_v = kv_mode == 0 || kv_mode == 3;
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
+#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+    constexpr uint32_t qrole = 3; a++;
+    const uint32_t qn = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t qnt = 0; a++;
+#else
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t q_ox = get_arg_val<uint32_t>(a++), q_oy = get_arg_val<uint32_t>(a++), qo_addr = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t gdn_on = 0; a++;
+#else
     const uint32_t gdn_on = get_arg_val<uint32_t>(a++);   // this core runs the GDN in-proj stand-in in GDN-type layers
+#endif
 #if defined(MKA_RWO)
     // wo: tiles (rot order), concat role, owner chunk, wo-core multicast rects, the 16 owners' coords, debug output
     const uint32_t wo_nt = get_arg_val<uint32_t>(a++);
@@ -235,7 +265,11 @@ void kernel_main() {
 #endif
 #if defined(MK_V12)
     // ---- v12 MLP args (appended after every other writer arg) ----
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t vrole_rt = 2; a++;
+#else
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++);   // 0 none, 1 STREAM, 2 owner
+#endif
 #if defined(MKA_ROLE_STREAM)
     constexpr uint32_t vrole = 1;
 #elif defined(MKA_ROLE_EXT)
