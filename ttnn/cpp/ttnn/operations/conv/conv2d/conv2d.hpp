@@ -53,13 +53,9 @@ Conv2dResultWithOptions conv2d(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
     bool return_output_dim = false,
     bool return_weights_and_bias = false,
-    // The preceding GroupNorm's affine (+ SiLU) applied in the halo pass: [1, C] TILE tensors, scale and shift
     const std::optional<const ttnn::Tensor>& prologue_scale = std::nullopt,
     const std::optional<const ttnn::Tensor>& prologue_shift = std::nullopt,
-    // The neighbour devices' boundary sticks for the border padding
     const std::optional<const ttnn::Tensor>& halo_boundary = std::nullopt,
-    // The epilogue writes the output's per-core column sums (and of its square) into this fp32 TILE DRAM
-    // tensor, pages slice * epilogue_stats_slice_stride + core * 2N + t (N = output tiles per core)
     const std::optional<const ttnn::Tensor>& epilogue_stats = std::nullopt,
     uint32_t epilogue_stats_slice_stride = 0);
 

@@ -782,15 +782,11 @@ void emit_cb_descriptors(
     }
 }
 
-// The three plain CBs the sharded factory adds for the epilogue statistics
-// (the 2N-tile fp32 page, two fp32 scratch tiles, the bf16 reduce scaler and row-mask tiles); not in the CBInfo
-// prediction
 static uint32_t epilogue_stats_cb_bytes(const Conv2dParams& operation_attributes) {
     if (!operation_attributes.epilogue_stats) {
         return 0;
     }
     const uint32_t n = operation_attributes.parallelization_config.per_core_out_matrix_width_ntile;
-    // the 2N-tile page + 2 scratch tiles (fp32), the scaler + the row mask (bf16)
     return (2 * n + 2) * tt::tile_size(tt::DataFormat::Float32) + 2 * tt::tile_size(tt::DataFormat::Float16_b);
 }
 

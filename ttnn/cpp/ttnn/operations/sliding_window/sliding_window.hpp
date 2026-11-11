@@ -151,27 +151,16 @@ struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> gather_config0;
     std::vector<std::vector<uint16_t>> gather_config1;
     std::vector<uint16_t> number_of_blocks_per_core;
-    // External halo: per core, triples (dst_local_idx, src_boundary_idx, nsticks) closed by a zero
-    // triple; empty unless an ExternalHaloSpec is given.
     std::vector<std::vector<uint16_t>> external_config;
 };
 
-// Where a halo window sits in the device image its boundary buffer was built for. A DRAM-sliced conv
-// runs one halo per width slice; every slice reads the same per-device buffer at its column offset. All zero (the
-// default) = the window is the whole device image.
 struct ExternalHaloWindow {
-    uint32_t col_offset = 0;    // device column of the window's first (unpadded) input column
-    uint32_t boundary_w = 0;    // device image width the buffer was built for (0 = the window's own width)
-    uint32_t dev_pad_left = 0;  // the device-level conv's left / right padding (the buffer's column bands)
+    uint32_t col_offset = 0;
+    uint32_t boundary_w = 0;
+    uint32_t dev_pad_left = 0;
     uint32_t dev_pad_right = 0;
 };
 
-// The border padding sticks of a stride-1 window come from a per-device boundary buffer instead of the
-// pad value. Buffer layout per image, for the device image (width Wd, pads dl / dr; = the window when unsliced):
-// [top: pad_top x Wb][bottom: pad_bottom x Wb][left: H x dl][right: H x dr] sticks, Wb = dl + Wd + dr (corners are
-// in the top / bottom rows). A window (a width slice) maps its padded column c to the device-padded column
-// col_offset + c - pad_left + dl; columns outside the window's real range (tile-rounding pad, a middle slice's
-// right pad) keep the pad value, exactly like the zero padding they replace.
 struct ExternalHaloSpec {
     uint32_t batch = 0;
     uint32_t in_h = 0;
@@ -188,7 +177,6 @@ struct ExternalHaloSpec {
     uint32_t device_pad_left() const { return boundary_w ? dev_pad_left : pad_left; }
     uint32_t device_pad_right() const { return boundary_w ? dev_pad_right : pad_right; }
     uint32_t sticks_per_image() const;
-    // boundary-buffer stick of padded position (b, r, c), or -1 when (r, c) is not a border pad
     int64_t boundary_index(uint32_t b, uint32_t r, uint32_t c) const;
 };
 ExternalHaloSpec external_halo_spec(const SlidingWindowConfig& config, const ExternalHaloWindow& window = {});

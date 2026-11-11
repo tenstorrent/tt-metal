@@ -32,9 +32,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 #ifdef PROLOGUE_AFFINE
-    // Per tile, dest0 = x * scale (row broadcast), dest1 = shift (row
-    // broadcast), dest0 = silu(dest0 + dest1), then the untilize pack of that one tile column into the row-major
-    // output. Two dest tiles per step, so it fits the fp32 half-dest (4 tiles).
     constexpr uint32_t scale_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t shift_cb_id = get_compile_time_arg_val(6);
     cb_wait_front(scale_cb_id, tiles_per_row);

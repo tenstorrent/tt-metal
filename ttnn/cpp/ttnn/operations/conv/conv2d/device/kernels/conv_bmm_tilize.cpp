@@ -208,12 +208,6 @@ inline void reblock_and_untilize(
 }
 
 #ifdef EPILOGUE_STATS
-// For the output tiles just packed into the OUT CB, the column sums of x
-// (tile `col` of the stats page, row 0) and of x * x (tile STATS_NTILES + col), accumulated with the packer's L1
-// accumulation; the square goes through one fp32 scratch tile because the reduce reads a CB.
-// A2m: `row_base` is the tile row (within the core's output shard) of the subblock's first tile and `valid_rows`
-// the shard's image rows: tiles beyond them are skipped, the straddling tile is multiplied by the row mask
-// (MASK_CB) into the scratch CB first.
 template <
     uint32_t out_cb,
     uint32_t stats_cb,
@@ -234,13 +228,12 @@ ALWI void epilogue_stats_tiles(
         const uint32_t col = col_base + (k % subblock_w);
         const uint32_t row = row_base + k / subblock_w;
         if (row * 32 >= valid_rows) {
-            continue;  // padding rows only
+            continue;
         }
         const bool partial = (row + 1) * 32 > valid_rows;
         uint32_t src_cb = out_cb;
         uint32_t src_tile = tile;
         if (partial) {
-            // the masked copy of the tile into scratch page 0
             tile_regs_acquire();
             reconfig_data_format(out_cb, mask_cb);
             mul_init(out_cb, mask_cb);
@@ -257,7 +250,7 @@ ALWI void epilogue_stats_tiles(
             src_cb = scratch_cb;
             src_tile = 0;
         }
-        const uint32_t sq_page = partial ? 1 : 0;  // the square goes behind the masked copy
+        const uint32_t sq_page = partial ? 1 : 0;
         tile_regs_acquire();
         reconfig_data_format(src_cb, scaler_cb);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(src_cb, scaler_cb, stats_cb);
@@ -385,7 +378,6 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
 #ifdef EPILOGUE_STATS
     uint32_t stats_tiles_pushed = 0;
-    // This core's valid output rows (runtime arg 0: the height-sharded kernel has no skip arg)
     const uint32_t stats_valid_rows = get_arg_val<uint32_t>(check_skip_compute ? 1 : 0);
     cb_reserve_back(STATS_CB, 2 * STATS_NTILES);
     cb_wait_front(SCALER_CB, 1);
@@ -749,6 +741,6 @@ void kernel_main() {
         }
     }
 #ifdef EPILOGUE_STATS
-    cb_push_back(STATS_CB, 2 * STATS_NTILES);  // the page is complete; the writer stores it
+    cb_push_back(STATS_CB, 2 * STATS_NTILES);
 #endif
 }  // void kernel_main()

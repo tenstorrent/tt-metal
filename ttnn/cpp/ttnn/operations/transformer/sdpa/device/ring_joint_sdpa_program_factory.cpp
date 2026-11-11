@@ -538,14 +538,10 @@ RingJointRuntimePlan build_runtime_plan(
     return plan;
 }
 
-// SDPAProgramConfig::ccl_row_sdpa_start_x = X0 adds the cores (X0 .. grid.x-1, grid.y) below the SDPA rectangle -- the
-// CCL row's cores that the fused all-gather does not use -- so the SDPA grid becomes non-rectangular (e.g. 12x9 + 8 =
-// 116 cores). Unset (default): unchanged. Part of the program hash through program_config.
 std::optional<uint32_t> extra_row_x0(const ttnn::prim::RingJointSDPAParams& args) {
     return args.program_config.has_value() ? args.program_config->ccl_row_sdpa_start_x : std::nullopt;
 }
 
-// The SDPA cores in work order: the grid rectangle row-major, then the extra row (if any). Work unit i -> cores[i].
 std::vector<CoreCoord> ring_joint_logical_cores(const CoreCoord& grid_size, std::optional<uint32_t> x0_opt) {
     std::vector<CoreCoord> cores;
     cores.reserve(grid_size.x * (grid_size.y + 1));
@@ -1220,8 +1216,6 @@ std::optional<std::vector<McastCandidate>> head_chain_mcast_candidates(
             continue;
         }
 
-        // ccl_row_sdpa_start_x: a chain touching the partial row is not multicast-eligible
-        // (a row multicast rectangle there could include the all-gather's CCL cores).
         if (std::any_of(chain_core_indices.begin(), chain_core_indices.end(), [&](uint32_t ci) {
                 return ci >= mcast_core_count;
             })) {
@@ -4038,7 +4032,7 @@ void apply_dynamic_local_n_runtime_args(
         enable_kv_chains,
         use_head_chain,
         build_kv_chains,
-        HeadMcastPolicy::Never,  // the reader was compiled unicast
+        HeadMcastPolicy::Never,
         layout.grid_size.x * layout.grid_size.y);
     TT_FATAL(!plan.head_mcast_enabled, "dynamic_local_n rebuilt a multicast head chain for a reader compiled unicast");
 

@@ -58,7 +58,6 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             args.padded_slice_end[i]);
     }
     if (args.prologue_affine) {
-        // The affine runs in the tiled factory's untilize pass
         TT_FATAL(
             input_tensor_a.layout() == Layout::TILE,
             "padded_slice prologue_scale / prologue_shift need a TILE input (the affine runs in the untilize pass)");

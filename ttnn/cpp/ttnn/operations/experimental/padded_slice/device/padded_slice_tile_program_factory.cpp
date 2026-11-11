@@ -499,8 +499,6 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
         .num_entries = 1,  // We need only a single row to hold the padding, and reuse it.
         .data_format_metadata = output_dfb_data_format,
     };
-    // The per-channel scale / shift tiles for the untilize compute kernel
-    // (height-sharded slices only: every core holds the whole channel row)
     const bool prologue_affine = operation_attributes.prologue_affine;
     if (prologue_affine) {
         TT_FATAL(

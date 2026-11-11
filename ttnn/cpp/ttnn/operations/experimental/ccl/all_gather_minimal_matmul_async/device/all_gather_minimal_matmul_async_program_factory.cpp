@@ -435,9 +435,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             N_block_tiles);
     }
 
-    // linear1 grouped N split: group A = the chunks before swiglu_chunk, group B = the SwiGLU chunk. Each of the
-    // in1_parallel_axis_cores N cores gets A_pc tiles of A and B_pc of B, laid out per core as a virtual range
-    // [A part | B part] (N_tiles_per_core = A_pc + B_pc); the kernels map virtual -> physical columns (grp_phys_n).
     const bool grouped_n = swiglu_chunk >= 0;
     uint32_t grp_a_tiles = 0, grp_a_pc = 0, grp_b_pc = 0;
     if (grouped_n) {
@@ -840,11 +837,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["GRP_A_PER_CORE"] = std::to_string(grp_a_pc);
         defines["GRP_B_PER_CORE"] = std::to_string(grp_b_pc);
         defines["SWIGLU_CHUNK"] = std::to_string(swiglu_chunk);
-        // Every (M, N) block accumulates K in the forward order, as the separate QKV and MLP-in ops do (each has one
-        // N block per core, so it never reaches the ring's per-N-block K reversal), at the cost of the in0 reuse
-        // between N blocks.
         defines["K_FORWARD_ONLY"] = "1";
-        // Output-space chunk table for the writer: the SwiGLU chunk is half as wide as its weight columns.
         std::string w_out, o_out = "0";
         uint32_t run = 0;
         for (uint32_t c = 0; c < N_chunks; c++) {

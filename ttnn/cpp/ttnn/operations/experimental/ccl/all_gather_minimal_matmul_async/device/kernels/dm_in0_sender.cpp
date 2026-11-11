@@ -49,10 +49,8 @@ constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(21);
 constexpr uint32_t chunk_tile_widths[N_chunks] = {CHUNK_TILE_WIDTHS};
 constexpr uint32_t chunk_tile_offsets[N_chunks + 1] = {CHUNK_TILE_OFFSETS};
 #ifdef GROUPED_N
-// linear1: output-space chunk table (the SwiGLU chunk is half its weight width).
 constexpr uint32_t chunk_tile_widths_out[N_chunks] = {CHUNK_TILE_WIDTHS_OUT};
 constexpr uint32_t chunk_tile_offsets_out[N_chunks + 1] = {CHUNK_TILE_OFFSETS_OUT};
-// Physical weight column -> output column: group A unchanged, group B (SwiGLU pairs) halves.
 FORCE_INLINE uint32_t grp_out_n(uint32_t p) { return p < GRP_A_TILES ? p : GRP_A_TILES + (p - GRP_A_TILES) / 2; }
 #endif
 constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(22);
@@ -356,7 +354,6 @@ void kernel_main() {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 #ifdef GROUPED_N
-            // Blocks never straddle the A / B boundary (host-checked), so the whole block maps contiguously.
             n_tile_end = grp_phys_n(n_tile) + (n_tile_end - n_tile);
             n_tile = grp_phys_n(n_tile);
 #endif
@@ -379,7 +376,7 @@ void kernel_main() {
                             defer_write_n_tile_end / 2);
                         cb_out.pop_front(out_block_num_tiles_swiglu);
 #elif defined(GROUPED_N)
-                        if (defer_write_n_tile >= GRP_A_TILES) {  // SwiGLU block: half width
+                        if (defer_write_n_tile >= GRP_A_TILES) {
                             cb_out.wait_front(out_block_num_tiles / 2);
                             write_block_sync_split<M_block_tiles, N_block_tiles / 2, N_chunks>(
                                 noc_obj,
@@ -721,7 +718,7 @@ void kernel_main() {
             if constexpr (!is_linear) {
                 reuse_block = true;
             }
-#endif  // K_FORWARD_ONLY: every N block reads K forward from block 0 (no reuse), like Linear
+#endif
 
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;
@@ -748,7 +745,7 @@ void kernel_main() {
                         n_tile / 2,
                         n_tile_end / 2);
 #elif defined(GROUPED_N)
-                    if (n_tile >= GRP_A_TILES) {  // SwiGLU block: compute pushes N_block / 2 tiles per row
+                    if (n_tile >= GRP_A_TILES) {
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles / 2, N_chunks>(
                             noc_obj,
                             outputs_tuple,

@@ -218,7 +218,6 @@ struct Conv2dParams {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
-    // Output statistics in the epilogue (default off); the DRAM page base of this call's pages
     bool epilogue_stats = false;
     uint32_t epilogue_stats_slice = 0;
     uint32_t epilogue_stats_slice_stride = 0;
@@ -296,8 +295,6 @@ struct Conv2dInputs {
     Tensor a;
     Tensor b;
     std::optional<Tensor> bias;
-    // The fp32 DRAM TILE tensor the epilogue writes the per-core column sums of
-    // the output (and of its square) into, pages slice * stride + core * 2N + t
     std::optional<Tensor> epilogue_stats;
 };
 

@@ -310,7 +310,6 @@ void kernel_main() {
 #endif
 
 #ifdef PROLOGUE_AFFINE
-    // The per-channel scale / shift tiles ([1, C] TILE tensors, C / 32 tiles each) for the compute kernel
     if constexpr (block_start_offset == 0) {
         constexpr auto affine_scale_args = TensorAccessorArgs<PROLOGUE_AFFINE_CTA>();
         constexpr auto affine_shift_args = TensorAccessorArgs<affine_scale_args.next_compile_time_args_offset()>();
@@ -357,10 +356,6 @@ void kernel_main() {
     }
 
 #ifdef EXTERNAL_HALO
-    // The border padding sticks are the neighbour devices' boundary sticks. This core's routes
-    // (dst_local_idx, src_boundary_idx, nsticks), closed by nsticks == 0, are one page of the external config; each
-    // stick is one page of the boundary buffer. Only the block_start_offset == 0 reader runs them (the external sticks
-    // are not in either pad config, so nothing else writes them).
     if constexpr (block_start_offset == 0) {
         constexpr auto ext_cfg_args = TensorAccessorArgs<EXTERNAL_HALO_CTA>();
         constexpr auto boundary_args = TensorAccessorArgs<ext_cfg_args.next_compile_time_args_offset()>();

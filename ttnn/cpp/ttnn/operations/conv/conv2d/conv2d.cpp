@@ -57,7 +57,7 @@ Result conv2d_L1(
     const std::optional<const ttnn::Tensor>& prologue_scale = std::nullopt,
     const std::optional<const ttnn::Tensor>& prologue_shift = std::nullopt,
     const std::optional<const ttnn::Tensor>& halo_boundary = std::nullopt,
-    const sliding_window::ExternalHaloWindow& halo_window = {},  // a DRAM slice's place in the device
+    const sliding_window::ExternalHaloWindow& halo_window = {},
     const std::optional<const ttnn::Tensor>& epilogue_stats = std::nullopt,
     uint32_t epilogue_stats_slice = 0,
     uint32_t epilogue_stats_slice_stride = 0) {
@@ -437,7 +437,7 @@ class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     DeviceComputeKernelConfig compute_config;
     std::optional<const Tensor> prologue_scale;
     std::optional<const Tensor> prologue_shift;
-    std::optional<const Tensor> halo_boundary;   // the device image's boundary, shared by every slice
+    std::optional<const Tensor> halo_boundary;
     std::optional<const Tensor> epilogue_stats;
     uint32_t epilogue_stats_slice_stride = 0;
     mutable uint32_t slices_run = 0;
@@ -700,7 +700,6 @@ public:
     std::string name() const override { return "Conv2D"; }
 
     std::pair<std::optional<Tensor>, std::optional<Tensor>> input_prologue() const override {
-        // The DRAM slice op untilizes each slice, so it applies the affine + SiLU there
         if (prologue_scale.has_value()) {
             return {Tensor(prologue_scale.value()), Tensor(prologue_shift.value())};
         }
@@ -731,8 +730,6 @@ public:
         // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
         conv_config_l1.output_layout = Layout::TILE;
 
-        // A ROW_MAJOR slice already carries the affine (padded_slice applied it in its untilize pass);
-        // a TILE input (the L1_FULL path) gets it in the halo's untilize pass
         const bool affine_in_halo = sliced_input_tensor.layout() == Layout::TILE;
         const std::optional<const Tensor> l1_prologue_scale =
             affine_in_halo ? prologue_scale : std::optional<const Tensor>{};
@@ -761,14 +758,12 @@ public:
             l1_prologue_scale,
             l1_prologue_shift,
             halo_boundary,
-            // This width slice reads the device boundary at its column offset (slices span the full
-            // height, so rows need no offset)
             halo_boundary.has_value()
                 ? sliding_window::
                       ExternalHaloWindow{.col_offset = input_slice_width_start, .boundary_w = std::get<1>(input_shape), .dev_pad_left = padding_n4[2], .dev_pad_right = padding_n4[3]}
                 : sliding_window::ExternalHaloWindow{},
             epilogue_stats,
-            slices_run++,  // each slice writes its own page block
+            slices_run++,
             epilogue_stats_slice_stride);
         weight_tensor = std::get<3>(conv2d_result);
         if (bias_tensor.has_value()) {
@@ -812,7 +807,6 @@ Result conv2d_DRAM(
     const std::optional<const ttnn::Tensor>& halo_boundary = std::nullopt,
     const std::optional<const ttnn::Tensor>& epilogue_stats = std::nullopt,
     uint32_t epilogue_stats_slice_stride = 0) {
-    // Width slices only (each slice spans the full height, so the device boundary maps by a column offset)
     TT_FATAL(
         !halo_boundary.has_value() || (dram_slice_config_.has_value() &&
                                        dram_slice_config_->slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH),
@@ -872,7 +866,7 @@ Result conv2d_DRAM(
             memory_config_,
             prologue_scale,
             prologue_shift,
-            std::nullopt,  // no external halo on the 1x1 (matmul) path
+            std::nullopt,
             sliding_window::ExternalHaloWindow{},
             epilogue_stats,
             0,
@@ -1113,7 +1107,7 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
         device,
         prologue_scale,
         prologue_shift,
-        std::nullopt,  // halo_boundary: external-halo callers construct Conv2dSliceAttr directly
+        std::nullopt,
         epilogue_stats,
         epilogue_stats_slice_stride));
 }

@@ -693,13 +693,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // override needed.
     emit_cb_descriptors(cb_info, desc, all_cores, a.buffer(), output.buffer(), conv_reader_indices_buffer);
 
-    // The epilogue statistics page (fp32, 2N tiles: sums of x, sums of x*x),
-    // the reduce scaler tile and one fp32 scratch tile, as plain L1 CBs after the standard ones
     const bool epilogue_stats = operation_attributes.epilogue_stats;
     const uint32_t stats_ntiles = per_core_out_matrix_width_ntiles;
     uint32_t stats_cb_index = 0, scaler_cb_index = 0, scratch_cb_index = 0, mask_cb_index = 0;
-    // The valid output rows of each core's shard (the rest of the shard is padding the conv fills);
-    // the shards are contiguous in input_cores order
     const uint32_t stats_rows_per_core = per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
     const uint32_t stats_total_rows = batch * sliding_window_config.get_output_shape()[1] * output_image_width;
     auto stats_valid_rows = [&](uint32_t core_index) -> uint32_t {
@@ -730,8 +726,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         };
         add_plain_cb(stats_cb_index, 2 * stats_ntiles, fp32_tile, tt::DataFormat::Float32);
         add_plain_cb(scaler_cb_index, 1, bf16_tile, tt::DataFormat::Float16_b);
-        add_plain_cb(scratch_cb_index, 2, fp32_tile, tt::DataFormat::Float32);  // masked copy + square
-        add_plain_cb(mask_cb_index, 1, bf16_tile, tt::DataFormat::Float16_b);   // the partial tile's row mask
+        add_plain_cb(scratch_cb_index, 2, fp32_tile, tt::DataFormat::Float32);
+        add_plain_cb(mask_cb_index, 1, bf16_tile, tt::DataFormat::Float16_b);
     }
 
     const CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
@@ -1370,8 +1366,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
     }
 
-    // This call's stats pages: slice * stride + core * 2N (+ t); the core order is the reader's input_cores
-    // order
     std::map<CoreCoord, uint32_t> stats_core_index;
     tt::tt_metal::Buffer* stats_buffer = nullptr;
     uint32_t stats_page_base0 = 0;
@@ -1450,7 +1444,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 sender_rt_args.push_back(writer_remaining_tiles_to_push);
                 if (epilogue_stats) {
                     sender_rt_args.push_back(stats_buffer);
-                    // a core outside the input shard grid does no work and never writes a page
                     sender_rt_args.push_back(
                         stats_page_base0 +
                         (input_cores.contains(core) ? stats_core_index.at(core) : 0) * 2 * stats_ntiles);
@@ -1514,8 +1507,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     }
 
     if (epilogue_stats) {
-        // The compute kernel skips the statistics of the padded rows (runtime arg 0; the height-sharded
-        // compute kernel has no skip_compute arg, its cores are the input cores)
         TT_FATAL(input_cores == output_cores, "epilogue_stats needs the height-sharded conv");
         uint32_t ci = 0;
         for (const CoreRange& r : input_cores.ranges()) {

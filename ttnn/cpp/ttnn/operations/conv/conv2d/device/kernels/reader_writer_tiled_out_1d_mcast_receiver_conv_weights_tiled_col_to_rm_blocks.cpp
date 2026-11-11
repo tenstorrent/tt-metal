@@ -205,7 +205,6 @@ void kernel_main() {
 
 #ifdef EPILOGUE_STATS
     {
-        // The compute kernel's finished statistics page -> this core's DRAM pages
         constexpr auto stats_args = TensorAccessorArgs<STATS_CTA>();
         const auto stats_accessor = TensorAccessor(stats_args, stats_addr, 4096);
         constexpr uint32_t stats_pages = 2 * STATS_NTILES;

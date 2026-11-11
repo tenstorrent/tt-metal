@@ -56,8 +56,6 @@ void kernel_main() {
     Noc noc;
 #ifdef EPILOGUE_STATS
     {
-        // The statistics page starts at zero (the compute kernel accumulates into it) and the reduce
-        // scaler tile holds bf16 1.0 in the first row of every face
         DataflowBuffer dfb_stats(STATS_CB);
         zero_out_tiles<STATS_CB>(noc, dfb_stats);
         DataflowBuffer dfb_scaler(SCALER_CB);
@@ -72,8 +70,6 @@ void kernel_main() {
             }
         }
         dfb_scaler.push_back(1);
-        // The row mask of the tile that straddles the valid rows: bf16 1.0 on rows < valid % 32, else 0
-        // (faces 0, 1 hold rows 0-15, faces 2, 3 rows 16-31; a face row is 8 words of two bf16)
         DataflowBuffer dfb_mask(MASK_CB);
         dfb_mask.reserve_back(1);
         volatile tt_l1_ptr uint32_t* mp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_mask.get_write_ptr());

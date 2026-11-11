@@ -54,9 +54,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(src_dfb, out_dfb0);
 #ifdef PROLOGUE_AFFINE
-    // Mirrored from pack_untilize.cpp: per tile, dest0 = x * scale (row
-    // broadcast), dest1 = shift (row broadcast), dest0 = silu(dest0 + dest1), then the untilize pack of that one
-    // tile column into the row-major output. The scale / shift DFBs are bound CONSUMER and never popped.
     constexpr uint32_t scale_cb_id = dfb::scale;
     constexpr uint32_t shift_cb_id = dfb::shift;
     cb_wait_front(scale_cb_id, tiles_per_row);

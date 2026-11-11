@@ -49,8 +49,6 @@ public:
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) = 0;
     virtual std::string name() const = 0;
-    // Per-channel (scale, shift) the DRAM slice op applies (with SiLU) in its untilize pass; the L1 op
-    // then receives the already-affined ROW_MAJOR slice
     virtual std::pair<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> input_prologue() const {
         return {std::nullopt, std::nullopt};
     }

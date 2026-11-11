@@ -520,7 +520,6 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     // Per-chunk widths: explicit when given, else the uniform N/chunks split.
     const auto chunk_sizes = resolve_chunk_sizes(attributes, N);
     for (int32_t c = 0; c < static_cast<int32_t>(chunk_sizes.size()); ++c) {
-        // linear1: the SwiGLU chunk's output is half its weight width.
         const bool swiglu_out = c == attributes.swiglu_chunk;
         const uint32_t chunk_width = swiglu_out ? chunk_sizes[c] / 2 : chunk_sizes[c];
         ttnn::Shape output_shape(in0_input_tensor_shape);

@@ -47,7 +47,7 @@ struct CBIndices {
     uint32_t untilize_out_cb_id1 = 32;
     uint32_t affine_scale_cb_id = 32;
     uint32_t affine_shift_cb_id = 32;
-    uint32_t external_config_cb_id = 32;  // this core's external-route page
+    uint32_t external_config_cb_id = 32;
     uint32_t get_next_cb_id() { return next_cb_id++; }
 
 private:
@@ -210,10 +210,10 @@ ProgramDescriptor build_halo_program(
             cb_indices.src_cb_id,
             input_to_writer_cb_id0,
             input_to_writer_cb_id1,
-            ntiles_per_block,                         // number of tiles in the width dimension (channels)
-            clamped_block_size_height / TILE_HEIGHT,  // number of tiles in height dimension that make up a block
-            prologue_affine ? cb_indices.affine_scale_cb_id : 0,  // per-channel scale tiles
-            prologue_affine ? cb_indices.affine_shift_cb_id : 0,  // per-channel shift tiles
+            ntiles_per_block,
+            clamped_block_size_height / TILE_HEIGHT,
+            prologue_affine ? cb_indices.affine_scale_cb_id : 0,
+            prologue_affine ? cb_indices.affine_shift_cb_id : 0,
         };
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
@@ -356,7 +356,6 @@ ProgramDescriptor build_halo_program(
     }
     KernelDescriptor::Defines reader_0_extra_defines;
     if (prologue_affine) {
-        // the block_start_offset == 0 reader fills the scale / shift CBs from the two [1, C] TILE tensors
         const Buffer* scale_buffer = prologue_scale.value().buffer();
         const Buffer* shift_buffer = prologue_shift.value().buffer();
         reader_0_extra_defines.emplace_back("PROLOGUE_AFFINE", "1");
@@ -369,7 +368,6 @@ ProgramDescriptor build_halo_program(
         tt::tt_metal::TensorAccessorArgs(shift_buffer).append_to(core_0_reader_ct_args);
     }
     if (external_halo) {
-        // The block_start_offset == 0 reader copies the external routes from the boundary buffer
         const Buffer* boundary_buffer = halo_boundary.value().buffer();
         TT_FATAL(
             boundary_buffer->page_size() == stick_nbytes,
@@ -436,8 +434,6 @@ ProgramDescriptor build_halo_program(
                 index = is_rm_orientation ? core.y : core.x;
             }
             if (prologue_affine && external_halo) {
-                // 0 = the config page index, 1 / 2 = the prologue scale / shift, 3 / 4 = the external
-                // config and boundary buffers (all buffer addresses patched on cache hits)
                 reader_0_desc.emplace_runtime_args(
                     core,
                     {index,
@@ -446,12 +442,9 @@ ProgramDescriptor build_halo_program(
                      external_config_buffer,
                      halo_boundary.value().buffer()});
             } else if (prologue_affine) {
-                // runtime arg 0 = the config page index (read only with CONFIG_TENSOR_IN_DRAM), 1 / 2 = the scale /
-                // shift buffer addresses (patched on cache hits)
                 reader_0_desc.emplace_runtime_args(
                     core, {index, prologue_scale.value().buffer(), prologue_shift.value().buffer()});
             } else if (external_halo) {
-                // 0 = the config page index, 1 / 2 = the external config and boundary buffers
                 reader_0_desc.emplace_runtime_args(
                     core, {index, external_config_buffer, halo_boundary.value().buffer()});
             } else {
@@ -578,7 +571,6 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
     Buffer* gather1_buf = gather1_owner->buffer();
     workload_descriptor.buffers.push_back({gather1_owner, gather1_buf});
 
-    // The external routes, one DRAM page per core (always in DRAM: read once per call by one reader)
     Buffer* external_config_buf = nullptr;
     if (operation_attributes.external_halo) {
         const auto external_config_tensor = sliding_window::construct_on_host_config_tensor(

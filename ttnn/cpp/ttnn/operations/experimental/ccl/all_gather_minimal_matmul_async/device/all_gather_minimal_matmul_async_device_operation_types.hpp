@@ -59,13 +59,8 @@ struct AllGatherMinimalMatmulAsyncParams {
     // so a pinned and an unpinned call that resolve alike share one program.
     std::optional<bool> transpose_core_grid;
 
-    // linear1 (one AGMM for QKV + MLP-in): index of the chunk that gets the fused SwiGLU epilogue (its weight columns
-    // are the tile-pair-interleaved [gate|up]; output width halves). It must be the last chunk; the chunks before it
-    // form N group A, it forms group B, and each N core computes an equal share of both (grouped N split). -1 = off.
     int32_t swiglu_chunk = -1;
 
-    // Overlap the SwiGLU epilogue (fuse_swiglu, or linear1's SwiGLU chunk) with the next subblock's matmul: the SiLU
-    // and multiply run on the PACK-thread SFPU. Same SFPU code, outputs identical. Off: serial SwiGLU.
     bool swiglu_overlap = false;
 
     AllGatherMinimalMatmulAsyncParams(

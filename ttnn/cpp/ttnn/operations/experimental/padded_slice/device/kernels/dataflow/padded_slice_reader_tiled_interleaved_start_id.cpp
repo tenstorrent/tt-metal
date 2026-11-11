@@ -34,8 +34,6 @@ void kernel_main() {
     const uint32_t tile_size = dfb_in.get_tile_size();
 #ifdef PROLOGUE_AFFINE
     {
-        // The per-channel scale / shift tiles ([1, C] TILE tensors, one page per channel tile) for the
-        // untilize compute kernel; pushed once, never popped
         DataflowBuffer dfb_scale(dfb::scale);
         DataflowBuffer dfb_shift(dfb::shift);
         const auto s_scale = TensorAccessor(tensor::scale_src);
