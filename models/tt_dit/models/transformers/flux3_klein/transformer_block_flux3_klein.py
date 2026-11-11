@@ -141,7 +141,7 @@ class Flux3KleinTransformerBlock(Module):
         *,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
         mod: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
-        logical_length: int,
+        logical_length: int | ttnn.Tensor,
     ) -> ttnn.Tensor:
         shift, scale_plus_one, gate = mod
         x_norm = ttnn.squeeze(self.norm(ttnn.unsqueeze(x, 0), dynamic_weight=scale_plus_one, dynamic_bias=shift), 0)

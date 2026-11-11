@@ -31,6 +31,8 @@ PAD_MODE_ID = 3
 EARLY_DEPTH = 5
 SINGLE_DEPTH = 28
 TILE = 32
+# samples per request: the conditional and, with guidance, the unconditional one
+MAX_SAMPLES = 2
 
 ROPE_THETA = 10000
 ROPE_AXES_DIM = (32, 32, 32, 32)
@@ -340,6 +342,10 @@ class Flux3KleinPlan:
     single_mod: tuple[ttnn.Tensor, ...]
     assembly: ttnn.Tensor
     image_out: ttnn.Tensor
+    # ring-SDPA logical_n of the text stack and of the single stage: the transformer's persistent buffers (or ints
+    # without sequence parallelism), not freed with the plan
+    text_logical_n: int | ttnn.Tensor
+    single_logical_n: int | ttnn.Tensor
 
     def deallocate(self) -> None:
         for t in (
@@ -404,11 +410,43 @@ class Flux3KleinTransformer(Module):
         )
         self.proj_out = Linear(HIDDEN, IN_CHANNELS["image"], bias=False, mesh_device=device)
 
+        # The attended lengths of the text stack and the single stage change with the prompt. Ring SDPA reads them
+        # from these device tensors, written by every request, so every prompt length runs the same programs.
+        # Allocated once here, before any request: one pair per sample of a request.
+        self._logical_n = None
+        if self.sp_factor > 1:
+            self._logical_n = [
+                {stage: self._logical_n_tensor(0, on_host=False) for stage in ("text", "single")}
+                for _ in range(MAX_SAMPLES)
+            ]
+
+    def _logical_n_tensor(self, n: int, *, on_host: bool) -> ttnn.Tensor:
+        """Ring-SDPA ``logical_n`` as a [1,1,1,1] uint32 ROW_MAJOR replicated tensor."""
+        return tensor.from_torch(
+            torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self._device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=[None, None, None, None],
+            on_host=on_host,
+        )
+
+    def _write_logical_n(self, sample: int, stage: str, n: int) -> ttnn.Tensor | int:
+        if self._logical_n is None:
+            return n
+        buffer = self._logical_n[sample][stage]
+        ttnn.copy_host_to_device_tensor(self._logical_n_tensor(n, on_host=True), buffer)
+        return buffer
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in STATE_PREFIXES:
             rename_substate(state, src, dst)
 
-    def prepare_plan(self, layout: Flux3KleinSequenceLayout, ids: dict[str, torch.Tensor]) -> Flux3KleinPlan:
+    def prepare_plan(
+        self, layout: Flux3KleinSequenceLayout, ids: dict[str, torch.Tensor], *, sample: int = 0
+    ) -> Flux3KleinPlan:
+        """``sample`` picks the logical_n buffers: samples of one request that run interleaved need different ones."""
+
         def rope(mode_ids: torch.Tensor, padded: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
             return tuple(
                 tensor.from_torch(
@@ -439,6 +477,8 @@ class Flux3KleinTransformer(Module):
             single_mod=tuple(indices(i) for i in modulation_indices(layout.mode_ids(), "single")),
             assembly=indices(layout.assembly_indices()),
             image_out=indices(layout.image_out_indices()),
+            text_logical_n=self._write_logical_n(sample, "text", layout.attended("text")),
+            single_logical_n=self._write_logical_n(sample, "single", layout.attended()),
         )
 
     def embed_text(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
@@ -466,9 +506,9 @@ class Flux3KleinTransformer(Module):
             x["image_cond"] = image_cond_embedded
         for mode in layout.modes:
             mod = tuple(gather_rows(table, idx) for idx in plan.early_mod[mode])
-            x[mode] = self.early(
-                mode, x[mode], rope=plan.early_rope[mode], mod=mod, logical_length=layout.attended(mode)
-            )
+            # the image stacks' lengths are fixed per size; the text stack's follows the prompt
+            logical_length = plan.text_logical_n if mode == "text" else layout.attended(mode)
+            x[mode] = self.early(mode, x[mode], rope=plan.early_rope[mode], mod=mod, logical_length=logical_length)
 
         parts = [x[m] for m in layout.modes]
         local = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=1)
@@ -479,7 +519,7 @@ class Flux3KleinTransformer(Module):
         mod = tuple(gather_rows(table, idx) for idx in plan.single_mod)
 
         def run_block(block: Flux3KleinTransformerBlock, h: ttnn.Tensor) -> ttnn.Tensor:
-            return block(h, rope=plan.single_rope, mod=mod, logical_length=layout.attended())
+            return block(h, rope=plan.single_rope, mod=mod, logical_length=plan.single_logical_n)
 
         if cache is not None:
             h = cache(self.single_blocks, h, run_block, layout=layout, sp_axis=self._sp_axis)

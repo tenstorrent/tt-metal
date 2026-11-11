@@ -497,7 +497,7 @@ class Attention(Module):
         self,
         *,
         sequence_1: ttnn.Tensor,
-        sequence_1_length: int,
+        sequence_1_length: int | ttnn.Tensor,
         sequence_2: ttnn.Tensor | None = None,
         sequence_2_length: int = 0,
         sequence_1_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
@@ -610,6 +610,13 @@ class Attention(Module):
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
 
         if self.parallel_config.sequence_parallel.factor > 1:
+            # A device-tensor length is read by the kernels on every dispatch, so one program serves every length;
+            # its program config and core grid are those of the padded (longest) sequence.
+            config_length = (
+                sequence_1.shape[1] * self.parallel_config.sequence_parallel.factor
+                if isinstance(sequence_1_length, ttnn.Tensor)
+                else sequence_1_length
+            )
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -626,7 +633,7 @@ class Attention(Module):
                 joint_strategy="rear",
                 logical_n=sequence_1_length,
                 logical_l=sequence_2_length,
-                program_config=self.get_ring_sdpa_program_config(sequence_1_length),
+                program_config=self.get_ring_sdpa_program_config(config_length),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -637,13 +644,13 @@ class Attention(Module):
                 mesh_device=self.mesh_device,
                 topology=self.ccl_manager.topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                ccl_core_grid_offset=(0, self.get_ring_sdpa_core_grid(sequence_1_length)[1]),
+                ccl_core_grid_offset=(0, self.get_ring_sdpa_core_grid(config_length)[1]),
                 persistent_output_buffer_joint_k=persistent_joint_k,
                 persistent_output_buffer_joint_v=persistent_joint_v,
             )
         else:
             assert (
-                sequence_1_length == spatial.shape[1]
+                not isinstance(sequence_1_length, ttnn.Tensor) and sequence_1_length == spatial.shape[1]
             ), "spatial sequence must not be padded without sequence parallelism"
 
             spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(

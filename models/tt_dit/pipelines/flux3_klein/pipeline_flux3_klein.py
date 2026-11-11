@@ -342,7 +342,7 @@ class Flux3KleinPipeline:
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
-        def sample(text_rows: torch.Tensor, text_ids: torch.Tensor, text_valid: int):
+        def sample(index: int, text_rows: torch.Tensor, text_ids: torch.Tensor, text_valid: int):
             lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[0]}
             layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
             sample_ids = {"image": ids, "text": text_ids}
@@ -351,11 +351,11 @@ class Flux3KleinPipeline:
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            return transformer.prepare_plan(layout, sample_ids), embedded
+            return transformer.prepare_plan(layout, sample_ids, sample=index), embedded
 
-        samples = [sample(*text)]
+        samples = [sample(0, *text)]
         if guidance is not None:
-            samples.append(sample(*self._null_text))
+            samples.append(sample(1, *self._null_text))
         image_axes = [None, self._sp_axis, None]
         rows, rows_padded = noise.shape[0], padded_length(noise.shape[0], sp)
         x = tensor.from_torch(
