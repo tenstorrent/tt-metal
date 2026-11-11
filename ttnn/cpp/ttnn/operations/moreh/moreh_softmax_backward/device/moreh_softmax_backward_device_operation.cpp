@@ -95,15 +95,21 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
         output_grad_tensor.logical_shape(),
         output_tensor.logical_shape());
 
-    const auto& input_grad_tensor = tensor_args.input_grad_tensor;
-    if (input_grad_tensor.has_value()) {
+    if (tensor_args.input_grad_tensor.has_value()) {
+        // The factories take every buffer format from input_grad, so it must match the incoming gradient.
+        const auto& input_grad = tensor_args.input_grad_tensor.value();
+        TT_FATAL(input_grad.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
         TT_FATAL(
-            input_grad_tensor->logical_shape() == output_tensor.logical_shape(),
-            "input_grad shape {} must match output shape {}",
-            input_grad_tensor->logical_shape(),
+            input_grad.dtype() == output_grad_tensor.dtype(),
+            "input_grad dtype {} must match the output_grad dtype {}",
+            input_grad.dtype(),
+            output_grad_tensor.dtype());
+        TT_FATAL(input_grad.layout() == Layout::TILE, "input_grad must be tilized");
+        TT_FATAL(
+            input_grad.logical_shape() == output_tensor.logical_shape(),
+            "input_grad shape {} must match the output shape {}",
+            input_grad.logical_shape(),
             output_tensor.logical_shape());
-        TT_FATAL(input_grad_tensor->storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-        TT_FATAL((input_grad_tensor->layout() == Layout::TILE), "Input_grad to softmax must be tilized");
     }
 }
 

@@ -76,7 +76,8 @@ python3 $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py \
 ```
 
 The mesh-graph descriptor is per-SKU, not per-model; `sc4_mgd.textproto` is shared
-across models. For glm53, swap the manifest path to `glm53.json`.
+across models. For glm53, swap the manifest path to `glm53.json`, or use the
+static binding in 3b.
 
 The runner allocates, captures its trace, warms up, logs `setup complete,
 entering request loop`, and then blocks there until requests arrive. That idle
@@ -89,6 +90,87 @@ run it somewhere writable.
 `PREFILL_MANIFEST` must be exported inside the `bash -lc` string. Passed through
 `--mpi-args -x` it reaches only the local rank, and the other ranks fall back to
 defaults — which shows up much later as a D2D chunk plan mismatch.
+
+## 3b. GLM-5.3 from a static rank binding
+
+Deployments that pin hosts instead of running discovery launch from
+`topology_configuration/glm53_4rank.yaml`. Rank N runs mesh N of `ci/sc4_mgd.textproto`,
+the same descriptor CI uses.
+
+Pick the variant by its manifest name:
+
+| `GLM53_VARIANT` | KV cache | MTP | Users |
+|---|---|---|---|
+| `glm53` | scaled FP8 | none | 54 |
+| `glm53_mtp_kv_share` | scaled FP8 | 1 level | 53 |
+| `glm53_bf16` | BF16 | none | 34 |
+| `glm53_mtp_kv_share_bf16` | BF16 | 1 level | 31 |
+
+```bash
+cd $TT_METAL_HOME && source python_env/bin/activate
+export PYTHONPATH=$TT_METAL_HOME
+export GLM53_VARIANT=glm53
+python3 ttnn/ttnn/distributed/ttrun.py \
+  --tcp-interface ens5f0np0 \
+  --rank-binding models/demos/common/prefill/runners/topology_configuration/glm53_4rank.yaml \
+  --mpi-args "--host host0:1,host1:1,host2:1,host3:1 --map-by slot --bind-to none --tag-output -x PATH" \
+  -- python3 -m models.demos.common.prefill.runners.prefill_runner
+```
+
+Run it on `host0`. The `--host` order is the pipeline order from the prerequisites:
+rank 0 first, each next host one cable further along the ring.
+
+The manifest plus the runner defaults are the configuration. The runner applies
+the manifest with `setdefault`, so any `PREFILL_*` variable already set in the
+environment silently wins over both. Leave them unset.
+
+Set only what is specific to the deployment:
+
+- `PREFILL_H2D_SERVICE_ID`, matching the producer.
+- Migration: `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1`,
+  `PREFILL_MIGRATION_TABLE_PATH` on storage all hosts share, and
+  `PREFILL_MIGRATION_DEVICE_MAP_PATH` on host-local storage.
+- `PREFILL_HF_MODEL` / `PREFILL_TTNN_CACHE`, when the weights are not at the
+  adapter defaults. For an MTP variant, also `TT_GLM53_MTP_TTNN_CACHE`; the
+  manifest pins the MTP cache to the weka path.
+
+### Launching through `ttrun`
+
+Copy `glm53_4rank.yaml` and add the variables to its `global_env`:
+
+```yaml
+global_env:
+  PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/${GLM53_VARIANT}.json"
+  LOGURU_LEVEL: "ERROR"
+  PREFILL_H2D_SERVICE_ID: "glm53-prefill"
+  PREFILL_ENABLE_MIGRATION: "1"
+  PREFILL_MIGRATION_EXPORT_TO_FILE: "1"
+  PREFILL_MIGRATION_TABLE_PATH: "/shared/glm53/migration_table"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/glm53_device_map"
+```
+
+`global_env` is the only route that reaches every rank. `ttrun` forwards only
+`TT_*`, `TTNN_*` and a few other prefixes from the launching shell
+(`ENV_PASSTHROUGH_PREFIXES` in `ttrun.py`), so a `PREFILL_*` export reaches
+rank 0 only, and so does `--mpi-args "-x ..."`. Do not write
+`"${PREFILL_ENABLE_MIGRATION}"` into `global_env` either: an unset variable
+expands to an empty string, which then shadows the manifest and the runner
+default.
+
+Keep the copy's `rank_bindings` and `mesh_graph_desc_path` identical to the
+checked-in file.
+
+### Launching one container per rank (Helm)
+
+Set the same variables in each rank's container environment, plus
+`PREFILL_MANIFEST` pointing at the variant's file. Every rank needs an identical
+set; a rank that differs fails later with a D2D chunk plan mismatch.
+
+Remove any variable the manifest or the runner already decides, since the
+container environment wins over both.
+
+Use `ci/sc4_mgd.textproto` (4×[8,4] `RING,RING`) as the mesh-graph descriptor,
+not a `LINE,RING` copy.
 
 ## Teardown
 

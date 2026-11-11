@@ -4,6 +4,9 @@
 
 #include "inbound_socket_service_sync_program_factory.hpp"
 
+#include <algorithm>
+#include <utility>
+
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -54,18 +57,25 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     auto* backing_buffer = backing.buffer();
     auto* tokens_buffer = tokens_out.buffer();
     Buffer* overhang_buffer = has_overhang ? outputs[1].buffer() : nullptr;
-    Buffer* metadata_buffer = has_metadata ? outputs[has_overhang ? 2 : 1].buffer() : nullptr;
+    const size_t num_extra = tensor_args.extra_backings.size();
+    const size_t first_extra_output = has_overhang ? 2 : 1;
+    Buffer* metadata_buffer = has_metadata ? outputs[first_extra_output + num_extra].buffer() : nullptr;
+    uint32_t max_page_size = page_size;
+    for (const uint32_t extra_page_size : args.extra_page_sizes) {
+        max_page_size = std::max(max_page_size, extra_page_size);
+    }
 
     ProgramDescriptor desc;
 
-    // Single-slot scratch CB, sized to one page, used as per-page staging L1.
+    // Single-slot scratch CB, sized to the largest page of any segment, used as
+    // per-page staging L1.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = page_size,
+        .total_size = max_page_size,
         .core_ranges = worker_crs,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(args.scratch_cb_index),
             .data_format = datatype_to_dataformat_converter(backing.dtype()),
-            .page_size = page_size,
+            .page_size = max_page_size,
         }}},
     });
 
@@ -83,6 +93,13 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     TensorAccessorArgs(*backing_buffer).append_to(ct_args);
     TensorAccessorArgs(*tokens_buffer).append_to(ct_args);
     TensorAccessorArgs(*(has_overhang ? overhang_buffer : tokens_buffer)).append_to(ct_args);
+    // Extra segments: count, then one accessor block shared by every extra backing and
+    // output. They are all DRAM interleaved, so only the base address and page size differ,
+    // and those go in the runtime args.
+    ct_args.push_back(static_cast<uint32_t>(num_extra));
+    if (num_extra > 0) {
+        TensorAccessorArgs(*tensor_args.extra_backings[0].buffer()).append_to(ct_args);
+    }
     if (has_metadata) {
         TensorAccessorArgs(*metadata_buffer).append_to(ct_args);
     }
@@ -96,15 +113,16 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     writer.compile_time_args = ct_args;
     writer.config = WriterConfigDescriptor{};
 
-    // Distribute pages across workers
-    const uint32_t base = num_pages / num_workers;
-    const uint32_t remainder = num_pages % num_workers;
-    uint32_t cursor = 0;
+    // Distribute each segment's pages across workers; the leading workers absorb the
+    // remainder.
+    const auto worker_slice = [num_workers](uint32_t total, uint32_t i) {
+        const uint32_t base = total / num_workers;
+        const uint32_t remainder = total % num_workers;
+        const uint32_t start = (i * base) + std::min(i, remainder);
+        return std::pair<uint32_t, uint32_t>{start, start + base + (i < remainder ? 1u : 0u)};
+    };
     for (uint32_t i = 0; i < num_workers; ++i) {
-        const uint32_t n = base + (i < remainder ? 1u : 0u);
-        const uint32_t start_page = cursor;
-        const uint32_t end_page = cursor + n;
-        cursor += n;
+        const auto [start_page, end_page] = worker_slice(num_pages, i);
 
         // Buffer* entries auto-register as BufferBindings (patched on cache
         // hits); the rest are plain uint32 scalars. Order MUST match the
@@ -127,6 +145,18 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
             rt_args.emplace_back(metadata_buffer);  // arg 8: metadata output base address
         } else {
             rt_args.emplace_back(uint32_t{0});
+        }
+        // 9 + 6*s: extra segment s [backing base, output base, page size, aligned page size,
+        // start_page, end_page].
+        for (size_t s = 0; s < num_extra; ++s) {
+            const auto [seg_start, seg_end] = worker_slice(args.extra_num_pages[s], i);
+            Buffer* seg_backing = tensor_args.extra_backings[s].buffer();
+            rt_args.emplace_back(seg_backing);
+            rt_args.emplace_back(outputs[first_extra_output + s].buffer());
+            rt_args.emplace_back(args.extra_page_sizes[s]);
+            rt_args.emplace_back(static_cast<uint32_t>(seg_backing->aligned_page_size()));
+            rt_args.emplace_back(seg_start);
+            rt_args.emplace_back(seg_end);
         }
         writer.emplace_runtime_args(workers[i], rt_args);
     }

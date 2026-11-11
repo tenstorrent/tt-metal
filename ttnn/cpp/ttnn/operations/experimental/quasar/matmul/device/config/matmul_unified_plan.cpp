@@ -6,6 +6,7 @@
 // everything the factory builds from, and choose_unified_placement picks the placement whose plan is fastest.
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -240,9 +241,9 @@ MatmulUnifiedPlan make_plan(
         !base.fp32_dest_acc_en && plan.C_format == tt::DataFormat::Float16_b && !base.has_fused_activation;
     plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > (can_accumulate_in_C_slice ? 1 : 2);
     plan.accumulate_in_C_slice = can_accumulate_in_C_slice && plan.packer_l1_acc_en;
-    plan.C_partials_format = base.fp32_dest_acc_en   ? tt::DataFormat::Float32
-                             : plan.packer_l1_acc_en ? tt::DataFormat::Float16_b
-                                                     : plan.C_format;
+    // An MX C keeps Float16_b partials (see get_interm_data_format): they must not be re-quantized per K chunk.
+    plan.C_partials_format = ttnn::operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        plan.packer_l1_acc_en, base.fp32_dest_acc_en, plan.C_format);
 
     // Borrowed operands: a matching shard bound as the DFB itself, when nothing is padded.
     // A borrowed shard holds only the true C slice dims. A's must also cover all of K in one K chunk, and C's tile

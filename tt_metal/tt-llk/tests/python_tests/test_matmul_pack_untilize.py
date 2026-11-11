@@ -16,7 +16,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 
@@ -72,9 +72,9 @@ def test_matmul_pack_untilize(
         ],
         runtimes=[NUM_BLOCKS(num_blocks), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
-            tilize(src_A, formats.input_format),
+            tilize_block(src_A, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
-            tilize(src_B, formats.input_format),
+            tilize_block(src_B, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,

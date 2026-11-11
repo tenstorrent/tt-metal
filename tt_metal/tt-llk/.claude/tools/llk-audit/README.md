@@ -37,6 +37,7 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | Check | What it recalls | Hints |
 |---|---|---|
 | `mmio-race` | RISC MMIO cfg/GPR write vs. consuming Tensix instruction/MOP; is an applicable ordering primitive local? | `LOCALLY_ORDERED` / `NO_LOCAL_ORDERING` / `AUTOTTSYNC_ORDERED` (Quasar) |
+| `tensix-risc-order` | a same-thread Tensix config/GPR write to the register a RISC MMIO store writes, not ordered before the store (no `tensix_sync()` between the write and the store, and no release after the write and before the poll the store waits behind; a `wait_for_next_context(2)` poll counts only for a per-context word); literal word and GPR offsets (`FIELD_ADDR32 + 2`, `p_gpr::X + 1`) are resolved; writers held behind a stall are marked; the call sites of the store's and writers' functions are evidence, so `--changed` keeps a finding when only a caller changes; a store whose index names no register (`cfg[upk0_reg]`) is reported unresolved | `TENSIX_WRITE_SAME_FN` / `TENSIX_WRITE_AFTER_RELEASE` / `TENSIX_WRITE_NO_RELEASE` / `UNRESOLVED_TARGET` |
 | `cfg-word-overlap` | fields sharing one 32-bit CONFIG word (per register file) written by ≥2 threads; intra-thread full-word clobber | `CROSS_THREAD_SHARED_WORD` / `INTRA_THREAD_CLOBBER` / `UNRESOLVED` |
 | `semaphore-handshake` | mutex acquire/release imbalance; semaphore wait with no matching concrete init (emitted as a candidate, `safety: LOW_CONFIDENCE` when a generic init may cover it) | `MUTEX_IMBALANCE` / `WAIT_WITHOUT_INIT` |
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall (walks every write; models unit re-arm) | `NO_UNIT_DRAIN` / `THCON_ONLY` / `DRAIN_REARMED` / `PARTIAL_MATH_DRAIN` |
@@ -86,12 +87,12 @@ evidence line (so a shared word whose partner writer is in a changed file still
 surfaces). The whole tree is still parsed for cross-file context; only output is
 scoped. Use it for a PR-scoped audit.
 
-### Coverage: 8 of 9 classes have a committed checker (12 checkers — the NoC class has 4, plus cross-cutting `mop-replay`)
+### Coverage: 8 of 9 classes have a committed checker (13 checkers — the NoC class has 4, `mmio-race` has 2, plus cross-cutting `mop-replay`)
 Only `instruction-latency` has no committed checker (its surface is the SFPU files
 that don't parse under clang, and its verdict needs an out-of-tree version-pinned
 `sfpi-gcc` table → stays fully LLM-driven). The split of the other 8 by *where
 their surface lives*:
-- **In tt-llk (findings on a plain run):** `mmio-race`, `cfg-word-overlap`,
+- **In tt-llk (findings on a plain run):** `mmio-race`, `tensix-risc-order`, `cfg-word-overlap`,
   `semaphore-handshake`, `reconfig-stall`, `srcreg-bank`, `mailbox-sync`, `mop-replay`.
   `mop-replay` is not a tenth hazard class — it is a **cross-cutting** recall
   surface (a word's execution point is its MOP/replay slot, not its line) whose
