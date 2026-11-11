@@ -95,7 +95,7 @@ class OutOfScope(Exception):
 
 def engine_buckets():
     """Verify widths the engine serves (QWEN36_R16_MK_BUCKETS, comma list or 'all'). Default '8' (user decision 11-10:
-    single-user is not an RC gate). Bucket 1 stays op-by-op (md5-identical to r13). Buckets 2-7: op-by-op in v0; the
+    single-user is not an RC gate). Live widths below 8 are padded onto it (spec_engine, QWEN36_R16_MK_PAD_MIN, RC default 1); the
     plan is to pad them onto the 8-user program (padded rows kvpos -1 / GDN ctrl HOLD: no KV append, no state write),
     since decode is weight-stream bound and the 8-row engine pass beats the op-by-op 2-7 row step; that needs the real
     KV append + GDN role honouring HOLD, so it lands with M3."""

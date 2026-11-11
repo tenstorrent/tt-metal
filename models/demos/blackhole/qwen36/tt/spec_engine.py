@@ -1128,9 +1128,10 @@ class MTPSpecEngine:
 
             _eb = engine_buckets()
             if _eb is not None and len(self._buckets) > 1:
-                # QWEN36_R16_MK_PAD_MIN (default 2): the smallest live width padded onto the engine; 1 also pads u1 (post-RC,
-                # same code path: bucket 1 is then just another dropped bucket)
-                _pmin = int(os.environ.get("QWEN36_R16_MK_PAD_MIN", "2"))
+                # QWEN36_R16_MK_PAD_MIN (RC default 1, user OK 11-10): the smallest live width padded onto the engine; 1 pads u1
+                # too (prod "1,2,4,8" -> "8": every step replays the 8-user engine trace). Fallback: QWEN36_R16_MK_PAD_MIN=2
+                # keeps bucket 1 op-by-op (if the rowind gate fails at k = 1 while k = 2..7 pass).
+                _pmin = int(os.environ.get("QWEN36_R16_MK_PAD_MIN", "1"))
                 _kept = tuple(b for b in self._buckets if b < _pmin or b in _eb or b == self.B)
                 if _kept != self._buckets:
                     logger.info(f"[spec_engine] megakernel pad: buckets {self._buckets} -> {_kept} (engine buckets {sorted(_eb)})")

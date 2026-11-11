@@ -50,3 +50,12 @@ not on this RC SHA. **The binding check is the RC's own flag-on length gate: RC 
 2. Flag-on (not md5-identical by design: split-K order, deferred norm): acceptance, GPQA accuracy + paired length
    (±5% of r13), needle / long context, OR-style replay (primary), 13 router standard tests.
 3. Multi-image co-batched decode: 3 clients × 4×1024px images, flag on vs off (dev baseline 234 → 126 tok/s).
+
+## RC engine scope (spec v1.73, user decisions 11-10)
+- Engine built and traced ONLY at the 8-user verify bucket (QWEN36_R16_MK_BUCKETS default "8"), R = 32 (build_program
+  asserts R == 32 under MK_REAL_AR: real-AR residual blow-up at R < 32).
+- Every live width 1..8 is padded onto it (QWEN36_R16_MK_PAD_MIN default 1: prod buckets "1,2,4,8" -> "8"; idle rows
+  kvpos -1 / GDN ctrl HOLD). Fallback if the rowind gate fails at k = 1 but passes k = 2..7: QWEN36_R16_MK_PAD_MIN=2
+  (bucket 1 op-by-op). No KV-split verify variant at engine widths.
+- Gates: flag-off md5 = r13; rowind (tests/test_mk_row_independence.py, k = 1, 2, 5, 7); length / accuracy / OR replay
+  with the engine on.
