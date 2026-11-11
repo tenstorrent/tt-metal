@@ -617,7 +617,7 @@ def test_perf_matmul_llkx_a4(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(throttle),
-            MATMUL_STOCH_RND(stoch),
+            *([MATMUL_STOCH_RND(stoch)] if stoch is not None else []),
             *(main_templates if main_form else keyed_templates),
         ],
         runtimes=[
