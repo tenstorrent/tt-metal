@@ -2653,13 +2653,14 @@ ENGINE_ENV = dict(
     MKA_GDN24="1", MKA_GDN_WAIT="1", MKA_GDNOUT="1", MKA_UPAR="1", MKA_KVA="1",
     E1_HOLD_SKIP="1", E1_XVC="2", E1_GO_VC="2",  # batch 7b gdnskew (-1.05 ms / verify, bit-identical)
     E1_LZVC="3",  # 7o (mesh md5 identical, -10 us / launch)
+    E1_WPRE="1", E1_WYPAIR="1", E1_WYORD="1", E1_CUTST="1", E1_KTLATE="1", E1_KTSLATE="1", E1_OSIG_VC="3", E1_ATTHOLD="3",  # 7r GSTEP F set (rc1)
     E1_GB="1", E1_C_OS="p",  # G-b: GDN prefix in the role on the model's real state (b.gdn_desc / b.gdn_ctrl from integ)
     MK_RRED_LATE="1", MK_CGAR_EARLY="1",  # 7e (#14, -0.42 ms / verify; needs MK_REAL_GAR + GDN_SP_RD)  # batch 7c (needs MK_AR_RSTD_RED=gdn + E1_EARLY_REPLAY=1, the code default)
     MKA_GDN_CHECK="0", E1_GO_DBG="0",  # in-model: no GDN-role stock-op reference / gdn_out debug DRAM copy (asserted off)  # batch 5f: the GDN role skips state I/O + replay for idle / HOLD rows (padded OR shapes)
     MKA_KVPROD="1", MKA_NKVH="1", MKA_KVH="0", MKA_BS="64",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
                "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,"
-               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MKA_RQBAL_HOST=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GIN_PERCORE=1,MK_GAMMA_CONS=1,MKA_QSPREAD=13500,MKA_AWIN=1,MK_DNORM_SPLIT=1",
+               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MKA_RQBAL_HOST=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GIN_PERCORE=1,MK_GAMMA_CONS=1,MKA_QSPREAD=27000,MK_WMIX_MF=1,MK_WMIX_MP=1,MKA_AWIN=1,MK_DNORM_SPLIT=1",
     MK_STREAM_DM_OS="1",  # batch 6b (reaches os.environ for setup_bench AND the lazy per-device builds: _env_ctx)
     MKA_W_ORD="1", MKA_ATT0="0",  # qkv / wo by attention ordinal (integ repack order); integ's tables are pass-relative
     MK_AR_RSTD="1", MK_AR_RSTD_RED="gdn",  # 6e: a GDN-role core reduces the Σ partials  # batch 6 (a445c147d35): real rstd producer + gamma at the consumers (the model's gammas: weights_mk 'gamma_cons')
