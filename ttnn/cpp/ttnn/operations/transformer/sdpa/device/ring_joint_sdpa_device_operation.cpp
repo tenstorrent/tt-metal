@@ -686,6 +686,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 t->buffer() != nullptr && t->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Sol-Attn tensors must be in DRAM");
         }
+        // The reader streams the bf16 pooled K/V through the K/V CBs, which carry K/V's data format.
+        const DataType v_dtype =
+            tensor_args.input_v.has_value() ? tensor_args.input_v->dtype() : tensor_args.input_k.dtype();
+        TT_FATAL(
+            tensor_args.input_k.dtype() == DataType::BFLOAT16 && v_dtype == DataType::BFLOAT16,
+            "Sol-Attn mode needs bf16 K and V (got {} / {}): the bf16 pooled K/V are read through the K/V CBs",
+            tensor_args.input_k.dtype(),
+            v_dtype);
         TT_FATAL(
             mask.buffer() != nullptr && mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "sol_block_mask must be in DRAM");

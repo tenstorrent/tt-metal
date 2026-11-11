@@ -1014,7 +1014,6 @@ void sdpa_ring_resident(
     const bool is_last_ring_iter,
     const bool is_first_active_iter,
     [[maybe_unused]] const volatile uint8_t* block_counts) {
-    init_sdpa_streaming_semaphores<15>();
     static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     static_assert(

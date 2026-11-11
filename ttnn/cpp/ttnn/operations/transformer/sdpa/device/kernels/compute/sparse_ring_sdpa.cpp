@@ -89,6 +89,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
+    // PACK_DONE capacity 15: the resident step posts one token per S5 batch. Once per kernel: a reset between ring
+    // iterations could drop a token UNPACK has not yet taken.
+    init_sdpa_streaming_semaphores<15>();
 
     CircularBuffer(cb_identity_scale_in).wait_front(1);
     [[maybe_unused]] const volatile uint8_t* block_counts = nullptr;

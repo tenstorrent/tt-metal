@@ -639,6 +639,24 @@ class MiniMaxH3Attention(Module):
                 row_max=False,
                 **extra,
             )
+        # The ring-joint reader's gather / compact paths attend block 0 of a shard exactly when a Q chunk keeps no block
+        # there, but take the pooled bias from the mask, which then still counts block 0 as pooled (double weight).
+        # Only the resident path corrects the bias, so the others rely on the pre-pass forcing block 0 into the mask.
+        # The pre-pass can only force a full block, so block 0 of every shard must be full: a short or all-padding
+        # block 0 (the last shards when logical_n leaves fewer than 64 tokens there) is never in the mask, and the
+        # reader would then force it anyway.
+        if self.sol_mode != "resident":
+            assert (
+                self._sol_prepass.force_first_chunk
+            ), f"sol_mode={self.sol_mode!r} needs the pre-pass to force block 0 exact (force_first_chunk=True)"
+            block0 = geo.block_lengths()[:, 0]
+            short = [s for s in range(geo.shards) if int(block0[s]) < geo.block]
+            assert not short, (
+                f"sol_mode={self.sol_mode!r}: block 0 of shard(s) {short} has fewer than {geo.block} tokens "
+                f"(lengths {[int(block0[s]) for s in short]}, rows {rows}, logical_n {self.sol_logical_n}); the "
+                "reader would attend it exactly while the bias also pools it. Use sol_mode='resident' or a length "
+                "that leaves at least one full block in every shard"
+            )
         if self.sol_mask_reuse > 1 and not self.sol_fused:
             raise ValueError("sol_mask_reuse > 1 needs the fused pre-pass (sol_fused=True)")
         if self.sol_fused:
@@ -920,6 +938,14 @@ class MiniMaxH3Attention(Module):
         self, q_BHNE, k_BHNE, v_BHNE, logical_n, program_config, sol_kwargs: dict, **op_kwargs
     ) -> ttnn.Tensor:
         """One ring-joint SDPA call over the local Q rows (dense, or Sol-Attn with `sol_kwargs`)."""
+        if sol_kwargs:
+            # The pre-pass indexes the mask's K chunks by its geometry's k_chunk (`sol_prepare`), so the op must use
+            # the same one (SOL_RESIDENT_K_CHUNK and the multi-pass per-pass configs can pick another).
+            geo_k_chunk = self._sol_prepass.geo.k_chunk
+            assert program_config.k_chunk_size == geo_k_chunk, (
+                f"Sol-Attn: the op's k_chunk {program_config.k_chunk_size} differs from the pre-pass geometry's "
+                f"{geo_k_chunk}; the block mask's K chunks would not line up"
+            )
         spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             input_tensor_q=q_BHNE,
             input_tensor_k=k_BHNE,
