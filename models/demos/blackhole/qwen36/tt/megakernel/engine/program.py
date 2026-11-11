@@ -1919,12 +1919,26 @@ def setup_bench(dev, MESH, mesh_identity):
             assert txt[end] == '}', (src, txt[end - 5:end + 5])
             body = txt[loop.end():_s0].rstrip(' ')
             nc = sp['rd_ncommon'] if role == 'r' else sp['wr_ncommon']
+            # MK_CGAR_EARLY (ledger #14, default off; needs MK_REAL_GAR): on the corners' READER the GDN layer's first AR iteration (the GAR
+            # sender) runs from the step's gdn_pre_sp_hook() -- right after the out handoff / gdn_out tail, BEFORE the S' write-back (rd_sp)
+            # -- instead of after the whole body (the corners sat ~22 us idle behind rd_sp, v1.143). Same iterations, same order per RISC.
+            cgar = role == 'r' and os.environ.get('MK_CGAR_EARLY', '0') == '1'
+            if cgar:
+                assert _gar and (gmask & a2) == gmask, "MK_CGAR_EARLY needs MK_REAL_GAR (2 ARs on every GDN-type layer, the GAR first)"
+                assert 'GDN_SP_RD' in str(list(kd.defines)), "MK_CGAR_EARLY: the hook sits before the reader's S' write-back (GDN_SP_RD)"
+            ar_it0 = ('g_cgar_done' if cgar else '0')
             new_loop = (f'\n  {obj}\n  ar_s.init(0, {nc});\n  uint32_t ar_it = 0, gL = 0;\n'
+                        + ('  g_cgar_s = &ar_s; g_cgar_it = &ar_it;\n' if cgar else '') +
                         f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
                         f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
-                        f'   for (uint32_t k = 0; k < 1u + (({a2}u >> LL) & 1u); ++k) ar_s.iter(ar_it++);   // this layer\'s ARs\n'
+                        f'   for (uint32_t k = {ar_it0}; k < 1u + (({a2}u >> LL) & 1u); ++k) ar_s.iter(ar_it++);   // this layer\'s ARs\n'
+                        + ('   g_cgar_done = 0;\n' if cgar else '') +
                         '  }\n' + ('  ar_s.fini(MKAR_ITERS);\n' if role == 'r' else '  ar_s.fini();\n'))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
+            if cgar:   # the hook (called inside reader<>() of a GDN-type layer) runs this layer's first AR iteration once
+                km = txt.index('void kernel_main() {')
+                txt = (txt[:km] + 'static mkar::SendReader* g_cgar_s = nullptr;\nstatic uint32_t* g_cgar_it = nullptr;\nstatic uint32_t g_cgar_done = 0;\n'
+                       'void gdn_pre_sp_hook() { g_cgar_s->iter((*g_cgar_it)++); g_cgar_done = 1; }   // MK_CGAR_EARLY\n' + txt[km:])
             # the AR phase headers right after the first include (the role's DM_OPT pragma, if any, stays first)
             inc = f'#include "{os.path.join(MKDIR_AR, hdr)}"\n'
             if os.environ.get('MK_AR_CORNER_NOZ', '0') == '1':   # profiled runs: the corner (GDN + hosted AR sender) kernels without zones
@@ -1936,7 +1950,7 @@ def setup_bench(dev, MESH, mesh_identity):
             rt = ttnn.RuntimeArgs()
             for c in corner:
                 rt[c.x][c.y] = (sp['rd_args'] if role == 'r' else sp['wr_args'])[(c.x, c.y)]
-            dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines'])
+            dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines']) + ([('GDN_PRE_SP_HOOK', '1')] if cgar else [])
             dfs = dfs + [('MKAR_S_PUB', dict(AR_PUB_D)['MK_AR_PUB']), ('MKAR_S_PUBA', dict(AR_PUB_D)['MK_AR_PUBA'])]
             if os.environ.get('MKAR_SZONE', '0') == '1': dfs = dfs + [('MKAR_SZONE', '1')]   # hosted sender iteration zones (S-RIT / S-WIT)
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
