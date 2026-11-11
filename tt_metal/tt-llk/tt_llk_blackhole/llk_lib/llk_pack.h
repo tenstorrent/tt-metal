@@ -589,8 +589,7 @@ inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_form
         pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 }
 
-// Cold, so out of line: the call sites of the block packs carry a load, a branch and a call. Not noinline: a kernel without a fast untilize
-// init folds the call away, and the body with it.
+// Cold, so out of line: the call sites of the block packs carry a load, a branch and a call.
 template <DstSync Dst>
 __attribute__((cold)) inline void pack_close_fast_untilize_slow_()
 {
@@ -601,14 +600,17 @@ __attribute__((cold)) inline void pack_close_fast_untilize_slow_()
 
 /**
  * @brief Close a fast untilize whose uninit was not called, before a block pack: the default program, strides and DEST offset registers come back, the W offset state goes stale.
- * Nothing in a kernel that does not run the fast untilize pack: the flag is never written and the call folds away.
+ * Nothing in a kernel without llk_pack_fast_untilize.h.
  */
 template <DstSync Dst>
 inline void _llk_pack_close_fast_untilize_()
 {
-    if (pack_fast_untilize_seen && LLK_PACK_FAST_UNTILIZE_OPEN())
+    if constexpr (pack_fast_untilize_linked<Dst>)
     {
-        pack_close_fast_untilize_slow_<Dst>();
+        if (pack_fast_untilize_seen && LLK_PACK_FAST_UNTILIZE_OPEN())
+        {
+            pack_close_fast_untilize_slow_<Dst>();
+        }
     }
 }
 
@@ -631,7 +633,13 @@ inline void _llk_pack_close_fast_untilize_()
  * @note mutex_ADC has to match the value given to @ref _llk_pack_init_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only, see @ref _llk_pack_init_.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false, bool rmw_dest = (Dst == DstSync::SyncFull && pack_mode == PackMode::Default)>
+template <
+    DstSync Dst,
+    bool is_fp32_dest_acc_en,
+    PackMode pack_mode = PackMode::Default,
+    bool mutex_ADC     = false,
+    bool rmw_dest      = (Dst == DstSync::SyncFull && pack_mode == PackMode::Default),
+    bool w_invalidate  = true>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     static_assert(
@@ -643,7 +651,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination<!rmw_dest>(address);
+    program_packer_destination<!rmw_dest, w_invalidate>(address);
 
     ckernel::ckernel_template::run();
 
@@ -658,7 +666,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
  * @tparam pack_mode: Packing layout, must be PackMode::Default.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false, bool w_invalidate = true>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {
     static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
@@ -670,7 +678,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination<!rmw_dest>(address);
+    program_packer_destination<!rmw_dest, w_invalidate>(address);
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
@@ -691,12 +699,12 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 /**
  * The destination words of _llk_pack_block_closed_, issued ahead of the math wait of a full-sync block.
  */
-template <bool rmw_dest = false>
+template <bool rmw_dest = false, bool w_invalidate = true>
 inline void _llk_pack_block_closed_pre_(const std::uint32_t start_tile_index, const std::uint32_t address)
 {
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination<!rmw_dest>(address);
+    program_packer_destination<!rmw_dest, w_invalidate>(address);
 }
 
 /**
@@ -706,10 +714,10 @@ inline void _llk_pack_block_closed_run_(const std::uint32_t num_tiles, const std
 {
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
     // Rewriting an unchanged stride cost the call up to 8 cycles.
-    if (tile_stride != pack_ch1_w_stride)
+    if (tile_stride != pack_ch1_w_stride())
     {
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
-        pack_ch1_w_stride = tile_stride;
+        pack_ch1_w_stride_set(tile_stride);
     }
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
@@ -721,7 +729,7 @@ inline void _llk_pack_block_closed_run_(const std::uint32_t num_tiles, const std
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool rmw_dest = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool rmw_dest = false, bool w_invalidate = true>
 inline void _llk_pack_block_closed_(
     const std::uint32_t start_tile_index,
     const std::uint32_t address,
@@ -736,7 +744,7 @@ inline void _llk_pack_block_closed_(
         "The block exceeds the destination register sync region");
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
 
-    _llk_pack_block_closed_pre_<rmw_dest>(start_tile_index, address);
+    _llk_pack_block_closed_pre_<rmw_dest, w_invalidate>(start_tile_index, address);
     _llk_pack_block_closed_run_(num_tiles, tile_stride, num_faces);
 }
 
@@ -850,10 +858,10 @@ inline void _llk_pack_block_closed_fast_(
 
     program_packer_destination<false>(address);
 
-    if (tile_stride != pack_ch1_w_stride)
+    if (tile_stride != pack_ch1_w_stride())
     {
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
-        pack_ch1_w_stride = tile_stride;
+        pack_ch1_w_stride_set(tile_stride);
     }
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
@@ -876,7 +884,7 @@ inline void _llk_pack_block_w_init_(const std::uint32_t address, const std::uint
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
     program_packer_destination<false>(address);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
-    pack_ch1_w_stride = tile_stride;
+    pack_ch1_w_stride_set(tile_stride);
 }
 
 // The packer adds the channel-1 W counter times its stride to the output address and wraps at 256 KB (the 16 byte words below).

@@ -175,8 +175,7 @@ __attribute__((always_inline)) inline void block(
     const std::uint32_t forms = folded_forms<sync, fp32, out_format>(num_tiles);
     if (forms == 1)
     {
-        state.seen  = 1;
-        state.valid = 0;
+        state.seen = 1;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
@@ -192,7 +191,6 @@ __attribute__((always_inline)) inline void block(
         {
             _llk_pack_close_fast_untilize_<sync>();
         }
-        state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
@@ -213,7 +211,6 @@ __attribute__((always_inline)) inline void block(
     }
     if (f == 'T')
     {
-        state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
@@ -222,7 +219,6 @@ __attribute__((always_inline)) inline void block(
     }
     if (f != 'W')
     {
-        state.valid = 0;
         if constexpr (form == 1)
         {
             _llk_pack_block_<sync, fp32, ckernel::PackMode::Default>(tile_index, address, num_tiles);
@@ -239,10 +235,10 @@ __attribute__((always_inline)) inline void block(
     {
         // llk_pack_w_take: the output base is programmed again, the stride only when it changed
         program_packer_destination<false>(address);
-        if (tile_stride != pack_ch1_w_stride)
+        if (tile_stride != pack_ch1_w_stride())
         {
             cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
-            pack_ch1_w_stride = tile_stride;
+            pack_ch1_w_stride_set(tile_stride);
         }
         state.valid = 1;
         state.page  = page;
