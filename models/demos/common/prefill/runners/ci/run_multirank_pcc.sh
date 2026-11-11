@@ -152,7 +152,17 @@ case "${MODEL}" in
     # producer can read back (its vLLM traces are raw streams, read by tests/sparse_mla/k31_trace.py), so the
     # producer only drives the request and checks no KV. K3's trace supplies the prompt tokens. sc1 only:
     # a multi-rank producer must verify (see prefill_producer), and there is nothing to verify against.
-    [ "${CONFIG}" = sc1 ] || { echo "${MODEL} runs sc1 only (no K3.1 golden for a multi-rank read-back)" >&2; exit 2; }
+    # PREFILL_K31_SC4_SMOKE=1 runs sc4 anyway, all 93 layers, with a single-rank producer that only feeds tokens
+    # (no read-back, no PCC gate), to check the four-stage pipeline runs before a P->D migration.
+    K31_SC4_SMOKE=0
+    if [ "${CONFIG}" = sc4 ] && [ "${PREFILL_K31_SC4_SMOKE:-0}" = 1 ]; then
+      K31_SC4_SMOKE=1
+      REQUEST_LEN="${PREFILL_SC4_REQUEST_LEN:-${GOLDEN_LEN}}"
+      # The manifest's 1,064,960 x 100 users is CI's 1M-context shape; with K3.1's indexer cache the expert weights
+      # no longer fit in DRAM (bank_manager OOM on load). 245,760 is sc1's shape, 24 layers per galaxy as here.
+      VARIANT_MAX_SEQ_LEN="${PREFILL_SC4_MAX_SEQ_LEN:-245760}"
+    fi
+    [ "${CONFIG}" = sc1 ] || [ "${K31_SC4_SMOKE}" = 1 ] || { echo "${MODEL} runs sc1 only (no K3.1 golden for a multi-rank read-back; PREFILL_K31_SC4_SMOKE=1 for a feed-only sc4 smoke)" >&2; exit 2; }
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
     SC1_NUM_LAYERS=24
@@ -164,6 +174,24 @@ case "${MODEL}" in
       export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=INFO; export TT_SPARSE_MLA_OVERLAP_PROFILE=off;"
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     PERF_BASELINES=""
+    if [ "${K31_SC4_SMOKE}" = 1 ] && [ "${PREFILL_K31_PD:-0}" = 1 ]; then
+      # P->D through tt-d-gen's KV Manager: the runners export the table (PREFILL_PD_TABLE_PATH) and each
+      # host's device map to files, and migration_driver replaces the producer: it feeds the prompt, POSTs
+      # /migrate to the prefill leader KVM, then writes the handoff and the DONE sentinel for decode.
+      : "${PREFILL_PD_TABLE_PATH:?PREFILL_K31_PD=1 needs PREFILL_PD_TABLE_PATH on shared storage}"
+      : "${PREFILL_MIGRATION_KVM_URL:?PREFILL_K31_PD=1 needs PREFILL_MIGRATION_KVM_URL}"
+      RUNNER_ENV+=" export PREFILL_MIGRATION_EXPORT_TO_FILE=1; \
+        export PREFILL_MIGRATION_DEVICE_MAP_PATH=${PREFILL_PD_DEVICE_MAP:-/tmp/prefill_device_map.txt};"
+      PRODUCER_MODULE=migration_driver
+      PRODUCER_ENV+=" export PREFILL_MIGRATION_KVM_URL='${PREFILL_MIGRATION_KVM_URL}'; \
+        export PREFILL_MIGRATION_KVM_RECEIVER='${PREFILL_MIGRATION_KVM_RECEIVER:-decode-0}'; \
+        export PREFILL_MIGRATION_PAIRS='${PREFILL_MIGRATION_PAIRS:-0:1}'; \
+        export PREFILL_MIGRATION_SRC_ENDPOINT_ID=1; export PREFILL_MIGRATION_DEST_ENDPOINT_ID=0; \
+        export MIGRATION_DONE_FILE='${MIGRATION_DONE_FILE:?}'; \
+        export PREFILL_MIGRATION_HANDOFF_PATH='${PREFILL_MIGRATION_HANDOFF_PATH:?}'; \
+        export PREFILL_VERIFY_MIGRATION=off; \
+        ${PREFILL_MIGRATION_DUMP_SRC_KV:+export PREFILL_MIGRATION_DUMP_SRC_KV='${PREFILL_MIGRATION_DUMP_SRC_KV}';}"
+    fi
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -260,7 +288,7 @@ mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${RUN_NAME}_prefill_ci_mr.XXXXXX")
 GATE_LOG="${MR_DIR}/gates.log"
-export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
+export TABLE_PATH="${PREFILL_PD_TABLE_PATH:-${MR_DIR}/kv_chunk_table.pb}"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 PRODUCER_LOG="${MR_DIR}/producer.log"
@@ -432,6 +460,12 @@ if [ "${PP_RANKS}" -eq 0 ]; then
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+if [ "${K31_SC4_SMOKE:-0}" = 1 ]; then
+  # Feed-only: one producer on rank 0's host. A multi-rank producer only runs validators, which need a golden.
+  HOSTS="${HOSTS%%,*}"
+  PRODUCER_PLACEMENT=(-np 1 --map-by slot)
+  echo "K3.1 sc4 smoke: single-rank feed-only producer on ${HOSTS}"
+fi
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
@@ -480,7 +514,7 @@ set +e
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
+    exec python3 -m models.demos.common.prefill.runners.${PRODUCER_MODULE:-prefill_producer}" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
 
