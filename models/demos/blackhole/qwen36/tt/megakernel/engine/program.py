@@ -278,7 +278,31 @@ def setup_bench(dev, MESH, mesh_identity):
     for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
     members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
     if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
-    if ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
+    RQ_S = [i for i in ACT if fcores[i].x < GX and fcores[i].y < GY]   # MKA_RQPOS / RQBAL pools: STREAM, then EXT
+    RQ_E = [i for i in ACT if i not in RQ_S]
+    def rq_layout(mu):
+        """MKA_RQPOS member layout (kernel twin: mka2_reader.cpp MKA_RQBAL block): users take contiguous slices of the
+        STREAM and EXT pools, s_u ∝ m_u (1 <= s_u <= m_u, sum = len(RQ_S)); rank r takes STREAM at the tree-internal
+        ranks (r % FAN == 0) and once the user's EXT share is used, else EXT (owners stay tree leaves)."""
+        NS_, N_ = len(RQ_S), sum(mu)
+        su = [min(m_, max(1, NS_ * m_ // N_)) for m_ in mu]
+        while sum(su) > NS_: k_ = max(range(len(su)), key=lambda u_: (su[u_], -u_)); su[k_] -= 1
+        while sum(su) < NS_:
+            k_ = max((u_ for u_ in range(len(su)) if su[u_] < mu[u_]), key=lambda u_: (mu[u_] - su[u_], -u_)); su[k_] += 1
+        out, s0, e0 = [], 0, 0
+        for u_, m_ in enumerate(mu):
+            sN, eN, si, ei, lay = su[u_], m_ - su[u_], 0, 0, []
+            for r_ in range(m_):
+                if ((r_ % FAN == 0 or ei == eN) and si < sN) or ei == eN: lay.append(RQ_S[s0 + si]); si += 1
+                else: lay.append(RQ_E[e0 + ei]); ei += 1
+            out.append(lay); s0 += sN; e0 += eN
+        return out
+    if ('MKA_RQPOS', '1') in MKDEF:   # static groups by the RQBAL rule at equal lengths (RQDYN == RQBAL bit for bit)
+        assert len(ACT) % NU == 0, (len(ACT), NU)
+        members = rq_layout([len(ACT) // NU] * NU)
+        for u_, m_ in enumerate(members):
+            for i_ in m_: grp[i_] = u_
+    elif ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
         _sx = lambda f_: fcores[f_].x < GX and fcores[f_].y < GY
         for m_ in members:
             e_ = [f_ for f_ in m_ if not _sx(f_) and f_ != m_[0]]
@@ -598,14 +622,14 @@ def setup_bench(dev, MESH, mesh_identity):
             assert QSK and GDN24, "MK_GDN_INPROJ needs MKA_QSK, MKA_GDN24 and MK_V12_CB (default on) (tiles land in the GDN cores' staging CB 41, planned address)"
             GN, GNR = 65, 2060
             GLS = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGL = len(GLS)
-            GLAY = _WEIGHTS['gdn_in']['layout'] if 'gdn_in' in _WEIGHTS else _wl().GdnInSplitKLayout(BANK_LOC, banks, gx=GX)   # engine/weight_layouts.py
-            GSL_, _gb, _go, PGL = GLAY.slices, GLAY.bank, GLAY.off, GLAY.pages_per_layer
+            GINLAY = _WEIGHTS['gdn_in']['layout'] if 'gdn_in' in _WEIGHTS else _wl().GdnInSplitKLayout(BANK_LOC, banks, gx=GX)   # engine/weight_layouts.py
+            GSL_, _gb, _go, PGL = GINLAY.slices, GINLAY.bank, GINLAY.off, GINLAY.pages_per_layer
             # gdn_in source: injected (G: _WEIGHTS['gdn_in'] = dict(tensor, layout), GDN-ordinal pages, golds skipped);
             # MK_GIN_W=<torch file {layer: [H, 2060 | 2080]}>: real per-device gdn_in (integ gdn_in_mats, device 0), exactly
             # the model's tiles, cycled over the GDN layers; else random, γ-folded, x 2^(g % 2)
             _gw_path = os.environ.get('MK_GIN_W')
             if 'gdn_in' in _WEIGHTS:
-                wg_all = _WEIGHTS['gdn_in']['tensor']; _gws = None
+                gin_w_all = _WEIGHTS['gdn_in']['tensor']; _gws = None
             else:
                 if _gw_path:
                     _gw = torch.load(_gw_path); _gk = sorted(_gw)
@@ -616,9 +640,9 @@ def setup_bench(dev, MESH, mesh_identity):
                     torch.manual_seed(11)
                     gw_t = torch.randn(H, GN * TILE) / math.sqrt(H); gw_t[:, GNR:] = 0   # (wg_t is the MLP gate)
                     _gws = [gam[:, None] * gw_t] * NGL; _gsc = [2.0 ** (g_ % 2) for g_ in range(NGL)]
-                wg_all = _wl().pack_gdn_in(_gws, GLAY, scales=_gsc, dev=dev)
-            wgq = ttnn.to_torch(wg_all).float().reshape(NGL, PGL, TILE, TILE)
-            wgfq = GLAY.unpack(wgq)   # as the device holds it
+                gin_w_all = _wl().pack_gdn_in(_gws, GINLAY, scales=_gsc, dev=dev)
+            gin_wq = ttnn.to_torch(gin_w_all).float().reshape(NGL, PGL, TILE, TILE)
+            wgfq = GINLAY.unpack(gin_wq)   # as the device holds it
             if _gw_path and _gws is not None: print(f"[gin] real gdn_in BFP4 round trip lossless (device tiles == model tiles): {all(torch.equal(wgfq[g_], _gws[g_]) for g_ in range(NGL))}", flush=True)
             gold_gin = [(rstd_g[:, None] * (xb.double() @ wgfq[g_].double())).float() for g_ in range(NGL)]
             gin_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGL * GN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -918,7 +942,7 @@ def setup_bench(dev, MESH, mesh_identity):
         # tile (column c, K-row r) -> the GDN core straight below the column, (c, 8 + r % 2), slot r // 2: a pure +y NOC0
         # write that never crosses the DRAM column (crossing it cost 32-46 us under the weight stream, d30u20 chip 16)
         ph = dev.worker_core_from_logical_core(ttnn.CoreCoord(key[0], GY + key[1] % 2))
-        return [sl_.nt, own, t_, wg_all.buffer_address(), _go[key] * banks + _gb[key], PGL, ph.x, ph.y, VADDR['gin'] + (key[1] // 2) * 2048,
+        return [sl_.nt, own, t_, gin_w_all.buffer_address(), _go[key] * banks + _gb[key], PGL, ph.x, ph.y, VADDR['gin'] + (key[1] // 2) * 2048,
                 ttnn.get_global_semaphore_address(GIN_CNT), gin_dbg.buffer_address()]
     def gin_cargs(fi):
         if not (RQKV and GIN): return []
@@ -1088,13 +1112,25 @@ def setup_bench(dev, MESH, mesh_identity):
                                     sum(([kvs[L_].buffer_address(), kvvs[L_].buffer_address()] for L_ in _att_l), []) + [KVBS, NKVH])] * _ncore, kgrid)
                 RQ_REPLAY, RQ_ATTN = _rb.buffer_address(), _ab.buffer_address()
                 RQ_TENS += [_rb, _ab]
-            # per-core KVP table: [0] info, [1] b0, [2] pt window base, [KVP_PT ..] page-table window (64 B aligned)
+            # per-core KVP table: [0] info, [1] b0, [2] pt window base, [3, 3 + T) row limits, [3 + T] RQBAL assignment
+            # (user | nrecv << 8 | root << 16), [KVP_PT ..] page-table window (64 B aligned)
+            RQBAL = ('MKA_RQBAL', '1') in MKDEF
+            assert not RQBAL or ('MKA_RQDYN', '1') not in MKDEF, 'MKA_RQBAL includes the dynamic split (no MKA_RQDYN)'
             _smax = max(RNG[fi_][1] - RNG[fi_][0] for fi_ in ACT)
+            if RQBAL: _smax = max(_smax, -(-NU * NBK // len(ACT)) + 4)   # proportional membership: ~ total blocks / cores
             KVP_PTW = (_smax + BS32 - 1) // BS32 + 1 + 16
-            kvp_t = _l1_tab([[0] * (-(-(3 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
-            KVP_PT = 3 + T + (-(kvp_t.buffer_address() + 4 * (3 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
+            kvp_t = _l1_tab([[0] * (-(-(4 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
+            KVP_PT = 4 + T + (-(kvp_t.buffer_address() + 4 * (4 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
             assert (kvp_t.buffer_address() + 4 * KVP_PT) % 64 == 0, ('KVP table alignment', kvp_t.buffer_address(), KVP_PT)
             RQ_TENS += [rq_kvpos, rq_cos, rq_sin, rq_pt, kvp_t]
+            RQB_L = RQ_S + RQ_E   # MKA_RQBAL table: STREAM pool, then EXT pool (rq_layout)
+            RQB_IDX = {f_: i_ for i_, f_ in enumerate(RQB_L)}
+            if RQBAL:
+                assert sorted(RQB_L) == sorted(ACT) and len(RQB_L) <= 255
+                _w = [fphys[f_].x | (fphys[f_].y << 8) for f_ in RQB_L]
+                rqb_t = _l1_tab([_w + [0] * (-len(_w) % 4)] * _ncore, kgrid)
+                RQ_TENS.append(rqb_t)
+                MKDEF = MKDEF + [('MKA_RQB_TAB', f"{rqb_t.buffer_address()}u"), ('MKA_RQB_N', str(len(RQB_L))), ('MKA_RQB_NS', str(len(RQ_S)))]
             torch.manual_seed(17)
             qk_w = 0.1 * torch.randn(ATT0 + NATT_, 2, 256)   # checkpoint w; applied gamma = bf16(1 + w)
             qk_g = (1.0 + qk_w).bfloat16().float()
@@ -1199,7 +1235,7 @@ def setup_bench(dev, MESH, mesh_identity):
         return [(HC.index(fi) if fi in HC else 255) | (KVA_ROLE.get(fi, 0) << 8)] + sum(([fphys[h_].x, fphys[h_].y] for h_ in HC), []) + [kd_t.buffer_address()] + \
             ([HG_ADDR if fi in HC else 0] if ('MKA_RQPOS', '1') in MKDEF else [])
     RMASK = ('MKA_RMASK', '1') in MKDEF
-    MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if RMASK else {}   # last-block core -> user
+    MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if (RMASK and ('MKA_RQPOS', '1') not in MKDEF) else {}   # last-block core -> user (RQPOS: masks from kvpos)
     if RMASK:
         assert RQNR
         mk = torch.ones(NU, TILE, TILE)
@@ -1644,6 +1680,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 for k in range(FAN - 1): o += [fphys[lst[k]].x, fphys[lst[k]].y] if k < len(lst) else [0, 0]
                 return o
             pp = fphys[par]
+            if ('MKA_RQBAL', '1') in MKDEF: sb0, sb1 = RQB_IDX[fi], len(RQB_L)   # reader: global index / list length
+            elif ('MKA_RQDYN', '1') in MKDEF: sb0, sb1 = r, n                    # reader: rank / group size (even split)
             sdpa_r = [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, has_p, pp.x, pp.y, plvl, len(ch0)] + xy(ch0) + [len(ch1)] + xy(ch1) + [1 if r == 0 else 0, outs.buffer_address(), QRP.x, QRP.y]
             isS = fi in stream_idx
             WO_NOC0 = ('MKA_WO_NOC0', '1') in MKDEF

@@ -86,14 +86,20 @@ for it in range(ITERS):
                 return o_
             _db = torch.stack([(_db[:V_R, i_] if i_ % 2 == 0 else _unpk(_db[:, i_])) for i_ in range(AR_NAR * 2)], 1)
         if it == 0: _rprev = xb.clone()[:V_R]
+        _x0_pass = _rprev.clone()   # this pass's layer-0 mixer x (the residual the previous pass left; x at iter 0)
         _worst = []
+        # MKA_UPAR: an attention AR's inputs differ by device parity (own users g = 2u + d % 2): res = prev + ring/2 *
+        # (in_dev0 + in_dev1) -- every user row comes from exactly one device per KV-head pair (V_R = 32 only)
+        _UP = os.environ.get('MKA_UPAR', '0') == '1' and V_R == 32
+        _db1 = _to_torch(ttnn.get_device_tensors(ar_dbgt)[1]).float().reshape(TILE, AR_NAR * 2, H) if _UP else None
         for k_ in range(AR_NAR):
             _in, _res = _db[:, 2 * k_], _db[:, 2 * k_ + 1]
+            if _UP and (AR_ATYPE >> k_) & 1: _in = 0.5 * (_in + _db1[:, 2 * k_])
             _g = (_rprev + AR.ring * _in).bfloat16().float()
             _p = torch.corrcoef(torch.stack([_res.flatten(), _g.flatten()]))[0, 1].item()
             _worst.append((round(_p, 6), k_, 'attn' if (AR_ATYPE >> k_) & 1 else 'mlp', round((_res - _g).abs().max().item(), 4), round(_g.abs().max().item(), 3)))
             _rprev = _res
-        print(f"[ar] iter {it} per-AR check (res = prev + ring*in): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
+        print(f"[ar] iter {it} per-AR check (res = prev + ring*in{' | UPAR attn: ring/2*(in_d0+in_d1)' if _UP else ''}): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
         if it == 0:   # what the first AR's residual started from: the stand-in x (expected) or zero
             _r0, _i0 = _db[:, 1], _db[:, 0]
             _pz = torch.corrcoef(torch.stack([_r0.flatten(), (AR.ring * _i0).bfloat16().float().flatten()]))[0, 1].item()
@@ -131,13 +137,32 @@ for it in range(ITERS):
             rat.append((ci, round(r_.item(), 3), round(pc_, 4)))
         bad = [t for t in rat if abs(t[1] - 1) > 0.02 or t[2] < 0.999]
         print(f"[fm11] diag bad cores {len(bad)}: {bad[:40]}", flush=True)
+    if REAL_AR and globals().get('GIN'):   # G-a golds from the x the AR delivered to each GDN layer's mixer: rstd(x) * (x [.] γ_L) @ W
+        _gx = {}
+        if AR_DBG:   # program order of the ARs as in the qkv regold: [attention / GDN AR], MLP AR per layer
+            _k = 0
+            for L_ in range(NL):
+                if not is_attn_layer(L_): _gx[L_] = _db[:, 2 * (_k - 1) + 1] if _k > 0 else _x0_pass
+                _k += 1 + (1 if (REAL_AAR and (is_attn_layer(L_) or ('MK_REAL_GAR', '1') in MKDEF)) else 0)
+        elif AR_SEQ:
+            _gx = {L_: x_ for L_, x_ in _xin_seq.items() if not is_attn_layer(L_)}
+        for g_, L_ in enumerate(GLS):
+            if L_ not in _gx: continue
+            x_ = _gx[L_]
+            if x_.shape[0] < M: x_ = torch.cat([x_, torch.zeros(M - x_.shape[0], H)], 0)
+            _rs_ = _rstd_of(x_)   # rstd of the un-scaled residual; γ scales the normalised x
+            if AR_GAMMA or GAMMA_CONS: x_ = (x_ * AR_GTAB[L_, 0][None, :]).bfloat16().float()
+            gold_gin[g_] = (_rs_[:, None] * (x_.double() @ wgfq[g_].double())).float()
+        print(f"[gin] iter {it} in-proj golds from the AR-delivered x for GDN layers {sorted(_gx)}" if _gx else f"[gin] iter {it} in-proj golds: static x (no AR chain to read)", flush=True)
     if globals().get('GIN'):   # MK_GDN_INPROJ: the in-proj tiles (bench-only DRAM copy) vs rstd * x @ W_gin per GDN layer
         gv_ = ttnn.to_torch(gin_dbg).float().reshape(TILE, NGL, GN * TILE)
         for g_ in range(NGL):
             d_, gg_ = gv_[:V_R, g_], gold_gin[g_][:V_R]
             pc_ = torch.corrcoef(torch.stack([d_.flatten(), gg_.flatten()]))[0, 1].item()
             pad0 = bool((gv_[:, g_, GNR:] == 0).all())
-            print(f"[gin] iter {it} GDN layer {g_} (L{GLS[g_]}) in-proj pcc {pc_:.5f} max|err| {(d_ - gg_).abs().max().item():.4f} |gold|max {gg_.abs().max().item():.3f} pad exact 0 {pad0}", flush=True)
+            nf_ = int((~torch.isfinite(d_)).sum()); nz_ = bool((d_ == 0).all())   # non-finite elements / never written (all 0)
+            print(f"[gin] iter {it} GDN layer {g_} (L{GLS[g_]}) in-proj pcc {pc_:.5f} max|err| {(d_ - gg_).abs().max().item():.4f} |gold|max {gg_.abs().max().item():.3f} pad exact 0 {pad0}"
+                  f" non-finite {nf_}{' NOT WRITTEN' if nz_ else ''}", flush=True)
     pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
     if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the pass's last K-row delivery left on the STREAM cores (rows 0-7 = the
@@ -250,6 +275,10 @@ for it in range(ITERS):
                 _pp.append(f"g{gu_}:{_pc(vs[L][uu, :NQH * T], o_):.6f}/{_pc(golds_s[L][uu, :NQH * T], o_):.6f}")
             print(f"[rqpos] layer {L} PROD-OP SDPA (prod q, softmax with -inf causal mask) per user engine/torch-gold vs prod: {' '.join(_pp)}", flush=True)
             for t_ in (qkt, gam, nrm, qkm, part, rop, tail): ttnn.deallocate(t_)
+    if ('MKA_RQPOS', '1') in MKDEF and it == ITERS - 1:   # bit-identity fingerprints of this iteration's SDPA / wo outputs
+        import hashlib
+        _h = lambda t_: hashlib.md5(ttnn.to_torch(t_).float().numpy().tobytes()).hexdigest()[:12]
+        print(f"[rqpos] iter {it} md5 sdpa {_h(outs)}" + (f" wo {_h(wod)}" if RWO else ''), flush=True)
     if MESH and ('MKA_RQPOS', '1') in MKDEF and os.environ.get('MKA_UPAR', '0') == '1':
         # per device d (own users g = 2u + d % 2): SDPA / wo vs that parity's golds -> every user 0-7 covered on the mesh
         _od = [_to_torch(t_).float().reshape(NL, NU, TILE, DHD) for t_ in ttnn.get_device_tensors(outs)]
