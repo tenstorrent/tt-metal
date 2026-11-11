@@ -161,9 +161,8 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     // Tile sizes
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);

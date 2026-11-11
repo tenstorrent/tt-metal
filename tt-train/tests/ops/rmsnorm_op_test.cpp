@@ -912,17 +912,17 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
             ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, dy, gate, compute_dgamma, da, dgamma_components, dgate);
         EXPECT_EQ(device->num_program_cache_entries(), num_programs) << suffix;
 
-        EXPECT_EQ(fw[0].buffer()->address(), out.buffer()->address());
-        EXPECT_EQ(fw[1].buffer()->address(), rms.buffer()->address());
-        EXPECT_EQ(bw[0]->buffer()->address(), da.buffer()->address());
-        EXPECT_EQ(bw[2]->buffer()->address(), dgate.buffer()->address());
+        EXPECT_EQ(fw[0].mesh_buffer().address(), out.mesh_buffer().address());
+        EXPECT_EQ(fw[1].mesh_buffer().address(), rms.mesh_buffer().address());
+        EXPECT_EQ(bw[0]->mesh_buffer().address(), da.mesh_buffer().address());
+        EXPECT_EQ(bw[2]->mesh_buffer().address(), dgate.mesh_buffer().address());
         expect_close(ttml::core::to_xtensor(out), ref.out, "preallocated out" + suffix);
         expect_close(ttml::core::to_xtensor(rms), ref.rms, "preallocated rms" + suffix);
         expect_close(ttml::core::to_xtensor(da), ref.dx, "preallocated dx" + suffix, kDxTol);
         expect_close(ttml::core::to_xtensor(dgate), ref.dgate, "preallocated dgate" + suffix);
         ASSERT_EQ(bw[1].has_value(), compute_dgamma);
         if (compute_dgamma) {
-            EXPECT_EQ(bw[1]->buffer()->address(), dgamma_components->buffer()->address());
+            EXPECT_EQ(bw[1]->mesh_buffer().address(), dgamma_components->mesh_buffer().address());
             const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(*dgamma_components));
             const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
             expect_close(dgamma, ref.dgamma, "preallocated dgamma");
