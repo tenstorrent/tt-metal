@@ -18,7 +18,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 import ttnn
 from models.common.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
 from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
-from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_glue, pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import clamp_text
 
 _PROF_EVERY = int(
@@ -457,7 +457,9 @@ class DSV41PrefillLayer:
         mc, cc = L.mesh_config, L.ccl
         eps = L.eps
         pka, pkf = self._pk()
-        f32 = lambda t: t if t.dtype == ttnn.float32 else ttnn.typecast(t, ttnn.float32)
+        # DSV41_PF_GLUE_TC / _FUSE (T19): pk_comb reads bf16 y operands directly, no bf16 -> fp32 typecast op in front of the expand
+        keep16 = pf_glue.on("DSV41_PF_GLUE_TC")
+        f32 = lambda t: t if (keep16 or t.dtype == ttnn.float32) else ttnn.typecast(t, ttnn.float32)
         _mark("start")
         pre_a, post_a, comb_a = pka.mixes(x)
         h_own = pka.collapse_norm(x, pre_in, L.attn_norm_w, eps)  # [1,1,N,D] bf16, own chunks g = 0..n8-1
@@ -538,7 +540,8 @@ class DSV41PrefillLayer:
         _mark("shared")
         m_all = f32(ttnn.concat(ms, dim=2) if len(ms) > 1 else ms[0])
         for t in ms:
-            ttnn.deallocate(t)
+            if t is not m_all:
+                ttnn.deallocate(t)
         x3 = pkf.expand(m_all, x2, post_f, comb_f, sh_all)
         for t in (m_all, sh_all, x2, post_f, comb_f):
             ttnn.deallocate(t)
