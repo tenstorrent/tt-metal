@@ -392,8 +392,10 @@ inline std::uint32_t llk_pack_context()
 
 // Set by _llk_pack_fast_untilize_init_ (with the DEST format of its strides), forgotten by set_packer_strides: the fast untilize leaves the pack program, the
 // packer strides and the DEST offset registers set for itself. The block packs of llk_pack_block close it first (_llk_pack_close_fast_untilize_), so a
-// pack_block that follows without the uninit still writes where it should. Only the fast untilize init writes pack_fast_untilize_seen, so a kernel
-// without one folds the test away and keeps no call in its pack loops.
+// pack_block that follows without the uninit still writes where it should. Only llk_pack_fast_untilize.h sets pack_fast_untilize_linked, so a kernel
+// without it compiles no close, and only the fast untilize init writes pack_fast_untilize_seen, so one that never calls the init folds it away.
+template <DstSync>
+inline constexpr bool pack_fast_untilize_linked = false;
 [[maybe_unused]] static bool pack_fast_untilize_seen         = false;
 [[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 

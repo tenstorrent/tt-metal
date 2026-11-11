@@ -589,8 +589,7 @@ inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_form
         pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 }
 
-// Cold, so out of line: the call sites of the block packs carry a load, a branch and a call. Not noinline: a kernel without a fast untilize
-// init folds the call away, and the body with it.
+// Cold, so out of line: the call sites of the block packs carry a load, a branch and a call.
 template <DstSync Dst>
 __attribute__((cold)) inline void pack_close_fast_untilize_slow_()
 {
@@ -601,14 +600,17 @@ __attribute__((cold)) inline void pack_close_fast_untilize_slow_()
 
 /**
  * @brief Close a fast untilize whose uninit was not called, before a block pack: the default program, strides and DEST offset registers come back, the W offset state goes stale.
- * Nothing in a kernel that does not run the fast untilize pack: the flag is never written and the call folds away.
+ * Nothing in a kernel without llk_pack_fast_untilize.h.
  */
 template <DstSync Dst>
 inline void _llk_pack_close_fast_untilize_()
 {
-    if (pack_fast_untilize_seen && LLK_PACK_FAST_UNTILIZE_OPEN())
+    if constexpr (pack_fast_untilize_linked<Dst>)
     {
-        pack_close_fast_untilize_slow_<Dst>();
+        if (pack_fast_untilize_seen && LLK_PACK_FAST_UNTILIZE_OPEN())
+        {
+            pack_close_fast_untilize_slow_<Dst>();
+        }
     }
 }
 
