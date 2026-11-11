@@ -107,6 +107,27 @@ __attribute__((always_inline)) inline std::uint32_t tile_address(const TileAddr&
     }
 }
 
+// llk_pack_block_forms of a tile count: 1 is a block that packs per tile from every state
+template <DstSync sync, bool fp32, DataFormat out_format>
+constexpr std::uint32_t forms_const(const std::uint32_t num_tiles)
+{
+    constexpr std::uint32_t face_rows = key_r0 < 16 ? key_r0 : 16;
+    constexpr std::uint32_t faces     = (key_r0 > 16 ? 2 : 1) * (key_c1 > 16 ? 2 : 1);
+    constexpr std::uint32_t row       = matmul_pack_tables::llk_pack_block_class_k(face_rows, faces, static_cast<std::uint32_t>(out_format));
+    constexpr bool int8     = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
+    constexpr bool src32    = fp32 && key_src32;
+    constexpr bool tables32 = src32 && unpack_to_dest;
+    return num_tiles <= 16 ? forms_table<fp32, MATMUL_PACK_NOK ? 0 : key_kt, row, tables32, sync == DstSync::SyncFull, src32, int8>.f[num_tiles]
+                           : forms_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(row, num_tiles, tables32, sync == DstSync::SyncFull, src32, int8);
+}
+
+// the forms of a constant tile count, 0 for a variable one
+template <DstSync sync, bool fp32, DataFormat out_format>
+__attribute__((always_inline)) inline std::uint32_t folded_forms(const std::uint32_t num_tiles)
+{
+    return __builtin_constant_p(num_tiles) ? forms_const<sync, fp32, out_format>(num_tiles) : 0;
+}
+
 // address in 16 byte words, tile_stride in bytes (the page size times 16)
 template <DstSync sync, bool fp32, int form, DataFormat out_format, typename TileAddr = std::nullptr_t>
 __attribute__((always_inline)) inline void block(
@@ -121,12 +142,7 @@ __attribute__((always_inline)) inline void block(
     constexpr bool tables32 = src32 && unpack_to_dest; // llk_pack_form_table: the 32 bit input tables only when a CB unpacks to DEST
     // llk_pack_block: with a constant tile count the forms of the three states fold at compile time, and a block that is T from all of them
     // is main's loop (no close, no guards)
-    std::uint32_t forms = 0;
-    if (__builtin_constant_p(num_tiles))
-    {
-        forms = num_tiles <= 16 ? forms_table<fp32, MATMUL_PACK_NOK ? 0 : key_kt, row, tables32, sync == DstSync::SyncFull, src32, int8>.f[num_tiles]
-                                : forms_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(row, num_tiles, tables32, sync == DstSync::SyncFull, src32, int8);
-    }
+    const std::uint32_t forms = folded_forms<sync, fp32, out_format>(num_tiles);
     if (forms == 1)
     {
         state.seen  = 1;

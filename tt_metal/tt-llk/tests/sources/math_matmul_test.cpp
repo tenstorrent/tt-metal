@@ -441,6 +441,12 @@ constexpr int matmul_pack_form_v = matmul_pack_form_key;
 
 #if defined(ARCH_BLACKHOLE)
 // MATMUL_PACK_FORM 1 and 2: the block pack llk_pack_block runs (matmul_pack_production.h).
+#if defined(MATMUL_PACK_CONST)
+// a constant block that packs per tile from every state runs main's loop in llk_pack_block: the main arm's loop here
+#define MATMUL_PACK_MAIN_LOOP(n) (matmul_pack_production::forms_const<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>(n) == 1)
+#else
+#define MATMUL_PACK_MAIN_LOOP(n) false
+#endif
 template <typename TileAddr = std::nullptr_t> __attribute__((always_inline)) inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] bool fast = false, TileAddr tile_addr = nullptr)
 {
     matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format, TileAddr>(tile_index, address, num_tiles, tile_stride, num_faces, tile_addr);
@@ -552,7 +558,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t result_block_stride = NUM_TILES_IN_BLOCK;
 #endif
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (matmul_pack_form_v != 0)
+                    if constexpr (matmul_pack_form_v != 0 && !MATMUL_PACK_MAIN_LOOP(NUM_TILES_IN_BLOCK))
                     {
                         matmul_pack_out(
                             DST_INDEX,
