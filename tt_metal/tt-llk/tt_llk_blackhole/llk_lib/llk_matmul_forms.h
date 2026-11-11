@@ -32,11 +32,19 @@ inline constexpr const char* matmul_forms_table[48] = {
 };
 
 // Reuse direction of a block: reuse_dir 0 holds in0 in SrcB and streams in1 through SrcA when ct_dim >= rt_dim (main's rule), 1 forces that
-// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). A kernel fixes it at compile time with matmul_reuse_dir.
+// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). 4 is the two-row scheme: two rows of in0 sit in the two banks
+// of SrcB and every streamed in1 tile is multiplied with both (in0 held whatever the block). A kernel fixes it at compile time with
+// matmul_reuse_dir.
+template <std::uint32_t reuse_dir>
+constexpr bool matmul_two_row()
+{
+    return reuse_dir == 4;
+}
+
 template <std::uint32_t reuse_dir>
 constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
-    return reuse_dir == 0 ? ct_dim >= rt_dim : reuse_dir == 1;
+    return reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
 }
 
 // A 32-bit tile takes twice the unpacker cycles of a 16-bit one (32 against 64 datums per cycle), and the streamed operand is unpacked once per
@@ -51,10 +59,26 @@ constexpr bool matmul_format_is_16bit(const DataFormat f)
 {
     return f == DataFormat::Float16 || f == DataFormat::Float16_b;
 }
+
+// A Float32 x Float32 LoFi block is bound by the unpack of its 32-bit tiles; with two rows of in0 in the two SrcB banks each in1 tile is
+// unpacked once for two rows (rt_dim + rt_dim * ct_dim / 2 tiles a block instead of the default direction's).
 // pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower
+// two_row_off: the blocks the two-row scheme does not serve or reads slower on: a static throttle, tiles other than 32x32, half sync with
+// a Float32 output and one k step
 constexpr std::uint32_t matmul_reuse_dir(
-    const MathFidelity fidelity, const DataFormat in0, const DataFormat in1, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool pack_bound = false)
+    const MathFidelity fidelity,
+    const DataFormat in0,
+    const DataFormat in1,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const bool pack_bound  = false,
+    const bool two_row_off = true)
 {
+    if (fidelity == MathFidelity::LoFi && !two_row_off && in0 == DataFormat::Float32 && in1 == DataFormat::Float32 && rt_dim >= 2 && (rt_dim % 2) == 0 &&
+        ct_dim >= 2)
+    {
+        return 4;
+    }
     if (fidelity != MathFidelity::LoFi || pack_bound || ct_dim * rt_dim < 4)
     {
         return 0;

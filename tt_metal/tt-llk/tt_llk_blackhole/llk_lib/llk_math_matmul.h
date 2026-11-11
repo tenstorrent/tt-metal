@@ -370,6 +370,7 @@ inline void matmul_configure_mop(
     // Col major layout in dest only impacts destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    static_assert(!matmul_two_row<reuse_dir>() || !high_fidelity, "the two-row scheme is LoFi");
 
     const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
@@ -489,6 +490,11 @@ inline void matmul_configure_mop(
                 {
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)
                 }
+            }
+            else if constexpr (matmul_two_row<reuse_dir>())
+            {
+                // the streamed tile is multiplied twice; _llk_math_matmul_ clears the sources
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
             }
             else
             {
@@ -1047,6 +1053,7 @@ inline void matmul_configure_mop_throttled(
     // if col major layout faces are ordered as f0,f2,f1,f3
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
+    static_assert(!matmul_two_row<reuse_dir>() || !high_fidelity, "the two-row scheme is LoFi");
     LLK_ASSERT(
         matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face),
         "MM throttling only enabled for full 32x32 tile size");
@@ -1102,7 +1109,8 @@ inline void matmul_configure_mop_throttled(
             {
                 tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0));
             }
-            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_5, 0));
+            tmp.set_last_outer_loop_instr(
+                TT_OP_MVMUL(matmul_two_row<reuse_dir>() ? p_setrwc::CLR_NONE : (reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B), 0, ADDR_MOD_5, 0));
         }
     }
 
@@ -1544,6 +1552,48 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
     LLK_ASSERT(reuse_a == math_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
+
+    if constexpr (matmul_two_row<reuse_dir>())
+    {
+        static_assert(!matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>(), "the two-row scheme is LoFi");
+        LLK_ASSERT((rt_dim % 2) == 0, "matmul: the two-row scheme needs an even rt_dim");
+        // With the clear of SrcB disabled, a clear of it only flips the bank, so the two in0 rows stay in its two banks. Set and cleared
+        // inside the call: no other op sees it.
+        TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK);
+        for (std::uint32_t t = 0; t < rt_dim; t += 2)
+        {
+            for (std::uint32_t c = 0; c < ct_dim; c++)
+            {
+                const bool last = c == (ct_dim - 1);
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * t + c);
+                ckernel_template::run();
+                // first row done: flip to the second, or give the first back after the last in1 tile
+                if (last)
+                {
+                    TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+                }
+                else
+                {
+                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                }
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (t + 1) + c);
+                ckernel_template::run();
+                // second row done: free the in1 tile and flip back, or also give the second row back after the last one
+                if (last)
+                {
+                    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+                }
+                else
+                {
+                    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                }
+            }
+        }
+        TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
+        math::reset_counters(p_setrwc::SET_ABD_F);
+        return;
+    }
 
     if constexpr (row_mop && THROTTLE_LEVEL == 0)
     {

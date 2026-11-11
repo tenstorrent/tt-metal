@@ -617,6 +617,44 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t mop_0  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, 0);
     const std::uint32_t mop_1  = mop_0 | context_1_zmask;
 
+    if constexpr (matmul_two_row<reuse_dir>())
+    {
+        static_assert(kernel_broadcast_a == 0 && kernel_broadcast_b == 0, "the two-row scheme has no kernel broadcast");
+        LLK_ASSERT((rt_dim % 2) == 0 && !unpA_partial_face && !unpB_partial_face, "matmul: the two-row scheme needs an even rt_dim and whole faces");
+        // Two in0 rows go to the two SrcB banks, then the in1 tiles are unpacked once for both.
+        for (std::uint32_t t = 0; t < rt_dim; t += 2)
+        {
+            const std::uint32_t row_a = base_address_a + tile_size_a * (tile_index_a + t * kt_dim);
+            const std::uint32_t row_b = base_address_b + tile_size_b * tile_index_b;
+
+            wait_for_next_context(2);
+            _llk_unpack_configure_addresses_(row_b, row_a, cfg);
+            semaphore_post(semaphore::UNPACK_SYNC);
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+            TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            const std::uint32_t next_row = row_a + tile_size_a * kt_dim;
+            TT_SETDMAREG(0, LOWER_HALFWORD(next_row), 0, LO_16(p_gpr_unpack::TMP1));
+            TT_SETDMAREG(0, UPPER_HALFWORD(next_row), 0, HI_16(p_gpr_unpack::TMP1));
+            if (unp_cfg_context == 0)
+            {
+                TTI_WRCFG(p_gpr_unpack::TMP1, 0, THCON_SEC1_REG3_Base_address_ADDR32);
+            }
+            else
+            {
+                TTI_WRCFG(p_gpr_unpack::TMP1, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+            }
+            TTI_NOP;
+            TTI_NOP;
+            TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+            switch_config_context(unp_cfg_context);
+        }
+        return;
+    }
+
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
         if constexpr (!hoisted)

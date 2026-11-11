@@ -52,6 +52,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    matmul_two_row_off,
 )
 
 MATMUL_FORMATS = input_output_formats(
@@ -231,6 +232,34 @@ def test_perf_math_matmul(
         * matmul_config.tile_dimensions.kt_dim
     )
 
+    k_loop = MATMUL_K_LOOP.for_block(
+        formats,
+        matmul_config.dest_acc,
+        math_fidelity,
+        matmul_config.tile_dimensions.ct_dim,
+        matmul_config.tile_dimensions.rt_dim,
+        matmul_config.tile_dimensions.kt_dim,
+        matmul_config.tile_dimensions.in0_tile_r_dim,
+        matmul_config.tile_dimensions.in0_tile_c_dim,
+        matmul_config.tile_dimensions.in1_tile_r_dim,
+        matmul_config.tile_dimensions.in1_tile_c_dim,
+        dest_sync=matmul_config.dest_sync,
+        throttle=throttle,
+    )
+    two_row_off = matmul_two_row_off(
+        formats,
+        matmul_config.dest_sync,
+        matmul_config.tile_dimensions.kt_dim,
+        throttle,
+        (
+            matmul_config.tile_dimensions.in0_tile_r_dim,
+            matmul_config.tile_dimensions.in0_tile_c_dim,
+            matmul_config.tile_dimensions.in1_tile_r_dim,
+            matmul_config.tile_dimensions.in1_tile_c_dim,
+        ),
+        k_loop,
+    )
+
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
@@ -266,6 +295,7 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
                 matmul_config.dest_sync,
+                two_row_off,
             ),
             *MATMUL_STREAM_Z.for_block(
                 formats,
@@ -279,21 +309,9 @@ def test_perf_math_matmul(
                 in1_partial=matmul_config.face_layout_config.partial_face_in1,
                 kt_dim=matmul_config.tile_dimensions.kt_dim,
                 throttle=throttle,
+                two_row_off=two_row_off,
             ),
-            *MATMUL_K_LOOP.for_block(
-                formats,
-                matmul_config.dest_acc,
-                math_fidelity,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.tile_dimensions.kt_dim,
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                matmul_config.tile_dimensions.in0_tile_c_dim,
-                matmul_config.tile_dimensions.in1_tile_r_dim,
-                matmul_config.tile_dimensions.in1_tile_c_dim,
-                dest_sync=matmul_config.dest_sync,
-                throttle=throttle,
-            ),
+            *k_loop,
             *MATMUL_ROW_END_FOLD.for_block(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
@@ -308,6 +326,7 @@ def test_perf_math_matmul(
                     matmul_config.tile_dimensions.rt_dim,
                     matmul_config.tile_dimensions.kt_dim,
                     num_blocks,
+                    two_row_off=two_row_off,
                 )
                 if math_fidelity == MathFidelity.LoFi
                 and matmul_config.dest_sync == DestSync.Full
@@ -325,6 +344,7 @@ def test_perf_math_matmul(
                 dest_acc=matmul_config.dest_acc,
                 throttle=throttle,
                 sections=num_blocks,
+                two_row_off=two_row_off,
             ),
             *MATMUL_IN1_ALT.for_tiles(
                 formats,
