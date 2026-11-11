@@ -100,21 +100,21 @@ void kernel_main() {
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
     const uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
     const uint32_t par_lvl = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN)
+#if (defined(MKA_EXTLEAN) || (defined(MKA_SV) && MKA_SV != 2))   // MKA_SV 0 / 1: tree leaf
     constexpr uint32_t nc0 = 0; a++;
 #else
     const uint32_t nc0 = get_arg_val<uint32_t>(a++);
 #endif
     uint32_t c0x[FANOUT], c0y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c0x[i] = get_arg_val<uint32_t>(a++); c0y[i] = get_arg_val<uint32_t>(a++); }
-#if defined(MKA_EXTLEAN)
+#if (defined(MKA_EXTLEAN) || (defined(MKA_SV) && MKA_SV != 2))   // MKA_SV 0 / 1: tree leaf
     constexpr uint32_t nc1 = 0; a++;
 #else
     const uint32_t nc1 = get_arg_val<uint32_t>(a++);
 #endif
     uint32_t c1x[FANOUT], c1y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c1x[i] = get_arg_val<uint32_t>(a++); c1y[i] = get_arg_val<uint32_t>(a++); }
-#if defined(MKA_EXTLEAN)
+#if (defined(MKA_EXTLEAN) || (defined(MKA_SV) && MKA_SV != 2))   // MKA_SV 0 / 1: tree leaf
     constexpr uint32_t is_root = 0; a++;
     const uint32_t out_addr = get_arg_val<uint32_t>(a++);
 #else

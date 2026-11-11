@@ -286,6 +286,28 @@ def setup_bench(dev, MESH, mesh_identity):
             assert e_, "a KV group without a non-STREAM core"
             m_.remove(e_[-1]); m_.append(e_[-1])
     rank = {i: members[grp[i]].index(i) for i in ACT}
+    # MKA_SVAR=1: STREAM kernel variants by phase membership (MKA_SV 0 leaf / 1 rstd producer / 2 SDPA tree parent or root):
+    # each STREAM core runs the binary of its variant, so code a core never runs drops out of its text. Tree parents are
+    # moved off the 8 rstd producers (STREAM (n = k, k)); the owners stay leaves (EXTLEAN). KV block ranges / mask: `members`.
+    SVAR = os.environ.get('MKA_SVAR', '0') == '1'
+    _RSTDP = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1'
+    def sv_prod(f_): return _RSTDP and fcores[f_].x < GX and fcores[f_].y < GY and fcores[f_].x == fcores[f_].y
+    TMEM = members
+    if SVAR:
+        _sx3 = lambda f_: fcores[f_].x < GX and fcores[f_].y < GY
+        TMEM = []
+        for m_ in members:
+            npar_ = (len(m_) + FAN - 1) // FAN
+            ok_ = lambda f_: _sx3(f_) and not sv_prod(f_)
+            orig_ = [m_[r_] for r_ in range(0, len(m_), FAN)]
+            par_ = ([f_ for f_ in orig_ if ok_(f_)] + [f_ for f_ in m_ if ok_(f_) and f_ not in orig_])[:npar_]
+            assert len(par_) == npar_, ("MKA_SVAR: too few non-producer STREAM cores for the tree parents", len(par_), npar_)
+            rest_ = [f_ for f_ in m_ if f_ not in par_]
+            t_ = []
+            for p_ in range(npar_): t_ += [par_[p_]] + rest_[p_ * (FAN - 1):(p_ + 1) * (FAN - 1)]
+            assert sorted(t_) == sorted(m_)
+            TMEM.append(t_)
+        rank = {i: TMEM[grp[i]].index(i) for i in ACT}
     kgrid = crs([fcores[i] for i in ACT]) if RESV else fgrid
     GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(23)]
     GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
@@ -1648,13 +1670,14 @@ def setup_bench(dev, MESH, mesh_identity):
                 cbs = cbs + [_g]
         rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         RS = os.environ.get('MKA_ROLESPLIT', '1') == '1'   # per-role binaries (spec v0.9.17)
-        rta = {k_: (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for k_ in ('s', 'e')}
+        rta = {k_: (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for k_ in ('s', 'e', 's0', 's1', 's2')}
+        SVC = {0: [], 1: [], 2: []}   # MKA_SVAR: STREAM cores per variant
         z10 = [0] * 10
         for fi, c in enumerate(fcores):
             if fi in RESV: continue
-            u, r, n = grp[fi], rank[fi], len(members[grp[fi]])
+            u, r, n = grp[fi], rank[fi], len(TMEM[grp[fi]])
             sb0, sb1 = RNG[fi]
-            m = members[u]
+            m = TMEM[u]
             if r == 0: has_p, par, plvl = 0, 0, 0
             elif r % FAN != 0: has_p, par, plvl = 1, m[r - r % FAN], 0
             else: has_p, par, plvl = 1, m[0], 1
@@ -1703,7 +1726,13 @@ def setup_bench(dev, MESH, mesh_identity):
                 if QSK and RWO: assert HLP.get(fi, (None, 0, 0))[2] == 0 and len(WOT.get(fi, [])) == WO_MAXT_, ("MKA_EXTLEAN wo", fi)
                 if RWO: assert not rd_w
                 if V12: assert vc_[0] == 2 and vr_[0] == 2 and vw_[0] == 2, ("MKA_EXTLEAN vrole", fi, vc_[0], vr_[0], vw_[0])
-            _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
+            _rk = 's' if isS else 'e'
+            if SVAR and isS:
+                _par = nrecv > 0 or r == 0
+                assert not (_par and sv_prod(fi)), ("MKA_SVAR: a tree parent / root on an rstd producer", fi)
+                _sv = 2 if _par else (1 if sv_prod(fi) else 0)
+                SVC[_sv].append(fi); _rk = f's{_sv}'
+            _r3 = rta[_rk]; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
             if GDN24 and isS and QSK and RWO and V12 and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_STREAMLEAN: folded STREAM role args
                 _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
                 assert g_ == 0 and r_mk[14] == 255 and r_mk[15] == 0, ("MKA_STREAMLEAN IS_GU / ROOT (reader)", fi, g_, r_mk[14:16])
@@ -1731,7 +1760,7 @@ def setup_bench(dev, MESH, mesh_identity):
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
             _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
             _up = [('MKA_UPAR', '1'), ('MKA_UPAR_PAR', str(UPAR_PAR(coord)))] if UPAR else []   # own users g = 2u + parity
-            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')] + _up, *rta['s'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None)) + _ks(_erng, [('MKA_ROLE_EXT', '1')] + _up, *rta['e'], *_ard, dmopt=_dmo)
+            ks = (sum((_ks(crs([fcores[f_] for f_ in SVC[v_]]), [('MKA_ROLE_STREAM', '1'), ('MKA_SV', str(v_))] + _up, *rta[f's{v_}'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None)) for v_ in (0, 1, 2) if SVC[v_]), []) if SVAR else _ks(_srng, [('MKA_ROLE_STREAM', '1')] + _up, *rta['s'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None))) + _ks(_erng, [('MKA_ROLE_EXT', '1')] + _up, *rta['e'], *_ard, dmopt=_dmo)
             if REAL_AR:
                 for kd_ in arp['sender_kernels']:   # attention ARs read the wo output CB (bit it of MKAR_ATYPE)
                     if REAL_AAR and not any(k_ == 'MKAR_ATYPE' for k_, _ in kd_.defines): kd_.defines = list(kd_.defines) + _aar_d
