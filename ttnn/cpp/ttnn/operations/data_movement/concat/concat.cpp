@@ -287,10 +287,33 @@ ttnn::Tensor concat_native(
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
-    // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
-    // which don't currently support sub_core_grids
+    // sub_core_grids fast path: only when the generic factory can consume inputs as-is.
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
+        const bool uniform_layout = std::all_of(input_tensors.begin(), input_tensors.end(), [&](const ttnn::Tensor& t) {
+            return t.layout() == first_tensor.layout();
+        });
+        TT_FATAL(
+            uniform_layout,
+            "ttnn.concat with sub_core_grids: all input tensors must share the same layout "
+            "(got mixed TILE/ROW_MAJOR). Convert inputs to a single layout before concat.");
+        if (first_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT && dim == rank - 1) {
+            // Max alignment across inputs: mixed L1/DRAM NOC reads otherwise hit a misaligned cumulative write.
+            uint32_t common_align = 0;
+            for (const auto& t : input_tensors) {
+                common_align = std::max<uint32_t>(common_align, t.mesh_buffer().alignment());
+            }
+            for (const auto& t : input_tensors) {
+                TT_FATAL(
+                    (static_cast<uint64_t>(t.padded_shape()[-1]) * t.element_size()) % common_align == 0,
+                    "ttnn.concat with sub_core_grids: RM width-concat requires every input's last dim to be a "
+                    "multiple of the max buffer alignment across inputs (got {} elements, element size {}, max "
+                    "alignment {}).",
+                    t.padded_shape()[-1],
+                    t.element_size(),
+                    common_align);
+            }
+        }
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 
