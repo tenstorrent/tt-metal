@@ -219,6 +219,16 @@ class _static_cb_refs:
         return False
 
 
+def _fresh_sem(*a, **k):
+    """ttnn.create_global_semaphore for an AR-owned sem (monotonic epochs / per-build flags): never taken from integ's
+    cross-build sem pool (_setup_context honours ttnn._mk_sem_fresh > 0)."""
+    ttnn._mk_sem_fresh = getattr(ttnn, "_mk_sem_fresh", 0) + 1
+    try:
+        return ttnn.create_global_semaphore(*a, **k)
+    finally:
+        ttnn._mk_sem_fresh -= 1
+
+
 def setup_bench(dev, MESH, mesh_identity):
     try:   # engine/ is on sys.path in the bench (the pushed tree's own module first)
         import cbplan as CBP
