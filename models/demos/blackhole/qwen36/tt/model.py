@@ -4276,23 +4276,6 @@ class Qwen36Model:
         _mk1 = getattr(self, "_vfy_mk1", None)
         if _mk1 is not None and _mk1.ready:
             _mk1.stage_host(pos, inactive, T)
-        _fr = self._vfy_flightrec()
-        if _fr is not None:  # QWEN36_R16_MK_FLIGHTREC (hang diagnostics): this replay's host inputs into the mmap ring
-            _rq = {}
-            for _b, _p in ((_mk1.programs if _mk1 is not None and _mk1.ready else None) or {}).items():
-                _f = getattr(getattr(_p, "program", None), "rq_last", None)
-                if _f is not None:
-                    _rq[f"rq_b{_b}"] = _f()
-            _nz = torch.nonzero(pt.reshape(pt.shape[0], -1).abs().sum(0))
-            _ptw = pt[:, : int(_nz.max()) + 1] if _nz.numel() else pt[:, :1]
-            _fr.stage(dict(bucket=-1 if bucket is None else int(bucket), T=T, B=B, pos=pos, positions=[int(p) for p in positions],
-                           inactive=None if inactive is None else [int(bool(x)) for x in inactive],
-                           mi_prev=[int(m) for m in mi_prev], pt=_ptw, pt_w=int(pt.shape[1]), pt_given=page_tables is not None,
-                           hostset=bool(getattr(self, "_vfy_hostset", False)), kv_split=bool(kv_split), skip_tokens=bool(skip_tokens_h2d),
-                           skip_aux=bool(skip_aux_h2d), skip_kv_check=bool(skip_kv_check), flip=bool(flip_parity),
-                           fwd_only=bool(forward_only), topk=bool(read_topk or execute_topk), mask=bool(execute_mask),
-                           pen=bool(execute_pen), stats=bool(execute_stats), **_rq))
-            _fr.l1_floor(dev)
         _hostset = bool(getattr(self, "_vfy_hostset", False))
         if not _hostset:
             _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
@@ -4356,6 +4339,24 @@ class Qwen36Model:
                 self._vfy_aux_staged = None
             else:
                 self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
+        _fr = self._vfy_flightrec()
+        if _fr is not None:  # QWEN36_R16_MK_FLIGHTREC (hang diagnostics): this replay's staged host inputs into the mmap ring
+            _rq = {}
+            for _b, _p in ((_mk1.programs if _mk1 is not None and _mk1.ready else None) or {}).items():
+                _f = getattr(getattr(_p, "program", None), "rq_last", None)
+                if _f is not None:
+                    _rq[f"rq_b{_b}"] = _f()
+            _nz = torch.nonzero(pt.reshape(pt.shape[0], -1).abs().sum(0))
+            _ptw = pt[:, : int(_nz.max()) + 1] if _nz.numel() else pt[:, :1]
+            _fr.stage(dict(bucket=-1 if bucket is None else int(bucket), T=T, B=B, pos=pos, positions=[int(p) for p in positions],
+                           inactive=None if inactive is None else [int(bool(x)) for x in inactive],
+                           mi_prev=[int(m) for m in mi_prev], pt=_ptw, pt_w=int(pt.shape[1]), pt_given=page_tables is not None,
+                           hostset=bool(getattr(self, "_vfy_hostset", False)), kv_split=bool(kv_split), skip_tokens=bool(skip_tokens_h2d),
+                           skip_aux=bool(skip_aux_h2d), skip_kv_check=bool(skip_kv_check), flip=bool(flip_parity),
+                           fwd_only=bool(forward_only), topk=bool(read_topk or execute_topk), mask=bool(execute_mask),
+                           pen=bool(execute_pen), stats=bool(execute_stats),
+                           aux=getattr(self, "_vfy_aux_staged", None), **_rq))
+            _fr.l1_floor(dev)
         ttnn.execute_trace(dev, _main_tid, cq_id=0, blocking=False)
         self._vfy_last_bucket = bk
         if getattr(self, "_vfy_mk", None) is not None:  # QWEN36_R16_MEGAKERNEL stage0: replay accounting
@@ -4470,9 +4471,20 @@ class Qwen36Model:
                 named = {k: getattr(self, k, None) for k in ("_vfy_kvpos_buf", "_vfy_kvpt_buf", "_vfy_kvpt_users",
                                                              "_vfy_kvpt1_buf", "_vfy_aux_buf", "_vfy_ctrl", "_vfy_token_buf")}
                 _mk1 = getattr(self, "_vfy_mk1", None)
+                l1b = {}
                 for b, p in ((_mk1.programs if _mk1 is not None and _mk1.ready else None) or {}).items():
                     named[f"rq_t_b{b}"] = getattr(getattr(p, "program", None), "rq_t", None)
-                fr.set_addrs(**named)
+                    blocks = getattr(getattr(getattr(p, "program", None), "blocks", None), "blocks", None) or {}
+                    for nm, bl in blocks.items():
+                        try:
+                            l1b[f"b{b}.{nm}"] = {"addr": int(bl["addr"]), "words": int(bl["tensor"].shape[-1])}
+                        except Exception as e:  # noqa: BLE001
+                            l1b[f"b{b}.{nm}"] = f"? {e}"
+                try:
+                    nbank = int(self.mesh_device.dram_grid_size().x)
+                except Exception:  # noqa: BLE001
+                    nbank = None
+                fr.set_addrs(l1blocks=l1b, dram_banks=nbank, **named)
             self._vfy_fr = fr
         return fr
 
