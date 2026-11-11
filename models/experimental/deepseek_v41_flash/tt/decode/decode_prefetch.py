@@ -10,10 +10,11 @@ V4.1 adds its own private rings next to it:
 * q_a on 8 receivers (``[5120, 160]`` slabs, 800 tiles), streamed in 80-tile pages.
 * kv on 16 receivers (``[5120, 32]`` slabs), streamed in 32-tile pages.
 * :data:`WIDE_RING` on 80 receivers, which three weights stream through at pages of their own: o_b and
-  the shared expert's down (``N = 5120`` over 64-column slabs, whole-slab pages), and Engram's wkv
-  (bf8, row-parallel under TP; ``[6144 / TP, 320]`` slabs in 30-tile pages). A page is a block of one
-  tensor, which the DRISC senders re-grid the ring to per tensor, so the weights need agree on neither
-  page size nor dtype (o_b is bf4, the other two bf8). The ring holds two of the largest page, o_b's.
+  the shared expert's down (``N = 5120`` over 64-column slabs; o_b in 32-tile pages, the down in
+  whole-slab ones), and Engram's wkv (bf8, row-parallel under TP; ``[6144 / TP, 320]`` slabs in 30-tile
+  pages). A page is a block of one tensor, which the DRISC senders re-grid the ring to per tensor, so
+  the weights need agree on neither page size nor dtype (o_b is bf4, the other two bf8). The ring holds
+  two of the largest page, the shared down's.
 
 The router gate (12 cores) and the shared expert's gate/up (36 cores, 9 per rank at TP4) do not
 divide the 8 DRAM banks a ring spreads over. Their matmuls read the DRAM ND-sharded weight
@@ -62,9 +63,12 @@ KV_RING_PAGES = 4
 Q_A_RING_ORIGIN = (8, 0)
 KV_RING_ORIGIN = (8, 2)
 # The 80-receiver ring o_b, Engram's wkv and the shared expert's down stream through, each at its own
-# page: the ring holds two of the largest, o_b's.
+# page: the ring holds two of the largest, the shared down's.
 WIDE_RING = "wide_full"
-# Whole-slab pages: o_b's [2048, 64] slab at TP4 is 128 tiles, ~72 KB per page at bf4.
+# o_b's [2048, 64] slab at TP4 (128 tiles) streams in pages of 16 tile-rows (32 tiles, ~18 KB at bf4),
+# pinned by a spec that is not a consumer. Its A is one tile row (decode is batch 1), which is what lets
+# matmul_decode stream a slab over several pages.
+_O_B_PAGE_PIN_K = 512
 O_B_RING_PAGES = 2
 # Whole-slab pages: [576, 64] at TP4, ~39 KB per page at bf8.
 SHARED_DOWN_RING_PAGES = 2
@@ -97,7 +101,11 @@ def prefetch_rings(tp_size: int = 1) -> dict:
         "kv_proj": PrefetchRing(KV_RING, (ATTENTION_LAYOUTS["kv_proj"], _KV_PAGE_PIN), KV_RING_PAGES, KV_RING_ORIGIN),
         "q_b_proj": PrefetchRing("q_b_proj", shared),
         "o_a_proj": PrefetchRing("o_a_proj", shared),
-        "o_b_proj": PrefetchRing(WIDE_RING, ({"K": o_b["K"] // tp_size, "N": o_b["N"]},), O_B_RING_PAGES),
+        "o_b_proj": PrefetchRing(
+            WIDE_RING,
+            ({"K": o_b["K"] // tp_size, "N": o_b["N"]}, {"K": _O_B_PAGE_PIN_K, "N": o_b["N"]}),
+            O_B_RING_PAGES,
+        ),
         "shared_down_proj": PrefetchRing(
             WIDE_RING, ({"K": down["K"] // tp_size, "N": down["N"]},), SHARED_DOWN_RING_PAGES
         ),
