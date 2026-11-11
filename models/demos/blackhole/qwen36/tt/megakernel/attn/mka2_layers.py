@@ -14,7 +14,9 @@ import os
 devs = sorted({r[ix["PCIe slot"]].strip() for r in rows[1:] if len(r) >= len(cols) - 1}, key=lambda d: int(d) if d.isdigit() else 0)
 DEVSEL = os.environ.get("MKA_DEV", devs[0] if devs else "0")
 # the last run of the selected device (mesh runs carry a different runtime id per device)
-_ids = [r[ix["run host ID"]].strip() for r in rows[1:] if len(r) >= len(cols) - 1 and r[ix["PCIe slot"]].strip() == DEVSEL]
+# (only runs of the engine: checker ops run after it, e.g. the MKA_RQPOS PROD-OP chain, are profiled too)
+_ids = [r[ix["run host ID"]].strip() for r in rows[1:] if len(r) >= len(cols) - 1 and r[ix["PCIe slot"]].strip() == DEVSEL
+        and r[ix["zone name"]].strip() in ("W-ARSTALL", "W-ARWAIT")]
 last = _ids[-1] if _ids else last
 occ = collections.defaultdict(list)   # (zone, core) -> [(start, end)]
 pend = {}
