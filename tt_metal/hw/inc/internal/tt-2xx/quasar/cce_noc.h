@@ -83,8 +83,7 @@ inline void latch() {
     }
 }
 
-// A NOC call a CCE does not serve: multicast, posted writes, stateful command buffers, NOC atomics other than an
-// increment. @p line identifies the caller.
+// A NOC call a CCE does not serve: multicast, stateful command buffers, NOC atomics other than an increment. @p line identifies the caller.
 [[noreturn, gnu::cold, gnu::noinline]] inline void unsupported(uint32_t line) { halt(Fault::Unsupported, line); }
 
 // The core a NOC address names, and the address's local part.
