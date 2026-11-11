@@ -944,8 +944,13 @@ void kernel_main() {
         if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
 #if defined(MK_REAL_GAR) && defined(MKA_ROLE_EXT)
             if (vrole == 2 && ar_on) {   // G-d: the GDN mixer AR (gdn_out -> CB_XO; until G-c: CB_XO stand-in) once the GDN layer is out
+#if defined(MK_GDN_OUT_REAL) && defined(MKA_GDNOUT)
+                // G-c: gdn_out scattered this owner's 10-tile chunk into CB_XO; every layer adds 10 to WOCNT (wo or gdn_out)
+                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), MKA_WOCNT_AT(L, A));
+#else
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY),
                                        MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1));
+#endif
 #if defined(MK_GAR_ZERO)   // CB_XO stand-in until gdn_out (G-c) lands: zero (the GDN AR adds 0: the residual chain is unchanged)
                 {
                     const uint32_t xo = get_read_ptr(CB_XO);
