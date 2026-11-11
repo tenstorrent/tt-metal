@@ -84,7 +84,11 @@ struct SendWriter {
         }
     }
 
+#if defined(GDN_GTEXT2) && GDN_GTEXT2 && !defined(MKAR_GT2_SP_INLINE)
+    __attribute__((noinline)) void send_ag(uint32_t j, uint32_t l1_read_addr) {  // GTEXT2: 2 call sites in iter()
+#else
     FORCE_INLINE void send_ag(uint32_t j, uint32_t l1_read_addr) {
+#endif
         if (fwd_range > 0) {
             hf->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(fwd_range)});
         }
