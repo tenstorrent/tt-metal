@@ -70,6 +70,16 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      # vLLM 0.32 and later require Python 3.11 or newer. Only the Ubuntu 24.04
+      # image has it (3.12); the 22.04 image has 3.10.
+      vllm-platform:
+        required: false
+        type: choice
+        default: "Ubuntu 24.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform for the vLLM tests. A second build runs when it differs from platform."
       build-type:
         required: false
         type: choice
@@ -119,6 +129,8 @@ jobs:
       has-vllm-tests: ${{ steps.check.outputs.has-vllm-tests }}
       has-any-tests: ${{ steps.check.outputs.has-any-tests }}
       has-image-consumer: ${{ steps.check.outputs.has-image-consumer }}
+      build-main: ${{ steps.check.outputs.build-main }}
+      build-vllm: ${{ steps.check.outputs.build-vllm }}
     steps:
       - name: Checkout test definitions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -210,6 +222,8 @@ jobs:
           RUN_E2E: ${{ inputs.run-e2e-tests }}
           RUN_SWEEP: ${{ inputs.run-sweep-tests }}
           RUN_VLLM: ${{ inputs.run-vllm-tests }}
+          PLATFORM: ${{ inputs.platform || 'Ubuntu 22.04' }}
+          VLLM_PLATFORM: ${{ inputs.vllm-platform || 'Ubuntu 24.04' }}
         run: |
           python3 - <<'PYEOF'
           import yaml, os, sys
@@ -317,11 +331,19 @@ jobs:
                   if has_vllm:
                       break
           results["has-vllm-tests"] = "true" if has_vllm else "false"
-          if has_vllm and run_vllm:
+          has_model_tests = any_tests
+          vllm_selected = has_vllm and run_vllm
+          if vllm_selected:
               any_tests = True
+          # The vLLM tests get their own build only when vllm-platform differs
+          # from platform; the main build then serves the model tests alone.
+          separate_vllm_build = vllm_selected and os.environ["VLLM_PLATFORM"] != os.environ["PLATFORM"]
+          build_main = has_model_tests or (vllm_selected and not separate_vllm_build)
 
           results["has-any-tests"] = "true" if any_tests else "false"
           results["has-image-consumer"] = "true" if has_image_consumer else "false"
+          results["build-main"] = "true" if build_main else "false"
+          results["build-vllm"] = "true" if separate_vllm_build else "false"
 
           if github_output:
               with open(github_output, "a") as f:
@@ -357,7 +379,7 @@ jobs:
   # ── Build (only if at least one combo has tests) ─────────────────
   build-artifact:
     needs: [check-harbor, preflight]
-    if: ${{ needs.preflight.outputs.has-any-tests == 'true' }}
+    if: ${{ needs.preflight.outputs.build-main == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -368,6 +390,21 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  build-artifact-vllm:
+    needs: [check-harbor, preflight]
+    if: ${{ needs.preflight.outputs.build-vllm == 'true' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-inplace-wheel: true
+      platform: ${{ inputs.vllm-platform || 'Ubuntu 24.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
   # Bakes the source tree and this run's build output into one image the unit and
@@ -553,14 +590,17 @@ jobs:
 
   # ── vLLM (single pipeline; runs the whole curated set, tier filter optional) ──
   vllm-tests:
-    needs: [build-artifact, preflight]
-    if: ${{ inputs.run-vllm-tests && needs.preflight.outputs.has-vllm-tests == 'true' }}
+    needs: [build-artifact, build-artifact-vllm, preflight]
+    if: >-
+      ${{ !cancelled() && inputs.run-vllm-tests && needs.preflight.outputs.has-vllm-tests == 'true' &&
+       (needs.preflight.outputs.build-vllm == 'true' && needs.build-artifact-vllm.result == 'success' ||
+        needs.preflight.outputs.build-vllm != 'true' && needs.build-artifact.result == 'success') }}
     secrets: inherit
     uses: ./.github/workflows/vllm-model-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact-vllm.outputs.dev-docker-image || needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-vllm.outputs.build-artifact-name || needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-vllm.outputs.wheel-artifact-name || needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

@@ -62,10 +62,12 @@ on:
         description: "tenstorrent/vllm branch or sha (vllm-source=fork)"
         required: false
         default: dev
+      # vLLM 0.32 and later require Python 3.11 or newer. Only the Ubuntu 24.04
+      # image has it (3.12); the 22.04 image has 3.10.
       platform:
         required: false
         type: choice
-        default: "Ubuntu 22.04"
+        default: "Ubuntu 24.04"
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
@@ -164,7 +166,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   vllm-plugin-unit-tests:
     needs: build-artifact
