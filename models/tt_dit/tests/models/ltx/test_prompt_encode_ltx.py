@@ -81,14 +81,14 @@ def test_prompt_conditioning(mesh_device):
     ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
     gemma = default_ltx_gemma()
 
-    # checkpoint_name=ckpt (not None): keys the feature-extractor/connector caches exactly as the
-    # pipeline does, so this loads the same weights the pipeline will. The transformer/VAE stay
-    # unloaded — they are built lazily, so this is still encoder-only.
+    # Construct only the encoder, then bind the resolved checkpoint before loading so the
+    # connector caches use the same weight identity as the full pipeline.
     # dynamic_load=False keeps the encoder resident, which is what turns the whole-encode trace on.
     pipe = LTXPipeline.create_pipeline(
-        mesh_device, checkpoint_name=ckpt, gemma_path=gemma, mode="av", dynamic_load=False
+        mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av", dynamic_load=False
     )
     pair = pipe.gemma_encoder_pair
+    pair.checkpoint_name = LTXPipeline._resolve_checkpoint_file(ckpt)
     pair.ensure_loaded()
     assert pair._encoder_trace, "resident encoder must trace, else this guards nothing"
 
