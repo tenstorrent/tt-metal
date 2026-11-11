@@ -314,7 +314,9 @@ def _sources(model):
 def _slot_of(model, b):
     """(mesh row, prefill slot in the row) of user b's carried state."""
     Up = model.Up
-    if Up == model.U:
+    if (
+        Up == model.U or model.__dict__.get("_slot_k") is not None
+    ):  # (slot bucket call: slot = in-row index of the user, the tensors are the k-slot views of the Up = U state)
         return b // model.U, b % model.U
     sl = model.__dict__.get("pf_slot_of", {}).get(b)
     assert sl is not None, f"user {b} has no prefill slot"
@@ -789,7 +791,7 @@ def restore_users(model, snap, bs):
         model.pool.admit(b, s + 1)
     model.pool.sync_page_table()
     for b in bs:
-        if model.Up != model.U:
+        if model.Up != model.U and model.__dict__.get("_slot_k") is None:
             slot = model._slot_alloc([(b, None, 0, s)], resume)[b]
             targets.append((slot // model.Up, slot % model.Up))
         else:

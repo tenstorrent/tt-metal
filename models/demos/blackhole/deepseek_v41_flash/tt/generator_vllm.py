@@ -1522,10 +1522,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 if cont_first:  # (a user of this call is never claimed by a second prompt)
                     avoid = list(avoid) + [q for q in phys if q not in avoid]
                 fr_ = self._full_rows(phys) if getattr(self, "protect", False) else ()
-                if self.bucketing and U:
+                if (self.bucketing or (hasattr(self.m, "slot_buckets_active") and self.m.slot_buckets_active())) and U:
                     p = self.slots.claim_packed(
                         slot, load, U, avoid, full_rows=fr_
-                    )  # lowest in-row index: the live set stays inside the smallest decode bucket
+                    )  # lowest in-row index: the live set stays inside the smallest decode bucket (and, DSV41_PREFILL_SLOT_BUCKETS, the prefilling users inside the smallest slot bucket)
                 else:
                     p = (
                         self.slots.claim_balanced(slot, load, U, avoid, full_rows=fr_)
