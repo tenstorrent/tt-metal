@@ -609,9 +609,9 @@ def custom_preprocessor_siglip(torch_model, name):
     return parameters
 
 
-def ttnn_featurizer(embedding, encoder, pixel):
-    """Helper function to run embedding + encoder."""
+def ttnn_featurizer(embedding, encoder, pixel, pos_embed):
+    """Helper function to run embedding + position embedding + encoder."""
     embd = embedding(pixel)
     # Encoder's layer_norm requires TILE layout
     embd = ttnn.to_layout(embd, layout=ttnn.TILE_LAYOUT)
-    return encoder(embd)
+    return encoder(ttnn.add(embd, pos_embed))
