@@ -137,3 +137,15 @@ FORCE_INLINE void mcast_word(uint32_t addr, uint32_t val, const uint32_t (*rc)[5
 #endif
 FORCE_INLINE bool is_attn(uint32_t L) { return ((uint32_t)(MKA_AMASK) >> L) & 1u; }
 FORCE_INLINE uint32_t aidx(uint32_t L) { return (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)); }
+// MKA_W_ORD (integ repack order): the qkv / wo weight tensors hold the ATTENTION layers only, attention ordinal a at page
+// a * stride. wla(L) = the page-block index of engine layer L: aidx(L) for an attention layer; a GDN layer's stand-in reads
+// (QSK slot M in-proj stand-in, bytes only) clamp to the last attention layer.
+FORCE_INLINE uint32_t wla(uint32_t L) {
+#if defined(MKA_W_ORD)
+    constexpr uint32_t NA = (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK));
+    const uint32_t a = aidx(L);
+    return a < NA ? a : NA - 1;
+#else
+    return L;
+#endif
+}

@@ -344,10 +344,10 @@ void kernel_main() {
 #endif
         cb_reserve_back(CB_PQ, QSL);
 #if defined(MKA_QSK) && defined(MKA_RWO)
-        noc_async_read(wow.get_noc_addr(rw_page + La0 * rw_pl), get_write_ptr(CB_PQ), rw_nt * WK * MWTB);
+        noc_async_read(wow.get_noc_addr(rw_page + wla(La0) * rw_pl), get_write_ptr(CB_PQ), rw_nt * WK * MWTB);
 #elif defined(MKA_QSK)
 #else
-        noc_async_read(wq.get_noc_addr(pq_page + La0 * pq_layer), get_write_ptr(CB_PQ), QSL * MWTB);
+        noc_async_read(wq.get_noc_addr(pq_page + wla(La0) * pq_layer), get_write_ptr(CB_PQ), QSL * MWTB);
 #endif
         noc_async_read_barrier();
         cb_push_back(CB_PQ, QSL);
@@ -355,7 +355,7 @@ void kernel_main() {
 #if defined(MKA_RWO) && defined(MKA_WORING)
     if (rw_nt && La0 < NL && !(kPqGdn && gdn_run(La0) > 0)) {
         cb_reserve_back(CB_WOR, WOR_SLOT);
-        noc_async_read(wow.get_noc_addr(rw_page + La0 * rw_pl), get_write_ptr(CB_WOR), rw_nt * WK * MWTB);
+        noc_async_read(wow.get_noc_addr(rw_page + wla(La0) * rw_pl), get_write_ptr(CB_WOR), rw_nt * WK * MWTB);
         noc_async_read_barrier();
         cb_push_back(CB_WOR, WOR_SLOT);
     }
@@ -393,10 +393,10 @@ void kernel_main() {
                 const uint64_t src = 0;
 #elif defined(MKA_QSK)
                 const uint32_t pqn = rw_nt * WK;   // §18: the ext ring is free of qkv -> it carries the Wo slice (WORING-like)
-                const uint64_t src = wow.get_noc_addr(rw_page + Ln * rw_pl);
+                const uint64_t src = wow.get_noc_addr(rw_page + wla(Ln) * rw_pl);
 #else
                 const uint32_t pqn = QSL;
-                const uint64_t src = wq.get_noc_addr(pq_page + Ln * pq_layer);
+                const uint64_t src = wq.get_noc_addr(pq_page + wla(Ln) * pq_layer);
 #endif
                 const uint32_t p0 = j * pqn / run, p1 = (j + 1) * pqn / run;
                 if (L > 0) noc_semaphore_wait_min(l1w(gs[GS_XRDY]), L);   // layer L has started
@@ -414,7 +414,7 @@ void kernel_main() {
                 if (rw_nt) {   // the next attention layer's Wo slice, same share / throttle (ring popped by the last wo)
                     const uint32_t wn = rw_nt * WK, w0 = j * wn / run, w1 = (j + 1) * wn / run;
                     if (j == 0) cb_reserve_back(CB_WOR, WOR_SLOT);
-                    const uint64_t wsrc = wow.get_noc_addr(rw_page + Ln * rw_pl);
+                    const uint64_t wsrc = wow.get_noc_addr(rw_page + wla(Ln) * rw_pl);
                     const uint32_t wdst = get_write_ptr(CB_WOR);
                     noc_async_read_set_trid(TRID_PQ);
                     for (uint32_t p = w0, c = 0; p < w1; p += MKA_PQCH, ++c) {
@@ -519,7 +519,7 @@ void kernel_main() {
             const uint32_t pq_per = (QSL - PQ_WS + pq_ng - 1) / pq_ng;   // pages per group
             uint32_t pq_done = PQ_WS, gi = 0, pq_dst = 0;
             bool pq_rsv = false;
-            const uint64_t pq_src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
+            const uint64_t pq_src = wq.get_noc_addr(pq_page + wla(next_att(L)) * pq_layer);
 #endif
 #if defined(MKA_RWO)
 #if defined(MKA_RWOSKIP)
@@ -532,7 +532,7 @@ void kernel_main() {
             // helper (STREAM): h_np pages of an ext core's slice, 8 at a time via CB_SCR, once that ring is free
             // (QFLAG >= A + 1: every qkv producer, ext included, finished, so every ring was popped)
             uint32_t h_done = 0;
-            const uint64_t h_src = wow.get_noc_addr(h_page + L * rw_pl);
+            const uint64_t h_src = wow.get_noc_addr(h_page + wla(L) * rw_pl);
             auto help_some = [&](bool all) {
                 if (!h_np || !att) return;
                 if (!all && *l1w(gs[GS_QFLAG]) < A + 1) return;
@@ -554,7 +554,7 @@ void kernel_main() {
             const uint32_t wo_per = (wo_np + pq_ng - 1) / pq_ng;
             uint32_t wo_done = 0, wo_dst = 0;
             bool wo_rsv = false;
-            const uint64_t wo_src = wow.get_noc_addr(rw_page + L * rw_pl);
+            const uint64_t wo_src = wow.get_noc_addr(rw_page + wla(L) * rw_pl);
 #endif
             for (uint32_t b = b0; b < b1; b += NBB) {
                 const uint32_t nb = (b1 - b) < NBB ? (b1 - b) : NBB;
@@ -720,7 +720,7 @@ void kernel_main() {
         if (qrole == QR_EXT && next_att(L) < NL) {
             MKZ("R-PQ");
             cb_reserve_back(CB_PQ, QSL);
-            const uint64_t src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
+            const uint64_t src = wq.get_noc_addr(pq_page + wla(next_att(L)) * pq_layer);
             const uint32_t dst = get_write_ptr(CB_PQ);
 #if defined(MKA_PQCH)
             // throttled: MKA_PQCH-page chunks, at most MKA_PQN chunks in flight (big single reads from 40 cores flood

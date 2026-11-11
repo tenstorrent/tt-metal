@@ -22,6 +22,20 @@ GX, GY = 10, 8; NC = GX * GY; NGU = HT; NDN = KT // NC; XSW = KT // NC
 KB = 16; GRP = int(os.environ.get("FM_GRP", "2")); ITERS = int(os.environ.get("FM_ITERS", "2"))
 
 
+# Real-weight injection (G, vLLM engine-ON / e2e-diff): kind -> dict(tensor=<device DRAM tensor>, layout=<weight_layouts
+# layout object>) from integ/weights_mk.repack. setup_bench then binds that tensor and takes the runtime-arg placement from
+# its layout, skipping the synthetic pack and its golds. Empty = the bench's synthetic weights (same layouts, same code).
+_WEIGHTS = {}
+
+
+def _wl():
+    import sys as _sys
+    _d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+    if _d not in _sys.path: _sys.path.insert(0, _d)
+    import weight_layouts as WL
+    return WL
+
+
 def setup_bench(dev, MESH, mesh_identity):
     try:   # engine/ is on sys.path in the bench (the pushed tree's own module first)
         import cbplan as CBP
@@ -201,6 +215,15 @@ def setup_bench(dev, MESH, mesh_identity):
     if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
+    # MKA_W_ORD=1 (integ repack order): qkv / wo weight tensors hold the attention layers only (ordinal a = aidx(L));
+    # the kernels index them with wla(L); the synthetic packers below follow, so the bench exercises the injected layout
+    W_ORD = os.environ.get('MKA_W_ORD', '0') == '1'
+    if W_ORD and ('MKA_W_ORD', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_W_ORD', '1')]
+    ATTN_L = [L_ for L_ in range(NL) if is_attn_layer(L_)]
+    def wla(L_):   # engine layer -> page block of the qkv / wo tensors (mirrors the kernels' wla)
+        if not W_ORD: return L_
+        a_ = sum(1 for l_ in range(L_) if is_attn_layer(l_)); return min(a_, len(ATTN_L) - 1)
+    WLS = ATTN_L if W_ORD else list(range(NL))   # engine layers whose weights are stored, in tensor order
 
     # ================= MKA2: full grid + SDPA phase setup =================
     gfull = dev.compute_with_storage_grid_size(); GXF, GYF = gfull.x, gfull.y; NCF = GXF * GYF
@@ -245,6 +268,7 @@ def setup_bench(dev, MESH, mesh_identity):
         # MK_REAL_AR + GDN24: the AR corner (x 10-11, rows 8-9) runs the GDN role with the AR sender phases hosted in its
         # reader / writer (see _gdn_host_ar below)
         GDNC = [i for i in range(NCF) if fcores[i].y >= GY]   # row-major: y 8 then 9, x 0..11
+        assert _wl().engine_cores(grid=(GXF, GYF), stream_rect=(GX, GY))['gdn_out'] == [(fi, fcores[fi].x, fcores[fi].y) for fi in GDNC]
         ARC = set()
     RESV = ARC | set(GDNC)
     ACT = [i for i in range(NCF) if i not in RESV]
@@ -477,7 +501,8 @@ def setup_bench(dev, MESH, mesh_identity):
         q_slot = {}   # bank-local page offset of each core's slice (slices packed per bank)
         _tot = [0] * banks
         if QSK:
-            _qb, _qo, PQL = LA_.splitk_bank_assign(QSL_, {key: key for key in QSL_}, BANK_LOC, banks)
+            QLAY = _WEIGHTS['qkv']['layout'] if 'qkv' in _WEIGHTS else _wl().QkvSplitKLayout(BANK_LOC, banks)   # engine/weight_layouts.py
+            _qb, _qo, PQL = QLAY.bank, QLAY.off, QLAY.pages_per_layer
             for fi, key in QSKEY.items(): q_bank[fi], q_slot[fi] = _qb[key], _qo[key]
         else:
             for fi in qcores:
@@ -488,7 +513,7 @@ def setup_bench(dev, MESH, mesh_identity):
         gam = 0.5 + torch.rand(H)
         wf_t = gam[:, None] * wq_t   # diag(γ) W, folded at load (spec v0.4; × NORM_FIX is part of γ here)
         def q_pages(scale):
-            if QSK: return LA_.pack_qkv_splitk_layer(wf_t, QSL_, _qb, _qo, banks, PQL, scale)
+            if QSK: return QLAY.pack(wf_t, scale=scale)
             pg = torch.zeros(PQL, TILE, TILE)
             for fi in qcores:
                 ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
@@ -496,15 +521,13 @@ def setup_bench(dev, MESH, mesh_identity):
                     for jj in range(nt):
                         pg[(j_ + kl * nt + jj) * banks + b_] = tl(wf_t, k0 + kl, n0 + jj) * scale
             return pg
-        wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        wqq = ttnn.to_torch(wq_all).float().reshape(NL, PQL, TILE, TILE)
+        _QINJ = QSK and 'qkv' in _WEIGHTS
+        if _QINJ: wq_all = _WEIGHTS['qkv']['tensor']   # real weights (golds skipped)
+        else: wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in WLS]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         wfq = torch.zeros(NL, H, QN * TILE)   # dequantized folded weights as the device sees them, per layer
-        if QSK:
-            for key, sl_ in QSL_.items():
-                for kl in range(sl_.pages // sl_.nt):
-                    for jj in range(sl_.nt):
-                        k_, n_ = sl_.k0 + kl, sl_.first + jj
-                        wfq[:, k_ * TILE:(k_ + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = wqq[:, (_qo[key] + sl_.page_of(kl, jj)) * banks + _qb[key]]
+        if not _QINJ: wqq = ttnn.to_torch(wq_all).float().reshape(len(WLS), PQL, TILE, TILE)
+        if not _QINJ: wqq = wqq[[wla(L_) for L_ in range(NL)]]   # back to engine-layer order for the golds
+        if QSK and not _QINJ: wfq = QLAY.unpack(wqq)
         for fi in ([] if QSK else qcores):
             ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
             for kl in range(nk):
@@ -820,36 +843,20 @@ def setup_bench(dev, MESH, mesh_identity):
         assert not any(is_attn_layer(L_) and is_attn_layer(L_ + 1) for L_ in range(NL - 1)), "MKA_RWO: no back-to-back attention layers"
         WK_, WN_ = 48, 160
         wo_cores = list(ext_list)
-        # rot chunk order for device 0: owning device o = j // 2, farthest around the 8-ring first, own (o = 0) last
-        rot = sorted(range(16), key=lambda j_: (-min(j_ // 2, 8 - j_ // 2), j_))
-        flat = [n_ for j_ in rot for n_ in range(10 * j_, 10 * j_ + 10)]
-        for c_, fi in enumerate(wo_cores): WOT[fi] = flat[c_::len(wo_cores)]
-        assert max(len(v) for v in WOT.values()) <= WO_MAXT_, (max(len(v) for v in WOT.values()), WO_MAXT_)
-        torch.manual_seed(11)
-        wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
-        # byte-balanced bank-local slices, k-major pages (k * nt + j)
-        caps_ = [len(wo_cores) // banks + (1 if b_ < len(wo_cores) % banks else 0) for b_ in range(banks)]
-        pairs_ = sorted(((abs(fcores[fi].x - bx) + abs(fcores[fi].y - by), fi, b_) for fi in wo_cores for b_, (bx, by) in enumerate(BANK_LOC)))
-        for d_, fi, b_ in pairs_:
-            if fi in WOB or caps_[b_] == 0: continue
-            WOB[fi] = b_; caps_[b_] -= 1
-        tot_ = [0] * banks
-        for fi in wo_cores: WOP[fi] = tot_[WOB[fi]]; tot_[WOB[fi]] += len(WOT[fi]) * WK_
-        WOPL = max(tot_) * banks
-        def wo_pages(scale):
-            pg = torch.zeros(WOPL, TILE, TILE)
-            for fi in wo_cores:
-                for kl in range(WK_):
-                    for jj, n_ in enumerate(WOT[fi]):
-                        pg[(WOP[fi] + kl * len(WOT[fi]) + jj) * banks + WOB[fi]] = tl(wo_t, kl, n_) * scale
-            return pg
-        wo_all = ttnn.from_torch(torch.cat([wo_pages(2.0 ** -(L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        woq_ = ttnn.to_torch(wo_all).float().reshape(NL, WOPL, TILE, TILE)
+        # engine/weight_layouts.py wo unit: rot chunk order (device 0: farthest owning device around the 8-ring first, own
+        # last), core c -> tiles flat[c::n], byte-balanced bank-local slices, k-major pages (k * nt + j)
+        WLAY = _WEIGHTS['wo']['layout'] if 'wo' in _WEIGHTS else _wl().wo_unit_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], BANK_LOC, banks, maxt=WO_MAXT_)
+        assert _wl().engine_cores(grid=(GXF, GYF), stream_rect=(GX, GY))['wo'] == [(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], "weight_layouts.engine_cores (integ's pre-build core list) != ext_list"
+        assert WLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], "injected wo layout built for other cores"
+        for c_, fi in enumerate(wo_cores): WOT[fi], WOB[fi], WOP[fi] = WLAY.tiles[c_], WLAY.bank[c_], WLAY.row[c_]
+        WOPL = WLAY.pages_per_layer
         woq = torch.zeros(NL, WK_ * TILE, WN_ * TILE)
-        for fi in wo_cores:
-            for kl in range(WK_):
-                for jj, n_ in enumerate(WOT[fi]):
-                    woq[:, kl * TILE:(kl + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = woq_[:, (WOP[fi] + kl * len(WOT[fi]) + jj) * banks + WOB[fi]]
+        if 'wo' in _WEIGHTS: wo_all = _WEIGHTS['wo']['tensor']   # real weights (golds skipped)
+        else:
+            torch.manual_seed(11)
+            wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
+            wo_all = _wl().pack_wo_unit([wo_t] * len(WLS), WLAY, scales=[2.0 ** -(L % 2) for L in WLS], dev=dev)
+            woq = WLAY.unpack(ttnn.to_torch(wo_all).float().reshape(len(WLS), WOPL, TILE, TILE)[[wla(L_) for L_ in range(NL)]])
         wod = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, WN_ * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         WCC = wo_cores[0]   # concat core
         owner_fi = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + j_ % 2 and c_.y == j_ // 2)) for j_ in range(16)]
@@ -880,7 +887,7 @@ def setup_bench(dev, MESH, mesh_identity):
                             A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = golds_s[L][u_, 4 * h_ + j_, :]
                 g = (A_ * sg) @ woq[L]
             gold_wo.append(g)
-        print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {rot}, rects {RECTS_E}", flush=True)
+        print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {_wl().rot_order()}, rects {RECTS_E}", flush=True)
     HC = []
     if RQNR:
         assert RQKV and ('MKA_WORING', '1') not in MKDEF and ('MKA_TREEFLAG', '1') not in MKDEF   # RWO optional (GDN24 decouple)
