@@ -166,7 +166,7 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
     nb = max(math.ceil((max(CTX) + 64 * T) / 64), 8)
     monkeypatch.setattr(tc, "B", B)
     monkeypatch.setattr(tc, "NB", nb)
-    monkeypatch.setattr(tc, "NUM_BLOCKS", sum(math.ceil((c + 64 * T) / 64) + 1 for c in CTX) + 64)
+    monkeypatch.setattr(tc, "NUM_BLOCKS", B * nb + 40)  # the warm table spans B x nb blocks (+ the MTP scratch block)
     model, eng, tokenizer, _ = tc._setup(mesh_device)
     mk1 = model._vfy_mk1
     assert mk1 is not None and mk1.ready and B in mk1.programs, f"engine bucket {B} not built: {getattr(mk1, 'reason', None)}"
