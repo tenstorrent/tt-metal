@@ -127,11 +127,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < NRF; ++i) for (uint32_t k = 0; k < 5; ++k) rf[i][k] = get_arg_val<uint32_t>(a++);
     const uint32_t self_rf = get_arg_val<uint32_t>(a++);
     for (uint32_t i = 0; i < 2; ++i) for (uint32_t k = 0; k < 5; ++k) rs[i][k] = get_arg_val<uint32_t>(a++);
-    uint32_t kv_addr[NL];
-    for (uint32_t L = 0; L < NL; ++L) kv_addr[L] = get_arg_val<uint32_t>(a++);
+    uint32_t kv_addr[MKA_KVN];
+    for (uint32_t L = 0; L < MKA_KVN; ++L) kv_addr[L] = get_arg_val<uint32_t>(a++);
 #if defined(MKA_KVPROD)
-    uint32_t kvv_addr[NL];   // paged_v per layer (kv_addr = paged_k)
-    for (uint32_t L = 0; L < NL; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
+    uint32_t kvv_addr[MKA_KVN];   // paged_v per layer (kv_addr = paged_k)
+    for (uint32_t L = 0; L < MKA_KVN; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
 #endif
 #if defined(MKA_RQPOS)
     const uint32_t user = get_arg_val<uint32_t>(a++);
@@ -304,7 +304,7 @@ void kernel_main() {
         return TensorAccessor(kv_args, rq_attn(w), KVTB);
     };
 #else
-    auto kva_tensor = [&](uint32_t L) { return TensorAccessor(kv_args, kva > 8 ? kvv_addr[L] : kv_addr[L], KVTB); };
+    auto kva_tensor = [&](uint32_t L) { return TensorAccessor(kv_args, kva > 8 ? kvv_addr[MKA_KVI(L)] : kv_addr[MKA_KVI(L)], KVTB); };
 #endif
     auto kva_pre = [&](uint32_t L) {   // layer L's target tiles -> CB_KVB pages 1.. (in flight under KVA_TRID)
         const auto t = kva_tensor(L);
@@ -1134,7 +1134,7 @@ void kernel_main() {
                 noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), MKA_WOCNT_AT(L, A));
 #else
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY),
-                                       MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1));
+                                       MKA_GDN_NC * (L - MKA_AIDX_EXPR(L) + 1));
 #endif
 #if defined(MK_GAR_ZERO)   // CB_XO stand-in until gdn_out (G-c) lands: zero (the GDN AR adds 0: the residual chain is unchanged)
                 {
@@ -1189,8 +1189,15 @@ void kernel_main() {
 #endif
 #if defined(MKA_QSPREAD)
             if (!att && L + 1 < NL) {   // next attention layer after L: its qkv slice -> slot Q (CB_WM popped by the previous one)
+#if defined(MKA_LPER)   // NL64: next attention layer in the 32-periodic pattern
+                const uint32_t s_ = (L + 1) & 31u;
+                uint32_t mh = (uint32_t)(MKA_AMASK) >> s_, nb_ = L + 1;
+                if (!mh) { nb_ += 32u - s_; mh = (uint32_t)(MKA_AMASK); }
+                const uint32_t na = mh ? nb_ + (uint32_t)__builtin_ctz(mh) : NL;
+#else
                 const uint32_t mh = (uint32_t)(MKA_AMASK) >> (L + 1);
                 const uint32_t na = mh ? L + 1 + (uint32_t)__builtin_ctz(mh) : NL;
+#endif
                 if (na < NL && sq_for != na) {
                     v_slot_start(sq, CB_WM, QSK_SLOT, wm.get_noc_addr(wm_page + wla(na) * pwm_layer), QSK_KPR * qsk_nt(vn) * MWTB, QSP_TRID);
                     sq_for = na;
@@ -1370,7 +1377,7 @@ void kernel_main() {
             // every engine core once its output rows landed; GDN layer g (= L - attention layers before L) is done at
             // MKA_GDN_NC * (g + 1). The program-end reset is below.
             volatile tt_l1_ptr uint32_t* gdn_or = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY);
-            const uint32_t gdn_tgt = MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1);
+            const uint32_t gdn_tgt = MKA_GDN_NC * (L - MKA_AIDX_EXPR(L) + 1);
 #define MKA_GDN_STALL_DONE() (invalidate_l1_cache(), *gdn_or >= gdn_tgt)
 #endif
 #if defined(MK_V12)
@@ -1459,9 +1466,9 @@ void kernel_main() {
             const auto kv = TensorAccessor(kv_args, rq_attn(4 + 2 * (MKA_ATT0 + A)), KVTB);   // model caches (attn block)
             const auto kvv = TensorAccessor(kv_args, rq_attn(5 + 2 * (MKA_ATT0 + A)), KVTB);
 #else
-            const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
+            const auto kv = TensorAccessor(kv_args, kv_addr[MKA_KVI(L)], KVTB);
 #if defined(MKA_KVPROD)
-            const auto kvv = TensorAccessor(kv_args, kvv_addr[L], KVTB);
+            const auto kvv = TensorAccessor(kv_args, kvv_addr[MKA_KVI(L)], KVTB);
             const uint32_t kvn = MKA_BPU;
 #else
             const auto& kvv = kv;
