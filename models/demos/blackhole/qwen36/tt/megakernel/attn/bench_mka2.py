@@ -66,7 +66,8 @@ def _rstd_of(x_):
     return 1.0 / torch.sqrt((xs * xs).sum(-1) / H + EPS)
 for it in range(ITERS):
     if KVA: KVA_PRE(it)   # this verify step's kvpos (MKA_KVA)
-    t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else ([rsp] if V12 else [])) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([t_ for t_ in (wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j) if t_ is not None] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + (list(GDN_ROLE.get('io', [])) if GDN24 else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    t1 = time.time(); y = ttnn.generic_op([t_ for t_ in (x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy) if t_ is not None] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else ([rsp] if V12 else [])) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([t_ for t_ in (wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j) if t_ is not None] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + (list(GDN_ROLE.get('io', [])) if GDN24 else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    _xo_t = XO_DUMP() if XO_DUMP is not None else v_xo   # MK_L1P2_QOVXO: CB_VXO read back right after the engine op (before any other device op)
     if KVA: KVA_POST(it)   # SDPA golden over the appended cache (+ MKA_KVA_CHECK: bit-compare vs paged_fused_update_cache)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
@@ -156,8 +157,8 @@ for it in range(ITERS):
             _k += 1
         print(f"[v12] iter {it} per-layer MLP vs AR-delivered-x gold pcc min {min(_mp)} all {_mp}", flush=True)
     if V12 and not (REAL_AR and AR_GAMMA):   # (MK_AR_GAMMA: v_xo ends the pass holding x_deliver, not the partial)
-        _v = ttnn.to_torch(v_xo).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
-        if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(v_xo), os.environ['V12_SAVE'])
+        _v = ttnn.to_torch(_xo_t).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
+        if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(_xo_t), os.environ['V12_SAVE'])
         _bad = [j_ for j_ in range(16) if torch.corrcoef(torch.stack([_v[:, j_*320:(j_+1)*320].flatten(), _g2[:, j_*320:(j_+1)*320].flatten()]))[0, 1].item() < 0.999]
         print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
     if REAL_AR and AR_SEQ and v_xk is not None:   # x of the next pass's layer 0 as the last AR delivered it into the K-row slots (STREAM (0, k)); MK_V12_CB: CB, not readable
@@ -205,8 +206,9 @@ for it in range(ITERS):
             nf_ = int((~torch.isfinite(d_)).sum()); nz_ = bool((d_ == 0).all())   # non-finite elements / never written (all 0)
             print(f"[gin] iter {it} GDN layer {g_} (L{GLS[g_]}) in-proj pcc {pc_:.5f} max|err| {(d_ - gg_).abs().max().item():.4f} |gold|max {gg_.abs().max().item():.3f} pad exact 0 {pad0}"
                   f" non-finite {nf_}{' NOT WRITTEN' if nz_ else ''}", flush=True)
-    pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
-    print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
+    if ymix is not None:   # (MK_L1P2_TENS: under QSK ymix is a static CB, never written: no stand-in mixer output to check)
+        pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
+        print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
     if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the pass's last K-row delivery left on the STREAM cores (rows 0-7 = the
         # K-row partials) vs Σx² of that x: the residual after AR (NAR - 2) (the last AR feeds no delivery inside the pass)
         _rs = ttnn.to_torch(rsp_sh).float().reshape(-1, TILE, rsp_sh.shape[-1])   # [cores, 32, NOWN*32], device 0
@@ -322,6 +324,14 @@ for it in range(ITERS):
         import hashlib
         _h = lambda t_: hashlib.md5(ttnn.to_torch(t_).float().numpy().tobytes()).hexdigest()[:12]
         print(f"[rqpos] iter {it} md5 sdpa {_h(outs)}" + (f" wo {_h(wod)}" if RWO else ''), flush=True)
+    if os.environ.get('MK_L1P2_MD5', '0') == '1':   # spec §20 phase 2 A/B: bit-identity fingerprints of every live engine output, per iteration
+        import hashlib
+        _hh = lambda t_: hashlib.md5(ttnn.to_torch(t_).float().numpy().tobytes()).hexdigest()[:12]
+        _lv = [('sdpa', outs)] + ([('wo', wod)] if RWO else []) + ([('qkv', qkv_out)] if RQKV else []) + ([('xo', _xo_t)] if (V12 and _xo_t is not None) else []) + \
+              ([('res', ar_out)] if REAL_AR else []) + \
+              [(n_, globals()[n_]) for n_ in ('gin_dbg', 'go_dbg') if globals().get(n_) is not None] + \
+              [(f'gio{i_}', t_) for i_, t_ in enumerate(GDN_ROLE.get('io', []) if GDN24 else []) if t_.memory_config().buffer_type == ttnn.BufferType.DRAM and t_.volume() <= (1 << 24)]
+        print(f"[l1p2] iter {it} md5 " + ' '.join(f"{n_} {_hh(t_)}" for n_, t_ in _lv), flush=True)
     if MESH and ('MKA_RQPOS', '1') in MKDEF and os.environ.get('MKA_UPAR', '0') == '1':
         # per device d (own users g = 2u + d % 2): SDPA / wo vs that parity's golds -> every user 0-7 covered on the mesh
         _od = [_to_torch(t_).float().reshape(NL, NU, TILE, DHD) for t_ in ttnn.get_device_tensors(outs)]
@@ -348,7 +358,7 @@ for it in range(ITERS):
         # dead buffers are skipped: out (fm11 output) is never written under V12, ymix (MIXN mixer) never under QSK; the
         # residual identity is the [ar] line (ar_out), qkv / v12 xo / sdpa are compared here when they are live
         _mi = ([] if V12 else [('out', y)]) + ([] if QSK else [('ymix', ymix)]) + ([('qkv', qkv_out)] if RQKV else []) + \
-              ([('v12 xo', v_xo)] if V12 else []) + [('sdpa', outs)]
+              ([('v12 xo', _xo_t)] if V12 else []) + [('sdpa', outs)]
         def _mid_r(t_):   # R < 32: valid rows only (rows >= R of each 32-row tile row are don't-care, spec v0.8)
             ds = [_to_torch(d).float() for d in ttnn.get_device_tensors(t_)]
             ds = [d_.reshape(-1, TILE, d_.shape[-1])[:, :V_R] for d_ in ds]
