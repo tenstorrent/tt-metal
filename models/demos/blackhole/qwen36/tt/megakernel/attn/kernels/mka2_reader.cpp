@@ -432,7 +432,11 @@ void kernel_main() {
 #endif
         if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers
 #if defined(MK_V12)
+#if defined(MK_REAL_GAR) && defined(MK_REAL_AR) && defined(MK_AR_DLV)
+            v12_aardlv(L, L);   // owners: the GDN mixer AR's x (G-d; replaces the MGO stand-in)
+#else
             v12_ox(L);
+#endif
             V12_ARDLV(L);
 #endif
             continue;
@@ -751,7 +755,11 @@ void kernel_main() {
 #endif
 #if defined(MK_V12)
 #if defined(MK_REAL_AAR) && defined(MK_REAL_AR) && defined(MK_AR_DLV)
+#if defined(MK_REAL_GAR)
+        v12_aardlv(L, L);   // owners, attention-type layers: the real attention AR's x (mixer-AR index = L under G-d)
+#else
         v12_aardlv(L, A);   // owners, attention-type layers: the real attention AR's x (replaces the MGO stand-in)
+#endif
 #else
         v12_ox(L);   // owners, attention-type layers (after this core's SDPA work)
 #endif

@@ -642,7 +642,11 @@ void kernel_main() {
     cb_wait_front(CB_ONE, 1);
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = ((uint32_t)(MKA_AMASK) >> L) & 1u;
+#if defined(MK_REAL_GAR) && defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+        if (!IS_STREAM && !att) { if (vrole == 2) ar_step(MK_AR_CB_AIN); V12_OSUM(L); continue; }   // G-d: GDN mixer AR, then MLP
+#else
         if (!IS_STREAM && !att) { V12_OSUM(L); continue; }
+#endif
 #if defined(MKA_RQKV)
         // attention layers: the real qkv PROJ; GDN-type layers: the STREAM K-half matmul alone stands in for the GDN
         // in-proj (64 x 87 KB BFP8 = 5.6 MB, spec 5.9 MB), output discarded

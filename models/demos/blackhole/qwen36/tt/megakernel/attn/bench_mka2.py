@@ -151,7 +151,7 @@ for it in range(ITERS):
             _k = 0
             for L_ in range(NL):
                 if is_attn_layer(L_) and _k > 0: _xin[L_] = _db[:, 2 * (_k - 1) + 1]
-                _k += 1 + (1 if (REAL_AAR and is_attn_layer(L_)) else 0)
+                _k += 1 + (1 if (REAL_AAR and (is_attn_layer(L_) or ('MK_REAL_GAR', '1') in MKDEF)) else 0)
         elif AR_SEQ:
             _xin = {L_: x_ for L_, x_ in _xin_seq.items() if is_attn_layer(L_) and L_ > 0}
         for L_, x_ in _xin.items():

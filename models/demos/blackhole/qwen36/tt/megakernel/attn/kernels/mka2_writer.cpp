@@ -22,6 +22,11 @@
 #define MK_AR_ZONE(n) DeviceZoneScopedN(n)
 #endif
 #include "mka2_common.hpp"
+#if defined(MK_REAL_GAR)
+#define MK_MI(L, A) (L)   // mixer-AR index: every layer has one (attention AR, GDN AR)
+#else
+#define MK_MI(L, A) (A)
+#endif
 #if defined(MK_V12)
 #include "v12e.hpp"
 #endif
@@ -411,6 +416,33 @@ void kernel_main() {
         noc_async_write_barrier();
     };
 #endif
+#if defined(MK_REAL_AAR) && defined(MKA_ROLE_EXT)
+    // the mixer AR of layer L (attention: wo output; MK_REAL_GAR: also GDN layers, gdn_out output) on the owners: CB_XO (CB 23) ->
+    // residual -> this layer's MLP x (γ_post_attn with MK_AR_GAMMA); mi = the running mixer-AR index (MK_MI) -> MK_AR_ADLV = mi + 1
+    auto mixer_ar = [&](uint32_t L, uint32_t mi) __attribute__((noinline)) {
+        MK_AR_ZONE("W-AAR");
+        for (uint32_t i = 0; i < ar_nready; ++i) {
+            const uint32_t xy = ar_blk[2 + 2 * i];
+            noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ar_blk[3 + 2 * i]), 1);
+        }
+#if defined(MK_AR_GAMMA)
+        ar_gamma_issue(L, 1);   // post_attention_layernorm γ -> pbuf+0: the owner's wo compute released A / S
+#endif
+        ar.iter(ar_it++);   // CB_XO is read by the RS once this returns
+#if defined(MK_AR_DBGADDR)
+        ar_dbg(ar_it - 1, get_read_ptr(CB_XO));
+#endif
+#if defined(MK_AR_GAMMA)
+        noc_async_read_barrier_with_trid(MK_AR_GTRID);
+        cb_push_back(MK_AR_CBG, MK_AR_GT);
+        cb_wait_front(CB_VXO, V_OT);   // x_deliver (the compute, CB_VXO is empty between the MLP ARs' handoffs)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_ADLV) = mi + 1;
+        cb_pop_front(CB_VXO, V_OT);
+#else
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_ADLV) = mi + 1;   // the NOC1 reader delivers
+#endif
+    };
+#endif
     // owner phase of layer L (stand-in AR): x chunk to the K-row, then the column-partial sum and its release
     auto v12_owner = [&](uint32_t L) {
         if (vrole != 2) return;
@@ -719,7 +751,24 @@ void kernel_main() {
         // prefetch) and += 1 at SDPA end (mode 3 releases its held writes) -> 2 per attention layer, cumulative
         if (att && is_qroot) gdn_inc(MKA_GDN_ATTNKV);
 #endif
-        if (!IS_STREAM && !att) { V12_OWNER(L); continue; }   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
+        if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
+#if defined(MK_REAL_GAR) && defined(MKA_ROLE_EXT)
+            if (vrole == 2 && ar_on) {   // G-d: the GDN mixer AR (gdn_out -> CB_XO; until G-c: CB_XO stand-in) once the GDN layer is out
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY),
+                                       MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1));
+#if defined(MK_GAR_ZERO)   // CB_XO stand-in until gdn_out (G-c) lands: zero (the GDN AR adds 0: the residual chain is unchanged)
+                {
+                    const uint32_t xo = get_read_ptr(CB_XO);
+                    for (uint32_t o = 0; o < 10 * 2048; o += MEM_ZEROS_SIZE) noc_async_read(get_noc_addr(MEM_ZEROS_BASE), xo + o, MEM_ZEROS_SIZE);
+                    noc_async_read_barrier();
+                }
+#endif
+                mixer_ar(L, L);
+            }
+#endif
+            V12_OWNER(L);
+            continue;
+        }
 #if defined(MKA_DBGSPIN)
         if (L > 0) spin_cycles(400000);
 #endif
@@ -882,7 +931,9 @@ void kernel_main() {
             spin_cycles(MKA_S_GDN);
 #endif
 #endif
+#if !defined(MK_REAL_GAR)   // G-d: the GDN mixer AR delivers this layer's MLP x (flag 2L + 2); the MLP's W-VX waits it
             spin_cycles(S_AR);
+#endif
 #if defined(MKA_RQKV) && !defined(MK_REAL_AR)   // real AR: XRDY only after the MLP AR's deliveries (below)
             if (is_qroot && L + 1 < NL) mcast_word<NRF>(gs[GS_XRDY], L + 1, rf, self_rf, 0);   // layer boundary -> STREAM_EXT
 #endif
@@ -1039,30 +1090,7 @@ void kernel_main() {
             if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
                 noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * (A + 1));
 #if defined(MK_REAL_AAR) && defined(MKA_ROLE_EXT)
-                if (ar_on) {   // the real attention AR (spec §19): wo output CB_XO (CB 23) -> residual -> x of this layer's MLP
-                    MK_AR_ZONE("W-AAR");
-                    for (uint32_t i = 0; i < ar_nready; ++i) {
-                        const uint32_t xy = ar_blk[2 + 2 * i];
-                        noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ar_blk[3 + 2 * i]), 1);
-                    }
-#if defined(MK_AR_GAMMA)
-                    ar_gamma_issue(L, 1);   // post_attention_layernorm γ -> pbuf+0: the owner's wo compute released A / S
-#endif
-                    ar.iter(ar_it++);   // CB_XO is read by the RS once this returns
-#if defined(MK_AR_DBGADDR)
-                    ar_dbg(ar_it - 1, get_read_ptr(CB_XO));
-#endif
-#if defined(MK_AR_GAMMA)
-                    noc_async_read_barrier_with_trid(MK_AR_GTRID);
-                    cb_push_back(MK_AR_CBG, MK_AR_GT);
-                    cb_wait_front(CB_VXO, V_OT);   // x_deliver (the compute, CB_VXO is empty between the MLP ARs' handoffs)
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_ADLV) = A + 1;
-                    cb_pop_front(CB_VXO, V_OT);
-#else
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_ADLV) = A + 1;   // the NOC1 reader delivers
-#endif
-                    MK_AR_RSTD_SEND();
-                }
+                if (ar_on) mixer_ar(L, MK_MI(L, A));   // the real attention AR (spec §19): wo output CB_XO (CB 23) -> residual -> MLP x
 #endif
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_WODONE]), 1);   // READY first; the copy is bench-only
                 for (uint32_t i = 0; i < 10; ++i) noc_async_write(xo + i * 2048, wod.get_noc_addr(L * WN + own_chunk * 10 + i), 2048);

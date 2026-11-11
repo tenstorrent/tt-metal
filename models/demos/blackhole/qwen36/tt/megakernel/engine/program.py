@@ -620,9 +620,12 @@ def setup_bench(dev, MESH, mesh_identity):
         AR_NAR, AR_ATYPE = NL, 0
         if REAL_AAR:
             assert ('MKA_RWO', '1') in MKDEF and AR_DLVR, "MK_REAL_AAR needs MKA_RWO (the wo unit's CB_XO) and the reader-side delivery"
+            # MK_REAL_GAR=1 (G-d): the GDN layers' mixer AR too (gdn_out's CB_XO; until G-c a CB_XO stand-in): 2 ARs on every layer
+            REAL_GAR = ('MK_REAL_GAR', '1') in MKDEF
+            if REAL_GAR: assert GDN24 and os.environ.get('MKA_GDN_WAIT', '0') == '1', "MK_REAL_GAR needs GDN24 + MKA_GDN_WAIT (the GDN out_ready gates the GDN AR)"
             _k = 0
             for L_ in range(NL):
-                if is_attn_layer(L_): AR_ATYPE |= 1 << _k; _k += 1
+                if is_attn_layer(L_) or REAL_GAR: AR_ATYPE |= 1 << _k; _k += 1
                 _k += 1
             AR_NAR = _k
             AR_ADLV = ttnn.create_global_semaphore(dev, O_CRS, 0); AR_ASRC = ttnn.create_global_semaphore(dev, O_CRS, 0)
@@ -1029,7 +1032,8 @@ def setup_bench(dev, MESH, mesh_identity):
         ck = {(c.x, c.y) for c in corner}
         from models.demos.blackhole.qwen36.tt.megakernel.oneshot_ar import MKDIR as MKDIR_AR
         _aar = ('MK_REAL_AAR', '1') in MKDEF   # the attention AR (its own branch): two ARs on attention layers
-        nar = [1 + (1 if _aar and is_attn_layer(L_) else 0) for L_ in range(NL)]
+        _gar = ('MK_REAL_GAR', '1') in MKDEF
+        nar = [1 + (1 if _aar and (is_attn_layer(L_) or _gar) else 0) for L_ in range(NL)]
         gmask = sum(1 << L_ for L_ in range(NL) if not is_attn_layer(L_))
         a2 = sum(1 << L_ for L_ in range(NL) if nar[L_] == 2)
         out = []
