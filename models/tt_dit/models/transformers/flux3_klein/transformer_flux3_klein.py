@@ -33,6 +33,8 @@ SINGLE_DEPTH = 28
 TILE = 32
 # samples per request: the conditional and, with guidance, the unconditional one
 MAX_SAMPLES = 2
+# the early stacks whose attended length changes per request (prompt length; reference size within its bucket)
+VARIABLE_MODES = ("image_cond", "text")
 
 ROPE_THETA = 10000
 ROPE_AXES_DIM = (32, 32, 32, 32)
@@ -342,9 +344,9 @@ class Flux3KleinPlan:
     single_mod: tuple[ttnn.Tensor, ...]
     assembly: ttnn.Tensor
     image_out: ttnn.Tensor
-    # ring-SDPA logical_n of the text stack and of the single stage: the transformer's persistent buffers (or ints
-    # without sequence parallelism), not freed with the plan
-    text_logical_n: int | ttnn.Tensor
+    # ring-SDPA logical_n of the text and reference stacks and of the single stage: the transformer's persistent
+    # buffers (or ints without sequence parallelism), not freed with the plan
+    early_logical_n: dict[str, int | ttnn.Tensor]
     single_logical_n: int | ttnn.Tensor
 
     def deallocate(self) -> None:
@@ -410,13 +412,14 @@ class Flux3KleinTransformer(Module):
         )
         self.proj_out = Linear(HIDDEN, IN_CHANNELS["image"], bias=False, mesh_device=device)
 
-        # The attended lengths of the text stack and the single stage change with the prompt. Ring SDPA reads them
-        # from these device tensors, written by every request, so every prompt length runs the same programs.
-        # Allocated once here, before any request: one pair per sample of a request.
+        # The attended lengths of the text stack, the reference stack and the single stage change with the request
+        # (the prompt's length, the reference's size within its bucket). Ring SDPA reads them from these device
+        # tensors, written by every request, so every request runs its bucket's programs. Allocated once here, before
+        # any request: one set per sample of a request.
         self._logical_n = None
         if self.sp_factor > 1:
             self._logical_n = [
-                {stage: self._logical_n_tensor(0, on_host=False) for stage in ("text", "single")}
+                {stage: self._logical_n_tensor(0, on_host=False) for stage in (*VARIABLE_MODES, "single")}
                 for _ in range(MAX_SAMPLES)
             ]
 
@@ -477,7 +480,9 @@ class Flux3KleinTransformer(Module):
             single_mod=tuple(indices(i) for i in modulation_indices(layout.mode_ids(), "single")),
             assembly=indices(layout.assembly_indices()),
             image_out=indices(layout.image_out_indices()),
-            text_logical_n=self._write_logical_n(sample, "text", layout.attended("text")),
+            early_logical_n={
+                m: self._write_logical_n(sample, m, layout.attended(m)) for m in modes if m in VARIABLE_MODES
+            },
             single_logical_n=self._write_logical_n(sample, "single", layout.attended()),
         )
 
@@ -506,8 +511,8 @@ class Flux3KleinTransformer(Module):
             x["image_cond"] = image_cond_embedded
         for mode in layout.modes:
             mod = tuple(gather_rows(table, idx) for idx in plan.early_mod[mode])
-            # the image stacks' lengths are fixed per size; the text stack's follows the prompt
-            logical_length = plan.text_logical_n if mode == "text" else layout.attended(mode)
+            # the image stack's length is fixed per size; the text and reference stacks' follow the request
+            logical_length = plan.early_logical_n.get(mode, layout.attended(mode))
             x[mode] = self.early(mode, x[mode], rope=plan.early_rope[mode], mod=mod, logical_length=logical_length)
 
         parts = [x[m] for m in layout.modes]
