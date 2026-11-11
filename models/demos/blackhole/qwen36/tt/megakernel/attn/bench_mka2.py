@@ -165,7 +165,7 @@ for it in range(ITERS):
             _gm = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
             _dm = _db[:, 2 * _k]   # this device's MLP output = the MLP AR's input
             _mp.append(round(torch.corrcoef(torch.stack([_dm.flatten(), _gm.flatten()]))[0, 1].item(), 5))
-            if GAMMA_CONS or AR_GAMMA:   # [norm] scale vs an explicit RMSNorm with the MODEL γ (= table / MK_NORM_FIX); PCC is scale-blind
+            if globals().get('GAMMA_CONS') or globals().get('AR_GAMMA'):   # [norm] scale vs an explicit RMSNorm with the MODEL γ (= table / MK_NORM_FIX); PCC is scale-blind
                 _nf = globals().get('NORM_FIX', 1.0)
                 _xt = (_xr.double() * torch.rsqrt(_xr.double().pow(2).mean(-1, keepdim=True) + globals().get('EPS', 1e-6))
                        * (AR_GTAB[L_, 1][None, :].double() / _nf))[:V_R].float()
@@ -287,7 +287,7 @@ for it in range(ITERS):
             bad_ = [n for n in range(QN) if torch.corrcoef(torch.stack([qv[L][:, n*TILE:(n+1)*TILE].flatten(), gq_[:, n*TILE:(n+1)*TILE].flatten()]))[0, 1].item() < 0.999]
             print(f"[rqkv] iter {it} layer {L} rows {QRW} qkv pcc {pq_:.5f} max|err| {(qv[L]-gq_).abs().max().item():.4f} |gold|max {gq_.abs().max().item():.3f} bad tiles {bad_[:12]}", flush=True)
             if os.environ.get('MK_NORM_DIAG') == '1': print(f"[normdiag] iter {it} layer {L} qkv cols<64T |dev|/|gold| {(qv[L][:, :64 * TILE].norm() / gq_[:, :64 * TILE].norm()).item():.4f}", flush=True)
-            if GAMMA_CONS or AR_GAMMA:   # [norm] q/k/v columns (pre-sigmoid, linear in γ): |dev| / |true RMSNorm · γ_model @ W|
+            if globals().get('GAMMA_CONS') or globals().get('AR_GAMMA'):   # [norm] q/k/v columns (pre-sigmoid, linear in γ): |dev| / |true RMSNorm · γ_model @ W|
                 _r = (qv[L][:, :64 * TILE].norm() / (gq_[:, :64 * TILE].norm() / globals().get('NORM_FIX', 1.0))).item()
                 print(f"[norm] iter {it} layer {L} qkv |dev| / |RMSNorm(x)*gamma_model @ W| {_r:.4f} {'PASS' if abs(_r - 1.0) <= 0.05 else 'FAIL'}", flush=True)
     vs = ttnn.to_torch(outs).float().reshape(NL, NU, TILE, DHD)
