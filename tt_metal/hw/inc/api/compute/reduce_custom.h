@@ -61,6 +61,7 @@ namespace ckernel {
 // clang-format on
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
@@ -168,6 +169,7 @@ ALWI void reduce_block_max_row(
 // clang-format on
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_short(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>(tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
@@ -188,6 +190,7 @@ ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
  */
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_minimal(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
@@ -211,6 +214,7 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
         block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
@@ -234,6 +238,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
+    PACK_MATH_CONTEXT(false);
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
         block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_short_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
@@ -309,6 +314,7 @@ ALWI void reduce_block_max_row_init_runtime(
     std::uint32_t icb,
     std::uint32_t icb_scaler,
     bool respect_trigger = false) {
+    PACK_MATH_CONTEXT(false);
 #ifdef ARCH_QUASAR
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(
         block_ct_dim, respect_trigger, icb, icb_scaler, tensor_shape)));

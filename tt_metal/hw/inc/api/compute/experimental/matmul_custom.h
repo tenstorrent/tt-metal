@@ -58,9 +58,7 @@ ALWI void mm_no_mop_init_short(
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
-#ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_matmul_context()));
-#endif
+    PACK_MATH_CONTEXT(true);
 }
 
 // clang-format off
@@ -116,6 +114,7 @@ ALWI void mm_no_mop_reinit_short(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    PACK_MATH_CONTEXT(true);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     // Both arches now re-derive operand tile geometry in reinit so 16x32 tiny-tile addrmods are
     // restored (previously the Blackhole branch dropped the cb ids and reset to full-32x32 addrmods).
@@ -134,9 +133,7 @@ ALWI void mm_no_mop_init_short_fidelity(
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
-#ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_matmul_context()));
-#endif
+    PACK_MATH_CONTEXT(true);
 }
 
 template <MathFidelity math_fidelity>
@@ -162,6 +159,7 @@ ALWI void mm_no_mop_reinit_short_fidelity(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    PACK_MATH_CONTEXT(true);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_reinit_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 }

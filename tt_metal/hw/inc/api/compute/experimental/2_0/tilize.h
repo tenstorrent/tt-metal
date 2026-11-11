@@ -44,6 +44,7 @@ template <
     TensorShape OutShape>
 ALWI void tilize_init(
     LLKOperand<InFormat, InShape> /*in*/, std::uint32_t block, LLKOperand<OutFormat, OutShape> /*out*/) {
+    PACK_MATH_CONTEXT(false);
     static_assert(is_legal_tile_shape(InShape), "tilize_init: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_init: illegal output tile shape.");
     UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>(block)));

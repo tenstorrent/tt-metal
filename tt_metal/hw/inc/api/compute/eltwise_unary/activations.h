@@ -54,7 +54,10 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
  */
 ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
-ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+ALWI void hardsigmoid_tile_init_pack() {
+    PACK_SFPU_CONTEXT();
+    PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX)));
+}
 
 // clang-format off
 /**

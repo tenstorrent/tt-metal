@@ -24,6 +24,7 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool transpose_of_faces = true>
 ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
+    PACK_MATH_CONTEXT(false);
     if constexpr (enable_sigmoid) {
         // Init sigmoid (SFPU)
         sigmoid_tile_init<false>();
@@ -64,6 +65,7 @@ ALWI void generalized_moe_gate_place_field_from_interm() {
 // the 16 candidates -> global top-8 + normalize, then transpose-dest step2 to the output layout.
 template <bool is_32bit = false, uint32_t topk = 8, bool output_softmax = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void generalized_moe_gate_combine_finalize(uint32_t eps, uint32_t scale) {
+    PACK_MATH_CONTEXT(false);
     MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -82,6 +84,7 @@ ALWI void generalized_moe_gate_combine_finalize(uint32_t eps, uint32_t scale) {
 // normalize). Mirrors the init that generalized_moe_gate(_init) does before the single-256 pipeline.
 template <bool is_32bit = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void generalized_moe_gate_combine_init() {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
     MATH((SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX, is_fp32_dest_acc_en))));
 }
@@ -93,6 +96,7 @@ ALWI void generalized_moe_gate_combine_init() {
 // block's produce_run/transpose_wh pipeline starts cleanly.)
 template <bool is_32bit = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void generalized_moe_gate_step2_only() {
+    PACK_MATH_CONTEXT(false);
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<is_fp32_dest_acc_en, is_32bit>()));
 }
@@ -136,6 +140,7 @@ template <
     uint32_t output_tiles = 3>
 ALWI void generalized_moe_gate(
     uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0x3f800000) {
+    PACK_MATH_CONTEXT(false);
     static_assert(!do_extra_scale || !ungrouped_top8, "extra scaling is supported by the grouped gate");
     static_assert(output_tiles == 3 || (!ungrouped_top8 && output_tiles == 2), "only grouped output may omit bias");
     if constexpr (enable_sigmoid) {
