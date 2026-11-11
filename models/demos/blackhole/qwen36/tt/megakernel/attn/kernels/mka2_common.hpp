@@ -175,14 +175,32 @@ FORCE_INLINE void mcast_word(uint32_t addr, uint32_t val, const uint32_t (*rc)[5
 #ifndef MKA_S_GDN
 #define MKA_S_GDN 0
 #endif
+#if defined(MKA_LPER)   // NL64 (NL > 32): the layer types repeat with period 32 (host-asserted); MKA_AMASK = one period
+FORCE_INLINE bool is_attn(uint32_t L) { return ((uint32_t)(MKA_AMASK) >> (L & 31u)) & 1u; }
+FORCE_INLINE uint32_t aidx(uint32_t L) {
+    return (L >> 5) * (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK)) +
+           (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK) & ((1u << (L & 31u)) - 1u));
+}
+#define MKA_AIDX_EXPR(L) aidx(L)
+#define MKA_KVN MKA_NA_PASS   // per-layer K / V runtime args packed by attention ordinal
+#define MKA_KVI(L) aidx(L)
+#else
 FORCE_INLINE bool is_attn(uint32_t L) { return ((uint32_t)(MKA_AMASK) >> L) & 1u; }
 FORCE_INLINE uint32_t aidx(uint32_t L) { return (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)); }
+#define MKA_AIDX_EXPR(L) __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u))
+#define MKA_KVN NL
+#define MKA_KVI(L) L
+#endif
 // MKA_W_ORD (integ repack order): the qkv / wo weight tensors hold the ATTENTION layers only, attention ordinal a at page
 // a * stride. wla(L) = the page-block index of engine layer L: aidx(L) for an attention layer; a GDN layer's stand-in reads
 // (QSK slot M in-proj stand-in, bytes only) clamp to the last attention layer.
 FORCE_INLINE uint32_t wla(uint32_t L) {
 #if defined(MKA_W_ORD)
+#if defined(MKA_LPER)
+    constexpr uint32_t NA = MKA_NA_PASS;
+#else
     constexpr uint32_t NA = (uint32_t)__builtin_popcount((uint32_t)(MKA_AMASK));
+#endif
     const uint32_t a = aidx(L);
     return a < NA ? a : NA - 1;
 #else

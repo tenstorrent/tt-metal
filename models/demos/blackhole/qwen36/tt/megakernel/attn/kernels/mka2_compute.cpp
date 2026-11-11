@@ -877,7 +877,11 @@ void kernel_main() {
     else MK_HWS(CB_Q, CB_K, CB_P);
     cb_wait_front(CB_ONE, 1);
     for (uint32_t L = 0; L < NL; ++L) {
+#if defined(MKA_LPER)
+        const bool att = ((uint32_t)(MKA_AMASK) >> (L & 31u)) & 1u;
+#else
         const bool att = ((uint32_t)(MKA_AMASK) >> L) & 1u;
+#endif
 #if defined(MK_REAL_GAR) && defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
         if (!IS_STREAM && !att) { if (vrole == 2) ar_step(MK_AR_CB_AIN); V12_OSUM(L); continue; }   // G-d: GDN mixer AR, then MLP
 #else
@@ -956,7 +960,11 @@ void kernel_main() {
             if (L > 0 || qrole) MK_HWS(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
 #endif
 #else
+#if defined(MKA_LPER)   // NL64: any attention layer before L
+            if (L > 0 && (IS_STREAM || (L >= 32u ? (uint32_t)(MKA_AMASK) : ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u))))) MK_HWS(CB_Q, CB_K, CB_P);
+#else
             if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) MK_HWS(CB_Q, CB_K, CB_P);
+#endif
 #endif
 #endif
             cb_wait_front(CB_Q, QT);

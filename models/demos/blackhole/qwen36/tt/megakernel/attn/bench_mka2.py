@@ -64,6 +64,13 @@ def _rstd_of(x_):
     xs = x_.double()
     if xs.shape[0] < M: xs = torch.cat([xs, torch.zeros(M - xs.shape[0], H, dtype=xs.dtype)], 0)
     return 1.0 / torch.sqrt((xs * xs).sum(-1) / H + EPS)
+# MK_WALL_N=N (bench-only wall clock): capture the engine launch's (io, program) so the block after the loop can replay it
+_WALL = {}
+_go_wall0 = ttnn.generic_op
+def _go_wall(io, prog):
+    if len(io) > 30: _WALL['a'] = (io, prog)   # the engine op (the seed / drain / dump ops have few io tensors)
+    return _go_wall0(io, prog)
+ttnn.generic_op = _go_wall
 for it in range(ITERS):
     if KVA: KVA_PRE(it)   # this verify step's kvpos (MKA_KVA)
     if ENGINE_SEED is not None: ENGINE_SEED()   # MK_L1P2_SEED: static-CB contents (residual from ENGINE_X0, constants) right before the launch
@@ -424,6 +431,33 @@ def _prof_decollide():
         lines = open(f_).readlines()
         open(f_, 'w').writelines(l_ for l_ in lines if not (l_.find(dl) >= 0 and l_[l_.find(dl) + len(dl):].rstrip('\n')[:-1] in drop))
 
+
+# MK_WALL_N=N: unprofiled wall clock of the engine step, no golds / readback: N back-to-back launches (+ the per-launch
+# ENGINE_SEED / ENGINE_DRAIN ops when MK_L1P2_SEED is on), one synchronize; MK_WALL_TRACE=1: the same as a captured trace
+# replayed N times (no host dispatch on the path). Positions / kvpos stay at the last iteration's.
+_WN = int(os.environ.get('MK_WALL_N', '0'))
+if _WN and 'a' in _WALL:
+    def _step():
+        if ENGINE_SEED is not None: ENGINE_SEED()
+        _go_wall0(*_WALL['a'])
+        if ENGINE_DRAIN is not None: ENGINE_DRAIN()
+    ttnn.synchronize_device(dev)
+    for _rep in range(2):
+        t_ = time.perf_counter()
+        for _ in range(_WN): _step()
+        ttnn.synchronize_device(dev)
+        print(f"[wall] enqueue rep {_rep}: {_WN} launches {1e6 * (time.perf_counter() - t_) / _WN:.1f} us/launch (incl. host dispatch)", flush=True)
+    if os.environ.get('MK_WALL_TRACE', '0') == '1':
+        _tid = ttnn.begin_trace_capture(dev, cq_id=0)
+        _step()
+        ttnn.end_trace_capture(dev, _tid, cq_id=0)
+        ttnn.synchronize_device(dev)
+        for _rep in range(2):
+            t_ = time.perf_counter()
+            for _ in range(_WN): ttnn.execute_trace(dev, _tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(dev)
+            print(f"[wall] trace rep {_rep}: {_WN} replays {1e6 * (time.perf_counter() - t_) / _WN:.1f} us/launch", flush=True)
+        ttnn.release_trace(dev, _tid)
 
 _prof_decollide()
 ttnn.ReadDeviceProfiler(dev)

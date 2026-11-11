@@ -433,10 +433,24 @@ def setup_bench(dev, MESH, mesh_identity):
     if ('MK_V12', '1') in MKDEF and not any(k_ == 'MK_V12_CB' for k_, _ in MKDEF):
         MKDEF = MKDEF + [('MK_V12_CB', '1')]
     MKDEF += [('MKA_AMASK', f'{AMASK & 0xFFFFFFFF}u'), ('MKA_S_GDN', str(int(S_GDN_US * 1350)))]
+    # NL64 (in-model full stack: ONE launch = all 64 layers). Every per-layer bit mask (MKA_AMASK, the GDN-hook gmask / a2, MKAR_ATYPE)
+    # was a u32 / u64 indexed by the layer (AR) number, which capped NL at 32. For NL > 32 the masks must be periodic (Qwen3.8: every
+    # 4th layer is attention): MKA_LPER makes the kernels index one 32-layer period (L & 31; ATYPE: it & 63) and pack the per-layer KV
+    # runtime args by attention ordinal (MKA_NA_PASS entries instead of NL). NL <= 32: no define, every kernel / generated text unchanged.
+    LPER = NL > 32
+    if LPER:
+        assert NL % 32 == 0, f"NL64: NL={NL} must be a multiple of 32 above 32"
+        assert all(((AMASK >> L_) & 1) == ((AMASK >> (L_ % 32)) & 1) for L_ in range(NL)), \
+            f"NL64: MK_AMASK {AMASK:#x} must repeat with period 32 over NL={NL} layers (e.g. 0x8888888888888888)"
+        MKDEF += [('MKA_LPER', '1'), ('MKA_NA_PASS', str(sum((AMASK >> L_) & 1 for L_ in range(NL))))]
     if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]
     if os.environ.get('MKA_STREAM_LEANZ', '0') == '1': MKDEF += [('MKA_STREAM_LEANZ', '1')]   # profiled runs: STREAM DM zones out (W-ARWAIT kept)   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
+    def _lbit(m_, v_='LL'):   # C expression: bit v_ (a layer index) of the per-layer mask m_ (NL64: one 32-layer period, MKA_LPER)
+        if not LPER: return f'(({m_}u >> {v_}) & 1u)'
+        assert all(((m_ >> L_) & 1) == ((m_ >> (L_ % 32)) & 1) for L_ in range(NL)), f'NL64: mask {m_:#x} not 32-periodic'
+        return f'(({m_ & 0xFFFFFFFF}u >> ({v_} & 31u)) & 1u)'
     # MKA_W_ORD=1 (integ repack order): qkv / wo weight tensors hold the attention layers only (ordinal a = aidx(L));
     # the kernels index them with wla(L); the synthetic packers below follow, so the bench exercises the injected layout
     W_ORD = os.environ.get('MKA_W_ORD', '0') == '1'
@@ -2055,8 +2069,8 @@ def setup_bench(dev, MESH, mesh_identity):
             new_loop = (f'\n  {obj}\n  ar_s.init(0, {nc});\n  uint32_t ar_it = 0, gL = 0;\n'
                         + ('  g_cgar_s = &ar_s; g_cgar_it = &ar_it;\n' if cgar else '') +
                         f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
-                        f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
-                        f'   for (uint32_t k = {ar_it0}; k < 1u + (({a2}u >> LL) & 1u); ++k) ' + ('cgar_iter();' if cgar and GTEXT else 'ar_s.iter(ar_it++);') + '   // this layer\'s ARs\n'
+                        f'   if {_lbit(gmask)} {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
+                        f'   for (uint32_t k = {ar_it0}; k < 1u + {_lbit(a2)}; ++k) ' + ('cgar_iter();' if cgar and GTEXT else 'ar_s.iter(ar_it++);') + '   // this layer\'s ARs\n'
                         + ('   g_cgar_done = 0;\n' if cgar else '') +
                         '  }\n' + ('  ar_s.fini(MKAR_ITERS);\n' if role == 'r' else '  ar_s.fini();\n'))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
@@ -2120,11 +2134,11 @@ def setup_bench(dev, MESH, mesh_identity):
             fn = 'rred_w' if role == 'w' else 'rred_c'
             if RRED_LATE:   # GDN layers: delivery 2 LL from the step's gdn_pre_in_hook() (after the replay / wr_rcoef), not at the layer top
                 head = (f'\n  uint32_t gL = 0;\n  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
-                        f'   if (({gmask}u >> LL) & 1u) {{\n    g_rred_d = 2u * LL;   // delivery 2 LL: this layer\'s mixer x (in the hook)\n'
+                        f'   if {_lbit(gmask)} {{\n    g_rred_d = 2u * LL;   // delivery 2 LL: this layer\'s mixer x (in the hook)\n'
                         f'    const uint32_t L = gL++;\n' + body + f'\n   }} else {fn}(2u * LL);   // attention layer: mixer x here\n')
             else:
                 head = (f'\n  uint32_t gL = 0;\n  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n   {fn}(2u * LL);   // delivery 2 LL: this layer\'s mixer x\n'
-                        f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n')
+                        f'   if {_lbit(gmask)} {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n')
             if DNORM_SPLIT and role == 'w':   # rows 10-31 of CB 37's 8 pages = 0 once (never written; rows 0-9 rewritten every delivery)
                 head = ('\n  {   // MK_DNORM_SPLIT\n'
                         f'    volatile tt_l1_ptr uint32_t* z_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>({VADDR["rred"]}u);\n'
@@ -2192,7 +2206,10 @@ def setup_bench(dev, MESH, mesh_identity):
                         _u[id(t_)] = ttnn.from_torch(torch.zeros(list(t_.shape)).bfloat16(), dtype=t_.dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                     _KV_DECOY.append(_u[id(t_)])
                 print(f"[kva] K / V runtime args -> {len(_u)} decoy caches (MKA_KV_ARGS_DECOY)", flush=True)
+            if LPER: return [_KV_DECOY[L_].buffer_address() for L_ in ATTN_L] + ([_KV_DECOY[NL + L_].buffer_address() for L_ in ATTN_L] if kvvs else [])
             return [t_.buffer_address() for t_ in _KV_DECOY]
+        if LPER:   # NL64: by attention ordinal (the kernels index kv_addr[aidx(L)]; GDN-type layers never read KV)
+            return [kvs[L_].buffer_address() for L_ in ATTN_L] + ([kvvs[L_].buffer_address() for L_ in ATTN_L] if kvvs else [])   # kvvs: MKA_KVPROD only
         return [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs]
     def build(out, coord=None, plan_only=False):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf) if xbuf is not None else cbd(0, ttnn.bfloat16, 1, rect), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
@@ -2384,7 +2401,9 @@ def setup_bench(dev, MESH, mesh_identity):
                                     config=_mka_ccfg())]
         if RS:
             _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
-            _aar_d = [('MKAR_ATYPE', f'{AR_ATYPE}ull'), ('MKAR_CB_AIN', '23')] if (REAL_AR and REAL_AAR) else []
+            if LPER and REAL_AR and REAL_AAR:   # NL64: 2 NL > 64 ARs; the AR type pattern must repeat with period 64 (kernels: it & 63)
+                assert all(((AR_ATYPE >> i_) & 1) == ((AR_ATYPE >> (i_ % 64)) & 1) for i_ in range(AR_NAR)), f'NL64: MKAR_ATYPE {AR_ATYPE:#x} not 64-periodic'
+            _aar_d = [('MKAR_ATYPE', f'{AR_ATYPE & 0xFFFFFFFFFFFFFFFF}ull'), ('MKAR_CB_AIN', '23')] + ([('MKAR_ATYPE_PER', '1')] if LPER else []) if (REAL_AR and REAL_AAR) else []
             _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon'])), ('MKAR_ARGS_L1', str(AR_BLK_ADDR)), ('MKAR_TRID', '15')] + ([('MKAR_LEANZ', '1')] if ('MKA_LEAN_C', '1') in MKDEF else []) + ([('MKAR_DLV_NONE', '1')] if AR_DLVR else []) + _aar_d, arp['comp_defines']) if REAL_AR else ((), ())
             # MK_EXT_DM_OS=1 (spec v1.5a: DM-only Os allowed after a timing check): the EXT (owner) reader / writer at -Os,
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
