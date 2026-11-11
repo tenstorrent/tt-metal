@@ -86,4 +86,6 @@ MKA_CTADDR (parked), E1_GO_KSTREAM (noise), MKA_RQDYN (superseded by RQBAL), MK_
 QWEN36_R16_VERIFY_SDPA_MULTI_CORES (dropped).
 
 Pending: MTP_SDPA_WINDOW (W) pending the OR A/B; G-b's E1_GB + E1_C_OS=p land with the G-b batch.
+Pending: QWEN36_LMHEAD_DSHARD_SCOPE=all + QWEN36_LMHEAD_DSHARD_FP32_DEST=1 (LM head #20, -0.1 ms / verify; prod-code env
+change, pending H+I's acceptance arm; off = today's env, so flag-off gate 1 is unaffected).
 If the full set overflows: drop MK_GDN_INPROJ, then GIN_PERCORE. Any drop is a spec-owner decision recorded in DESIGN.
