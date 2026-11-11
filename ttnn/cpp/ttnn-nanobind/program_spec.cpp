@@ -143,10 +143,6 @@ using ComputeConfig = m2::ComputeHardwareConfig;
 // its parent, which it keeps alive. TensorParameter.spec, a ttnn TensorSpec, is a copy too.
 constexpr auto COPY = nb::rv_policy::copy;
 
-// Python holds the tensors of a ProgramRunArgs in this attribute, which keeps them alive while the
-// C++ object refers to their MeshTensors.
-constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
-
 // Property setters refuse None unless told otherwise; these setters clear an std::optional field on None.
 auto setter_accepts_none() { return nb::for_setter(nb::arg("value").none()); }
 
@@ -586,7 +582,8 @@ void bind_kernel_spec(nb::module_& mod) {
         "compiler_options and runtime_arg_schema refer into this object, so setting one of their fields changes the "
         "kernel. Lists and dicts, there and on the kernel, are copied in and out: to change one, assign the whole "
         "field (k.compile_time_args = {...}, not k.compile_time_args[\"n\"] = 4). source and hw_config are copies. "
-        "Varargs (advanced_options) are C++ only: use array arguments instead. See kernel_spec.hpp.");
+        "advanced_options (varargs, tensor binding sequences and PrefetcherPipe bindings) is C++ only: use array "
+        "arguments instead of varargs. See kernel_spec.hpp.");
 
     nb::class_<m2::KernelSpec::SourceCode>(kernel_spec, "SourceCode", "Kernel source code, given inline.")
         .def(
