@@ -1191,6 +1191,12 @@ void kernel_main() {
     // v12 words: every increment into this core's words for layer NL - 1 preceded its last wait above (STREAM: W-VMD;
     // owner: W-OP), and the reader's LA write preceded the writer's last LA wait
     if (vrole) for (uint32_t i = 0; i < NVG; ++i) *vw(vg[i]) = 0;
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+    // rstd flag (device-local): 8 producers x 2 K-row deliveries per layer reach every STREAM core; this core drains, then resets
+    // (the consumers only wait)
+    noc_semaphore_wait_min(l1w(MK_AR_RSF), 8 * 2 * NL);
+    *l1w(MK_AR_RSF) = 0;
+#endif
 #if defined(MK_REAL_AR)
     // device-local words only (the arrival semaphore / EPOCH base are handled by fini): STREAM awaited XF = NL in its
     // last W-ARWAIT; the owner's own copy counted its NL deliveries; the Q root drains the last layer's 16 increments
