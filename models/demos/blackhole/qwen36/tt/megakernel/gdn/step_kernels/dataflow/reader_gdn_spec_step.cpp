@@ -125,6 +125,9 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GSTEP_WYPAIR
 #define GSTEP_WYPAIR 0  // engine GDN role (BATCH, T*kBatchMax == 32): kmq tiles carry K_u AND Q_u (Q rows in the other face row)
 #endif
+#ifndef GSTEP_CUTNZ
+#define GSTEP_CUTNZ 0  // BENCH ONLY (wrong numerics): WYPAIR cuts skip the previous occupant's zeroing (reader-bound probe)
+#endif
 #ifndef GSTEP_WPRE
 #define GSTEP_WPRE 0  // engine GDN role (GDN_STATE_FIRST + GDN_PREFIXED): w_in (norm weight rows) read before gdn_in_wait
 #endif
@@ -853,7 +856,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                     }
                     noc_async_read_barrier();
                     g_cut_addr[g_cut_n++] = dst_tile;
-                } else if (g_cut_r0[e] != rr) {  // the previous occupant's K and Q rows (disjoint from the new ones)
+                } else if (!GSTEP_CUTNZ && g_cut_r0[e] != rr) {  // the previous occupant's K and Q rows (disjoint)
                     const uint32_t pt = g_cut_r0[e] * 64;
                     noc_async_read(z, dst_tile + pt, rb);
                     noc_async_read(z, dst_tile + pt + 1024, rb);
