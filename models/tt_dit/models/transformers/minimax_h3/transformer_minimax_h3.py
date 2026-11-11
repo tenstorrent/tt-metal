@@ -19,7 +19,6 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
-from .length_classes import DYNAMIC_AG_WORKERS_PER_LINK
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
 
@@ -28,6 +27,10 @@ NUM_OUT_MODULATION_PARAMS = 2
 
 # Any served per-device row count gives the output heads the same generic blocking (M_tiles >= 8).
 _HEAD_CONFIG_ROWS = 4736
+
+# all_gather_async workers per link on the dynamic-length path: the op's byte-based pick for every served
+# length (the audio gather clears its 256 KB/link threshold by 1.2 %), pinned so the key cannot move.
+_DYNAMIC_AG_WORKERS_PER_LINK = 4
 
 
 class MiniMaxH3TimestepEmbedding(Module):
@@ -582,7 +585,7 @@ class MiniMaxH3Transformer3DModel(Module):
             temb,
             timestep_idx,
         )
-        ag_kwargs = {"num_workers_per_link": DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
+        ag_kwargs = {"num_workers_per_link": _DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(
                 hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs

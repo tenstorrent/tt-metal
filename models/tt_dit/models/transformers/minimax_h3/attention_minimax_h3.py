@@ -20,7 +20,7 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_kwargs, agmm_pins
-from .length_classes import DYNAMIC_AG_WORKERS_PER_LINK, LENGTH_CLASSES, length_class
+from .length_classes import LENGTH_CLASSES, length_class
 
 # Ring SDPA chunk pair of the dynamic-length path per length class, one program each. Measured per block
 # on 4x8: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
@@ -191,7 +191,6 @@ class MiniMaxH3Attention(Module):
         # all_gather_minimal_matmul_async folds the TP all-gather into the matmul. Ring only: on a
         # line topology WanAttention measured the unfused path faster, so match that condition.
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and tp_factor > 1
-        self._ag_workers_per_link = DYNAMIC_AG_WORKERS_PER_LINK if dynamic_length else None
 
         # Ring SDPA reuses the joint-attention entry point with empty joint inputs, as WanAttention does.
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), device=mesh_device)
@@ -539,7 +538,6 @@ class MiniMaxH3Attention(Module):
                 dim=3,
                 mesh_axis=self.tp_mesh_axis,
                 use_hyperparams=False,
-                num_workers_per_link=self._ag_workers_per_link,
             )
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
@@ -658,7 +656,6 @@ class MiniMaxH3Attention(Module):
                 dim=3,
                 mesh_axis=self.tp_mesh_axis,
                 use_hyperparams=False,
-                num_workers_per_link=self._ag_workers_per_link,
             )
 
         # The gated residual rides along in the matmul epilogue on the fused path; on the unfused

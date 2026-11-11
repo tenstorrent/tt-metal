@@ -380,8 +380,8 @@ stays bucketed and traced, and the Wormhole 4x8 preset stays bucketed (dynamic l
 A line topology (a `FABRIC_1D` fabric or `MINIMAX_H3_TOPOLOGY=linear`) takes the dynamic path too: there the
 projections run unfused (all-gather + matmul, matmul + reduce-scatter). The reduce-scatter keys its program
 without the row count when its worker and chunk counts are pinned (`CCLManager` pins both), the all-gathers key
-without it on their default path with the model pinning their worker count, and the gated residual's `addcmul`
-keys on its width alone.
+without it on their default path (the op's byte-derived worker count is 4 at every served length), and the gated
+residual's `addcmul` keys on its width alone.
 No stage of a dynamic-length pipeline is traced: the preset's `trace_audio` is ignored on that path (an
 explicit `trace_audio=True` raises), so the audio decoder runs eagerly too (about 0.3 s per request).
 A dynamic-length `task="ref2va"` pipeline also defaults to `dit_fsdp=True` when its preset has no `dit_fsdp`

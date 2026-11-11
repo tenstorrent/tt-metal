@@ -53,7 +53,3 @@ def uncovered_class_lengths(padded_lengths: Iterable[int], sp_factor: int) -> li
             out.append(first)
     return out
 
-
-# all_gather_async workers per link on the dynamic-length path, pinned so the program key cannot move with the rows.
-# Measured on Blackhole only; Wormhole (4 links, 8x9 grid) is unexercised, as its presets stay bucketed.
-DYNAMIC_AG_WORKERS_PER_LINK = 4
