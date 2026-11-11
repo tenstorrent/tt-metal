@@ -194,7 +194,7 @@ def norm_gamma(norm):
     return g
 
 
-def gamma_pages(model):
+def gamma_pages(model, layers=None):
     """kind 'gamma' (spec §19; the AR owner applies gamma at x delivery): per layer L and norm n (0 input_layernorm =
     attention_norm, 1 post_attention_layernorm = ffn_norm) one tile row [32, H] bf16 with gamma in row 0 (rows 1-31
     zero) -> page ((L * 2 + n) * 160 + chunk * 10 + t) = owner chunk ``chunk`` (16 x 10 tiles), tile t. Identical on
@@ -203,7 +203,9 @@ mul (reads row 0) applies gamma and NORM_FIX at once."""
     import torch
 
     rows = []
-    for l in model.layers:
+    for i, l in enumerate(model.layers):
+        if layers is not None and i not in layers:
+            continue
         for norm in (l.attention_norm.norm, l.ffn_norm.norm):
             r = torch.zeros(TILE, H)
             r[0] = norm_gamma(norm).float() * NORM_FIX  # fp32 here; the one bf16 rounding is at assembly
@@ -211,7 +213,7 @@ mul (reads row 0) applies gamma and NORM_FIX at once."""
     return torch.cat(rows).reshape(1, 1, -1, H)
 
 
-def qkg_pages(model):
+def qkg_pages(model, layers=None):
     """kind 'qkg' (attention RQPOS): per attention layer a (ordinal) and norm k (0 q_norm, 1 k_norm) the bf16 (1+w)
     head-dim vector the prod verify multiplies by (tw['qk_norm_dense']: q heads' row / the k head's row; fallback the
     fp32 tw['q_norm'] / ['k_norm'] rounded to bf16, the same values), as 8 tiles [32, 32] per vector with EVERY row of
@@ -219,8 +221,8 @@ def qkg_pages(model):
     import torch
 
     tiles = []
-    for l in model.layers:
-        if not l.is_full_attention:
+    for i, l in enumerate(model.layers):
+        if not l.is_full_attention or (layers is not None and i not in layers):
             continue
         tw = l.attention.tw
         if "qk_norm_dense" in tw:
@@ -258,20 +260,25 @@ def repack(model, layouts=None, kinds=None, only_layers=None):
     mesh = model.mesh_device
     out = {}
     if "gamma" in (kinds or layouts):  # replicated, bf16, its own fixed layout (gamma_pages)
-        t = ttnn.from_torch(gamma_pages(model).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        t = ttnn.from_torch(gamma_pages(model, only_layers).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
                             device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
-        out["gamma"] = dict(tensor=t, pages_per_layer=2 * (H // TILE), layers=list(range(len(model.layers))),
+        out["gamma"] = dict(tensor=t, pages_per_layer=2 * (H // TILE),
+                            layers=[i for i in range(len(model.layers)) if only_layers is None or i in only_layers],
                             dtype="bfloat16")
-    if "qkg" in (kinds or layouts):  # replicated, bf16, fixed layout (qkg_pages)
-        t = ttnn.from_torch(qkg_pages(model), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
+    if "qkg" in (kinds or layouts) and any(l.is_full_attention for i, l in enumerate(model.layers)
+                                           if only_layers is None or i in only_layers):  # replicated, bf16 (qkg_pages)
+        t = ttnn.from_torch(qkg_pages(model, only_layers), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
                             memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
-        out["qkg"] = dict(tensor=t, pages_per_layer=16, layers=[i for i, l in enumerate(model.layers) if l.is_full_attention],
+        out["qkg"] = dict(tensor=t, pages_per_layer=16, layers=[i for i, l in enumerate(model.layers) if l.is_full_attention
+                                                                 and (only_layers is None or i in only_layers)],
                           dtype="bfloat16")
     for kind in [k for k in (kinds or sorted(layouts)) if k not in ("gamma", "qkg")]:
         lay = layouts[kind]
         want, extract = SOURCES[kind]
         idx = [i for i, l in enumerate(model.layers) if want(l) and (only_layers is None or i in only_layers)]
+        if not idx:  # e.g. qkv / wo for a GDN-only subset (teacher-forced single layer)
+            continue
         per_dev = None  # device -> list of per-layer page tensors (host bf16)
         for i in idx:
             mats = extract(model.layers[i])

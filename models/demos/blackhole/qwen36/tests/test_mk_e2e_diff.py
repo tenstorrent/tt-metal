@@ -36,6 +36,8 @@ K5 = os.environ.get("E2E_K5", "1") == "1"
 LONG = int(os.environ.get("E2E_LONG", "65536"))
 BAR = float(os.environ.get("E2E_BAR", "0.999"))
 OUT = os.environ.get("E2E_OUT", "")
+TF = os.environ.get("E2E_TF", "1") == "1"  # teacher-forced per-layer mode (spec owner 11-11)
+TF_NL = int(os.environ.get("E2E_TF_NL", str(NL)))
 B, T = 8, tc.K + 1
 DIM = 5120
 
@@ -77,12 +79,14 @@ def _restore(ts, snap):
     ttnn.synchronize_device(ts[0].device())
 
 
-def _layer_hooks(model, rec):
+def _layer_hooks(model, rec, rec_in=None):
     saved = []
-    for i, l in enumerate(model.layers[:NL]):
+    for i, l in enumerate(model.layers[:max(NL, TF_NL)]):
         f = l.forward
 
         def wrapped(*a, _f=f, _i=i, **k):
+            if rec_in is not None:
+                rec_in[_i] = _rows(a[0] if a else k["x"])
             y = _f(*a, **k)
             rec[_i] = _rows(y)
             return y
@@ -117,9 +121,9 @@ def _diff_case(model, live, tag):
     ts = _mutable(model)
     snap = _snapshot(ts)
     # reference: op-by-op
-    ref = {}
+    ref, ref_in = {}, {}
     model._vfy_mk1 = None
-    saved = _layer_hooks(model, ref)
+    saved = _layer_hooks(model, ref, ref_in)
     try:
         model._forward_verify_bucket_tp(B, None, None)
         ttnn.synchronize_device(model.mesh_device)
@@ -139,6 +143,7 @@ def _diff_case(model, live, tag):
     dbg_all_equal = all(torch.equal(ttnn.to_torch(d).float().reshape(32, -1)[:, res_cols], dbg[:, res_cols])
                         for d in ttnn.get_device_tensors(S["ar_dbgt"])[1:])
     _restore(ts, snap)
+    tf = _teacher_forced(model, live, ref, ref_in, ts, snap) if TF else {}
     ari = _mlp_ar_index(lt, aar, gar)
     pcc, mx, bad = {}, {}, []
     for u in live:
@@ -151,7 +156,71 @@ def _diff_case(model, live, tag):
                 bad.append(dict(case=tag, user=u, layer=L, what="nan" if not torch.isfinite(e).all() else "zero"))
             pcc[u][L] = round(_pcc(e, r), 6)
             mx[u][L] = float((e - r).abs().max())
-    return pcc, mx, bad, dbg_all_equal
+    return pcc, mx, bad, dbg_all_equal, tf
+
+
+def _layer_tensors(model, L):
+    a = model.layers[L].attention
+    if model.layers[L].is_full_attention:
+        return [a.paged_k, a.paged_v] if getattr(a, "use_paged", False) else []
+    return [t for t in (getattr(a, "rec_state", None), getattr(a, "_spec_ring", None)) if t is not None] + \
+        list(getattr(a, "_verify_win_pair", None) or ())
+
+
+def _teacher_forced(model, live, ref, ref_in, ts, snap):
+    """Per layer L < TF_NL: a 1-layer engine built for model layer L (its type, its repacked weights, its KV / GDN state)
+    is seeded with the op-by-op residual ENTERING L and compared with the op-by-op output of L, inside an engine-on verify
+    body (the per-replay inputs are the body's own). Only layer L's state is restored before its run. -> {user: {L: pcc}}"""
+    from models.demos.blackhole.qwen36.tt.megakernel.engine import build as EB
+    from models.demos.blackhole.qwen36.tt.megakernel.engine import program as EP
+    from models.demos.blackhole.qwen36.tt.megakernel.integ import stage1 as S1
+    from models.demos.blackhole.qwen36.tt.megakernel.integ import weights_mk as WM
+
+    mk1 = model._vfy_mk1
+    mesh = model.mesh_device
+    idx = {id(t): i for i, t in enumerate(ts)}
+    kv_all, gdn_all = S1.kv_descriptors(model), S1.gdn_descriptors(model)
+    out = {u: {} for u in live}
+    err = {}
+    orig = mk1.forward
+
+    def tf_forward(x, n_users, T_, in_body):
+        pr = S1.per_replay_inputs(model, in_body)
+        for L in range(min(TF_NL, len(model.layers))):
+            lt = ["attention" if model.layers[L].is_full_attention else "gdn"]
+            try:
+                w = WM.repack(model, layouts=EP.weight_layouts(mesh), only_layers=[L])
+                eng = EB.MkEngine(mesh, B, T_, "mk", lt, w, [d for d in kv_all if d["layer"] == L],
+                                  [d for d in gdn_all if d["layer"] == L])
+                for t in _layer_tensors(model, L):
+                    if id(t) in idx:
+                        ttnn.copy_host_to_device_tensor(snap[idx[id(t)]], t)
+                xi = ttnn.from_torch(ref_in[L].reshape(1, 1, -1, DIM).bfloat16(), dtype=ttnn.bfloat16,
+                                     layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+                xo = eng.alloc_x_out()
+                eng.launch(xi, xo, pr)
+                ttnn.synchronize_device(mesh)
+                e_all = _rows(xo)
+                for u in live:
+                    out[u][L] = round(_pcc(e_all[u * T:(u + 1) * T], ref[L][u * T:(u + 1) * T]), 6)
+                ttnn.deallocate(xi)
+                ttnn.deallocate(xo)
+                del eng, w
+            except Exception as e:  # noqa: BLE001 -- report per layer (e.g. a build overflow), keep going
+                err[L] = f"{type(e).__name__}: {str(e)[:200]}"
+                logger.warning(f"[e2ediff] teacher-forced layer {L} ({lt[0]}): {err[L]}")
+        return x
+
+    mk1.forward = tf_forward
+    try:
+        model._forward_verify_bucket_tp(B, None, None)
+        ttnn.synchronize_device(mesh)
+    finally:
+        mk1.forward = orig
+    _restore(ts, snap)
+    return dict(pcc=out, err=err, types={L: ("attention" if model.layers[L].is_full_attention else "gdn")
+                                         for L in range(min(TF_NL, len(model.layers)))})
 
 
 def _long_prompt(tokenizer, n, salt):
@@ -187,7 +256,13 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
             drv.admit(u, 100 * len(res["pcc"]) + u, prompts[u], max_new=WARM * T + 8)
         for _ in range(WARM):
             drv.step()
-        pcc, mx, bad, deq = _diff_case(model, live, tag)
+        pcc, mx, bad, deq, tf = _diff_case(model, live, tag)
+        if tf:
+            res.setdefault("tf", {})[tag] = {str(u): {str(L): v for L, v in d.items()} for u, d in tf["pcc"].items()}
+            res.setdefault("tf_err", {})[tag] = {str(L): v for L, v in tf["err"].items()}
+            res["tf_types"] = {str(L): v for L, v in tf["types"].items()}
+            for u, d in tf["pcc"].items():
+                logger.info(f"[e2ediff] TF {tag} user {u}: " + " ".join(f"L{L}{tf['types'][L][0]}:{v:.5f}" for L, v in d.items()))
         res["pcc"][tag] = {str(u): {str(L): v for L, v in d.items()} for u, d in pcc.items()}
         res["maxabs"][tag] = {str(u): {str(L): v for L, v in d.items()} for u, d in mx.items()}
         res["nan_zero_rows"] += bad
@@ -209,7 +284,11 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
                        short_on_engine=bool(gate is not None and mx_ctx and not gate.want("verify", B, mx_ctx)))
     allp = [v for c in res["pcc"].values() for d in c.values() for v in d.values()]
     res["min_pcc"] = min(allp) if allp else None
-    res["pass"] = bool(allp and min(allp) >= BAR and not res["nan_zero_rows"] and res["final_err_spread"] <= 2.0
+    tfp = [v for c in res.get("tf", {}).values() for d in c.values() for v in d.values()]
+    res["tf_min_pcc"] = min(tfp) if tfp else None
+    res["tf_first_bad"] = next(({"case": c, "user": u, "layer": L, "pcc": v} for c, cd in res.get("tf", {}).items()
+                                for u, d in cd.items() for L, v in d.items() if v < BAR), None)
+    res["pass"] = bool((not TF or (tfp and min(tfp) >= BAR and not any(res.get("tf_err", {}).values()))) and allp and min(allp) >= BAR and not res["nan_zero_rows"] and res["final_err_spread"] <= 2.0
                        and res["long"]["fallback"] and res["long"]["short_on_engine"])
     logger.info(f"[e2ediff] {json.dumps(res)}")
     for tag in res["pcc"]:

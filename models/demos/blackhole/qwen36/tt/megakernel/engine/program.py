@@ -2024,9 +2024,11 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     # the integration arg blocks are model-global (KV bases, page table) or rewritten per launch (replay): ONE set per
     # mesh, shared by every bucket (each L1 tensor reserves its range on every core; see _L1POOL)
-    blocks = _ABLOCKS.get(id(mesh))
+    # keyed by the KV set too: a teacher-forced single-layer engine (e2e-diff) lists only its own layer's (k, v)
+    _abk = (id(mesh), tuple((d.get("k_addr", 0), d.get("v_addr", 0)) for d in (kv_desc or ())))
+    blocks = _ABLOCKS.get(_abk)
     if blocks is None:
-        blocks = _ABLOCKS[id(mesh)] = AB.ArgBlocks(mesh)
+        blocks = _ABLOCKS[_abk] = AB.ArgBlocks(mesh)
         attn = []
         for d in kv_desc or ():
             attn += [d.get("k_addr", 0), d.get("v_addr", 0)]
