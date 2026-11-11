@@ -223,3 +223,26 @@ B 16 shows whether the KPH reference itself reproduces.
 
 16 x 1 M is resident on one 8x4. The MoE x-row coalesce (`GLM53_MKX_XROWS_COAL`, default) adds -2.8 ms at 4 K x 16
 (40.8 -> 38.0 ms) and -0.8 ms at 32 K x 4 (ids identical).
+
+## 12. The routed experts' scratch between stacked layers (2026-11-11, #64931 5bf638d7f74)
+
+At 12 or more users the outputs changed from run to run, in multi-layer sparse_kda stack programs only (B 12: rows 10-11,
+B 14: rows 8-13, B 16: every row; one layer per program was clean). Cause: `xa.cpp` of layer l reads the list page's
+weight rows in place (and, with `MKX_RW_XA`, scatters into `xw.cpp`'s CB_RAW scratch) after `MKX_SEM_LIST`, but `xc.cpp`
+pops the list page as soon as it has read n. On the 8x4 the third reader of a bank sits out every dense phase, so its
+`xw.cpp` for layer l + 1 reserves that page and zero-fills the weight rows while `xa.cpp` of layer l is still reading them
+(the window is long enough only at t >= 12).
+
+Fix: `xa.cpp` clears `MKX_SEM_LIST` after its last access to either page and `xw.cpp` waits for that 0 before its first
+write (`GLM53_MKX_RAW_SYNC`, default on; no L1, no new semaphore; `=0` restores the previous binaries). The routing-weight
+scatter moves back to `xw.cpp` (`GLM53_MKX_RW_XA=0`, default). `tests/test_mkx_xrows_coal_host.py` holds the byte map and
+an exhaustive interleaving model of one reader over 1-3 stacked layers (the race is reachable without the hand-back with
+`MKX_RW_XA` on and off; with it, none and no deadlock).
+
+| Check (8x4, 45 layers unless noted) | Before | After |
+|---|---|---|
+| Pinned-input replays, B 14 / B 16 (3-6 sparse layers), 21 each | several digests | 1 digest |
+| 4 K x 16 e2e, 3 runs | outputs differ, 37.5-38.0 ms | identical, 36.8 ms (27.1 tok/s per user) |
+| 32 K x 16, 16 identical prompts | outputs differ | one output, 35.5 ms (28.1 tok/s per user) |
+| 32 K x 4 | ids d032bb00 | ids d032bb00, 22.3 ms |
+| Served 128 K profile, 16 identical prompts | several texts | one text, median ITL 37.6 ms |

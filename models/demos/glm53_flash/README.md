@@ -139,15 +139,17 @@ prefill + 128 tokens):
 | 1 M | 32 K tokens, 1 user / 4 users | 13.5 s / 42.9 s each | TTFT ~39 s for 4 x 32 K (wall minus 128 e2e decode steps); texts identical across 1 and 4 users and to the e2e row at the same cache length |
 | 1 M | 1,047,610 tokens, 1 user | 355.9 s | 95 thought + 33 answer tokens |
 | 1 M | 1,047,610 tokens, 4 identical / 4 distinct users | 1,404 s / 1,407 s each | vLLM prefills the four back to back (~345 s each: the e2e's 1,379 s TTFT), all four resident; the identical set's texts equal the lone request's |
-| 128 K (16 slots) | 128 tokens, 1 user / 16 identical / 16 distinct | 7.8 s / 15.2 s / 15.7 s each | 16 identical prompts: 1 text variant in one run, 3 in another (the two token lanes' reduction orders flip a near-tie) |
+| 128 K (16 slots) | 128 tokens, 1 user / 16 identical / 16 distinct | 7.8 s / 15.2 s / 15.7 s each | 16 identical prompts: 1 text variant in one run, 3 in another before the expert-scratch fix; one text since 5bf638d7f74 |
 | 128 K | 130,815 tokens, 1 user | 44.3 s | prefill ~3 K tok/s |
-| 128 K | 130,815 tokens, 16 identical / 16 distinct users | 583-600 s / 587-601 s each | the 16 prefills back to back (the e2e's 579 s TTFT), all 16 resident and coherent; identical prompts split into 6 text variants |
+| 128 K | 130,815 tokens, 16 identical / 16 distinct users | 583-600 s / 587-601 s each | the 16 prefills back to back (the e2e's 579 s TTFT), all 16 resident and coherent; identical prompts split into 6 text variants (before the expert-scratch fix) |
 
 Boot: ~11-12 min on a warm cache (the stack build ~5.5 min + the prefill-bucket and decode captures). Determinism: on
 the 4-slot profile the greedy text is identical across 1 and 4 live users and equal to the e2e row at the same cache
 length; a different cache length (the e2e's 64 K default vs the served 1 M) changes the sparse ladder and can flip a
-near-tie later in the text. On the 16-slot profile identical prompts in one batch split into several variants (two
-token lanes plus per-slot numerics; the e2e at 128 K x 16 shows the same, 14 of 16 users agreeing), all coherent. Smoke: `_logs/mesh/serve_stack_catalog.sh` on the box (the catalog entry as-is, then
+near-tie later in the text. On the 16-slot profile identical prompts in one batch used to split into several variants
+(the e2e at 128 K x 16 the same, 14 of 16 users agreeing): a cross-layer race on the routed experts' scratch at 12 or
+more slots, fixed in 5bf638d7f74 (`GLM53_MKX_RAW_SYNC`, `doc/perf/shard_8x4_design.md` section 12); since then 16
+identical prompts give one text (served 128-token prompts on the 128 K profile, the 32 K x 16 e2e). Smoke: `_logs/mesh/serve_stack_catalog.sh` on the box (the catalog entry as-is, then
 `serve_stack_client.py`: the e2e prompt greedy vs the reference text, N identical and N distinct concurrent users, one
 sampled request).
 
