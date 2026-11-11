@@ -50,11 +50,13 @@ from hf_layer_reference import generate_streaming, load_config  # noqa: E402
 
 def build_hf_vision(snapshot: Path, weights: dict, dtype=torch.float32):
     """``Glm5NextVisionModel`` from the raw tower weights (non-persistent rope buffer recomputed); the
-    same construction as ``tests/test_vision.py``."""
-    from transformers import AutoConfig
+    same construction as ``tests/test_vision.py``. The config comes from transformers' own ``Glm5NextConfig``, not
+    ``AutoConfig``: a process that imported vLLM has its ``glm5_next`` config class registered over transformers' (no
+    ``rope_parameters`` on its vision config: the tower construction fails)."""
+    from transformers.models.glm5_next.configuration_glm5_next import Glm5NextConfig
     from transformers.models.glm5_next.modeling_glm5_next import Glm5NextVisionModel, Glm5NextVisionRotaryEmbedding
 
-    vcfg = AutoConfig.from_pretrained(str(snapshot)).vision_config
+    vcfg = Glm5NextConfig.from_pretrained(str(snapshot)).vision_config
     vcfg._attn_implementation = "sdpa"
     with torch.device("meta"):
         hf = Glm5NextVisionModel(vcfg)

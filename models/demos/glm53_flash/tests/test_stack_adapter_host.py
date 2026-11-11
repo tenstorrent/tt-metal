@@ -13,7 +13,12 @@ adapter's plugin-slot -> generator-slot alias, so no state moves: a 2-cycle thro
 the host-sampled logits route, the async read, the teardown hooks and the refusals. GLM53_STACK_PREFIX (the prefix
 cache, ``StackPrefixCache``) on a mock with the device side of the snapshot pool and the sequence-sharded pool's owner
 blocks: snapshots at the on-grid chunk ends, the hit confirmation, the attach of a new request admitted at start > 0
-on shared pages, the release, the LRU reuse of unpinned entries, and the fallbacks to a prefill from 0.
+on shared pages, the release, the LRU reuse of unpinned entries, and the fallbacks to a prefill from 0. Image input
+(GLM53_STACK_MM): the generator's per-chunk staging + id remap into the mock's extra embedding rows, image prompts kept
+out of the batched / packed replays, ``GLM53StackForConditionalGeneration`` (declaration with / without vLLM, the 0.31 /
+0.30 processor module, the plugin's per-row image items routed to the generator through a fake encoder) and, with a
+vLLM interpreter (``GLM53_VLLM_PYTHON``, a subprocess: this process stays vLLM- and ttnn-free) and the checkpoint, the
+real processor the class registers run on the demo image.
 
     PYTHONPATH=<worktree> <tt-metal>/python_env/bin/pytest --noconftest -p no:cacheprovider -q \\
         models/demos/glm53_flash/tests/test_stack_adapter_host.py
@@ -22,10 +27,15 @@ on shared pages, the release, the LRU reuse of unpinned entries, and the fallbac
 from __future__ import annotations
 
 import contextlib
+import importlib
 import inspect
+import json
+import os
+import subprocess
 import sys
 import types
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -47,9 +57,11 @@ from models.demos.glm53_flash.tt.generator_vllm_stack import (
     LATENT_DIM,
     GLM53StackForCausalLM,
     cache_defaults,
+    declare_multimodal_class,
     row_params,
     trim_page_rows,
 )
+from models.demos.glm53_flash.tt.mm_inputs import IMAGE_TOKEN_ID
 
 VOCAB = 64
 B = 4  # max_num_seqs = the backend's slots
@@ -132,7 +144,9 @@ class _Cache:
 class _MockStackBackend(ModelBackend):
     """StackBackend's contract on CPU: one full-width decode trace that samples greedily itself (fused sampling,
     every token row rewritten), the TP prefill's 64-token alignment, 128-token chunks (so a 200-token prompt is two
-    chunks). Model: next token = (token + 1) % VOCAB; the per-slot ledger asserts positions and page coverage."""
+    chunks). Model: next token = (token + 1) % VOCAB; the per-slot ledger asserts positions and page coverage. Image
+    input: MM_ROWS extra embedding rows (StackBackend.stage_mm_rows under GLM53_STACK_MM=1); a chunk id VOCAB + j reads
+    staged row j, recorded in the ledger as ("img", int(row[0]))."""
 
     vocab_size = VOCAB
     logits_width = VOCAB
@@ -145,10 +159,14 @@ class _MockStackBackend(ModelBackend):
     samples_in_decode_trace = True
     copy_slot_keeps_sampler_rng = True
     layer_kinds = ("dense_kda",)
+    mm_extra_rows = 64  # MM_ROWS
 
     def __init__(self, max_batch: int):
         self.max_batch = max_batch
         self.chunks: list = []  # (slot, chunk_start, n_valid, logits_rows, sampled)
+        self.chunk_ids: list = []  # every chunk's valid ids as the backend received them
+        self.mm_table: dict = {}  # extra row j -> its staged row
+        self.mm_stages: list = []  # (chunks run before the stage, rows staged)
         self.traces: list = []
         self.released: list = []
         self.releases: list = []
@@ -196,6 +214,13 @@ class _MockStackBackend(ModelBackend):
     def release_slot(self, kv, slot):
         self.releases.append(slot)
 
+    def stage_mm_rows(self, rows):
+        assert 1 <= int(rows.shape[0]) <= self.mm_extra_rows, tuple(rows.shape)
+        self.mm_stages.append((len(self.chunks), rows.clone()))
+        for j in range(int(rows.shape[0])):
+            self.mm_table[j] = rows[j].clone()
+        return VOCAB
+
     # ---- prefill
     def prepare_prefill(self, kv):
         self.prepared = (True, self.prepared[1])
@@ -205,11 +230,12 @@ class _MockStackBackend(ModelBackend):
         if chunk_start == 0:
             st.clear()
         assert len(st) == chunk_start, f"slot {slot}: state holds {len(st)} tokens, chunk starts at {chunk_start}"
-        st.extend(int(t) for t in tokens[:n_valid].tolist())
+        self.chunk_ids.append(tokens[:n_valid].clone())
+        st.extend(t if t < VOCAB else ("img", int(self.mm_table[t - VOCAB][0])) for t in tokens[:n_valid].tolist())
         self.chunks.append((slot, chunk_start, n_valid, logits_rows, sample is not None))
         if logits_rows == "none":
             return None
-        nxt = (st[-1] + 1) % VOCAB
+        nxt = ((st[-1] if isinstance(st[-1], int) else st[-1][1]) + 1) % VOCAB  # an image row: its position
         if sample is not None:
             io.tokens.t[slot] = nxt
             io.sampled.t[slot] = nxt
@@ -1079,3 +1105,351 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
                              start_pos=[192], empty_slots=[3], sampling_params=_greedy(1))  # fmt: skip
     assert backend.state_io[n][1:3] == (0, None) and kv.state[ad._alias[3]] == b and pc.stats["fallbacks"] == 2
+
+# ------------------------------------------------------------------------------- image input (GLM53_STACK_MM)
+MM_WIDTH = 8  # the mock's feature width (the generator never looks at it)
+
+
+def _img_rows(positions) -> torch.Tensor:
+    """feature rows whose first value names the prompt position they belong to (the mock's ledger shows it)"""
+    pos = torch.as_tensor(positions, dtype=torch.int64)
+    return pos.to(torch.bfloat16)[:, None].expand(-1, MM_WIDTH).contiguous()
+
+
+def _mm_prompt(n: int, lo: int, hi: int, base: int) -> list[int]:
+    """an n-token text prompt whose positions [lo, hi) are the image placeholder run"""
+    return [IMAGE_TOKEN_ID if lo <= i < hi else t for i, t in enumerate(_prompt(n, base))]
+
+
+def _ledger(prompt: list[int], lo: int, hi: int) -> list:
+    """what the mock's slot state holds after the prompt: text ids, ("img", position) on the image rows"""
+    return [("img", i) if lo <= i < hi else t for i, t in enumerate(prompt)]
+
+
+def _mm_generator():
+    backend = _MockStackBackend(B)
+    return backend, Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+
+
+def test_generator_stages_image_rows_per_planned_chunk():
+    """generate_batch(mm=...): an image run straddling the 128-token chunk boundary -- each planned chunk stages ITS
+    rows (in order, before its replay) into the extra rows and its image positions take the ids VOCAB + j; text ids are
+    untouched. The refusals: positions outside the prompt, a feature row count
+    that is not the position count, more image rows in one chunk than extra rows, a backend without extra rows."""
+    backend, gen = _mm_generator()
+    lo, hi = 100, 160
+    p = _mm_prompt(200, lo, hi, 7)
+    pos = torch.arange(lo, hi)
+    out = gen.generate_batch([p], 1, mm=[(pos, _img_rows(pos))])  # (the mock models no generator-owned decode)
+    assert out == [[(p[-1] + 1) % VOCAB]]
+    assert [c[1:3] for c in backend.chunks] == [(0, 128), (128, 72)]
+    assert [(k, r[:, 0].tolist()) for k, r in backend.mm_stages] == [
+        (0, list(range(100, 128))),  # chunk 0's rows, staged before chunk 0 ran
+        (1, list(range(128, 160))),  # chunk 1's rows, after chunk 0, before chunk 1
+    ]
+    want0 = torch.tensor(p[:128])
+    want0[100:128] = VOCAB + torch.arange(28)
+    want1 = torch.tensor(p[128:200])
+    want1[:32] = VOCAB + torch.arange(32)
+    assert torch.equal(backend.chunk_ids[0], want0) and torch.equal(backend.chunk_ids[1], want1)
+    assert gen._own_binding().kv_cache.state[0][:200] == _ledger(p, lo, hi)
+    assert gen.counters["mm_chunks"] == 2 and gen.counters["mm_rows"] == 60
+    # refusals
+    with expect_error(ValueError, "outside its"):
+        gen.generate_batch([p], 1, mm=[(torch.tensor([250]), _img_rows([250]))])
+    with expect_error(ValueError, "one \\[hidden\\] row each"):
+        gen.generate_batch([p], 1, mm=[(pos, _img_rows(pos)[:10])])
+    backend2, gen2 = _mm_generator()
+    big = torch.arange(10, 110)  # 100 image rows inside the first 128-token chunk > the mock's 64 extra rows
+    with expect_error(ValueError, "64 extra rows"):
+        gen2.generate_batch([_mm_prompt(200, 10, 110, 3)], 1, mm=[(big, _img_rows(big))])
+    backend3, gen3 = _mm_generator()
+    backend3.mm_extra_rows = 0  # the text build (GLM53_STACK_MM off)
+    with expect_error(ValueError, "GLM53_STACK_MM=1"):
+        gen3.generate_batch([p], 1, mm=[(pos, _img_rows(pos))])
+    assert backend3.chunks == []  # refused before any chunk ran
+
+
+def test_image_prompts_stay_out_of_the_batched_and_packed_replays(monkeypatch):
+    """A batched admission (generate_batch) and a packed step (prefill_forward) take the text prompts only: the image
+    prompt runs the per-user path, where its chunk is staged and remapped."""
+    backend, gen = _mm_generator()
+    calls = []
+
+    def batch_tp(reqs, *, kv_cache, io, sample=None):
+        calls.append(("batch", [int(slot) for _, slot, _ in reqs]))
+        firsts = []
+        for ids, slot, n in reqs:
+            kv_cache.state[slot] = [int(t) for t in ids[:n].tolist()]
+            nxt = (int(ids[n - 1]) + 1) % VOCAB
+            io.tokens.t[slot], io.sampled.t[slot] = nxt, nxt
+            firsts.append(nxt)
+        return firsts
+
+    backend.prefill_batch_size = lambda: (128, 2)
+    backend.prefill_batch_tp = batch_tp
+    lo, hi = 20, 40
+    texts = [_prompt(50, 1), _prompt(60, 2)]
+    img = _mm_prompt(70, lo, hi, 3)
+    pos = torch.arange(lo, hi)
+    out = gen.generate_batch([texts[0], img, texts[1]], 1, mm=[None, (pos, _img_rows(pos)), None])
+    assert calls == [("batch", [0, 2])]  # the two text prompts in one replay, the image prompt alone
+    assert backend.chunks == [(1, 0, 70, "last", True)]
+    assert gen._own_binding().kv_cache.state[1] == _ledger(img, lo, hi)
+    assert out == [[(texts[0][-1] + 1) % VOCAB], [(img[-1] + 1) % VOCAB], [(texts[1][-1] + 1) % VOCAB]]
+
+    # prefill_forward under a packed-step backend (continuation + head-less segments): the image row runs alone
+    backend, gen = _mm_generator()
+    packed = []
+
+    def packed_tp(reqs, *, kv_cache, io, t, sample=None, starts=None, heads=None):
+        packed.append([int(slot) for _, slot, _ in reqs])
+        firsts = []
+        for (ids, slot, n), st in zip(reqs, starts):
+            kv_cache.state[slot] = kv_cache.state[slot][:st] + [int(x) for x in ids[:n].tolist()]
+            nxt = (int(ids[n - 1]) + 1) % VOCAB
+            io.tokens.t[slot], io.sampled.t[slot] = nxt, nxt
+            firsts.append(nxt)
+        return firsts
+
+    backend.prefill_packed_caps = lambda: {"continuation": True, "no_head": True}
+    backend.prefill_packed_sizes = lambda: [(256, 4)]
+    backend.prefill_packed_tp = packed_tp
+    kv = gen.allocate_kv_cache(B, SEQ, num_blocks=NUM_BLOCKS, null_block=0)
+    gen.warmup(kv, capture=True)
+    prompts = [texts[0], img, texts[1]]
+    toks = _history(prompts)
+    toks[1, lo:hi] = IMAGE_TOKEN_ID
+    got = gen.prefill_forward(
+        toks,
+        page_table=trim_page_rows(_table([_blocks(i, len(q)) for i, q in enumerate(prompts)], 3)),
+        kv_cache=kv,
+        prompt_lens=[len(q) for q in prompts],
+        empty_slots=[0, 1, 2],
+        sampling_params=[SamplingParams()] * 3,
+        mm_rows={1: (pos, _img_rows(pos))},
+    )
+    assert packed == [[0, 2]] and backend.chunks == [(1, 0, 70, "last", True)]
+    assert kv.state[1] == _ledger(img, lo, hi)
+    assert got.tolist() == [(q[-1] + 1) % VOCAB for q in prompts]
+
+
+def test_multimodal_class_declaration_with_and_without_vllm():
+    """GLM53StackForConditionalGeneration: the text adapter + SupportsMultiModal + the upstream processor registration
+    (a fake vLLM api here); the text class stays text-only. Without vLLM (this host) the module-level class is the plain
+    declaration with the same flags, reachable through MM_ADAPTER_TARGET."""
+    plain = declare_multimodal_class(None)
+    assert issubclass(plain, GLM53StackForCausalLM) and plain.supports_multimodal is True
+    assert GLM53StackForCausalLM.supports_multimodal is False
+    assert plain.__name__ == plain.__qualname__ == "GLM53StackForConditionalGeneration"
+    assert plain.get_placeholder_str("image", 0) == "<|begin_of_image|><|image|><|end_of_image|>"
+    with expect_error(ValueError, "Only image"):
+        plain.get_placeholder_str("video", 0)
+    assert plain.model_capabilities is GLM53StackForCausalLM.model_capabilities
+    assert plain.decode_input_update_contract == 1 and plain.mm_encoder is None
+
+    class SupportsMultiModal:
+        supports_multimodal = True
+
+    seen = {}
+
+    def register_processor(cls):
+        seen["cls"] = cls
+        cls._processor_factory = "glm5next"
+        return cls
+
+    mm = declare_multimodal_class(
+        SimpleNamespace(SupportsMultiModal=SupportsMultiModal, register_processor=register_processor)
+    )
+    assert seen["cls"] is mm and mm._processor_factory == "glm5next"
+    assert issubclass(mm, SupportsMultiModal) and issubclass(mm, GLM53StackForCausalLM)
+    mod, _, name = gvs.MM_ADAPTER_TARGET.partition(":")
+    assert getattr(importlib.import_module(mod), name) is gvs.GLM53StackForConditionalGeneration
+    assert gvs.GLM53StackForConditionalGeneration.supports_multimodal is True
+    assert "vllm" not in sys.modules  # the host declaration never imported vLLM (its platform plugins import ttnn)
+
+
+def test_vllm_multimodal_api_takes_the_031_module_then_the_030_one(monkeypatch):
+    """_vllm_multimodal_api in a vLLM process: the processor from vllm.models.glm5next.common.multimodal (0.31), else
+    .nvidia.multimodal (0.30), registered with Glm4v's dummy-inputs builder; None without either, and None in a process
+    that has not imported vLLM (fake vLLM modules here)."""
+    reg = []
+
+    class Registry:
+        @staticmethod
+        def register_processor(proc, *, info, dummy_inputs):
+            reg.append((proc.__module__, info.__module__, dummy_inputs))
+            return lambda cls: cls
+
+    def module(name, **attrs):
+        m = types.ModuleType(name)
+        for k, v in attrs.items():
+            if isinstance(v, type):
+                v.__module__ = name
+            setattr(m, k, v)
+        monkeypatch.setitem(sys.modules, name, m)
+        return m
+
+    assert gvs._vllm_multimodal_api() is None  # no vLLM in this process
+    module("vllm")
+    module("vllm.model_executor.models.glm4_1v", Glm4vDummyInputsBuilder="builder")
+    module("vllm.model_executor.models.interfaces", SupportsMultiModal=type("SupportsMultiModal", (), {}))
+    module("vllm.multimodal", MULTIMODAL_REGISTRY=Registry)
+    new, old = gvs.GLM5NEXT_PROCESSOR_MODULES
+    assert gvs._vllm_multimodal_api() is None  # neither processor module
+    module(old, Glm5NextMultiModalProcessor=type("P", (), {}), Glm5NextProcessingInfo=type("I", (), {}))
+    api = gvs._vllm_multimodal_api()
+    assert api.processor_module == old and reg[-1] == (old, old, "builder")
+    module(new, Glm5NextMultiModalProcessor=type("P", (), {}), Glm5NextProcessingInfo=type("I", (), {}))
+    api = gvs._vllm_multimodal_api()
+    assert api.processor_module == new == "vllm.models.glm5next.common.multimodal" and reg[-1] == (new, new, "builder")
+    cls = declare_multimodal_class(api)
+    assert issubclass(cls, sys.modules["vllm.model_executor.models.interfaces"].SupportsMultiModal)
+
+
+def test_multimodal_adapter_routes_image_items_to_the_generator(monkeypatch):
+    """The plugin's per-row image items (pixel_values / image_grid_thw lists + placeholder ranges) on the multimodal
+    class: the item's rows found in the row's prefix, the item encoded (fake encoder), the chunk's rows handed to the
+    generator -- an image straddling the two scheduler chunks of a 200-token prompt is staged by both; text rows of the
+    same batch and a text-only batch (pixel_values=[None]) take the text path; videos, a missing encoder and a backend
+    without extra rows are refused; the text class still refuses pixels."""
+    cls = declare_multimodal_class(None)
+    backend = _MockStackBackend(B)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = cls(gen, B, SEQ)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B)
+    encoded = []
+
+    def encoder(items):  # row j of an item = its j-th feature row; the first value names it (offset + j)
+        encoded.append([it.n_tokens for it in items])
+        return [_img_rows(torch.arange(it.offset, it.offset + it.n_tokens)) for it in items]
+
+    ad.mm_encoder = encoder
+    lo, n_img = 112, 32  # grid (1, 8, 16): 128 patches -> 32 image tokens at [112, 144)
+    img = _mm_prompt(200, lo, lo + n_img, 9)
+    text = _prompt(90, 4)
+    grid = torch.tensor([[1, 8, 16]])
+    pv = torch.zeros(128, 4)
+    kw = dict(pixel_values=[None, [pv]], image_grid_thw=[None, [grid]], mm_placeholder_offsets=[None, [lo]],
+              mm_placeholder_lengths=[None, [n_img]])  # fmt: skip
+    # step 1: the text prompt whole + the image prompt's first 128 tokens (host-routed intermediate chunk)
+    first = ad.prefill_forward(
+        _history([text, img[:128]]),
+        page_table=_table([_blocks(0, 90), _blocks(1, 128)], 2),
+        kv_cache=kv,
+        prompt_lens=[90, 128],
+        start_pos=[0, 0],
+        empty_slots=[0, 1],
+        sampling_params=None,
+        **kw,
+    )
+    assert first.shape == (2, 1, VOCAB) and encoded == [[32]]
+    assert [k for k, _ in backend.mm_stages] == [1] and backend.mm_stages[0][1][:, 0].tolist() == list(range(112, 128))
+    assert kv.state[0] == text and kv.state[1] == _ledger(img[:128], lo, lo + n_img)
+    # step 2: the rest of the image prompt; the plugin sends the item again, its remaining rows are staged
+    out = ad.prefill_forward(
+        _history([img]),
+        page_table=_table([_blocks(1, 200)], 1),
+        kv_cache=kv,
+        prompt_lens=[200],
+        start_pos=[128],
+        empty_slots=[1],
+        sampling_params=_greedy(1),
+        **{k: [v[1]] for k, v in kw.items()},
+    )
+    assert int(out[0][0, 0]) == (img[-1] + 1) % VOCAB and encoded == [[32], [32]]
+    assert backend.mm_stages[-1][1][:, 0].tolist() == list(range(128, 144))
+    assert kv.state[1] == _ledger(img, lo, lo + n_img)
+    # a text-only batch on the multimodal class: the text path (no encoder call, no stage)
+    ad.prefill_forward(_history([text]), page_table=_table([_blocks(2, 90)], 1), kv_cache=kv, prompt_lens=[90],
+                       start_pos=[0], empty_slots=[2], sampling_params=_greedy(1), pixel_values=[None],
+                       image_grid_thw=[None], mm_placeholder_offsets=[None], mm_placeholder_lengths=[None])  # fmt: skip
+    assert len(encoded) == 2 and len(backend.mm_stages) == 2
+    # refusals
+    one = dict(page_table=_table([_blocks(3, 200)], 1), kv_cache=kv, prompt_lens=[200], start_pos=[0], empty_slots=[3],
+               sampling_params=_greedy(1))  # fmt: skip
+    with expect_error(NotImplementedError, "images only"):
+        ad.prefill_forward(_history([img]), pixel_values_videos=[[torch.zeros(256, 4)]],
+                           video_grid_thw=[[torch.tensor([[2, 8, 16]])]], **one)  # fmt: skip
+    ad.mm_encoder = None
+    with expect_error(NotImplementedError, "without an image encoder"):
+        ad.prefill_forward(_history([img]), **{k: [v[1]] for k, v in kw.items()}, **one)
+    ad.mm_encoder = encoder
+    backend.mm_extra_rows = 0
+    with expect_error(NotImplementedError, "GLM53_STACK_MM=1"):
+        ad.prefill_forward(_history([img]), **{k: [v[1]] for k, v in kw.items()}, **one)
+    text_ad, *_ = _adapter()
+    with expect_error(NotImplementedError, "text-only"):
+        text_ad.prefill_forward(_history([img]), **{k: [v[1]] for k, v in kw.items()}, **one)
+    assert "ttnn" not in sys.modules and "vllm" not in sys.modules
+
+
+# the HF reference prompt of demo/sample_prompts/shapes_hello.png + the question (doc/vision/multimodal.md: 286 tokens,
+# the 256 image tokens at rows 11..266, </think> appended)
+DEMO_IMAGE = Path(__file__).resolve().parents[1] / "demo" / "sample_prompts" / "shapes_hello.png"
+DEMO_QUESTION = "What shapes and what word are in this image? Answer in one sentence."
+DEMO_HEAD = [154822, 154824, 154826, 25062, 287, 29905, 371, 25, 7487, 154827, 154830]
+DEMO_TAIL = [154831, 3838, 20770, 323, 1128, 3409, 525, 304, 419, 2168, 30, 21754, 304, 825, 11646, 13, 154828, 154841,
+             154842]  # fmt: skip
+_PROCESSOR_PROBE = r"""
+import json, os, sys
+from pathlib import Path
+from models.demos.glm53_flash.tt import generator_vllm_stack as gvs  # before vLLM: the module's fabric probe stays off
+import vllm  # noqa: F401
+from PIL import Image
+from transformers import AutoTokenizer
+from vllm.config import ModelConfig
+from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.multimodal.processing import ProcessorInputs
+from vllm.multimodal.processing.context import TimingContext
+
+snap, image, question = sys.argv[1:4]
+api = gvs._vllm_multimodal_api()
+cls = gvs.declare_multimodal_class(api)  # what the module declares when the plugin imports it inside vLLM
+mc = ModelConfig(model=snap, tokenizer=snap, dtype="bfloat16", max_model_len=4096)
+MULTIMODAL_REGISTRY._get_model_cls = lambda model_config: cls  # the plugin's override resolves the arch to the adapter
+proc = MULTIMODAL_REGISTRY.create_processor(mc)
+tk = AutoTokenizer.from_pretrained(snap)
+msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}]
+text = tk.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False) + "</think>"
+img = Image.open(image).convert("RGB")
+out = proc.apply(ProcessorInputs(tk.encode(text, add_special_tokens=False), proc.info.parse_mm_data({"image": [img]})),
+                 TimingContext(enabled=False))
+data = out["mm_kwargs"].get_data()
+ph = out["mm_placeholders"]["image"][0]
+print("PROBE " + json.dumps(dict(module=api.processor_module, mm=bool(cls.supports_multimodal),
+      bases=[c.__name__ for c in cls.__mro__], processor=type(proc).__name__, ids=list(out["prompt_token_ids"]),
+      grid=data["image_grid_thw"].reshape(-1).tolist(), pixels=list(data["pixel_values"].shape),
+      placeholder=[ph.offset, ph.length], ttnn="ttnn" in sys.modules)))
+"""
+
+
+def test_registered_processor_encodes_the_demo_image():
+    """The processor GLM53StackForConditionalGeneration registers in a real vLLM (0.31: vllm.models.glm5next.common;
+    0.30: .nvidia) on the demo image + question: the HF reference's 286 ids (256 image tokens at rows 11..266), grid
+    (1, 32, 32), 1024 patches, placeholder [11, 256) -- the plugin's mm_placeholder_offsets / _lengths. Runs in a
+    subprocess of GLM53_VLLM_PYTHON (a python with vLLM; VLLM_PLUGINS="" so no TT platform plugin imports ttnn) over
+    the checkpoint (MODEL_WEIGHTS_DIR / the HF cache); skipped without them."""
+    from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
+
+    py = os.environ.get("GLM53_VLLM_PYTHON", "")
+    if not py or not Path(py).exists():
+        pytest.skip("GLM53_VLLM_PYTHON (a python with vLLM) not set")
+    try:
+        snap = default_snapshot_dir()
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"no GLM-5.3-Flash checkpoint ({exc})")
+    root = Path(__file__).resolve().parents[4]
+    env = dict(os.environ, VLLM_PLUGINS="", PYTHONPATH=str(root), OMP_NUM_THREADS="8")
+    res = subprocess.run([py, "-c", _PROCESSOR_PROBE, str(snap), str(DEMO_IMAGE), DEMO_QUESTION], env=env, cwd=root,
+                         capture_output=True, text=True, timeout=600)  # fmt: skip
+    line = [ln for ln in res.stdout.splitlines() if ln.startswith("PROBE ")]
+    assert res.returncode == 0 and line, f"processor probe failed ({res.returncode}):\n{res.stderr[-4000:]}"
+    got = json.loads(line[-1][len("PROBE ") :])
+    assert got["module"] in gvs.GLM5NEXT_PROCESSOR_MODULES and got["mm"] is True
+    assert "SupportsMultiModal" in got["bases"] and got["processor"] == "Glm5NextMultiModalProcessor"
+    assert got["ids"] == DEMO_HEAD + [IMAGE_TOKEN_ID] * 256 + DEMO_TAIL
+    assert got["grid"] == [1, 32, 32] and got["pixels"] == [1024, 1176] and got["placeholder"] == [11, 256]
+    assert got["ttnn"] is False

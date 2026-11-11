@@ -155,6 +155,15 @@ def plan_prefill(seq_len: int, start_pos: int = 0, chunk: int = PREFILL_CHUNK, a
     return plans
 
 
+def mm_chunk_ids(chunk: torch.Tensor, local_rows: torch.Tensor, first: int) -> torch.Tensor:
+    """Image input on the token path (ModelBackend.stage_mm_rows): the chunk's image positions `local_rows`
+    (chunk-relative, ascending) take the ids first, first + 1, ... -- the extra embedding rows the chunk's rows were
+    staged into, in the same order -- in place; every other id is left alone. Returns `chunk`."""
+    local_rows = torch.as_tensor(local_rows).reshape(-1).to(torch.int64)
+    chunk[local_rows] = int(first) + torch.arange(int(local_rows.numel()), dtype=chunk.dtype)
+    return chunk
+
+
 # ---- Stage 16 slice-boundary mitigation (coordinator 2026-10-22T23:13:59Z, Stage 16's TP8 per-row probe): in a
 # sequence-parallel (SP) prefill bucket chip r holds rows [r R, (r + 1) R), R = bucket rows / chips; a chunk whose LAST
 # valid row is the FIRST row of a chip's slice ((L - 1) mod R == 0: golden[:97] in the 256 bucket, chip 3's first row)
@@ -343,6 +352,18 @@ class ModelBackend(ABC):
     #: prefill_chunk honours state_src / state_snap itself (inside its trace); False: the generator copies with
     #: restore_slot / snapshot_slot around the chunk
     prefill_state_io: bool = False
+
+    # ---- prompt-supplied input rows (image features; StackBackend under GLM53_STACK_MM=1): the embedding table carries
+    # `mm_extra_rows` rows after the vocabulary. Before a chunk with image positions the generator stages that chunk's
+    # rows there (stage_mm_rows) and gives those positions the ids first, first + 1, ...: the chunk's own embedding
+    # lookup reads them, so the prefill programs and traces are the text ones. 0 = none (image rows are refused).
+    mm_extra_rows: int = 0
+
+    def stage_mm_rows(self, rows: torch.Tensor) -> int:
+        """Write `rows` [m, hidden] (m <= mm_extra_rows; bf16 values) into the extra embedding rows, ordered behind
+        every chunk enqueued so far (the previous chunk has read the rows it was given), and return the id of the
+        first (the vocabulary size): the next chunk's position of row j takes the id first + j."""
+        raise NotImplementedError(f"{type(self).__name__} has no extra embedding rows (image input)")
 
     def decode_tee(self, kv_cache) -> bool:
         """True: the decode trace itself copies crossing slots into snapshot entries (set_decode_tee before the step)"""
@@ -1445,14 +1466,19 @@ class Glm53Generator(_ReadinessGenerator):
         state_src: Optional[int] = None,
         state_snap: Optional[int] = None,
         snap_at: Optional[int] = None,
+        mm: Optional[tuple] = None,
     ):
         """Chunked prefill of one user into `slot`: plan, pad, run, slice. Returns logits [n, V] (all), [1, V] (last)
         or the first token sampled on device (int) when `sample` is given and host sampling is off; with `no_head`
         (an intermediate chunk of a longer prompt: its token would be discarded) no chunk produces logits or samples
         and it returns None. Updates the slot's cache length and decode-token state.
         `state_src`: the snapshot entry the first chunk starts from (a prefix-cache attach at start_pos > 0);
-        `state_snap`: the entry that also receives the state after the last chunk (a prefix-cache snapshot)."""
+        `state_snap`: the entry that also receives the state after the last chunk (a prefix-cache snapshot).
+        `mm`: (positions [m] absolute, rows [m, hidden]) -- the prompt's image feature rows; the rows inside
+        [start_pos, start_pos + n) replace those positions' token embeddings (mm_chunk_ids, per planned chunk), the
+        others are ignored. Such a prompt runs chunk by chunk (no layer-major group)."""
         n = int(ids.numel())
+        mm = self._mm_rows(mm, start_pos, n)
         in_trace = bool(getattr(self.backend, "prefill_state_io", False))
         if state_src is not None and not in_trace:  # plain DMA before the chunk (no in-trace state I/O)
             self.backend.restore_slot(b.kv_cache, int(state_src), slot)
@@ -1502,6 +1528,8 @@ class Glm53Generator(_ReadinessGenerator):
             last = i == len(plans) - 1 and not no_head
             chunk = torch.zeros(pl.physical, dtype=torch.int64)
             chunk[: pl.n_valid] = ids[pl.offset : pl.offset + pl.n_valid]
+            if mm is not None:  # this chunk's image rows -> the extra embedding rows, their positions -> those ids
+                self._mm_stage(chunk, pl.start, pl.n_valid, mm)
             rows = "all" if all_logits else ("last" if last else "none")
             sio = {}
             if in_trace:
@@ -1534,7 +1562,7 @@ class Glm53Generator(_ReadinessGenerator):
                 if dev_sample is None:
                     self.counters["prefill_logits_readback_rows"] += 1
 
-        if gsizes and not all_logits and hasattr(self.backend, "prefill_group"):
+        if gsizes and not all_logits and mm is None and hasattr(self.backend, "prefill_group"):
             gc = int(self.backend.prefill_chunk_tokens)
             i = 0
             while i < len(plans):
@@ -1598,6 +1626,41 @@ class Glm53Generator(_ReadinessGenerator):
             return torch.cat(outs)
         return result[..., : self.backend.vocab_size].reshape(1, -1)
 
+    def _mm_rows(self, mm: Optional[tuple], start: int, n: int) -> Optional[tuple]:
+        """A prompt's image rows (positions [m], rows [m, hidden]) checked and cut to [start, start + n): None when
+        none falls inside (the call is plain text)"""
+        if mm is None:
+            return None
+        pos, rows = mm
+        pos = torch.as_tensor(pos).reshape(-1).to(torch.int64)
+        rows = torch.as_tensor(rows)
+        if rows.dim() != 2 or int(rows.shape[0]) != int(pos.numel()):
+            raise ValueError(f"image rows {tuple(rows.shape)} for {int(pos.numel())} positions: one [hidden] row each")
+        if pos.numel() > 1 and not bool((pos[1:] > pos[:-1]).all()):
+            raise ValueError("image row positions must ascend (distinct, in prompt order)")
+        keep = (pos >= int(start)) & (pos < int(start) + int(n))
+        if not bool(keep.any()):
+            return None
+        if int(getattr(self.backend, "mm_extra_rows", 0) or 0) <= 0:
+            raise ValueError(f"{type(self.backend).__name__} has no extra embedding rows for image input "
+                             "(StackBackend: GLM53_STACK_MM=1)")  # fmt: skip
+        return pos[keep], rows[keep]
+
+    def _mm_stage(self, chunk: torch.Tensor, start: int, n_valid: int, mm: tuple) -> None:
+        """The planned chunk [start, start + n_valid): its image rows into the backend's extra embedding rows, their
+        chunk positions remapped in place to those rows' ids (mm_chunk_ids)"""
+        pos, rows = mm
+        sel = torch.nonzero((pos >= start) & (pos < start + n_valid)).reshape(-1)
+        if sel.numel() == 0:
+            return
+        cap = int(self.backend.mm_extra_rows)
+        if int(sel.numel()) > cap:
+            raise ValueError(f"a chunk of {n_valid} tokens holds {int(sel.numel())} image rows > the {cap} extra rows")
+        first = int(self.backend.stage_mm_rows(rows[sel]))
+        mm_chunk_ids(chunk, pos[sel] - start, first)
+        self.counters["mm_chunks"] = self.counters.get("mm_chunks", 0) + 1
+        self.counters["mm_rows"] = self.counters.get("mm_rows", 0) + int(sel.numel())
+
     def prefill_forward(
         self,
         tokens: torch.Tensor,
@@ -1615,6 +1678,7 @@ class Glm53Generator(_ReadinessGenerator):
         snapshot_after: Optional[dict] = None,
         head_rows: Optional[Sequence[bool]] = None,
         snapshot_at: Optional[dict] = None,
+        mm_rows: Optional[dict] = None,
         **kwargs: Any,
     ):
         """Low level: prefill `tokens [B, P_padded]` (real lengths `prompt_lens`) into fixed slots (`empty_slots`, or
@@ -1636,7 +1700,10 @@ class Glm53Generator(_ReadinessGenerator):
         must be a snapshot boundary). Both ride inside the prefill trace on backends with `prefill_state_io`, else
         they are plain device copies around the chunk; neither row joins a batched admission.
         `head_rows[i]` False (chunk pipelining, doc/ttnn/09-vllm/chunk_pipelining.md): the same head-less row as
-        `sample_rows[i]` False, also without `sampling_params` (its result row is then zero logits)."""
+        `sample_rows[i]` False, also without `sampling_params` (its result row is then zero logits).
+        `mm_rows[i]` = (positions [m] absolute, rows [m, hidden] bf16): row i's image feature rows (its rows inside
+        [start_pos[i], start_pos[i] + prompt_lens[i]) are used, see _prefill_user); such a row runs the per-user path
+        (never a packed / batched replay: those embed every segment from the one chunk's ids)."""
         b = self._binding(kv_cache)
         if os.environ.get("GLM53_MOCK") == "1":  # [mock-dram-point] after the first 1 / 8 / 32 served prefill calls
             self._mock_pf_calls = getattr(self, "_mock_pf_calls", 0) + 1
@@ -1684,6 +1751,9 @@ class Glm53Generator(_ReadinessGenerator):
                 raise ValueError(f"prefix_states row {i}: slot {slots[i]} holds a live request")
         prefix_attach = {int(k): int(v) for k, v in (prefix_attach or {}).items()}
         snapshot_after = {int(k): int(v) for k, v in (snapshot_after or {}).items()}
+        mm = {int(k): v for k, v in (mm_rows or {}).items() if v is not None}
+        if any(not 0 <= i < batch for i in mm):
+            raise ValueError(f"mm_rows rows {sorted(mm)} outside [0, {batch})")
         n_entries = int(getattr(self.backend, "snapshot_entries", 0))
         for i, ent in prefix_attach.items():
             if not 0 <= i < batch or starts[i] <= 0 or starts[i] % self.backend.continuation_align:
@@ -1731,13 +1801,13 @@ class Glm53Generator(_ReadinessGenerator):
             done = self._packed_step(b, [(i, slots[i], tokens[i, : lens[i]], starts[i], not skip[i],
                                           sampling_params[i] or GREEDY) for i in range(batch)
                                          if i not in prefix_states and i not in prefix_attach
-                                         and i not in snapshot_after and i not in snaps])  # fmt: skip
+                                         and i not in snapshot_after and i not in snaps and i not in mm])  # fmt: skip
         if sampling_params is not None and not return_all_logits:
             done.update(self._admit_batch(b, [(i, slots[i], tokens[i, : lens[i]],
                                           SlotState(active=True, params=sampling_params[i] or GREEDY))
                                          for i in range(batch)
                                          if starts[i] == 0 and not skip[i] and i not in done
-                                         and i not in snapshot_after and i not in snaps]))  # fmt: skip
+                                         and i not in snapshot_after and i not in snaps and i not in mm]))  # fmt: skip
         outs = []
         for i in range(batch):
             if i in done:
@@ -1775,12 +1845,19 @@ class Glm53Generator(_ReadinessGenerator):
             if i in snapshot_after:
                 self.counters["prefix_snapshots"] = self.counters.get("prefix_snapshots", 0) + 1
             if skip[i]:  # an intermediate chunk: no head, no sample (the slot's RNG does not advance)
-                self._prefill_user(b, slot, tokens[i, :n], start_pos=starts[i], no_head=True, **sio)
+                self._prefill_user(b, slot, tokens[i, :n], start_pos=starts[i], no_head=True, mm=mm.get(i), **sio)
                 self.counters["prefill_unsampled_rows"] = self.counters.get("prefill_unsampled_rows", 0) + 1
                 outs.append(-1 if sp is not None else torch.zeros(1, self.backend.vocab_size))
                 continue
             out = self._prefill_user(
-                b, slot, tokens[i, :n], start_pos=starts[i], all_logits=return_all_logits, sample=sp, **sio
+                b,
+                slot,
+                tokens[i, :n],
+                start_pos=starts[i],
+                all_logits=return_all_logits,
+                sample=sp,
+                mm=mm.get(i),
+                **sio,
             )
             if not heads[i]:
                 outs.append(-1 if sp is not None else torch.zeros(1, self.backend.vocab_size))
@@ -2364,16 +2441,26 @@ class Glm53Generator(_ReadinessGenerator):
         enable_trace: bool = True,
         slots: Optional[Sequence[int]] = None,
         page_table: Optional[torch.Tensor] = None,
+        mm: Optional[Sequence[Optional[tuple]]] = None,
     ) -> List[List[int]]:
         """Mixed-length batch generation over fixed slots of the generator-owned cache. Each prompt is prefilled into
         its slot (any length), then all live slots decode together; a user that hits a stop token or its
         max_new_tokens becomes an inactive row (cur_pos -1) whose state the remaining steps leave untouched.
         `next_input(user, step, predicted) -> token` teacher-forces inputs (called once per prediction). `page_table`
         [max_batch, blocks] gives the listed slots these block rows (rewritten in place under the live trace);
-        without it each slot gets its own identity blocks back."""
+        without it each slot gets its own identity blocks back. `mm[i]` = (positions [m], rows [m, hidden] bf16):
+        prompt i's image feature rows (positions inside the prompt; _prefill_user); such a prompt is prefilled on the
+        per-user path, never in a batched / packed admission."""
         n = len(prompts)
         if n == 0:
             return []
+        mm = list(mm) if mm is not None else [None] * n
+        if len(mm) != n:
+            raise ValueError(f"mm: one entry (or None) per prompt, got {len(mm)} for {n}")
+        for i, m in enumerate(mm):
+            pos = torch.as_tensor(m[0]).reshape(-1) if m is not None else None
+            if pos is not None and pos.numel() and not (0 <= int(pos.min()) and int(pos.max()) < len(prompts[i])):
+                raise ValueError(f"prompt {i}: image row positions outside its {len(prompts[i])} tokens")
         b = self._own_binding()
         if not (b.prepared_prefill and b.prepared_decode) or (enable_trace and not b.decode_traces):
             self.warmup(capture=enable_trace)
@@ -2410,7 +2497,8 @@ class Glm53Generator(_ReadinessGenerator):
             mk = lambda i: SlotState(active=True, params=params[i], max_new_tokens=mnt[i],  # noqa: E731
                                      stop_ids=stops if stop_on_eos else frozenset())  # fmt: skip
             admitted = self._admit_batch(b, [(i, s, torch.as_tensor(list(p), dtype=torch.int64), mk(i))
-                                             for i, (p, s) in enumerate(zip(prompts, slots))])  # fmt: skip
+                                             for i, (p, s) in enumerate(zip(prompts, slots))
+                                             if mm[i] is None])  # fmt: skip
             for i, (p, s) in enumerate(zip(prompts, slots)):
                 if i in admitted:
                     self._emit(b, s, outputs[i], admitted[i], next_input, user_of, feed)
@@ -2419,11 +2507,11 @@ class Glm53Generator(_ReadinessGenerator):
                 self._new_request_rng(b, s, params[i])
                 ids = torch.as_tensor(list(p), dtype=torch.int64)
                 if self.host_sampling:
-                    logits = self._prefill_user(b, s, ids, sample=None)
+                    logits = self._prefill_user(b, s, ids, sample=None, mm=mm[i])
                     p0 = int(self.host_sampler.sample(logits.float(), [params[i]], [s])[0])
                     self.counters["host_sampling_steps"] += 1
                 else:
-                    p0 = self._prefill_user(b, s, ids, sample=params[i])
+                    p0 = self._prefill_user(b, s, ids, sample=params[i], mm=mm[i])
                 self._emit(b, s, outputs[i], p0, next_input, user_of, feed)
             t_first = _time.perf_counter()
             # ---- decode loop: replay decode + sampler; refresh only scheduler changes and forced tokens.

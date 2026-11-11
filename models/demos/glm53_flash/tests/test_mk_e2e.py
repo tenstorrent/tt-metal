@@ -12,10 +12,17 @@ GLM53_MK_PREFIX=1 (needs GLM53_MK_B >= 3): the device prefix cache through the g
 a request A whose state at GLM53_MK_PREFIX_LEN = 32,768 tokens is snapshotted into a pool entry, a request B with the
 same document and another question attaching to it with A's pages shared, and B prefilled from scratch); B's greedy ids
 must equal the cold run's. Logs MK_PREFIX: lines (TTFT of the attach vs the cold prefill, decode, ids, counters).
+
+Image input (GLM53_MK_IMAGE_FEATS=<.pt>, optionally GLM53_MK_IMAGE=<png>): every user's prompt is the file's image
+prompt (the HF processor's ids: chat template + image placeholder run) and its image positions take the file's bf16
+feature rows (the HF CPU tower) through the stack's extra embedding rows (GLM53_STACK_MM=1, set here); gate = the
+HF greedy reference ids (GLM53_MK_IMAGE_EXPECT, else the file's expect_ids): first token and every id, the stack's
+top-5 per step (teacher-forced on the reference) logged when they differ. GLM53_MK_ISL = the prompt's length.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 
@@ -59,6 +66,11 @@ FILLER = (
 )
 QUESTION = "Summarize the text above in two sentences."
 QUESTION_B = "Which parts of the system does the text above describe? Answer in one sentence."
+IMAGE = os.environ.get("GLM53_MK_IMAGE", "")
+IMAGE_FEATS = os.environ.get("GLM53_MK_IMAGE_FEATS", "")
+# the HF greedy reference of demo/sample_prompts/shapes_hello.png + "What shapes and what word are in this image? Answer
+# in one sentence." (doc/vision/multimodal.md): 'The image contains a red circle, a blue square, a green triangle, and'
+SHAPES_HELLO_IDS = [785, 2168, 5610, 264, 2518, 12665, 11, 264, 6303, 9331, 11, 264, 6176, 21445, 11, 323]
 
 
 def _layers() -> list[int]:
@@ -172,6 +184,47 @@ def run_prefix(gen, kv, ids_a: list[int], ids_b: list[int], prefix_len: int, osl
     return out
 
 
+def image_input() -> dict:
+    """GLM53_MK_IMAGE_FEATS: {ids, rows, feats, expect} of one image prompt -- the file's prompt ids, its image
+    positions (every image-token id, in order) and their [rows, 4096] bf16 feature rows; GLM53_MK_IMAGE, when set, must
+    be the image the file was made from (its sha256)"""
+    d = torch.load(IMAGE_FEATS, weights_only=False)
+    ids = [int(v) for v in d["input_ids"].reshape(-1).tolist()]
+    rows = d["rows"].reshape(-1).to(torch.int64)
+    feats = d["feats"].to(torch.bfloat16)
+    tok_id = int(d.get("image_token_id", 154854))
+    assert tuple(feats.shape) == (int(rows.numel()), 4096), (tuple(feats.shape), int(rows.numel()))
+    assert [i for i, t in enumerate(ids) if t == tok_id] == rows.tolist(), "the rows are not the prompt's image tokens"
+    if IMAGE:
+        with open(IMAGE, "rb") as f:
+            sha = hashlib.sha256(f.read()).hexdigest()
+        assert d.get("image_sha256") in (None, sha), f"{IMAGE} is not the image of {IMAGE_FEATS}"
+    env = os.environ.get("GLM53_MK_IMAGE_EXPECT", "")
+    expect = [int(v) for v in env.split(",") if v.strip()] or [int(v) for v in d.get("expect_ids", SHAPES_HELLO_IDS)]
+    return dict(ids=ids, rows=rows, feats=feats, expect=expect)
+
+
+def image_topk_report(gen, mm_in: dict, k: int = 5) -> list:
+    """the stack's top-k at the image prompt's last position and after each reference token (teacher-forced on the
+    reference ids), host logits route (prefill_forward / decode_forward without sampling params) in slot 0 of the
+    generator's own cache -> [(step, reference id, [(id, logit)] * k)]"""
+    b = gen._own_binding()
+    kv, ids, exp = b.kv_cache, mm_in["ids"], mm_in["expect"]
+    n = len(ids)
+    row = b.identity_row(0).reshape(1, -1)
+    top = lambda lg: [(int(i), round(float(v), 3)) for v, i in zip(*torch.topk(lg.reshape(-1).float(), k))]  # noqa
+    out = []
+    lg = gen.prefill_forward(torch.tensor([ids], dtype=torch.int64), page_table=row, kv_cache=kv, prompt_lens=[n],
+                             empty_slots=[0], mm_rows={0: (mm_in["rows"], mm_in["feats"])})  # fmt: skip
+    out.append((0, exp[0], top(lg)))
+    for j in range(len(exp) - 1):
+        lg = gen.decode_forward(torch.tensor([[exp[j]]]), torch.tensor([n + j]), page_table=row, kv_cache=kv,
+                                slots=[0], sampling_params=None, read_from_device=True)  # fmt: skip
+        out.append((j + 1, exp[j + 1], top(lg)))
+    gen.release_slot(kv, 0)
+    return out
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -193,6 +246,10 @@ def test_mk_e2e(mesh_device, monkeypatch):
 
     # every knob an explicit environment value does not already set (the prefix run's prompts take the 8,192 buckets)
     DEFAULTS = GD.apply(MESH, SEQ, _ISL_SEQ)
+    mm_in = image_input() if IMAGE_FEATS else None
+    if mm_in is not None:  # the embedding table's extra rows (tt/mk_head.py mm_extra_rows), before the backend is built
+        monkeypatch.setenv("GLM53_STACK_MM", os.environ.get("GLM53_STACK_MM", "1"))
+        assert os.environ["GLM53_STACK_MM"] == "1", "an image prompt needs GLM53_STACK_MM=1"
     snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
     tok = load_tokenizer(snapshot)
@@ -228,11 +285,16 @@ def test_mk_e2e(mesh_device, monkeypatch):
     gen.warmup(capture=True)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"generator warm-up (prefill buckets, decode, traces) {time.perf_counter() - t0:.1f} s")
-    ids = chat_prompt(tok, ISL)
+    ids = chat_prompt(tok, ISL) if mm_in is None else mm_in["ids"]
     # GLM53_MK_LIVE=n (default B): the live users of the run on a backend built for B rows (the speculative step,
     # GLM53_SPEC_K, serves ONE live user in slot 0 of a backend whose max_batch >= K + 1)
     live = int(os.environ.get("GLM53_MK_LIVE", str(B)))
-    prompts = [list(chat_prompt(tok, ISL, user=u)) for u in range(live)]
+    prompts = [list(chat_prompt(tok, ISL, user=u)) if mm_in is None else list(ids) for u in range(live)]
+    mm = None if mm_in is None else [(mm_in["rows"], mm_in["feats"])] * live
+    if mm_in is not None:
+        r_ = mm_in["rows"]
+        logger.info(f"image prompt: {len(ids)} tokens, {int(r_.numel())} image rows {int(r_[0])}..{int(r_[-1])}, "
+                    f"extra embedding rows {backend.mm_extra_rows}")  # fmt: skip
     logger.info(f"prompt {len(ids)} tokens (ISL target {ISL}; per user {[len(p) for p in prompts]}); OSL {OSL}; "
                 f"cache {B} x {SEQ}; distinct {os.environ.get('GLM53_MK_DISTINCT', '0')}")  # fmt: skip
     # GLM53_MK_TEMP=1.0 (GLM53_MK_TOP_P, GLM53_MK_TOP_K, GLM53_MK_SEED): sampled requests (GLM's generation config is
@@ -248,7 +310,7 @@ def test_mk_e2e(mesh_device, monkeypatch):
     # one call: TTFT = prefill of every user + its first token, decode = the rest (the generator splits its wall at the
     # first predictions: last_batch_timing). A separate TTFT call and decode = (second call - TTFT) / (OSL - 1) put the
     # difference of two prefills into every step: at 1 M context ~0.05 % of a 46 min prefill is ~20 ms per step
-    outs = gen.generate_batch(prompts, OSL, sampling=sampling, stop_on_eos=stop, enable_trace=True)
+    outs = gen.generate_batch(prompts, OSL, sampling=sampling, stop_on_eos=stop, enable_trace=True, mm=mm)
     ttnn.synchronize_device(mesh_device)
     timing = gen.last_batch_timing
     n_gen = max(len(o) for o in outs)
@@ -265,6 +327,19 @@ def test_mk_e2e(mesh_device, monkeypatch):
     logger.info(f"MK_E2E_TEXT: {text!r}")
     logger.info(f"MK_E2E counters: {gen.counters_report()}")
     assert n_gen >= 1
+    if mm_in is not None and sampling is None:  # the image gate: the HF greedy reference's ids
+        exp = mm_in["expect"]
+        got = outs[0][: len(exp)]
+        logger.info(f"MK_E2E_IMAGE: ids {got} vs HF {exp}: first {got[:1] == exp[:1]}, all {got == exp} "
+                    f"({sum(a == b_ for a, b_ in zip(got, exp))}/{len(exp)} equal)")  # fmt: skip
+        if got != exp:
+            try:
+                for step, ref, tk in image_topk_report(gen, mm_in):
+                    logger.info(f"MK_E2E_IMAGE top-5 step {step}: HF {ref} -> {tk}")
+            except Exception as e:  # noqa: BLE001  (a diagnostic never hides the gate below)
+                logger.warning(f"MK_E2E_IMAGE top-5 report failed: {type(e).__name__}: {e}")
+        assert got[:1] == exp[:1], f"first token {got[:1]} != the HF reference's {exp[:1]}"
+        assert got == exp, f"ids {got} != the HF reference {exp}"
     # the gates (a PASS means the numerics, not only the run): identical prompts decode identically across the users;
     # GLM53_MK_EXPECT_IDS="785,1196,702,3267,..." = user 0's first ids of the validated row for this configuration;
     # GLM53_MK_MIN_TOKS = the decode floor in tok/s per user (a regression below it fails the row)

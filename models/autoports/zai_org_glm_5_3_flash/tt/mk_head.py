@@ -367,17 +367,82 @@ def embed_host(source) -> torch.Tensor:
     return ttnn.to_torch(source._load(e)).reshape(e["shape"]).to(torch.bfloat16)
 
 
+def mm_extra_rows(env=None) -> int:
+    """GLM53_STACK_MM=1 (image input, opt-in): the embedding table's extra rows after the vocabulary that a prompt's
+    image feature rows are staged into (MkEmbed.stage) -- GLM53_STACK_MM_ROWS, default the largest prefill bucket of
+    GLM53_PREFILL_BUCKETS (else 2,048 = PREFILL_CHUNK): a planned chunk never holds more rows than that, so any chunk's
+    image rows fit. 0 (the default, knob off): the text table, upload and programs exactly as before."""
+    env = os.environ if env is None else env
+    if env.get("GLM53_STACK_MM", "0") != "1":
+        return 0
+    n = int(env.get("GLM53_STACK_MM_ROWS", "0") or 0)
+    if n <= 0:
+        bs = [int(v) for v in (env.get("GLM53_PREFILL_BUCKETS", "") or "").split(",") if v.strip()]
+        n = max(bs or [2048])
+    return n
+
+
+def mm_stage_rows(env=None) -> int:
+    """GLM53_STACK_MM_STAGE_ROWS (default 256 = one 448 x 448 image, 2 MiB per chip): rows per host -> staging write"""
+    env = os.environ if env is None else env
+    return max(1, int(env.get("GLM53_STACK_MM_STAGE_ROWS", "256") or 256))
+
+
 class MkEmbed:
     """The step's input as ONE program on 64 cores: the device-resident tokens [4, 64] uint32 (row t word 0; the
     previous step's MkHead top-K output, or a host write) -> the stacked residual [t,1,4,4096] fp32 = the token's
-    embedding in all 4 hyper-connection streams (kernels/head/embed_dm0.cpp)."""
+    embedding in all 4 hyper-connection streams (kernels/head/embed_dm0.cpp).
 
-    def __init__(self, device, table: torch.Tensor, *, t: int, place: dict):
+    Image input (`extra_rows` > 0, GLM53_STACK_MM=1: mm_extra_rows): the table holds `extra_rows` zero rows after the
+    vocabulary (ids V .. V + extra_rows - 1) and a row-major staging buffer of `stage_rows` rows; `stage` writes a
+    prompt chunk's image feature rows to ids V, V + 1, ... so every lookup of the table (the TP prefill's
+    ttnn.embedding inside its bucket traces, this program) reads them for those ids. Both buffers are allocated here,
+    with the backend, before any capture."""
+
+    ROW_BYTES = HIDDEN * 2  # one row-major bf16 row = one DRAM page of the table and of the staging buffer
+
+    def __init__(self, device, table: torch.Tensor, *, t: int, place: dict, extra_rows: int = 0, stage_rows: int = 256):
         assert 1 <= t <= 32, t
         self.device, self.t, self.place = device, t, place
         repl = ttnn.ReplicateTensorToMesh(device) if int(device.get_num_devices()) > 1 else None
+        self.vocab_rows, self.extra_rows, self.stage_buf = int(table.shape[0]), int(extra_rows), None
+        if self.extra_rows:  # (a meta tensor in a DRAM-image replay: new_zeros keeps it meta)
+            table = table.reshape(table.shape[0], HIDDEN)
+            table = torch.cat([table, table.new_zeros(self.extra_rows, HIDDEN)])
         self.table = ttnn.from_torch(table.reshape(table.shape[0], HIDDEN), dtype=BF16, layout=ttnn.ROW_MAJOR_LAYOUT,
                                      device=device, memory_config=DRAM, mesh_mapper=repl)  # fmt: skip
+        if self.extra_rows:
+            n = min(int(stage_rows), self.extra_rows)
+            self.stage_buf = ttnn.from_torch(torch.zeros(n, HIDDEN, dtype=torch.bfloat16), dtype=BF16,
+                                             layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=DRAM,
+                                             mesh_mapper=repl)  # fmt: skip
+
+    def stage(self, rows: torch.Tensor, slot_ops) -> int:
+        """rows [m, 4096] (1 <= m <= extra_rows; bf16 values: the tower output as HF rounds it) -> table rows
+        [V, V + m) on every chip (the table is replicated: every chip gets every row), ordered behind every program and
+        trace replay enqueued so far. Per round of <= stage rows: one host write of the staging buffer (the dispatcher
+        waits for the workers before a buffer write, so the previous round's copy and the previous chunk's replay have
+        read what they need) + one SlotOps page copy (kind 1, one 8 KiB page per row: kernels/head/slot_op.cpp) into
+        the table. No allocation and no new program (SlotOps compiles at the warm-up's reset_all, before any
+        capture). Returns V, the id of rows[0]."""
+        if self.stage_buf is None:
+            raise ValueError("MkEmbed has no extra rows: image input needs GLM53_STACK_MM=1 at construction")
+        rows = torch.as_tensor(rows)
+        m = int(rows.shape[0]) if rows.dim() == 2 else -1
+        if m < 1 or int(rows.shape[-1]) != HIDDEN or m > self.extra_rows:
+            raise ValueError(f"image rows {tuple(rows.shape)}: need [1..{self.extra_rows}, {HIDDEN}]")
+        rows = rows.to(torch.bfloat16)
+        cap = int(self.stage_buf.shape[0])
+        repl = ttnn.ReplicateTensorToMesh(self.device) if int(self.device.get_num_devices()) > 1 else None
+        src, dst = int(self.stage_buf.buffer_address()), int(self.table.buffer_address())
+        for j0 in range(0, m, cap):
+            part = rows[j0 : j0 + cap]
+            host = torch.zeros(cap, HIDDEN, dtype=torch.bfloat16)
+            host[: int(part.shape[0])] = part
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=BF16, layout=ttnn.ROW_MAJOR_LAYOUT,
+                                                            mesh_mapper=repl), self.stage_buf)  # fmt: skip
+            slot_ops.run([(1, src, 0, dst, self.vocab_rows + j0, int(part.shape[0]), self.ROW_BYTES, 0)])
+        return self.vocab_rows
 
     def __call__(self, tokens, res):
         """tokens [32, 64] uint32 (row t word 0); res: the stacked residual (t <= 4) or the 4-row chunk residuals"""

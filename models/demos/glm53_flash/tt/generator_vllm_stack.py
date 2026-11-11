@@ -4,7 +4,9 @@
 ``Glm53Generator``) for the TT vLLM plugin -- the FIRST adapter: text only, greedy on device (the head's top-1 inside
 the one full-width decode trace), host-sampled rows through full logits, no prefix cache, no multimodal, no speculative
 decode, synchronous scheduling (every decode reloads its inputs). GLM53_STACK_PREFIX=1 (opt-in) adds vLLM's automatic
-prefix caching from the stack's device snapshot pool (``StackPrefixCache``).
+prefix caching from the stack's device snapshot pool (``StackPrefixCache``). Image input:
+``GLM53StackForConditionalGeneration`` at the bottom of this module (the same adapter + vLLM's ``SupportsMultiModal``
+and the upstream GLM-5.3-Flash processor).
 
 Selected with ``TT_MODEL_CLASS_OVERRIDES="Glm5NextForCausalLM=<ADAPTER_TARGET>,Glm5NextForConditionalGeneration=
 <ADAPTER_TARGET>"``. The plugin opens the mesh BEFORE ``initialize_vllm_model`` (worker.py:274-281) with
@@ -29,12 +31,14 @@ with ``null_block=0``.
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import os
 import sys
 import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from loguru import logger
@@ -49,6 +53,9 @@ from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
 
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
 ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
+MM_ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForConditionalGeneration"
+MM_ENV = "GLM53_STACK_MM"  # "1": the stack's embedding table carries the image rows (mk_head.mm_extra_rows)
+MM_ENCODER_ENV = "GLM53_STACK_MM_ENCODER"  # the image encoder of the multimodal class: "hf_cpu" (default) | "none"
 LATENT_DIM = 512  # kv_lora_rank: the latent page row, the only "KV" vLLM accounts for (generator_vllm.LATENT_DIM)
 
 
@@ -599,7 +606,7 @@ class GLM53StackForCausalLM:
         ``max_device_top_k=1``) or ``logits [B, 1, V]`` fp32 for host sampling, which the plugin also selects when a
         row is an intermediate chunk (its head output is discarded)."""
         mm = [k for k in kwargs if k.startswith(("pixel_values", "image_", "video_", "audio_", "mm_"))]
-        if mm:
+        if mm and not self.supports_multimodal:
             raise NotImplementedError(f"multimodal prompt on the text-only stack adapter ({mm[0]})")
         kv = self._kv(kv_cache)
         tokens = torch.as_tensor(tokens)
@@ -644,6 +651,11 @@ class GLM53StackForCausalLM:
             chunk = torch.zeros(B, max(lens), dtype=torch.int64)
             for i in range(B):
                 chunk[i, : lens[i]] = tokens[i, starts[i] : ends[i]].to(torch.int64)
+        # GLM53StackForConditionalGeneration: the rows' image feature rows (``_mm_rows``) beside the chunk ids
+        if mm:
+            mm_rows = self._mm_rows(tokens, starts, ends, kwargs)
+            if mm_rows:
+                extra["mm_rows"] = mm_rows
         try:
             out = self.gen.prefill_forward(
                 chunk,
@@ -940,3 +952,193 @@ class GLM53StackForCausalLM:
 
     def compute_logits(self, hidden_states, **kwargs):  # pragma: no cover - protocol shim
         raise NotImplementedError("TT models return logits from decode_forward")
+
+
+# ===================================================================================== image input
+class HostVisionEncoder:
+    """The image encoder of ``GLM53StackForConditionalGeneration`` until the stack carries its own tower: HF's
+    ``Glm5NextVisionModel`` in fp32 on the host CPU with the checkpoint's ``model.visual.*`` weights (the construction
+    of ``reference/hf_multimodal_reference.build_hf_vision``: the features the HF greedy reference consumed) -> per
+    image item ``[n_tokens, 4096]`` rows rounded to bf16 (``Glm5NextModel.forward`` casts them). Built on first use
+    (``build()`` at model construction); ~2 s of CPU per 448 x 448 image, the weights ~2.3 GB of host memory."""
+
+    def __init__(self, snapshot: Path, dtype: torch.dtype = torch.float32):
+        self.snapshot, self.dtype, self.model = Path(snapshot), dtype, None
+
+    def build(self) -> "HostVisionEncoder":
+        if self.model is None:
+            from models.demos.glm53_flash.reference.hf_multimodal_reference import build_hf_vision
+            from models.demos.glm53_flash.tt.vision import load_vision_weights
+
+            t0 = time.perf_counter()
+            self.model = build_hf_vision(self.snapshot, load_vision_weights(self.snapshot), self.dtype)
+            logger.info(f"GLM53 stack vLLM: host vision tower ({self.dtype}) built in {time.perf_counter() - t0:.1f} s")
+        return self
+
+    @torch.no_grad()
+    def __call__(self, items: list) -> list[torch.Tensor]:
+        self.build()
+        out = []
+        for it in items:
+            if it.kind != "image":
+                raise NotImplementedError(f"the stack adapter encodes images only (item kind {it.kind!r})")
+            f = self.model(it.pixel_values.to(self.dtype), grid_thw=it.grid_thw).pooler_output
+            out.append(f.float().to(torch.bfloat16))
+        return out
+
+
+def make_mm_encoder(snapshot: Path, env=os.environ):
+    """``GLM53_STACK_MM_ENCODER``: ``hf_cpu`` (default) = ``HostVisionEncoder`` (weights loaded now, not on the first
+    request), ``none`` = no encoder (an image request is refused)"""
+    kind = env.get(MM_ENCODER_ENV, "hf_cpu")
+    if kind == "none":
+        return None
+    if kind != "hf_cpu":
+        raise ValueError(f"{MM_ENCODER_ENV}={kind!r}: hf_cpu | none")
+    return HostVisionEncoder(snapshot).build()
+
+
+# where vLLM keeps the upstream GLM-5.3-Flash processor: glm5next.common.multimodal (0.31), .nvidia.multimodal (0.30)
+GLM5NEXT_PROCESSOR_MODULES = ("vllm.models.glm5next.common.multimodal", "vllm.models.glm5next.nvidia.multimodal")
+
+
+def _vllm_multimodal_api():
+    """vLLM's multimodal declaration pieces in a vLLM process -- ``SupportsMultiModal`` and the registration of
+    upstream's ``Glm5NextMultiModalProcessor`` / ``Glm5NextProcessingInfo`` with the Glm4v dummy-inputs builder
+    (exactly what upstream's ``Glm5NextForConditionalGeneration`` registers; the module per vLLM version:
+    ``GLM5NEXT_PROCESSOR_MODULES``) -- or None: a host process (vLLM not imported: importing it would run its platform
+    plugins; the plugin imports vLLM before it resolves the model class) or a vLLM without them."""
+    if "vllm" not in sys.modules:
+        return None
+    try:
+        from vllm.model_executor.models.glm4_1v import Glm4vDummyInputsBuilder
+        from vllm.model_executor.models.interfaces import SupportsMultiModal
+        from vllm.multimodal import MULTIMODAL_REGISTRY
+    except ImportError as exc:
+        logger.warning(f"GLM53 stack vLLM: multimodal class declared without vLLM's multimodal API ({exc})")
+        return None
+    errors = []
+    for name in GLM5NEXT_PROCESSOR_MODULES:
+        try:
+            mod = importlib.import_module(name)
+            proc, info = mod.Glm5NextMultiModalProcessor, mod.Glm5NextProcessingInfo
+        except (ImportError, AttributeError) as exc:
+            errors.append(f"{name}: {exc}")
+            continue
+        return SimpleNamespace(
+            SupportsMultiModal=SupportsMultiModal,
+            register_processor=MULTIMODAL_REGISTRY.register_processor(
+                proc, info=info, dummy_inputs=Glm4vDummyInputsBuilder
+            ),
+            processor_module=name,
+        )
+    logger.warning(f"GLM53 stack vLLM: no GLM-5.3-Flash multimodal processor in this vLLM ({'; '.join(errors)})")
+    return None
+
+
+def declare_multimodal_class(api=None):
+    """``GLM53StackForConditionalGeneration``: the stack adapter served with image input. A separate class (as
+    ``generator_vllm.GLM53FlashForConditionalGeneration``): the text class stays text-only, bit for bit (without
+    ``SupportsMultiModal`` vLLM puts no processor in front of it and sends it no pixel lists). Selected with
+    ``TT_MODEL_CLASS_OVERRIDES="Glm5NextForConditionalGeneration=<MM_ADAPTER_TARGET>"``.
+
+    Per prefill row with image items (the plugin's per-row ``pixel_values`` / ``image_grid_thw`` lists + placeholder
+    ranges, ``tt/mm_inputs.py``): the items' prompt rows (``feature_rows`` on the row's prefix), the items whose rows
+    meet this chunk encoded (``mm_encoder``: ``HostVisionEncoder``), the chunk's rows handed to the generator as
+    ``mm_rows`` -> the stack's extra embedding rows (``Glm53Generator._mm_stage``, GLM53_STACK_MM=1, set by this class's
+    construction). Videos are refused (images only).
+
+    ``api``: ``_vllm_multimodal_api()`` (the class gains ``SupportsMultiModal`` and the processor registration, which
+    is what makes ``vllm serve`` accept ``image_url`` content) or None (the same flags on a plain subclass)."""
+    bases = (GLM53StackForCausalLM,) + ((api.SupportsMultiModal,) if api is not None else ())
+
+    class GLM53StackForConditionalGeneration(*bases):
+        """GLM-5.3-Flash text + image generation on the persistent stack (one Blackhole Galaxy mesh)."""
+
+        supports_multimodal = True  # the SupportsMultiModal ClassVar, restated for the vLLM-less declaration
+        supports_multimodal_raw_input_only = False
+        supports_encoder_tp_data = False
+        supports_mm_device_do_normalize = False
+        requires_raw_input_tokens = False
+        mm_encoder = None  # the image encoder (initialize_vllm_model: make_mm_encoder)
+
+        @classmethod
+        def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size: int, max_seq_len: int, *a, **kw):
+            """The text construction with GLM53_STACK_MM=1 (the table's extra rows; an explicit 0 is refused: this
+            class serves images) + the image encoder (``GLM53_STACK_MM_ENCODER``)."""
+            os.environ.setdefault(MM_ENV, "1")
+            if os.environ[MM_ENV] != "1":
+                raise ValueError(f"{cls.__name__} serves images: {MM_ENV}={os.environ[MM_ENV]!r} (needs 1)")
+            from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
+
+            model = super().initialize_vllm_model(hf_config, mesh_device, max_batch_size, max_seq_len, *a, **kw)
+            if int(getattr(model.gen.backend, "mm_extra_rows", 0) or 0) <= 0:
+                raise RuntimeError(f"{cls.__name__}: the backend was built without the extra embedding rows")
+            model.mm_encoder = make_mm_encoder(_snapshot_dir(hf_config, default_snapshot_dir))
+            return model
+
+        def _mm_rows(self, tokens: torch.Tensor, starts: list, ends: list, kwargs: dict) -> dict:
+            """{row: (positions [m] absolute, rows [m, 4096] bf16)} of this prefill's chunks [starts[i], ends[i]) (the
+            rows of every image item that meets the chunk; ``tokens [B, T]`` = every row's history from 0)"""
+            from models.demos.glm53_flash.tt.mm_inputs import feature_rows, items_in_range, mm_items, mm_present
+
+            if not mm_present(kwargs):  # a text batch on this class arrives with pixel_values=[None] * B
+                return {}
+            if int(getattr(self.gen.backend, "mm_extra_rows", 0) or 0) <= 0:
+                raise NotImplementedError(f"image input needs the stack's extra embedding rows ({MM_ENV}=1)")
+            out = {}
+            for i in range(int(tokens.shape[0])):
+                items = mm_items(kwargs, i)
+                if not items:
+                    continue
+                kinds = sorted({it.kind for it in items} - {"image"})
+                if kinds:
+                    raise NotImplementedError(f"row {i}: {kinds} items: the stack adapter serves images only")
+                rows = feature_rows(tokens[i, : ends[i]], items)
+                need = items_in_range(rows, starts[i], ends[i])
+                if not need:
+                    continue
+                if self.mm_encoder is None:
+                    raise NotImplementedError(
+                        f"row {i}: an image prompt without an image encoder ({MM_ENCODER_ENV}=none)"
+                    )
+                pos, vals = [], []
+                for k, feats in zip(need, self.mm_encoder([items[k] for k in need])):
+                    feats = torch.as_tensor(feats)
+                    if tuple(feats.shape[:1]) != (items[k].n_tokens,):
+                        raise ValueError(
+                            f"row {i} item {k}: {tuple(feats.shape)} features for {items[k].n_tokens} tokens"
+                        )
+                    r = rows[k]
+                    f = feats[: int(r.numel())]  # an item the prefix cuts: its rows so far
+                    sel = (r >= starts[i]) & (r < ends[i])
+                    pos.append(r[sel])
+                    vals.append(f[sel])
+                p_, v_ = torch.cat(pos).to(torch.int64), torch.cat(vals).to(torch.bfloat16)
+                order = torch.argsort(p_)
+                out[i] = (p_[order], v_[order])
+            return out
+
+        @classmethod
+        def get_placeholder_str(cls, modality: str, i: int) -> str | None:
+            """The chat template's image marker (upstream ``Glm4vForConditionalGeneration``): the processor expands
+            ``<|image|>`` to the image tokens"""
+            if modality.startswith("image"):
+                return "<|begin_of_image|><|image|><|end_of_image|>"
+            raise ValueError("Only image modality is supported")
+
+        # vLLM nn.Module multimodal protocol shims (the TT runner hands the raw items to prefill_forward instead)
+        def embed_multimodal(self, **kwargs):  # pragma: no cover - protocol shim
+            raise NotImplementedError("TT models encode multimodal items inside prefill_forward")
+
+        def get_language_model(self):  # pragma: no cover - protocol shim
+            raise NotImplementedError("TT models expose no nn.Module language model")
+
+    GLM53StackForConditionalGeneration.__qualname__ = GLM53StackForConditionalGeneration.__name__
+    GLM53StackForConditionalGeneration.__module__ = __name__
+    if api is not None:
+        GLM53StackForConditionalGeneration = api.register_processor(GLM53StackForConditionalGeneration)
+    return GLM53StackForConditionalGeneration
+
+
+GLM53StackForConditionalGeneration = declare_multimodal_class(_vllm_multimodal_api())

@@ -507,7 +507,11 @@ class StackBackend(ModelBackend):
                                n_prod=self.fl.n_readers if self.fl is not None else None, sample=self.sample)  # fmt: skip
         self._rng_counter = 0
         del lm
-        self.embed = MKH.MkEmbed(mesh, emb, t=max_batch, place=self.head.place)
+        # GLM53_STACK_MM=1 (MKH.mm_extra_rows): the table's extra rows for image input (stage_mm_rows); off: the text
+        # table
+        mm_rows = MKH.mm_extra_rows()
+        mm_kw = dict(extra_rows=mm_rows, stage_rows=MKH.mm_stage_rows()) if mm_rows else {}
+        self.embed = MKH.MkEmbed(mesh, emb, t=max_batch, place=self.head.place, **mm_kw)
         del emb
         repl = ttnn.ReplicateTensorToMesh(mesh) if self.tp > 1 else None
         self.pos = ttnn.from_torch(torch.full((1, 32), -1, dtype=torch.int32), dtype=ttnn.int32,
@@ -1357,6 +1361,27 @@ class StackBackend(ModelBackend):
     def reset_slot(self, kv: StackCache, slot: int) -> None:
         self.slot_ops.run(self._state_ops(kv, slot, None))
         self.counters["slot_ops"] += 1
+
+    @property
+    def mm_extra_rows(self) -> int:
+        """the embedding table's extra rows for image input (GLM53_STACK_MM=1; 0: the text build)"""
+        embed = self.__dict__.get("embed")
+        return int(getattr(embed, "extra_rows", 0)) if embed is not None else 0
+
+    def stage_mm_rows(self, rows: torch.Tensor) -> int:
+        """ModelBackend.stage_mm_rows: a chunk's image feature rows into the table's extra rows (MkEmbed.stage: host
+        write + SlotOps copy on the command queue, behind the previous chunk's replay) -> V, the id of rows[0]; the
+        generator remaps the chunk's image positions to V + j, which the TP prefill's ttnn.embedding (inside the
+        bucket's trace) and the decode-program embed read like any token. The device is settled first: the previous
+        chunk (a head-less replay is only enqueued) may still embed from the rows the copy rewrites, and after trace
+        replays an eager program's go-wait can pass early (TPPrefill.quiesce); GLM53_STACK_MM_SYNC=0 relies on the
+        command queue's order alone"""
+        if os.environ.get("GLM53_STACK_MM_SYNC", "1") == "1" and not MOCK:
+            ttnn.synchronize_device(self.mesh)
+        first = self.embed.stage(rows, self.slot_ops)
+        self.counters["mm_stage_calls"] = self.counters.get("mm_stage_calls", 0) + 1
+        self.counters["mm_stage_rows"] = self.counters.get("mm_stage_rows", 0) + int(torch.as_tensor(rows).shape[0])
+        return first
 
     def release_slot(self, kv: StackCache, slot: int) -> None:
         """Canonical idle row (coordinator 2026-10-22 10:51:21Z): a released slot's per-request state goes back to the
