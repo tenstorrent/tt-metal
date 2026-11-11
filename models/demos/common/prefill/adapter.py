@@ -368,6 +368,8 @@ ADAPTER_PATHS = {
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # Qwen3.5-9B VLM, the FLUX.3 Klein prompt upsampler: one (1, 4) column, GDN state as Snapshot configs.
+    "qwen35_9b_pup": "models.demos.blackhole.qwen36.tt.runners.adapter:Qwen35PupPrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
 }
