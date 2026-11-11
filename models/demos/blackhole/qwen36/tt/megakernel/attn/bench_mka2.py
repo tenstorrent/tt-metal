@@ -198,6 +198,13 @@ for it in range(ITERS):
             gn_ = GOLD_NOMASK[L][:, :NQH * T]
             print(f"[rmask] iter {it} layer {L} |dev-masked| {(v_ - g2).norm().item():.4e}  |dev-unmasked| {(v_ - gn_).norm().item():.4e}  |masked-unmasked| {(g2 - gn_).norm().item():.4e}", flush=True)
         print(f"[mka2] iter {it} layer {L} sdpa pcc {torch.corrcoef(torch.stack([v_.flatten(), g2.flatten()]))[0, 1].item():.5f} max|err| {(v_-g2).abs().max().item():.4f}", flush=True)
+        if ('MKA_RQPOS', '1') in MKDEF:   # per own user (global user g = ug(u)): PCC, finiteness, the user's kvpos rows
+            _pu = []
+            for uu in range(NU):
+                vu, gu_ = v_[uu], g2[uu]
+                _ok = bool(torch.isfinite(vu).all())
+                _pu.append(f"g{ug(uu)}:{torch.corrcoef(torch.stack([vu.flatten(), gu_.flatten()]))[0, 1].item():.5f}{'' if _ok else '(NONFINITE)'}")
+            print(f"[rqpos] iter {it} layer {L} sdpa per user {' '.join(_pu)}", flush=True)
     if RQNR:
         kv_ = ttnn.to_torch(kd_t).float().reshape(NL, M, -1)
         for L in range(NL):
@@ -205,11 +212,64 @@ for it in range(ITERS):
             KRW = V_R if (QSK and V_R < 32) else M
             pk_ = torch.corrcoef(torch.stack([kv_[L][:KRW].flatten(), gold_k[L][:KRW].flatten()]))[0, 1].item()
             print(f"[rqnr] iter {it} layer {L} rows {KRW} k head pcc {pk_:.5f} max|err| {(kv_[L][:KRW] - gold_k[L][:KRW]).abs().max().item():.4f}", flush=True)
+    if ('MKA_RQPOS', '1') in MKDEF and it == ITERS - 1 and os.environ.get('MKA_RQPOS_PROD', '1') == '1' and not MESH:   # last iter: its ops would be the CSV's last run
+        # prod's op-by-op q/k chain on device (attention/tp.py dense verify path): rms_norm -> * bf16(1+w) rows ->
+        # rotary_embedding_hf on dims 0-63 with this replay's cos / sin -> concat; vs the engine's k head and the torch golds
+        _kv_ = ttnn.to_torch(kd_t).float().reshape(NL, M, -1)
+        for L in range(NL):
+            if not is_attn_layer(L): continue
+            a_ = ATT0 + sum(1 for l_ in range(L) if is_attn_layer(l_))
+            gq_ = gold_qkv[L].float()
+            qk_ = torch.stack([gq_[:, h_ * 256:(h_ + 1) * 256] for h_ in range(6)] + [gq_[:, 48 * TILE:56 * TILE]])[None]   # [1, 7, 32, 256]
+            _d = lambda t_, ly_=ttnn.TILE_LAYOUT: ttnn.from_torch(t_.bfloat16(), dtype=ttnn.bfloat16, layout=ly_, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            qkt = _d(qk_)
+            gam = _d(torch.stack([qk_g[a_, 0]] * 6 + [qk_g[a_, 1]])[None, :, None, :].expand(1, 7, TILE, 256).contiguous())
+            nrm = ttnn.rms_norm(qkt, epsilon=1e-6)
+            qkm = ttnn.multiply(nrm, gam)
+            part = ttnn.slice(qkm, (0, 0, 0, 0), (1, 7, M, 64))
+            rop = ttnn.experimental.rotary_embedding_hf(part, rq_cos, rq_sin, is_decode_mode=False)
+            tail = ttnn.slice(qkm, (0, 0, 0, 64), (1, 7, M, 256))
+            ref = ttnn.to_torch(ttnn.concat([rop, tail], dim=-1)).float()[0]   # [7, 32, 256]
+            gk_ = gold_k[L][:M].float()
+            pk_dev = torch.corrcoef(torch.stack([_kv_[L][:M].flatten(), ref[6].flatten()]))[0, 1].item()
+            pk_gold = torch.corrcoef(torch.stack([gk_.flatten(), ref[6].flatten()]))[0, 1].item()
+            _qg = torch.stack([norm_rope(gq_[:, h_ * 256:(h_ + 1) * 256], h_, L) * 16.0 for h_ in range(6)])
+            pq_gold = torch.corrcoef(torch.stack([_qg.flatten(), ref[:6].flatten()]))[0, 1].item()
+            print(f"[rqpos] layer {L} PROD-OP chain: engine k head vs prod {pk_dev:.6f} max|err| {(_kv_[L][:M] - ref[6]).abs().max().item():.4f}; "
+                  f"torch golds vs prod: k {pk_gold:.6f} q {pq_gold:.6f} (q max|err| {(_qg - ref[:6]).abs().max().item():.4f})", flush=True)
+            # SDPA with prod's q (x 1/16 = SDPA scale), bench KV, prod's causal bound per row: vs the engine's SDPA output
+            kq_, vq_ = KVQ[L]; _ar = torch.arange(CTX).float()[None, :]; _pp = []
+            for uu in range(NU):
+                gu_ = ug(uu); Qu = torch.zeros(NQH * T, DHD)
+                for h_ in range(6):
+                    for j_ in range(4): Qu[4 * h_ + j_] = ref[h_, 4 * gu_ + j_] / 16.0
+                _pj = kvpos_l[gu_ * T:(gu_ + 1) * T]; _pm = max([x_ for x_ in _pj if x_ >= 0] or [0])
+                _lim = torch.tensor([float(_pj[r_ % T] if _pj[r_ % T] >= 0 else _pm) for r_ in range(NQH * T)])
+                p_ = torch.softmax((Qu.bfloat16().float() @ kq_[uu].T).masked_fill(_ar > _lim[:, None], float('-inf')), -1)
+                o_ = p_ @ vq_[uu]
+                _pc = lambda a_, b_: torch.corrcoef(torch.stack([a_.flatten(), b_.flatten()]))[0, 1].item()
+                _pp.append(f"g{gu_}:{_pc(vs[L][uu, :NQH * T], o_):.6f}/{_pc(golds_s[L][uu, :NQH * T], o_):.6f}")
+            print(f"[rqpos] layer {L} PROD-OP SDPA (prod q, softmax with -inf causal mask) per user engine/torch-gold vs prod: {' '.join(_pp)}", flush=True)
+            for t_ in (qkt, gam, nrm, qkm, part, rop, tail): ttnn.deallocate(t_)
+    if MESH and ('MKA_RQPOS', '1') in MKDEF and os.environ.get('MKA_UPAR', '0') == '1':
+        # per device d (own users g = 2u + d % 2): SDPA / wo vs that parity's golds -> every user 0-7 covered on the mesh
+        _od = [_to_torch(t_).float().reshape(NL, NU, TILE, DHD) for t_ in ttnn.get_device_tensors(outs)]
+        _wd = [_to_torch(t_).float().reshape(NL, M, -1) for t_ in ttnn.get_device_tensors(wod)] if RWO else None
+        for L in range(NL):
+            if not is_attn_layer(L): continue
+            _gp = {p_: rq_gold(L, gold_qkv[L], par=p_) for p_ in (0, 1)}
+            _ln = []
+            for d_, o_ in enumerate(_od):
+                gs_, gw_ = _gp[d_ % 2]
+                _pu = ' '.join(f"g{2 * uu + d_ % 2}:{torch.corrcoef(torch.stack([o_[L][uu, :NQH * T].flatten(), gs_[uu, :NQH * T].flatten()]))[0, 1].item():.5f}" for uu in range(NU))
+                _pw = f" wo {torch.corrcoef(torch.stack([_wd[d_][L].flatten(), gw_.flatten()]))[0, 1].item():.5f}" if RWO else ''
+                _ln.append(f"d{d_}[{_pu}{_pw}]")
+            print(f"[rqpos] iter {it} layer {L} MESH per device/user sdpa: {' '.join(_ln)}", flush=True)
     if RWO:
         wv_ = ttnn.to_torch(wod).float().reshape(NL, M, -1)
         for L in range(NL):
             if not is_attn_layer(L): continue
-            rows_ = slice(0, 4 * NU)
+            rows_ = slice(0, M) if os.environ.get('MKA_UPAR', '0') == '1' else slice(0, 4 * NU)
             pw_ = torch.corrcoef(torch.stack([wv_[L][rows_].flatten(), gold_wo[L][rows_].flatten()]))[0, 1].item()
             print(f"[rwo] iter {it} layer {L} wo pcc {pw_:.5f} max|err| {(wv_[L][rows_] - gold_wo[L][rows_]).abs().max().item():.4f} |gold|max {gold_wo[L].abs().max().item():.3f}", flush=True)
     print(f"[fm11] iter {it} wall {time.time()-t1:.2f}s last-layer pcc {p:.5f} max|err| {e:.4f} |gold|max {gold_last.abs().max().item():.3f}", flush=True)

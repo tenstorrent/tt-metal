@@ -130,7 +130,16 @@ void kernel_main() {
     uint32_t kvv_addr[NL];   // paged_v per layer (kv_addr = paged_k)
     for (uint32_t L = 0; L < NL; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
 #endif
+#if defined(MKA_RQPOS)
+    const uint32_t user = get_arg_val<uint32_t>(a++);
+    uint32_t vb0 = get_arg_val<uint32_t>(a++), vb1 = get_arg_val<uint32_t>(a++);
+    bool kvp_rd = false;
+#if defined(MKA_KVA)
+    uint32_t kva_mf = KVP_NONE;   // MKA_RQPOS: first local block with the user's new rows (from the reader's KVP word)
+#endif
+#else
     const uint32_t user = get_arg_val<uint32_t>(a++), vb0 = get_arg_val<uint32_t>(a++), vb1 = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
 #if defined(MKA_EXTLEAN) && defined(MKA_RWO)
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++);
@@ -242,29 +251,34 @@ void kernel_main() {
     // once here. Rows go in increasing j (later row wins, as paged_fused_update_cache). Each user's rows span <= KVA_PPU
     // tiles (verify: consecutive positions); a row past the page table or with position -1 is skipped, as in prod.
     constexpr uint32_t KV_BS = KV_BS32 * 32, KVA_NPG = KVA_NP - 1;
-    constexpr uint32_t KVA_KXY[8] = MKA_KVA_KXY, KVA_VXY[8] = MKA_KVA_VXY, KVA_WXY[MKA_KVA_NW] = MKA_KVA_WXY;
+    constexpr uint32_t KVA_KXY[8] = MKA_KVA_KXY, KVA_VXY[8] = MKA_KVA_VXY;
+#if defined(MKA_RQPOS)   // one source with the SDPA: kvpos from G's replay block, the page table from the attn block
+    const uint32_t kva_pos = rq_replay(0), kva_pt = rq_attn(0), kva_nb = rq_attn(2);
+#else
+    constexpr uint32_t kva_pos = MKA_KVA_POS, kva_pt = MKA_KVA_PT, kva_nb = MKA_KVA_NB;
+#endif
     uint32_t kva_np = 0, kva_pg[KVA_NPG];
     uint8_t kva_rp[KVA_R], kva_ro[KVA_R];   // per source row: target pass (0xFF = skip), target tile row
     if (kva) {
         KVA_ZONE("W-KVAT");   // once per pass: kvpos + page-table rows -> target tile table
         const uint32_t c = (kva - 1) & 7;
         const uint32_t scr = (get_write_ptr(CB_KVB) + KVTB + 63) & ~63u;   // pages 1.. are free until the first prefetch
-        const InterleavedAddrGen<true> pg_pos{.bank_base_address = MKA_KVA_POS, .page_size = KVA_R * 4};
+        const InterleavedAddrGen<true> pg_pos{.bank_base_address = kva_pos, .page_size = KVA_R * 4};
         noc_async_read(pg_pos.get_noc_addr(0), scr, KVA_R * 4);
         noc_async_read_barrier();
         volatile tt_l1_ptr int32_t* pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
-        const InterleavedAddrGen<true> pg_pt{.bank_base_address = MKA_KVA_PT, .page_size = MKA_KVA_PTS};
+        const InterleavedAddrGen<true> pg_pt{.bank_base_address = kva_pt, .page_size = kva_nb * 4};
         const uint32_t ptb = scr + 128;   // one 64 B page-table chunk per row
         for (uint32_t r = 0; r < KVA_R; ++r) {
             const int32_t p = pos[r];
-            if (p < 0 || (uint32_t)p / KV_BS >= MKA_KVA_NB) continue;
+            if (p < 0 || (uint32_t)p / KV_BS >= kva_nb) continue;
             noc_async_read(pg_pt.get_noc_addr(r / KVA_T, ((uint32_t)p / KV_BS * 4) & ~63u), ptb + r * 64, 64);
         }
         noc_async_read_barrier();
         for (uint32_t r = 0; r < KVA_R; ++r) {
             kva_rp[r] = 0xFF;
             const int32_t p = pos[r];
-            if (p < 0 || (uint32_t)p / KV_BS >= MKA_KVA_NB) continue;
+            if (p < 0 || (uint32_t)p / KV_BS >= kva_nb) continue;
             const uint32_t vb = (uint32_t)p / KV_BS, pb = l1w(ptb + r * 64)[vb & 15];
             const uint32_t page = ((pb * KV_NKVH + KV_H) * KV_BS32 + ((uint32_t)p % KV_BS) / 32) * 8 + c;
             uint32_t q = 0;
@@ -316,9 +330,19 @@ void kernel_main() {
         for (uint32_t q = 0; q < kva_np; ++q) noc_async_write(base + (1 + q) * KVTB, t.get_noc_addr(kva_pg[q]), KVTB);
 #endif
         noc_async_write_barrier();
-        for (uint32_t w = 0; w < MKA_KVA_NW; ++w) noc_semaphore_inc(get_noc_addr(KVA_WXY[w] & 0xFF, KVA_WXY[w] >> 8, KVA_GS_DONE), 1);
+        // done -> every attention core (any may hold a user's new-row blocks): += 1 on the aggregator (unit K0); once all
+        // 16 landed it multicasts KVA_DONE = A + 1 (a SET, loopback on its own rect: an atomic multicast cannot include
+        // its sender) -- one multicast per attention layer
+        noc_semaphore_inc(get_noc_addr(MKA_KVA_AXY & 0xFF, MKA_KVA_AXY >> 8, KVA_GS_AGG), 1);
+        if (kva == 1) {
+            noc_semaphore_wait_min(l1w(KVA_GS_AGG), 16 * (A + 1));
+            mcast_word<NRF>(KVA_GS_DONE, A + 1, rf, self_rf, 0);
+        }
         cb_pop_front(CB_KVB, KVA_NP);
     };
+#endif
+#if defined(MKA_RQPOS)
+    const uint32_t hg_addr_w = get_arg_val<uint32_t>(a++);   // per attention layer q / k gamma table (head cores)
 #endif
 #if !defined(MKA_RWO)
     if (head_id == 0) {   // no concat core without RWO: head core 0 publishes the (uniform) CB_A address
@@ -1117,7 +1141,12 @@ void kernel_main() {
                     for (uint32_t u = 0; u < NUSR; ++u)
                         for (uint32_t t = 0; t < 8; ++t)
                             for (uint32_t c = 0; c < 2; ++c) {
-                                const uint32_t src = yo + t * 2048 + ((u < 4 ? 0 : 2) + c) * 512 + ((4 * u) % 16) * 32;
+#if defined(MKA_RQPOS)
+                                const uint32_t g = rq_g(u);   // own user u = global user g: qkv rows 4g + j
+#else
+                                const uint32_t g = u;
+#endif
+                                const uint32_t src = yo + t * 2048 + ((g < 4 ? 0 : 2) + c) * 512 + ((4 * g) % 16) * 32;
                                 const uint32_t dst = qb + (u * 8 + t) * 2048 + (dface + c) * 512 + drow * 32;
                                 noc_async_write(src, get_noc_addr(qr_x, qr_y, dst), 128);
                             }
@@ -1136,6 +1165,14 @@ void kernel_main() {
                     noc_async_write_barrier();
                 }
                 cb_pop_front(CB_XO, 10);
+#if defined(MKA_RQPOS)
+                if (A + 1 < MKA_NATT) {   // compute is done with this layer's gamma (it pushed CB_XO after): next layer's into slots 0-7
+                    const auto hg = TensorAccessor(qo_args, hg_addr_w, 2048);
+                    const uint32_t pg = ((MKA_ATT0 + A + 1) * 2 + (head_id == 6 ? 1 : 0)) * 8;
+                    for (uint32_t t = 0; t < 8; ++t) noc_async_read(hg.get_noc_addr(pg + t), get_write_ptr(CB_HG) + t * 2048, 2048);
+                    noc_async_read_barrier();
+                }
+#endif
             }
 #endif
         }
@@ -1273,6 +1310,10 @@ void kernel_main() {
                 if (L + 1 < NL) plan_layer(L + 1, true);
                 if (!budget) issue_some(true);
             }
+#if defined(MKA_RQPOS)
+            const auto kv = TensorAccessor(kv_args, rq_attn(4 + 2 * (MKA_ATT0 + A)), KVTB);   // model caches (attn block)
+            const auto kvv = TensorAccessor(kv_args, rq_attn(5 + 2 * (MKA_ATT0 + A)), KVTB);
+#else
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
 #if defined(MKA_KVPROD)
             const auto kvv = TensorAccessor(kv_args, kvv_addr[L], KVTB);
@@ -1281,10 +1322,43 @@ void kernel_main() {
             const auto& kvv = kv;
             const uint32_t kvn = NBK;
 #endif
+#endif
 #if defined(MKA_RQKV)
             // STREAM_EXT: the writer's share of layer L + 1's slice (pages [0, PQ_WS)), spread over this core's V groups.
             // Safe from group 0: qkv_tail(L) above waited this layer's qkv output, i.e. compute already popped CB_PQ.
             const bool pqw_go = qrole == QR_EXT && L + 1 < NL && PQ_WS > 0;
+#if defined(MKA_RQPOS)
+            if (!kvp_rd) {   // the reader's bound, once per pass; then this core's causal mask tiles (if it holds the user's
+                // last blocks) into CB_ONE pages 1 (m0) / 2 (m1): ADDITIVE bf16 0 / -9984, row 4h + j valid cols c <= p_j - 32 blk
+                const uint32_t v_ = kvp_wait();
+                volatile tt_l1_ptr uint32_t* tab = l1w(MKA_KVP_TAB);
+                vb0 = tab[1]; vb1 = vb0 + (v_ & 0x7FF); kvp_rd = true;
+                const uint32_t m0 = (v_ >> 11) & 0x3FF, m1 = (v_ >> 21) & 0x3FF;
+#if defined(MKA_KVA)
+                kva_mf = m1 != KVP_NONE ? m1 : m0;   // KV append: the first block with the user's new rows (none: KVP_NONE)
+#endif
+                if (m0 != KVP_NONE || m1 != KVP_NONE) {
+                    cb_reserve_back(CB_ONE, 2);
+                    const uint32_t mt = get_write_ptr(CB_ONE);
+                    for (uint32_t k = 0; k < 2; ++k) {
+                        const uint32_t mb = k ? m1 : m0;
+                        if (mb == KVP_NONE) continue;
+                        const int32_t base = (int32_t)((vb0 + mb) * 32);
+                        for (uint32_t r = 0; r < 32; ++r) {
+                            const int32_t lim = r < 6 * MKA_RQ_T ? (int32_t)tab[3 + r % MKA_RQ_T] - base : 31;
+                            for (uint32_t h = 0; h < 2; ++h) {
+                                volatile tt_l1_ptr uint32_t* fr = l1w(mt + k * 2048 + ((r / 16) * 2 + h) * 512 + (r % 16) * 32);
+                                for (uint32_t c2 = 0; c2 < 8; ++c2) {
+                                    const int32_t c = (int32_t)(16 * h + 2 * c2);
+                                    fr[c2] = (c <= lim ? 0u : 0xC61Cu) | ((c + 1 <= lim ? 0u : 0xC61Cu) << 16);
+                                }
+                            }
+                        }
+                    }
+                    cb_push_back(CB_ONE, 2);
+                }
+            }
+#endif
             const uint32_t pqw_ng = (vb1 - vb0 + NBB - 1) / NBB;
             const uint32_t pqw_per = pqw_ng ? (PQ_WS + pqw_ng - 1) / pqw_ng : PQ_WS;
             uint32_t pqw_done = 0;
@@ -1316,14 +1390,22 @@ void kernel_main() {
                     continue;
                 }
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+#if defined(MKA_RQPOS)
+                if (kva_mf != KVP_NONE && b - vb0 <= kva_mf && kva_mf < b - vb0 + nb) noc_semaphore_wait_min(l1w(gs[GS_KVPROG]), A + 1);   // new rows written
+#else
                 if (vb1 + 2 > NBK && b + nb + 2 > NBK) noc_semaphore_wait_min(l1w(gs[GS_KVPROG]), A + 1);   // new rows written
+#endif
 #endif
                 if (wr_k) cb_reserve_back(CB_K, NBB * DH);   // full group (see reader)
                 if (wr_v) cb_reserve_back(CB_V, NBB * DH);
                 const uint32_t wk = wr_k ? get_write_ptr(CB_K) : 0, wv = wr_v ? get_write_ptr(CB_V) : 0;
                 noc_async_read_set_trid(TRID_V);
                 for (uint32_t i = 0; i < nb; ++i) {
+#if defined(MKA_RQPOS)
+                    const uint32_t pk = kv_page_pt(b + i), pv = pk;   // through the real page table (row g)
+#else
                     const uint32_t pk = kv_page(user, b + i, kvn, false), pv = kv_page(user, b + i, kvn, true);
+#endif
                     if (wr_k) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + t), wk + (i * DH + t) * KVTB, KVTB);
                     if (wr_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kvv.get_noc_addr(pv + t), wv + (i * DH + t) * KVTB, KVTB);
                 }
@@ -1608,8 +1690,9 @@ void kernel_main() {
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
     // KVPROG doubles as the reader's "KV append done" flag for this core's last-block V reads (kv_mode != 2): the
     // reader's last write preceded our last wait. KVA_SRC: every producer inc was awaited (NA per pass).
-    if (kv_mode == 2 || vb1 + 2 > NBK) *l1w(gs[GS_KVPROG]) = 0;
+    *l1w(gs[GS_KVPROG]) = 0;   // kv_mode 2: group count; else the append-done flag (both awaited above)
     if (kva) { noc_semaphore_wait_min(l1w(KVA_GS_SRC), aidx(NL)); *l1w(KVA_GS_SRC) = 0; }
+    if (kva == 1) { noc_async_write_barrier(); *l1w(KVA_GS_AGG) = 0; }   // the last aggregate was awaited above
 #else
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
 #endif

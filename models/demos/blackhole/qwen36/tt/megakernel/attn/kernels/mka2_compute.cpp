@@ -99,6 +99,9 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+#if defined(MKA_RQPOS)
+#include "api/compute/eltwise_unary/fill.h"
+#endif
 #endif
 #if defined(MKA_RWO)
 #include "wo_unit_c.hpp"
@@ -166,7 +169,13 @@ void kernel_main() {
 #else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
 #endif
+#if defined(MKA_RQPOS)
+    const uint32_t u = get_arg_val<uint32_t>(a++);
+    uint32_t nblk = get_arg_val<uint32_t>(a++), kvp_m0 = 0x3FF, kvp_m1 = 0x3FF;   // bounded by kvpos at the first SDPA
+    bool kvp_rd = false;
+#else
     const uint32_t u = get_arg_val<uint32_t>(a++), nblk = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_EXTLEAN)
     constexpr uint32_t nrecv = 0, is_root = 0; a += 2;
 #else
@@ -254,6 +263,9 @@ void kernel_main() {
         add_unary_tile(0, MKA_EPS_BITS);
         rsqrt_tile_init();
         rsqrt_tile(0);
+#if defined(MKA_RQPOS)
+        if (is_head == 1) mul_unary_tile(0, MKA_QSCALE_BITS);   // q heads: the softmax 1/sqrt(256), exact (power of 2)
+#endif
         tile_regs_commit();
         cb_pop_front(CB_HSQ, 8);
         cb_reserve_back(CB_RS, 1);
@@ -842,6 +854,15 @@ void kernel_main() {
 #endif
 #endif
             cb_wait_front(CB_Q, QT);
+#if defined(MKA_RQPOS)
+            if (!kvp_rd) {   // the reader's per-pass word (mka2_common.hpp), read by all three TRISCs
+                volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_KVP_TAB);
+                uint32_t v;
+                do { asm volatile("fence" ::: "memory"); v = *w; } while (!(v >> 31));
+                nblk = v & 0x7FF; kvp_m0 = (v >> 11) & 0x3FF; kvp_m1 = (v >> 21) & 0x3FF;
+                kvp_rd = true;
+            }
+#endif
             cb_reserve_back(CB_O, NO);
             bool first = true;
             for (uint32_t b = 0; b < nblk; b += NBB) {
@@ -857,9 +878,17 @@ void kernel_main() {
                 unary_min_tile_init();   // RC guard for the no-max softmax: S <= 60 (exp(60) ~ 1e26, fp32-safe sums); bit-identical
                 for (uint32_t i = 0; i < nb; ++i) unary_min_tile(i, 0x42700000u);   // when |S| < 60 (real 8-32K traces: max 21.85)
 #endif
+#if defined(MKA_RQPOS)
+                if (b == kvp_m0 || b == kvp_m1) {   // causal mask from kvpos, ADDITIVE on S (0 / -9984) before exp (NBB = 1);
+                    cb_wait_front(CB_ONE, 3);         // the writer's tiles: CB_ONE 1 = block m0, 2 = block m1 (once per pass)
+                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_ONE);
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_ONE, b == kvp_m0 ? 1 : 2, 0);
+                }
+#endif
                 exp_tile_init();
                 for (uint32_t i = 0; i < nb; ++i) exp_tile(i);
-#if defined(MKA_RQNR) && defined(MKA_RMASK)
+#if defined(MKA_RQPOS)
+#elif defined(MKA_RQNR) && defined(MKA_RMASK)
                 if (!IS_STREAM && mask_blk >= b && mask_blk < b + nb) {   // causal mask on the last block: P = exp(S) (.) M
                     cb_wait_front(CB_HG, 11);
                     mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_HG);
@@ -902,6 +931,18 @@ void kernel_main() {
                 cb_pop_front(CB_V, NBB * DH);
             }
             cb_pop_front(CB_Q, QT);
+#if defined(MKA_RQPOS)
+            if (first) {   // no valid KV block on this core (short user): zero partial (O, l) for the tree
+                tile_regs_acquire();
+                fill_tile_init();
+                for (uint32_t t = 0; t <= DH; ++t) fill_tile(t, 0.0f);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(CB_O);
+                for (uint32_t t = 0; t <= DH; ++t) pack_tile<true>(t, CB_O, t);
+                tile_regs_release();
+            }
+#endif
             for (uint32_t i = 0; i < nrecv; ++i) {
                 cb_wait_front(CB_R, NO);
                 reconfig_data_format_srca(CB_R);
