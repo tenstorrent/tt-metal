@@ -45,6 +45,7 @@ ENGINE_SOURCES = (".py", ".cpp", ".hpp", ".h")
 # converted from the checkpoint alone (no `reuse` links into another cache).
 CONVERT_ARGS = {"fold": False, "head": True, "embed": True, "reuse": None}
 PRECISIONS = {"bf4": "bf4", "bf8": "bf8"}  # declared label -> the dtype every projection entry must have
+VERIFY_MODES = ("sha256", "sizes")  # GEMMA4_RESIDENT_CACHE_VERIFY; anything else is refused (no silent sizes-only)
 
 
 def _sha256(path, bufsize=1 << 22):
@@ -205,6 +206,8 @@ def ensure_resident_cache(cache=None, package=None, precision=None, verify=None,
         raise ValueError("GEMMA4_RESIDENT_ENGINE_PACKAGE must name the resident engine package")
     precision = precision or os.environ.get("GEMMA4_RESIDENT_PRECISION", "bf4")
     verify = verify or os.environ.get("GEMMA4_RESIDENT_CACHE_VERIFY", "sha256")
+    if verify not in VERIFY_MODES:
+        raise ValueError(f"GEMMA4_RESIDENT_CACHE_VERIFY={verify!r}: expected one of {VERIFY_MODES}")
     checkpoint = os.environ.get("HF_MODEL", "")
     if not os.path.isfile(os.path.join(checkpoint, "model.safetensors.index.json")):
         raise ValueError(f"HF_MODEL must name the checkpoint directory the cache is converted from, got {checkpoint!r}")

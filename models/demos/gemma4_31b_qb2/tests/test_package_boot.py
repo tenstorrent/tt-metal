@@ -186,6 +186,25 @@ def test_by_default_a_boot_hashes_the_files(env):
     assert pb.check_cache(env["cache"], env["key"], "sha256") is None
 
 
+@pytest.mark.parametrize("mode", ["SHA256", "sha", "size", "none", " sha256"])
+def test_an_unknown_verify_mode_is_refused_before_the_cache_is_touched(env, monkeypatch, mode):
+    build(env)
+    before = (env["cache"] / pb.MARKER).stat().st_mtime_ns
+    monkeypatch.setenv("GEMMA4_RESIDENT_CACHE_VERIFY", mode)
+    with pytest.raises(ValueError, match="GEMMA4_RESIDENT_CACHE_VERIFY"):
+        pb.ensure_resident_cache(convert=refuse)
+    with pytest.raises(ValueError, match="GEMMA4_RESIDENT_CACHE_VERIFY"):
+        pb.ensure_resident_cache(convert=refuse, verify=mode)
+    assert (env["cache"] / pb.MARKER).stat().st_mtime_ns == before
+
+
+@pytest.mark.parametrize("mode", ["sha256", "sizes"])
+def test_both_verify_modes_are_accepted_from_the_environment(env, monkeypatch, mode):
+    build(env)
+    monkeypatch.setenv("GEMMA4_RESIDENT_CACHE_VERIFY", mode)
+    pb.ensure_resident_cache(convert=refuse)
+
+
 def _rebuild_with(env, **kw):
     calls = []
     pb.ensure_resident_cache(convert=converter(calls), **kw)
