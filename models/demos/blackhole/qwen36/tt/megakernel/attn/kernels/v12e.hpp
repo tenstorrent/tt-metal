@@ -19,8 +19,32 @@ constexpr uint32_t V_NNM = 7, V_NTM = 14, V_KTR = 20, V_OT = 10, V_NROW = 8, V_N
 constexpr uint32_t V_SLOT = 3 * V_KTR * V_NNM;   // 420 tiles
 constexpr uint32_t V_TRID0 = 12;   // MLP slice read trids 12 / 13 (layer parity)
 // v12 global words (index into the v12 address array)
+#if defined(MK_V12_NOCBAL)
+// MK80 NoC-balanced MLP slice (DRAM_CEILING.md / DESIGN_mk70 §9.1): the STREAM writer (NOC0) reads the first
+// MK_V12_NOCBAL % of the slice, the reader (NOC1) the rest, each with 1 request of MK_V12_NOCBAL_PB bytes in flight.
+// Writer -> reader mailbox per slice: VSL / VSH = NOC1 address of the reader's part, then VS = slice seq; reader -> writer:
+// VD = seq once its part landed (the writer pushes CB_WV after it). Data movement only: bytes and L1 placement unchanged.
+constexpr uint32_t VG_XA = 0, VG_XB = 1, VG_RS = 2, VG_H = 3, VG_P = 4, VG_MDONE = 5, VG_MGO = 6, VG_LA = 7, VG_LB = 8,
+                   VG_BUSY = 9, VG_VS = 10, VG_VSL = 11, VG_VSH = 12, VG_VD = 13, NVG = 14;
+#ifndef MK_V12_NOCBAL_ATT
+#define MK_V12_NOCBAL_ATT 0
+#endif
+#ifndef MK_V12_NOCBAL_PB
+#define MK_V12_NOCBAL_PB 9216
+#endif
+constexpr uint32_t V_NB_PB = MK_V12_NOCBAL_PB;
+// NOC0 bytes of a `total`-byte slice (a whole number of pieces)
+FORCE_INLINE uint32_t v_nb_n0(uint32_t total) { return total * MK_V12_NOCBAL / 100 / V_NB_PB * V_NB_PB; }
+#if !defined(MKA_ROLE_EXT)   // only STREAM cores stream a slice: the EXT binary keeps today's code (text budget)
+#define V_NB_ON 1
+#else
+#define V_NB_ON 0
+#endif
+#else
+#define V_NB_ON 0
 constexpr uint32_t VG_XA = 0, VG_XB = 1, VG_RS = 2, VG_H = 3, VG_P = 4, VG_MDONE = 5, VG_MGO = 6, VG_LA = 7, VG_LB = 8,
                    VG_BUSY = 9, NVG = 10;
+#endif
 constexpr uint32_t V_FACE_B = 512, V_ROW_B = 32, V_XPK_SLOT_B = 10 * 2 * 16 * V_ROW_B;
 // spec §18 qkv split-K (MKA_QSK) through this unit: column c's N-list = qkv tiles first(c) .. + qsk_nt(c) - 1 (112 over
 // 10 columns: 12, 12, 11 x 8), slot M (CB_WM) = 20 K tiles x nt BFP8 pages, k-major; GDN-type layers read QSK_GK K tiles
@@ -97,3 +121,27 @@ FORCE_INLINE void v_busy(uint32_t busy_word, uint32_t val, bool mirror, const ui
     if (mirror) { v_mcast_word(busy_word, val, rc, noc_index); noc_async_write_barrier(); }
     else *vw(busy_word) = val;
 }
+#if V_NB_ON
+// the STREAM reader's NOC1 part: wait for CB_VA (the compute's partial) while streaming its share of the current slice,
+// 1 request in flight (TRID_NB), VD = seq once landed. One out-of-line copy for both call sites (text budget).
+struct VNb { uint32_t seq, rem, dst, dst0, len; const uint32_t* vg; uint64_t src; };
+constexpr uint32_t TRID_NB = 11;
+__attribute__((noinline)) void v_nb_wait(VNb& b, uint32_t cb, uint32_t n) {
+    while (!cb_pages_available_at_front(cb, n)) {
+        if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, TRID_NB)) continue;
+        if (!b.rem) {   // previous part landed (or none yet): publish, then look for the next slice (VS += 1 per slice)
+            *vw(b.vg[VG_VD]) = b.seq;
+            invalidate_l1_cache();
+            if (*vw(b.vg[VG_VS]) == b.seq) continue;
+            ++b.seq;
+            b.src = ((uint64_t)*vw(b.vg[VG_VSH]) << 32) | *vw(b.vg[VG_VSL]);
+            b.dst = b.dst0; b.rem = b.len;
+        }
+        const uint32_t sz = b.rem < V_NB_PB ? b.rem : V_NB_PB;
+        noc_async_read_set_trid(TRID_NB);
+        noc_async_read<V_NB_PB>(b.src, b.dst, sz);
+        noc_async_read_set_trid(0);
+        b.src += sz; b.dst += sz; b.rem -= sz;
+    }
+}
+#endif

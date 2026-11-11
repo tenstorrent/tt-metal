@@ -320,6 +320,13 @@ void kernel_main() {
 #else
     auto v_gate = [&]() {};
 #endif
+#if V_NB_ON
+    const uint32_t nb_tot = 3 * V_KTR * vnn * WTB, nb_n0 = v_nb_n0(nb_tot);
+    VNb vnb = {0, 0, 0, get_write_ptr(CB_WV) + nb_n0, nb_tot - nb_n0, vg, 0};
+#define V_NB_WAIT_VA() v_nb_wait(vnb, CB_VA, V_NTM)
+#else
+#define V_NB_WAIT_VA() do {} while (0)
+#endif
 #endif   // MK_V12
 #if defined(MKA_RQKV)
     // next attention layer after L (NL if none) and the length of the GDN-type run right before attention layer La
@@ -469,6 +476,7 @@ void kernel_main() {
 #if defined(MKA_QSK)
         if (att && vrole == 1) {   // spec §18: this core's qkv partial to the column rows above (NOC1); the writer does rows below
             MKZ("R-QRS");
+            V_NB_WAIT_VA();
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = 2 * L + 1;
             v_rs_send(get_read_ptr(CB_VA), 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
@@ -777,6 +785,7 @@ void kernel_main() {
 #endif
         V12_ARDLV(L);
         if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
+            V_NB_WAIT_VA();
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = V_LV(L);
             v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows above (NOC1)

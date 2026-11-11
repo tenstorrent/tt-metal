@@ -726,11 +726,33 @@ void kernel_main() {
         cb_reserve_back(cb, pages);
         s_ = {src, get_write_ptr(cb), bytes, trid};
     };
+#if V_NB_ON
+    uint32_t vseq = 0;    // split MLP slices started (mailbox seq)
+    bool vsplit = false;  // slot V currently holds a NOC0/NOC1-split slice: 1 request in flight, one-packet pieces
+    // a split slice whose previous piece is still in flight holds the pump (returns true); every other slot (slot M,
+    // NOC0-only attention slices) keeps today's issue-when-the-cmd-buffer-is-free behaviour
+    auto pump1 = [&](VSlot& s_) {
+        if (!s_.rem) return false;
+        if (vsplit && &s_ == &sv) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, s_.trid)) return true;
+            const uint32_t sz = s_.rem < V_NB_PB ? s_.rem : V_NB_PB;
+            noc_async_read_set_trid(s_.trid);
+            noc_async_read<V_NB_PB>(s_.src, s_.dst, sz);   // one packet (<= NOC_MAX_BURST_SIZE): no burst loop
+            noc_async_read_set_trid(0);
+            s_.src += sz; s_.dst += sz; s_.rem -= sz;
+            return true;
+        }
+        if (!noc_cmd_buf_ready(noc_index, read_cmd_buf)) return false;
+        const uint32_t sz = s_.rem < 16384 ? s_.rem : 16384;
+        noc_async_read_set_trid(s_.trid);
+        noc_async_read(s_.src, s_.dst, sz);
+#else
     auto pump1 = [&](VSlot& s_) {
         if (!s_.rem || !noc_cmd_buf_ready(noc_index, read_cmd_buf)) return false;
         const uint32_t sz = s_.rem < 16384 ? s_.rem : 16384;
         noc_async_read_set_trid(s_.trid);
         noc_async_read(s_.src, s_.dst, sz);
+#endif
         noc_async_read_set_trid(0);
         s_.src += sz; s_.dst += sz; s_.rem -= sz;
         return true;
@@ -740,9 +762,12 @@ void kernel_main() {
 #else
     auto v_pump = [&]() { pump1(sv); };
 #endif
-    auto v_slot_ready = [&](VSlot& s_, uint32_t cb, uint32_t pages, uint32_t trid) {
+    auto v_slot_ready = [&](VSlot& s_, uint32_t cb, uint32_t pages, uint32_t trid, uint32_t vd = 0) {
         while (s_.rem) pump1(s_);
         noc_async_read_barrier_with_trid(trid);
+#if V_NB_ON
+        while (*vw(vg[VG_VD]) < vd) invalidate_l1_cache();   // the reader's NOC1 part of the slice landed
+#endif
         cb_push_back(cb, pages);
     };
 #if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
@@ -797,9 +822,26 @@ void kernel_main() {
         if (vn == vk) rstd_send();   // rstd producer (n = k): this K-row's Σx² row -> every STREAM core's Σ tile
 #endif
     };
+#if V_NB_ON
+    auto v_mlp_start = [&](uint32_t L) __attribute__((noinline)) {   // one out-of-line copy (3 call sites; text budget)
+        if (vrole == 1) {
+            // attention-type layers' slices (prefetched at the previous MLP tail, across the SDPA window where the reader
+            // streams K) stay NOC0-only unless MK_V12_NOCBAL_ATT
+            const bool nb = MK_V12_NOCBAL_ATT || !is_attn(L);
+            vsplit = nb;
+            const uint32_t n0 = nb ? v_nb_n0(vnt * WTB) : vnt * WTB;
+            v_slot_start(sv, CB_WV, V_SLOT, wv.get_noc_addr(vwv_page + L * vpvl), n0, V_TRID0 + (L & 1));
+            if (nb) {
+                const uint64_t s1 = wv.get_noc_addr(vwv_page + L * vpvl, n0, 1);   // the reader's part, NOC1 coordinates
+                *vw(vg[VG_VSL]) = (uint32_t)s1; *vw(vg[VG_VSH]) = (uint32_t)(s1 >> 32); *vw(vg[VG_VS]) = ++vseq;
+            }
+        }
+    };
+#else
     auto v_mlp_start = [&](uint32_t L) {   // layer L's MLP slice into slot V (free: the previous MLP popped it)
         if (vrole == 1) v_slot_start(sv, CB_WV, V_SLOT, wv.get_noc_addr(vwv_page + L * vpvl), vnt * WTB, V_TRID0 + (L & 1));
     };
+#endif
 #if defined(MKA_QSK)
     // slot M: layer L's split-K qkv slice (attention: 20 K tiles x nt, k-major) or the GDN in-proj stand-in (QSK_GK K tiles)
     auto qsk_start = [&](uint32_t L) {
@@ -1263,7 +1305,11 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(vgo1x, vgo1y, vg[VG_MGO]), 1);
             }
             const bool own_h = vk < vnn;
+#if V_NB_ON
+            v_slot_ready(sv, CB_WV, V_SLOT, V_TRID0 + (L & 1), (MK_V12_NOCBAL_ATT || !is_attn(L)) ? vseq : 0);   // both NoCs' parts landed
+#else
             v_slot_ready(sv, CB_WV, V_SLOT, V_TRID0 + (L & 1));   // layer L's MLP slice landed
+#endif
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
 #if defined(MK_V12_X2) || defined(MK_RS_QKV)
             const uint32_t vxv = 2 * L + 2;   // two x deliveries per layer: mixer, MLP
