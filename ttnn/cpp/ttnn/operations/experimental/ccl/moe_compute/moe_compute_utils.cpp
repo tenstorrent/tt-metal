@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <numeric>
 #include <utility>
 #include <vector>
@@ -402,7 +403,11 @@ WeightCoreShardMaps get_weight_core_shard_maps(
     // Matmul ring size = the live DRAM-bank count (12 on Wormhole, 7/8 on Blackhole) to match
     // ttnn.experimental.moe_compute.
     const uint32_t n_dram_banks = static_cast<uint32_t>(in0_core_coords.size());
-    const uint32_t target_ring_size = n_dram_banks;
+    // MOE_COMPUTE_RING=<N> (experiment, default off): ring of N > banks cores, several ring cores per DRAM bank
+    uint32_t target_ring_size = n_dram_banks;
+    if (const char* v = std::getenv("MOE_COMPUTE_RING"); v != nullptr && *v != '\0') {
+        target_ring_size = static_cast<uint32_t>(std::atoi(v));
+    }
 
     // Ring ordering: sort the DRAM-bank logical core coords by (y, x) descending.
     std::vector<uint32_t> ring_to_dram_bank(n_dram_banks);

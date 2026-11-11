@@ -49,6 +49,10 @@ inline bool moe_compute_env_flag(const char* name, bool default_value) {
     const char* v = std::getenv(name);
     return v == nullptr ? default_value : std::string(v) != "0";
 }
+inline uint32_t moe_compute_env_uint(const char* name, uint32_t default_value) {
+    const char* v = std::getenv(name);
+    return (v == nullptr || *v == '\0') ? default_value : static_cast<uint32_t>(std::atoi(v));
+}
 inline tt::tt_metal::MathFidelity moe_compute_env_fidelity(tt::tt_metal::MathFidelity default_value) {
     const char* v = std::getenv("MOE_COMPUTE_FIDELITY");
     if (v == nullptr) {
@@ -452,7 +456,9 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     const uint32_t expected_matmul_n =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
     TT_FATAL(
-        matmul_num_cores == expected_matmul_n,
+        matmul_num_cores == expected_matmul_n ||
+            (matmul_num_cores > expected_matmul_n &&
+             matmul_num_cores % expected_matmul_n == 0),  // ring of several cores per bank
         "moe_compute: expected matmul_num_cores={}, got {}",
         expected_matmul_n,
         matmul_num_cores);
@@ -613,6 +619,11 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
      * MM: Used as input CB (where tilized chunks arrive)
      * Combine: Stores output of MM, for input to combine
      */
+    // MZ_FLAGS (experiment bits, default 0; 3 when MOE_COMPUTE_RING is set): bit0/1 in2 rotates once per chunk, bit2/3 all-gather,
+    // bit4 (16): chunks of <= 16 tokens multiply with 16x32 in0 tiles (half the MVMULs): alias CBs c_20 (of c_0) and c_21 (of c_6)
+    const uint32_t mz_flags_used = moe_compute_env_uint("MZ_FLAGS", matmul_num_cores > expected_matmul_n ? 3u : 0u);
+    constexpr uint32_t kSmallIn0Cb = tt::CBIndex::c_20;   // 16x32 tile view of c_0 (tilized chunk)
+    constexpr uint32_t kSmallIn2Cb = tt::CBIndex::c_21;   // 16x32 tile view of c_6 (in2)
     uint32_t tilize_output_cb_id = tt::CBIndex::c_0;
     [[maybe_unused]] uint32_t cb_s2c_in_id = tt::CBIndex::c_0;
     uint32_t matmul_writer_cb_id = tt::CBIndex::c_1;
@@ -633,6 +644,14 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         shared_cb_num_pages,
         tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
         tilize_output_tensor.buffer());
+    if ((mz_flags_used & 16u) != 0) {
+        desc.cbs.back().format_descriptors.push_back(tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(kSmallIn0Cb),
+            .data_format = tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
+            .page_size = output_page_size,
+            .tile = tt::tt_metal::TileDescriptor(16, 32, false),
+        });
+    }
 
     // MoE output for combine uses the same buffer as input but create a new CB to manage control flow
     push_cb(
@@ -859,14 +878,19 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and Combine cores
+    // MOE_COMPUTE_WSLOTS=<n> (experiment, default off): weight CB slots (blocks) instead of moe_ring::weight_cb_slots
+    const uint32_t weight_cb_slots_used =
+        moe_compute_env_uint("MOE_COMPUTE_WSLOTS", moe_ring::weight_cb_slots(weight_tiles_per_txn));
     std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
         // dm0's slots of one block each (moe_ring::weight_cb_slots: 3 for 14- and 20-tile transactions);
         // whole blocks so the ring buffer wraps on a block boundary.
         {"cb_r2c_w0",
          tt::CBIndex::c_3,
-         moe_compute_env_flag("MOE_COMPUTE_BFP8_WEIGHTS", false) ? tt::DataFormat::Bfp8_b : tt::DataFormat::Bfp4_b,
+         // the weight format follows the tensor (a layer may be bfp4 next to bfp8 layers); no env at call time
+         tensor_args.matmul_w0_w1_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ? tt::DataFormat::Bfp8_b
+                                                                                      : tt::DataFormat::Bfp4_b,
          true,
-         moe_ring::weight_cb_slots(weight_tiles_per_txn) * weight_tiles_per_block},
+         weight_cb_slots_used * weight_tiles_per_block},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
@@ -882,6 +906,14 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         const uint32_t bytes_per_tile =
             is_tile ? tt::tile_size(data_format) : non_tile_cb_page_size(data_format, l1_alignment);
         push_cb(desc, index, matmul_core_range_set, bytes_per_tile, tiles_per_cb, data_format);
+        if (index == tt::CBIndex::c_6 && (mz_flags_used & 16u) != 0) {
+            desc.cbs.back().format_descriptors.push_back(tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(kSmallIn2Cb),
+                .data_format = data_format,
+                .page_size = bytes_per_tile,
+                .tile = tt::tt_metal::TileDescriptor(16, 32, false),
+            });
+        }
     }
 
     // LOCAL_OUTPUT: dm1's per-chunk copy of the current expert's e_t entries (one 16-B entry per
@@ -1397,6 +1429,13 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         {"layer_id", args.layer_id},
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
+        {"weight_cb_slots", weight_cb_slots_used},
+        {"mz_flags", mz_flags_used},  // experiment bits (dm1.cpp / compute.cpp); with MOE_COMPUTE_RING default 3 = rotate the in2 pieces once per chunk
+        {"ag_bb_x0", static_cast<uint32_t>(matmul_mcast_start_physical.x)},
+        {"ag_bb_y0", static_cast<uint32_t>(matmul_mcast_start_physical.y)},
+        {"ag_bb_x1", static_cast<uint32_t>(matmul_mcast_end_physical.x)},
+        {"ag_bb_y1", static_cast<uint32_t>(matmul_mcast_end_physical.y)},
+        {"ag_bb_dests", matmul_bounding_box_num_cores - 1},
         {"num_banks", num_dram_banks},
         {"w2_pages_per_ring_core_total", w2_pages_per_ring_core_total},
         {"activation_function", static_cast<uint32_t>(activation_type)},
@@ -1488,17 +1527,21 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     std::vector<uint32_t> ring_pos2bank_id(matmul_num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
 
-    std::sort(
-        ring_pos2bank_id.begin(),
-        ring_pos2bank_id.end(),
-        [mesh_device, &matmul_cores](uint32_t bank_id_a, uint32_t bank_id_b) {
-            const auto& pa = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_a]);
-            const auto& pb = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_b]);
-            if (pa.y != pb.y) {
-                return pa.y > pb.y;  // Descending y
-            }
-            return pa.x > pb.x;  // Descending x
-        });
+    // MOE_COMPUTE_RING (experiment): matmul_cores is already in ring order (grouped by DRAM bank), keep it
+    const bool ring_grouped = matmul_num_cores > num_dram_banks;
+    if (!ring_grouped) {
+        std::sort(
+            ring_pos2bank_id.begin(),
+            ring_pos2bank_id.end(),
+            [mesh_device, &matmul_cores](uint32_t bank_id_a, uint32_t bank_id_b) {
+                const auto& pa = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_a]);
+                const auto& pb = mesh_device->worker_core_from_logical_core(matmul_cores[bank_id_b]);
+                if (pa.y != pb.y) {
+                    return pa.y > pb.y;  // Descending y
+                }
+                return pa.x > pb.x;  // Descending x
+            });
+    }
 
     // Build a map where key = bank_id, value = {ring position (i), neighbor's bank_id}
     std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> bank2ring_pos;
@@ -1506,6 +1549,15 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         uint32_t this_bank = ring_pos2bank_id[ring_pos];
         uint32_t next_bank = ring_pos2bank_id[(ring_pos + 1) % matmul_num_cores];
         bank2ring_pos[this_bank] = {ring_pos, next_bank};
+    }
+
+    // MZ_FLAGS bit 2 (experiment): physical coordinates of the ring cores by ring position (all-gather by multicast + semaphore incs)
+    std::vector<uint32_t> ag_ring_coords(2 * matmul_num_cores, 0);
+    for (uint32_t i = 0; i < matmul_num_cores; ++i) {
+        const auto rp = bank2ring_pos[i].first;
+        const auto phys = mesh_device->worker_core_from_logical_core(matmul_cores[i]);
+        ag_ring_coords[2 * rp] = static_cast<uint32_t>(phys.x);
+        ag_ring_coords[2 * rp + 1] = static_cast<uint32_t>(phys.y);
     }
 
     // Set the runtime arguments for the kernels
@@ -1634,6 +1686,8 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
             matmul_rt.push_back(tensor_return_value[5].buffer());
             matmul_rt.push_back(tilize_e_t_output_tensor.buffer());
         }
+        // MZ_FLAGS bit 2 (experiment, all-gather by multicast): physical coordinates of every ring position, trailing
+        matmul_rt.append(ag_ring_coords);
         desc.kernels[kMatmulDm0KernelIdx].emplace_runtime_args(core, matmul_rt);
         desc.kernels[kMatmulDm1KernelIdx].emplace_runtime_args(core, matmul_rt);
         desc.kernels[kMatmulComputeKernelIdx].emplace_runtime_args(core, matmul_rt);

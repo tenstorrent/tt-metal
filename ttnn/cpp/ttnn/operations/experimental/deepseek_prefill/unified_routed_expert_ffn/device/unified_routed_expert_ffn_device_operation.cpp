@@ -119,11 +119,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             is_ring_weights(t.up_projs[0]) && is_ring_weights(t.down_projs[0]) &&
                 t.gate_projs[0].buffer()->address() == t.up_projs[0].buffer()->address() &&
-                t.gate_projs[0].dtype() == tt::tt_metal::DataType::BFLOAT8_B &&
-                t.down_projs[0].dtype() == tt::tt_metal::DataType::BFLOAT8_B &&
-                t.gate_projs[0].layout() == tt::tt_metal::Layout::TILE && gate_shape[0] == 8 && down_shape[0] == 8 &&
-                gate_shape[2] == op.experts_per_chip && down_shape[2] == op.experts_per_chip && gate_shape[-1] == 128 &&
-                down_shape[-1] == 128,
+                (t.gate_projs[0].dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+                 t.gate_projs[0].dtype() == tt::tt_metal::DataType::BFLOAT4_B) &&
+                t.down_projs[0].dtype() == t.gate_projs[0].dtype() &&
+                t.gate_projs[0].layout() == tt::tt_metal::Layout::TILE && gate_shape[0] == 8 &&
+                down_shape[0] % 8 == 0 && down_shape[0] >= 8 && gate_shape[2] == op.experts_per_chip &&
+                down_shape[2] == op.experts_per_chip && gate_shape[-1] == 128 && down_shape[-1] == 128,
             "ring weights: gate/up must be the decode w0_w1 tensor and down the decode w2 tensor (8 ring cores, E "
             "experts, bfp8 TILE)");
         TT_FATAL(

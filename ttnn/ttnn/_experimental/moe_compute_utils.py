@@ -563,6 +563,10 @@ def effective_matmul_ring_size(mesh_device, bh_ring_size: int = 8) -> int:
     actually use. Pass the result to the ``prepare_*`` / ``get_weight_*`` helpers so host weight
     layout matches the op.
     """
+    import os
+
+    if os.environ.get("MOE_COMPUTE_RING"):  # experiment: ring of N cores, several per DRAM bank
+        return int(os.environ["MOE_COMPUTE_RING"])
     if mesh_device.arch() == ttnn.Arch.BLACKHOLE:
         return len(ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0))
     return 12

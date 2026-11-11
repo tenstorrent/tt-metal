@@ -12,6 +12,7 @@
 
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
+#include <cstdlib>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -576,10 +577,22 @@ std::vector<ttnn::Tensor> moe_compute(
     // Ring size is 12 on Wormhole (no DRAM-bank harvesting). On Blackhole it is the live
     // DRAM-bank count (7 or 8). Resolved by the public API before invocation, but keep a
     // fallback to the live bank count for direct prim callers.
-    const uint32_t ring_n = bh_ring_size.value_or(
+    uint32_t ring_n = bh_ring_size.value_or(
         mesh_device->arch() == tt::ARCH::BLACKHOLE
             ? mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size()
             : 12u);
+    // MOE_COMPUTE_RING=<N> (experiment, default off): ring of N cores, several per DRAM bank
+    // the ring of this call is the one the weights were packed for: the w2 tensor's leading dim (ring cores) when it is
+    // a multiple of the DRAM-bank count (a layer may use a ring of 24 / 40 next to layers on the ring of 8; no env at
+    // call time)
+    if (mesh_device->arch() == tt::ARCH::BLACKHOLE && matmul_w2_tensor.logical_shape().rank() == 6) {
+        const uint32_t banks =
+            mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
+        const uint32_t w2_cores = static_cast<uint32_t>(matmul_w2_tensor.logical_shape()[0]);
+        if (w2_cores > banks && w2_cores % banks == 0) {
+            ring_n = w2_cores;
+        }
+    }
     // NOTE: the public API auto-detects the ring from the device and does not expose it as a knob.
 
     // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4.
