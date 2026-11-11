@@ -1570,6 +1570,15 @@ TT_KERNEL void writer(
 
     // ---- the user's T output rows of the head's Vt output tiles
     DeviceZoneScopedN("wr_out");
+#ifndef GDN_OUT_RD
+#define GDN_OUT_RD 0  // engine GDN role: the reader (NOC1) writes the out tiles and raises the out signal (reader source)
+#endif
+#if GDN_OUT_RD
+    static_assert(GDN_BATCH && GDN_LAZY && !GDN_OUT_LOCAL, "GDN_OUT_RD: engine role (BATCH + LAZY), not with GDN_OUT_LOCAL yet");
+    if (true) {
+        // nothing: the reader owns out (wait / write / pop / signal)
+    } else
+#endif
 #if GDN_OUT_LOCAL
     out.wait_front(Vs);
     gdn_out_local(out.get_read_ptr(), h * Vt + v0, Vs);  // engine gdn_out: full out tiles to every GDN core's A, local
@@ -1607,9 +1616,11 @@ TT_KERNEL void writer(
 #if GDN_LAZY && GDN_BATCH
     {
         DeviceZoneScopedN("wr_obar");  // the out rows' write barrier + the out signal (wr_out spans to the end)
+#if !GDN_OUT_RD
         noc.async_write_barrier();
 #if GDN_OUT_SIGNAL
         gdn_out_signal();  // engine GDN role: this core's output rows have landed (the stash writes trail)
+#endif
 #endif
     }
 #ifndef GDN_SP_RD

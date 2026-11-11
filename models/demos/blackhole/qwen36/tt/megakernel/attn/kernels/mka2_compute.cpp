@@ -23,6 +23,17 @@
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
+#if defined(MK_AR_RSTD)
+#include "api/compute/transpose_dest.h"
+#endif
+#if defined(MK_AR_RSTD)
+// one copy of the SFPU fp32 column sum (sfpu_reduce is always-inline): shared by the rstd producer (X^T squares) and the consumer
+// (the Σ tile); STREAM text
+__attribute__((noinline)) static void mk_colsum(uint32_t idst) {
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(idst);
+}
+#endif
 #include "api/debug/kernel_profiler.hpp"
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
 #include "../../kernels/mk_ar_reduce.hpp"   // AR reduce on the owners (MKAR_* defines from ar_phase.py)
@@ -365,8 +376,7 @@ void kernel_main() {
             add_binary_tile_init();
             for (uint32_t i = 0; i < n_; ++i) add_binary_tile(0, 1 + i, 0);
         }
-        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        mk_colsum(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, MK_AR_CB_SS);
@@ -377,12 +387,55 @@ void kernel_main() {
 #else
 #define MK_RSTD_PART() do {} while (0)
 #endif
+#if defined(MK_GAMMA_CONS) && defined(MKA_ROLE_STREAM)
+    // γ at the consumers: CB_XK *= γ (bcast rows of the writer's 20 γ row tiles, CB MK_GC_CB) IN PLACE: packed through MK_GC_XKA,
+    // a second format index of CB_XK's memory whose fifo stays at the base like CB_XK's (20 pages each, one delivery at a time)
+    auto gc_scale = [&]() __attribute__((noinline)) {
+        CZONE("C-GC");
+        cb_wait_front(CB_XK, V_KTR);
+        cb_wait_front(MK_GC_CB, V_KTR);
+        cb_reserve_back(MK_GC_XKA, V_KTR);
+        reconfig_data_format(CB_XK, MK_GC_CB);
+        pack_reconfig_data_format(MK_GC_XKA);
+        mul_bcast_rows_init(CB_XK, MK_GC_CB);
+        for (uint32_t t0 = 0; t0 < V_KTR; t0 += 4) {
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < 4; ++i) mul_tiles_bcast_rows(CB_XK, MK_GC_CB, t0 + i, t0 + i, i);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < 4; ++i) pack_tile<true>(i, MK_GC_XKA, t0 + i);
+            tile_regs_release();
+        }
+        cb_push_back(MK_GC_XKA, V_KTR);
+        cb_wait_front(MK_GC_XKA, V_KTR);   // the packed x is in L1 before the consumers unpack CB_XK
+        cb_pop_front(MK_GC_XKA, V_KTR);
+        cb_pop_front(MK_GC_CB, V_KTR);
+    };
+#define MK_GC_SCALE() gc_scale()
+#else
+#define MK_GC_SCALE() do {} while (0)
+#endif
     // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
     auto v_rstd = [&]() {
+#if defined(MK_AR_RSTD)
+        // real rstd: the Σ tile (rsp tile 0, bound as CB_VRSA) holds row k = K-row k's per-token partial (row form, fp32).
+        // UnpackToDestFp32 copy (CB 43) -> SFPU column sum (row 0 = Σ_k S[k][c]) -> in-DST transpose (column 0 per token row).
+        cb_wait_front(CB_VRSA, 1);
+        cb_reserve_back(CB_VRT, 1);
+        reconfig_data_format_srca(CB_VRSA);
+        copy_init(CB_VRSA);
+        tile_regs_acquire();
+        copy_tile(CB_VRSA, 0, 0);
+        mk_colsum(0);
+        transpose_dest_init<true>();
+        transpose_dest<true>(0);
+#else
         cb_wait_front(CB_VRSA, MKA_NOWN);
         cb_reserve_back(CB_VRT, 1);
         tile_regs_acquire();
-#if MKA_NOWN == 2
+#endif
+#if defined(MK_AR_RSTD)
+#elif MKA_NOWN == 2
         reconfig_data_format(CB_VRSA, CB_VRSA);
         add_init(CB_VRSA, CB_VRSA);
         add_tiles(CB_VRSA, CB_VRSA, 0, 1, 0);
@@ -402,7 +455,11 @@ void kernel_main() {
         pack_tile(0, CB_VRT);
         tile_regs_release();
         cb_push_back(CB_VRT, 1);
+#if defined(MK_AR_RSTD)
+        cb_pop_front(CB_VRSA, 1);
+#else
         cb_pop_front(CB_VRSA, MKA_NOWN);
+#endif
     };
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
     mkar::Reduce ar_red;   // [has_work, ring, PT] from the owner's L1 arg table (spec v1.25): has_work = this device owns it
@@ -527,6 +584,7 @@ void kernel_main() {
         const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK, cbw = CB_WM, cbs = QSK_SLOT, nown = qnt;
 #endif
         MK_RSTD_PART();
+        MK_GC_SCALE();
         MK_HWS(CB_XK, cbw, CB_VA);
         cb_wait_front(CB_XK, V_KTR);
         cb_wait_front(cbw, cbs);
@@ -965,6 +1023,7 @@ void kernel_main() {
             const bool own_h = vk < vnn;
             if (L == 0) { cb_wait_front(CB_VI, 1); cb_wait_front(CB_VJ, 1); }
             MK_RSTD_PART();
+        MK_GC_SCALE();
             MK_HWS(CB_XK, CB_WV, CB_VA);
             cb_wait_front(CB_WV, V_SLOT);
             cb_wait_front(CB_XK, V_KTR);
