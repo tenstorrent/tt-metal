@@ -667,7 +667,35 @@ def _lookup_nearest_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, t
     return (Mb, Kb, Nb, sb) if sb is not None else (Mb, Kb, Nb)
 
 
-def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
+_matmul_config_cache: dict[tuple, ttnn.MinimalMatmulConfig] = {}
+
+
+def get_matmul_config(
+    M: int,
+    K: int,
+    N: int,
+    core_grid,
+    default_block_size: tuple[int, int, int] | None = None,
+    use_heuristic: bool = False,
+    num_k_shards: int = -1,
+) -> ttnn.MinimalMatmulConfig:
+    """Get the matmul config for the given shape and core grid, see `_compute_matmul_config`.
+
+    The result depends only on the arguments and the static tables, and every matmul of every
+    forward pass asks again, so it is cached. An exact table miss otherwise scans the whole grid
+    table (`_same_m_per_core_match`) on every call.
+    """
+    grid = None if core_grid is None else (getattr(core_grid, "x", None), getattr(core_grid, "y", None))
+    block = None if default_block_size is None else tuple(default_block_size)
+    key = (M, K, N, grid, block, use_heuristic, num_k_shards)
+    config = _matmul_config_cache.get(key)
+    if config is None:
+        config = _compute_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic, num_k_shards)
+        _matmul_config_cache[key] = config
+    return config
+
+
+def _compute_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic=False, num_k_shards=-1):
     """Get the matmul config for the given shape and core grid.
 
     Args:
