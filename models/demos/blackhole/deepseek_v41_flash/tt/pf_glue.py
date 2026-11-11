@@ -9,7 +9,9 @@ DSV41_PF_GLUE_NORM=1   packed mHC ``collapse_norm``: pk_comb collapse that also 
 DSV41_PF_GLUE_TC=1     bf16 ``y`` / ``y2`` operands accepted by the expand pk_comb (no bf16 -> fp32 typecast op in front of it).
 DSV41_PF_GLUE_RS=1     attention output reduce-scatter (prefill_attention._reduce_scatter_tokens): one reduce_scatter over the batch of 256-row pieces instead of
                        R/256 slice + reduce_scatter pairs and a concat.
-DSV41_PF_GLUE_FUSE=1   all of the above.
+DSV41_PF_GLUE_AGTILE=1 ccl_lean._allgather: big row-major dim-3 gathers (indexer candidates of the FA_IDXP path) through TILE layout (bit-identical).
+DSV41_PF_GLUE_SAFE=1   RS + AGTILE (the two bit-identical fusions of this file).
+DSV41_PF_GLUE_FUSE=1   every switch of this file, INCLUDING the not bit-identical ones (MIX, TC, NORM): not recommended; use SAFE.
 """
 import os
 import struct
@@ -22,8 +24,16 @@ f32, bf16 = ttnn.float32, ttnn.bfloat16
 VER = 2  # bump with every kernel edit: the JIT cache key only sees custom_program_hash
 
 
+EXACT = ("DSV41_PF_GLUE_RS", "DSV41_PF_GLUE_AGTILE")  # bit-identical fusions: also switched on by DSV41_PF_GLUE_SAFE=1
+
+
 def on(name):
-    return os.environ.get(name, "0") == "1" or os.environ.get("DSV41_PF_GLUE_FUSE", "0") == "1"
+    e = os.environ.get
+    return (
+        e(name, "0") == "1"
+        or e("DSV41_PF_GLUE_FUSE", "0") == "1"
+        or (name in EXACT and e("DSV41_PF_GLUE_SAFE", "0") == "1")
+    )
 
 
 def _kernel(name, core_set, ct, rt, crt, cfg, common=None):

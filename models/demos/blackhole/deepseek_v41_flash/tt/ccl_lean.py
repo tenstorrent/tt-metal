@@ -118,7 +118,9 @@ def _allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, lin
 
 
 def _tile_ag_ok(tensor, dim, linear):
-    if linear or dim != 3 or os.environ.get("DSV41_PF_GLUE_AGTILE", "0") != "1":
+    from models.demos.blackhole.deepseek_v41_flash.tt import pf_glue
+
+    if linear or dim != 3 or not pf_glue.on("DSV41_PF_GLUE_AGTILE"):
         return False
     sh = tensor.shape
     return (
