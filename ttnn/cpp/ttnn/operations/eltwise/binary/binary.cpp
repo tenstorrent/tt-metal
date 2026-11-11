@@ -744,6 +744,18 @@ inline auto invoke_binary_ng_impl(
                 a_dtype,
                 scalar_value,
                 a_dtype);
+        } else if (
+            binary_op_type == operations::binary::BinaryOpType::SUB &&
+            (a_dtype == DataType::UINT8 || a_dtype == DataType::INT8)) {
+            const float scalar_value = std::visit([](auto v) { return static_cast<float>(v); }, rhs);
+            TT_FATAL(
+                operations::binary::utils::scalar_fits_integer_dtype(scalar_value, a_dtype),
+                "Binary operation {} with a {} tensor cannot represent the scalar {}: only an integer within the "
+                "range of {} is accepted. Typecast the input to a wider or floating-point dtype first.",
+                binary_op_type,
+                a_dtype,
+                scalar_value,
+                a_dtype);
         }
     }
     if constexpr (requires { rhs.dtype(); }) {

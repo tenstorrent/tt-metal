@@ -47,6 +47,12 @@ bool scalar_fits_integer_dtype(float value, tt::tt_metal::DataType dtype) {
     if (dtype == tt::tt_metal::DataType::INT32) {
         return value >= -2147483648.0f && value < 2147483648.0f;
     }
+    if (dtype == tt::tt_metal::DataType::INT8) {
+        return value >= -128.0f && value < 128.0f;
+    }
+    if (dtype == tt::tt_metal::DataType::UINT8) {
+        return value >= 0.0f && value < 256.0f;
+    }
     return value >= 0.0f && value < 4294967296.0f;
 }
 
