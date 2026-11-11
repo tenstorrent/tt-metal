@@ -2677,7 +2677,16 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     finally:
         _WEIGHTS.clear()
     io0 = _io_list(S)
-    per_dev = S.get("PROG_PER_DEV")
+    _per_dev_raw = S.get("PROG_PER_DEV")
+
+    def _per_dev_checked(co):
+        """Every per-device program must be built under the engine env (build() reads flags from os.environ): fail loudly
+        otherwise (in-model the lazy device 1-7 builds once ran after the env was restored: DM at -O2, E1_* etc. lost)."""
+        bad = {k: (os.environ.get(k), v) for k, v in env.items() if os.environ.get(k) != v}
+        assert not bad, f"engine per-device build outside the engine env (device {co}): {dict(list(bad.items())[:6])}"
+        return _per_dev_raw(co)
+
+    per_dev = _per_dev_checked if _per_dev_raw else None
     try:  # v12's CB plan check (engine/cbplan.py, on -mk-v12cb): the in-model CB base / L1 high-water may differ from 112000
         from models.demos.blackhole.qwen36.tt.megakernel.engine import cbplan as CBP
     except ImportError:
