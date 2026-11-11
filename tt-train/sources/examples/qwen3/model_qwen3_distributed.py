@@ -145,7 +145,12 @@ class ColumnParallelLinear(AbstractModuleBase):
         # global segment sizes let ttml.distributed_checkpointing reshard it across TP sizes.
         if fused_segments is not None:
             fused_segments = tuple(int(s) for s in fused_segments)
-            assert sum(fused_segments) == out_features, (fused_segments, out_features)
+            tp_size = get_tp_size(shard_dim)
+            if sum(fused_segments) != out_features or any(s <= 0 or s % tp_size for s in fused_segments):
+                raise ValueError(
+                    f"fused_segments {fused_segments} must be positive, sum to out_features={out_features} and each "
+                    f"divide by the TP size {tp_size}"
+                )
             self.weight.checkpoint_layout = {"fused": (2, fused_segments)}
             if self.col_bias is not None:
                 self.col_bias.checkpoint_layout = {"fused": (3, fused_segments)}
@@ -397,6 +402,8 @@ class DistributedQwen3Model(AbstractModuleBase):
                 weight_init=sharded_weight_init(3),
                 axis_name="tp",
             )
+            # Its rows are padded to a TP-dependent size; the logical row count lets checkpoints reshard across TP sizes.
+            self.embed_tokens.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
         rope_params = build_rope_params_from_config(config, config.head_dim)
         self.layers = ModuleList(
             [DistributedQwen3DecoderLayer(config, i, rope_params, shard_dim) for i in range(config.num_hidden_layers)]

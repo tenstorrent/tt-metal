@@ -30,6 +30,7 @@ from ._index import (
     FileRecord,
     Index,
     begin_staging,
+    check_json,
     data_file_name,
     finalize_staging,
     write_header,
@@ -78,17 +79,18 @@ class _ByteBudget:
 
 
 def _logical_bytes(view: np.ndarray, sizes: tuple[int, ...], itemsize: int) -> np.ndarray:
-    """The row-major logical bytes of a shard from its host buffer, which may pad the last dim to an alignment."""
+    """The row-major logical bytes of a shard from its host buffer.
+
+    A row-major host tensor holds exactly its logical bytes: converting to row-major on the host strips the tile
+    padding. A buffer of any other size has a padding or sharding this code does not know the layout of, so it is
+    refused rather than sliced by a guessed stride."""
     expected = prod(sizes) * itemsize
-    if view.nbytes == expected:
-        return view
-    rows = prod(sizes[:-1])
-    if rows == 0 or view.nbytes % rows:
+    if view.nbytes != expected:
         raise CheckpointError(
-            f"host buffer of {view.nbytes} bytes does not hold a {list(sizes)} shard of itemsize {itemsize}"
+            f"host buffer of {view.nbytes} bytes is not the {expected} bytes of a {list(sizes)} shard of itemsize "
+            f"{itemsize}; its host layout is padded or sharded in a way save does not handle"
         )
-    physical_width = view.nbytes // rows
-    return np.ascontiguousarray(view.reshape(rows, physical_width)[:, : sizes[-1] * itemsize]).reshape(-1)
+    return view
 
 
 def _write_chunk(fd: int, offset: int, view: np.ndarray, budget: _ByteBudget, charged: int) -> int:
@@ -122,6 +124,9 @@ def save(
         raise CheckpointError("save needs a model and/or an optimizer")
     if optimizer is not None and model is None:
         raise CheckpointError("optimizer state is keyed by the model's parameters; pass model= as well")
+    if header is not None and not isinstance(header, dict):
+        raise CheckpointError(f"header must be a dict, not {type(header).__name__}")
+    header = check_json("header", header or {})  # before any device read or file write
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
     fsdp_gate(model, reshard_fsdp)
@@ -153,22 +158,31 @@ def save(
 
         fds: dict[int, int] = {}
         data_start: dict[int, int] = {}
-        for fplan in plan.files:
-            path = os.path.join(staging, fplan.path)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
-            fds[fplan.index] = os.open(path, os.O_RDWR)
-
         budget = _ByteBudget(max_inflight_bytes)
         crcs: dict[tuple[str, int], int] = {}
         t2 = time.perf_counter()
         readback_s = 0.0
+        synced = False
         try:
+            for fplan in plan.files:
+                path = os.path.join(staging, fplan.path)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
+                fds[fplan.index] = os.open(path, os.O_RDWR)
             workers = len(plan.files) if threads is None else threads
+            failed: list[BaseException] = []  # the first failed write stops the readback of the keys after it
+
+            def record_failure(future) -> None:
+                if not future.cancelled() and future.exception() is not None:
+                    failed.append(future.exception())
+
             with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
                 futures = []
                 order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
                 for key in order:
+                    if failed:
+                        pool.shutdown(wait=True, cancel_futures=True)
+                        raise failed[0]
                     items = plan.items[key]
                     info = plan.infos[key]
                     live_tensor = by_key[key]
@@ -195,14 +209,21 @@ def save(
                         future = pool.submit(
                             _write_chunk, fds[it.file], data_start[it.file] + it.data_offset, view, budget, per_item
                         )
+                        future.add_done_callback(record_failure)
                         futures.append(((key, it.file), future))
                     del buffer, host_rm
                 for key_file, future in futures:
                     crcs[key_file] = future.result()
-        finally:
             for fd in fds.values():
                 os.fdatasync(fd)
-                os.close(fd)
+            synced = True
+        finally:
+            for fd in fds.values():
+                try:
+                    os.close(fd)
+                except OSError:
+                    if synced:
+                        raise
         stats["readback_s"] = readback_s
         stats["write_s"] = time.perf_counter() - t2
 

@@ -150,6 +150,11 @@ class LoRAColumnParallelLinear(AbstractModuleBase):
         self.scaling = alpha / rank
         self.lora_A = Parameter(make_dist_replicated_weight((1, 1, rank, in_features), std=1.0 / math.sqrt(rank)))
         self.lora_B = Parameter(make_dist_sharded_zeros((1, 1, out_features, rank), 2, self.shard_dim))
+        # lora_B's rows add onto the base output shard by shard, so on a fused base layer (kv_proj) they follow the
+        # same per-shard order and need the same declaration to reshard across TP sizes.
+        base_layout = getattr(base_layer.weight, "checkpoint_layout", None) or {}
+        if "fused" in base_layout:
+            self.lora_B.checkpoint_layout = {"fused": base_layout["fused"]}
 
     def forward(self, x):
         x_b = ttml.ops.distributed.broadcast(x, self.shard_dim)

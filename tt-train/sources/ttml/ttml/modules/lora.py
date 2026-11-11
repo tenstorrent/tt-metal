@@ -136,6 +136,11 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
         lora_B_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=2)
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features, mapper=lora_B_mapper))
+        # lora_B's rows add onto the base layer's output shard by shard, so on a fused base layer they are in the same
+        # per-shard [Q_d | K_d | V_d] order and need the same declaration to reshard across TP sizes.
+        fused_segments = getattr(base_layer, "fused_segments", None)
+        if fused_segments is not None:
+            self.lora_B.checkpoint_layout = {"fused": (2, tuple(fused_segments))}
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None

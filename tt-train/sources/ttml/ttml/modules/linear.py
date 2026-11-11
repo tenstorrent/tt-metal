@@ -117,6 +117,12 @@ class ColumnParallelLinear(AbstractModuleBase):
                 raise ValueError(
                     f"fused_segments {fused_segments} must be positive and sum to out_features={out_features}"
                 )
+            tp_size = ttml.mesh().axis_size(axis_name)
+            if any(s % tp_size for s in fused_segments):
+                raise ValueError(
+                    f"fused_segments {fused_segments} must each divide by the {axis_name!r} axis size {tp_size}: every "
+                    f"shard holds an equal piece of every segment"
+                )
         self.fused_segments = fused_segments
 
         if weight_init is None:

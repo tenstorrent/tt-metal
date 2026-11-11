@@ -34,6 +34,7 @@ from ._state_dict import (
     TTNN_DTYPES,
     LiveTensor,
     check_label_unchanged,
+    check_param_groups,
     collect_model,
     collect_optimizer,
     fsdp_gate,
@@ -177,6 +178,10 @@ def load(
     header = _read_header_json(ckpt_dir)
 
     fsdp_states = fsdp_gate(model, reshard_fsdp)
+    # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
+    # freed as it is replaced instead of at the end (the next forward rebuilds the cache).
+    for state in fsdp_states:
+        state._cached_shards.clear()
     live: list[LiveTensor] = collect_model(model)
     if optimizer is not None:
         state_live, _ = collect_optimizer(optimizer, live)
@@ -184,6 +189,8 @@ def load(
     by_key = {lt.key: lt for lt in live}
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
     plan: LoadPlan = create_load_plan(index, [lt.info for lt in live], strict=strict, roles=roles)
+    if optimizer is not None:
+        check_param_groups(optimizer, index.scalars)  # before anything is placed
     stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
 
     fds: dict[int, int] = {}
@@ -193,23 +200,32 @@ def load(
     t1 = time.perf_counter()
     try:
         needed = {r.file for kp in plan.keys.values() for r in kp.reads}
-        for file_index in needed:
-            path = os.path.join(ckpt_dir, index.files[file_index].path)
+        for file_index in sorted(needed):
+            record = index.files[file_index]
+            path = os.path.join(ckpt_dir, record.path)
             if not os.path.isfile(path):
                 raise CheckpointError(f"data file {path} listed in the index is missing")
-            _, data_start[file_index] = read_safetensors_header(path)
             fds[file_index] = os.open(path, os.O_RDONLY)
+            size = os.fstat(fds[file_index]).st_size
+            if size != record.nbytes:
+                raise IncompleteCheckpoint(
+                    f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
+                    "truncated or corrupt"
+                )
+            _, data_start[file_index] = read_safetensors_header(path)
         workers = 32 if threads is None else threads
         read_s = place_s = 0.0
         reads = 0
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            for key, kplan in plan.keys.items():
+
+            def submit(kplan: KeyPlan):
+                """Allocate a key's destination shards and submit its reads; returns (arrays, futures)."""
                 info = kplan.info
                 carrier = NUMPY_CARRIERS[info.dtype]
                 arrays = {group: np.zeros(box.sizes, dtype=carrier) for group, box in kplan.boxes.items()}
                 for fill in kplan.fills:
                     if fill.fill != "zeros":
-                        raise CheckpointError(f"{key}: unsupported padding fill {fill.fill!r}")
+                        raise CheckpointError(f"{kplan.key}: unsupported padding fill {fill.fill!r}")
                 by_chunk: dict[int, list[ReadItem]] = {}
                 for r in kplan.reads:
                     by_chunk.setdefault(r.chunk, []).append(r)
@@ -226,10 +242,19 @@ def load(
                     )
                     for its in by_chunk.values()
                 ]
+                return arrays, futures
+
+            # The reads of the next key run while the current key is placed on the device, so file I/O and placement
+            # overlap; at most two keys' host arrays are alive at a time.
+            keys = list(plan.keys.items())
+            pending = submit(keys[0][1]) if keys else None
+            for position, (key, kplan) in enumerate(keys):
+                arrays, futures = pending
                 t_key = time.perf_counter()
                 for future in futures:
                     bytes_read += future.result()
                 t_read_done = time.perf_counter()
+                pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
                 _place(by_key[key], kplan, arrays, device)
                 read_s += t_read_done - t_key
                 place_s += time.perf_counter() - t_read_done
@@ -243,8 +268,6 @@ def load(
     stats["reads"] = float(reads)
     stats["bytes_read"] = float(bytes_read)
 
-    for state in fsdp_states:
-        state._cached_shards.clear()
     applied: list[str] = []
     if optimizer is not None:
         applied = restore_scalars(optimizer, index.scalars)
