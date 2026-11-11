@@ -11,6 +11,13 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 from tt_py_test_utils_common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
@@ -1422,3 +1429,27 @@ def test_height_sharded_width_concat_block_float(device, dtype, shape, shard_sha
 
     result = ttnn.concat(tt_inputs, dim=3)
     assert_equal(expected, ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.concat))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.concat))
+def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.concat docstring lists."""
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    inputs = [
+        ttnn.from_torch(
+            full_range_input((1, 1, 32, 64), dtype, seed=seed),
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+        )
+        for seed in (0, 1)
+    ]
+    output = ttnn.concat(inputs, dim=2, memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(torch.concat([ttnn.to_torch(t) for t in inputs], dim=2), ttnn.to_torch(output))
