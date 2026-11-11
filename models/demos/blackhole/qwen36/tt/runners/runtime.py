@@ -69,6 +69,9 @@ class TtQwen35PupPrefillRuntime:
         self.gdn_layer_ids = tuple(i for i, layer in enumerate(model.layers) if not layer.is_full_attention)
         self.image_token = int(getattr(args.hf_config, "image_token_id", 0) or 0) or None
         self._sink = None
+        self._kv_ref = None
+        self._slot_host = None
+        self._last_record = (0, 0.0)
         self._host_ids = None  # (device input, host ids) of the last make_chunk_input
         self._slot_scalars = {}
         self.last_timing = {}
@@ -82,6 +85,7 @@ class TtQwen35PupPrefillRuntime:
         buffer allocated after a capture can land on a captured trace's freed intermediates and be overwritten by
         every replay (seen here as a slot's published GDN state staying zero)."""
         m = self.model
+        self._kv_ref = kv_caches
         full_pt = self.page_table.reshape(1, -1)
         for slot in range(self.config.num_users):
             self._slot_scalar(slot)
@@ -182,6 +186,8 @@ class TtQwen35PupPrefillRuntime:
             ttnn.synchronize_device(self.mesh_device)
         t_prefill = time.perf_counter() - tp
         te = time.perf_counter()
+        grid = self.model._req_image_grid_thw if refs else None
+        rec = self._publish_slot_record(slot_id, grid, len(refs))
         self._export(kv_cache, slot=slot_id, actual_start=actual_start, actual_end=actual_end)
         if self.profile:
             ttnn.synchronize_device(self.mesh_device)
@@ -199,6 +205,22 @@ class TtQwen35PupPrefillRuntime:
         logger.info("[qwen35_9b_pup] PUPPRE " + " ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}"
                                                          for k, v in self.last_timing.items()))
         return None  # one rank: the published caches are the output
+
+    # --- the request's slot record (kv_table config 10) -----------------------------------------------------------
+    def _publish_slot_record(self, slot, grid, n_images):
+        """The request's decode parameters into ``slot``'s pages of config 10, before any layer is reported: the M-RoPE
+        offset decode applies after the prompt (the model's own ``rope_delta`` for the staged prompt; 0 for text) and
+        the presence penalty of the request's task (text-to-image vs image editing, :class:`PupPrefillConfig`)."""
+        pc = self.config.pup
+        delta = int(getattr(self.model.rope, "rope_delta", 0) or 0) if grid is not None else 0
+        if grid is not None and delta != kv_table.mrope_delta(grid.tolist()):
+            logger.warning(f"[qwen35_9b_pup] rope_delta {delta} != closed form {kv_table.mrope_delta(grid.tolist())}")
+        penalty = pc.presence_penalty_images if n_images else pc.presence_penalty_text
+        if getattr(self, "_slot_host", None) is None:
+            self._slot_host = torch.zeros(self._kv_ref.num_layers * self._kv_ref.num_users, kv_table.SLOT_WORDS,
+                                          dtype=torch.int32)
+        self._last_record = (delta, penalty)
+        return kv_table.write_slot_params(self.mesh_device, self._kv_ref, slot, delta, penalty, self._slot_host)
 
     # --- KV chunk table ----------------------------------------------------------------------------------------
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):

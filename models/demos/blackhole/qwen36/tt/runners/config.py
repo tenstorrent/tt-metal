@@ -73,6 +73,12 @@ class PupPrefillConfig:
     tokpar_min_rows: int = 1536
     """Token-parallel residual stream from this many rows (session 5: costs more than it saves below)."""
 
+    # --- per-request decode parameters published with the state (kv_table config 10) ---
+    presence_penalty_text: float = 1.5
+    """vLLM presence penalty of a request without images (FLUX.3 pup.py: text-to-image)."""
+    presence_penalty_images: float = 0.0
+    """... and of a request with images (image editing)."""
+
     # --- media ---
     media_source: str = "spliced"
     """Image embeddings come from the encoder service's embedding store; prefill runs no vision tower."""

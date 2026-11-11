@@ -19,6 +19,12 @@ tables and M3 use):
     04..07  v head 0..3        Kv        same
     08      gdn_recurrent      Snapshot  chunk 32 (synthetic), 16384 B         rows: GDN layers 0-2, 4-6, ..., 28-30
     09      gdn_convolution    Snapshot  chunk 32 (synthetic), 384 B
+    10      slot_params        Snapshot  chunk 32, 64 B: one per TP chip       rows: every layer (0..31)
+
+Config 10 is the request's per-slot record (:func:`write_slot_params`): word 0 the int32 M-RoPE position offset decode
+applies after the prompt, word 1 the fp32 presence penalty. One page per (layer, slot) on each chip, window 128 = one
+32-position chunk per chip, so the KV manager lands chip c's copy on decode chip c of every layer's stage (tt-blaze
+``blaze.models.qwen35_9b.slot_params``).
 
 Every config is published on the model's layer axis (32 rows); a row published on one side only makes the KV manager
 reject the migration, so decode must publish the same rows.
@@ -34,7 +40,10 @@ from models.demos.blackhole.qwen36.tt.runners.gdn_state import GdnGeometry, GdnS
 NUM_BANKS_BH = 8
 CHUNK_TOKENS = 32
 BF8_TILE_BYTES = 1088
-KINDS = ("k", "v", "gdn_recurrent", "gdn_convolution")
+KINDS = ("k", "v", "gdn_recurrent", "gdn_convolution", "slot_params")
+SLOT_PAGE_BYTES = 64
+SLOT_WORDS = SLOT_PAGE_BYTES // 4
+SLOT_WINDOW = CHUNK_TOKENS * 4  # one chunk per TP chip
 #: Rotary dims of a Qwen3.5-9B attention head (partial_rotary_factor 0.25 of 256).
 K_ROPE_DIM = 64
 
@@ -86,6 +95,7 @@ def config_specs(num_kv_heads: int):
     specs += [(f"{num_kv_heads + h:02d}", "v", h, False) for h in range(num_kv_heads)]
     n = 2 * num_kv_heads
     specs += [(f"{n:02d}", "gdn_recurrent", None, True), (f"{n + 1:02d}", "gdn_convolution", None, True)]
+    specs += [(f"{n + 2:02d}", "slot_params", None, True)]
     return specs
 
 
@@ -109,6 +119,7 @@ class PupKvCaches:
     head_dim: int
     attn_layer_ids: tuple
     gdn_layer_ids: tuple
+    slot_params: object = None  # [num_layers * num_users, 16] uint32 ROW_MAJOR interleaved DRAM (config 10)
 
     @property
     def num_attn_layers(self) -> int:
@@ -120,6 +131,12 @@ class PupKvCaches:
         ttnn.deallocate(self.k)
         ttnn.deallocate(self.v)
         self.gdn.deallocate()
+        if self.slot_params is not None:
+            ttnn.deallocate(self.slot_params)
+
+    @property
+    def num_layers(self) -> int:
+        return len(self.attn_layer_ids) + len(self.gdn_layer_ids)
 
 
 try:  # register as the runner's opaque handle type without importing it at module load in a host-only test
@@ -163,6 +180,16 @@ def allocate(mesh_device, *, attn_layer_ids, gdn_layer_ids, geometry: GdnGeometr
 
     k, v = _alloc(), _alloc()
     gdn = GdnStates.allocate(mesh_device, geometry, layer_ids=tuple(gdn_layer_ids), num_slots=num_users)
+    import torch
+
+    slot_params = ttnn.from_torch(
+        torch.zeros((len(attn_layer_ids) + len(gdn_layer_ids)) * num_users, SLOT_WORDS, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
     return PupKvCaches(
         k=k,
         v=v,
@@ -172,7 +199,42 @@ def allocate(mesh_device, *, attn_layer_ids, gdn_layer_ids, geometry: GdnGeometr
         head_dim=head_dim,
         attn_layer_ids=tuple(attn_layer_ids),
         gdn_layer_ids=tuple(gdn_layer_ids),
+        slot_params=slot_params,
     )
+
+
+def slot_record(rope_delta: int, presence_penalty: float):
+    """The 16-word record of one request (config 10)."""
+    import torch
+
+    r = torch.zeros(SLOT_WORDS, dtype=torch.int32)
+    r[0] = int(rope_delta)
+    r[1] = torch.tensor([float(presence_penalty)], dtype=torch.float32).view(torch.int32)[0]
+    return r
+
+
+def write_slot_params(mesh_device, caches: "PupKvCaches", slot: int, rope_delta: int, presence_penalty: float, host):
+    """Write ``slot``'s record into every layer's page (host keeps the whole table: [num_layers * num_users, 16] int32,
+    updated in place); one small host -> device copy. Call before the request's first layer completion."""
+    import ttnn
+
+    rec = slot_record(rope_delta, presence_penalty)
+    for layer in range(caches.num_layers):
+        host[layer * caches.num_users + slot] = rec
+    h = ttnn.from_torch(
+        host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+    ttnn.copy_host_to_device_tensor(h, caches.slot_params)
+    return h
+
+
+def mrope_delta(grids, merge: int = 2) -> int:
+    """Rope position minus KV position for text after the images (HF Qwen-VL ``get_rope_index``, single turn)."""
+    delta = 0
+    for g in grids if grids is not None else ():
+        t, h, w = (int(v) for v in g)
+        delta += max(t, h // merge, w // merge) - t * (h // merge) * (w // merge)
+    return delta
 
 
 def migration_stages(caches: PupKvCaches):
@@ -184,6 +246,7 @@ def migration_stages(caches: PupKvCaches):
         KvCacheStage(int(caches.v.buffer_address()), 0, caches.num_attn_layers),
         KvCacheStage(int(caches.gdn.recurrent.buffer_address()), 0, caches.gdn.num_layers),
         KvCacheStage(int(caches.gdn.convolution.buffer_address()), 0, caches.gdn.num_layers),
+        KvCacheStage(int(caches.slot_params.buffer_address()), 0, caches.num_layers),
     ]
 
 
@@ -230,7 +293,7 @@ def build_table(
         import ttnn
 
         disagg = ttnn.experimental.disaggregation
-    assert len(stage_layouts) == 4, "one layout per kind: k, v, gdn_recurrent, gdn_convolution"
+    assert len(stage_layouts) == 5, "one layout per kind: k, v, gdn_recurrent, gdn_convolution, slot_params"
     assert max_seq_len % CHUNK_TOKENS == 0
     specs = config_specs(num_kv_heads)
 
@@ -242,6 +305,11 @@ def build_table(
             cfg.max_sequence_length = max_seq_len
             cfg.chunk_n_tokens = CHUNK_TOKENS
             cfg.chunk_size_bytes = kv_chunk_bytes(head_dim)
+        elif kind == "slot_params":
+            cfg.max_sequence_length = SLOT_WINDOW
+            cfg.chunk_n_tokens = CHUNK_TOKENS
+            cfg.chunk_size_bytes = SLOT_PAGE_BYTES
+            cfg.tensor_type = disagg.KvChunkTensorType.Snapshot
         else:
             cfg.max_sequence_length = geometry.window
             cfg.chunk_n_tokens = geometry.chunk_n_tokens(kind)
@@ -264,7 +332,7 @@ def build_table(
 
     kv_chunk = kv_chunk_bytes(head_dim)
     chunks_per_seq = max_seq_len // CHUNK_TOKENS
-    kind_index = {"k": 0, "v": 1, "gdn_recurrent": 2, "gdn_convolution": 3}
+    kind_index = {"k": 0, "v": 1, "gdn_recurrent": 2, "gdn_convolution": 3, "slot_params": 4}
     for config_id, (_, kind, head, _) in enumerate(specs):
         for stage in stage_layouts[kind_index[kind]]:
             count = int(stage["count"])
@@ -272,6 +340,19 @@ def build_table(
                 continue
             base, nb, first, fnids = int(stage["base_addr"]), int(stage["num_banks"]), int(stage["first_layer"]), stage["fnids"]
             sp = len(fnids)
+            if kind == "slot_params":
+                # page (layer, slot) on every chip; chunk c of the 128-position window = chip c's copy
+                for tp_col in range(len(fnids[0])):
+                    g = _group(stage, [fnids[r][tp_col] for r in range(sp)])
+                    for slot in range(num_users):
+                        for layer in range(count):
+                            page = layer * num_users + slot
+                            loc = disagg.KvCacheLocation()
+                            loc.noc_addr = ((page % nb) << 32) | (base + (page // nb) * SLOT_PAGE_BYTES)
+                            loc.size_bytes = SLOT_PAGE_BYTES
+                            loc.device_group_index = g
+                            table.set(first + layer, tp_col * CHUNK_TOKENS, slot, loc, config_id)
+                continue
             if kind in ("k", "v"):
                 assert sp == 1, "PUP prefill runs on one (1, TP) column: no sequence parallelism"
                 g = _group(stage, [fnids[0][head]])
@@ -308,7 +389,8 @@ def build_table(
 
 
 def layer_position_range(layer_idx: int, real_len: int, gdn_layer_ids, geometry: GdnGeometry):
-    """Positions one /migrate of ``layer_idx`` covers: the tokens for attention, the whole Snapshot window for GDN."""
+    """Positions one /migrate of ``layer_idx`` covers: the tokens for attention, the whole Snapshot window for GDN
+    (config 10, the slot record, is a Snapshot of every layer: the KV manager moves it whole)."""
     if layer_idx in gdn_layer_ids:
         return 0, geometry.window
     return 0, real_len

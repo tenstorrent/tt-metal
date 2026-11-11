@@ -217,8 +217,8 @@ GDN = tuple(i for i in range(32) if i not in ATTN)
 
 def _build(num_users=2, max_seq_len=256):
     fnids = [[_fid(c) for c in range(4)]]
-    bases = {"k": 1 << 20, "v": 2 << 20, "gdn_recurrent": 3 << 20, "gdn_convolution": 4 << 20}
-    counts = {"k": 8, "v": 8, "gdn_recurrent": 24, "gdn_convolution": 24}
+    bases = {"k": 1 << 20, "v": 2 << 20, "gdn_recurrent": 3 << 20, "gdn_convolution": 4 << 20, "slot_params": 5 << 20}
+    counts = {"k": 8, "v": 8, "gdn_recurrent": 24, "gdn_convolution": 24, "slot_params": 32}
     layouts = [
         [dict(first_layer=0, count=counts[k], base_addr=bases[k], num_banks=8, host_name="lb", fnids=fnids)]
         for k in kv_table.KINDS
@@ -241,16 +241,34 @@ def _build(num_users=2, max_seq_len=256):
 def test_table_configs():
     t, _ = _build()
     names = sorted(t.configs)
-    assert names == [f"{i:02d}" for i in range(10)]
+    assert names == [f"{i:02d}" for i in range(11)]
     for i, name in enumerate(names):
         cfg = t.configs[name]
         assert cfg.num_layers == 32 and cfg.num_slots == 2
         if i < 8:
             assert (cfg.chunk_n_tokens, cfg.chunk_size_bytes, cfg.max_sequence_length) == (32, 8704, 256)
             assert cfg.tensor_type == "Kv"
-        else:
+        elif i < 10:
             assert cfg.tensor_type == "Snapshot" and cfg.chunk_n_tokens == 32 and cfg.max_sequence_length == 4096
     assert t.configs["08"].chunk_size_bytes == 16384 and t.configs["09"].chunk_size_bytes == 384
+    c10 = t.configs["10"]
+    assert (c10.tensor_type, c10.chunk_n_tokens, c10.chunk_size_bytes, c10.max_sequence_length) == (
+        "Snapshot", 32, 64, 128)
+
+
+def test_table_slot_record():
+    """Config 10: every layer row, one 64 B chunk per chip (chunk c on chip c), page layer * slots + slot."""
+    t, bases = _build()
+    for chip in range(4):
+        page = 17 * 2 + 1
+        addr, size, grp = t.entries[(10, 17, chip * 32, 1)]
+        assert size == 64 and addr == ((page % 8) << 32) | (bases["slot_params"] + (page // 8) * 64)
+        assert [f.chip_id for f in t.groups[grp]] == [chip]
+    assert {k[1] for k in t.entries if k[0] == 10} == set(range(32))
+    assert sum(1 for k in t.entries if k[0] == 10) == 32 * 2 * 4
+    rec = kv_table.slot_record(-2400, 1.5)
+    assert int(rec[0]) == -2400 and rec[1:2].view(torch.float32).item() == 1.5
+    assert kv_table.mrope_delta([[1, 32, 32]]) == -240 and kv_table.mrope_delta([[1, 64, 64]] ) == -992
 
 
 def test_table_kv_addresses_follow_the_nd_round_robin():
@@ -284,14 +302,14 @@ def test_table_gdn_addresses():
     # one full window per (layer, slot): 128 segments of each kind
     for cid in (8, 9):
         assert sum(1 for k in t.entries if k[0] == cid and k[1] == GDN[3] and k[3] == 1) == 128
-    assert {k[1] for k in t.entries if k[0] >= 8} == set(GDN)
+    assert {k[1] for k in t.entries if k[0] in (8, 9)} == set(GDN)
 
 
 def test_cache_kind_and_position_range():
     from models.demos.blackhole.qwen36.tt.runners.adapter import Qwen35PupPrefillAdapter, layer_ids
 
     a = Qwen35PupPrefillAdapter()
-    assert [a.cache_kind(i) for i in range(11)] == ["kv"] * 8 + ["gdn_recurrent", "gdn_convolution", "other"]
+    assert [a.cache_kind(i) for i in range(11)] == ["kv"] * 8 + ["gdn_recurrent", "gdn_convolution", "slot_params"]
     assert a.layer_position_range(3, 900) == (0, 900)
     assert a.layer_position_range(0, 900) == (0, 12288)  # the ring form (R.window)
     attn, gdn = layer_ids(32, ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8)

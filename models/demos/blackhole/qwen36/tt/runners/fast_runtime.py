@@ -108,6 +108,7 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
         m, dev = self.model, self.mesh_device
         rep = ttnn.ReplicateTensorToMesh(dev)
         self._kv = kv_caches
+        self._kv_ref = kv_caches
         t0 = time.perf_counter()
         st = self._slot_scalar(0)
         m.prefill_trash_block = self.trash
@@ -566,6 +567,7 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
             assert n_img == sum(int(r.shape[0]) for _, r in rows), (n_img, [tuple(r.shape) for _, r in rows])
             vis = [(s0 - P, r) for s0, r in rows]
         keep = self._stage(b, ids[:, P:], P=P, n=n, vis=vis)
+        keep.append(self._publish_slot_record(slot_id, grid, len(refs)))
         t_stage = time.perf_counter()
         self._run(b, slot_id, actual_start, actual_end, report=True)
         keep.clear()
@@ -584,6 +586,8 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
             tokens=L,
             prefix=P,
             bucket=b.Tb,
+            rope_delta=self._last_record[0],
+            presence=self._last_record[1],
         )
         logger.info(
             "[qwen35_9b_pup] PUPPRE "
