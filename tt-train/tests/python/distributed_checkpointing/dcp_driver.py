@@ -26,7 +26,6 @@ the logical vocab rows for the padded LM head).
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import random
@@ -38,12 +37,13 @@ import ttnn
 
 import ttml
 import ttml.distributed_checkpointing as dcp
-from dcp_shards import local_coords, shard_arrays
+from dcp_shards import shard_arrays
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
 from ttml.common.utils import set_seed
+from ttml.distributed_checkpointing._state_dict import local_coords
 from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
 
 from dcp_oracle import Loader
@@ -191,8 +191,7 @@ def agree(ok: bool) -> bool:
 
 def local_shards(tensor) -> dict[tuple[int, ...], np.ndarray]:
     """This process's shards of a tensor as float32, by mesh coordinate."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    return shard_arrays(tensor.get_value(NATIVE), local_coords(device))
+    return shard_arrays(tensor.get_value(NATIVE), local_coords())
 
 
 def label_json(tensor) -> str:
@@ -568,10 +567,12 @@ def main(argv=None) -> int:
     reference_base = args.dir.rstrip("/") + ".reference"
     actual_base = args.dir.rstrip("/") + ".actual"
     saved_resume = False
+    saved_ranks = 1
     if args.command == "load":
         with np.load(reference_base + ".config.npz") as saved:
             sizes = json.loads(str(saved["config"]))
             saved_resume = "resume_step" in saved.files and bool(saved["resume_step"])
+            saved_ranks = int(saved["ranks"]) if "ranks" in saved.files else 1
     else:
         sizes = dict(
             hidden_size=args.hidden,
@@ -634,7 +635,12 @@ def main(argv=None) -> int:
                 print("RESULT: the reference could not be written on every rank")
                 return 1
             if rank == 0:
-                np.savez(reference_base + ".config.npz", config=json.dumps(sizes), resume_step=np.asarray(resumed))
+                np.savez(
+                    reference_base + ".config.npz",
+                    config=json.dumps(sizes),
+                    resume_step=np.asarray(resumed),
+                    ranks=np.asarray(size),
+                )
                 print(
                     json.dumps(
                         {
@@ -672,11 +678,13 @@ def main(argv=None) -> int:
         problems: list[str] = []
         if rank == 0:
             try:
-                expected_parts = merge_parts(glob.glob(reference_base + "-w*.npz"))
+                # Exactly the parts of the two worlds' ranks, by name: the tests share one saved checkpoint across
+                # several load worlds, and a part left by an earlier, larger world must not be merged in.
+                expected_parts = merge_parts([part_path(reference_base, r) for r in range(saved_ranks)])
                 if not resumed:
                     expected_parts = {k: v for k, v in expected_parts.items() if not k.startswith(RESUME)}
                 expected = canonical(expected_parts, config)
-                actual = canonical(merge_parts(glob.glob(actual_base + "-w*.npz")), config)
+                actual = canonical(merge_parts([part_path(actual_base, r) for r in range(size)]), config)
                 problems = compare(actual, expected, 0.0 if args.same_layout else args.logits_tolerance)
             except Exception as err:  # noqa: BLE001
                 traceback.print_exc()

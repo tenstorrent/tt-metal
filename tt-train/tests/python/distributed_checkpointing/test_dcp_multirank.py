@@ -24,7 +24,8 @@ import numpy as np
 import pytest
 import torch
 import ttnn
-from dcp_shards import shard_arrays
+from dcp_oracle import Loader
+from dcp_shards import param_shards
 from tp_block import TPBlock, fresh_tp, train_step
 
 import ttml
@@ -36,15 +37,6 @@ pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 MESH = (1, 4)
 DIM = 64
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
-
-
-def _local_shards(params, local):
-    """Every parameter's shards at this rank's coordinates, keyed by name and coordinate."""
-    out = {}
-    for name, tensor in params.items():
-        for coord, array in shard_arrays(tensor.get_value(NATIVE), local).items():
-            out[(name, coord)] = array
-    return out
 
 
 @pytest.fixture(scope="module")
@@ -77,26 +69,12 @@ def two_ranks():
         ttml.close_device_mesh()
 
 
-class _Loader:
-    def __init__(self) -> None:
-        self.position = 0
-
-    def advance(self) -> None:
-        self.position += 1
-
-    def get_state_dict(self) -> dict:
-        return {"position": self.position}
-
-    def set_state_dict(self, state: dict) -> None:
-        self.position = int(state["position"])
-
-
 def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ranks):
     rank, local, root = two_ranks
     ctx = ttml.autograd.AutoContext.get_instance()
     model, params, opt = fresh_tp(DIM)
     sched = CosineAnnealingScheduler(opt, T_max=8)
-    loader = _Loader()
+    loader = Loader()
     ctx.set_seed(100 + rank)
     random.seed(200 + rank)
     np.random.seed(300 + rank)
@@ -105,7 +83,7 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
         train_step(model, opt, DIM)
         sched.step()
         loader.advance()
-    before = _local_shards(params, local)
+    before = param_shards(params, local)
     # Devices that hold the same replicated tensor need not agree across ranks (a TP world whose collectives do
     # not span its ranks lets them drift), and the checkpoint keeps the copy of the device elected to write it: a
     # loaded shard must equal one of the saving ranks' copies, so every rank dumps its copies for the others.
@@ -142,15 +120,15 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
 
     model2, params2, opt2 = fresh_tp(DIM)
     sched2 = CosineAnnealingScheduler(opt2, T_max=8)
-    loader2 = _Loader()
+    loader2 = Loader()
     ctx.set_seed(7)
     random.seed(0)
     np.random.seed(0)
     loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2, rng=True)
 
     assert loaded.missing == [] and loaded.unexpected == [] and loaded.header == {"step": 2}
-    assert loaded.restored[:2] == ["dataloader", "scheduler"] and "rng.ttml" in loaded.restored
-    after = _local_shards(params2, local)
+    assert loaded.restored[:2] == ["scheduler", "dataloader"] and "rng.ttml" in loaded.restored
+    after = param_shards(params2, local)
     assert after.keys() == before.keys(), "this rank restores exactly the coordinates it holds"
     for (name, coord), array in after.items():
         assert any(np.array_equal(array, c) for c in copies[name]), f"{name} at {coord} matches no saved copy"

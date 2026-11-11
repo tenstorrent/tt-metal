@@ -14,9 +14,7 @@ module holds no device fixture of its own: the children need the chips.
 import os
 import re
 import shutil
-import signal
 import socket
-import subprocess
 import sys
 
 import pytest
@@ -24,11 +22,11 @@ import ttnn
 
 import ttml
 from dcp_driver import MESH_OPEN_FAILED
+from dcp_harness import run_world
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(3600)]
 
 MGD_DIR = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), "..", "..", "..", "configs", "mgd"))
-REPO = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), *([".."] * 4)))
 # Two MPI ranks on one host, each with its own [2, 2] mesh (mesh ids 0 and 1), eight chips in all. The shared-mesh
 # layout (the ttnn dual-rank descriptor) is not used for cross-world checks: its TP collectives do not reach across
 # the ranks, so replicas drift and the forward is not consistent (test_dcp_multirank covers the protocol on it).
@@ -129,34 +127,12 @@ def _command(args: list[str]) -> list[str]:
     ]
 
 
-def _run_world(command: list[str], env: dict, timeout: int) -> subprocess.CompletedProcess:
-    """Run a world to completion. On timeout the whole process group gets SIGTERM, so mpirun tears the ranks down (a
-    rank parked in a hung device call would otherwise keep its chips locked for the next world), then SIGKILL for
-    whatever is left; what the world printed so far is kept."""
-    proc = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, start_new_session=True
-    )
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGTERM)
-        try:
-            out, err = proc.communicate(timeout=60)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            out, err = proc.communicate()
-        return subprocess.CompletedProcess(
-            command, -9, out + f"\n[harness] the world ran for {timeout} s and was terminated\n", err
-        )
-    return subprocess.CompletedProcess(command, proc.returncode, out, err)
-
-
 def _run(args: list[str], what: str) -> str:
     env = dict(os.environ)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
     if "--ranks" in args and TT_RUN is None:
         pytest.skip(f"{what}: tt-run is not installed")
-    proc = _run_world(_command(args), env, 1500)
+    proc = run_world(_command(args), env, 1500)
     # The interpreter's exit prints a long nanobind leak report after any traceback; keep the lines that matter.
     lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
     opened = not any("MESH_OPEN_FAILED" in ln for ln in lines)

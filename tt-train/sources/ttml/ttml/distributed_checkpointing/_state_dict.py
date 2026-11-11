@@ -266,10 +266,12 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
 
 
 def check_param_groups(optimizer, scalars: dict[str, Any]) -> None:
-    """The checkpoint's param groups must be the live optimizer's: the same count and, group by group, the same
-    params. Checked before any tensor is placed, so a mismatch leaves the model and optimizer untouched instead of
-    surfacing from ``set_state_dict`` after every tensor was replaced. A checkpoint without optimizer scalars (a
-    model-only save loaded non-strictly) has nothing to check."""
+    """The live optimizer's param groups must fit the checkpoint's: the same number of groups, and every live member
+    of a group among the checkpoint's members of that group. The checkpoint records each group's members over every
+    rank of the saving world (a rank of a multi-mesh world holds only its own), so a live optimizer holding fewer is
+    allowed (strict judges missing tensors), while a param in another group, or one the checkpoint never saw, is
+    refused. Checked before any tensor is placed, so a mismatch leaves the model and optimizer untouched. A checkpoint
+    without optimizer scalars (a model-only save loaded non-strictly) has nothing to check."""
     saved_count = scalars.get("optimizer/num_param_groups")
     if saved_count is None:
         return
@@ -294,20 +296,21 @@ def check_param_groups(optimizer, scalars: dict[str, Any]) -> None:
                 stacklevel=3,
             )
             continue
-        if saved == live_members:
-            continue
-        saved_set, live_set = set(saved.split("\n")), set(live_members.split("\n"))
-        raise CheckpointError(
-            f"optimizer param group {group} holds different params in the checkpoint: only saved "
-            f"{sorted(saved_set - live_set)[:3]}, only live {sorted(live_set - saved_set)[:3]}; build the optimizer with "
-            f"the same param groups"
-        )
+        saved_set = {n for n in saved.split("\n") if n}
+        live_set = {n for n in live_members.split("\n") if n}
+        extra = live_set - saved_set
+        if extra:
+            raise CheckpointError(
+                f"optimizer param group {group} holds params the checkpoint's group {group} does not: "
+                f"{sorted(extra)[:3]}; build the optimizer with the same param groups"
+            )
 
 
 def is_structural_scalar(key: str) -> bool:
     """A scalar that describes the optimizer's own structure rather than its progress: the parameter names of a
-    param group. It is recorded for inspection and never written back, since on a multi-mesh world each rank's
-    optimizer holds its own parameters and the optimizer refuses another rank's list."""
+    param group. It is never written back (each rank's optimizer keeps its own list, which on a multi-mesh world
+    holds only that rank's parameters); ``check_param_groups`` checks it against the checkpoint's list, the union over
+    the saving ranks, before anything is placed."""
     return bool(_PARAM_GROUP_MEMBERS.search(key))
 
 
@@ -374,15 +377,9 @@ def local_coords() -> list[tuple[int, ...]]:
 def mesh_id() -> int:
     """The id the control plane gave this process's mesh (0 on a single mesh)."""
     try:
-        raw = mesh_device().get_system_mesh_id()
-    except Exception:  # noqa: BLE001  (no control plane: a plain single-host mesh)
+        return int(mesh_device().get_system_mesh_id())
+    except Exception:  # noqa: BLE001  (no control plane: a plain single-host mesh has no system mesh id)
         return 0
-    for convert in (int, lambda v: int(v.value()), lambda v: int(v.value), lambda v: int(v.get())):
-        try:
-            return convert(raw)
-        except Exception:  # noqa: BLE001
-            continue
-    return 0
 
 
 def rank_record(rank: int = 0, world_rank: int = 0) -> dict:

@@ -32,8 +32,6 @@ that names the stuck operation). Without ``DCP_HOSTS`` the module skips.
 import os
 import re
 import shutil
-import signal
-import subprocess
 import sys
 import uuid
 
@@ -41,11 +39,11 @@ import pytest
 
 import ttml
 from dcp_driver import MESH_OPEN_FAILED
+from dcp_harness import run_world
 
 pytestmark = [pytest.mark.timeout(7200)]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), *([".."] * 4)))
 MGD_DIR = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), "..", "..", "..", "configs", "mgd"))
 TWO_MESHES = os.path.join(HERE, "bh_two_2x2_meshes.textproto")
 DRIVER = [sys.executable, os.path.join(HERE, "dcp_driver.py")]
@@ -55,7 +53,6 @@ SHARED = os.environ.get("DCP_SHARED_TMP")
 BIGMESH_MGD = os.environ.get("DCP_BIGMESH_MGD")
 BIGMESH_SHAPE = os.environ.get("DCP_BIGMESH_SHAPE", "16x4")
 BIGMESH_HOSTS = [h for h in os.environ.get("DCP_BIGMESH_HOSTS", ",".join(HOSTS)).split(",") if h]
-TIMED_OUT = -9  # the harness's own exit code for a world it had to terminate
 
 
 def _world(mesh, axes, flags, mgd, hosts):
@@ -132,34 +129,12 @@ def _command(world, command, ckpt, steps):
     return [TT_RUN, "--mesh-graph-descriptor", mgd, "--hosts", hosts, "--mpi-args", mpi_args, *DRIVER, *args]
 
 
-def _run_world(command: list[str], env: dict, timeout: int) -> subprocess.CompletedProcess:
-    """Run a world to completion. On timeout the whole process group gets SIGTERM, so mpirun tears the ranks down on
-    every host (a rank parked in a hung device call would otherwise keep its chips locked for the next world), then
-    SIGKILL for whatever is left; what the world printed so far is kept."""
-    proc = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, start_new_session=True
-    )
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGTERM)
-        try:
-            out, err = proc.communicate(timeout=60)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            out, err = proc.communicate()
-        return subprocess.CompletedProcess(
-            command, TIMED_OUT, out + f"\n[harness] the world ran for {timeout} s and was terminated\n", err
-        )
-    return subprocess.CompletedProcess(command, proc.returncode, out, err)
-
-
 def _run(world, command, ckpt, steps, what):
     if len(world["hosts"]) > 1 and TT_RUN is None:
         pytest.skip(f"{what}: tt-run is not installed")
     env = dict(os.environ)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    proc = _run_world(_command(world, command, ckpt, steps), env, 3000)
+    proc = run_world(_command(world, command, ckpt, steps), env, 3000)
     lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
     if proc.returncode == MESH_OPEN_FAILED or any("MESH_OPEN_FAILED" in ln for ln in lines):
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")

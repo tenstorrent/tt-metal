@@ -25,11 +25,12 @@ import tempfile
 import numpy as np
 import pytest
 import ttnn
-from dcp_shards import local_coords, shard_arrays
+from dcp_shards import param_shards
 from tp_block import TPBlock, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
+from ttml.distributed_checkpointing._state_dict import local_coords
 from ttml.modules import AbstractModuleBase, LinearLayer
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
@@ -56,14 +57,6 @@ class _Pipeline(AbstractModuleBase):
         return x
 
 
-def _local_shards(params, local):
-    out = {}
-    for name, tensor in params.items():
-        for coord, array in shard_arrays(tensor.get_value(NATIVE), local).items():
-            out[(name, coord)] = array
-    return out
-
-
 @pytest.fixture(scope="module")
 def two_meshes():
     if not ttnn.using_distributed_env():
@@ -74,8 +67,7 @@ def two_meshes():
         if size != 2:
             pytest.skip(f"needs exactly two ranks, launched with {size}")
         rank = int(ttnn.distributed_context_get_rank())
-        device = ttml.autograd.AutoContext.get_instance().get_device()
-        local = local_coords(device)
+        local = local_coords()
         assert local == [(0, 0), (0, 1)], f"rank {rank} holds {local}"
         ctx = ttml.autograd.AutoContext.get_instance()
         ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
@@ -103,7 +95,7 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     params = model.parameters()
     opt = make_adamw(params)
     train_step(model, opt, DIM)
-    before = _local_shards(params, local)
+    before = param_shards(params, local)
     np.savez(os.path.join(root, f"before-w{rank}.npz"), **{f"{n}|{c}": a for (n, c), a in before.items()})
     ttnn.distributed_context_barrier()
     copies: dict[str, list[np.ndarray]] = {}
@@ -130,7 +122,7 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     opt2 = make_adamw(params2)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
     assert loaded.missing == [] and loaded.unexpected == [], "judged over the union of the ranks' keys"
-    after = _local_shards(params2, local)
+    after = param_shards(params2, local)
     assert after.keys() == before.keys()
     for (name, coord), array in after.items():
         assert any(np.array_equal(array, c) for c in copies[name]), f"{name} at {coord} matches no saved copy"

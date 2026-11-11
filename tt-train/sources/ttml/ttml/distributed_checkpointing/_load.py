@@ -23,7 +23,7 @@ from math import prod
 import numpy as np
 import ttnn
 
-from ._coordinator import Group, current_transport
+from ._coordinator import checked_payload, current_group, name_hash
 from ._errors import CheckpointError, IncompleteCheckpoint, MissingKeyError, UnexpectedKeyError
 from ._index import Index, is_complete, read_index
 from ._index import read_header as _read_header_json
@@ -188,8 +188,11 @@ def load(
     ``CheckpointError`` naming it. ``threads`` caps the reader threads (default 32; a read is one contiguous byte
     range of one file). Returns the header passed to ``save``, the train state stored and the names restored.
 
-    Under ``tt-run`` with several ranks the call is collective: every rank restores the shards of the coordinates
-    it holds, and ``strict`` judges unexpected entries over the union of the ranks' live tensors.
+    Under ``tt-run`` with several ranks the call is collective: every rank calls it with the same ``ckpt_dir``,
+    ``strict`` and optimizer-or-not (checked before anything is read), restores the shards of the coordinates it
+    holds, and ``strict`` judges unexpected entries over the union of the ranks' live tensors. A failure on any rank
+    makes every rank raise the same error class, and no point-to-point MPI traffic between the ranks may be
+    outstanding when load is called. A single process is the group of one and takes the same path.
     """
     if model is None and optimizer is None:
         raise CheckpointError("load needs a model and/or an optimizer")
@@ -197,9 +200,12 @@ def load(
         raise CheckpointError("optimizer state is keyed by the model's parameters; pass model= as well")
     t0 = time.perf_counter()
     ckpt_dir = os.path.abspath(ckpt_dir)
-    transport = current_transport()
-    group = Group(transport) if transport is not None else None
-    world_rank = group.world_rank if group is not None else 0
+    group = current_group()
+    world_rank = group.world_rank
+    # Ranks that resolved different directories (a stale NFS listing behind find_latest) or asked for different
+    # things would restore different checkpoints, or wait for each other in different collectives.
+    group.agree("the checkpoint directory", name_hash(ckpt_dir))
+    group.agree("strict and whether an optimizer is loaded", int(bool(strict)) + 2 * int(optimizer is not None))
 
     def open_and_collect():
         if not is_complete(ckpt_dir):
@@ -224,14 +230,11 @@ def load(
             live.extend(state_live)
         return index, header, train_state, missing_state, fsdp_states, live, set(local_coords())
 
-    # On a multi-rank world even the local work runs inside a phase, so a rank that fails here cannot leave the
-    # others waiting in the first collective.
-    if group is None:
-        index, header, train_state, missing_state, fsdp_states, live, local = open_and_collect()
-    else:
-        index, header, train_state, missing_state, fsdp_states, live, local = group.phase(
-            "reading the index and collecting the live tensors", open_and_collect
-        )
+    # Even the local work runs inside a phase, so a rank that fails here cannot leave the others waiting in the next
+    # collective; on a single process the phase just runs it.
+    index, header, train_state, missing_state, fsdp_states, live, local = group.phase(
+        "reading the index and collecting the live tensors", open_and_collect
+    )
     by_key = {lt.key: lt for lt in live}
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
 
@@ -245,20 +248,21 @@ def load(
             check_param_groups(optimizer, index.scalars)  # before anything is placed
         return plan
 
-    if group is None:
+    def plan_and_report() -> tuple[LoadPlan, bytes]:
         plan = plan_locally()
-    else:
-        plan = group.phase("planning the load", plan_locally)
         used = sorted({kp.entry.key for kp in plan.keys.values()})
-        gathered = group.gather(json.dumps(used).encode())
+        return plan, checked_payload(json.dumps(used).encode(), "this rank's planned keys")
 
-        def judge() -> bytes | None:
-            if not group.is_coordinator:
-                return None
-            union_used = {key for part in gathered for key in json.loads(part.decode("utf-8"))}
-            return json.dumps(unexpected_keys(index, union_used, roles)).encode()
+    plan, used_bytes = group.phase("planning the load", plan_and_report)
+    gathered = group.gather(used_bytes)
 
-        plan.unexpected = json.loads(group.broadcast(group.phase("judging the unexpected entries", judge)))
+    def judge() -> bytes | None:
+        if not group.is_coordinator:
+            return None
+        union_used = {key for part in gathered for key in json.loads(part.decode("utf-8"))}
+        return checked_payload(json.dumps(unexpected_keys(index, union_used, roles)).encode(), "the unexpected keys")
+
+    plan.unexpected = json.loads(group.broadcast(group.phase("judging the unexpected entries", judge)))
     if strict and plan.unexpected:
         raise UnexpectedKeyError(
             f"{len(plan.unexpected)} checkpoint entr(ies) have no live tensor: {plan.unexpected[:5]}"
@@ -337,10 +341,7 @@ def load(
         return bytes_read, reads, read_s, place_s
 
     t1 = time.perf_counter()
-    if group is None:
-        bytes_read, reads, read_s, place_s = read_and_place()
-    else:
-        bytes_read, reads, read_s, place_s = group.phase("reading and placing the shards", read_and_place)
+    bytes_read, reads, read_s, place_s = group.phase("reading and placing the shards", read_and_place)
     stats["read_and_place_s"] = time.perf_counter() - t1
     stats["read_s"] = read_s
     stats["place_s"] = place_s
@@ -357,10 +358,7 @@ def load(
         )
         return applied, restored
 
-    if group is None:
-        applied, restored = restore_rest()
-    else:
-        applied, restored = group.phase("restoring the scalars and the train state", restore_rest)
+    applied, restored = group.phase("restoring the scalars and the train state", restore_rest)
     stats["total_s"] = time.perf_counter() - t0
     return LoadResult(
         ckpt_dir,

@@ -12,12 +12,9 @@ shard per coordinate this process owns, which is what the tests and the driver c
 import numpy as np
 import ttnn
 
+import ttml
+
 CARRIER = {ttnn.DataType.BFLOAT16: np.uint16, ttnn.DataType.FLOAT32: np.float32, ttnn.DataType.UINT32: np.uint32}
-
-
-def local_coords(mesh_device) -> list[tuple[int, ...]]:
-    """The coordinates this process holds: every coordinate on a single-host mesh."""
-    return [tuple(int(x) for x in c) for c in mesh_device.get_view().get_local_mesh_coord_range()]
 
 
 def shard_arrays(value, coords) -> dict[tuple[int, ...], np.ndarray]:
@@ -41,4 +38,13 @@ def shard_arrays(value, coords) -> dict[tuple[int, ...], np.ndarray]:
         if carrier is np.uint16:  # bf16 bits -> float32
             array = (array.astype(np.uint32) << 16).view(np.float32)
         out[tuple(coord)] = np.ascontiguousarray(array.astype(np.float32))
+    return out
+
+
+def param_shards(params, coords) -> dict[tuple[str, tuple[int, ...]], np.ndarray]:
+    """Every parameter's shards at ``coords``, keyed by (name, coordinate)."""
+    out = {}
+    for name, tensor in params.items():
+        for coord, array in shard_arrays(tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE), coords).items():
+            out[(name, coord)] = array
     return out
