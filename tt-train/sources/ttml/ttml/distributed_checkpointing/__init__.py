@@ -14,8 +14,8 @@ one mesh shape and parallelism strategy loads onto another.
     dcp.save(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, header={"step": step})
     result = dcp.load(ckpt_dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, rng=True)
 
-The scheduler, the dataloader and the random generators (the ttml generator, python, numpy, torch) are saved beside
-the header and restored on request; see ``_train_state``.
+The scheduler, the dataloader and the random generators (the ttml generator, ttml.init's, python, numpy, torch) are
+saved beside the header and restored on request; see ``_train_state``.
 
 Topology labels are trusted. The one fact a label cannot carry, the segment order inside a fused projection, is
 declared by the layer that fuses it (``ColumnParallelLinear(fused_segments=...)``), and a padded vocab weight

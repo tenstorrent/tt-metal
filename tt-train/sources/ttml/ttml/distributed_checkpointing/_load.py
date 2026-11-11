@@ -42,7 +42,7 @@ from ._state_dict import (
     restore_scalars,
     world_record,
 )
-from ._train_state import TRAIN_STATE_KEY, missing_train_state, restore_train_state
+from ._train_state import TRAIN_STATE_KEY, check_train_state, missing_train_state, restore_train_state
 
 
 @dataclass
@@ -172,9 +172,13 @@ def load(
     when ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result.
     Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and
     ``dataloader`` are restored through their ``set_state_dict`` from the state ``save`` stored, and with
-    ``rng=True`` so is every random generator ``save`` captured (the ttml generator for this world rank, python,
-    numpy, torch when imported); a component asked for that the checkpoint lacks is an error under ``strict`` and
-    listed in ``missing`` otherwise. ``threads`` caps the reader threads (default 32; a read is one contiguous byte
+    ``rng=True`` so is every random generator ``save`` captured (ttml's and ttml.init's for this world rank, python,
+    numpy, torch when imported). A component asked for that the checkpoint lacks entirely is an error under ``strict``
+    and listed in ``missing`` otherwise; within the RNG block, a generator or a world rank the checkpoint holds no state
+    for (torch imported only now, a world with more hosts than the save) keeps its current state with a warning, and
+    ``restored`` lists exactly what was restored. Everything that can be checked is checked before anything is placed:
+    the optimizer's param groups, the data files' sizes and the stored RNG state; a scheduler or dataloader that
+    refuses its state raises a ``CheckpointError`` naming it. ``threads`` caps the reader threads (default 32; a read is one contiguous byte
     range of one file). Returns the header passed to ``save``, the train state stored and the names restored.
     """
     if model is None and optimizer is None:
@@ -191,6 +195,7 @@ def load(
     missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
     if strict and missing_state:
         raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
+    check_train_state(train_state, rng=rng, world_rank=world_record()["ranks"][0]["world_rank"])
 
     fsdp_states = fsdp_gate(model, reshard_fsdp)
     # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
