@@ -469,7 +469,7 @@ void kernel_main() {
         if (with_mix) {
 #endif
             cb_reserve_back(CB_WM, MIXT);
-            add(wm.get_noc_addr(wm_page + L * pwm_layer), get_write_ptr(CB_WM), MIXT * MWTB, MIX_TRID0 + (L & 1), false);
+            add(wm.get_noc_addr(wm_page + wla(L) * pwm_layer), get_write_ptr(CB_WM), MIXT * MWTB, MIX_TRID0 + (L & 1), false);
         }
 #if defined(MK_V12)
         if (false) {
@@ -549,7 +549,7 @@ void kernel_main() {
 #if defined(MKA_QSK)
     // slot M: layer L's split-K qkv slice (attention: 20 K tiles x nt, k-major) or the GDN in-proj stand-in (QSK_GK K tiles)
     auto qsk_start = [&](uint32_t L) {
-        v_slot_start(sm, CB_WM, QSK_SLOT, wm.get_noc_addr(wm_page + L * pwm_layer), (is_attn(L) ? QSK_KPR : QSK_GK) * qsk_nt(vn) * MWTB, 10 + (L & 1));
+        v_slot_start(sm, CB_WM, QSK_SLOT, wm.get_noc_addr(wm_page + wla(L) * pwm_layer), (is_attn(L) ? QSK_KPR : QSK_GK) * qsk_nt(vn) * MWTB, 10 + (L & 1));
     };
 #endif
 #endif
@@ -832,7 +832,7 @@ void kernel_main() {
             const uint32_t pqw_per = pqw_ng ? (PQ_WS + pqw_ng - 1) / pqw_ng : PQ_WS;
             uint32_t pqw_done = 0;
             const uint32_t pqw_dst = get_write_ptr(CB_PQ);   // 1-slot ring: the writer never moves its copy of the pointer
-            const uint64_t pqw_src = wm.get_noc_addr(wm_page + (L + 1) * pwm_layer);
+            const uint64_t pqw_src = wm.get_noc_addr(wm_page + wla(L + 1) * pwm_layer);
 #endif
             for (uint32_t b = vb0; b < vb1; b += NBB) {
 #if defined(MKA_RQKV)

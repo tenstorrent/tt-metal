@@ -215,6 +215,15 @@ def setup_bench(dev, MESH, mesh_identity):
     if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
+    # MKA_W_ORD=1 (integ repack order): qkv / wo weight tensors hold the attention layers only (ordinal a = aidx(L));
+    # the kernels index them with wla(L); the synthetic packers below follow, so the bench exercises the injected layout
+    W_ORD = os.environ.get('MKA_W_ORD', '0') == '1'
+    if W_ORD and ('MKA_W_ORD', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_W_ORD', '1')]
+    ATTN_L = [L_ for L_ in range(NL) if is_attn_layer(L_)]
+    def wla(L_):   # engine layer -> page block of the qkv / wo tensors (mirrors the kernels' wla)
+        if not W_ORD: return L_
+        a_ = sum(1 for l_ in range(L_) if is_attn_layer(l_)); return min(a_, len(ATTN_L) - 1)
+    WLS = ATTN_L if W_ORD else list(range(NL))   # engine layers whose weights are stored, in tensor order
 
     # ================= MKA2: full grid + SDPA phase setup =================
     gfull = dev.compute_with_storage_grid_size(); GXF, GYF = gfull.x, gfull.y; NCF = GXF * GYF
@@ -458,9 +467,10 @@ def setup_bench(dev, MESH, mesh_identity):
             return pg
         _QINJ = QSK and 'qkv' in _WEIGHTS
         if _QINJ: wq_all = _WEIGHTS['qkv']['tensor']   # real weights (golds skipped)
-        else: wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else: wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in WLS]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         wfq = torch.zeros(NL, H, QN * TILE)   # dequantized folded weights as the device sees them, per layer
-        if not _QINJ: wqq = ttnn.to_torch(wq_all).float().reshape(NL, PQL, TILE, TILE)
+        if not _QINJ: wqq = ttnn.to_torch(wq_all).float().reshape(len(WLS), PQL, TILE, TILE)
+        if not _QINJ: wqq = wqq[[wla(L_) for L_ in range(NL)]]   # back to engine-layer order for the golds
         if QSK and not _QINJ: wfq = QLAY.unpack(wqq)
         for fi in ([] if QSK else qcores):
             ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
@@ -765,8 +775,8 @@ def setup_bench(dev, MESH, mesh_identity):
         else:
             torch.manual_seed(11)
             wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
-            wo_all = _wl().pack_wo_unit([wo_t] * NL, WLAY, scales=[2.0 ** -(L % 2) for L in range(NL)], dev=dev)
-            woq = WLAY.unpack(ttnn.to_torch(wo_all).float().reshape(NL, WOPL, TILE, TILE))
+            wo_all = _wl().pack_wo_unit([wo_t] * len(WLS), WLAY, scales=[2.0 ** -(L % 2) for L in WLS], dev=dev)
+            woq = WLAY.unpack(ttnn.to_torch(wo_all).float().reshape(len(WLS), WOPL, TILE, TILE)[[wla(L_) for L_ in range(NL)]])
         wod = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, WN_ * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         WCC = wo_cores[0]   # concat core
         owner_fi = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + j_ % 2 and c_.y == j_ // 2)) for j_ in range(16)]
