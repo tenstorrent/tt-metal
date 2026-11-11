@@ -357,9 +357,11 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
     # long context: a step with a user past the engine's max context must take the op-by-op split fallback
     mx_ctx = getattr(model, "_vfy_mk_max_ctx", None)
     gate = getattr(model, "_kv_split_gate", None)
-    res["long"] = dict(ctx=LONG, engine_max_ctx=mx_ctx,
-                       fallback=bool(gate is not None and mx_ctx and gate.want("verify", B, LONG)),
-                       short_on_engine=bool(gate is not None and mx_ctx and not gate.want("verify", B, mx_ctx)))
+    fb = bool(gate is not None and mx_ctx and gate.want("verify", B, LONG))
+    res["long"] = dict(ctx=LONG, engine_max_ctx=mx_ctx, fallback=fb,
+                       short_on_engine=bool(gate is not None and mx_ctx and not gate.want("verify", B, min(mx_ctx, LONG))),
+                       # a context past the engine's max must take the op-by-op fallback; within it, it stays on the engine
+                       ok=bool(mx_ctx and (fb if LONG > mx_ctx else not fb)))
     allp = [v for c in res["pcc"].values() for d in c.values() for v in d.values()]
     res["min_pcc"] = min(allp) if allp else None
     tfp = [v for c in res.get("tf", {}).values() for d in c.values() for v in d.values()]
@@ -367,7 +369,7 @@ def test_mk_e2e_diff(mesh_device, monkeypatch):
     res["tf_first_bad"] = next(({"case": c, "user": u, "layer": L, "pcc": v} for c, cd in res.get("tf", {}).items()
                                 for u, d in cd.items() for L, v in d.items() if v < BAR), None)
     res["pass"] = bool((not TF or (tfp and min(tfp) >= BAR and not any(res.get("tf_err", {}).values()))) and allp and min(allp) >= BAR and not res["nan_zero_rows"] and res["final_err_spread"] <= 2.0
-                       and res["long"]["fallback"] and res["long"]["short_on_engine"])
+                       and res["long"]["ok"])
     logger.info(f"[e2ediff] {json.dumps(res)}")
     for tag in res["pcc"]:
         for u, d in res["pcc"][tag].items():
