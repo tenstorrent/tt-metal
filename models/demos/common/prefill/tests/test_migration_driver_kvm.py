@@ -120,3 +120,14 @@ def test_kvm_health_wait_gives_up(kvm_driver, monkeypatch):
     with pytest.raises(RuntimeError, match="/health not 200"):
         driver._wait_kvm_healthy()
     server.shutdown()
+
+
+def test_kvm_migrate_retries_receiver_unready(kvm_driver, monkeypatch):
+    monkeypatch.setattr("models.demos.common.prefill.runners.migration_driver.time.sleep", lambda s: None)
+    unready = {"status": "FAILED", "reason": "receiver_unready"}
+    driver, seen, server = kvm_driver([(500, unready), (500, unready), (200, {"status": "SUCCESSFUL"})])
+    driver._post_kvm_migrate(
+        command_id=1, migration_id=1, src_slot=0, dst_slot=1, layer_begin=0, layer_end=3, pos_begin=0, pos_end=8
+    )
+    server.shutdown()
+    assert [p for p, _ in seen] == ["/migrate"] * 3

@@ -61,6 +61,9 @@ def _parse_layers(spec: str):
 
 
 class MigrationDriver:
+    #: KV Manager /migrate failure reasons that mean "not yet", not "wrong": retried for PREFILL_MIGRATION_KVM_RETRY_S.
+    KVM_RETRY_REASONS = ("receiver_unready",)
+
     def __init__(self, *, chunk_size: int, num_layers: int, default_dst_slot_offset: int):
         self.chunk_size = chunk_size
         self.num_layers = num_layers
@@ -323,23 +326,34 @@ class MigrationDriver:
         }
         if self.kvm_receiver:
             body["receiver"] = self.kvm_receiver
-        req = urllib.request.Request(
-            f"{self.kvm_url}/migrate",
-            data=_json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        # The prefill leader's /health does not cover the receiving group: a /migrate sent while decode's
+        # formation is still registering fails with reason receiver_unready, which is retried.
+        retry_budget = float(os.environ.get("PREFILL_MIGRATION_KVM_RETRY_S", "900"))
+        retry_deadline = time.monotonic() + retry_budget
         t0 = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_ms / 1000.0) as resp:
-                text = resp.read().decode()
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(
-                f"[migration_driver] KVM /migrate HTTP {e.code} for {body}: {e.read().decode(errors='replace')}"
-            ) from e
-        reply = _json.loads(text) if text.strip() else {}
-        if reply.get("status") != "SUCCESSFUL":
-            raise RuntimeError(f"[migration_driver] KVM /migrate failed for {body}: {reply}")
+        while True:
+            req = urllib.request.Request(
+                f"{self.kvm_url}/migrate",
+                data=_json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_ms / 1000.0) as resp:
+                    code, text = resp.status, resp.read().decode()
+            except urllib.error.HTTPError as e:
+                code, text = e.code, e.read().decode(errors="replace")
+            try:
+                reply = _json.loads(text) if text.strip() else {}
+            except ValueError:
+                reply = {"raw": text}
+            if reply.get("status") == "SUCCESSFUL":
+                break
+            if reply.get("reason") in self.KVM_RETRY_REASONS and time.monotonic() < retry_deadline:
+                logger.info(f"[migration_driver] KVM /migrate {reply.get('reason')}; retrying in 10 s")
+                time.sleep(10)
+                continue
+            raise RuntimeError(f"[migration_driver] KVM /migrate HTTP {code} failed for {body}: {reply}")
         logger.info(
             f"[migration_driver] KVM /migrate ok: layers=[{layer_begin},{layer_end}) pos=[{pos_begin},{pos_end}) "
             f"{reply.get('duration_ms', '?')} ms (wall {time.monotonic() - t0:.1f} s)"
