@@ -54,6 +54,16 @@ void kernel_main() {
 
     const uint32_t base_l1_write_addr = cb_out_obj.get_write_ptr() + initial_l1_write_addr_offset;
 
+    // Tilize reads TILE_SIZE rows of cb_in_batch per block. Rows past the C channels are never written, so zero them.
+    if constexpr (is_reader && input_block_size_sticks_per_core < TILE_SIZE) {
+        const uint32_t row_bytes = get_local_cb_interface(cb_in_batch).fifo_page_size;
+        noc.async_write_zeros(
+            cb_in_batch_obj,
+            (TILE_SIZE - input_block_size_sticks_per_core) * row_bytes,
+            {.offset_bytes = input_block_size_sticks_per_core * row_bytes});
+        noc.write_zeros_l1_barrier();
+    }
+
     // Process each blocked transfer group
     for (uint32_t block_id = 0; block_id < num_blocks && block_id < input_num_blocks; block_id++) {
         // Output write address for this block. Per-tile advance skips the other
@@ -61,7 +71,7 @@ void kernel_main() {
         // Assumes equal-width blocks (select_block_size + TT_FATAL in the program factory).
         uint32_t l1_output_write_addr = base_l1_write_addr + block_id * block_size_bytes;
         if constexpr (is_reader) {
-            cb_in_batch_obj.reserve_back(input_block_size_sticks_per_core);
+            cb_in_batch_obj.reserve_back(TILE_SIZE);
 
             // Process all transfers in this group
             const uint32_t group_size = args[args_idx++];
@@ -100,7 +110,7 @@ void kernel_main() {
             }
 
             noc.async_read_barrier();
-            cb_in_batch_obj.push_back(input_block_size_sticks_per_core);
+            cb_in_batch_obj.push_back(TILE_SIZE);
         }
 
         for (uint32_t i = 0; i < num_full_tiles; i++) {

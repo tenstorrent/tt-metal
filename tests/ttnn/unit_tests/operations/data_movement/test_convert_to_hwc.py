@@ -593,3 +593,41 @@ def test_convert_to_hwc_rejects_unsupported_output_dtype(device, expect_error):
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     with expect_error(RuntimeError, "convert_to_hwc output dtype must be BFLOAT16 or FLOAT32"):
         ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.uint32)
+
+
+def _hwc_on_one_core(device, torch_input, buffer_type):
+    C, HW = torch_input.shape[2], torch_input.shape[3]
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    input_shard_spec = ttnn.ShardSpec(core_grid, (C, HW), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, input_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(core_grid, (HW, round_up(C, 8)), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    input_tensor = ttnn.Tensor(
+        torch_input, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+    )
+    output = ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+    return input_tensor, output
+
+
+# The padding channels must be zero whatever L1 held before: a conv reading them with zero-padded
+# weights stays exact only for finite padding. A C=32 all-NaN run first leaves NaN where a C=3
+# run's staging buffer ends.
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["l1", "dram"])
+def test_convert_to_hwc_padding_is_zero_after_stale_l1(device, input_buffer_type):
+    HW = 2048
+    poison_input, poison_output = _hwc_on_one_core(
+        device, torch.full([1, 1, 32, HW], float("nan"), dtype=torch.bfloat16), input_buffer_type
+    )
+    ttnn.deallocate(poison_output)
+    ttnn.deallocate(poison_input)
+
+    torch_input = torch.randn([1, 1, 3, HW], dtype=torch.bfloat16)
+    _, output = _hwc_on_one_core(device, torch_input, input_buffer_type)
+    actual = ttnn.to_torch(output)
+
+    assert torch.equal(actual[..., :3], torch_input.transpose(2, 3).reshape(1, 1, HW, 3))
+    padding = actual[..., 3:]
+    assert torch.count_nonzero(padding) == 0, (
+        f"{int(torch.isinf(padding).sum())} Inf, {int(torch.isnan(padding).sum())} NaN and "
+        f"{int((torch.isfinite(padding) & (padding != 0)).sum())} other nonzero padding values"
+    )
