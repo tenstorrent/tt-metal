@@ -35,7 +35,18 @@ def _inter(a, b):
 # (callers shrink total_size afterwards, e.g. the AR's RED / OUT views). Within one program a (core, id) pair can only
 # exist once, so the key is unique; a static descriptor re-created from a tracked one (the AR's RS slot CB) is
 # unmarked with mark_static(). verify() catches any misclassification on device.
-_GKEY = set()
+def _reg():
+    """The tensor-backed key registry, kept ON the ttnn module so every import of this file shares it: the engine is
+    imported both as `cbplan` (engine/ on sys.path: bench, _wl()) and as models....engine.cbplan (build_program's verify);
+    a module-level set gave the second instance an empty registry, which planned every tensor-backed CB as static
+    (in-model verify FAIL, 16000 / 30848 mismatches on -mk-on 0792569c6ed)."""
+    import ttnn
+
+    r = getattr(ttnn, "_cbplan_gkey", None)
+    if r is None:
+        r = set()
+        ttnn._cbplan_gkey = r
+    return r
 
 
 def _key(d):
@@ -43,27 +54,36 @@ def _key(d):
 
 
 def track(ttnn):
-    """Install once (before any engine CB descriptor is built): record every tensor-backed CB descriptor."""
+    """Install once per process (before any engine CB descriptor is built): record every tensor-backed CB descriptor."""
     f = ttnn.cb_descriptor_from_sharded_tensor
     if getattr(f, "_cbplan", False):
         return
+    reg = _reg()
 
     def w(*a, **k):
         d = f(*a, **k)
-        _GKEY.add(_key(d))
+        reg.add(_key(d))
         return d
 
     w._cbplan = True
     ttnn.cb_descriptor_from_sharded_tensor = w
 
 
+def reset():
+    """Start a fresh registry for one engine build. In the model process every other op that calls
+    cb_descriptor_from_sharded_tensor (prod generic_ops, the drafter, ...) also lands in the shared registry; a static
+    engine CB sharing such a key would be planned global. setup_bench resets right after track(), so the registry holds
+    exactly this build's tensor-backed descriptors (its plan + the verify right after it)."""
+    _reg().clear()
+
+
 def mark_static(d):
-    _GKEY.discard(_key(d))
+    _reg().discard(_key(d))
     return d
 
 
 def _global(d):
-    return _key(d) in _GKEY
+    return _key(d) in _reg()
 
 
 def plan(cbs, base=CB_BASE):
