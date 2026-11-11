@@ -176,6 +176,16 @@ def test_sha256_verification_catches_a_same_size_corruption(env):
     assert pb.check_cache(env["cache"], env["key"], "sha256") is None
 
 
+def test_by_default_a_boot_hashes_the_files(env):
+    build(env)
+    p = env["cache"] / FILES[4]
+    data = bytearray(p.read_bytes())
+    data[-1] ^= 1
+    p.write_bytes(bytes(data))  # same size, other bytes
+    assert len(build(env)) == 1
+    assert pb.check_cache(env["cache"], env["key"], "sha256") is None
+
+
 def _rebuild_with(env, **kw):
     calls = []
     pb.ensure_resident_cache(convert=converter(calls), **kw)

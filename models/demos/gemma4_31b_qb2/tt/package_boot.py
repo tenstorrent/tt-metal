@@ -10,11 +10,13 @@ this converter and this precision before the adapter builds anything:
     the whole engine package, the converter's per-entry dtypes, the declared precision, the converter arguments) and
     the file manifest (every file with its size and sha256);
   - a boot accepts the cache only if the marker parses, its key equals the current key, and the files on disk are
-    exactly the manifest's: same set, regular files (no symlinks), same sizes, and the same sha256 too with
-    GEMMA4_RESIDENT_CACHE_VERIFY=sha256;
+    exactly the manifest's: same set, regular files (no symlinks), same sizes and the same sha256 (the default; the
+    engine reads all 22 GB next anyway, so the ~15-20 s pass also warms the page cache. GEMMA4_RESIDENT_CACHE_VERIFY=
+    sizes skips the hashes);
   - anything else rebuilds: the stale marker is deleted first, then the directory, then the conversion runs in
     <cache>.partial, which gets its marker after an fsync of everything written and is renamed into place. A kill at
     any point leaves no directory a later boot accepts (a .partial is always discarded and rebuilt).
+$HF_MODEL outside an HF hub snapshot (.../snapshots/<sha>) keys the cache by its resolved path, not its contents.
 Package-only (changh95/gemma4-31b-it-dflash): the verified adapters are unchanged; the package's
 vllm_models/resident_spec bundle names Gemma4ResidentSpecPackaged.
 """
@@ -202,7 +204,7 @@ def ensure_resident_cache(cache=None, package=None, precision=None, verify=None,
     if not package:
         raise ValueError("GEMMA4_RESIDENT_ENGINE_PACKAGE must name the resident engine package")
     precision = precision or os.environ.get("GEMMA4_RESIDENT_PRECISION", "bf4")
-    verify = verify or os.environ.get("GEMMA4_RESIDENT_CACHE_VERIFY", "sizes")
+    verify = verify or os.environ.get("GEMMA4_RESIDENT_CACHE_VERIFY", "sha256")
     checkpoint = os.environ.get("HF_MODEL", "")
     if not os.path.isfile(os.path.join(checkpoint, "model.safetensors.index.json")):
         raise ValueError(f"HF_MODEL must name the checkpoint directory the cache is converted from, got {checkpoint!r}")
