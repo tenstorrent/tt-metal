@@ -154,6 +154,9 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
+# `prepare_modulation`'s stacked timestep rows are padded to a multiple of this, so its programs (and the per-step
+# row lookup's) are the same for every step count up to it: the warmup's short denoise compiles them.
+ADALN_PREPARED_ROWS = 256
 
 # Read from the two scheduler_config.json files, which hold nothing else. Distillation adapters may
 # need other shifts.
@@ -716,6 +719,7 @@ class MiniMaxH3Pipeline:
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
+        self._tt_modulation_rows = StateTensor()
         self._tt_logical_n = StateTensor()
         # True during `warmup`, whose output is discarded.
         self._warming = False
@@ -3163,6 +3167,32 @@ class MiniMaxH3Pipeline:
                 )
 
         upload_levels(step_levels(0))
+        # Every step's adaLN tables in one projection a block (one FSDP gather of its weight a denoise, not a step);
+        # each forward then picks its step's rows by an embedding lookup. The stacked rows are padded to a multiple
+        # of ADALN_PREPARED_ROWS so the programs do not depend on the step count (the warmup compiles them). The
+        # prepared table lives for one request, so traced runs keep the per-step projection.
+        precompute_modulation = not traced and os.environ.get("MINIMAX_H3_ADALN_PRECOMPUTE", "1") != "0"
+        if precompute_modulation:
+            levels = [step_levels(i) for i in range(len(timesteps))]
+            num_slots = levels[0][0].numel()
+
+            def stacked(k: int) -> ttnn.Tensor:
+                rows = torch.cat([lv[k].reshape(-1) for lv in levels])
+                rows = torch.nn.functional.pad(rows, (0, -rows.numel() % ADALN_PREPARED_ROWS))
+                return from_torch(rows.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
+
+            stacked_ts = stacked(0)
+            stacked_ep = None if endpoints is None else stacked(1)
+            transformer.prepare_modulation(stacked_ts, stacked_ep)
+            ttnn.deallocate(stacked_ts)
+            if stacked_ep is not None:
+                ttnn.deallocate(stacked_ep)
+
+            def modulation_rows(i: int) -> dict:
+                rows = torch.arange(i * num_slots, (i + 1) * num_slots, dtype=torch.int32)
+                self._tt_modulation_rows.update(self._replicated_indices(rows), traced=False)
+                return {"modulation_rows": self._tt_modulation_rows.value}
+
         if _is_host_rank():
             _tqdm_spacer()
         # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
@@ -3200,6 +3230,7 @@ class MiniMaxH3Pipeline:
                         traced=traced,
                         **tilerow_kwargs,
                         **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
+                        **(modulation_rows(i) if precompute_modulation else {}),
                     )
                 except RuntimeError as err:
                     if "Out of Memory" in str(err):
@@ -3225,6 +3256,8 @@ class MiniMaxH3Pipeline:
                     t_steady += t_step
                 on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
 
+            if precompute_modulation:
+                transformer.release_modulation()
             state.warm = True
             steady_steps = max(len(timesteps) - 1, 1)
             self._log(
