@@ -27,7 +27,7 @@ using namespace ckernel;
 
 struct State
 {
-    std::uint32_t seen   = 0; // pack_w_last == the output; words: a byte store may alias anything and force reloads (dest_offset_id)
+    std::uint32_t last   = 0; // the state half of llk_pack_block: 0 none, 1 a block of the output, 2 a W offset block (LLK_PACK_STATE_W); words: a byte store may alias anything and force reloads (dest_offset_id)
     std::uint32_t valid  = 0;
     std::uint32_t page   = 0;
     std::uint32_t next   = 0;
@@ -173,9 +173,10 @@ __attribute__((always_inline)) inline void block(
     // llk_pack_block: with a constant tile count the forms of the three states fold at compile time, and a block that is T from all of them
     // is main's loop (no close, no guards)
     const std::uint32_t forms = folded_forms<sync, fp32, out_format>(num_tiles);
-    if (forms == 1)
+    // a count known only at run time packs per tile, as main
+    if (forms == 1 || !__builtin_constant_p(num_tiles))
     {
-        state.seen = 1;
+        state.last = 1;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
@@ -191,23 +192,29 @@ __attribute__((always_inline)) inline void block(
         {
             _llk_pack_close_fast_untilize_<sync>();
         }
+        state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
         }
         return;
     }
-    const bool first        = MATMUL_PACK_STATE != 0 || state.seen == 0;
+    const bool first        = MATMUL_PACK_STATE != 0 || state.last == 0;
     // as llk_pack_block_form: one word of the state, the count's two bits
     const std::uint32_t nt   = key_nt != 0 ? key_nt : num_tiles;
     const std::uint32_t word = form_words<fp32, MATMUL_PACK_NOK ? 0 : key_kt, row, tables32, sync == DstSync::SyncFull, src32, int8>.w[first ? (MATMUL_PACK_STATE == 1 ? 1 : 0) : 2];
     const std::uint32_t code = (word >> (2 * ((nt < 16 ? nt : 16) - 1))) & 3;
     const char f             = forms == 2 ? 'B' : (code == 0 ? 'T' : (code == 1 ? 'B' : 'W'));
-    state.seen = 1;
     // a fast untilize left open marks the last output: only a first block closes it
     if (!one_form && first)
     {
         _llk_pack_close_fast_untilize_<sync>();
+    }
+    // a W offset block stores the state after it reads it
+    const std::uint32_t last = state.last;
+    if (f != 'W')
+    {
+        state.last = 1;
     }
     if (f == 'T')
     {
@@ -230,7 +237,8 @@ __attribute__((always_inline)) inline void block(
         return;
     }
     constexpr std::uint32_t max_tiles = wide_format(out_format) ? 64 : 127; // LLK_PACK_W_MAX_TILES_W
-    const bool cont = state.valid != 0 && state.page == page && state.next == address && state.tiles + num_tiles <= max_tiles;
+    // continues only right behind a W offset block of the output, with no init or reconfigure in between
+    const bool cont = MATMUL_PACK_STATE == 0 && last == 2 && state.valid != 0 && state.page == page && state.next == address && state.tiles + num_tiles <= max_tiles;
     if (!cont)
     {
         // llk_pack_w_take: the output base is programmed again, the stride only when it changed
@@ -245,6 +253,7 @@ __attribute__((always_inline)) inline void block(
         state.next  = address;
         state.tiles = 0;
     }
+    state.last                   = 2;
     const std::uint32_t out_tile = state.tiles;
     state.tiles += num_tiles;
     state.next += page * num_tiles;

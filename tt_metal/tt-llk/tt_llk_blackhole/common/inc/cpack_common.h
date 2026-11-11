@@ -328,11 +328,13 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 }
 
 // The packer state the block packs read, one word so that set_packer_strides resets it with one store:
-//   byte 0 the output of the last llk_pack_block plus one (0 none since the last init or reconfigure, LLK_PACK_STATE_FU_OPEN a fast untilize left open)
+//   byte 0 the output of the last llk_pack_block plus one (0 none since the last init or reconfigure, LLK_PACK_STATE_FU_OPEN a fast untilize left open),
+//          with LLK_PACK_STATE_W when that block took the W offset, so the packer's output base is still its W base
 //   byte 1 1 after a packer reconfigure, until the next block   bytes 2-3 the channel-1 W stride the closed block pack last wrote
 // Written only with plain stores and read only by the block packs, so a kernel without them drops every store.
 [[maybe_unused]] alignas(4) static std::uint8_t pack_state[4] = {0, 0, 0, 0};
 constexpr std::uint8_t LLK_PACK_STATE_FU_OPEN = 0xff;
+constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
 inline std::uint32_t llk_pack_state_half()
 {
     std::uint16_t half;
@@ -382,7 +384,6 @@ inline std::uint32_t llk_pack_context()
 // W offset block packs (llk_pack_block under LLK_PACK_W_OFFSET): the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
 // Anything that writes L1_Dest_addr or the channel-1 W stride makes the state stale (LLK_PACK_W_INVALIDATE), the next block call programs the base again.
 [[maybe_unused]] static bool pack_w_valid               = false;
-[[maybe_unused]] static std::uint8_t pack_w_out         = 0;
 [[maybe_unused]] static std::uint32_t pack_w_page       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_next       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
@@ -820,7 +821,7 @@ inline void select_packer_dest_registers()
 
 // Program packer destination addresses from GPRs
 // keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from.
-// w_invalidate: false for llk_pack_block's own packs, which move the CB write pointer past the W offset continuation instead.
+// w_invalidate: false for llk_pack_block's own packs, which mark the state instead (only a W offset block leaves LLK_PACK_STATE_W).
 template <bool keep_output_addr = true, bool w_invalidate = true>
 inline void program_packer_destination(std::uint32_t addr)
 {

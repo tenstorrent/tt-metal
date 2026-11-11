@@ -324,26 +324,22 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
 
 #ifdef LLK_PACK_W_OFFSET
 // W offset block packs: program the output base and the tile stride once per output and move the output of each block
-// call with the packer W counter of channel 1. The base is programmed again when the output changes, the CB write
-// pointer does not continue the last block (wrap, other packs into the CB, among them this function's own per-tile and
-// block packs), a pack outside it wrote L1_Dest_addr or the channel-1 W stride in between (LLK_PACK_W_INVALIDATE), or the
-// offset would pass LLK_PACK_W_MAX_TILES or the 256 KB reach of the W offset.
+// call with the packer W counter of channel 1. The base is programmed again unless the last llk_pack_block call was a W
+// offset block of the same output (LLK_PACK_STATE_W in the state; its other packs program the output without invalidating),
+// no pack outside it wrote L1_Dest_addr or the channel-1 W stride since (LLK_PACK_W_INVALIDATE), the CB write pointer
+// continues that block, and the offset stays within LLK_PACK_W_MAX_TILES and the 256 KB reach of the W offset.
 #ifndef LLK_PACK_W_MAX_TILES
 #define LLK_PACK_W_MAX_TILES 127
 #endif
 static_assert(LLK_PACK_W_MAX_TILES * LLK_PACK_PAGE_WORDS_NARROW <= PACK_W_REACH_WORDS);
 constexpr std::uint32_t LLK_PACK_W_MAX_TILES_W =
     LLK_PACK_W_MAX_TILES < LLK_PACK_W_MAX_TILES_WIDE ? LLK_PACK_W_MAX_TILES : LLK_PACK_W_MAX_TILES_WIDE;
-// Returns whether this block takes the W offset path (out_tile is its tile offset). The first block of an output after another output packs as before: the base is
-// programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
-inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
-    if (llk_pack_state_half() != output_id + 1u) {
-        llk_pack_state_set_half(output_id + 1);
-        return false;
-    }
+// A W offset block in the next state, before the block stores the state; out_tile is its tile offset. A CB write pointer that comes back to
+// pack_w_next after a full CB turn of other packs of the output does not continue: the state then lacks LLK_PACK_STATE_W.
+inline void llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
     const std::uint32_t max_tiles = llk_pack_dst_is_wide(output_id) ? LLK_PACK_W_MAX_TILES_W : LLK_PACK_W_MAX_TILES;
-    const bool cont = pack_w_valid && pack_w_out == output_id && pack_w_page == page && pack_w_next == addr &&
-                      pack_w_tiles + ntiles <= max_tiles;
+    const bool cont = llk_pack_state_half() == ((output_id + 1u) | LLK_PACK_STATE_W) && pack_w_valid && pack_w_page == page &&
+                      pack_w_next == addr && pack_w_tiles + ntiles <= max_tiles;
     if (!cont) {
         program_packer_destination(addr);
         const std::uint32_t stride = page << 4;
@@ -352,15 +348,14 @@ inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t ad
             pack_ch1_w_stride_set(stride);
         }
         pack_w_valid = true;
-        pack_w_out   = output_id;
         pack_w_page  = page;
         pack_w_next  = addr;
         pack_w_tiles = 0;
     }
+    llk_pack_state_set_half((output_id + 1u) | LLK_PACK_STATE_W);
     out_tile = pack_w_tiles;
     pack_w_tiles += ntiles;
     pack_w_next += page * ntiles;
-    return true;
 }
 #endif
 
@@ -941,6 +936,36 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
     }
 }
 
+// The tile counts at which every output the kernel configures packs per tile from every state and context: bit n - 1, counts above 16
+// take the bit of 16. Built at compile time, so a block of such a constant count looks nothing up, whatever its output.
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+struct llk_pack_per_tile_counts_t {
+    std::uint32_t counts;
+    constexpr llk_pack_per_tile_counts_t() : counts(0) {
+        const auto& words = llk_pack_form_words<is_fp32_dest_acc_en, matmul_kt>.w;
+        const auto& words_mm = llk_pack_form_words_mm<is_fp32_dest_acc_en, matmul_kt>.w;
+        std::uint32_t any = 0;
+        for (std::uint32_t i = 0; i < sizeof(pack_dst_format); i++) {
+            const std::uint32_t fmt = pack_dst_format[i];
+            const bool int8 = fmt == static_cast<std::uint32_t>(DataFormat::Int8) || fmt == static_cast<std::uint32_t>(DataFormat::UInt8);
+            if (fmt == static_cast<std::uint32_t>(DataFormat::Invalid) || (!is_fp32_dest_acc_en && int8)) {
+                continue;
+            }
+            const std::uint32_t row = llk_pack_class_tab.row[i];
+            for (std::uint32_t state = 0; state < 3; state++) {
+                any |= words[0][state][row] | words[1][state][row] | words_mm[0][state][row];
+            }
+        }
+        for (std::uint32_t bit = 0; bit < 16; bit++) {
+            if (((any >> (2 * bit)) & 3) == 0) {
+                counts |= 1u << bit;
+            }
+        }
+    }
+};
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+inline constexpr llk_pack_per_tile_counts_t<is_fp32_dest_acc_en, matmul_kt> llk_pack_per_tile_counts{};
+
 // guard_dest_straddle: two block-float tiles at DEST tiles 3 and 4 read 6 cycles slower closed than per tile, so a caller with a variable start tile takes the per-tile path.
 // Off by default, the check costs instructions in the callers that pass 0.
 // matmul_kt: the K tiles per output block of the matmul that filled DEST, where the caller knows it at compile time; 0 takes the forms no K reads slower than per tile.
@@ -967,15 +992,21 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         StateDiscard<std::uint32_t>(ntiles)));
 
     // With a constant output and tile count the forms of every state fold at compile time (0 otherwise): a block of one form reads no
-    // state, and a kernel whose blocks never take W keeps no W state, so its per-tile packs are main's.
+    // state, and a kernel whose blocks never take W keeps no W state, so its per-tile packs are main's. A constant count that every
+    // output of the kernel packs per tile folds the same way when the output is known only later.
     std::uint32_t forms = 0;
-    if (__builtin_constant_p(output_id) && __builtin_constant_p(ntiles)) {
+    if (__builtin_constant_p(ntiles) &&
+        ((llk_pack_per_tile_counts<is_fp32_dest_acc_en, matmul_kt>.counts >> ((ntiles < 16 ? ntiles : 16) - 1)) & 1) != 0) {
+        forms = 1;
+    } else if (__builtin_constant_p(output_id) && __builtin_constant_p(ntiles)) {
         const std::uint32_t ctx = llk_pack_context();
         forms = ctx == 0 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0)
                          : (ctx == 1 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
                                      : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     }
-    if (forms == 1) {
+    // A count known only at run time packs per tile, as main. The last output is still marked: these packs move the
+    // packer's output base without invalidating the W offset of another output.
+    if (forms == 1 || !__builtin_constant_p(ntiles)) {
 #ifdef LLK_PACK_W_OFFSET
         llk_pack_state_set_half(output_id + 1);
 #endif
@@ -991,14 +1022,15 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         if (!one_form) {
             _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         }
+        LLK_PACK_W_INVALIDATE();
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
 
 #ifdef LLK_PACK_W_OFFSET
-    // The last output and the reconfigure mark in one halfword: a block that continues its output reads exactly output_id + 1.
+    // The last output and the reconfigure mark in one halfword: a block that continues its output reads output_id + 1, with or without LLK_PACK_STATE_W.
     const std::uint32_t state = llk_pack_state_half();
-    const bool first_block = state != output_id + 1u;
+    const bool first_block = (state & ~static_cast<std::uint32_t>(LLK_PACK_STATE_W)) != output_id + 1u;
     const bool reconfigured = (state >> 8) != 0;
     // Constant or variable, a block reads the word of each state at a constant index, with the folded path's context: an output or count that
     // becomes constant late still folds its forms, and both paths pick the same form.
@@ -1010,15 +1042,22 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     if (!one_form && first_block) {
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
     }
-    llk_pack_state_set_half(output_id + 1);
 #else
     const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0);
+#endif
+    const bool straddle = guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3;
+    [[maybe_unused]] const bool take_w = form == 'W' && (forms == 0 || (forms & 4) != 0) &&
+                                         (llk_pack_block_is_contiguous(output_id) || (llk_pack_block_is_closable(output_id) && !straddle));
+#ifdef LLK_PACK_W_OFFSET
+    // A W offset block stores the state in llk_pack_w_take, after it reads it.
+    if (!take_w) {
+        llk_pack_state_set_half(output_id + 1);
+    }
 #endif
     if (form == 'T') {
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
-    const bool take_w = form == 'W' && (forms == 0 || (forms & 4) != 0);
     if (llk_pack_block_is_contiguous(output_id)) {
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
@@ -1026,7 +1065,8 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
 #ifdef LLK_PACK_W_OFFSET
         std::uint32_t out_tile = 0;
-        if (take_w && llk_pack_w_take(output_id, pack_tile_addr, get_local_cb_interface(output_id).fifo_page_size, ntiles, out_tile)) {
+        if (take_w) {
+            llk_pack_w_take(output_id, pack_tile_addr, get_local_cb_interface(output_id).fifo_page_size, ntiles, out_tile);
             _llk_pack_block_w_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles);
         } else {
             _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>, false>(start_tile_index, pack_tile_addr, ntiles);
@@ -1035,16 +1075,15 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>, false>(
             start_tile_index, pack_tile_addr, ntiles);
 #endif
-    } else if (
-        llk_pack_block_is_closable(output_id) &&
-        !(guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3)) {
+    } else if (llk_pack_block_is_closable(output_id) && !straddle) {
         const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
 #ifdef LLK_PACK_W_OFFSET
         std::uint32_t out_tile = 0;
-        if (take_w && llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile)) {
+        if (take_w) {
+            llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile);
             _llk_pack_block_closed_w_mop_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles, get_output_num_faces(output_id));
         } else {
             _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>, false>(
@@ -1077,6 +1116,10 @@ inline void llk_pack_block_prepare(std::uint32_t start_tile_index, std::uint32_t
             _llk_pack_block_closed_pre_<llk_pack_rmw_tile<PackMode::Default>, false>(
                 start_tile_index,
                 get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1);
+#ifdef LLK_PACK_W_OFFSET
+            // a closed block of the output, as llk_pack_block marks it: the next W offset block programs its base again
+            llk_pack_state_set_half(output_id + 1);
+#endif
         }
     }
 }
