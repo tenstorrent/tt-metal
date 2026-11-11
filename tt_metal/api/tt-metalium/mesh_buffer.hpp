@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <memory>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -158,7 +159,16 @@ public:
     // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
     // at its specific address. The backing buffer will not be populated if an address was passed
     // into the creation API.
+    [[deprecated(
+        "Use unique_id() to identify the allocation, get_device_buffer() for per-device attributes, or a MeshTensor "
+        "to bind a circular buffer. This API will be removed after 2026-12-03.")]]
     Buffer* get_backing_buffer() const;
+
+    // Identifies the device allocation this MeshBuffer owns. The Buffers holding the allocation share this ID, so the
+    // allocator and graph tracking report the allocation under it. Like Buffer::unique_id(), it stays the same after
+    // the MeshBuffer is deallocated.
+    // std::nullopt if the MeshBuffer never owned an allocation: it was created at an explicit address.
+    std::optional<std::uint64_t> unique_id() const { return unique_id_; }
 
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
@@ -180,6 +190,7 @@ private:
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
+        unique_id_(backing_buffer->unique_id()),
         state_(OwnedBufferState{std::move(backing_buffer)}) {}
 
     // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
@@ -205,6 +216,7 @@ private:
     DeviceAddr device_local_size_ = 0;
 
     DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
+    std::optional<std::uint64_t> unique_id_;
 
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.

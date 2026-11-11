@@ -406,6 +406,14 @@ inline void pack_init_apply(
     {
         set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
     }
+    if constexpr (pack_mode == PackMode::Default)
+    {
+        LLK_PACK_OTHER_PROGRAM_CLEAR();
+    }
+    else
+    {
+        LLK_PACK_OTHER_PROGRAM_SET();
+    }
 
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
     // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
@@ -581,9 +589,10 @@ inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_form
         pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 }
 
-// Out of line: the call sites of the block packs carry a load, a branch and a call.
+// Cold, so out of line: the call sites of the block packs carry a load, a branch and a call. Not noinline: a kernel without a fast untilize
+// init folds the call away, and the body with it.
 template <DstSync Dst>
-__attribute__((noinline)) void pack_close_fast_untilize_slow_()
+__attribute__((cold)) inline void pack_close_fast_untilize_slow_()
 {
     _llk_pack_restore_default_program_(pack_fast_untilize_src);
     // The fast untilize moved the DEST offset registers to its strip offsets; the offset id is the one the math thread flips with, so it stays.
@@ -597,7 +606,7 @@ __attribute__((noinline)) void pack_close_fast_untilize_slow_()
 template <DstSync Dst>
 inline void _llk_pack_close_fast_untilize_()
 {
-    if (pack_fast_untilize_open)
+    if (pack_fast_untilize_seen && pack_fast_untilize_open)
     {
         pack_close_fast_untilize_slow_<Dst>();
     }
@@ -731,103 +740,6 @@ inline void _llk_pack_block_closed_(
     _llk_pack_block_closed_run_(num_tiles, tile_stride, num_faces);
 }
 
-namespace pack_block_dense_internal
-{
-// Replay slots 17 and up: the closed fast block records slots 0 to 16 and small tiles never use it.
-constexpr std::uint32_t REPLAY_START = 17;
-
-inline std::uint32_t pacr_word(const std::uint32_t face_r_dim, const std::uint32_t addr_mod, const std::uint32_t last)
-{
-    const std::uint32_t intf = face_r_dim == 1 ? p_pacr::SINGLE_INTF_ACTIVE : (face_r_dim == 2 ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE);
-    return TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_NORMAL_MODE,
-        addr_mod,
-        p_pacr::ADDR_CNT_CTXT_0,
-        p_pacr::P_ZERO_OUTPUT_DISABLED,
-        intf,
-        0,
-        0,
-        0,
-        0,
-        last);
-}
-
-inline std::uint32_t pacrs_per_tile(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
-{
-    return num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2);
-}
-} // namespace pack_block_dense_internal
-
-/**
- * Opt-in setup of _llk_pack_block_dense_ for tiles of one to four faces of 1 to 16 rows, at most eight PACRs (a 16x32 tile), known at run time.
- * Call it after the default pack init, and again after any program that replaces the replay buffer.
- * Records one tile: its PACRs (the last one steps to the next face slot without closing), the step to the next tile in DEST and the face reset.
- */
-inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
-{
-    using namespace pack_block_dense_internal;
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const std::uint32_t pacrs = pacrs_per_tile(face_r_dim, num_faces);
-    LLK_ASSERT(pacrs >= 1 && pacrs <= 8, "The dense block pack records at most eight PACRs per tile");
-    const std::uint32_t per_face = pacrs / num_faces;
-    const std::uint32_t row      = pacr_word(face_r_dim, ADDR_MOD_0, 0);
-    const std::uint32_t face     = pacr_word(face_r_dim, ADDR_MOD_2, 0);
-
-    lltt::record<lltt::NoExec>(REPLAY_START, pacrs + 2);
-    for (std::uint32_t f = 0; f < num_faces; f++)
-    {
-        for (std::uint32_t r = 1; r < per_face; r++)
-        {
-            TT_INSN(row);
-        }
-        TT_INSN(face);
-    }
-    TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
-}
-
-/**
- * Pack num_tiles consecutive small tiles to dense L1, each tile right after the previous one, with one close (Last) for the whole run
- * (needs _llk_pack_block_dense_init_ for the same tile shape). The per-tile tile close and the data converter restart of the closed block
- * are paid once. Not for block-float outputs and padded pages: use _llk_pack_block_closed_ there.
- */
-template <DstSync Dst, bool is_fp32_dest_acc_en>
-inline void _llk_pack_block_dense_(
-    const std::uint32_t start_tile_index,
-    const std::uint32_t address,
-    const std::uint32_t num_tiles,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t num_faces)
-{
-    using namespace pack_block_dense_internal;
-    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
-    LLK_ASSERT(
-        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-        "The block exceeds the destination register sync region");
-
-    const std::uint32_t pacrs = pacrs_per_tile(face_r_dim, num_faces);
-
-    set_dst_write_addr(start_tile_index);
-
-    program_packer_destination(address);
-
-    const std::uint32_t tile_replay = lltt::replay_insn(REPLAY_START, pacrs + 2);
-    for (std::uint32_t tile = 1; tile < num_tiles; tile++)
-    {
-        TT_INSN(tile_replay);
-    }
-    // The last tile closes on its last PACR
-    if (pacrs > 1)
-    {
-        TT_INSN(lltt::replay_insn(REPLAY_START, pacrs - 1));
-    }
-    TT_INSN(pacr_word(face_r_dim, ADDR_MOD_1, 1));
-    TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
-}
-
 /**
  * Opt-in setup of the byte-wise destination write of _llk_pack_, _llk_pack_block_ and _llk_pack_block_closed_ (the rmw_dest template argument):
  * three RMWCIB over the low bytes of L1_Dest_addr instead of SETDMAREG, STALLWAIT, WRCFG, SETDMAREG and DMANOP. Call it after _llk_pack_init_ and
@@ -874,6 +786,11 @@ template <bool zero_output = false>
 inline void _llk_pack_block_fast_init_()
 {
     TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    // The default pack init does not touch the replay buffer: a re-init before every block records the tile once, until another recording clears the flag.
+    if (pack_fast_replay_valid)
+    {
+        return;
+    }
     load_replay_buf(
         0,
         17,
@@ -892,6 +809,7 @@ inline void _llk_pack_block_fast_init_()
             pack_block_fast_pacr_<zero_output, ADDR_MOD_1, 1>();
             TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
         });
+    pack_fast_replay_valid = true;
 }
 
 /**
@@ -959,6 +877,17 @@ inline void _llk_pack_block_w_init_(const std::uint32_t address, const std::uint
     program_packer_destination<false>(address);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
     pack_ch1_w_stride = tile_stride;
+}
+
+// The packer adds the channel-1 W counter times its stride to the output address and wraps at 256 KB (the 16 byte words below).
+constexpr std::uint32_t PACK_W_REACH_WORDS = 1 << 14;
+
+/**
+ * Whether W offset blocks up to tile tiles_end (out_tile + num_tiles) of pages of page_words 16 byte words stay inside the reach of one programmed base.
+ */
+constexpr bool _llk_pack_block_w_reach_(const std::uint32_t tiles_end, const std::uint32_t page_words)
+{
+    return tiles_end * page_words <= PACK_W_REACH_WORDS;
 }
 
 /**

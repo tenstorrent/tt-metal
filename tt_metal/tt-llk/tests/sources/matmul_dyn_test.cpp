@@ -55,7 +55,10 @@ constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 #include "llk_matmul_forms.h"
-#ifdef MATMUL_BLOCK
+#if defined(MATMUL_TRUE_MAIN)
+// a cell that runs main's code (an exact main row, or init before every call): the table key is 0 whatever the block
+constexpr std::uint32_t matmul_kt_key = 0;
+#elif defined(MATMUL_BLOCK)
 // the forms table key: main's form (0) for the blocks llk_matmul_forms.h keeps on it
 constexpr std::uint32_t matmul_kt_key = ckernel::matmul_form_k<
     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf ? 0 : 1, MATMUL_BLOCK_ACC, MATMUL_KT_PER_SECTION, MATMUL_BLOCK_KT, MATMUL_KEY_IN0, MATMUL_KEY_IN1, MATMUL_OUT_FORMAT,
@@ -69,10 +72,17 @@ constexpr bool matmul_force_form = !(matmul_kt_key == 0 && MATMUL_KT_PER_SECTION
 #endif
 #endif
 
+// main's form: the table key is 0 (an exact main row, or init before every call); the cell then keeps main's pack init and unpack row mask
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_true_main_key = matmul_kt_key == 0;
+#else
+constexpr bool matmul_true_main_key = false;
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
-#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_LE_8)
+#if defined(ARCH_BLACKHOLE) && (defined(MATMUL_ROW_LE_8) || defined(MATMUL_TRUE_MAIN))
 constexpr std::uint32_t matmul_max_row_tiles = 8;
 #elif defined(ARCH_BLACKHOLE)
 constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
@@ -114,12 +124,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
 #ifdef MATMUL_UNPACK_TTSYNC_EXCL
-    constexpr std::uint32_t unpack_auto_ttsync = 2;
+    constexpr std::uint32_t unpack_ttsync_req = 2;
 #elif defined(MATMUL_UNPACK_TTSYNC)
-    constexpr std::uint32_t unpack_auto_ttsync = 1;
+    constexpr std::uint32_t unpack_ttsync_req = 1;
 #else
-    constexpr std::uint32_t unpack_auto_ttsync = 0;
+    constexpr std::uint32_t unpack_ttsync_req = 0;
 #endif
+    // the opt-in runs only on the blocks that keep the ttsync unpack (llk_matmul_forms.h); a kernel without block keys keeps what it asks for
+#if defined(MATMUL_TTSYNC_BLOCK)
+    constexpr std::uint32_t unpack_auto_ttsync = !matmul_unpack_ttsync_cell(
+                                                     MATH_FIDELITY,
+                                                     dest_sync == ckernel::DstSync::SyncHalf,
+                                                     is_fp32_dest_acc_en,
+                                                     MATMUL_TTSYNC_IN1,
+                                                     MATMUL_TTSYNC_IN0,
+                                                     MATMUL_TTSYNC_OUT,
+                                                     MATMUL_TTSYNC_RT,
+                                                     MATMUL_TTSYNC_CT,
+                                                     MATMUL_TTSYNC_KT)
+                                                     ? 0
+                                                     : unpack_ttsync_req;
+#elif defined(MATMUL_BLOCK) && !defined(LLK_MAIN_ARM)
+    constexpr std::uint32_t unpack_auto_ttsync = (unpack_ttsync_req != 0 && !matmul_unpack_ttsync_cell(
+                                                                                MATH_FIDELITY,
+                                                                                dest_sync == ckernel::DstSync::SyncHalf,
+                                                                                is_fp32_dest_acc_en,
+                                                                                MATMUL_KEY_IN1,
+                                                                                MATMUL_KEY_IN0,
+                                                                                MATMUL_OUT_FORMAT,
+                                                                                MATMUL_BLOCK_RT,
+                                                                                MATMUL_BLOCK_CT,
+                                                                                MATMUL_BLOCK_KT))
+                                                     ? 0
+                                                     : unpack_ttsync_req;
+#else
+    constexpr std::uint32_t unpack_auto_ttsync = unpack_ttsync_req;
+#endif
+#line 69
     // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
 #ifdef MATMUL_STREAM_NARROW
     constexpr bool stream_narrow = !is_fp32_dest_acc_en;
@@ -176,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM, 1, matmul_reuse_dir_k);
+            _perf_unpack_matmul_mock<PERF_RUN_TYPE>(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM, 1, matmul_reuse_dir_k);
             return;
         }
         else
@@ -276,6 +317,13 @@ constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync,
 constexpr bool matmul_tile_mop = false;
 #endif
 
+// main's form writes the address mods exactly as main does (the bias register too); the other forms skip that write
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_bias_write = matmul_kt_key == 0;
+#else
+constexpr bool matmul_bias_write = false;
+#endif
+
 // keys production selects the forms by (partials format, its row MOP rule) and no fused post flip: see matmul_prod_keys.py
 #ifdef MATMUL_PROD_KEYS
 constexpr bool matmul_prod_keys = true;
@@ -309,9 +357,9 @@ constexpr bool matmul_half_end_fold_k = false;
 #endif
 #ifdef ARCH_BLACKHOLE
 #ifdef MATMUL_PACK_KEYS
-#define MATMUL_INIT_KEYS MATMUL_PK_CT, MATMUL_PK_RT
+#define MATMUL_INIT_KEYS MATMUL_PK_CT, MATMUL_PK_RT, matmul_bias_write
 #else
-#define MATMUL_INIT_KEYS 0, 0
+#define MATMUL_INIT_KEYS 0, 0, matmul_bias_write
 #endif
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
 #define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, MATMUL_INIT_KEYS
@@ -350,10 +398,10 @@ volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr s
         if (DYN_MODE == 3) fw &= ~1u;                                                                               \
         if (DYN_MODE == 4) { fw &= ~1u; _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } \
         if (fw % 2) {                                                                                              \
-            if (dyn_status != 1) { _llk_math_matmul_init_switch_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); dyn_status = 1; } \
+            if (dyn_status != 1) { if constexpr (matmul_true_main_key) { _llk_math_matmul_init_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } else { _llk_math_matmul_init_switch_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } dyn_status = 1; } \
             _llk_math_matmul_<DYN_TCALL_ARGS>(0, CT_DIM, RT_DIM);                                                   \
         } else {                                                                                                  \
-            if (dyn_status != 0) { _llk_math_matmul_init_switch_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); dyn_status = 0; } \
+            if (dyn_status != 0) { if constexpr (matmul_true_main_key) { _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } else { _llk_math_matmul_init_switch_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } dyn_status = 0; } \
             _llk_math_matmul_<DYN_CALL_ARGS>(0, CT_DIM, RT_DIM);                                                    \
         }                                                                                                          \
     } while (0)
@@ -392,9 +440,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM, 1, matmul_reuse_dir_k);
+            _perf_math_matmul_mock<PERF_RUN_TYPE>(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM, 1, matmul_reuse_dir_k);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -423,28 +471,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     DYN_MATMUL();
                 }
-                #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_BLOCK)
+// main's form ends its section as main does: the fused post and the skipped base write are for the cells the table gives another form
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                [[maybe_unused]] constexpr bool matmul_main_math_form =
+                    ckernel::matmul_default_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>() == '.';
+#else
+                [[maybe_unused]] constexpr bool matmul_main_math_form = false;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_BLOCK)
                 // the cells that keep main's whole section end: separate post and the base write of the DEST flip (llk_matmul_forms.h)
                 [[maybe_unused]] constexpr bool matmul_main_flip_cell = ckernel::matmul_main_flip(
                     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, MATMUL_BLOCK_ACC, MATMUL_KEY_IN1, MATMUL_KEY_IN0, MATMUL_OUT_FORMAT, MATMUL_BLOCK_RT, MATMUL_BLOCK_CT,
                     MATMUL_BLOCK_KT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB);
-                #else
+#else
                 [[maybe_unused]] constexpr bool matmul_main_flip_cell = false;
-                #endif
-                #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-                #ifdef MATMUL_UNFUSED_POST
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+#ifdef MATMUL_UNFUSED_POST
                 [[maybe_unused]] constexpr bool fused_post_flip = false;
-                #else
-                #ifdef MATMUL_BLOCK
+#else
+#ifdef MATMUL_BLOCK
                 // the cells where main's separate post reads faster under packer L1 accumulate (llk_matmul_forms.h)
                 [[maybe_unused]] constexpr bool matmul_unfused_cell = matmul_main_flip_cell || ckernel::matmul_unfused_post(
                     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, MATMUL_BLOCK_ACC, MATMUL_KEY_IN1, MATMUL_KEY_IN0, MATMUL_OUT_FORMAT, MATMUL_BLOCK_RT, MATMUL_BLOCK_CT,
                     MATMUL_BLOCK_KT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB);
-                #else
+#else
                 [[maybe_unused]] constexpr bool matmul_unfused_cell = false;
-                #endif
-                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_unfused_cell && !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
-                #endif
+#endif
+                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_unfused_cell && !matmul_main_math_form && !matmul_prod_keys &&
+                                                                  (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
+#endif
                 #else
                 [[maybe_unused]] constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
                 #endif
@@ -464,7 +520,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 #if defined(MATMUL_KEEP_FLIP_WRITE)
                     [[maybe_unused]] constexpr bool next_op_sets_base = false;
 #else
-                    [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en && !matmul_main_flip_cell;
+                [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en && !matmul_main_flip_cell && !matmul_main_math_form;
 #endif
                     _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
             }
@@ -491,20 +547,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_matmul_forms.h"
 #ifdef MATMUL_PACK_KEYS
 // the pack form of the block: the LLK decision, which the python mirror (the MATMUL_PACK_FORM define) must equal
-constexpr int matmul_pack_form_v = ckernel::matmul_pack_form_k(
+constexpr int matmul_pack_form_key = ckernel::matmul_pack_form_k(
     MATMUL_PK_FID, MATMUL_PK_HALF, MATMUL_PK_THROTTLE, MATMUL_PK_KT, MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_IN_A, MATMUL_PK_IN_B, MATMUL_PK_OUT, MATMUL_PK_R0, MATMUL_PK_C1, MATMUL_PK_DENSE,
     MATMUL_PK_L1ACC);
-static_assert(matmul_pack_form_v == MATMUL_PACK_FORM, "the python matmul_pack_form differs from matmul_pack_form_k");
+static_assert(matmul_pack_form_key == MATMUL_PACK_FORM, "the python matmul_pack_form differs from matmul_pack_form_k");
 #else
-constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+constexpr int matmul_pack_form_key = MATMUL_PACK_FORM;
 #endif
 #else
-constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+constexpr int matmul_pack_form_key = MATMUL_PACK_FORM;
 #endif
 #ifdef MATMUL_PACK_KEYS
 constexpr DataFormat matmul_pack_out_format = MATMUL_PK_OUT;
 #else
 constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PACK_PROD) && !defined(LLK_MAIN_ARM)
+// main's ttnn kernels: pack_block on every output block, without the K; 3 is the closed block of llk_pack_block (not prepared)
+constexpr int matmul_pack_form_v = matmul_pack_production::prod_form<matmul_pack_out_format>();
+#elif defined(ARCH_BLACKHOLE)
+// a block whose every form is per tile packs per tile (llk_matmul_block_pack); the full sync closed block runs prepared (pack_block_prepare) and takes no form
+constexpr int matmul_pack_form_v = (matmul_pack_form_key == 2 && dest_sync == DstSync::SyncFull) ||
+                                           !matmul_pack_production::always_per_tile<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>()
+                                       ? matmul_pack_form_key
+                                       : 0;
+#else
+constexpr int matmul_pack_form_v = matmul_pack_form_key;
 #endif
 #line 271
 
@@ -513,9 +581,15 @@ constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
 #endif
 
 #if defined(ARCH_BLACKHOLE)
-inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
+#if defined(MATMUL_PACK_CONST)
+// a constant block that packs per tile from every state runs main's loop in llk_pack_block: the main arm's loop here
+#define MATMUL_PACK_MAIN_LOOP(n) (matmul_pack_production::forms_const<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>(n) == 1)
+#else
+#define MATMUL_PACK_MAIN_LOOP(n) false
+#endif
+template <typename TileAddr = std::nullptr_t> __attribute__((always_inline)) inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4, TileAddr tile_addr = nullptr)
 {
-    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format>(tile_index, address, num_tiles, tile_stride, num_faces);
+    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format, TileAddr>(tile_index, address, num_tiles, tile_stride, num_faces, tile_addr);
 }
 #endif
 
@@ -529,8 +603,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
     const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
+#if defined(MATMUL_PACK_CONST)
+#ifndef MATMUL_CONST_DIMS
+#error MATMUL_PACK_CONST needs MATMUL_CONST_DIMS
+#endif
+    // ttnn's matmul kernels pass pack_block a compile-time tile count (out_subblock_num_tiles)
+    constexpr std::uint32_t CT_DIM = MATMUL_CONST_CT;
+    constexpr std::uint32_t RT_DIM = MATMUL_CONST_RT;
+#ifdef MATMUL_PACK_KEYS
+    static_assert(CT_DIM == MATMUL_PK_CT && RT_DIM == MATMUL_PK_RT, "pack keys and tile dims disagree");
+#endif
+#else
     const std::uint32_t CT_DIM         = params.CT_DIM;
     const std::uint32_t RT_DIM         = params.RT_DIM;
+#endif
+#line 318
     const Operand& buffer_Res          = params.buffer_Res;
 #endif
 
@@ -538,7 +625,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en, !matmul_true_main_key>();
         // the W base of the block pack is programmed by its second call, as in llk_pack_block
         //
         //
@@ -550,7 +637,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
 #if defined(ARCH_BLACKHOLE) && MATMUL_L1_ACC == 1
             reconfigure_packer_l1_acc(1);
@@ -561,16 +648,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t tile_index = tile % MAX_TILES_DEST;
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (matmul_pack_form_v != 0)
+                    if constexpr (matmul_pack_form_v != 0 && !MATMUL_PACK_MAIN_LOOP(CT_DIM * RT_DIM))
                     {
-                        matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
+                        matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4, [&](std::uint32_t j) { return PERF_ADDRESS(PERF_OUTPUT, (tile_index + j) % MAX_TILES_DEST); });
                         break;
                     }
 #endif
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles for matmul");
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, (dest_sync == DstSync::SyncFull && !matmul_true_main_key)>(
+                        tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
                 }
             }
         }
@@ -578,6 +666,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+#if defined(MATMUL_PACK_STATE) && MATMUL_PACK_STATE == 1
+                // a pack reconfigure before every block, as between the partials and the output of a spilled matmul
+                _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
+#endif
+#line 366
 #if defined(ARCH_BLACKHOLE)
                 if constexpr (matmul_pack_form_v == 2 && dest_sync == DstSync::SyncFull)
                 {
@@ -617,7 +710,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (matmul_pack_form_v != 0)
+                    if constexpr (matmul_pack_form_v != 0 && !MATMUL_PACK_MAIN_LOOP(CT_DIM * RT_DIM))
                     {
                         if (LOOP_FACTOR == 1)
                         {
@@ -630,11 +723,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             break;
                         }
 #endif
-                        matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
+                        matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4, [&](std::uint32_t j) { return (LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS) ? PERF_ADDRESS(PERF_OUTPUT, i + j) : L1_ADDRESS(buffer_Res[(MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0) + i + j]); });
                         break;
                     }
 #endif
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, (dest_sync == DstSync::SyncFull && !matmul_true_main_key)>(
+                        i, addr);
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }

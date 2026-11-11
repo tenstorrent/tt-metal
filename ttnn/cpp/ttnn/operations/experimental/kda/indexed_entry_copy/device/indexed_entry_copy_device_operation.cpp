@@ -82,6 +82,9 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
         source_shape,
         destination_shape);
     TT_FATAL(params.index_scale >= 1, "{}: index_scale must be at least 1", kOperation);
+    if (inputs.zero_fill_at_zero.has_value()) {
+        kda_factory_detail::check_device_scalar(source, *inputs.zero_fill_at_zero, kOperation, "zero_fill_at_zero");
+    }
 }
 
 IndexedEntryCopyDeviceOperation::spec_return_value_t IndexedEntryCopyDeviceOperation::compute_output_specs(
@@ -95,11 +98,17 @@ IndexedEntryCopyDeviceOperation::tensor_return_value_t IndexedEntryCopyDeviceOpe
 }
 
 Tensor indexed_entry_copy(
-    const Tensor& source, const Tensor& destination, const Tensor& index, uint32_t index_scale, uint32_t index_offset) {
+    const Tensor& source,
+    const Tensor& destination,
+    const Tensor& index,
+    uint32_t index_scale,
+    uint32_t index_offset,
+    const std::optional<Tensor>& zero_fill_at_zero) {
     using OperationType = ttnn::experimental::prim::IndexedEntryCopyDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.index_scale = index_scale, .index_offset = index_offset},
-        OperationType::tensor_args_t{.source = source, .destination = destination, .index = index});
+        OperationType::tensor_args_t{
+            .source = source, .destination = destination, .index = index, .zero_fill_at_zero = zero_fill_at_zero});
 }
 
 }  // namespace ttnn::experimental::prim

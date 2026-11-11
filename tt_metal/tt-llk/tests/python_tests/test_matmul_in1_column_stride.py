@@ -12,12 +12,12 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     CRK_TILE_DIMM,
     DEST_SYNC,
     MATH_FIDELITY,
     MATMUL_STREAM_NARROW,
     NUM_FACES,
+    PACK_SRC_FROM_OUTPUT,
     THROTTLE_LEVEL,
     TILE_COUNT,
 )

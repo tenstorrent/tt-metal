@@ -6,12 +6,9 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
-#include <limits>
 #include <string_view>
 #include <type_traits>
-#include <unordered_set>
 
-#include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
 #include "mx_host_packing.hpp"
 #include "tensor_impl.hpp"
@@ -21,10 +18,8 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>

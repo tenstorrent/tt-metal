@@ -13,6 +13,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    decode_tail,
     make_actual_start,
 )
 
@@ -68,7 +69,7 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
     )
     assert_accurate(
         golden_convolution,
-        ttnn.to_torch(state.convolution),
+        decode_tail(ttnn.to_torch(state.convolution), layer.convolution_page_channels),
         name="segmented convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.004,

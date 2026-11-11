@@ -152,6 +152,13 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
         args.kernel_size[2],
         args.dilation[2]);
 
+    TT_FATAL(
+        args.config.T_out_block > 0 && args.config.H_out_block > 0 && args.config.W_out_block > 0,
+        "T_out_block ({}), H_out_block ({}) and W_out_block ({}) must be greater than 0",
+        args.config.T_out_block,
+        args.config.H_out_block,
+        args.config.W_out_block);
+
     if (args.config.C_out_block > 0) {
         uint32_t padded_C_out = tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
         TT_FATAL(
@@ -238,6 +245,14 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
             "C_in_block ({}) must be a multiple of {}",
             args.config.C_in_block,
             l1_alignment);
+        // Prepared weights pack C_in blocks back to back, while the kernels step through them in whole tiles.
+        const uint32_t kernel_volume = args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2];
+        TT_FATAL(
+            C_in == args.config.C_in_block || (kernel_volume * args.config.C_in_block) % tt::constants::TILE_WIDTH == 0,
+            "kernel volume ({}) * C_in_block ({}) must be a multiple of {} when C_in is split into multiple blocks",
+            kernel_volume,
+            args.config.C_in_block,
+            tt::constants::TILE_WIDTH);
     }
 
     // Verify number of C_in_blocks is <= the number of cores

@@ -9,11 +9,37 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#ifndef ARCH_QUASAR
+// On Quasar, ckernel.h is the LLK header, which a data-movement build cannot include
+// (ckernel_trisc_id.h #errors without COMPILE_FOR_TRISC).
 #include "ckernel.h"
+#endif
 #include <type_traits>
 #include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 namespace dataflow_kernel_lib {
+
+namespace detail {
+// Writes all 1024 entries of the index tile at width position wt to SRAM with ordinary RISC-V stores
+// (no NoC). Ptr is a pointer to the index type, or a CoreLocalMem of it.
+template <typename Ptr>
+FORCE_INLINE void store_index_tile(Ptr ptr, const uint32_t wt) {
+    constexpr uint32_t tile_faces = 2;
+    constexpr uint32_t face_size = 16;
+    const uint32_t w = wt << 5;  // wt * 32
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < tile_faces; ++i) {
+        for (uint32_t j = 0; j < tile_faces; ++j) {
+            for (uint32_t k = 0; k < face_size; ++k) {
+                for (uint32_t l = 0; l < face_size; ++l) {
+                    ptr[count] = l + face_size * j + w;
+                    count++;
+                }
+            }
+        }
+    }
+}
+}  // namespace detail
 
 /**
  * Generate one index tile for the sorting ops (top-k, sort, moe, sampling).
@@ -27,14 +53,17 @@ namespace dataflow_kernel_lib {
  * bottom-right. The index depends only on the column, so all 16 rows of a face are identical
  * and the two lower faces repeat the two upper ones. Only 32 of the 1024 entries are distinct.
  *
- * Rather than store all 1024 entries with the RISC, seed two rows of each upper face and let the
- * NoC replicate them. Per tile that is 32 stores of a 32-bit word holding two indices, and 15 NoC
- * read commands, against 1024 16-bit stores. This is the same construction the DeepSeek gate
- * writers already use
+ * Rather than write all 1024 entries to SRAM with ordinary RISC-V stores, seed two rows of each
+ * upper face and let the NoC replicate them. Per tile that is 32 stores of a 32-bit word holding two
+ * indices, and 15 NoC read commands, against 1024 16-bit stores. This is the same construction the
+ * DeepSeek gate writers already use
  * (experimental/reduction/deepseek_grouped_gate, experimental/deepseek_prefill/moe_grouped_topk).
+ * The NoC replication is used only for 16-bit indices on WH/BH. For 32-bit indices, and for every
+ * index tile on Quasar, ordinary RISC-V stores write all 1024 entries to SRAM.
  *
- * T selects the index width, which must match the top-k LLK's dest mode: uint16_t for the
- * UInt16 index tile (LO16 dest, WH/BH), uint32_t for the Int32 index tile (INT32 dest, Quasar).
+ * T selects the index width, which must match the top-k LLK's dest mode: uint16_t for a 16-bit
+ * index tile (UInt16 with LO16 dest on WH/BH; Int16 with UINT16 dest on Quasar, where tt-metal does
+ * not yet support UInt16 dataflow buffers), uint32_t for a 32-bit index tile (INT32 dest).
  *
  * @param dfb The kernel's dataflow buffer to write the generated index tile to. Construct it once at
  *            kernel scope and pass it by reference: on Quasar a DataflowBuffer drains when it goes out
@@ -44,11 +73,23 @@ namespace dataflow_kernel_lib {
 template <typename T = uint16_t, typename DFB, std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
 FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
     constexpr uint32_t one_tile = 1;
-    constexpr uint32_t tile_faces = 2;
-    constexpr uint32_t face_size = 16;
 
     dfb.reserve_back(one_tile);
 
+#ifdef ARCH_QUASAR
+    // The NoC replication below needs the seed rows to be in SRAM before the NoC reads them. On WH/BH,
+    // ckernel::load_blocking ensures this is the case, but it doesn't support Quasar.
+    // So on Quasar, write all 1024 entries to SRAM with ordinary RISC-V stores instead. Hold a scoped
+    // write lock while writing: releasing it flushes the reserved tile's address range from data cache,
+    // so consumer sees written data in SRAM.
+    {
+        auto lock = dfb.scoped_write_lock(one_tile);
+        detail::store_index_tile(lock.template get_ptr<volatile T>(), wt);
+    }
+    dfb.push_back(one_tile);
+#else
+    constexpr uint32_t tile_faces = 2;
+    constexpr uint32_t face_size = 16;
     const uint32_t tile_addr = dfb.get_write_ptr();
     const uint32_t w = wt << 5;  // wt * 32
 
@@ -121,19 +162,9 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
         return;
     }
 
-    volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(tile_addr);
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < tile_faces; ++i) {
-        for (uint32_t j = 0; j < tile_faces; ++j) {
-            for (uint32_t k = 0; k < face_size; ++k) {
-                for (uint32_t l = 0; l < face_size; ++l) {
-                    ptr[count] = l + face_size * j + w;
-                    count++;
-                }
-            }
-        }
-    }
+    detail::store_index_tile(reinterpret_cast<volatile tt_l1_ptr T*>(tile_addr), wt);
     dfb.push_back(one_tile);
+#endif
 }
 
 // The id-only form: builds the DataflowBuffer from the id and runs the form above. See id_only_helpers.hpp.

@@ -196,7 +196,9 @@ def create_optimizer(model, yaml_config: dict):
 
     Accepts either a top-level YAML config dict (with training_config.optimizer)
     or the optimizer dict directly (detected by the presence of a "type" key).
-    Passes the dict straight to the C++ optimizer factory.
+    Passes the dict straight to the C++ optimizer factory. With a top-level
+    config, training_config.precision.master_dtype first stores the model's
+    trainable parameters in that dtype, so the optimizer state follows it.
 
     Args:
         model: Model to optimize
@@ -216,6 +218,9 @@ def create_optimizer(model, yaml_config: dict):
         # fc only on the last), so a param group can match nothing on some stages.
         if _is_pipeline_parallel(yaml_config):
             optimizer_cfg = {**optimizer_cfg, "allow_empty_param_groups": True}
+        params = model.parameters()
+        ttml.core.apply_precision_config(tc, params)
+        return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
 
@@ -224,6 +229,17 @@ def _is_pipeline_parallel(yaml_config: dict) -> bool:
     from .config import resolve_multihost_config
 
     return resolve_multihost_config(yaml_config).pipeline_parallel_config is not None
+
+
+def validate_clip_grad_norm(model) -> None:
+    """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
+    when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
+    clipping by a wrong per-shard norm."""
+    if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for p in model.parameters().values()):
+        raise ValueError(
+            "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
+            "only a shard, so the per-shard norm is wrong"
+        )
 
 
 def get_loss_over_devices(loss):

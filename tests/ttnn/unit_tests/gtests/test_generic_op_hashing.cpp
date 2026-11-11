@@ -119,3 +119,47 @@ TEST(GenericOpNamedArgsHash, ValueOnlyDifferenceKeepsHash) {
     EXPECT_EQ(program_hash(a), program_hash(b))
         << "Named-arg values (and per-core core count) must not change the generic-op program hash";
 }
+
+namespace genop_build_options_hash_test {
+
+using namespace tt::tt_metal;
+
+KernelDescriptor base_kernel() {
+    return KernelDescriptor{
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+        .core_ranges = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
+        .config = DataMovementConfigDescriptor{},
+    };
+}
+
+ttsl::hash::hash_t program_hash(const KernelDescriptor& kernel) {
+    ProgramDescriptor descriptor{.kernels = {kernel}};
+    return ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
+}
+
+}  // namespace genop_build_options_hash_test
+
+TEST(GenericOpBuildOptionsHash, OptLevelChangesHash) {
+    using namespace genop_build_options_hash_test;
+    auto unset = base_kernel();
+    auto o0 = base_kernel();
+    o0.opt_level = KernelBuildOptLevel::O0;
+    auto o3 = base_kernel();
+    o3.opt_level = KernelBuildOptLevel::O3;
+    EXPECT_NE(program_hash(o0), program_hash(o3));
+    EXPECT_NE(program_hash(unset), program_hash(o0));
+}
+
+TEST(GenericOpBuildOptionsHash, CompilerIncludePathsChangeHash) {
+    using namespace genop_build_options_hash_test;
+    auto a = base_kernel();
+    a.compiler_include_paths = {"include/a"};
+    auto b = base_kernel();
+    b.compiler_include_paths = {"include/b"};
+    auto ab = base_kernel();
+    ab.compiler_include_paths = {"include/a", "include/b"};
+    auto ba = base_kernel();
+    ba.compiler_include_paths = {"include/b", "include/a"};
+    EXPECT_NE(program_hash(a), program_hash(b));
+    EXPECT_NE(program_hash(ab), program_hash(ba)) << "include path order affects compilation";
+}

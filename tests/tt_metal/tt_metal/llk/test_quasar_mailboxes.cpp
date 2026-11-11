@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "llk_device_fixture.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>

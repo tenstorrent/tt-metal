@@ -36,11 +36,10 @@
 constexpr uint32_t FWD_SIGNAL_CAP = 32;
 constexpr dspf2d::SenderCtArgs ct{};
 
-// A batch comparable to the channel's depth is the trap this op's own forwarding region used to avoid by
-// bumping on a chunk's last page: fill 32 pages of a 34-page channel before announcing any and the consumer
-// sits idle while the producer stalls for credits it is the only source of. Capacity is a free parameter
-// now, so every constant measured in pages has to scale with it -- a quarter of the channel, exactly as the
-// reader's credit return does.
+// A batch comparable to the channel's depth starves both sides: fill 32 pages of a 34-page channel before
+// announcing any and the consumer sits idle while the producer stalls for credits it is the only source of.
+// Every constant measured in pages has to scale with the depth -- a quarter of the channel, as the reader's
+// credit return does.
 constexpr uint32_t fwd_signal_at() {
     const uint32_t quarter = ct.vc_pages / 4;
     return quarter < 1 ? 1u : (quarter < FWD_SIGNAL_CAP ? quarter : FWD_SIGNAL_CAP);
@@ -204,14 +203,10 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         if (avail > 0) {
             return avail;
         }
-        // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
-        // the bump batch is fwd_signal_at(), so a producer that fills a channel without completing a batch
-        // would never tell the consumer those pages are there -- and that consumer is the only source of the
-        // credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward used
-        // to rule out by forcing a signal on a chunk's last page. Channels have no chunk ends, so this
-        // announce is what rules it out instead.
-        //
-        // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
+        // Nothing of ours to send, so announce what we already sent. A producer that fills a channel without
+        // completing a bump batch would never tell the consumer those pages are there -- and that consumer is
+        // the only source of the credits the producer is then waiting on. This announce is what rules out
+        // that deadlock. Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
             for (uint32_t v = 0; v < ct.num_vcs; v++) {
                 if (fwd_since_signal[v] > 0) {

@@ -152,14 +152,27 @@ class StimuliConfig:
         # face rows and tile dimensions; unset, an operand follows num_faces, face_r_dim and tile_dimensions as before.
         self.per_operand_geometry = any(
             v is not None
-            for v in (num_faces_A, num_faces_B, face_r_dim_A, face_r_dim_B, tile_dimensions_A, tile_dimensions_B, num_faces_res, face_r_dim_res)
+            for v in (
+                num_faces_A,
+                num_faces_B,
+                face_r_dim_A,
+                face_r_dim_B,
+                tile_dimensions_A,
+                tile_dimensions_B,
+                num_faces_res,
+                face_r_dim_res,
+            )
         )
         self.num_faces_A = num_faces if num_faces_A is None else num_faces_A
         self.num_faces_B = num_faces if num_faces_B is None else num_faces_B
         self.face_r_dim_A = face_r_dim if face_r_dim_A is None else face_r_dim_A
         self.face_r_dim_B = face_r_dim if face_r_dim_B is None else face_r_dim_B
-        self.tile_dimensions_A = tile_dimensions if tile_dimensions_A is None else tile_dimensions_A
-        self.tile_dimensions_B = tile_dimensions if tile_dimensions_B is None else tile_dimensions_B
+        self.tile_dimensions_A = (
+            tile_dimensions if tile_dimensions_A is None else tile_dimensions_A
+        )
+        self.tile_dimensions_B = (
+            tile_dimensions if tile_dimensions_B is None else tile_dimensions_B
+        )
         self.num_faces_res = num_faces if num_faces_res is None else num_faces_res
         self.face_r_dim_res = face_r_dim if face_r_dim_res is None else face_r_dim_res
 
@@ -299,7 +312,8 @@ class StimuliConfig:
     @property
     def operand_unpack_words(self):
         """(tile size of unpacker 0, tile size of unpacker 1) in 16 byte words from the per-operand geometry, or None without one.
-        Unpacker 0 reads in1 (operand B) and unpacker 1 reads in0 (operand A), each strided by its own L1 tile size."""
+        Unpacker 0 reads in1 (operand B) and unpacker 1 reads in0 (operand A), each strided by its own L1 tile size.
+        """
         if not self.per_operand_geometry:
             return None
         return self.tile_size_B_bytes // 16, self.tile_size_A_bytes // 16

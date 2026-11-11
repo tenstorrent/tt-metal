@@ -344,17 +344,32 @@ static std::uint32_t pack_ch1_w_stride = 0;
 [[maybe_unused]] static std::uint32_t pack_w_next       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
 [[maybe_unused]] static std::uint8_t pack_w_last        = 0xff;
+// Set by a packer reconfigure and cleared by the next llk_pack_block or pack init: the first block after a reconfigure reads another form than the first block after an init.
+[[maybe_unused]] static bool pack_reconfigured          = false;
 // An init forgets the last output instead of invalidating the base: the first block after it packs as before, which programs the destination and invalidates the base, and a pack init before every block never programs the W stride.
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
-#define LLK_PACK_W_FORGET_OUTPUT() (pack_w_last = 0xff)
+#define LLK_PACK_W_FORGET_OUTPUT() (pack_w_last = 0xff, pack_reconfigured = false)
+#define LLK_PACK_W_RECONFIGURED() (pack_reconfigured = true)
 #else
 #define LLK_PACK_W_INVALIDATE() ((void)0)
 #define LLK_PACK_W_FORGET_OUTPUT() ((void)0)
+#define LLK_PACK_W_RECONFIGURED() ((void)0)
 #endif
+
+// Another pack program (tilize, untilize, pack rows, fast tilize) replaced the default MOP the block packs run: llk_pack_block packs per tile, as main, until
+// a default pack init. Only those inits write pack_other_program_seen, so a kernel without one folds the test away; no writer reads a flag, so a
+// kernel without llk_pack_block keeps none of them.
+[[maybe_unused]] static bool pack_other_program_seen = false;
+[[maybe_unused]] static bool pack_other_program      = false;
+#define LLK_PACK_OTHER_PROGRAM_SET() (pack_other_program_seen = true, pack_other_program = true)
+#define LLK_PACK_OTHER_PROGRAM_CLEAR() (pack_other_program = false)
+#define LLK_PACK_OTHER_PROGRAM_ACTIVE() (pack_other_program_seen && pack_other_program)
 
 // Set by _llk_pack_fast_untilize_init_ (with the DEST format of its strides), cleared by set_packer_strides: the fast untilize leaves the pack program, the
 // packer strides and the DEST offset registers set for itself. The block packs of llk_pack_block close it first (_llk_pack_close_fast_untilize_), so a
-// pack_block that follows without the uninit still writes where it should. Internal linkage: a kernel without fast untilize never writes it, the test folds away.
+// pack_block that follows without the uninit still writes where it should. Only the fast untilize init writes pack_fast_untilize_seen, so a kernel
+// without one folds the test away and keeps no call in its pack loops.
+[[maybe_unused]] static bool pack_fast_untilize_seen         = false;
 [[maybe_unused]] static bool pack_fast_untilize_open         = false;
 [[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 
@@ -388,11 +403,26 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_NOP;
 }
 
+// The packer accumulates in L1 (Pack_L1_Acc): under half sync llk_pack_block packs per tile, as main. Only a runtime
+// enable writes pack_l1_acc_seen, so a kernel that never accumulates folds the test away.
+[[maybe_unused]] static bool pack_l1_acc_seen = false;
+[[maybe_unused]] static bool pack_l1_acc_on   = false;
+#define LLK_PACK_L1_ACC_ACTIVE() (pack_l1_acc_seen && pack_l1_acc_on)
+
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
+    if (pack_l1_acc != 0)
+    {
+        pack_l1_acc_seen = true;
+    }
+    pack_l1_acc_on = pack_l1_acc != 0;
     // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
+    // Accumulating writes are bank atomics; with the fast tile end drain the lockstep packer ports can settle into a slow rate.
+#if !defined(TT_METAL_TTSIM) // ttsim does not model PACK_GLOBAL_CFG_CTL and aborts on any access to it
+    cfg_reg_rmw_tensix<PACK_GLOBAL_CFG_CTL_pack_disable_fast_tile_end_drain_RMW>(pack_l1_acc ? 1 : 0);
+#endif
 }
 
 /**
@@ -617,6 +647,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+    LLK_PACK_W_RECONFIGURED();
 
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
     // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole

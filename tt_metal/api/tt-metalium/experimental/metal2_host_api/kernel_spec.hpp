@@ -196,12 +196,23 @@ struct KernelSpec {
     using CompileTimeArgs = Table<std::string, ArgValue>;
     CompileTimeArgs compile_time_args;
 
+    // Compile time array arguments
+    // An array's length is the length of its value, which must be non-empty.
+    //
+    // To retrieve an array in kernel code, use:
+    //   auto values = get_arg(args::<name>);  // read as values[i]; usable in constant expressions
+    using CompileTimeArrayArgs = Table<std::string, ArrayArgValue>;
+    CompileTimeArrayArgs compile_time_array_args;
+
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)
 
-    // Schema (names) for the runtime arguments declared by this kernel.
+    // Schema for the runtime arguments declared by this kernel.
     // (The values of these arguments are set as ProgramRunArgs.)
     // Currently, only arguments of uint32_t are supported.
+    //
+    // NOTE: All of a kernel's argument names (compile-time, runtime, and common runtime;
+    //       scalar and array) share the kernel's args:: namespace, so they must be mutually unique.
 
     struct RuntimeArgSchema {
         // Runtime argument names (must be unique, valid C++ identifiers.)
@@ -209,6 +220,21 @@ struct KernelSpec {
 
         // Common runtime argument names (must be unique, valid C++ identifiers.)
         Group<std::string> common_runtime_arg_names;
+
+        // Array arguments: a fixed number of elements, which kernel code reads by index.
+        // (Use these for arguments the kernel reads as elements of an indexed collection.)
+        struct ArrayArgDecl {
+            std::string name;  // must be a unique, valid C++ identifier
+            uint32_t size;     // number of elements; must be > 0
+        };
+
+        // Runtime array arguments
+        // To retrieve an array in kernel code, use:
+        //   auto values = get_arg(args::<name>);  // read as values[i]; values.size() is the length
+        Group<ArrayArgDecl> runtime_array_args;
+
+        // Common runtime array arguments (retrieved in kernel code as for runtime array arguments)
+        Group<ArrayArgDecl> common_runtime_array_args;
     };
     RuntimeArgSchema runtime_arg_schema{};
 
@@ -232,6 +258,9 @@ struct KernelSpec {
 // These aliases lift commonly-used nested enums to the namespace level
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
+
+// This alias lifts the array argument declaration type to the namespace level
+using ArrayArgDecl = KernelSpec::RuntimeArgSchema::ArrayArgDecl;
 
 // These aliases lift the kernel resource-binding types to the namespace level
 using DFBBinding = KernelSpec::DFBBinding;

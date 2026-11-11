@@ -30,7 +30,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"

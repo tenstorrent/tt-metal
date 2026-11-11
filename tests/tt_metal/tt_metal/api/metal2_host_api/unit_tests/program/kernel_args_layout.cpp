@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Layout of a lowered kernel's arguments: named and tensor binding compile-time args, and the CRTA buffer's
-// named CRTAs, varargs and tensor binding runtime fields.
+// Layout of a lowered kernel's arguments: named and tensor binding compile-time args, array args, and the
+// CRTA buffer's named CRTAs, varargs and tensor binding runtime fields.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -198,6 +198,51 @@ TEST_F(ProgramSpecTestGen1, CPU_KernelCrtaLayout_AllThreeSectionsConsistent) {
            "calculation degenerates to the pre-refactor case.";
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_ArrayArgsExtendNamedSectionAheadOfBindings) {
+    // Arrays follow the scalars in section 1 of each buffer, so everything after section 1 (tensor
+    // binding addresses, scratchpad addresses, varargs) moves out by the array words.
+    //   CRTA: [ c | d0 d1 d2 | tensor address | scratchpad address | varargs ]
+    //   RTA:  [ a | x0 x1 | varargs ]
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    KernelSpec& dm = spec.kernels[0];
+    dm.runtime_arg_schema = {
+        .runtime_arg_names = {"a"},
+        .common_runtime_arg_names = {"c"},
+        .runtime_array_args = {{.name = "x", .size = 2}},
+        .common_runtime_array_args = {{.name = "d", .size = 3}},
+    };
+    dm.advanced_options.num_runtime_varargs = 1;
+    dm.advanced_options.num_common_runtime_varargs = 1;
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(dm, "input_tensor", "input_ta");
+    dm.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+
+    const KernelCrtaLayout crta = kernel->get_crta_layout();
+    EXPECT_EQ(crta.num_named_words, 4u);  // c, d0..d2
+    EXPECT_EQ(crta.binding_section_words, 1u);
+    EXPECT_EQ(crta.scratchpad_section_words, 1u);
+    EXPECT_EQ(crta.vararg_section_offset, 6u);
+    ASSERT_EQ(kernel->tensor_binding_handles().size(), 1u);
+    EXPECT_EQ(kernel->tensor_binding_handles()[0].addr_crta_offset, 4u * sizeof(uint32_t));
+    ASSERT_EQ(kernel->scratchpad_binding_handles().size(), 1u);
+    EXPECT_EQ(kernel->scratchpad_binding_handles()[0].addr_crta_word, 5u);
+
+    const KernelRtaLayout rta = kernel->get_rta_layout();
+    EXPECT_EQ(rta.num_named_words, 3u);  // a, x0, x1
+    EXPECT_EQ(rta.vararg_section_offset, 3u);
+
+    const KernelArrayArgs& arrays = kernel->get_array_args();
+    ASSERT_EQ(arrays.runtime.size(), 1u);
+    EXPECT_EQ(arrays.runtime[0].word_offset, 1u);
+    ASSERT_EQ(arrays.common_runtime.size(), 1u);
+    EXPECT_EQ(arrays.common_runtime[0].word_offset, 1u);
+}
+
 // ============================================================================
 // Tensor binding compile-time args
 // ============================================================================
@@ -240,6 +285,19 @@ TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArgValuesLowerAsUint32Conversion) {
     EXPECT_EQ(named.at("wide"), 5u);
     EXPECT_EQ(named.at("flag"), 1u);
     EXPECT_EQ(named.at("real"), 2u);
+}
+
+// CTA arrays lower to their own table, not into the named compile-time args (which also feed the
+// legacy named-CTA map) and not into the positional compile-time args.
+TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArrayArgsLowerToTheirOwnTable) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].compile_time_array_args = {{"sizes", {-1, true, 7}}};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    EXPECT_THAT(kernel->get_array_args().compile_time.at("sizes"), ::testing::ElementsAre(0xFFFFFFFFu, 1u, 7u));
+    EXPECT_FALSE(kernel->named_compile_time_args().contains("sizes"));
+    EXPECT_TRUE(kernel->compile_time_args().empty());
 }
 
 }  // namespace

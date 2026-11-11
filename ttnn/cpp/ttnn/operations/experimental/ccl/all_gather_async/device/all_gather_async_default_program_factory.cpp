@@ -685,7 +685,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
                             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
                         }
                     } else {
                         writer_rt_args.push_back(forward_coord.has_value());
@@ -693,7 +693,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
                             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
                         }
                         writer_rt_args.push_back(false);
                     }

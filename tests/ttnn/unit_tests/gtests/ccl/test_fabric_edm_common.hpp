@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 

@@ -24,11 +24,11 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     CRK_TILE_DIMM,
     DEST_SYNC,
     MATH_FIDELITY,
     NUM_FACES,
+    PACK_SRC_FROM_OUTPUT,
     THROTTLE_LEVEL,
     TILE_COUNT,
 )

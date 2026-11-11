@@ -4,8 +4,6 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <utility>
-
 namespace tt::tt_metal::experimental {
 
 ProgramResources RegisterResources(

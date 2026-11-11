@@ -73,10 +73,9 @@ ALL_PERF_RUN_TYPES = [
     PerfRunType.UNPACK_ISOLATE,
     PerfRunType.MATH_ISOLATE,
     PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
 ]
 
-# Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
+# Run-type → kernel components for the ELF_SIZE column.
 _CODE_SIZE_COMPONENTS = {
     PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],
     PerfRunType.UNPACK_ISOLATE: ["unpack"],
@@ -795,6 +794,136 @@ def _selected_run_types(run_types):
     return [rt for rt in run_types if rt.name in names]
 
 
+# Template parameters a main-form cell keeps (an exact-cell row of matmul_closed_off_rows.csv with form main): the shape of the block, nothing that changes the code.
+_TRUE_MAIN_KEEP = (
+    "MATH_FIDELITY",
+    "DEST_SYNC",
+    "THROTTLE_LEVEL",
+    "MATMUL_L1_ACC",
+    "PACK_SRC_FROM_OUTPUT",
+    "MATMUL_FORM_KEYS",
+    "MATMUL_PACK_BLOCK",
+    "_D",
+    "MATMUL_NB",
+    "MATMUL_OPERAND_SIZES",
+)
+
+
+def _true_main_templates(test_name, formats, dest_acc, l1_acc, templates, runtimes):
+    """The templates of a cell the table keeps on main (matmul_grid_main_cells): main's unpack, math and per-tile pack with none of the harness opt-ins (ttsync, row MOP, row end fold, stream z and narrow, reuse direction, phase elide, k loop, flip and fused post)."""
+    if not str(test_name).startswith(
+        ("sources/matmul", "sources/math_matmul")
+    ) or not hasattr(formats, "input_format_B"):
+        return templates
+    from ..chip_architecture import get_chip_architecture
+    from ..llk_params import DestSync
+    from ..matmul_prod_keys import grid_main_cell, reinit_keyed_cell, tiny_main_cell
+    from ..test_variant_parameters import MATMUL_TRUE_MAIN
+
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        return templates
+    by = {type(t).__name__: t for t in templates}
+    dims = next((r for r in runtimes if type(r).__name__ == "CRK_TILE_DIMM"), None)
+    if (
+        dims is None
+        or "MATH_FIDELITY" not in by
+        or "DEST_SYNC" not in by
+        or "MATMUL_FORM_KEYS" not in by
+    ):
+        return templates
+    throttle = by["THROTTLE_LEVEL"].throttle_level if "THROTTLE_LEVEL" in by else 0
+    l1 = bool(l1_acc == L1Accumulation.Yes) or (
+        "MATMUL_L1_ACC" in by
+        and by["MATMUL_L1_ACC"].matmul_l1_acc == L1Accumulation.Yes
+    )
+    nbk = next((r for r in runtimes if type(r).__name__ == "NUM_BLOCKS"), None)
+    nb = (
+        nbk.num_blocks
+        if nbk is not None
+        else (by["MATMUL_NB"].matmul_nb if "MATMUL_NB" in by else 1)
+    )
+    tile = next((r for r in runtimes if type(r).__name__ == "IN_TILE_DIMS"), None)
+    r0 = tile.in0_r_dim if tile is not None else 32
+    c1 = tile.in1_c_dim if tile is not None else 32
+    half = by["DEST_SYNC"].dest_sync == DestSync.Half
+    fid = by["MATH_FIDELITY"].math_fidelity
+    acc = dest_acc == DestAccumulation.Yes
+    reinit = bool(os.environ.get("LLK_REINIT")) or any(
+        repr(t) == "DYN(4)" for t in templates
+    )
+    # init before every call: the cell re-inits on main's form unless the table names a keyed re-init form for it
+    reinit_main = reinit and not reinit_keyed_cell(
+        fid,
+        half,
+        acc,
+        formats.input_format,
+        formats.input_format_B,
+        formats.output_format,
+        dims.r_dimm,
+        dims.c_dimm,
+        dims.k_dimm,
+        throttle,
+        l1,
+        nb,
+    )
+    if not (
+        reinit_main
+        or grid_main_cell(
+            fid,
+            half,
+            acc,
+            formats.input_format,
+            formats.input_format_B,
+            formats.output_format,
+            dims.r_dimm,
+            dims.c_dimm,
+            dims.k_dimm,
+            throttle,
+            l1,
+            nb,
+        )
+        or tiny_main_cell(
+            fid,
+            half,
+            acc,
+            formats.input_format,
+            formats.input_format_B,
+            formats.output_format,
+            r0,
+            c1,
+            dims.r_dimm,
+            dims.c_dimm,
+            dims.k_dimm,
+        )
+    ):
+        return templates
+    out = []
+    for t in templates:
+        name = type(t).__name__
+        if name not in _TRUE_MAIN_KEEP:
+            continue
+        if name == "MATMUL_FORM_KEYS":
+            t.keep_flip = False
+            t.unfused_post = False
+            t.force_form = ""
+            t.with_block(
+                dims.c_dimm,
+                dims.r_dimm,
+                dims.k_dimm,
+                dest_acc,
+                throttle,
+                l1,
+                nb,
+                r0,
+                c1,
+            )
+        if name == "MATMUL_PACK_BLOCK":
+            t = type(t)(0)
+        out.append(t)
+    out.append(MATMUL_TRUE_MAIN())
+    return out
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -818,9 +947,14 @@ class PerfConfig(TestConfig):
         requires_vector_ext: bool = False,
     ):
 
+        # the report keeps the columns of the templates the module passed, so a main row of the table does not change the CSV schema
+        reported_templates = templates
+        templates = _true_main_templates(
+            test_name, formats, dest_acc, l1_acc, templates, runtimes
+        )
         # Initialize passed templates and runtimes here so we don't get variant hash issues
         # when we reasign them in run method of PerfConfig
-        self.passed_templates = templates.copy()
+        self.passed_templates = reported_templates.copy()
         self.passed_runtimes = runtimes.copy()
         self.current_run_type = None
 

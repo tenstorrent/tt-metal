@@ -287,7 +287,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
     // append the EDM connection rt args
     append_fabric_connection_rt_args(
-        sender_id, mcast_start_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
+        *sender_device, sender_id, mcast_start_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -624,7 +624,13 @@ void run_unicast_test_bw_chips(
 
     uint32_t link_idx = available_links[0];
     append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        *sender_device,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        sender_program,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -999,6 +1005,7 @@ void RunTestMCastConnAPI(
         *sender_device, src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
     const auto left_dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
+        *sender_device,
         src_fabric_node_id,
         left_dst_fabric_node_id,
         link_idx,
@@ -1019,6 +1026,7 @@ void RunTestMCastConnAPI(
         *sender_device, src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
     const auto right_dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
+        *sender_device,
         src_fabric_node_id,
         right_dst_fabric_node_id,
         link_idx,
@@ -1447,6 +1455,7 @@ void RunTest2DMCastConnAPI(
         if (north_branch_east_hops > 0) {
             link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, north_east_fabric_node_id)[0];
             append_fabric_connection_rt_args(
+                *sender_device,
                 src_fabric_node_id,
                 north_east_fabric_node_id,
                 link_idx,
@@ -1456,6 +1465,7 @@ void RunTest2DMCastConnAPI(
         } else if (north_branch_west_hops) {
             link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, north_west_fabric_node_id)[0];
             append_fabric_connection_rt_args(
+                *sender_device,
                 src_fabric_node_id,
                 north_west_fabric_node_id,
                 link_idx,
@@ -1465,6 +1475,7 @@ void RunTest2DMCastConnAPI(
         } else {
             link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, north_fabric_node_id)[0];
             append_fabric_connection_rt_args(
+                *sender_device,
                 src_fabric_node_id,
                 north_fabric_node_id,
                 link_idx,
@@ -1475,6 +1486,7 @@ void RunTest2DMCastConnAPI(
     } else {
         link_idx = 0;
         append_fabric_connection_rt_args(
+            *sender_device,
             src_fabric_node_id,
             arbitrary_fabric_node_id,
             link_idx,
@@ -1489,6 +1501,7 @@ void RunTest2DMCastConnAPI(
         if (south_branch_west_hops > 0) {
             link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, south_west_fabric_node_id)[0];
             append_fabric_connection_rt_args(
+                *sender_device,
                 src_fabric_node_id,
                 south_west_fabric_node_id,
                 link_idx,
@@ -1498,6 +1511,7 @@ void RunTest2DMCastConnAPI(
         } else if (south_branch_east_hops > 0) {
             link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, south_east_fabric_node_id)[0];
             append_fabric_connection_rt_args(
+                *sender_device,
                 src_fabric_node_id,
                 south_east_fabric_node_id,
                 link_idx,
@@ -1507,6 +1521,7 @@ void RunTest2DMCastConnAPI(
         } else {
             link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, south_fabric_node_id)[0];
             append_fabric_connection_rt_args(
+                *sender_device,
                 src_fabric_node_id,
                 south_fabric_node_id,
                 link_idx,
@@ -1517,6 +1532,7 @@ void RunTest2DMCastConnAPI(
     } else {
         link_idx = 0;
         append_fabric_connection_rt_args(
+            *sender_device,
             src_fabric_node_id,
             arbitrary_fabric_node_id,
             link_idx,
@@ -1530,6 +1546,7 @@ void RunTest2DMCastConnAPI(
     if (west_hops > 0) {
         link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, left_fabric_node_id)[0];
         append_fabric_connection_rt_args(
+            *sender_device,
             src_fabric_node_id,
             left_fabric_node_id,
             link_idx,
@@ -1539,6 +1556,7 @@ void RunTest2DMCastConnAPI(
     } else {
         link_idx = 0;
         append_fabric_connection_rt_args(
+            *sender_device,
             src_fabric_node_id,
             arbitrary_fabric_node_id,
             link_idx,
@@ -1549,6 +1567,7 @@ void RunTest2DMCastConnAPI(
     if (east_hops > 0) {
         link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, right_fabric_node_id)[0];
         append_fabric_connection_rt_args(
+            *sender_device,
             src_fabric_node_id,
             right_fabric_node_id,
             link_idx,
@@ -1558,6 +1577,7 @@ void RunTest2DMCastConnAPI(
     } else {
         link_idx = 0;
         append_fabric_connection_rt_args(
+            *sender_device,
             src_fabric_node_id,
             arbitrary_fabric_node_id,
             link_idx,
@@ -1769,7 +1789,13 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     uint32_t link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, dst_fabric_node_id)[0];
     append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        *sender_device,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        sender_program,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -2027,6 +2053,7 @@ void RunEDMConnectionStressTest(
                 const auto receiver_fabric_node_id =
                     control_plane.get_fabric_node_id_from_physical_chip_id(receiver_device->get_device_ids()[0]);
                 append_fabric_connection_rt_args(
+                    *sender_device,
                     sender_fabric_node_id,
                     receiver_fabric_node_id,
                     0,
@@ -2194,6 +2221,7 @@ void FabricUnicastCommon(
     }
 
     append_routing_plane_connection_manager_rt_args(
+        *sender_device,
         src_fabric_node_id,
         dest_fabric_node_ids,
         {},
@@ -3286,6 +3314,7 @@ void Fabric2DMulticastCommon(
     // Append connection manager args for all connections at once
     // Using default (std::nullopt) for auto-detection: if N/S connections exist, validates no N+S mixing
     append_routing_plane_connection_manager_rt_args(
+        *sender_device,
         src_fabric_node_id,
         dest_fabric_node_ids,
         {},
@@ -3467,6 +3496,7 @@ void FabricMulticastCommon(
             .compile_args = compile_time_args});
 
     append_routing_plane_connection_manager_rt_args(
+        *sender_device,
         src_fabric_node_id,
         dest_fabric_node_ids,
         {},
@@ -3756,6 +3786,7 @@ void FabricSparseMulticastCommon(
             .compile_args = compile_time_args});
 
     append_routing_plane_connection_manager_rt_args(
+        *sender_device,
         src_fabric_node_id,
         dest_fabric_node_ids,
         {},

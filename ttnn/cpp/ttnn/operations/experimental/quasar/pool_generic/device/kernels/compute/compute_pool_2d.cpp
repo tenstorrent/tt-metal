@@ -258,6 +258,10 @@ void kernel_main() {
                     // advance by the same number of bytes per round so their rd/wr pointers
                     // stay aligned. The producer-view wait_front/pop_front/reserve_back below
                     // continues to drive the producer pointer ledger.
+                    // The packer wrote these bytes through pre_tilize_cb, so nothing has packed into
+                    // fast_tilize_cb since its reserve_back; on Quasar the push needs a packer op on this
+                    // DFB after that wait (TEN-4746).
+                    dummy_pack(fast_tilize_cb_id);
                     fast_tilize_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.wait_front(in_ntiles_c);
 

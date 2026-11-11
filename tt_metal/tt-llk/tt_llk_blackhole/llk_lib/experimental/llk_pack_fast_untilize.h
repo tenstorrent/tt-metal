@@ -224,6 +224,7 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
 {
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize supports block_ct_dim 2, 3, or 4");
 
+    pack_fast_untilize_seen = true;
     pack_fast_untilize_open = true;
     pack_fast_untilize_src  = pack_src_format;
     LLK_PACK_W_INVALIDATE();

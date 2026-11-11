@@ -23,12 +23,11 @@ from helpers.llk_params import (
     DestSync,
     L1Accumulation,
     MathFidelity,
-    PerfRunType,
     Transpose,
 )
 from helpers.matmul_sweep import PERF_RING_TILES, generate_tile_dims, matmul_pack_form
 from helpers.param_config import parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -897,13 +896,6 @@ def test_perf_matmul_cov2(perf_report, case):
         l1_acc,
     ) = case
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
     dims = generate_tile_dims((matrix_a, matrix_b))
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
@@ -911,7 +903,7 @@ def test_perf_matmul_cov2(perf_report, case):
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             PACK_SRC_FROM_OUTPUT(),

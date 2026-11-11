@@ -29,20 +29,20 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
-    MATMUL_PACK_BLOCK,
-    MATMUL_ROW_MOP,
     MATMUL_DYN_SWITCH,
-    MATMUL_FUNC_BLOCKS,
     MATMUL_FORM_KEYS,
+    MATMUL_FUNC_BLOCKS,
     MATMUL_K_LOOP,
-    MATMUL_ROW_END_FOLD,
-    MATMUL_STREAM_NARROW,
+    MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
     MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
+    MATMUL_ROW_MOP,
+    MATMUL_STREAM_NARROW,
     MATMUL_STREAM_Z,
     MATMUL_UNPACK_TTSYNC,
     MATMUL_UNPACK_TTSYNC_EXCL,
@@ -168,7 +168,6 @@ def test_matmul(
         tilized_A = src_A
         tilized_B = src_B
 
-
     configuration = TestConfig(
         source,
         formats,
@@ -183,24 +182,61 @@ def test_matmul(
             *([MATMUL_FUNC_BLOCKS()] if blocks > 1 else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *([MATMUL_UNPACK_TTSYNC_EXCL()] if unpack_ttsync_excl else []),
-            *([] if unpack_ttsync else MATMUL_UNPACK_TTSYNC.for_block(formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim, dest_sync)),
+            *(
+                []
+                if unpack_ttsync
+                else MATMUL_UNPACK_TTSYNC.for_block(
+                    formats,
+                    dest_acc,
+                    math_fidelity,
+                    matmul_dims.ct_dim,
+                    matmul_dims.rt_dim,
+                    matmul_dims.kt_dim,
+                    dest_sync,
+                )
+            ),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
+                formats,
+                dest_acc,
+                dest_sync,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
             ),
-            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, dest_sync),
+            *MATMUL_REUSE_DIR.for_block(
+                formats,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                dest_sync,
+            ),
             *MATMUL_STREAM_Z.for_block(
-                formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
+                formats,
+                dest_acc,
+                dest_sync,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
                 kt_dim=matmul_dims.kt_dim,
             ),
             *MATMUL_K_LOOP.for_block(
-                formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim
+                formats,
+                dest_acc,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                matmul_dims.kt_dim,
             ),
             *MATMUL_ROW_END_FOLD.for_block(matmul_dims.ct_dim, matmul_dims.rt_dim),
             *MATMUL_FORM_KEYS.for_block(
-                formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True,
+                formats,
+                matmul_dims.kt_dim,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=dest_sync,
+                dest_acc=dest_acc,
+                unfuse_one_tile=True,
             ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(
@@ -425,7 +461,12 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
                 math_fidelity=math_fidelity,
             ),
             *MATMUL_K_LOOP.for_block(
-                formats, DestAccumulation.No, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim
+                formats,
+                DestAccumulation.No,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                matmul_dims.kt_dim,
             ),
             *MATMUL_ROW_END_FOLD.for_block(matmul_dims.ct_dim, matmul_dims.rt_dim),
             *MATMUL_FORM_KEYS.for_block(
@@ -499,7 +540,9 @@ def test_matmul_stream_narrow(math_fidelity, format_dest_acc_and_dims):
 # A dynamic throttle change between k steps (matmul_dyn_switch_test.cpp: even steps run the form of the init, odd ones the
 # throttled tile MOP), re-initialised by the switch path (dyn_switch) and by the full init, against the golden, on the tile and
 # the row form, at both DEST syncs.
-DYN_SWITCH_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b], same=True)
+DYN_SWITCH_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
+)
 DYN_SWITCH_BLOCKS = [
     ((rt * 32, kt * 32), (kt * 32, ct * 32))
     for rt, ct, kt in [(1, 1, 5), (2, 2, 4), (1, 4, 3), (4, 1, 3), (2, 4, 4), (1, 8, 3)]
@@ -515,7 +558,9 @@ DYN_SWITCH_BLOCKS = [
     row_mop=[False, True],
     dyn_switch=[False, True],
 )
-def test_matmul_dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch):
+def test_matmul_dyn_switch(
+    math_fidelity, formats, dims, dest_sync, row_mop, dyn_switch
+):
     test_matmul(
         math_fidelity,
         (formats, DestAccumulation.No, dims),
@@ -537,6 +582,11 @@ def test_matmul_dyn_switch(math_fidelity, formats, dims, dest_sync, row_mop, dyn
 def test_matmul_blocks(math_fidelity, format_dest_acc_and_dims, dest_sync):
     formats, dest_acc, dims = format_dest_acc_and_dims
     md = generate_tile_dims((dims[0], dims[1]))
-    if matmul_pack_form(formats, dest_sync, math_fidelity, md.rt_dim, md.ct_dim, md.kt_dim) == 0:
+    if (
+        matmul_pack_form(
+            formats, dest_sync, math_fidelity, md.rt_dim, md.ct_dim, md.kt_dim
+        )
+        == 0
+    ):
         pytest.skip("per-tile pack")
     test_matmul(math_fidelity, format_dest_acc_and_dims, dest_sync=dest_sync, blocks=3)

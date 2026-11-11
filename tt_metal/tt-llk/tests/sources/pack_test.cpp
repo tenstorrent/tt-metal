@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_stream_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else
@@ -121,7 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (unpack_to_dest)
             {
@@ -139,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(src_handshake_iters);
+                _perf_math_stream_clear_valid</* src A */ true, /* src B */ true, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -220,6 +220,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #line 201
 
 #if defined(ARCH_BLACKHOLE)
+// The W base and its tile index (pack_block 6): llk_pack_w_take programs the base again where the next block would pass the reach of the W offset.
+static std::uint32_t w_page_words = 0;
+static std::uint32_t w_base_tile  = 0;
+#line 203
 // The block pack of one block. Default (pack_block 1 and 2): the calls llk_pack_block makes with the W offset on (the plain block with the W offset, the closed
 // block with the W offset for block-float outputs), the output programmed once by _llk_pack_block_w_init_. pack_block_w (3) and pack_block_fast (4) are library
 // forms on purpose: the W offset forms behind _llk_pack_block_fast_init_, and the fast forms of the matmul harness.
@@ -230,9 +234,18 @@ inline void pack_block_call(
     std::uint32_t num_tiles,
     std::uint32_t tile_stride,
     bool bfp,
-    std::uint32_t out_tile = 0,
-    bool closed_no_w       = false)
+    std::uint32_t out_tile = 0)
 {
+    if constexpr (pack_block_far)
+    {
+        if (out_tile < w_base_tile || !_llk_pack_block_w_reach_(out_tile - w_base_tile + num_tiles, w_page_words))
+        {
+            _llk_pack_block_w_init_(address, w_page_words << 4);
+            w_base_tile = out_tile;
+        }
+        out_tile -= w_base_tile;
+    }
+#line 216
     if constexpr (pack_block_w)
     {
         if (bfp)
@@ -269,11 +282,7 @@ inline void pack_block_call(
     }
     else
     {
-        if (bfp && closed_no_w)
-        {
-            _llk_pack_block_closed_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
-        }
-        else if (bfp)
+        if (bfp)
         {
             _llk_pack_block_closed_w_mop_<sync, fp32>(dst_index, out_tile, num_tiles);
         }
@@ -300,9 +309,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
-    // llk_pack_block takes the closed block without W here (llk_pack_tile_api.h), so the W base is not programmed
-    [[maybe_unused]] const bool closed_no_w_cell =
-        is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
@@ -320,11 +326,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
         if constexpr (pack_block_en)
         {
+            if constexpr (pack_block_far)
+            {
+                w_page_words = L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0]);
+                w_base_tile  = 0;
+            }
+#line 303
             if constexpr (pack_block_w || pack_block_fast)
             {
                 _llk_pack_block_fast_init_<false>();
             }
-            if (!pack_block_fast && !pack_block_plain && (pack_block_w || !closed_no_w_cell))
+            if (!pack_block_fast && !pack_block_plain)
             {
                 _llk_pack_block_w_init_(L1_ADDRESS(buffer_Res[0]), (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4);
             }
@@ -337,7 +349,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -358,8 +370,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
-                                    res_tile_idx,
-                                    closed_no_w_cell);
+                                    res_tile_idx);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
@@ -402,8 +413,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
-                                    res_tile_idx,
-                                    closed_no_w_cell);
+                                    res_tile_idx);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)

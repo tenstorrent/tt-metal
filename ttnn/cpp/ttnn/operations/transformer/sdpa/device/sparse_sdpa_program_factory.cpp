@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>  // GetCommonRuntimeArgs (cache-hit in-place patch)
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>  // corerange_to_cores
 #include <array>
 #include <bit>
 #include <string>
@@ -108,9 +109,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
     auto* device = t.q.device();
-    tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
-    auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-    const uint32_t num_cores = grid.x * grid.y;
+    const auto& core_grid = attrs.worker_core_grid;
+    const auto cores = corerange_to_cores(core_grid, std::nullopt, /*row_wise=*/true);
+    const uint32_t num_cores = cores.size();
     const uint32_t base = S / num_cores;
     const uint32_t extra = S % num_cores;
 
@@ -352,7 +353,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
+        const auto& core = cores[i];
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
         reader_desc.emplace_runtime_args(core, {tok_start, tok_count});

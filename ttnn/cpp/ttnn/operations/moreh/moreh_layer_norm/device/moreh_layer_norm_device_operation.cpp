@@ -104,6 +104,21 @@ void MorehLayerNormOperation::validate_inputs(
             rstd->logical_shape());
     }
 
+    const auto& output = tensor_args.output;
+    if (output.has_value()) {
+        // Every buffer, the output one included, takes the input's format, so the output must match it.
+        TT_FATAL(
+            output->dtype() == input.dtype(),
+            "output dtype {} must match the input dtype {}",
+            output->dtype(),
+            input.dtype());
+        TT_FATAL(output->layout() == Layout::TILE, "output must be tilized");
+        TT_FATAL(
+            output->logical_shape() == input.logical_shape(),
+            "output shape {} must match the input shape {}",
+            output->logical_shape(),
+            input.logical_shape());
+    }
 }
 
 void MorehLayerNormOperation::validate_on_program_cache_miss(

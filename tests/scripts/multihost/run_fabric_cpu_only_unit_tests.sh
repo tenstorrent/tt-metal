@@ -365,6 +365,7 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Strea
 # The allocator picks its buffer slot table by the arch the HAL reports, so run it once per arch.
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricStaticSizedChannelsAllocatorTest.*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/p100_cluster_desc/p100_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricStaticSizedChannelsAllocatorTest.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricSlotAllocatorTest.*:FabricTridAllocatorTest.*"
 
 # LogicalToPhysicalConversionFixture used to be run here. Its file,
 # fabric_router/test_control_plane_logical_to_physical.cpp, is in no sources.cmake and does not

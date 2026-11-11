@@ -14,6 +14,7 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include "untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -218,7 +219,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     KernelSpec::CompilerOptions::Defines compute_defines;
     auto make_compute = [&](const KernelSpecName& id) {
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
             compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }
         return KernelSpec{

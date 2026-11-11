@@ -4,6 +4,7 @@
 
 // Intra-scope (self-loop) DFB tests.
 
+#include "data_format/bfloat16_utils.hpp"
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"

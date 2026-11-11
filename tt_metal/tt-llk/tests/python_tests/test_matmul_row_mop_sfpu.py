@@ -6,11 +6,11 @@ alone. The body is test_matmul_grid2_tiny (math matmul test) with the opt-in row
 every fidelity; the golden is the matmul golden through relu."""
 
 import pytest
+import test_matmul_grid2_tiny as _t
 import torch
 from conftest import skip_for_wormhole
 from helpers.llk_params import MathFidelity
 from helpers.test_variant_parameters import TemplateParameter
-import test_matmul_grid2_tiny as _t
 
 
 class _Raw(TemplateParameter):
@@ -37,7 +37,22 @@ _FORMS = {
 
 def _cases():
     return [
-        (form, ("F16b", "F16b", "F16b", "N", sy, getattr(MathFidelity, fi), 32, 32, rt, ct, 2))
+        (
+            form,
+            (
+                "F16b",
+                "F16b",
+                "F16b",
+                "N",
+                sy,
+                getattr(MathFidelity, fi),
+                32,
+                32,
+                rt,
+                ct,
+                2,
+            ),
+        )
         for form in _FORMS
         for sy in ("H", "F")
         for fi in ("LoFi", "HiFi2", "HiFi4")
@@ -47,14 +62,24 @@ def _cases():
 
 @pytest.mark.nightly
 @skip_for_wormhole
-@pytest.mark.parametrize("case", _cases(), ids=lambda c: "sfpu_after_%s_%s_%s_%dx%dx%d" % (c[0], c[1][4], c[1][5].name, c[1][8], c[1][9], c[1][10]))
+@pytest.mark.parametrize(
+    "case",
+    _cases(),
+    ids=lambda c: "sfpu_after_%s_%s_%s_%dx%dx%d"
+    % (c[0], c[1][4], c[1][5].name, c[1][8], c[1][9], c[1][10]),
+)
 def test_matmul_row_mop_sfpu(case, monkeypatch):
     form, case = case
     real_config = _t.TestConfig
     real_golden = _t.get_golden_generator
 
     def config(*args, templates=None, **kwargs):
-        return real_config(*args, templates=list(templates) + [_Raw(_FORMS[form] + "\n#define MATMUL_SFPU_AFTER")], **kwargs)
+        return real_config(
+            *args,
+            templates=list(templates)
+            + [_Raw(_FORMS[form] + "\n#define MATMUL_SFPU_AFTER")],
+            **kwargs,
+        )
 
     def golden(cls):
         gen = real_golden(cls)

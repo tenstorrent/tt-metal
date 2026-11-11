@@ -28,7 +28,12 @@ BIAS_TYPE = re.compile(r"\baddr_mod_bias_t\b")
 
 
 def _code_lines(path):
-    text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), path.read_text(errors="replace"), flags=re.S)
+    text = re.sub(
+        r"/\*.*?\*/",
+        lambda m: "\n" * m.group(0).count("\n"),
+        path.read_text(errors="replace"),
+        flags=re.S,
+    )
     for number, line in enumerate(text.splitlines(), 1):
         yield number, line.split("//", 1)[0]
 
@@ -38,7 +43,11 @@ def _sources():
         if not root.is_dir():
             continue
         for path in sorted(root.rglob("*")):
-            if path.suffix in SUFFIXES and path.name not in ALLOWED and "build" not in path.parts[len(root.parts) :]:
+            if (
+                path.suffix in SUFFIXES
+                and path.name not in ALLOWED
+                and "build" not in path.parts[len(root.parts) :]
+            ):
                 yield path
 
 
@@ -48,6 +57,13 @@ def test_no_nonzero_addr_mod_bias_in_blackhole_code():
     found = []
     for path in _sources():
         for number, line in _code_lines(path):
-            if NONZERO_BIAS.search(line) or BIAS_REGISTER.search(line) or BIAS_TYPE.search(line):
+            if (
+                NONZERO_BIAS.search(line)
+                or BIAS_REGISTER.search(line)
+                or BIAS_TYPE.search(line)
+            ):
                 found.append(f"{path.relative_to(TT_METAL)}:{number}: {line.strip()}")
-    assert not found, "address mod bias is written, so the matmul inits must write it too:\n" + "\n".join(found)
+    assert not found, (
+        "address mod bias is written, so the matmul inits must write it too:\n"
+        + "\n".join(found)
+    )

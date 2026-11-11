@@ -17,6 +17,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -32,6 +33,7 @@
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -247,6 +249,15 @@ public:
         return DeviceOperation::create_output_tensors(attrs, tensor_args);
     }
 
+    static bool skip_launch(
+        const operation_attributes_t& attrs,
+        const tensor_args_t& tensor_args,
+        const tensor_return_value_t& tensor_return_value)
+        requires HasSkipLaunch<DeviceOperation>
+    {
+        return DeviceOperation::skip_launch(attrs, tensor_args, tensor_return_value);
+    }
+
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
@@ -383,6 +394,9 @@ public:
             // Non-empty when the factory used emplace_runtime_args() with
             // Buffer* args (or, for the WorkloadDescriptor variant, declared any CB buffer binding).
             tt::tt_metal::ResolvedBindings resolved_bindings;
+            // WorkloadDescriptor variant only, when resolve_bindings bailed: the tensor buffer addresses
+            // baked into the cached program, which a cache hit can only reuse if they are unchanged.
+            std::vector<uint32_t> unpatchable_buffer_addresses;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -420,6 +434,34 @@ public:
                 buffers.push_back(wb.buffer);
             }
             return collected;
+        }
+
+        static std::vector<uint32_t> buffer_addresses(std::span<tt::tt_metal::Buffer* const> buffers) {
+            std::vector<uint32_t> addresses;
+            addresses.reserve(buffers.size());
+            for (const auto* buffer : buffers) {
+                addresses.push_back(buffer != nullptr ? buffer->address() : 0);
+            }
+            return addresses;
+        }
+
+        static bool declares_tensor_buffer_bindings(
+            const tt::tt_metal::ProgramDescriptor& desc, std::span<tt::tt_metal::Buffer* const> buffers) {
+            for (const auto& kernel : desc.kernels) {
+                if (!kernel.buffer_bindings.empty() || !kernel.common_buffer_bindings.empty()) {
+                    return true;
+                }
+            }
+            for (const auto& cb : desc.cbs) {
+                const tt::tt_metal::Buffer* cb_buffer = cb.buffer;
+                if (cb_buffer == nullptr && cb.tensor != nullptr) {
+                    cb_buffer = cb.tensor->mesh_buffer().get_reference_buffer();
+                }
+                if (cb_buffer != nullptr && std::find(buffers.begin(), buffers.end(), cb_buffer) != buffers.end()) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // Whether create_descriptor (the ProgramDescriptor variant) wants the per-coord MeshCoordinate.
@@ -571,9 +613,17 @@ public:
                         collected.buffers,
                         collected.num_input_buffers,
                         /*allow_inplace_output_tensor_alias=*/true);
+                    // A descriptor that declares tensor-buffer bindings only resolves to empty bindings when
+                    // resolve_bindings bailed on an aliased buffer.
+                    std::vector<uint32_t> unpatchable_buffer_addresses;
+                    if (bindings.empty() && declares_tensor_buffer_bindings(desc, collected.buffers)) {
+                        unpatchable_buffer_addresses = buffer_addresses(collected.buffers);
+                    }
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
-                        .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(bindings)};
+                        .workload_descriptor = workload_descriptor,
+                        .resolved_bindings = std::move(bindings),
+                        .unpatchable_buffer_addresses = std::move(unpatchable_buffer_addresses)};
                 }
                 return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
             } else {
@@ -661,6 +711,18 @@ public:
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                    } else if (!has_override_runtime_arguments() && !sv.unpatchable_buffer_addresses.empty()) {
+                        // Overrides are exempt: some rewrite every buffer address themselves (e.g.
+                        // minimal_matmul_strided_reduce_scatter_async), and the adapter cannot tell which.
+                        auto collected =
+                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        TT_FATAL(
+                            buffer_addresses(collected.buffers) == sv.unpatchable_buffer_addresses,
+                            "{}: program cache hit on an entry built from a call that passed the same buffer in more "
+                            "than one tensor slot, so its buffer addresses cannot be re-patched for the current "
+                            "tensors. Pass distinct tensors to the first call (for example a clone of the repeated "
+                            "tensor).",
+                            ttsl::get_type_name<DeviceOperation>());
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
                     if constexpr (has_override_runtime_arguments()) {
@@ -801,6 +863,8 @@ public:
     struct SpecBindingSupport {
         using TensorParamName = tt::tt_metal::experimental::TensorParamName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
+        using PrefetcherPipeParamName = tt::tt_metal::experimental::PrefetcherPipeParamName;
+        using PrefetcherPipeArgument = tt::tt_metal::experimental::PrefetcherPipeArgument;
 
         // Stored across cache entries: for each TensorArgument in a program's ProgramRunArgs, which
         // tensor (by index into the deterministic enumeration of io tensors followed by op-owned
@@ -811,9 +875,23 @@ public:
             std::size_t tensor_idx;
         };
 
+        // The same for each PrefetcherPipeArgument: the index into operation_attributes_t::prefetcher_pipes
+        // of the pipe it was bound to.
+        struct ResolvedPipeBinding {
+            PrefetcherPipeParamName pipe_parameter_name;
+            std::size_t pipe_idx;
+        };
+
+        // An op whose programs bind PrefetcherPipes holds them in operation_attributes_t::prefetcher_pipes,
+        // where the cache-hit path finds them again.
+        static constexpr bool attrs_hold_prefetcher_pipes = requires(const operation_attributes_t& attrs) {
+            { attrs.prefetcher_pipes } -> std::convertible_to<const ttnn::PrefetcherPipeList&>;
+        };
+
         // Shared by both spec adapters: the SPMD one and the per-range MeshWorkload one.
         struct SpecSharedVariables {
             std::vector<ResolvedTensorBinding> bindings;
+            std::vector<ResolvedPipeBinding> pipe_bindings;
             // Op-owned tensors produced by the factory, parked here so the (move-only) MeshTensors
             // outlive the cache miss and every program on the occupied ranges can reference them.
             // Shared ownership keeps the device allocation alive for the life of the cache entry.
@@ -845,6 +923,37 @@ public:
                     fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
+            }
+        }
+
+        // Cache-hit pipe refresh: supply each program the pipes now at its resolved positions in
+        // operation_attributes_t::prefetcher_pipes. A pipe keys the program hash by what a Program bakes in
+        // from it, not by which pipe it is, so a hit may bring one re-carved in place of the pipe the
+        // program bound, and supplying it rebinds the program. The pipe it already holds is a no-op.
+        template <typename CachedWorkload>
+        static void refresh_prefetcher_pipe_args(CachedWorkload& cached_workload, const operation_attributes_t& attrs) {
+            if constexpr (attrs_hold_prefetcher_pipes) {
+                const ttnn::PrefetcherPipeList& prefetcher_pipes = attrs.prefetcher_pipes;
+                const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                    if (sv.pipe_bindings.empty()) {
+                        continue;
+                    }
+                    tt::tt_metal::experimental::ProgramRunArgs run_args;
+                    for (const auto& b : sv.pipe_bindings) {
+                        TT_FATAL(
+                            b.pipe_idx < prefetcher_pipes.size(),
+                            "PrefetcherPipeArgument '{}' was bound to prefetcher_pipes[{}] when this program was "
+                            "cached, but the hit supplies {} pipes; the program hash must cover prefetcher_pipes",
+                            b.pipe_parameter_name.get(),
+                            b.pipe_idx,
+                            prefetcher_pipes.size());
+                        run_args.advanced_options.prefetcher_pipe_args.emplace(
+                            b.pipe_parameter_name, PrefetcherPipeArgument{*prefetcher_pipes[b.pipe_idx]});
+                    }
+                    tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
+                }
             }
         }
 
@@ -922,6 +1031,40 @@ public:
             }
             return bindings;
         }
+
+        // Match each PrefetcherPipeArgument to its pipe's index in operation_attributes_t::prefetcher_pipes,
+        // so that every cache hit rebinds it (refresh_prefetcher_pipe_args). Throws when an argument's
+        // pipe is not there, since a hit could not supply it. Cache-miss path only.
+        static std::vector<ResolvedPipeBinding> resolve_pipe_bindings(
+            const tt::tt_metal::experimental::Table<PrefetcherPipeParamName, PrefetcherPipeArgument>& factory_pipe_args,
+            const operation_attributes_t& attrs) {
+            if (factory_pipe_args.empty()) {
+                return {};
+            }
+            if constexpr (attrs_hold_prefetcher_pipes) {
+                const ttnn::PrefetcherPipeList& prefetcher_pipes = attrs.prefetcher_pipes;
+                std::vector<ResolvedPipeBinding> bindings;
+                bindings.reserve(factory_pipe_args.size());
+                for (const auto& [pipe_parameter_name, pipe_arg] : factory_pipe_args) {
+                    const auto it = std::find_if(
+                        prefetcher_pipes.begin(), prefetcher_pipes.end(), [&pipe_arg](const auto& prefetcher_pipe) {
+                            return prefetcher_pipe.get() == &pipe_arg.get();
+                        });
+                    TT_FATAL(
+                        it != prefetcher_pipes.end(),
+                        "PrefetcherPipeArgument '{}' must reference a pipe in operation_attributes_t::"
+                        "prefetcher_pipes, which a cache hit rebinds it from",
+                        pipe_parameter_name.get());
+                    bindings.push_back(
+                        {pipe_parameter_name, static_cast<std::size_t>(std::distance(prefetcher_pipes.begin(), it))});
+                }
+                return bindings;
+            } else {
+                TT_THROW(
+                    "The spec factory binds PrefetcherPipes, but operation_attributes_t has no prefetcher_pipes "
+                    "(a ttnn::PrefetcherPipeList) for a cache hit to rebind them from");
+            }
+        }
     };
 
     // -----------------------------------------------------------------------
@@ -951,6 +1094,7 @@ public:
         // Resolve one artifacts' tensor bindings and park its op-owned tensors. Consumes
         // artifacts.op_owned_tensors; a vector move keeps the run_params references valid.
         static shared_variables_t make_shared_variables(
+            const operation_attributes_t& attrs,
             ProgramArtifacts& artifacts,
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
             auto mesh_tensors = io_mesh_tensors;
@@ -959,6 +1103,8 @@ public:
             }
             return shared_variables_t{
                 .bindings = SpecBindingSupport::resolve_bindings(artifacts.run_params.tensor_args, mesh_tensors),
+                .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
+                    artifacts.run_params.advanced_options.prefetcher_pipe_args, attrs),
                 .op_owned_tensors =
                     std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors))};
         }
@@ -984,7 +1130,7 @@ public:
             // One ProgramArtifacts mapped onto every occupied range; bindings and op-owned tensors
             // are identical for every program built from it.
             auto artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-            auto sv = make_shared_variables(artifacts, io_mesh_tensors);
+            auto sv = make_shared_variables(attrs, artifacts, io_mesh_tensors);
             for (const auto& range : tensor_coords.ranges()) {
                 shared_variables.emplace(range, sv);
                 program_specs.emplace(range, artifacts.spec);
@@ -1007,16 +1153,18 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& /*attrs*/,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
+            SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
         }
     };
 
     // Like ProgramSpecMeshWorkloadFactoryAdapter (cache-miss build inherited unchanged), but the
     // cache-hit path calls the factory's override_runtime_arguments and applies the returned
     // ProgramRunArgs via UpdateProgramRunArgs instead of the base's tensor-only UpdateTensorArgs.
+    // PrefetcherPipes are rebound from operation_attributes_t::prefetcher_pipes either way.
     // The miss path applies create_program_artifacts' run args, not the override, so per-coordinate
     // run args must come from a MeshWorkloadSpecFactoryConcept factory's create_mesh_workload_artifacts.
     template <CustomProgramSpecFactoryConcept CustomSpecFactory>
@@ -1029,6 +1177,7 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
+            Base::refresh_prefetcher_pipe_args(cached_workload, attrs);
             const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto run_args = CustomSpecFactory::override_runtime_arguments(
@@ -1053,6 +1202,7 @@ public:
     // On cache hit the adapter refreshes tensor bindings per range, or calls the factory's
     // override_runtime_arguments(attrs, args, ret, range) if it declares one. The range is passed
     // whole: one Program backs it, so the run args it returns apply to every device in it.
+    // PrefetcherPipes are rebound from operation_attributes_t::prefetcher_pipes either way.
     // -----------------------------------------------------------------------
     template <MeshWorkloadSpecFactoryConcept WorkloadSpecFactory>
     struct MeshWorkloadSpecFactoryAdapter : SpecBindingSupport {
@@ -1118,7 +1268,9 @@ public:
                     per_coord.range,
                     shared_variables_t{
                         .bindings =
-                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors)});
+                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
+                        .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
+                            per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
@@ -1134,6 +1286,7 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
+            SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
             if constexpr (has_override_runtime_arguments()) {
                 const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
                 for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {

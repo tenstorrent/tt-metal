@@ -14,6 +14,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -166,7 +167,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
     };
 
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }
     KernelSpec::CompilerOptions::Defines compute_defines;

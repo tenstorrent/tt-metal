@@ -511,6 +511,81 @@ def check_dense_pack() -> int:
     return bad
 
 
+def check_stream() -> int:
+    """The Z counter step of the streamed in1 tile: python MATMUL_STREAM_Z.for_block against matmul_stream_z of llk_matmul_forms.h over the grid and grid2 rows (the harness
+    must measure what the LLK rule picks)."""
+    from types import SimpleNamespace
+
+    from helpers.llk_params import DestAccumulation
+    from helpers.test_variant_parameters import (
+        MATMUL_STREAM_NARROW,
+        MATMUL_STREAM_Z,
+        matmul_reuse_dir_for,
+    )
+
+    rows = [(*r, 1) for r in grid._grid()] + list(grid2._grid2())
+    rows = [r for r in rows if r[5] == "LoFi"]
+    py, args = "", []
+    for a, b, o, acc, sy, fi, rt, ct, kt, thr, l1, nb in rows:
+        fm = SimpleNamespace(
+            input_format=getattr(DataFormat, NAME[a]),
+            input_format_B=getattr(DataFormat, NAME[b]),
+            output_format=getattr(DataFormat, NAME[o]),
+        )
+        sync = DestSync.Half if sy == "H" else DestSync.Full
+        dest_acc = DestAccumulation.Yes if acc == "Y" else DestAccumulation.No
+        fid = getattr(MathFidelity, fi)
+        stream = MATMUL_STREAM_Z.for_block(
+            fm, dest_acc, sync, ct, rt, 32, fid, 4, False, kt, thr
+        )
+        py += "1" if stream else "0"
+        reuse = matmul_reuse_dir_for(fm, fid, ct, rt, sync)
+        dense = not MATMUL_STREAM_NARROW.for_block(fm, dest_acc, sync, ct, rt, 32, fid)
+        args.append(
+            "{MathFidelity::%s,%s,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d,%d,%s}"
+            % (
+                fi,
+                "true" if sy == "F" else "false",
+                NAME[b],
+                NAME[a],
+                NAME[o],
+                kt,
+                ct,
+                rt,
+                thr,
+                reuse,
+                "true" if dense else "false",
+            )
+        )
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "llk_defs.h").write_text(STUB)
+        (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
+        (Path(d) / "t.cpp").write_text(
+            '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool full;DataFormat i0,i1,o;int kt,ct,rt,th,reuse;bool dense;};\n'
+            f"static const R rows[]={{{','.join(args)}}};\nint main(){{for(const R& r:rows)putchar(matmul_stream_z(r.f,r.full,r.i0,r.i1,r.o,r.kt,r.ct,r.rt,r.th,r.reuse,r.dense)?'1':'0');}}\n"
+        )
+        subprocess.run(
+            [
+                "g++",
+                "-std=c++20",
+                "-O1",
+                f"-I{d}",
+                str(Path(d) / "t.cpp"),
+                "-o",
+                str(Path(d) / "t"),
+            ],
+            check=True,
+        )
+        cpp = subprocess.run(
+            [str(Path(d) / "t")], check=True, capture_output=True, text=True
+        ).stdout
+    bad = sum(x != y for x, y in zip(cpp, py))
+    print(
+        f"{len(rows)} LoFi grid and grid2 rows, stream_z: C++ {cpp.count('1')}, python {py.count('1')}, {bad} differ"
+    )
+    return bad or len(cpp) != len(py)
+
+
 def main() -> int:
     rows = [(*r, 1) for r in grid._grid()] + list(grid2._grid2())
     with tempfile.TemporaryDirectory() as d:
@@ -586,6 +661,7 @@ def main() -> int:
         or len(cpp) != len(py)
         or gen.main()
         or check_tiny()
+        or check_stream()
         or check_pack()
         or check_cell_table(
             "main form table",

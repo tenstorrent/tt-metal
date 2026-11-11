@@ -34,7 +34,6 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-umd/types/arch.hpp>
 #include "common/stable_hash.hpp"
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -800,6 +799,26 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(name.size()));
         hasher.update(name);
     }
+    // Array args: RTA/CRTA arrays by name and placement (their values are runtime data, not part of the
+    // build); CTA arrays by name and value (the values are baked into the generated header).
+    auto hash_array_layouts = [&hasher](const std::vector<ArrayArgLayout>& arrays) {
+        hasher.update(static_cast<uint64_t>(arrays.size()));
+        for (const auto& array : arrays) {
+            hasher.update(static_cast<uint64_t>(array.name.size()));
+            hasher.update(array.name);
+            hasher.update(static_cast<uint64_t>(array.word_offset));
+            hasher.update(static_cast<uint64_t>(array.size));
+        }
+    };
+    hash_array_layouts(this->array_args_.runtime);
+    hash_array_layouts(this->array_args_.common_runtime);
+    hasher.update(static_cast<uint64_t>(this->array_args_.compile_time.size()));
+    for (const auto& [name, values] : this->array_args_.compile_time) {
+        hasher.update(static_cast<uint64_t>(name.size()));
+        hasher.update(name);
+        hasher.update(static_cast<uint64_t>(values.size()));
+        hasher.update(values.begin(), values.end());
+    }
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
     // Removal is tracked by issue #50953
@@ -901,15 +920,6 @@ std::size_t Kernel::logical_common_runtime_arg_count() const {
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
-// Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
-// max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
-// payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet
-// dispatcher's 32 KB (~8176 words), and the dispatch core type is not known when validate_runtime_args_size
-// runs (SetRuntimeArgs time), so this cap is dispatch-core-independent and set conservatively below that limit
-// (with margin so several cores' commands still fit the ethernet cmddat queue). The actual L1 fit is still
-// enforced at program finalize.
-constexpr uint32_t max_runtime_args_tensix = 4096;
-
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 // num_unique_rt_args and num_common_rt_args are user-visible arg counts (excluding any watcher count words).
 void Kernel::validate_runtime_args_size(
@@ -924,7 +934,7 @@ void Kernel::validate_runtime_args_size(
         case HalProgrammableCoreType::TENSIX:
             // The TENSIX kernel-config L1 size is device-dependent (derived from the allocator at program
             // finalize, not available from the HAL here), so bound by the dispatch-core-independent
-            // large-unicast cap (see max_runtime_args_tensix above). The actual L1 fit is enforced later
+            // large-unicast cap (see max_runtime_args_tensix in kernel.hpp). The actual L1 fit is enforced later
             // against the kernel-config ring buffer.
             expected_max_rt_args = max_runtime_args_tensix;
             break;

@@ -20,7 +20,7 @@ from helpers.constraints import (
     get_valid_dest_indices,
 )
 from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     FACES_PER_TILE,
     TILE_DIMENSIONS,
@@ -45,6 +45,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
@@ -60,9 +61,27 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
+from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test, result_tensor
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
-PACK_BLOCK_MIN_TILES = 4
+PACK_BLOCK_MIN_TILES = 2
+
+# bytes of one tile of a plain output format in L1
+EQUIV_TILE_BYTES = {
+    DataFormat.Float16: 2048,
+    DataFormat.Float16_b: 2048,
+    DataFormat.UInt16: 2048,
+    DataFormat.Int8: 1024,
+    DataFormat.UInt8: 1024,
+    DataFormat.Lf8: 1024,
+    DataFormat.Fp8_e4m3: 1024,
+    DataFormat.Float32: 4096,
+    DataFormat.Int32: 4096,
+    DataFormat.UInt32: 4096,
+    DataFormat.Tf32: 4096,
+    DataFormat.Bfp8_b: 1088,
+}
 
 
 def golden_src_f32(src_A):
@@ -116,6 +135,8 @@ def test_pack(
     pack_block: bool = False,
     block_tiles: int | None = None,
     allow_int32_mix: bool = False,
+    res_page_bytes: int | None = None,
+    equiv_out: dict | None = None,
 ):
     if not allow_int32_mix and (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -248,7 +269,7 @@ def test_pack(
             )
         num_blocks = tile_cnt_A // num_tiles_in_block
 
-    # llk_pack_block (LLK_PACK_BLOCK_MIN_TILES in llk_pack_tile_api.h) packs shorter blocks one tile at a time
+    # llk_pack_block (the form tables in llk_pack_tile_api.h) packs a one tile block one tile at a time
     # (negated in the report: its own key, the build is the per-tile one)
     pack_block_arg = (
         -int(pack_block)
@@ -291,6 +312,7 @@ def test_pack(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            operand_res_tile_size=res_page_bytes,
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": unpack_to_dest,
@@ -305,7 +327,41 @@ def test_pack(
         configuration.run(perf_report)
         return
 
+    if equiv_out is not None:
+        # the raw L1 bytes of the result tiles, for the form equivalence check
+        raw_bytes = tile_cnt_A * EQUIV_TILE_BYTES[formats.output_format]
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            write_to_device(TestConfig.TENSIX_LOCATION, configuration.variant_stimuli.buf_res_addr, [0xA5] * raw_bytes)
+        configuration.run()
+        equiv_out[pack_block] = (
+            bytes(read_from_device(TestConfig.TENSIX_LOCATION, configuration.variant_stimuli.buf_res_addr, num_bytes=raw_bytes))
+            if TestConfig.BUILD_MODE != BuildMode.PRODUCE
+            else b""
+        )
+        return
+    if res_page_bytes is not None and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        # the run clears one unpadded stride per tile: fill the pages so a misplaced tile cannot match by luck
+        write_to_device(
+            TestConfig.TENSIX_LOCATION,
+            configuration.variant_stimuli.buf_res_addr,
+            [0xA5] * (tile_cnt_A * res_page_bytes),
+        )
     res_from_L1 = configuration.run().result
+    if res_page_bytes is not None:
+        # the result tiles sit one padded page apart
+        res_from_L1 = unpack_res_tiles(
+            read_from_device(
+                TestConfig.TENSIX_LOCATION,
+                configuration.variant_stimuli.buf_res_addr,
+                num_bytes=tile_cnt_A * res_page_bytes,
+            ),
+            formats.output_format,
+            tile_cnt_A,
+            False,
+            FACES_PER_TILE,
+            16,
+            tile_stride_bytes=res_page_bytes,
+        )
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
@@ -426,6 +482,71 @@ def test_pack_block_plain(
 
 @skip_for_wormhole
 @parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[32, 2304]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[4, 6, 8],
+)
+def test_pack_block_w_far(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+):
+    """W offset block packs of 72 tiles: the blocks from output tile 64 on sit 256 KB or more past the base of a 32 bit output, where the channel-1 W offset wraps."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=6,
+        block_tiles=block_tiles,
+    )
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[32, 512]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[4, 8],
+)
+def test_pack_block_closed_w_far(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+):
+    """Closed W offset blocks of Bfp8_b tiles in 20 KB pages: the blocks that reach output tile 13 sit 256 KB or more past the base."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=6,
+        block_tiles=block_tiles,
+        res_page_bytes=20480,
+    )
+
+
+@skip_for_wormhole
+@parametrize(
     formats=PACK_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
     input_dimensions=[[96, 128], [160, 32], [224, 32]],
@@ -456,3 +577,163 @@ def test_pack_block_tiles(
         pack_block=pack_block,
         block_tiles=block_tiles,
     )
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_FORMATS,
+    dest_acc=[DestAccumulation.No],
+    input_dimensions=lambda block_tiles: [[64, 32 * block_tiles]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Full],
+    dest_index=[0],
+    block_tiles=[9, 10, 12, 13, 16],
+    pack_block=[2, 3, 5],
+)
+def test_pack_block_tiles_full(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+):
+    """Blocks of 9 to 16 tiles, which only a full sync section of a 16 bit DEST holds: the default W offset forms (2), the W offset forms (3), the plain and closed blocks (5)."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+    )
+
+
+PACK_BLOCK_OTHER_FORMATS = [
+    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
+    InputOutputFormat(DataFormat.UInt16, DataFormat.UInt16),
+    InputOutputFormat(DataFormat.Int8, DataFormat.Int8),
+    InputOutputFormat(DataFormat.UInt8, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.Lf8, DataFormat.Lf8),
+    InputOutputFormat(DataFormat.Fp8_e4m3, DataFormat.Fp8_e4m3),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Fp8_e4m3),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Tf32),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Tf32),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Int8),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Lf8),
+    InputOutputFormat(DataFormat.Int32, DataFormat.Int8),
+    InputOutputFormat(DataFormat.Int32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.Int32, DataFormat.UInt16),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32),
+]
+
+
+# The golden does not model these conversions: the per-tile pack fails them the same way.
+PACK_BLOCK_GOLDEN_GAPS = {
+    (DataFormat.Float16_b, DataFormat.Int8, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.UInt8, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.Yes),
+    (DataFormat.Float16_b, DataFormat.Lf8, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.Lf8, DestAccumulation.Yes),
+    (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
+    (DataFormat.Int8, DataFormat.Int8, DestAccumulation.No),
+    (DataFormat.UInt8, DataFormat.UInt8, DestAccumulation.No),
+    (DataFormat.Lf8, DataFormat.Lf8, DestAccumulation.Yes),
+}
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_BLOCK_OTHER_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[96, 128]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[2, 3, 4],
+    pack_block=[2, 3, 5],
+    allow_int32_mix=[True],
+)
+def test_pack_block_other_formats(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+    allow_int32_mix,
+):
+    """Plain output formats beyond Float16_b, Float32 and Int32: blocks of 2 to 4 tiles in the default W offset forms (2), the W offset forms (3) and the plain blocks (5)."""
+    if (formats.input_format, formats.output_format, dest_acc) in PACK_BLOCK_GOLDEN_GAPS:
+        pytest.skip("The golden does not model this conversion.")
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+        allow_int32_mix=allow_int32_mix,
+    )
+
+
+_EQUIV_PER_TILE = {}
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=PACK_BLOCK_OTHER_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[96, 128]],
+    relu_type=[PackerReluType.NoRelu],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_index=[0],
+    block_tiles=[2, 3, 4],
+    pack_block=[0, 2, 3, 5],
+    allow_int32_mix=[True],
+)
+def test_pack_block_equivalence(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    block_tiles,
+    pack_block,
+    allow_int32_mix,
+):
+    """The default W offset (2), W offset (3) and plain (5) block forms write the same L1 bytes as the per-tile packs (0, the first of the four runs of a cell), for the formats the golden cannot judge too."""
+    if formats.output_format in (DataFormat.Int8, DataFormat.UInt8) and dest_acc == DestAccumulation.No:
+        pytest.skip("llk_pack_block keeps these per tile: from a 16 bit DEST the per-tile pack writes two faces, the block forms four.")
+    raw = {}
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=pack_block,
+        block_tiles=block_tiles,
+        allow_int32_mix=allow_int32_mix,
+        equiv_out=raw,
+    )
+    cell = (formats.input_format, formats.output_format, dest_acc, dest_sync, block_tiles)
+    if pack_block == 0:
+        _EQUIV_PER_TILE[cell] = raw[0]
+    elif TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        ref = _EQUIV_PER_TILE[cell]
+        diff = [i for i in range(len(ref)) if ref[i] != raw[pack_block][i]]
+        assert not diff, f"pack_block form {pack_block} differs from the per-tile packs in {len(diff)} of {len(ref)} bytes, from byte {diff[0]} ref {ref[diff[0]:diff[0]+24].hex()} form {raw[pack_block][diff[0]:diff[0]+24].hex()} last diff {diff[-1]} (tile bytes {len(ref) // (96 * 128 // 1024)})"

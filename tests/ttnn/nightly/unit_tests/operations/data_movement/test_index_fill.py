@@ -9,13 +9,7 @@ import torch
 from tests.ttnn.utils_for_testing import assert_equal
 
 
-# Every test runs against the legacy op and its ProgramDescriptor port (#42392).
-@pytest.fixture(params=["index_fill", "index_fill_new"])
-def index_fill_op(request):
-    return getattr(ttnn, request.param)
-
-
-def run_index_fill_test(index_fill_op, shape, dim, indices, value, dtype, device):
+def run_index_fill_test(shape, dim, indices, value, dtype, device):
     torch.manual_seed(2025)
 
     if dim > len(shape) - 1:
@@ -30,7 +24,7 @@ def run_index_fill_test(index_fill_op, shape, dim, indices, value, dtype, device
 
     tt_input = ttnn.from_torch(torch_input, device=device)
     tt_index = ttnn.from_torch(torch_index, device=device)
-    tt_output = index_fill_op(tt_input, dim, tt_index, value)
+    tt_output = ttnn.index_fill(tt_input, dim, tt_index, value)
     tt_output = ttnn.to_torch(tt_output)
 
     assert_equal(tt_output, torch_output)
@@ -51,8 +45,8 @@ def run_index_fill_test(index_fill_op, shape, dim, indices, value, dtype, device
 @pytest.mark.parametrize("indices", [[0, 2]])
 @pytest.mark.parametrize("value", [2.5, 1.72])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_index_fill_float(index_fill_op, shape, dim, indices, value, dtype, device):
-    run_index_fill_test(index_fill_op, shape, dim, indices, value, dtype, device)
+def test_index_fill_float(shape, dim, indices, value, dtype, device):
+    run_index_fill_test(shape, dim, indices, value, dtype, device)
 
 
 @pytest.mark.parametrize(
@@ -70,8 +64,8 @@ def test_index_fill_float(index_fill_op, shape, dim, indices, value, dtype, devi
 @pytest.mark.parametrize("indices", [[0, 2]])
 @pytest.mark.parametrize("value", [15, 12])
 @pytest.mark.parametrize("dtype", [torch.int32])
-def test_index_fill_int(index_fill_op, shape, dim, indices, value, dtype, device):
-    run_index_fill_test(index_fill_op, shape, dim, indices, value, dtype, device)
+def test_index_fill_int(shape, dim, indices, value, dtype, device):
+    run_index_fill_test(shape, dim, indices, value, dtype, device)
 
 
 @pytest.mark.parametrize(
@@ -84,8 +78,8 @@ def test_index_fill_int(index_fill_op, shape, dim, indices, value, dtype, device
 )
 @pytest.mark.parametrize("value", [15])
 @pytest.mark.parametrize("dtype", [torch.int32])
-def test_index_fill_cornercases(index_fill_op, shape, dim, indices, value, dtype, device):
-    run_index_fill_test(index_fill_op, shape, dim, indices, value, dtype, device)
+def test_index_fill_cornercases(shape, dim, indices, value, dtype, device):
+    run_index_fill_test(shape, dim, indices, value, dtype, device)
 
 
 @pytest.mark.parametrize(
@@ -102,9 +96,9 @@ def test_index_fill_cornercases(index_fill_op, shape, dim, indices, value, dtype
 @pytest.mark.parametrize("dim", [0])
 @pytest.mark.parametrize("indices", [[0, 2]])
 @pytest.mark.parametrize("value", [2002])
-def test_index_fill_callback(index_fill_op, shape, dim, indices, value, device):
+def test_index_fill_callback(shape, dim, indices, value, device):
     for i in range(2):
-        run_index_fill_test(index_fill_op, shape, dim, indices, value, torch.int32, device)
+        run_index_fill_test(shape, dim, indices, value, torch.int32, device)
         if i == 0:
             num_program_cache_entries = device.num_program_cache_entries()
             assert num_program_cache_entries > 0
@@ -137,7 +131,7 @@ def _make_index_tensor(indices: torch.Tensor, device) -> ttnn.Tensor:
     ],
     ids=["dim0", "dim1", "dim2", "dim3-last"],
 )
-def test_index_fill_height_sharded(index_fill_op, device, shape, dim, num_indices, value):
+def test_index_fill_height_sharded(device, shape, dim, num_indices, value):
     """index_fill with HEIGHT_SHARDED input and output."""
     sharded_mem_cfg = ttnn.create_sharded_memory_config(
         shape=shape,
@@ -157,7 +151,51 @@ def test_index_fill_height_sharded(index_fill_op, device, shape, dim, num_indice
     )
     tt_index = _make_index_tensor(torch_index, device)
 
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=sharded_mem_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=sharded_mem_cfg)
+
+    golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
+    assert_equal(ttnn.to_torch(tt_out), golden)
+
+
+def _height_sharded_cfg(shard_h: int, width: int, num_cores: int) -> ttnn.MemoryConfig:
+    """HEIGHT_SHARDED L1 config over a 1 x num_cores grid with an explicit shard height."""
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (shard_h, width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+@pytest.mark.parametrize(
+    "dim, num_indices, value",
+    [
+        (0, 2, 1.5),
+        (2, 3, -0.5),
+        (3, 8, 2.0),  # last dim
+    ],
+    ids=["dim0", "dim2", "dim3-last"],
+)
+@pytest.mark.parametrize("out_layout", ["height", "interleaved"])
+def test_index_fill_height_sharded_partial_last_shard(device, dim, num_indices, value, out_layout):
+    """HEIGHT_SHARDED input whose final shard is only partially populated."""
+    # num_rows = 3*3*5 = 45 over 8 cores of 6 rows: the last core holds 3 of its 6 rows.
+    shape = (3, 3, 5, 32)
+    in_cfg = _height_sharded_cfg(shard_h=6, width=shape[-1], num_cores=8)
+    out_cfg = (
+        in_cfg
+        if out_layout == "height"
+        else ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    )
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_index = torch.randint(0, shape[dim], (num_indices,), dtype=torch.int32)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+    )
+    tt_index = _make_index_tensor(torch_index, device)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -174,7 +212,7 @@ def test_index_fill_height_sharded(index_fill_op, device, shape, dim, num_indice
     ],
     ids=["dim0", "dim1", "dim2", "dim3-last"],
 )
-def test_index_fill_width_sharded(index_fill_op, device, shape, dim, num_indices, value):
+def test_index_fill_width_sharded(device, shape, dim, num_indices, value):
     """index_fill with WIDTH_SHARDED input and output (same shard spec required)."""
     sharded_mem_cfg = ttnn.create_sharded_memory_config(
         shape=shape,
@@ -194,7 +232,7 @@ def test_index_fill_width_sharded(index_fill_op, device, shape, dim, num_indices
     )
     tt_index = _make_index_tensor(torch_index, device)
 
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=sharded_mem_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=sharded_mem_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -211,7 +249,7 @@ def test_index_fill_width_sharded(index_fill_op, device, shape, dim, num_indices
     ],
     ids=["dim0", "dim1", "dim2", "dim3-last"],
 )
-def test_index_fill_block_sharded(index_fill_op, device, shape, dim, num_indices, value):
+def test_index_fill_block_sharded(device, shape, dim, num_indices, value):
     """index_fill with BLOCK_SHARDED input and output (same shard spec required)."""
     sharded_mem_cfg = ttnn.create_sharded_memory_config(
         shape=shape,
@@ -231,7 +269,7 @@ def test_index_fill_block_sharded(index_fill_op, device, shape, dim, num_indices
     )
     tt_index = _make_index_tensor(torch_index, device)
 
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=sharded_mem_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=sharded_mem_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -252,7 +290,7 @@ def test_index_fill_block_sharded(index_fill_op, device, shape, dim, num_indices
     ],
     ids=["interleaved_to_width_dim0", "interleaved_to_width_dim3", "height_to_block_dim1", "height_to_block_dim3"],
 )
-def test_index_fill_cross_layout_to_col_sharded(index_fill_op, device, shape, dim, num_indices, value, out_strategy):
+def test_index_fill_cross_layout_to_col_sharded(device, shape, dim, num_indices, value, out_strategy):
     """INTERLEAVED/HEIGHT input with WIDTH/BLOCK output."""
     if out_strategy == ttnn.ShardStrategy.WIDTH:
         in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
@@ -278,7 +316,7 @@ def test_index_fill_cross_layout_to_col_sharded(index_fill_op, device, shape, di
         memory_config=in_cfg,
     )
     tt_index = _make_index_tensor(torch_index, device)
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=out_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -294,7 +332,7 @@ def test_index_fill_cross_layout_to_col_sharded(index_fill_op, device, shape, di
     ],
     ids=["width_to_interleaved_dim0", "width_to_interleaved_dim3", "block_to_height_dim1", "block_to_height_dim3"],
 )
-def test_index_fill_cross_layout_from_col_sharded(index_fill_op, device, shape, dim, num_indices, value, in_strategy):
+def test_index_fill_cross_layout_from_col_sharded(device, shape, dim, num_indices, value, in_strategy):
     """WIDTH/BLOCK input with INTERLEAVED/HEIGHT output."""
     if in_strategy == ttnn.ShardStrategy.WIDTH:
         in_cfg = ttnn.create_sharded_memory_config(shape=shape, core_grid=ttnn.CoreGrid(y=1, x=4), strategy=in_strategy)
@@ -316,7 +354,7 @@ def test_index_fill_cross_layout_from_col_sharded(index_fill_op, device, shape, 
         memory_config=in_cfg,
     )
     tt_index = _make_index_tensor(torch_index, device)
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=out_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -347,7 +385,7 @@ def test_index_fill_cross_layout_from_col_sharded(index_fill_op, device, shape, 
         "b2w_dim3-last",
     ],
 )
-def test_index_fill_width_block_conversion(index_fill_op, device, shape, dim, num_indices, value, direction):
+def test_index_fill_width_block_conversion(device, shape, dim, num_indices, value, direction):
     """WIDTH <-> BLOCK conversion with matching column shard width."""
     width_cfg = ttnn.create_sharded_memory_config(
         shape=shape, core_grid=ttnn.CoreGrid(y=1, x=4), strategy=ttnn.ShardStrategy.WIDTH
@@ -368,13 +406,13 @@ def test_index_fill_width_block_conversion(index_fill_op, device, shape, dim, nu
         memory_config=in_cfg,
     )
     tt_index = _make_index_tensor(torch_index, device)
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=out_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
 
 
-def test_index_fill_col_sharded_width_mismatch_raises(index_fill_op, device, expect_error):
+def test_index_fill_col_sharded_width_mismatch_raises(device, expect_error):
     """WIDTH -> BLOCK with mismatched column shard width must raise a validation error."""
     shape = (4, 4, 4, 64)
     # WIDTH: 4 col shards (width 16);  BLOCK: 2 col shards (width 32) -> mismatch.
@@ -395,7 +433,7 @@ def test_index_fill_col_sharded_width_mismatch_raises(index_fill_op, device, exp
     tt_index = _make_index_tensor(torch.tensor([0, 1, 2, 3], dtype=torch.int32), device)
 
     with expect_error(RuntimeError, "column shard width"):
-        index_fill_op(tt_input, 3, tt_index, 1.0, memory_config=block_cfg)
+        ttnn.index_fill(tt_input, 3, tt_index, 1.0, memory_config=block_cfg)
 
 
 @pytest.mark.parametrize(
@@ -409,7 +447,7 @@ def test_index_fill_col_sharded_width_mismatch_raises(index_fill_op, device, exp
     ids=["KW2", "KW4-KH4", "KW8"],
 )
 @pytest.mark.parametrize("direction", ["width_to_block", "block_to_width"])
-def test_index_fill_width_block_varied_geometry(index_fill_op, device, width_grid, block_grid, direction):
+def test_index_fill_width_block_varied_geometry(device, width_grid, block_grid, direction):
     """WIDTH <-> BLOCK across varied column-shard counts and block row-shard heights."""
     shape = (4, 4, 4, 64)
     dim = 3  # exercise the column-local last-dim fill, the most geometry-sensitive path
@@ -428,7 +466,7 @@ def test_index_fill_width_block_varied_geometry(index_fill_op, device, width_gri
         torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
     )
     tt_index = _make_index_tensor(torch_index, device)
-    tt_out = index_fill_op(tt_input, dim, tt_index, 1.5, memory_config=out_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, 1.5, memory_config=out_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), 1.5)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -443,7 +481,7 @@ def test_index_fill_width_block_varied_geometry(index_fill_op, device, width_gri
     ids=["float32", "int32"],
 )
 @pytest.mark.parametrize("direction", ["width_to_block", "block_to_width"])
-def test_index_fill_width_block_dtypes(index_fill_op, device, torch_dtype, ttnn_dtype, value, direction):
+def test_index_fill_width_block_dtypes(device, torch_dtype, ttnn_dtype, value, direction):
     """WIDTH <-> BLOCK conversion for non-bfloat16 dtypes (4-byte element path)."""
     shape = (4, 4, 4, 64)
     dim = 3
@@ -465,7 +503,7 @@ def test_index_fill_width_block_dtypes(index_fill_op, device, torch_dtype, ttnn_
         torch_input, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
     )
     tt_index = _make_index_tensor(torch_index, device)
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=out_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -481,7 +519,7 @@ def test_index_fill_width_block_dtypes(index_fill_op, device, torch_dtype, ttnn_
     ids=["dim0", "dim2", "dim3-last"],
 )
 @pytest.mark.parametrize("direction", ["interleaved_to_height", "height_to_interleaved"])
-def test_index_fill_interleaved_height_conversion(index_fill_op, device, shape, dim, num_indices, value, direction):
+def test_index_fill_interleaved_height_conversion(device, shape, dim, num_indices, value, direction):
     """INTERLEAVED <-> HEIGHT_SHARDED conversion (full-row pages on both sides)."""
     interleaved_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     height_cfg = ttnn.create_sharded_memory_config(
@@ -498,7 +536,7 @@ def test_index_fill_interleaved_height_conversion(index_fill_op, device, shape, 
         torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
     )
     tt_index = _make_index_tensor(torch_index, device)
-    tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=out_cfg)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
 
     golden = torch.index_fill(torch_input, dim, torch_index.long(), value)
     assert_equal(ttnn.to_torch(tt_out), golden)
@@ -509,7 +547,7 @@ def test_index_fill_interleaved_height_conversion(index_fill_op, device, shape, 
     [("interleaved", "interleaved"), ("width", "block")],
     ids=["interleaved", "width_to_block"],
 )
-def test_index_fill_program_cache_hit_new_addresses(index_fill_op, device, in_layout, out_layout):
+def test_index_fill_program_cache_hit_new_addresses(device, in_layout, out_layout):
     """A cache hit must run with the new call's buffer addresses. The first call's tensors stay
     alive, so the second call's input, index and output cannot land at the same addresses."""
     shape, dim, value = (4, 4, 4, 64), 3, 1.5
@@ -531,7 +569,7 @@ def test_index_fill_program_cache_hit_new_addresses(index_fill_op, device, in_la
             torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
         )
         tt_index = _make_index_tensor(torch_index, device)
-        tt_out = index_fill_op(tt_input, dim, tt_index, value, memory_config=out_cfg)
+        tt_out = ttnn.index_fill(tt_input, dim, tt_index, value, memory_config=out_cfg)
         assert_equal(ttnn.to_torch(tt_out), torch.index_fill(torch_input, dim, torch_index.long(), value))
         return tt_input, tt_index, tt_out
 

@@ -583,7 +583,8 @@ MeshWorkload make_remote_gate_opener_workload(
         *dst_node.mesh_id,
         static_cast<uint32_t>(ttnn::d2d_stream::GateState::Open),
     };
-    tt::tt_fabric::append_fabric_connection_rt_args(src_node, dst_node, links.front(), program, opener_core, rt);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        *opener_mesh, src_node, dst_node, links.front(), program, opener_core, rt);
     SetRuntimeArgs(program, kernel, opener_core, rt);
 
     MeshWorkload workload;

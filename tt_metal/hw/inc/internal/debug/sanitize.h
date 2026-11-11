@@ -21,6 +21,10 @@
 #if !defined(COMPILE_FOR_TRISC) && defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && \
     !defined(FORCE_WATCHER_OFF)
 
+// The condition above in one name, for code outside this header that exists only for the NoC sanitizer, such as
+// sanitize_multicast_destination.h.
+#define DEBUG_SANITIZE_NOC_ENABLED
+
 #include "watcher_common.h"
 #include "internal/hw_thread.h"
 
@@ -1160,3 +1164,5 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
 
 #endif  // WATCHER_ENABLED
+
+#include "internal/debug/sanitize_multicast_destination.h"

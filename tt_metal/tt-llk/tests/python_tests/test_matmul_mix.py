@@ -3,11 +3,14 @@
 
 from typing import List
 
-import pytest
 import torch
-from conftest import skip_for_wormhole
 from helpers.device import BootMode
-from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat, is_dest_acc_needed
+from helpers.format_config import (
+    DataFormat,
+    FormatConfig,
+    InputOutputFormat,
+    is_dest_acc_needed,
+)
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
@@ -22,24 +25,24 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
     matmul_pack_form,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    MATMUL_MIXED_STRIDE,
-    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
-    MATMUL_PACK_BLOCK,
-    MATMUL_ROW_MOP,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
-    MATMUL_ROW_END_FOLD,
-    MATMUL_STREAM_NARROW,
+    MATMUL_MIXED_STRIDE,
+    MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
     MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
+    MATMUL_ROW_MOP,
+    MATMUL_STREAM_NARROW,
     MATMUL_STREAM_Z,
     MATMUL_UNPACK_TTSYNC,
     MATMUL_UNPACK_TTSYNC_EXCL,
@@ -85,8 +88,14 @@ DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 # Local mixed-format functional test (not committed): input_format feeds SrcA (matmul in1), input_format_B SrcB (matmul in0), buffer A is in0.
 F = DataFormat
 PAIRS = [(F.Float32, F.Float16_b), (F.Float16_b, F.Float32)]
-MIX_FORMATS = [InputOutputFormat(a, o, input_format_B=b) for a, b in PAIRS for o in (F.Float16_b, F.Float32)]
-MIX_COMBINATIONS = generate_format_aware_matmul_combinations(MIX_FORMATS, DEST_ACC_MODES)
+MIX_FORMATS = [
+    InputOutputFormat(a, o, input_format_B=b)
+    for a, b in PAIRS
+    for o in (F.Float16_b, F.Float32)
+]
+MIX_COMBINATIONS = generate_format_aware_matmul_combinations(
+    MIX_FORMATS, DEST_ACC_MODES
+)
 
 
 @parametrize(
@@ -152,14 +161,17 @@ def test_matmul_mix(
     tilized_A = (
         src_A
         if formats.input_format_B.is_block_float()
-        else tilize_block(src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format_B)
+        else tilize_block(
+            src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format_B
+        )
     )
     tilized_B = (
         src_B
         if formats.input_format.is_block_float()
-        else tilize_block(src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format)
+        else tilize_block(
+            src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
+        )
     )
-
 
     configuration = TestConfig(
         "sources/matmul_test.cpp",
@@ -174,24 +186,61 @@ def test_matmul_mix(
             *([MATMUL_ROW_MOP()] if row_mop else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *([MATMUL_UNPACK_TTSYNC_EXCL()] if unpack_ttsync_excl else []),
-            *([] if unpack_ttsync else MATMUL_UNPACK_TTSYNC.for_block(formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim, dest_sync)),
+            *(
+                []
+                if unpack_ttsync
+                else MATMUL_UNPACK_TTSYNC.for_block(
+                    formats,
+                    dest_acc,
+                    math_fidelity,
+                    matmul_dims.ct_dim,
+                    matmul_dims.rt_dim,
+                    matmul_dims.kt_dim,
+                    dest_sync,
+                )
+            ),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
+                formats,
+                dest_acc,
+                dest_sync,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
             ),
-            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, dest_sync),
+            *MATMUL_REUSE_DIR.for_block(
+                formats,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                dest_sync,
+            ),
             *MATMUL_STREAM_Z.for_block(
-                formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
+                formats,
+                dest_acc,
+                dest_sync,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
                 kt_dim=matmul_dims.kt_dim,
             ),
             *MATMUL_K_LOOP.for_block(
-                formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim
+                formats,
+                dest_acc,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                matmul_dims.kt_dim,
             ),
             *MATMUL_ROW_END_FOLD.for_block(matmul_dims.ct_dim, matmul_dims.rt_dim),
             *MATMUL_FORM_KEYS.for_block(
-                formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True,
+                formats,
+                matmul_dims.kt_dim,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=dest_sync,
+                dest_acc=dest_acc,
+                unfuse_one_tile=True,
             ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(
@@ -236,5 +285,3 @@ def test_matmul_mix(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
-
-

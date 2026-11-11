@@ -39,7 +39,8 @@ inline void llk_math_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt>(
+    // an unkeyed caller (no block keys) gets main's init exactly: tile MOP, no end fold, the bias word written; the keyed forms keep their opt-ins
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), (DST_SYNC_MODE == DstSync::SyncFull && key_ct != 0 && key_rt != 0) || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt, (key_ct == 0 || key_rt == 0)>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
@@ -130,7 +131,8 @@ template <
     bool row_end_fold = false,
     bool half_end_fold = false,
     std::uint32_t key_ct = 0,
-    std::uint32_t key_rt = 0>
+    std::uint32_t key_rt = 0,
+    bool light_switch = false>
 inline void llk_math_matmul_init_switch_impl(
     const std::uint32_t in0_tile_r_dim,
     const std::uint32_t in0_tile_c_dim,
@@ -140,8 +142,15 @@ inline void llk_math_matmul_init_switch_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    _llk_math_matmul_init_switch_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt>(
+    if constexpr (light_switch) {
+        // only for a caller that guarantees no op between the matmul inits rewrote ADDR_MOD 0, 1, 2 and 4: writes ADDR_MOD_5 and 6, the replay and the MOP
+        _llk_math_matmul_init_switch_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), (DST_SYNC_MODE == DstSync::SyncFull && key_ct != 0 && key_rt != 0) || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt, (key_ct == 0 || key_rt == 0)>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
+    } else {
+        // main's switch: the full init again
+        llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
+            in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
+    }
 }
 
 template <
@@ -154,7 +163,8 @@ template <
     bool row_end_fold = false,
     bool half_end_fold = false,
     std::uint32_t key_ct = 0,
-    std::uint32_t key_rt = 0>
+    std::uint32_t key_rt = 0,
+    bool light_switch = false>
 inline void llk_math_matmul_init_switch(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -185,7 +195,7 @@ inline void llk_math_matmul_init_switch(
         StateDiscard<std::uint32_t>(in1_tile_c_dim),
         StateDiscard<bool>(partial_face)));
 
-    llk_math_matmul_init_switch_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
+    llk_math_matmul_init_switch_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt, light_switch>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 

@@ -28,6 +28,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_mcast_wrap_around_device.cpp
     watcher/test_noc_sanitize_delays.cpp
     watcher/test_sanitize.cpp
+    watcher/test_sanitize_multicast_node_set.cpp
     watcher/test_sanitize_shared_noc.cpp
     watcher/test_pause.cpp
     watcher/test_ringbuf.cpp
@@ -35,6 +36,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_waypoint.cpp
     watcher/test_runtime_args_known_garbage.cpp
     watcher/test_tile_counters_log.cpp
+    watcher/test_trisc_irq_mret_alias.cpp
     watcher/test_zero_mode_guard.cpp
 )
 

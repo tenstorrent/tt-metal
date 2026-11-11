@@ -559,6 +559,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
             std::vector<uint32_t> snd_rt{1u};  // num_connections
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *mesh,
                 mesh->get_fabric_node_id(coord),
                 std::vector<tt::tt_fabric::FabricNodeId>{self.downstream_node},
                 std::vector<uint32_t>{self.link_idx},

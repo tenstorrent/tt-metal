@@ -21,20 +21,22 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-template <bool Produce, ckernel::BroadcastType BType>
-inline void perf_binary_source_handshakes(
-    const std::uint32_t loop_factor, const std::uint32_t num_tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
+template <bool Produce, ckernel::BroadcastType BType, PerfRunType RUN_TYPE>
+inline void perf_binary_mock(const std::uint32_t loop_factor, const std::uint32_t num_tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
     const std::uint32_t num_faces = num_faces_r * num_faces_c;
 
+    if constexpr (perf_mock_mop<RUN_TYPE>()) // Wormhole isolate mocks: the handshakes below as one MOP stream (perf.h)
+    {
+        return _perf_mock_binary_<Produce, BType>(loop_factor * num_tiles, num_faces_r, num_faces_c);
+    }
     for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
     {
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
             if constexpr (BType == ckernel::BroadcastType::COL)
             {
-                // The COL MOP loads B once per face row, then consumes A once
-                // per face column while retaining B until the row completes.
+                // The COL MOP loads B once per face row, then consumes A once per face column while retaining B until the row completes.
                 for (std::uint32_t face_r = 0; face_r < num_faces_r; ++face_r)
                 {
                     if constexpr (Produce)
@@ -49,9 +51,8 @@ inline void perf_binary_source_handshakes(
                     }
                 }
             }
-            else if constexpr (BType == ckernel::BroadcastType::SCALAR)
+            else if constexpr (BType == ckernel::BroadcastType::SCALAR) // Scalar B remains valid while all A faces are consumed.
             {
-                // Scalar B remains valid while all A faces are consumed.
                 if constexpr (Produce)
                 {
                     _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1);
@@ -63,9 +64,8 @@ inline void perf_binary_source_handshakes(
                     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1);
                 }
             }
-            else
+            else // NONE and ROW load and clear both sources once per face.
             {
-                // NONE and ROW load and clear both sources once per face.
                 if constexpr (Produce)
                 {
                     _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(num_faces);
@@ -93,6 +93,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(TEST_FACE_C_DIM),
         static_cast<std::uint8_t>(num_faces_r_dim_A),
         static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    constexpr ckernel::TensorShape tensor_shape_b = {
+        static_cast<std::uint8_t>(in1_face_r_dim),
+        static_cast<std::uint8_t>(in1_face_c_dim),
+        static_cast<std::uint8_t>(num_faces_r_dim_B),
+        static_cast<std::uint8_t>(num_faces_c_dim_B)};
     constexpr ckernel::Transpose transpose  = UNPACK_TRANSPOSE_FACES ? (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                                      : (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
     constexpr std::uint32_t num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
@@ -104,6 +109,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_C_DIM          = params.TEST_FACE_C_DIM;
     const int num_faces_r_dim_A                  = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A                  = params.num_faces_c_dim_A;
+    const int in1_face_r_dim                     = params.in1_face_r_dim;
+    const int in1_face_c_dim                     = params.in1_face_c_dim;
+    const int num_faces_r_dim_B                  = params.num_faces_r_dim_B;
+    const int num_faces_c_dim_B                  = params.num_faces_c_dim_B;
     const bool UNPACK_TRANSPOSE_FACES            = params.UNPACK_TRANSPOSE_FACES;
     const bool UNPACK_TRANSPOSE_WITHIN_FACE      = params.UNPACK_TRANSPOSE_WITHIN_FACE;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
@@ -119,6 +128,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(TEST_FACE_C_DIM),
         static_cast<std::uint8_t>(num_faces_r_dim_A),
         static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    const ckernel::TensorShape tensor_shape_b = {
+        static_cast<std::uint8_t>(in1_face_r_dim),
+        static_cast<std::uint8_t>(in1_face_c_dim),
+        static_cast<std::uint8_t>(num_faces_r_dim_B),
+        static_cast<std::uint8_t>(num_faces_c_dim_B)};
     const ckernel::Transpose transpose  = UNPACK_TRANSPOSE_FACES ? (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                                  : (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
     const std::uint32_t num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
@@ -132,15 +146,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst,
             formats.unpack_B_dst,
             tensor_shape.face_r_dim,
-            tensor_shape.face_r_dim,
+            tensor_shape_b.face_r_dim,
             tensor_shape.total_num_faces(),
-            tensor_shape.total_num_faces(),
+            tensor_shape_b.total_num_faces(),
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
 
         // Must follow HW configure, which overwrites the ALU stoch-rnd bits.
         _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
-        _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);
+        _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, tensor_shape_b, transpose);
         PROFILER_SYNC();
     }
     {
@@ -150,7 +164,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            perf_binary_source_handshakes<true, BROADCAST_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_mock<true, BROADCAST_TYPE, PERF_RUN_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
@@ -231,9 +245,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_mock<false, BROADCAST_TYPE, PERF_RUN_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
@@ -292,9 +306,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_mock<false, BROADCAST_TYPE, PERF_RUN_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {

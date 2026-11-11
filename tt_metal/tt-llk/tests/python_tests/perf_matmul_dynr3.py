@@ -1,6 +1,7 @@
 import pytest
 from conftest import skip_for_wormhole
-from dynr_base import CASES, run_dyn
+from dynr_base import CASES
+from perf_matmul_dyn_base import run_dyn
 
 pytestmark = (
     pytest.mark.llk_sweep

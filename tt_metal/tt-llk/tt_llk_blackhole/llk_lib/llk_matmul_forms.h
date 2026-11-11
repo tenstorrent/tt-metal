@@ -81,7 +81,7 @@ constexpr char matmul_default_form()
                                                             : -1;
     if constexpr (kt_per_section == 0)
     {
-        return '.'; // main's form, also for the output formats that key a forced form below
+        return '.'; // main's unpack and math form (opt-ins by their own rules), also for the output formats that key a forced form below
     }
     else if constexpr (out_format == DataFormat::Bfp2_b)
     {
@@ -109,27 +109,30 @@ constexpr char matmul_default_form()
         return matmul_forms_table[((k_class * 4 + fid) * 2 + (dst_sync == DstSync::SyncFull ? 1 : 0)) * 2 + (fp32_dest ? 1 : 0)][fmt];
     }
 }
+
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
-// Float16_b in1 into Float32 and, on main's form (unknown k), a Bfp4_b in1 into Float32, both when the operand formats are given; HiFi2 with a 16-bit DEST and one k step per section, Float16_b or Bfp8_b output.
-// At LoFi, at HiFi3 with a 32-bit DEST and elsewhere at HiFi2 the earlier release of the held source read slower.
+// Float16_b in1 into Float32, both when the operand formats and the k steps of a section are given (main's form, unknown k, takes no fold); HiFi2 with a 16-bit
+// DEST and one k step per section, Float16_b or Bfp8_b output. At LoFi, at HiFi3 with a 32-bit DEST and elsewhere at HiFi2 the earlier release of the held
+// source read slower.
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0 = DataFormat::Invalid, DataFormat in1 = DataFormat::Invalid>
 constexpr bool matmul_half_end_fold()
 {
     constexpr bool known_operands = in0 != DataFormat::Invalid && in1 != DataFormat::Invalid;
-    return dst_sync == DstSync::SyncHalf &&
-           ((math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 && (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b)) ||
-            (known_operands && math_fidelity == MathFidelity::HiFi4) ||
-            (known_operands && math_fidelity == MathFidelity::HiFi3 && !fp32_dest &&
-             !(in0 == DataFormat::Bfp8_b && in1 == DataFormat::Float16_b && out_format == DataFormat::Float32) &&
-             !(kt_per_section == 0 && in1 == DataFormat::Bfp4_b && out_format == DataFormat::Float32)));
+    return dst_sync == DstSync::SyncHalf && ((math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 &&
+                                              (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b)) ||
+                                             (kt_per_section != 0 && known_operands && math_fidelity == MathFidelity::HiFi4) ||
+                                             (kt_per_section != 0 && known_operands && math_fidelity == MathFidelity::HiFi3 && !fp32_dest &&
+                                              !(in0 == DataFormat::Bfp8_b && in1 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
 }
+
 // Cells where the keys of the ttnn matmul kernels (the format each DEST section is packed to, the row MOP rule) pick a form that reads
 // slower than main's tile MOP and per-row unpack on the tt-llk sweep (perf_matmul_forms: every form of every perf_matmul Half cell,
-// ABBA against main, no fused post flip). Those cells keep main's form. A cell is the math fidelity, whether the contraction of a section
-// is one tile, a 32-bit DEST, one input format (of in0 or in1), the output format and the format the section is packed to.
-// several_blocks_ok: the cell keeps the keyed form when the kernel runs several inner blocks. Bfp8_b input to Float32 output from a 16-bit DEST
-// with Float16_b partials (packer_l1_acc) at HiFi3 and HiFi4 with one tile per section: the last section reads slower than main (up to +1.2 cy
-// per tile) but the partial sections gain more, so two or more inner blocks are faster (ttnn, HiFi3, 4 inner blocks: 1.2 % faster than main).
+// ABBA against main, no fused post flip). Those cells keep main's unpack and math form; the harness runs them with none of its opt-ins (helpers/perf/core.py
+// _true_main_templates). A cell is the math fidelity, whether the contraction of a section is one tile, a 32-bit DEST, one input format (of in0 or in1), the
+// output format and the format the section is packed to. several_blocks_ok: the cell keeps the keyed form when the kernel runs several inner blocks. Bfp8_b
+// input to Float32 output from a 16-bit DEST with Float16_b partials (packer_l1_acc) at HiFi3 and HiFi4 with one tile per section: the last section reads
+// slower than main (up to +1.2 cy per tile) but the partial sections gain more, so two or more inner blocks are faster (ttnn, HiFi3, 4 inner blocks: 1.2 %
+// faster than main).
 struct matmul_main_form_cell
 {
     MathFidelity fidelity;
@@ -244,9 +247,10 @@ constexpr bool matmul_main_form_cell_selected()
     return false;
 }
 
-// Cells of the perf_matmul_grid sweep (every out_subblock h x w at k 1, 3 and 8 steps, one long k, the packer L1 accumulate block and static throttle) where the keyed forms
-// read slower than main's: they keep main's form. A cell is the fidelity, half sync, 32-bit DEST accumulate, in1, in0 and output format, the block (rt x ct), the k steps of the
-// section, the static throttle level and whether the packer L1 accumulates.
+// Cells of the perf_matmul_grid sweep (every out_subblock h x w at k 1, 3 and 8 steps, one long k, the packer L1 accumulate block and static throttle) where
+// the keyed forms read slower than main's: they keep main's unpack and math form (the harness switches its opt-ins off for them). A cell is the fidelity, half
+// sync, 32-bit DEST accumulate, in1, in0 and output format, the block (rt x ct), the k steps of the section, the static throttle level and whether the packer
+// L1 accumulates.
 struct matmul_grid_main_cell
 {
     MathFidelity fidelity;
@@ -259,6 +263,7 @@ struct matmul_grid_main_cell
     bool l1_acc;
     std::uint8_t nb;
 };
+
 inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::HiFi2, false, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 1, 3, 0, false, 1},
     {MathFidelity::HiFi2, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 6, 2, 1, 0, true, 1},
@@ -639,8 +644,9 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp2_b, 4, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 2, 8, 2, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16, 1, 4, 8, 0, false, 1},
-    // LoFi, 32-bit DEST accumulate, a 1x4 block of a Float16 in1 against a Bfp8 in0 to Bfp8 over 3 k steps: the keyed forms and the closed block pack read 3.8 cycles behind main, main's form
-    // with the per-tile pack (matmul_pack_exact_per_tile_cells) reads level with it; LoFi, 16-bit DEST, a 2x4 block of a Float16_b in1 against a Bfp4_b in0 to Bfp8_b over 8 k steps at throttle 2: 0.6 behind, main's form and per-tile pack -0.03
+    // LoFi, 32-bit DEST accumulate, a 1x4 block of a Float16 in1 against a Bfp8 in0 to Bfp8 over 3 k steps: the keyed forms and the closed block pack read 3.8
+    // cycles behind main, main's form with the per-tile pack (matmul_pack_exact_per_tile_cells) reads level with it; LoFi, 16-bit DEST, a 2x4 block of a
+    // Float16_b in1 against a Bfp4_b in0 to Bfp8_b over 8 k steps at throttle 2: 0.6 behind, main's form and per-tile pack -0.03
     {MathFidelity::LoFi, true, true, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Bfp8, 1, 4, 3, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 4, 8, 2, false, 1},
     // Full sync 1x1 blocks of Float16_b or Bfp8_b: re-initialised before every call, the keyed forms read up to 10 cycles per call behind main's
@@ -682,7 +688,8 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 1, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float32, 1, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Float32, 1, 1, 1, 0, false, 1},
-    // LoFi, 32-bit DEST, half sync, a 2x1 block of one K tile to Bfp4_b: the rows form of the keyed unpack and math reads 0.5 to 3.4 cycles behind main's tile form
+    // LoFi, 32-bit DEST, half sync, a 2x1 block of one K tile to Bfp4_b: the rows form of the keyed unpack and math reads 0.5 to 3.4 cycles behind main's tile
+    // form
     {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
@@ -698,7 +705,714 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
     // BEGIN generated by gen_matmul_closed_off_cells.py grid_main
-    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 2, 8, 2, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp2_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float32, 1, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 1, 3, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 2, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16, 1, 2, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, true, 2},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 2, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 1, 1, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp8_b, 5, 1, 3, 5, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16, 1, 2, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 1, 1, 4, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 1, 1, 5, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 3, 2, 1, 1, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, true, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 1, 1, 0, true, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 3, 1, 1, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, true, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp2_b, 1, 6, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 5, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 2, 2, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 6, 8, 0, true, 2},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 2, 1, 2, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 4, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 4, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 4, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 8, 3, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 3, 1, 2, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 4, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 4, 32, 0, false, 1},
+    {MathFidelity::HiFi2, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 6, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 6, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 6, 5, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 6, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 6, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 3, 2, 0, false, 1},
+    {MathFidelity::HiFi2, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 4, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 4, 5, 0, false, 1},
+    {MathFidelity::HiFi2, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 3, 2, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 3, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 3, 5, 0, false, 1},
+    {MathFidelity::HiFi2, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 5, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 1, 1, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 8, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 8, 8, 2, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 4, 32, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 2, 1, 0, true, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 2, 1, 0, true, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 1, 0, false, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 1, 1, 2, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 2, 1, 3, false, 1},
+    {MathFidelity::HiFi3, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 4, 1, 2, false, 1},
+    {MathFidelity::HiFi3, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 4, 1, 2, false, 1},
+    {MathFidelity::HiFi3, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 1, 1, 2, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 1, 2, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 1, 2, false, 1},
+    {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 1, 2, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp2_b, DataFormat::Bfp2_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp2_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Bfp2_b, 2, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp2_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 3, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 1, 0, true, 2},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 8, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 4, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 1, 0, true, 2},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 3, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 1, 1, 0, true, 2},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 3, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 6, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 8, 3, 2, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 8, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 2, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 2, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 4, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 1, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 4, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 4, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 7, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 8, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, true, 2},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 4, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16_b, 4, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 1, 8, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 6, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 6, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 2, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp2_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp2_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 1, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 3, 3, 0, true, 2},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1, 0, true, 4},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 4, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 3, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 1, 6, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 1, 7, 2, 0, false, 1},
+    {MathFidelity::LoFi, false, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 2, 1, 8, 0, true, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 4, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 8, 0, true, 2},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp4_b, 4, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp4_b, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp4_b, 6, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp4_b, 7, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, 1, 3, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, 3, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, 3, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 2, 3, 4, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 6, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Bfp8_b, 3, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16, DataFormat::Float16, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 1, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 1, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 3, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 3, 2, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 7, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 1, 0, true, 2},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 3, 0, true, 4},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 4, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 5, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 5, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 2, false, 1},
+    {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 7, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 7, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 3, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 1, 0, true, 2},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 5, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 7, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 7, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 8, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 2, 3, 8, 0, true, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 2, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 3, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float32, 4, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 7, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 8, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 3, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 3, 2, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 4, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 3, 4, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 6, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 7, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 1, 8, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 2, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 4, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 4, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp4_b, 1, 6, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp4_b, 2, 4, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp4_b, 4, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 1, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Bfp8_b, 2, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 1, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 2, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 3, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 5, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 6, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 6, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 7, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp2_b, DataFormat::Float32, 2, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 6, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 8, 0, true, 2},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 8, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 8, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 4, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 4, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 3, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 4, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 5, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 7, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp8_b, 7, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16, 1, 3, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 2, 3, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 3, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 3, 3, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 5, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 6, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 8, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 8, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 2, 3, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 3, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16, 1, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 4, 1, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 3, 3, 0, true, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 2, 1, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 6, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 6, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 7, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 8, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 6, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 8, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 4, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16, 1, 4, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 2, 3, 3, 4, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 4, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 3, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 6, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 1, 8, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 2, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 2, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 8, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp2_b, 7, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 3, 3, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 6, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 6, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 1, 7, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 2, 1, 2, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 4, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 4, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 2, 4, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 3, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 7, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 2, 8, 2, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 7, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 8, 0, true, 2},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 1, 2, 8, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 2, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 2, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 2, 15, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 2, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 2, 8, 2, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 3, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 4, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 4, 8, 0, true, 2},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 5, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 5, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 6, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 6, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 7, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 7, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 8, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 1, 8, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 1, 2, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 1, 5, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 3, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 3, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 4, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 4, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 3, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 3, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 3, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 3, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 2, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 2, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 2, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 5, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 5, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 5, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 5, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 6, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 6, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 6, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 7, 1, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 7, 1, 4, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 7, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 7, 1, 32, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 8, 1, 3, 0, true, 4},
     // END generated
     // 8-bit integer operands to Int32 at half sync, 1x1x1
     {MathFidelity::HiFi2, true, true, DataFormat::Int8, DataFormat::Int8, DataFormat::Int32, 1, 1, 1, 0, false, 1},
@@ -711,12 +1425,25 @@ constexpr bool matmul_reinit_main_block(const MathFidelity fidelity, const bool 
     return !half_sync && throttle == 0 && !l1_acc && nb == 1 && kt == 1 && rt * ct == 2 && (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi2 && rt == 2));
 }
 
+// HiFi2 half sync blocks of two tiles and one K tile into Float16_b from Float16_b or Float32 operands: the keyed row form reads 7.4 cycles per call behind main's tile
+// form, for every accumulate mode, transpose and block count (the full tile cells of the perf_math_matmul sweep); the tiles of fewer than 32 rows read 28.4 behind
+constexpr bool matmul_half_two_tile_main_block(const MathFidelity fidelity, const bool half_sync, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                               const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle)
+{
+    const auto wide = [](const DataFormat f) { return f == DataFormat::Float16_b || f == DataFormat::Float32; };
+    return fidelity == MathFidelity::HiFi2 && half_sync && throttle == 0 && kt == 1 && rt * ct == 2 && out == DataFormat::Float16_b && wide(in1) && wide(in0);
+}
+
 constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
                                      const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
 {
     // Blocks of two tiles at full sync the keyed row form re-initialises slower than main's tile form (up to 25 cycles per init
     // before every call) without reading faster: LoFi is bound by the unpack and the pack, which the row form does not relieve
     if (matmul_reinit_main_block(fidelity, half_sync, rt, ct, kt, throttle, l1_acc, nb))
+    {
+        return true;
+    }
+    if (matmul_half_two_tile_main_block(fidelity, half_sync, in1, in0, out, rt, ct, kt, throttle))
     {
         return true;
     }
@@ -1376,11 +2103,10 @@ constexpr bool matmul_pack_llkx_per_tile(const MathFidelity fidelity, const Data
     return false;
 }
 
-// Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages), 4 the dense run of small tiles (dense_pages only: the perf sweep, where the
-// output address does not change the pack timing). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
+// Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages and small tiles). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
 // harness (matmul_pack_form of matmul_sweep.py mirrors it) and of the keyed llk_matmul_block_pack.
 constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
-                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
+                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, [[maybe_unused]] const bool dense_pages = false,
                                  const bool l1_acc = false)
 {
     const bool small = r0 < 32 || c1 < 32;
@@ -1441,10 +2167,6 @@ constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool ha
                       ((in_a == DataFormat::Float32 || (in_b == DataFormat::Float32 && out == DataFormat::Bfp4_b)) && out != DataFormat::Float32 && rt * ct >= 3)))
     {
         return 0;
-    }
-    if (dense_pages && small && c1 == 32 && !block_float_out)
-    {
-        return (half_sync && rt * ct >= 8) ? 2 : 4;
     }
     return (small || block_float_out) ? 2 : 1;
 }
@@ -1514,13 +2236,15 @@ inline constexpr matmul_pack_closed_off_cell matmul_pack_closed_off_cells[] = {
     {MathFidelity::HiFi3, 0, DataFormat::Bfp4_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, false},
     {MathFidelity::HiFi3, 0, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 2, 1, false},
     {MathFidelity::HiFi3, 0, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, false},
-    {MathFidelity::LoFi, 0, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Bfp2_b, 2, 1, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 5, 1, 8, false},
+    {MathFidelity::LoFi, 0, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 7, 1, 3, false},
     {MathFidelity::LoFi, 0, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 3, 1, true},
     {MathFidelity::LoFi, 0, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 7, 4, false},
     {MathFidelity::LoFi, 0, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 7, 1, 4, false},
+    {MathFidelity::LoFi, 0, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 4, 2, 4, false},
     {MathFidelity::LoFi, 0, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, 4, 1, 3, true},
     {MathFidelity::LoFi, 0, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 1, 3, 3, false},
+    {MathFidelity::LoFi, 2, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 2, 2, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 3, 2, 3, false},
     {MathFidelity::LoFi, 0, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 3, 2, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Bfp8_b, 3, 2, 32, false},
@@ -1532,6 +2256,7 @@ inline constexpr matmul_pack_closed_off_cell matmul_pack_closed_off_cells[] = {
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 3, 32, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 8, false},
+    {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 5, 32, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 3, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 1, 2, 32, false},
@@ -1543,7 +2268,9 @@ inline constexpr matmul_pack_closed_off_cell matmul_pack_closed_off_cells[] = {
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 8, true},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 1, 2, 32, false},
+    {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 6, 32, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 7, 3, false},
+    {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 2, 4, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 7, 1, 3, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 5, 8, false},
     {MathFidelity::LoFi, 0, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 1, 5, 32, false},
@@ -1741,6 +2468,7 @@ struct matmul_tiny_main_cell
     DataFormat out;
     std::uint8_t r0, c1, rt, ct, kt;
 };
+
 inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
@@ -1755,11 +2483,41 @@ inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 8, 32, 2, 2, 4},
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 4, 32, 1, 4, 4},
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 2, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 4, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 8, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 16, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float16_b, 32, 16, 1, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 8, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 32, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 2, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 8, 16, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16_b, 16, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 8, 32, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 32, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 8, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 8, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 16, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 16, 16, 1, 4, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 16, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 16, 32, 1, 8, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 16, 1, 4, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 16, 2, 2, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 16, 1, 4, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 16, 32, 1, 4, 4},
 };
 
 constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
                                      const std::uint32_t r0, const std::uint32_t c1, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
 {
+    if (fidelity == MathFidelity::HiFi2 && half_sync && r0 < 32 && c1 == 32 && kt == 1 && rt * ct == 2 && out == DataFormat::Float16_b)
+    {
+        return true;
+    }
     for (const matmul_tiny_main_cell& c : matmul_tiny_main_cells)
     {
         if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.r0 == r0 && c.c1 == c1 && c.rt == rt &&
@@ -1771,7 +2529,8 @@ constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool hal
     return false;
 }
 
-// The k key a block runs its forms by: 0, main's form, where the block is one of the grid cells above; the caller's k steps per section otherwise.
+// The k key a block runs its forms by: 0, main's unpack and math form (the opt-ins keep their own rules), where the block is one of the grid cells above; the
+// caller's k steps per section otherwise.
 template <MathFidelity math_fidelity, int sync, bool dest_acc, std::uint32_t kt_per_section, std::uint32_t kt_dim, DataFormat in0, DataFormat in1, DataFormat out_format,
           std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t throttle = 0, bool l1_acc = false, std::uint32_t nb = 1, std::uint32_t in0_r_dim = 32, std::uint32_t in1_c_dim = 32>
 constexpr std::uint32_t matmul_form_k()
@@ -1807,9 +2566,11 @@ struct matmul_forced_form_cell
 };
 
 inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
-    // LoFi, 16-bit DEST, one DEST section, a 1x8 block of a Float16_b in1 against a Float32 in0 over 8 k steps to Bfp8_b (static throttle 3): the table's form reads 0.28 cycles behind main, the hoisted tile form 0.38 ahead
+    // LoFi, 16-bit DEST, one DEST section, a 1x8 block of a Float16_b in1 against a Float32 in0 over 8 k steps to Bfp8_b (static throttle 3): the table's form
+    // reads 0.28 cycles behind main, the hoisted tile form 0.38 ahead
     {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 8, 8, 1, true, 'h', false, 1, 1, true},
-    // LoFi, 16-bit DEST, one DEST section, a 1x7 block over 8 k steps of a Bfp8 in0 under a Float16 in1 to a Bfp8 output: the opt-in row MOP reads 27 cycles behind main at half sync
+    // LoFi, 16-bit DEST, one DEST section, a 1x7 block over 8 k steps of a Bfp8 in0 under a Float16 in1 to a Bfp8 output: the opt-in row MOP reads 27 cycles
+    // behind main at half sync
     // and 10 at full sync (the 1x6 and 1x8 blocks gain from it); the hoisted rows form reads 4.9 cycles ahead of main at half sync and 37 at full sync
     {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 7, 7, 1, true, 'R', false, 1, 1, true},
     {MathFidelity::LoFi, 1, 8, 8, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 7, 7, 1, true, 'R', false, 1, 1, true},
@@ -1831,8 +2592,10 @@ inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
     {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
     {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
     {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
-    // The rows form without the hoisted unpack ('r'; the kernels' own row MOP stays) where the hoisted unpack of the table's form reads 0.1 to 2 cycles slower than
-    // main on the tt-llk dyn harness (equal in0 and in1 format, ABBA over its four throttle modes) and the unhoisted one does not; the single core ttnn cells among
+    // The rows form without the hoisted unpack ('r'; the kernels' own row MOP stays) where the hoisted unpack of the table's form reads 0.1 to 2 cycles slower
+    // than
+    // main on the tt-llk dyn harness (equal in0 and in1 format, ABBA over its four throttle modes) and the unhoisted one does not; the single core ttnn cells
+    // among
     // them (Bfp8_b HiFi2 4x2, Float16_b HiFi2 8x1 at half sync) read the same either way
     // Bfp8_b HiFi2, a 4 by 2 block over 2 to 32 k steps, at half and full sync
     {MathFidelity::HiFi2, 0, 2, 32, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4, false, 'r', false, 0, 4},
@@ -1848,7 +2611,89 @@ inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
     {MathFidelity::HiFi2, 0, 2, 4, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 8, false, 'r', false, 0, 8},
     {MathFidelity::LoFi, 0, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 8, false, 'r', false, 0, 8},
     {MathFidelity::LoFi, 0, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 2, 4, false, 'r', false, 0, 4},
+    // LoFi, 16-bit DEST, one DEST section, a 2x2 block of 8 k steps with a Float16_b input to Bfp8_b: the hoisted tile form reads 16 to 185 cycles ahead of the
+    // per-row unpack on the twins, and takes the static throttle 2 cell from 0.91 to 0.28 behind main
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 2, true, 'h', false, 1, 2},
+    // LoFi, 32-bit DEST, a 2x2 block of one k step of a Float32 input to Float16_b (static throttle 2): the per-row unpack reads 0.30 cycles behind main, the
+    // hoisted tile form 0.08 ahead
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 2, 2, 2, true, 'h', false, 1, 2},
+    // LoFi, 32-bit DEST, a 2x1 block of one k step against a Bfp8_b in0 to Bfp4_b: the table's hoisted rows form reads 0.4 cycles behind main at every code
+    // position, the hoisted tile form 0.4 ahead
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 1, 2, false, 'h', false, 1, 2, true},
 };
+
+// Cells where the ttsync unpack init stall (about 11 cycles per kernel) costs more than its loop gain (in1 = A, in0 = B, as the main rows); matmul_prod_keys.py
+// _TTSYNC_OFF is the twin
+struct matmul_ttsync_off_cell
+{
+    MathFidelity fidelity;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint32_t ct, rt, kt;
+};
+
+inline constexpr matmul_ttsync_off_cell matmul_ttsync_off_cells[] = {
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 3},
+    {MathFidelity::LoFi, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 2, 1, 4},
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4},
+    {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1},
+    {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1},
+};
+
+// Whether the ttsync unpack (unpack_auto_ttsync) is kept for a block: the cells where it measured 0 slower than the context poll (matmul_prod_keys.py
+// matmul_unpack_ttsync_cell is the twin); an opt-in on any other block runs the default unpack.
+constexpr bool matmul_unpack_ttsync_cell(
+    const MathFidelity fid,
+    const bool half,
+    const bool f32_acc,
+    const DataFormat in_f,
+    const DataFormat in_b,
+    const DataFormat out_f,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt)
+{
+    for (const matmul_ttsync_off_cell& c : matmul_ttsync_off_cells)
+    {
+        if (c.fidelity == fid && c.in1 == in_f && c.in0 == in_b && c.out == out_f && c.ct == ct && c.rt == rt && c.kt == kt)
+        {
+            return false;
+        }
+    }
+    const bool one   = rt == 1 && ct == 1;
+    const bool hi_lo = fid == MathFidelity::HiFi2 || fid == MathFidelity::LoFi;
+    bool take        = false;
+    if (kt >= 5)
+    {
+        take = one && hi_lo;
+    }
+    else if (kt >= 2)
+    {
+        take = (one && (hi_lo || (fid == MathFidelity::HiFi3 && half)) &&
+                !(fid == MathFidelity::HiFi3 && in_f == DataFormat::Float16_b && out_f == DataFormat::Float32 && !f32_acc)) ||
+               (fid == MathFidelity::LoFi && half && rt <= 2 && ct <= 2);
+        if (fid == MathFidelity::LoFi && rt == 1 && ct == 2 && in_f == DataFormat::Float32 && out_f == DataFormat::Float16_b)
+        {
+            take = false;
+        }
+        if (rt == 2 && ct == 2 && in_f == DataFormat::Float32)
+        {
+            take = false;
+        }
+        if (fid == MathFidelity::LoFi && rt == 2 && ct == 1 && in_f == DataFormat::Float32 && out_f == DataFormat::Float32 && !f32_acc)
+        {
+            take = false;
+        }
+    }
+    else
+    {
+        take = one && half && hi_lo && !(in_f == DataFormat::Float32 && out_f == DataFormat::Float32 && !f32_acc) &&
+               !(fid == MathFidelity::HiFi2 && in_f == DataFormat::Bfp8_b && out_f == DataFormat::Float32 && f32_acc) &&
+               !(fid == MathFidelity::HiFi2 && in_f == DataFormat::Float16_b && out_f == DataFormat::Float32 && !f32_acc);
+    }
+    return take;
+}
 
 template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, int sync, std::uint32_t h, std::uint32_t w, bool several_blocks = false, std::uint32_t dest_sections = 1>
 constexpr char matmul_forced_form()
@@ -1956,30 +2801,37 @@ constexpr bool matmul_stream_z_loses(
         std::uint8_t rt, ct, kt, throttle;
         DataFormat in, out;
     };
+
     constexpr Cell cells[] = {
-        {true, 1, 6, 1, 0, DataFormat::Float32, DataFormat::Float16_b},
-        {true, 1, 7, 1, 0, DataFormat::Float32, DataFormat::Bfp8_b},
-        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
-        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float32},
-        {true, 1, 7, 4, 0, DataFormat::Float32, DataFormat::Float32},
-        {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
-        {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Float16_b},
-        {false, 1, 4, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 1, 5, 1, 0, DataFormat::Float16_b, DataFormat::Float32},
-        {false, 1, 6, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float16_b},
-        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
-        {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Float32},
-        {false, 2, 3, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
-        {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
-        {false, 2, 4, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {true, 1, 6, 1, 0, DataFormat::Float32, DataFormat::Float16_b},     {true, 1, 7, 1, 0, DataFormat::Float32, DataFormat::Bfp8_b},
+        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},      {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float32},     {true, 1, 7, 4, 0, DataFormat::Float32, DataFormat::Float32},
+        {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 4, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},    {false, 1, 5, 1, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 6, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float16_b}, {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},    {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Float32},    {false, 2, 3, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 2, 4, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 1, 1, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 4, 3, 0, DataFormat::Float16_b, DataFormat::Float16_b},  {false, 1, 4, 8, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 8, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 4, 8, 3, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 1, 4, 32, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 5, 1, 0, DataFormat::Float16, DataFormat::Bfp8},         {false, 1, 6, 8, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 7, 3, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 1, 7, 3, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 7, 3, 0, DataFormat::Float16_b, DataFormat::Float32},    {false, 1, 7, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},
+        {false, 1, 7, 8, 0, DataFormat::Float16_b, DataFormat::Float16_b},  {false, 1, 7, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},    {false, 1, 8, 3, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 8, 3, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 1, 8, 8, 0, DataFormat::Float16, DataFormat::Bfp8},
+        {false, 1, 8, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 1, 8, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},    {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 2, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 2, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 2, 8, 2, DataFormat::Float16_b, DataFormat::Bfp8_b},     {false, 2, 2, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},
+        {false, 2, 2, 32, 0, DataFormat::Float16_b, DataFormat::Float32},   {false, 2, 4, 3, 0, DataFormat::Float16_b, DataFormat::Bfp2_b},
+        {false, 2, 4, 3, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp2_b},
+        {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 4, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},    {false, 2, 4, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
     };
     for (const Cell& c : cells)
     {

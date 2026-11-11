@@ -83,13 +83,39 @@ struct ProgramRunArgs {
         using CommonRuntimeArgValues = Table<std::string, ArgValue>;
         CommonRuntimeArgValues common_runtime_arg_values;
 
+        // Per-node runtime array argument values.
+        // Keyed like runtime_arg_values:
+        //   runtime_array_arg_values[name][node] = {v0, v1, ...};
+        // Each value must have exactly the length declared in the array's ArrayArgDecl.
+        //
+        // When calling SetProgramRunArgs:
+        //  Every array in this kernel's RuntimeArgSchema::runtime_array_args must be set,
+        //  for every node the kernel runs on.
+        //
+        // When calling UpdateProgramRunArgs (arbitrary partial args update):
+        //  Any subset of arrays may be supplied, for any subset of the kernel's nodes.
+        //  A supplied value replaces the whole array on that node (there is no per-element update).
+        using RuntimeArrayArgValues = Table<std::string, Table<NodeCoord, ArrayArgValue>>;
+        RuntimeArrayArgValues runtime_array_arg_values;
+
+        // Common runtime array argument values (broadcast to every node).
+        // Each value must have exactly the length declared in the array's ArrayArgDecl.
+        //
+        // When calling SetProgramRunArgs:
+        //  Every array in this kernel's RuntimeArgSchema::common_runtime_array_args must be set.
+        //
+        // When calling UpdateProgramRunArgs (arbitrary partial update):
+        //  Any subset of common runtime arrays may be supplied; a supplied value replaces the whole array.
+        using CommonRuntimeArrayArgValues = Table<std::string, ArrayArgValue>;
+        CommonRuntimeArrayArgValues common_runtime_array_arg_values;
+
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
         // positional vararg values.
         AdvancedKernelRunArgs advanced_options;
     };
     // For SetProgramRunArgs, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
-    //  (except for kernels that have no runtime or common runtime arguments).
+    //  (except for kernels that have no runtime or common runtime arguments, scalar or array).
     // For UpdateProgramRunArgs, any kernel may be omitted (its arguments retain their prior values).
     Group<KernelRunArgs> kernel_run_args;
 

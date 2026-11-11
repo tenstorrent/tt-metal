@@ -1211,11 +1211,12 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
 def test_eltwise_binary_sfpu_xlogy_denormal(mathop, dest_acc):
     # xlogy(x, denormal) = x * ln(denormal) = -inf, because the kernel flushes its log operand
     # (see _xlogy_denormal_stimuli_specs). Float32 into a 32-bit Dest is the only pipeline in
-    # this harness that delivers a denormal to the SFPU, and the flush is measured on Blackhole.
-    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "the denormal flush of the xlogy log operand is measured on Blackhole only"
-        )
+    # this harness that delivers a denormal to the SFPU. Quasar has no xlogy kernel.
+    if TestConfig.CHIP_ARCH not in (
+        ChipArchitecture.WORMHOLE,
+        ChipArchitecture.BLACKHOLE,
+    ):
+        pytest.skip("xlogy has a kernel on Wormhole and Blackhole only")
 
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     spec_A, spec_B = _xlogy_denormal_stimuli_specs()

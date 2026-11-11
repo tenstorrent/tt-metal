@@ -32,7 +32,6 @@
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "fabric_host_utils.hpp"
-#include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -40,6 +39,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -2788,7 +2788,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
     if (this->fabric_context_ == nullptr) {
         log_warning(
             tt::LogFabric,
-            "ControlPlane: Fabric context is not set, cannot write fabric connections to Tensix cores for M%dD%d",
+            "ControlPlane: Fabric context is not set, cannot write fabric connections to Tensix cores for M{}D{}",
             *mesh_id,
             chip_id);
         return;
@@ -2812,7 +2812,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
             if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
                 log_warning(
                     tt::LogFabric,
-                    "ControlPlane: Maximum number of fabric endpoints exceeded for M%dD%d, skipping further "
+                    "ControlPlane: Maximum number of fabric endpoints exceeded for M{}D{}, skipping further "
                     "connections",
                     *mesh_id,
                     chip_id);

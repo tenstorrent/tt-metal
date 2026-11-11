@@ -155,7 +155,21 @@ repos:
       entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_bool_from_arithmetic.py
       language: python
       additional_dependencies: ["pytest==8.3.5"]
-      files: ^scripts/(test_)?check_bool_from_arithmetic\.py$
+      files: ^scripts/(precommit_common\.py|(test_)?check_bool_from_arithmetic\.py)$
+      pass_filenames: false
+    - id: check-redefined-helpers
+      name: Use the shared host and device helpers instead of a local copy
+      entry: python3 scripts/check_redefined_helpers.py
+      language: system
+      types: [file]
+      files: ^(?:ttnn|tt_stl|tt-train|tests|models|tools|tt_metal/(?!third_party/|tt-llk/)).*\.(?:c|cc|cpp|cxx|h|hpp|inl)$
+      pass_filenames: true
+    - id: check-redefined-helpers-tests
+      name: Run the redefined-helper checker's tests when it or they change
+      entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_redefined_helpers.py
+      language: python
+      additional_dependencies: ["pytest==8.3.5"]
+      files: ^scripts/(precommit_common\.py|(test_)?check_redefined_helpers\.py)$
       pass_filenames: false
 - repo: local
   hooks:
