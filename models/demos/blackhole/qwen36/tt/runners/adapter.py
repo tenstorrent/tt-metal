@@ -151,4 +151,15 @@ class Qwen35PupPrefillAdapter(PrefillModelAdapter):
             use_trace=True,  # the model's own per-bucket traces (not the runner's segmented capture_trace)
             pup=cfg,
         )
-        return TtQwen35PupPrefillRuntime(mesh_device=mesh_device, model=model, config=rc, media_reader=self.media_reader)
+        reader = self.media_reader
+        if reader is None:
+            # The encoder service writes image embeddings into this host's segment of the media store
+            # (PREFILL_MEDIA_STORE_*, tt-metal #64095); the store is on when PREFILL_MEDIA_STORE_MASTER is set.
+            from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
+
+            store = MediaEmbeddingStoreConfig.from_env()
+            if store is not None:
+                from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
+
+                reader = self.media_reader = MooncakeEmbeddingReader.open(store)
+        return TtQwen35PupPrefillRuntime(mesh_device=mesh_device, model=model, config=rc, media_reader=reader)
