@@ -778,7 +778,14 @@ constexpr std::uint64_t llk_pack_mm_tail_no_w[2][4][3][12] = {
 // DEST. One word per cell, the last matching word wins: bits 0-2 the family (datacopy, 32 bit input to SrcA, 32 bit input to DEST), 3-6 the fidelity
 // (LoFi, HiFi2, HiFi3, HiFi4), 7-12 the K (not given, 1, 2, 4, 8, other), 13-15 the context, as masks; 16-17 the state, 18-21 the row, 22-23 the column,
 // 24-27 the tile count - 1, 28-29 the form (0 per tile, 1 block, 2 W offset). Sorted by state and row; read at compile time only, like the masks.
-constexpr std::uint32_t llk_pack_form_cells[] = {0};
+constexpr std::uint32_t llk_pack_form_cells[] = {
+    0x070020F9, 0x070420F9, 0x07082089, 0x070C20F9, 0x071020F9, 0x035C2089, 0x032820F1, 0x032C2089, 0x010120F9, 0x014120F9, 0x010520F9, 0x014520FB,
+    0x010920F9, 0x014920FB, 0x010D20F9, 0x014D20FB, 0x011120F9, 0x015120FB, 0x00E120FC, 0x00A520F9, 0x00A920F1, 0x032920F1, 0x00AD20F9, 0x00ED20FE,
+    0x00EDC0FC, 0x032D2089, 0x010220F9, 0x014220FB, 0x030220F9, 0x034220FB, 0x12426411, 0x010620F9, 0x014620FB, 0x030620F9, 0x034620FB, 0x11C6660A,
+    0x010A20F9, 0x014A20FB, 0x030A20F9, 0x034A20FB, 0x124A6812, 0x010E20F9, 0x014E20FB, 0x030E20F9, 0x034E20FB, 0x114E6422, 0x124E6812, 0x134E6E42,
+    0x011220F9, 0x015220FB, 0x031220F9, 0x035220FB, 0x135220FC, 0x035620F1, 0x031A2089, 0x035A2089, 0x125A20F4, 0x135A20FC, 0x031E2089, 0x115E20FC,
+    0x11DE20FC, 0x125E208A, 0x016A208A, 0x032A20F9, 0x036A20F9, 0x032E2089, 0x116E20B2
+};
 // First word of each state and row in llk_pack_form_cells (state * 12 + row), so a form looks at its own cells only.
 struct llk_pack_form_cells_at_t {
     std::uint16_t at[3 * 12 + 1];
