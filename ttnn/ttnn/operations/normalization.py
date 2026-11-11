@@ -490,14 +490,19 @@ def dram_group_norm_params_from_torch(
                 tensor_to_shard,
                 dtype=dtype,
                 device=device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=mapper_dims),
+                mesh_mapper=(
+                    ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=mapper_dims)
+                    if device is not None
+                    else None
+                ),
             )
         )
 
     tt_params = tt_params[0] if isinstance(torch_params, torch.Tensor) else tt_params
     if return_mask:
         tt_mask = ttnn.create_group_norm_input_mask(channels_per_device, groups_per_device, num_virtual_cols, dtype)
-        tt_mask = ttnn.to_device(tt_mask, device)
+        if device is not None:
+            tt_mask = ttnn.to_device(tt_mask, device)
         return tt_params, tt_mask
     else:
         return tt_params
