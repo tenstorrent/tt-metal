@@ -335,6 +335,25 @@ static std::uint32_t pack_ch1_w_stride = 0;
 #if !defined(LLK_PACK_W_OFFSET) && !defined(LLK_PACK_W_OFFSET_OFF)
 #define LLK_PACK_W_OFFSET
 #endif
+// The context of the masks llk_pack_block applies, one halfword of its own, so a kernel that stores no context folds the select away:
+//   byte 0 the math context: 1 matmul, 0 other (llk_pack_math_context)   byte 1 a pack-thread SFPU init ran (1, sticky; llk_pack_sfpu_context)
+[[maybe_unused]] alignas(2) static std::uint8_t pack_ctx[2] = {0, 0};
+inline void llk_pack_math_context(const std::uint8_t context)
+{
+    pack_ctx[0] = context;
+}
+inline void llk_pack_sfpu_context()
+{
+    pack_ctx[1] = 1;
+}
+// 0 other, 1 matmul, 2 matmul with a pack-thread SFPU.
+inline std::uint32_t llk_pack_context()
+{
+    std::uint16_t half;
+    __builtin_memcpy(&half, pack_ctx, sizeof(half));
+    return (half & 0xff) == 0 ? 0 : 1 + ((half >> 8) != 0);
+}
+
 #ifdef LLK_PACK_W_OFFSET
 // W offset block packs (llk_pack_block under LLK_PACK_W_OFFSET): the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
 // Anything that writes L1_Dest_addr or the channel-1 W stride makes the state stale (LLK_PACK_W_INVALIDATE), the next block call programs the base again.

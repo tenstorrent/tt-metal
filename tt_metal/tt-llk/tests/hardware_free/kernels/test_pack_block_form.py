@@ -136,7 +136,7 @@ def pack_block_form(ntiles, dst_format, state, fp32_dest=False, full_sync=False,
     """Form of one llk_pack_block call; state is init (first block after a pack init or another output), reconf (first block after a packer reconfigure) or next (the block continues the output).
     src32: a Float32, Int32 or UInt32 CB sits in the kernel's CB list (the output's own CB counts, for its unpack source format is its format).
     u2d: a CB of the kernel unpacks to DEST (LLK_UNPACK_TO_DEST_ANY); the form tables of the 32 bit input family need it, the masks do not.
-    after_matmul: a matmul init ran on the pack thread (llk_pack_matmul_seen); without it and without the K the masks of the other contexts apply (groups 4, 5)."""
+    after_matmul: the math context byte of pack_ctx is matmul (a matmul init ran on the pack thread); without it and without the K the masks of the other contexts apply (groups 4, 5)."""
     if not fp32_dest and dst_format in ("Int8", "UInt8"):
         return FORM_NAMES["T"]
     family = 1 if (fp32_dest and (src32 or dst_format in ("Float32", "Int32", "UInt32"))) else 0
@@ -243,8 +243,8 @@ def test_header_logic_matches_mirror():
     assert "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;" in src
     assert "inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);" in src
     assert "constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));" in src
-    assert "constexpr std::uint32_t group_other = MATH_FIDELITY != MathFidelity::LoFi ? 5 : 4; const std::uint32_t mask_group = (matmul_kt != 0 || matmul_ctx) ? group : group_other;" in src
-    assert "const std::uint32_t state, const bool matmul_ctx = llk_pack_matmul_seen) {" in src
+    assert "constexpr std::uint32_t group_other = MATH_FIDELITY != MathFidelity::LoFi ? 5 : 4; const std::uint32_t mask_group = (matmul_kt != 0 || ctx != 0) ? group : group_other;" in src
+    assert "const std::uint32_t state, const std::uint32_t ctx = llk_pack_context()) {" in src
     assert "PACK((llk_pack_matmul_context()));" in (API.parent.parent.parent.parent.parent / "inc/api/compute/matmul.h").read_text()
     assert "if (out == 'W' && ((llk_pack_mm_no_w[family][mask_group][state][row] >> bit) & 1) != 0) { out = 'B'; } if (out == 'B' && ((llk_pack_mm_no_block[family][mask_group][state][row] >> bit) & 1) != 0) { out = 'T'; }" in src
     assert "if (state == 2 && out != 'W' && ((llk_pack_mm_take_w[family][group - 1][row] >> bit) & 1) != 0) { out = 'W'; }" in src
@@ -252,9 +252,9 @@ def test_header_logic_matches_mirror():
     assert "if (pack_tile_num_faces[i] != 4 || rows != FACE_R_DIM) { if (rows == FACE_R_DIM) { return pack_tile_num_faces[i] == 1 ? 0 : 1; } return rows >= 8 ? 2 : (rows >= 4 ? 3 : 4); }" in src
     assert "if (fmt == static_cast<std::uint32_t>(DataFormat::Float16_b)) { return 10; } if (fmt == static_cast<std::uint32_t>(DataFormat::Float32)) { return 11; } return datum_size_in_bytes(fmt) == 4 ? 8 : 9;" in src
     assert "return llk_pack_class_tab.row[output_id];" in src
-    assert "llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2);" in src
+    assert "llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2, pack_ctx[0] != 0);" in src
     assert "llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc), llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc), llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_next_form, llk_pack_next_form_dc)};" in src
-    assert "llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state, ctx != 0);" in src
+    assert "llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state, ctx0 + ctx);" in src
     assert "return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;" in src
     assert "#if defined(LLK_UNPACK_TO_DEST_ANY) inline constexpr bool llk_pack_unpack_to_dest = LLK_UNPACK_TO_DEST_ANY != 0; #else inline constexpr bool llk_pack_unpack_to_dest = true; #endif" in src
     assert "closed_pays" not in src and "closed_loses" not in src and "LLK_PACK_BLOCK_MIN_TILES" not in src

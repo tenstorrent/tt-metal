@@ -629,21 +629,20 @@ constexpr std::uint64_t llk_pack_mm_take_b[2][3][12] = {
     },
 };
 
-// Set by the matmul inits on the pack thread: the masks of a matmul kernel apply. Only matmul kernels write it, so the others fold the test away.
-[[maybe_unused]] static bool llk_pack_matmul_seen = false;
-inline void llk_pack_matmul_context() { llk_pack_matmul_seen = true; }
+// The matmul inits on the pack thread: the masks of a matmul kernel apply.
+inline void llk_pack_matmul_context() { llk_pack_math_context(1); }
 
 // Form of a block of a row of the form tables, the Int8 rule aside: evaluated at compile time only, into llk_pack_form_words.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 constexpr char llk_pack_block_form_of(
-    const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const std::uint32_t state, const bool matmul_ctx) {
+    const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const std::uint32_t state, const std::uint32_t ctx) {
     const std::uint32_t column = (DST_SYNC_MODE == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);
     const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;
     const char form = table[row][column][count];
     constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;
     constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));
     constexpr std::uint32_t group_other = MATH_FIDELITY != MathFidelity::LoFi ? 5 : 4;
-    const std::uint32_t mask_group = (matmul_kt != 0 || matmul_ctx) ? group : group_other;
+    const std::uint32_t mask_group = (matmul_kt != 0 || ctx != 0) ? group : group_other;
     const std::uint32_t bit = column * 16 + count;
     char out = form;
     if (out == 'W' && ((llk_pack_mm_no_w[family][mask_group][state][row] >> bit) & 1) != 0) {
@@ -668,21 +667,21 @@ constexpr const char (*llk_pack_form_table(const char (*u)[4][17], const char (*
     return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;
 }
 
-// The form of every row and tile count from the init, reconfigure and next states (0, 1, 2), behind matmul math (1) or not (0), two bits
-// per tile count (T 0, B 1, W 2). Built at compile time: a lookup reads one word, and at most these 288 bytes sit in the pack thread's local memory.
-template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+// The form of every row and tile count from the init, reconfigure and next states (0, 1, 2) in nctx contexts from ctx0 (llk_pack_context), two
+// bits per tile count (T 0, B 1, W 2). Built at compile time: a lookup reads one word.
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt, std::uint32_t ctx0, std::uint32_t nctx>
 struct llk_pack_form_words_t {
-    std::uint32_t w[2][3][12];
+    std::uint32_t w[nctx][3][12];
     constexpr llk_pack_form_words_t() : w() {
         const char(*tables[3])[4][17] = {
             llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc),
             llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc),
             llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_next_form, llk_pack_next_form_dc)};
-        for (std::uint32_t ctx = 0; ctx < 2; ctx++) {
+        for (std::uint32_t ctx = 0; ctx < nctx; ctx++) {
             for (std::uint32_t state = 0; state < 3; state++) {
                 for (std::uint32_t row = 0; row < 12; row++) {
                     for (std::uint32_t n = 1; n <= 16; n++) {
-                        const char f = llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state, ctx != 0);
+                        const char f = llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state, ctx0 + ctx);
                         w[ctx][state][row] |= static_cast<std::uint32_t>(f == 'T' ? 0 : (f == 'B' ? 1 : 2)) << (2 * (n - 1));
                     }
                 }
@@ -690,29 +689,33 @@ struct llk_pack_form_words_t {
         }
     }
 };
+// Contexts 0 and 1, which a variable block reads (at most these 288 bytes sit in the pack thread's local memory), and context 2, read where it folds.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
-inline constexpr llk_pack_form_words_t<is_fp32_dest_acc_en, matmul_kt> llk_pack_form_words{};
+inline constexpr llk_pack_form_words_t<is_fp32_dest_acc_en, matmul_kt, 0, 2> llk_pack_form_words{};
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+inline constexpr llk_pack_form_words_t<is_fp32_dest_acc_en, matmul_kt, 2, 1> llk_pack_form_words_sfpu{};
 
 // Form of a block of ntiles of an output from a state (0 init, 1 reconfigure, 2 next): T per-tile packs, B the block, W the block with the W offset.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 __attribute__((always_inline)) inline char llk_pack_block_form(
-    const std::uint32_t output_id, const std::uint32_t ntiles, const std::uint32_t state, const bool matmul_ctx = llk_pack_matmul_seen) {
+    const std::uint32_t output_id, const std::uint32_t ntiles, const std::uint32_t state, const std::uint32_t ctx = llk_pack_context()) {
     if (!is_fp32_dest_acc_en && llk_pack_dst_is_int8(output_id)) {
         return 'T';
     }
     const std::uint32_t row = llk_pack_block_class(output_id);
     const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;
     const auto& words = llk_pack_form_words<is_fp32_dest_acc_en, matmul_kt>.w;
-    const std::uint32_t code = ((matmul_ctx ? words[1][state][row] : words[0][state][row]) >> (2 * count)) & 3;
+    const auto& words_sfpu = llk_pack_form_words_sfpu<is_fp32_dest_acc_en, matmul_kt>.w;
+    const std::uint32_t code = ((ctx != 0 ? (ctx == 1 ? words[1][state][row] : words_sfpu[0][state][row]) : words[0][state][row]) >> (2 * count)) & 3;
     return code == 0 ? 'T' : (code == 1 ? 'B' : 'W');
 }
 
 // The forms a block of ntiles takes from the init, reconfigure and next states, as a mask: 1 per tile, 2 block, 4 W offset.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
-__attribute__((always_inline)) inline std::uint32_t llk_pack_block_forms(const std::uint32_t output_id, const std::uint32_t ntiles, const bool matmul_ctx) {
-    const char init = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0, matmul_ctx);
-    const char reconf = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1, matmul_ctx);
-    const char next = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2, matmul_ctx);
+__attribute__((always_inline)) inline std::uint32_t llk_pack_block_forms(const std::uint32_t output_id, const std::uint32_t ntiles, const std::uint32_t ctx) {
+    const char init = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0, ctx);
+    const char reconf = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1, ctx);
+    const char next = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2, ctx);
     return (init == 'T' || reconf == 'T' || next == 'T' ? 1 : 0) | (init == 'B' || reconf == 'B' || next == 'B' ? 2 : 0) |
            (init == 'W' || reconf == 'W' || next == 'W' ? 4 : 0);
 }
@@ -755,8 +758,10 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     // state, and a kernel whose blocks never take W keeps no W state, so its per-tile packs are main's.
     std::uint32_t forms = 0;
     if (__builtin_constant_p(output_id) && __builtin_constant_p(ntiles)) {
-        forms = llk_pack_matmul_seen ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, true)
-                                     : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, false);
+        const std::uint32_t ctx = llk_pack_context();
+        forms = ctx == 0 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0)
+                         : (ctx == 1 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
+                                     : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     }
     if (forms == 1) {
 #ifdef LLK_PACK_W_OFFSET
@@ -781,13 +786,14 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
 
 #ifdef LLK_PACK_W_OFFSET
     const bool first_block = pack_w_last != output_id;
-    // A constant block selects among its folded forms; a variable one reads the word of its state.
+    // A constant block selects among its folded forms; a variable one reads the word of its state, with the math context byte alone (context 2
+    // differs from 1 only in cells of a pack-thread SFPU, which a variable block reads with the matmul masks).
     const char form = forms == 2 ? 'B'
                       : forms != 0
                           ? (first_block ? (pack_reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
                                                               : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
                                          : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2))
-                          : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2);
+                          : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2, pack_ctx[0] != 0);
     // A fast untilize left open marks the last output, so only a first block closes it.
     if (!one_form && first_block) {
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
