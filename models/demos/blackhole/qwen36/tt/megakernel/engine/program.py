@@ -1062,6 +1062,9 @@ def setup_bench(dev, MESH, mesh_identity):
     # own flag pair (MK_AR_XF0 / XF1: the stand-in v12_ox keeps feeding the MLP after the attention / GDN AR stall); each
     # STREAM core waits its row's two flags instead of the stall, the Q root waits all 16 deliveries (MK_AR_XCNT) before XRDY.
     RRED = False   # MK_AR_RSTD_RED=gdn's GDN-core Σ reducer (set in the AR block)
+    # GTEXT (DESIGN v1.156): GDN-role code-size trims for the corner / reducer variants under E1_GB (E1_GTEXT=0 = the old binaries)
+    # (explicit E1_GTEXT=1 also without E1_GB: the cgar_iter md5 A/B vs E1_GTEXT unset / 0 = 9f97ada55bb's corner reader)
+    GTEXT = os.environ.get('E1_GTEXT', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'
     REAL_AR = ('MK_REAL_AR', '1') in MKDEF
     if REAL_AR:
         assert MESH and V12, "MK_REAL_AR needs MK_MESH=1 and MK_V12=1"
@@ -1831,6 +1834,12 @@ def setup_bench(dev, MESH, mesh_identity):
         GDN_WAIT = os.environ.get('MKA_GDN_WAIT', '0') == '1'
         if _gdn_hook is not None and os.environ.get('MKA_GDN_HOOK', '1') == '1':
             import types
+            # GTEXT (E1_GTEXT, default on under E1_GB; 0 = the old binaries): the AR corners and the Σ reducer get compute kernels
+            # without the G-b L2-root code (GB_NOROOT), so the role places its 4 L2 roots off them (e1_shim _gb_payloads)
+            # (E1_GTEXT_NOROOT_SIM=1, single-chip A/B only: the mesh root placement without REAL_AR / RRED, no GB_NOROOT kernels)
+            _nrs = GTEXT and os.environ.get('E1_GTEXT_NOROOT_SIM', '0') == '1'
+            _gb_noroot = ((([(10, 8), (11, 8), (10, 9), (11, 9)] if REAL_AR or _nrs else []) + ([(RRED_HC.x, RRED_HC.y)] if RRED else [(1, 8)] if _nrs else []))
+                          if GTEXT and os.environ.get('E1_GB', '0') == '1' else [])
             if REAL_AR:   # the hosted AR sender owns CB ids RS / RED / HDR / AG on the corner cores: the GDN step's DFBs skip
                 # them (e1_shim build_engine skip_cb_ids default (34, 35, 37, 39))
                 assert sorted(AR.cbids[i] for i in (0, 1, 3, 5)) == [34, 35, 37, 39], AR.cbids
@@ -1849,8 +1858,13 @@ def setup_bench(dev, MESH, mesh_identity):
                                        gb_gin=(dict(gin_addr='cb41', dbg=gin_dbg,   # 'cb41': the role reads CB 41's base itself (planned later)
                                                     tiles=sorted((s_.first + r_, c_, GY + r_ % 2, r_ // 2)
                                                                  for c_, s_ in {k_[0]: s_ for k_, s_ in GSL_.items()}.items() for r_ in range(s_.nt)))
-                                               if GIN else None))
+                                               if GIN else None), gb_noroot=_gb_noroot)
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
+            if _gb_noroot:   # GTEXT: the GB_NOROOT kernels' cores must hold no L2 root in the runtime tables
+                _gxy = [(fcores[i].x, fcores[i].y) for i in GDNC]
+                _rxy = {_gxy[r_] for r_ in GDN_ROLE['role'].role['info']['gb_roots']}
+                assert not _rxy & set(_gb_noroot), f"GTEXT: L2 roots {sorted(_rxy)} on GB_NOROOT cores {_gb_noroot}"
+                print(f"[gtext] GB_NOROOT on {_gb_noroot}; G-b L2 roots on {sorted(_rxy)}", flush=True)
             GDN_ROLE.setdefault('io', [])
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)
             if GO:
@@ -1904,6 +1918,15 @@ def setup_bench(dev, MESH, mesh_identity):
         for kd in gks:
             src = str(kd.kernel_source)
             role = 'r' if src.endswith('g2_reader.cpp') else ('w' if src.endswith('g2_writer.cpp') else None)
+            if role is None and GTEXT and src.endswith('g2_compute.cpp'):
+                # GTEXT: the corners' compute = the role's compute without the L2-root code (they hold no root: asserted at the hook)
+                cores = [c for c in ttnn.corerange_to_cores(kd.core_ranges) if (c.x, c.y) not in ck]
+                base = dict(compile_time_args=list(kd.compile_time_args), common_runtime_args=list(kd.common_runtime_args), config=kd.config)
+                out.append(ttnn.KernelDescriptor(kernel_source=src, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
+                                                 defines=list(kd.defines), runtime_args=ttnn.RuntimeArgs(), **base))
+                out.append(ttnn.KernelDescriptor(kernel_source=src, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
+                                                 defines=list(kd.defines) + [('GB_NOROOT', '1')], runtime_args=ttnn.RuntimeArgs(), **base))
+                continue
             if role is None:
                 out.append(kd); continue
             cores = [c for c in ttnn.corerange_to_cores(kd.core_ranges) if (c.x, c.y) not in ck]
@@ -1938,14 +1961,17 @@ def setup_bench(dev, MESH, mesh_identity):
                         + ('  g_cgar_s = &ar_s; g_cgar_it = &ar_it;\n' if cgar else '') +
                         f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
                         f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
-                        f'   for (uint32_t k = {ar_it0}; k < 1u + (({a2}u >> LL) & 1u); ++k) ar_s.iter(ar_it++);   // this layer\'s ARs\n'
+                        f'   for (uint32_t k = {ar_it0}; k < 1u + (({a2}u >> LL) & 1u); ++k) ' + ('cgar_iter();' if cgar and GTEXT else 'ar_s.iter(ar_it++);') + '   // this layer\'s ARs\n'
                         + ('   g_cgar_done = 0;\n' if cgar else '') +
                         '  }\n' + ('  ar_s.fini(MKAR_ITERS);\n' if role == 'r' else '  ar_s.fini();\n'))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
             if cgar:   # the hook (called inside reader<>() of a GDN-type layer) runs this layer's first AR iteration once
                 km = txt.index('void kernel_main() {')
                 txt = (txt[:km] + 'static mkar::SendReader* g_cgar_s = nullptr;\nstatic uint32_t* g_cgar_it = nullptr;\nstatic uint32_t g_cgar_done = 0;\n'
-                       'void gdn_pre_sp_hook() { g_cgar_s->iter((*g_cgar_it)++); g_cgar_done = 1; }   // MK_CGAR_EARLY\n' + txt[km:])
+                       # one out-of-line copy of SendReader::iter (FORCE_INLINE) for the hook and the loop: two inlined copies cost +776 B corner reader text
+                       + ('__attribute__((noinline)) void cgar_iter() { g_cgar_s->iter((*g_cgar_it)++); }\n'
+                          'void gdn_pre_sp_hook() { cgar_iter(); g_cgar_done = 1; }   // MK_CGAR_EARLY\n' if GTEXT else
+                          'void gdn_pre_sp_hook() { g_cgar_s->iter((*g_cgar_it)++); g_cgar_done = 1; }   // MK_CGAR_EARLY\n') + txt[km:])
             # the AR phase headers right after the first include (the role's DM_OPT pragma, if any, stays first)
             inc = f'#include "{os.path.join(MKDIR_AR, hdr)}"\n'
             if os.environ.get('MK_AR_CORNER_NOZ', '0') == '1':   # profiled runs: the corner (GDN + hosted AR sender) kernels without zones
@@ -2043,7 +2069,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 u_[37] = ttnn.UnpackToDestMode.UnpackToDestFp32
                 cfg.unpack_to_dest_mode = u_
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)]),
-                                             defines=list(kd.defines) + ([('GDN_PRE_IN_HOOK', '1')] if RRED_LATE else []),
+                                             defines=list(kd.defines) + ([('GDN_PRE_IN_HOOK', '1')] if RRED_LATE else [])
+                                             + ([('GB_NOROOT', '1')] if GTEXT and role == 'c' else []),   # GTEXT: holds no L2 root
                                              runtime_args=ttnn.RuntimeArgs(), config=cfg, **base))
         assert sum(str(k_.kernel_source).endswith('_rred.cpp') for k_ in out) == 2, "_gdn_host_rred: writer + compute variants on RRED_HC"
         return out

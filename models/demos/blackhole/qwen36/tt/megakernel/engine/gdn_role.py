@@ -29,7 +29,10 @@ def _gb(b, coords):
     ix = {(c.x, c.y): i for i, c in enumerate(coords)}
     tl = gg["tiles"]
     assert [t[0] for t in tl] == list(range(len(tl))), "G-a tile list not contiguous"
-    return dict(gin_addr=gg["gin_addr"], gin_map=[(ix[(x, y)], sl) for _, x, y, sl in tl], dbg=gg["dbg"])
+    # GTEXT (E1_GTEXT, default on under E1_GB): the cores whose kernels are built without the L2-root code (GB_NOROOT:
+    # the AR corners, the Σ reducer) -- the role places the 4 L2 roots off them
+    noroot = sorted(ix[xy] for xy in getattr(b, "gb_noroot", ()) if xy in ix)
+    return dict(gin_addr=gg["gin_addr"], gin_map=[(ix[(x, y)], sl) for _, x, y, sl in tl], dbg=gg["dbg"], noroot=noroot)
 
 
 def _state(b):
