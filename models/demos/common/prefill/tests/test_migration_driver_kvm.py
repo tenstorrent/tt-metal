@@ -131,3 +131,14 @@ def test_kvm_migrate_retries_receiver_unready(kvm_driver, monkeypatch):
     )
     server.shutdown()
     assert [p for p, _ in seen] == ["/migrate"] * 3
+
+
+def test_handoff_tail_reads_past_the_pool_from_the_trace(monkeypatch):
+    from models.demos.common.prefill.runners import migration_driver as md
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    trace = list(range(100, 120))
+    monkeypatch.setattr(producer, "load_trace_token_ids", lambda t: trace)
+    assert md._trace_continuation(trace[:10], "t", 11)[10] == 110
+    # A trace that does not start with the pool is not used.
+    assert md._trace_continuation([1, 2, 3], "t", 4) == [1, 2, 3]
