@@ -2748,6 +2748,9 @@ class DecodeResidualAllReduce:
         all-gathered DRAM tensor itself, no RES40 copy; the megakernel's x_in, QWEN36_R16_MK_VTAIL_IO)."""
         if x.shape[-2] > TILE_SIZE:
             raise ValueError(f"QWEN36_DECODE_ALLREDUCE supports decode batch <= {TILE_SIZE}, got {x.shape[-2]}")
+        if dram and os.environ.get("QWEN36_R16_MK_VTAIL_AG", "0") == "1":
+            # VTAIL cut B (engine x_in only): the plain ttnn.all_gather (no tt_ccl semaphores; the fused argmax's gather)
+            return ttnn.all_gather(x, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gathered = ttnn.experimental.all_gather_async(
             x,
             persistent_output_buffer=None,
