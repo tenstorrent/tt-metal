@@ -250,6 +250,18 @@ class Stage1Verify:
             return {"ready": False, "reason": self.reason}
         self.ready = True
         self.replaces_layers = all(p.replaces_layers for p in self.programs.values())
+        if self.replaces_layers:
+            # The engine REPLACES the model's whole layer loop (model.py: `for layer in () if replaces_layers`), so a program
+            # with fewer layers than the model silently drops layers nl..n_layers-1. Refuse that unless explicitly allowed
+            # (QWEN36_R16_MK_ALLOW_PARTIAL=1: the gate-9 e2e-diff, which compares the first E2E_NL layers op-by-op).
+            n_model = len(self.model.layers)
+            short = {b: int((getattr(p, "info", None) or {}).get("nl", -1)) for b, p in self.programs.items()}
+            short = {b: n for b, n in short.items() if n != n_model}
+            if short and os.environ.get("QWEN36_R16_MK_ALLOW_PARTIAL", "0") != "1":
+                raise AssertionError(
+                    f"megakernel engine covers {short} layers (bucket: FM_NL) but replaces all {n_model} model layers: "
+                    f"engine-ON would run a {min(short.values())}-layer model. Set QWEN36_R16_MK_NL={n_model} (needs the "
+                    f"NL=64 engine) or QWEN36_R16_MK_ALLOW_PARTIAL=1 for a partial-model correctness test only")
         return {"ready": True, "buckets": sorted(self.programs), "replaces_layers": self.replaces_layers,
                 "kind": type(next(iter(self.programs.values()))).__name__, "out_of_scope": sorted(self.skipped),
                 "info": {b: getattr(p, "info", None) for b, p in self.programs.items()}}
