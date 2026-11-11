@@ -153,7 +153,14 @@ DENSE_DECODE_FUSION_ON = {
 # global layers, "2" the sliding layers too). Off in every profile until device-validated; a build turns it on by
 # adding the name to its ON dict (tt/attention/decode.py reads it through decode_flag).
 SDPA_SPLITFREE_ENV = "GEMMA4_SDPA_DECODE_SPLITFREE"
-DECODE_FUSION_OFF = {name: "0" for name in {**DECODE_FUSION_ON, **DENSE_DECODE_FUSION_ON, SDPA_SPLITFREE_ENV: "0"}}
+# GEMMA4_SDPA_PAIR_SPLIT: the global layers' decode attention split over the two chips of a KV-head pair
+# (tt/sdpa_pair_split.py, custom_ops/sdpa_decode_lse in pair mode). Off in every profile until device-validated; it is
+# read at the weight build (the pair QKV / o_proj copies) and at the decode call, both through decode_flag.
+SDPA_PAIR_SPLIT_ENV = "GEMMA4_SDPA_PAIR_SPLIT"
+DECODE_FUSION_OFF = {
+    name: "0"
+    for name in {**DECODE_FUSION_ON, **DENSE_DECODE_FUSION_ON, SDPA_SPLITFREE_ENV: "0", SDPA_PAIR_SPLIT_ENV: "0"}
+}
 FOUR_CHIP_SHAPES = (ROW_MESH_SHAPE, COLUMN_MESH_SHAPE)
 # The dense Galaxy DP engine: 8 Blackhole chips opened as the (1,8) line, TP=8 over the columns, the same plain-TP
 # build as (1,4) (DramShardedLinear on wqkv / o_proj / gate_up / down; the decode grids derive from the per-chip

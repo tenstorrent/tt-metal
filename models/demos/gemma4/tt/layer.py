@@ -87,6 +87,7 @@ class Gemma4DecoderLayer:
         router_dtype=None,
         bounded_sliding_kv_cache: bool = False,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
+        sdpa_pair_split: bool = True,  # False: the attention builds no GEMMA4_SDPA_PAIR_SPLIT weights (MTP drafter)
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
         # callers that don't care about precision config see no change.
@@ -155,6 +156,7 @@ class Gemma4DecoderLayer:
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+            sdpa_pair_split=sdpa_pair_split,
         )
 
         # Shared/dense MLP (HF key: "mlp")

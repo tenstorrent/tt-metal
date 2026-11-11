@@ -133,6 +133,7 @@ class Gemma4AssistantModel:
                 max_seq_len=self.text_args.max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                sdpa_pair_split=False,  # KV-shared layers: the 4-head decode path only, no pair weights
             )
             self.layers.append(layer)
 

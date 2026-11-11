@@ -141,6 +141,8 @@ class Gemma4Attention:
         bounded_sliding_kv_cache: bool = False,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
+        # False: no GEMMA4_SDPA_PAIR_SPLIT pair weights for this layer whatever the knob (load_attention_weights)
+        sdpa_pair_split: bool = True,
     ):
         self.mesh_device = mesh_device
         self.config = config
@@ -167,6 +169,7 @@ class Gemma4Attention:
             mesh_config=mesh_config,
             tensor_cache_path=tensor_cache_path,
             weight_dtype=weight_dtype,
+            allow_pair_split=sdpa_pair_split,
         )
 
         if create_kv_cache:
