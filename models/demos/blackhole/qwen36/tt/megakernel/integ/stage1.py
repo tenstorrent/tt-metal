@@ -293,7 +293,7 @@ class Stage1Verify:
             if st is not None:
                 st(rows)
 
-    def forward(self, x, n_users, T, in_body):
+    def forward(self, x, n_users, T, in_body, out_mc=None):
         """Inside the traced verify body, on the replicated RES40 residual ``x`` [1,1,rows,5120] (consumed). Runs the
         engine (x_in = DRAM copy of x) into the persistent x_out and returns a FRESH tensor in x's memory config (never
         x_out itself: the caller deallocates what it gets back)."""
@@ -301,10 +301,13 @@ class Stage1Verify:
 
         prog = self.programs[n_users]
         x_out = self.x_out[n_users]
-        mc = x.memory_config()
-        x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        if x_in is not x:
-            ttnn.deallocate(x)
+        mc = x.memory_config() if out_mc is None else out_mc  # out_mc: QWEN36_R16_MK_VTAIL_IO (x is already the DRAM x_in)
+        if x.memory_config() == ttnn.DRAM_MEMORY_CONFIG:
+            x_in = x  # already the engine's DRAM x_in (to_memory_config would hand back an alias of x)
+        else:
+            x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            if x_in is not x:
+                ttnn.deallocate(x)
         if os.environ.get("QWEN36_R16_MK_L1DUMP") == "1":
             l1_dump(f"engine launch bucket {n_users}", prog, self.model)
         prog.launch(x_in, x_out, per_replay_inputs(self.model, in_body))

@@ -2566,8 +2566,20 @@ class Qwen36Model:
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         _dar = self._verify_dar(rows)
+        # QWEN36_R16_MK_VTAIL_IO=1 (VTAIL, bit-identical): with the engine on, the all-gathered residual stays in DRAM and IS the
+        # engine's x_in (no RES40 copy here + no DRAM copy back in Stage1Verify.forward).
+        _mk1v = getattr(self, "_vfy_mk1", None)
+        _vt_io = (
+            os.environ.get("QWEN36_R16_MK_VTAIL_IO", "0") == "1"
+            and _dar is not None
+            and _mk1v is not None
+            and _mk1v.ready
+            and _mk1v.replaces_layers
+            and n_users in _mk1v.programs
+            and kv_split is not True
+        )
         if _dar is not None:
-            x = _dar.enter(x)  # QWEN36_VERIFY_DAR: one AG -> replicated RES40 residual, as the plain decode
+            x = _dar.enter(x, dram=_vt_io)  # QWEN36_VERIFY_DAR: one AG -> replicated RES40 residual, as the plain decode
         # QWEN36_VERIFY_ATTN_LEAN: cos/sin in the prefill-shaped layout apply_partial_rope_decode wants ([1,1,R,rd]; the
         # staged buffers are [1,R,1,rd]), built ONCE here instead of 4 reshapes per attention layer; and the T strided
         # position slices of the grouped KV write, likewise shared by every attention layer.
@@ -2613,6 +2625,7 @@ class Qwen36Model:
             x = _mk1.forward(
                 x, n_users, T,
                 dict(kvpos=kvpos, ctrl=ctrl, cos=_cos, sin=_sin, pt_rows=pt_rows, pt_users=pt_users, pt_groups=pt_groups),
+                out_mc=(self._decode_ar.res_mem if _vt_io else None),
             )
         for layer in () if _mk1_on and _mk1.replaces_layers else self.layers:
             if layer.is_full_attention:
