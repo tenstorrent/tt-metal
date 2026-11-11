@@ -2625,7 +2625,10 @@ def engine_env(n_users, n_layers, layer_types=None):
     for kv in _ov.split():
         k, v = kv.split("=", 1)
         env[k] = v
-    nl = min(int(env.pop("FM_NL", os.environ.get("QWEN36_R16_MK_NL", "8"))), n_layers, 32)  # MKA_AMASK is a u32
+    # 7q (NL64): one launch covers up to 64 layers (NL > 32 needs NL % 32 == 0 and a 32-periodic layer mask, MKA_LPER);
+    # default = the whole model (Stage1Verify refuses a partial engine unless QWEN36_R16_MK_ALLOW_PARTIAL=1)
+    nl = min(int(env.pop("FM_NL", os.environ.get("QWEN36_R16_MK_NL", "64"))), n_layers, 64)
+    assert nl <= 32 or nl % 32 == 0, ("engine NL > 32 must be a multiple of 32 (7q)", nl)
     env["FM_NL"] = str(nl)
     env["MKA_NU"] = str(max(1, -(-int(n_users) // 2)))  # own users per chip (u8 -> 4, u1 -> 1)
     env.setdefault("V12_R", str(min(32, 4 * int(n_users))))  # rows of the bucket (u8 32, u1 4)
