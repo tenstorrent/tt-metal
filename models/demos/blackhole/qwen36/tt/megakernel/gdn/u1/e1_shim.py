@@ -317,6 +317,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     zs_late = early and os.environ.get("E1_ZS_LATE", "1") == "1"
     # GDN_CUT_FAST (default on): kts / kmq slots re-zero only the previous occupant's rows (one barrier per chunk)
     cut_fast = os.environ.get("E1_CUT_FAST", "1") == "1"
+    # GDN_OUT_TILE (default on): at B * T == 32 the out tiles go out as whole tiles (1 write each, same bytes)
+    out_tile = os.environ.get("E1_OUT_TILE", "1") == "1"
     # lean CB table (E1_LEAN, default on): 3 ids freed (LEAN_ALIAS) and kmq 4 -> 2 user slots (-32 KB)
     lean = os.environ.get("E1_LEAN", "1") == "1"
     tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring, lean=lean, kmq_users=2 if lean else 4)
@@ -465,5 +467,5 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]]
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab),
-                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast)
+                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
