@@ -22,7 +22,7 @@ def _pages(x_dev: torch.Tensor, cores: int) -> torch.Tensor:
     _, c = x_dev.shape
     n = c // TILE
     page = torch.zeros(cores, 2 * n, TILE, TILE, dtype=torch.float32)
-    for k, chunk in enumerate(x_dev.chunk(cores, dim=0)):  # height-sharded: consecutive pixel rows per core
+    for k, chunk in enumerate(x_dev.chunk(cores, dim=0)):
         s1 = chunk.sum(0).reshape(n, TILE)
         s2 = (chunk * chunk).sum(0).reshape(n, TILE)
         page[k, :n, 0, :] = s1

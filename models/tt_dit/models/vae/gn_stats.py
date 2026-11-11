@@ -34,8 +34,8 @@ TILE = 32
 def _page_sums_torch(pages: torch.Tensor, cores: int, channels: int) -> torch.Tensor:
     """[cores * 2N * 32, 32] host page -> [2, C] fp32 sums over the cores (row 0 of each tile)."""
     n = channels // TILE
-    t = pages.reshape(cores, 2 * n, TILE, TILE)[:, :, 0, :].to(torch.float32)  # [cores, 2N, 32]
-    return t.sum(0).reshape(2, n * TILE)  # row 0: sum x, row 1: sum x^2
+    t = pages.reshape(cores, 2 * n, TILE, TILE)[:, :, 0, :].to(torch.float32)
+    return t.sum(0).reshape(2, n * TILE)
 
 
 def gn_affine_reference(
@@ -49,8 +49,8 @@ def gn_affine_reference(
     count: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Torch oracle: the pages of every device (any order) -> (scale, shift), each [C] fp32."""
-    sums = sum(_page_sums_torch(p, cores, channels) for p in device_pages)  # [2, C] over cores and devices
-    per_group = sums.reshape(2, groups, channels // groups).sum(-1)  # [2, G]
+    sums = sum(_page_sums_torch(p, cores, channels) for p in device_pages)
+    per_group = sums.reshape(2, groups, channels // groups).sum(-1)
     mean = per_group[0] / count
     var = per_group[1] / count - mean * mean
     rstd = torch.rsqrt(var + eps)
@@ -80,31 +80,27 @@ def gn_affine_from_stats(
     Returns (scale, shift), each [1, 1, 1, C] bf16 TILE, replicated on every device.
     All work is on 2 x C values per device plus one small gather per sharded mesh axis.
     """
-    import ttnn  # lazy: the reference and its host test run without a device
+    import ttnn
 
     n = channels // TILE
     rep = channels // groups
-    # row 0 of every tile: [cores, 2N, 32, 32] -> [cores, 2N, 1, 32] (tiny; row-major to slice inside tiles)
     x = ttnn.to_layout(stats, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, (cores, 2 * n, TILE, TILE))
     x = ttnn.slice(x, (0, 0, 0, 0), (cores, 2 * n, 1, TILE))
-    x = ttnn.sum(x, dim=0, keepdim=True)  # [1, 2N, 1, 32] over the cores
-    x = ttnn.reshape(x, (1, 1, 2, channels))  # row 0: sum x, row 1: sum x^2 (channel 32c + j at column 32c + j)
-    # over the devices: gather the 2 x C partials along each sharded mesh axis and add them
+    x = ttnn.sum(x, dim=0, keepdim=True)
+    x = ttnn.reshape(x, (1, 1, 2, channels))
     for axis in (h_mesh_axis, w_mesh_axis):
         if axis is None:
             continue
-        g = ccl_manager.all_gather(x, dim=1, mesh_axis=axis, use_hyperparams=False)  # [1, D, 2, C]
+        g = ccl_manager.all_gather(x, dim=1, mesh_axis=axis, use_hyperparams=False)
         x = ttnn.sum(g, dim=1, keepdim=True)
-    # per group: [1, 1, 2, G, C/G] -> sums over the group's channels
     x = ttnn.reshape(x, (1, 2, groups, rep))
-    x = ttnn.sum(x, dim=3, keepdim=True)  # [1, 2, G, 1]
+    x = ttnn.sum(x, dim=3, keepdim=True)
     s1 = ttnn.slice(x, (0, 0, 0, 0), (1, 1, groups, 1))
     s2 = ttnn.slice(x, (0, 1, 0, 0), (1, 2, groups, 1))
     mean = ttnn.multiply(s1, 1.0 / count)
     var = ttnn.subtract(ttnn.multiply(s2, 1.0 / count), ttnn.multiply(mean, mean))
     rstd = ttnn.rsqrt(ttnn.add(var, eps))
-    # back to per channel: repeat each group's value rep times -> [1, 1, 1, C]
     rstd_c = ttnn.reshape(ttnn.repeat(rstd, ttnn.Shape((1, 1, 1, rep))), (1, 1, 1, channels))
     mean_c = ttnn.reshape(ttnn.repeat(mean, ttnn.Shape((1, 1, 1, rep))), (1, 1, 1, channels))
     gamma_rm = ttnn.to_layout(ttnn.typecast(gamma, ttnn.float32), ttnn.ROW_MAJOR_LAYOUT)

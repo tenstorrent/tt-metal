@@ -23,7 +23,7 @@ from models.tt_dit.utils.conv3d import aligned_channels, get_conv3d_config
 from models.tt_dit.utils.substate import rename_substate
 from models.tt_dit.utils.tensor import local_device_to_torch
 
-VAE_A_MAX_SLICES = 8  # DRAM slices per conv the norm-fusion statistics page block covers
+VAE_A_MAX_SLICES = 8
 
 
 @dataclass(frozen=True)
@@ -46,9 +46,6 @@ class VaeContext:
     w_mesh_axis: int | None = None
     w_factor: int = 1
     use_conv3d: bool = False
-    # 2D spatial decode (no TP): 3x3 convs pad their borders from a boundary exchange instead of NeighborPad,
-    # a resnet block's norm2 comes from conv1's epilogue statistics (its affine + SiLU in conv2's halo prologue), and
-    # the mid-block attention norms the local shard
     external_halo: bool = False
     norm_fusion: bool = False
     norm_prologue: bool = False
@@ -376,7 +373,7 @@ class VaeConv2d(Module):
             and stride == 1
             and self._full_padding == (1, 1, 1, 1)
         )
-        self._a3_refused: set[tuple[int, int]] = set()  # shapes whose external-halo conv failed
+        self._a3_refused: set[tuple[int, int]] = set()
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "", "inner")
@@ -446,16 +443,14 @@ class VaeConv2d(Module):
             )
             return ttnn.squeeze(out, 0)
 
-        # rows: H is not a tiled dim, so one-row slices of a TILE tensor are cheap
         top = rm(act(ttnn.slice(x, [0, 0, 0, 0], [n, 1, w, c])))
         bot = rm(act(ttnn.slice(x, [0, h - 1, 0, 0], [n, h, w, c])))
         if self._h_sharded:
-            ph = exchange(ttnn.concat([top, bot], dim=1), 2, self._ctx.h_mesh_axis)  # [n, 4, w, c]
+            ph = exchange(ttnn.concat([top, bot], dim=1), 2, self._ctx.h_mesh_axis)
             halo_top = ttnn.slice(ph, [0, 0, 0, 0], [n, 1, w, c])
             halo_bot = ttnn.slice(ph, [0, 3, 0, 0], [n, 4, w, c])
         else:
             halo_top, halo_bot = ttnn.zeros_like(top), ttnn.zeros_like(bot)
-        # columns of the H-extended block: tile-aligned 32-column bands, then the edge column
         band = min(32, w)
         lb = rm(act(ttnn.slice(x, [0, 0, 0, 0], [n, h, band, c])))
         rb = rm(act(ttnn.slice(x, [0, 0, w - band, 0], [n, h, w, c])))
@@ -474,20 +469,20 @@ class VaeConv2d(Module):
             dim=1,
         )
         if self._w_sharded:
-            pw = exchange(ttnn.concat([left_ext, right_ext], dim=2), 3, self._ctx.w_mesh_axis)  # [n, h + 2, 4, c]
+            pw = exchange(ttnn.concat([left_ext, right_ext], dim=2), 3, self._ctx.w_mesh_axis)
             halo_left = ttnn.slice(pw, [0, 0, 0, 0], [n, h + 2, 1, c])
             halo_right = ttnn.slice(pw, [0, 0, 3, 0], [n, h + 2, 4, c])
         else:
             halo_left, halo_right = ttnn.zeros_like(left_ext), ttnn.zeros_like(right_ext)
 
-        def row(t, r):  # [n, 1, 1, c] corner stick from a column
+        def row(t, r):
             return ttnn.slice(t, [0, r, 0, 0], [n, r + 1, 1, c])
 
-        top_seq = ttnn.concat([row(halo_left, 0), halo_top, row(halo_right, 0)], dim=2)  # [n, 1, w + 2, c]
+        top_seq = ttnn.concat([row(halo_left, 0), halo_top, row(halo_right, 0)], dim=2)
         bot_seq = ttnn.concat([row(halo_left, h + 1), halo_bot, row(halo_right, h + 1)], dim=2)
         left_seq = ttnn.reshape(ttnn.slice(halo_left, [0, 1, 0, 0], [n, h + 1, 1, c]), (n, 1, h, c))
         right_seq = ttnn.reshape(ttnn.slice(halo_right, [0, 1, 0, 0], [n, h + 1, 1, c]), (n, 1, h, c))
-        boundary = ttnn.concat([top_seq, bot_seq, left_seq, right_seq], dim=2, memory_config=dram)  # [n, 1, B, c]
+        boundary = ttnn.concat([top_seq, bot_seq, left_seq, right_seq], dim=2, memory_config=dram)
         return ttnn.reshape(boundary, (1, 1, n * (2 * (w + 2) + 2 * h), c))
 
     def a3_takes(self, hw: tuple[int, int]) -> bool:
@@ -506,9 +501,9 @@ class VaeConv2d(Module):
         if self._a3 and self._a3_eligible(int(x.shape[1]), int(x.shape[2])):
             boundary = self._exchange_boundary(x, prologue)
             if self._a3_num_slices(int(x.shape[1]), int(x.shape[2])) not in (None, 1) and x.is_sharded():
-                x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)  # the DRAM-sliced conv reads DRAM
+                x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
             saved = self.inner.padding
-            self.inner.padding = self._full_padding  # the conv pads the border itself, from the boundary
+            self.inner.padding = self._full_padding
             out = None
             try:
                 out = self.inner.forward(
@@ -519,7 +514,7 @@ class VaeConv2d(Module):
                     epilogue_stats=epilogue_stats,
                     **({"prologue": prologue} if prologue is not None else {}),
                 )
-            except RuntimeError as e:  # e.g. the conv fell back off the height-sharded L1 path
+            except RuntimeError as e:
                 self._a3_refused.add((int(x.shape[1]), int(x.shape[2])))
                 logger.warning(f"VAE: external halo refused for {tuple(x.shape)}, using NeighborPad: {str(e)[:160]}")
             finally:
@@ -527,9 +522,7 @@ class VaeConv2d(Module):
                 ttnn.deallocate(boundary)
             if out is not None:
                 return out
-        if (
-            prologue is not None
-        ):  # no halo prologue off the external-halo path: apply it before the pad (the halo sees the result)
+        if prologue is not None:
             x = self._apply_prologue(x, prologue)
             prologue = None
         if self._needs_neighbor_pad:
@@ -635,11 +628,10 @@ class VaeResnetBlock(Module):
         c_part = c // n_parts
         grid = ctx.device.compute_with_storage_grid_size()
         cores_max = grid.x * grid.y
-        stride = cores_max * 2 * (c_part // 32)  # pages per DRAM slice (per part)
+        stride = cores_max * 2 * (c_part // 32)
         key = (*(int(d) for d in h.shape), n_parts)
         pages = self._a_pages.get(key)
         if pages is None:
-            # zeroed once: every call rewrites the pages of the slices and cores it uses, the others stay zero
             pages = [
                 tensor.from_torch(
                     torch.zeros(1, 1, VAE_A_MAX_SLICES * stride * 32, 32),
@@ -699,7 +691,6 @@ class VaeResnetBlock(Module):
         that fell back to no shard layout; the groups must split evenly over the parts."""
         inner = self.conv1.inner
         _, hh, ww, _ = (int(d) for d in h.shape)
-        # a ragged DRAM width slice computes junk columns the epilogue would sum: the local width must be tile-aligned
         if ww % 32:
             return False
         hh, ww = self.conv1.padded_input_shape(hh, ww)
@@ -767,12 +758,8 @@ class VaeAttention(Module):
 
         self._attn_local = ctx.local_attention and ctx.tp_axis is None and (ctx.h_factor > 1 or ctx.w_factor > 1)
         if self._attn_local:
-            # its own parameter name: the weight cache keys tensors by module path and layout, and the plain norm's
-            # cached ROW_MAJOR 'norm.weight' cannot load into the 2D norm's TILE parameters
             self.norm_local = _norm(norm, num_channels=num_channels, ctx=ctx)
         else:
-            # Norm runs on the AG'd full-spatial tensor inside forward(), so the inner norm should NOT
-            # AG/partition again. Bypass the _VaeSpatialGroupNorm wrap by handing _norm a TP-only ctx.
             norm_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
             self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
         # Fused QKV: one ColParallelLinear with chunks=3 replaces three RowParallelLinear+RS+AG
@@ -863,12 +850,10 @@ class VaeAttention(Module):
         ctx = self._ctx
         ccl = ctx.ccl_manager
         assert ccl is not None
-        xn = self.norm_local.forward(x)  # [n, h_l, w_l, c], statistics over the mesh
+        xn = self.norm_local.forward(x)
         if xn.layout != ttnn.TILE_LAYOUT:
             xn = ttnn.to_layout(xn, ttnn.TILE_LAYOUT)
-        local = ttnn.reshape(xn, (n, 1, h_l * w_l, c))  # a view: w_l is tile-aligned on the 2D decode
-        # the flat sequences of every device, H shards first then W shards; the token order is a fixed permutation of
-        # the raster, the same for K, V and the queries of every device
+        local = ttnn.reshape(xn, (n, 1, h_l * w_l, c))
         full = local
         if ctx.h_factor > 1:
             full = ccl.all_gather(full, dim=2, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)

@@ -25,15 +25,13 @@ from ....utils.tensor import bf16_tensor
 from ....utils.test import ring_params_8k
 
 HEADS, HEAD_DIM, SP, TP = 24, 128, 8, 4
-VALID_TEXT = 320  # valid caption rows; the rest of the text bucket is the masked K tail
-Q_GAIN = 3.0  # peaked scores (std ~3), so the max / exp numerics matter
+VALID_TEXT = 320
+Q_GAIN = 3.0
 SAMPLE_ROWS = 48
 MAX_REL_ERR = 0.045
 MIN_PCC = 0.998
 
-# per-device rows: text bucket (0: no text rows)
 TEXT_BUCKET_BY_ROWS = {2560: 4096, 2688: 1024, 2816: 2048, 3072: 4096, 8192: 0, 8320: 1024, 8960: 2048}
-# the chunks Klein's attention resolves on the streaming path: the streaming entry, else the shared table's
 CHUNKS = {**RING_SDPA_CHUNKS_BY_LOCAL_ROWS, **RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS}
 
 

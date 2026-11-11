@@ -174,7 +174,6 @@ class ColParallelLinear(Module):
     Linear layer with column parallel weights
     """
 
-    # The fused SwiGLU epilogue overlapped with the next block's matmul (all-gather-matmul path, no bias)
     swiglu_overlap: bool = False
 
     def __init__(

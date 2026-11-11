@@ -97,7 +97,6 @@ def test_linear1(*, mesh_device: ttnn.MeshDevice) -> None:
 
         def run_block(linear1: bool, rope=rope, total=total, hosts=(x_host, shift_host, scale_host, gate_host)):
             block._l1_disabled = not linear1
-            # fresh inputs per call; the output lives in proj_out's persistent RS buffer, so copy it out right away
             x_in, shift, scale_plus_one, gate = (rows_tensor(t) for t in hosts)
             return _bytes(block(x_in, rope=rope, mod=(shift, scale_plus_one, gate), logical_length=total))
 

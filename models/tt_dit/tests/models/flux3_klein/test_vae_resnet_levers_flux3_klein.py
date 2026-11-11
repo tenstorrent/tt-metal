@@ -22,10 +22,7 @@ from ....utils import tensor
 from ....utils.test import ring_params_8k
 
 SIZE, H_AXIS, W_AXIS = 4096, 1, 0
-# level: (up block, channels, full height = width at that block)
 LEVELS = {"512ch": (1, 512, 1024), "256ch": (2, 256, 2048), "128ch": (3, 128, 4096)}
-# arm: (lever switched on in this arm on top of the previous ones, check against the previous arm: None = exact, else
-# max rel L2 error); the first arm is the 2D decode with every lever off
 ARMS = {
     "spatial_2d": (None, None),
     "cout_split": ("cout_split", 2e-2),
@@ -61,7 +58,7 @@ def test_vae_resnet_levers(*, mesh_device: ttnn.MeshDevice) -> None:
     )
     gen = torch.Generator().manual_seed(0)
     inputs = {level: torch.randn(1, hw, hw, c, generator=gen) for level, (_, c, hw) in LEVELS.items()}
-    decoder = vae._decoder  # its conv slicing for SIZE is set per instance at construction
+    decoder = vae._decoder
     blocks = {level: decoder.up_blocks[up].resnets[1] for level, (up, _, _) in LEVELS.items()}
     levers = {level: _levers(block) for level, block in blocks.items()}
     off = {"cout_split": 1, "external_halo": False, "fused_norm": False, "prologue_affine": False}

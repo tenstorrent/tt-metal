@@ -23,39 +23,27 @@ HEADS = 24
 HEAD_DIM = 128
 MLP_RATIO = 3
 SDPA_Q_CHUNK_MAX = 128
-# Ring SDPA (q, k) chunks by per-device rows (SP8 x TP4): q fills whole rounds of (head, q chunk) units on the SDPA
-# grid, k divides the shard. Rows not listed keep the shared rule (q clamped to SDPA_Q_CHUNK_MAX).
 RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
-    # 2048x2048: 6 heads x 16 q chunks = 96 units, one round
     2560: (160, 512),
-    # 2048x2048 + 1 reference: 96 units, one round
     3072: (192, 512),
-    # 2048x2048 + 1 reference, 1024-row text bucket: 102 units, one round
     2688: (160, 512),
-    # 4096x4096, 1024-row text bucket: k 640 divides the shard
     8320: (128, 640),
-    # 2048x2048 + 1 reference, 2048-row text bucket: 108 units, one round
     2816: (160, 512),
-    # 4096x4096 + 1 reference, 2048-row text bucket: k 640 divides the shard
     8960: (128, 640),
 }
 
-# Streaming path on the 116-core grid (12 x 9 + the CCL row's 8 free cores): 2 rounds of q 224 at the 4096 rows,
-# 3 rounds of q 160 at 4096 + 1 reference (2048-row text bucket).
 RING_SDPA_CHUNKS_STREAMING_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     8192: (224, 512),
     8320: (224, 512),
     8960: (160, 512),
 }
-# SDPA also runs on the CCL row's cores from this x (the all-gather keeps x < 4 with 2 links)
 RING_SDPA_CCL_ROW_START_X = 4
-LINEAR1_N_CORES = 9  # N cores of linear1's transposed grid
-LINEAR1_MIN_ROWS = 8192  # linear1 only at the 4096 row counts, where it is bit-identical to QKV + MLP-in
-_LINEAR1_K_BLOCK: dict[int, int | None] = {}  # rows -> the K block QKV and MLP-in share there (None: they differ)
+LINEAR1_N_CORES = 9
+LINEAR1_MIN_ROWS = 8192
+_LINEAR1_K_BLOCK: dict[int, int | None] = {}
 
 
 class Flux3KleinAttention(Attention):
-    # ring SDPA on the streaming compute path with fp32 dest (bf16 score block); False: the compute_common.hpp path
     ring_sdpa_streaming_fp32_dest = True
 
     def forward(self, *, sequence_1: ttnn.Tensor, **kwargs):
@@ -171,7 +159,7 @@ class Flux3KleinTransformerBlock(Module):
         self.proj_mlp.swiglu_overlap = True
         self._mesh_device = device
         self._barrier_tile = None
-        self._l1_weight = None  # [W_qkv | W_mlp], built once from the loaded weights, outside the state dict
+        self._l1_weight = None
         self._l1_disabled = False
 
     def _tp_barrier(self) -> None:
@@ -219,7 +207,6 @@ class Flux3KleinTransformerBlock(Module):
         n_qkv = attn.to_qkv.weight.data.padded_shape[-1]
         n_mlp = self.proj_mlp.weight.data.padded_shape[-1]
         full = self._mesh_device.compute_with_storage_grid_size()
-        # the grouped N split needs the 72 QKV / 144 MLP tiles per device to split evenly over the N cores
         if full.y < LINEAR1_N_CORES:
             raise RuntimeError(f"linear1 needs {LINEAR1_N_CORES} N cores, grid {full.x}x{full.y}")
         grid = ttnn.CoreCoord(full.x, LINEAR1_N_CORES)
@@ -289,8 +276,6 @@ class Flux3KleinTransformerBlock(Module):
             sequence_1_length=logical_length,
             precomputed_qkv_flat=(q, k, v),
         )
-        # linear1 moved MLP-in's all-gather ahead of the attention: restore the TP ordering it gave before proj_out,
-        # and let proj_out's reduce-scatter handshake with its peers before writing into them
         self._tp_barrier()
         return self.proj_out.forward_fused_addcmul([attn, mlp], x, gate, scalar=1.0, rs_barrier=True)
 

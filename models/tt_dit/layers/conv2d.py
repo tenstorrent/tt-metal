@@ -622,11 +622,8 @@ class Conv2d(Module):
             slice_config=slice_config,
             return_output_dim=True,
             return_weights_and_bias=True,
-            # the preceding norm's affine + SiLU inside the halo pass
             **({"prologue_scale": prologue[0], "prologue_shift": prologue[1]} if prologue is not None else {}),
-            # the neighbour devices' boundary sticks for the border padding
             **({"halo_boundary": halo_boundary} if halo_boundary is not None else {}),
-            # output GroupNorm statistics: (stats tensor, pages per slice)
             **(
                 {"epilogue_stats": epilogue_stats[0], "epilogue_stats_slice_stride": epilogue_stats[1]}
                 if epilogue_stats is not None
@@ -694,7 +691,6 @@ class Conv2d(Module):
                 raise ValueError(msg)
 
         slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-        # `slice_shape`: the (h, w) to look the slice count up by (the external halo's neighbour-padded shape)
         num_slices = slice_params.get((*(slice_shape or (h, w)), self.in_channels, self.out_channels))
         slice_config = (
             ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
@@ -702,7 +698,6 @@ class Conv2d(Module):
             else None
         )
         if halo_boundary is not None and num_slices in (None, 1):
-            # the external halo runs on the conv's L1 path when unsliced
             slice_config = ttnn.Conv2dL1FullSliceConfig
 
         in_channels = self.in_channels // self.in_mesh_axis_size
@@ -748,8 +743,7 @@ class Conv2d(Module):
                             split=(i, n_split),
                             shard_layout=self.split_shard_layout,
                             prologue=prologue,
-                            halo_boundary=halo_boundary,  # every cout part reads the same input + border
-                            # one (pages, stride) per cout part
+                            halo_boundary=halo_boundary,
                             epilogue_stats=(
                                 epilogue_stats[i]
                                 if isinstance(epilogue_stats, list) and len(epilogue_stats) == n_split
