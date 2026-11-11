@@ -36,15 +36,33 @@ void bind_concat(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. Defaults to `None`, which gives a DRAM interleaved output.
-            output_tensor (ttnn.Tensor, optional): Not supported: passing a tensor raises an error. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Must be `None`. Defaults to `None`.
             groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for a width concat of two height-sharded tensors in L1.
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use when the inputs and the output are interleaved (L1 or DRAM). If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
 
-        Note:
-            Block-sharded width concat (`dim` = -1) requires each input to start on an L1 alignment boundary: the sum of the widths before it, times the element size, must be a multiple of the NOC alignment (16 bytes on Wormhole and Blackhole). A ragged width that breaks this is rejected, since the concat boundary falls inside a shard where the NOC cannot write. Pad each width to a multiple of `l1_alignment / element_size` elements, or concat before sharding.
-
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            L1 block-sharded width concat (`dim` = -1) requires each input to start on an L1 alignment boundary: the sum of the widths before it, times the element size, must be a multiple of the NOC alignment (16 bytes on Wormhole and Blackhole). A ragged width that breaks this is rejected, since the concat boundary falls inside a shard where the NOC cannot write. Pad each width to a multiple of `l1_alignment / element_size` elements, or concat before sharding.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED and WIDTH_SHARDED in DRAM and L1; BLOCK_SHARDED in L1
+            - The output can be interleaved or sharded independently of the inputs
+            - An L1 sharded output from L1 sharded inputs must have the inputs' sharding scheme, shard grid and shard orientation. A last-dim concat then needs HEIGHT_SHARDED or BLOCK_SHARDED inputs, and a second-to-last-dim concat needs WIDTH_SHARDED or BLOCK_SHARDED inputs
     )doc";
 
     ttnn::bind_function<"concat">(
