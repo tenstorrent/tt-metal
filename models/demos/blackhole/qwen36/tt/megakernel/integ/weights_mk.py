@@ -290,5 +290,5 @@ def repack(model, layouts=None, kinds=None, only_layers=None):
             per_dev[d] = None
             shards.append(ttnn.from_torch(pages, dtype=dtype, layout=ttnn.TILE_LAYOUT))
         t = ttnn.to_device(ttnn.from_host_shards(shards, mesh.shape), mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out[kind] = dict(tensor=t, pages_per_layer=lay.pages_per_layer, layers=idx, dtype=lay.dtype)
+        out[kind] = dict(tensor=t, pages_per_layer=lay.pages_per_layer, layers=idx, dtype=lay.dtype, layout=lay)
     return out

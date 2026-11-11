@@ -1348,10 +1348,7 @@ def engine_env(n_users, n_layers):
 # build and stays op-by-op). QWEN36_R16_MK_L1POOL=0 turns the pool off.
 _L1POOL = {}  # id(mesh) -> {key: [tensor, ...]}
 _ABLOCKS = {}  # id(mesh) -> the shared integration ArgBlocks
-# The model's repacked weights (weights_mk.repack: kind -> dict(tensor, pages_per_layer, layers, dtype)) for setup_bench while
-# build_program runs it: a track's phase that finds its kind here reads that tensor (layout = its weight_layouts pack) instead
-# of building the synthetic stand-in. Empty outside build_program (the bench).
-_WEIGHTS = {}
+
 
 
 def _l1_key(shape, dtype, layout, mc, data=None):
@@ -1460,16 +1457,30 @@ def weight_layouts(mesh):
     (layout_attn split-K qkv, the wo unit, GDN) take over -- resident and addressable, not yet read by the kernels."""
     from models.demos.blackhole.qwen36.tt.megakernel.integ import weights_mk as wm
 
+    from models.demos.blackhole.qwen36.tt.megakernel.engine import weight_layouts as WL
+
     bank_loc = [(c.x, c.y) for c in mesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)]
-    return {
+    banks = mesh.dram_grid_size().x
+    env = dict(os.environ)
+    env.update(engine_env(8, 64))  # the engine build's env (core lists depend on MKA_GDN24 / MKA_ARCORES)
+    C = WL.engine_cores(env)
+    lays = {
         "mlp": wm.MlpLayout(bank_loc),
         "gamma": None,
         "qkg": None,  # q/k-norm (1+w) table (weights_mk.qkg_pages), fixed layout
-        "qkv": wm.TileOrderLayout("qkv", "bfloat8_b"),
-        "wo": wm.TileOrderLayout("wo", "bfloat8_b"),
+        # the attention track's engine-layout packs (lossless; setup_bench binds the tensor + takes placement from .layout)
+        "qkv": WL.QkvSplitKLayout(bank_loc, banks),
+        "wo": WL.wo_unit_layout(C["wo"], bank_loc, banks),
         "gdn_in": wm.TileOrderLayout("gdn_in", "bfloat4_b"),
-        "gdn_out": wm.TileOrderLayout("gdn_out", "bfloat4_b"),
+        "gdn_out": (WL.gdn_out_layout(C["gdn_out"], bank_loc, banks) if C["gdn_out"]
+                    else wm.TileOrderLayout("gdn_out", "bfloat4_b")),
     }
+    # The repack stores the attention layers by attention ORDINAL (layer a at a * ppl); setup_bench's synthetic wq_all /
+    # wo_all are indexed by ENGINE layer L (all NL layers). Until the kernels take an ordinal base (asked of the attention
+    # helper), the track packs are opt-in (QWEN36_R16_MK_W_ATTN=1) and the default keeps tile-order placeholders (unbound).
+    if os.environ.get("QWEN36_R16_MK_W_ATTN", "0") != "1":
+        lays.update(qkv=wm.TileOrderLayout("qkv", "bfloat8_b"), wo=wm.TileOrderLayout("wo", "bfloat8_b"))
+    return lays
 
 
 def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
@@ -1520,7 +1531,7 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     if _qkg.get("tensor") is not None:
         env.setdefault("MKA_QKG_ADDR", str(_qkg["tensor"].buffer_address()))
     _WEIGHTS.clear()
-    _WEIGHTS.update({k: v for k, v in (weights or {}).items() if v})
+    _WEIGHTS.update({k: v for k, v in (weights or {}).items() if v and not type(v.get("layout")).__name__ == "TileOrderLayout"})
     # KV injection (QWEN36_R16_MK_KV_INJECT=1; e2e-diff, and the default once the SDPA reads the real page table): the
     # engine reads the model's paged caches in the prod layout instead of CTX-sized synthetic ones
     if os.environ.get("QWEN36_R16_MK_KV_INJECT", "0") == "1" and kv_desc and all(d.get("paged") for d in kv_desc):
