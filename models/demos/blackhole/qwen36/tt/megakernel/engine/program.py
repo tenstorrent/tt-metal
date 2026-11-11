@@ -2166,19 +2166,36 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
 
     rq_t, rq_fn = None, globals().get("rqbal_table")
     if "MKA_RQBAL_HOST=1" in env.get("MK_DEFINES", "").split(",") and rq_fn is not None:
-        _ns, _ne = len(S.get("RQ_S") or ()), len(S.get("RQ_E") or ())
-        _w = rq_fn([S.get("CTX", 32) - 4] * 32, _ns, _ne)
-        rq_t = ttnn.from_torch(torch.as_tensor(_w.astype("int64")).reshape(1, -1).to(torch.int32), dtype=ttnn.uint32,
-                               layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # attnpos 1439f532efc: rqbal_table(kvpos, xy, n_stream) -> uint32 [2N * 16] = [2N, 16] rows (parity p, core i at
+        # row p * N + i; one 64 B page each). Computed for replay k+1 right after replay k is enqueued (precompute, from
+        # upper-bound positions); stage() before the replay then only copies (a recompute only on a prediction miss).
+        _xy, _ns = S["RQB_XY"], len(S["RQ_S"])
+        _tab = lambda rows: torch.as_tensor(rq_fn(rows, _xy, _ns).astype("int64")).reshape(-1, 16).to(torch.int32)
+        rq_t = ttnn.from_torch(_tab([S.get("CTX", 32) - 4] * 32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
+                               device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+        _pre = {}
+        _cost = dict(n=0, us=0.0, miss=0)
+
+        def precompute(rows):
+            _pre.clear()
+            _pre[tuple(rows)] = _tab(rows)
 
         def stage(rows):
-            w = rq_fn(rows, _ns, _ne)
-            h = ttnn.from_torch(torch.as_tensor(w.astype("int64")).reshape(1, -1).to(torch.int32), dtype=ttnn.uint32,
-                                layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
-            ttnn.copy_host_to_device_tensor(h, rq_t)
+            t0 = time.perf_counter()
+            h = _pre.pop(tuple(rows), None)
+            if h is None:
+                _cost["miss"] += 1
+                h = _tab(rows)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(h, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
+                                                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)), rq_t)
+            _cost["n"] += 1
+            _cost["us"] += (time.perf_counter() - t0) * 1e6
+            if _cost["n"] % 1000 == 0:
+                print(f"[rqbal-host] {_cost['n']} stages, mean {_cost['us'] / _cost['n']:.1f} us on the replay path, "
+                      f"{_cost['miss']} prediction misses", flush=True)
 
-        program.stage = stage
+        program.stage, program.precompute = stage, precompute
     program.info = info
     program.setup = S
     program.xio = make_xio(mesh, S) if os.environ.get("QWEN36_R16_MK_XIO", "1") == "1" else None

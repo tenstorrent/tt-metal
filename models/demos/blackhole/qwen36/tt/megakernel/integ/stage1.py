@@ -253,14 +253,28 @@ class Stage1Verify:
                 "kind": type(next(iter(self.programs.values()))).__name__, "out_of_scope": sorted(self.skipped),
                 "info": {b: getattr(p, "info", None) for b, p in self.programs.items()}}
 
-    def stage_host(self, row_positions, inactive, T):
-        """Before each verify replay (model.verify_stage_and_enqueue): every engine program's host-staged tables from the
-        step's row positions (r = u*T + j; -1 for inactive users). No-op for programs without host tables."""
+    @staticmethod
+    def _rows(row_positions, inactive, T):
         rows = [int(p) for p in row_positions]
         if inactive is not None:
             for u, off in enumerate(inactive):
                 if off:
                     rows[u * T:(u + 1) * T] = [-1] * T
+        return rows
+
+    def post_enqueue(self, row_positions, inactive, T):
+        """Right after replay k is enqueued: precompute every program's host tables for replay k+1 from the upper-bound
+        positions (each live row + T; the tables are hints), so step k+1 only pays the H2D copy."""
+        rows = [p + T if p >= 0 else -1 for p in self._rows(row_positions, inactive, T)]
+        for prog in self.programs.values():
+            pre = getattr(getattr(prog, "program", None), "precompute", None)
+            if pre is not None:
+                pre(rows)
+
+    def stage_host(self, row_positions, inactive, T):
+        """Before each verify replay (model.verify_stage_and_enqueue): every engine program's host-staged tables from the
+        step's row positions (r = u*T + j; -1 for inactive users). No-op for programs without host tables."""
+        rows = self._rows(row_positions, inactive, T)
         for prog in self.programs.values():
             st = getattr(getattr(prog, "program", None), "stage", None)
             if st is not None:

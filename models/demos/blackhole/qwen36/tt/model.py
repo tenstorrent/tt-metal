@@ -4316,6 +4316,8 @@ class Qwen36Model:
             post_pending=bool(forward_only),
         )
         handle.mask_keep = mask_keep
+        if _mk1 is not None and _mk1.ready:  # overlap the next step's host tables with this replay (upper-bound positions)
+            _mk1.post_enqueue(pos, inactive, T)
         return handle
 
     def _vfy_check_post(self, bk, topk, execute_mask, mask_host, forward_only):
