@@ -26,7 +26,7 @@
 #if defined(MK_AR_RSTD) && !defined(MK_AR_RSTD_RED_GDN)   // RED_GDN (iii'): the column sum + transpose run on the GDN host core
 #include "api/compute/transpose_dest.h"
 #endif
-#if defined(MK_AR_RSTD) && !defined(MK_AR_RSTD_RED_GDN)
+#if defined(MK_AR_RSTD) && (!defined(MK_AR_RSTD_RED_GDN) || (defined(MK_DNORM_SPLIT) && defined(MKA_ROLE_STREAM)))
 // one copy of the SFPU fp32 column sum (sfpu_reduce is always-inline): shared by the rstd producer (X^T squares) and the consumer
 // (the Σ tile); STREAM text
 __attribute__((noinline)) static void mk_colsum(uint32_t idst) {
@@ -418,7 +418,7 @@ void kernel_main() {
 #if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && defined(MK_AR_RSTD_HOST)
     a++;   // the producer's arg (vn) is still passed with the host Σ
 #define MK_RSTD_PART() do {} while (0)
-#elif defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && defined(MKA_SV) && MKA_SV != 1
+#elif defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && defined(MKA_SV) && MKA_SV != 1 && !defined(MK_DNORM_SPLIT)
     a++;   // MKA_SV leaf / parent: not an rstd producer (program.py asserts the variant membership)
 #define MK_RSTD_PART() do {} while (0)
 #elif defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
@@ -427,8 +427,8 @@ void kernel_main() {
     // REDUCE_COL (row 0 = Σ_c x[r, c]^2 at column r: already the Σ tile's row format; same reduce instantiation as the consumers)
     // CB_SS -> the writer, which multicasts row 0 as row k of the Σ tile. Runs before the site's hw startup (which re-inits after it).
     const uint32_t vn_c = get_arg_val<uint32_t>(a++);
-#if defined(MKA_SV)
-    constexpr bool rprod = true; (void)vn_c;   // MKA_SV 1: every core of this variant is a producer
+#if defined(MKA_SV) || defined(MK_DNORM_SPLIT)
+    constexpr bool rprod = true;   // MKA_SV 1: every core of this variant is a producer; DNORM split: every STREAM core
 #else
     const bool rprod = vn_c == vk;
 #endif
@@ -439,6 +439,18 @@ void kernel_main() {
         reconfig_data_format_srca(CB_XK);
         pack_reconfig_data_format(MK_AR_CB_SS);
         tile_regs_acquire();
+#if defined(MK_DNORM_SPLIT)
+        // DNORM (ii): this core's 2 of the K-row's 20 tiles (2 vn, 2 vn + 1) -> (x^T)^2 summed + column sum (row 0 = per-token partial)
+        copy_init(CB_XK, 1, 1);
+        copy_tile(CB_XK, 2 * vn_c, 0);
+        copy_tile(CB_XK, 2 * vn_c + 1, 1);
+        square_tile_init();
+        square_tile(0);
+        square_tile(1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        mk_colsum(0);
+#else
         copy_init(CB_XK, 1, 1);
         copy_tile(CB_XK, 0, 0);
         square_tile_init();
@@ -455,6 +467,7 @@ void kernel_main() {
 #if !defined(MK_AR_RSTD_RED_GDN)
         mk_colsum(0);
 #endif   // RED_GDN: the elementwise Σ_t (x_t^T)^2 tile goes to the GDN host core, which sums the 8 K-rows + column-reduces
+#endif   // MK_DNORM_SPLIT
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, MK_AR_CB_SS);
