@@ -737,7 +737,14 @@ class MiniMaxH3Transformer3DModel(Module):
         A sampler with a fixed schedule (H3-Image's 6 PDD steps) then passes `modulation_key=key` to `forward`,
         which skips the per-block adaLN projections: 13B params streamed from DRAM per forward for a handful of
         rows. Costs `6 tables x 32 rows x hidden_local` bf16 per block per key (about 0.5 MB at TP=4).
+
+        A key already held is kept as is (the caller guarantees a key always means the same timestep), so calling
+        this every step costs nothing after the first and never leaks the tables it would otherwise replace. The
+        tables live until `clear_modulation_cache`; nothing tears this model down, so a long-lived owner that
+        changes schedules should call it.
         """
+        if key in self._modulation_cache:
+            return
         if self.two_time is not None:
             raise NotImplementedError("precomputed modulation does not cover two-time conditioning")
         temb = self.time_embedder(self.time_proj(timestep))
@@ -745,6 +752,7 @@ class MiniMaxH3Transformer3DModel(Module):
         ttnn.deallocate(temb)
 
     def clear_modulation_cache(self) -> None:
+        """Deallocate every `precompute_modulation` table and forget their keys."""
         for tables in self._modulation_cache.values():
             for block_tables in tables:
                 for table in block_tables:

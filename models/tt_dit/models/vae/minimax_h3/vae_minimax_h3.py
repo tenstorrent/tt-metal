@@ -1657,6 +1657,10 @@ class MiniMaxH3Vae:
         torch to one thread for the denoise loop's benefit and the host still does the tile
         stitching, unpatchify and temporal blend. The previous limit is restored on the way out.
         """
+        if self.task == "image":
+            # The temporal chunking below assumes `temporal_compression_ratio` pixel frames per latent frame; the
+            # 2D decoder emits one, so this path would decode the wrong frame count.
+            raise ValueError("decode() is the video path; an image (task='image') VAE decodes with decode_clip()")
         if output_type not in OUTPUT_TYPES:
             raise ValueError(f"output_type must be one of {OUTPUT_TYPES}, got {output_type!r}")
         if self.readback_uint8 and self.pixel_denorm is None:

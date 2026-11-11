@@ -14,7 +14,8 @@ port was validated against:
 H3-Image differences: no audio tensors (audio-free DiT), a 2D ViT decoder (16 heads x 64, 24 layers, rope ratio 0.5,
 2-axis RoPE, Conv2d post_quant), and the per-step PDD output heads, stored as `pdd_heads.{weight,bias}`.
 
-usage: python convert_h3_image.py <H3-Image release snapshot> <output dir> [vae|transformer|all]
+usage: python convert_h3_image.py <H3-Image release snapshot> <output dir> [all|vae|transformer|transformer-layers=N]
+(every mode also copies pdd_config.json, model_index.json, processor/, tokenizer/ and examples/)
 
 The release ships no text encoder: H3-Image conditions on the same Qwen3-VL-32B as MiniMax-H3, so link it in:
   ln -s <MiniMax-H3 diffusers snapshot>/text_encoder <output dir>/text_encoder
@@ -254,17 +255,41 @@ def is_converted(path: str) -> bool:
     return os.path.isfile(os.path.join(path, "transformer", "pdd_heads.safetensors"))
 
 
+MODES = ("all", "vae", "transformer", "transformer-layers=N")
+
+
+def _max_layers(what: str) -> int | None:
+    """`N` for `transformer-layers=N` (N >= 1), None for every other mode; an unknown mode raises."""
+    if what.startswith("transformer-layers="):
+        value = what.split("=", 1)[1]
+        if value.isdigit() and int(value) >= 1:
+            return int(value)
+    elif what in MODES:
+        return None
+    raise ValueError(f"unknown conversion mode {what!r}; expected one of {', '.join(MODES)}")
+
+
 def convert(src: str, out: str, what: str = "all") -> None:
+    max_layers = _max_layers(what)  # before any work, so a typo does not convert nothing and print ok
     os.makedirs(out, exist_ok=True)
     if what in ("vae", "all"):
         convert_vae(src, out)
-        copy_side_files(src, out)
     if what in ("transformer", "all"):
         convert_transformer(src, out)
-    if what.startswith("transformer-layers="):  # e.g. transformer-layers=2
-        convert_transformer(src, out, max_layers=int(what.split("=", 1)[1]))
+    if max_layers is not None:  # e.g. transformer-layers=2
+        convert_transformer(src, out, max_layers=max_layers)
+    # Every mode: the pipeline reads pdd_config.json (the sigma grid), the processor and the tokenizer whichever
+    # component was converted, so a transformer-only snapshot is otherwise unloadable.
+    copy_side_files(src, out)
     print("ok", out)
 
 
 if __name__ == "__main__":
-    convert(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "all")
+    if not 3 <= len(sys.argv) <= 4:
+        sys.exit(f"usage: python convert_h3_image.py <release snapshot> <output dir> [{'|'.join(MODES)}]")
+    mode = sys.argv[3] if len(sys.argv) > 3 else "all"
+    try:
+        _max_layers(mode)
+    except ValueError as err:
+        sys.exit(str(err))
+    convert(sys.argv[1], sys.argv[2], mode)

@@ -110,6 +110,7 @@ def test_zero_jit_across_lengths(mesh_device, guide_examples):
     warm = pipe(t2i["prompt"], width=2048, height=2048, seed=1)
     seen = {warm.rung}
     logger.info(f"RESULT zero_jit warm 2048x2048: padded {warm.rung} (dynamic_length={pipe.dynamic_length})")
+    compiled = {}
     for width, height in ((2560, 2048), (3072, 2048), (2048, 2560), (2304, 2304)):
         before = mesh_device.num_program_cache_entries()
         result = pipe(t2i["prompt"], width=width, height=height, seed=2)
@@ -121,6 +122,10 @@ def test_zero_jit_across_lengths(mesh_device, guide_examples):
             f"(new length: {new_length}) | misses {misses} by stage {result.timings.program_misses} | "
             f"total {result.timings.total:.2f}s"
         )
+        if misses:
+            compiled[(width, height)] = result.timings.program_misses
+    # Asserted after the loop, so every size is logged before a failure.
+    assert not compiled, f"JIT compiles on the serving path (size -> misses by stage): {compiled}"
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])

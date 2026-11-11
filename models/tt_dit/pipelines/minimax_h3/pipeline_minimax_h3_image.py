@@ -20,7 +20,7 @@ Device flow per request:
 On a ring fabric the DiT runs dynamic length: the packed length is a runtime argument and a request pads only to
 SP * TILE rows, so once one request has run, no request size compiles a new program. Each fixed schedule step's adaLN
 modulation tables are computed once and reused (`precompute_adaln`). Without a ring the pipeline falls back to the
-`IMAGE_BUCKET_LADDER_4X8` rungs, warmed once each.
+`IMAGE_BUCKET_LADDER_4X8` rungs, warmed once each; its reference limit then shrinks to what the top rung holds.
 """
 
 from __future__ import annotations
@@ -87,6 +87,26 @@ def image_arena_caps(reference_area_limit: int = host.REFERENCE_AREA_LIMIT) -> M
 IMAGE_ARENA_CAPS = image_arena_caps()
 
 
+def _arena_rows(caps: MiniMaxH3ArenaCaps) -> int:
+    """The longest packed sequence the arenas admit: a full prompt, full references and the largest target."""
+    return caps.prompt + caps.condition_video_rows + caps.video_rows
+
+
+def largest_reference_area_limit(max_packed: int) -> int:
+    """The largest reference limit (in whole VAE rows of 1024 px) whose arenas fit `max_packed` packed rows: what a
+    bucketed pipeline may admit, since nothing pads past its top rung. 4194304 (one 2048^2 reference) for 32768."""
+    lo, hi = 0, host.REFERENCE_AREA_LIMIT // 1024
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _arena_rows(image_arena_caps(mid * 1024)) <= max_packed:
+            lo = mid
+        else:
+            hi = mid - 1
+    if lo == 0:
+        raise ValueError(f"a {max_packed}-row ladder top cannot hold a request at the arenas' target and prompt caps")
+    return lo * 1024
+
+
 @dataclass
 class ImageRequestTimings:
     encode_prompt: float = 0.0
@@ -117,7 +137,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | Path,
         bucket_ladder: tuple[int, ...] = IMAGE_BUCKET_LADDER_4X8,
-        reference_area_limit: int = host.REFERENCE_AREA_LIMIT,
+        reference_area_limit: int | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
@@ -139,13 +159,10 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
 
         `reference_area_limit` is the per-request reference limit (`host.check_references`): the arenas, the
         presentation and vision-tower ladders and `max_sequence_length` (default: the arenas' sum) all derive from
-        it, so every request it admits fits and is warmed."""
-        self.reference_area_limit = int(reference_area_limit)
-        self.reference_caps = host.reference_caps(self.reference_area_limit)
-        if arena_caps is None:
-            arena_caps = image_arena_caps(self.reference_area_limit)
-        if max_sequence_length is None:
-            max_sequence_length = arena_caps.prompt + arena_caps.condition_video_rows + arena_caps.video_rows
+        it, so every request it admits fits and is warmed. Its default is `host.REFERENCE_AREA_LIMIT` with dynamic
+        length. Bucketed, nothing pads past the ladder's top rung, so the default is the largest limit whose arenas
+        fit that rung (`largest_reference_area_limit`: 4.19 MP, one 2048^2 reference, for the default ladder), and a
+        larger limit -- or `arena_caps` whose rows sum past the rung -- raises."""
         # Deliberately not super().__init__: that builds the audio VAE and the video presets. Only the attributes the
         # reused helpers read are set here.
         self.mesh_device = mesh_device
@@ -168,6 +185,23 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             dynamic_length = ring
         if dynamic_length and not ring:
             raise ValueError("dynamic_length needs a ring topology (its fused AGMM / MMRS pins exist for a ring)")
+        bucket_ladder = tuple(bucket_ladder)
+        if reference_area_limit is None:
+            reference_area_limit = (
+                host.REFERENCE_AREA_LIMIT if dynamic_length else largest_reference_area_limit(bucket_ladder[-1])
+            )
+        self.reference_area_limit = int(reference_area_limit)
+        self.reference_caps = host.reference_caps(self.reference_area_limit)
+        if arena_caps is None:
+            arena_caps = image_arena_caps(self.reference_area_limit)
+        if not dynamic_length and _arena_rows(arena_caps) > bucket_ladder[-1]:
+            raise ValueError(
+                f"the bucketed pipeline pads to at most {bucket_ladder[-1]} rows but its arenas admit "
+                f"{_arena_rows(arena_caps)} (reference_area_limit {self.reference_area_limit}); use a reference limit "
+                f"of at most {largest_reference_area_limit(bucket_ladder[-1])}, a longer ladder, or a ring fabric"
+            )
+        if max_sequence_length is None:
+            max_sequence_length = _arena_rows(arena_caps)
         self.dynamic_length = dynamic_length
         self.bucket_denoise = not dynamic_length
         # Persistent CCL buffers: without them every all-gather-matmul host-syncs the device first (150 per DiT
@@ -177,7 +211,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         # Keep the latents and the Euler update on device (same bits as the host update); see _denoise_image.
         self.device_latents = device_latents
         self.dit_fsdp = dit_fsdp
-        self.bucket_ladder = tuple(bucket_ladder)
+        self.bucket_ladder = bucket_ladder
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
         alignment = self.sp_factor * ttnn.TILE_SIZE
         self.max_sequence_length = -(-max_sequence_length // alignment) * alignment
@@ -229,6 +263,12 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         self.pdd_head_fp32 = os.environ.get("H3_IMAGE_PDD_FP32", "0") == "1"
         # Per-step adaLN tables computed once (the 6-step schedule is fixed) instead of every forward.
         self.precompute_adaln = precompute_adaln
+        # Once here: `_prepare_request` calls `_prepare_transformer` on every request, and hashing the weight files
+        # there would re-read the config and index each time.
+        self._dit_cache_subfolder = (
+            f"transformer_{self._weights_fingerprint()}_pdd{self.schedule.num_steps}"
+            f"{'fp32' if self.pdd_head_fp32 else ''}_{self._dit_weight_mode()}"
+        )
         self.vae_config = MiniMaxH3VaeConfig.from_pretrained(self.weights_dir / "vae")
 
         self._host_log("building the Qwen3-VL text encoder")
@@ -301,26 +341,26 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         return state
 
     def _weights_fingerprint(self) -> str:
-        """A short hash of the checkpoint's transformer config + weight index + PDD heads, so differently shaped or
-        different checkpoints (a few-layer gate snapshot, a perf-tiled one, the release) never share a cache entry --
-        the cache key is otherwise only the parallel config and mesh."""
+        """A short hash of the transformer config + weight index and of every weight file's (name, size, mtime_ns) --
+        each shard and pdd_heads.safetensors -- so different checkpoints (a few-layer gate snapshot, a perf-tiled one,
+        the release) and a re-conversion with unchanged shapes never share a cache entry; the cache key is otherwise
+        only the parallel config and mesh. A copy that does not preserve mtimes rebuilds the cache once."""
         import hashlib
 
         tdir = self.weights_dir / "transformer"
         digest = hashlib.sha1()
         for name in ("config.json", "diffusion_pytorch_model.safetensors.index.json"):
             digest.update((tdir / name).read_bytes())
-        digest.update(str((tdir / "pdd_heads.safetensors").stat().st_size).encode())
+        for path in sorted(tdir.glob("*.safetensors")):
+            stat = path.stat()
+            digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
         return digest.hexdigest()[:12]
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME_IMAGE,
-            subfolder=(
-                f"transformer_{self._weights_fingerprint()}_pdd{self.schedule.num_steps}"
-                f"{'fp32' if self.pdd_head_fp32 else ''}_{self._dit_weight_mode()}"
-            ),
+            subfolder=self._dit_cache_subfolder,
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
@@ -426,6 +466,13 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         canvas = host.resolve_image_canvas(width, height, min_generation_area)
         cw, ch = canvas
         lh, lw = ch // host.VAE_RATIO, cw // host.VAE_RATIO
+        # Before any device work: otherwise an oversized canvas is only rejected after the Qwen and VAE encodes.
+        target_rows = (lh // 2) * (lw // 2)
+        if target_rows > self.arena_caps.video_rows:
+            raise ValueError(
+                f"{width}x{height} resolves to a {cw}x{ch} canvas of {target_rows} latent rows, over the "
+                f"{self.arena_caps.video_rows}-row target cap (4096x4096 is 16384)"
+            )
 
         refs_rgb = [host.load_reference_image(image) for image in images or ()]
         if refs_rgb:  # over the limit is rejected (the served API answers 422 first), never shrunk
@@ -536,6 +583,7 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         caps = self.arena_caps
         transformer = self._prepare_transformer()
         L, R, T = layout.text_len, layout.num_ref_rows, layout.target_rows
+        # A guard: `_generate` already rejects an oversized canvas and `check_references` oversized references.
         if L > caps.prompt or R > caps.condition_video_rows or T > caps.video_rows:
             raise ValueError(
                 f"request exceeds the arena caps: text {L}/{caps.prompt}, refs {R}/{caps.condition_video_rows}, "
@@ -631,10 +679,10 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         modulation_key = None
         if self.precompute_adaln:
             # The schedule is fixed, so step k always conditions on the same `[t_k, 0.999]`: its modulation tables
-            # are computed on the first request and reused by every later one (keyed by the exact timestep pair).
+            # are computed on the first request and reused by every later one (keyed by the exact timestep pair;
+            # `precompute_modulation` is a no-op for a key it already holds).
             modulation_key = (k, *timestep.tolist())
-            if modulation_key not in transformer._modulation_cache:
-                transformer.precompute_modulation(modulation_key, tt_t)
+            transformer.precompute_modulation(modulation_key, tt_t)
         rope_cos, rope_sin = request["rope"]
         # Diagnostics, off by default. H3_IMAGE_STEP_TIMING=1 splits each step into host enqueue / device wait /
         # readback (enqueue close to the step time means the step is host-dispatch bound). H3_IMAGE_PROFILE_STEP=k
@@ -693,7 +741,9 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         The DiT and the VAE are length-agnostic once one request has run (dynamic length), but the text encoder keys
         programs on the presentation length: each rung of `presentation_ladder` is encoded once, text-only and (where
         a 1024^2 reference fits) with one, which is what an edit merges. Then a 4K t2i (the default size; the most
-        VAE decode waves) and a 2K edit (the vision tower and the VAE encoder) run end to end.
+        VAE decode waves) and a 2K edit (the vision tower and the VAE encoder) run end to end. With dynamic length a
+        4K edit with as many 1024^2 references as the limit admits (up to sixteen) warms the DiT's long length
+        class; bucketed, `warm_rungs` warms each ladder rung instead (the bucketed limit admits no such request).
         """
         started = time.perf_counter()
         reference = Image.new("RGB", (1024, 1024), (128, 128, 128))
@@ -734,13 +784,22 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
             ttnn.deallocate(embeds)
         self._warm_vision_merge(self.presentation_ladder, self.vision_patch_ladder)
         self("warmup", width=4096, height=4096, seed=0)
-        self("warmup", width=2048, height=2048, seed=0, images=[reference])
-        # Sixteen references put the DiT past 6144 rows a device, its "long" length class (its own programs).
-        self("warmup", width=4096, height=4096, seed=0, images=[reference] * 16)
+        num_refs = min(host.MAX_REFERENCES, self.reference_area_limit // (1024 * 1024))
+        if num_refs:
+            self("warmup", width=2048, height=2048, seed=0, images=[reference])
+        if self.dynamic_length:
+            # Sixteen references put the DiT past 6144 rows a device, its "long" length class (its own programs).
+            if num_refs > 1:
+                self("warmup", width=4096, height=4096, seed=0, images=[reference] * num_refs)
+        else:
+            self.warm_rungs()
         return time.perf_counter() - started
 
     def warm_rungs(self, rungs: Sequence[int] | None = None) -> dict[int, float]:
-        """Run one tiny request forced to each rung so its DiT programs are compiled before serving."""
+        """Run one tiny request forced to each rung so its DiT programs are compiled before serving (bucketed only:
+        the dynamic-length DiT has no rungs, and `warmup` covers its length classes)."""
+        if self.dynamic_length:
+            raise RuntimeError("warm_rungs is for the bucketed (dynamic_length=False) pipeline; use warmup()")
         seconds = {}
         for rung in rungs or self.bucket_ladder:
             self._force_bucket = rung
