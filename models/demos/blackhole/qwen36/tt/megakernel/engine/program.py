@@ -185,6 +185,16 @@ def l1io(dev, groups, direction):
     ttnn.generic_op(io + io[:1] if len(io) < 2 else io, pd)
 
 
+def _fresh_sem(*a, **k):
+    """A global semaphore the cross-build sem pool (integ program.py _setup_context, QWEN36_R16_MK_SEMPOOL) must NOT share:
+    the AR's flags / counters (epoch-based or AR-owned). The pool shim checks ttnn._mk_sem_fresh."""
+    ttnn._mk_sem_fresh = getattr(ttnn, "_mk_sem_fresh", 0) + 1
+    try:
+        return ttnn.create_global_semaphore(*a, **k)
+    finally:
+        ttnn._mk_sem_fresh -= 1
+
+
 class _L1Ref:
     """Spec §20 phase 2: a static CB at a planned L1 address standing in for the sharded L1 tensor a consumer API expects
     (buffer_address() + memory_config().shard_spec only; the AR's engine_parts). Inside _static_cb_refs(),
