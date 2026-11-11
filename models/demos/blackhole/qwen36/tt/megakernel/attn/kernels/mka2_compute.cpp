@@ -368,6 +368,34 @@ void kernel_main() {
 #else
 #define MK_RSTD_PART() do {} while (0)
 #endif
+#if defined(MK_GAMMA_CONS) && defined(MKA_ROLE_STREAM)
+    // γ at the consumers: CB_XK *= γ (bcast rows of the writer's 20 γ row tiles, CB MK_GC_CB) IN PLACE: packed through MK_GC_XKA,
+    // a second format index of CB_XK's memory whose fifo stays at the base like CB_XK's (20 pages each, one delivery at a time)
+    auto gc_scale = [&]() __attribute__((noinline)) {
+        CZONE("C-GC");
+        cb_wait_front(CB_XK, V_KTR);
+        cb_wait_front(MK_GC_CB, V_KTR);
+        cb_reserve_back(MK_GC_XKA, V_KTR);
+        reconfig_data_format(CB_XK, MK_GC_CB);
+        pack_reconfig_data_format(MK_GC_XKA);
+        mul_bcast_rows_init(CB_XK, MK_GC_CB);
+        for (uint32_t t0 = 0; t0 < V_KTR; t0 += 4) {
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < 4; ++i) mul_tiles_bcast_rows(CB_XK, MK_GC_CB, t0 + i, t0 + i, i);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < 4; ++i) pack_tile<true>(i, MK_GC_XKA, t0 + i);
+            tile_regs_release();
+        }
+        cb_push_back(MK_GC_XKA, V_KTR);
+        cb_wait_front(MK_GC_XKA, V_KTR);   // the packed x is in L1 before the consumers unpack CB_XK
+        cb_pop_front(MK_GC_XKA, V_KTR);
+        cb_pop_front(MK_GC_CB, V_KTR);
+    };
+#define MK_GC_SCALE() gc_scale()
+#else
+#define MK_GC_SCALE() do {} while (0)
+#endif
     // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
     auto v_rstd = [&]() {
 #if defined(MK_AR_RSTD)
@@ -538,6 +566,7 @@ void kernel_main() {
         const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK, cbw = CB_WM, cbs = QSK_SLOT, nown = qnt;
 #endif
         MK_RSTD_PART();
+        MK_GC_SCALE();
         MK_HWS(CB_XK, cbw, CB_VA);
         cb_wait_front(CB_XK, V_KTR);
         cb_wait_front(cbw, cbs);
@@ -947,6 +976,7 @@ void kernel_main() {
             const bool own_h = vk < vnn;
             if (L == 0) { cb_wait_front(CB_VI, 1); cb_wait_front(CB_VJ, 1); }
             MK_RSTD_PART();
+        MK_GC_SCALE();
             MK_HWS(CB_XK, CB_WV, CB_VA);
             cb_wait_front(CB_WV, V_SLOT);
             cb_wait_front(CB_XK, V_KTR);

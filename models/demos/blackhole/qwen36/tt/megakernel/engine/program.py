@@ -779,6 +779,19 @@ def setup_bench(dev, MESH, mesh_identity):
         # core (n = k, k) computes its K-row's per-row Σx² (fp32: copy + SFPU square + add over the 20 tiles, SFPU REDUCE_ROW) into
         # CB 19 (1 fp32 tile, the 8 producers only), multicasts it as row k of the Σ tile (rsp tile 0) to the STREAM rects, then
         # MK_AR_RSF += 1 there (8 per delivery: consumers wait >= 8 x (2L + 1) / 8 x (2L + 2), drain at program end). 0 owner text.
+        # MK_GAMMA_CONS=1 (spec owner decision, RC): γ applied by the x CONSUMERS, not the owners. Every STREAM core scales its K-row x
+        # in CB_XK in place on each delivery (mixer 2L + 1: input_layernorm γ of L; MLP 2L + 2: post_attention_layernorm γ of L), AFTER
+        # the rstd producer's Σx² (un-scaled x). γ table in DRAM: row (L * 2 + n) * 8 + k = γ[640 k : 640 k + 640] bf16 (1280 B pages);
+        # the writer reads each tile's row 0 (64 B) into CB 22 (20 tiles), the compute multiplies (bcast rows) and packs back in place
+        # through CB 21 (a second format index of CB 33's memory). Owners deliver the un-scaled residual (no MK_AR_GAMMA).
+        GAMMA_CONS = ('MK_GAMMA_CONS', '1') in MKDEF
+        if GAMMA_CONS:
+            assert V12CB and V_R == 32 and ('MK_AR_GAMMA', '1') not in MKDEF, "MK_GAMMA_CONS: MK_V12_CB (CB 33 = CB_XK, 20 pages), R = 32, not with MK_AR_GAMMA"
+            _gg = torch.Generator().manual_seed(19)
+            AR_GTAB = ((0.5 + torch.rand(NL, 2, H, generator=_gg)) * (1.25 ** 0.5)).bfloat16().float()
+            gam_c = ttnn.from_torch(AR_GTAB.reshape(NL * 2 * 8, 640).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            MKDEF = MKDEF + [('MK_GC_ADDR', str(gam_c.buffer_address())), ('MK_GC_PAGE', '1280'), ('MK_GC_CB', '22'), ('MK_GC_XKA', '21')]
+            print(f"[gc] gamma at the consumers: table {NL}x2x8 rows of 640 at DRAM {gam_c.buffer_address()}, CB 22 (20 tiles) + CB 21 = CB 33 alias", flush=True)
         AR_RSTD = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1'   # HOST: static Σ, no producer
         if AR_RSTD:   # the producer reuses the consumers' flag (RSTD_RSF, MK_AR_RSF / MK_AR_RSF_N defined in the rsp block)
             assert V_R == 32 and RQKV and RSTD, "MK_AR_RSTD: R = 32 with the rsp Σ tile (MKA_RQKV / QSK + V12)"
@@ -1396,7 +1409,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 if idx_ == 2: d_ = cbd(2, HDT, 1, rect)
                 keep.append(d_)
             cbs = [cbd(32, ttnn.bfloat4_b, LM.SLOT, rect)] + keep + [
-                cbd(33, ttnn.bfloat16, 20, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(33, v_xk), cbd(34, ttnn.bfloat16, 14, rect), cbd(35, ttnn.bfloat16, 2, rect),
+                (ttnn.CBDescriptor(total_size=20 * 2048, core_ranges=rect, format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=33, data_format=ttnn.bfloat16, page_size=2048),
+                    ttnn.CBFormatDescriptor(buffer_index=21, data_format=ttnn.bfloat16, page_size=2048)]) if (REAL_AR and GAMMA_CONS) else cbd(33, ttnn.bfloat16, 20, rect)) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(33, v_xk), cbd(34, ttnn.bfloat16, 14, rect), cbd(35, ttnn.bfloat16, 2, rect),
                 cbd(36, ttnn.bfloat16, 16, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(36, v_rs),
                 cbd(37, ttnn.bfloat16, 7, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(37, v_h7), cbd(38, ttnn.bfloat16, 1, rect),
                 cbd(39, ttnn.bfloat16, 1, rect), cbd(40, ttnn.bfloat16, 10, rect), cbd(41, ttnn.bfloat16, 10, rect), ttnn.cb_descriptor_from_sharded_tensor(42, v_id),
@@ -1417,6 +1431,10 @@ def setup_bench(dev, MESH, mesh_identity):
             sems = sems + arp['semaphores']
             _red = [CBP.mark_static(ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=(O_CRS if GDN24 else d_.core_ranges), format_descriptors=list(d_.format_descriptors))) for d_ in arp['shared_cbs']]
             cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
+            if GAMMA_CONS:   # CB 22: the 20 γ row tiles of this K-row's delivery (STREAM)
+                _sid = {f_.buffer_index for c_ in cbs for f_ in c_.format_descriptors if any(q_.x < GX and q_.y < GY for q_ in ttnn.corerange_to_cores(c_.core_ranges))}
+                assert 22 not in _sid, ("MK_GAMMA_CONS: CB 22 taken on STREAM", sorted(_sid))
+                cbs = cbs + [cbd(22, ttnn.bfloat16, 20, rect)]
             if AR_RSTD:   # CB 19 (fp32 Σx² tile, compute -> writer) on the 8 producer cores (n = k, k) only
                 _pc = crs([c_ for c_ in fcores if c_.x == c_.y and c_.y < GY])
                 _pcs = {(c_.x, c_.y) for c_ in ttnn.corerange_to_cores(_pc)}

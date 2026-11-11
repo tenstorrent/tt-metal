@@ -837,8 +837,28 @@ void kernel_main() {
         cb_pop_front(MK_AR_CB_SS, 1);
     };
 #endif
+#if defined(MK_GAMMA_CONS) && defined(MKA_ROLE_STREAM)
+    // γ at the consumers: delivery xv (2L + 1 mixer: input_layernorm; 2L + 2 MLP: post_attention_layernorm) of K-row vk ->
+    // the 20 γ row tiles (row 0 of each tile: 64 B from DRAM, then the face-1 half moved to +512) in CB MK_GC_CB
+    auto gc_issue = [&](uint32_t xv) __attribute__((noinline)) {
+        const InterleavedAddrGen<true> gg = {.bank_base_address = MK_GC_ADDR, .page_size = MK_GC_PAGE};
+        const uint64_t src = get_noc_addr((((xv - 1) >> 1) * 2 + ((xv - 1) & 1)) * 8 + vk, gg);
+        cb_reserve_back(MK_GC_CB, 2 * V_OT);
+        const uint32_t w = get_write_ptr(MK_GC_CB);
+        for (uint32_t t = 0; t < 2 * V_OT; ++t) noc_async_read(src + t * 64, w + t * V_PTB, 64);
+        noc_async_read_barrier();
+        for (uint32_t t = 0; t < 2 * V_OT; ++t) {
+            volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w + t * V_PTB);
+            for (uint32_t i = 0; i < 8; ++i) q[128 + i] = q[8 + i];   // bytes 32..63 (γ cols 16-31) -> face 1 row 0 (byte 512)
+        }
+        cb_push_back(MK_GC_CB, 2 * V_OT);
+    };
+#endif
     // K-row x (two owner chunks, flag >= xv) into CB_XK; unpack when R < 32 (v0.8.2)
     auto v_xk_push = [&](uint32_t xv) {
+#if defined(MK_GAMMA_CONS) && defined(MKA_ROLE_STREAM)
+        gc_issue(xv);   // γ lands while this core waits for the x
+#endif
         { MKZ("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), xv); noc_semaphore_wait_min(vw(vg[VG_XB]), xv); }
         cb_reserve_back(CB_XK, 2 * V_OT);
         if (vR < 32) {
