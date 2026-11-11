@@ -1063,7 +1063,8 @@ def setup_bench(dev, MESH, mesh_identity):
     # STREAM core waits its row's two flags instead of the stall, the Q root waits all 16 deliveries (MK_AR_XCNT) before XRDY.
     RRED = False   # MK_AR_RSTD_RED=gdn's GDN-core Σ reducer (set in the AR block)
     # GTEXT (DESIGN v1.156): GDN-role code-size trims for the corner / reducer variants under E1_GB (E1_GTEXT=0 = the old binaries)
-    GTEXT = os.environ.get('E1_GB', '0') == '1' and os.environ.get('E1_GTEXT', '1') == '1'
+    # (explicit E1_GTEXT=1 also without E1_GB: the cgar_iter md5 A/B vs E1_GTEXT unset / 0 = 9f97ada55bb's corner reader)
+    GTEXT = os.environ.get('E1_GTEXT', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'
     REAL_AR = ('MK_REAL_AR', '1') in MKDEF
     if REAL_AR:
         assert MESH and V12, "MK_REAL_AR needs MK_MESH=1 and MK_V12=1"
@@ -1838,7 +1839,7 @@ def setup_bench(dev, MESH, mesh_identity):
             # (E1_GTEXT_NOROOT_SIM=1, single-chip A/B only: the mesh root placement without REAL_AR / RRED, no GB_NOROOT kernels)
             _nrs = GTEXT and os.environ.get('E1_GTEXT_NOROOT_SIM', '0') == '1'
             _gb_noroot = ((([(10, 8), (11, 8), (10, 9), (11, 9)] if REAL_AR or _nrs else []) + ([(RRED_HC.x, RRED_HC.y)] if RRED else [(1, 8)] if _nrs else []))
-                          if GTEXT else [])
+                          if GTEXT and os.environ.get('E1_GB', '0') == '1' else [])
             if REAL_AR:   # the hosted AR sender owns CB ids RS / RED / HDR / AG on the corner cores: the GDN step's DFBs skip
                 # them (e1_shim build_engine skip_cb_ids default (34, 35, 37, 39))
                 assert sorted(AR.cbids[i] for i in (0, 1, 3, 5)) == [34, 35, 37, 39], AR.cbids
