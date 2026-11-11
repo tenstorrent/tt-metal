@@ -127,10 +127,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const uint32_t token_page = token_size_bytes(tensor_args);
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::TILE ||
-            token_page == static_cast<uint32_t>(buf.buffer()->aligned_page_size()),
+            token_page == static_cast<uint32_t>(buf.mesh_buffer().aligned_page_size()),
         "combine_fabric2d: ROW_MAJOR dispatched_buffer pages by {} B but a token is {} B; one row must be "
         "exactly one page",
-        buf.buffer()->aligned_page_size(),
+        buf.mesh_buffer().aligned_page_size(),
         token_page);
     // A token is the payload of a NoC transfer, which needs 16-byte alignment.
     TT_FATAL(

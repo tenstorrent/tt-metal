@@ -152,6 +152,34 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBWit
             ::testing::HasSubstr("its backing TensorParameter 'borrowed_tensor' was not supplied")));
 }
 
+TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_NonResizingBorrowedDFBOverrideNeedsNoTensor) {
+    // A partial update may list a borrowed DFB without resizing it and without supplying its backing tensor.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}});
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, CPU_SetProgramRunArgs_ResizingBorrowedDFBWithoutTensorReportsMissingTensorArgument) {
+    // A full argument set that resizes a borrowed DFB but omits its backing tensor reports the missing TensorArgument.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params = MakeBorrowedDFBRunArgs();
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "TensorParameter 'borrowed_tensor' is declared in the Program but has no TensorArgument entry")));
+}
+
 // Supplying the backing tensor alongside the resize is accepted: the fit check re-runs and the new
 // size (48 B) still fits the 64 B backing.
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBWithTensorSucceeds) {

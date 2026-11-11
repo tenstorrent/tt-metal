@@ -139,7 +139,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const uint32_t block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
     const uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
     const uint32_t per_core_N_bytes_padded =
-        tt::round_up(per_core_N * datum_size_bytes, output_tensor.buffer()->alignment());
+        tt::round_up(per_core_N * datum_size_bytes, output_tensor.mesh_buffer().alignment());
 
     // num_out_blocks: L1 safety net that splits the (now per-core) block height so height-scaled CBs
     // fit L1. With the multi-core split per_core_M is small, so this is typically 1. The stock
@@ -684,11 +684,11 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // Runtime args
     // ------------------------------------------------------------------------
-    const uint32_t input_addr = input_tensor.buffer()->address();
-    const uint32_t output_addr = output_tensor.buffer()->address();
-    const uint32_t gamma_addr = has_gamma ? gamma->buffer()->address() : 0u;
-    const uint32_t beta_addr = has_beta ? beta->buffer()->address() : 0u;
-    const uint32_t input_mask_addr = input_mask->buffer()->address();
+    const uint32_t input_addr = input_tensor.mesh_buffer().address();
+    const uint32_t output_addr = output_tensor.mesh_buffer().address();
+    const uint32_t gamma_addr = has_gamma ? gamma->mesh_buffer().address() : 0u;
+    const uint32_t beta_addr = has_beta ? beta->mesh_buffer().address() : 0u;
+    const uint32_t input_mask_addr = input_mask->mesh_buffer().address();
     const uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
 
     uint32_t out_ready_sem_bank_addr = 0;
@@ -945,13 +945,14 @@ void DitFusedDistributedGroupnormMeshWorkloadFactory::override_runtime_arguments
     const DitFusedDistributedGroupnormParams& operation_attributes,
     const DitFusedDistributedGroupnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    const uint32_t input_addr = tensor_args.input.buffer()->address();
-    const uint32_t output_addr = tensor_return_value.at(0).buffer()->address();
-    const uint32_t gamma_addr = tensor_args.gamma.has_value() ? tensor_args.gamma->buffer()->address() : 0u;
-    const uint32_t beta_addr = tensor_args.beta.has_value() ? tensor_args.beta->buffer()->address() : 0u;
+    const uint32_t input_addr = tensor_args.input.mesh_buffer().address();
+    const uint32_t output_addr = tensor_return_value.at(0).mesh_buffer().address();
+    const uint32_t gamma_addr = tensor_args.gamma.has_value() ? tensor_args.gamma->mesh_buffer().address() : 0u;
+    const uint32_t beta_addr = tensor_args.beta.has_value() ? tensor_args.beta->mesh_buffer().address() : 0u;
     const uint32_t input_mask_addr =
-        tensor_args.input_mask.has_value() ? tensor_args.input_mask->buffer()->address() : 0u;
-    const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
+        tensor_args.input_mask.has_value() ? tensor_args.input_mask->mesh_buffer().address() : 0u;
+    const uint32_t stats_dram_addr =
+        tensor_return_value.size() > 1 ? tensor_return_value[1].mesh_buffer().address() : 0u;
     const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
                                             ? 0u
                                             : operation_attributes.multi_device_global_semaphore.at(0).address();
