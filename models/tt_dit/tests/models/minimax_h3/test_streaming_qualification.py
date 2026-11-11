@@ -21,14 +21,22 @@ class ServedQualificationTest(unittest.TestCase):
         self.assertEqual(throughput["threshold"], 1)
         self.assertEqual(throughput["numerator"], "unique playable video seconds received by the API caller")
         self.assertEqual(throughput["denominator"], "elapsed wall seconds")
-        self.assertEqual(set(throughput["included_costs"]), {"queue", "generation", "export", "delivery"})
-        self.assertEqual(set(throughput["excluded_media"]), {"overlap", "padding"})
+        self.assertEqual(
+            set(throughput["included_costs"]),
+            {"admission", "upload", "queue", "generation", "export", "delivery", "failures", "retries", "final drain"},
+        )
+        self.assertEqual(
+            set(throughput["excluded_media"]), {"overlap", "padding", "conditioning-only frames", "duplicate attempts"}
+        )
         self.assertTrue(throughput["concurrent_galaxies_count"])
 
     def test_sustained_protocol_and_reporting_survive(self):
-        self.assertEqual(self.contract["minimum_chunks"], 60)
-        self.assertEqual(self.contract["minimum_new_playable_seconds"], 300)
-        self.assertEqual(self.contract["paced_playback_seconds"], 1800)
+        for obsolete in ("minimum_chunks", "minimum_new_playable_seconds", "paced_playback_seconds"):
+            self.assertNotIn(obsolete, self.contract)
+        self.assertEqual(self.contract["offered_load_seconds"], 60)
+        self.assertEqual(self.contract["stop_new_submissions_after_seconds"], 60)
+        self.assertTrue(self.contract["declare_finite_drain_bound_before_run"])
+        self.assertEqual(self.contract["concurrency_policy"], "modest, existing owner-authorized concurrency")
         self.assertEqual(self.contract["production"], "concurrent galaxies permitted in both protocols")
         self.assertEqual(
             set(self.contract["report_separately"]),
@@ -39,6 +47,17 @@ class ServedQualificationTest(unittest.TestCase):
                 "participating galaxies",
                 "unpaced capacity",
                 "deliberately paced playback",
+                "actual tested playback duration",
+                "prompt-sent timestamp",
+                "generation-done timestamp",
+                "prompt-to-generation-done roundtrip",
+                "time to first clip",
+                "per-stage times",
+                "file-ready timestamp",
+                "client-received timestamp",
+                "decoded-playable timestamp",
+                "failures and retries",
+                "final drain duration and timeouts",
             },
         )
         for evidence in (
@@ -47,6 +66,20 @@ class ServedQualificationTest(unittest.TestCase):
             "zero underruns after declared startup buffer",
         ):
             self.assertIn(evidence, self.contract["required_evidence"])
+
+    def test_current_docs_replace_long_duration_gates(self):
+        for path in (
+            DOCS / "served_source_reconciliation_20261110.md",
+            DOCS / "streaming_integration_20261110.md",
+            DOCS.parent / "pipelines/minimax_h3/STREAMING.md",
+        ):
+            text = path.read_text()
+            self.assertIn("60 seconds of offered load", text)
+            self.assertIn("bounded final drain", text)
+            self.assertIn("prompt-sent", text)
+            self.assertIn("generation-done", text)
+            self.assertNotIn("Retain the initial >=60-chunk", text)
+            self.assertNotIn("Then measure at least 60 chunks", text)
 
     def test_all_four_cells_require_power_evidence(self):
         self.assertEqual(self.contract["required_location"], "TYO2")
