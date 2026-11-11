@@ -2952,7 +2952,11 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     gdn_ctrl_t = None
     if env.get("E1_GB") == "1" and os.environ.get("QWEN36_R16_MK_GDN_REAL", "1") == "1" and gdn_desc:
         _nl = int(env.get("FM_NL", len(layer_types)))
-        _gd = [d for d in gdn_desc if d["layer"] < _nl]
+        # the pass's GDN layers = the first n GDN descriptors (gdn_desc is pass-relative: integ / the teacher-forced blocks
+        # pass the descriptors of this pass's layers in order). NOT d['layer'] < FM_NL: model layer indices are absolute, so a
+        # pass starting past layer 0 (TF block [4..7], FM_NL 4) bound no state and the role fell back to SYNTHETIC state.
+        _ngp = sum(1 for t_ in list(layer_types)[:_nl] if t_ != "attention")
+        _gd = list(gdn_desc)[:_ngp]
         _cw = int(_gd[0].get("ctrl_words", 0)) if _gd else 0
         if _gd and _cw:
             import torch as _torch
