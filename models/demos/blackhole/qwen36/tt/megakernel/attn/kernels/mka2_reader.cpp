@@ -245,6 +245,27 @@ void kernel_main() {
             volatile tt_l1_ptr int32_t* ka = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
             constexpr uint32_t NS = MKA_RQB_NS, N = MKA_RQB_N;   // compile-time: divisions by constants
             const uint32_t me = b0;
+#if defined(MKA_RQBAL_HOST)
+            // host-staged assignment (engine/program.py rqbal_table, staged with kvpos each step): this core's 2 words
+            // [u | rank << 8 | m << 16, s0 | e0 << 8 | sN << 16 | eN << 24] at (parity * N + me) * 8 B of the table page.
+            // Any valid table is correct: the block split, masks and bounds still come from the device kvpos.
+            uint32_t u, r, m, s0, e0, sN, eN;
+            {
+#if defined(MKA_UPAR)
+                const uint32_t off = (MKA_UPAR_PAR * N + me) * 8;
+#else
+                const uint32_t off = me * 8;
+#endif
+                // the table: uint32 [1, 4 N] ROW_MAJOR DRAM (one page, both parities), address = replay block word 7
+                const InterleavedAddrGen<true> ht{.bank_base_address = rq_replay(7), .page_size = 4 * N * 4};
+                const uint32_t dst = MKA_KVP_TAB + KVP_PT * 4;   // 64 B aligned scratch (the pt window lands here later)
+                noc_async_read(ht.get_noc_addr(0) + (off & ~63u), dst, 64);
+                noc_async_read_barrier();
+                const uint32_t w0 = l1w(dst + (off & 63))[0], w1 = l1w(dst + (off & 63))[1];
+                u = w0 & 0xFF; r = (w0 >> 8) & 0xFF; m = (w0 >> 16) & 0xFF;
+                s0 = w1 & 0xFF; e0 = (w1 >> 8) & 0xFF; sN = (w1 >> 16) & 0xFF; eN = w1 >> 24;
+            }
+#else
             uint32_t nb[NUSR], mu[NUSR], su[NUSR], W = 0;
             for (uint32_t u = 0; u < NUSR; ++u) {
                 int32_t pm = -1;
@@ -291,11 +312,14 @@ void kernel_main() {
                 s0 += su[u]; e0 += mu[u] - su[u];
             }
             const uint32_t m = mu[u], sN = su[u], eN = m - sN;
+#endif
             uint8_t lay[MKA_RQB_N];   // rank -> table index
             for (uint32_t r = 0, si = 0, ei = 0; r < m; ++r)
                 lay[r] = (((r % FANOUT == 0 || ei == eN) && si < sN) || ei == eN) ? (uint8_t)(s0 + si++) : (uint8_t)(NS + e0 + ei++);
+#if !defined(MKA_RQBAL_HOST)
             uint32_t r = 0;
             while (lay[r] != me) ++r;
+#endif
             volatile tt_l1_ptr uint32_t* ct = l1w(MKA_RQB_TAB);
             user = u;
             b0 = r; b1 = m;   // even split of this user's blocks over its m cores (below)

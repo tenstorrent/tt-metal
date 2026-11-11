@@ -36,6 +36,75 @@ def _wl():
     return WL
 
 
+def rqbal_table(kvpos, n_stream, n_ext, n_own=4, T=4, fan=6, upar=True):
+    """MKA_RQBAL_HOST: the per-step SDPA core assignment (kernel twin: mka2_reader.cpp MKA_RQBAL block), from the verify
+    kvpos (int32 [8 * T], row g * T + j, -1 = HOLD / idle; upper bounds are fine). Returns np.uint32 [4 * N]
+    (N = n_stream + n_ext): parity p (MKA_UPAR: own users g = 2u + p; else parity 1 = a copy of parity 0) at words
+    [2 N p, 2 N (p + 1)); core i (MKA_RQB_TAB order: STREAM pool, then EXT pool) at 2 i: w0 = u | rank << 8 | m << 16,
+    w1 = s0 | e0 << 8 | sN << 16 | eN << 24 (the user's STREAM / EXT pool slices). A pure load-balance hint: any table
+    it returns is correct for ANY actual device kvpos (the kernels split blocks from the device kvpos; a shorter user's
+    extra cores hold empty partials). Depends only on the per-user block counts -> cached (rqbal_table_cached)."""
+    import numpy as np
+    kp = [int(x) for x in (kvpos.tolist() if hasattr(kvpos, 'tolist') else kvpos)]
+    nbs = tuple(max(max(kp[g * T:(g + 1) * T]), 0) // 32 + 1 for g in range(len(kp) // T))
+    return np.frombuffer(_rqbal_words(nbs, n_stream, n_ext, n_own, fan, upar), dtype=np.uint32)
+
+
+def _rqbal_parity(nb, NS, NE, fan):
+    """One parity's 2 N words for own-user block counts nb (pure Python: faster than numpy at N ~ 100)."""
+    N, NU = NS + NE, len(nb)
+    W = sum(nb)
+    mu = [max(1, min(nb[u], N * nb[u] // W)) for u in range(NU)]
+    tot = sum(mu)
+    while tot > N:
+        k = 0
+        for u in range(1, NU):
+            if mu[u] > mu[k]: k = u
+        mu[k] -= 1; tot -= 1
+    cap = True
+    while tot < N:
+        k = NU
+        for u in range(NU):
+            if (not cap or mu[u] < nb[u]) and (k == NU or nb[u] * mu[k] > nb[k] * mu[u]): k = u
+        if k == NU: cap = False; continue
+        mu[k] += 1; tot += 1
+    su = [min(mu[u], max(1, NS * mu[u] // N)) for u in range(NU)]
+    tot = sum(su)
+    while tot > NS:
+        k = 0
+        for u in range(1, NU):
+            if su[u] > su[k]: k = u
+        su[k] -= 1; tot -= 1
+    while tot < NS:
+        k = NU
+        for u in range(NU):
+            if su[u] < mu[u] and (k == NU or mu[u] - su[u] > mu[k] - su[k]): k = u
+        su[k] += 1; tot += 1
+    w = [0] * (2 * N)
+    s0 = e0 = 0
+    for u in range(NU):
+        m, sN = mu[u], su[u]; eN = m - sN; si = ei = 0
+        w0b, w1 = u | (m << 16), s0 | (e0 << 8) | (sN << 16) | (eN << 24)
+        for r in range(m):
+            if ((r % fan == 0 or ei == eN) and si < sN) or ei == eN: idx = s0 + si; si += 1
+            else: idx = NS + e0 + ei; ei += 1
+            w[2 * idx] = w0b | (r << 8); w[2 * idx + 1] = w1
+        s0 += sN; e0 += eN
+    return w
+
+
+import functools as _functools
+
+
+@_functools.lru_cache(maxsize=256)
+def _rqbal_words(nbs, NS, NE, n_own, fan, upar):
+    """Cached on the 8 users' block counts (they change only when a user crosses a 32-position block)."""
+    import array
+    par = [_rqbal_parity([nbs[2 * u + p] if upar else nbs[u] for u in range(n_own)], NS, NE, fan) for p in ((0, 1) if upar else (0,))]
+    if not upar: par.append(par[0])
+    return array.array('I', par[0] + par[1]).tobytes()
+
+
 def setup_bench(dev, MESH, mesh_identity):
     try:   # engine/ is on sys.path in the bench (the pushed tree's own module first)
         import cbplan as CBP
@@ -1113,7 +1182,14 @@ def setup_bench(dev, MESH, mesh_identity):
             if os.environ.get('MKA_REPLAY_L1'):   # engine (G): the model's blocks / qkg table
                 RQ_REPLAY, RQ_ATTN = int(os.environ['MKA_REPLAY_L1']), int(os.environ['MKA_ATTN_L1'])
             else:
-                _rb = _l1_tab([_blk(5, [rq_kvpos.buffer_address(), 0, rq_cos.buffer_address(), rq_sin.buffer_address(), 0, rq_pt.buffer_address(), 0])] * _ncore, kgrid)
+                _rqh = 0
+                if ('MKA_RQBAL_HOST', '1') in MKDEF:   # host-staged RQBAL table (rqbal_table), replay word 7
+                    _sh = int(os.environ.get('MKA_RQBAL_HINT_SHIFT', '0'))   # test: table from upper-bound positions (chain)
+                    _ht = rqbal_table([p_ + _sh if p_ >= 0 else p_ for p_ in kvpos_l], len(RQ_S), len(RQ_E), NU, T, FAN, UPAR)
+                    rq_ht = _dram(torch.tensor(_ht.astype('int64'), dtype=torch.int64).to(torch.int32).reshape(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+                    RQ_TENS.append(rq_ht); _rqh = rq_ht.buffer_address()
+                    print(f"[rqpos] RQBAL host table: {len(_ht)} words", flush=True)
+                _rb = _l1_tab([_blk(5, [rq_kvpos.buffer_address(), 0, rq_cos.buffer_address(), rq_sin.buffer_address(), 0, rq_pt.buffer_address(), 0, _rqh])] * _ncore, kgrid)
                 _ab = _l1_tab([_blk(4, [rq_pt.buffer_address(), 8, RQ_NB, ATT0 + NATT_] + [0, 0] * ATT0 +
                                     sum(([kvs[L_].buffer_address(), kvvs[L_].buffer_address()] for L_ in _att_l), []) + [KVBS, NKVH])] * _ncore, kgrid)
                 RQ_REPLAY, RQ_ATTN = _rb.buffer_address(), _ab.buffer_address()
