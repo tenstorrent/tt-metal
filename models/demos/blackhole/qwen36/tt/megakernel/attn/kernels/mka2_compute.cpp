@@ -103,8 +103,38 @@ ALWI void v_mm(uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t id
     UNPACK((llk_unpack_AB_matmul(in0, in1, i0, i1, ct, rt, kt)));
     MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(idst, ct, rt)));
 }
+#if defined(MK_RSTD_HIFI4)
+// MK_RSTD_HIFI4 (normdiag bisect): the per-row rstd broadcast (Rcol @ J, rstd = in0 -> srcB) at HiFi4, i.e. without the srcB
+// mantissa truncation of the kernel-wide HiFi2 fidelity (suspected ~-1% scale bias on every rstd-scaled output)
+ALWI void v_rs_bcast(uint32_t idst) {
+    state_configure(30u, 44u, __builtin_LINE());
+    UNPACK((llk_unpack_AB_matmul_init(44u, 30u, 0, 1, 1, 1)));
+    MATH((llk_math_matmul_init<MathFidelity::HiFi4, MM_THROTTLE>(44u, 30u, 0, 1, 1)));
+    MATH((throttled_mop_status = 0));
+    UNPACK((llk_unpack_AB_matmul(44u, 30u, 0, 0, 1, 1, 1)));
+    MATH((llk_math_matmul<MathFidelity::HiFi4, MM_THROTTLE>(idst, 1, 1)));
+}
+#endif
+#if defined(MK_GC_HIFI4)
+// MK_GC_HIFI4 (normdiag): the consumers' γ multiply x (.) γ (bcast rows) at HiFi4 instead of the kernel-wide HiFi2 (operand truncation bias)
+ALWI void gc_mul_init(uint32_t a, uint32_t b) {
+    state_configure(a, b, __builtin_LINE());
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MathFidelity::HiFi4>(a, b)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(a, b)));
+}
+ALWI void gc_mul(uint32_t a, uint32_t b, uint32_t i0, uint32_t i1, uint32_t d) {
+    MATH((llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, DST_ACCUM_MODE, MathFidelity::HiFi4,
+                                  EltwiseBinaryReuseDestType::NONE>(a, b, d, true)));
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(a, b, i0, i1, 0)));
+}
+#endif
 }  // namespace ckernel
 #define V_MM_INIT(a, b, ct, rt, kt) v_mm_init(a, b, ct, rt, kt)
+#if defined(MK_RSTD_HIFI4)
+#define MK_RS_BCAST(d) v_rs_bcast(d)
+#else
+#define MK_RS_BCAST(d) do { matmul_block_init(CB_VRT, CB_VJ, 0, 1, 1, 1); matmul_block(CB_VRT, CB_VJ, 0, 0, d, 0, 1, 1, 1); } while (0)
+#endif
 #define V_MM(a, b, i0, i1, d, ct, rt, kt) v_mm(a, b, i0, i1, d, ct, rt, kt)
 #else
 #define V_MM_INIT(a, b, ct, rt, kt) matmul_block_init(a, b, 0, ct, rt, kt)
@@ -488,11 +518,19 @@ void kernel_main() {
         cb_reserve_back(MK_GC_XKA, V_KTR);
         reconfig_data_format(CB_XK, MK_GC_CB);
         pack_reconfig_data_format(MK_GC_XKA);
+#if defined(MK_GC_HIFI4)
+        gc_mul_init(CB_XK, MK_GC_CB);
+#else
         mul_bcast_rows_init(CB_XK, MK_GC_CB);
+#endif
         for (uint32_t t0 = 0; t0 < V_KTR; t0 += 4) {
             tile_regs_acquire();
             MK_NOUNROLL
+#if defined(MK_GC_HIFI4)
+            for (uint32_t i = 0; i < 4; ++i) gc_mul(CB_XK, MK_GC_CB, t0 + i, t0 + i, i);
+#else
             for (uint32_t i = 0; i < 4; ++i) mul_tiles_bcast_rows(CB_XK, MK_GC_CB, t0 + i, t0 + i, i);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             MK_NOUNROLL
@@ -728,8 +766,7 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t m = 0; m < nown; ++m) v_rs_sum(CB_VOWN, m, CB_VRS, vk, m, 1, m);
         reconfig_data_format(CB_VJ, CB_VRT);
-        matmul_block_init(CB_VRT, CB_VJ, 0, 1, 1, 1);
-        matmul_block(CB_VRT, CB_VJ, 0, 0, 2, 0, 1, 1, 1);
+        MK_RS_BCAST(2);
         mul_binary_tile_init();
         for (uint32_t m = 0; m < nown; ++m) mul_binary_tile(m, 2, m);
         for (uint32_t m = 0; m < nown; ++m) {   // gate tiles: sig = 1 / (1 + exp(-x))
@@ -1192,8 +1229,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 v_rs_sum(CB_VOWN, 0, CB_VRS, vk, 0, 2, 0);   // (gate k, up k) -> DST 0, 1
                 reconfig_data_format(CB_VJ, CB_VRT);
-                matmul_block_init(CB_VRT, CB_VJ, 0, 1, 1, 1);
-                matmul_block(CB_VRT, CB_VJ, 0, 0, 2, 0, 1, 1, 1);
+                MK_RS_BCAST(2);
                 mul_binary_tile_init();
                 mul_binary_tile(0, 2, 0);
                 mul_binary_tile(1, 2, 1);
