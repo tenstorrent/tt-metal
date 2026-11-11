@@ -497,7 +497,11 @@ def setup_bench(dev, MESH, mesh_identity):
         def vlayer(L): return vwg, vwu * (2.0 ** (L % 2)), vwd * (2.0 ** -(L % 3)) * _vds   # distinct per layer, exact in BFP4
         s_xy = [(i % GX, i // GX) for i in range(NC)]
         NOCBAL = any(k_ == 'MK_V12_NOCBAL' for k_, _ in MKDEF)   # MK80 NoC-balanced slice stream (v12e.hpp)
-        if NOCBAL and os.environ.get('MK_V12_NOCBAL_BANKS', '1') == '1':
+        # MK80 NOCBAL is GDN24-only until the GDN24-off attention regression (+66-75 us per attention layer) is understood
+        assert not NOCBAL or GDN24, "MK_V12_NOCBAL requires MKA_GDN24=1"
+        # byte-balanced bank placement: opt-in (MK_V12_NOCBAL_BANKS=1); it changes the weight page layout (vLLM repack:
+        # layout_mlp.build_device_pages(..., nocbal=True) must then match)
+        if NOCBAL and os.environ.get('MK_V12_NOCBAL_BANKS', '0') == '1':
             v_bank, v_rank, v_nsb = LM.assign_banks_balanced(s_xy, BANK_LOC)
         else:
             v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)

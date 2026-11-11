@@ -268,7 +268,8 @@ void kernel_main() {
     auto v_gate = [&]() {};
 #endif
 #if V_NB_ON
-    VNb vnb = {0, 0, 0, 3 * V_KTR * vnn * WTB, 0, 0, vg[VG_VS], vg[VG_VSL], vg[VG_VSH], vg[VG_VD]};
+    const uint32_t nb_tot = 3 * V_KTR * vnn * WTB, nb_n0 = v_nb_n0(nb_tot);
+    VNb vnb = {0, 0, 0, get_write_ptr(CB_WV) + nb_n0, nb_tot - nb_n0, vg, 0};
 #define V_NB_WAIT_VA() v_nb_wait(vnb, CB_VA, V_NTM)
 #else
 #define V_NB_WAIT_VA() do {} while (0)

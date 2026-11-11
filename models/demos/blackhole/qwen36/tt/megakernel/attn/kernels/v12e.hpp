@@ -124,26 +124,24 @@ FORCE_INLINE void v_busy(uint32_t busy_word, uint32_t val, bool mirror, const ui
 #if V_NB_ON
 // the STREAM reader's NOC1 part: wait for CB_VA (the compute's partial) while streaming its share of the current slice,
 // 1 request in flight (TRID_NB), VD = seq once landed. One out-of-line copy for both call sites (text budget).
-struct VNb { uint32_t seq, rem, dst, tot; uint64_t src; uint32_t pend, vs, vsl, vsh, vd; };
+struct VNb { uint32_t seq, rem, dst, dst0, len; const uint32_t* vg; uint64_t src; };
 constexpr uint32_t TRID_NB = 11;
 __attribute__((noinline)) void v_nb_wait(VNb& b, uint32_t cb, uint32_t n) {
     while (!cb_pages_available_at_front(cb, n)) {
         if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, TRID_NB)) continue;
-        if (!b.rem) {
-            if (b.pend) { *vw(b.vd) = b.seq; b.pend = 0; }
+        if (!b.rem) {   // previous part landed (or none yet): publish, then look for the next slice (VS += 1 per slice)
+            *vw(b.vg[VG_VD]) = b.seq;
             invalidate_l1_cache();
-            if (*vw(b.vs) <= b.seq) continue;
+            if (*vw(b.vg[VG_VS]) == b.seq) continue;
             ++b.seq;
-            const uint32_t n0 = v_nb_n0(b.tot);
-            b.src = ((uint64_t)*vw(b.vsh) << 32) | *vw(b.vsl);
-            b.dst = get_write_ptr(CB_WV) + n0; b.rem = b.tot - n0;
+            b.src = ((uint64_t)*vw(b.vg[VG_VSH]) << 32) | *vw(b.vg[VG_VSL]);
+            b.dst = b.dst0; b.rem = b.len;
         }
         const uint32_t sz = b.rem < V_NB_PB ? b.rem : V_NB_PB;
         noc_async_read_set_trid(TRID_NB);
         noc_async_read<V_NB_PB>(b.src, b.dst, sz);
         noc_async_read_set_trid(0);
         b.src += sz; b.dst += sz; b.rem -= sz;
-        if (!b.rem) b.pend = 1;
     }
 }
 #endif

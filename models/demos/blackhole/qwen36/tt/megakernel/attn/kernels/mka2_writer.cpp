@@ -505,14 +505,25 @@ void kernel_main() {
         s_ = {src, get_write_ptr(cb), bytes, trid};
     };
 #if V_NB_ON
-    uint32_t vseq = 0;   // MLP slices started (mailbox seq)
-    // one request in flight per RISC: a slot whose previous piece is still in flight holds the pump (returns true)
+    uint32_t vseq = 0;    // split MLP slices started (mailbox seq)
+    bool vsplit = false;  // slot V currently holds a NOC0/NOC1-split slice: 1 request in flight, one-packet pieces
+    // a split slice whose previous piece is still in flight holds the pump (returns true); every other slot (slot M,
+    // NOC0-only attention slices) keeps today's issue-when-the-cmd-buffer-is-free behaviour
     auto pump1 = [&](VSlot& s_) {
         if (!s_.rem) return false;
-        if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, s_.trid)) return true;
-        const uint32_t sz = s_.rem < V_NB_PB ? s_.rem : V_NB_PB;
+        if (vsplit && &s_ == &sv) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, s_.trid)) return true;
+            const uint32_t sz = s_.rem < V_NB_PB ? s_.rem : V_NB_PB;
+            noc_async_read_set_trid(s_.trid);
+            noc_async_read<V_NB_PB>(s_.src, s_.dst, sz);   // one packet (<= NOC_MAX_BURST_SIZE): no burst loop
+            noc_async_read_set_trid(0);
+            s_.src += sz; s_.dst += sz; s_.rem -= sz;
+            return true;
+        }
+        if (!noc_cmd_buf_ready(noc_index, read_cmd_buf)) return false;
+        const uint32_t sz = s_.rem < 16384 ? s_.rem : 16384;
         noc_async_read_set_trid(s_.trid);
-        noc_async_read<V_NB_PB>(s_.src, s_.dst, sz);   // one packet (<= NOC_MAX_BURST_SIZE): no burst loop
+        noc_async_read(s_.src, s_.dst, sz);
 #else
     auto pump1 = [&](VSlot& s_) {
         if (!s_.rem || !noc_cmd_buf_ready(noc_index, read_cmd_buf)) return false;
@@ -558,6 +569,7 @@ void kernel_main() {
             // attention-type layers' slices (prefetched at the previous MLP tail, across the SDPA window where the reader
             // streams K) stay NOC0-only unless MK_V12_NOCBAL_ATT
             const bool nb = MK_V12_NOCBAL_ATT || !is_attn(L);
+            vsplit = nb;
             const uint32_t n0 = nb ? v_nb_n0(vnt * WTB) : vnt * WTB;
             v_slot_start(sv, CB_WV, V_SLOT, wv.get_noc_addr(vwv_page + L * vpvl), n0, V_TRID0 + (L & 1));
             if (nb) {
