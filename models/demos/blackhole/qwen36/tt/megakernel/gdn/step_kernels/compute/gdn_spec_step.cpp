@@ -87,6 +87,9 @@
 #ifndef GDN_EARLY_REPLAY
 #define GDN_EARLY_REPLAY 0  // engine GDN role (BATCH + PREFIXED_GATES): replay before the prefix inputs
 #endif
+#if defined(GDN_PRE_IN_HOOK)
+void gdn_pre_in_hook();  // defined by the including TU (engine MK_RRED_LATE)
+#endif
 #ifndef GDN_ST_RING
 #define GDN_ST_RING 0  // BATCH: the state / stash DFBs are a ring of GDN_ST_RING users (popped per user)
 #endif
@@ -1946,6 +1949,12 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         up_in.pop_front(Vs);
 #endif  // GDN_BATCH
     }
+#if defined(GDN_PRE_IN_HOOK)
+    // engine (MK_RRED_LATE): this core's per-layer pre-in_ready work (the Σ reducer's mixer delivery) AFTER the replay, so the
+    // replay keeps its early slot; then this kernel's startup again (the reducer reprograms unpack / math / pack)
+    gdn_pre_in_hook();
+    compute_kernel_hw_startup(dfb::src_in, dfb::state_in, dfb::out);
+#endif
 #endif
 #if GDN_LAZY
     // B' (K4): k and q l2norms row-batched (q: inverse_l2 with the mask_T rows, the per-row ops of the per-token path),
