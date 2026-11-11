@@ -2668,6 +2668,7 @@ ENGINE_ENV = dict(
     E1_LZVC="3",  # 7o (mesh md5 identical, -10 us / launch)
     E1_WPRE="1", E1_WYPAIR="1", E1_WYORD="1", E1_CUTST="1", E1_KTLATE="1", E1_KTSLATE="1", E1_OSIG_VC="3", E1_ATTHOLD="3",  # 7r GSTEP F set (rc1)
     E1_STNARROW="1", E1_KTDD="1",  # 7u REPLAY (rc1b): GDN_STNARROW / GDN_KTDD on the GDN role (B=8, VB>1)
+    E1_GTEXT2="1", E1_GBC_WBAR="1", E1_GBC_GEARLY="1", E1_GO_SCVC="2", E1_GO_KSTREAM="1", E1_GO_SCPASS="1",  # rc1c: 7w GTEXT2 (code default on under E1_GB) + GBC + GOTAIL
     E1_GB="1", E1_C_OS="p",  # G-b: GDN prefix in the role on the model's real state (b.gdn_desc / b.gdn_ctrl from integ)
     MK_RRED_LATE="1", MK_CGAR_EARLY="1",  # 7e (#14, -0.42 ms / verify; needs MK_REAL_GAR + GDN_SP_RD)  # batch 7c (needs MK_AR_RSTD_RED=gdn + E1_EARLY_REPLAY=1, the code default)
     MKA_GDN_CHECK="0", E1_GO_DBG="0",  # in-model: no GDN-role stock-op reference / gdn_out debug DRAM copy (asserted off)  # batch 5f: the GDN role skips state I/O + replay for idle / HOLD rows (padded OR shapes)

@@ -20,6 +20,8 @@ E1_TO_GDN = {
     "E1_LZVC": "GDN_LZVC", "E1_WPRE": "GSTEP_WPRE", "E1_ATTHOLD": "GSTEP_ATTHOLD", "E1_WYPAIR": "GSTEP_WYPAIR",
     "E1_WYORD": "GSTEP_WYORD", "E1_CUTST": "GSTEP_CUTST", "E1_KTLATE": "GSTEP_KTLATE", "E1_KTSLATE": "GSTEP_KTSLATE",
     "E1_STNARROW": "GDN_STNARROW", "E1_KTDD": "GDN_KTDD",   # rc1b (7u REPLAY): RC B=8 / VB>1 satisfy their gates
+    "E1_GTEXT2": "GDN_GTEXT2", "E1_GBC_WBAR": "GB_WBAR", "E1_GBC_GEARLY": "GB_GEARLY",   # rc1c (7w GTEXT2 / GBC)
+    # (E1_GO_SCVC / E1_GO_KSTREAM / E1_GO_SCPASS change generated GDN-role source text, no define: host-only here)
 }
 # recipe flags that are code defaults (the recipe names them with "default"): an unset host env is the RC value
 CODE_DEFAULT = {"E1_EARLY_REPLAY"}
