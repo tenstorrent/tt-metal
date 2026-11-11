@@ -10,8 +10,10 @@
 //   top-k  : a running sorted buffer of KT tiles (cb_acc, in the transposed domain: row j of tile p holds position
 //            32 p + j of every Q block's descending candidate scores, column r = Q block r), seeded with SENTINEL.
 //            Each column tile enters as S[c]^T plus the transposed candidate bias (0 / EXCLUDED) and is inserted
-//            level by level with the 64-wide SFPU bitonic sort (topk_local_sort, as ttnn.topk's insertion cascade);
-//            the loser of level p moves to level p + 1, the loser of the last level is dropped.
+//            level by level with the SFPU bitonic network: level 0 sorts both tiles into 32-runs, then every level
+//            merges its descending buffer tile with the ascending loser from the level above and rebuilds both
+//            runs (topk_merge + topk_rebuild); the loser of level p moves to level p + 1, the loser of the last
+//            level is dropped.
 //   k-th   : the sorted tiles go to the writer (cb_fin), which copies position k - 1 of every Q block into a
 //            row-broadcast threshold tile (cb_thr_raw); compute adds the per-row bias (0 for a scored Q block,
 //            -DENSE for a dense Q block, +DENSE for a pad Q block).
@@ -58,6 +60,7 @@ constexpr uint32_t cb_q = 0, cb_k = 1, cb_const = 2, cb_cand_t = 7, cb_colbias =
 constexpr uint32_t EYE = 0, SENT = 1, ONES = 2, ROW_SEL = 3, N_CONST = ROW_SEL + 32;
 constexpr uint32_t QUAD = 4;
 constexpr int SORT_END_PHASE = 5;
+constexpr int RUN = 32, LOG_RUN = 5;
 
 ALWI void mm_begin(uint32_t in0, uint32_t in1, uint32_t transpose) {
     reconfig_data_format<SrcOrder::Reverse>(in0, in1);
@@ -73,6 +76,26 @@ ALWI void copy_begin(uint32_t cb) {
 ALWI void sort_pair() {
     ckernel::topk_tile_init();
     ckernel::topk_local_sort(0, 0, SORT_END_PHASE);
+}
+
+// DST 0 holds a descending and DST 1 an ascending 32-run per column. Afterwards DST 0 holds the larger 32 descending,
+// DST 1 the smaller 32 ascending, so DST 1 is a valid partner for the next level's descending buffer tile.
+ALWI void merge_runs() {
+    ckernel::topk_merge(0, 0, RUN);
+    ckernel::topk_rebuild(0, false, 0, RUN, LOG_RUN, 0);
+}
+
+// Level 0: the incoming tile is unsorted, so both tiles are first sorted into 32-runs (DST 0 descending, DST 1
+// ascending).
+ALWI void insert_unsorted() {
+    ckernel::topk_tile_init();
+    ckernel::topk_local_sort(0, 0, LOG_RUN - 1);
+    merge_runs();
+}
+
+ALWI void insert_sorted() {
+    ckernel::topk_tile_init();
+    merge_runs();
 }
 
 ALWI void pack_one(uint32_t dst, uint32_t cb) {
@@ -165,7 +188,7 @@ void kernel_main() {
             copy_begin(cb_acc);
             copy_tile(cb_acc, 0, 0);
             cacc.pop_front(1);
-            sort_pair();
+            insert_unsorted();
             tile_regs_commit();
             tile_regs_wait();
             pack_one(0, cb_acc);
@@ -183,7 +206,7 @@ void kernel_main() {
                 copy_begin(cb_loser);
                 copy_tile(cb_loser, 0, 1);
                 closer.pop_front(1);
-                sort_pair();
+                insert_sorted();
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_one(0, cb_acc);
