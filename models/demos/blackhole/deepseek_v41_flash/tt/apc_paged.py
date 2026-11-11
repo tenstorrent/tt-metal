@@ -833,7 +833,9 @@ class BlockIndex:
 
     # ---- chunk commit ---------------------------------------------------------------------------------------------------------------------------------
     @_locked
-    def begin_chunk(self, req_id, start, end, key_tokens, prompt_len, salt=b"", spans=None, copy=None):
+    def begin_chunk(
+        self, req_id, start, end, key_tokens, prompt_len, salt=b"", spans=None, copy=None, force_halo=False
+    ):
         """``copy`` (cross-row copy of a donor block, see ``_plan_xrow``): (want halo A, want halo B, b_zone of the donor's halo B); the halo policy is replaced by it, an existing block is left alone"""
         req = self._reqs.get(req_id)
         if req is None or req.state != "bound":
@@ -861,7 +863,9 @@ class BlockIndex:
             if self.halo_spacing > 0 and int(prompt_len) >= self.halo_spacing_min:
                 nb = int(prompt_len) // c
                 thin = min(thin, max(self.halo_thin, -(-self.halo_spacing // c), -(-nb // self.halo_spacing_max)))
-        want_halo = tip or (i % thin == 0)
+        want_halo = (
+            tip or (i % thin == 0) or bool(force_halo)
+        )  # (force_halo: a snapshot of a prompt whose carried state is about to be evicted)
         if copy is not None:
             want_halo = bool(copy[0])
         blk = row.blocks.get(key)

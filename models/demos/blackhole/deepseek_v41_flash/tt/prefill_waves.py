@@ -42,6 +42,21 @@ def resume_record_on():
     return os.environ.get("DSV41_RESUME_FROM_RECORD", "0") == "1"
 
 
+def snapshot_on_evict_on():
+    """DSV41_SNAPSHOT_ON_EVICT=1 (default off; live file DSV41_SNAPSHOT_ON_EVICT_FILE 0 / 1): when a prefill slot is taken from a prompt in progress, its carried halo state is saved as a record of the
+    paged index at the carried position first (device-local copy, ~0.6 MiB per bank), so that DSV41_RESUME_FROM_RECORD resumes exactly there.
+    """
+    import os
+
+    f = os.environ.get("DSV41_SNAPSHOT_ON_EVICT_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_SNAPSHOT_ON_EVICT", "0") == "1"
+
+
 def needs_slot(item, pending_hits):
     """True for a user that will be allocated a slot in the wave it runs in: a new prompt (start 0) or a prefix hit whose restore has not been done (it owns no slot yet)."""
     return item[2] == 0 or item[0] in pending_hits

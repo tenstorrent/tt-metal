@@ -49,6 +49,9 @@ def set_env():
             "DSV41_VLLM_INTERLEAVE": "1",
             "DSV41_VLLM_CHUNK": str(CHUNK),
             "DSV41_PIECE_LAG": "1",
+            "DSV41_APC_PAGED_HALO_BUDGET": os.environ.get(
+                "DSV41_PP_BUDGET", "3"
+            ),  # (6 blocks per prompt -> a halo record every 2nd block: block 5 (2560) has none)
             "DSV41_PREFILL_ROW_AWARE": os.environ.get("DSV41_PP_ROW_AWARE", "1"),
         }
     )
@@ -89,6 +92,9 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
     sw_r.write_text("0")
     os.environ["DSV41_PROTECT_PARTIAL_FILE"] = str(sw_p)
     os.environ["DSV41_RESUME_FROM_RECORD_FILE"] = str(sw_r)
+    sw_s = tmp_path / "snap"
+    sw_s.write_text("0")
+    os.environ["DSV41_SNAPSHOT_ON_EVICT_FILE"] = str(sw_s)
     from models.demos.blackhole.deepseek_v41_flash.tt import apc_paged_model as APM
     from models.demos.blackhole.deepseek_v41_flash.tt.common import create_tt_model, default_page_params
     from models.demos.blackhole.deepseek_v41_flash.tt.generator import Generator
@@ -161,9 +167,10 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
         ad.pf_done.clear()
         events.clear()
 
-    def set_flags(protect, resume):
+    def set_flags(protect, resume, snap=False):
         sw_p.write_text("1" if protect else "0")
         sw_r.write_text("1" if resume else "0")
+        sw_s.write_text("1" if snap else "0")
 
     results = {}
     X, Y = rnd(LEN), rnd(LEN)
@@ -231,6 +238,43 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
         results[f"B_{resume}"] = r
         log(json.dumps(r))
         pa.idx.check()
+    # ---- case C: slot eviction of a prompt in progress at a block without a record, with / without the snapshot -----------------------------------------------------------------
+    PIECE = 5 * CHUNK  # 2560: block 5 carries no record (every 2nd block)
+    Q = rnd(LEN)
+    S_pad = m.single_spad(CHUNK)
+    for snap in (False, True):
+        set_flags(False, True, snap)
+        clean()
+        call(Y, 0, PIECE, "Y", 0, False, LEN)  # (user 0 / slot 0 of row 0)
+        m.flush_key_exports(why="test")
+        u_y = ad.slots.phys[0]
+        m.prefill_interleaved(  # a second prompt in progress in the same row: both prefill slots are taken
+            [(1 if u_y != 1 else 2, Q, 0, PIECE)],
+            CHUNK,
+            s_pad_max=S_pad,
+            totals={(1 if u_y != 1 else 2): LEN},
+            final={(1 if u_y != 1 else 2): False},
+            rids={(1 if u_y != 1 else 2): "Q"},
+        )
+        assert m.pf_resume.get(u_y) == PIECE, m.pf_resume
+        # a third prompt of the row takes a slot: the owner of the lowest slot (Y) is evicted (the snapshot runs first when enabled)
+        m._slot_alloc([(3, None, 0, CHUNK)], m.pf_resume)
+        assert u_y not in m.pf_resume, "the eviction did not take Y's slot"
+        events.clear()
+        out, dt = call(Y, PIECE, LEN, "Y", 0, True, LEN)
+        lg = out[0, 0].float()
+        r = dict(
+            case="C",
+            snapshot=snap,
+            events=list(events),
+            vs_cold=cmp(lg, refs[("Y", 0)]),
+            second_piece_s=round(dt, 2),
+            snapshots=pa.stats.get("snapshots", 0),
+        )
+        r["ok"] = bool(r["vs_cold"]["max"] <= 3 * noise("Y") and r["vs_cold"]["argmax_equal"])
+        results[f"C_{snap}"] = r
+        log(json.dumps(r))
+        pa.idx.check()
     set_flags(False, False)
     clean()
     pa.idx.check()
@@ -252,4 +296,17 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
     assert any("resume from record" in e for e in results["B_True"]["events"]), results["B_True"]
     assert not any("without carried state" in e for e in results["B_True"]["events"]), results["B_True"]
     assert results["B_True"]["ok"], results["B_True"]
+
+    def resumed_at(res):
+        import re
+
+        for e in res["events"]:
+            x = re.search(r"resumes at (\d+)", e)
+            if x:
+                return int(x.group(1))
+        return None
+
+    assert resumed_at(results["C_False"]) == 4 * CHUNK, results["C_False"]  # no record at 2560: the deepest earlier one
+    assert resumed_at(results["C_True"]) == PIECE, results["C_True"]  # the snapshot made one
+    assert results["C_True"]["snapshots"] >= 1 and results["C_True"]["ok"] and results["C_False"]["ok"], results
     log(f"ALL OK; stats {ad.protect_stats}")
