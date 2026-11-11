@@ -1,0 +1,29 @@
+# LoRA fine-tuning of Llama 3.2 1B Instruct on SST-2, on a single chip.
+#
+#   python -m ttml.unified_trainer \
+#     --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_sst2_lora.yaml
+#
+# Checkpoints are PEFT adapter directories under <project_dir>/checkpoints/.
+dataset_id: sst2
+model_name: meta-llama/Llama-3.2-1B-Instruct
+max_length: 64
+learning_rate: 1.0e-4
+batch_size: 8
+num_epochs: 1
+max_steps: 500
+val_steps_freq: 50
+seed: 0
+
+lora:
+  r: 4
+  alpha: 8
+  # ttml fuses q, k and v into one layer, and gate and up into another: target all of a group or none.
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+metrics:
+  steps_freq: 10
+
+checkpoint:
+  save_strategy: step
+  steps_freq: 100
+  project_dir: runs/llama_3_2_1b_sst2_lora

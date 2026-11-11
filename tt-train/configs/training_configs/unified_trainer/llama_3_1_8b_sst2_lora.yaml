@@ -1,0 +1,30 @@
+# LoRA fine-tuning of Llama 3.1 8B Instruct on SST-2, on a single chip: the run tt-inference-server's
+# ttml-training-lora runner makes, as a recipe.
+#
+#   python -m ttml.unified_trainer \
+#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_sst2_lora.yaml
+dataset_id: sst2
+model_name: meta-llama/Llama-3.1-8B-Instruct
+max_length: 64
+learning_rate: 1.0e-4
+batch_size: 8
+num_epochs: 1
+weight_decay: 0.01
+max_steps: 500
+val_steps_freq: 50
+gradient_checkpointing: true
+seed: 0
+
+lora:
+  r: 4
+  alpha: 8
+  # ttml fuses q, k and v into one layer, and gate and up into another: target all of a group or none.
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+metrics:
+  steps_freq: 10
+
+checkpoint:
+  save_strategy: step
+  steps_freq: 100
+  project_dir: runs/llama_3_1_8b_sst2_lora

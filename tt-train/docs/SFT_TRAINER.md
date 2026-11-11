@@ -4,6 +4,9 @@ Supervised Fine-Tuning (SFT) trainer for adapting language models on Tenstorrent
 The API is inspired by [TRL's SFTTrainer](https://huggingface.co/docs/trl/en/sft_trainer) so that
 users who know TRL face minimal friction.
 
+To fine-tune a HuggingFace model from one config, from the command line or inside a service, see
+[UNIFIED_TRAINER.md](UNIFIED_TRAINER.md).
+
 ---
 
 ## Quick Start

@@ -376,7 +376,7 @@ from _ttml.models.llama import (
     create_cpp_llama_model,
 )
 
-from .safetensors_loader import load_from_safetensors
+from .safetensors_loader import HfTensor, export_hf_model, hf_layout, load_from_safetensors
 from .flops import calculate_flops_per_token
 
 __all__ = [
@@ -385,9 +385,12 @@ __all__ = [
     "CppLlamaConfig",
     "create_cpp_llama_model",
     # Python implementations
+    "HfTensor",
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
     "calculate_flops_per_token",
+    "export_hf_model",
+    "hf_layout",
     "load_from_safetensors",
 ]

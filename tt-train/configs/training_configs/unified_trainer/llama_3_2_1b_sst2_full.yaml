@@ -1,0 +1,27 @@
+# Full fine-tuning (every weight) of Llama 3.2 1B Instruct on SST-2, on a single chip.
+#
+#   python -m ttml.unified_trainer \
+#     --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_sst2_full.yaml
+#
+# Checkpoints are HF model directories (AutoModelForCausalLM.from_pretrained loads them) under
+# <project_dir>/checkpoints/; each holds all weights, so only the last one is kept.
+dataset_id: sst2
+model_name: meta-llama/Llama-3.2-1B-Instruct
+max_length: 64
+learning_rate: 1.0e-5
+batch_size: 8
+num_epochs: 1
+max_steps: 500
+val_steps_freq: 50
+max_grad_norm: 1.0
+# fp32 master weights: AdamW updates at this learning rate are below bf16's resolution.
+master_dtype: float32
+seed: 0
+
+metrics:
+  steps_freq: 10
+
+checkpoint:
+  save_strategy: epoch
+  keep_last_n: 1
+  project_dir: runs/llama_3_2_1b_sst2_full

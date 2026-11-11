@@ -1,0 +1,37 @@
+# LoRA fine-tuning of Llama 3.1 8B Instruct on your own instruction data, on a single chip.
+#
+#   python -m ttml.unified_trainer \
+#     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_custom_lora.yaml \
+#       --set custom_dataset.train_dataset_path=/data/train.jsonl --set custom_dataset.val_dataset_path=/data/val.jsonl
+#
+# Each line of the files is one example with "instruction", "output" and optionally "input" fields;
+# custom_dataset.column_mapping maps them to other column names.
+dataset_id: custom
+model_name: meta-llama/Llama-3.1-8B-Instruct
+max_length: 256
+learning_rate: 1.0e-4
+batch_size: 4
+num_epochs: 1
+weight_decay: 0.01
+val_steps_freq: 100
+gradient_checkpointing: true
+seed: 0
+
+custom_dataset:
+  file_type: jsonl
+  train_dataset_path: data/train.jsonl
+  val_dataset_path: data/val.jsonl
+  template: alpaca
+
+lora:
+  r: 8
+  alpha: 16
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+metrics:
+  steps_freq: 10
+
+checkpoint:
+  save_strategy: step
+  steps_freq: 200
+  project_dir: runs/llama_3_1_8b_custom_lora
