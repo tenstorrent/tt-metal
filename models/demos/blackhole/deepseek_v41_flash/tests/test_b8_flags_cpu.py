@@ -168,3 +168,64 @@ def test_b8_protected_records_beyond_the_halo_store_fall_back_to_lru():
     st_ = idx.stats()
     assert st_["rows"][0]["halo_a_free"] == 0 if "halo_a_free" in st_["rows"][0] else True
     assert idx.check()
+
+
+# ---- B=16 Up = U = 4 (image 2 B=16 entry, slot buckets 1,2 are a model-side window choice: the adapter only sees a normal piece) -----------------------------------------------------
+@pytest.mark.parametrize("sliver,protect", FLAGS)
+def test_b16_up4_hit_sliver_all_flag_combinations(monkeypatch, sliver, protect):
+    setflags(monkeypatch, sliver, protect)
+    gen, m, plans = make_gen(monkeypatch, bool(protect), B=16, U=4, Up=4, row_aware=True)
+    c = Count()
+    logger.remove()
+    h = logger.add(c, level="INFO")
+    try:
+        L = 400000
+        toks = torch.randint(1000, 90000, (L,), dtype=torch.int64)
+        plans["hit1"] = Plan(user=5, hit=111616)
+        call(gen, toks, 111616, 111749, "hit1", 5, L)
+        call(gen, toks, 111749, 115712, "hit1", 5, L)
+    finally:
+        logger.remove(h)
+    if sliver == protect == 0:
+        assert c.lost == 1
+    else:
+        assert c.lost == 0 and m.steps[-1][0][1] == 112128
+
+
+def test_b16_up4_protect_does_not_gate_admission(monkeypatch):
+    setflags(monkeypatch, 1, 1)
+    gen, m, plans = make_gen(monkeypatch, True, B=16, U=4, Up=4, row_aware=True)
+    for p in (0, 1, 2, 4, 8, 12):
+        gen.inprog.update(p, 4096, torch.zeros(4096, dtype=torch.int64))
+        m.pf_resume[p] = 4096
+        gen.slots.live.add(p)
+    for row in range(4):
+        live = {p for p in gen.slots.live}
+        assert gen._free_users_of_row(row) == [p for p in range(row * 4, row * 4 + 4) if p not in live]
+    assert gen._full_rows() == set() and gen.prefill_row_capacity() is None
+
+
+@pytest.mark.parametrize("sliver,protect", FLAGS)
+def test_b16_up4_closed_loop_with_slivers_and_cont_first(monkeypatch, sliver, protect):
+    from models.demos.blackhole.deepseek_v41_flash.tests import test_prefill_row_placement as T
+    from models.demos.blackhole.deepseek_v41_flash.tests.test_sliver_extend_cpu import sliver_prefill
+
+    monkeypatch.setattr(T.PluginSim, "_prefill", sliver_prefill)
+    monkeypatch.setenv("DSV41_PIECE_LAG", "1")
+    setflags(monkeypatch, sliver, protect)
+    sim, m, c, _ = T.run_case(
+        row_aware=True,
+        B=16,
+        U=4,
+        up=4,
+        n_req=32,
+        closed_loop_total=48,
+        prompt=140000,
+        lengths=[100000 + (i * 997 + 13 * i * i) % 20000 for i in range(40)],
+        skew=0.3,
+        cap=16,
+        budget=32768,
+        osl_steps=20,
+    )
+    if sliver:
+        assert c.n == 0, c.lines[:2]
