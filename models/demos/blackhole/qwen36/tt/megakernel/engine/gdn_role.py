@@ -44,7 +44,8 @@ def gdn_role(b, coords):
     # it to 2 * (attention layers) before their program-end reset
     attn_n = b.NL - NG
     role = g2_role.GdnRole(dev, coords, NG, B, b.sems, tgt, prod, gen, kdir=KDIR, ref=ref, attn_n=attn_n,
-                           gdnout=getattr(b, "gdnout", None))   # MKA_GDNOUT: the GDN out_proj via the wo unit
+                           gdnout=getattr(b, "gdnout", None),   # MKA_GDNOUT: the GDN out_proj via the wo unit
+                           gin_k=getattr(b, "gin_k", None))     # MK_GIN_PERCORE: per-core in_ready targets
     # MKA_GDN_HOLD (bench): HOLD users of every step, e.g. "0,1,3,4,6" = 3 live users (2, 5, 7) -- the padded-row shape
     hold = [int(x) for x in os.environ.get("MKA_GDN_HOLD", "").split(",") if x.isdigit() and int(x) < B]
     role.prepare(hold)
