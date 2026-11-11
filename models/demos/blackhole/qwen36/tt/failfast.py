@@ -83,9 +83,14 @@ class _Watchdog:
             self.next += 1
             tok = self.next
             self.waits[tok] = [time.monotonic(), tag, mesh, False]
-            if self.thread is None:
+            start = self.thread is None
+            if start:
                 self.thread = threading.Thread(target=self._run, name="qwen36-failfast", daemon=True)
                 self.thread.start()
+        if start:
+            _log("info", f"[failfast] armed: mode {mode()}, stall "
+                         f"{_env_float('QWEN36_FAILFAST_STALL_S', max(10.0, 2.0 * _op_timeout_s())):.0f} s, probe deadline "
+                         f"{_env_float('QWEN36_FAILFAST_HARD_S', 120.0):.0f} s (first wait: {tag})")
         return tok
 
     def end(self, tok):
