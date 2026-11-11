@@ -279,7 +279,6 @@ constexpr std::uint32_t LLK_PACK_W_MAX_TILES_W =
 // programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
 inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
     if (pack_w_last != output_id) {
-        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         pack_w_last = output_id;
         return false;
     }
@@ -287,7 +286,6 @@ inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t ad
     const bool cont = pack_w_valid && pack_w_out == output_id && pack_w_page == page && pack_w_next == addr &&
                       pack_w_tiles + ntiles <= max_tiles;
     if (!cont) {
-        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
         program_packer_destination(addr);
         const std::uint32_t stride = page << 4;
         if (stride != pack_ch1_w_stride) {
@@ -622,13 +620,9 @@ __attribute__((always_inline)) inline std::uint32_t llk_pack_block_forms(const s
            (init == 'W' || reconf == 'W' || next == 'W' ? 4 : 0);
 }
 
-// The per-tile packs of a block that takes none of the block forms: main's loop. Without close_fast_untilize, main's exactly: a kernel whose
-// blocks all pack per tile then reads no pack flag.
-template <bool is_fp32_dest_acc_en, bool close_fast_untilize = true>
+// The per-tile packs of a block that takes none of the block forms: main's loop, so a kernel whose blocks all pack per tile reads no pack flag.
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles) {
-    if constexpr (close_fast_untilize) {
-        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
-    }
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
         llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr, output_id);
@@ -672,13 +666,18 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         pack_reconfigured = false;
         pack_w_last = output_id;
 #endif
-        llk_pack_block_per_tile<is_fp32_dest_acc_en, false>(start_tile_index, output_id, ntiles);
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
+    // A block of one folded form packs as main: it reads no state, so it closes no fast untilize either.
+    const bool one_form = forms != 0 && (forms & (forms - 1)) == 0;
 
     // The block forms run the default pack program: after a tilize, untilize or pack rows init, main's per-tile packs. So too while the packer
     // accumulates in L1 under half sync, where a block behind matmul math reads up to 64 cycles slower (full sync: faster).
     if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE())) {
+        if (!one_form) {
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+        }
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
@@ -692,6 +691,10 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
                                                               : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
                                          : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2))
                           : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2);
+    // A fast untilize left open marks the last output, so only a first block closes it.
+    if (!one_form && first_block) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+    }
     pack_reconfigured = false;
     pack_w_last = output_id;
 #else
@@ -702,9 +705,6 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         return;
     }
     const bool take_w = form == 'W' && (forms == 0 || (forms & 4) != 0);
-    if (!take_w) {
-        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
-    }
     if (llk_pack_block_is_contiguous(output_id)) {
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
