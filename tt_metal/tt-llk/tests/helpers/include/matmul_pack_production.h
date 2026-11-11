@@ -93,6 +93,36 @@ struct forms_table_t
 template <bool fp32, std::uint32_t kt, std::uint32_t row, bool t32, bool full, bool src32, bool int8>
 inline constexpr forms_table_t<fp32, kt, row, t32, full, src32, int8> forms_table {};
 
+// llk_pack_form_words: the form of every tile count of a row from each state (0 init, 1 reconfigure, 2 next), two bits per count (T 0, B 1,
+// W 2), in context 1 (a matmul init, no pack-thread SFPU); a variable block reads one word instead of the form tables and masks
+template <bool fp32, std::uint32_t kt, std::uint32_t row, bool t32, bool full, bool src32, bool int8>
+struct form_words_t
+{
+    std::uint32_t w[3];
+    constexpr form_words_t() : w()
+    {
+        using namespace matmul_pack_tables;
+        for (std::uint32_t st = 0; st < 3; st++)
+        {
+            for (std::uint32_t n = 1; n <= 16; n++)
+            {
+                const char f = llk_pack_block_form_k<fp32, kt>(
+                    row,
+                    n,
+                    st == 0 ? (t32 ? llk_pack_init_form : llk_pack_init_form_dc) : (st == 1 ? (t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc) : (t32 ? llk_pack_next_form : llk_pack_next_form_dc)),
+                    st,
+                    full,
+                    src32,
+                    int8,
+                    1u);
+                w[st] |= static_cast<std::uint32_t>(f == 'T' ? 0 : (f == 'B' ? 1 : 2)) << (2 * (n - 1));
+            }
+        }
+    }
+};
+template <bool fp32, std::uint32_t kt, std::uint32_t row, bool t32, bool full, bool src32, bool int8>
+inline constexpr form_words_t<fp32, kt, row, t32, full, src32, int8> form_words {};
+
 // tile i of a per-tile pack: the caller's address of it (the main arm's), else address + i * page
 template <typename TileAddr>
 __attribute__((always_inline)) inline std::uint32_t tile_address(const TileAddr& tile_addr, const std::uint32_t address, const std::uint32_t page, const std::uint32_t i)
@@ -170,17 +200,11 @@ __attribute__((always_inline)) inline void block(
         return;
     }
     const bool first        = MATMUL_PACK_STATE != 0 || state.seen == 0;
-    const char f = forms == 2 ? 'B' : matmul_pack_tables::llk_pack_block_form_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(
-        row,
-        key_nt != 0 ? key_nt : num_tiles,
-        first ? (MATMUL_PACK_STATE == 1 ? (tables32 ? matmul_pack_tables::llk_pack_reconf_form : matmul_pack_tables::llk_pack_reconf_form_dc)
-                                        : (tables32 ? matmul_pack_tables::llk_pack_init_form : matmul_pack_tables::llk_pack_init_form_dc))
-              : (tables32 ? matmul_pack_tables::llk_pack_next_form : matmul_pack_tables::llk_pack_next_form_dc),
-        first ? (MATMUL_PACK_STATE == 1 ? 1u : 0u) : 2u,
-        sync == DstSync::SyncFull,
-        src32,
-        int8,
-        1u); // a variable block reads its forms in the folded path's context: 1, a matmul init and no pack-thread SFPU
+    // as llk_pack_block_form: one word of the state, the count's two bits
+    const std::uint32_t nt   = key_nt != 0 ? key_nt : num_tiles;
+    const std::uint32_t word = form_words<fp32, MATMUL_PACK_NOK ? 0 : key_kt, row, tables32, sync == DstSync::SyncFull, src32, int8>.w[first ? (MATMUL_PACK_STATE == 1 ? 1 : 0) : 2];
+    const std::uint32_t code = (word >> (2 * ((nt < 16 ? nt : 16) - 1))) & 3;
+    const char f             = forms == 2 ? 'B' : (code == 0 ? 'T' : (code == 1 ? 'B' : 'W'));
     state.seen = 1;
     // a fast untilize left open marks the last output: only a first block closes it
     if (!one_form && first)
