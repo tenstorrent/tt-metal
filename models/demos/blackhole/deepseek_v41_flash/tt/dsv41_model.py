@@ -1943,6 +1943,19 @@ class Model:
         self.timing = tm
         return res
 
+    def slot_buckets_active(self):
+        """slot buckets built and not switched off (live switch file DSV41_PREFILL_SLOT_BUCKETS_FILE holds 0): also read by the placement in generator_vllm (claim_packed), so an OFF arm is the old placement too"""
+        if not self.__dict__.get("_slot_ks"):
+            return False
+        sw = os.environ.get("DSV41_PREFILL_SLOT_BUCKETS_FILE")
+        if sw:
+            try:
+                if open(sw).read().strip() == "0":
+                    return False
+            except OSError:
+                pass
+        return True
+
     def _slot_pick(self, items, chunk, vis):
         """DSV41_PREFILL_SLOT_BUCKETS: the number of prefill slots per mesh row k of the chunk trace this call runs on (0 = the full Up = U trace): the smallest captured bucket that covers the in-row index
         of every user of the call (slot = user % U in the Up = U layout; ``claim_packed`` hands out the lowest free index first, so a lone prompt sits in slot 0). Image prompts use the full trace.
@@ -1950,15 +1963,8 @@ class Model:
         ks = self.__dict__.get("_slot_ks")
         if not ks or self.Up != self.U or self.__dict__.get("_up1_active") or not items:
             return 0
-        sw = os.environ.get(
-            "DSV41_PREFILL_SLOT_BUCKETS_FILE"
-        )  # live switch for A/B in one server: the file holds 0 / 1
-        if sw:
-            try:
-                if open(sw).read().strip() == "0":
-                    return 0
-            except OSError:
-                pass
+        if not self.slot_buckets_active():
+            return 0
         if vis or int(chunk) != self._slot_chunk:
             return 0
         pm = self.prefill_model
