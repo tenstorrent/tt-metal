@@ -505,7 +505,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMeshProgramRunArgsNeedTheSpecsRanges)
     EXPECT_THAT(
         [&] { ttnn::experimental::generic_op({input, output}, mesh_spec, two_ranges_run_args); },
         ThrowsMessage<std::exception>(
-            HasSubstr("the MeshProgramSpec has 1 programs, but the MeshProgramRunArgs has run args for 2")));
+            HasSubstr("the MeshProgramSpec and the MeshProgramRunArgs have different numbers of programs (1 and 2)")));
 }
 
 // Every call checks its run args and tensors against the spec, so these later calls run without
@@ -988,6 +988,29 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallTakesAPipeReCarve
         ttnn::experimental::prepare_generic_op({output}, replacement.spec, replacement.run_args);
         EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
     }
+}
+
+// Every call checks that the run args give a pipe for each PrefetcherPipe parameter the spec declares, and for no other
+// name, before Metal sees them.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksThePipesOfEveryCall) {
+    auto space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto pipe = space.create_pipe(pipe_sender(), pipe_receivers());
+    const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
+    const Tensor output = make_unused_output(this->device_);
+    const auto program = make_pipe_sender_program(pipe);
+
+    auto no_pipe = program.run_args;
+    no_pipe.advanced_options.prefetcher_pipe_args.clear();
+    EXPECT_THAT(
+        [&] { ttnn::experimental::generic_op({output}, program.spec, no_pipe); },
+        ThrowsMessage<std::exception>(HasSubstr("PrefetcherPipeParameter 'pipe' has no pipe in run_args")));
+
+    auto extra_pipe = program.run_args;
+    extra_pipe.advanced_options.prefetcher_pipe_args.emplace(
+        m2::PrefetcherPipeParamName{"other"}, m2::PrefetcherPipeArgument{pipe});
+    EXPECT_THAT(
+        [&] { ttnn::experimental::generic_op({output}, program.spec, extra_pipe); },
+        ThrowsMessage<std::exception>(HasSubstr("has a pipe for 'other', which the ProgramSpec does not declare")));
 }
 
 // The op does not opt into per-core allocation, so ttnn rejects a per-core allocated tensor before the op sees it.

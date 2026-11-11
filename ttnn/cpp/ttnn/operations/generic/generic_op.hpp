@@ -65,7 +65,9 @@ struct MeshProgramRunArgs {
 // two forms share cache entries. The output is the last tensor in io_tensors, which the caller preallocates, and each
 // tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec. PrefetcherPipes in
 // the run args must outlive every program that uses them, and a program stays bound to its first pipe (or one
-// re-carved in its place), so a call with another pipe needs another pipe parameter name.
+// re-carved in its place), so a call with another pipe needs another pipe parameter name. generic_op does not check
+// SRAMArenas yet: give every arena the spec declares on every call, and keep it allocated while a program that uses it
+// can run, since a call that leaves one out runs with the arena the cached program got last.
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args);
 
 // Runs each range's program on the devices in that range.

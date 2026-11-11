@@ -233,7 +233,12 @@ void check_kernel_run_args(
 void check_tensor_args(
     const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args, const std::vector<Tensor>& io_tensors) {
     std::vector<bool> claimed(io_tensors.size(), false);
+    // A parameter declared twice claims one entry, and Metal's checks, which run after these, name the duplicate.
+    std::unordered_set<m2::TensorParamName> parameters_seen;
     for (const auto& parameter : spec.tensor_parameters) {
+        if (!parameters_seen.insert(parameter.unique_id).second) {
+            continue;
+        }
         const auto tensor_arg = run_args.tensor_args.get(parameter.unique_id);
         TT_FATAL(
             tensor_arg.has_value(),
@@ -325,26 +330,25 @@ void check_program(
     const m2::ProgramRunArgs& run_args,
     const std::vector<Tensor>& io_tensors,
     bool check_nodes) {
-    std::vector<bool> has_run_args(spec.kernels.size(), false);
+    // Kept by name, so a spec that declares a kernel twice gets past these checks to Metal's, which names it.
+    std::unordered_set<m2::KernelSpecName> kernels_with_run_args;
     for (const auto& kernel_run_args : run_args.kernel_run_args) {
         const auto kernel = std::ranges::find(spec.kernels, kernel_run_args.kernel, &m2::KernelSpec::unique_id);
         TT_FATAL(
             kernel != spec.kernels.end(),
             "generic_op: run_args.kernel_run_args names kernel '{}', which the ProgramSpec does not declare",
             kernel_run_args.kernel);
-        const auto index = static_cast<std::size_t>(kernel - spec.kernels.begin());
         TT_FATAL(
-            !has_run_args[index],
+            kernels_with_run_args.insert(kernel_run_args.kernel).second,
             "generic_op: run_args.kernel_run_args lists kernel '{}' more than once",
             kernel_run_args.kernel);
-        has_run_args[index] = true;
         check_kernel_run_args(spec, *kernel, kernel_run_args, check_nodes);
     }
-    for (std::size_t i = 0; i < spec.kernels.size(); ++i) {
+    for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            has_run_args[i] || !has_runtime_arguments(spec.kernels[i]),
+            kernels_with_run_args.contains(kernel.unique_id) || !has_runtime_arguments(kernel),
             "generic_op: kernel '{}' takes runtime arguments, but run_args.kernel_run_args has no entry for it",
-            spec.kernels[i].unique_id);
+            kernel.unique_id);
     }
     check_tensor_args(spec, run_args, io_tensors);
     check_prefetcher_pipe_args(spec, run_args);
