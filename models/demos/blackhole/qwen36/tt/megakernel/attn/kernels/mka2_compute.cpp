@@ -35,6 +35,13 @@ __attribute__((noinline)) static void mk_colsum(uint32_t idst) {
 }
 #endif
 #include "api/debug/kernel_profiler.hpp"
+// STEXT (spec v1.138, STREAM kernel text budget): STREAM-only size trims, bit-identical; MKA_NO_STEXT = the old binary
+#if defined(MKA_ROLE_STREAM) && !defined(MKA_NO_STEXT)
+#define MK_STEXT 1
+#define MK_NOUNROLL _Pragma("GCC unroll 1")
+#else
+#define MK_NOUNROLL
+#endif
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
 #include "../../kernels/mk_ar_reduce.hpp"   // AR reduce on the owners (MKAR_* defines from ar_phase.py)
 #endif
@@ -422,9 +429,11 @@ void kernel_main() {
         mul_bcast_rows_init(CB_XK, MK_GC_CB);
         for (uint32_t t0 = 0; t0 < V_KTR; t0 += 4) {
             tile_regs_acquire();
+            MK_NOUNROLL
             for (uint32_t i = 0; i < 4; ++i) mul_tiles_bcast_rows(CB_XK, MK_GC_CB, t0 + i, t0 + i, i);
             tile_regs_commit();
             tile_regs_wait();
+            MK_NOUNROLL
             for (uint32_t i = 0; i < 4; ++i) pack_tile<true>(i, MK_GC_XKA, t0 + i);
             tile_regs_release();
         }
@@ -945,12 +954,15 @@ void kernel_main() {
                 reconfig_data_format(CB_V, CB_P);
                 matmul_init(CB_P, CB_V, 0);
                 tile_regs_acquire();
-                for (uint32_t i = 0; i < nb; ++i)
+                for (uint32_t i = 0; i < nb; ++i) {
+                    MK_NOUNROLL
                     for (uint32_t t = 0; t < DH; ++t) matmul_tiles(CB_P, CB_V, i, i * DH + t, t);
+                }
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(CB_O);
                 pack_reconfig_l1_acc(first ? 0 : 1);
+                MK_NOUNROLL
                 for (uint32_t t = 0; t < DH; ++t) pack_tile<true>(t, CB_O, t);
                 pack_reconfig_l1_acc(0);
                 tile_regs_release();
@@ -980,6 +992,7 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(CB_O);
+                MK_NOUNROLL
                 for (uint32_t t = 0; t <= DH; ++t) pack_tile<true>(t, CB_O, t);
                 tile_regs_release();
             }
@@ -991,11 +1004,13 @@ void kernel_main() {
                 for (uint32_t t0 = 0; t0 < NO; t0 += DH) {
                     const uint32_t n = (NO - t0) < DH ? (NO - t0) : DH;
                     tile_regs_acquire();
+                    MK_NOUNROLL
                     for (uint32_t t = 0; t < n; ++t) copy_tile(CB_R, t0 + t, t);
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_reconfig_data_format(CB_O);
                     pack_reconfig_l1_acc(1);
+                    MK_NOUNROLL
                     for (uint32_t t = 0; t < n; ++t) pack_tile<true>(t, CB_O, t0 + t);
                     pack_reconfig_l1_acc(0);
                     tile_regs_release();
@@ -1023,6 +1038,7 @@ void kernel_main() {
                 mul_init(CB_O, CB_D);
                 cb_reserve_back(CB_OA, DH);
                 pack_reconfig_data_format(CB_OA);
+                MK_NOUNROLL
                 for (uint32_t t = 0; t < DH; ++t) {
                     tile_regs_acquire();
 #if defined(MKA_DBGRAW)
@@ -1138,6 +1154,7 @@ void kernel_main() {
                     for (uint32_t j = 0; j < vnn; ++j) V_MM(CB_VH, CB_WV, j, 2 * V_KTR * vnn + b * vnn * V_DSB + j * V_DSB, 0, V_DSB, 1, vnn);
                     tile_regs_commit();
                     tile_regs_wait();
+                    MK_NOUNROLL
                     for (uint32_t t = 0; t < V_DSB; ++t) pack_tile<true>(t, ocb, (b & 1) * V_DSB + t);
                     tile_regs_release();
                     if (bi == 1) cb_push_back(CB_VDO2, 2 * V_DSB);
