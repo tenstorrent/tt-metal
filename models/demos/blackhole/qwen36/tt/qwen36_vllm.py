@@ -559,6 +559,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if not placeholders_match(tokens, items, int(model.args.hf_config.image_token_id)):
             logger.warning("qwen36 mm prefix cache: image placeholders off the vLLM spans; plain multimodal path")
             return None
+        missing = [k for k, pv in enumerate(pv_items) if pv is None]
+        if missing:
+            # the plugin keeps every payload of a prefix hit (VLLM_TT_MM_PREFIX_CACHE=1); refuse before the engine runs
+            raise ValueError(f"image prompt of row {u}: no pixels for item(s) {missing}")
+        # every image must fit a warmed vision bucket: refuse here, before any engine state changes (as the plain path)
+        self._check_vision_bucket(torch.stack([torch.as_tensor(g).reshape(3) for g in grid_items]))
         ids = [it.identifier for it in items]
 
         def encode(pixel_values, grid_thw):

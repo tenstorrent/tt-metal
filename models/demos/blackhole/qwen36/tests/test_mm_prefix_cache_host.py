@@ -427,3 +427,21 @@ def test_capability_follows_the_env():
     assert caps["accepts_mm_prefix_cache"] == (
         mm_prefix.mm_prefix_cache_enabled() and qwen36_vllm._spec_prefix_cache_enabled()
     )
+
+
+def test_prefill_forward_refuses_a_missing_payload_before_the_engine(monkeypatch):
+    g, eng, tower = _gen(monkeypatch)
+    toks = _prompt(200, [(20, 4)])
+    with pytest.raises(ValueError, match="no pixels"):
+        g.prefill_forward(
+            torch.tensor([toks], dtype=torch.int32),
+            torch.ones(1, 4, dtype=torch.int32),
+            None,
+            torch.tensor([200]),
+            empty_slots=[0],
+            pixel_values=[[None]],
+            image_grid_thw=[[torch.tensor([1, 4, 4])]],
+            mm_item_spans=[[(20, 4, "hash-A")]],
+            start_pos=torch.tensor([64]),
+        )
+    assert eng.calls == [] and tower == []
