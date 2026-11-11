@@ -78,21 +78,32 @@ register_fused_mmrs_configs(
 
 
 # SP8 x TP4 MLP shapes (M, 3072, N) whose heuristic blocking overflows L1 on the 12x9 worker grid of a Galaxy. M is the
-# single stage's rows per device: (image + reference bucket + 4096 text rows) / 8, e.g. 4608 = 2048 output + a 4 MP
-# reference bucket, 10752 = 4096 output + a 4 MP reference bucket; the blockings follow the neighbouring shapes
+# single stage's rows per device: (image + reference bucket + text bucket) / 8, e.g. 4608 = 2048 output + a 4 MP
+# reference bucket + 4096 text rows, 10368 = 4096 output + a 4 MP reference bucket + 1024 text rows; the blockings
+# follow the neighbouring shapes
 register_matmul_configs(
     {
         "12x9": {
             (2560, 3072, 4608): (4, 8, 16, (1, 4)),
             (3072, 3072, 4608): (4, 8, 16, (1, 4)),
+            (4224, 3072, 2304): (4, 8, 8, (1, 4)),
+            (4224, 3072, 4608): (4, 8, 16, (1, 4)),
+            (4352, 3072, 2304): (4, 8, 8, (1, 4)),
+            (4352, 3072, 4608): (4, 8, 16, (1, 4)),
             (4608, 3072, 2304): (4, 8, 8, (1, 4)),
             (4608, 3072, 4608): (4, 8, 16, (1, 4)),
             (8192, 3072, 2304): (11, 8, 8, (1, 4)),
             (8192, 3072, 4608): (6, 8, 16, (1, 4)),
+            (8448, 3072, 2304): (8, 8, 8, (1, 4)),
+            (8448, 3072, 4608): (6, 8, 16, (1, 4)),
             (8704, 3072, 2304): (8, 8, 8, (1, 4)),
             (8704, 3072, 4608): (6, 8, 16, (1, 4)),
             (9216, 3072, 2304): (8, 8, 8, (1, 4)),
             (9216, 3072, 4608): (6, 8, 16, (1, 4)),
+            (10368, 3072, 2304): (8, 8, 8, (1, 4)),
+            (10368, 3072, 4608): (6, 8, 16, (1, 4)),
+            (10496, 3072, 2304): (8, 8, 8, (1, 4)),
+            (10496, 3072, 4608): (6, 8, 16, (1, 4)),
             (10752, 3072, 2304): (8, 8, 8, (1, 4)),
             (10752, 3072, 4608): (6, 8, 16, (1, 4)),
         }
