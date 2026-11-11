@@ -120,14 +120,21 @@ counting concurrent galaxies. Include queue, generation, export and delivery cos
 remove overlap and padding from playable duration. Slow individual clips do not
 alone fail this aggregate throughput criterion.
 
-Retain the initial >=60-chunk AND >=300-second net playable video protocol and
-the >=1800-second (30-minute) playback protocol, both adapted to concurrent
-production. Report per-clip latency, declared startup buffer, concurrency and
-participating galaxies separately. Measure unpaced capacity separately from
-deliberately paced playback; pacing is not a capacity measurement. Preserve
-continuity, bounded host/device memory, quality, changed references and zero
-underruns after the declared startup buffer. Finite batches do not qualify as
-sustained delivery. Branch alignment closes neither stream order.
+Use approximately 60 seconds of offered load with modest existing authorized
+concurrency, then stop new submissions and include a bounded final drain whose
+finite timeout is declared before starting. This replaces the 60-chunk,
+300-second-video and 30-minute-playback minima (user #127); preserve run183's
+historical artifacts. Include admission, upload, queue, generation, export,
+delivery, failures, retries and drain in one caller wall interval. Deduct overlap,
+padding, conditioning-only frames and duplicate attempts.
+Report prompt-sent and generation-done timestamps and their roundtrip, per-job
+latency, time to first clip, per-stage times, declared startup buffer, concurrency
+and participating galaxies. Keep file-ready, client-received and decoded-playable
+boundaries distinct. Report actual tested playback duration and keep unpaced
+capacity separate from deliberately paced playback. Preserve continuity, bounded
+memory, quality, changed references and zero observed underruns after the declared
+startup buffer. No sustained qualification follows from finite latency receipts.
+Branch alignment closes neither stream order.
 
 Historical contract (superseded): sequential production and mandatory capacity
 and service RTF <=0.8 were the earlier gates. Run142's immutable snapshots retain

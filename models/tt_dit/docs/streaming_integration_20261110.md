@@ -11,8 +11,9 @@ tests and preparation documents. It does not import the main-based H3 tree.
 | Corrected source/config preparation | `f72e0a7be72fd99d0b46407b49802d826981d60f` | #44, run171 |
 
 The four runtime modules are byte-identical to the reviewed transport head.
-The two preparation documents are historical snapshots, also imported unchanged;
-their queued-review wording describes the earlier inspection. Reviews #37/#44
+The preparation identities remain the accepted historical snapshot; the active
+qualification contract is amended below for user #127. Queued-review wording in
+the historical delivery section describes the earlier inspection. Reviews #37/#44
 are now accepted. `STREAMING.md` records current compatibility and qualification.
 The run174 authored-delta inventory records each input path and SHA256.
 
@@ -45,5 +46,26 @@ cells remain open under the concurrent caller-throughput contract in the
 preparation manifest, including mandatory per-chip TYO2 160 W readback.
 Combined-source checks/review, publication and sulphur adoption must each have
 their own receipt. Task20 may be marked superseded only after actual re-landing.
+
+User #127's current protocol uses approximately 60 seconds of offered load,
+modest owner-authorized concurrency and a bounded final drain declared in advance.
+Report prompt-sent and generation-done timestamps and their roundtrip separately
+from file-ready, client-received and decoded-playable delivery. Retain actual
+playback duration, startup buffer, continuity, quality, memory and underrun
+observations. This replaces the 60-chunk/300-second and 30-minute minima; run183
+and the accepted input commits remain immutable. Qualification still requires
+TYO2 at enforced 160 W individually read back on every participating chip.
+
+The run193 selection prioritizes existing TT Turbo R2V and the quality-passing
+HyperFlow FL2V baseline; Turbo FL v1.0 failed visual quality and remains unsuitable
+for enablement without matched passing evidence. This checkout contains neither
+the serving request serializer nor the Turbo adapter runtime. Its base pipeline
+already rejects mixed keyframes/references and selects transformer_ref for ref2va.
+The accepted wrapper explicitly requires ref2va and verifies adapter digest,
+strength and schedule family. No demonstrated endpoint/reference-sheet mapping
+defect can be repaired in these files from the supplied receipts. Existing owner22
+must obtain the actual failed FL request/fixture and served serializer identity
+before a targeted fix; no new benchmark or conversion is requested. FastVideo
+Omni's TT rendering and sampling contract remain unproved here.
 
 [authored by AI]

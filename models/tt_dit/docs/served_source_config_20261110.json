@@ -97,7 +97,7 @@
     "required_receipt": ["exact paths", "hashes", "ownership", "admission", "free disk"]
   },
   "qualification": {
-    "contract_updated_at": "2026-11-10 14:54 PST",
+    "contract_updated_at": "2026-11-10 17:05 PST",
     "restriction": "R-1ac7",
     "required_location": "TYO2",
     "required_watts_per_chip": 160,
@@ -110,22 +110,26 @@
       {"model": "LTX 2.5 IC-LoRA", "mode": "FL2V", "qualified": false},
       {"model": "LTX 2.5 IC-LoRA", "mode": "R2V", "qualified": false}
     ],
-    "minimum_chunks": 60,
-    "minimum_new_playable_seconds": 300,
-    "paced_playback_seconds": 1800,
+    "offered_load_seconds": 60,
+    "stop_new_submissions_after_seconds": 60,
+    "declare_finite_drain_bound_before_run": true,
+    "concurrency_policy": "modest, existing owner-authorized concurrency",
     "production": "concurrent galaxies permitted in both protocols",
     "sustained_caller_throughput": {
       "numerator": "unique playable video seconds received by the API caller",
       "denominator": "elapsed wall seconds",
       "operator": ">",
       "threshold": 1,
-      "included_costs": ["queue", "generation", "export", "delivery"],
-      "excluded_media": ["overlap", "padding"],
+      "included_costs": ["admission", "upload", "queue", "generation", "export", "delivery", "failures", "retries", "final drain"],
+      "excluded_media": ["overlap", "padding", "conditioning-only frames", "duplicate attempts"],
       "concurrent_galaxies_count": true
     },
     "report_separately": [
       "per-clip latency", "startup buffer", "concurrency", "participating galaxies",
-      "unpaced capacity", "deliberately paced playback"
+      "unpaced capacity", "deliberately paced playback", "actual tested playback duration",
+      "prompt-sent timestamp", "generation-done timestamp", "prompt-to-generation-done roundtrip",
+      "time to first clip", "per-stage times", "file-ready timestamp", "client-received timestamp",
+      "decoded-playable timestamp", "failures and retries", "final drain duration and timeouts"
     ],
     "historical_contract": {
       "status": "superseded; not an acceptance gate",

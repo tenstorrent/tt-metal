@@ -113,13 +113,19 @@ exercises actual CPU Torch layout, detached context copies, exact video/audio
 overlap, decoded-reference preparation and 100 synthetic tensor chunks. It never
 loads a model or claims generated-video continuity, device cache bounds or speed.
 Run that test on a validated remote CPU host, followed by a device matched fixture
-A/B, before use. Then measure at least 60 chunks and 300 new playable seconds
-and the owner's 30-minute playback window per claimed variant, adapting both to
-concurrent production. Qualification requires sustained unique playable video
-received by the API caller / elapsed wall time >1 across participating galaxies,
-including queue, generation, export and delivery, excluding overlap and padding.
-Per-clip latency, startup buffer, concurrency and participating galaxies are
-reported separately, as are unpaced capacity and deliberately paced playback.
+A/B, before use. Use approximately 60 seconds of offered load at modest existing
+authorized concurrency, stop new submissions, and include a bounded final drain
+with a finite timeout declared before starting. Record actual playback duration;
+there is no mandatory chunk count, media duration or 30-minute playback window.
+Qualification requires unique playable video received by the API caller / elapsed
+wall time >1 across participating galaxies. Include admission, upload, queue,
+generation, export, delivery, failures, retries and drain in one caller interval;
+exclude overlap, padding, conditioning-only frames and duplicate attempts.
+Report prompt-sent and generation-done timestamps and their roundtrip, per-job
+latency, time to first clip, per-stage times, startup buffer, concurrency and
+participating galaxies. Distinguish file-ready, client-received and decoded-playable
+boundaries, and unpaced capacity from deliberately paced playback. Net-video
+RTF <=0.8 remains an optimization target, not an individual-clip acceptance gate.
 Keep continuity, bounded memory, quality and zero underruns after the declared
 buffer. All four H3/LTX 2.5 IC-LoRA FL2V/R2V cases require TYO2 at enforced
 160 W per participating chip, each limit read back and recorded, with host/mesh,
