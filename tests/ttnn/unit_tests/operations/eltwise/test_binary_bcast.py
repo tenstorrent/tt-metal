@@ -2338,6 +2338,25 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
     assert comp_pass
 
 
+def test_bcast_rejects_non_float_b(device, expect_error):
+    torch.manual_seed(0)
+    a_shape = [1, 1, 32, 32]
+    b_shape = [1, 1, 1, 32]
+    a_pt = torch.rand(a_shape, dtype=torch.bfloat16)
+
+    b_pt = torch.rand(b_shape, dtype=torch.bfloat16)
+    a_tt = ttnn.from_torch(a_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.bcast(a_tt, b_tt, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
+    golden_tensor = ttnn.get_golden_function(ttnn.bcast)(a_pt, b_pt, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
+    assert compare_pcc([output_tensor], [golden_tensor], 0.9999)
+
+    b_int_pt = torch.randint(-100, 100, b_shape, dtype=torch.int32)
+    b_int_tt = ttnn.from_torch(b_int_pt, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "Unsupported data format for input tensor B"):
+        ttnn.bcast(a_tt, b_int_tt, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
+
+
 def test_yolov8_add_small(device):
     tor_a = torch.tensor(
         [
