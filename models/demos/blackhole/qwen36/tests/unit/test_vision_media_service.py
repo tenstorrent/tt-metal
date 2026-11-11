@@ -231,12 +231,14 @@ def _free_port():
 
 
 def test_mooncake_put_from_and_in_place_read(tmp_path):
-    mooncake = pytest.importorskip("mooncake.store")
+    pytest.importorskip("mooncake.store")
     from models.common.multimedia_store.config import MediaEmbeddingStoreConfig
     from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
     from models.demos.blackhole.qwen36.vision.service_emu import MooncakeWriter
 
-    binary = shutil.which("mooncake_master") or os.path.join(os.path.dirname(mooncake.__file__), "mooncake_master")
+    import mooncake as mooncake_pkg
+
+    binary = shutil.which("mooncake_master") or os.path.join(os.path.dirname(mooncake_pkg.__file__), "mooncake_master")
     rpc, http, metrics = _free_port(), _free_port(), _free_port()
     log = open(tmp_path / "master.log", "w")
     master = subprocess.Popen(

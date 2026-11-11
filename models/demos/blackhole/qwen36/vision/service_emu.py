@@ -92,7 +92,7 @@ class MooncakeWriter:
         cfg = self._ReplicateConfig()
         cfg.preferred_segment = preferred_segment
         cfg.soft_pin_action = self._SoftPinAction.ENABLE
-        cfg.soft_pin_ttl_ms = 300_000
+        cfg.soft_pin_ttl_ms = int(os.environ.get("MEDIA_STORE_SOFT_PIN_MS", "300000"))
         rc = self.client.put_from(key, value.ctypes.data, value.nbytes, cfg)
         if rc != 0:
             raise RuntimeError(f"put_from {key[:16]} ({value.nbytes} B) to {preferred_segment} failed ({rc})")
@@ -116,53 +116,85 @@ def decode_image(data: bytes) -> np.ndarray:
 
 
 class EncodeWorker:
-    """One group of K chips: prepare + encode + store for the images the front gives it."""
+    """One group of K chips: prepare + encode + store for the images the front gives it.
 
-    def __init__(self, media, store, pool: np.ndarray | None = None):
+    Pipelined like a serving worker: every image's decode + prepare (CPU, PIL releases the GIL) is submitted to a thread
+    pool at once, the device encodes image i as soon as it is prepared while the CPU prepares i+1.., and each value's
+    put_from runs on a store thread while the next image encodes. One encode() call per image (unless batch)."""
+
+    def __init__(self, media, store, pool: np.ndarray | None = None, prep_threads: int = 4):
+        from concurrent.futures import ThreadPoolExecutor
+
         self.media = media
         self.store = store
         self.pool = pool if pool is not None else np.empty(64 << 20, dtype=np.uint8)
+        self.prep = ThreadPoolExecutor(max_workers=prep_threads, thread_name_prefix="prep") if prep_threads else None
+        self.putter = ThreadPoolExecutor(max_workers=1, thread_name_prefix="put")
+
+    def _prepare(self, job):
+        idx, data, n_refs, nonce = job
+        a = time.perf_counter()
+        item = self.media.prepare("image", decode_image(data), n_refs=n_refs)
+        key = hashlib.sha256(data + self.media.media_key_salt(item) + nonce).hexdigest()
+        return idx, item, key, (time.perf_counter() - a) * 1e3
+
+    def _put(self, key, buf, segment):
+        a = time.perf_counter()
+        self.store.put_from(key, buf, segment)
+        return (time.perf_counter() - a) * 1e3
 
     def run(self, jobs, preferred_segment: str, batch: bool = False):
-        """jobs: [(index, image bytes, n_refs, salt nonce)] -> [(index, key hex, runs, grid, timing ms)]. One encode()
-        per image unless batch."""
+        """jobs: [(index, image bytes, n_refs, salt nonce)] -> ([(index, key hex, runs, grid, prepare ms)], timing)."""
         t0 = time.perf_counter()
-        prepared = []
-        for idx, data, n_refs, nonce in jobs:
+        if self.prep is not None:
+            futs = [self.prep.submit(self._prepare, j) for j in jobs]
+            get = lambda i: futs[i].result()
+        else:
+            done = [self._prepare(j) for j in jobs]
+            get = lambda i: done[i]
+        off, prepared, enc_ms, puts, waits = 0, [], [], [], []
+        hits = 0
+        todo_batch = []
+        for i in range(len(jobs)):
             a = time.perf_counter()
-            item = self.media.prepare("image", decode_image(data), n_refs=n_refs)
-            key = hashlib.sha256(data + self.media.media_key_salt(item) + nonce).hexdigest()
-            prepared.append((idx, item, key, (time.perf_counter() - a) * 1e3))
-        t1 = time.perf_counter()
-        todo = [p for p in prepared if not self.store.is_exist(p[2])]
-        off, bufs = 0, []
-        for _, item, _, _ in todo:
+            p = get(i)
+            waits.append((time.perf_counter() - a) * 1e3)
+            prepared.append(p)
+            _, item, key, _ = p
+            if self.store.is_exist(key):
+                hits += 1
+                continue
             n = self.media.value_size(item)
             off = -(-off // 64) * 64
             if off + n > self.pool.nbytes:
                 raise RuntimeError(f"encode pool of {self.pool.nbytes} B too small for this request")
-            bufs.append(self.pool[off : off + n])
+            buf = self.pool[off : off + n]
             off += n
-        t2 = time.perf_counter()
-        enc_ms = []
-        groups = [list(range(len(todo)))] if (batch and todo) else [[i] for i in range(len(todo))]
-        for g in groups:
+            if batch:
+                todo_batch.append((item, key, buf))
+                continue
             a = time.perf_counter()
-            self.media.encode([todo[i][1] for i in g], [memoryview(bufs[i]) for i in g])
+            self.media.encode([item], [memoryview(buf)])
             enc_ms.append((time.perf_counter() - a) * 1e3)
-        t3 = time.perf_counter()
-        for (_, _, key, _), buf in zip(todo, bufs):
-            self.store.put_from(key, buf, preferred_segment)
-        t4 = time.perf_counter()
-        out = []
-        for idx, item, key, prep_ms in prepared:
-            out.append((idx, key, self.media.expansion(item), item.grid_thw, prep_ms))
+            puts.append(self.putter.submit(self._put, key, buf, preferred_segment))
+        if todo_batch:
+            a = time.perf_counter()
+            self.media.encode([t[0] for t in todo_batch], [memoryview(t[2]) for t in todo_batch])
+            enc_ms.append((time.perf_counter() - a) * 1e3)
+            puts += [self.putter.submit(self._put, k_, b_, preferred_segment) for _, k_, b_ in todo_batch]
+        t_enc = time.perf_counter()
+        put_ms = [f.result() for f in puts]
+        t1 = time.perf_counter()
+        out = [(idx, key, self.media.expansion(item), item.grid_thw, pm) for idx, item, key, pm in prepared]
         timing = {
-            "prepare_ms": (t1 - t0) * 1e3,
-            "encode_ms": (t3 - t2) * 1e3,
+            "wall_ms": (t1 - t0) * 1e3,
+            "prepare_ms": sum(p[3] for p in prepared),  # CPU time of all decodes + prepares (overlapped)
+            "prepare_wait_ms": sum(waits),  # time the device loop waited for a prepared image
+            "encode_ms": sum(enc_ms),
             "encode_calls_ms": enc_ms,
-            "put_ms": (t4 - t3) * 1e3,
-            "cache_hits": len(prepared) - len(todo),
+            "put_ms": sum(put_ms),
+            "put_tail_ms": (t1 - t_enc) * 1e3,  # store writes still running after the last encode
+            "cache_hits": hits,
             "last": dict(getattr(getattr(self.media, "_encoder", None), "last", {}) or {}),
         }
         return out, timing
