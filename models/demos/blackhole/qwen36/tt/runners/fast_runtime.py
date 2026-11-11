@@ -454,14 +454,16 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
 
     # -------------------------------------------------------------------------------------------- the request --
     def _prefix_len(self, ids):
-        """P for this prompt: its system turn (through the first prefix-end token) floored to prefix_align, or 0."""
+        """P for this prompt: its system turn (through the first prefix-end token; the whole chunk when the engine's cut
+        falls inside the turn) floored to prefix_align, at most the chunk minus 3 tokens; 0 when that leaves no aligned
+        prefix within prefix_max."""
         if self.prefix_end_token is None:
             return 0
+        L = int(ids.shape[1])
         hit = (ids[0] == int(self.prefix_end_token)).nonzero()
-        if hit.numel() == 0:
-            return 0
-        P = (int(hit[0, 0]) + 1) // self.prefix_align * self.prefix_align
-        if P < self.prefix_align or P > self.prefix_max or ids.shape[1] - P < 3:
+        end = int(hit[0, 0]) + 1 if hit.numel() else L
+        P = min(end, L - 3) // self.prefix_align * self.prefix_align
+        if P < self.prefix_align or P > self.prefix_max:
             return 0
         if self.image_token is not None and bool((ids[0, :P] == self.image_token).any()):
             return 0

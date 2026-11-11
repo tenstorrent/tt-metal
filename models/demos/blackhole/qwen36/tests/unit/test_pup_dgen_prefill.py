@@ -63,8 +63,8 @@ def test_config_serving_and_validation():
 
 
 def test_fast_runtime_system_turn_boundary():
-    """The snapshot boundary: the system turn (through the first <|im_end|>) floored to 128; no snapshot when the
-    turn is shorter than 128 or longer than prefix_max, an image token sits before it, or the tail is < 3 tokens."""
+    """The snapshot boundary: the system turn (through the first <|im_end|>, or the whole chunk when the cut falls inside
+    it) floored to 128 and at most L - 3; no snapshot below 128, above prefix_max, or with an image token before it."""
     from models.demos.blackhole.qwen36.tt.runners.fast_runtime import TtQwen35PupFastPrefillRuntime
 
     rt = object.__new__(TtQwen35PupFastPrefillRuntime)
@@ -79,8 +79,10 @@ def test_fast_runtime_system_turn_boundary():
     ids3[0, 100] = 9  # an image inside the system turn: no snapshot
     assert rt._prefix_len(ids3) == 0
     tail = torch.zeros(1, 513, dtype=torch.int32)
-    tail[0, 511] = 7  # P = 512 leaves a 1-token tail
-    assert rt._prefix_len(tail) == 0
+    tail[0, 511] = 7  # P = 512 would leave a 1-token tail: the prefix stops at the 128 below
+    assert rt._prefix_len(tail) == 384
+    cut = torch.zeros(1, 704, dtype=torch.int32)  # the engine's cut falls inside a 715-token system turn
+    assert rt._prefix_len(cut) == 640
     short = torch.zeros(1, 300, dtype=torch.int32)
     short[0, 100] = 7
     assert rt._prefix_len(short) == 0  # < 128
