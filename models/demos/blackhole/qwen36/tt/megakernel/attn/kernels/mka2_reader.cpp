@@ -243,8 +243,8 @@ void kernel_main() {
         // + a level 2 for groups > FAN^2. Equal lengths reproduce the static groups / trees (RQDYN) bit for bit.
         {
             volatile tt_l1_ptr int32_t* ka = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
-            constexpr uint32_t NS = MKA_RQB_NS;
-            const uint32_t N = b1, me = b0;
+            constexpr uint32_t NS = MKA_RQB_NS, N = MKA_RQB_N;   // compile-time: divisions by constants
+            const uint32_t me = b0;
             uint32_t nb[NUSR], mu[NUSR], su[NUSR], W = 0;
             for (uint32_t u = 0; u < NUSR; ++u) {
                 int32_t pm = -1;
@@ -306,12 +306,12 @@ void kernel_main() {
             has_parent = r != 0;
             if (has_parent) { par_lvl = h ? 1 : 0; xy(r - r % f, &par_x, &par_y); }
             uint32_t n0 = 0, n1 = 0;
+#if !defined(MKA_EXTLEAN)   // owners are always tree leaves (rq_layout): no children, never the root
             for (uint32_t l = 0, st = 1; l < h; ++l, st *= FANOUT)
                 for (uint32_t j = 1; j < FANOUT && r + j * st < m; ++j) {
                     if (l == 0) xy(r + j * st, &c0x[n0], &c0y[n0]), ++n0;
                     else xy(r + j * st, &c1x[n1], &c1y[n1]), ++n1;
                 }
-#if !defined(MKA_EXTLEAN)
             nc0 = n0; nc1 = n1; is_root = r == 0;
 #endif
             l1w(MKA_KVP_TAB)[3 + MKA_RQ_T] = u | ((n0 + n1) << 8) | ((r == 0 ? 1u : 0u) << 16);   // compute: user, nrecv, root
