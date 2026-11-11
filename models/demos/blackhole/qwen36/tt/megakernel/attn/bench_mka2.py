@@ -66,8 +66,12 @@ def _rstd_of(x_):
     return 1.0 / torch.sqrt((xs * xs).sum(-1) / H + EPS)
 for it in range(ITERS):
     if KVA: KVA_PRE(it)   # this verify step's kvpos (MKA_KVA)
-    t1 = time.time(); y = ttnn.generic_op([t_ for t_ in (x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy) if t_ is not None] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else ([rsp] if V12 else [])) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([t_ for t_ in (wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j) if t_ is not None] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + (list(GDN_ROLE.get('io', [])) if GDN24 else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    if ENGINE_SEED is not None: ENGINE_SEED()   # MK_L1P2_SEED: static-CB contents (residual from ENGINE_X0, constants) right before the launch
+    t1 = time.time(); y = ttnn.generic_op([t_ for t_ in ([t_ for t_ in (x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy) if t_ is not None] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else ([rsp] if V12 else [])) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([t_ for t_ in (wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j) if t_ is not None] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + (list(GDN_ROLE.get('io', [])) if GDN24 else []) + [out_t]) if t_ is not None], prog); ttnn.synchronize_device(dev)
     _xo_t = XO_DUMP() if XO_DUMP is not None else v_xo   # MK_L1P2_QOVXO: CB_VXO read back right after the engine op (before any other device op)
+    _rsp_t = RSP_DUMP() if RSP_DUMP is not None else rsp_sh   # MK_L1P2_SEED: CB 43 read back (the AR's rstd checks), same place
+    if ENGINE_DRAIN is not None: ENGINE_DRAIN()   # MK_L1P2_SEED: residual CB 5 -> ENGINE_X0 (the next launch's seed), same place
+    _res_t = ENGINE_X0 if ENGINE_X0 is not None else globals().get('ar_out')
     if KVA: KVA_POST(it)   # SDPA golden over the appended cache (+ MKA_KVA_CHECK: bit-compare vs paged_fused_update_cache)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
@@ -124,7 +128,7 @@ for it in range(ITERS):
                     _pc = lambda a_, b_: round(torch.corrcoef(torch.stack([a_.flatten(), b_.flatten()]))[0, 1].item(), 6)
                     if os.environ.get('MK_AR_SAVE'):
                         torch.save(dict(dvt=[t_[:, :8] for t_ in _dvt], x0=_x0_pass, gtab=AR_GTAB if GAMMA_CONS else None, w=[vlayer(l_) for l_ in range(2)],
-                                        eps=EPS, H=H, ring=AR.ring, rsp=ttnn.to_torch(rsp_sh).float()), os.environ['MK_AR_SAVE'] + f'.it{it}.pt')
+                                        eps=EPS, H=H, ring=AR.ring, rsp=ttnn.to_torch(_rsp_t).float()), os.environ['MK_AR_SAVE'] + f'.it{it}.pt')
                         print(f"[archk] saved {os.environ['MK_AR_SAVE']}.it{it}.pt", flush=True)
                     print(f"[archk] iter {it} AR {k_} (L{L_} MLP) hypotheses pcc dev0 / dev1: " + "; ".join(f"{n_} {_pc(_dv[0], h_)} / {_pc(_dv[1], h_)}" for n_, h_ in _hyp.items()), flush=True)
             _rprev = _res
@@ -169,7 +173,7 @@ for it in range(ITERS):
         _xg = _xres * (AR_GTAB[0, 0][None, :] if AR_GAMMA else 1.0)
         print(f"[ar] iter {it} delivered x{' (gamma)' if AR_GAMMA else ''} pcc {torch.corrcoef(torch.stack([_xd.flatten(), _xg.flatten()]))[0, 1].item():.6f} max|err| {(_xd - _xg).abs().max().item():.4f} |gold|max {_xg.abs().max().item():.3f}", flush=True)
     if REAL_AR and AR_SEQ:   # (R < 32: packed residual, not checked here) the residual stream after this pass
-        _ar = ttnn.to_torch(ar_out).float().reshape(TILE, H); _arg = _xres
+        _ar = ttnn.to_torch(_res_t).float().reshape(TILE, H); _arg = _xres
         print(f"[ar] iter {it} residual pcc {torch.corrcoef(torch.stack([_ar.flatten(), _arg.flatten()]))[0, 1].item():.6f} max|err| {(_ar - _arg).abs().max().item():.4f} |gold|max {_arg.abs().max().item():.3f} mesh identity {mesh_identity(ar_out):.3e}", flush=True)
     p, e = pcc_of(y, gold_last)
     if os.environ.get("FM_DIAG") == "1":
@@ -213,7 +217,7 @@ for it in range(ITERS):
         print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
     if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the pass's last K-row delivery left on the STREAM cores (rows 0-7 = the
         # K-row partials) vs Σx² of that x: the residual after AR (NAR - 2) (the last AR feeds no delivery inside the pass)
-        _rs = ttnn.to_torch(rsp_sh).float().reshape(-1, TILE, rsp_sh.shape[-1])   # [cores, 32, NOWN*32], device 0
+        _rs = ttnn.to_torch(_rsp_t).float().reshape(-1, TILE, _rsp_t.shape[-1])   # [cores, 32, NOWN*32], device 0
         _xl = _db[:, 2 * (AR_NAR - 2) + 1].double()
         _gs = (_xl * _xl).sum(-1)
         _gk = torch.stack([(_xl[:, k_ * 640:(k_ + 1) * 640] ** 2).sum(-1) for k_ in range(8)])   # [8, 32]
@@ -339,7 +343,7 @@ for it in range(ITERS):
         import hashlib
         _hh = lambda t_: hashlib.md5(ttnn.to_torch(t_).float().numpy().tobytes()).hexdigest()[:12]
         _lv = [('sdpa', outs)] + ([('wo', wod)] if RWO else []) + ([('qkv', qkv_out)] if RQKV else []) + ([('xo', _xo_t)] if (V12 and _xo_t is not None) else []) + \
-              ([('res', ar_out)] if REAL_AR else []) + \
+              ([('res', _res_t)] if REAL_AR else []) + \
               [(n_, globals()[n_]) for n_ in ('gin_dbg', 'go_dbg') if globals().get(n_) is not None] + \
               [(f'gio{i_}', t_) for i_, t_ in enumerate(GDN_ROLE.get('io', []) if GDN24 else []) if t_.memory_config().buffer_type == ttnn.BufferType.DRAM and t_.volume() <= (1 << 24)]
         print(f"[l1p2] iter {it} md5 " + ' '.join(f"{n_} {_hh(t_)}" for n_, t_ in _lv), flush=True)
