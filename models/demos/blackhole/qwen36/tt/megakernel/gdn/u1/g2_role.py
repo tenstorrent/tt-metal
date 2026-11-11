@@ -352,6 +352,13 @@ class GdnRole:
     def prepare(self, hold=()):
         """This step's rows / ctrl, then the producers for every GDN layer (before the engine pass). G-b: no producers."""
         self.hold = list(hold)
+        # MKA_GDN_MI (bench timing knob, WALLGAP): this step's per-user accepted index mi (replay r_rep = mi + 1 when mi < T):
+        # "rand" = uniform 0..T-1 (what the stock-op reference path draws), "T" = full accept (no replay; the profiled default),
+        # "k" = every user mi = k. Unset = unchanged (T without the reference, random with it). Numerics vs the reference: not checked.
+        _mi = os.environ.get("MKA_GDN_MI", "")
+        if _mi == "rand": self.mi_ctrl = [int(x) for x in torch.randint(0, self.T, (self.B,), generator=self.gen)]
+        elif _mi == "T": self.mi_ctrl = [self.T] * self.B
+        elif _mi.isdigit(): self.mi_ctrl = [min(int(_mi), self.T)] * self.B
         self._rows()
         if self.state is not None and not getattr(self, "decoy", False):   # (d): the model stages ctrl and owns the state
             return
