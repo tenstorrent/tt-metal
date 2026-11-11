@@ -435,7 +435,9 @@ class Stage1Verify:
             x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             if x_in is not x:
                 ttnn.deallocate(x)
-        if os.environ.get("QWEN36_R16_MK_L1DUMP") == "1":
+        if os.environ.get("QWEN36_R16_MK_L1DUMP") == "1" and not getattr(self, "_l1dump_once", False):
+            # first launch only (soaks: thousands of launches); the setup dump already lists the persistent buffers
+            self._l1dump_once = os.environ.get("QWEN36_R16_MK_L1DUMP_EVERY", "0") != "1"
             l1_dump(f"engine launch bucket {n_users}", prog, self.model)
         prog.launch(x_in, x_out, per_replay_inputs(self.model, in_body))
         ttnn.deallocate(x_in)
