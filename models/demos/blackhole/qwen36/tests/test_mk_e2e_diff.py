@@ -70,9 +70,13 @@ def _mutable(model):
         if l.is_full_attention:
             out += [a.paged_k, a.paged_v] if getattr(a, "use_paged", False) else []
         else:
-            out += [t for t in (getattr(a, "rec_state", None), getattr(a, "_spec_ring", None)) if t is not None]
+            out += [t for t in (getattr(a, "rec_state", None), getattr(a, "_spec_ring", None),
+                                getattr(a, "_verify_win_buf", None)) if t is not None]
             out += list(getattr(a, "_verify_win_pair", None) or ())
-    return [t for t in out if t is not None]
+            out += [c for c in (getattr(a, "conv_states", None) or ()) if c is not None]   # (G-b binds win / ring / state)
+    out += [t for t in (getattr(model, "_vfy_aux_buf", None), getattr(model, "_vfy_ctrl", None)) if t is not None]
+    seen = set()
+    return [t for t in out if t is not None and not (id(t) in seen or seen.add(id(t)))]
 
 
 def _snapshot(ts):
