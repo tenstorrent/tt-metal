@@ -1,0 +1,272 @@
+# tt-model.yaml — google/gemma-4-31B-it on a QuietBox 2 (P300x2: 2x P300 boards = 4 Blackhole chips, (1, 4) mesh, TP4)
+# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/{tt-model.yaml,card.md} by render_manifest.py.
+#
+#   single-user          DEFAULT: one user on the resident persistent-kernel decode engine (resident_m3_2) with
+#                        DFlash2 speculative decoding (RedHatAI/gemma-4-31B-it-speculator.dflash2, block 8, R=8 verify),
+#                        262,144-token context. = stage-2 regression config D (M2 adapter + M2 delta).
+#   batch                up to 32 users on the stock ttnn batched decode path with the E1-E4 env knobs.
+#                        = regression config B32 (bench/regression/session_B32).
+#   (multi-user resident profile: a later update, not in this package.)
+#
+#   tt-model package --container models/demos/gemma4_31b_qb2/tt-model.yaml --out /home/ttuser/experiments/gemma4/tt-model-builds
+#   tt-model serve   <builds>/gemma4-31b-it-dflash/tt_kernel_manifest.json [--profile batch]
+#   tt-model push    <builds>/gemma4-31b-it-dflash --private
+#
+# Authored against tt-model-manager d28ed4dc (the installed CLI; card = description + quickstart only; lead 2026-11-11).
+# Release decisions (2026-11-12): engine resident_m3_2 (stage-2 D's; m3_3 comes with the next update), BF4 weights
+# (the user decoupled the upload from the BF8 evaluation), the card's tables from stage-2 D / Dsd and stage-1 B32.
+schema: "5.1"
+repo: changh95/gemma4-31b-it-dflash
+name: gemma4-31b-it-dflash
+weights:
+  repo: google/gemma-4-31B-it
+  revision: 842da3794eaa0b77d5f08bae87a17459d91ff475   # refs/main as validated (= tt/model.py HF_REVISION)
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  # Branch hchang/gemma4-31b-qb2-package = main 7ccf9c16556 + the serving closure copied from the live tree
+  # (bench/packaging/stage_files.sh, sums checked against the m3_2 freeze and the M2 delta) + this manifest.
+  # Worktree prerequisites: submodules initialised, `runtime/` a real directory (copied, gitignored).
+  tt_metal: /home/ttuser/experiments/gemma4/tt-metal-pkg
+  code:                                          # = the import closure traced from the adapters (no lazy-import gaps)
+    - models/demos/gemma4_31b_qb2/__init__.py
+    - models/demos/gemma4_31b_qb2/README.md
+    - models/demos/gemma4_31b_qb2/tt               # ttnn model (prefill + batch32 decode), adapters, drafters, taps
+    - models/demos/gemma4_31b_qb2/resident_m3_2    # the engine stage-2 D validated (frozen SUMS 4677ca02)
+    - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR (two bundles)
+    - models/demos/gemma4/__init__.py              # spec_policy (generator_resident_spec_vllm.py imports it)
+    - models/demos/gemma4/tt/__init__.py
+    - models/demos/gemma4/tt/spec_policy.py
+    - models/demos/gpt_oss/tt/ccl.py               # tt/decoder.py's CCL helpers
+    - models/common                                # sampling (TTSampling), lightweightmodule
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.31.0"}
+  # Stock upstream tenstorrent/vllm-tt-plugin main @ ca7a182 (pushed, on origin/main): the plugin every validated
+  # gemma4 serving run used, unmodified (git_diff_vllm-tt-plugin.patch empty in session_B32). It already carries the
+  # model-owned drafter sentinel (spec_admission.py) and the custom_class speculative path the adapter needs.
+  plugin: {repo: https://github.com/tenstorrent/vllm-tt-plugin, ref: ca7a18246e4111629ed6cb4a7d1192002749fccf}
+  extra_models_dir: models/demos/gemma4_31b_qb2/vllm_models
+  # The validated serving venv (tt-metal/python_env), pinned exactly: 418 packages, then vLLM --no-deps, as the plugin's
+  # own installer does. Live resolution (attempt 2 of the warm-up build) pulled vLLM's CUDA metadata: torch 2.13 against
+  # ttnn's 2.11 (verify.sh refused it), protobuf 7, nvidia-*/flashinfer/triton. Two documented departures, in the file.
+  lock: requirements.lock
+
+serve:                             # common to both profiles; a profile's env/additional_config MERGE over this, but a
+  hardware: p300x2                 # profile's `args` REPLACE serve.args wholesale (so every profile lists its own argv)
+  mesh_device: P300x2              # as validated (MESH_DEVICE=P300x2); (1, 4)
+  port: 8000
+  max_model_len: 262144
+  max_num_seqs: 1
+  block_size: 128
+  additional_config:
+    tt:
+      sample_on_device_mode: all
+      trace_region_size: 536870912
+      l1_small_size: 16384
+  env:
+    ARCH_NAME: blackhole
+    MESH_DEVICE: P300x2
+    # tt/model.py checkpoint_path() refuses an HF_MODEL that is not a directory, and tt-model sets HF_MODEL to the
+    # repo id: point it at the pinned snapshot inside the /hf mount (as tt-inference-server does). The resident
+    # weight conversion (weights.Checkpoint) reads the same variable.
+    HF_MODEL: /hf/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475
+    HF_HUB_OFFLINE: "1"
+    TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
+    VLLM_ENGINE_READY_TIMEOUT_S: "3600"          # cold first boot: resident cache conversion + kernel JIT
+    VLLM_PLUGINS: tt,tt_model_registry
+    VLLM_RPC_TIMEOUT: "900000"
+    VLLM_CONFIGURE_LOGGING: "1"
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+    TORCHDYNAMO_DISABLE: "1"
+
+serve_profiles:
+  - name: single-user
+    description: One user on the resident decode engine with DFlash2 speculative decoding, 262K context.
+    max_num_seqs: 1
+    capabilities:
+      tool_parser: gemma4                             # = stage-2 D's argv (spec_qb2_resident_spec_262k_m3.json)
+      reasoning_parser: gemma4
+    env:
+      GEMMA4_RESIDENT_ENGINE_PACKAGE: resident_m3_2       # = stage-2 D
+      GEMMA4_RESIDENT_DRAFTER: dflash2
+      # The resident engine's converted weights (raw BF4/BF8 blocks, 22 GB), in the /tensor-cache mount
+      # (~/.cache/tt-model/gemma4-31b-it-dflash/tensors on the host). vllm_models/resident_spec names
+      # tt/package_boot.py:Gemma4ResidentSpecPackaged, which converts them on the first start and checks them on every
+      # start (COMPLETE.json: weights revision, engine + converter hashes, precision, file manifest).
+      GRES_CACHE: /tensor-cache/gemma4_resident_raw_bf4
+      GEMMA4_RESIDENT_PRECISION: bf4                   # must match the converter's dtypes (refused otherwise)
+      # The drafter (5.2 GB) is a second checkpoint the single `weights` pointer cannot carry: tt/dflash2.py resolves
+      # RedHatAI/gemma-4-31B-it-speculator.dflash2 at its pinned commit b0cd01b4 from the /hf cache, offline
+      # (snapshot_download local_files_only). The card's quickstart downloads it first.
+    args:
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentSpecForCausalLM"]}']
+      - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
+      - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
+      - [--max-num-batched-tokens, "8192"]
+      - --enable-chunked-prefill
+      - --no-enable-prefix-caching
+      - [--max-logprobs, "-1"]
+      - [--override-generation-config, '{"top_k": 20}']
+      - [--default-chat-template-kwargs, '{"enable_thinking":true}']
+      - [--seed, "9472"]
+      - [--max-log-len, "32"]
+      - --no-async-scheduling                         # the custom_class drafter requires sync scheduling
+      - [--speculative-config, '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":7}']
+  - name: batch
+    description: Up to 32 concurrent users on the stock ttnn batched decode path (E1-E4 on), 262K context.
+    max_num_seqs: 32
+    capabilities:
+      reasoning_parser: gemma4                        # as B32 ran: no tool parser (lead: ship validated configs only)
+    env:
+      GEMMA4_QB2_HF_DECODE_ROPE: "1"                  # E1-E4: the validated env-gated decode/prefill knobs
+      GEMMA4_QB2_HOIST_DECODE_ROPE: "1"
+      GEMMA4_QB2_SLIDING_SDPA_GRID: 11x10
+      GEMMA4_QB2_SMALL_PREFILL_1D_ROWS: "128"
+    args:
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ForCausalLM"]}']
+      - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
+      - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
+      - [--max-num-batched-tokens, "8192"]
+      - --enable-chunked-prefill
+      - --no-enable-prefix-caching
+      - [--max-logprobs, "-1"]
+      - [--override-generation-config, '{"top_k": 20}']
+      - [--default-chat-template-kwargs, '{"enable_thinking":true}']
+      - [--seed, "9472"]
+      - [--max-log-len, "32"]
+      - --async-scheduling
+default_profile: single-user          # lead 2026-11-11 (qwen v2 names); multi-user comes later
+
+card:
+  description: |
+    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on the stock ttnn decode path.
+  quickstart: |
+    ### At a glance
+    - Weights: [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) @ `842da37`; drafter
+      [RedHatAI/gemma-4-31B-it-speculator.dflash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) @ `b0cd01b`
+    - Hardware: P300x2 (QuietBox 2), one (1, 4) Blackhole mesh, tensor-parallel over 4 chips
+    - Profiles: `single-user` (default), `batch`
+    - Context: 262,144 tokens on both profiles
+    - Weights on device: BF4 (bfloat4_b) projections, BF8 LM head and KV cache, as validated
+    - Thinking is on by default. Turn it off per request with `"chat_template_kwargs": {"enable_thinking": false}`.
+    - Default sampling: the model's generation config (temperature 1.0, top_p 0.95) with top_k 20. Pass `"temperature": 0` for greedy.
+    - `single-user` speculates on greedy and on sampled requests (temperature, top_p, top_k). Penalties and top_k above 32
+      are served without speculation. Speculative output can differ from plain decoding at near-ties.
+    - `single-user` refuses (HTTP 400) what its speculative path cannot apply: logprobs, structured outputs
+      (`response_format`, guided decoding), `bad_words`, `allowed_token_ids`, `min_tokens`, `logit_bias`, `min_p`.
+      `batch` serves logprobs.
+    - Tool calling: `single-user` parses tool calls (vLLM's `gemma4` parser, `tool_choice: "auto"`). `batch` has no tool
+      calling.
+
+    ### Which profile
+    - One user: `single-user`.
+    - 2 to 32 concurrent users: `batch`.
+
+    ### Get the drafter (`single-user`)
+    ```bash
+    hf download RedHatAI/gemma-4-31B-it-speculator.dflash2 --revision b0cd01b4918aae6b6388272950c4f9851734674b
+    ```
+
+    ### Serve
+    ```bash
+    tt-model serve changh95/gemma4-31b-it-dflash                    # default profile: single-user
+    tt-model serve changh95/gemma4-31b-it-dflash --profile batch
+    tt-model profiles changh95/gemma4-31b-it-dflash
+    ```
+    - First start on a host (`single-user`): about 12.5 min to ready. It converts the resident engine's weights once
+      (about 70 s: 22 GB from the 59 GB checkpoint) and compiles kernels once (about 9.5 min).
+    - Later starts: about 2.5 min, including a sha256 check of the converted weights (seconds when they are in the page cache).
+      `batch` then starts in about 2 min.
+    - Disk: about 31 GB under `~/.cache/tt-model/gemma4-31b-it-dflash` (22 GB converted weights, 9 GB compiled kernels).
+      A package update that changes the engine converts again.
+
+    ### How to query
+    ```bash
+    curl http://localhost:20000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+      "model": "google/gemma-4-31B-it",
+      "messages": [{"role": "user", "content": "Write a haiku about Blackhole chips."}],
+      "max_tokens": 256, "temperature": 0,
+      "chat_template_kwargs": {"enable_thinking": false}
+    }'
+    ```
+
+    ### Results (tt-inference-server `--workflow benchmarks`)
+
+    #### `single-user`
+    | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
+    |---|---|---|---|---|---|---|---|
+    | 128 | 128 | 1 | 8 | 58.6 | 5.2 | 194.0 | 179.4 |
+    | 128 | 1024 | 1 | 4 | 58.4 | 3.0 | 333.5 | 327.6 |
+    | 1024 | 128 | 1 | 4 | 136.2 | 9.0 | 110.8 | 99.8 |
+    | 2048 | 128 | 1 | 4 | 280.6 | 8.2 | 121.4 | 96.4 |
+    | 4096 | 128 | 1 | 4 | 564.2 | 8.0 | 125.7 | 81.3 |
+    | 8192 | 128 | 1 | 2 | 1168.3 | 10.8 | 92.3 | 50.3 |
+    | 8192 | 1024 | 1 | 2 | 1171.9 | 8.6 | 116.3 | 102.7 |
+    | 10000 | 1024 | 1 | 2 | 1507.7 | 4.3 | 232.8 | 173.5 |
+    | 16384 | 128 | 1 | 2 | 2494.7 | 8.2 | 122.1 | 36.2 |
+    | 32768 | 128 | 1 | 1 | 5620.7 | 9.5 | 104.8 | 18.7 |
+    | 65536 | 128 | 1 | 1 | 13633.1 | 10.7 | 93.5 | 8.5 |
+    | 131072 | 128 | 1 | 1 | 36673.2 | 5.1 | 195.4 | 3.4 |
+    | 196608 | 128 | 1 | 1 | 69641.8 | 4.4 | 228.4 | 1.8 |
+    | 262016 | 128 | 1 | 1 | 111304.2 | 3.9 | 258.6 | 1.1 |
+
+    Run 2026-11-11 23:04–23:12 (KST), tt-inference-server 0.26.1 `--workflow benchmarks`; random prompts, greedy (temperature 0), thinking on (server default). One of the QuietBox's two fans was dead during the run; chip 1 thermally throttled during decode at 6 of 14 points (up to 29% of decode time: 4096/128 c1, 8192/128 c1, 8192/1024 c1, 10000/1024 c1, 16384/128 c1, 32768/128 c1).
+    Greedy continuations of random prompts repeat and draft unusually well, so these rates are above what real text gets;
+    the realistic-prompt numbers below are the better guide.
+
+    #### `single-user`, realistic prompts (tt-inference-server `--spec-decode`)
+    | Prompts (SPEED-Bench) | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) | Tokens per verify (of 8) |
+    |---|---|---|---|---|---|---|---|
+    | coding | 1 | 80 | 156.1 | 4.8 | 206.8 | 185.9 | 4.64 |
+    | throughput_32k | 1 | 32 | 6836.5 | 10.9 | 91.8 | 70.9 | 2.62 |
+
+    Run 2026-11-11 23:20–23:50 (KST), tt-inference-server 0.26.1 `--workflow benchmarks --spec-decode`: SPEED-Bench prompts (AIPerf; the requests carry no sampling fields, so the server's defaults apply: temperature 1.0, top_p 0.95, top_k 20, thinking on). Each answer runs to its natural end (throughput sets capped at 8,192 tokens). One of the QuietBox's two fans was dead during the run; chip 1 throttled during coding 0.2% of decode; throughput_32k 0.6% of decode, 75% of prefill at a mild clock dip.
+
+    #### `batch`
+    | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
+    |---|---|---|---|---|---|---|---|
+    | 128 | 128 | 1 | 8 | 69.0 | 26.1 | 38.2 | 37.8 |
+    | 128 | 128 | 32 | 256 | 1482.0 | 28.3 | 35.3 | 806.0 |
+    | 128 | 1024 | 1 | 4 | 70.5 | 28.0 | 35.7 | 35.6 |
+    | 128 | 1024 | 32 | 128 | 1454.3 | 33.0 | 30.3 | 930.7 |
+    | 1024 | 128 | 1 | 4 | 151.9 | 29.7 | 33.6 | 32.6 |
+    | 1024 | 128 | 32 | 128 | 3075.6 | 47.0 | 21.3 | 452.8 |
+    | 2048 | 128 | 1 | 4 | 291.9 | 30.1 | 33.2 | 31.1 |
+    | 2048 | 128 | 32 | 128 | 4575.0 | 72.1 | 13.9 | 297.9 |
+    | 4096 | 128 | 1 | 4 | 578.3 | 30.7 | 32.5 | 28.6 |
+    | 4096 | 128 | 32 | 128 | 6254.9 | 131.9 | 7.6 | 177.8 |
+    | 8192 | 128 | 1 | 2 | 1185.2 | 32.1 | 31.1 | 24.3 |
+    | 8192 | 128 | 31 | 62 | 12482.5 | 230.2 | 4.3 | 94.8 |
+    | 8192 | 1024 | 1 | 2 | 1178.3 | 32.3 | 31.0 | 29.9 |
+    | 8192 | 1024 | 28 | 56 | 11599.0 | 62.8 | 15.9 | 377.5 |
+    | 10000 | 1024 | 1 | 2 | 1527.6 | 32.9 | 30.4 | 29.1 |
+    | 10000 | 1024 | 23 | 46 | 13938.4 | 63.6 | 15.7 | 297.8 |
+    | 16384 | 128 | 1 | 2 | 2528.1 | 34.7 | 28.8 | 18.4 |
+    | 16384 | 128 | 15 | 30 | 13138.7 | 230.3 | 4.3 | 45.1 |
+    | 32768 | 128 | 1 | 1 | 5650.9 | 40.1 | 24.9 | 11.9 |
+    | 32768 | 128 | 7 | 7 | 22704.8 | 173.0 | 5.8 | 19.9 |
+    | 65536 | 128 | 1 | 1 | 13643.6 | 50.8 | 19.7 | 6.4 |
+    | 65536 | 128 | 3 | 3 | 27516.6 | 157.9 | 6.3 | 8.0 |
+    | 131072 | 128 | 1 | 1 | 36882.2 | 72.0 | 13.9 | 2.8 |
+    | 196608 | 128 | 1 | 1 | 69690.9 | 93.2 | 10.7 | 1.6 |
+    | 262016 | 128 | 1 | 1 | 111567.4 | 114.4 | 8.7 | 1.0 |
+
+    Run 2026-11-11 16:16–16:51 (KST), tt-inference-server 0.26.1 `--workflow benchmarks`; random prompts, greedy (temperature 0), thinking on (server default). One of the QuietBox's two fans was dead during the run; chip 1 thermally throttled during decode at 13 of 25 points (up to 80% of decode time: 1024/128 c32, 2048/128 c32, 4096/128 c1, 4096/128 c32, 8192/128 c31, 8192/1024 c1, 8192/1024 c28, 10000/1024 c1, 10000/1024 c23, 16384/128 c15, 32768/128 c7, 65536/128 c1, 65536/128 c3).
+
+verify:
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot import Gemma4ResidentSpecPackaged, ensure_resident_cache; assert Gemma4ResidentSpecPackaged"
+  # the first-boot converter's key resolves for the shipped engine and precision (no checkpoint needed for this)
+  - "from models.demos.gemma4_31b_qb2.tt import package_boot as pb; import inspect, importlib; c = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.weights').convert; assert set(pb.CONVERT_ARGS) <= set(inspect.signature(c).parameters)"
+  - "from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM; assert Gemma4ForCausalLM"   # batch
+  # the engine is imported lazily by package name: import it here, and check its kernel sources shipped beside it
+  - "import os, importlib; e = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.engine'); importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.model'); from models.demos.gemma4_31b_qb2.resident_m3_2 import PKG_DIR; ks = ('streamer_reader.cpp', 'streamer_writer.cpp', 'streamer_compute.cpp', 'hub_dm.cpp', 'slice_dm.cpp', 'slice_mc.cpp', 'slice_compute.cpp', 'attn_reader.cpp', 'attn_writer.cpp', 'attn_compute.cpp'); missing = [k for k in ks if not os.path.isfile(os.path.join(PKG_DIR, 'kernels', k))]; assert not missing and e.ResidentEngine, missing"
+  - "from models.demos.gemma4_31b_qb2.tt.dflash2 import DFlash2Drafter; assert DFlash2Drafter.REVISION == 'b0cd01b4918aae6b6388272950c4f9851734674b'"
+  - "from models.demos.gemma4_31b_qb2.tt.model import HF_REVISION; assert HF_REVISION == '842da3794eaa0b77d5f08bae87a17459d91ff475'"
+  - "from vllm_tt_plugin.spec_admission import MODEL_OWNED_DRAFT_SENTINEL as s; assert s == 'vllm_tt_plugin.model_owned_drafter', s"
+  # the lock took: the serving-relevant versions of the validated venv
+  - "import importlib.metadata as md; want = {'torch': '2.11.0+cpu', 'torchvision': '0.26.0+cpu', 'transformers': '5.12.1', 'tokenizers': '0.22.2', 'huggingface-hub': '1.33.0', 'safetensors': '0.8.0', 'numpy': '1.26.4', 'protobuf': '5.29.6', 'fastapi': '0.136.3', 'starlette': '1.10.0', 'prometheus-fastapi-instrumentator': '8.1.0', 'numba': '0.61.2'}; got = {k: md.version(k) for k in want}; assert got == want, {k: (got[k], v) for k, v in want.items() if got[k] != v}"
+  - "import importlib.util as u; bad = [m for m in ('flashinfer', 'tilelang', 'tokenspeed_mla') if u.find_spec(m)]; assert not bad, bad"   # no CUDA closure
