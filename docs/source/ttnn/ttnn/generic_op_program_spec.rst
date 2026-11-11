@@ -13,8 +13,8 @@ This form is experimental while its API settles, so everything it adds lives und
 
 Each Python class has the fields of the C++ struct with the same name, whose comments document them: TT-NN's
 ``MeshProgramSpec`` and ``MeshProgramRunArgs`` are in ``ttnn/cpp/ttnn/operations/generic/generic_op.hpp``, and the
-others in ``tt_metal/api/tt-metalium/experimental/metal2_host_api/``. Of the advanced options, Python binds only the ones
-listed under `How a kernel finds its inputs`_.
+others in ``tt_metal/api/tt-metalium/experimental/metal2_host_api/``. Of the advanced options, Python binds only
+``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are C++ only.
 
 An example
 **********
@@ -85,11 +85,13 @@ spec only ties the binding to it. In the example, the reader reads tensor parame
 An array has the same length on every core, and ``get_arg(args::<name>).size()`` gives it. For a list whose length
 differs from core to core, such as a list of core coordinates, declare the longest length and pass each core's count
 in another argument. Python has no varargs, the positional arguments that Metal 2.0 keeps only to ease migration:
-array arguments replace them. Of the advanced options, Python binds only ``DFBAdvancedOptions.alias_with``, which lets
-two buffers share memory; the others are C++ only.
+array arguments replace them.
 
-The lists and dicts these classes return are copies, so a change to one is lost: assign the whole field instead, as
-in ``kernel.compile_time_args = {"block": 2}`` rather than ``kernel.compile_time_args["block"] = 2``.
+The lists and dicts these classes return are copies, and so are ``KernelSpec.source``, ``KernelSpec.hw_config`` and the
+``config_1xx``, ``config_12x`` and ``config_2xx`` fields of a hardware config. A change to a copy is lost: assign the
+whole field instead, as in ``kernel.compile_time_args = {"block": 2}`` rather than
+``kernel.compile_time_args["block"] = 2``. Other nested objects, such as ``kernel.runtime_arg_schema``, are not copies,
+so a change to one changes the kernel.
 
 Tensors
 *******
