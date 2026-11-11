@@ -87,11 +87,12 @@ differs from core to core, such as a list of core coordinates, declare the longe
 in another argument. Python has no varargs, the positional arguments that Metal 2.0 keeps only to ease migration:
 array arguments replace them.
 
-The lists and dicts these classes return are copies, and so are ``KernelSpec.source``, ``KernelSpec.hw_config`` and the
-``config_1xx``, ``config_12x`` and ``config_2xx`` fields of a hardware config. A change to a copy is lost: assign the
-whole field instead, as in ``kernel.compile_time_args = {"block": 2}`` rather than
-``kernel.compile_time_args["block"] = 2``. Other nested objects, such as ``kernel.runtime_arg_schema``, are not copies,
-so a change to one changes the kernel.
+The lists and dicts these classes return are copies, and so are their other fields that hold an object, such as
+``KernelSpec.hw_config``, ``TensorParameter.spec`` and ``WorkUnitSpec.target_nodes``. A change to a copy is lost: assign
+the whole field instead, as in ``kernel.compile_time_args = {"block": 2}`` rather than
+``kernel.compile_time_args["block"] = 2``. Only four fields return the object itself, so that a change to it changes the
+object that holds it: ``KernelSpec.compiler_options``, ``KernelSpec.runtime_arg_schema``,
+``TensorParameter.relaxations`` and ``DataflowBufferSpec.advanced_options``.
 
 Tensors
 *******
@@ -115,12 +116,12 @@ the same cache entry.
 
 Every call checks its run args against the spec before Metal sees them: each kernel gets exactly the runtime arguments
 and arrays it declares, each array with its declared length, each tensor parameter gets a tensor from ``io_tensors``
-that matches it, and each DFB size override names a buffer of the spec. Whether every core got its values is checked on
-later calls only when ``ttnn.CONFIG.validate_program_args`` is on; with it off, a core that a later call leaves out
-keeps its previous values. A DFB size override in ``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls
-that reuse the cached program, including calls with an equal spec from other code, until a call changes it.
-``prepare_generic_op`` with a program that is already cached applies its run args to it the same way, even if the
-preparation then fails.
+that matches it, and each DFB size override names a buffer of the spec, at most once and with no size of 0. Whether
+every core got its values is checked on later calls only when ``ttnn.CONFIG.validate_program_args`` is on; with it off,
+a core that a later call leaves out keeps its previous values. A DFB size override in
+``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls that reuse the cached program, including calls with
+an equal spec from other code, until a call changes it. ``prepare_generic_op`` with a program that is already cached
+applies its run args to it the same way, even if the preparation then fails.
 
 Running on a mesh
 *****************
@@ -140,8 +141,8 @@ different devices, give a program for each mesh coordinate range. On a 1x2 mesh,
         E.MeshProgramRunArgs(programs=[(left, run_args), (right, other_run_args)]),
     )
 
-The ranges must not overlap, every device in them must hold every tensor, and the run args must have the same ranges as
-the spec.
+The ranges must stay inside the mesh and must not overlap, every device in them must hold every tensor, and the run args
+must have the same ranges as the spec.
 
 Moving a kernel from the ProgramDescriptor form
 ***********************************************
