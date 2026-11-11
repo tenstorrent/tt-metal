@@ -27,7 +27,8 @@ Run (one 8x4 Blackhole Galaxy):
     RING_AG_SWAP_NOC=1 pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_ring_indexer_noc_hang_repro.py -s
 
 Knobs (env): RING_IDX_REPRO_SECS (default 300), RING_IDX_REPRO_SYNC_EVERY (default 1; 0 = sync once a minute),
-RING_IDX_REPRO_SCENARIO (default long = 0.5M cache; warm = 50k, slower to hang), RING_AG_SWAP_NOC (0/1).
+RING_IDX_REPRO_SCENARIO (default long = 0.5M cache; warm = 50k, slower to hang), RING_AG_SWAP_NOC (0/1),
+RING_IDX_REPRO_PAYLOAD (fabric max packet payload in bytes; default 14400).
 """
 
 import contextlib
@@ -61,6 +62,8 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
 pytestmark = pytest.mark.perf
 OP_NAME = "ring_indexer_score_dsa"
+# fabric max packet payload (bytes) the mesh opens with: RING_IDX_REPRO_PAYLOAD, default the perf test's 14 KiB + 64
+REPRO_PAYLOAD = int(os.environ.get("RING_IDX_REPRO_PAYLOAD", "0")) or get_max_payload_size()
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -120,7 +123,7 @@ def _record(calls):
     [
         {
             "fabric_config": PERF_FABRIC,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "fabric_router_config": create_fabric_router_config(max_payload_size=REPRO_PAYLOAD),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
             "trace_region_size": 16 * 1024 * 1024,
@@ -208,7 +211,7 @@ def test_ring_indexer_noc_hang_repro(mesh_device, variant, config_only):
 
     logger.info(
         f"RING_IDX_REPRO: glm_5_3 layer {mla_layer_idx}, {scenario}: {chunk}-token chunk at start={cache} "
-        f"(total {total}), SP={sp} x TP={tp}, {PERF_FABRIC}, RING_AG_SWAP_NOC={os.environ.get('RING_AG_SWAP_NOC', '0')}"
+        f"(total {total}), SP={sp} x TP={tp}, {PERF_FABRIC}, fabric payload {REPRO_PAYLOAD} B, RING_AG_SWAP_NOC={os.environ.get('RING_AG_SWAP_NOC', '0')}"
     )
     ttnn.deallocate(forward())  # compile every program, create the CCL resources
     ttnn.synchronize_device(mesh_device)
