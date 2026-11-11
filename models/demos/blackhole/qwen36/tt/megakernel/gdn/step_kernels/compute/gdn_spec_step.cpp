@@ -1022,6 +1022,11 @@ constexpr uint32_t kCoefEye = 5;   // 1 at (r0 + t, r0 + t)
 constexpr uint32_t kCoefW = 6;
 #endif
 #if GDN_BATCH
+#ifndef GDN_HOLD_SKIP
+#define GDN_HOLD_SKIP 0  // engine GDN role: skip HOLD users' replay / K S' Q S' terms / K^T transposes (reader source)
+#endif
+// GDN_HOLD_SKIP: the including TU declares uint32_t gdn_live_mask() (global scope, before this file): this layer's
+// live-user mask (it spins on the reader's L1 word)
 constexpr uint32_t kBatchMax = 8;                   // users per core (B <= 8 at T = 4: one 32-row tile)
 constexpr uint32_t kCoefN = 7 + kBatchMax;          // NGB G E BETA NBE EYE W + C_u per user
 constexpr uint32_t kMskRow = 0, kMskCol = kBatchMax, kMskZero = 2 * kBatchMax, kMskN = 2 * kBatchMax + 1;
@@ -1503,6 +1508,12 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     DataflowBuffer u_out(dfb::u_out);
 #if GDN_BATCH
     const uint32_t nb = gdn_rt_B();
+#if GDN_HOLD_SKIP
+    static_assert(GDN_EARLY_REPLAY && !GDN_ST_RING, "GDN_HOLD_SKIP: engine role (EARLY_REPLAY, ST_RING 0)");
+    const uint32_t live = gdn_live_mask();  // bit u: user u is not HOLD this layer
+#else
+    constexpr uint32_t live = 0xFFu;
+#endif
 #endif
 #endif
     const uint32_t state_in_id = dfb::state_in;
@@ -1905,7 +1916,12 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         up_in.wait_front(nb * Vs);
 #pragma GCC unroll 1
         for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
-            lz_replay<Kt, Vs>(sp, dnew, wu, 0u, ub_ * KVs, ub_ * Kt, ub_ * Vs, kCoefC + ub_);
+            if (live & (1u << ub_)) {
+                lz_replay<Kt, Vs>(sp, dnew, wu, 0u, ub_ * KVs, ub_ * Kt, ub_ * Vs, kCoefC + ub_);
+            } else {
+                sp.reserve_back(KVs);  // HOLD_SKIP: the slot keeps its place in sp (consumers wait nb * KVs), never read
+                sp.push_back(KVs);
+            }
         }
         state_in.pop_front(nb * KVs);
         ktp_in.pop_front(nb * Kt);
@@ -2105,6 +2121,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             lz_mm_init(dfb::kmq, dfb::sp);
 #pragma GCC unroll 1
             for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                if (!(live & (1u << ub_))) {
+                    continue;  // HOLD_SKIP: no term (its rows stay the cleared DST's zeros)
+                }
                 kmq.wait_front(Kt);  // K_u (o < Vs) / Q_u, streamed by the reader in this order
 #pragma GCC unroll 1
                 for (uint32_t i = 0; i < Kt; ++i) {
@@ -2128,6 +2147,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             reconfig_data_format_srca(dfb::kts);
 #pragma GCC unroll 1
             for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                if (!(live & (1u << ub_))) {
+                    continue;  // HOLD: no stash write-back (writer), no K^T page
+                }
 #pragma GCC unroll 1
                 for (uint32_t q = 0; q < kpb; ++q) {
                     if (s + q * VB >= Kt) {
@@ -2140,7 +2162,8 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
                     transpose_dest<true>(0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(0, dfb::kt_out, ub_ * kpb + q);
+                    // HOLD_SKIP: skipped users leave gaps, so the index must be honoured (in-order packing ignores it)
+                    pack_tile<GDN_HOLD_SKIP != 0>(0, dfb::kt_out, ub_ * kpb + q);
                     tile_regs_release();
                 }
             }

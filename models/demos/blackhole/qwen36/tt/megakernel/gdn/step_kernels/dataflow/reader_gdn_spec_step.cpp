@@ -53,6 +53,14 @@ void gdn_out_signal();  // the including TU (out_ready +1 / the aggregator, issu
 #if GDN_OUT_RD == 2
 void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);  // engine gdn_out: the out tiles into every GDN core's A (TU)
 #endif
+#ifndef GDN_HOLD_SKIP
+#define GDN_HOLD_SKIP 0  // engine GDN role (BATCH, ST_RING 0; RC v1.89): HOLD (idle) users get no state / stash reads and no
+                         // masked K_u / Q_u copies; the compute skips their replay, K S' / Q S' terms and K^T transposes
+                         // (block-diagonal per user: live rows bit-identical; HOLD rows finite, their ring untouched)
+#endif
+#if GDN_HOLD_SKIP
+void gdn_hold_publish(uint32_t live);  // the including TU: this layer's live-user mask -> the compute (L1 word + seq)
+#endif
 #ifndef GDN_CUT_FAST
 #define GDN_CUT_FAST 0  // engine GDN role (BATCH): masked K_u / Q_u slots (kts, kmq) keep their zeros across uses: only the
                         // previous occupant's T rows are re-zeroed (no full-tile zero fill + barrier per tile)
@@ -299,6 +307,15 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         ctrl_r.push_back(1);
         ctrl_r.wait_front(1);
         ctrl_r.pop_front(1);
+#if GDN_HOLD_SKIP && GDN_BATCH
+        {
+            uint32_t live = 0;
+            for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                live |= hold_b[ub_] ? 0u : (1u << ub_);
+            }
+            gdn_hold_publish(live);
+        }
+#endif
     }
 #if GDN_LAZY
     // no replay for HOLD or FRESH (the writer's r = 0): zero stash tiles, never the stale stash (the same rule as the
@@ -604,6 +621,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         ktp_in.reserve_back(nb * Kt);
         up_in.reserve_back(nb * Vs);
         for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            if (GDN_HOLD_SKIP && hold_b[ub_]) {
+                continue;  // HOLD_SKIP: the compute never reads this user's state / stash slots
+            }
             const uint32_t blk_u = ub_ * Nv + h;
             for (uint32_t i = 0; i < Kt; ++i) {
                 read_tiles_at(ring_acc, state_in, noc, blk_u * KV + i * Vt + s * Vs, Vs, ub_ * KVs + i * Vs);
@@ -716,6 +736,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             kts.reserve_back(kBatchMax * kpb);
             const uint32_t te = kts.get_entry_size(), kb = kts.get_write_ptr();
             for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                if (GDN_HOLD_SKIP && hold_b[ub_]) {
+                    continue;
+                }
                 for (uint32_t q = 0; q < kpb; ++q) {
                     const uint32_t i = s + q * VB;
                     if (i < Kt) {
@@ -734,6 +757,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             for (uint32_t o = 0; o < 2 * Vs; ++o) {
                 const uint32_t ro = o >= Vs ? 1u : 0u;
                 for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                    if (GDN_HOLD_SKIP && hold_b[ub_]) {
+                        continue;  // the compute skips this user's K S' / Q S' term
+                    }
                     kmq.reserve_back(Kt);
                     const uint32_t kb = kmq.get_write_ptr();
                     for (uint32_t i = 0; i < Kt; ++i) {

@@ -78,6 +78,9 @@ prog0 = program(0.0)
 ok_all = True
 for step in range(STEPS):
     hold = HOLD if step == 1 else []
+    if os.environ.get("G2_HOLD_SETS"):   # e.g. "x/1,5/0,2,3,4,5,6,7": HOLD users per step ('/'-separated, x = none), cycled
+        sets = os.environ["G2_HOLD_SETS"].split("/")
+        hold = [int(x) for x in sets[step % len(sets)].split(",") if x.isdigit() and int(x) < B]
     role.prepare(hold)
     ttnn.generic_op(io, prog0)
     ttnn.synchronize_device(dev)

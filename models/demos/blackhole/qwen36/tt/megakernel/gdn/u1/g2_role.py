@@ -278,9 +278,22 @@ class GdnRole:
             wA = _host([cA.win_a, cA.win_b][1 - cA.par]).float()
             wE = _host([cE.win_a, cE.win_b][1 - cE.par]).float()
             e_out, e_ring, e_win = torch.equal(iv(outA), iv(outB)), torch.equal(ringbits(rA), ringbits(rE)), torch.equal(iv(wA), iv(wE))
+            if self.out_unwritten:   # gdn_out E1_GO_LOCAL=2: the out tensor is never written -> out not compared (ring / win are)
+                e_out = "NOT CHECKED (gdn_out E1_GO_LOCAL=2; =1 checks)"
+            elif os.environ.get("E1_HOLD_SKIP", "0") == "1" and self.hold and B > 1:
+                # HOLD_SKIP: HOLD rows' out is not the reference's (no state term) -- live rows bit-identical, HOLD rows finite
+                W_ = outB.shape[-1]
+                oa, ob = iv(outA).reshape(-1, W_), iv(outB).reshape(-1, W_)
+                lv = torch.tensor([(r // T) not in self.hold for r in range(oa.shape[0])])
+                fin = bool(torch.isfinite(outB.reshape(-1, W_)[~lv]).all())
+                e_out = torch.equal(oa[lv], ob[lv]) and fin
+                outA = outA.reshape(-1, W_)[lv]; outB = outB.reshape(-1, W_)[lv]
+                if outA.numel() == 0:   # every user HOLD: nothing live to compare
+                    outA = outB = torch.zeros(1)
+                print(f"[{tag}]   HOLD_SKIP: live rows {int(lv.sum())} compared, HOLD rows finite {fin}", flush=True)
             print(f"[{tag}] GDN layer {l} hold={self.hold}: out {e_out} (max|d| {(outA - outB).abs().max().item():.3e}) | "
                   f"ring {e_ring} | win {e_win}", flush=True)
-            if not e_out:  # where: shape, # differing elements, first indices (row = user*T + t)
+            if e_out is False:  # where: shape, # differing elements, first indices (row = user*T + t)
                 d = (iv(outA) != iv(outB)).reshape(outB.shape)
                 nz = d.nonzero()
                 print(f"[{tag}]   out diff: shape {tuple(outB.shape)} n {nz.shape[0]} first {nz[:12].tolist()}", flush=True)
@@ -292,10 +305,15 @@ class GdnRole:
                 print(f"[{tag}]   pairs (row, col, ref, got): {[(r, c, float(oa[r, c]), float(ob[r, c])) for r, c in idx]}", flush=True)
                 n2 = int(((iv(outA) != iv(outB)).reshape(-1, outB.shape[-1]).sum(0) > 0).reshape(-1, 32).any(1).sum())
                 print(f"[{tag}]   blocks with diffs: {n2}", flush=True)
-            if self.out_unwritten:
-                if l == 0: print(f"[{tag}]   out not compared: gdn_out E1_GO_LOCAL=2 never writes the out tensor (E1_GO_LOCAL=1 = full check)", flush=True)
-                e_out = True
-            ok_all = ok_all and e_out and e_ring and e_win
+            if not e_ring:  # which (ring slot, user) blocks differ, and in how many heads
+                da, db = ringbits(rA), ringbits(rE)
+                bad = [(sl, u, int((da[sl, u] != db[sl, u]).flatten(1).any(1).sum())) for sl in range(da.shape[0]) for u in range(da.shape[1])
+                       if not torch.equal(da[sl, u], db[sl, u])]
+                print(f"[{tag}]   ring diff (slot, user, heads): {bad}", flush=True)
+                for sl, u, _ in bad[:3]:   # which 32x32 tiles of the (Dk, Dv) block differ (head 0..): page = tile row * Vt + col
+                    dd = (da[sl, u] != db[sl, u]).reshape(da.shape[2], da.shape[3] // 32, 32, da.shape[4] // 32, 32).any(4).any(2)
+                    print(f"[{tag}]     slot {sl} user {u}: differing pages per head {[[int(i) for i in dd[hh].flatten().nonzero().flatten()] for hh in range(dd.shape[0])][:2]}", flush=True)
+            ok_all = ok_all and (e_out is not False) and e_ring and e_win
             ttnn.deallocate(oAs[l])
             cA.par, cE.par = 1 - cA.par, 1 - cE.par
         self.mi_ctrl = [int(x) for x in torch.randint(0, T, (B,), generator=self.gen)]
