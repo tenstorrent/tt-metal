@@ -2578,6 +2578,10 @@ class Qwen36Model:
             and n_users in _mk1v.programs
             and kv_split is not True
         )
+        if _vt_io and not getattr(self, "_vt_io_logged", False):
+            self._vt_io_logged = True
+            logger.info(f"[vtail] QWEN36_R16_MK_VTAIL_IO on: engine x_in = all-gathered DRAM residual "
+                        f"(QWEN36_R16_MK_VTAIL_AG={os.environ.get('QWEN36_R16_MK_VTAIL_AG', '0')})")
         if _dar is not None:
             x = _dar.enter(x, dram=_vt_io)  # QWEN36_VERIFY_DAR: one AG -> replicated RES40 residual, as the plain decode
         # QWEN36_VERIFY_ATTN_LEAN: cos/sin in the prefill-shaped layout apply_partial_rope_decode wants ([1,1,R,rd]; the
