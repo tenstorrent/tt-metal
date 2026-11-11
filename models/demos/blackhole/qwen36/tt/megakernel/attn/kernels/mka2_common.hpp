@@ -113,13 +113,16 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* l1w(uint32_t addr) { return reinterpre
 // pt_groups) and the model-global 'attn' block (MKA_ATTN_L1: pt_addr, pt_B, pt_nb, n_attn, (k, v) per attention layer,
 // block_size, n_kv_heads). kvpos: int32 [32] RM DRAM (row u*T + j, -1 = HOLD / idle); cos / sin: [1,1,32,64] bf16 TILE
 // DRAM (tile 0 = the 32 frequencies of each row, prod's values). Page table: _vfy_kvpt_users int32 [B, nb] RM DRAM.
-// Per-core table at MKA_KVP_TAB (uniform L1 address, KVP_W words): [0] info = bit 31 valid | nv (bits 0-10: valid KV
-// blocks of this core) | m0 (bits 11-20: local index of the user's last valid block, 0x3FF none) | m1 (bits 21-30: the
-// block before it when the user's T rows straddle); [1] b0 (first block, dynamic under MKA_RQDYN); [2] pt window base
-// (entry index of word KVP_PT); [KVP_PT ..] this core's page-table window. The reader writes it at pass start (info
-// last) and resets [0] at program end; writer / compute wait [0]. Mask tiles (bf16 0 / -9984, ADDITIVE on S before exp,
-// so stale positions can't overflow exp; pages 0 = m0, 1 = m1) go through CB_OA (CB 28) right before the first masked
-// group. Own users (MKA_UPAR): global user g = 2u + MKA_UPAR_PAR (prod kv_split ownership).
+// Per-core table at MKA_KVP_TAB (uniform L1 address): [0] info = bit 31 valid | nv (bits 0-10: valid KV blocks of this
+// core) | m0 (bits 11-20: local index of the user's last valid block, 0x3FF none) | m1 (bits 21-30: the block before it
+// when the user's T rows straddle); [1] b0 (first block; MKA_RQDYN: the static share rescaled to the user's length);
+// [2] pt window base (entry index of word KVP_PT); [3 .. 3+T) per-row causal limits (HOLD rows: the user's max);
+// [KVP_PT ..] this core's page-table window. The reader writes it at pass start (info last) and resets [0] at program
+// end; writer / compute wait [0]. Mask tiles (bf16 0 / -9984, ADDITIVE on S before exp, so stale positions can't
+// overflow exp) are built once per pass by the WRITER into CB_ONE pages 1 (m0) / 2 (m1) (CB_ONE = 3 pages under
+// RQPOS; page 0 = ones). CB_OA must not carry them: on a tree root it flows compute -> reader (normalize), and a CB used
+// in both directions deadlocks (ragged users put the last block on the root).
+// Own users (MKA_UPAR): global user g = 2u + MKA_UPAR_PAR (prod kv_split ownership).
 constexpr uint32_t KVP_NONE = 0x3FF, KVP_PT = MKA_KVP_PT;   // host: MKA_KVP_TAB + 4 * KVP_PT is 64 B aligned (DRAM reads)
 FORCE_INLINE uint32_t rq_replay(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_REPLAY_L1)[4 + i]; }
 FORCE_INLINE uint32_t rq_attn(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_ATTN_L1)[4 + i]; }
