@@ -138,7 +138,7 @@ class SlotTable:
         j = self.phys.index(phys)
         self.phys[j], self.phys[logical] = cur, phys
 
-    def claim_balanced(self, logical: int, load: dict, users_per_row: int, avoid=()) -> int:
+    def claim_balanced(self, logical: int, load: dict, users_per_row: int, avoid=(), full_rows=()) -> int:
         """Prefill of a NEW request into logical slot ``logical`` with few prefill slots per mesh row (``DSV41_PREFILL_UP``): swap its model user with that of the free
         logical slot whose mesh row has the fewest users in prefill (``load`` {mesh row: users in prefill}; counted and updated here), so that concurrent prompts spread
         over the mesh rows. Free logical slots hold no state, so the swap is invisible to the plugin. Returns the physical user.
@@ -151,7 +151,15 @@ class SlotTable:
             for j in range(self.n_logical)
             if j == logical or (self.phys[j] not in self.live and self.phys[j] not in avoid)
         ]
-        best = min(free, key=lambda j: (load.get(self.phys[j] // users_per_row, 0), j != logical, j))
+        best = min(
+            free,
+            key=lambda j: (
+                self.phys[j] // users_per_row in full_rows,
+                load.get(self.phys[j] // users_per_row, 0),
+                j != logical,
+                j,
+            ),
+        )
         if best != logical:
             self.phys[logical], self.phys[best] = self.phys[best], self.phys[logical]
         p = self.phys[logical]
@@ -159,7 +167,7 @@ class SlotTable:
         load[p // users_per_row] = load.get(p // users_per_row, 0) + 1
         return p
 
-    def claim_rowaware(self, logical: int, busy_rows, users_per_row: int, avoid=()):
+    def claim_rowaware(self, logical: int, busy_rows, users_per_row: int, avoid=(), full_rows=()):
         """Prefill of a NEW request with few prefill slots per mesh row (DSV41_PREFILL_ROW_AWARE=1): a free model user of a mesh row WITHOUT an in-progress prompt (``busy_rows``), the row
         with the fewest live users first (decoders spread over the rows, so that every row keeps a free user for the next prompt), then the lowest in-row index, then the user the logical slot
         already maps to. Only free users are candidates: the logical slot's own user is no exception (a continuation of the same prefill call may still be bound to it). The swap is invisible
@@ -184,6 +192,8 @@ class SlotTable:
         best = min(
             free,
             key=lambda j: (
+                self.phys[j] // U
+                in full_rows,  # (DSV41_PROTECT_PARTIAL: a row whose prefill slots all hold a prompt in progress is the very last resort)
                 self.phys[j] // U in busy_rows,
                 live_row.get(self.phys[j] // U, 0),
                 self.phys[j] % U,
@@ -197,7 +207,7 @@ class SlotTable:
         self.live.add(p)
         return p, (p // U) not in busy_rows
 
-    def claim_packed(self, logical: int, load: dict, users_per_row: int, avoid=()) -> int:
+    def claim_packed(self, logical: int, load: dict, users_per_row: int, avoid=(), full_rows=()) -> int:
         """Prefill of a NEW request with decode buckets: like ``claim_balanced`` (concurrent prompts spread over the mesh rows: ``load`` {mesh row: users in prefill}) but among the rows
         of equal prefill load the free model user with the LOWEST in-row index u is taken (then the row with the fewest live users), so that the live set stays inside the smallest
         decode bucket (a step runs the users u < U' of every row). Free logical slots hold no state: the swap is invisible to the plugin.
@@ -217,6 +227,7 @@ class SlotTable:
         best = min(
             free,
             key=lambda j: (
+                self.phys[j] // U in full_rows,
                 load.get(self.phys[j] // U, 0),
                 self.phys[j] % U,
                 live_row.get(self.phys[j] // U, 0),
@@ -305,15 +316,27 @@ class PrefillTracker:
         if p in self.users:
             self.reported[p] = int(reported)
 
-    def find(self, start: int, prefix: torch.Tensor, exclude=(), lag: bool = False):
+    def find(self, start: int, prefix: torch.Tensor, exclude=(), lag: bool = False, ahead: bool = False):
         """physical slot of the in-progress user whose processed prefix is exactly ``prefix`` (``start`` tokens), else None. ``exclude``: slots already taken by another row of the same call
         (two prompts that share their first ``start`` tokens have identical carried state, each continuation must get its own). ``lag``: also a user whose model-side end is below ``start``
         (its last piece was cut back to a chunk boundary: ``reported`` end == ``start``) and whose computed prefix matches ``prefix[:end]``: the caller resumes at ``users[p][0]``.
         """
         prefix = prefix.reshape(-1).long()
-        for p, (end, toks) in self.users.items():
+        for p, (end, toks) in tuple(self.users.items()):
             if p not in exclude and end == start and toks.numel() == start and torch.equal(toks, prefix):
                 return p
+        if (
+            ahead
+        ):  # (DSV41_PROTECT_PARTIAL) the model computed one chunk MORE than vLLM's piece (a prefix hit whose piece was shorter than a chunk): vLLM's next piece starts at ``reported`` < end
+            for p, (end, toks) in tuple(self.users.items()):
+                if (
+                    p not in exclude
+                    and self.reported.get(p, end) == start < end
+                    and toks.numel() == end
+                    and prefix.numel() >= start
+                    and torch.equal(toks[:start], prefix[:start])
+                ):
+                    return p
         if lag:
             for p, (end, toks) in self.users.items():
                 if (

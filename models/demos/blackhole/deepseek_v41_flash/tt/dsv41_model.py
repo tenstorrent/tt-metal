@@ -523,7 +523,8 @@ class Model:
         (the non-ring unified layout: 88 cores, 29.5 MiB/bank/layer; -29 % expert op at N=1024 vs the ring in place, tests/test_moe_fuse_bench.py MF_WMODE=copy4) instead of reading the decode ring weights in place (the
         other layers keep the in-place read: ONE copy of those). The copies are added after everything else is resident, while the free DRAM per bank stays above DSV41_UNI_COPY_RESERVE_MIB (default 550 =
         the 450 MiB growth reserve of ``_uni_auto`` + 100 MiB margin); DSV41_UNI_COPY_MAX caps the count, DSV41_UNI_COPY_LAYER_MIB (29.5) is the cost per layer. The host cache of a copy layer
-        (DSV41_UNIFIED_CACHE/layer_<L>/*BFLOAT4_B*) is built from the checkpoint at the first boot (several minutes per layer)."""
+        (DSV41_UNIFIED_CACHE/layer_<L>/*BFLOAT4_B*) is built from the checkpoint at the first boot (several minutes per layer).
+        """
         from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
 
         v = os.environ.get("DSV41_UNI_COPY_LAYERS", "").strip()
@@ -547,7 +548,9 @@ class Model:
                 break
             kept = (self._keep or {}).get("umoe", {}).get(L)
             pl.umoe = DSV41UnifiedMoE(self.md, L, log=self.log, weights=kept, wdtype=ttnn.bfloat4_b)
-            pl.umoe.hybrid_thr = int(os.environ.get("DSV41_UNI_HYBRID", "0"))  # fused/unified split of the expert op on copy layers (needs the t16 fused kernel overlay)
+            pl.umoe.hybrid_thr = int(
+                os.environ.get("DSV41_UNI_HYBRID", "0")
+            )  # fused/unified split of the expert op on copy layers (needs the t16 fused kernel overlay)
             done.append(L)
         self.uni_copy_layers = done
         self.log(
@@ -1742,16 +1745,32 @@ class Model:
     # lives there) until it is finished or evicted by another user
     def _slot_alloc(self, wave, resume):
         """assign a prefill slot (global index r * Up + i) to every user of ``wave`` [(b, tokens, start, end)]; users that continue keep theirs. Returns {b: slot}."""
-        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import slot_alloc
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import (
+            protect_partial_on,
+            slot_alloc,
+            snapshot_on_evict_on,
+        )
 
         owner = self.__dict__.setdefault("pf_slot_owner", [None] * (self.rows * self.Up))
         of = self.__dict__.setdefault("pf_slot_of", {})
 
         def on_evict(o):
+            pa_ = self.__dict__.get("apc_paged")
+            if pa_ is not None and o in resume and snapshot_on_evict_on():
+                try:
+                    if pa_.snapshot(
+                        o, int(resume[o])
+                    ):  # (the carried halo state of the prompt in progress becomes a record before it is overwritten)
+                        self.log(f"  slot eviction: user {o} snapshotted at {resume[o]}")
+                except Exception as ex:  # noqa: BLE001 - the eviction goes on (the prompt recomputes)
+                    self.log(f"  slot eviction: snapshot of user {o} failed: {ex!r}")
             if self.__dict__.get("_kx_pending"):
                 self.flush_key_exports([o], "slot eviction")  # (its carried key FIFO is about to be overwritten)
 
-        return slot_alloc(owner, of, self.Up, self.U, wave, resume, on_evict)
+        prot = protect_partial_on()
+        return slot_alloc(
+            owner, of, self.Up, self.U, wave, resume, on_evict, cheapest=prot, log=self.log if prot else None
+        )
 
     def enable_apc(self, budget_bytes, policy="pow2"):
         """Automatic prefix caching of the interleaved prefill (tt/prefix_cache.py): host snapshots of the carried prefill state at chunk boundaries, restored into any user."""

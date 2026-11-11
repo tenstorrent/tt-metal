@@ -105,6 +105,7 @@ class ChunkPlan:
     _blk: object = field(default=None, repr=False)
     _done: bool = field(default=False, repr=False)
     zone: int = 0  # p0 of the prompt this chunk belongs to (recorded with halo B)
+    tip: bool = False  # the last full block of its prompt (its commit ends the prompt's prefill)
 
 
 class _Block:
@@ -123,6 +124,7 @@ class _Block:
         "children",
         "halo_pins",
         "state",
+        "infl",
     )
 
     def __init__(self, bid, row, idx, key, parent, pages, key_slot):
@@ -133,6 +135,7 @@ class _Block:
             1 << 60
         )  # zone start (p0) of the prompt whose replay wrote halo B: B is only valid for a new prompt with p0_new >= b_zone
         self.refs = self.children = self.halo_pins = 0
+        self.infl = False  # created by a prompt whose prefill is still running (DSV41_PROTECT_PARTIAL): its halo records are the last to be evicted
         self.state = "pending"  # pending -> live -> gone
 
 
@@ -216,6 +219,10 @@ class BlockIndex:
         xrow_min=2048,
         xrow_max=65536,
         loss_log=None,
+        halo_spacing=0,
+        halo_spacing_min=100000,
+        halo_spacing_max=64,
+        protect_fn=None,
     ):
         if chunk % page:
             raise ValueError(f"chunk {chunk} is not a multiple of the page {page}")
@@ -227,6 +234,14 @@ class BlockIndex:
         self.halo_budget = int(
             halo_budget
         )  # > 0: at most about this many halo A records per prompt (thin = ceil(blocks / budget), the tip always): a long cold prompt must not wipe the halo store of its row
+        # adaptive record schedule (DSV41_APC_PAGED_HALO_SPACING, default 0 = off): a prompt of at least ``halo_spacing_min`` tokens records a halo A every ``halo_spacing`` tokens (at most
+        # ``halo_spacing_max`` per prompt) when that is denser than the per-prompt budget; ``protect_fn()`` (DSV41_PROTECT_PARTIAL): the records of prompts still prefilling are evicted last
+        self.halo_spacing, self.halo_spacing_min, self.halo_spacing_max = (
+            int(halo_spacing),
+            int(halo_spacing_min),
+            max(1, int(halo_spacing_max)),
+        )
+        self.protect_fn = protect_fn
         self.strict_zone_equal = bool(
             strict_zone_equal
         )  # halo B valid only if b_zone == p0_new (exact), instead of b_zone <= p0_new
@@ -376,22 +391,35 @@ class BlockIndex:
         self.counters["ev_halo_a"] += 1
         self._emit("halo_a", ri, [blk.id], why)
 
+    def _protect(self):
+        return self.protect_fn is not None and bool(self.protect_fn())
+
+    def _halo_victim(self, lru):
+        """oldest block with a droppable halo record: not pinned by a pending hit; with the protection on, the records of prompts that are still prefilling are skipped unless nothing else is left"""
+        first = None
+        prot = self._protect()
+        for blk in lru.values():
+            if blk.halo_pins == 0:
+                if not (prot and blk.infl):
+                    return blk
+                if first is None:
+                    first = blk
+        return first
+
     def _alloc_halo_a(self, ri):
         row = self._rows[ri]
         if not row.free_a:
-            for blk in row.a_lru.values():
-                if blk.halo_pins == 0:
-                    self._drop_halo_a(ri, blk)
-                    break
+            blk = self._halo_victim(row.a_lru)
+            if blk is not None:
+                self._drop_halo_a(ri, blk)
         return row.free_a.pop() if row.free_a else -1
 
     def _alloc_halo_b(self, ri):
         row = self._rows[ri]
         if not row.free_b:
-            for blk in row.b_lru.values():
-                if blk.halo_pins == 0:
-                    self._drop_halo_b(ri, blk)
-                    break
+            blk = self._halo_victim(row.b_lru)
+            if blk is not None:
+                self._drop_halo_b(ri, blk)
         return row.free_b.pop() if row.free_b else -1
 
     def _lookup_row(self, ri, digests, num_tokens, max_hit, spans=None):
@@ -441,6 +469,8 @@ class BlockIndex:
             blk.halo_pins -= 1
         for blk in req.held:
             blk.refs -= 1
+            if blk.refs <= 0:
+                blk.infl = False
             if blk.state == "dead" and blk.refs == 0:
                 self._rows[blk.row].free_pages.extend(reversed(blk.pages))
                 blk.state = "gone"
@@ -456,7 +486,8 @@ class BlockIndex:
         """READ-ONLY look for the bounded home-row hold of the scheduler: -> (deepest resident hit of any row, that row (-1 = none), free users per row). Nothing is planned, pinned, reserved, dropped or
         counted (``plan_hit`` does all of that), so it can be asked on every scheduler step. ``finished_ids`` as in ``plan_hit``.
         ``touch``: refresh the LRU position of the block (and its halo slots) the hit resumes from, so that a request held for a busy home row does not lose its resume point to the halo / block
-        eviction of the commits that run meanwhile (measured: a 511 k hit gone after 31 s of hold, the halo A store being full). Only the recency order changes."""
+        eviction of the commits that run meanwhile (measured: a 511 k hit gone after 31 s of hold, the halo A store being full). Only the recency order changes.
+        """
         fin_users = {r.user for r in (self._reqs.get(i) for i in finished_ids) if r is not None and r.state == "bound"}
         num_tokens = int(num_tokens)
         top = (
@@ -802,7 +833,9 @@ class BlockIndex:
 
     # ---- chunk commit ---------------------------------------------------------------------------------------------------------------------------------
     @_locked
-    def begin_chunk(self, req_id, start, end, key_tokens, prompt_len, salt=b"", spans=None, copy=None):
+    def begin_chunk(
+        self, req_id, start, end, key_tokens, prompt_len, salt=b"", spans=None, copy=None, force_halo=False
+    ):
         """``copy`` (cross-row copy of a donor block, see ``_plan_xrow``): (want halo A, want halo B, b_zone of the donor's halo B); the halo policy is replaced by it, an existing block is left alone"""
         req = self._reqs.get(req_id)
         if req is None or req.state != "bound":
@@ -827,7 +860,12 @@ class BlockIndex:
         thin = self.halo_thin
         if self.halo_budget > 0:
             thin = max(thin, -(-(int(prompt_len) // c) // self.halo_budget))
-        want_halo = tip or (i % thin == 0)
+            if self.halo_spacing > 0 and int(prompt_len) >= self.halo_spacing_min:
+                nb = int(prompt_len) // c
+                thin = min(thin, max(self.halo_thin, -(-self.halo_spacing // c), -(-nb // self.halo_spacing_max)))
+        want_halo = (
+            tip or (i % thin == 0) or bool(force_halo)
+        )  # (force_halo: a snapshot of a prompt whose carried state is about to be evicted)
         if copy is not None:
             want_halo = bool(copy[0])
         blk = row.blocks.get(key)
@@ -858,6 +896,7 @@ class BlockIndex:
             blk.refs += 1  # (protects the block until finish/abort)
             req.held.append(blk)
             cp = ChunkPlan(req_id, ri, i, -1, ha, hb, full, True, blk, zone=z_new if copy is None else int(copy[2]))
+            cp.tip = tip
             req.cps.append(cp)
             return cp
         if key in row.pending:
@@ -885,6 +924,10 @@ class BlockIndex:
         row.pending[key] = blk
         blk.b_zone = z_new if copy is None else int(copy[2])
         cp = ChunkPlan(req_id, ri, i, ks, ha, hb, full, False, blk, zone=z_new if copy is None else int(copy[2]))
+        cp.tip = tip
+        blk.infl = (
+            self._protect() and not tip
+        )  # (the tip ends the prefill: nothing in flight any more once it is published)
         req.cps.append(cp)
         return cp
 
@@ -992,6 +1035,9 @@ class BlockIndex:
             req.priv.discard(p)
         req.held.append(blk)  # (its ref was taken at begin_chunk)
         self.counters["commits"] += 1
+        if cp.tip:  # the prompt's prefill is over: its records are not "in flight" any more
+            for b_ in req.held:
+                b_.infl = False
         return True
 
     # ---- release / reset ------------------------------------------------------------------------------------------------------------------------------
