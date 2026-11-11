@@ -37,10 +37,13 @@
 #include "../../kernels/mk_ar_recv.hpp"   // AR_RECV on the owners (AR_INTERFACE.md; MKAR_* defines from ar_phase.py)
 #endif
 
-#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
+#if defined(MKA_ROLE_STREAM) && defined(MKA_GDN24) && defined(MKA_QSK) && defined(MKA_RWO) && defined(MK_V12) && !defined(MKA_OWNPAR)
+#define MKA_STREAMLEAN 1   // the EXTLEAN pattern on STREAM (RC config): role args every STREAM core shares are constants (program.py asserts them)
+#endif
+#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
 #define MKA_WOT_DIV (wo_tiles ? wo_tiles : 1u)   // folded 0: dead code, but -Werror=div-by-zero
 #else
 #define MKA_WOT_DIV wo_tiles
@@ -102,12 +105,12 @@ void kernel_main() {
     const uint32_t cbh_base = get_arg_val<uint32_t>(a++);
     const uint32_t wd_addr = get_arg_val<uint32_t>(a++), dn_page = get_arg_val<uint32_t>(a++);
     const uint32_t wgu_addr = get_arg_val<uint32_t>(a++), gu_page = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
     constexpr uint32_t ROOT = 0xFF; a++;
 #else
     const uint32_t ROOT = get_arg_val<uint32_t>(a++);
 #endif
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
     constexpr uint32_t IS_GU = 0; a++;
 #else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
@@ -146,7 +149,10 @@ void kernel_main() {
     const bool wr_k = kv_mode == 1 || kv_mode == 3, wr_v = kv_mode == 0 || kv_mode == 3;
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
-#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t qrole = 1; a++;
+    const uint32_t qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
+#elif defined(MKA_EXTLEAN) && defined(MKA_QSK)
     constexpr uint32_t qrole = 3; a++;
     const uint32_t qn = get_arg_val<uint32_t>(a++);
     constexpr uint32_t qnt = 0; a++;
@@ -154,17 +160,39 @@ void kernel_main() {
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
 #endif
     const uint32_t q_ox = get_arg_val<uint32_t>(a++), q_oy = get_arg_val<uint32_t>(a++), qo_addr = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t gdn_on = 1; a++;
+#elif defined(MKA_EXTLEAN)
     constexpr uint32_t gdn_on = 0; a++;
 #else
     const uint32_t gdn_on = get_arg_val<uint32_t>(a++);   // this core runs the GDN in-proj stand-in in GDN-type layers
+#endif
+#if defined(MK_GDN_INPROJ) && defined(MKA_ROLE_EXT)   // STREAM-only args: constants on the owners (EXT text budget)
+    constexpr uint32_t gnt = 0, gq = 0, gtile = 0, gw_page = 0, pgw_layer = 0, gin_x = 0, gin_y = 0, gin_addr = 0, gcnt = 0;
+    a += 11;
+    const auto wg = TensorAccessor(wm_args, 0, MKA_GWTB);
+    const auto gdbg = TensorAccessor(qo_args, 0, 2048);
+#elif defined(MK_GDN_INPROJ)
+    // column nt, owned tile (0/1) and its index, BFP4 weight slice, destination (GDN core xy + staging slot address),
+    // the Q root's tile counter, bench-only DRAM debug copy
+    const uint32_t gnt = get_arg_val<uint32_t>(a++), gq = get_arg_val<uint32_t>(a++), gtile = get_arg_val<uint32_t>(a++);
+    const uint32_t gw_addr = get_arg_val<uint32_t>(a++), gw_page = get_arg_val<uint32_t>(a++), pgw_layer = get_arg_val<uint32_t>(a++);
+    const uint32_t gin_x = get_arg_val<uint32_t>(a++), gin_y = get_arg_val<uint32_t>(a++), gin_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t gcnt = get_arg_val<uint32_t>(a++), gdbg_addr = get_arg_val<uint32_t>(a++);
+    const auto wg = TensorAccessor(wm_args, gw_addr, MKA_GWTB);
+    const auto gdbg = TensorAccessor(qo_args, gdbg_addr, 2048);
 #endif
 #if defined(MKA_RWO)
     // wo: tiles (rot order), concat role, owner chunk, wo-core multicast rects, the 16 owners' coords, debug output
     const uint32_t wo_nt = get_arg_val<uint32_t>(a++);
     uint32_t wo_tile[WO_MAXT];
     for (uint32_t i = 0; i < WO_MAXT; ++i) wo_tile[i] = get_arg_val<uint32_t>(a++);
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t is_concat = 0; a++;
+    const uint32_t own_chunk = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t is_concat = get_arg_val<uint32_t>(a++), own_chunk = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t re[3][5];
     for (uint32_t i = 0; i < 3; ++i) for (uint32_t k = 0; k < 5; ++k) re[i][k] = get_arg_val<uint32_t>(a++);
     const uint32_t self_re = get_arg_val<uint32_t>(a++);
@@ -190,7 +218,12 @@ void kernel_main() {
     }
 #endif
 #if defined(MKA_RQNR)   // q/k head-norm cores (independent of MKA_RWO since the GDN24 decouple)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t head_id = 255; a++;   // head cores are owners
 #if defined(MKA_KVA)
+    constexpr uint32_t kva = 0;
+#endif
+#elif defined(MKA_KVA)
     const uint32_t head_kva = get_arg_val<uint32_t>(a++);
 #if defined(MKA_ROLE_STREAM)
     const uint32_t head_id = head_kva & 0xFF;
@@ -726,11 +759,33 @@ void kernel_main() {
         cb_reserve_back(cb, pages);
         s_ = {src, get_write_ptr(cb), bytes, trid};
     };
+#if V_NB_ON
+    uint32_t vseq = 0;    // split MLP slices started (mailbox seq)
+    bool vsplit = false;  // slot V currently holds a NOC0/NOC1-split slice: 1 request in flight, one-packet pieces
+    // a split slice whose previous piece is still in flight holds the pump (returns true); every other slot (slot M,
+    // NOC0-only attention slices) keeps today's issue-when-the-cmd-buffer-is-free behaviour
+    auto pump1 = [&](VSlot& s_) {
+        if (!s_.rem) return false;
+        if (vsplit && &s_ == &sv) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, s_.trid)) return true;
+            const uint32_t sz = s_.rem < V_NB_PB ? s_.rem : V_NB_PB;
+            noc_async_read_set_trid(s_.trid);
+            noc_async_read<V_NB_PB>(s_.src, s_.dst, sz);   // one packet (<= NOC_MAX_BURST_SIZE): no burst loop
+            noc_async_read_set_trid(0);
+            s_.src += sz; s_.dst += sz; s_.rem -= sz;
+            return true;
+        }
+        if (!noc_cmd_buf_ready(noc_index, read_cmd_buf)) return false;
+        const uint32_t sz = s_.rem < 16384 ? s_.rem : 16384;
+        noc_async_read_set_trid(s_.trid);
+        noc_async_read(s_.src, s_.dst, sz);
+#else
     auto pump1 = [&](VSlot& s_) {
         if (!s_.rem || !noc_cmd_buf_ready(noc_index, read_cmd_buf)) return false;
         const uint32_t sz = s_.rem < 16384 ? s_.rem : 16384;
         noc_async_read_set_trid(s_.trid);
         noc_async_read(s_.src, s_.dst, sz);
+#endif
         noc_async_read_set_trid(0);
         s_.src += sz; s_.dst += sz; s_.rem -= sz;
         return true;
@@ -740,9 +795,12 @@ void kernel_main() {
 #else
     auto v_pump = [&]() { pump1(sv); };
 #endif
-    auto v_slot_ready = [&](VSlot& s_, uint32_t cb, uint32_t pages, uint32_t trid) {
+    auto v_slot_ready = [&](VSlot& s_, uint32_t cb, uint32_t pages, uint32_t trid, uint32_t vd = 0) {
         while (s_.rem) pump1(s_);
         noc_async_read_barrier_with_trid(trid);
+#if V_NB_ON
+        while (*vw(vg[VG_VD]) < vd) invalidate_l1_cache();   // the reader's NOC1 part of the slice landed
+#endif
         cb_push_back(cb, pages);
     };
 #if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
@@ -797,12 +855,32 @@ void kernel_main() {
         if (vn == vk) rstd_send();   // rstd producer (n = k): this K-row's Σx² row -> every STREAM core's Σ tile
 #endif
     };
+#if V_NB_ON
+    auto v_mlp_start = [&](uint32_t L) __attribute__((noinline)) {   // one out-of-line copy (3 call sites; text budget)
+        if (vrole == 1) {
+            // attention-type layers' slices (prefetched at the previous MLP tail, across the SDPA window where the reader
+            // streams K) stay NOC0-only unless MK_V12_NOCBAL_ATT
+            const bool nb = MK_V12_NOCBAL_ATT || !is_attn(L);
+            vsplit = nb;
+            const uint32_t n0 = nb ? v_nb_n0(vnt * WTB) : vnt * WTB;
+            v_slot_start(sv, CB_WV, V_SLOT, wv.get_noc_addr(vwv_page + L * vpvl), n0, V_TRID0 + (L & 1));
+            if (nb) {
+                const uint64_t s1 = wv.get_noc_addr(vwv_page + L * vpvl, n0, 1);   // the reader's part, NOC1 coordinates
+                *vw(vg[VG_VSL]) = (uint32_t)s1; *vw(vg[VG_VSH]) = (uint32_t)(s1 >> 32); *vw(vg[VG_VS]) = ++vseq;
+            }
+        }
+    };
+#else
     auto v_mlp_start = [&](uint32_t L) {   // layer L's MLP slice into slot V (free: the previous MLP popped it)
         if (vrole == 1) v_slot_start(sv, CB_WV, V_SLOT, wv.get_noc_addr(vwv_page + L * vpvl), vnt * WTB, V_TRID0 + (L & 1));
     };
+#endif
 #if defined(MKA_QSK)
     // slot M: layer L's split-K qkv slice (attention: 20 K tiles x nt, k-major) or the GDN in-proj stand-in (QSK_GK K tiles)
     auto qsk_start = [&](uint32_t L) {
+#if defined(MK_GDN_INPROJ)   // GDN-type layer: its own gdn_in slice at the GDN ordinal (not the qkv block)
+        if (!is_attn(L)) { v_slot_start(sm, CB_WMG, GIN_SLOT, wg.get_noc_addr(gw_page + (L - aidx(L)) * pgw_layer), QSK_KPR * gnt * MKA_GWTB, 10 + (L & 1)); return; }
+#endif
         v_slot_start(sm, CB_WM, QSK_SLOT, wm.get_noc_addr(wm_page + wla(L) * pwm_layer), (is_attn(L) ? QSK_KPR : QSK_GK) * qsk_nt(vn) * MWTB, 10 + (L & 1));
     };
 #endif
@@ -858,6 +936,21 @@ void kernel_main() {
         noc_async_atomic_barrier();
     };
 #endif
+#if defined(MKA_GDNOUT) && defined(MKA_RWO)
+    // gdn_out (wo unit on the 24 GDN cores) scatters into the owners' CB_XO: owner 0 publishes the uniform CB_XO address
+    // to the GDN cores' xow word (its own copy of the word is the multicast source)
+    if (own_chunk == 0) {
+        constexpr uint32_t gr[2][5] = MKA_GDN_RECTS;
+        *l1w(MKA_GDN_XOW) = get_write_ptr(CB_XO);
+        for (uint32_t i = 0; i < 2; ++i)
+            if (gr[i][4]) noc_semaphore_set_multicast(MKA_GDN_XOW, get_noc_multicast_addr(gr[i][0], gr[i][1], gr[i][2], gr[i][3], MKA_GDN_XOW), gr[i][4], false);
+        noc_async_write_barrier();
+    }
+    // every layer (attention wo or gdn_out) adds 10 to each owner's WOCNT
+#define MKA_WOCNT_AT(L, A) (10 * ((L) + 1))
+#else
+#define MKA_WOCNT_AT(L, A) (10 * ((A) + 1))
+#endif
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
         const uint32_t A = aidx(L);
@@ -869,8 +962,13 @@ void kernel_main() {
         if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
 #if defined(MK_REAL_GAR) && defined(MKA_ROLE_EXT)
             if (vrole == 2 && ar_on) {   // G-d: the GDN mixer AR (gdn_out -> CB_XO; until G-c: CB_XO stand-in) once the GDN layer is out
+#if defined(MK_GDN_OUT_REAL) && defined(MKA_GDNOUT)
+                // G-c: gdn_out scattered this owner's 10-tile chunk into CB_XO; every layer adds 10 to WOCNT (wo or gdn_out)
+                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), MKA_WOCNT_AT(L, A));
+#else
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY),
                                        MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1));
+#endif
 #if defined(MK_GAR_ZERO)   // CB_XO stand-in until gdn_out (G-c) lands: zero (the GDN AR adds 0: the residual chain is unchanged)
                 {
                     const uint32_t xo = get_read_ptr(CB_XO);
@@ -897,26 +995,60 @@ void kernel_main() {
             // owned rows {k, k + 8} of the N-list; GDN-type layers: partial only (in-proj stand-in, discarded)
             MKZ("W-MIX");
             v_xk_push(2 * L + 1);
+#if defined(MK_GDN_INPROJ)
+            if (att) v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
+            else v_slot_ready(sm, CB_WMG, GIN_SLOT, 10 + (L & 1));
+            const bool mrs = true, mown = att || gq;   // every layer has a mixer RS; this row sums one (qkv items / its gdn_in tile)
+#else
             v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
+            const bool mrs = att, mown = att;
+#endif
 #if defined(MK_AR_RSTD)
-            if (att) {   // the qkv mixer's rstd: Σ of this layer's mixer x (K-row delivery 2L + 1) is in the Σ tile
+            if (mown) {   // the mixer's rstd: Σ of this layer's mixer x (K-row delivery 2L + 1) is in the Σ tile
 #if !defined(MK_AR_RSTD_HOST)
                 noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 1));
 #endif
                 cb_reserve_back(CB_VRSA, 1); cb_push_back(CB_VRSA, 1);
             }
 #else
-            if (att) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
+            if (mown) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
 #endif
             if (L + 1 < NL) qsk_start(L + 1);   // blocks until compute popped slot M (partial done)
-            if (att) {
+            if (mrs) {
                 noc_semaphore_wait_min(vw(vg[VG_LA]), 2 * L + 1);
+#if defined(MK_GDN_INPROJ)
+                v_rs_send(vabase, vk + 1, V_NROW, att ? qsk_nt(vn) : gnt, 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
+#else
                 v_rs_send(vabase, vk + 1, V_NROW, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
+#endif
                 *vw(vg[VG_LB]) = 2 * L + 1;
-                { MKZ("W-QRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * ((vk < vnn ? L : 0) + A + 1)); }
-                cb_reserve_back(CB_VRS, 2 * V_NROW);
-                cb_push_back(CB_VRS, 2 * V_NROW);
-                qkv_route(L);
+                if (mown) {
+                    { MKZ("W-QRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * ((vk < vnn ? L : 0) + QMIX(L, A))); }
+                    cb_reserve_back(CB_VRS, 2 * V_NROW);
+                    cb_push_back(CB_VRS, 2 * V_NROW);
+#if defined(MK_GDN_INPROJ)
+                    if (!att) {   // owned gdn_in tile -> the GDN core's staging slot, then count it at the Q root
+                        MKZ("W-GIN");
+                        { MKZ("W-GINQ"); cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt); }
+                        const uint32_t gsrc = get_read_ptr(CB_QO);
+                        noc_async_write(gsrc, get_noc_addr(gin_x, gin_y, gin_addr), 2048);
+#if !defined(MK_GIN_PERCORE)   // count at the Q root (acked; the role waits in_ready >= g + 1). Its incs cross the DRAM column (+33 us on the Q root wait)
+                        { MKZ("W-GINB"); noc_async_write_barrier(); }
+                        noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gcnt), 1);
+#else   // per GDN core: in_ready += 1 on the tile's own core, ordered behind the data on the same path (flushed)
+                        noc_async_writes_flushed();
+                        noc_semaphore_inc(get_noc_addr(gin_x, gin_y, MKA_GDN_INREADY), 1);
+                        noc_async_atomic_barrier();
+#endif
+#if !defined(MKA_NOQDBG)   // bench-only DRAM copy (in-proj PCC), after the staging write + count
+                        noc_async_write(gsrc, gdbg.get_noc_addr((L - A) * GIN_NT + gtile), 2048);
+                        noc_async_write_barrier();
+#endif
+                        cb_pop_front(CB_QO, QO_SLOT ? QO_SLOT : qnt);
+                    } else
+#endif
+                    qkv_route(L);
+                }
             }
         } else if (qrole == QR_EXT) {
             MKZ("W-XQKV");
@@ -1016,7 +1148,13 @@ void kernel_main() {
 #if defined(MKA_GDN24)
             // GDN role (spec §17 / §20): this GDN-type layer's step may read its prefix input -> in_ready += 1 on the 24
             // GDN cores (rows 8-9), from the Q root (device-local global sem; the GDN cores wait >= g + 1, then reset)
+#if defined(MK_GDN_INPROJ)
+#if !defined(MK_GIN_PERCORE)
+            if (is_qroot) { noc_semaphore_wait_min(l1w(gcnt), GIN_NT * (L - A + 1)); gdn_inc(MKA_GDN_INREADY); }   // all 65 tiles landed
+#endif   // (default: each GDN core's in_ready counts its own tiles, raised by their writers)
+#else
             if (is_qroot) gdn_inc(MKA_GDN_INREADY);
+#endif
 #endif
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             // GDN-type layer: the MLP slots of layer L are pushed here (before plan_layer(L + 1) reserves the other slot)
@@ -1054,7 +1192,11 @@ void kernel_main() {
                     } else v_pump();
 #endif
                 }
+#if defined(MKA_ZGDNW)
+                { DeviceZoneScopedN("W-GDNI"); issue_some(true); }   // diagnostic: starts when the stall ended
+#else
                 issue_some(true);
+#endif
             }
 #else
             issue_some(true);
@@ -1228,7 +1370,7 @@ void kernel_main() {
             const uint32_t xo = get_write_ptr(CB_XO);   // uniform on the ext cores
             wou::scatter(CB_QO, QO_SLOT, wo_nt, wo_tile, ow_x, ow_y, xo, gs[GS_WOCNT]);   // rot order: farthest owner first
             if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
-                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * (A + 1));
+                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), MKA_WOCNT_AT(L, A));
 #if defined(MK_REAL_AAR) && defined(MKA_ROLE_EXT)
                 if (ar_on) mixer_ar(L, MK_MI(L, A));   // the real attention AR (spec §19): wo output CB_XO (CB 23) -> residual -> MLP x
 #endif
@@ -1272,15 +1414,12 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(vgo1x, vgo1y, vg[VG_MGO]), 1);
             }
             const bool own_h = vk < vnn;
-            v_slot_ready(sv, CB_WV, V_SLOT, V_TRID0 + (L & 1));   // layer L's MLP slice landed
-#if defined(MK_AR_RSTD)
-            if (own_h) {   // the MLP's rstd: Σ of this layer's MLP x (K-row delivery 2L + 2)
-#if !defined(MK_AR_RSTD_HOST)
-                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 2));
-#endif
-                cb_reserve_back(CB_VRSA, 1); cb_push_back(CB_VRSA, 1);
-            }
+#if V_NB_ON
+            v_slot_ready(sv, CB_WV, V_SLOT, V_TRID0 + (L & 1), (MK_V12_NOCBAL_ATT || !is_attn(L)) ? vseq : 0);   // both NoCs' parts landed
 #else
+            v_slot_ready(sv, CB_WV, V_SLOT, V_TRID0 + (L & 1));   // layer L's MLP slice landed
+#endif
+#if !defined(MK_AR_RSTD)
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
 #endif
 #if defined(MK_V12_X2) || defined(MK_RS_QKV)
@@ -1289,6 +1428,16 @@ void kernel_main() {
             const uint32_t vxv = L + 1;
 #endif
             v_xk_push(vxv);
+#if defined(MK_AR_RSTD)
+            // the MLP's rstd: Σ of this layer's MLP x (K-row delivery 2L + 2); after v_xk_push, whose producer step (n = k)
+            // adds this core's own row (waiting before it deadlocks the 8 producer cores)
+            if (own_h) {
+#if !defined(MK_AR_RSTD_HOST)
+                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 2));
+#endif
+                cb_reserve_back(CB_VRSA, 1); cb_push_back(CB_VRSA, 1);
+            }
+#endif
             noc_semaphore_wait_min(vw(vg[VG_LA]), V_LV(L));
             v_rs_send(vabase, vk + 1, vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
             *vw(vg[VG_LB]) = V_LV(L);
@@ -1403,6 +1552,11 @@ void kernel_main() {
 #endif
     }
     if (is_qroot) { *l1w(gs[GS_MIXDONE]) = 0; *l1w(gs[GS_ADONE]) = 0; }
+#if defined(MK_GDN_INPROJ)
+#if !defined(MK_GIN_PERCORE)
+    if (is_qroot) *l1w(gcnt) = 0;   // device-local: every increment was awaited (65 per GDN layer) before the last in_ready
+#endif
+#endif
 #if defined(MK_V12)
     // v12 words: every increment into this core's words for layer NL - 1 preceded its last wait above (STREAM: W-VMD;
     // owner: W-OP), and the reader's LA write preceded the writer's last LA wait
@@ -1453,6 +1607,9 @@ void kernel_main() {
     *l1w(gs[GS_XRDY]) = 0;
     if (qrole == QR_OWNER) *l1w(gs[GS_QPART]) = 0;
 #if defined(MKA_RWO)
+#if defined(MKA_GDNOUT)
+    if (own_chunk < 16) noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * NL);   // drain: trailing GDN layers' gdn_out counts
+#endif
     *l1w(gs[GS_ACNT]) = 0; *l1w(gs[GS_AFLAG]) = 0; *l1w(gs[GS_SCNT]) = 0; *l1w(gs[GS_SFLAG]) = 0; *l1w(gs[GS_WOCNT]) = 0; if (is_qroot) *l1w(gs[GS_WODONE]) = 0;
 #endif
     // GS_PQH is reset by the reader after its last wait (see reader)

@@ -203,6 +203,7 @@ def setup_bench(dev, MESH, mesh_identity):
     MKDEF = [tuple(kv.split('=', 1)) for kv in os.environ.get('MK_DEFINES', '').split(',') if kv]  # e.g. MKA_NOMLP=1  # -mk-tail: e.g. MK_DNPIPE=1,MK_FLAG_FLUSH=1
     AMASK = int(os.environ.get('MK_AMASK', '0xFFFFFFFF'), 0)   # mixed groups: bit L = attention-type layer
     S_GDN_US = float(os.environ.get('MK_SGDN_US', '0'))
+    GIN = False   # MK_GDN_INPROJ (set in the RQKV block)
     QSK = ('MKA_QSK', '1') in MKDEF   # spec §18: qkv split-K on STREAM through v12's unit (implies MK_V12 + MK_RS_QKV)
     if QSK:
         for k_ in ('MK_V12', 'MK_RS_QKV', 'MKA_RQKV'):
@@ -554,6 +555,40 @@ def setup_bench(dev, MESH, mesh_identity):
         rstd_g = 1.0 / torch.sqrt(ss.sum(0) / H + EPS)   # [M]
         gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
         qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # MK_GDN_INPROJ (spec v1.78 G-a): the real GDN in-proj on the GDN-type layers through the same split-K unit:
+        # gdn_in [H, 65 tiles] (2060 real columns, pad exactly 0), BFP4, γ-folded like qkv, per GDN layer g x 2^(g % 2)
+        GIN = ('MK_GDN_INPROJ', '1') in MKDEF
+        if GIN:
+            assert QSK and GDN24, "MK_GDN_INPROJ needs MKA_QSK, MKA_GDN24 and MK_V12_CB (default on) (tiles land in the GDN cores' staging CB 41, planned address)"
+            GN, GNR = 65, 2060
+            GLS = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGL = len(GLS)
+            GLAY = _WEIGHTS['gdn_in']['layout'] if 'gdn_in' in _WEIGHTS else _wl().GdnInSplitKLayout(BANK_LOC, banks, gx=GX)   # engine/weight_layouts.py
+            GSL_, _gb, _go, PGL = GLAY.slices, GLAY.bank, GLAY.off, GLAY.pages_per_layer
+            # gdn_in source: injected (G: _WEIGHTS['gdn_in'] = dict(tensor, layout), GDN-ordinal pages, golds skipped);
+            # MK_GIN_W=<torch file {layer: [H, 2060 | 2080]}>: real per-device gdn_in (integ gdn_in_mats, device 0), exactly
+            # the model's tiles, cycled over the GDN layers; else random, γ-folded, x 2^(g % 2)
+            _gw_path = os.environ.get('MK_GIN_W')
+            if 'gdn_in' in _WEIGHTS:
+                wg_all = _WEIGHTS['gdn_in']['tensor']; _gws = None
+            else:
+                if _gw_path:
+                    _gw = torch.load(_gw_path); _gk = sorted(_gw)
+                    _gws = [_wl().gdn_in_dense(_gw[_gk[g_ % len(_gk)]]) for g_ in range(NGL)]
+                    print(f"[gin] real gdn_in from {_gw_path}: model layers {_gk} (cycled), |w|max {max(w_.abs().max().item() for w_ in _gws):.4f}", flush=True)
+                    _gsc = None
+                else:
+                    torch.manual_seed(11)
+                    gw_t = torch.randn(H, GN * TILE) / math.sqrt(H); gw_t[:, GNR:] = 0   # (wg_t is the MLP gate)
+                    _gws = [gam[:, None] * gw_t] * NGL; _gsc = [2.0 ** (g_ % 2) for g_ in range(NGL)]
+                wg_all = _wl().pack_gdn_in(_gws, GLAY, scales=_gsc, dev=dev)
+            wgq = ttnn.to_torch(wg_all).float().reshape(NGL, PGL, TILE, TILE)
+            wgfq = GLAY.unpack(wgq)   # as the device holds it
+            if _gw_path and _gws is not None: print(f"[gin] real gdn_in BFP4 round trip lossless (device tiles == model tiles): {all(torch.equal(wgfq[g_], _gws[g_]) for g_ in range(NGL))}", flush=True)
+            gold_gin = [(rstd_g[:, None] * (xb.double() @ wgfq[g_].double())).float() for g_ in range(NGL)]
+            gin_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGL * GN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            GIN_CNT = ttnn.create_global_semaphore(dev, kgrid, 0)
+            MKDEF = MKDEF + [('MKA_GWTB', str(ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b)))]
+            print(f"[gin] real GDN in-proj: {NGL} GDN layers {GLS}, {GN} tiles ({GNR} cols) over {GX} columns nt {sorted(set(s_.nt for s_ in GSL_.values()))}, {PGL} pages/layer ({GN * KT * ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b) / 1e6:.2f} MB), staging CB 41 on the GDN cores", flush=True)
         # x on every qkv core: shard x over the full grid (lockstep L1 address, same footprint as the 80-core shard)
         if not QSK:
             if xbuf is not None: ttnn.deallocate(xbuf)   # free the 80-core shard first so the full-grid one reuses its lockstep L1 range
@@ -610,7 +645,16 @@ def setup_bench(dev, MESH, mesh_identity):
         _vds = 2.0 ** -6 if (('MK_REAL_AR', '1') in MKDEF and V_R == 32) else 1.0
         def vlayer(L): return vwg, vwu * (2.0 ** (L % 2)), vwd * (2.0 ** -(L % 3)) * _vds   # distinct per layer, exact in BFP4
         s_xy = [(i % GX, i // GX) for i in range(NC)]
-        v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)
+        NOCBAL = any(k_ == 'MK_V12_NOCBAL' for k_, _ in MKDEF)   # MK80 NoC-balanced slice stream (v12e.hpp)
+        # MK80 NOCBAL is GDN24-only until the GDN24-off attention regression (+66-75 us per attention layer) is understood
+        assert not NOCBAL or GDN24, "MK_V12_NOCBAL requires MKA_GDN24=1"
+        # byte-balanced bank placement: opt-in (MK_V12_NOCBAL_BANKS=1); it changes the weight page layout (vLLM repack:
+        # layout_mlp.build_device_pages(..., nocbal=True) must then match)
+        if NOCBAL and os.environ.get('MK_V12_NOCBAL_BANKS', '0') == '1':
+            v_bank, v_rank, v_nsb = LM.assign_banks_balanced(s_xy, BANK_LOC)
+        else:
+            v_bank, v_rank, v_nsb = LM.assign_banks(s_xy, BANK_LOC)
+        print(f"[v12] nocbal {int(NOCBAL)} bank tiles/layer {LM.bank_tiles(v_bank, banks)}", flush=True)
         PVL = LM.pages_per_layer(v_nsb, banks)
         t_v = time.time()
         wv_all = ttnn.from_torch(torch.cat([LM.pack_layer(*vlayer(L), v_bank, v_rank, v_nsb, banks) for L in range(NL)]).reshape(1, 1, -1, TILE),
@@ -651,7 +695,7 @@ def setup_bench(dev, MESH, mesh_identity):
         _J = torch.zeros(TILE, TILE); _J[0, :] = 1.0
         v_j = ttnn.from_torch(_J.repeat(1, NC), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=v_wsh(rect, 1))
         hbuf = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, TILE * NC, TILE]), HDT, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12CB else hs(rect, TILE))   # placeholder (unused by v12)
-        VGS = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(10)]   # never on reserved (AR / GDN) cores
+        VGS = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(14 if NOCBAL else 10)]   # never on reserved (AR / GDN) cores
         VGA = [ttnn.get_global_semaphore_address(g) for g in VGS]
         def v_prect(lx0, lx1, ly0, ly1):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, ly0)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, ly1))
@@ -711,7 +755,7 @@ def setup_bench(dev, MESH, mesh_identity):
             REAL_GAR = ('MK_REAL_GAR', '1') in MKDEF
             if REAL_GAR: assert GDN24 and os.environ.get('MKA_GDN_WAIT', '0') == '1', "MK_REAL_GAR needs GDN24 + MKA_GDN_WAIT (the GDN out_ready gates the GDN AR)"
             # spec v1.94: until gdn_out (G-c) writes CB_XO, the GDN AR reads uninitialised CB_XO (NaN) unless MK_GAR_ZERO zeroes it
-            if REAL_GAR: assert ('MK_GAR_ZERO', '1') in MKDEF or ('MK_GDN_OUT_REAL', '1') in MKDEF, \
+            if REAL_GAR: assert ('MK_GAR_ZERO', '1') in MKDEF or ('MK_GDN_OUT_REAL', '1') in MKDEF or os.environ.get('MKA_GDNOUT', '0') == '1', \
                 "MK_REAL_GAR needs MK_GAR_ZERO=1 until gdn_out (G-c, MK_GDN_OUT_REAL) writes CB_XO (else NaN)"
             _k = 0
             for L_ in range(NL):
@@ -823,7 +867,21 @@ def setup_bench(dev, MESH, mesh_identity):
         if not RQKV: return []
         ro, n0, nt, k0, nk, peer = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
         pp_ = fphys[peer]
-        return [ro, n0, nt, pp_.x, pp_.y, qkv_out.buffer_address(), gdn_on(fi)] + wo_wargs(fi) + head_args_w(fi)
+        return [ro, n0, nt, pp_.x, pp_.y, qkv_out.buffer_address(), gdn_on(fi)] + gin_wargs(fi) + wo_wargs(fi) + head_args_w(fi)
+    def gin_wargs(fi):   # MK_GDN_INPROJ writer args: [nt, owns, tile, wg addr, first page, pages/layer, dst xy, dst addr, count, dbg]
+        if not (RQKV and GIN): return []
+        if fi not in stream_idx: return [0] * 11
+        key = (fcores[fi].x, fcores[fi].y); sl_ = GSL_[key]; own = 1 if key[1] < sl_.nt else 0; t_ = sl_.first + key[1]
+        # tile (column c, K-row r) -> the GDN core straight below the column, (c, 8 + r % 2), slot r // 2: a pure +y NOC0
+        # write that never crosses the DRAM column (crossing it cost 32-46 us under the weight stream, d30u20 chip 16)
+        ph = dev.worker_core_from_logical_core(ttnn.CoreCoord(key[0], GY + key[1] % 2))
+        return [sl_.nt, own, t_, wg_all.buffer_address(), _go[key] * banks + _gb[key], PGL, ph.x, ph.y, VADDR['gin'] + (key[1] // 2) * 2048,
+                ttnn.get_global_semaphore_address(GIN_CNT), gin_dbg.buffer_address()]
+    def gin_cargs(fi):
+        if not (RQKV and GIN): return []
+        if fi not in stream_idx: return [0, 0]
+        key = (fcores[fi].x, fcores[fi].y); sl_ = GSL_[key]
+        return [sl_.nt, 1 if key[1] < sl_.nt else 0]
     TREEFLAG = ('MKA_TREEFLAG', '1') in MKDEF
     def tfk(fi):   # index of this core in its parent's child list (level-0 list or the root's level-1 list)
         r_ = rank[fi]
@@ -831,7 +889,7 @@ def setup_bench(dev, MESH, mesh_identity):
     def q_rargs(fi):
         if not RQKV: return []
         ro = QROLE.get(fi, (0,))[0]
-        return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi) + head_args_r(fi)
+        return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + gin_cargs(fi)[:1] + wo_rargs(fi) + head_args_r(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
     if os.environ.get('MKA_SCLAMP', '1') == '1' and ('MKA_SCLAMP', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_SCLAMP', '1')]   # S <= 60 before exp (RC guard)
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
@@ -1145,11 +1203,54 @@ def setup_bench(dev, MESH, mesh_identity):
         GDN_SEMS = dict(in_ready=ttnn.create_global_semaphore(dev, gdn_crs, 0), attn_kv=ttnn.create_global_semaphore(dev, gdn_crs, 0),
                         vb0=ttnn.create_global_semaphore(dev, gdn_crs, 0), vb1=ttnn.create_global_semaphore(dev, gdn_crs, 0),
                         out_ready=ttnn.create_global_semaphore(dev, kgrid, 0))   # out_ready: target = the Q root (kgrid)
+        # MKA_GDNOUT (spec v1.8a / v1.50): the GDN out_proj through the wo unit on the 24 GDN cores. gdna: += 1 per GDN core
+        # per layer on every GDN core (all 24 output column tiles of `out` landed); xow: the owners' uniform CB_XO address,
+        # published by owner 0 at program start (a word on the owners AND the GDN cores, so the owner has a source copy)
+        GDNOUT = os.environ.get('MKA_GDNOUT', '0') == '1'
+        if GDNOUT:
+            assert RWO, "MKA_GDNOUT needs MKA_RWO (the owners' CB_XO + WOCNT)"
+            GDN_SEMS['gdna'] = ttnn.create_global_semaphore(dev, gdn_crs, 0)
+            GDN_SEMS['xow'] = ttnn.create_global_semaphore(dev, kgrid.merge(gdn_crs), 0)
         GDN_SA = {k_: ttnn.get_global_semaphore_address(v_) for k_, v_ in GDN_SEMS.items()}
+        GO = None
+        if GDNOUT:
+            WKG, WNG = 24, 160   # A = the 24 `out` column tiles (6 heads x 128); N = the hidden (16 owner chunks of 10)
+            g_layers = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGo = len(g_layers)
+            gcs = list(GDNC)
+            # engine/weight_layouts.py gdn_out_layout (the shared packer, = this branch's layout): rot-order owner chunks,
+            # core c -> tiles flat[c::24], bank-local k-major slices; per-layer stride = pages_per_layer (GDN ordinal g)
+            GLAY = _WEIGHTS['gdn_out']['layout'] if 'gdn_out' in _WEIGHTS else _wl().gdn_out_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], BANK_LOC, banks)
+            assert GLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], "injected gdn_out layout built for other cores"
+            GT = {fi: GLAY.tiles[c_] for c_, fi in enumerate(gcs)}; GB = {fi: GLAY.bank[c_] for c_, fi in enumerate(gcs)}
+            GP = {fi: GLAY.row[c_] for c_, fi in enumerate(gcs)}
+            GMAXT = max(len(v_) for v_ in GT.values())
+            GPL = GLAY.pages_per_layer   # pages per GDN layer (the layer stride)
+            if 'gdn_out' in _WEIGHTS: wg_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
+            else:
+                torch.manual_seed(17)
+                wg_all = _wl().pack_gdn_out([torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE) for _ in range(NGo)], GLAY, dev=dev)
+            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(NGo, GPL, TILE, TILE))
+            gdbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGo * WNG * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
+                      wk=WKG, maxt=GMAXT, w=wg_all, w_addr=wg_all.buffer_address(), w_stride=GPL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
+                      gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in gcs], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
+                      cnt=GSA[13], nt=[len(GT[fi]) for fi in gcs], page=[GP[fi] * banks + GB[fi] for fi in gcs], tiles=[GT[fi] for fi in gcs],
+                      dbg=gdbg, dbg_addr=gdbg.buffer_address(),
+                      # CB ids (ring, A, out) on the GDN cores: 42/43/44 reserved for gdn_out (lean GDN table 0..41, -mk-int 80b43723a3f); before
+                      # them; MKA_GDNOUT_CB=34,35,37 borrows the AR-sender ids for bring-up WITHOUT MK_REAL_AR
+                      cb=tuple(int(v_) for v_ in os.environ.get('MKA_GDNOUT_CB', '42,43,44').split(',')),
+                      # LoFi matmul inside the HiFi4 GDN binary (== HiFi2 on BFP4 weights, the prod BFP4_LAYOUT_LOFI out-proj; MKA_GDNOUT_FID=hifi4: as compiled)
+                      lofi=os.environ.get('MKA_GDNOUT_FID', 'lofi') != 'hifi4')
+            assert not (set(GO['cb']) & {34, 35, 37, 39} and ('MK_REAL_AR', '1') in MKDEF), "MKA_GDNOUT_CB: 34/35/37/39 are the AR senders' ids"
+            assert ('MK_GAR_ZERO', '1') not in MKDEF, "MKA_GDNOUT writes CB_XO: drop the MK_GAR_ZERO stand-in"
+            MKDEF = MKDEF + [('MKA_GDNOUT', '1'), ('MKA_GDN_XOW', f"{GDN_SA['xow']}u"), ('MK_GDN_OUT_REAL', '1')]   # G-d reads CB_XO at WOCNT
+            print(f"[gdnout] GDN out_proj via the wo unit: {NGo} GDN layers, {len(gcs)} cores x {min(GO['nt'])}-{GMAXT} tiles, K {WKG}, BFP4 ring "
+                  f"{WKG * GMAXT} pages, banks {sorted(set(GB.values()))}", flush=True)
         def _gpr(lx0, lx1):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, GY)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, GYF - 1))
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (GYF - GY)]
         _gr = _gpr(0, fsplit - 1) + _gpr(fsplit, GXF - 1)
+        if GO: GO['rects'] = list(_gr)   # gdn_out local A handoff: the two GDN multicast rects (NoC-0 phys)
         assert _gr[4] + _gr[9] == len(GDNC), _gr
         MKDEF = MKDEF + [('MKA_GDN24', '1'), ('MKA_GDN_INREADY', f"{GDN_SA['in_ready']}u"), ('MKA_GDN_ATTNKV', f"{GDN_SA['attn_kv']}u"),
                          ('MKA_GDN_RECTS', '{{' + ','.join(map(str, _gr[:5])) + '},{' + ','.join(map(str, _gr[5:])) + '}}')]
@@ -1172,10 +1273,23 @@ def setup_bench(dev, MESH, mesh_identity):
             b_ = types.SimpleNamespace(dev=dev, mesh=dev if MESH else None, NL=NL, AMASK=AMASK, is_attn=is_attn_layer, NU=NU, CTX=CTX,
                                        gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
                                        cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), out_rects=(RECTS_F[:10] if GDN_WAIT else None), per_replay={},
-                                       free_cb_ids=list(range(45)))
+                                       free_cb_ids=list(range(45)), gdnout=GO)
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
             GDN_ROLE.setdefault('io', [])
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)
+            if GO:
+                def _gdnout_check(it):   # out_proj golden from the engine's own `out` (A) of each GDN layer x the dequantized slices
+                    role_ = GDN_ROLE['role']
+                    dv_ = ttnn.to_torch(gdbg).float().reshape(TILE, NGo, WNG * TILE)
+                    R_ = role_.B * role_.T
+                    for g_ in range(NGo):
+                        A_ = ttnn.to_torch(role_.LY[g_]['outE']).float().reshape(TILE, WKG * TILE)
+                        gg_ = A_ @ wgq[g_]
+                        v_ = dv_[:, g_]
+                        pc_ = torch.corrcoef(torch.stack([v_[:R_].flatten(), gg_[:R_].flatten()]))[0, 1].item()
+                        print(f"[gdnout] iter {it} GDN layer {g_layers[g_]} rows {R_} gdn_out pcc {pc_:.5f} max|err| {(v_[:R_] - gg_[:R_]).abs().max().item():.4f} "
+                              f"|gold|max {gg_[:R_].abs().max().item():.3f}", flush=True)
+                GDN_ROLE['gdnout_check'] = _gdnout_check
             if GDN_WAIT:
                 MKDEF = MKDEF + [('MKA_GDN_WAIT', '1'), ('MKA_GDN_OUTREADY', f"{GDN_SA['out_ready']}u"), ('MKA_GDN_NC', str(len(GDNC)))]
                 print(f"[gdn24] GDN stall = out_ready wait ({len(GDNC)} per GDN layer, multicast to RECTS_F), not the MK_SGDN_US spin", flush=True)
@@ -1291,6 +1405,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 ttnn.cb_descriptor_from_sharded_tensor(4, v_xo), ttnn.cb_descriptor_from_sharded_tensor(5, v_x0),
                 # CB_VPK: the stand-in's packing scratch (R < 32 only); MK_V12_CB: the same descriptor is v_xpk on STREAM (both 10 tiles)
                 cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, rect.merge(O_CRS) if V12CB else O_CRS)]
+            if GIN: cbs = cbs + [cbd(15, ttnn.bfloat4_b, 20 * 7, rect)]   # the gdn_in BFP4 slice slot (slot M's turn on GDN layers)
+        if GIN: cbs = [cbd(41, ttnn.bfloat16, 4, crs([fcores[i] for i in GDNC]))] + cbs   # GIN staging on the GDN cores, FIRST: CB base there
         if plan_only: return _order(cbs)   # MK_V12_CB: the list prefix that fixes the v12 addresses (AR / GDN-role CBs follow it)
         if KVA:   # owners only (CB 6 / 8 are STREAM-rect-only otherwise): source bf16 tile, BFP8 source + target tiles
             cbs = cbs + [cbd(6, ttnn.bfloat16, 1, KVA_CRS), cbd(8, ttnn.bfloat8_b, 1 + KVA_PPU * KVA_NUT, KVA_CRS)]
@@ -1359,11 +1475,11 @@ def setup_bench(dev, MESH, mesh_identity):
             _wa = wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
                 [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
             nrecv = len(ch0) + len(ch1)
-            _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if (RWO or QSK) else []) + ([(1 if fi in HC else 0) | (KVA_ROLE.get(fi, 0) << 8), 1 if (fi in HC or fi in MASKC) else 0] + ([(RNG[fi][1] - RNG[fi][0] - 1) if fi in MASKC else 0xFFFFFFFF] if RMASK else []) if RQNR else []) if RQKV else [])
+            _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if (RWO or QSK) else []) + gin_cargs(fi) + ([(1 if fi in HC else 0) | (KVA_ROLE.get(fi, 0) << 8), 1 if (fi in HC or fi in MASKC) else 0] + ([(RNG[fi][1] - RNG[fi][0] - 1) if fi in MASKC else 0xFFFFFFFF] if RMASK else []) if RQNR else []) if RQKV else [])
             if V12:   # v12 arg tails (appended after every other arg)
                 vw_, vr_, vc_ = v_args(fi, c)
                 _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
-            if GDN24 and not isS and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_EXTLEAN: the owner binary folds these role args (kernels)
+            if GDN24 and NU >= 4 and not isS and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_EXTLEAN (u8 only): the owner binary folds these role args (kernels)
                 _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
                 assert g_ == 0 and nrecv == 0 and r != 0 and gdn_on(fi) == 0, ("MKA_EXTLEAN owner args", fi, g_, nrecv, r, gdn_on(fi))
                 assert r_mk[14] == 255 and r_mk[15] == 0, ("MKA_EXTLEAN ROOT / IS_GU", fi, r_mk[14:16])
@@ -1372,7 +1488,14 @@ def setup_bench(dev, MESH, mesh_identity):
                 if RWO: assert not rd_w
                 if V12: assert vc_[0] == 2 and vr_[0] == 2 and vw_[0] == 2, ("MKA_EXTLEAN vrole", fi, vc_[0], vr_[0], vw_[0])
             _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
-            if os.environ.get('MKA_ARGDUMP') == '1' and not isS: print(f"[argdump] fi {fi} xy ({c.x},{c.y}) R {list(_ra)} W {list(_wa)} C {list(_ca)}", flush=True)
+            if GDN24 and isS and QSK and RWO and V12 and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_STREAMLEAN: folded STREAM role args
+                _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
+                assert g_ == 0 and r_mk[14] == 255 and r_mk[15] == 0, ("MKA_STREAMLEAN IS_GU / ROOT (reader)", fi, g_, r_mk[14:16])
+                assert _qr[0] == 1 and _qr[4] == QSK_GK and gdn_on(fi) == 1, ("MKA_STREAMLEAN qkv role", fi, _qr, gdn_on(fi))
+                assert len(WOT.get(fi, [])) == 0 and not rd_w and HLP.get(fi, (None, 0, 0))[2] == 0 and fi != WCC, ("MKA_STREAMLEAN wo", fi)
+                if RQNR: assert fi not in HC and fi not in MASKC and _ca[13] == 0 and _ca[14] == 0, ("MKA_STREAMLEAN head / mask", fi)
+                if RMASK: assert _ca[15] == 0xFFFFFFFF, ("MKA_STREAMLEAN mask_blk", fi, _ca[15])
+            if os.environ.get('MKA_ARGDUMP') == ('2' if isS else '1'): print(f"[argdump] fi {fi} xy ({c.x},{c.y}) R {list(_ra)} W {list(_wa)} C {list(_ca)}", flush=True)
         acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
         acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
         acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []
@@ -1390,7 +1513,7 @@ def setup_bench(dev, MESH, mesh_identity):
             # MK_EXT_DM_OS=1 (spec v1.5a: DM-only Os allowed after a timing check): the EXT (owner) reader / writer at -Os,
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
             _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
-            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s']) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard, dmopt=_dmo)
+            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None)) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard, dmopt=_dmo)
             if REAL_AR:
                 for kd_ in arp['sender_kernels']:   # attention ARs read the wo output CB (bit it of MKAR_ATYPE)
                     if REAL_AAR and not any(k_ == 'MKAR_ATYPE' for k_, _ in kd_.defines): kd_.defines = list(kd_.defines) + _aar_d
@@ -1442,6 +1565,7 @@ def setup_bench(dev, MESH, mesh_identity):
         p_ = CBP.plan(cbs)
         a_ = dict(xk=CBP.address_of(p_, 33, (0, 0)), rs=CBP.address_of(p_, 36, (0, 0)), h7=CBP.address_of(p_, 37, (0, 0)), xpk=CBP.address_of(p_, 16, (0, 0)))
         if v_pbuf is None: a_['pbuf'] = CBP.address_of(p_, 3, (GX, 0))
+        if GIN: a_['gin'] = CBP.address_of(p_, 41, (fcores[GDNC[0]].x, fcores[GDNC[0]].y))
         return a_
     # V12 drops the fm11 output CB 16 (re-used as CB_VPK on the owners): keep the unused fm11 output out of L1 (it was the L1 floor)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12 else ws(rect, NDN * TILE))
