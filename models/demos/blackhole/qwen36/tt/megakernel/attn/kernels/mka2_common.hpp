@@ -9,7 +9,9 @@
 // MKA_EXT_LEANZ (profiled runs only): the EXT (owner) data-movement kernels keep only the zones the layer / AR reports
 // use (W-OREL, W-WOAR, the MK_AR_ZONE ones); the rest compile out. The profiler zones alone put the owners-only EXT
 // binary over the 70656 B kernel config buffer under GDN24 + RWO + MK_REAL_AR + MK_REAL_AAR (fits at O2 without them).
-#if defined(MKA_ROLE_EXT) && defined(MKA_EXT_LEANZ)
+// MKA_STREAM_LEANZ: the same on the STREAM DM kernels (MKZK zones stay: W-ARWAIT = the layer report's boundary)
+#define MKZK(n) DeviceZoneScopedN(n)
+#if (defined(MKA_ROLE_EXT) && defined(MKA_EXT_LEANZ)) || (defined(MKA_ROLE_STREAM) && defined(MKA_STREAM_LEANZ))
 #define MKZ(n)
 #else
 #define MKZ(n) DeviceZoneScopedN(n)

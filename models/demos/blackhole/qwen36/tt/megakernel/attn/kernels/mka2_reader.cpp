@@ -607,7 +607,13 @@ void kernel_main() {
 #endif
             }
 #if defined(MK_V12)
+#if defined(MK_REAL_GAR) && defined(MK_REAL_AR) && defined(MK_AR_DLV)
+            v12_aardlv(L, L);   // G-d: the GDN mixer AR's x (as the plain-owner branch below). v12_ox here multicast the stale
+                                // CB_VX0 (= ar_out before the GDN AR landed): the GDN layers' MLP ran on the mixer x, and on a
+                                // late owner the AR's writes raced the multicast (AR 1 of iter 0 differs on one device, ~50%)
+#else
             v12_ox(L);
+#endif
             V12_ARDLV(L);
 #endif
             continue;
