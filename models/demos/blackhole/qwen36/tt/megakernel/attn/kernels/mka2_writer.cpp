@@ -48,7 +48,7 @@
 #else
 #define MKA_WOT_DIV wo_tiles
 #endif
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && !defined(MK_AR_RSTD_HOST) && (!defined(MKA_SV) || MKA_SV == 1)
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && !defined(MK_AR_RSTD_HOST) && (!defined(MKA_SV) || MKA_SV == 1 || defined(MK_DNORM_SPLIT))
 #define MK_AR_RSTD_PROD 1   // the STREAM producer (off with the host Σ: no producer defines then)
 #endif
 void kernel_main() {
@@ -890,7 +890,20 @@ void kernel_main() {
         noc_semaphore_inc_multicast(get_noc_multicast_addr(x0, y0, x1, y1, MK_AR_RSF), 1, (x1 - x0 + 1) * (y1 - y0 + 1));
     };
 #endif
-#if defined(MK_AR_RSTD_RED_GDN)
+#if defined(MK_DNORM_SPLIT)
+    // DNORM (ii): this core's per-token partial (row 0 of CB_SS: face 0 / face 1, 64 B each) -> row vn of page vk of the reducer's CB 37
+    // (rows 10-31 stay zero), then the reducer's arrival word += 1 (80 per delivery)
+    auto rstd_send = [&]() __attribute__((noinline)) {
+        cb_wait_front(MK_AR_CB_SS, 1);
+        const uint32_t sp = get_read_ptr(MK_AR_CB_SS), dp = MK_AR_RRED_IN + vk * 4096 + vn * 64;
+        noc_async_write(sp, get_noc_addr(MK_AR_RRED_X, MK_AR_RRED_Y, dp), 64);
+        noc_async_write(sp + 1024, get_noc_addr(MK_AR_RRED_X, MK_AR_RRED_Y, dp + 1024), 64);
+        noc_async_write_barrier();   // the row has landed before its flag
+        noc_semaphore_inc(get_noc_addr(MK_AR_RRED_X, MK_AR_RRED_Y, MK_AR_RRED_SEM), 1);
+        noc_async_atomic_barrier();
+        cb_pop_front(MK_AR_CB_SS, 1);
+    };
+#elif defined(MK_AR_RSTD_RED_GDN)
     // v1.112 (iii'): the un-reduced fp32 tile (Σ over the 20 tiles of (x^T)^2, elementwise) -> page k of the GDN host core's Σ-in
     // CB (MK_AR_RRED_IN, 8 pages), then the host's arrival word += 1; the host reduces and multicasts the final Σ + MK_AR_RSF
     auto rstd_send = [&]() __attribute__((noinline)) {
@@ -964,7 +977,11 @@ void kernel_main() {
         }
         cb_push_back(CB_XK, 2 * V_OT);
 #if defined(MK_AR_RSTD_PROD)
+#if defined(MK_DNORM_SPLIT)
+        rstd_send();   // DNORM (ii): every STREAM core sends its 2-tile row partial
+#else
         if (vn == vk) rstd_send();   // rstd producer (n = k): this K-row's Σx² row -> every STREAM core's Σ tile
+#endif
 #endif
     };
 #if V_NB_ON
