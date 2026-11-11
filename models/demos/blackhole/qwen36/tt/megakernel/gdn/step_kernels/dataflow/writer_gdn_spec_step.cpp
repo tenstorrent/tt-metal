@@ -180,6 +180,15 @@ inline uint32_t gdn_bits(float f) {
 #ifndef GDN_XVC
 #define GDN_XVC 0  // engine GDN role (E1_XVC): static unicast VC of the head exchange (lz_xchg data + increments); 0 = default VC
 #endif
+#if defined(GSTEP_NO_ATTHOLD) && defined(GSTEP_ATTHOLD)
+#undef GSTEP_ATTHOLD  // AR-sender corners / the Sigma reducer (engine program.py): never hold (their post-body work feeds the attention layer)
+#endif
+#ifndef GSTEP_ATTHOLD
+#define GSTEP_ATTHOLD 0  // engine GDN role (E1_ATTHOLD): gdn_att_hold() (the including TU) before the batched stash writes
+#endif
+#if GSTEP_ATTHOLD
+void gdn_att_hold();
+#endif
 #ifndef GDN_LAZY_GATE
 #define GDN_LAZY_GATE 0  // engine GDN role (E1_LAZY_GATE): gdn_lazy_gate() (the including TU) before the batched stash writes
 #endif
@@ -1710,6 +1719,9 @@ TT_KERNEL void writer(
 #endif
 #if GDN_LAZY_GATE
     gdn_lazy_gate();  // E1_LAZY_GATE: the stash writes (NOC0 DRAM) wait until every head's exchange is past
+#endif
+#if GSTEP_ATTHOLD
+    gdn_att_hold();  // E1_ATTHOLD: a pre-attention GDN layer's stash writes wait for the attention layer's SDPA end
 #endif
     wr_lazy_fn();
 #endif
