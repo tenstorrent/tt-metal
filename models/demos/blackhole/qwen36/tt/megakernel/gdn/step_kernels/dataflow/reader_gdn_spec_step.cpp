@@ -128,6 +128,9 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GSTEP_WYORD
 #define GSTEP_WYORD 0  // WYPAIR: user order 0 1 4 5 2 3 6 7 in the kmq stream / c_wy (compute must match)
 #endif
+#ifndef GSTEP_CUTST
+#define GSTEP_CUTST 0  // WYPAIR: the kmq cut reads through one stateful local read command (noc_async_read_one_packet_with_state)
+#endif
 #ifndef GSTEP_CUTNZ
 #define GSTEP_CUTNZ 0  // BENCH ONLY (wrong numerics): WYPAIR cuts skip the previous occupant's zeroing (reader-bound probe)
 #endif
@@ -846,6 +849,13 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             DataflowBuffer kmq(dfb::kmq);
             const uint32_t te = kmq.get_entry_size();
             constexpr uint32_t rb = T * 64;  // one user's rows in one face (fp32)
+            auto cut_rd = [&](uint32_t src, uint32_t dst) {
+#if GSTEP_CUTST
+                noc_async_read_one_packet_with_state(src, dst);
+#else
+                noc_async_read(get_noc_addr(src), dst, rb);
+#endif
+            };
             auto cut_pair = [&](uint32_t dst_tile, uint32_t src_k, uint32_t src_q, uint32_t r0u) {
                 const uint32_t rr = r0u & 15, soff = (r0u >> 4) * 2048 + rr * 64, top = rr * 64, bot = 2048 + rr * 64;
 #if GDN_CUT_FAST
@@ -859,12 +869,15 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                     }
                     noc_async_read_barrier();
                     g_cut_addr[g_cut_n++] = dst_tile;
+#if GSTEP_CUTST
+                    noc_async_read_one_packet_set_state(z, rb);  // the plain reads above reprogrammed the read cmd buffer
+#endif
                 } else if (!GSTEP_CUTNZ && g_cut_r0[e] != rr) {  // the previous occupant's K and Q rows (disjoint)
                     const uint32_t pt = g_cut_r0[e] * 64;
-                    noc_async_read(z, dst_tile + pt, rb);
-                    noc_async_read(z, dst_tile + pt + 1024, rb);
-                    noc_async_read(z, dst_tile + 2048 + pt, rb);
-                    noc_async_read(z, dst_tile + 2048 + pt + 1024, rb);
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + pt);
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + pt + 1024);
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + 2048 + pt);
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + 2048 + pt + 1024);
                 }
                 g_cut_r0[e] = rr;
 #else
@@ -872,12 +885,20 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                     noc_async_read(z, dst_tile + o, MEM_ZEROS_SIZE);
                 }
                 noc_async_read_barrier();
+#if GSTEP_CUTST
+                noc_async_read_one_packet_set_state(z, rb);
 #endif
-                noc_async_read(get_noc_addr(src_k + soff), dst_tile + top, rb);
-                noc_async_read(get_noc_addr(src_k + soff + 1024), dst_tile + top + 1024, rb);
-                noc_async_read(get_noc_addr(src_q + soff), dst_tile + bot, rb);
-                noc_async_read(get_noc_addr(src_q + soff + 1024), dst_tile + bot + 1024, rb);
+#endif
+                cut_rd(src_k + soff, dst_tile + top);
+                cut_rd(src_k + soff + 1024, dst_tile + top + 1024);
+                cut_rd(src_q + soff, dst_tile + bot);
+                cut_rd(src_q + soff + 1024, dst_tile + bot + 1024);
             };
+#if GSTEP_CUTST
+            // GSTEP_CUTST: every cut read is local (this core's L1 -> L1, rb bytes): one stateful read command, only the two
+            // local addresses change per read (same reads, same bytes)
+            noc_async_read_one_packet_set_state(z, rb);
+#endif
             for (uint32_t j = 0; j < Vs; ++j) {
                 for (uint32_t k_ = 0; k_ < kBatchMax; ++k_) {
                     // GSTEP_WYORD: users 0 1 4 5 2 3 6 7 -> each kmq ring slot sees row offsets 0 0 8 8 / 4 4 12 12 (fewer
