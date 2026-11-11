@@ -128,7 +128,11 @@ def _diff_case(model, live, tag):
     model._forward_verify_bucket_tp(B, None, None)
     ttnn.synchronize_device(model.mesh_device)
     dbg = ttnn.to_torch(ttnn.get_device_tensors(S["ar_dbgt"])[0]).float().reshape(32, -1)
-    dbg_all_equal = all(torch.equal(ttnn.to_torch(d).float().reshape(32, -1), dbg)
+    # the post-AR residual columns (2k+1) must be identical on every device (AR contract: mesh identity 0); the input
+    # partial columns (2k) are per-device by design
+    nar = dbg.shape[1] // (2 * DIM)
+    res_cols = torch.cat([torch.arange((2 * k + 1) * DIM, (2 * k + 2) * DIM) for k in range(nar)])
+    dbg_all_equal = all(torch.equal(ttnn.to_torch(d).float().reshape(32, -1)[:, res_cols], dbg[:, res_cols])
                         for d in ttnn.get_device_tensors(S["ar_dbgt"])[1:])
     _restore(ts, snap)
     ari = _mlp_ar_index(lt, aar)
