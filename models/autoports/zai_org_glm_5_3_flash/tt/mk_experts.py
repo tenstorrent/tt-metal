@@ -52,6 +52,8 @@ MKX_REV = 24  # kernel revision (compile signature: a long-lived process rebuild
 # 22 fold_y2 (MKX_Y2_INIT): y2 added to the finished routed sum in its own pass (batch invariance; Stage 14)
 # (MKX_XROWS_COAL, opt-in GLM53_MKX_XROWS_COAL=1: xa's T x rows read as one span per face; no revision bump: the knob
 # is its own define on xa alone, so a knob-off build keeps every kernel's defines and binaries)
+# (MKX_RAW_SYNC, opt-in GLM53_MKX_RAW_SYNC=1: xa hands xw's scratch back to the next stacked layer; no revision bump:
+# its own define on xw / xa, inert outside stack programs, so a knob-off build keeps every kernel's defines and binaries)
 TPT = 8  # tiles per NoC read transaction (8 x 576 B)
 
 
@@ -62,6 +64,13 @@ def f32_bits(x: float) -> int:
 def xcoal(xdefs: list) -> bool:
     """GLM53_MKX_XROWS_COAL=1 and xa reads x by rows (MKX_XROWS among xdefs): xa's MKX_XROWS_COAL define is added"""
     return os.environ.get("GLM53_MKX_XROWS_COAL", "0") == "1" and any(k == "MKX_XROWS" for k, _ in xdefs)
+
+
+def raw_sync() -> bool:
+    """GLM53_MKX_RAW_SYNC=1 (opt-in): xw / xa get MKX_RAW_SYNC -- in a stack program (MK_LAYERS > 1) xa clears
+    MKX_SEM_LIST after its last access to xw's scratch and the list page, and the next layer's xw waits for that before
+    its first write into either (the multi-layer race of parts_raw's MKX_RW_XA note); xc keeps its define list"""
+    return os.environ.get("GLM53_MKX_RAW_SYNC", "0") == "1"
 
 
 class ReaderExperts:
@@ -255,6 +264,14 @@ class ReaderExperts:
         # ~75 us of every MoE layer's expert phase at B = 16); the same bytes at the same L1 offsets (bitwise)
         if xcoal(xprog):
             adefs.append(("MKX_XROWS_COAL", "1"))
+        # GLM53_MKX_RAW_SYNC=1 (opt-in, raw_sync): the scratch hand-back between stacked layers, whatever MKX_RW_XA says
+        # (off, xa still reads the list page's weight rows in place: the race window shrinks, it does not close). Costs
+        # no L1 and no semaphore (MKX_SEM_LIST's existing 1 / 0 states); xw's one poll per layer is free on a reader
+        # whose streamer is gated by its dense phases, and on an expert-only reader it only delays pre-hand-off work
+        # that then waits for the router tail anyway
+        if raw_sync():
+            wdefs.append(("MKX_RAW_SYNC", "1"))
+            adefs.append(("MKX_RAW_SYNC", "1"))
         wtail, atail = [], []
         if wait is not None:
             wdefs.append(("MKX_WAIT_SEM", str(wait[0])))

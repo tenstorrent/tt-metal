@@ -191,7 +191,7 @@ void kernel_main() {
         invalidate_l1_cache();
     }
     invalidate_l1_cache();
-#if defined(MK_LAYERS) && MK_LAYERS > 1
+#if defined(MK_LAYERS) && MK_LAYERS > 1 && !defined(MKX_RAW_SYNC)
     *flag = 0;  // stack: the next layer's list is published by a fresh 1 (its BRISC rebuilds the list only after this
                 // layer's routed output was consumed: the layer's P10 waits for every reader's shared down)
 #endif
@@ -347,6 +347,14 @@ void kernel_main() {
         cb_push_back(CB_M, I_TILES);
         mk::signal_handoff(sem_mr, ph_rt0 + COORDS, NREAD);
     }
+#if defined(MKX_RAW_SYNC) && defined(MK_LAYERS) && MK_LAYERS > 1
+    // GLM53_MKX_RAW_SYNC=1: every access to xw's scratch (MKX_RW_XA's sel / rank / weights tile in CB_RAW) and to the
+    // list page (n, T, the scatter's weight rows, the routing weight tiles' reads) is above: hand both pages back. The
+    // next layer's xw waits for this 0 before its first write into either (xw.cpp), and publishes its list with a fresh
+    // 1 only after that, so no publish is lost.
+    asm volatile("" ::: "memory");
+    *flag = 0;
+#endif
 #if defined(MK_LAYERS) && MK_LAYERS > 1
 #if defined(MKX_XTP)
 #error "Stage 14b stack: expert TP (MKX_XTP) is not stackable (its partial counter MKX_XTP_SEM runs on across layers)"

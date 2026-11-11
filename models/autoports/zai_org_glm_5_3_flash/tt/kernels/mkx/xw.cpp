@@ -93,6 +93,23 @@ void kernel_main() {
         shard[s] = get_arg_val<uint32_t>(ph_rt0 + 5 + s);
     }
     MK_MARK();
+#if defined(MKX_RAW_SYNC) && defined(MK_LAYERS) && MK_LAYERS > 1
+    // GLM53_MKX_RAW_SYNC=1: the previous layer's xa.cpp works on this RISC's scratch in place after MKX_SEM_LIST --
+    // CB_RAW (sel / rank / the weights tile, MKX_RW_XA) and the list page's weight rows (the scatter, the routing
+    // weight tiles) -- and neither page is flow-controlled against xa (xc pops the list right after reading n; CB_RAW
+    // is never pushed). An expert-only reader (it sits out every dense phase) whose layer-l stream fits its ring gets
+    // here while xa(l) still reads: the weight-row zero fill below raced it (replay-dependent rows at native t >= 12;
+    // the table / live reads miss every byte xa touches). xa clears MKX_SEM_LIST once it is done with both pages
+    // (instead of right after its wait); the first layer of a launch starts at the semaphore's initial 0. No L1, no
+    // semaphore of its own.
+    {
+        volatile tt_l1_ptr uint32_t* xa_flag =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(MKX_SEM_LIST));
+        while (*xa_flag != 0) {
+            invalidate_l1_cache();
+        }
+    }
+#endif
 
     // ---- 1. routing inputs -> raw scratch: ids tile | the weights tile (MKX_RW) or E_TILES score tiles | the address
     // table row. The table row and the zero fill of the list page's weight rows do not depend on the router: both are
