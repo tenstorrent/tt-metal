@@ -1408,6 +1408,11 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     from models.demos.blackhole.qwen36.tt.megakernel.engine import argblock as AB
 
     env = engine_env(n_users, len(layer_types))
+    # HARD RULE (spec owner 11-10, batch 3d): real AR has a residual blow-up at R < 32 (u1 R=4, post-RC fix): with
+    # MK_REAL_AR the engine is only ever built at R = 32 rows (8 users x T = 4); fewer live users are padded onto it.
+    if "MK_REAL_AR=1" in env.get("MK_DEFINES", "").split(","):
+        assert int(env.get("V12_R", "32")) == 32 and int(n_users) * int(T) == 32, (
+            f"MK_REAL_AR engine at R={env.get('V12_R')} (n_users {n_users} x T {T}): only R = 32 is allowed; pad onto bucket 8")
     with _setup_context(mesh, env) as pool_stats:
         S = setup_bench(mesh, True, lambda t: 0.0)
     io0 = _io_list(S)
