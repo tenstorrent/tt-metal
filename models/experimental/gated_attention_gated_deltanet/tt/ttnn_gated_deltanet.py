@@ -115,18 +115,31 @@ def _causal_conv1d_decode_t1_inplace(
 
     # out = sum(weight_taps[k] * state[k]) + weight_taps[K-1] * x
     out = ttnn.multiply(x, weight_taps[kernel_size - 1], memory_config=mc)
+    # conv_buffer has unaligned height (K-1 = 3 for Qwen3.5-9B), so every slice/concat on
+    # TILE_LAYOUT decomposes into untilize/op/tilize. Convert to ROW_MAJOR once, do all the
+    # taps and the shift there, and tilize only the final new_state.
+    conv_rm = ttnn.to_layout(conv_buffer, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
     for k in range(kernel_size - 1):
-        s_k = conv_buffer[:, k : k + 1, :]
-        s_k = ttnn.to_layout(s_k, ttnn.TILE_LAYOUT)
+        s_k_rm = conv_rm[:, k : k + 1, :]
+        s_k = ttnn.to_layout(s_k_rm, ttnn.TILE_LAYOUT, memory_config=mc)
+        ttnn.deallocate(s_k_rm)
         term = ttnn.multiply(s_k, weight_taps[k], memory_config=mc)
+        ttnn.deallocate(s_k)
         out = ttnn.add(out, term, memory_config=mc)
+        ttnn.deallocate(term)
 
     if bias_dev is not None:
         out = ttnn.add(out, bias_dev, memory_config=mc)
 
-    # Update conv_buffer in-place
-    new_state = ttnn.concat([conv_buffer[:, 1:, :], x], dim=1, memory_config=mc)
-    new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
+    # Shift conv_buffer: new_state = concat(conv_buffer[:, 1:, :], x) -> copy back.
+    shifted_rm = conv_rm[:, 1:, :]
+    ttnn.deallocate(conv_rm)
+    x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+    new_state_rm = ttnn.concat([shifted_rm, x_rm], dim=1, memory_config=mc)
+    ttnn.deallocate(shifted_rm)
+    ttnn.deallocate(x_rm)
+    new_state = ttnn.to_layout(new_state_rm, ttnn.TILE_LAYOUT, memory_config=mc)
+    ttnn.deallocate(new_state_rm)
     ttnn.copy(new_state, conv_buffer)
     ttnn.deallocate(new_state)
 
@@ -159,24 +172,30 @@ def _causal_conv1d_fir(
             x, conv_state, kernel_size, device, memory_config=mc, weight_taps=weight_taps, bias_dev=bias_dev
         )
 
+    # conv_state has unaligned height K-1=3, so concat on dim=1 forces the TILE path through
+    # untilize/concat/tilize. Doing the concat and the four following unaligned slices in
+    # ROW_MAJOR drops an untilize on every slice.
     if conv_state is not None:
-        x_padded = ttnn.concat([conv_state, x], dim=1, memory_config=mc)
+        cs_rm = ttnn.to_layout(conv_state, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
     else:
-        pad = ttnn.zeros(
+        cs_rm = ttnn.zeros(
             [B, kernel_size - 1, D],
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=mc,
         )
-        x_padded = ttnn.concat([pad, x], dim=1, memory_config=mc)
+    x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+    x_padded = ttnn.concat([cs_rm, x_rm], dim=1, memory_config=mc)
+    ttnn.deallocate(cs_rm)
+    ttnn.deallocate(x_rm)
 
     # new_state: last K-1 tokens; land in DRAM (carry alive across downstream kernel CBs).
     total_len = (kernel_size - 1) + T
     if valid_len is None:
-        new_state = x_padded[:, total_len - (kernel_size - 1) :, :]
-        # to_layout then to_memory_config: slice keeps L1 if memory_config passed to to_layout
-        new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
+        new_state_rm = x_padded[:, total_len - (kernel_size - 1) :, :]
+        new_state = ttnn.to_layout(new_state_rm, ttnn.TILE_LAYOUT, memory_config=mc)
+        ttnn.deallocate(new_state_rm)
         new_state = ttnn.to_memory_config(new_state, ttnn.DRAM_MEMORY_CONFIG)
     else:
         # Fixed-bucket masking: x is right-padded to a bucket length T but only the first
@@ -216,12 +235,14 @@ def _causal_conv1d_fir(
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # Depthwise K-tap FIR via multiply + addcmul; re-tilize k>=1 slices (only k=0 is tile-aligned).
+    # Depthwise K-tap FIR via multiply + addcmul; x_padded is ROW_MAJOR so tilize each slice
+    # once on the way in. No start is tile-aligned (K-1=3 skews k=0 too), so the previous
+    # k==0 shortcut no longer applied once x_padded moved to RM.
     out = None
     for k in range(kernel_size):
-        x_slice = x_padded[:, k : k + T]
-        if k != 0:
-            x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
+        x_slice_rm = x_padded[:, k : k + T]
+        x_slice = ttnn.to_layout(x_slice_rm, ttnn.TILE_LAYOUT, memory_config=mc)
+        ttnn.deallocate(x_slice_rm)
         if out is None:
             out = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)
         else:
@@ -459,13 +480,20 @@ def gated_deltanet_forward_ttnn(
                 valid_len=valid_len,
             )
             new_fused_conv_state = new_fused_conv_state_raw
-            # Per-stream conv states for decode handoff
-            new_conv_q = new_fused_conv_state_raw[:, :, :q_dim]
-            new_conv_q = ttnn.to_layout(new_conv_q, ttnn.TILE_LAYOUT)
-            new_conv_k = new_fused_conv_state_raw[:, :, q_dim : q_dim + k_dim]
-            new_conv_k = ttnn.to_layout(new_conv_k, ttnn.TILE_LAYOUT)
-            new_conv_v = new_fused_conv_state_raw[:, :, q_dim + k_dim :]
-            new_conv_v = ttnn.to_layout(new_conv_v, ttnn.TILE_LAYOUT)
+            # Per-stream conv states for decode handoff. new_fused_conv_state_raw has the
+            # unaligned-height layout (K-1=3), so the three slices each run through
+            # untilize/slice/tilize. The Qwen3.5-9B single-chip BH decode path
+            # (models/demos/blackhole/qwen36/tt/gdn/decode.py) threads only the fused state
+            # and drops these three, so compute them only when the caller actually carries
+            # per-stream state.
+            if conv_state_q is not None or conv_state_k is not None or conv_state_v is not None:
+                new_conv_q = ttnn.to_layout(new_fused_conv_state_raw[:, :, :q_dim], ttnn.TILE_LAYOUT)
+                new_conv_k = ttnn.to_layout(new_fused_conv_state_raw[:, :, q_dim : q_dim + k_dim], ttnn.TILE_LAYOUT)
+                new_conv_v = ttnn.to_layout(new_fused_conv_state_raw[:, :, q_dim + k_dim :], ttnn.TILE_LAYOUT)
+            else:
+                new_conv_q = None
+                new_conv_k = None
+                new_conv_v = None
         elif fused_conv_state_split is not None:
             # Split-state decode (no slice+to_layout)
             conv_fn = _causal_conv1d_decode_t1_split_inplace if use_inplace_state else _causal_conv1d_decode_t1_split
@@ -565,12 +593,16 @@ def gated_deltanet_forward_ttnn(
                 if hasattr(qkv_proj_weight, "shape")
                 else None
             )
-            new_conv_q = new_fused_conv_state_raw[:, :, :q_dim]
-            new_conv_q = ttnn.to_layout(new_conv_q, ttnn.TILE_LAYOUT)
-            new_conv_k = new_fused_conv_state_raw[:, :, q_dim : q_dim + k_dim]
-            new_conv_k = ttnn.to_layout(new_conv_k, ttnn.TILE_LAYOUT)
-            new_conv_v = new_fused_conv_state_raw[:, :, q_dim + k_dim :]
-            new_conv_v = ttnn.to_layout(new_conv_v, ttnn.TILE_LAYOUT)
+            # Per-stream conv states from fused state. Same unaligned-height pattern as above;
+            # only compute the three slices when any per-stream carry is actually threaded.
+            if conv_state_q is not None or conv_state_k is not None or conv_state_v is not None:
+                new_conv_q = ttnn.to_layout(new_fused_conv_state_raw[:, :, :q_dim], ttnn.TILE_LAYOUT)
+                new_conv_k = ttnn.to_layout(new_fused_conv_state_raw[:, :, q_dim : q_dim + k_dim], ttnn.TILE_LAYOUT)
+                new_conv_v = ttnn.to_layout(new_fused_conv_state_raw[:, :, q_dim + k_dim :], ttnn.TILE_LAYOUT)
+            else:
+                new_conv_q = None
+                new_conv_k = None
+                new_conv_v = None
             new_fused_conv_state = new_fused_conv_state_raw
             _mega_extracted = False
         else:
