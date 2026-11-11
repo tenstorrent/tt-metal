@@ -871,14 +871,21 @@ def test_run_args_must_match_the_kernels(device, cache_hit, expect_error):
         run_with(add_common_arg)
 
 
-@pytest.mark.parametrize("duplicate", ["kernel", "tensor_parameter"])
+@pytest.mark.parametrize("duplicate", ["kernel", "kernel_with_other_arguments", "tensor_parameter"])
 def test_a_name_declared_twice_gets_metals_error(device, duplicate, expect_error):
-    """generic_op checks a kernel or tensor parameter declared twice against its first declaration, so a spec that
-    repeats one unchanged gets past generic_op's checks to Metal's, which names the duplicate."""
+    """generic_op checks a kernel or tensor parameter declared twice once, against its first declaration, so when the
+    run args fit that declaration, the call gets past generic_op's checks to Metal's, which names the duplicate."""
     _, a, b, out = inputs(device)
     spec, run_args = mul_program(a, b, out)
     if duplicate == "kernel":
         spec.kernels = spec.kernels + [spec.kernels[0]]
+        message = "Duplicate KernelSpec name 'reader'"
+    elif duplicate == "kernel_with_other_arguments":
+        # A first declaration of the reader without runtime arguments, which run args without a reader entry fit.
+        reader = spec.kernels[0]
+        reader.runtime_arg_schema = E.KernelSpec.RuntimeArgSchema()
+        spec.kernels = [reader] + spec.kernels
+        run_args.kernel_run_args = [entry for entry in run_args.kernel_run_args if entry.kernel != "reader"]
         message = "Duplicate KernelSpec name 'reader'"
     else:
         spec.tensor_parameters = spec.tensor_parameters + [spec.tensor_parameters[0]]
@@ -1089,6 +1096,8 @@ def test_one_program_runs_on_every_device_of_its_tensors(mesh_device):
     """With its tensors on both devices, each holding data of its own, the program runs on both, on a cache hit too,
     and the MeshProgramSpec form over the whole mesh keys the same entry."""
     initial = torch.full((1, 1, 64, 64), 7.0, dtype=torch.bfloat16)
+    # Each call's tensors stay allocated, so the next call's are at other addresses, which a cache hit must bind.
+    tensors_of_each_call = []
 
     def call(seed, *, tile_limit=None, mesh_form=False):
         """Runs a * b, with a and b split over the devices. Returns the expected and actual output of each device, in
@@ -1102,6 +1111,7 @@ def test_one_program_runs_on_every_device_of_its_tensors(mesh_device):
             for tensor in (torch_a, torch_b)
         )
         out = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        tensors_of_each_call.append((a, b, out))
         spec, run_args = mul_program(a, b, out, tile_limit=tile_limit)
         if mesh_form:
             whole_mesh = mesh_range(mesh_device)

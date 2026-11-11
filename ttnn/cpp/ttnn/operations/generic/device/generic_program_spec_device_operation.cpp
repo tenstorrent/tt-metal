@@ -331,8 +331,8 @@ void check_program(
     const m2::ProgramRunArgs& run_args,
     const std::vector<Tensor>& io_tensors,
     bool check_nodes) {
-    // Kept by name. A kernel declared twice is checked against its first declaration, so when its run args fit that
-    // one, the call gets past these checks to Metal's, which names the duplicate.
+    // Kept by name. A kernel declared twice is checked once, against its first declaration, so when its run args fit
+    // that one, the call gets past these checks to Metal's, which names the duplicate.
     std::unordered_set<m2::KernelSpecName> kernels_with_run_args;
     for (const auto& kernel_run_args : run_args.kernel_run_args) {
         const auto kernel = std::ranges::find(spec.kernels, kernel_run_args.kernel, &m2::KernelSpec::unique_id);
@@ -346,7 +346,11 @@ void check_program(
             kernel_run_args.kernel);
         check_kernel_run_args(spec, *kernel, kernel_run_args, check_nodes);
     }
+    std::unordered_set<m2::KernelSpecName> kernels_seen;
     for (const auto& kernel : spec.kernels) {
+        if (!kernels_seen.insert(kernel.unique_id).second) {
+            continue;
+        }
         TT_FATAL(
             kernels_with_run_args.contains(kernel.unique_id) || !has_runtime_arguments(kernel),
             "generic_op: kernel '{}' takes runtime arguments, but run_args.kernel_run_args has no entry for it",
