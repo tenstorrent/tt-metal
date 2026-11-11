@@ -40,13 +40,23 @@ def _parts():
     cls = _sub(cls, "    const std::uint32_t rows = pack_tile_face_r_dim[i];\n", "", 1)
     cls = _sub(cls, "    const std::uint32_t fmt = pack_dst_format[i];\n", "", 1)
     cls = _sub(cls, "pack_tile_num_faces[i]", "faces")
-    form = _func(s, "inline char llk_pack_block_form(")
-    head = "inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32_t ntiles, const char (*table)[4][17], const bool next)"
-    form = _sub(form, head, "constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const bool next, const bool sync_full, const bool src32, const bool int8, const bool matmul_ctx)", 1)
-    form = _sub(form, "llk_pack_matmul_seen", "matmul_ctx", 1)
-    form = _sub(form, "    const std::uint32_t row = llk_pack_block_class(output_id);\n", "", 1)
+    k_head = "constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const bool next, const bool sync_full, const bool src32, const bool int8, const bool matmul_ctx)"
+    folded = re.search(r"constexpr char llk_pack_block_form_of\(\s*const std::uint32_t row, const std::uint32_t ntiles, const char \(\*table\)\[4\]\[17\], const bool next, const bool matmul_ctx\)", s)
+    if folded:
+        # the forms fold into compile-time words: llk_pack_block_form_of is the rule of a table row, llk_pack_block_form adds the Int8 rule
+        form = _sub(_func(s, folded.group(0)), folded.group(0), k_head, 1)
+        int8 = re.search(r"    if \(!is_fp32_dest_acc_en && llk_pack_dst_is_int8\(output_id\)\) \{\n        return 'T';\n    \}\n", _func(s, "inline char llk_pack_block_form("))
+        if int8 is None:
+            raise SystemExit("generator out of date: the Int8 rule of llk_pack_block_form")
+        form = _sub(form, k_head + " {\n", k_head + " {\n" + int8.group(0).replace("llk_pack_dst_is_int8(output_id)", "int8"), 1)
+    else:
+        form = _func(s, "inline char llk_pack_block_form(")
+        head = "inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32_t ntiles, const char (*table)[4][17], const bool next)"
+        form = _sub(form, head, k_head, 1)
+        form = _sub(form, "llk_pack_matmul_seen", "matmul_ctx", 1)
+        form = _sub(form, "    const std::uint32_t row = llk_pack_block_class(output_id);\n", "", 1)
+        form = _sub(form, "llk_pack_dst_is_int8(output_id)", "int8", 1)
     form = _sub(form, "DST_SYNC_MODE == DstSync::SyncFull", "sync_full", 1)
-    form = _sub(form, "llk_pack_dst_is_int8(output_id)", "int8", 1)
     form = _sub(form, "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;", "const std::uint32_t family = (is_fp32_dest_acc_en && src32) ? 1 : 0;", 1)
     assert "output_id" not in form and "[i]" not in cls and "llk_pack_matmul_seen" not in form
     for name in sorted(set(re.findall(r"\bllk_pack_mm_\w+", form))):

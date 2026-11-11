@@ -63,6 +63,17 @@ constexpr std::uint32_t key_c1 = 32;
 constexpr bool key_src32       = false;
 #endif
 
+// llk_pack_block_forms: the forms a block takes from the init, reconfigure and next states, as a mask (1 per tile, 2 block, 4 W offset)
+template <bool fp32, std::uint32_t kt>
+constexpr std::uint32_t forms_k(const std::uint32_t row, const std::uint32_t nt, const bool t32, const bool full, const bool src32, const bool int8)
+{
+    using namespace matmul_pack_tables;
+    const char a = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, false, full, src32, int8, true);
+    const char b = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, false, full, src32, int8, true);
+    const char c = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, true, full, src32, int8, true);
+    return (a == 'T' || b == 'T' || c == 'T' ? 1 : 0) | (a == 'B' || b == 'B' || c == 'B' ? 2 : 0) | (a == 'W' || b == 'W' || c == 'W' ? 4 : 0);
+}
+
 // address in 16 byte words, tile_stride in bytes (the page size times 16)
 template <DstSync sync, bool fp32, int form, DataFormat out_format>
 inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
@@ -74,7 +85,24 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     constexpr bool int8     = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
     constexpr bool src32    = fp32 && key_src32;
     constexpr bool tables32 = src32 && unpack_to_dest; // llk_pack_form_table: the 32 bit input tables only when a CB unpacks to DEST
-    // llk_pack_block: per tile after another pack program init, and while the packer accumulates in L1 under half sync
+    // llk_pack_block: with a constant tile count the forms of the three states fold at compile time, and a block that is T from all of them
+    // is main's loop (no close, no guards)
+    std::uint32_t forms = 0;
+    if (__builtin_constant_p(num_tiles))
+    {
+        forms = forms_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(row, num_tiles, tables32, sync == DstSync::SyncFull, src32, int8);
+    }
+    if (forms == 1)
+    {
+        state.seen  = true;
+        state.valid = false;
+        for (std::uint32_t i = 0; i < num_tiles; i++)
+        {
+            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
+        }
+        return;
+    }
+    // per tile after another pack program init, and while the packer accumulates in L1 under half sync
     if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (sync == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE()))
     {
         _llk_pack_close_fast_untilize_<sync>();
@@ -86,7 +114,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         return;
     }
     const bool first        = MATMUL_PACK_STATE != 0 || !state.seen;
-    const char f = matmul_pack_tables::llk_pack_block_form_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(
+    const char f = forms == 2 ? 'B' : matmul_pack_tables::llk_pack_block_form_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(
         row,
         key_nt != 0 ? key_nt : num_tiles,
         first ? (MATMUL_PACK_STATE == 1 ? (tables32 ? matmul_pack_tables::llk_pack_reconf_form : matmul_pack_tables::llk_pack_reconf_form_dc)
