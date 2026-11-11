@@ -11,6 +11,8 @@
   first-traced-chunk block differs from a one-chunk piece;
 * with ``V41_PREFILL_PREFIX_REUSE`` unset the runtime issues the SAME device work, call for call, as the base commit's
   runtime.py + kv_export.py (``git show``; skipped without git);
+* with the H2 store off (``V41_PREFILL_PREFIX_STORE_GB`` unset), H1 off AND on, the SAME device work as H1's last commit
+  (a7830ff1d74: its runtime.py, kv_export.py, tt/v41/prefix_reuse.py and common prefix_reuse.py);
 * each piece of the resume is needed: removing it makes a scenario fail (mutations).
 """
 
@@ -62,6 +64,7 @@ assert {k: getattr(CFG, k) for k in _ROLES_1017} == _ROLES_1017, "the checkpoint
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 5))
 BASE = os.environ.get("V41_PREFIX_BASE_COMMIT", "03b370b312b")  # sdawle/dsv41p_1017_tt-d-gen, the branch point
+H1_COMMIT = os.environ.get("V41_PREFIX_H1_COMMIT", "a7830ff1d74")  # sdawle/dsv41p_prefill_reuse: H1 as device-checked
 C = 512  # chunk (a multiple of 64 x sp = 512)
 MAXSEQ = 8 * C
 MARKED, LAST = 1 << 29, 1 << 30
@@ -105,6 +108,7 @@ def _base_env(layout: str, flag: bool, ckpts: int = 8) -> dict:
         "PREFILL_REQUEST_SIDECAR_DIR": None,
         PR.ENV_FLAG: "1" if flag else None,
         PR.ENV_CKPTS: str(ckpts),
+        "V41_PREFILL_PREFIX_STORE_GB": None,  # H2 off unless a test turns it on
     }
     env.update(LAYOUTS[layout])
     return env
@@ -420,27 +424,37 @@ def test_marked_words_with_the_flag_off_behave_as_plain_words():
 
 
 # -------------------------------------------------------------------------------------------- flag off == base commit
-def _base_modules(tmp_path):
+_COMMON = "models/demos/common/prefill/prefix_reuse.py"
+
+
+def _base_modules(tmp_path, commit=BASE, prefix=False):
+    """(runtime, kv_export) modules of ``commit`` (``git show``), in a package of their own; ``prefix``: also its
+    tt/v41/prefix_reuse.py and the common prefix_reuse.py THEY import (rewritten to the package's copy, so the base runtime
+    runs the base retention, not this tree's)."""
+    names = ("runtime.py", "kv_export.py") + (("prefix_reuse.py",) if prefix else ())
     try:
-        srcs = {
-            n: subprocess.check_output(
-                ["git", "-C", ROOT, "show", f"{BASE}:models/demos/deepseek_v3_d_p/tt/v41/{n}"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            )
-            for n in ("runtime.py", "kv_export.py")
-        }
+        show = lambda path: subprocess.check_output(  # noqa: E731
+            ["git", "-C", ROOT, "show", f"{commit}:{path}"], text=True, stderr=subprocess.DEVNULL
+        )
+        srcs = {n: show(f"models/demos/deepseek_v3_d_p/tt/v41/{n}") for n in names}
+        if prefix:
+            srcs["common_prefix_reuse.py"] = show(_COMMON)
     except Exception as e:  # noqa: BLE001
-        pytest.skip(f"base commit {BASE} not readable with git ({e})")
-    pkg = tmp_path / "v41_base"
+        pytest.skip(f"base commit {commit} not readable with git ({e})")
+    name = f"v41_base_{commit}"
+    pkg = tmp_path / name
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
     (pkg / "prefill.py").write_text("class V41Prefill:\n    pass\n")
+    common = "from models.demos.common.prefill.prefix_reuse import"
     for n, src in srcs.items():
+        if prefix:
+            src = src.replace(common, f"from {name}.common_prefix_reuse import")
+        assert common not in src, n
         (pkg / n).write_text(src)
     sys.path.insert(0, str(tmp_path))
     try:
-        return importlib.import_module("v41_base.runtime"), importlib.import_module("v41_base.kv_export")
+        return importlib.import_module(f"{name}.runtime"), importlib.import_module(f"{name}.kv_export")
     finally:
         sys.path.remove(str(tmp_path))
 
@@ -461,6 +475,34 @@ def test_flag_off_issues_the_base_commits_device_work(tmp_path, layout, users):
         (f"first difference at call {i}: {x} != {y}" for i, (x, y) in enumerate(zip(t0, t1)) if x != y), "length"
     )
     assert F.same(e0, e1) and F.same(m0, m1) and a0 == a1
+
+
+@pytest.mark.parametrize("layout", list(LAYOUTS))
+@pytest.mark.parametrize("users", [1, 2])
+@pytest.mark.parametrize("h1", [False, True])
+def test_store_off_issues_the_h1_commits_device_work(tmp_path, layout, users, h1):
+    """H2 off (V41_PREFILL_PREFIX_STORE_GB unset): the runtime issues the same device work, call for call, as H1's last
+    commit -- with H1 off and with H1 on (skips, resumes, silent rebuilds, a strict prefix, empty chunks, marked and unmarked
+    headers, two slots) -- and leaves the same export, model rows and acks."""
+    rt0, kx0 = _base_modules(tmp_path, H1_COMMIT, prefix=True)
+    seq = [(0, X), (0, A), (users - 1, B), (0, A2), (0, A2), (0, AP), (0, A), (users - 1, LONG), (0, SHORT_SIB)]
+    runs = []
+    for rt_mod, kx_mod in ((rt0, kx0), (RT, KX)):
+        with _isolated_sys(), _env(**_base_env(layout, flag=h1, ckpts=3)):
+            s = System(rt_mod, kx_mod, users=users, flag=h1)
+            for k, (slot, p) in enumerate(seq):
+                s.prompt(p, slot=slot, marks=k % 3 != 2)
+                if k in (2, 5):
+                    _empty_chunk(s, slot=slot, marks=k == 2)
+            runs.append(
+                (list(F.SYS.trace), F.export_bytes(s.kv), F.model_state(s.rt.pf, 0, len(SHORT_SIB)), list(s.acks))
+            )
+    (t0, e0, m0, a0), (t1, e1, m1, a1) = runs
+    assert len(t0) == len(t1) and t0 == t1, next(
+        (f"first difference at call {i}: {x} != {y}" for i, (x, y) in enumerate(zip(t0, t1)) if x != y), "length"
+    )
+    assert F.same(e0, e1) and F.same(m0, m1) and a0 == a1
+    assert any(op[0] == "pf._chunk" for op in t1) and (not h1 or any(op[0] == "copy" for op in t1))
 
 
 # ------------------------------------------------------------------------------------------------------- mutations

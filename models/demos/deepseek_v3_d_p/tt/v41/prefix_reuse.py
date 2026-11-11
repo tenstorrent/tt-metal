@@ -37,7 +37,27 @@ partial chunk costs at most one chunk on an exact re-send and writes the ring as
 already restores the boundary's carry: _on_resume). Skips ending ON a chunk boundary (one carry) are unaffected.
 
 Image prompts: a chunk with a virtual image-span id (>= vocab) is never matched (the same span layout gives the same ids for
-different images); its prompt is computed whole and nothing of it is retained.
+different images): it is computed -- resumed at its start first, like any computed chunk, when a skipped / restored prefix
+precedes it -- and nothing of the prompt from it on is retained (nor stored, H2). The text chunks before it depend on their own
+ids only, so they are reused like any other.
+
+H2, the host-RAM chunk store (``V41_PREFILL_PREFIX_STORE_GB`` > 0, on top of H1; 0 / unset = H1 exactly, call for call;
+plan ``v41ax_logs/prefill_reuse_design.md`` section 3; GLM-5.3's G53F-0311 phase 2 / G53F-0256 / G53F-0315 ported). Every
+FULL chunk the runner computes is read into the store after its sync: the position-indexed rows a restore must write back --
+per KV source (2 / 8 / 14 at ratio 2, layer 20 at ratio 1) the bf16 entries ``compressed_kv`` and index keys ``index_k`` of
+its ``C / ratio`` entry rows (the indexer scores the bf16 state, not the bfp8 export), chip 0 (the states are replicated):
+25 MiB per 8192-token chunk. A chunk the device does not hold but the store does is RESTORED (``_restore_rows``), through
+the writers a computed chunk uses: replicated uploads -> ``fill_cache_for_user_`` into ``compressed_kv`` / ``index_k`` (as
+``TtCSA.forward`` / ``kv_only``) -> the path-A slab's entry rows at ``chunk + s / ratio`` (``_slab_write``, a block source
+with ``sparse_path``; layer 20 KV-only has no slab) -> the export's entry / key rows repacked by ``_export_entries``
+(``kv_export.export_entry_rows``) -> the Engram n-gram history (``EngramHost.hash_ids``, host only); a restore at chunk 0
+first does what a cold chunk 0 does (``pf.reset`` + ``zero_slot``). The window rings, counters and score mask are written
+where H1 writes them (``_on_resume`` / ``_export_carries`` / ``resume_at``). Tip carries: when the device leaves a prompt,
+the device checkpoints of its ``V41_PREFILL_PREFIX_SPILL_TIPS`` (default 2) newest boundaries are read into the store's tip
+arena (21 x 128 x 512 bf16 = 2.625 MiB each), after the burst's last chunk (``after_acks``); a later turn resumes on them
+(``_load_carries``: replicated upload + ``ttnn.copy`` INTO the live carry buffers, whose addresses the islands captured).
+Memory: two fixed arenas (``SlotArena``), RSS <= the budget whatever the eviction history (G53F-0315), plus the
+``V41_PREFILL_PREFIX_HOST_RESERVE_GB`` MemAvailable floor (default 32). One store per user slot (the budget split evenly).
 """
 
 from __future__ import annotations
@@ -50,12 +70,19 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.prefix_reuse import PrefixRetention
+from models.demos.common.prefill.prefix_reuse import ChunkStore, PrefixRetention
 
-from .kv_export import export_windows, export_zero_blocks, zero_export_rows
+from .kv_export import export_entry_rows, export_windows, export_zero_blocks, zero_export_rows
 
 ENV_FLAG = "V41_PREFILL_PREFIX_REUSE"
 ENV_CKPTS = "V41_PREFILL_PREFIX_CKPTS"
+# H2 (host chunk store; needs ENV_FLAG): the store's RAM budget (GiB, all slots; 0 / unset = off), the part of it for tip carries
+# (default 1/16), the host-memory floor (MemAvailable GiB under which the store gives memory back), the boundaries spilled per
+# prompt the device leaves
+ENV_STORE_GB = "V41_PREFILL_PREFIX_STORE_GB"
+ENV_STORE_TIP_GB = "V41_PREFILL_PREFIX_STORE_TIP_GB"
+ENV_RESERVE_GB = "V41_PREFILL_PREFIX_HOST_RESERVE_GB"
+ENV_SPILL_TIPS = "V41_PREFILL_PREFIX_SPILL_TIPS"
 TAG = "v41-prefix"
 
 
@@ -65,6 +92,23 @@ def enabled() -> bool:
 
 def n_checkpoints() -> int:
     return int(os.environ.get(ENV_CKPTS, "16"))
+
+
+def store_gb() -> float:
+    return float(os.environ.get(ENV_STORE_GB, "0") or 0)
+
+
+def entry_sources(pf) -> list:
+    """(layer, attention, CURRENT-slot state, compress ratio, is a block) of every KV source whose position-indexed rows a
+    chunk writes: the encoder's full layers (2 / 8 / 14), then layer 20 KV-only -- ``export_chunk``'s order."""
+    out = [
+        (blk.layer, blk.attn, blk.state, pf.cfg.role(blk.layer).compress_ratio, True)
+        for blk in pf.blocks
+        if pf.cfg.role(blk.layer).mode == "full"
+    ]
+    if pf.kv_attn is not None:
+        out.append((pf.kv_only_layer, pf.kv_attn, pf.kv_state, pf.cfg.role(pf.kv_only_layer).compress_ratio, False))
+    return out
 
 
 def carry_states(pf, slot: int) -> list:
@@ -179,6 +223,24 @@ class V41PrefixReuse:
         self.hwm = {s: 0 for s in range(runtime.num_users)}
         self.bypass = {s: False for s in range(runtime.num_users)}
         self.on = True
+        self.last_restored = False  # the last begin_chunk restored its chunk from the host store (H2)
+        self.stores = self._build_stores(runtime) if store_gb() > 0 else {}  # H2; {} = off
+        self.spill_tips = int(os.environ.get(ENV_SPILL_TIPS, "2"))
+        h2 = {
+            s: (
+                dict(
+                    store=self.stores[s],
+                    restore_rows=partial(self._restore_rows, s),
+                    spill=partial(self._spill, s),
+                    load_carries=partial(self._load_carries, s),
+                    spill_tips=self.spill_tips,
+                    chain_seed=f"dsv41-prefill-chain-v1 chunk {self.chunk}".encode(),
+                )
+                if s in self.stores
+                else {}
+            )
+            for s in range(runtime.num_users)
+        }
         self.ret = {
             s: PrefixRetention(
                 chunk=self.chunk,
@@ -193,6 +255,7 @@ class V41PrefixReuse:
                 tag=f"{TAG} slot {s}",
                 # a partial last chunk is computed, never skipped: see the module docstring (device check 11-11, S.17)
                 skip_partial_last=False,
+                **h2[s],
             )
             for s in range(runtime.num_users)
         }
@@ -205,6 +268,49 @@ class V41PrefixReuse:
         logger.info(
             f"[{TAG}] ON: {self.n_ckpts} checkpoint(s) x {n_states} window carries per slot x {runtime.num_users} slot(s), "
             f"export zero blocks for ratios {sorted(self.zeros)}, {made} new mask piece(s){dram}"
+        )
+        if self.stores:
+            st = self.stores[0]
+            logger.info(
+                f"[{TAG}] H2 ON: host chunk store {st.budget / 2**30:.2f} GiB per slot x {len(self.stores)} slot(s) (tip "
+                f"carries {st.tip_budget / 2**30:.2f} GiB of it; ~{st.chunk_budget // self._chunk_record_bytes()} chunk(s) of "
+                f"{self.chunk} tokens at {self._chunk_record_bytes() / 2**20:.1f} MiB each, INFERRED from the state shapes), "
+                f"spill {self.spill_tips} tip(s) per prompt left, host floor {st.reserve / 2**30:g} GiB MemAvailable"
+            )
+
+    def _build_stores(self, runtime) -> dict:
+        """H2: one ChunkStore per user slot (``ENV_STORE_GB`` split evenly). The restore writes the encoder + layer-20 KV-only
+        layout's bf16 states (the production layer set, V41_PREFILL_DECODER=0); anything else is refused at startup."""
+        pf, cfg = self.pf, runtime.cfg
+        assert pf.kv_attn is not None and len(pf.blocks) == cfg.first_decoder_layer, (
+            f"{ENV_STORE_GB} needs the encoder + layer-20 KV-only prefill (V41_PREFILL_DECODER=0): {len(pf.blocks)} blocks, "
+            f"kv-only {pf.kv_attn is not None}"
+        )
+        for L, _attn, st, ratio, _blk in entry_sources(pf):
+            assert st.compressed_kv.dtype == ttnn.bfloat16 and st.index_k.dtype == ttnn.bfloat16, (
+                L,
+                st.compressed_kv.dtype,
+                st.index_k.dtype,
+            )
+            # the whole capacity (no DS4F-0295 compact dense cache): the export and the restore read / write every entry row
+            assert int(st.compressed_kv.shape[2]) >= self.max_seq // ratio, (L, tuple(st.compressed_kv.shape), ratio)
+        users = int(runtime.num_users)
+        per = int(store_gb() * 2**30) // users
+        tip_env = os.environ.get(ENV_STORE_TIP_GB, "")
+        tip = None if tip_env == "" else int(float(tip_env) * 2**30) // users
+        reserve = int(float(os.environ.get(ENV_RESERVE_GB, "32")) * 2**30)
+        return {
+            s: ChunkStore(
+                per, tip_budget_bytes=tip, log=logger.info, reserve_bytes=reserve, tag=f"{TAG} store slot {s}"
+            )
+            for s in range(users)
+        }
+
+    def _chunk_record_bytes(self) -> int:
+        """INFERRED bytes of one stored chunk (bf16 entries + keys of every source; the first capture fixes the real size)."""
+        return sum(
+            (self.chunk // ratio) * (int(st.compressed_kv.shape[3]) + int(st.index_k.shape[3])) * 2
+            for _L, _a, st, ratio, _b in entry_sources(self.pf)
         )
 
     # ---- runtime hooks ---------------------------------------------------------------------------------------------------
@@ -220,21 +326,32 @@ class V41PrefixReuse:
         """True = the runtime only acknowledges this chunk (the device holds it); False = compute it (resumed first if the
         prompt matched so far)."""
         pr = self.ret[slot]
+        self.last_restored = False
         if start == 0:
             self.bypass[slot] = False
-            logger.info(f"[{TAG}] slot {slot} new prompt at chunk {request_id}: {pr.summary()}")
+            rss = f"; runner RSS {_rss_gib():.1f} GiB" if pr.store is not None else ""
+            logger.info(f"[{TAG}] slot {slot} new prompt at chunk {request_id}: {pr.summary()}{rss}")
         if not self.on or self.bypass[slot]:
             return False
-        if any(int(t) >= self.vocab for t in ids):
-            pr.invalidate(f"image-span ids in chunk [{start}, {end}): the prompt is computed whole, nothing retained")
-            self.bypass[slot] = True
-            return False
+        image = any(int(t) >= self.vocab for t in ids)
         t0 = time.perf_counter()
         try:
+            # an image chunk too: its virtual ids are never retained nor stored, so it is always computed, and the retention
+            # first resumes the model at its start like any computed chunk -- a skipped (H1) or restored (H2) prefix before it
+            # leaves the counters, the mask and the carries elsewhere (a7830ff1d74 skipped that: A, then an image prompt sharing
+            # A's chunk 0, tripped the runtime's kv_actual assert -- host repro in test_v41_prefix_store.py)
             skipped = pr.begin_chunk(torch.tensor([int(t) for t in ids], dtype=torch.int32), start, end, last)
+            assert not (image and skipped), "an image-span chunk was skipped / restored"
         except BaseException:
             pr.invalidate("begin_chunk failed")
             raise
+        if image:
+            pr.flush_spills()  # the tips of the prompt the device left (H2; nothing without a store)
+            pr.invalidate(
+                f"image-span ids in chunk [{start}, {end}): computed, nothing of the prompt retained from here"
+            )
+            self.bypass[slot] = True
+        self.last_restored = bool(skipped and pr.last_restored)
         if not skipped and pr.last_resume is not None:
             ttnn.synchronize_device(self.rt.mesh_device)
             logger.info(
@@ -247,6 +364,37 @@ class V41PrefixReuse:
         """After the chunk's compute + export were issued (before the runtime's sync): retain it (checkpoint at a boundary)."""
         if self.on and not self.bypass[slot]:
             self.ret[slot].end_compute(torch.tensor([int(t) for t in ids], dtype=torch.int32), start, end)
+
+    def capture(self, slot: int, ids, start: int, end: int) -> float:
+        """H2, after a computed chunk's sync (its state rows are final) and before its acks: a full chunk of a hashed chain
+        the store does not hold yet -> its rows read from chip 0 into the store. Returns the seconds spent (0: nothing read;
+        never a device call with the store off)."""
+        if not self.stores or not self.on or self.bypass[slot]:
+            return 0.0
+        pr = self.ret[slot]
+        if not pr.wants_rows(start, end):
+            return 0.0
+        t0 = time.perf_counter()
+        parts = self._read_rows(int(start))
+        t1 = time.perf_counter()
+        ok = pr.store_rows(torch.tensor([int(t) for t in ids], dtype=torch.int32), int(start), int(end), parts)
+        logger.info(
+            f"[{TAG}] slot {slot} chunk [{start}, {end}) {'stored' if ok else 'NOT stored (no slot free)'}: read "
+            f"{t1 - t0:.3f} s, copy {time.perf_counter() - t1:.3f} s"
+        )
+        return time.perf_counter() - t0
+
+    def after_acks(self, slot: int, last) -> None:
+        """H2, after a chunk's acks: when a burst ended (a marked last chunk, an empty chunk), read the checkpoints pinned
+        for the prompts the device left (their tips) into the store."""
+        pr = self.ret[slot]
+        if pr.store is None or not pr.pending_spills or not last:
+            return
+        t0 = time.perf_counter()
+        n = pr.flush_spills()
+        logger.info(
+            f"[{TAG}] slot {slot} spilled {n} checkpoint(s) to the host store in {time.perf_counter() - t0:.3f} s"
+        )
 
     def note_zeroed(self, slot: int) -> None:
         """The runtime zeroed the slot's export (zero_slot at a cold chunk 0)."""
@@ -310,9 +458,93 @@ class V41PrefixReuse:
         ttnn.synchronize_device(self.rt.mesh_device)
         return bool(final)
 
+    # ---- H2 callbacks (the host chunk store) ----------------------------------------------------------------------------
+    def _read_rows(self, start: int) -> list:
+        """The current slot's rows of the full chunk at ``start``, chip 0 (replicated states): per source in ``entry_sources``
+        order its entries [C / ratio, 512] and index keys [C / ratio, 128], bf16 host tensors."""
+        parts = []
+        for _L, _attn, st, ratio, _blk in entry_sources(self.pf):
+            e0, n = int(start) // ratio, self.chunk // ratio
+            for src in (st.compressed_kv, st.index_k):
+                W = int(src.shape[3])
+                part = ttnn.slice(src, [0, 0, e0, 0], [1, 1, e0 + n, W])
+                parts.append(ttnn.to_torch(ttnn.get_device_tensors(part)[0]).reshape(n, W))
+                ttnn.deallocate(part)
+        return parts
+
+    def _upload(self, t: torch.Tensor, dtype):
+        """A host [n, W] block -> [1, 1, n, W] TILE on every chip (replicated, as the states are)."""
+        mesh = self.rt.mesh_device
+        return ttnn.from_torch(
+            t.reshape(1, 1, int(t.shape[-2]), int(t.shape[-1])),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def _restore_rows(self, slot: int, parts: list, ids: torch.Tensor, start: int) -> None:
+        """A stored chunk [start, start + C) back into the device through the writers a computed chunk uses (module
+        docstring): the model's entry / key rows (+ the path-A slab), the export's rows from them, the Engram history.
+        """
+        assert self.pf.slot == slot, (self.pf.slot, slot)
+        start = int(start)
+        t0 = time.perf_counter()
+        if start == 0:  # what a cold chunk 0 does first: the export holds another prompt
+            self.pf.reset()
+            self.exp.zero_slot(slot)
+            self.hwm[slot] = 0
+        srcs = entry_sources(self.pf)
+        assert len(parts) == 2 * len(srcs), (len(parts), len(srcs))
+        for i, (_L, attn, st, ratio, blk) in enumerate(srcs):
+            e0 = start // ratio
+            rows = self._upload(parts[2 * i], st.compressed_kv.dtype)
+            keys = self._upload(parts[2 * i + 1], st.index_k.dtype)
+            ttnn.kv_cache.fill_cache_for_user_(st.compressed_kv, rows, 0, update_idx=e0)
+            ttnn.kv_cache.fill_cache_for_user_(st.index_k, keys, 0, update_idx=e0)
+            if blk and getattr(attn, "sparse_path", False):
+                # path A's slab [chunk S | entries | carry]: entry w at row S + w (TtCSA.forward / glue_chunk); layer 20's
+                # kv_only writes no slab
+                attn._slab_write(st, rows, self.chunk + e0)
+            ttnn.deallocate(rows)
+            ttnn.deallocate(keys)
+        t1 = time.perf_counter()
+        export_entry_rows(self.exp, self.pf, slot, start, start + self.chunk)
+        self.note_export(slot, start)
+        if getattr(self.pf, "engrams", None) and self.rt.engram is not None:
+            self.rt.engram.hash_ids(
+                slot, [int(v) for v in ids.tolist()], start
+            )  # the n-gram history (host, per position)
+        logger.info(
+            f"[{TAG}] slot {slot} restored [{start}, {start + self.chunk}) from the host store: model rows {t1 - t0:.3f} s, "
+            f"export rows + Engram {time.perf_counter() - t1:.3f} s (dispatch)"
+        )
+
+    def _spill(self, slot: int, k: int) -> list:
+        """Checkpoint ``k`` -> host: the window carries of every attention state (``carry_states`` order), chip 0."""
+        return [ttnn.to_torch(ttnn.get_device_tensors(buf)[0]) for buf in self.ckpt[slot][k]]
+
+    def _load_carries(self, slot: int, parts: list) -> None:
+        """Host carries -> the live carry buffers (copied INTO them: the islands captured their addresses)."""
+        states = carry_states(self.pf, slot)
+        assert len(parts) == len(states), (len(parts), len(states))
+        for st, host in zip(states, parts):
+            tmp = self._upload(host, st.sliding_carry.dtype)
+            ttnn.copy(tmp, st.sliding_carry)
+            ttnn.deallocate(tmp)
+
     def _dram(self):
         """Allocated DRAM bytes per bank (the checkpoint pool's cost in the startup line); None where unavailable."""
         try:
             return int(ttnn.get_memory_view(self.rt.mesh_device, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank)
         except Exception:  # noqa: BLE001 -- a report must not fail the build
             return None
+
+
+def _rss_gib() -> float:
+    try:
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**30
+    except OSError:
+        return float("nan")

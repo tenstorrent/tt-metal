@@ -118,7 +118,8 @@ class V41PrefillRuntime:
         self.num_layers = int(cfg.n_layers)
         self._ack = None
         self._request_id = 0
-        # prefill-side prefix reuse H1 (V41_PREFILL_PREFIX_REUSE=1, tt/v41/prefix_reuse.py): built in compile(); None = off
+        # prefill-side prefix reuse H1 (V41_PREFILL_PREFIX_REUSE=1, tt/v41/prefix_reuse.py): built in compile(); None = off.
+        # H2 (+ V41_PREFILL_PREFIX_STORE_GB > 0): its host chunk store
         self._prefix = None
 
     # ---- KV export ----------------------------------------------------------------------------------------------------
@@ -231,7 +232,10 @@ class V41PrefillRuntime:
                 self._request_image_rows(int(slot_id))  # the request's sidecar even when its chunk 0 is skipped
                 image_rows_done = True
             if reuse.begin_chunk(int(slot_id), ids[:real], int(actual_start), int(actual_end), last, int(request_id)):
-                self._skip_chunk(int(slot_id), int(actual_start), int(actual_end), int(request_id), t_skip)
+                self._skip_chunk(
+                    int(slot_id), int(actual_start), int(actual_end), int(request_id), t_skip, reuse.last_restored
+                )
+                reuse.after_acks(int(slot_id), last)  # H2: a burst's last chunk -> the tips of the prompts it left
                 return None
         if int(actual_start) == 0:
             self.pf.reset()
@@ -263,10 +267,17 @@ class V41PrefillRuntime:
             )  # checkpoint before the sync
         t2 = time.time()
         ttnn.synchronize_device(self.mesh_device)
+        # H2 (V41_PREFILL_PREFIX_STORE_GB): a full computed chunk's rows into the host store, before its acks (no device call
+        # with the store off)
+        t_store = (
+            reuse.capture(int(slot_id), ids[:real], int(actual_start), int(actual_end)) if reuse is not None else 0.0
+        )
         t3 = time.time()
         if self._ack is not None and not warmup:
             for L in range(self.num_layers):
                 self._ack(L)
+        if reuse is not None:
+            reuse.after_acks(int(slot_id), last)
         t4 = time.time()
         # DS41F-0119: the first request at a NEW prompt length is 0.3-4.6 s slower (bench 10-29) -- log the program-cache growth
         # per chunk, so a length-keyed program build shows up as "+N programs" on the request path
@@ -285,6 +296,7 @@ class V41PrefillRuntime:
         logger.info(
             f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id} in {t4 - t0:.2f} s "
             f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
+            + (f" (incl. host-store read {t_store:.3f})" if t_store else "")
             + (" (warm-up)" if warmup else "")
         )
         return None
@@ -305,19 +317,23 @@ class V41PrefillRuntime:
         if self._ack is not None and not warmup:
             for L in range(self.num_layers):
                 self._ack(L)
+        if self._prefix is not None and not warmup:
+            self._prefix.after_acks(slot_id, True)  # H2: an empty chunk ends a (declined) burst
         logger.info(f"[v41 runtime] chunk [{start}, {start}) slot {slot_id} EMPTY (declined before compute): acks only")
         return None
 
-    def _skip_chunk(self, slot_id: int, start: int, end: int, request_id: int, t0: float) -> None:
+    def _skip_chunk(
+        self, slot_id: int, start: int, end: int, request_id: int, t0: float, restored: bool = False
+    ) -> None:
         """Prefix reuse H1: a chunk the device already holds (entries, keys and export rows of the same ids through the same
-        chunk partition) -- every contract layer acknowledged at once, nothing computed."""
+        chunk partition) -- every contract layer acknowledged at once, nothing computed. H2 (``restored``): its rows were
+        written back from the host store instead (the export's rows included)."""
         self._request_id = int(request_id)
         if self._ack is not None:
             for L in range(self.num_layers):
                 self._ack(L)
-        logger.info(
-            f"[v41 runtime] chunk [{start}, {end}) slot {slot_id} SKIPPED (retained prefix) in {time.time() - t0:.3f} s"
-        )
+        what = "RESTORED (host store)" if restored else "SKIPPED (retained prefix)"
+        logger.info(f"[v41 runtime] chunk [{start}, {end}) slot {slot_id} {what} in {time.time() - t0:.3f} s")
 
     def _program_cache_entries(self):
         try:

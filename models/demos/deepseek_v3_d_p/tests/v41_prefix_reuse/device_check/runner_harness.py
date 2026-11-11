@@ -5,15 +5,19 @@ layer-ack channel, KV table exported to file) with the V4.1 runtime and ``V41_PR
 patches, so one model build measures every arm on the same programs. Started by ``run_device_check.sh``.
 
 ``PREFIX_CHECK_CTL`` holds the arm of the NEXT prompt (read when a chunk at start 0 arrives): ``<mode> <tag> [digest]``
-    off    prefix reuse bypassed (today's runner) and its retention emptied
-    cold   retention emptied before the prompt: every chunk computed (checkpoints still saved)
-    reuse  retention as served
+    off    prefix reuse bypassed (today's runner) and its retention emptied; the H2 store is kept, neither read nor written
+    cold   retention emptied before the prompt: every chunk computed (checkpoints still saved) -- an H1 arm: with the H2 store
+           on, a "cold" prompt may still restore from the store (H2 runs take their references with "off")
+    clear  "reuse" after emptying the retention AND the H2 store (a fresh store per slot)
+    reuse  retention (and store) as served
 An EMPTY chunk at 0 is a FLUSH: if the previous prompt's arm asked for ``digest``, the harness writes a
 ``[prefix-check] digest`` line -- crc32 of every export tensor of slot 0 (the 7 tensors whole, rows past the prompt
-included: what the KV Manager could read; chip 0, window rings also on the last chip) and of the model's own rows
-[0, S / ratio) of every KV source and layer 20 (entries + index keys) -- then hands the chunk to the runtime, whose EMPTY-chunk
-path (tt-d-gen prefill_wait_for_arm_us) acknowledges every layer and computes nothing: every prompt after a flush is also a
-"declined request, then a prompt" check. SIGUSR1 dumps every Python thread's stack.
+included: what the KV Manager could read; chip 0, window rings also on the last chip), of the model's own rows
+[0, S / ratio) of every KV source and layer 20 (entries + index keys), of the path-A slab's entry rows [chunk, chunk + S / ratio)
+of every encoder source (``slab=``; what a later chunk's sparse gather reads, written by a restore too) and of the Engram n-gram
+history [0, S) (``engram=``) -- then hands the chunk to the runtime, whose EMPTY-chunk path (tt-d-gen prefill_wait_for_arm_us)
+acknowledges every layer and computes nothing: every prompt after a flush is also a "declined request, then a prompt" check.
+SIGUSR1 dumps every Python thread's stack.
 """
 
 from __future__ import annotations
@@ -80,11 +84,26 @@ def _digest(rt, kv, S: int) -> dict:
             ttnn.deallocate(part)
         rows[L] = c
         racc = zlib.crc32(f"{L}:{c:08x}".encode(), racc)
+    # the path-A slab's entry rows (whole-tensor read, as the export's: the slab is ND-sharded like them), host-sliced
+    sacc = 0
+    for b in pf.blocks:
+        slab = getattr(b.state, "slab_rm", None)
+        if pf.cfg.role(b.layer).mode != "full" or slab is None:
+            continue
+        n = -(-S // pf.cfg.role(b.layer).compress_ratio)
+        host = _read(slab, 0)
+        sacc = zlib.crc32(f"{b.layer}:{_crc(host[..., pf.chunk : pf.chunk + n, :]):08x}".encode(), sacc)
+    try:  # the Engram n-gram history of slot 0 (tt-blaze EngramHost: one NgramHashState cache per slot)
+        eng = _crc(rt.engram._hash[0].cache[0, :S].contiguous())
+    except Exception:  # noqa: BLE001 -- another EngramHost layout: not digested
+        eng = 0xFFFFFFFF
     return {
         "S": S,
         "export": acc,
         "tensors": exp,
         "rows": racc,
+        "slab": sacc,
+        "engram": eng,
         "notes": notes,
         "digest_s": round(time.perf_counter() - t0, 2),
     }
@@ -107,7 +126,8 @@ def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kw):
                     logger.warning(f"[prefix-check] digest {tag} notes: {d['notes']}")
                 logger.info(
                     f"[prefix-check] digest {tag} S={S} export={d['export']:08x} rows={d['rows']:08x} "
-                    f"({d['digest_s']} s) tensors=" + ";".join(f"{k}:{v:08x}" for k, v in d["tensors"].items())
+                    f"slab={d['slab']:08x} engram={d['engram']:08x} ({d['digest_s']} s) tensors="
+                    + ";".join(f"{k}:{v:08x}" for k, v in d["tensors"].items())
                 )
             except Exception as e:  # noqa: BLE001 -- a failed digest must not take the runner down
                 logger.exception(f"[prefix-check] digest {tag} FAILED: {e}")
@@ -124,6 +144,13 @@ def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kw):
             pr.on = False
         elif mode == "cold":
             pr.reset_all("check: arm cold")
+            pr.on = True
+        elif mode == "clear":
+            pr.reset_all("check: arm clear")
+            if pr.stores:  # H2: a fresh store per slot (the old arenas are unmapped with their last reference)
+                pr.stores = pr._build_stores(self)
+                for s, r in pr.ret.items():
+                    r.store = pr.stores[s]
             pr.on = True
         else:
             pr.on = True

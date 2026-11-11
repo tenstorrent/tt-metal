@@ -400,6 +400,44 @@ def export_windows(exp: V41KvExport, pf, slot: int, end: int, carries=None) -> N
         _write_window(exp, pf.kv_attn, carry, exp.win_batch(slot, pf.kv_only_layer), row0)
 
 
+def export_entry_rows(exp: V41KvExport, pf, slot: int, start: int, end: int) -> None:
+    """export_chunk's entry / key writes for chunk [start, end) WITHOUT the window rings, from the current slot's states:
+    prefix reuse H2 repacks a chunk restored from the host store with the export's own ``_export_entries`` (the CP2 chip-major
+    halves and the bfp8 keys are those of a computed chunk by construction). The windows are written once the burst's end
+    (or the resume point) is known: export_windows."""
+    for blk in pf.blocks:
+        r = pf.cfg.role(blk.layer)
+        if r.mode == "full":
+            ent, idx = (exp.ent2, exp.idx2) if r.compress_ratio == 2 else (exp.ent1, exp.idx1)
+            _export_entries(
+                exp,
+                blk.attn,
+                blk.state,
+                slot,
+                blk.layer,
+                start,
+                end,
+                ratio=r.compress_ratio,
+                ent=ent,
+                idx=idx,
+                chunk=pf.chunk,
+            )
+    if pf.kv_attn is not None:
+        _export_entries(
+            exp,
+            pf.kv_attn,
+            pf.kv_state,
+            slot,
+            pf.kv_only_layer,
+            start,
+            end,
+            ratio=1,
+            ent=exp.ent1,
+            idx=exp.idx1,
+            chunk=pf.chunk,
+        )
+
+
 def _entry_sources(exp: V41KvExport, pf):
     """(layer, attention, compress ratio, entries tensor, keys tensor) of every layer export_chunk writes entries for."""
     out = []

@@ -13,12 +13,20 @@ Prompts (C = PREFILL_CHUNK_SIZE; ids from fixed seeds; every length a multiple o
     B    A[:C + 7040] + 20096      shares A's chunk 0 (+7040 tokens of chunk 1): resumes at C        <- the coordinator's pair
     A2   A + 12032                 the next turn of A: resumes at 3C
     AP   A[:2C]                    a strict prefix ending ON a boundary: skipped through, carries from the checkpoint
+    U    2C + 1280 unrelated tokens (H2: moves the device off a conversation; its own chunks are stored too)
 Phases (PREFIX_CHECK_PHASES, default R,S):
     R  cold references, each after X; A twice = the DETERMINISM check (cold == cold)
     S  the reuse sequence; every digest must equal the R digest of the same prompt
     U  the reuse sequence with UNMARKED headers (an engine without mark_last_chunk): equal for these prompts too
     T  timing, wall to the last ack: A2 off / cold / reuse-after-A, A2 again (every chunk skipped)
-Verdict lines: ``[driver] VERDICT determinism ...`` and ``[driver] VERDICT reuse ...``; results.json in PREFIX_CHECK_OUT.
+  H2 (the host chunk store, V41_PREFILL_PREFIX_STORE_GB > 0; run_device_check_h2.sh: PHASES=R2,S2[,T2]):
+    R2 references with arm OFF (today's runner; the store is neither read nor written), each after X; A twice = determinism
+    S2 the store sequence (arm reuse, the store emptied first): A, U, A2, U, A, U, AP, U, B, A2, A2 -- each digest == its R2
+       reference AND each prompt's per-chunk pattern (S skipped / R restored / C computed / C+Ns silent rebuild, parsed from
+       the runner log) == EXPECT_S2
+    T2 timing (2 reps): A off, then A reuse (its full chunks read into the store), U, A2 off, A2 reuse (3 chunks restored)
+Verdict lines: ``[driver] VERDICT determinism ...``, ``[driver] VERDICT reuse ...`` and (S2) ``[driver] VERDICT h2 pattern ...``;
+results.json in PREFIX_CHECK_OUT.
 
     PREFILL_* env as the runner's, PREFIX_CHECK_CTL, PREFIX_CHECK_RUNNER_LOG, PREFIX_CHECK_OUT -> python driver.py
 """
@@ -51,7 +59,23 @@ A = _rng(53, 3 * CHUNK + 4992)
 B = A[: CHUNK + 7040] + _rng(17, 20096)
 A2 = A + _rng(11, 12032)
 AP = A[: 2 * CHUNK]
-PROMPTS = {"X": X, "A": A, "B": B, "A2": A2, "AP": AP}
+U = _rng(29, 2 * CHUNK + 1280)
+PROMPTS = {"X": X, "A": A, "B": B, "A2": A2, "AP": AP, "U": U}
+# H2's S2 sequence and each prompt's expected per-chunk pattern (chunk 8192: A 4 chunks, A2 6, U 3, AP 2, B 5)
+S2 = ["A", "U", "A2", "U", "A", "U", "AP", "U", "B", "A2", "A2"]
+EXPECT_S2 = [
+    "CCCC",  # A: computed, its 3 full chunks stored
+    "CCC",  # U: the device leaves A -> A's tips (3C, 2C) are read into the store after U's last chunk
+    "RRRCCC",  # A2 = A + 12032: A's chunks restored, resumed on A's tip at 3C
+    "RRC",  # U again: restored, its partial last chunk computed on U's tip at 2C
+    "RRRC",  # A again (an exact repeat after another prompt)
+    "RRC",
+    "RR",  # AP = A[:2C]: its last chunk restored with the stored carries at 2C (export cleared past it)
+    "RRC",
+    "R,C+1s,C,C,C",  # B shares A's chunk 0 only: restored, no tip at C -> rebuilt silently from 0
+    "SRRRRC",  # A2 after B: chunk 0 held on the device (H1), 1..4 from the store, resumed on A2's tip at 5C
+    "SSSSSC",  # A2 again: held on the device, the partial last chunk recomputed
+]
 assert all(len(v) % 128 == 0 for v in PROMPTS.values()), {k: len(v) for k, v in PROMPTS.items()}
 assert len(A2) <= int(os.environ.get("PREFILL_MAX_SEQ_LEN", 1 << 20)), "prompts exceed PREFILL_MAX_SEQ_LEN"
 
@@ -142,7 +166,9 @@ def run_prompt(phase: str, name: str, arm: str, *, digest=False, mark=True, time
 
 
 def digests() -> dict:
-    pat = re.compile(r"\[prefix-check\] digest (\S+) S=(\d+) export=(\w+) rows=(\w+) .*tensors=(\S+)")
+    pat = re.compile(
+        r"\[prefix-check\] digest (\S+) S=(\d+) export=(\w+) rows=(\w+) (?:slab=(\w+) engram=(\w+) )?.*tensors=(\S+)"
+    )
     out = {}
     with open(RUNNER_LOG, errors="replace") as f:
         for line in f:
@@ -152,13 +178,41 @@ def digests() -> dict:
                     "S": int(m.group(2)),
                     "export": m.group(3),
                     "rows": m.group(4),
-                    "tensors": m.group(5),
+                    "slab": m.group(5),
+                    "engram": m.group(6),
+                    "tensors": m.group(7),
                 }
     return out
 
 
+def patterns() -> dict:
+    """tag -> the prompt's per-chunk pattern from the runner log: S skipped, R restored (H2), C computed, C+Ns a computed chunk
+    after N silently rebuilt ones."""
+    tag_re = re.compile(r"\[prefix-check\] chunk \d+: prompt (\S+) arm")
+    chunk_re = re.compile(r"\[v41 runtime\] chunk \[\d+, \d+\) slot \d+ (SKIPPED|RESTORED|in )")
+    silent_re = re.compile(r"rebuilt the carries at \d+ from \d+ \((\d+) chunk")
+    out, tag, silent = {}, None, 0
+    with open(RUNNER_LOG, errors="replace") as f:
+        for line in f:
+            m = tag_re.search(line)
+            if m:
+                tag, silent = m.group(1), 0
+                out[tag] = []
+                continue
+            m = silent_re.search(line)
+            if m and tag is not None:
+                silent = int(m.group(1))
+                continue
+            m = chunk_re.search(line)
+            if m and tag is not None and "EMPTY" not in line:
+                k = {"SKIPPED": "S", "RESTORED": "R"}.get(m.group(1), "C")
+                out[tag].append(f"C+{silent}s" if k == "C" and silent else k)
+                silent = 0
+    return {t: ("".join(v) if all(len(x) == 1 for x in v) else ",".join(v)) for t, v in out.items()}
+
+
 def runner_lines() -> list:
-    keep = ("[v41-prefix", "[prefix-check]", "SKIPPED", "[v41 runtime] chunk")
+    keep = ("[v41-prefix", "[prefix-check]", "SKIPPED", "RESTORED", "[v41 runtime] chunk")
     with open(RUNNER_LOG, errors="replace") as f:
         return [l.rstrip("\n") for l in f if any(k in l for k in keep)]
 
@@ -182,6 +236,22 @@ def main() -> None:
         res.append(run_prompt("U", "X", "cold", mark=False))
         for name in ("A", "A2", "B"):
             res.append(run_prompt("U", name, "reuse", digest=True, mark=False))
+    if "R2" in PHASES:  # H2 references: arm off = today's runner, the store untouched
+        for name in ("A", "A", "U", "A2", "AP", "B"):
+            res.append(run_prompt("R2", "X", "off"))
+            res.append(run_prompt("R2", name, "off", digest=True))
+    if "S2" in PHASES:
+        res.append(run_prompt("S2", "X", "clear"))  # the store emptied, X computed (and stored)
+        for name in S2:
+            res.append(run_prompt("S2", name, "reuse", digest=True))
+    for rep in range(2 if "T2" in PHASES else 0):
+        res.append(run_prompt(f"T2{rep}", "X", "clear"))
+        res.append(run_prompt(f"T2{rep}", "A", "off"))
+        res.append(run_prompt(f"T2{rep}", "X", "off"))
+        res.append(run_prompt(f"T2{rep}", "A", "reuse"))  # computed; its 3 full chunks read into the store
+        res.append(run_prompt(f"T2{rep}", "U", "reuse"))  # the device leaves A: A's tips spilled
+        res.append(run_prompt(f"T2{rep}", "A2", "off"))  # today's runner
+        res.append(run_prompt(f"T2{rep}", "A2", "reuse"))  # 3 chunks restored, 3 computed (on A's tip at 3C)
     for rep in range(2 if "T" in PHASES else 0):
         res.append(run_prompt(f"T{rep}", "X", "off"))
         res.append(run_prompt(f"T{rep}", "A2", "off"))
@@ -195,26 +265,43 @@ def main() -> None:
     time.sleep(10)
     d = digests()
     refs, ref_all = {}, {}
+    ref_phase = {"S": "R", "U": "R", "S2": "R2"}
     for k, v in d.items():
         phase, name = k.split(".")[0], k.split(":")[1]
-        if phase == "R":
-            refs.setdefault(name, v)
-            ref_all.setdefault(name, []).append(v)
-    same = lambda a, b: a["S"] == b["S"] and a["export"] == b["export"] and a["rows"] == b["rows"]  # noqa: E731
-    det = ref_all.get("A", [])
+        if phase in ("R", "R2"):
+            refs.setdefault((phase, name), v)
+            ref_all.setdefault((phase, name), []).append(v)
+
+    def same(a, b):
+        keys = ["S", "export", "rows"] + [
+            k for k in ("slab", "engram") if a.get(k) is not None and b.get(k) is not None
+        ]
+        return all(a[k] == b[k] for k in keys)
+
+    det = ref_all.get(("R2", "A"), ref_all.get(("R", "A"), []))
     determinism = len(det) == 2 and same(det[0], det[1])
     log(
-        f"VERDICT determinism (cold A twice, export + model rows byte-identical): {'PASS' if determinism else 'FAIL'} {det}"
+        f"VERDICT determinism (cold A twice, export + model rows (+ slab + Engram) byte-identical): "
+        f"{'PASS' if determinism else 'FAIL'} {det}"
     )
     verdict = {}
     for k, v in d.items():
         phase, name = k.split(".")[0], k.split(":")[1]
-        if phase in ("S", "U"):
-            verdict[k] = None if name not in refs else same(v, refs[name])
+        if phase in ref_phase:
+            ref = refs.get((ref_phase[phase], name))
+            verdict[k] = None if ref is None else same(v, ref)
     ok = bool(verdict) and all(verdict.values())
     log(
-        f"VERDICT reuse (every S/U digest == the cold reference of the same prompt): {'PASS' if ok else 'FAIL'} {verdict}"
+        f"VERDICT reuse (every S/U/S2 digest == the cold reference of the same prompt): {'PASS' if ok else 'FAIL'} {verdict}"
     )
+    pats = patterns()
+    if "S2" in PHASES:
+        got = [pats.get(r["tag"]) for r in res if r["phase"] == "S2" and r["prompt"] != "X"]
+        pat_ok = got == EXPECT_S2
+        log(
+            f"VERDICT h2 pattern (S2 per-chunk S/R/C == expected): {'PASS' if pat_ok else 'FAIL'} "
+            f"{list(zip(S2, got, EXPECT_S2))}"
+        )
     with open(os.path.join(OUT, "results.json"), "w") as f:
         json.dump(
             {
@@ -222,6 +309,7 @@ def main() -> None:
                 "digests": d,
                 "determinism": determinism,
                 "verdict": verdict,
+                "patterns": pats,
                 "runner_lines": runner_lines(),
             },
             f,

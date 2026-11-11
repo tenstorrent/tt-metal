@@ -15,6 +15,12 @@ compressor does), the A3 islands' SHARED score mask opened by a glue that copies
 DS4F-0262 hazard of design risk R2), and the Engram n-gram history. A chunk's outputs hash its ids (causally), its start, the
 carry it starts from, its counters, the source entries it may see (never the stale rows past them), the mask and the Engram
 history: resuming from anything but a cold prefill's state changes every later row.
+
+Prefix reuse H2 (the host chunk store) also needs: ``ttnn.to_torch`` / ``get_device_tensors`` (a chunk's rows and the checkpoint
+carries are read to the host; the fake mesh's tensors are their replicated content), and the path-A SLAB of each encoder KV source
+(``TtCSA._slab_write``: entry ``w`` at slab row ``chunk + w``, written every chunk): a chunk on path A (context >= max(window,
+top-k x ratio)) gathers its source entries from the slab, not from ``compressed_kv`` (which only chunk 0's path B reads), so a
+restore that skips the slab write changes every later row. ``FakeEngram.hash_ids`` advances the n-gram history without rows.
 """
 
 from __future__ import annotations
@@ -198,9 +204,19 @@ def _mk_ttnn():
     def synchronize_device(mesh, *a, **k):
         rec("synchronize_device")
 
+    def get_device_tensors(t):
+        _alive(t)
+        return [t]  # the fake mesh's tensors hold their (replicated) content once: chip 0 is the tensor
+
+    def to_torch(t, *a, **k):
+        _alive(t)
+        rec("to_torch", t)
+        return t.data.clone()
+
     m.get_memory_view = get_memory_view
     m.from_torch, m.slice, m.typecast, m.deallocate = from_torch, slice, typecast, deallocate
     m.reshape, m.permute, m.clone, m.copy, m.synchronize_device = reshape, permute, clone, copy, synchronize_device
+    m.get_device_tensors, m.to_torch = get_device_tensors, to_torch
 
     kv = types.SimpleNamespace()
 
@@ -290,6 +306,18 @@ class FakeAttn:
         self.sliding_window = WINDOW
         self.indexer = FakeIndexer() if role.mode == "full" else None
         self.topk = topk
+        # V41CSA.from_weights(sparse_path=PATH_A): every KV source, layer 20 KV-only included (whose kv_only writes no slab)
+        self.sparse_path = role.mode == "full"
+
+    def _slab_write(self, state, block, row):
+        """TtCSA._slab_write: ``block`` [1, 1, H, 512] at slab row ``row`` (identically on every chip)."""
+        _alive(block)
+        assert state.slab_rm is not None, f"layer {self.layer}: no slab"
+        _alive(state.slab_rm)
+        H_ = block.data.shape[2]
+        assert row + H_ <= state.slab_rm.data.shape[2], (row, H_, state.slab_rm)
+        state.slab_rm.data[0, 0, row : row + H_] = block.data[0, 0]
+        rec("slab_write", state.slab_rm, block, row)
 
     def _write_rm(self, cache, block, batch, row):
         _alive(cache), _alive(block)
@@ -307,8 +335,12 @@ class FakeAttn:
 
 
 class FakeState:
-    def __init__(self, slot, cap_entries=0, mask=None):
+    def __init__(self, slot, cap_entries=0, mask=None, slab_rows=0):
         self.slot = slot
+        # path A's slab [chunk | entries (capacity) | carry] (TtCSA._slab_alloc); only the encoder sources write one
+        self.slab_rm = (
+            FakeT(torch.zeros(1, 1, slab_rows, WIDTH, dtype=torch.int64), "bf16", "RM", MESH) if slab_rows else None
+        )
         self.kv_actual = 0
         self.entry_count = 0
         self.sliding_carry = FakeT(torch.zeros(1, 1, WINDOW, WIDTH, dtype=torch.int64), "bf16", "TILE", MESH)
@@ -345,6 +377,12 @@ class FakeEngram:
     def __init__(self, n_slots, max_seq):
         self.cache = [torch.full((max_seq + 64,), -5, dtype=torch.int64) for _ in range(n_slots)]
 
+    def hash_ids(self, slot, part, start):
+        """EngramHost.hash_ids: the n-gram history advanced (positions [start, start + len)), no table rows."""
+        part = torch.tensor([int(t) for t in part], dtype=torch.int64)
+        self.cache[slot][start : start + len(part)] = part
+        return part
+
     def rows_for(self, slot, part, start):
         part = torch.tensor([int(t) for t in part], dtype=torch.int64)
         c = self.cache[slot]
@@ -370,6 +408,7 @@ class FakePrefill:
         self._ids_dev = None
         self.n_layers = cfg.first_decoder_layer
         self.kv_only_layer = cfg.first_decoder_layer
+        self.engrams = {L: None for L in cfg.engram_layer_ids if L < self.n_layers}
         self.blocks = []
         S_l = self.chunk // sp
         masks = {}
@@ -385,7 +424,8 @@ class FakePrefill:
                     if s not in masks:
                         masks[s] = FakeT(torch.full((1, 1, S_l, cap), NEG, dtype=torch.float64), "bf16", "TILE", MESH)
                     assert masks[s].shape[3] == cap
-                    states[s] = FakeState(s, cap, masks[s])
+                    slab = -(-(self.chunk + cap + WINDOW) // self.chunk) * self.chunk  # TtCSA._slab_alloc's rows
+                    states[s] = FakeState(s, cap, masks[s], slab_rows=slab)
                     # _source_alloc_state: the A3 zero block of the FIRST traced chunk's open, built before any capture
                     need = max(WINDOW, topk * r)
                     attn.indexer._zeros_block_tile(S_l, (-(-need // self.chunk) * self.chunk) // r)
@@ -476,13 +516,15 @@ class FakePrefill:
             r = role.compress_ratio
             E0 = st.entry_count
             mask_d = self._glue(blk, st, r) if self._traced(blk, st, r) else H(E0, 5)
-            ent_d = digest_rows(st.compressed_kv.data[0, 0, :E0]) if E0 else 0
+            # path A (TtCSA.forward's use_sparse) gathers the entries from the slab; path B (chunk 0) reads compressed_kv
+            ent_d = digest_rows(self._entries_read(blk, st, start, E0)) if E0 else 0
             key_d = digest_rows(st.index_k.data[0, 0, :E0]) if E0 else 0
             ctx = H(L, carry_d, st.kv_actual, E0, ent_d, key_d, mask_d)
         else:
-            src = self.by_layer[role.kv_source].state
+            sblk = self.by_layer[role.kv_source]
+            src = sblk.state
             E = src.entry_count  # the source already wrote this chunk's entries
-            ent_d = digest_rows(src.compressed_kv.data[0, 0, :E])
+            ent_d = digest_rows(self._entries_read(sblk, src, start, E))  # a consumer follows its source's path
             ctx = H(L, carry_d, st.kv_actual, st.entry_count, E, ent_d)
         out = H(h, ctx)
         out = torch.remainder(torch.cumsum(out, 0), P)  # causal: row p sees rows <= p of the chunk
@@ -492,12 +534,21 @@ class FakePrefill:
             grp = torch.remainder(out.view(C // r, r).sum(dim=1), P)
             st.compressed_kv.data[0, 0, E0 : E0 + C // r] = H(L, grp, 7).unsqueeze(-1)
             st.index_k.data[0, 0, E0 : E0 + C // r] = H(L, grp, 11).unsqueeze(-1)
+            if blk.attn.sparse_path:  # TtCSA.forward / glue_chunk: the entries also into the slab, every chunk
+                st.slab_rm.data[0, 0, C + E0 : C + E0 + C // r] = H(L, grp, 7).unsqueeze(-1)
             st.entry_count += real // r
         elif role.mode != "swa":
             st.entry_count = self.by_layer[role.kv_source].state.entry_count
         st.sliding_carry.data[0, 0] = H(L, out[real - WINDOW : real], 13).unsqueeze(-1)
         st.kv_actual += real
         return out
+
+    def _entries_read(self, sblk, src, start, E):
+        """The source entries [0, E) a chunk at ``start`` reads: the slab's on path A, compressed_kv's on path B."""
+        r = self.cfg.role(sblk.layer).compress_ratio
+        if sblk.attn.sparse_path and start >= max(WINDOW, sblk.attn.topk * r):
+            return src.slab_rm.data[0, 0, self.chunk : self.chunk + E]
+        return src.compressed_kv.data[0, 0, :E]
 
     def _traced(self, blk, st, r):
         return blk._attn_islands_enabled() and st.kv_actual >= max(WINDOW, blk.attn.topk * r)
@@ -557,6 +608,8 @@ def model_state(pf, slot, S, live: bool = True) -> dict:
         if st.compressed_kv is not None:
             n = S // r
             out[b.layer] += [st.compressed_kv.data[0, 0, :n].clone(), st.index_k.data[0, 0, :n].clone()]
+        if st.slab_rm is not None:  # path A's entry rows [chunk, chunk + S / ratio)
+            out[b.layer].append(st.slab_rm.data[0, 0, pf.chunk : pf.chunk + S // r].clone())
     st = pf.kv_states[slot]
     out[20] = ([st.kv_actual, st.entry_count, st.sliding_carry.data.clone()] if live else []) + [
         st.compressed_kv.data[0, 0, :S].clone(),

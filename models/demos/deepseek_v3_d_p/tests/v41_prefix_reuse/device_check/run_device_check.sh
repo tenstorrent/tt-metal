@@ -11,6 +11,8 @@
 #   H=30 bash run_device_check.sh            (~25-40 min: build ~15-25 min incl. warm-all + islands, then ~10 min of prompts)
 #   env: H, SRC (this worktree on 29), DST (its copy on H; NEVER the serving tree tt-metal-1017-serve), RUN (scratch dir on
 #        H), OUT (results on 29), CHUNK, MAXSEQ, MAXPOS (the ring's CP2 positions), CKPTS, PHASES, TT_CACHE
+#        H2 (the host chunk store; unset = H1 only, env.sh as before): STORE_GB, STORE_TIP_GB, RESERVE_GB, SPILL_TIPS --
+#        see run_device_check_h2.sh
 # It does not restart the serving stack: bring it back afterwards (v41ax_stack_up.sh / stack_up.sh).
 set -u
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -80,6 +82,9 @@ export V41_PREFILL_DEVICE_EMBED=1 V41_PREFILL_ENGRAM_RM=1 V41_EXPORT_CP2=1 V41_E
 export V41_PREFILL_PREFIX_REUSE=1 V41_PREFILL_PREFIX_CKPTS=$CKPTS
 export PREFIX_CHECK_CTL=$RUN/ctl PREFIX_CHECK_RUNNER_LOG=$RUN/runner.log PREFIX_CHECK_OUT=$RUN PREFIX_CHECK_PHASES=$PHASES PREFIX_CHECK_STACKS=$RUN/stacks.txt
 EOF
+if [ -n "${STORE_GB:-}" ]; then  # H2 (run_device_check_h2.sh): the host chunk store on top of H1
+  echo "export V41_PREFILL_PREFIX_STORE_GB=$STORE_GB V41_PREFILL_PREFIX_HOST_RESERVE_GB=${RESERVE_GB:-32} V41_PREFILL_PREFIX_SPILL_TIPS=${SPILL_TIPS:-2}${STORE_TIP_GB:+ V41_PREFILL_PREFIX_STORE_TIP_GB=$STORE_TIP_GB}" >> "$OUT/env.sh"
+fi
 rsync -a "$OUT/env.sh" $P:$RUN/env.sh || exit 1
 log "runner harness on $H (chunk $CHUNK, MAXSEQ $MAXSEQ, CP2 positions $MAXPOS, $CKPTS checkpoints, phases $PHASES)"
 R $P "rm -f /dev/shm/*${SERVICE}*; source $RUN/env.sh && echo 'reuse -' > $RUN/ctl && (setsid nohup timeout 10800 python $DST/models/demos/deepseek_v3_d_p/tests/v41_prefix_reuse/device_check/runner_harness.py > $RUN/runner.log 2>&1 < /dev/null & echo \$! > $RUN/runner.pid); sleep 2; cat $RUN/runner.pid" | sed 's/^/  runner pid /' | tee -a "$OUT/check.log"
