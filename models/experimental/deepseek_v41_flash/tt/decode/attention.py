@@ -65,7 +65,6 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
 from models.experimental.deepseek_v4_flash.tt.decode.attention_csa import DeepSeekV4Indexer, _scale_linear_weight
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     check_decode_layout,
-    make_decode_prefetch_buffers,
     ring_prefetch,
 )
 from models.experimental.deepseek_v4_flash.tt.layers import (
@@ -78,10 +77,10 @@ from models.experimental.deepseek_v4_flash.tt.layers import (
 from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache, _load_weight
 
-from .decode_prefetch import prefetch_rings
+from .decode_prefetch import make_prefetch_buffers, prefetch_rings
 
 DECODE_LAYOUTS = {
-    # 8 cores keep q_a's B grid inside q_b's 8x8 rectangle, the dest of its fused-norm mcast.
+    # 8 cores: q_a's N is 40 tiles, and the full-width cut needs a core count dividing both it and the 8 DRAM banks.
     "q_a_proj": {"K": 5120, "N": 1280, "n_blocks": 8},
     "q_b_proj": {"K": 1280, "N": 32768, "n_blocks": 64},
     "kv_proj": {"K": 5120, "N": 512, "n_blocks": 16},
@@ -146,9 +145,24 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
     selection. The projections, caches and the merged rows stay replicated. ``split_keys`` turns the
     split off (every rank then scores every key); set it before compiling, e.g. from
     :func:`key_split_layers`. :meth:`select_kv`'s ``split_keys`` overrides it for one call.
+
+    ``tokens_grid`` is where the decode all-gather replica of the tokens sits (the attention's
+    :meth:`~DeepSeekV41Attention._decode_activation_grid`): ``weights_proj`` reads its one slab onto the
+    first core of it, so it reads the replica in place. ``None`` keeps it on core (0, 0).
     """
 
-    def __init__(self, config, layer_idx: int, weights: dict, device, rot, cache, weight_dtype, tp_size: int = 1):
+    def __init__(
+        self,
+        config,
+        layer_idx: int,
+        weights: dict,
+        device,
+        rot,
+        cache,
+        weight_dtype,
+        tp_size: int = 1,
+        tokens_grid: ttnn.CoreRangeSet | None = None,
+    ):
         self.device = device
         self.tp_size = tp_size
         self.split_keys = tp_size > 1
@@ -187,6 +201,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             use_rm_hs=True,
             dram_sharded_weight=True,
         )
+        first_token_core = None if tokens_grid is None else tokens_grid.bounding_box().start
         self.weights_proj = LinearDecode(
             _scale_linear_weight(weights["indexer.weights_proj.weight"], folded),
             device,
@@ -196,6 +211,11 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             rectangle_b_grid=True,
             use_rm_hs=True,
             dram_sharded_weight=True,
+            b_core_grid=(
+                None
+                if first_token_core is None
+                else ttnn.CoreRangeSet({ttnn.CoreRange(first_token_core, first_token_core)})
+            ),
         )
 
     def select_kv(
@@ -498,13 +518,16 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         self.scaling = self.head_dim**-0.5
 
         if use_prefetcher and prefetch_buffers is None:
-            prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, sys_cfg.prefetcher.num_prefetch_pages)
+            prefetch_buffers = make_prefetch_buffers(
+                device, weight_dtype, sys_cfg.prefetcher.num_prefetch_pages, tp_size=tp_size
+            )
         rings = prefetch_rings(tp_size) if use_prefetcher else {}
         replicate = ttnn.ReplicateTensorToMesh(device) if tp_size > 1 else None
         self.qkv_tp_strategy = "replicated"
         tp_tag = f".tp{tp_size}.{self.qkv_tp_strategy}" if tp_size > 1 else ""
 
-        # q_a's producer grid must sit inside q_b's filled output-mcast rectangle.
+        # q_a mcasts its normalized output onto q_b's 8x8 B grid. Under the prefetcher its B cores sit on
+        # their ring's receivers beside that grid, and the writer unicasts into a staging buffer there first.
         self.q_a_proj = LinearDecode(
             weights["q_a_proj.weight"],
             device,
@@ -646,7 +669,15 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             )
         if self.is_index_source:
             self.indexer = DeepSeekV41Indexer(
-                config, layer_idx, weights, device, self.rot, cache, weight_dtype, tp_size=tp_size
+                config,
+                layer_idx,
+                weights,
+                device,
+                self.rot,
+                cache,
+                weight_dtype,
+                tp_size=tp_size,
+                tokens_grid=self._decode_activation_grid(),
             )
 
     def prefetch_weights(self):
@@ -656,12 +687,15 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 proj.fetch_weights()
 
     def _decode_activation_grid(self) -> ttnn.CoreRangeSet:
-        """Cores that receive the decode all-gather replica of ``tokens``: q_a's B grid, or kv's if it contains it."""
+        """Cores that receive the decode all-gather replica of ``tokens``: q_a's B grid, or kv's if it contains it,
+        else the rectangle around both (their prefetcher rings sit side by side), which the gather multicasts."""
         grid = self.q_a_proj.b_core_grid()
         kv_grid = self.kv_proj.b_core_grid()
-        if kv_grid.num_cores() > grid.num_cores() and _core_grid_contains(kv_grid, grid):
+        if _core_grid_contains(grid, kv_grid):
+            return grid
+        if _core_grid_contains(kv_grid, grid):
             return kv_grid
-        return grid
+        return ttnn.CoreRangeSet({grid.merge(kv_grid).bounding_box()})
 
     def _project_qkv(self, tokens):
         """``q`` ``[M, H_local*Dh]``, ``kv`` ``[M, Dh]`` (both before RoPE) and the normalized q_a latent."""

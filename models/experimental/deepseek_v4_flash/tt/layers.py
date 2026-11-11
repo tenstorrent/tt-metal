@@ -25,7 +25,8 @@ from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
 
 # How every pipe list built here was made, keyed by ``id(pipes)``, so a model can drop its pipes (freeing their
-# L1) and build identical ones later (see :meth:`~.model.DeepSeekV4Model.release_prefetch_buffers`).
+# L1) and build identical ones later (see :meth:`~.model.DeepSeekV4Model.release_prefetch_buffers`). Pipe lists
+# reserved together share one recipe group and are rebuilt together.
 _PIPE_RECIPES: dict[int, tuple] = {}
 _PIPE_SERIAL = itertools.count(1)  # next() is atomic: stages build their pipes on parallel threads
 
@@ -42,8 +43,13 @@ def pipe_config_buffer_type(device) -> ttnn.BufferType:
     return ttnn.BufferType.L1
 
 
-def _reserve_prefetch_pipes(device, bank_to_receivers, ring_size: int, overlap_program_l1: bool = False) -> list:
-    """DRAM-sender PrefetcherPipes feeding ``bank_to_receivers``, each ring ``ring_size`` bytes per receiver.
+def _reserve_prefetch_pipes(device, rings, overlap_program_l1: bool = False) -> list:
+    """One list of DRAM-sender PrefetcherPipes per ``(bank_to_receivers, ring_size)`` of ``rings``, each ring
+    ``ring_size`` bytes per receiver.
+
+    The rings are reserved in one allocation. A space with DRAM senders takes its L1 at one address on every
+    worker core, so rings reserved one by one would take one range of every core each; reserved together they
+    share a single range, sized for the largest. That needs their receivers to be disjoint.
 
     A pipe space is persistent L1, which the arena gives out only on cores no live Program holds -- and every
     cached Program holds the cores it ran on. By the time a ring is built, construction has already run some
@@ -54,30 +60,41 @@ def _reserve_prefetch_pipes(device, bank_to_receivers, ring_size: int, overlap_p
     buffers: for :func:`rebuild_prefetch_pipes`, whose rings come back at the addresses the decode programs were
     laid out around, under a prefill that only runs while they are empty.
     """
+    rings = tuple(rings)
     if not overlap_program_l1:
         ttnn.synchronize_device(device)
         device.clear_program_cache()
-    space = ttnn.experimental.create_prefetcher_pipe_space(
+    spaces = ttnn.experimental.create_prefetcher_pipe_spaces(
         device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=ttnn.CoreRangeSet(
-            {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
-        ),
-        ring_size=ring_size,
-        # Every bank has two DRISC senders, each feeding half its receivers (the larger half first). The
-        # config page grows with this, and every sender core holds one page per ring in a 2 KB zone.
-        max_receivers_per_pipe=max((receivers.num_cores() + 1) // 2 for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-        config_buffer_type=pipe_config_buffer_type(device),
-        overlap_program_l1=overlap_program_l1,
+        [
+            ttnn.experimental.PrefetcherPipeSpaceConfig(
+                ttnn.CoreRangeSet(set()),
+                ttnn.CoreRangeSet(
+                    {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
+                ),
+                ring_size,
+                # Every bank has two DRISC senders, each feeding half its receivers (the larger half first). The
+                # config page grows with this, and every sender core holds one page per ring in a 2 KB zone.
+                max((receivers.num_cores() + 1) // 2 for _, receivers in bank_to_receivers),
+                num_dram_senders=2 * len(bank_to_receivers),
+                config_buffer_type=pipe_config_buffer_type(device),
+                overlap_program_l1=overlap_program_l1,
+            )
+            for bank_to_receivers, ring_size in rings
+        ],
     )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(space, bank_to_receivers)
-    from_arena = space.l1_source() == ttnn.experimental.PrefetcherPipeL1Source.PersistentArena
-    _PIPE_RECIPES[id(pipes)] = (
-        next(_PIPE_SERIAL),
-        (device, bank_to_receivers, ring_size, pipes[0].buffer_address(), from_arena),
-    )
-    return pipes
+    from_arena = spaces[0].l1_source() == ttnn.experimental.PrefetcherPipeL1Source.PersistentArena
+    # Filled by rebuild_prefetch_pipes with the group's rebuilt pipe lists, each handed out once.
+    rebuilt = {}
+    pipe_lists = []
+    for index, (space, (bank_to_receivers, _)) in enumerate(zip(spaces, rings)):
+        pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(space, bank_to_receivers)
+        _PIPE_RECIPES[id(pipes)] = (
+            next(_PIPE_SERIAL),
+            (device, rings, index, pipes[0].buffer_address(), from_arena, rebuilt),
+        )
+        pipe_lists.append(pipes)
+    return pipe_lists
 
 
 def is_prefetch_pipes(value) -> bool:
@@ -100,9 +117,14 @@ def rebuild_prefetch_pipes(recipe: tuple) -> list:
     where it was: the cached decode programs placed their circular buffers just above it, and nothing checks
     them against the arena. A ring with DRAM senders is an ordinary L1 allocation instead, so it lands wherever
     the allocator puts it, and every cached program's circular buffers are checked against it on each launch.
+
+    Rings reserved together come back together: the first of them rebuilt reserves the whole group again in
+    one allocation, and the others are handed their share of it.
     """
-    device, bank_to_receivers, ring_size, ring_address, from_arena = recipe
-    pipes = _reserve_prefetch_pipes(device, bank_to_receivers, ring_size, overlap_program_l1=True)
+    device, rings, index, ring_address, from_arena, rebuilt = recipe
+    if not rebuilt:
+        rebuilt.update(enumerate(_reserve_prefetch_pipes(device, rings, overlap_program_l1=True)))
+    pipes = rebuilt.pop(index)
     if from_arena and pipes[0].buffer_address() != ring_address:
         raise RuntimeError(
             f"a rebuilt prefetch ring landed at {pipes[0].buffer_address():#x}, not at {ring_address:#x}: rebuild "
@@ -157,48 +179,58 @@ def to_ttnn_device(
     return _load_weight(tensor, device, cache_file_name=cache_file_name, layout=layout)
 
 
-def _receiver_ring_cols(num_cores: int, device, preferred_width: Optional[int] = None) -> int:
-    """Width (int, in cores) of a ``num_cores`` receiver rectangle anchored at (0, 0).
+def _receiver_ring_cols(
+    num_cores: int, device, preferred_width: Optional[int] = None, origin: tuple[int, int] = (0, 0)
+) -> int:
+    """Width (int, in cores) of a ``num_cores`` receiver rectangle whose top-left core is ``origin`` ``(x, y)``.
 
     One receiver holds one weight slab ``[Kc, Nc]``. ``matmul_decode`` walks the pipes' receivers
     row-major and treats position ``p`` as weight slab ``p``, so the receivers must form a full
     rectangle: only then is a core's row-major index ``row * width + col``, which is what
     :func:`_bank_receivers_strided` assumes when it places ring position ``p`` at ``(p % width,
-    p // width)``. A ragged set (what ``num_cores_to_corerangeset`` yields for a non-multiple of
-    the grid width) would shift the mapping and silently pair receivers with the wrong slab.
+    p // width)`` from the origin. A ragged set (what ``num_cores_to_corerangeset`` yields for a
+    non-multiple of the grid width) would shift the mapping and silently pair receivers with the
+    wrong slab.
 
     ``preferred_width`` wins when it yields a rectangle that fits, so the partial layout keeps
     its natural ``n_blocks``-wide by ``k_blocks``-tall arrangement; otherwise the widest
-    divisor that fits the device grid is used.
+    divisor that fits the device grid right of and below ``origin`` is used.
     """
     grid = device.compute_with_storage_grid_size()
+    x0, y0 = origin
+    cols, rows = grid.x - x0, grid.y - y0
 
     def fits(w):
         """Whether width ``w`` gives a whole ``num_cores // w``-row rectangle inside the grid.
 
         ``w`` is in cores, ``None`` never fits.
         """
-        return w is not None and 0 < w <= grid.x and num_cores % w == 0 and num_cores // w <= grid.y
+        return w is not None and 0 < w <= cols and num_cores % w == 0 and num_cores // w <= rows
 
-    width = preferred_width if fits(preferred_width) else next((w for w in range(grid.x, 0, -1) if fits(w)), None)
+    width = preferred_width if fits(preferred_width) else next((w for w in range(cols, 0, -1) if fits(w)), None)
     if width is None:
-        raise ValueError(f"cannot form a rectangle of {num_cores} cores within a {grid.x}x{grid.y} device grid")
+        raise ValueError(
+            f"cannot form a rectangle of {num_cores} cores from {origin} within a {grid.x}x{grid.y} device grid"
+        )
     return width
 
 
-def _bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int):
+def _bank_receivers_strided(
+    bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int, origin: tuple[int, int] = (0, 0)
+):
     """The ``recv_per_bank`` ``[Kc, Nc]``-slab receivers fed by DRAM bank ``bank_idx``.
 
-    Returned as one-core ``CoreRange``s, ring position ``p`` sitting at ``(p % ring_cols,
-    p // ring_cols)``, so the receivers form the ``ring_cols``-wide rectangle
-    :func:`_receiver_ring_cols` sized. Under ROUND_ROBIN_1D a weight shard ``s`` lands on bank
-    ``s % num_dram_banks``; giving bank ``b`` the positions ``b, b + num_dram_banks, ...``
-    therefore makes shard index equal ring position, so no permutation of the weight is needed.
+    Returned as one-core ``CoreRange``s, ring position ``p`` sitting ``(p % ring_cols, p // ring_cols)``
+    from ``origin``, so the receivers form the ``ring_cols``-wide rectangle :func:`_receiver_ring_cols`
+    sized. Under ROUND_ROBIN_1D a weight shard ``s`` lands on bank ``s % num_dram_banks``; giving bank
+    ``b`` the positions ``b, b + num_dram_banks, ...`` therefore makes shard index equal ring position,
+    so no permutation of the weight is needed.
     """
+    x0, y0 = origin
     cores = []
     for s in range(recv_per_bank):
         ring_pos = bank_idx + s * num_dram_banks
-        coord = ttnn.CoreCoord(ring_pos % ring_cols, ring_pos // ring_cols)
+        coord = ttnn.CoreCoord(x0 + ring_pos % ring_cols, y0 + ring_pos // ring_cols)
         cores.append(ttnn.CoreRange(coord, coord))
     return ttnn.CoreRangeSet(cores)
 
@@ -376,7 +408,9 @@ def _core_grid_contains(outer: ttnn.CoreRangeSet, inner: ttnn.CoreRangeSet) -> b
     return all((c.x, c.y) in outer_cores for c in _receiver_cores_in_order(inner))
 
 
-def make_shared_decode_pipes(device, specs, dtype: ttnn.DataType, num_pages: int = 2) -> list:
+def make_shared_decode_pipes(
+    device, specs, dtype: ttnn.DataType, num_pages: int = 2, origin: tuple[int, int] = (0, 0)
+) -> list:
     """One set of prefetcher pipes that several :class:`LinearDecode` weights can be prefetched through.
 
     ``specs`` is a list of ``decode_weight_layout`` keyword dicts (``K``, ``N``,
@@ -399,7 +433,48 @@ def make_shared_decode_pipes(device, specs, dtype: ttnn.DataType, num_pages: int
     same order the matmuls consume them; a consumer that runs out of turn pops a page belonging
     to another weight, which is wrong results rather than an error. Keep ``specs``, the
     queueing order, and the forward order in agreement.
+
+    ``origin`` ``(x, y)`` is the top-left core of the receiver rectangle.
     """
+    return _reserve_prefetch_pipes(device, [_shared_decode_ring(device, specs, dtype, num_pages, origin)])[0]
+
+
+def make_coallocated_decode_pipes(device, rings, dtype: ttnn.DataType) -> list:
+    """One pipe list per ``(specs, num_pages, origin)`` of ``rings``, each as :func:`make_shared_decode_pipes`
+    builds it, reserved in one L1 range.
+
+    A ring's L1 is taken at one address on every worker core, so the rings here cost the largest
+    of them on each core instead of their sum. Their receiver rectangles must not overlap.
+    """
+    return _reserve_prefetch_pipes(
+        device, [_shared_decode_ring(device, specs, dtype, num_pages, origin) for specs, num_pages, origin in rings]
+    )
+
+
+def make_multi_page_decode_pipes(device, members, origin: tuple[int, int] = (0, 0)) -> list:
+    """One set of prefetcher pipes several weights stream through, each at its own page size.
+
+    ``members`` holds one ``(specs, dtype, num_pages)`` per weight, each as :func:`make_shared_decode_pipes` takes it:
+    that weight streams in pages of its ``specs``' gcd at ``dtype`` (pass the same ``specs`` and ``dtype`` to its
+    :class:`LinearDecode` as ``prefetch_page_bytes``) and needs ``num_pages`` of them in flight. The ring is sized for
+    the largest member. A smaller page need not divide it: the DRISC senders re-grid their write cursor per tensor,
+    ``matmul_decode`` relays only the whole pages that fit, and both ends credit the remainder at the wrap.
+
+    Every member must use the same number of B cores. The FIFO ordering contract of
+    :func:`make_shared_decode_pipes` applies across all of them.
+    """
+    rings = [_shared_decode_ring(device, specs, dtype, num_pages, origin) for specs, dtype, num_pages in members]
+    core_counts = {sum(receivers.num_cores() for _, receivers in bank_to_receivers) for bank_to_receivers, _ in rings}
+    if len(core_counts) != 1:
+        raise ValueError(
+            f"weights sharing a ring must use the same number of B cores, but the members want {sorted(core_counts)}"
+        )
+    return _reserve_prefetch_pipes(device, [(rings[0][0], max(ring_size for _, ring_size in rings))])[0]
+
+
+def _shared_decode_ring(device, specs, dtype: ttnn.DataType, num_pages: int, origin: tuple[int, int]) -> tuple:
+    """``(bank_to_receivers, ring_size)`` of the ring ``specs`` share, having checked they can share one
+    (see :func:`make_shared_decode_pipes`)."""
     if not specs:
         raise ValueError("make_shared_decode_pipes needs at least one weight spec")
     if num_pages < 2:
@@ -413,10 +488,9 @@ def make_shared_decode_pipes(device, specs, dtype: ttnn.DataType, num_pages: int
     num_b_cores = core_counts.pop()
     # The per-spec preferred widths can disagree, so fall back to the common rectangle rather
     # than letting whichever weight is built first pick the receiver set for the others.
-    ring_cols = _receiver_ring_cols(num_b_cores, device, preferred_width=None)
-    return _reserve_prefetch_pipes(
-        device,
-        _bank_to_receivers(num_b_cores, device, ring_cols),
+    ring_cols = _receiver_ring_cols(num_b_cores, device, preferred_width=None, origin=origin)
+    return (
+        _bank_to_receivers(num_b_cores, device, ring_cols, origin),
         num_pages * decode_pipe_page_bytes(specs, dtype),
     )
 
@@ -431,12 +505,13 @@ def _dram_banks_for(num_b_cores: int, device) -> int:
     return num_dram_banks
 
 
-def _bank_to_receivers(num_b_cores: int, device, ring_cols: int):
-    """``(dram_bank, receivers)`` pairs placing the ``[Kc, Nc]`` slab ``p`` on receiver ``p``."""
+def _bank_to_receivers(num_b_cores: int, device, ring_cols: int, origin: tuple[int, int] = (0, 0)):
+    """``(dram_bank, receivers)`` pairs placing the ``[Kc, Nc]`` slab ``p`` on receiver ``p`` of the
+    ``ring_cols``-wide rectangle from ``origin``."""
     num_dram_banks = _dram_banks_for(num_b_cores, device)
     recv_per_bank = num_b_cores // num_dram_banks
     return [
-        (bank, _bank_receivers_strided(bank, recv_per_bank, num_dram_banks, ring_cols))
+        (bank, _bank_receivers_strided(bank, recv_per_bank, num_dram_banks, ring_cols, origin))
         for bank in range(num_dram_banks)
     ]
 
@@ -1011,9 +1086,13 @@ class LinearDecode(DeepSeekV4Module):
             ring_cols = _receiver_ring_cols(num_inputB_cores, self.device, preferred_width)
             self.prefetcher_pipes = _reserve_prefetch_pipes(
                 self.device,
-                _bank_to_receivers(num_inputB_cores, self.device, ring_cols),
-                num_slabs * _slab_bytes(dtype, slab_shape),
-            )
+                [
+                    (
+                        _bank_to_receivers(num_inputB_cores, self.device, ring_cols),
+                        num_slabs * _slab_bytes(dtype, slab_shape),
+                    )
+                ],
+            )[0]
         # The op requires the output to live on the receiver cores (full mode asserts the two
         # grids are equal; partial mode reduces onto the first n_blocks of them in row-major
         # order), so keep them to build the output config from. Read back from the pipes so this
@@ -1584,9 +1663,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
             ring_cols = _receiver_ring_cols(num_b_cores, self.device, preferred_width=self.n_blocks)
             self.prefetcher_pipes = _reserve_prefetch_pipes(
                 self.device,
-                _bank_to_receivers(num_b_cores, self.device, ring_cols),
-                num_slabs * _slab_bytes(dtype, slab_shape),
-            )
+                [(_bank_to_receivers(num_b_cores, self.device, ring_cols), num_slabs * _slab_bytes(dtype, slab_shape))],
+            )[0]
         self.receiver_cores = _receiver_cores_in_order(prefetch_pipe_receiver_cores(self.prefetcher_pipes))
 
     def _store_dram_sharded_weight(self, weight, cache_file_name, dtype, preprocess, fold, slab_shape, num_dram_banks):

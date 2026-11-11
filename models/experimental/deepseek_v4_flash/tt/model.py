@@ -347,6 +347,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         rope["win"][cr] = (cos_half, sin_half)          # per compress-rate windows
     """
 
+    # Builds a device's prefetch mapping when the first layer on it needs one (see _prefetch_buffers_for).
+    make_prefetch_buffers = staticmethod(make_decode_prefetch_buffers)
+
     def __init__(
         self,
         config,
@@ -876,7 +879,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 self._gcb_headroom[key] = _l1_spacer(device, headroom)
             self._prefetch_buffers_by_device[key] = (
                 device,
-                make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages),
+                self.make_prefetch_buffers(device, weight_dtype, num_prefetch_pages),
             )
         return self._prefetch_buffers_by_device[key][1]
 
