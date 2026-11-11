@@ -105,6 +105,32 @@ def _allreduce(self, tensor, ccl_manager, memory_config=None, pad_size=None, axi
 
 
 def _allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False, lean_ag=False):
+    if _tile_ag_ok(tensor, dim, linear):
+        # DSV41_PF_GLUE_AGTILE (T19): a big row-major gather runs as AllBroadcast + Concat (164 + 90 us for [512,512] bf16); the same bytes gathered in TILE layout take 81 us
+        # (bf16) / 125 us (u32) and the tilize / untilize around it are cheaper than the difference. Pure data movement: bit-identical.
+        t = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+        g = _allgather_raw(self, t, ccl_manager, memory_config, axis, dim, linear, lean_ag)
+        ttnn.deallocate(t)
+        out = ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(g)
+        return out
+    return _allgather_raw(self, tensor, ccl_manager, memory_config, axis, dim, linear, lean_ag)
+
+
+def _tile_ag_ok(tensor, dim, linear):
+    if linear or dim != 3 or os.environ.get("DSV41_PF_GLUE_AGTILE", "0") != "1":
+        return False
+    sh = tensor.shape
+    return (
+        tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+        and tensor.dtype in (ttnn.bfloat16, ttnn.uint32)
+        and int(sh[-1]) % 32 == 0
+        and int(sh[-2]) % 32 == 0
+        and int(sh[-1]) * int(sh[-2]) >= 1 << 17
+    )
+
+
+def _allgather_raw(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False, lean_ag=False):
     lean = lean_ag and dim == 3 and not linear
     return ttnn.experimental.all_gather_async(
         tensor,

@@ -86,11 +86,12 @@ def test_pf_glue_mhc(mesh_device):
         ce = ttnn.matmul(cc_, pk.e16, compute_kernel_config=pk.ckc)
         cpv = ttnn.matmul(cp_, pk.e4, compute_kernel_config=pk.ckc)
         cpre = pk.coefs_pre(cp_)
-        for mc in (130, 96, 64, 48, 32, 24):
+        for mc in (110, 80, 64, 48, 32, 24):
             for _ in range(2):
                 o1 = pk_comb(xp, ce, cpv, y=y2p, y2=y2p, nout=4, max_cores=mc)
                 o2 = pk_comb(xp, cpre, None, nout=1, out_dtype=ttnn.bfloat16, max_cores=mc)
             ttnn.synchronize_device(md)
+            ttnn.ReadDeviceProfiler(md)
             print("SWEEP2 max_cores", mc, flush=True)
         return
 
