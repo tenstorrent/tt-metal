@@ -324,6 +324,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # caches with the engine's own k / v and compares the caches bit-for-bit.
     KVA = os.environ.get('MKA_KVA', '0') == '1'
     KVA_T, KVA_NUT, KVA_STEPS, KVA_EXT, KVA_PTT = 4, 0, [], {}, None
+    KVA_RQ, KVA_OWNG = False, list(range(NU))
     if KVA:
         assert KVPROD, 'MKA_KVA (bench) needs MKA_KVPROD=1'   # MESH: replicated kvpos / page table (mesh path untested)
         KVA_NUT = int(os.environ.get('MKA_KVA_NU', str(2 * NU if NU == 4 else NU)))
@@ -346,13 +347,36 @@ def setup_bench(dev, MESH, mesh_identity):
                 base = (2500 + 37 * k_) * KVBS; return [base + KVBS - 2 + 3 * s + j for j in range(4)]
             if k_ % 4 == 2: return [KVA_PTW * KVBS + j for j in range(4)] if s == 1 else [-1] * 4  # past the table / HOLD
             return [[base + 9, base + 10, base + 10, -1], [base + j for j in range(4)], [KVA_PTW * KVBS - 4 + j for j in range(4)]][s]   # s 2: the table's last block
-        KVA_STEPS = [sum(((_own(s, u) if u < NU else _other(s, u)) for u in range(KVA_NUT)), []) for s in range(3)]
+        KVA_RQ = ('MKA_RQPOS', '1') in MKDEF   # own user u -> its kvpos / page-table row g: KVA_OWNG
+        if KVA_RQ:
+            # MKA_RQPOS: the 8-user R = 32 program; own users g(u) (MKA_UPAR: 2u + parity) take the RQPOS positions (ragged under
+            # MKA_RQPOS_RAG / _P0 / _K: the dynamic KVA_DONE waiters), the other rows the append's own cases: a page
+            # crossing past 128K, the table's last block, past the table (skipped), all-HOLD. One kvpos for every iteration.
+            KVA_NUT = 8
+            _upar, _par = os.environ.get('MKA_UPAR', '0') == '1', int(os.environ.get('MKA_UPAR_PAR', '0')) % 2
+            KVA_OWNG = [2 * u + _par if _upar else u for u in range(NU)]
+            _p0e = os.environ.get('MKA_RQPOS_P0', '')
+            if _p0e: _p0 = [int(x_) for x_ in _p0e.split(',')]
+            elif os.environ.get('MKA_RQPOS_RAG', '0') == '1': _p0 = [CTX - 4 - 226, CTX - 4, 997, CTX - 201, 5000, CTX - 4, CTX - 61, 77]
+            else: _p0 = [CTX - 4] * 8
+            _k = int(os.environ.get('MKA_RQPOS_K', '8'))
+            _kp = [(_p0[g_] + j_ if (_p0[g_] >= 0 and g_ < _k) else -1) for g_ in range(8) for j_ in range(KVA_T)]
+            if os.environ.get('MKA_RQPOS_RAG', '0') == '1': _kp[3 * KVA_T + 1] = _kp[3 * KVA_T + 3] = -1   # partial HOLD
+            for i_, g_ in enumerate([g_ for g_ in range(8) if g_ not in KVA_OWNG]):
+                c_ = [[(2500 + 37 * i_) * KVBS + KVBS - 2 + j for j in range(4)], [KVA_PTW * KVBS - 4 + j for j in range(4)],
+                      [KVA_PTW * KVBS + j for j in range(4)], [-1] * 4][i_ % 4]
+                _kp[g_ * KVA_T:(g_ + 1) * KVA_T] = c_
+            KVA_STEPS = [_kp]
+        else:
+            KVA_STEPS = [sum(((_own(s, u) if u < NU else _other(s, u)) for u in range(KVA_NUT)), []) for s in range(3)]
+            for u in range(NU):
+                assert all(p_ < 0 or CTX - 2 * TILE <= p_ < CTX for s_ in KVA_STEPS for p_ in s_[u * 4:(u + 1) * 4]), 'own rows outside the last 2 blocks'
         for u in range(NU):
-            assert all(p_ < 0 or CTX - 2 * TILE <= p_ < CTX for s_ in KVA_STEPS for p_ in s_[u * 4:(u + 1) * 4]), 'own rows outside the last 2 blocks'
+            assert all(p_ < CTX for s_ in KVA_STEPS for p_ in s_[KVA_OWNG[u] * 4:(KVA_OWNG[u] + 1) * 4]), 'own rows past MKA_CTX'
         _pt = torch.zeros(KVA_NUT, KVA_PTW, dtype=torch.int32)
-        for u in range(NU): _pt[u, :BPU] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
+        for u in range(NU): _pt[KVA_OWNG[u], :BPU] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
         _nx = NU * BPU
-        for u in range(NU, KVA_NUT):
+        for u in [g_ for g_ in range(KVA_NUT) if g_ not in KVA_OWNG]:
             for s_ in KVA_STEPS:
                 for p_ in s_[u * 4:(u + 1) * 4]:
                     vb_ = p_ // KVBS
@@ -389,7 +413,7 @@ def setup_bench(dev, MESH, mesh_identity):
             if KVA:   # poison the own users' new-row positions: an SDPA read that misses the append shows
                 for s_ in KVA_STEPS:
                     for u_ in range(NU):
-                        for p_ in s_[u_ * 4:(u_ + 1) * 4]:
+                        for p_ in s_[KVA_OWNG[u_] * 4:(KVA_OWNG[u_] + 1) * 4]:
                             if p_ >= 0: v_t[u_, p_] = KVA_POISON
             kv = ttnn.from_torch(to_paged(k_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             kvv_ = ttnn.from_torch(to_paged(v_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -991,7 +1015,6 @@ def setup_bench(dev, MESH, mesh_identity):
             assert KVPROD and T == 4 and NU in (1, 4), 'MKA_RQPOS: prod KV layout (MKA_KVPROD=1), T 4, R = 32 rows'
             # TODO(E, ab2cbd6a96c63c232): MKA_KVA + RQPOS = the append reads this kvpos / page table (replay / attn blocks)
             # and its KVA_DONE waiters follow the KVP table's m0 / m1 (blocks floor(kvpos / 32)), not the static last 2 blocks
-            assert not KVA, 'MKA_RQPOS + MKA_KVA: not integrated yet (shared kvpos / page table, dynamic KVA_DONE waiters)'
             import struct as _st
             NATT_ = sum(1 for L_ in range(NL) if is_attn_layer(L_))
             ATT0 = int(os.environ.get('MKA_ATT0', '0'))   # model attention-layer ordinal of this pass's first attention layer
@@ -1006,7 +1029,8 @@ def setup_bench(dev, MESH, mesh_identity):
             _k = int(os.environ.get('MKA_RQPOS_K', '8'))   # live users (row-independence: k = 1, 2, 5, 7 padded onto R = 32)
             kvpos_l = [(_p0[g_] + j_ if (_p0[g_] >= 0 and g_ < _k) else -1) for g_ in range(8) for j_ in range(T)]
             if os.environ.get('MKA_RQPOS_RAG', '0') == '1': kvpos_l[3 * T + 1] = kvpos_l[3 * T + 3] = -1   # partial HOLD
-            assert all(p_ < CTX for p_ in kvpos_l), ('kvpos past MKA_CTX', CTX)
+            if KVA: kvpos_l = list(KVA_STEPS[0])   # the append's kvpos (own rows identical; the other rows its test cases)
+            assert all(p_ < CTX for g_ in range(8) for p_ in kvpos_l[g_ * T:(g_ + 1) * T] if (g_ in KVA_OWNG or not KVA)), ('kvpos past MKA_CTX', CTX)
             RQ_DELTA = [0, -1000, 517, 0, 3, 0, -64, 0] if os.environ.get('MKA_RQPOS_DELTA', '1') == '1' else [0] * 8
             ROPE_MAX = CTX + 1024
             rrow_l = [min(ROPE_MAX - 1, max(0, max(kvpos_l[r_], 0) + RQ_DELTA[r_ // T])) for r_ in range(RQ_W)]
@@ -1017,14 +1041,15 @@ def setup_bench(dev, MESH, mesh_identity):
             RQ_ROWS = rrow_l
             _dram = lambda x_, dt_, ly_: ttnn.from_torch(x_, dtype=dt_, layout=ly_, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # this replay's in-trace tensors, as prod's verify body makes them (_vfy_inputs under QWEN36_SPEC_HOSTSET)
-            rq_kvpos = _dram(torch.tensor(kvpos_l, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            rq_kvpos = KVA_POS if KVA else _dram(torch.tensor(kvpos_l, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             rq_cos = _dram(rope_cos[rrow_l].reshape(1, 1, RQ_W, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             rq_sin = _dram(rope_sin[rrow_l].reshape(1, 1, RQ_W, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             # page table [8, BPU]: own user u at row g = ug(u) -> its physical blocks; other users' rows stay 0 (prod pads with 0)
             _pt = torch.zeros(8, BPU, dtype=torch.int32)
             for u_ in range(NU):   # both parities (the table is replicated; device d owns g = 2u + d % 2 under MKA_UPAR)
                 for g_ in ({2 * u_, 2 * u_ + 1} if UPAR else {u_}): _pt[g_] = KV_PERM[u_ * BPU:(u_ + 1) * BPU].to(torch.int32)
-            rq_pt = _dram(_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            rq_pt = KVA_PTT if KVA else _dram(_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)   # KVA: [8, KVA_PTW], own rows g(u)
+            RQ_NB = KVA_PTW if KVA else BPU
             _att_l = [L_ for L_ in range(NL) if is_attn_layer(L_)]
             def _l1_tab(rows_, crs_):   # [ncores, W] uint32 HEIGHT_SHARDED over crs_ (uniform L1 address, every core / device)
                 _w = len(rows_[0])
@@ -1040,7 +1065,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 RQ_REPLAY, RQ_ATTN = int(os.environ['MKA_REPLAY_L1']), int(os.environ['MKA_ATTN_L1'])
             else:
                 _rb = _l1_tab([_blk(5, [rq_kvpos.buffer_address(), 0, rq_cos.buffer_address(), rq_sin.buffer_address(), 0, rq_pt.buffer_address(), 0])] * _ncore, kgrid)
-                _ab = _l1_tab([_blk(4, [rq_pt.buffer_address(), 8, BPU, ATT0 + NATT_] + [0, 0] * ATT0 +
+                _ab = _l1_tab([_blk(4, [rq_pt.buffer_address(), 8, RQ_NB, ATT0 + NATT_] + [0, 0] * ATT0 +
                                     sum(([kvs[L_].buffer_address(), kvvs[L_].buffer_address()] for L_ in _att_l), []) + [KVBS, NKVH])] * _ncore, kgrid)
                 RQ_REPLAY, RQ_ATTN = _rb.buffer_address(), _ab.buffer_address()
                 RQ_TENS += [_rb, _ab]
@@ -1224,31 +1249,38 @@ def setup_bench(dev, MESH, mesh_identity):
         assert len(KVA_ROLE) == 16, KVA_ROLE
         _xy = lambda fi_: fphys[fi_].x | (fphys[fi_].y << 8)
         _byc = {(fcores[f_].x, fcores[f_].y): f_ for f_ in KVA_ROLE}
-        KVA_W = [fi_ for fi_ in ACT if RNG[fi_][1] + 2 > NBK]   # readers of each own user's last 2 KV blocks
-        assert 0 < len(KVA_W) <= 2 * NU, KVA_W
-        # the wait code is compiled only into the non-STREAM roles (STREAM text budget): every waiter must be an ext core
-        assert not any(f_ in stream_idx for f_ in KVA_W), f'MKA_KVA: last-block readers {KVA_W} include STREAM cores (needs MKA_RMASK member order)'
-        KVA_GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(3)]
+        # KVA_DONE: each unit multicasts += 1 to every attention core per attention layer (RECTS_F); the waiters are the
+        # SDPA readers of the users' new-row blocks (static: each own user's last 2 blocks; MKA_RQPOS: the KVP table's m0 / m1)
+        KVA_GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(4)]   # DONE, SRC, AD, AGG
         _ga = [ttnn.get_global_semaphore_address(g_) for g_ in KVA_GSEM]
         _arr = lambda v_: '{' + ','.join(f'{x_}u' for x_ in v_) + '}'
         MKDEF = MKDEF + [('MKA_KVA', '1'), ('MKA_KVA_NU', str(KVA_NUT)), ('MKA_KVA_T', str(KVA_T)), ('MKA_KVA_PPU', str(KVA_PPU)),
                          ('MKA_KVA_NB', f'{KVA_PTW}u'), ('MKA_KVA_POS', f'{KVA_POS.buffer_address()}u'), ('MKA_KVA_PT', f'{KVA_PTT.buffer_address()}u'),
-                         ('MKA_KVA_PTS', f'{KVA_PTW * 4}u'), ('MKA_KVA_GS_DONE', f'{_ga[0]}u'), ('MKA_KVA_GS_SRC', f'{_ga[1]}u'), ('MKA_KVA_GS_AD', f'{_ga[2]}u'),
-                         ('MKA_KVA_KXY', _arr([_xy(_byc[(10, t_)]) for t_ in range(8)])), ('MKA_KVA_VXY', _arr([_xy(_byc[(11, t_)]) for t_ in range(8)])),
-                         ('MKA_KVA_NW', str(len(KVA_W))), ('MKA_KVA_WXY', _arr([_xy(f_) for f_ in KVA_W]))]
+                         ('MKA_KVA_PTS', f'{KVA_PTW * 4}u'), ('MKA_KVA_GS_DONE', f'{_ga[0]}u'), ('MKA_KVA_GS_SRC', f'{_ga[1]}u'), ('MKA_KVA_GS_AD', f'{_ga[2]}u'), ('MKA_KVA_GS_AGG', f'{_ga[3]}u'), ('MKA_KVA_AXY', f'{_xy(_byc[(10, 0)])}u'),
+                         ('MKA_KVA_KXY', _arr([_xy(_byc[(10, t_)]) for t_ in range(8)])), ('MKA_KVA_VXY', _arr([_xy(_byc[(11, t_)]) for t_ in range(8)]))]
         KVA_CRS = crs([fcores[f_] for f_ in sorted(KVA_ROLE)])
         KVA_SG = {L: torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE]).clone() for L in range(NL) if is_attn_layer(L)}
-        print(f"[kva] append cores {sorted(KVA_ROLE)}; KVA_DONE waiters {KVA_W}; gs {_ga}", flush=True)
+        print(f"[kva] append cores {sorted(KVA_ROLE)}; KVA_DONE multicast to every attention core; own rows g {KVA_OWNG}; gs {_ga}", flush=True)
         def KVA_PRE(it):   # this step's kvpos (rewritten in place: the program bakes its address in)
             _mm = {'mesh_mapper': ttnn.ReplicateTensorToMesh(dev)} if MESH else {}
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor(KVA_STEPS[it % 3], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, **_mm), KVA_POS)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor(KVA_STEPS[it % len(KVA_STEPS)], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, **_mm), KVA_POS)
         def _kva_last(tt, u):   # this own user's positions CTX - 64 .. CTX - 1 (its last 2 blocks) from the cache
             p1 = (u + 1) * BPU; p0 = p1 - max(1, 2 * TILE // KVBS)
             try: sl = ttnn.to_torch(ttnn.slice(tt, [p0, 0, 0, 0], [p1, NKVH, KVBS, DHD])).float()
             except Exception: sl = ttnn.to_torch(tt).float()[p0:p1]
             return sl[:, KVH].reshape(-1, DHD)[-2 * TILE:]
+        def _kva_blk(tt, pb):   # one physical block's head-KVH rows [KVBS, DHD]
+            try: return ttnn.to_torch(ttnn.slice(tt, [pb, 0, 0, 0], [pb + 1, NKVH, KVBS, DHD])).float()[0, KVH]
+            except Exception: return ttnn.to_torch(tt).float()[pb, KVH]
         def _kva_regold(L):   # SDPA (and wo) golden over the cache as the engine left it
             kq_, vq_ = KVQ[L]
+            if KVA_RQ:   # ragged: refresh each own user's blocks that hold its new rows, then the RQPOS golds
+                for u_ in range(NU):
+                    for vb_ in sorted({p_ // KVBS for p_ in KVA_STEPS[0][KVA_OWNG[u_] * 4:(KVA_OWNG[u_] + 1) * 4] if p_ >= 0}):
+                        kq_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvs[L], u_ * BPU + vb_)
+                        vq_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvvs[L], u_ * BPU + vb_)
+                rq_gold(L, gold_qkv[L])
+                return
             for u_ in range(NU):
                 kq_[u_, CTX - 2 * TILE:] = _kva_last(kvs[L], u_); vq_[u_, CTX - 2 * TILE:] = _kva_last(kvvs[L], u_)
             Xq = gold_qkv[L].double()
@@ -1300,7 +1332,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 _mi = max(max(mesh_identity(kvs[L]), mesh_identity(kvvs[L])) for L in KVA_TWIN if is_attn_layer(L))
                 bad += int(_mi != 0)
                 print(f"[kva] iter {it} mesh: max |dev d - dev 0| over the K / V caches {_mi:.3e}", flush=True)
-            print(f"[kva] iter {it} cache check {'PASS' if bad == 0 else 'FAIL'} (bit-exact vs prod, step {KVA_STEPS[it % 3]})", flush=True)
+            print(f"[kva] iter {it} cache check {'PASS' if bad == 0 else 'FAIL'} (bit-exact vs prod, step {KVA_STEPS[it % len(KVA_STEPS)]})", flush=True)
         def KVA_POST(it):
             for L in range(NL):   # MKA_KVA_REGOLD=0: negative control (the poisoned pre-append golden must FAIL)
                 if is_attn_layer(L) and os.environ.get('MKA_KVA_REGOLD', '1') == '1': _kva_regold(L)

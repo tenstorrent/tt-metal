@@ -67,13 +67,11 @@ FORCE_INLINE uint32_t kv_page(uint32_t user, uint32_t blk, uint32_t nbk, bool v)
 constexpr uint32_t CB_KVS = 6, CB_KVB = 8;   // owners only (both ids are STREAM-rect-only otherwise)
 constexpr uint32_t KVA_NU = MKA_KVA_NU, KVA_T = MKA_KVA_T, KVA_R = KVA_NU * KVA_T, KVA_NP = 1 + MKA_KVA_PPU * KVA_NU;   // PPU: target tiles per user (verify: 2)
 constexpr uint32_t KVA_GS_DONE = MKA_KVA_GS_DONE, KVA_GS_SRC = MKA_KVA_GS_SRC, KVA_GS_AD = MKA_KVA_GS_AD;
-constexpr uint32_t KVA_PER_LAYER = 16;   // append cores incrementing each waiter per attention layer
+constexpr uint32_t KVA_GS_AGG = MKA_KVA_GS_AGG;   // the 16 units' done count on the aggregator (unit K0)
 constexpr uint32_t KVA_TRID = 15;
 // KVA_DONE waiters (the readers of each own user's last 2 KV blocks) are always non-STREAM cores (the RMASK member order
 // puts each user's last block on an ext core; engine/program.py asserts it), so the wait code compiles out of STREAM
-#if !defined(MKA_ROLE_STREAM)
-#define MKA_KVA_WAITER 1
-#endif
+#define MKA_KVA_WAITER 1   // KVA_DONE is multicast to every attention core (all drain it), any SDPA core may wait
 #if defined(MKA_KVA_PROF)   // KV append zones (W-KVAT / W-KVAS / W-KVA / R-KVAW) are opt-in: code budget (STREAM / EXT text)
 #define KVA_ZONE(n) DeviceZoneScopedN(n)
 #else

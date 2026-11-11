@@ -134,6 +134,9 @@ void kernel_main() {
     const uint32_t user = get_arg_val<uint32_t>(a++);
     uint32_t vb0 = get_arg_val<uint32_t>(a++), vb1 = get_arg_val<uint32_t>(a++);
     bool kvp_rd = false;
+#if defined(MKA_KVA)
+    uint32_t kva_mf = KVP_NONE;   // MKA_RQPOS: first local block with the user's new rows (from the reader's KVP word)
+#endif
 #else
     const uint32_t user = get_arg_val<uint32_t>(a++), vb0 = get_arg_val<uint32_t>(a++), vb1 = get_arg_val<uint32_t>(a++);
 #endif
@@ -248,29 +251,34 @@ void kernel_main() {
     // once here. Rows go in increasing j (later row wins, as paged_fused_update_cache). Each user's rows span <= KVA_PPU
     // tiles (verify: consecutive positions); a row past the page table or with position -1 is skipped, as in prod.
     constexpr uint32_t KV_BS = KV_BS32 * 32, KVA_NPG = KVA_NP - 1;
-    constexpr uint32_t KVA_KXY[8] = MKA_KVA_KXY, KVA_VXY[8] = MKA_KVA_VXY, KVA_WXY[MKA_KVA_NW] = MKA_KVA_WXY;
+    constexpr uint32_t KVA_KXY[8] = MKA_KVA_KXY, KVA_VXY[8] = MKA_KVA_VXY;
+#if defined(MKA_RQPOS)   // one source with the SDPA: kvpos from G's replay block, the page table from the attn block
+    const uint32_t kva_pos = rq_replay(0), kva_pt = rq_attn(0), kva_nb = rq_attn(2);
+#else
+    constexpr uint32_t kva_pos = MKA_KVA_POS, kva_pt = MKA_KVA_PT, kva_nb = MKA_KVA_NB;
+#endif
     uint32_t kva_np = 0, kva_pg[KVA_NPG];
     uint8_t kva_rp[KVA_R], kva_ro[KVA_R];   // per source row: target pass (0xFF = skip), target tile row
     if (kva) {
         KVA_ZONE("W-KVAT");   // once per pass: kvpos + page-table rows -> target tile table
         const uint32_t c = (kva - 1) & 7;
         const uint32_t scr = (get_write_ptr(CB_KVB) + KVTB + 63) & ~63u;   // pages 1.. are free until the first prefetch
-        const InterleavedAddrGen<true> pg_pos{.bank_base_address = MKA_KVA_POS, .page_size = KVA_R * 4};
+        const InterleavedAddrGen<true> pg_pos{.bank_base_address = kva_pos, .page_size = KVA_R * 4};
         noc_async_read(pg_pos.get_noc_addr(0), scr, KVA_R * 4);
         noc_async_read_barrier();
         volatile tt_l1_ptr int32_t* pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
-        const InterleavedAddrGen<true> pg_pt{.bank_base_address = MKA_KVA_PT, .page_size = MKA_KVA_PTS};
+        const InterleavedAddrGen<true> pg_pt{.bank_base_address = kva_pt, .page_size = kva_nb * 4};
         const uint32_t ptb = scr + 128;   // one 64 B page-table chunk per row
         for (uint32_t r = 0; r < KVA_R; ++r) {
             const int32_t p = pos[r];
-            if (p < 0 || (uint32_t)p / KV_BS >= MKA_KVA_NB) continue;
+            if (p < 0 || (uint32_t)p / KV_BS >= kva_nb) continue;
             noc_async_read(pg_pt.get_noc_addr(r / KVA_T, ((uint32_t)p / KV_BS * 4) & ~63u), ptb + r * 64, 64);
         }
         noc_async_read_barrier();
         for (uint32_t r = 0; r < KVA_R; ++r) {
             kva_rp[r] = 0xFF;
             const int32_t p = pos[r];
-            if (p < 0 || (uint32_t)p / KV_BS >= MKA_KVA_NB) continue;
+            if (p < 0 || (uint32_t)p / KV_BS >= kva_nb) continue;
             const uint32_t vb = (uint32_t)p / KV_BS, pb = l1w(ptb + r * 64)[vb & 15];
             const uint32_t page = ((pb * KV_NKVH + KV_H) * KV_BS32 + ((uint32_t)p % KV_BS) / 32) * 8 + c;
             uint32_t q = 0;
@@ -322,7 +330,14 @@ void kernel_main() {
         for (uint32_t q = 0; q < kva_np; ++q) noc_async_write(base + (1 + q) * KVTB, t.get_noc_addr(kva_pg[q]), KVTB);
 #endif
         noc_async_write_barrier();
-        for (uint32_t w = 0; w < MKA_KVA_NW; ++w) noc_semaphore_inc(get_noc_addr(KVA_WXY[w] & 0xFF, KVA_WXY[w] >> 8, KVA_GS_DONE), 1);
+        // done -> every attention core (any may hold a user's new-row blocks): += 1 on the aggregator (unit K0); once all
+        // 16 landed it multicasts KVA_DONE = A + 1 (a SET, loopback on its own rect: an atomic multicast cannot include
+        // its sender) -- one multicast per attention layer
+        noc_semaphore_inc(get_noc_addr(MKA_KVA_AXY & 0xFF, MKA_KVA_AXY >> 8, KVA_GS_AGG), 1);
+        if (kva == 1) {
+            noc_semaphore_wait_min(l1w(KVA_GS_AGG), 16 * (A + 1));
+            mcast_word<NRF>(KVA_GS_DONE, A + 1, rf, self_rf, 0);
+        }
         cb_pop_front(CB_KVB, KVA_NP);
     };
 #endif
@@ -1290,6 +1305,9 @@ void kernel_main() {
                 volatile tt_l1_ptr uint32_t* tab = l1w(MKA_KVP_TAB);
                 vb0 = tab[1]; vb1 = vb0 + (v_ & 0x7FF); kvp_rd = true;
                 const uint32_t m0 = (v_ >> 11) & 0x3FF, m1 = (v_ >> 21) & 0x3FF;
+#if defined(MKA_KVA)
+                kva_mf = m1 != KVP_NONE ? m1 : m0;   // KV append: the first block with the user's new rows (none: KVP_NONE)
+#endif
                 if (m0 != KVP_NONE || m1 != KVP_NONE) {
                     cb_reserve_back(CB_ONE, 2);
                     const uint32_t mt = get_write_ptr(CB_ONE);
@@ -1343,7 +1361,11 @@ void kernel_main() {
                     continue;
                 }
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+#if defined(MKA_RQPOS)
+                if (kva_mf != KVP_NONE && b - vb0 <= kva_mf && kva_mf < b - vb0 + nb) noc_semaphore_wait_min(l1w(gs[GS_KVPROG]), A + 1);   // new rows written
+#else
                 if (vb1 + 2 > NBK && b + nb + 2 > NBK) noc_semaphore_wait_min(l1w(gs[GS_KVPROG]), A + 1);   // new rows written
+#endif
 #endif
                 if (wr_k) cb_reserve_back(CB_K, NBB * DH);   // full group (see reader)
                 if (wr_v) cb_reserve_back(CB_V, NBB * DH);
@@ -1627,8 +1649,9 @@ void kernel_main() {
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
     // KVPROG doubles as the reader's "KV append done" flag for this core's last-block V reads (kv_mode != 2): the
     // reader's last write preceded our last wait. KVA_SRC: every producer inc was awaited (NA per pass).
-    if (kv_mode == 2 || vb1 + 2 > NBK) *l1w(gs[GS_KVPROG]) = 0;
+    *l1w(gs[GS_KVPROG]) = 0;   // kv_mode 2: group count; else the append-done flag (both awaited above)
     if (kva) { noc_semaphore_wait_min(l1w(KVA_GS_SRC), aidx(NL)); *l1w(KVA_GS_SRC) = 0; }
+    if (kva == 1) { noc_async_write_barrier(); *l1w(KVA_GS_AGG) = 0; }   // the last aggregate was awaited above
 #else
     if (kv_mode == 2) *l1w(gs[GS_KVPROG]) = 0;   // the reader's last write preceded our last wait
 #endif

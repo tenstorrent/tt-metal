@@ -141,7 +141,9 @@ void kernel_main() {
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
     // KV append: this core holds one of its user's last 2 KV blocks (where the new rows land); its reader waits the 16
     // append cores (KVA_DONE) before that group, then raises GS_KVPROG = A + 1 for the writer's reads (kv_mode != 2)
+#if !defined(MKA_RQPOS)
     const bool kva_w = b1 + 2 > NBK;
+#endif
 #endif
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
@@ -689,9 +691,15 @@ void kernel_main() {
                     wdone += n;
                 }
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+#if defined(MKA_RQPOS)
+                // dynamic (ragged kvpos): the group holding this core's first block with the user's new rows (m1 before m0)
+                const uint32_t kva_mf = kvp_m1 != KVP_NONE ? kvp_m1 : kvp_m0;
+                if (kva_mf != KVP_NONE && b - b0 <= kva_mf && kva_mf < b - b0 + nb) {
+#else
                 if (kva_w && b + nb + 2 > NBK) {
+#endif
                     KVA_ZONE("R-KVAW");
-                    noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * (A + 1));
+                    noc_semaphore_wait_min(l1w(KVA_GS_DONE), A + 1);
                     if (kv_mode != 2) *l1w(gs[GS_KVPROG]) = A + 1;
                 }
 #endif
@@ -914,7 +922,8 @@ void kernel_main() {
     // matching wait above returned, so nothing arrives after this point
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
-    if (kva_w) { noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * aidx(NL)); *l1w(KVA_GS_DONE) = 0; }   // drain, reset
+    // every attention core gets the aggregator's KVA_DONE = A + 1 per attention layer: drain to the last, reset
+    noc_semaphore_wait_min(l1w(KVA_GS_DONE), aidx(NL)); *l1w(KVA_GS_DONE) = 0;
 #endif
 #if defined(MKA_RQPOS)
     *l1w(MKA_KVP_TAB) = 0;   // writer / compute read it at their first SDPA, long done
