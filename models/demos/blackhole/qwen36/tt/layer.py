@@ -93,19 +93,25 @@ def _TBW():
     return int(os.environ.get("QWEN36_TOKPAR_BW", "8"))
 
 
-def _gu_pc_override(pc):
+def _gu_pc_override(pc, env="QWEN36_TOKPAR_MLP_GU_PC"):
     """QWEN36_TOKPAR_MLP_GU_PC="bw,sh,sw[,obh,obw]" (opt-in): in0_block_w, out subblock and (optionally) out block of the
     token-parallel gate / up matmuls. A smaller in0_block_w or out block shrinks their static CBs: with fp32 dest
     accumulation (the MLP precision fix) gate / up / hidden + residual in L1 clash at 800 rows per chip (the 3200
-    bucket) unless e.g. "8,1,4,3,16" or "4,1,4"."""
+    bucket) unless e.g. "8,1,4,3,16" or "4,1,4". QWEN36_TOKPAR_MLP_DN_PC (same format): the down projection on the
+    token-parallel 12x10 config instead of create_prefill_mlp_matmul_program_config ("16,3,1": 225 vs 261 us at 800
+    rows, LoFi + fp32 acc)."""
     import os
 
-    v = os.environ.get("QWEN36_TOKPAR_MLP_GU_PC")
+    v = os.environ.get(env)
     if not v:
         return pc
     vals = [int(t) for t in v.split(",")]
     bw, sh, sw = vals[:3]
     obh, obw = (vals[3], vals[4]) if len(vals) >= 5 else (pc.per_core_M, pc.per_core_N)
+    while obh % sh:  # other buckets (per_core_M differs): the largest subblock that still divides the block
+        sh -= 1
+    while obw % sw:
+        sw -= 1
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
         in0_block_w=bw,
@@ -503,6 +509,8 @@ class Qwen36DecoderLayer:
             if cfg2
             else tpc.create_prefill_mlp_matmul_program_config(M, F, K, max_cols=12)
         )
+        if os.environ.get("QWEN36_TOKPAR_MLP_DN_PC"):
+            pc_d = _gu_pc_override(_tokpar_pc(M, F, K, 16, lim=4, prefer_h=True), "QWEN36_TOKPAR_MLP_DN_PC")
         out = ttnn.linear(
             hidden,
             w["w2"],
