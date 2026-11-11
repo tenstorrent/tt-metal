@@ -49,7 +49,7 @@ try:
                 if bad < 5: print(f"[argblock] MISMATCH dev {d} core ({c.x},{c.y}) got {got[i, :len(want)].tolist()} want {want}")
     try:
         AB.check_cb_ids(ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=[ttnn.CBDescriptor(
-            total_size=128, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=45, data_format=ttnn.uint32, page_size=128)])]))
+            total_size=128, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=AB.MAX_CB_ID + 1, data_format=ttnn.uint32, page_size=128)])]))
         cb_ok = False
     except ValueError:
         cb_ok = True

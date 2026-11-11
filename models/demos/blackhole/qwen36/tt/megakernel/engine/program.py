@@ -2569,8 +2569,8 @@ ENGINE_ENV = dict(
     MKA_BUDGET="16384", MKA_EXT="1", MK_MIXN="1",
     MKA_GDN24="1", MKA_GDN_WAIT="1", MKA_GDNOUT="1", MKA_UPAR="1", MKA_KVA="1",
     E1_HOLD_SKIP="1", E1_XVC="2", E1_GO_VC="2",  # batch 7b gdnskew (-1.05 ms / verify, bit-identical)
+    E1_LZVC="3",  # 7o (mesh md5 identical, -10 us / launch)
     E1_GB="1", E1_C_OS="p",  # G-b: GDN prefix in the role on the model's real state (b.gdn_desc / b.gdn_ctrl from integ)
-    MK_MAX_CB_ID="48",  # E1_GB: G-b CBs 45..48 on the GDN cores (0..44 taken); argblock.check_cb_ids cap (spec v1.25 default 44)
     MK_RRED_LATE="1", MK_CGAR_EARLY="1",  # 7e (#14, -0.42 ms / verify; needs MK_REAL_GAR + GDN_SP_RD)  # batch 7c (needs MK_AR_RSTD_RED=gdn + E1_EARLY_REPLAY=1, the code default)
     MKA_GDN_CHECK="0", E1_GO_DBG="0",  # in-model: no GDN-role stock-op reference / gdn_out debug DRAM copy (asserted off)  # batch 5f: the GDN role skips state I/O + replay for idle / HOLD rows (padded OR shapes)
     MKA_KVPROD="1", MKA_NKVH="1", MKA_KVH="0", MKA_BS="64",

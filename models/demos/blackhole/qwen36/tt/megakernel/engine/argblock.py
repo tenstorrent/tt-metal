@@ -12,7 +12,7 @@ Block = [magic "MKAB", kind id, n payload words, version, payload..., zero pad t
 of one kind get the same block width W (the max payload over cores, padded). Per-device tables (e.g. AR roles differ by
 ring position) are built per device and assembled with from_host_shards: same shape, same address, different bytes.
 
-Also here: ``check_cb_ids`` (CB ids < 45 keep the program-wide CB-config block small).
+Also here: ``check_cb_ids`` (CB ids <= MAX_CB_ID keep the program-wide CB-config block small; 16 B per index on every core).
 """
 
 import os
@@ -20,9 +20,8 @@ import os
 MAGIC = 0x4D4B4142
 HEADER = 4
 KINDS = {"phase": 0, "ar": 1, "v12": 2, "gdn": 3, "attn": 4, "replay": 5}  # = common runtime arg slot; mk_argblock.hpp AB_*
-# MK_MAX_CB_ID: the cap is a dispatch-size choice, not a hardware limit. G-b (E1_GB=1) puts its prefix CBs at 45..48
-# (E1_GB_CB) on the GDN cores, whose ids 0..44 are all taken (G2 role 0..40, gin 41, gdnout 42..44): E1_GB needs 48.
-MAX_CB_ID = int(os.environ.get("MK_MAX_CB_ID", "44"))
+MAX_CB_ID = 48  # spec v1.166: 44 -> 48 for G-b's E1_GB prefix CBs 45-48 (+64 B config on every core; fit proven on the mesh)
+# (MK_MAX_CB_ID overrides it per check_cb_ids call, e.g. 44 to prove a build stays under the old cap)
 
 
 def _cores(crs):

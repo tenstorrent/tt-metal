@@ -372,6 +372,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # early heads' stash / S' DRAM writes (1.6 us typical -> 8-17 us spikes on the last head). Same bytes / order.
     xvc = int(os.environ.get("E1_XVC", "0"))
     assert xvc in (0, 2, 3), ("E1_XVC: a unicast request VC other than the default 1", xvc)
+    # E1_LZVC (#15 GAR contention, default 0 = off): the writer's batched stash writes (wr_lazy, NOC0 -> DRAM, ~60-105 us into
+    # a GDN layer) on static unicast VC E1_LZVC instead of the default VC. They overlap the GDN mixer AR's reduce-scatter, whose
+    # 4 corner senders write every packet into the EDM over NOC0 (GAR fabric send 12-13 us vs 1.5-2.5 for the same chunks in
+    # the MLP AR; gar15/NOTES.md). Same bytes / order / barrier. Must differ from E1_XVC (the head exchange's VC).
+    lzvc = int(os.environ.get("E1_LZVC", "0"))
+    assert lzvc in (0, 2, 3) and (lzvc == 0 or lzvc != xvc), ("E1_LZVC: a static unicast VC (2 / 3) other than E1_XVC", lzvc, xvc)
     # E1_LAZY_GATE (out-ready skew, default off; needs the gdn_out reader hook + GO flags): the writer's batched stash writes
     # (wr_lazy, NOC0 -> DRAM) start once every GDN core's out tiles reached this core's A (the 24 GO flags = every head's
     # exchange is past), so they never sit in front of a later head's exchange
@@ -846,7 +852,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
         [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else []) + (
         [("GDN_OUT_TILE", "1")] if out_tile else []) + ([("GDN_OUT_RD", "1")] if out_rd else []) + (
-        [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else [])
+        [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else []) + ([("GDN_LZVC", str(lzvc))] if lzvc else [])
     d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
         "E1_SP_WAIT", "0") == "1" else []) + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
         [("GDN_ZS_LATE", "1")] if zs_late else []) + ([("GDN_EARLY_REPLAY", "1")] if early else []) + (

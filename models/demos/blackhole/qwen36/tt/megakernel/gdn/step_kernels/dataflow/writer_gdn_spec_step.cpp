@@ -169,6 +169,14 @@ inline uint32_t gdn_bits(float f) {
 #ifndef GDN_OUT_SIGNAL
 #define GDN_OUT_SIGNAL 0  // engine GDN role: gdn_out_signal() (the including TU) after the output rows are written
 #endif
+#ifndef GDN_LZVC
+#define GDN_LZVC 0  // engine GDN role (E1_LZVC, #15): static unicast VC of the batched stash writes (wr_lazy); 0 = default VC
+#endif
+#if GDN_LZVC
+#define GDN_LZ_WRITE(...) noc.async_write<NocOptions::CUSTOM_VC>(__VA_ARGS__, NocOptVals{GDN_LZVC, 0})
+#else
+#define GDN_LZ_WRITE(...) noc.async_write(__VA_ARGS__)
+#endif
 #ifndef GDN_XVC
 #define GDN_XVC 0  // engine GDN role (E1_XVC): static unicast VC of the head exchange (lz_xchg data + increments); 0 = default VC
 #endif
@@ -1448,18 +1456,18 @@ TT_KERNEL void writer(
             }
             const uint32_t sw_u = ((1 + (1 - par)) * Mr + ub_) * Nv + h;
             for (uint32_t j = 0; j < Vs; ++j) {
-                noc.async_write(stg, ring_acc, entry, {.offset_bytes = (ub_ * Vs + j) * entry},
+                GDN_LZ_WRITE(stg, ring_acc, entry, {.offset_bytes = (ub_ * Vs + j) * entry},
                                 {.page_id = sw_u * KV + Kt + v0 + j});
             }
             for (uint32_t q = 0; q < kpb; ++q) {
                 const uint32_t i = s + q * VB;
                 if (i < Kt) {
-                    noc.async_write(kt_out, ring_acc, entry, {.offset_bytes = (ub_ * kpb + q) * entry},
+                    GDN_LZ_WRITE(kt_out, ring_acc, entry, {.offset_bytes = (ub_ * kpb + q) * entry},
                                     {.page_id = sw_u * KV + i});
                 }
             }
             if (ub_ % VB == s) {
-                noc.async_write(stg, ring_acc, entry, {.offset_bytes = (kBatchMax * Vs + ub_ / VB) * entry},
+                GDN_LZ_WRITE(stg, ring_acc, entry, {.offset_bytes = (kBatchMax * Vs + ub_ / VB) * entry},
                                 {.page_id = sw_u * KV + Kt + Vt});
             }
         }

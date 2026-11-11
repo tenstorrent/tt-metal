@@ -73,9 +73,9 @@ MKA_RQBAL_HOST=1, MK_V12_NOCBAL=60, MK_V12_NOCBAL_ATT=1, MK_GDN_INPROJ=1, MK_GIN
 MKA_QSPREAD=13500, MKA_AWIN=1 (7h #23), MK_DNORM_SPLIT=1 (7k; needs MK_AR_RSTD=1 + RED=gdn + MK_REAL_AR).
 
 Engine env: MKA_GDN24=1, MKA_GDN_WAIT=1, MKA_GDNOUT=1, MKA_UPAR=1, MKA_KVA=1, MKA_KVPROD=1, MKA_NKVH=1, MKA_KVH=0, MKA_BS=64,
-MKA_EXT=1, MKA_KVDT=bfp8, MKA_NBB=1, MKA_BUDGET=16384, MKA_CTX=262144, MK_MIXN=1, E1_HOLD_SKIP=1, E1_XVC=2, E1_GO_VC=2
+MKA_EXT=1, MKA_KVDT=bfp8, MKA_NBB=1, MKA_BUDGET=16384, MKA_CTX=262144, MK_MIXN=1, E1_HOLD_SKIP=1, E1_XVC=2, E1_GO_VC=2, E1_LZVC=3
 (7b gdnskew, default off in code), MK_RRED_LATE=1 (7c, default off; needs RED=gdn + E1_EARLY_REPLAY=1 default), MK_CGAR_EARLY=1 (7e #14, needs MK_REAL_GAR +
-GDN_SP_RD), E1_GB=1, E1_C_OS=p (G-b: GDN prefix in the role on the model's real state), MK_MAX_CB_ID=48 (G-b CBs 45..48: the CB-id cap of spec v1.25 raised from 44), MK_AR_RSTD=1,
+GDN_SP_RD), E1_GB=1, E1_C_OS=p (G-b: GDN prefix in the role on the model's real state), MK_AR_RSTD=1,
 MK_AR_RSTD_RED=gdn, MKA_W_ORD=1, MK_STREAM_DM_OS=1 (must reach os.environ at _ks time: build_program applies the env around
 setup_bench and the lazy per-device builds), MKA_GDN_CHECK=0, E1_GO_DBG=0, MKA_ATT0=0 (integration builds the tables per pass).
 (ENGINE_ENV also carries the inert stall knobs MK_SGDN_US=64 / MK_SAR_US=18 / MKA_SWO_US=10.)
