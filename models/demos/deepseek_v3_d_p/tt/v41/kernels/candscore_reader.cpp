@@ -13,12 +13,17 @@
 // bandwidth time). Block id c is page block_base + c: the pages of one user's slot in a pool of block pages (the
 // decode pool, tt/v41/pool.py index_k_blocks) or 0 for a cache of one sequence. A sentinel id (>= nblocks) reads
 // the slot's block 0 instead (finite values; the writer masks it to -inf). With DYN (the one-live-row capture) block_base is word 1 of a per-step uint32 page (the live user's slot; a capture must not bake
-// in the slot) read from base_addr instead of the runtime argument.
+// in the slot) read from base_addr instead of the runtime argument. With QSPLIT > 0 (the live rows of a decode tile
+// scored in one launch) the ids hold QSPLIT rows per live row (row i is live row i / QSPLIT, a
+// QSPLIT-th of its candidate blocks), and a live row's query and head weights are read from its own tile row and
+// its blocks from its own user's slot: the pairs (tile row, block base) of the live rows follow the fixed runtime
+// arguments.
 //
-// compile_time_args = [cb_qrm, cb_wrm, cb_krm, cb_ids, K, ROWS_PER_READ, DYN, TensorAccessorArgs(q)...,
+// compile_time_args = [cb_qrm, cb_wrm, cb_krm, cb_ids, K, ROWS_PER_READ, DYN, QSPLIT, TensorAccessorArgs(q)...,
 //                      TensorAccessorArgs(w)..., TensorAccessorArgs(ids)..., TensorAccessorArgs(k_blocks)...,
 //                      TensorAccessorArgs(base)... (DYN only)]
-// runtime args = [q_addr, w_addr, ids_addr, k_addr, row_start, row_count, nblocks, block_base, base_addr (DYN)]
+// runtime args = [q_addr, w_addr, ids_addr, k_addr, row_start, row_count, nblocks, block_base, base_addr (DYN,
+//                      else 0), then with QSPLIT per live row: its tile row, its block base]
 
 #include <cstdint>
 
@@ -42,7 +47,9 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(4);              // candidate blocks per query
     constexpr uint32_t ROWS_PER_READ = get_compile_time_arg_val(5);  // tile-rows of K gathered per read barrier
     constexpr uint32_t DYN = get_compile_time_arg_val(6);            // 1: block_base is word 1 of the base page
-    constexpr auto q_args = TensorAccessorArgs<7>();
+    constexpr uint32_t QSPLIT = get_compile_time_arg_val(7);         // > 0: id rows per live row (a power of two)
+    constexpr uint32_t LIVE_ARGS = 9;                                // the first live row's (tile row, block base)
+    constexpr auto q_args = TensorAccessorArgs<8>();
     constexpr auto w_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto ids_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
@@ -88,11 +95,17 @@ void kernel_main() {
     }
 
     for (uint32_t row = row_start; row < row_start + row_count; ++row) {
+        uint32_t qrow = row;
+        if constexpr (QSPLIT > 0) {
+            const uint32_t live = row / QSPLIT;
+            qrow = get_arg_val<uint32_t>(LIVE_ARGS + 2 * live);
+            block_base = get_arg_val<uint32_t>(LIVE_ARGS + 2 * live + 1);
+        }
         noc_async_read(ids.get_noc_addr(row, 0), ids_l1, K * 4);
         qrm.reserve_back(PAGES);
-        noc_async_read(q.get_noc_addr(row, 0), qrm.get_write_ptr(), Q_BYTES);
+        noc_async_read(q.get_noc_addr(qrow, 0), qrm.get_write_ptr(), Q_BYTES);
         wrm.reserve_back(1);
-        noc_async_read(w.get_noc_addr(row, 0), wrm.get_write_ptr(), W_BYTES);
+        noc_async_read(w.get_noc_addr(qrow, 0), wrm.get_write_ptr(), W_BYTES);
         noc_async_read_barrier();
         qrm.push_back(PAGES);
         wrm.push_back(1);

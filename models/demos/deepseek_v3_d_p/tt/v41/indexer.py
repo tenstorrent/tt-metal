@@ -6,29 +6,43 @@
 
 Index keys (KV sources): ``k = k_norm(wk(latent))``, RoPE at each row's group-first position, FP4 QDQ
 (block 32, ue8m0). Indexer (index sources): ``q = wq_b(qr)`` split into 32 heads, RoPE, FP4 QDQ;
-``score[s, t] = sum_h relu(q_h . k_t) * w_h`` with ``w = weights_proj(x) * (d^-1/2 * H^-1/2)``; row t is visible
-to the query at absolute position p iff ``t < (p + 1) // r``. The candidate source (layer 20) keeps, per query,
+``score[s, t] = sum_h relu(q_h . k_t) * w_h`` with ``w = weights_proj(x) * (d^-1/2 * H^-1/2)``; row t is
+visible
+to the query at absolute position p iff ``t < (p + 1) // r``. The candidate source (layer 20) keeps, per
+query,
 the 2048 blocks of 8 rows with the best max score, always including the block of its newest row, and publishes
 their ids (``CandidateBlocks``); candidate index sources select only among those blocks' rows. Top-k keeps
-``min(512, visible)`` rows; unreachable picks become the 0xFFFFFFFF sentinel, in one tail (descending score order).
+``min(512, visible)`` rows; unreachable picks become the 0xFFFFFFFF sentinel, in one tail (descending score
+order).
 
-Distribution: queries are split over SP and then TP (each chip scores ``S/(sp*tp)`` contiguous queries with all
+Distribution: queries are split over SP and then TP (each chip scores ``S/(sp*tp)`` contiguous queries with
+all
 32 heads), so nothing is reduced across chips and the selection comes out in the attention's head->sequence
-query layout. Scores use ``indexer_score_dsa`` (ratio 1 relies on its token-causal mask; ratio 2 adds its own).
+query layout. Scores use ``indexer_score_dsa`` (ratio 1 relies on its token-causal mask; ratio 2 adds its
+own).
 No host tables: position-dependent inputs are slices of the geometry's ``cache.V41ChunkTables`` (trace-safe).
 
-Exact subset selection (bead F10, design R): with tie-free scores the k best elements of a row lie in its k best
-blocks by block max, for any block size (k other blocks with larger maxima would hold k larger elements). So the
-candidate source takes the top-2048 blocks of 8 among the blocks of its top-2048 superblocks of 32 rows (level 1
-is skipped while a row has at most 2048 superblocks), and a candidate index source takes its top-512 rows among
-the 16,384 rows of its candidate blocks. Two V4.1 kernels (``tt/v41/kernels``, launched through ``ttnn.generic_op``)
-work on the row-major score in DRAM: ``segment_max`` (block or superblock maxima in one read of the row, the newest
-row's block pinned to +inf) and ``gather_runs`` (a query's ranked blocks or superblocks, gathered from its row);
+Exact subset selection (bead F10, design R): with tie-free scores the k best elements of a row lie in its k
+best
+blocks by block max, for any block size (k other blocks with larger maxima would hold k larger elements). So
+the
+candidate source takes the top-2048 blocks of 8 among the blocks of its top-2048 superblocks of 32 rows (level
+1
+is skipped while a row has at most 2048 superblocks), and a candidate index source takes its top-512 rows
+among
+the 16,384 rows of its candidate blocks. Two V4.1 kernels (``tt/v41/kernels``, launched through
+``ttnn.generic_op``)
+work on the row-major score in DRAM: ``segment_max`` (block or superblock maxima in one read of the row, the
+newest
+row's block pinned to +inf) and ``gather_runs`` (a query's ranked blocks or superblocks, gathered from its
+row);
 ``tt/v41/indexer_kernels.py``.
 
 Candidate scoring (bead F10): a candidate index source's score is observable only in its candidate blocks (the
-reference masks the rest to -inf), so on long rows it scores only those rows (``candidate_scores``: per query its
-16,384 candidate index-K rows gathered from the cache) instead of the full row; on short rows the full-row score and
+reference masks the rest to -inf), so on long rows it scores only those rows (``candidate_scores``: per query
+its
+16,384 candidate index-K rows gathered from the cache) instead of the full row; on short rows the full-row
+score and
 a gather of its candidate blocks are cheaper (``SPARSE_SCORE_MIN_WIDTH``).
 """
 
@@ -53,20 +67,29 @@ from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_ue8m0_qdq, fp8_qdq
 SENTINEL = 0xFFFFFFFF
 TOPK_MIN, TOPK_ALIGN = 16, 16
 SUPERBLOCK = 32  # the candidate selection's first level: 32 rows (one 64-byte bf16 run), 4 candidate blocks
-# ttnn.gather's row-major factory for index rows wider than 60 tiles gives every core a slice of each index row and
-# re-reads the whole input row on each core; up to this width it splits rows over cores (measured on [640, 2048]
+# ttnn.gather's row-major factory for index rows wider than 60 tiles gives every core a slice of each index
+# row and
+# re-reads the whole input row on each core; up to this width it splits rows over cores (measured on [640,
+# 2048]
 # uint32: 2.8 ms by a 2048-wide index vs 0.14 ms by a 1024-wide one)
 GATHER_INDEX_WIDTH = 60 * 32
-# The candidate source's own top-k runs among the rows of its best candidate blocks above this width, where that is
-# cheaper than a top-k over the row. Exact: its top-512 rows lie in its top-512 blocks by max, which are among the
+# The candidate source's own top-k runs among the rows of its best candidate blocks above this width, where
+# that is
+# cheaper than a top-k over the row. Exact: its top-512 rows lie in its top-512 blocks by max, which are among
+# the
 # first 513 published ids (descending block max after the pinned block), so only those blocks are gathered
-# (LB 2x4, 640 rows at 56,320 columns: direct top-512 1.43 ms; gather_runs of all 2048 blocks 0.62 ms + top-512 of
-# 16,384 0.31 ms + the id mapping; the gather's sequential row read and the direct top-k both grow with the row)
+# (LB 2x4, 640 rows at 56,320 columns: direct top-512 1.43 ms; gather_runs of all 2048 blocks 0.62 ms +
+# top-512 of
+# 16,384 0.31 ms + the id mapping; the gather's sequential row read and the direct top-k both grow with the
+# row)
 SUBSET_TOPK_MIN_WIDTH = 1 << 15
 # TT_V41_PREFILL_INDEX_BOUND=1: in generic mode the ratio-1
-# candidate source selects over its unmasked score when its selection runs through the candidate blocks (the long
-# buckets): ``segment_max`` writes -inf for the segments past the row's pin and ``gather_runs`` for the gathered
-# elements past it, which is where the additive visibility mask was read, so the chunk's ratio-1 mask build (three
+# candidate source selects over its unmasked score when its selection runs through the candidate blocks (the
+# long
+# buckets): ``segment_max`` writes -inf for the segments past the row's pin and ``gather_runs`` for the
+# gathered
+# elements past it, which is where the additive visibility mask was read, so the chunk's ratio-1 mask build
+# (three
 # passes over rows x W) and the row-major add a layer (~12 ms a 1M-bucket chunk) go. Bit-identical
 # selections but for the sign of a zero score (the add turned a -0.0 into +0.0; both are ties). Default off.
 INDEX_BOUND = "TT_V41_PREFILL_INDEX_BOUND"
@@ -76,9 +99,12 @@ def prefill_index_bound() -> bool:
     return os.environ.get(INDEX_BOUND, "0") == "1"
 
 
-# A candidate index source scores only its candidate rows (``candidate_scores``: a per-query gather of its 16,384
-# index-K rows, a fixed ~2.7 GB per chip at 640 queries, plus a relayout of the visible index-K) from this score width
-# up; below it the full-row score (index-K read once per query tile-row) and ``gather_runs`` of its candidate blocks are
+# A candidate index source scores only its candidate rows (``candidate_scores``: a per-query gather of its
+# 16,384
+# index-K rows, a fixed ~2.7 GB per chip at 640 queries, plus a relayout of the visible index-K) from this
+# score width
+# up; below it the full-row score (index-K read once per query tile-row) and ``gather_runs`` of its candidate
+# blocks are
 # cheaper. Measured, LB 2x4 traced L24 indexer at chunk start 51,200 / 262,144 / 512,000: candidate scoring
 # 8.22 / 9.72 / 11.12 ms, full row 3.04 / 8.47 / 15.35 ms (crossover ~310K columns)
 SPARSE_SCORE_MIN_WIDTH = 5 << 16
@@ -92,7 +118,8 @@ def _round_up(x: int, m: int) -> int:
 
 
 def _wq_b_program_config(m: int, k: int, n: int):
-    """2D-multicast config of the [m, k] x [k, n] bf16 x bf16 fp32-accumulating wq_b GEMM on ``WQ_B_GRID``, or None
+    """2D-multicast config of the [m, k] x [k, n] bf16 x bf16 fp32-accumulating wq_b GEMM on ``WQ_B_GRID``, or
+    None
     (ttnn's default, 150 us at chunk 5120 on LB) when no in0 block width fits ``WQ_B_L1_BUDGET``."""
     mt, kt, nt = m // 32, k // 32, n // 32
     gx, gy = WQ_B_GRID
@@ -123,9 +150,12 @@ def _wq_b_program_config(m: int, k: int, n: int):
 class CandidateBlocks:
     """The candidate source's published selection (B11), consumed by the candidate index sources of the chunk.
 
-    ``ids``: per query the kept blocks of ``CANDIDATE_BLOCK_SIZE`` rows, [1, 1, S/(sp*tp), CANDIDATE_TOPK_BLOCKS]
-    uint32 row-major in descending block score (the pinned newest block first) with a 0xFFFFFFFF tail when fewer
-    blocks are reachable; ``None`` when a row has at most CANDIDATE_TOPK_BLOCKS blocks, i.e. every visible block
+    ``ids``: per query the kept blocks of ``CANDIDATE_BLOCK_SIZE`` rows, [1, 1, S/(sp*tp),
+    CANDIDATE_TOPK_BLOCKS]
+    uint32 row-major in descending block score (the pinned newest block first) with a 0xFFFFFFFF tail when
+    fewer
+    blocks are reachable; ``None`` when a row has at most CANDIDATE_TOPK_BLOCKS blocks, i.e. every visible
+    block
     is a candidate and consumers select over their whole score."""
 
     ids: ttnn.Tensor | None
@@ -133,9 +163,12 @@ class CandidateBlocks:
 
 @dataclass(frozen=True)
 class DecodePins:
-    """What ``select`` needs of ``V41ChunkTables`` for the decode tile: a per-row pin page ``[1, 1, 1, ROWS]`` uint32
-    (``indexer_kernels._pin_rows``), entry ``i`` the newest compressed row of row ``i``'s user in the scored source
-    (its visible count less one; the sentinel when the row is idle, which pins nothing). ``start`` is 0 with it: a
+    """What ``select`` needs of ``V41ChunkTables`` for the decode tile: a per-row pin page ``[1, 1, 1, ROWS]``
+    uint32
+    (``indexer_kernels._pin_rows``), entry ``i`` the newest compressed row of row ``i``'s user in the scored
+    source
+    (its visible count less one; the sentinel when the row is idle, which pins nothing). ``start`` is 0 with
+    it: a
     row's pin is its absolute row."""
 
     newest: ttnn.Tensor
@@ -155,12 +188,14 @@ def _is_sentinel(t):
 
 
 def _keep_sentinel(values, pos):
-    """uint32 ``values`` with the sentinel wherever ``pos`` holds it (bitwise: ttnn.where does not select uint32)."""
+    """uint32 ``values`` with the sentinel wherever ``pos`` holds it (bitwise: ttnn.where does not select
+    uint32)."""
     return ttnn.bitwise_or(values, ttnn.multiply(_is_sentinel(pos), SENTINEL))
 
 
 def _gather_cols(t, index):
-    """``ttnn.gather(t, -1, index)`` of row-major uint32 tensors, in index slices the row-splitting factory takes."""
+    """``ttnn.gather(t, -1, index)`` of row-major uint32 tensors, in index slices the row-splitting factory
+    takes."""
     width = index.shape[3]
     if width <= GATHER_INDEX_WIDTH:
         return ttnn.gather(t, -1, index)
@@ -173,7 +208,8 @@ def _gather_cols(t, index):
 
 
 def _topk(score, k: int):
-    """Row-major bf16 ``score`` [1, 1, R, W] -> [1, 1, R, k] uint32 row-major indices (``topk_large_indices``)."""
+    """Row-major bf16 ``score`` [1, 1, R, W] -> [1, 1, R, k] uint32 row-major indices
+    (``topk_large_indices``)."""
     k_pad = _round_up(max(k, TOPK_MIN), TOPK_ALIGN)
     idx = ttnn.experimental.topk_large_indices(score, k=k_pad)
     return idx if k_pad == k else ttnn.slice(idx, [0, 0, 0, 0], [1, 1, score.shape[2], k])
@@ -215,7 +251,8 @@ class TtV41IndexKeys(LightweightModule):
     """B7: index keys from a KV source's RoPE-free latent."""
 
     def __init__(self, mesh_device, config, layer: int, weights: dict, qdq=fp4_ue8m0_qdq):
-        """``weights``: ``wk`` [index_head_dim, head_dim] bf16, ``k_norm`` [index_head_dim]. ``qdq``: FP4 block-32
+        """``weights``: ``wk`` [index_head_dim, head_dim] bf16, ``k_norm`` [index_head_dim]. ``qdq``: FP4
+        block-32
         ue8m0 quantize-dequantize on a tiled bf16 tensor."""
         self.mesh_device, self.config = mesh_device, config
         self.ratio = config.compress_ratio(layer)
@@ -241,7 +278,8 @@ class TtV41IndexKeys(LightweightModule):
         )
 
     def forward(self, latent, rope):
-        """latent [1, 1, rows/sp, head_dim] bf16 (SP rank r holds the rows of its contiguous tokens), ``rope``: the
+        """latent [1, 1, rows/sp, head_dim] bf16 (SP rank r holds the rows of its contiguous tokens),
+        ``rope``: the
         (cos, sin) of those rows' group-first positions (``V41ChunkTables.rope(True, ratio, start)``)
         -> index keys [1, 1, rows/sp, index_head_dim] bf16 after RoPE and QDQ."""
         k = ttnn.linear(latent, self.wk, compute_kernel_config=self.compute_kernel_config)
@@ -253,7 +291,8 @@ class TtV41Indexer(LightweightModule):
     """B9-B12 for one index source; returns the per-query selection in head->sequence query layout."""
 
     def __init__(self, mesh_device, config, layer: int, weights: dict, qdq=fp4_ue8m0_qdq):
-        """``weights``: ``wq_b`` [heads*d, q_lora] bf16, ``weights_proj`` [heads, hidden] bf16. ``qdq`` as in keys."""
+        """``weights``: ``wq_b`` [heads*d, q_lora] bf16, ``weights_proj`` [heads, hidden] bf16. ``qdq`` as in
+        keys."""
         self.mesh_device, self.config, self.layer = mesh_device, config, layer
         self.ratio = config.compress_ratio(layer)
         self.heads, self.head_dim = config.INDEX_N_HEADS, config.INDEX_HEAD_DIM
@@ -275,8 +314,10 @@ class TtV41Indexer(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=rep,
         )
-        # both operands carry at most 4 significant bits (FP8 e4m3 with power-of-two block scales), so LoFi products
-        # are exact: bit-identical to HiFi4 (measured on [640, 1024] x [1024, 8192]) at a quarter of the math passes
+        # both operands carry at most 4 significant bits (FP8 e4m3 with power-of-two block scales), so LoFi
+        # products
+        # are exact: bit-identical to HiFi4 (measured on [640, 1024] x [1024, 8192]) at a quarter of the math
+        # passes
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True
         )
@@ -299,7 +340,8 @@ class TtV41Indexer(LightweightModule):
         return ttnn.mesh_partition(t, dim=2, cluster_axis=1) if self.tp > 1 else t
 
     def _width(self, start: int, length: int, tables=None) -> tuple[int, int]:
-        """(visible rows, score width: the visible rows rounded up to tiles; in generic mode the bucket width of
+        """(visible rows, score width: the visible rows rounded up to tiles; in generic mode the bucket width
+        of
         ``tables``, the same for every chunk of the bucket)."""
         assert start % self.ratio == 0 and (start // self.ratio) % 32 == 0, f"chunk start {start} not tile-aligned"
         visible = (start + length) // self.ratio
@@ -325,13 +367,19 @@ class TtV41Indexer(LightweightModule):
         return q, self._query_shard(self.ccl.tp_all_reduce(ttnn.linear(x, self.weights_proj)))
 
     def scores(self, x, qr, index_k, tables, start: int, length: int, index_k_tiled=None, masked: bool = True):
-        """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] row-major,
-        ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major DRAM-interleaved,
-        -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows).
+        """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d]
+        row-major,
+        ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major
+        DRAM-interleaved,
+        -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible
+        rows).
         ``index_k_tiled``: the state's tiled twin of ``index_k`` with a zero tile past its rows
-        (``V41PrefillState.index_k_tiled``), read instead of ``index_k`` by the generic path under the chunk's shared
-        masks (``V41ChunkTables.chunk_mask``). ``masked=False`` (generic only, ``TT_V41_PREFILL_INDEX_BOUND``): the
-        kernel's output as it is, the columns at or past a query's visible count unmasked: the caller's selection
+        (``V41PrefillState.index_k_tiled``), read instead of ``index_k`` by the generic path under the chunk's
+        shared
+        masks (``V41ChunkTables.chunk_mask``). ``masked=False`` (generic only,
+        ``TT_V41_PREFILL_INDEX_BOUND``): the
+        kernel's output as it is, the columns at or past a query's visible count unmasked: the caller's
+        selection
         bounds them (``select`` with ``bounded``)."""
         visible, width = self._width(start, length, tables)
         q, w = self._query(x, qr, tables, start)
@@ -346,8 +394,10 @@ class TtV41Indexer(LightweightModule):
             if tables.generic:
                 k = ttnn.pad(k, [(0, 0), (0, 0), (0, 32), (0, 0)], 0.0)
         if tables.generic:
-            # position-generic: the kernel's causal window masks nothing real (it starts at ``width``, past every
-            # row; K is padded by one zero tile for it), and the rows a query may not see (at or past its visible
+            # position-generic: the kernel's causal window masks nothing real (it starts at ``width``, past
+            # every
+            # row; K is padded by one zero tile for it), and the rows a query may not see (at or past its
+            # visible
             # count, a device input) are masked over the whole score: one add, the same graph at every start
             score = self._score(q, k, w, chunk_start_idx=width)  # [1, 1, q_rows, width + 32]
             if not masked:
@@ -364,12 +414,15 @@ class TtV41Indexer(LightweightModule):
             ttnn.deallocate(score)
             return ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT), visible
         if self.ratio == 1:
-            # V4.1's rule t < p + 1 is the kernel's causal mask: under seq_shard_axes=[] chip c (row-major (sp, tp)
+            # V4.1's rule t < p + 1 is the kernel's causal mask: under seq_shard_axes=[] chip c (row-major
+            # (sp, tp)
             # order) starts its diagonal at chunk_start_idx + c * q_rows, which is this query split
             return self._score(q, k, w, chunk_start_idx=start), visible
         # ratio 2: the kernel scores every row (pad K by one zero tile and start its causal window at `width`,
-        # which masks nothing real); rows before the chunk's own are visible to all its queries, and the chunk's
-        # own rows (and the pad tile) follow the start-independent pattern of the tables' visibility tail, which
+        # which masks nothing real); rows before the chunk's own are visible to all its queries, and the
+        # chunk's
+        # own rows (and the pad tile) follow the start-independent pattern of the tables' visibility tail,
+        # which
         # is added to that region only and written back in place
         k = ttnn.pad(k, [(0, 0), (0, 0), (0, 32), (0, 0)], 0.0)
         score = self._score(q, k, w, chunk_start_idx=width)  # [1, 1, q_rows, width + 32]
@@ -390,7 +443,8 @@ class TtV41Indexer(LightweightModule):
     # ---- selection (B11 candidates, B12 top-k) on a row-major score [1, 1, R, W] (W a multiple of 32) ----
 
     def candidates(self, score, tables, start: int, bounded: bool = False) -> CandidateBlocks:
-        """B11 on the candidate source's score: per query the CANDIDATE_TOPK_BLOCKS best blocks by max score, its
+        """B11 on the candidate source's score: per query the CANDIDATE_TOPK_BLOCKS best blocks by max score,
+        its
         newest row's block pinned in (``v41.select_candidate_blocks``). ``bounded``: the score is unmasked
         (``scores`` with ``masked=False``) and the kernels write -inf past each row's pin instead."""
         block, k = self.config.CANDIDATE_BLOCK_SIZE, self.config.CANDIDATE_TOPK_BLOCKS
@@ -401,10 +455,13 @@ class TtV41Indexer(LightweightModule):
         assert start % SUPERBLOCK == 0, f"chunk start {start} does not begin a superblock"
         (pin, pin_base), every = tables.pin(start), 0xFFFFFFFF
         if width // SUPERBLOCK <= k:
-            # one level: block maxima of the whole row (block ids in order), the newest row's block pinned to +inf
+            # one level: block maxima of the whole row (block ids in order), the newest row's block pinned to
+            # +inf
             return CandidateBlocks(_topk(segment_max(score, block, pin, pin_base, every, bound=bounded), k))
-        # two levels: the top-k blocks lie in the top-k superblocks by max (the newest row's superblock pinned first);
-        # their rows are gathered in rank order and ranked by block max, the newest row pinned again in rank 0 (at
+        # two levels: the top-k blocks lie in the top-k superblocks by max (the newest row's superblock pinned
+        # first);
+        # their rows are gathered in rank order and ranked by block max, the newest row pinned again in rank 0
+        # (at
         # column (start + q) % 32; chunk starts and per-chip query offsets are multiples of 32)
         per = SUPERBLOCK // block
         sb = _topk(segment_max(score, SUPERBLOCK, pin, pin_base, every, bound=bounded), k)  # sentinels: -inf sbs
@@ -416,8 +473,10 @@ class TtV41Indexer(LightweightModule):
         return CandidateBlocks(ttnn.to_layout(_keep_sentinel(ids, pos), ttnn.ROW_MAJOR_LAYOUT))
 
     def candidate_rows(self, x, qr, index_k, tables, start: int, ids):
-        """A candidate index source's score over its queries' candidate rows only (``candidate_scores``): [1, 1, R,
-        K * block] bf16 row-major, rank r's rows at [r * block, (r + 1) * block), -inf for sentinels and rows past the
+        """A candidate index source's score over its queries' candidate rows only (``candidate_scores``): [1,
+        1, R,
+        K * block] bf16 row-major, rank r's rows at [r * block, (r + 1) * block), -inf for sentinels and rows
+        past the
         query; the layout ``gather_runs`` makes of the full score."""
         assert self.uses_candidates and self.ratio == 1
         q, w = self._query(x, qr, tables, start)
@@ -428,7 +487,8 @@ class TtV41Indexer(LightweightModule):
         return candidate_scores(q, w, index_k, ids, pin, pin_base, width)
 
     def decode_query(self, q, w):
-        """The decode tile's query and head weights (``q`` [1, heads, ROWS, 128] and ``w`` [1, 1, ROWS, heads] as
+        """The decode tile's query and head weights (``q`` [1, heads, ROWS, 128] and ``w`` [1, 1, ROWS, heads]
+        as
         the step builds them) in ``candidate_scores``'s row-major forms."""
         return ttnn.to_layout(ttnn.experimental.nlp_concat_heads(q), ttnn.ROW_MAJOR_LAYOUT), ttnn.to_layout(
             w, ttnn.ROW_MAJOR_LAYOUT
@@ -436,22 +496,30 @@ class TtV41Indexer(LightweightModule):
 
     def select_user_in_blocks(self, q_rm, w_rm, blocks, newest, ids, user: int, rows: int, block_base: int, k: int):
         """A candidate index source's top-k for one user of the decode tile, scoring its candidate rows only
-        (``candidate_scores`` over the pool's block pages) -> [1, 1, 1, k] uint32 row-major row ids (sentinel tail).
+        (``candidate_scores`` over the pool's block pages) -> [1, 1, 1, k] uint32 row-major row ids (sentinel
+        tail).
 
-        ``q_rm``, ``w_rm``: ``decode_query``; ``blocks``: the pool's block pages; ``newest`` [1, 1, 1, ROWS] the
-        tile's per-row pins (or [1, 1, 1, 1], the user's own); ``ids`` [1, 1, ROWS, K] the blocks the candidate
+        ``q_rm``, ``w_rm``: ``decode_query``; ``blocks``: the pool's block pages; ``newest`` [1, 1, 1, ROWS]
+        the
+        tile's per-row pins (or [1, 1, 1, 1], the user's own); ``ids`` [1, 1, ROWS, K] the blocks the
+        candidate
         source published against this user's keys (row ``user`` the user's own; or [1, 1, 1, K], the user's);
-        ``rows`` the user's rows in the pool (the candidate scorer's visible bound; its pin masks the rows past the
-        user's newest); ``block_base`` the page of the user's block 0. The scorer works a query row per core, so the
-        user's K blocks are split over ROWS rows of K / ROWS blocks of the same query (ROWS cores, a ROWS-th of the
-        traffic of scoring every tile row against this user), and the ROWS x (K / ROWS x 8) scores are one row again
+        ``rows`` the user's rows in the pool (the candidate scorer's visible bound; its pin masks the rows
+        past the
+        user's newest); ``block_base`` the page of the user's block 0. The scorer works a query row per core,
+        so the
+        user's K blocks are split over ROWS rows of K / ROWS blocks of the same query (ROWS cores, a ROWS-th
+        of the
+        traffic of scoring every tile row against this user), and the ROWS x (K / ROWS x 8) scores are one row
+        again
         for the top-k."""
         assert self.uses_candidates and self.ratio == 1
         n = q_rm.shape[2]
         row = [0, 0, user, 0]
         q_u = ttnn.slice(q_rm, row, [1, 1, user + 1, q_rm.shape[3]])
         w_u = ttnn.slice(w_rm, row, [1, 1, user + 1, w_rm.shape[3]])
-        # ids published for the whole tile (row user the user's own) or for the user alone (the single-query path); likewise the tile's pin page or the user's one-entry page
+        # ids published for the whole tile (row user the user's own) or for the user alone (the single-query
+        # path); likewise the tile's pin page or the user's one-entry page
         ids_u = ids if ids.shape[2] == 1 else ttnn.slice(ids, row, [1, 1, user + 1, ids.shape[3]])  # [1, 1, 1, K]
         pin_u = newest if newest.shape[3] == 1 else ttnn.slice(newest, [0, 0, 0, user], [1, 1, 1, user + 1])
         q_n, w_n = ttnn.concat([q_u] * n, dim=2), ttnn.concat([w_u] * n, dim=2)
@@ -460,8 +528,10 @@ class TtV41Indexer(LightweightModule):
 
     def select_live_in_blocks(self, q_n, w_n, blocks, pin_n, ids_u, base_page, rows: int, k: int):
         """``select_user_in_blocks`` for the one-live-row capture: the live user's query and
-        head weights already repeated over the ROWS rows (``q_n`` [1, 1, ROWS, 32 * 128], ``w_n`` [1, 1, ROWS, 32]
-        bf16 row-major, a one-hot matmul of the tile), its pin repeated (``pin_n`` [1, 1, 1, ROWS] uint32 row-major),
+        head weights already repeated over the ROWS rows (``q_n`` [1, 1, ROWS, 32 * 128], ``w_n`` [1, 1, ROWS,
+        32]
+        bf16 row-major, a one-hot matmul of the tile), its pin repeated (``pin_n`` [1, 1, 1, ROWS] uint32
+        row-major),
         its published blocks ``ids_u`` [1, 1, 1, K] and the page of its block 0 as word 1 of ``base_page`` (a
         per-step host row), so the capture carries no slot."""
         assert self.uses_candidates and self.ratio == 1
@@ -483,20 +553,71 @@ class TtV41Indexer(LightweightModule):
         ids_rep = ttnn.concat([ids_u] * n, dim=2)
         return ttnn.slice(self._topk_in_rows(rows_n, ids_rep, k), [0, 0, 0, 0], [1, 1, 1, k])
 
+    def select_rows_in_blocks(self, q_rm, w_rm, blocks, newest, ids, live: list, rows: int, k: int):
+        """``select_user_in_blocks`` for the ``L`` live rows of the decode tile in one chain of ops (the
+        per-row chain is 25 programs a live row and source, whatever the row) -> [1, 1, L, k] uint32
+        row-major row ids (sentinel tail), row ``l`` bit-equal to live row ``l``'s own
+        ``select_user_in_blocks``.
+
+        ``q_rm``, ``w_rm``: ``decode_query``; ``blocks``: the pool's block pages; ``newest`` [1, 1, 1, ROWS]
+        the
+        tile's per-row pins; ``ids`` [1, 1, L, K] the blocks the candidate source published for each live row,
+        in
+        the rows' order; ``live``: per live row ``(tile row, the page of its user's block 0)``; ``rows`` a
+        user's
+        rows in the pool. One ``candidate_scores`` launch scores every live row's blocks, each row's K split
+        over
+        ``s`` cores (the largest power of two that keeps ``L s`` rows within the grid: the per-row chain's
+        ROWS at
+        one row, 4 at 16), the ``L s`` score rows are a row per live row again, and one top-k and one id chain
+        work on the ``L`` rows."""
+        assert self.uses_candidates and self.ratio == 1
+        n, n_live, n_ids = q_rm.shape[2], len(live), ids.shape[3]
+        assert ids.shape[2] == n_live and 1 <= n_live <= n, (tuple(ids.shape), n_live)
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        split = min(n, 1 << (((grid.x * grid.y) // n_live).bit_length() - 1))
+        per = n_ids // split
+        block = self.config.CANDIDATE_BLOCK_SIZE
+        assert per * split == n_ids and (per * block) % 32 == 0, (n_ids, split)
+        ids_n = ttnn.reshape(ids, [1, 1, n_live * split, per])  # row l s + j: blocks [j per, (j + 1) per) of row l's
+        scores = candidate_scores(q_rm, w_rm, blocks, ids_n, newest, 0, rows, live=live)  # [1, 1, L s, per * 8]
+        rows_l = ttnn.reshape(scores, [1, 1, n_live, n_ids * block])
+        if n_live < n:  # the top-k kernels take a tile of rows: the live rows first, the rest -inf (sentinel picks)
+            rows_l = ttnn.pad(rows_l, [(0, 0), (0, 0), (0, n - n_live), (0, 0)], float("-inf"))
+        pos = self._topk_positions(rows_l, k)
+        if n_live < n:
+            pos = ttnn.slice(pos, [0, 0, 0, 0], [1, 1, n_live, k])
+        return self._rows_of_positions(pos, ids)
+
     def _topk_in_blocks(self, score, ids, k: int, pin=None):
-        """Top-k rows of ``score`` among each query's candidate blocks ``ids`` [1, 1, R, K] uint32 row-major (sentinel
-        tail) -> [1, 1, R, k] uint32 row-major row ids (sentinel tail). ``pin`` (``V41ChunkTables.pin``: the page and
+        """Top-k rows of ``score`` among each query's candidate blocks ``ids`` [1, 1, R, K] uint32 row-major
+        (sentinel
+        tail) -> [1, 1, R, k] uint32 row-major row ids (sentinel tail). ``pin`` (``V41ChunkTables.pin``: the
+        page and
         its base) bounds an unmasked score at each row's newest element."""
         # rank r's rows at [r * block, (r + 1) * block); sentinels -inf
         return self._topk_in_rows(gather_runs(score, ids, self.config.CANDIDATE_BLOCK_SIZE, *(pin or ())), ids, k)
 
     def _topk_in_rows(self, rows, ids, k: int):
-        """Top-k of the candidate ``rows`` [1, 1, R, K * block] (rank r's block at [r * block, (r + 1) * block)) ->
+        """Top-k of the candidate ``rows`` [1, 1, R, K * block] (rank r's block at [r * block, (r + 1) *
+        block)) ->
         [1, 1, R, k] uint32 row-major row ids (sentinel tail)."""
-        block = self.config.CANDIDATE_BLOCK_SIZE
+        return self._rows_of_positions(self._topk_positions(rows, k), ids)
+
+    def _topk_positions(self, rows, k: int):
+        """The top-k positions of the candidate ``rows`` [1, 1, R, K * block] -> [1, 1, R, k] uint32
+        row-major."""
         if rows.shape[3] < k:  # fewer candidate rows than picks (small candidate counts): the rest are sentinels
             rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, 0), (0, k - rows.shape[3])], float("-inf"))
-        pos = ttnn.to_layout(_topk(rows, k), ttnn.TILE_LAYOUT)
+        return _topk(rows, k)
+
+    def _rows_of_positions(self, pos, ids):
+        """Candidate positions ``pos`` [1, 1, R, k] uint32 row-major (rank r's block at [r * block, (r + 1) *
+        block); the sentinel for none) -> the row ids [1, 1, R, k] uint32 row-major through each row's block
+        ``ids``
+        [1, 1, R, K]."""
+        block = self.config.CANDIDATE_BLOCK_SIZE
+        pos = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
         rank = _min(ttnn.bitwise_right_shift(pos, block.bit_length() - 1), ids.shape[3] - 1)
         chosen = ttnn.to_layout(_gather_cols(ids, ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT)
         row = ttnn.add(ttnn.multiply(chosen, block), ttnn.bitwise_and(pos, block - 1))
@@ -521,14 +642,18 @@ class TtV41Indexer(LightweightModule):
     def _merge_split(self, rows, k: int, per_chunk: int):
         """Top-k over a split layout ``rows`` [1, 1, R, Wr] bf16 row-major (element (r, j) is global
         ``((j // per_chunk) * R + r) * per_chunk + j % per_chunk``, R a power of two) -> [1, 1, 1, k] uint32
-        row-major global ids in descending score (sentinel tail for -inf). Per row a top-k on its own core, then one
+        row-major global ids in descending score (sentinel tail for -inf). Per row a top-k on its own core,
+        then one
         top-k over the R x k_r picks' values."""
         return self._merge_split_rows(rows, 1, k, per_chunk)
 
     def _merge_split_rows(self, rows, n_live: int, k: int, per_chunk: int):
-        """``_merge_split`` over ``n_live`` split layouts stacked along dim 2 (``rows`` [1, 1, L * R, Wr]: layout
-        ``l`` at rows ``l * R .. (l + 1) * R - 1``) in one chain of ops -> [1, 1, L, k] uint32 row-major, row ``l``
-        the global top-k of layout ``l`` (the verify rows of speculative decode merge their selections together: the chain's op count does not grow with the rows)."""
+        """``_merge_split`` over ``n_live`` split layouts stacked along dim 2 (``rows`` [1, 1, L * R, Wr]:
+        layout
+        ``l`` at rows ``l * R .. (l + 1) * R - 1``) in one chain of ops -> [1, 1, L, k] uint32 row-major, row
+        ``l``
+        the global top-k of layout ``l`` (the verify rows of speculative decode merge their selections
+        together: the chain's op count does not grow with the rows)."""
         total, width = rows.shape[2], rows.shape[3]
         n_rows = total // n_live
         assert n_rows * n_live == total, (total, n_live)
@@ -566,8 +691,10 @@ class TtV41Indexer(LightweightModule):
         return ttnn.to_layout(_keep_sentinel(chosen, pos_t), ttnn.ROW_MAJOR_LAYOUT)
 
     def _split_pins(self, newest, n_rows: int, per_chunk: int):
-        """The per-row pin page [1, 1, 1, R] uint32 row-major of a split layout for the user's ``newest`` [1, 1, 1, 1]:
-        the row holding the newest key gets its local column, every other row the sentinel (an idle user's sentinel
+        """The per-row pin page [1, 1, 1, R] uint32 row-major of a split layout for the user's ``newest`` [1,
+        1, 1, 1]:
+        the row holding the newest key gets its local column, every other row the sentinel (an idle user's
+        sentinel
         lands past every row: no pin)."""
         if n_rows == 1:
             return newest  # the user's own one-entry page
@@ -575,7 +702,8 @@ class TtV41Indexer(LightweightModule):
         return self._split_pins_page(ttnn.concat([newest] * n_pins, dim=3), n_rows, per_chunk)
 
     def _split_pins_page(self, newest, n_rows: int, per_chunk: int):
-        """``_split_pins`` from a page ``newest`` [1, 1, 1, P] uint32 row-major that already holds every split row's
+        """``_split_pins`` from a page ``newest`` [1, 1, 1, P] uint32 row-major that already holds every split
+        row's
         user newest key (P a multiple of R, not PIN_PAGE: stacked layouts, each row ``l * R + r`` its layout's
         newest) -> the per-row pin page [1, 1, 1, P]."""
         n_pins = newest.shape[3]
@@ -597,9 +725,12 @@ class TtV41Indexer(LightweightModule):
         return ttnn.to_layout(ttnn.bitwise_or(local, ttnn.multiply(other, SENTINEL)), ttnn.ROW_MAJOR_LAYOUT)
 
     def select_split_rows(self, stacked, newest, n_live: int, width: int, k: int, candidates=None):
-        """``select_split`` over ``n_live`` users' (or verify rows') split layouts stacked along dim 2 (``stacked``
-        [1, 1, L * R, Wr] bf16 row-major; ``newest`` [1, 1, 1, L * R] uint32 row-major, entry ``l * R + r`` layout
-        ``l``'s newest key) in one chain of ops -> (top-k rows [1, 1, L, k], the published blocks [1, 1, L, kb] of
+        """``select_split`` over ``n_live`` users' (or verify rows') split layouts stacked along dim 2
+        (``stacked``
+        [1, 1, L * R, Wr] bf16 row-major; ``newest`` [1, 1, 1, L * R] uint32 row-major, entry ``l * R + r``
+        layout
+        ``l``'s newest key) in one chain of ops -> (top-k rows [1, 1, L, k], the published blocks [1, 1, L,
+        kb] of
         the candidate source as one ``CandidateBlocks`` or None); row ``l`` of each is layout ``l``'s."""
         n_rows = stacked.shape[2] // n_live
         assert newest.shape[3] != PIN_PAGE, "a page of PIN_PAGE entries would read as a query_first page"
@@ -625,13 +756,19 @@ class TtV41Indexer(LightweightModule):
         return self._merge_split_rows(stacked, n_live, k, chunk_cols), published
 
     def select_split(self, rows, newest, width: int, k: int, candidates: CandidateBlocks | None = None):
-        """B11-B12 on one user's score in the split layout (``range_scores`` of ``width`` columns) -> (top-k rows
+        """B11-B12 on one user's score in the split layout (``range_scores`` of ``width`` columns) -> (top-k
+        rows
         [1, 1, 1, k] uint32 row-major with a sentinel tail, the published ``CandidateBlocks`` [1, 1, 1,
-        CANDIDATE_TOPK_BLOCKS] of the candidate source or None), the semantics of ``select``: the candidate source
-        publishes its best blocks by maximum with the newest key's block pinned (``segment_max`` per row with the
-        pin in the row holding it, the rows merged), and its top-k is the dense top-k (which lies in those blocks);
-        a consumer with published blocks does not come here (``select_user_in_blocks``); everything else is the
-        dense top-k of the row. ``newest`` [1, 1, 1, 1] uint32 row-major: the user's newest key (the sentinel for
+        CANDIDATE_TOPK_BLOCKS] of the candidate source or None), the semantics of ``select``: the candidate
+        source
+        publishes its best blocks by maximum with the newest key's block pinned (``segment_max`` per row with
+        the
+        pin in the row holding it, the rows merged), and its top-k is the dense top-k (which lies in those
+        blocks);
+        a consumer with published blocks does not come here (``select_user_in_blocks``); everything else is
+        the
+        dense top-k of the row. ``newest`` [1, 1, 1, 1] uint32 row-major: the user's newest key (the sentinel
+        for
         none)."""
         n_rows, row_width = rows.shape[2], rows.shape[3]
         chunk_cols = RANGE_CHUNK * 32
@@ -653,9 +790,12 @@ class TtV41Indexer(LightweightModule):
     def select(
         self, score, tables, start: int, visible: int, candidates: CandidateBlocks | None = None, bounded: bool = False
     ):
-        """B11-B12 on this index source's score (``scores``) -> (top-k rows [1, 1, R, k] uint32 row-major with a
-        sentinel tail, the published ``CandidateBlocks`` of the candidate source or None). ``bounded``: the score is
-        the candidate source's unmasked one (``_bounded``), selected through its candidate blocks with the kernels
+        """B11-B12 on this index source's score (``scores``) -> (top-k rows [1, 1, R, k] uint32 row-major with
+        a
+        sentinel tail, the published ``CandidateBlocks`` of the candidate source or None). ``bounded``: the
+        score is
+        the candidate source's unmasked one (``_bounded``), selected through its candidate blocks with the
+        kernels
         writing -inf past each row's pin."""
         k = min(self.config.INDEX_TOPK, visible)
         published = None
@@ -684,7 +824,8 @@ class TtV41Indexer(LightweightModule):
         candidates: CandidateBlocks | None = None,
         index_k_tiled=None,
     ):
-        """-> (top-k rows [1, 1, S/(sp*tp), k] uint32 row-major (sentinel tail), published CandidateBlocks or None)."""
+        """-> (top-k rows [1, 1, S/(sp*tp), k] uint32 row-major (sentinel tail), published CandidateBlocks or
+        None)."""
         visible, width = self._width(start, length, tables)
         if self.uses_candidates and candidates.ids is not None and width >= SPARSE_SCORE_MIN_WIDTH:
             rows = self.candidate_rows(x, qr, index_k, tables, start, candidates.ids)
@@ -694,9 +835,12 @@ class TtV41Indexer(LightweightModule):
         return self.select(score, tables, start, visible, candidates, bounded)
 
     def _bounded(self, tables, width: int, visible: int, index_k_tiled) -> bool:
-        """Whether this chunk's score of this source goes unmasked (``TT_V41_PREFILL_INDEX_BOUND``): the generic
-        ratio-1 candidate source under the shared masks, at a width where ``select`` runs through the candidate
-        blocks (two levels or one, then the top-k among the published blocks), which is where the kernels bound the
+        """Whether this chunk's score of this source goes unmasked (``TT_V41_PREFILL_INDEX_BOUND``): the
+        generic
+        ratio-1 candidate source under the shared masks, at a width where ``select`` runs through the
+        candidate
+        blocks (two levels or one, then the top-k among the published blocks), which is where the kernels
+        bound the
         rows past each query's pin. The score is ``width + 32`` wide in generic mode (the pad tile)."""
         if not (prefill_index_bound() and tables.generic and index_k_tiled is not None):
             return False

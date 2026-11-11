@@ -997,3 +997,110 @@ def test_v41_select_split_rows(mesh_device, device_params, split):
                 fn()
             ttnn.synchronize_device(mesh_device)
             print(f"{what} at {cap} keys, {split} split rows: {(time.perf_counter() - t0) / 10 * 1e3:.3f} ms a call (with host)")
+
+
+@pytest.mark.parametrize("layout", ["c1", "c32"])
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
+def test_v41_select_rows_in_blocks(mesh_device, device_params, layout):
+    """``TtV41Indexer.select_rows_in_blocks`` (the live rows' selections in their candidate blocks in one chain) against ``select_user_in_blocks`` row by row, bit-equal on every chip: the verify step's two
+    layouts on a pool of four users of 20,480 rows (``c1``: one user's block of four tile rows, its own and the rows
+    past the users'; ``c32``: every user's four rows, 16 live rows), the rows at distinct positions (one below
+    INDEX_TOPK, one idle with sentinel blocks, one at the pool's end, one with a short block list). Then the per-row
+    chain and the merged one are timed."""
+    cfg, rows = C, 32
+    cap = 20480
+    width = cap + 32
+    users = 4
+    block, kb, topk = cfg.CANDIDATE_BLOCK_SIZE, cfg.CANDIDATE_TOPK_BLOCKS, cfg.INDEX_TOPK
+    nb = width // block
+    g = torch.Generator().manual_seed(259)
+    # (tile row, user) of the live rows, as ``TtV41VerifyDecoder.block_rows`` lays them out at K = 3
+    if layout == "c1":
+        live_rows = [(3, 3), (4, 3), (5, 3), (6, 3)]
+    else:
+        live_rows = [(u * 4 + j, u) for u in range(users) for j in range(4)]
+    n_live = len(live_rows)
+    positions = [19999, 299, 4095, -1, cap - 1, 8191, 12345, 16383, 20000, 511, 17, 9000, 2047, -1, 15000, 6001]
+    newest = torch.full((rows,), -1, dtype=torch.int64)  # the sentinel's bits
+    ids = torch.full((n_live, kb), -1, dtype=torch.int64)
+    for l, (t, _) in enumerate(live_rows):
+        newest[t] = positions[l]
+        if positions[l] < 0:
+            continue  # an idle row: the candidate source published sentinels
+        pinned = positions[l] // block
+        others = torch.randperm(cap // block, generator=g)
+        others = others[others != pinned]
+        valid = kb if l % 4 != 2 else kb // 3  # a short list: the sentinel tail of a row with few reachable blocks
+        ids[l, 0] = pinned
+        ids[l, 1:valid] = others[: valid - 1]
+    with phase("inputs", what="FP4-like query / index-K block pages, head weights, pins, published blocks"):
+        q = _fp4_like((rows, 32, 128), g)
+        w = (torch.randn(rows, 32, generator=g) * 0.05).to(torch.bfloat16)
+        k = _fp4_like((users * width, 128), g)
+        k.view(users, width, 128)[:, cap:] = 0  # the pad tile is never written
+        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        row_major = dict(device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+        dev_q = ttnn.from_torch(q.reshape(1, 1, rows, -1), **row_major)
+        dev_w = ttnn.from_torch(w.reshape(1, 1, rows, 32), **row_major)
+        pages = ttnn.from_torch(k.reshape(1, 1, users * nb, block * 128), **row_major)
+        dev_pin = _replicated(mesh_device, newest.view(1, 1, 1, rows).to(torch.int32), ttnn.uint32)
+        dev_ids = _replicated(mesh_device, ids.view(1, 1, n_live, kb).to(torch.int32), ttnn.uint32)
+    consumer = TtV41Indexer(
+        mesh_device,
+        cfg,
+        24,
+        {
+            "wq_b": torch.zeros(cfg.INDEX_N_HEADS * cfg.INDEX_HEAD_DIM, cfg.Q_LORA_RANK),
+            "weights_proj": torch.zeros(cfg.INDEX_N_HEADS, cfg.EMB_SIZE),
+        },
+    )
+    live = [(t, u * nb) for t, u in live_rows]
+
+    def merged_rows():
+        return consumer.select_rows_in_blocks(dev_q, dev_w, pages, dev_pin, dev_ids, live, cap, topk)
+
+    def per_row(l: int):
+        t, u = live_rows[l]
+        pin_t = ttnn.slice(dev_pin, [0, 0, 0, t], [1, 1, 1, t + 1])
+        ids_t = ttnn.slice(dev_ids, [0, 0, l, 0], [1, 1, l + 1, kb])
+        return consumer.select_user_in_blocks(dev_q, dev_w, pages, pin_t, ids_t, t, cap, u * nb, topk)
+
+    with phase("merged", what=f"select_rows_in_blocks over {n_live} live rows"):
+        merged = merged_rows()
+        assert list(merged.shape) == [1, 1, n_live, topk], tuple(merged.shape)
+        chips = [ttnn.to_torch(d)[0, 0] for d in ttnn.get_device_tensors(merged)]
+        merged_t = chips[0]
+        for i, other in enumerate(chips[1:], 1):
+            assert torch.equal(other, merged_t), f"chip {i} differs from chip 0"
+        again = _chip0(merged_rows())
+        assert torch.equal(again, merged_t), "select_rows_in_blocks is not deterministic"
+    total = 0
+    for l, (t, u) in enumerate(live_rows):
+        with phase(f"row{l}", what="select_user_in_blocks of the row alone"):
+            one_t = _chip0(per_row(l))[0]
+        differ = (merged_t[l] != one_t).nonzero()[:8].flatten().tolist()
+        assert torch.equal(merged_t[l], one_t), f"live row {l} (tile row {t}, user {u}): the top-k differs at {differ}"
+        picks = _rows(one_t.view(1, -1))[0]
+        if positions[l] >= 0:
+            assert picks and max(picks) <= positions[l], (l, len(picks), max(picks, default=None), positions[l])
+            allowed = {int(b) for b in ids[l].tolist() if b >= 0}
+            assert all(p // block in allowed for p in picks), f"live row {l}: a pick outside its published blocks"
+        total += len(picks)
+        print(
+            f"select_rows_in_blocks {layout} live row {l} (tile row {t}, user {u}, newest {positions[l]}): "
+            f"{len(picks)} picks, bit-equal to the row's own"
+        )
+    assert total > 0
+    with phase("timing", what="the per-row chain against the merged one (with the host's dispatch)"):
+        for what, fn in (
+            (f"select_user_in_blocks x {n_live}", lambda: [per_row(l) for l in range(n_live)]),
+            ("select_rows_in_blocks", merged_rows),
+        ):
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(10):
+                fn()
+            ttnn.synchronize_device(mesh_device)
+            ms = (time.perf_counter() - t0) / 10 * 1e3
+            print(f"{what} ({layout}, {n_live} live rows): {ms:.3f} ms a call (with host)")

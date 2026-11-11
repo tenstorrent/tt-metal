@@ -127,6 +127,11 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         # by its replay)
         self.merge_rows = os.environ.get("V41_VR_MERGE", "rows") == "rows"
         self._stack_idx: dict[tuple, ttnn.Tensor] = {}
+        # V41_VR_MERGE_BLOCKS=rows: the candidate consumers' selection of the live rows in one chain a source
+        # (``TtV41Indexer.select_rows_in_blocks``) instead of ``select_user_in_blocks`` once a
+        # live row (``row``, the default); no constant of its own
+        self.merge_blocks = os.environ.get("V41_VR_MERGE_BLOCKS", "row") == "rows"
+        self._published: tuple | None = None  # (tile rows, ids [1, 1, L, K]) the candidate source published stacked
 
     def attach_drafter(self, drafter, users: list[int] | None = None, max_k: int = 3) -> None:
         """Run ``drafter`` (a ``TtDSparkDrafter`` at this pool's ``ring_slots``) inside the steps with drafts; its
@@ -615,6 +620,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         if "dcos" in self.inputs:
             self.inputs["dmain"] = (self.inputs["dcos"], self.inputs["dsin"])
         self._windows, self._uoff = {}, {}
+        self._published = None
         self._commit_carries()
         selection = {}
         h = model.embedding(self.inputs["token"])
@@ -818,7 +824,30 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         q_rm, w_rm = indexer.decode_query(q, w)
         parts = {}
         dense: list[tuple[int, ttnn.Tensor]] = []  # (tile row, its split-layout score) of the densely scored rows
+        if published is not None:
+            self._published = None
+        merged = []  # the (tile row, user) pairs whose selection in their blocks is merged (V41_VR_MERGE_BLOCKS)
+        if self.merge_blocks and in_blocks:
+            merged = [(row, u) for row, u in self.live if candidates[row].ids is not None]
+            merged = merged if len(merged) > 1 else []
+        if merged:
+            # the live rows' selections in their candidate blocks in one chain: the blocks
+            # the source published for them as one [1, 1, L, K] page (its own stacked output when it published
+            # these rows in this order), one scorer launch, one top-k, the rows sliced apart
+            rows_m = tuple(row for row, _ in merged)
+            if self._published is not None and self._published[0] == rows_m:
+                ids_all = self._published[1]
+            else:
+                ids_all = ttnn.concat([candidates[row].ids for row in rows_m], dim=2)
+            live = [(row, u * (cap + 32) // cfg.CANDIDATE_BLOCK_SIZE) for row, u in merged]
+            topk_all = indexer.select_rows_in_blocks(
+                q_rm, w_rm, blocks_of, pins.newest, ids_all, live, cap, cfg.INDEX_TOPK
+            )
+            for l, row in enumerate(rows_m):
+                parts[row] = ttnn.slice(topk_all, [0, 0, l, 0], [1, 1, l + 1, cfg.INDEX_TOPK])
         for row, u in self.live:
+            if row in parts:
+                continue
             mine = candidates[row] if candidates is not None else None
             if in_blocks and mine.ids is not None:
                 pin_r = ttnn.slice(pins.newest, [0, 0, 0, row], [1, 1, 1, row + 1])
@@ -843,6 +872,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             topk_all, blocks_all = indexer.select_split_rows(
                 stacked, newest, len(dense), cap + 32, cfg.INDEX_TOPK, mine
             )
+            if published is not None and blocks_all.ids is not None:
+                self._published = (tuple(row for row, _ in dense), blocks_all.ids)
             for l, (row, _) in enumerate(dense):
                 parts[row] = ttnn.slice(topk_all, [0, 0, l, 0], [1, 1, l + 1, cfg.INDEX_TOPK])
                 if published is not None:

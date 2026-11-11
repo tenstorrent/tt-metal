@@ -12,11 +12,13 @@
 // tensor, ``V41ChunkTables.query_first()``), absolute position p = start + q; ratio-1 row t is visible iff t <= p.
 // With PIN_ROWS > 0 the pin tensor holds one entry per row instead (PIN_ROWS uint32, read whole): q = pin[i], and a
 // SENTINEL entry makes every row visible (the decode tile: entry u is user u's newest row, or the sentinel when it
-// is idle, whose selection is discarded).
+// is idle, whose selection is discarded). With QSPLIT > 0 (candscore_reader.cpp: QSPLIT id rows per live row) the
+// pin of row i is the entry of its live row's tile row, which follows the fixed runtime arguments per live row.
 //
-// compile_time_args = [cb_out, cb_scratch, K, PIN_ROWS, TensorAccessorArgs(ids)..., TensorAccessorArgs(out)...,
-//                      TensorAccessorArgs(pin)...]
-// runtime args      = [ids_addr, out_addr, pin_addr, row_start, row_count, start, nblocks]
+// compile_time_args = [cb_out, cb_scratch, K, PIN_ROWS, QSPLIT, TensorAccessorArgs(ids)...,
+//                      TensorAccessorArgs(out)..., TensorAccessorArgs(pin)...]
+// runtime args      = [ids_addr, out_addr, pin_addr, row_start, row_count, start, nblocks, then with QSPLIT per
+//                      live row: its tile row]
 
 #include <cstdint>
 
@@ -36,7 +38,9 @@ void kernel_main() {
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr uint32_t PIN_ROWS = get_compile_time_arg_val(3);
-    constexpr auto ids_args = TensorAccessorArgs<4>();
+    constexpr uint32_t QSPLIT = get_compile_time_arg_val(4);  // > 0: id rows per live row (a power of two)
+    constexpr uint32_t LIVE_ARGS = 7;                         // the first live row's tile row
+    constexpr auto ids_args = TensorAccessorArgs<5>();
     constexpr auto out_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto pin_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
@@ -68,7 +72,11 @@ void kernel_main() {
 
     uint32_t slot = 0;
     for (uint32_t row = row_start; row < row_start + row_count; ++row) {
-        const uint32_t q = PIN_ROWS == 0 ? query_first + row : pins[row];
+        uint32_t pin_row = row;
+        if constexpr (QSPLIT > 0) {
+            pin_row = get_arg_val<uint32_t>(LIVE_ARGS + row / QSPLIT);
+        }
+        const uint32_t q = PIN_ROWS == 0 ? query_first + row : pins[pin_row];
         const uint32_t p = PIN_ROWS != 0 && q == SENTINEL ? SENTINEL : start + q;
         volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buf_l1[slot]);
         volatile tt_l1_ptr uint16_t* dst16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf_l1[slot]);

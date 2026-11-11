@@ -224,7 +224,9 @@ def _largest_divisor(n: int, options=(8, 4, 2, 1)) -> int:
     return next(b for b in options if n % b == 0)
 
 
-def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_base: int = 0, base_page=None):
+def candidate_scores(
+    q, w, k, ids, pin, start: int, rows_visible: int, block_base: int = 0, base_page=None, live: list | None = None
+):
     """A ratio-1 candidate index source's score over each query's candidate rows only.
 
     ``q`` [1, 1, R, 32 * 128] bf16 row-major (the query's 32 heads, head-major, after RoPE and QDQ), ``w`` [1, 1, R, 32]
@@ -243,7 +245,14 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
     ``relu(Q @ K^T)`` rounded to bf16 per head, and the heads summed by ``W @ S`` in fp32 (HiFi4). ``base_page``
     (uint32 row-major [1, 1, 1, P], P >= 32): the page of the slot's block 0 is read from its word 1 on device
     instead of ``block_base`` (the one-live-row capture: the live user is a per-step input, not
-    a constant of the capture); ``ids``, ``pin`` and ``rows_visible`` stay the slot's own, as with ``block_base``."""
+    a constant of the capture); ``ids``, ``pin`` and ``rows_visible`` stay the slot's own, as with ``block_base``.
+    ``live`` (the live rows of a decode tile scored in one launch): a list of ``(tile row, block
+    base)``, one per live row; ``ids`` is then [1, 1, L * s, K / s] (``s`` a power of two: rows ``l s .. l s + s - 1``
+    hold live row ``l``'s K blocks in rank order, so the output reshaped to [1, 1, L, K * 8] is a row per live row),
+    row ``l s + j`` is scored with the query, head weights and pin of tile row ``live[l][0]`` of ``q``, ``w`` and the
+    per-row ``pin`` page (which keep the tile's rows) against the block pages from ``live[l][1]`` on: what ``L``
+    calls with each row's query repeated over ``s`` rows and its own ``block_base`` compute, on ``L * s`` rows of
+    one launch."""
     for t, dtype, what in ((q, ttnn.bfloat16, "query"), (w, ttnn.bfloat16, "weights"), (k, ttnn.bfloat16, "index-K")):
         _check_row_major(t, dtype, f"candidate_scores {what}")
     _check_row_major(ids, ttnn.uint32, "candidate_scores ids")
@@ -254,10 +263,21 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
             tuple(base_page.shape),
             block_base,
         )
-    rows, nk = q.shape[2], ids.shape[3]
-    pin_rows = _pin_rows(pin, rows)
+    rows, nk = ids.shape[2], ids.shape[3]
+    qsplit = 0
+    if live is not None:
+        qsplit = rows // len(live)
+        tile = q.shape[2]
+        assert not dyn and block_base == 0 and start == 0, "live rows: per-row bases, a per-row pin page"
+        assert qsplit * len(live) == rows and qsplit & (qsplit - 1) == 0, (rows, len(live))
+        assert all(0 <= row < tile for row, _ in live), (live, tile)
+        pin_rows = _pin_rows(pin, tile)
+        assert pin_rows >= tile, "live rows take the tile's per-row pin page"
+    else:
+        assert q.shape[2] == rows, (tuple(q.shape), rows)
+        pin_rows = _pin_rows(pin, rows)
     pin_slot = _round_up(max(32, pin_rows * 4), 64)
-    assert q.shape[3] == 32 * 128 and (w.shape[2], w.shape[3]) == (rows, 32) and ids.shape[2] == rows
+    assert q.shape[3] == 32 * 128 and (w.shape[2], w.shape[3]) == (q.shape[2], 32)
     assert rows_visible % CANDSCORE_BLOCK == 0, rows_visible
     tile_rows = nk * CANDSCORE_BLOCK // 32
     assert tile_rows * 32 == nk * CANDSCORE_BLOCK, f"{nk} candidate blocks do not fill whole tiles"
@@ -265,8 +285,10 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
     per_read = _largest_divisor(tile_rows, (8, 4, 2, 1))
     nblocks = rows_visible // CANDSCORE_BLOCK
     if k.shape[3] == CANDSCORE_BLOCK * 128:  # block pages already (persistent): no copy
-        assert (nblocks if dyn else block_base + nblocks) <= k.shape[2], (block_base, nblocks, tuple(k.shape))
+        last_base = max(base for _, base in live) if live is not None else 0 if dyn else block_base
+        assert last_base + nblocks <= k.shape[2], (last_base, nblocks, tuple(k.shape))
     else:
+        assert live is None, "live rows score block pages"
         assert k.shape[3] == 128 and block_base == 0 and rows_visible <= k.shape[2], (tuple(k.shape), rows_visible)
         if rows_visible < k.shape[2]:
             k = ttnn.slice(k, [0, 0, 0, 0], [1, 1, rows_visible, 128])
@@ -281,6 +303,8 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
     )
     coords, cores = _cores(device, rows)
     reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    live_reader = [v for pair in live for v in pair] if live is not None else []
+    live_writer = [row for row, _ in live] if live is not None else []
     for (cx, cy), (first, count) in zip(coords, _split(rows, len(coords))):
         reader_args[cx][cy] = [
             q.buffer_address(),
@@ -292,7 +316,7 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
             nblocks,
             block_base,
             base_page.buffer_address() if dyn else 0,
-        ]
+        ] + live_reader
         writer_args[cx][cy] = [
             ids.buffer_address(),
             out.buffer_address(),
@@ -301,13 +325,13 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
             count,
             start,
             nblocks,
-        ]
+        ] + live_writer
         compute_args[cx][cy] = [count]
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/candscore_reader.cpp",
             core_ranges=cores,
-            compile_time_args=[0, 1, 2, 3, nk, per_read, int(dyn)]
+            compile_time_args=[0, 1, 2, 3, nk, per_read, int(dyn), qsplit]
             + ttnn.TensorAccessorArgs(q).get_compile_time_args()
             + ttnn.TensorAccessorArgs(w).get_compile_time_args()
             + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
@@ -319,7 +343,7 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/candscore_writer.cpp",
             core_ranges=cores,
-            compile_time_args=[16, 8, nk, pin_rows]
+            compile_time_args=[16, 8, nk, pin_rows, qsplit]
             + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
             + ttnn.TensorAccessorArgs(out).get_compile_time_args()
             + ttnn.TensorAccessorArgs(pin).get_compile_time_args(),
