@@ -98,7 +98,7 @@ for it in range(ITERS):
             _g = (_rprev + AR.ring * _in).bfloat16().float()
             _p = torch.corrcoef(torch.stack([_res.flatten(), _g.flatten()]))[0, 1].item()
             _worst.append((round(_p, 6), k_, 'attn' if (AR_ATYPE >> k_) & 1 else 'mlp', round((_res - _g).abs().max().item(), 4), round(_g.abs().max().item(), 3)))
-            if os.environ.get('MK_AR_CHK_DEV', '0') == '1' and _p < 0.99999:   # where, and do the inputs differ by device?
+            if os.environ.get('MK_AR_CHK_DEV', '0') == '1' and (_p < 0.99999 or (k_ == 1 and os.environ.get('MK_AR_CHK_ALL', '0') == '1')):   # where, and do the inputs differ by device?
                 _e = (_res - _g).abs() > 4 * (2.0 ** (torch.floor(torch.log2(_g.abs() + 1e-30)) - 7))   # > 4 bf16 ulps
                 _dvt = [_to_torch(t_).float().reshape(TILE, AR_NAR * 2, H)[:V_R] for t_ in ttnn.get_device_tensors(ar_dbgt)]
                 _dv = [t_[:, 2 * k_] for t_ in _dvt]
@@ -110,6 +110,22 @@ for it in range(ITERS):
                       f"in max|d - d0| {[round((d_ - _dv[0]).abs().max().item(), 4) for d_ in _dv]}; "
                       f"res max|d - d0| {[round((t_[:, 2 * k_ + 1] - _res).abs().max().item(), 4) for t_ in _dvt]}; "
                       f"prev max|d - d0| {[round((t_[:, 2 * k_ - 1] - _rprev).abs().max().item(), 4) for t_ in _dvt] if k_ else '-'}", flush=True)
+                if k_ % 2 == 1 and not (AR_ATYPE >> k_) & 1:   # MLP AR of layer k_ // 2: which (rstd, gamma) reproduces each device's MLP output?
+                    L_ = k_ // 2; _g, _u, _d = vlayer(L_)
+                    _xm = _rprev if k_ < 2 else None
+                    _xmix = _x0_pass if k_ == 1 else _dvt[0][:, 2 * k_ - 3]   # this layer's mixer x (residual before AR k_ - 1)
+                    _gt = (lambda i_: AR_GTAB[L_, i_][None, :]) if GAMMA_CONS else (lambda i_: 1.0)
+                    def _mlp(xr_, x_, gi_):
+                        _xn = (_rstd_of(xr_)[:V_R, None] * (x_ * _gt(gi_)).bfloat16().double()).float()
+                        return (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
+                    _hyp = {'ok': _mlp(_rprev, _rprev, 1), 'rstd(mixer x)': _mlp(_xmix, _rprev, 1), 'gamma(input_ln)': _mlp(_rprev, _rprev, 0),
+                            'x = mixer x': _mlp(_rprev, _xmix, 1)}
+                    _pc = lambda a_, b_: round(torch.corrcoef(torch.stack([a_.flatten(), b_.flatten()]))[0, 1].item(), 6)
+                    if os.environ.get('MK_AR_SAVE'):
+                        torch.save(dict(dvt=[t_[:, :8] for t_ in _dvt], x0=_x0_pass, gtab=AR_GTAB if GAMMA_CONS else None, w=[vlayer(l_) for l_ in range(2)],
+                                        eps=EPS, H=H, ring=AR.ring, rsp=ttnn.to_torch(rsp_sh).float()), os.environ['MK_AR_SAVE'] + f'.it{it}.pt')
+                        print(f"[archk] saved {os.environ['MK_AR_SAVE']}.it{it}.pt", flush=True)
+                    print(f"[archk] iter {it} AR {k_} (L{L_} MLP) hypotheses pcc dev0 / dev1: " + "; ".join(f"{n_} {_pc(_dv[0], h_)} / {_pc(_dv[1], h_)}" for n_, h_ in _hyp.items()), flush=True)
             _rprev = _res
         print(f"[ar] iter {it} per-AR check (res = prev + ring*in{' | UPAR attn: ring/2*(in_d0+in_d1)' if _UP else ''}): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
         if it == 0:   # what the first AR's residual started from: the stand-in x (expected) or zero
