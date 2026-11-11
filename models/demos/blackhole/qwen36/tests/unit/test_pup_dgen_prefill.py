@@ -92,7 +92,14 @@ def test_fast_runtime_system_turn_boundary():
 
 @pytest.mark.parametrize(
     "flag, rows_per_chip, l1",
-    [(False, 100, False), (True, 10_000, True), (1152, 288, True), (1152, 352, False), (3072, 768, True), (3072, 800, False)],
+    [
+        (False, 100, False),
+        (True, 10_000, True),
+        (1152, 288, True),
+        (1152, 352, False),
+        (3072, 768, True),
+        (3072, 800, False),
+    ],
 )
 def test_l1_rows_switch(flag, rows_per_chip, l1):
     from models.demos.blackhole.qwen36.tt.layer import _l1_rows_ok
@@ -255,7 +262,11 @@ def test_table_configs():
     assert t.configs["08"].chunk_size_bytes == 16384 and t.configs["09"].chunk_size_bytes == 384
     c10 = t.configs["10"]
     assert (c10.tensor_type, c10.chunk_n_tokens, c10.chunk_size_bytes, c10.max_sequence_length) == (
-        "Snapshot", 32, 64, 128)
+        "Snapshot",
+        32,
+        64,
+        128,
+    )
 
 
 def test_table_slot_record():
@@ -270,7 +281,7 @@ def test_table_slot_record():
     assert sum(1 for k in t.entries if k[0] == 10) == 32 * 2 * 4
     rec = kv_table.slot_record(-2400, 1.5)
     assert int(rec[0]) == -2400 and rec[1:2].view(torch.float32).item() == 1.5
-    assert kv_table.mrope_delta([[1, 32, 32]]) == -240 and kv_table.mrope_delta([[1, 64, 64]] ) == -992
+    assert kv_table.mrope_delta([[1, 32, 32]]) == -240 and kv_table.mrope_delta([[1, 64, 64]]) == -992
 
 
 def test_table_kv_addresses_follow_the_nd_round_robin():

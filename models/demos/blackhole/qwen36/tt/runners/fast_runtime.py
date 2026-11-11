@@ -142,7 +142,9 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
             self._prefixes.append(
                 _Prefix(
                     index=i,
-                    rec=[up(torch.zeros(1, dn.Nv, dn.Dk, dn.Dv), ttnn.float32, ttnn.TILE_LAYOUT) for dn in self.dn_list],
+                    rec=[
+                        up(torch.zeros(1, dn.Nv, dn.Dk, dn.Dv), ttnn.float32, ttnn.TILE_LAYOUT) for dn in self.dn_list
+                    ],
                     hist=[
                         up(torch.zeros(1, K - 1, C, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
                         for _ in self.dn_list
@@ -174,7 +176,10 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
                 mc=ttnn.DRAM_MEMORY_CONFIG,
             )
             b.vmask = up(
-                torch.zeros(1, 1, Tb, 1, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, mc=ttnn.DRAM_MEMORY_CONFIG
+                torch.zeros(1, 1, Tb, 1, dtype=torch.bfloat16),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                mc=ttnn.DRAM_MEMORY_CONFIG,
             )
             b.export_rows = min(self.config.max_seq_len, _next_pow2(self.prefix_max + Tb))
             self._buckets[Tb] = b
@@ -310,7 +315,13 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
                         ttnn.deallocate(x)
                         x = z
                     ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                        dst, x, slot_idx=0, layer_idx=pos, num_layers=kv.num_attn_layers, kv_actual_global=0, cluster_axis=0
+                        dst,
+                        x,
+                        slot_idx=0,
+                        layer_idx=pos,
+                        num_layers=kv.num_attn_layers,
+                        kv_actual_global=0,
+                        cluster_axis=0,
                     )
                     ttnn.deallocate(x)
             else:
@@ -401,7 +412,12 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
         key_pt = (P, nreal)
         if b.host_keys.get("pt") != key_pt:
             put(row[:, : self.buf_blocks].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, cfg.full_pts[0])
-            put(row[:, cb0 : cb0 + cfg.blocks_per_bucket].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, cfg.chunk_pts[0])
+            put(
+                row[:, cb0 : cb0 + cfg.blocks_per_bucket].contiguous(),
+                ttnn.int32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                cfg.chunk_pts[0],
+            )
             put(torch.tensor([P], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, cfg.csi)
             b.host_keys["pt"] = key_pt
         cos, sin = self.model._rope_tp_cos_sin_torch(P, Tb)
@@ -513,7 +529,9 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
                 raise pup_media.MediaSpanError("media refs but no embedding store reader is configured")
             values = pup_media.fetch_values(self.media_reader, refs)
             grid = torch.tensor([list(h.grid_thw) for h, _ in values], dtype=torch.long)
-            rows = [(int(r.start_pos), np.asarray(v)) for r, (_, v) in zip(refs, values)]  # (span start, rows) per image
+            rows = [
+                (int(r.start_pos), np.asarray(v)) for r, (_, v) in zip(refs, values)
+            ]  # (span start, rows) per image
         t_media = time.perf_counter()
         P = self._prefix_len(ids)
         snap = self._find_prefix(ids, P) if P else None
@@ -536,7 +554,9 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
             self._slot_prefix = snap
             self.stats["snapshots"] += 1
             t_snap = time.perf_counter() - ts
-            logger.info(f"[qwen35_9b_pup fast] system-turn snapshot P={P} into prefix slot {snap.index} ({t_snap * 1e3:.1f} ms)")
+            logger.info(
+                f"[qwen35_9b_pup fast] system-turn snapshot P={P} into prefix slot {snap.index} ({t_snap * 1e3:.1f} ms)"
+            )
         if snap is None:
             P = 0
             self.stats["misses"] += 1
@@ -547,7 +567,9 @@ class TtQwen35PupFastPrefillRuntime(TtQwen35PupPrefillRuntime):
         n = L - P
         b = self._bucket_for(n)
         if b is None or n < 3:
-            raise NotImplementedError(f"qwen35_9b_pup fast: tail of {n} tokens (P={P}) has no bucket {self.buckets_rows}")
+            raise NotImplementedError(
+                f"qwen35_9b_pup fast: tail of {n} tokens (P={P}) has no bucket {self.buckets_rows}"
+            )
         # restore: the slot's K / V prefix rows and the traces' GDN init
         tr = time.perf_counter()
         restored = 0

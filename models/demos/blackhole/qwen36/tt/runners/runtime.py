@@ -202,8 +202,10 @@ class TtQwen35PupPrefillRuntime:
             images=len(refs),
             tokens=n,
         )
-        logger.info("[qwen35_9b_pup] PUPPRE " + " ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}"
-                                                         for k, v in self.last_timing.items()))
+        logger.info(
+            "[qwen35_9b_pup] PUPPRE "
+            + " ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}" for k, v in self.last_timing.items())
+        )
         return None  # one rank: the published caches are the output
 
     # --- the request's slot record (kv_table config 10) -----------------------------------------------------------
@@ -217,8 +219,9 @@ class TtQwen35PupPrefillRuntime:
             logger.warning(f"[qwen35_9b_pup] rope_delta {delta} != closed form {kv_table.mrope_delta(grid.tolist())}")
         penalty = pc.presence_penalty_images if n_images else pc.presence_penalty_text
         if getattr(self, "_slot_host", None) is None:
-            self._slot_host = torch.zeros(self._kv_ref.num_layers * self._kv_ref.num_users, kv_table.SLOT_WORDS,
-                                          dtype=torch.int32)
+            self._slot_host = torch.zeros(
+                self._kv_ref.num_layers * self._kv_ref.num_users, kv_table.SLOT_WORDS, dtype=torch.int32
+            )
         self._last_record = (delta, penalty)
         return kv_table.write_slot_params(self.mesh_device, self._kv_ref, slot, delta, penalty, self._slot_host)
 

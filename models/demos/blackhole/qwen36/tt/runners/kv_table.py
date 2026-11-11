@@ -338,7 +338,12 @@ def build_table(
             count = int(stage["count"])
             if count == 0:
                 continue
-            base, nb, first, fnids = int(stage["base_addr"]), int(stage["num_banks"]), int(stage["first_layer"]), stage["fnids"]
+            base, nb, first, fnids = (
+                int(stage["base_addr"]),
+                int(stage["num_banks"]),
+                int(stage["first_layer"]),
+                stage["fnids"],
+            )
             sp = len(fnids)
             if kind == "slot_params":
                 # page (layer, slot) on every chip; chunk c of the 128-position window = chip c's copy
