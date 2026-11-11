@@ -491,37 +491,61 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                   f'    noc_async_read_set_trid(0); }}   // E1_GO_RING0=split: retired + pushed at the tail head\n')
         go_r0s_done = f'  if (g_l == 0) {{ noc_async_read_barrier_with_trid(13); cb_push_back({CR_}, {RP}); }}   // E1_GO_RING0=split\n'
         owx = ", ".join(f"{x}u" for x, _ in GO["owners"]); owy = ", ".join(f"{y}u" for _, y in GO["owners"])
+        # GOTAIL (gdn_out tail, default off; u8 reader hook + tail hook + per-source flags only; bit-identical by construction):
+        #  E1_GO_SCVC=2|3: the scatter's writes + owner count incs on a static unicast VC (behind the other cores' S' / stash writes on VC 1)
+        #  E1_GO_KSTREAM=1: A pushed tile by tile as each source flag lands (k order); C-GOMM's first DST pass waits per k
+        #     (same matmul sequence per output tile, only the waits move)
+        #  E1_GO_SCPASS=1: C-GOMM pushes each DST pass's output tiles; the reader scatters them per pass (one barrier + incs at the end)
+        go_scvc = int(os.environ.get("E1_GO_SCVC", "0"))
+        assert go_scvc in (0, 2, 3), ("E1_GO_SCVC", go_scvc)
+        go_ks = os.environ.get("E1_GO_KSTREAM", "0") == "1"
+        go_scp = os.environ.get("E1_GO_SCPASS", "0") == "1"
+        if go_scvc or go_ks or go_scp:
+            assert go_rdhook and os.environ.get("E1_GO_FLAGS", "1") == "1" and os.environ.get("E1_GO_GATHER", "0") == "0" \
+                and os.environ.get("E1_GO_TAILHOOK", "1") == "1" and GO_LOCAL, "GOTAIL flags need the u8 reader hook + tail hook + flags"
+        GO_NW = 4   # C-GOMM output tiles per DST pass (half-sync fp32 DST)
+        _scv = f'<{go_scvc}u>' if go_scvc else ''
+        if go_ks:
+            go_a_body = (f'    cb_reserve_back({CA_}, {GO["wk"]});\n'
+                         f'    for (uint32_t t = 0; t < {len(cores)}u; ++t) {{ noc_semaphore_wait_min(g_ab + {{GFL}} + t, L + 1); cb_push_back({CA_}, 1); }} }}\n')
+            assert len(cores) == GO["wk"], ("E1_GO_KSTREAM: one A tile per GDN core", len(cores), GO["wk"])
+        go_mm = (f'    {{ DeviceZoneScopedN("GO-MM"); cb_wait_front({CO_}, {MAXT if GO.get("dbg_copy", False) else min(GO_NW, MAXT)}); }}\n' if go_scp else
+                 f'    {{ DeviceZoneScopedN("GO-MM"); cb_wait_front({CO_}, {MAXT}); }}\n')
+        go_sc = (f'    wou::scatter_ps{_scv}({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u, {GO_NW}u);   // per DST pass; also retires the debug writes\n' if go_scp else
+                 f'    wou::scatter{_scv}({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u);   // also retires the debug writes\n')
         go_w = (f'  {{   // gdn_out of GDN layer L\n'
                 f'    {{ DeviceZoneScopedN("GO-A");\n'
                 f'    noc_async_atomic_barrier();\n'
-                + (f'    noc_semaphore_wait_min(g_ab + {{GRDY}}, L + 1);\n' if go_rdhook and os.environ.get("E1_GO_GATHER", "0") == "1" else
+                + ('' if go_ks else f'    noc_semaphore_wait_min(g_ab + {{GRDY}}, L + 1);\n' if go_rdhook and os.environ.get("E1_GO_GATHER", "0") == "1" else
                    f'    for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {{GFL}} + t, L + 1);\n' if go_rdhook and os.environ.get("E1_GO_FLAGS", "1") == "1" else
-                f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdna"]}u, {len(cores)}u * (L + 1));\n') +
-                f'    cb_reserve_back({CA_}, {GO["wk"]});\n'
+                f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdna"]}u, {len(cores)}u * (L + 1));\n')
+                + (go_a_body if go_ks else f'    cb_reserve_back({CA_}, {GO["wk"]});\n')
                 + ('' if GO_LOCAL else
                 f'    const auto oa = TensorAccessor(TensorAccessorArgs<{{OUT_OFF}}>(), crta[{CRTA0} + {WRITER_TENSORS.index("out")}], 2048);\n'
                 f'    for (uint32_t t = 0; t < {GO["wk"]}u; ++t) noc_async_read(oa.get_noc_addr(t), get_write_ptr({CA_}) + t * 2048, 2048);\n'
-                f'    noc_async_read_barrier();\n') +
-                f'    cb_push_back({CA_}, {GO["wk"]}); }}\n'
+                f'    noc_async_read_barrier();\n')
+                + ('' if go_ks else f'    cb_push_back({CA_}, {GO["wk"]}); }}\n') +
                 f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["xow"]}u, 1);\n'
                 f'    const uint32_t xo = *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u;\n'
                 f'    static constexpr uint32_t owx[16] = {{{owx}}}, owy[16] = {{{owy}}};\n'
                 f'    uint32_t tl[{MAXT}];\n'
                 f'    for (uint32_t j = 0; j < {MAXT}u; ++j) tl[j] = g_ab[{{OGO}} + 2 + j];\n'
                 f'    const uint32_t nt = g_ab[{{OGO}}];\n'
-                f'    {{ DeviceZoneScopedN("GO-MM"); cb_wait_front({CO_}, {MAXT}); }}\n'
+                + go_mm +
                 f'    DeviceZoneScopedN("GO-SC");\n'
                 # GO["dbg_copy"] (E1_GO_DBG; program.py: bench checker only, never in the model): the out tiles' copy into the
                 # debug tensor (the [gdnout] PCC's input); off = production (no per-layer DRAM writes on the tail)
                 + (f'    const auto dg = TensorAccessor(TensorAccessorArgs<{{DBG_OFF}}>(), {GO["dbg_addr"]}u, 2048);\n'
                    f'    for (uint32_t j = 0; j < nt; ++j) noc_async_write(get_read_ptr({CO_}) + j * 2048, dg.get_noc_addr(L * 160 + tl[j]), 2048);\n'
-                   if GO.get("dbg_copy", False) else '') +
-                f'    wou::scatter({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u);   // also retires the debug writes\n'
+                   if GO.get("dbg_copy", False) else '')
+                + go_sc +
                 f'    {{OSIG}}\n'
                 + ('    { DeviceZoneScopedN("GO-OSIGB"); noc_async_atomic_barrier(); }\n' if os.environ.get("E1_GO_OSIGB", "0") == "1" else '') +
                 f'    }}\n')   # 4-space close: program.py's AR splice (hosted sender on the corners) cuts the layer body at the
                                 # first "\n  }\n" after the loop head -- a 2-space close here ended the body early (mesh hang)
-        go_c = f'    {{ DeviceZoneScopedN("C-GOMM"); wou::matmul_nt<{"true" if GO.get("lofi", True) else "false"}>({CA_}, {CR_}, {RP}, {CO_}, {MAXT}, {GO["wk"]}, g_ab[{{OGO}}], 4); }}   // short inits only; half-sync fp32 DST: 4 tiles / pass\n'
+        go_c = (f'    {{ DeviceZoneScopedN("C-GOMM"); wou::matmul_nt_ks<{"true" if GO.get("lofi", True) else "false"}, {"true" if go_ks else "false"}, {"true" if go_scp else "false"}>({CA_}, {CR_}, {RP}, {CO_}, {MAXT}, {GO["wk"]}, g_ab[{{OGO}}], {GO_NW}); }}   // GOTAIL: k-stream / per-pass push\n'
+                if go_ks or go_scp else
+                f'    {{ DeviceZoneScopedN("C-GOMM"); wou::matmul_nt<{"true" if GO.get("lofi", True) else "false"}>({CA_}, {CR_}, {RP}, {CO_}, {MAXT}, {GO["wk"]}, g_ab[{{OGO}}], 4); }}   // short inits only; half-sync fp32 DST: 4 tiles / pass\n')
     rct, roff = ctas([rmap[t] for t in rtens])
     wct, woff = ctas([wmap[t] for t in WRITER_TENSORS])
     if GO:   # gdn_out accessors appended after the step's (reader: the weight slices; writer: the debug output copy)
@@ -546,11 +570,19 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             GO_FLAGS = os.environ.get("E1_GO_FLAGS", "1") == "1"
             if GO_FLAGS:   # per-source ready flags (arg block words GFL + t, L + 1) written after the tiles landed: no atomics
                 inc1h = _loop('noc_inline_dw_write(get_noc_addr(go_gx[gi_], go_gy[gi_], (uint32_t)(g_ab + {GFL} + t0)), g_l + 1' + (f', 0xF, noc_index, {go_vc}' if go_vc else '') + ');')
+            # GOTAIL E1_GOZ=1 (bench zones): GO-HW (the unicast issue), GO-HB (the write barrier), GO-HF (flags + flush)
+            goz = os.environ.get("E1_GOZ", "0") == "1"
+            zo_ = (lambda z_: f'{{ DeviceZoneScopedN("{z_}"); ') if goz else (lambda z_: '{ ')
+            # GOTAIL E1_GO_FLFL=1 (with E1_GO_FLAGS + E1_GO_VC, default off): the per-source flags follow the tiles after
+            # noc_async_writes_flushed() instead of the write barrier: same NoC, same static VC, same destination -> the flag
+            # lands behind the tile (in-order per path / VC); saves the ack round trip of the slowest core's 24 writes
+            go_flfl = os.environ.get("E1_GO_FLFL", "0") == "1"
+            assert not go_flfl or (GO_FLAGS and go_vc), "E1_GO_FLFL needs E1_GO_FLAGS=1 and a static E1_GO_VC"
             go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
                            f'  DeviceZoneScopedN("GO-RDH");\n'
-                           f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc1h}\n'
-                           f'  noc_async_write_barrier();\n  {inc1h}\n'
-                           + ('  noc_async_writes_flushed();\n' if GO_FLAGS else '') +
+                           f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{zo_("GO-HW")}{mc1h} }}\n'
+                           f'  {zo_("GO-HB")}' + ('noc_async_writes_flushed(); }' if go_flfl else 'noc_async_write_barrier(); }') + f'\n  {zo_("GO-HF")}{inc1h}\n'
+                           + ('  noc_async_writes_flushed();\n' if GO_FLAGS else '') + '  }\n' +
                            ('  noc_async_atomic_barrier();\n' if os.environ.get("E1_GO_ABAR", "0") == "1" else '') + '}\n')
         GO_GATHER = go_rdhook and os.environ.get("E1_GO_GATHER", "0") == "1"
         if GO_GATHER:
