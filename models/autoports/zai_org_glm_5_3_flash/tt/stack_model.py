@@ -216,6 +216,12 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
         # one user group per row (its own copy of the head cores, the same arithmetic) = -38 us per KDA layer
         # (dense 0-2 1222.6 -> 1107.4 us, sparse alike). GLM53_STACK_KNOB_SET="d:GLM53_REC_UGROUPS=1" = the A/B.
         os.environ.update({"GLM53_REC_V2_UG": "1", "GLM53_REC_UGROUPS": str(min(4, t))})
+    if tp > 1 and mode == "s7a283" and key in (False, True) and t == 16:
+        # 2026-11-11 (8x4, B = 16): one user group per row on both KDA kinds (dense 1 -> 16, sparse 8 -> 16; the same
+        # arithmetic on 16 copies of the head cores): 4 K x 16 distinct 34.3 -> 33.3 ms, outputs bit-identical over 3
+        # in-process runs (ids + top-4 values). The 11-10 A/B that moved the ids ran while B 16 had the routed-expert
+        # scratch race. GLM53_STACK_KNOB_SET="d:GLM53_REC_UGROUPS=1;s:GLM53_REC_UGROUPS=8" = the A/B.
+        os.environ.update({"GLM53_REC_V2_UG": "1", "GLM53_REC_UGROUPS": "16"})
     if prof is KNOBS_TP and key is True and t > 1:
         # 4-row chunks: the sparse stack's 4-slot expert ring (14's B=1 default) puts the reader CBs 5 KB above the
         # step's L1 floor (0x1466c0 > 0x145400 in mock); 3 slots fit (7a's serving value)
