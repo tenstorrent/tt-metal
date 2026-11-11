@@ -166,6 +166,8 @@ class GdnRole:
             state = [dict(win_a=ly["cE"].win_a, win_b=ly["cE"].win_b, ring=ly["cE"].ring, taps=ly["cE"].taps_d,
                           dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d) for ly in self.LY]
             self._check_state(state)
+            if "gdn_state_real" in _dec:   # test the in-model state-mode path itself: no bench reference, snapshot/check
+                self.state, self.decoy, self.ref = state, False, False
             print(f"[decoy] gdn_state{'_model' if model else ''}: {len(self._dkeep)} bench GDN state / ctrl buffers zeroed; the role binds clones via state= "
                   f"(one shared ctrl @{shared.buffer_address()})", flush=True)
         if state is not None:
@@ -361,6 +363,8 @@ class GdnRole:
         elif _mi.isdigit(): self.mi_ctrl = [min(int(_mi), self.T)] * self.B
         self._rows()
         if self.state is not None and not getattr(self, "decoy", False):   # (d): the model stages ctrl and owns the state
+            if os.environ.get("MKA_GDN_SNAP", "0") == "1":   # bench: the state is not touched between setup and the first run
+                self.snapshot()
             return
         if self.gb is not None:
             cmp_ = os.environ.get("G2_GB_CMP", "0") == "1"
@@ -390,8 +394,69 @@ class GdnRole:
             ttnn.generic_op([self.qkv, cE.ring, pre], self._build_G(cA, pre, cE.ring, cE.par, self.hold))
         ttnn.synchronize_device(self.dev)
 
+    def snapshot(self):
+        """(d) in-model self-check, part 1: call right before the checked engine launch (after the model staged its ctrl).
+        Clones every GDN layer's real state (ring, window pair; constants by reference) and records the ctrl parity."""
+        if self.state is None or getattr(self, "decoy", False):
+            return
+        import types
+        cl = lambda t_: ttnn.clone(t_, memory_config=t_.memory_config())
+        par = int(_host(self.LY[0]["ctrl"]).flatten()[0].item()) & 1
+        self._snap = [types.SimpleNamespace(win_a=cl(st["win_a"]), win_b=cl(st["win_b"]), ring=cl(st["ring"]), taps_d=st["taps"],
+                                            dtb_d=st["dtb"], nea_d=st["nea"], w_d=st["weight"], out_dtype=b16, par=par)
+                      for st in self.state]
+        print(f"[gdn24] snapshot: {len(self._snap)} GDN layers' real state cloned, ctrl parity {par}", flush=True)
+
+    def _check_state_mode(self, tag):
+        """(d) in-model self-check, part 2 (after ONE engine launch): the stock gdn_spec_step on the snapshot with G-a's real
+        in-proj (gb['dbg']) and the same ctrl, vs the model's state the engine role wrote (ring / win[1-par]; out if written).
+        Device 0's copies (mesh: the op runs everywhere on device 0's qkv; only device 0 is compared)."""
+        if not getattr(self, "_snap", None):
+            print(f"[{tag}] check skipped (state mode: call role.snapshot() before the checked launch)", flush=True)
+            return True
+        Kt, Vt, T, B, Nv, m = self.Kt, self.Vt, self.T, self.B, self.Nv, self.m
+        iv = lambda t: t.contiguous().view(torch.int32)
+        def ringbits(r):
+            b = iv(r).clone()
+            p = Kt + Vt
+            r0, c0 = (p // Vt) * 32, (p % Vt) * 32
+            b[1:3, :, :, r0:r0 + 32, c0 + 1:c0 + 32] = 0
+            return b
+        d = _host(self.gb["dbg"]).reshape(32, -1)
+        W = self.g.W
+        import hashlib
+        _h = lambda t_: hashlib.md5(t_.contiguous().numpy().tobytes()).hexdigest()[:12]
+        ok_all = True
+        for l, (sn, st) in enumerate(zip(self._snap, self.state)):
+            q = ttnn.from_torch(d[:, l * W:(l + 1) * W].reshape(1, 32, W).bfloat16(), dtype=b16, layout=ttnn.TILE_LAYOUT,
+                                device=self.dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            oA = self._plain(sn, self.LY[l]["ctrl"], q)
+            ttnn.synchronize_device(self.dev)
+            rA = _host(sn.ring).reshape(T, B, Nv, m.Dk, m.Dv).float()
+            rE = _host(st["ring"]).reshape(T, B, Nv, m.Dk, m.Dv).float()
+            wA = _host([sn.win_a, sn.win_b][1 - sn.par]).float()
+            wE = _host([st["win_a"], st["win_b"]][1 - sn.par]).float()
+            e_ring, e_win = torch.equal(ringbits(rA), ringbits(rE)), torch.equal(iv(wA), iv(wE))
+            outB = _host(self.LY[l]["outE"]).float()
+            outA = _host(oA).float().reshape(outB.shape)
+            e_out = "NOT CHECKED (E1_GO_LOCAL=2)" if self.out_unwritten else torch.equal(iv(outA), iv(outB))
+            print(f"[{tag}] (d) GDN layer {l}: out {e_out} | ring {e_ring} (max|d| {(rA - rE).abs().max().item():.3e}) | "
+                  f"win {e_win} (max|d| {(wA - wE).abs().max().item():.3e}) | ref |out|max {outA.abs().max().item():.3e} "
+                  f"md5 ring {_h(ringbits(rE))} win {_h(iv(wE))}", flush=True)
+            ok_all = ok_all and e_ring and e_win and (e_out is not False)
+            ttnn.deallocate(oA)
+            ttnn.deallocate(q)
+        for sn in self._snap:
+            for t_ in (sn.win_a, sn.win_b, sn.ring):
+                ttnn.deallocate(t_)
+        self._snap = None
+        print(f"[{tag}] (d) in-model check {'PASS' if ok_all else 'FAIL'}", flush=True)
+        return ok_all
+
     def check(self, tag="g2"):
         """After ONE engine pass: the stock op on the reference copies, then out / ring / next window per GDN layer."""
+        if self.state is not None and not getattr(self, "decoy", False):
+            return self._check_state_mode(tag)
         if not self.ref:
             print(f"[{tag}] check skipped (no stock-op reference in this run: device profiler on)", flush=True)
             return True
