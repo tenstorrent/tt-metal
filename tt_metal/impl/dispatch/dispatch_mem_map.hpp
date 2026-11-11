@@ -133,6 +133,11 @@ private:
     uint32_t cq_zone_stride_ = 0;
 
     uint32_t host_alignment_ = 0;
+    // Stride between the host-visible CQ pointers. Normally host_alignment_, but on a host whose
+    // inbound PCIe DMA is not snooped it is raised to the cache block size: host- and device-written
+    // pointers must not share a cache line, or the write-back that cache maintenance requires would
+    // clobber the other side's value in DRAM.
+    uint32_t host_ptr_stride_ = 0;
     uint32_t l1_alignment_ = 0;
     uint32_t noc_overlay_start_addr_ = 0;
     uint32_t noc_stream_reg_space_size_ = 0;

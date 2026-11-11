@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-umd/chip_helpers/host_cache.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -90,6 +91,16 @@ DispatchMemMap::DispatchMemMap(
         dispatch_stream_base_ = 48u;
     } else {
         TT_THROW("DispatchMemMap not implemented for core type");
+    }
+
+    // Keep host- and device-written CQ pointers in separate cache lines where the platform does not
+    // snoop inbound DMA; see the note on host_ptr_stride_.
+    host_ptr_stride_ = host_alignment_;
+    if (tt::umd::host_cache::available()) {
+        const uint32_t block = tt::umd::host_cache::block_bytes();
+        if (block > host_ptr_stride_) {
+            host_ptr_stride_ = block;
+        }
     }
 
     const auto dispatch_buffer_block_size = settings.dispatch_size_;
@@ -319,7 +330,7 @@ uint32_t DispatchMemMap::get_device_command_queue_addr(
 }
 
 uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const {
-    return ttsl::as_underlying_type<CommandQueueHostAddrType>(host_addr) * host_alignment_;
+    return ttsl::as_underlying_type<CommandQueueHostAddrType>(host_addr) * host_ptr_stride_;
 }
 
 uint32_t DispatchMemMap::get_sync_offset(uint32_t index) const {
