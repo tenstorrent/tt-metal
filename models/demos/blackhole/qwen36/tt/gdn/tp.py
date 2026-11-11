@@ -363,6 +363,27 @@ def spec_conv_sel(mi, n_users, T, kc):
     return sel
 
 
+_GIN_GPTQ = {}
+
+
+def _gin_gptq_layer(cache_dir):
+    """QWEN36_GIN_GPTQ=<file> (with QWEN36_LOFI_WROUND gin): this layer's in_proj_qkv / z / a / b weights rounded to 5
+    significant bits by GPTQ (error feedback through the calibration Hessian of the in-proj input) instead of rounding
+    to nearest; file from s6/gptq6.py ({"layers": {layer: {"qkv", "z", "a", "b"}}}). The layer index comes from the
+    weight cache directory (".../layers.<n>"). None when unset."""
+    import os
+    import re
+
+    path = os.environ.get("QWEN36_GIN_GPTQ")
+    if not path or "gin" not in tpc.lofi_wround_sites():
+        return None
+    m = re.search(r"layers\.(\d+)", str(cache_dir))
+    assert m is not None, "QWEN36_GIN_GPTQ needs the per-layer weight cache dir to know the layer index"
+    if path not in _GIN_GPTQ:
+        _GIN_GPTQ[path] = torch.load(path, weights_only=False)["layers"]
+    return _GIN_GPTQ[path][int(m.group(1))]
+
+
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     """Shard one GDN layer's linear_attn.* weights across the mesh."""
     tp = args.num_devices
@@ -397,9 +418,13 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         conv1d_w = sd[P + "conv1d.weight"]
     else:  # bf16 remap: reassemble fused conv1d from q/k/v streams
         conv1d_w = torch.cat([sd[P + "q_conv.weight"], sd[P + "k_conv.weight"], sd[P + "v_conv.weight"]], dim=0)
-    qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
     z_w = sd[P + "in_proj_z.weight"]
     a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
+    _gq = _gin_gptq_layer(cache_dir)
+    if _gq is not None:  # QWEN36_GIN_GPTQ: error-compensated 5-bit in-proj weights (replace the checkpoint's)
+        assert _gq["qkv"].shape == qkv_w.shape and _gq["z"].shape == z_w.shape, "QWEN36_GIN_GPTQ shape mismatch"
+        qkv_w, z_w, a_w, b_w = _gq["qkv"], _gq["z"], _gq["a"], _gq["b"]
+    qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
     tw = {}
     # Column-parallel qkvz (DRAM-sharded decode matmul when enabled); distinct .dramshard cache
     qkvz_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
@@ -430,7 +455,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
-            cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard") + (".r5" if _rnd else "")),
+            cache_path=c(
+                "qkvzab" + (".il" if _proj1d else ".dramshard") + (".r5" if _rnd else "") + (".gptq" if _gq is not None else "")
+            ),
             dtype=_in_dtype,
         )
     else:
