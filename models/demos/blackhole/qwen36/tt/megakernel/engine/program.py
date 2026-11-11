@@ -42,6 +42,7 @@ def setup_bench(dev, MESH, mesh_identity):
     except ImportError:
         from models.demos.blackhole.qwen36.tt.megakernel.engine import cbplan as CBP
     CBP.track(ttnn)   # spec §20 v12cb: the CB plan must know which descriptors are tensor-backed
+    CBP.reset()   # this build's tensor-backed keys only (the model process's other ops share the registry)
     banks = dev.dram_grid_size().x
     cores = [ttnn.CoreCoord(i % GX, i // GX) for i in range(NC)]
     rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])

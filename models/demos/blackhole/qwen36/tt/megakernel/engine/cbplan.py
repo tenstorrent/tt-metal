@@ -69,6 +69,14 @@ def track(ttnn):
     ttnn.cb_descriptor_from_sharded_tensor = w
 
 
+def reset():
+    """Start a fresh registry for one engine build. In the model process every other op that calls
+    cb_descriptor_from_sharded_tensor (prod generic_ops, the drafter, ...) also lands in the shared registry; a static
+    engine CB sharing such a key would be planned global. setup_bench resets right after track(), so the registry holds
+    exactly this build's tensor-backed descriptors (its plan + the verify right after it)."""
+    _reg().clear()
+
+
 def mark_static(d):
     _reg().discard(_key(d))
     return d
