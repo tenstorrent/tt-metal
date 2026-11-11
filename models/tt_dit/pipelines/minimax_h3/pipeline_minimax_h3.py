@@ -460,23 +460,27 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 # Wormhole Galaxy. Same axes as Blackhole -- the shape arguments for TP=4 are architectural, not
 # per-chip -- but these differ:
 #
-#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, so each stage is
-#     evicted before the next loads. The cost is a text-encoder reload per request, which is the trade
-#     the Residency note above describes.
+#   * `coresident: True` for t2va (`coresident_tasks`) with `evict_vae_for_denoise`. A Wormhole chip has 12 GB of
+#     DRAM against Blackhole's 32 GB.
+#     With `dit_fsdp` the DiT is ~2 GB a device, so it, the text encoder (~2 GB) and the audio decoder (0.56 GB) stay
+#     resident across requests; the video VAE decoder (4.9 GB of fp32 weights) does not fit beside a denoise, so it
+#     is dropped before each denoise and reloaded for the decode (~2.9 s a request). t2va at its capacity length
+#     (120320 rows) on the mock 4x8: device 0 holds 8.6 GB after the first denoise step, 10.7 GB after the decode.
+#     ref2va evicts each stage before the next loads: its token refiner and text encoder run at the 61440-token
+#     prompt cap, which fits beside neither the resident encoders (in the denoise) nor the video VAE decoder.
 #   * `dit_fsdp: True`: the DiT weights are sharded across the SP axis too and gathered layer by layer.
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
 #
 # There is no (4, 32) entry: the quad is a Blackhole configuration.
-# TODO: Try to figure out how we can keep components of the the model coresident throughout generation
-# to improve perf. Easy target would be to keep the text encoder resident if possible, might save a
-# few seconds. This will matter when video gen is ~1 minute or so.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (4, 8): {
         "tp_axis": 0,
         "sp_axis": 1,
         "num_links": 4,
         "topology": ttnn.Topology.Ring,
-        "coresident": False,
+        "coresident": True,
+        "coresident_tasks": ("t2va",),
+        "evict_vae_for_denoise": True,
         "dit_fsdp": True,
         # Dynamic length by default, as on the Blackhole 4x8; the bucket ladder stays as the backup path and the
         # admission cap.
@@ -668,7 +672,9 @@ class MiniMaxH3Pipeline:
             # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
             fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
             topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
-        coresident = preset.get("coresident", True) if coresident is None else coresident
+        if coresident is None:
+            # A preset can keep its stages coresident for some tasks only (`coresident_tasks`).
+            coresident = preset.get("coresident", True) and task in preset.get("coresident_tasks", (task,))
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
@@ -693,6 +699,9 @@ class MiniMaxH3Pipeline:
         source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
         fsdp = "on" if self.dit_fsdp else "off"
         self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
+        # Coresident presets whose video VAE decoder does not fit beside a denoise: it is dropped before each denoise
+        # and reloads for the decode (everything else stays resident across requests).
+        self.evict_vae_for_denoise = coresident and preset.get("evict_vae_for_denoise", False)
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -2354,6 +2363,10 @@ class MiniMaxH3Pipeline:
         transformer = self._prepare_transformer()
         if self.dynamic_length and self.resident_kv_gather_pair:
             self._bind_kv_gather_pair(transformer)
+        if self.evict_vae_for_denoise:
+            for module in self._vae.modules:
+                if module.is_loaded():
+                    module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
