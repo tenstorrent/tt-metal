@@ -213,13 +213,18 @@ lane skew: shard_plan.rs1_early_gates), yet rev 67 alone at 4 K x 16 distinct le
 (785 1196 702 3267 291 264 1467 429 374, then 7548 vs 16897); it stays opt-in until a knob-off run of the same tree at
 B 16 shows whether the KPH reference itself reproduces.
 
-## 11. Batch scaling at 1 M context per user (2026-11-10, galaxy defaults KPH + AGK)
+## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 86b8fac2888 defaults)
 
 | users at 1 M each | 1 | 2 | 4 | 8 | 16 |
 |---|---|---|---|---|---|
-| decode step | 19.1 ms | 20.8 | 25.4 | 36.1 | 46.2 |
-| tok/s per user | 52.3 | 48.1 | 39.3 | 27.7 | 21.7 |
+| decode step | 18.9 ms | 19.9 | 24.3 | 30.6 | 44.5 |
+| tok/s per user | 52.8 | 50.2 | 41.1 | 32.7 | 22.5 |
 | TTFT (all users back to back) | 345 s | 690 s | 1378 s | 2779 s | 5520 s |
+
+Decode is timed inside the e2e's one generate_batch call (`Glm53Generator.last_batch_timing`, 86b8fac2888). The
+2026-11-10 table (19.1 / 20.8 / 25.4 / 36.1 / 46.2 ms) subtracted a separately timed prefill, so the difference of two
+1 M prefills landed in every step: two such runs at 1 M x 8 read 36.1 and 26.8 ms around the one-call 30.6 ms. Of the
+1 M x 16 step, ~7.7 ms is context (4 K x 16: 36.8 ms).
 
 16 x 1 M is resident on one 8x4. The MoE x-row coalesce (`GLM53_MKX_XROWS_COAL`, default) adds -2.8 ms at 4 K x 16
 (40.8 -> 38.0 ms) and -0.8 ms at 32 K x 4 (ids identical).
