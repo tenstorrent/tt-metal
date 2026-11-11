@@ -9,7 +9,7 @@ Optional γ / NORM_FIX fold (post-attention RMSNorm weight) into gate and up row
 
 Pure torch (no device): returns host page tensors in the interleaved-DRAM page order (page = slot_tile * banks + bank)
 plus the runtime-arg fields the engine kernels need."""
-import math, torch
+import torch
 
 TILE = 32
 GX, GY, KTR = 10, 8, 20
@@ -101,15 +101,17 @@ def pages_per_layer(nslot_b, banks):
 # HF checkpoint -> per-device v12 MLP weights (TP8 column/row parallel exactly as prod tt/mlp.py: gate/up column-parallel
 # on the intermediate dim, down row-parallel on it; ShardTensorToMesh gives device d the contiguous slice d).
 H_DIM = 5120
-# AR contract (spec §12 / AR_INTERFACE.md): rstd' = rsqrt(Σ_j P_j + 1.25 eps), P_j = Σ x² · 2^-12, so
-# rstd' = rstd / NORM_FIX with NORM_FIX = sqrt(H / 4096) = sqrt(1.25); fold γ · NORM_FIX into gate and up rows.
-NORM_FIX = math.sqrt(H_DIM / 4096)
+# rstd contract (DESIGN v1.94+, the STREAM producer / MK_DNORM_SPLIT + RED=gdn reducer): consumers form the TRUE rstd =
+# rsqrt(Σx²/H + eps) (MKA_INVH_BITS = 1/H on the un-scaled Σx²), so γ is folded / applied WITHOUT a factor: NORM_FIX = 1.0.
+# (The retired AR-stats contract rstd' = rsqrt(Σ x² · 2^-12 + 1.25 eps) = rstd / sqrt(1.25) needed γ · sqrt(H / 4096); a
+# NORM_FIX of sqrt(1.25) on the current engine makes the normed x 1.118x too large: gate-9 E20p/E20t, MLP 1.22x.)
+NORM_FIX = 1.0
 
 
 def from_hf(state_dict, layer, dev, tp=8, prefix="model.layers.{L}.", fold_norm=False):
     """REFERENCE / TEST path (prod is GPTQ BFP4: use from_tt). Return (wg [H, I], wu [H, I], wd [I, H]) float32 for
     device `dev` of layer `layer` (I = I_total / tp). fold_norm (default OFF, spec §19: the AR owner applies
-    γ·NORM_FIX to x at delivery) folds the zero-centered post-attention RMSNorm (1 + w) x NORM_FIX into gate / up."""
+    γ to x at delivery) folds the zero-centered post-attention RMSNorm (1 + w) (x NORM_FIX = 1.0) into gate / up."""
     p = prefix.format(L=layer)
     g = state_dict[p + "mlp.gate_proj.weight"].float()   # [I_total, H]
     u = state_dict[p + "mlp.up_proj.weight"].float()

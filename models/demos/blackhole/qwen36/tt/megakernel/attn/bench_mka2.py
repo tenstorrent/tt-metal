@@ -155,7 +155,7 @@ for it in range(ITERS):
         v_gold = _pL
     if V12 and REAL_AR and AR_DBG:   # per-layer v12 MLP vs a gold from the residual the AR delivered to that MLP (AR program order:
         # [mixer AR under AAR (attention, and GDN with MK_REAL_GAR)], MLP AR): xn = rstd(xr) * (xr [.] γ_post_L); MLP = silu(xn g) * (xn u) @ d
-        _k, _mp = 0, []
+        _k, _mp, _nr = 0, [], []
         for L_ in range(NL):
             if REAL_AAR and (is_attn_layer(L_) or ('MK_REAL_GAR', '1') in MKDEF): _k += 1
             _xr = _db[:, 2 * (_k - 1) + 1] if _k > 0 else _x0_pass
@@ -165,8 +165,18 @@ for it in range(ITERS):
             _gm = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
             _dm = _db[:, 2 * _k]   # this device's MLP output = the MLP AR's input
             _mp.append(round(torch.corrcoef(torch.stack([_dm.flatten(), _gm.flatten()]))[0, 1].item(), 5))
+            if GAMMA_CONS or AR_GAMMA:   # [norm] scale vs an explicit RMSNorm with the MODEL γ (= table / MK_NORM_FIX); PCC is scale-blind
+                _nf = globals().get('NORM_FIX', 1.0)
+                _xt = (_xr.double() * torch.rsqrt(_xr.double().pow(2).mean(-1, keepdim=True) + globals().get('EPS', 1e-6))
+                       * (AR_GTAB[L_, 1][None, :].double() / _nf))[:V_R].float()
+                _gt_ = (torch.nn.functional.silu(_xt @ _g) * (_xt @ _u)).bfloat16().float() @ _d
+                _nr.append(round((_dm.norm() / _gt_.norm()).item(), 4))
             _k += 1
         print(f"[v12] iter {it} per-layer MLP vs AR-delivered-x gold pcc min {min(_mp)} all {_mp}", flush=True)
+        if _nr:
+            _ok = all(abs(r_ - 1.0) <= 0.005 for r_ in _nr)
+            print(f"[norm] iter {it} MLP |dev| / |RMSNorm(x)*gamma_model MLP| per layer {_nr} (MK_NORM_FIX {globals().get('NORM_FIX', 1.0):.6f}) "
+                  f"{'PASS' if _ok else 'FAIL'} (1.000 +- 0.5%)", flush=True)
     if V12 and not (REAL_AR and AR_GAMMA):   # (MK_AR_GAMMA: v_xo ends the pass holding x_deliver, not the partial)
         _v = ttnn.to_torch(_xo_t).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
         if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(_xo_t), os.environ['V12_SAVE'])
@@ -274,6 +284,9 @@ for it in range(ITERS):
             if nan_: print(f"[rqkv] iter {it} layer {L} non-finite tiles {nan_}", flush=True)
             bad_ = [n for n in range(QN) if torch.corrcoef(torch.stack([qv[L][:, n*TILE:(n+1)*TILE].flatten(), gq_[:, n*TILE:(n+1)*TILE].flatten()]))[0, 1].item() < 0.999]
             print(f"[rqkv] iter {it} layer {L} rows {QRW} qkv pcc {pq_:.5f} max|err| {(qv[L]-gq_).abs().max().item():.4f} |gold|max {gq_.abs().max().item():.3f} bad tiles {bad_[:12]}", flush=True)
+            if GAMMA_CONS or AR_GAMMA:   # [norm] q/k/v columns (pre-sigmoid, linear in γ): |dev| / |true RMSNorm · γ_model @ W|
+                _r = (qv[L][:, :64 * TILE].norm() / (gq_[:, :64 * TILE].norm() / globals().get('NORM_FIX', 1.0))).item()
+                print(f"[norm] iter {it} layer {L} qkv |dev| / |RMSNorm(x)*gamma_model @ W| {_r:.4f} {'PASS' if abs(_r - 1.0) <= 0.005 else 'FAIL'}", flush=True)
     vs = ttnn.to_torch(outs).float().reshape(NL, NU, TILE, DHD)
     for L in range(NL):
         v_, g2 = vs[L][:, :NQH * T], golds_s[L][:, :NQH * T]
