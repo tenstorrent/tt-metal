@@ -174,11 +174,11 @@ X = toks(2 * C, 7)  # an unrelated prompt: dirties the caches before every cold 
 
 @contextlib.contextmanager
 def _isolated_sys():
-    saved = (F.SYS.trace, F.SYS.next_id, F.SYS.captured, F.SYS.late_allocs)
+    saved = (F.SYS.trace, F.SYS.next_id, F.SYS.captured, F.SYS.late_allocs, F.SYS.replays)
     try:
         yield
     finally:
-        F.SYS.trace, F.SYS.next_id, F.SYS.captured, F.SYS.late_allocs = saved
+        F.SYS.trace, F.SYS.next_id, F.SYS.captured, F.SYS.late_allocs, F.SYS.replays = saved
 
 
 _REFS: dict = {}

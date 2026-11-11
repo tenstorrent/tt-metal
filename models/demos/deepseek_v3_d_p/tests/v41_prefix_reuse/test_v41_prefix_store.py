@@ -14,7 +14,10 @@ layouts) and ``tt/v41/prefix_reuse.py`` with a store.
 * capacity: the store's slots, LRU eviction, the in-flight prompt's refusals, the resident size within the budget; the floor;
 * H2 off issues H1's device work (``test_v41_prefix_reuse.test_store_off_issues_the_h1_commits_device_work``), and an extra
   device call with the store off is caught by it;
-* each piece of a restore is needed: removing it makes a scenario fail (mutations).
+* each piece of a restore is needed: removing it makes a scenario fail (mutations);
+* the device check's S2 sequence at CHUNK 4096 (the 1M serving geometry of device check run1, 11-11) with the H2D ids handed as
+  device tensors: every prompt == cold, and without the stale-ids guard exactly AP and B differ -- run1's verdict, reproduced
+  (the fake's trace-island aliasing rule: a replay overwrites live post-capture buffers); the S2 pattern tables per chunk size.
 """
 
 from __future__ import annotations
@@ -23,7 +26,12 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "device_check"))
+import hashlib  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
 import pytest  # noqa: E402
+import s2_plan  # noqa: E402 -- the device check's prompts + expected S2 patterns (torch / numpy only)
 import test_v41_prefix_reuse as T  # noqa: E402 -- installs the fake ttnn first (fake_v41), then the H1 harness
 import torch  # noqa: E402
 
@@ -382,3 +390,147 @@ def test_mutation_is_caught(name, monkeypatch):
             except AssertionError as e:
                 failures.append(str(e)[:100])
     assert failures, f"mutation '{name}' went unnoticed"
+
+
+# ------------------------------------------------------------------- device check run1 (11-11): the S2 sequence at chunk 4096
+# The expected S2 patterns per chunk size (s2_plan.expected_patterns derives them by a dry run of the decisions; these are the
+# hand-checked values it must reproduce). 8192: the table the driver hard-coded at a8e1346671e. 4096: what the device runner
+# did in run1 (check.log's "got" column) -- every pattern difference in run1 was the 8192-only table, not a decision.
+S2_TABLES = {
+    8192: ["CCCC", "CCC", "RRRCCC", "RRC", "RRRC", "RRC", "RR", "RRC", "R,C+1s,C,C,C", "SRRRRC", "SSSSSC"],
+    4096: ["CCCCC", "CCC", "RRRRCCCC", "RRC", "RRRRC", "RRC", "R,C+1s", "RRC", "RRCCCCCC", "SSRRRRRC", "SSSSSSSC"],
+}
+
+
+@pytest.mark.parametrize("chunk", sorted(S2_TABLES))
+def test_s2_expected_patterns_by_chunk(chunk):
+    assert s2_plan.expected_patterns(chunk) == S2_TABLES[chunk]
+
+
+class GeoSystem:
+    """A runner at any chunk / MAXSEQ (``T.System`` is fixed at C = 512) that, like the real runner, hands every chunk its
+    H2D ids as a DEVICE tensor allocated after the islands' capture ([sp, 1, C / sp], ``_token_ids_from_device``'s layout),
+    freed after the chunk; each prompt ends with the digest's EMPTY flush chunk (as the device check's driver sends)."""
+
+    def __init__(self, chunk, maxseq, *, flag, topk=512):
+        F.SYS.reset()
+        rt = object.__new__(RT.V41PrefillRuntime)
+        rt.mesh_device, rt.cfg = F.MESH, CFG
+        rt.config = SimpleNamespace(is_first_rank=True, is_last_rank=True, use_trace=False, num_users=1)
+        rt.chunk_size, rt.max_seq_len, rt.num_users, rt.mesh_shape = chunk, maxseq, 1, F.MESH.shape
+        rt.pf = F.FakePrefill(CFG, chunk=chunk, max_seq_len=maxseq, num_users=1, topk=topk)
+        rt.engram = F.FakeEngram(1, maxseq)
+        rt.vit, rt.num_layers, rt._request_id, rt._prefix = None, int(CFG.n_layers), 0, None
+        rt._ack = lambda L: None
+        self.C, self.rt, self.kv, self.req = int(chunk), rt, F.make_export(KX, CFG, max_seq_len=maxseq), 0
+        rt.compile(self.kv)
+        rt.on_services_ready(self.kv)
+        assert (rt._prefix is not None) == flag
+
+    def prompt(self, tokens, *, marks=True) -> str:
+        C, S, out = self.C, len(tokens), []
+        for s, e in [(s, min(S, s + C)) for s in range(0, S, C)]:
+            body = list(tokens[s:e]) + [1] * (C - (e - s))
+            inp = F.FakeT(torch.tensor(body, dtype=torch.int64).reshape(8, 1, C // 8), "u32", "RM", F.MESH)
+            n0 = len(F.SYS.trace)
+            word = (MARKED | (LAST if e == S else 0)) if marks else 0
+            self.rt.prefill_chunk(inp, self.kv, slot_id=word, actual_start=s, actual_end=e, request_id=self.req)
+            self.req += 1
+            if not inp.dead:
+                F.TTNN.deallocate(inp)  # the runner frees the chunk's H2D tensor
+            n = sum(1 for op in F.SYS.trace[n0:] if op[0] == "pf._chunk")
+            restored = self.rt._prefix is not None and self.rt._prefix.last_restored
+            out.append(("R" if restored else "S") if n == 0 else ("C" if n == 1 else f"C+{n - 1}s"))
+        if self.rt._prefix is not None:  # the digest's flush: tt-d-gen's EMPTY chunk
+            word = (MARKED | LAST) if marks else 0
+            self.rt.prefill_chunk([1] * C, self.kv, slot_id=word, actual_start=0, actual_end=0, request_id=self.req)
+            self.req += 1
+        return "".join(out) if all(len(x) == 1 for x in out) else ",".join(out)
+
+    def digest(self, S) -> dict:
+        """The device check's digest, on the fake: the 7 export tensors whole, the model's rows [0, S / ratio) (+ the slab's
+        entry rows), the Engram history [0, S)."""
+        h = lambda t: hashlib.blake2b(t.contiguous().numpy().tobytes(), digest_size=8).hexdigest()  # noqa: E731
+        d = {k: h(v.data) for k, v in self.kv.tensors().items()}
+        ms = F.model_state(self.rt.pf, 0, S, live=False)
+        d["rows"] = hashlib.blake2b("".join(h(x) for L in sorted(ms, key=str) for x in ms[L]).encode()).hexdigest()[:16]
+        d["engram"] = h(self.rt.engram.cache[0][:S])
+        return d
+
+
+C4K = 4096
+_GEO_ENV = {**T._base_env("cp2", flag=True, ckpts=16), "V41_EXPORT_IDX_SHARD": "64"}  # run1's export layout and pool
+_GEO_REFS: dict = {}
+
+
+def _geo_refs(chunk: int, names) -> dict:
+    """R2: today's runner (H1 off), X then each prompt, digested."""
+    if chunk not in _GEO_REFS:
+        P = s2_plan.prompts(chunk)
+        with T._isolated_sys(), T._env(**{**_GEO_ENV, PR.ENV_FLAG: None}):
+            r = GeoSystem(chunk, 8 * chunk, flag=False)
+            refs = {}
+            for name in names:
+                r.prompt(P["X"])
+                r.prompt(P[name])
+                refs[name] = r.digest(len(P[name]))
+        _GEO_REFS[chunk] = refs
+    return _GEO_REFS[chunk]
+
+
+@pytest.mark.parametrize("guard", [True, False], ids=["ids_guard", "no_guard_is_run1"])
+def test_s2_sequence_at_chunk_4096_equals_cold(guard, monkeypatch):
+    """Device check run1 on the fake: chunk 4096, the driver's prompts, 8 GB-class store (no eviction), 16 checkpoints.
+    The guard (runtime._ids_stale): AP's chunk 1 follows a silent rebuild (no tip at C) -- its H2D ids tensor waited through
+    the rebuild's island replays. Without it, exactly AP and B (resumed on AP's spilled carries) differ from cold, as in run1;
+    with it, all 11 prompts equal cold and every pattern equals the 4096 table."""
+    if not guard:
+        monkeypatch.setattr(RT.V41PrefillRuntime, "_ids_stale", staticmethod(lambda reuse: False))
+    P = s2_plan.prompts(C4K)
+    refs = _geo_refs(C4K, sorted(set(s2_plan.S2)))
+    rec = 3 * (C4K // 2) * 640 * 8 + C4K * 640 * 8  # the fake's int64 record
+    tip = 21 * 128 * 512 * 8
+    env = {
+        **_GEO_ENV,
+        PR.ENV_STORE_GB: repr((24 * rec + 24 * tip) / 2**30),
+        PR.ENV_STORE_TIP_GB: repr(24 * tip / 2**30),
+        PR.ENV_RESERVE_GB: "0",
+        PR.ENV_SPILL_TIPS: "2",
+    }
+    with T._env(**env):
+        s = GeoSystem(C4K, 8 * C4K, flag=True)
+        s.prompt(P["X"])
+        got, differ = [], []
+        for name in s2_plan.S2:
+            got.append(s.prompt(P[name]))
+            d = s.digest(len(P[name]))
+            if d != refs[name]:
+                differ.append((name, sorted(k for k in d if d[k] != refs[name][k])))
+        st = s.rt._prefix.stores[0]
+        assert st.stats.evicted == 0 and st.stats.refused == 0 and st.resident_bytes <= st.budget
+    assert got == S2_TABLES[C4K], got
+    if guard:
+        assert differ == [], differ
+    else:
+        assert [n for n, _ in differ] == ["AP", "B"], differ  # run1's verdict
+        assert "engram" not in dict(differ)["AP"] and "swa" in dict(differ)["AP"], differ  # run1's tensor signature
+
+
+@pytest.mark.parametrize("guard", [True, False])
+def test_h1_silent_rebuild_with_h2d_ids(guard, monkeypatch):
+    """The same defect without the store (H1 since 01a5ecd1c88, never exercised on a device): a thinned pool resumes by a
+    silent rebuild, and the resumed chunk's H2D ids waited through its replays."""
+    if not guard:
+        monkeypatch.setattr(RT.V41PrefillRuntime, "_ids_stale", staticmethod(lambda reuse: False))
+    Q = LONG[: 3 * C] + toks(2 * C + 256, 9)
+    with T._isolated_sys(), T._env(**T._base_env("cp2", flag=False)):
+        r = GeoSystem(C, MAXSEQ, flag=False, topk=64)
+        r.prompt(X)
+        r.prompt(Q)
+        ref = r.digest(len(Q))
+    with T._env(**T._base_env("cp2", flag=True, ckpts=2)):
+        s = GeoSystem(C, MAXSEQ, flag=True, topk=64)
+        s.prompt(LONG)
+        assert s.prompt(Q) == "S,S,S,C+3s,C,C"
+        d = s.digest(len(Q))
+    assert (d == ref) == guard, sorted(k for k in d if d[k] != ref[k])

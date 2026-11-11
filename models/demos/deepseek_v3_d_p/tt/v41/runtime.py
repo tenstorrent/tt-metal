@@ -247,8 +247,15 @@ class V41PrefillRuntime:
         assert self.pf.kv_actual == int(actual_start), (self.pf.kv_actual, actual_start)
         self._request_id = int(request_id)
         t0 = time.time()
-        # DS41F-0119 V41_PREFILL_DEVICE_EMBED: the prefill may embed a full chunk straight from the H2D ids tensor
-        self.pf._ids_dev = None if isinstance(input_tensor, list) else input_tensor
+        # DS41F-0119 V41_PREFILL_DEVICE_EMBED: the prefill may embed a full chunk straight from the H2D ids tensor -- unless the
+        # prefix-reuse resume of THIS chunk recomputed chunks silently (_ids_stale): the host path then
+        stale = self._ids_stale(reuse)
+        self.pf._ids_dev = None if isinstance(input_tensor, list) or stale else input_tensor
+        if stale and not isinstance(input_tensor, list):
+            logger.info(
+                f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id}: host embedding (the resume replayed the "
+                f"islands while this chunk's H2D ids tensor waited unread)"
+            )
         try:
             self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None)
         except BaseException:
@@ -300,6 +307,17 @@ class V41PrefillRuntime:
             + (" (warm-up)" if warmup else "")
         )
         return None
+
+    @staticmethod
+    def _ids_stale(reuse) -> bool:
+        """True when this chunk's prefix-reuse resume ran chunks through the model (a silent rebuild of the carries) before the
+        chunk itself. The runner hands each chunk its H2D ids as a tensor allocated after the trace islands' capture; the silent
+        chunks REPLAY the islands while it waits unread, and a replay writes its intermediates over any buffer allocated after
+        the capture (trace_island.py's rule; DS41F-0037 attempt 1, ids "arrived as garbage"). H2 device check run1 (11-11, host
+        30, chunk 4096): AP = 'R,C+1s' embedded its chunk 1 from overwritten ids (all export tensors != cold, Engram history --
+        host ids -- equal), and B, resumed on AP's spilled carries, inherited it. The host embedding path is bit-identical to
+        the device one (DS41F-0119, MEASURED on 32 chips), so such a chunk takes it."""
+        return reuse is not None and bool(getattr(reuse, "replayed", False))
 
     def _empty_chunk(self, input_tensor, slot_id: int, start: int, request_id: int, warmup: bool = False) -> None:
         """tt-d-gen ``prefill_wait_for_arm_us`` (2b8e93558): a request the decode side declines before its first chunk sends

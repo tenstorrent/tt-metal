@@ -224,6 +224,7 @@ class V41PrefixReuse:
         self.bypass = {s: False for s in range(runtime.num_users)}
         self.on = True
         self.last_restored = False  # the last begin_chunk restored its chunk from the host store (H2)
+        self.replayed = False  # the last begin_chunk ran silent chunks (island replays) before its chunk
         self.stores = self._build_stores(runtime) if store_gb() > 0 else {}  # H2; {} = off
         self.spill_tips = int(os.environ.get(ENV_SPILL_TIPS, "2"))
         h2 = {
@@ -327,6 +328,7 @@ class V41PrefixReuse:
         prompt matched so far)."""
         pr = self.ret[slot]
         self.last_restored = False
+        self.replayed = False  # the resume below ran chunks through the model (silent rebuild): runtime._ids_stale
         if start == 0:
             self.bypass[slot] = False
             rss = f"; runner RSS {_rss_gib():.1f} GiB" if pr.store is not None else ""
@@ -340,7 +342,9 @@ class V41PrefixReuse:
             # first resumes the model at its start like any computed chunk -- a skipped (H1) or restored (H2) prefix before it
             # leaves the counters, the mask and the carries elsewhere (a7830ff1d74 skipped that: A, then an image prompt sharing
             # A's chunk 0, tripped the runtime's kv_actual assert -- host repro in test_v41_prefix_store.py)
+            silent0 = pr.stats.silent_chunks
             skipped = pr.begin_chunk(torch.tensor([int(t) for t in ids], dtype=torch.int32), start, end, last)
+            self.replayed = pr.stats.silent_chunks > silent0
             assert not (image and skipped), "an image-span chunk was skipped / restored"
         except BaseException:
             pr.invalidate("begin_chunk failed")

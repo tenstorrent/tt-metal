@@ -42,14 +42,14 @@ Wall time is about 30-45 min: the build takes 15-25 min, then about 15 min of pr
 
 **Prompts.** The ids come from fixed seeds; every length is a multiple of 128, like the engine's `floor128(S - 2541)`.
 
-| Prompt | Content | Chunks |
-|---|---|---|
-| X | 2C unrelated tokens | 2 |
-| A | 3C + 4992 | 4 (ragged last) |
-| A2 | A + 12032 = 5C + 640 | 6 |
-| AP | A[:2C] | 2 |
-| B | A[:C + 7040] + 20096 | 5 (shares A's chunk 0 only) |
-| U | 2C + 1280 unrelated tokens | 3 |
+| Prompt | Content | Chunks at 8192 | Chunks at 4096 (the 1M stack) |
+|---|---|---|---|
+| X | 2C unrelated tokens | 2 | 2 |
+| A | 3C + 4992 | 4 (ragged last) | 5 (4C + 896) |
+| A2 | A + 12032 | 6 (5C + 640) | 8 (7C + 640) |
+| AP | A[:2C] | 2 | 2 |
+| B | A[:C + 7040] + 20096 | 5 (shares A's chunk 0) | 8 (shares A's chunks 0-1) |
+| U | 2C + 1280 unrelated tokens | 3 | 3 |
 
 **Phases.**
 
@@ -60,19 +60,33 @@ Wall time is about 30-45 min: the build takes 15-25 min, then about 15 min of pr
   driver's `EXPECT_S2`. The codes are: S = skipped (the device holds the chunk, H1); R = restored from the store; C =
   computed; C+Ns = computed after N silently rebuilt chunks.
 
-  | # | Prompt | Expected | What it exercises |
-  |---|---|---|---|
-  | 1 | A | CCCC | computed; its 3 full chunks are read into the store |
-  | 2 | U | CCC | the device leaves A; A's tips (3C, 2C) are spilled after U's last chunk |
-  | 3 | A2 | RRRCCC | **the AgentX case**: A's chunks are restored although the device holds U; resumes on A's tip at 3C |
-  | 4 | U | RRC | U restored; its ragged last chunk is computed on U's tip at 2C |
-  | 5 | A | RRRC | an exact repeat after another prompt |
-  | 6 | U | RRC | |
-  | 7 | AP | RR | a strict prefix; its LAST chunk is restored with the stored carries at 2C (windows from them, export cleared past 2C) |
-  | 8 | U | RRC | |
-  | 9 | B | R,C+1s,C,C,C | chunk 0 restored; there is no tip at C, so it is rebuilt silently from 0 (restore, then silent compute) |
-  | 10 | A2 | SRRRRC | H1 and H2 in one prompt: chunk 0 is held on the device (B's), 1..4 come from the store, resumes on A2's tip at 5C |
-  | 11 | A2 | SSSSSC | held on the device; the ragged last chunk is recomputed |
+  The expected patterns depend on the chunk size, so the driver derives them for its CHUNK and store settings:
+  `s2_plan.expected_patterns` dry-runs the runner's own decisions. The driver logs them as `S2 expected per-chunk patterns at
+  chunk ...` before S2. Run1 at 4096 compared against the old 8192-only table and "failed" every pattern, although every
+  decision was the designed one. The 8192 and 4096 tables are pinned in `test_v41_prefix_store.py`:
+
+  | # | Prompt | Expected at 8192 | Expected at 4096 | What it exercises |
+  |---|---|---|---|---|
+  | 1 | A | CCCC | CCCCC | computed; its full chunks are read into the store |
+  | 2 | U | CCC | CCC | the device leaves A; A's 2 newest boundaries' carries (its tips) are spilled after U's last chunk |
+  | 3 | A2 | RRRCCC | RRRRCCCC | **the AgentX case**: A's chunks are restored although the device holds U; resumes on A's tip |
+  | 4 | U | RRC | RRC | U restored; its ragged last chunk is computed on U's tip at 2C |
+  | 5 | A | RRRC | RRRRC | an exact repeat after another prompt |
+  | 6 | U | RRC | RRC | |
+  | 7 | AP | RR | R,C+1s | 8192: its LAST chunk is restored with A's tip at 2C. 4096: A's tips are at 4C / 3C, so chunk 0 is restored, rebuilt silently, and chunk 1 is computed (run1's failure, see below) |
+  | 8 | U | RRC | RRC | |
+  | 9 | B | R,C+1s,C,C,C | RRCCCCCC | 8192: no tip at C, rebuilt silently. 4096: chunks 0-1 restored, resumes on AP's spilled tip at 2C |
+  | 10 | A2 | SRRRRC | SSRRRRRC | H1 and H2 in one prompt: held chunks skipped, the rest from the store, resumes on A2's tip |
+  | 11 | A2 | SSSSSC | SSSSSSSC | held on the device; the ragged last chunk is recomputed |
+
+  **Run1 (11-11, 4096) and the stale-ids guard.** A chunk whose resume runs a silent rebuild (`C+Ns`) waits, with its H2D ids
+  tensor unread, while the rebuilt chunks replay the trace islands. That tensor is allocated after the capture, so a replay
+  overwrites it (DS41F-0037 attempt 1). AP's chunk 1 embedded garbage: every export tensor differed from cold, while the
+  Engram history, built from the host ids, matched. B, resumed on AP's spilled carries, inherited the error. The runtime now
+  embeds such a chunk on the host path (`runtime._ids_stale`), which is bit-identical (DS41F-0119). On the fake,
+  `test_s2_sequence_at_chunk_4096_equals_cold` reproduces run1 without the guard and passes with it. With the guard, every
+  `C+Ns` chunk in a pattern is embedded on the host path, and the runner logs `host embedding (the resume replayed the
+  islands ...)` for it.
 
 - **T2 (timing, optional, 2 reps).** The order is X `clear`, A `off`, X `off`, A `reuse`, U `reuse`, A2 `off`, A2 `reuse`.
 
@@ -103,5 +117,6 @@ Wall time is about 30-45 min: the build takes 15-25 min, then about 15 min of pr
 
    Report both reps.
 
-The store sequence is reproduced on the host fake by `test_v41_prefix_store.py::test_store_sequence_equals_cold`. The
-`EXPECT_S2` patterns were checked against the real runtime code on the fake at the same chunk-count structure.
+On the host fake, `test_v41_prefix_store.py::test_s2_sequence_at_chunk_4096_equals_cold` runs this exact sequence at chunk
+4096, with the H2D ids handed as device tensors and the trace-island aliasing rule modelled. The 8192-structured sequence
+runs in `test_store_sequence_equals_cold`.

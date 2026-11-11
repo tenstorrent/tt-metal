@@ -23,7 +23,8 @@ Phases (PREFIX_CHECK_PHASES, default R,S):
     R2 references with arm OFF (today's runner; the store is neither read nor written), each after X; A twice = determinism
     S2 the store sequence (arm reuse, the store emptied first): A, U, A2, U, A, U, AP, U, B, A2, A2 -- each digest == its R2
        reference AND each prompt's per-chunk pattern (S skipped / R restored / C computed / C+Ns silent rebuild, parsed from
-       the runner log) == EXPECT_S2
+       the runner log) == EXPECT_S2, derived for THIS chunk size and store by s2_plan.expected_patterns (a dry run of the
+       runner's decisions; the 8192 / 4096 tables are pinned in test_v41_prefix_store.py)
     T2 timing (2 reps): A off, then A reuse (its full chunks read into the store), U, A2 off, A2 reuse (3 chunks restored)
 Verdict lines: ``[driver] VERDICT determinism ...``, ``[driver] VERDICT reuse ...`` and (S2) ``[driver] VERDICT h2 pattern ...``;
 results.json in PREFIX_CHECK_OUT.
@@ -40,8 +41,6 @@ import struct
 import sys
 import time
 
-import numpy as np
-
 import ttnn
 from models.demos.common.prefill.runners import prefill_producer as pp
 
@@ -53,29 +52,21 @@ RUNNER_LOG = os.environ["PREFIX_CHECK_RUNNER_LOG"]
 MARKED, LAST = 1 << 29, 1 << 30
 PHASES = os.environ.get("PREFIX_CHECK_PHASES", "R,S").split(",")
 
-_rng = lambda seed, n: np.random.default_rng(seed).integers(1000, 120000, size=n).tolist()  # noqa: E731
-X = _rng(7, 2 * CHUNK)
-A = _rng(53, 3 * CHUNK + 4992)
-B = A[: CHUNK + 7040] + _rng(17, 20096)
-A2 = A + _rng(11, 12032)
-AP = A[: 2 * CHUNK]
-U = _rng(29, 2 * CHUNK + 1280)
-PROMPTS = {"X": X, "A": A, "B": B, "A2": A2, "AP": AP, "U": U}
-# H2's S2 sequence and each prompt's expected per-chunk pattern (chunk 8192: A 4 chunks, A2 6, U 3, AP 2, B 5)
-S2 = ["A", "U", "A2", "U", "A", "U", "AP", "U", "B", "A2", "A2"]
-EXPECT_S2 = [
-    "CCCC",  # A: computed, its 3 full chunks stored
-    "CCC",  # U: the device leaves A -> A's tips (3C, 2C) are read into the store after U's last chunk
-    "RRRCCC",  # A2 = A + 12032: A's chunks restored, resumed on A's tip at 3C
-    "RRC",  # U again: restored, its partial last chunk computed on U's tip at 2C
-    "RRRC",  # A again (an exact repeat after another prompt)
-    "RRC",
-    "RR",  # AP = A[:2C]: its last chunk restored with the stored carries at 2C (export cleared past it)
-    "RRC",
-    "R,C+1s,C,C,C",  # B shares A's chunk 0 only: restored, no tip at C -> rebuilt silently from 0
-    "SRRRRC",  # A2 after B: chunk 0 held on the device (H1), 1..4 from the store, resumed on A2's tip at 5C
-    "SSSSSC",  # A2 again: held on the device, the partial last chunk recomputed
-]
+# the prompts and the S2 sequence's expected per-chunk patterns at THIS chunk size and store (s2_plan.py, next to this file:
+# a dry run of the runner's own decisions; at a8e1346671e the table was 8192-only, so run1 at 4096 "failed" every pattern)
+import s2_plan  # noqa: E402
+
+PROMPTS = s2_plan.prompts(CHUNK)
+X, A, B, A2, AP, U = (PROMPTS[k] for k in ("X", "A", "B", "A2", "AP", "U"))
+S2 = s2_plan.S2
+_tip = os.environ.get("V41_PREFILL_PREFIX_STORE_TIP_GB")
+EXPECT_S2 = s2_plan.expected_patterns(
+    CHUNK,
+    n_ckpts=int(os.environ.get("V41_PREFILL_PREFIX_CKPTS", "16")),
+    spill_tips=int(os.environ.get("V41_PREFILL_PREFIX_SPILL_TIPS", "2")),
+    store_gb=float(os.environ.get("V41_PREFILL_PREFIX_STORE_GB", "8") or 8),
+    tip_gb=float(_tip) if _tip else None,
+)
 assert all(len(v) % 128 == 0 for v in PROMPTS.values()), {k: len(v) for k, v in PROMPTS.items()}
 assert len(A2) <= int(os.environ.get("PREFILL_MAX_SEQ_LEN", 1 << 20)), "prompts exceed PREFILL_MAX_SEQ_LEN"
 
@@ -241,6 +232,7 @@ def main() -> None:
             res.append(run_prompt("R2", "X", "off"))
             res.append(run_prompt("R2", name, "off", digest=True))
     if "S2" in PHASES:
+        log(f"S2 expected per-chunk patterns at chunk {CHUNK} (s2_plan dry run): {list(zip(S2, EXPECT_S2))}")
         res.append(run_prompt("S2", "X", "clear"))  # the store emptied, X computed (and stored)
         for name in S2:
             res.append(run_prompt("S2", name, "reuse", digest=True))

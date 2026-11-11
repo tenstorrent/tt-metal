@@ -21,12 +21,20 @@ carries are read to the host; the fake mesh's tensors are their replicated conte
 (``TtCSA._slab_write``: entry ``w`` at slab row ``chunk + w``, written every chunk): a chunk on path A (context >= max(window,
 top-k x ratio)) gathers its source entries from the slab, not from ``compressed_kv`` (which only chunk 0's path B reads), so a
 restore that skips the slab write changes every later row. ``FakeEngram.hash_ids`` advances the n-gram history without rows.
+
+The trace-island aliasing rule (``trace_island.py``: no buffer allocated after a capture may live across a replay; DS41F-0037
+attempt 1, the H2D ids that "arrived as garbage"): every tensor records whether it was allocated after the islands' capture,
+and every chunk run on the islands REPLAYS -- it overwrites every live post-capture tensor (``SYS.replays``). A full text chunk
+whose runtime handed it the H2D ids tensor (``_ids_dev``, V41_PREFILL_DEVICE_EMBED) embeds from that tensor, as ``_streams``
+does; the host path reads ``part``. So a replay between a chunk's arrival and its embedding (a silent rebuild in its resume)
+feeds it garbage ids, as on the device (H2 device check run1, 11-11).
 """
 
 from __future__ import annotations
 
 import sys
 import types
+import weakref
 
 import torch
 
@@ -67,9 +75,25 @@ class _Sys:
         self.captured = False
         self.late_allocs = []
         self.alive = 0
+        self.replays = 0
+
+    def replay(self):
+        """An island replay: it writes its intermediates wherever the capture's allocator put them, i.e. over any buffer
+        allocated after the capture that is still alive (a constant is added: garbage that still digests)."""
+        self.replays += 1
+        for t in list(LIVE):
+            if t.post and not t.dead:
+                if t.data.is_floating_point():
+                    t.data.add_(7919.0)
+                else:
+                    t.data.add_(7919)
+                t.clobbered += 1
 
 
 SYS = _Sys()
+LIVE = (
+    weakref.WeakSet()
+)  # every FakeT not yet garbage-collected (a module global: SYS.reset in a cold reference keeps it)
 
 
 class FakeT:
@@ -81,6 +105,9 @@ class FakeT:
         self.sid = SYS.next_id
         SYS.next_id += 1
         self.dead = False
+        self.post = SYS.captured  # allocated after the islands' capture: overwritten by any replay while alive
+        self.clobbered = 0
+        LIVE.add(self)
 
     @property
     def shape(self):
@@ -140,6 +167,12 @@ def _mk_ttnn():
             self.dev = dev
 
     m.ReplicateTensorToMesh = ReplicateTensorToMesh
+
+    class ConcatMesh2dToTensor:  # the runtime's _token_ids_from_device composer: the fake tensor is the whole content
+        def __init__(self, mesh, mesh_shape=None, dims=None):
+            self.mesh, self.mesh_shape, self.dims = mesh, mesh_shape, dims
+
+    m.ConcatMesh2dToTensor = ConcatMesh2dToTensor
 
     class BufferType:
         DRAM = "DRAM"
@@ -296,7 +329,9 @@ class FakeIndexer:
         if key not in self._cut_masks:
             if SYS.captured:
                 SYS.late_allocs.append(key)
-            self._cut_masks[key] = FakeT(torch.zeros(1, 1, int(S_l), int(n), dtype=torch.float64), "bf16", "TILE", MESH)
+            t = FakeT(torch.zeros(1, 1, int(S_l), int(n), dtype=torch.float64), "bf16", "TILE", MESH)
+            t.post = False  # a cached constant built after the capture is reported in late_allocs (R2), not clobbered
+            self._cut_masks[key] = t
         return self._cut_masks[key]
 
 
@@ -486,6 +521,11 @@ class FakePrefill:
         assert 0 < real <= C and (real == C or real % 128 == 0), real
         ids = torch.zeros(C, dtype=torch.int64)
         ids[:real] = torch.tensor([int(t) for t in part], dtype=torch.int64)
+        if self._ids_dev is not None and real == C and max(int(t) for t in part) < self.cfg.vocab_size:
+            # V41_PREFILL_DEVICE_EMBED (_streams): a full text chunk embeds from the runtime's H2D ids tensor, read on device
+            ids = _alive(self._ids_dev).data.reshape(-1)[:C].to(torch.int64).clone()
+        if self.islands:
+            SYS.replay()  # the embedding is in; every block's island replays from here on
         h = H(3, ids, torch.arange(C) + start)
         rows = engram_host.rows_for(self.slot, part, start) if engram_host is not None else {}
         for blk in self.blocks:
