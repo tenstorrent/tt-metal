@@ -7,7 +7,6 @@
 #include <sstream>
 #include <ostream>
 #include <filesystem>
-#include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
@@ -25,12 +24,10 @@
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <map>
 
 #include <google/protobuf/text_format.h>
 

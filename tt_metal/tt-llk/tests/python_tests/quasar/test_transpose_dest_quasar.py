@@ -27,6 +27,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_input_dimensions,
@@ -117,7 +118,7 @@ def generate_qsr_transpose_dest_combinations(
         ],
     }
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
     transpose_faces_modes = (Transpose.No, Transpose.Yes)
     combinations = []
     for fmt in formats_list:

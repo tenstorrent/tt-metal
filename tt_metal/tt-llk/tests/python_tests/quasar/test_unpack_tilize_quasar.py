@@ -14,7 +14,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     UnpackerEngine,
 )
@@ -24,6 +23,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -80,7 +80,7 @@ def generate_unpack_tilize_combinations(
     """
     combinations = []
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
@@ -110,9 +110,8 @@ def generate_unpack_tilize_combinations(
         for dest_acc in dest_acc_modes:
             for dest_sync in dest_sync_modes:
                 for unpacker_sel in unpacker_engines:
-                    # Dest accumulation (32-bit dest) is only supported on SrcA
-                    # (UNP_A); see the static_assert in
-                    # _llk_unpack_tilize_strided_mop_config_small_faces_.
+                    # Strided tilize supports dest accumulation only on UNP_A,
+                    # so UnpB with dest accumulation is skipped for every shape
                     if (
                         dest_acc == DestAccumulation.Yes
                         and unpacker_sel == UnpackerEngine.UnpB

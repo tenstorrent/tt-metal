@@ -63,8 +63,10 @@ class ResidualStream(Protocol):
         """Abandon the stream with no final read — what a `kv_only` last layer leaves behind."""
         ...
 
-    def handoff(self) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+    def handoff(self) -> tuple[ttnn.Tensor, list[ttnn.Tensor] | None]:
         """End at a pipeline boundary: `(live_sum, sealed_set)`, ownership to the caller.
+
+        The sealed set is the list of snapshot tensors in seal order, as the stream keeps it.
 
         The exit for a rank that is not the last. `finish` spends the model-level query, of
         which the stack has exactly one, so an earlier rank must not call it.
@@ -165,7 +167,7 @@ class TtAttnResResidual:
     def finish(self) -> ttnn.Tensor:
         return self._walk.finish()
 
-    def handoff(self) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+    def handoff(self) -> tuple[ttnn.Tensor, list[ttnn.Tensor] | None]:
         return self._walk.handoff()
 
     @property

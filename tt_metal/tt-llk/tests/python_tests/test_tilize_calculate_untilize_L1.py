@@ -4,8 +4,8 @@
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
-    MathFidelity,
     MathOperation,
 )
 from helpers.param_config import input_output_formats, parametrize
@@ -20,7 +20,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test, result_tensor
 
 
@@ -34,12 +34,7 @@ from helpers.utils import passed_test, result_tensor
     ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_tilize_calculate_untilize_L1(
     formats,
@@ -58,7 +53,11 @@ def test_tilize_calculate_untilize_L1(
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
     golden_tensor = generate_golden(
-        mathop, tilize(src_A), tilize(src_B), formats.output_format, math_fidelity
+        mathop,
+        tilize_block(src_A, input_dimensions).flatten(),
+        tilize_block(src_B, input_dimensions).flatten(),
+        formats.output_format,
+        math_fidelity,
     )
     num_blocks = 32
     golden_tensor = golden_tensor.repeat(num_blocks)

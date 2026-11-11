@@ -4,7 +4,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -239,7 +239,7 @@ class RMSNorm(LightweightModule):
             return None
         grid = x.device().compute_with_storage_grid_size()
         rows, width_tiles = seq // ttnn.TILE_SIZE, dim // ttnn.TILE_SIZE
-        if width_tiles < 16:
+        if rows > grid.y or width_tiles < 16:
             return None
         cols = max(c for c in range(1, min(8, grid.x) + 1) if width_tiles % c == 0)
         if cols <= 1:

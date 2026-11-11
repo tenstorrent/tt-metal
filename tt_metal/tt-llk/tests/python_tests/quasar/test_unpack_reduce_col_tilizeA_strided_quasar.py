@@ -31,6 +31,7 @@ from helpers.param_config import (
     input_output_formats,
     max_dest_tiles,
     parametrize,
+    quasar_dest_sync_modes,
     runtime,
     select_perf_tile_sizes,
 )
@@ -134,11 +135,12 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                 and acc == DestAccumulation.No
             ):
                 continue
-            for dest_sync in (
-                (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-            ):
+            for dest_sync in quasar_dest_sync_modes(is_perf=is_perf):
                 for tile_dimensions in tile_sizes:
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
+                        continue
+                    # Int8 reduce only supports full 32x32 tiles
+                    if in_fmt == DataFormat.Int8 and tuple(tile_dimensions) != (32, 32):
                         continue
                     tile_shape = construct_tile_shape(tile_dimensions)
                     dimensions_list = (

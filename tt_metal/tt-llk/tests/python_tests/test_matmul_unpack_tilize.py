@@ -3,7 +3,7 @@
 
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import ALL_MATH_FIDELITIES, DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -14,7 +14,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test, result_tensor
 
 
@@ -27,12 +27,7 @@ from helpers.utils import passed_test, result_tensor
         same=True,
     ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_matmul_unpack_tilize(
     formats,
@@ -51,7 +46,7 @@ def test_matmul_unpack_tilize(
     )
 
     generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = tilize(
+    golden_tensor = tilize_block(
         generate_golden(
             src_A,
             src_B,
@@ -61,8 +56,9 @@ def test_matmul_unpack_tilize(
             input_B_dimensions=input_dimensions,
             input_A_format=formats.input_format,
             input_B_format=formats.input_format,
-        )
-    )
+        ),
+        input_dimensions,
+    ).flatten()
     golden_tensor = golden_tensor.to(torch_format)
     num_blocks = 32
     golden_tensor = golden_tensor.repeat(num_blocks)

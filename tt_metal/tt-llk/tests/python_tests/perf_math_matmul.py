@@ -7,10 +7,10 @@ import pytest
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
-    MathFidelity,
-    PerfRunType,
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
@@ -23,7 +23,7 @@ from helpers.matmul_sweep import (
     sweep_tiny_tiles_matmul,
 )
 from helpers.param_config import input_output_formats, max_dest_tiles
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -49,15 +49,8 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
-MATH_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 
 # Dest-fill RT x CT from dest capacity, dest occupancy blocks, and half-dest
 # mid-fill when they fit. KT 1 and 4 (long-K lives on perf_matmul).
@@ -170,18 +163,18 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, cfg, throttle, 1)
             for fidelity, cfg, throttle in product(
-                MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
             )
         ),
         (
             (fidelity, cfg, 0, 1)
             for fidelity, cfg in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         (
             (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
-            for fidelity, cfg in product(MATH_FIDELITIES, MATMUL_COMBINATIONS)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
             if cfg.tile_dimensions.kt_dim == 1
         ),
     )
@@ -220,14 +213,6 @@ def test_perf_math_matmul(
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim
         * matmul_config.tile_dimensions.ct_dim
@@ -237,7 +222,7 @@ def test_perf_math_matmul(
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),

@@ -119,14 +119,11 @@ tensor_return_value_t LayerNormBackwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t LayerNormBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<LayerNormBackwardDeviceOperation>(
-        input_tensor.dtype(), input_logical_shape);
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<LayerNormBackwardDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::layernorm_bw::device

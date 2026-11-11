@@ -42,7 +42,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    bool output_sharded = is_sharded(output.buffer()->buffer_layout());
+    bool output_sharded = is_sharded(output.mesh_buffer().device_local_config().sharding_args.buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
@@ -141,7 +141,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         const uint64_t l1_capacity =
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
         const uint64_t output_bytes =
-            output_sharded ? output.buffer()->aligned_size_per_bank() : round_up(output_row_bytes, l1_alignment);
+            output_sharded ? output.mesh_buffer().aligned_size_per_bank() : round_up(output_row_bytes, l1_alignment);
         const uint64_t full_row_dfb_bytes = round_up(row_bytes, l1_alignment) + output_bytes;
         if (full_row_dfb_bytes + other_l1_bytes <= l1_capacity) {
             // One buffer holds the row, so the short last chunk lands on the end.
@@ -214,7 +214,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     uint32_t output_dfb_total_size;
     if (output_sharded) {
-        output_dfb_total_size = output.buffer()->aligned_size_per_bank();
+        output_dfb_total_size = output.mesh_buffer().aligned_size_per_bank();
     } else {
         output_dfb_total_size = dfb_num_entries * output_single_tile_size;
     }

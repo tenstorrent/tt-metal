@@ -14,7 +14,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     PerfRunType,
     ReluConfig,
 )
@@ -23,6 +22,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
 )
@@ -105,10 +105,6 @@ def generate_qsr_pack_l1_acc_combinations(
     return combinations
 
 
-def pack_l1_acc_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
-
-
 ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
     PACK_L1_ACC_FORMATS
 )
@@ -117,7 +113,7 @@ ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
-    dest_sync_mode=lambda: pack_l1_acc_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],

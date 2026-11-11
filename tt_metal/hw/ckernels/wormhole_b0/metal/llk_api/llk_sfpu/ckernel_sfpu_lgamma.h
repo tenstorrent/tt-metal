@@ -149,15 +149,27 @@ inline void calculate_lgamma_adjusted(
         sfpi::vFloat result = res_stirling;
 
         // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_stirling.
-        v_if(in < 0.5f) { result = reflection_adj - res_stirling; }
+        v_if(in < 0.5f) {
+            result = reflection_adj - res_stirling;
+            // At a pole (x a non-positive integer) log|sin| is -inf, so reflection_adj is +inf and
+            // lgamma is +inf whatever res_stirling holds. For x <= about -4e36 (every float that
+            // large is an integer) res_stirling itself overflows to +inf, and inf - inf is NaN:
+            // let the pole win.
+            v_if(sfpi::is_inf(reflection_adj)) { result = reflection_adj; }
+            v_endif;
+        }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        } else {
-            v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
-            v_endif;
         }
+
+        // Stirling's (z - 0.5) * log(z) - z is inf - inf for an infinite z. in = +inf never enters
+        // the reflection arm, so only this override repairs it; in = -inf is a pole (floor(-inf) is
+        // -inf) that the arm above already returns +inf for. The override runs in both Dest modes:
+        // +inf is exact in bf16 and fp32 alike, and lgamma(+-inf) = +inf.
+        v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
+        v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;

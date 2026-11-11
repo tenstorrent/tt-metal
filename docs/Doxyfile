@@ -950,7 +950,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/binop_with_scalar.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/fill.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/fmod.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/rounding.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/identity.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/negative.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/dropout.h \
@@ -959,7 +958,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/softplus.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/hardtanh.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/rand.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/isinf_isnan.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/shift.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/remainder.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/threshold.h \
@@ -967,7 +965,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/where.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/addcmul.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/log1p.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/comp.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/bitwise.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/bitwise_not.h \
                          tt_metal/hw/inc/api/compute/bcast.h \

@@ -5,11 +5,10 @@ from typing import List
 
 import pytest
 from helpers.data_format_inference import unpacks_to_dest
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     PerfRunType,
 )
 from helpers.param_config import (
@@ -17,6 +16,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -45,10 +45,6 @@ PACK_UNTILIZE_TILE_SIZES = [
     (1, 32),
     (2, 32),
 ]
-
-
-def pack_untilize_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def pack_untilize_perf_input_dimensions(dest_acc, dest_sync, tile_shape):
@@ -91,7 +87,7 @@ def generate_pack_untilize_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -159,6 +155,13 @@ ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
 PERF_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS,
     is_perf=True,
+)
+# Float32 unpacks straight to a 32-bit Dest, then packs untilized to Float32 or Float16_b.
+PACK_UNTILIZE_FLOAT32_COMBINATIONS = generate_pack_untilize_combinations(
+    [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ]
 )
 
 
@@ -264,3 +267,13 @@ def test_pack_untilize_quasar(
         formats.output_format,
         tile_shape=tile_shape,
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc_sync_dimensions_tile_dims=PACK_UNTILIZE_FLOAT32_COMBINATIONS,
+)
+def test_pack_untilize_float32_quasar(formats_dest_acc_sync_dimensions_tile_dims):
+    test_pack_untilize_quasar(
+        formats_dest_acc_sync_dimensions_tile_dims, [PerfRunType.L1_TO_L1], 1
+    )

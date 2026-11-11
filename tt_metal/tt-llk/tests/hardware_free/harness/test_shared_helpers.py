@@ -4,10 +4,42 @@
 
 import pytest
 import torch
-from helpers.constraints import is_valid_quasar_dest_mode_conversion
-from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.constraints import (
+    get_valid_dest_accumulation_modes,
+    is_valid_quasar_dest_mode_conversion,
+)
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.param_config import quasar_dest_sync_modes
+from helpers.test_variant_parameters import fp32_bits
 from helpers.utils import result_tensor
+
+
+@pytest.mark.parametrize(
+    "value, bits",
+    [(1.0, 0x3F800000), (-2.0, 0xC0000000), (0.0, 0), (float("inf"), 0x7F800000)],
+)
+def test_fp32_bits(value, bits):
+    assert fp32_bits(value) == bits
+
+
+@pytest.mark.parametrize(
+    "in_fmt, out_fmt",
+    [
+        (DataFormat.Float32, DataFormat.Float32),
+        (DataFormat.Float32, DataFormat.Float16_b),
+        (DataFormat.Int32, DataFormat.Int32),
+        (DataFormat.UInt32, DataFormat.UInt8),
+    ],
+)
+def test_get_valid_dest_accumulation_modes_32bit_input(in_fmt, out_fmt):
+    formats = InputOutputFormat(in_fmt, out_fmt)
+    assert get_valid_dest_accumulation_modes(formats) == [DestAccumulation.Yes]
+
+
+def test_quasar_dest_sync_modes():
+    assert quasar_dest_sync_modes() == [DestSync.Half, DestSync.Full]
+    assert quasar_dest_sync_modes(is_perf=True) == [DestSync.Half]
 
 
 @pytest.mark.parametrize(
