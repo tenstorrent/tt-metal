@@ -42,6 +42,7 @@ import ttnn
 from models.experimental.openvla.tt import tt_optimized_openvla_vision
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
 from models.tt_transformers.tt.common import (
+    Mode,
     PagedAttentionConfig,
     get_block_size,
     get_padded_prefill_len,
@@ -50,6 +51,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
@@ -175,7 +177,9 @@ class PerfCheckpoints:
 CHECKPOINTS = PerfCheckpoints()
 
 
-def map_openvla_hf_to_meta_keys(loaded_weights):
+def map_openvla_hf_to_meta_keys(loaded_weights, head_dim):
+    # tt_transformers applies RoPE in the Meta layout, so Q/K need the permutation its own HF loader applies
+    loaded_weights = convert_hf_qkv_to_meta_format(loaded_weights, head_dim)
     hf_to_meta = {
         # Top level mappings
         "language_model.model.embed_tokens.weight": "tok_embeddings.weight",
@@ -288,7 +292,7 @@ def get_LLama2OpenVLAArgs(state_dict, use_bf16_lm_head=True):
         def load_state_dict(self):
             if state_dict is None:
                 return super().load_state_dict()
-            new_state_dict = map_openvla_hf_to_meta_keys(state_dict)
+            new_state_dict = map_openvla_hf_to_meta_keys(state_dict, self.head_dim)
             return new_state_dict
 
         def weight_cache_path(self, dtype):
@@ -296,8 +300,8 @@ def get_LLama2OpenVLAArgs(state_dict, use_bf16_lm_head=True):
             # When OpenVLA weights are provided, use a different cache directory
             if state_dict is not None:
                 cache_suffix = {
-                    ttnn.bfloat16: "tensor_cache_openvla_bf16",
-                    ttnn.bfloat8_b: "tensor_cache_openvla_bfp8",
+                    ttnn.bfloat16: "tensor_cache_openvla_meta_qk_bf16",
+                    ttnn.bfloat8_b: "tensor_cache_openvla_meta_qk_bfp8",
                 }[dtype]
             else:
                 # Fall back to default base Llama cache
@@ -651,8 +655,8 @@ class OpenVLALanguageModel(GenerationMixin):
             inputs_embeds = ttnn.pad(inputs_embeds, [(0, 0), (0, 0), (0, padding), (0, 0)], 0)
 
         tt_rot_mats_prefill_global = [
-            self.model[0].rope_setup.cos_matrix[:, :, : inputs_embeds.shape[2], :],
-            self.model[0].rope_setup.sin_matrix[:, :, : inputs_embeds.shape[2], :],
+            self.model[0].rope_setup.cos_matrix_prefill[:, :, : inputs_embeds.shape[2], :],
+            self.model[0].rope_setup.sin_matrix_prefill[:, :, : inputs_embeds.shape[2], :],
         ]
         page_table_user = self._get_prefill_user_page_table(self.page_table, self.tt_kv_cache[0], seq_len)
         tt_page_table = ttnn.from_torch(
@@ -667,7 +671,7 @@ class OpenVLALanguageModel(GenerationMixin):
             inputs_embeds,
             None,
             rot_mats_global=tt_rot_mats_prefill_global,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=tt_page_table,
             kv_cache=self.tt_kv_cache[0],
             get_last_token=((seq_len - 1) // 32) * 32,
@@ -688,12 +692,13 @@ class OpenVLALanguageModel(GenerationMixin):
         current_pos = torch.tensor([seq_len], dtype=torch.int32)
         # Convert prefilled_token to int32 for TT compatibility
         out_tok = prefilled_token.to(torch.int32).view(1)  # Ensure shape [1] and int32
-        output_toks = []
+        # The prefill picks the first action token, so decode produces the remaining ones
+        output_toks = [output_logits.view(1, 1, -1)]
         CHECKPOINTS.checkpoint("end_PREFILL")
         decode_tokens = [prefilled_token.item()]
 
         # Use cropped page_table_user for decode (same as prefill)
-        for i in range(self.num_actions):
+        for i in range(self.num_actions - 1):
             # Run decode forward
             # CUse self.tt_kv_cache[0] to match what prefill write to
             # Prefill: model[0].forward(..., kv_cache=self.tt_kv_cache[0], ...)
@@ -925,6 +930,13 @@ class PrismaticVisionBackbone(nn.Module):
                     custom_preprocessor=tt_optimized_openvla_vision.custom_preprocessor_siglip,
                 )
 
+                siglip_pos_embed = ttnn.from_torch(
+                    self.fused_featurizer.pos_embed.detach().to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=ttnn_device,
+                )
+
                 def siglip_forward_no_norm(x2):
                     output = tt_optimized_openvla_vision.ttnn_featurizer(
                         embedding=lambda x: tt_optimized_openvla_vision.siglip_patch_embeddings(
@@ -938,6 +950,7 @@ class PrismaticVisionBackbone(nn.Module):
                             layer_end_index=len(self.fused_featurizer.blocks) - 1,
                         ),
                         pixel=x2,
+                        pos_embed=siglip_pos_embed,
                     )
                     return output
 
@@ -1107,7 +1120,7 @@ class PrismaticPreTrainedModel(PreTrainedModel):
     @property
     def _supports_sdpa(self) -> bool:
         """Check LLM supports SDPA Attention"""
-        return self.language_model._supports_sdpa
+        return getattr(getattr(self, "language_model", None), "_supports_sdpa", False)
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
@@ -1118,9 +1131,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             raise ValueError("Missing config field `use_fused_vision_backbone`")
 
         if timm.__version__ not in {"0.9.10", "0.9.11", "0.9.12", "0.9.16", "1.0.22"}:
-            raise NotImplementedError(
-                "TIMM Version must be >= 0.9.10 and < 1.0.0 or == 1.0.22 (breaking); please raise a GitHub Issue "
-                "if you urgently need support for latest TIMM versions."
+            logger.warning(
+                f"Expected `timm` 0.9.10 to 0.9.16 or 1.0.22 but got `timm=={timm.__version__}`; "
+                f"there might be inference-time regressions due to dependency changes."
             )
 
         if (transformers.__version__ != "4.40.1") or (tokenizers.__version__ != "0.19.1"):
@@ -1203,7 +1216,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
     def set_decoder(self, decoder: nn.Module) -> None:
         self.language_model.set_decoder(decoder)
 
-    def tie_weights(self) -> None:
+    def tie_weights(self, *args, **kwargs) -> None:
         self.language_model.tie_weights()  # Note: `Llama-2` and `Mistral` don't tie weights (no-op)
 
     def resize_token_embeddings(
@@ -1608,8 +1621,20 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
 
         # Run VLA inference
         if self.ttnn_device is not None:
+            # The TT language model decodes every action token greedily within one forward call.
             self.language_model.num_actions = self.get_action_dim(unnorm_key)
-        generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
+            self(
+                input_ids=input_ids,
+                attention_mask=kwargs.get("attention_mask"),
+                pixel_values=kwargs["pixel_values"],
+                use_cache=False,
+                return_dict=True,
+            )
+            self.cached_output = (None, None)
+            action_ids = torch.tensor([self.language_model._last_generated_tokens], dtype=input_ids.dtype)
+            generated_ids = torch.cat((input_ids, action_ids), dim=1)
+        else:
+            generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
 
         # Extract action tokens (last N tokens where N = action_dim)
         action_dim = self.get_action_dim(unnorm_key)
@@ -1661,7 +1686,7 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D if len(ttnn.get_device_ids()) > 1 else None,
             "trace_region_size": 30000000,
             "num_command_queues": 1,
             "l1_small_size": 81920,
@@ -1702,7 +1727,7 @@ def test_language_model(mesh_device, prompt):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D if len(ttnn.get_device_ids()) > 1 else None,
             "trace_region_size": 30000000,
             "num_command_queues": 1,
             "l1_small_size": 81920,
