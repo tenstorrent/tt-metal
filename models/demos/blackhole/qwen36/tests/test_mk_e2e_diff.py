@@ -40,6 +40,8 @@ TF = os.environ.get("E2E_TF", "1") == "1"  # teacher-forced per-layer mode (spec
 TF_NL = int(os.environ.get("E2E_TF_NL", str(NL)))
 TF_BLOCK = int(os.environ.get("E2E_TF_BLOCK", "4"))  # teacher-forced block (both layer types per engine pass)
 DBG = os.environ.get("E2E_DBG", "1") == "1"  # MK_AR_DBG per-AR residual dumps (more engine text); 0 = final x_out only
+MID = os.environ.get("E2E_MID", "1") == "1"  # with DBG + MK_REAL_GAR: also the post-mixer residual per layer (mixer AR)
+REF_MID = {}
 B, T = 8, tc.K + 1
 DIM = 5120
 
@@ -95,6 +97,15 @@ def _layer_hooks(model, rec, rec_in=None):
 
         saved.append((l, f))
         l.forward = wrapped
+        if rec_in is not None and MID and hasattr(l, "ffn_norm"):   # E2E_MID: the post-mixer residual h (ffn_norm's input)
+            fn = l.ffn_norm
+
+            def wrapped_fn(*a, _fn=fn, _i=i, **k):
+                REF_MID[_i] = _rows(a[0] if a else k["x"])
+                return _fn(*a, **k)
+
+            saved.append((l, ("ffn_norm", fn)))
+            l.ffn_norm = wrapped_fn
     return saved
 
 
@@ -132,7 +143,10 @@ def _diff_case(model, live, tag):
         ttnn.synchronize_device(model.mesh_device)
     finally:
         for l, f in saved:
-            l.forward = f
+            if isinstance(f, tuple):
+                setattr(l, f[0], f[1])
+            else:
+                l.forward = f
         model._vfy_mk1 = mk1
     kv_ref = _kv_rows(model, L_attn, live)
     _restore(ts, snap)
@@ -181,6 +195,9 @@ def _diff_case(model, live, tag):
                 bad.append(dict(case=tag, user=u, layer=L, what="nan" if not torch.isfinite(e).all() else "zero"))
             pcc[u][L] = round(_pcc(e, r), 6)
             mx[u][L] = float((e - r).abs().max())
+            if MID and gar and L in REF_MID:   # mixer AR k = 2L: its residual column = x + mixer(x) = the ref's h
+                em = dbg[u * T:(u + 1) * T, (2 * (2 * L) + 1) * DIM:(2 * (2 * L) + 2) * DIM]
+                pcc[u][f"{L}m"] = round(_pcc(em, REF_MID[L][u * T:(u + 1) * T]), 6)
     return pcc, mx, bad, dbg_all_equal, dict(tf, kva=kva) if tf else dict(kva=kva)
 
 
