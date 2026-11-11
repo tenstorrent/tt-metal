@@ -821,10 +821,10 @@ void kernel_main() {
                 for (uint32_t i = 0; i < nb; ++i) unary_min_tile(i, 0x42700000u);   // when |S| < 60 (real 8-32K traces: max 21.85)
 #endif
 #if defined(MKA_RQPOS)
-                if (b == kvp_m0 || b == kvp_m1) {   // causal mask from kvpos, ADDITIVE on S (0 / -9984) before exp (NBB = 1)
-                    cb_wait_front(CB_OA, 8);
-                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_OA);
-                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_OA, b == kvp_m0 ? 0 : 1, 0);
+                if (b == kvp_m0 || b == kvp_m1) {   // causal mask from kvpos, ADDITIVE on S (0 / -9984) before exp (NBB = 1);
+                    cb_wait_front(CB_ONE, 3);         // the writer's tiles: CB_ONE 1 = block m0, 2 = block m1 (once per pass)
+                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_ONE);
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_ONE, b == kvp_m0 ? 1 : 2, 0);
                 }
 #endif
                 exp_tile_init();
@@ -874,7 +874,6 @@ void kernel_main() {
             }
             cb_pop_front(CB_Q, QT);
 #if defined(MKA_RQPOS)
-            if (kvp_m0 != 0x3FF || kvp_m1 != 0x3FF) cb_pop_front(CB_OA, 8);
             if (first) {   // no valid KV block on this core (short user): zero partial (O, l) for the tree
                 tile_regs_acquire();
                 fill_tile_init();

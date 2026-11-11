@@ -93,7 +93,7 @@ void kernel_main() {
 #if defined(MKA_RQPOS)
     const uint32_t user = get_arg_val<uint32_t>(a++);
     uint32_t b0 = get_arg_val<uint32_t>(a++), b1 = get_arg_val<uint32_t>(a++);   // bounded by kvpos at pass start (below)
-    uint32_t kvp_m0 = KVP_NONE, kvp_m1 = KVP_NONE, kvp_p[MKA_RQ_T];   // masked blocks, per-row positions
+    uint32_t kvp_m0 = KVP_NONE, kvp_m1 = KVP_NONE, kvp_p[MKA_RQ_T];   // masked blocks, per-row positions (pass start only)
 #else
     const uint32_t user = get_arg_val<uint32_t>(a++), b0 = get_arg_val<uint32_t>(a++), b1 = get_arg_val<uint32_t>(a++);
 #endif
@@ -246,6 +246,7 @@ void kernel_main() {
             noc_async_read_barrier();
         }
         tab[1] = b0;
+        for (uint32_t j = 0; j < MKA_RQ_T; ++j) tab[3 + j] = kvp_p[j];   // per-row causal limits (the writer builds the masks)
         tab[0] = (1u << 31) | nv | (kvp_m0 << 11) | (kvp_m1 << 21);
     }
 #endif
@@ -692,29 +693,6 @@ void kernel_main() {
                     KVA_ZONE("R-KVAW");
                     noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * (A + 1));
                     if (kv_mode != 2) *l1w(gs[GS_KVPROG]) = A + 1;
-                }
-#endif
-#if defined(MKA_RQPOS)
-                if (b - b0 == (kvp_m1 != KVP_NONE ? kvp_m1 : kvp_m0)) {   // first masked group: the ADDITIVE mask tiles (bf16 0 / -9984)
-                    cb_reserve_back(CB_OA, 8);
-                    const uint32_t mt = get_write_ptr(CB_OA);
-                    for (uint32_t k = 0; k < 2; ++k) {
-                        const uint32_t mb = k ? kvp_m1 : kvp_m0;
-                        if (mb == KVP_NONE) continue;
-                        const int32_t base = (int32_t)((b0 + mb) * 32);
-                        volatile tt_l1_ptr uint32_t* t = l1w(mt + k * 2048);
-                        for (uint32_t r = 0; r < 32; ++r) {
-                            const int32_t lim = r < 6 * MKA_RQ_T ? (int32_t)kvp_p[r % MKA_RQ_T] - base : 31;   // valid cols c <= lim
-                            for (uint32_t h = 0; h < 2; ++h) {
-                                volatile tt_l1_ptr uint32_t* fr = t + (((r / 16) * 2 + h) * 512 + (r % 16) * 32) / 4;
-                                for (uint32_t c2 = 0; c2 < 8; ++c2) {
-                                    const int32_t c = (int32_t)(16 * h + 2 * c2);
-                                    fr[c2] = (c <= lim ? 0u : 0xC61Cu) | ((c + 1 <= lim ? 0u : 0xC61Cu) << 16);
-                                }
-                            }
-                        }
-                    }
-                    cb_push_back(CB_OA, 8);
                 }
 #endif
                 if (!(rd_k || rd_v)) continue;

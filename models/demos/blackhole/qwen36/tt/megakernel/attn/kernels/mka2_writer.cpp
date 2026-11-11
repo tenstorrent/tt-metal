@@ -1284,7 +1284,33 @@ void kernel_main() {
             // Safe from group 0: qkv_tail(L) above waited this layer's qkv output, i.e. compute already popped CB_PQ.
             const bool pqw_go = qrole == QR_EXT && L + 1 < NL && PQ_WS > 0;
 #if defined(MKA_RQPOS)
-            if (!kvp_rd) { const uint32_t v_ = kvp_wait(); vb0 = l1w(MKA_KVP_TAB)[1]; vb1 = vb0 + (v_ & 0x7FF); kvp_rd = true; }   // reader's bound
+            if (!kvp_rd) {   // the reader's bound, once per pass; then this core's causal mask tiles (if it holds the user's
+                // last blocks) into CB_ONE pages 1 (m0) / 2 (m1): ADDITIVE bf16 0 / -9984, row 4h + j valid cols c <= p_j - 32 blk
+                const uint32_t v_ = kvp_wait();
+                volatile tt_l1_ptr uint32_t* tab = l1w(MKA_KVP_TAB);
+                vb0 = tab[1]; vb1 = vb0 + (v_ & 0x7FF); kvp_rd = true;
+                const uint32_t m0 = (v_ >> 11) & 0x3FF, m1 = (v_ >> 21) & 0x3FF;
+                if (m0 != KVP_NONE || m1 != KVP_NONE) {
+                    cb_reserve_back(CB_ONE, 2);
+                    const uint32_t mt = get_write_ptr(CB_ONE);
+                    for (uint32_t k = 0; k < 2; ++k) {
+                        const uint32_t mb = k ? m1 : m0;
+                        if (mb == KVP_NONE) continue;
+                        const int32_t base = (int32_t)((vb0 + mb) * 32);
+                        for (uint32_t r = 0; r < 32; ++r) {
+                            const int32_t lim = r < 6 * MKA_RQ_T ? (int32_t)tab[3 + r % MKA_RQ_T] - base : 31;
+                            for (uint32_t h = 0; h < 2; ++h) {
+                                volatile tt_l1_ptr uint32_t* fr = l1w(mt + k * 2048 + ((r / 16) * 2 + h) * 512 + (r % 16) * 32);
+                                for (uint32_t c2 = 0; c2 < 8; ++c2) {
+                                    const int32_t c = (int32_t)(16 * h + 2 * c2);
+                                    fr[c2] = (c <= lim ? 0u : 0xC61Cu) | ((c + 1 <= lim ? 0u : 0xC61Cu) << 16);
+                                }
+                            }
+                        }
+                    }
+                    cb_push_back(CB_ONE, 2);
+                }
+            }
 #endif
             const uint32_t pqw_ng = (vb1 - vb0 + NBB - 1) / NBB;
             const uint32_t pqw_per = pqw_ng ? (PQ_WS + pqw_ng - 1) / pqw_ng : PQ_WS;

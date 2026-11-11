@@ -1046,8 +1046,8 @@ def setup_bench(dev, MESH, mesh_identity):
             # per-core KVP table: [0] info, [1] b0, [2] pt window base, [KVP_PT ..] page-table window (64 B aligned)
             _smax = max(RNG[fi_][1] - RNG[fi_][0] for fi_ in ACT)
             KVP_PTW = (_smax + BS32 - 1) // BS32 + 1 + 16
-            kvp_t = _l1_tab([[0] * (-(-(3 + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
-            KVP_PT = 3 + (-(kvp_t.buffer_address() + 12) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
+            kvp_t = _l1_tab([[0] * (-(-(3 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
+            KVP_PT = 3 + T + (-(kvp_t.buffer_address() + 4 * (3 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
             assert (kvp_t.buffer_address() + 4 * KVP_PT) % 64 == 0, ('KVP table alignment', kvp_t.buffer_address(), KVP_PT)
             RQ_TENS += [rq_kvpos, rq_cos, rq_sin, rq_pt, kvp_t]
             torch.manual_seed(17)
@@ -1502,7 +1502,7 @@ def setup_bench(dev, MESH, mesh_identity):
                ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
                # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
                cbd(9, ttnn.bfloat16, QT_ if RQNR else 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
-               cbd(24, ttnn.bfloat16, 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
+               cbd(24, ttnn.bfloat16, 3 if ('MKA_RQPOS', '1') in MKDEF else 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
                cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
         if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
             cbs = ([] if (QSK and not RWO) else [cbd(19, ttnn.bfloat8_b, RING_P_ if RWO else 2 * KT, ext_crs)]) + cbs + [cbd(13, ttnn.float32, 1, kgrid), cbd(14, ttnn.float32, 2, kgrid),
