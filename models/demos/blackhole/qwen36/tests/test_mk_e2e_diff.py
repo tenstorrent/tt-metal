@@ -258,8 +258,11 @@ def _teacher_forced(model, live, ref, ref_in, ts, snap):
                 ttnn.deallocate(xo)
                 del eng, w
             except Exception as e:  # noqa: BLE001 -- report per layer (e.g. a build overflow), keep going
+                import traceback
+
                 err[L] = f"{type(e).__name__}: {str(e)[:200]}"
-                logger.warning(f"[e2ediff] teacher-forced layer {L} ({lt[0]}): {err[L]}")
+                logger.warning(f"[e2ediff] teacher-forced layer {L} ({lt[0]}): {err[L]}\n" +
+                               "".join(traceback.format_exc().splitlines(True)[-12:]))
         return x
 
     mk1.forward = tf_forward
