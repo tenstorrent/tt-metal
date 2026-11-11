@@ -86,10 +86,14 @@ def published_state(rt, kv, slot, L):
     out = {}
     dev = lambda t: [ttnn.to_torch(x) for x in ttnn.get_device_tensors(t)]  # noqa: E731
     k_dev, v_dev = dev(kv.k), dev(kv.v)
+    from models.demos.blackhole.qwen36.tt.runners import kv_table
+
+    # K is published in the decode ring's interleaved-RoPE order: back to HF order for the reference
+    k_hf = torch.argsort(kv_table.interleaved_k_perm(int(k_dev[0].shape[-1])))
     for pos, li in enumerate(kv.attn_layer_ids):
         b = slot * kv.num_attn_layers + pos
         out[li] = {
-            "keys": torch.stack([x[b, 0, :L] for x in k_dev]).to(torch.bfloat16),
+            "keys": torch.stack([x[b, 0, :L][..., k_hf] for x in k_dev]).to(torch.bfloat16),
             "values": torch.stack([x[b, 0, :L] for x in v_dev]).to(torch.bfloat16),
         }
     rec_dev, conv_dev = dev(kv.gdn.recurrent), dev(kv.gdn.convolution)
@@ -101,12 +105,12 @@ def published_state(rt, kv, slot, L):
             for seg, _ in geo.local_segments("gdn_recurrent", c):
                 _, h, band = geo.decompose_recurrent(seg)
                 rsegs[seg] = rec[h][:, band * 32 : (band + 1) * 32]
-            rows = conv_dev[c][b].to(torch.bfloat16)  # [32, 192]
+            rows = conv_dev[c][b].to(torch.bfloat16)  # [shards, 192]
             for seg, shard in geo.local_segments("gdn_convolution", c):
                 csegs[seg] = rows[shard].reshape(geo.conv_history, gs.CONVOLUTION_PAGE_CHANNELS)
         out[li] = {
             "recurrent_state": gs.assemble_recurrent(rsegs, geo),
-            "conv_state": gs.hf_conv_state(gs.assemble_convolution(csegs, geo)),
+            "conv_state": gs.hf_conv_state(gs.per_value_head_to_native(gs.assemble_convolution(csegs, geo), geo)),
         }
     return out
 
@@ -178,6 +182,8 @@ def main():
     ap.add_argument("--table", default="")
     ap.add_argument("--wait-ref", type=float, default=2400.0)
     ap.add_argument("--segment", type=int, default=0, help="override PupPrefillConfig.segment_tokens")
+    ap.add_argument("--prompts", default="", help="JSON list of {id, prompt_ids}: prefill these (text) instead of --names")
+    ap.add_argument("--cut", type=int, default=0, help="with --prompts: prefill the first CUT tokens (the P/D cut)")
     a = ap.parse_args()
 
     import ttnn
@@ -240,6 +246,22 @@ def main():
         logger.info(f"HARNESS build {t1 - t0:.1f}s compile {t2 - t1:.1f}s")
 
         image_token = rt.image_token
+        if a.prompts:
+            for slot, p in enumerate(json.load(open(a.prompts))):
+                ids = p["prompt_ids"][: a.cut or None]
+                inp = rt.make_chunk_input(ids)
+                rt.prefill_chunk(inp, kv, slot_id=slot % a.slots, actual_start=0, actual_end=len(ids))
+                ttnn.synchronize_device(mesh)
+                pub = published_state(rt, kv, slot % a.slots, len(ids))
+                work = working_state(rt, slot % a.slots, len(ids))
+                torch.save({"published": pub, "working": work, "L": len(ids)},
+                           os.path.join(os.path.dirname(a.out), f"{p['id']}_cut{len(ids)}_state.pt"))
+                compare(pub, work, f"{p['id']} cut {len(ids)} published vs working")
+                for li in (0, 1, 28):
+                    cs = pub[li]["conv_state"]  # [C, 4]: columns 1..3 = the migrated history, oldest first
+                    logger.info(f"CONV {p['id']} L={len(ids)} layer {li}: nonzero per history column "
+                                f"{[(cs[:, c] != 0).float().mean().item() for c in range(1, 4)]}")
+            a.names = ""
         for slot, name in enumerate(n for n in a.names.split(",") if n):
             slot %= a.slots
             gold = torch.load(os.path.join(a.gold, f"{name}.pt"), weights_only=False)
