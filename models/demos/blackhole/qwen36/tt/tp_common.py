@@ -71,6 +71,30 @@ if norm_exact_enabled() and not getattr(ttnn, "_qwen36_norm_exact", False):
     ttnn._qwen36_norm_exact = True
 
 
+LOFI_WROUND_ENV = "QWEN36_LOFI_WROUND"
+
+
+def lofi_wround_sites():
+    """QWEN36_LOFI_WROUND=gu,dn,wo,gin,qkv (opt-in): which prefill weights are stored pre-rounded for LoFi.
+    gu / dn = token-parallel MLP gate+up / down, wo = token-parallel mixer out-projection, gin = GDN in-projection,
+    qkv = attention qkv. Use with the LoFi fidelity of those matmuls (QWEN36_TOKPAR_MLP_FID_GU / _DOWN,
+    QWEN36_TOKPAR_OUT_LOFI, QWEN36_GDN_IN_LOFI, QWEN36_ATTN_QKV_LOFI)."""
+    return set(filter(None, os.environ.get(LOFI_WROUND_ENV, "").split(",")))
+
+
+def lofi_round(t, bits=5):
+    """Round every element to `bits` significant bits (round half to even), fp32 out.
+
+    A LoFi matmul multiplies with its weight operand (in1, unpacked to srcA) TRUNCATED to 5 significant bits; the
+    activation (srcB) keeps its bits. Measured on BH (session 6, mb_lofi6.py, 800x4096 @ 4096x1536 bf8): device LoFi ==
+    an fp64 emulation of that truncation exactly (rel err 0.0188, least-squares output scale 0.9867: truncation toward
+    zero shrinks every LoFi output by ~1.3%). Weights pre-rounded to 5 bits are exact under LoFi: rel err 0.0143, scale
+    0.9996 (no bias), at LoFi speed."""
+    m, e = torch.frexp(t.float())
+    s = float(2**bits)
+    return torch.ldexp(torch.round(m * s) / s, e)
+
+
 def fabric_router_config():
     """QWEN36_FABRIC_PAYLOAD_BYTES (default 8192; 0 = the fabric default of 4352): max fabric packet payload for the
     multi-device meshes, the value qwen38_27b_qb2 uses. Larger packets cut per-packet overhead in the decode

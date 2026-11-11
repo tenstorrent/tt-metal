@@ -87,12 +87,13 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         # bit-identical on interleaved — test_agmm_accepts_interleaved_weight). Distinct cache suffix.
         _proj1d = getattr(args, "proj_1d_decode", False)
         _base = "wqkv_fused_qkvg" if qg_deint else "wqkv_fused"
+        _rnd = "qkv" in tpc.lofi_wround_sites()  # QWEN36_LOFI_WROUND qkv: pre-rounded for LoFi (QWEN36_ATTN_QKV_LOFI)
         tw["wqkv_fused"] = tpc.shard_w(
-            fused,
+            tpc.lofi_round(fused) if _rnd else fused,
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
-            cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
+            cache_path=c(_base + (".il" if _proj1d else ".dramshard") + (".r5" if _rnd else "")),
             dtype=_attn_dtype,
         )
     else:

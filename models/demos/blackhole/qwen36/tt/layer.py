@@ -65,19 +65,22 @@ def tokpar_a2a(x, to_tokens):
 
 
 def _load_tokpar_mlp(mesh, mlp_state, cache_dir):
-    """Full (unsharded) gate / up / down weights, bf8, replicated on every chip, [in, out] for ttnn.linear."""
+    """Full (unsharded) gate / up / down weights, bf8, replicated on every chip, [in, out] for ttnn.linear.
+    QWEN36_LOFI_WROUND gu / dn: gate+up / down stored pre-rounded for LoFi (tpc.lofi_round, own cache file)."""
     rep = ttnn.ReplicateTensorToMesh(mesh)
+    wr = tpc.lofi_wround_sites()
 
     def load(name):
+        rnd = ("gu" if name in ("gate_proj", "up_proj") else "dn") in wr
         return ttnn.as_tensor(
             mlp_state[f"{name}.weight"],
-            preprocess=lambda t: t.T.contiguous(),
+            preprocess=(lambda t: tpc.lofi_round(t.T.contiguous())) if rnd else (lambda t: t.T.contiguous()),
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             mesh_mapper=rep,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=(cache_dir / f"mlp.{name}.weight.tokpar_rep") if cache_dir else None,
+            cache_file_name=(cache_dir / f"mlp.{name}.weight.tokpar_rep{'_r5' if rnd else ''}") if cache_dir else None,
         )
 
     return {"w1": load("gate_proj"), "w3": load("up_proj"), "w2": load("down_proj")}
@@ -88,6 +91,34 @@ def _TBW():
     import os
 
     return int(os.environ.get("QWEN36_TOKPAR_BW", "8"))
+
+
+def _gu_pc_override(pc):
+    """QWEN36_TOKPAR_MLP_GU_PC="bw,sh,sw[,obh,obw]" (opt-in): in0_block_w, out subblock and (optionally) out block of the
+    token-parallel gate / up matmuls. A smaller in0_block_w or out block shrinks their static CBs: with fp32 dest
+    accumulation (the MLP precision fix) gate / up / hidden + residual in L1 clash at 800 rows per chip (the 3200
+    bucket) unless e.g. "8,1,4,3,16" or "4,1,4"."""
+    import os
+
+    v = os.environ.get("QWEN36_TOKPAR_MLP_GU_PC")
+    if not v:
+        return pc
+    vals = [int(t) for t in v.split(",")]
+    bw, sh, sw = vals[:3]
+    obh, obw = (vals[3], vals[4]) if len(vals) >= 5 else (pc.per_core_M, pc.per_core_N)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=bw,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        out_block_h=obh,
+        out_block_w=obw,
+        per_core_M=pc.per_core_M,
+        per_core_N=pc.per_core_N,
+        transpose_mcast=pc.transpose_mcast,
+        fused_activation=pc.fused_activation,
+        fuse_batch=False,
+    )
 
 
 def _tokpar_pc(m, k, n, bw, act=None, lim=4, prefer_h=False):
@@ -276,15 +307,16 @@ class Qwen36DecoderLayer:
             self._tokpar = _load_tokpar_mlp(mesh_device, mlp_state, mlp_cache)
             if tokpar_out_enabled():
                 key = "self_attn.o_proj.weight" if self.is_full_attention else "linear_attn.out_proj.weight"
+                _rnd = "wo" in tpc.lofi_wround_sites()  # QWEN36_LOFI_WROUND wo: pre-rounded for LoFi
                 self._tokpar["wo"] = ttnn.as_tensor(
                     state_dict[f"layers.{layer_num}.{key}"],
-                    preprocess=lambda t: t.T.contiguous(),
+                    preprocess=(lambda t: tpc.lofi_round(t.T.contiguous())) if _rnd else (lambda t: t.T.contiguous()),
                     dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh_device,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cache_file_name=(mlp_cache / f"{key}.tokpar_rep") if mlp_cache else None,
+                    cache_file_name=(mlp_cache / f"{key}.tokpar_rep{'_r5' if _rnd else ''}") if mlp_cache else None,
                 )
 
     def _make_norm(
@@ -441,8 +473,8 @@ class Qwen36DecoderLayer:
             w["w1"],
             compute_kernel_config=ck,
             memory_config=act_mc,
-            program_config=_tokpar_pc(
-                M, K, F, _TBW(), act=None if silu_mul else ttnn.UnaryOpType.SILU, lim=8 if cfg2 else 4
+            program_config=_gu_pc_override(
+                _tokpar_pc(M, K, F, _TBW(), act=None if silu_mul else ttnn.UnaryOpType.SILU, lim=8 if cfg2 else 4)
             ),
         )
         up = ttnn.linear(
@@ -450,7 +482,7 @@ class Qwen36DecoderLayer:
             w["w3"],
             compute_kernel_config=ck,
             memory_config=act_mc,
-            program_config=_tokpar_pc(M, K, F, _TBW(), lim=8 if cfg2 else 4),
+            program_config=_gu_pc_override(_tokpar_pc(M, K, F, _TBW(), lim=8 if cfg2 else 4)),
         )
         if x8 is not x:
             ttnn.deallocate(x8)

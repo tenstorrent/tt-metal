@@ -424,12 +424,13 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         # proj_1d_decode: interleaved weight (fast small-grid 1D decode matmul; prefill AGMM verified
         # bit-identical on interleaved). Distinct cache suffix.
         _proj1d = getattr(args, "proj_1d_decode", False)
+        _rnd = "gin" in tpc.lofi_wround_sites()  # QWEN36_LOFI_WROUND gin: pre-rounded for LoFi (QWEN36_GDN_IN_LOFI)
         tw["qkvz"] = tpc.shard_w(
-            fused,
+            tpc.lofi_round(fused) if _rnd else fused,
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
-            cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
+            cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard") + (".r5" if _rnd else "")),
             dtype=_in_dtype,
         )
     else:
