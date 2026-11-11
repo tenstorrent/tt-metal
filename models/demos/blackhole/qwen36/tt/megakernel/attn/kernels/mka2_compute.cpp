@@ -115,6 +115,19 @@ ALWI void v_rs_bcast(uint32_t idst) {
     MATH((llk_math_matmul<MathFidelity::HiFi4, MM_THROTTLE>(idst, 1, 1)));
 }
 #endif
+#if defined(MK_GC_HIFI4)
+// MK_GC_HIFI4 (normdiag): the consumers' γ multiply x (.) γ (bcast rows) at HiFi4 instead of the kernel-wide HiFi2 (operand truncation bias)
+ALWI void gc_mul_init(uint32_t a, uint32_t b) {
+    state_configure(a, b, __builtin_LINE());
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MathFidelity::HiFi4>(a, b)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(a, b)));
+}
+ALWI void gc_mul(uint32_t a, uint32_t b, uint32_t i0, uint32_t i1, uint32_t d) {
+    MATH((llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, DST_ACCUM_MODE, MathFidelity::HiFi4,
+                                  EltwiseBinaryReuseDestType::NONE>(a, b, d, true)));
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(a, b, i0, i1, 0)));
+}
+#endif
 }  // namespace ckernel
 #define V_MM_INIT(a, b, ct, rt, kt) v_mm_init(a, b, ct, rt, kt)
 #if defined(MK_RSTD_HIFI4)
@@ -505,11 +518,19 @@ void kernel_main() {
         cb_reserve_back(MK_GC_XKA, V_KTR);
         reconfig_data_format(CB_XK, MK_GC_CB);
         pack_reconfig_data_format(MK_GC_XKA);
+#if defined(MK_GC_HIFI4)
+        gc_mul_init(CB_XK, MK_GC_CB);
+#else
         mul_bcast_rows_init(CB_XK, MK_GC_CB);
+#endif
         for (uint32_t t0 = 0; t0 < V_KTR; t0 += 4) {
             tile_regs_acquire();
             MK_NOUNROLL
+#if defined(MK_GC_HIFI4)
+            for (uint32_t i = 0; i < 4; ++i) gc_mul(CB_XK, MK_GC_CB, t0 + i, t0 + i, i);
+#else
             for (uint32_t i = 0; i < 4; ++i) mul_tiles_bcast_rows(CB_XK, MK_GC_CB, t0 + i, t0 + i, i);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             MK_NOUNROLL
