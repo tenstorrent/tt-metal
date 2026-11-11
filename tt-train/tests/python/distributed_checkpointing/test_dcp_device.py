@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 import torch
 import ttnn
+from dcp_oracle import Loader
 from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
 import ttml
@@ -323,22 +324,6 @@ def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_s
     _assert_same_shards(_model_shards(fresh.parameters()), saved)
 
 
-class _Loader:
-    """A stateful dataloader stand-in: its only state is how many batches it has handed out."""
-
-    def __init__(self) -> None:
-        self.position = 0
-
-    def advance(self) -> None:
-        self.position += 1
-
-    def get_state_dict(self) -> dict:
-        return {"position": self.position}
-
-    def set_state_dict(self, state: dict) -> None:
-        self.position = int(state["position"])
-
-
 def _ttml_draw():
     """One tensor from the ttml generator (``rand`` without a seed draws its seed from it), as seen by device 0."""
     value = ttml.ops.rand((1, 1, 32, 32)).get_value(NATIVE)
@@ -351,7 +336,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     ctx = ttml.autograd.AutoContext.get_instance()
     model, params, opt = fresh_tp(DIM)
     sched = CosineAnnealingScheduler(opt, T_max=8)
-    loader = _Loader()
+    loader = Loader()
     ctx.set_seed(123)
     random.seed(4)
     np.random.seed(5)
@@ -365,7 +350,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     stored = dcp.read_train_state(path)
     assert set(stored) == {"scheduler", "dataloader", "rng"} and stored["dataloader"] == {"position": 3}
     assert set(stored["rng"]) == {"format", "ranks"} and list(stored["rng"]["ranks"]) == ["0"]
-    assert set(stored["rng"]["ranks"]["0"]) == {"ttml", "python", "numpy", "torch"}
+    assert set(stored["rng"]["ranks"]["0"]) == {"ttml", "python", "numpy", "ttml_init", "torch"}
     lrs_at_save = sched.get_last_lrs()
     opt_lrs_at_save = opt.get_group_lrs()  # the optimizer holds float32 LRs, the scheduler doubles
 
@@ -386,13 +371,21 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
 
     model2, params2, opt2 = fresh_tp(DIM)
     sched2 = CosineAnnealingScheduler(opt2, T_max=8)
-    loader2 = _Loader()
+    loader2 = Loader()
     ctx.set_seed(999)
     random.seed(0)
     np.random.seed(0)
     torch.manual_seed(0)
     loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2, rng=True)
-    assert loaded.restored == ["dataloader", "scheduler", "rng.ttml", "rng.python", "rng.numpy", "rng.torch"]
+    assert loaded.restored == [
+        "scheduler",
+        "dataloader",
+        "rng.ttml",
+        "rng.python",
+        "rng.numpy",
+        "rng.ttml_init",
+        "rng.torch",
+    ]
     assert loaded.train_state == stored and loaded.missing == [] and loaded.header == {"step": 3}
     assert sched2.get_last_lrs() == lrs_at_save and opt2.get_group_lrs() == opt_lrs_at_save
     train_step(model2, opt2, DIM, input_scale=0.5)

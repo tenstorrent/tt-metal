@@ -38,7 +38,11 @@ from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
+from ttml.common.utils import set_seed
+from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
 from ttml.sharding import Sharding
+
+from dcp_oracle import Loader
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 # head_dim = hidden_size / num_attention_heads must be a multiple of 32 (RoPE); the head counts must be multiples of
@@ -54,22 +58,6 @@ TINY = dict(
 SEQ_LEN = 32  # a whole tile: the SDPA kernel wants the sequence dimension unpadded
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
 T_MAX = 16  # cosine schedule length, longer than any --steps the tests use, so the LR keeps moving
-
-
-class _Loader:
-    """A stateful dataloader stand-in: its only state is how many batches it has handed out."""
-
-    def __init__(self) -> None:
-        self.position = 0
-
-    def advance(self) -> None:
-        self.position += 1
-
-    def get_state_dict(self) -> dict:
-        return {"position": self.position}
-
-    def set_state_dict(self, state: dict) -> None:
-        self.position = int(state["position"])
 
 
 def parse_mesh(text: str) -> tuple[int, ...]:
@@ -162,9 +150,7 @@ def train(model, params, optimizer, scheduler, loader, config, steps: int, seed:
     the run starts, at step 0; a resumed step continues from the generators the checkpoint restored."""
     ctx = ttml.autograd.AutoContext.get_instance()
     if start == 0:
-        ctx.set_seed(seed)
-        random.seed(seed)
-        np.random.seed(seed)
+        set_seed(seed)
     mesh = ttml.mesh()
     needs_sync = any(mesh.axis_size(name) > 1 for name in mesh.axis_names if name != "tp")
     for step in range(start, start + steps):
@@ -247,11 +233,19 @@ def canonical_name(name: str, config: LlamaConfig) -> str:
 
 
 def reference(model, params, optimizer, scheduler, loader, config, seed: int) -> dict[str, np.ndarray]:
+    """The run as it stands: every parameter and optimizer tensor and scalar in canonical layout, the logits on a fixed
+    batch and what a resumed run does next. The dump leaves the run where it found it: the probes below step the
+    scheduler and the loader and draw from the generators, and all three are put back, so the optimizer scalars
+    compared are the ones the save or the load left and a step taken afterwards is the run's own next step."""
     tp = ttml.mesh().axis_size("tp") if config.use_tp else 1
     out: dict[str, np.ndarray] = {}
+    scheduler_state, loader_state, generators = (
+        scheduler.get_state_dict(),
+        loader.get_state_dict(),
+        capture_process_rng(),
+    )
     # What a resumed run does next: the scheduler's next LRs, the loader's next position and the next draw of each
-    # generator (the ttml one as its state text: nothing draws from it on the host). Taken before the forward
-    # below, which draws from the ttml generator when the model has dropout.
+    # generator (the ttml one as its state text: nothing draws from it on the host).
     scheduler.step()
     out["train:next_lrs"] = np.asarray(scheduler.get_last_lrs())
     loader.advance()
@@ -259,6 +253,8 @@ def reference(model, params, optimizer, scheduler, loader, config, seed: int) ->
     out["train:ttml_generator"] = np.asarray(ttml.autograd.AutoContext.get_instance().get_generator_state())
     out["train:python_next"] = np.asarray(random.random())
     out["train:numpy_next"] = np.asarray(np.random.random())
+    scheduler.set_state_dict(scheduler_state)  # writes the LRs back into the optimizer as they were
+    loader.set_state_dict(loader_state)
     for name, tensor in params.items():
         out["param:" + canonical_name(name, config)] = canonicalize(name, gather(tensor), config, tp)
 
@@ -279,6 +275,7 @@ def reference(model, params, optimizer, scheduler, loader, config, seed: int) ->
     logits = model(tokens, mask)
     out["logits"] = full_logits(logits, config)
     ttml.autograd.AutoContext.get_instance().reset_graph()
+    restore_process_rng(generators)  # after the forward too, which draws from the ttml generator with dropout
     return out
 
 
@@ -407,7 +404,7 @@ def main(argv=None) -> int:
         return MESH_OPEN_FAILED
     try:
         config, model, params, optimizer, scheduler = build(args.tp, args.fsdp, args.tie, sizes)
-        loader = _Loader()
+        loader = Loader()
         if args.command == "save":
             train(model, params, optimizer, scheduler, loader, config, args.steps, args.seed)
             result = dcp.save(
@@ -445,7 +442,7 @@ def main(argv=None) -> int:
         problems = compare(actual, expected, 0.0 if args.same_layout else args.logits_tolerance)
         if result.header.get("step") != args.steps:
             problems.append(f"header step {result.header.get('step')} != {args.steps}")
-        expected_restored = ["dataloader", "scheduler", "rng.ttml", "rng.python", "rng.numpy"]
+        expected_restored = ["scheduler", "dataloader", "rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
         if "torch" in sys.modules:
             expected_restored.append("rng.torch")
         if result.restored != expected_restored:
