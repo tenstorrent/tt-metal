@@ -868,7 +868,10 @@ def setup_bench(dev, MESH, mesh_identity):
             assert V12CB and V_R == 32 and ('MK_AR_GAMMA', '1') not in MKDEF, "MK_GAMMA_CONS: MK_V12_CB (CB 33 = CB_XK, 20 pages), R = 32, not with MK_AR_GAMMA"
             _gg = torch.Generator().manual_seed(19)
             AR_GTAB = ((0.5 + torch.rand(NL, 2, H, generator=_gg)) * (1.25 ** 0.5)).bfloat16().float()
-            gam_c = ttnn.from_torch(AR_GTAB.reshape(NL * 2 * 8, 640).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if 'gamma_cons' in _WEIGHTS:   # integ: the model's (1+w) * NORM_FIX gammas (weights_mk.gamma_cons_rows, same layout)
+                gam_c = _WEIGHTS['gamma_cons']['tensor']
+            else:
+                gam_c = ttnn.from_torch(AR_GTAB.reshape(NL * 2 * 8, 640).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             MKDEF = MKDEF + [('MK_GC_ADDR', str(gam_c.buffer_address())), ('MK_GC_PAGE', '1280'), ('MK_GC_CB', '22'), ('MK_GC_XKA', '21')]
             print(f"[gc] gamma at the consumers: table {NL}x2x8 rows of 640 at DRAM {gam_c.buffer_address()}, CB 22 (20 tiles) + CB 21 = CB 33 alias", flush=True)
         AR_RSTD = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1'   # HOST: static Σ, no producer
@@ -1926,7 +1929,8 @@ ENGINE_ENV = dict(
     MKA_KVPROD="1", MKA_NKVH="1", MKA_KVH="0", MKA_BS="64",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
                "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,"
-               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1",
+               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GAMMA_CONS=1",
+    MK_AR_RSTD="1",  # batch 6 (a445c147d35): real rstd producer + gamma at the consumers (the model's gammas: weights_mk 'gamma_cons')
 )
 # the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
 PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups", "rqbal")  # rqbal: host table
@@ -2079,6 +2083,7 @@ def weight_layouts(mesh):
         "mlp": wm.MlpLayout(bank_loc),
         "gamma": None,
         "qkg": None,  # q/k-norm (1+w) table (weights_mk.qkg_pages), fixed layout
+        "gamma_cons": None,  # MK_GAMMA_CONS gamma rows (weights_mk.gamma_cons_rows), fixed layout
         # the attention track's engine-layout packs (lossless; setup_bench binds the tensor + takes placement from .layout)
         "qkv": WL.QkvSplitKLayout(bank_loc, banks),
         "wo": WL.wo_unit_layout(C["wo"], bank_loc, banks),

@@ -213,6 +213,21 @@ mul (reads row 0) applies gamma and NORM_FIX at once."""
     return torch.cat(rows).reshape(1, 1, -1, H)
 
 
+def gamma_cons_rows(model, layers=None):
+    """kind 'gamma_cons' (MK_GAMMA_CONS: gamma applied by the x consumers): bf16 ROW_MAJOR [NL * 2 * 8, 640], row
+    (L * 2 + n) * 8 + k = bf16(gamma_n(L) * NORM_FIX)[640 k : 640 k + 640] (n 0 = input_layernorm, 1 = post_attention).
+    The same fp32 product / one bf16 rounding as gamma_pages."""
+    import torch
+
+    rows = []
+    for i, l in enumerate(model.layers):
+        if layers is not None and i not in layers:
+            continue
+        for norm in (l.attention_norm.norm, l.ffn_norm.norm):
+            rows.append((norm_gamma(norm).float() * NORM_FIX).reshape(8, H // 8))
+    return torch.cat(rows)
+
+
 def qkg_pages(model, layers=None):
     """kind 'qkg' (attention RQPOS): per attention layer a (ordinal) and norm k (0 q_norm, 1 k_norm) the bf16 (1+w)
     head-dim vector the prod verify multiplies by (tw['qk_norm_dense']: q heads' row / the k head's row; fallback the
@@ -266,6 +281,12 @@ def repack(model, layouts=None, kinds=None, only_layers=None):
         out["gamma"] = dict(tensor=t, pages_per_layer=2 * (H // TILE),
                             layers=[i for i in range(len(model.layers)) if only_layers is None or i in only_layers],
                             dtype="bfloat16")
+    if "gamma_cons" in (kinds or layouts):  # replicated bf16 ROW_MAJOR, fixed layout (gamma_cons_rows)
+        t = ttnn.from_torch(gamma_cons_rows(model, only_layers).to(torch.bfloat16), dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+        out["gamma_cons"] = dict(tensor=t, pages_per_layer=16, dtype="bfloat16",
+                                 layers=[i for i in range(len(model.layers)) if only_layers is None or i in only_layers])
     if "qkg" in (kinds or layouts) and any(l.is_full_attention for i, l in enumerate(model.layers)
                                            if only_layers is None or i in only_layers):  # replicated, bf16 (qkg_pages)
         t = ttnn.from_torch(qkg_pages(model, only_layers), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
@@ -273,7 +294,7 @@ def repack(model, layouts=None, kinds=None, only_layers=None):
         out["qkg"] = dict(tensor=t, pages_per_layer=16, layers=[i for i, l in enumerate(model.layers) if l.is_full_attention
                                                                  and (only_layers is None or i in only_layers)],
                           dtype="bfloat16")
-    for kind in [k for k in (kinds or sorted(layouts)) if k not in ("gamma", "qkg")]:
+    for kind in [k for k in (kinds or sorted(layouts)) if k not in ("gamma", "qkg", "gamma_cons")]:
         lay = layouts[kind]
         want, extract = SOURCES[kind]
         idx = [i for i, l in enumerate(model.layers) if want(l) and (only_layers is None or i in only_layers)]
