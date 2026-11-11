@@ -37,6 +37,7 @@ from safetensors import safe_open
 from tracy import signpost
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
@@ -225,15 +226,14 @@ def _sparse_cache_format(has_indexer, kv_cache_format):
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), TP-deduped KV cache. Per-chunk median of CI runs 40424879138, 40494538796,
-    # 40532334659 and 40610708699.
-    (61, 11, 10): [0.311, 0.325, 0.356, 0.386, 0.418, 0.449, 0.475, 0.509, 0.551, 0.590, 0.623],
+    # (55k / code_debug), TP-deduped KV cache. Per-chunk median of CI run 42221158458 / job 127907825353.
+    (61, 11, 10): [0.302, 0.317, 0.348, 0.378, 0.409, 0.440, 0.464, 0.499, 0.537, 0.576, 0.612],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations, with the routed
-    # expert overlapped with combine_fabric2d. CI run 41067008100 / job 124125611366.
-    (61, 11, 10): [0.328, 0.338, 0.372, 0.399, 0.432, 0.462, 0.489, 0.523, 0.564, 0.604, 0.638],
+    # expert overlapped with combine_fabric2d. CI run 42214174243 / job 127885734290.
+    (61, 11, 10): [0.310, 0.319, 0.351, 0.381, 0.413, 0.444, 0.468, 0.503, 0.543, 0.582, 0.616],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -2584,7 +2584,7 @@ def run_chunked_transformer_updated(
     finish_transformer(transformer)
 
     # Assert AFTER the table is logged so the full per-chunk breakdown is always visible on failure.
-    assert not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures)
+    assert_perf_gate(not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures))
 
 
 def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):

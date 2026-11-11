@@ -90,7 +90,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t num_input_units = 2;
-    const uint32_t input_alignment = input.buffer()->alignment();
+    const uint32_t input_alignment = input.mesh_buffer().alignment();
     const uint32_t aligned_input_unit_size = tt::align(input_unit_size, input_alignment);
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_units * aligned_input_unit_size,
@@ -106,7 +106,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     if (convert_dtype) {
         output_cb_index = tt::CBIndex::c_16;
         const uint32_t num_output_units = 2;
-        const uint32_t output_alignment = output.buffer()->alignment();
+        const uint32_t output_alignment = output.mesh_buffer().alignment();
         const uint32_t aligned_output_unit_size = tt::align(output_unit_size, output_alignment);
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_units * aligned_output_unit_size,

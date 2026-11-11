@@ -171,7 +171,8 @@ def tuned_projection_matmul_configs(
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
     Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
-    (bf16, FP32 destination accumulation); subblocks stay within the 4-tile FP32 destination limit.
+    (bf16, FP32 destination accumulation) at HiFi2; not re-tuned at other fidelities. Subblocks stay within
+    the 4-tile FP32 destination limit.
     Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
     """
     row_tiles = rows // ttnn.TILE_SIZE
@@ -231,12 +232,18 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped",
             summary_group_chunks=group_chunks[active_seq_len_local],
+            # HiFi3, not HiFi2: HiFi2 keeps only SrcB's 6 explicit mantissa bits, which biases the FP32 state products
+            # low over long sequences. With SP these are the relay's hop (affine prefix) and the entry correction
+            # (scan).
+            scan_math_fidelity=ttnn.MathFidelity.HiFi3,
+            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # HiFi3 for the same SrcB truncation.
+        output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
