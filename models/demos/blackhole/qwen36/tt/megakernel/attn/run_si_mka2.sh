@@ -11,6 +11,7 @@ mkdir -p $TT_METAL_PROFILER_DIR; cd $MK2
 [ -n "${MK_PCACHE:-}" ] && export TT_METAL_CACHE=$MK2/cache   # private JIT cache (per-run binary sizes)
 # MK_CHIP=<N> (device policy 23:20Z): single-chip run on chip N under the SHARED host lock + an exclusive per-chip lock
 if [ -n "${MK_CHIP:-}" ]; then LCK="flock -w 3600 -s /tmp/tt_device.lock flock -w 3600 -x /tmp/tt_chip${MK_CHIP}.lock env TT_VISIBLE_DEVICES=${MK_CHIP}"; else LCK="flock -w 1800 /tmp/tt_device.lock"; fi
+[ -n "${MK_CHIP:-}" ] && while [ -e /tmp/tt_host_exclusive.req ]; do sleep 5; done   # device rule: yield to queued whole-host runs
 s=$(date +%s); $LCK timeout ${MK_TIMEOUT:-600} $TM/python_env/bin/python $MK2/megakernel/attn/bench_mka2.py > $MK2/$TAG.log 2>&1; rc=$?
 echo "rc=$rc wall=$(( $(date +%s)-s ))s"; grep -E "\[mka2\]|\[mk1\] iter|\[fm11\] iter|TT_THROW|TT_FATAL|Error|Timeout" $MK2/$TAG.log | head -24
 CSV=$(find $TT_METAL_PROFILER_DIR -name profile_log_device.csv 2>/dev/null | head -1)
