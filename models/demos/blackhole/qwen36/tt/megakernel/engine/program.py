@@ -1318,6 +1318,10 @@ def engine_env(n_users, n_layers):
 # build and stays op-by-op). QWEN36_R16_MK_L1POOL=0 turns the pool off.
 _L1POOL = {}  # id(mesh) -> {key: [tensor, ...]}
 _ABLOCKS = {}  # id(mesh) -> the shared integration ArgBlocks
+# The model's repacked weights (weights_mk.repack: kind -> dict(tensor, pages_per_layer, layers, dtype)) for setup_bench while
+# build_program runs it: a track's phase that finds its kind here reads that tensor (layout = its weight_layouts pack) instead
+# of building the synthetic stand-in. Empty outside build_program (the bench).
+_WEIGHTS = {}
 
 
 def _l1_key(shape, dtype, layout, mc, data=None):
@@ -1485,8 +1489,13 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     _qkg = (weights or {}).get("qkg") or {}
     if _qkg.get("tensor") is not None:
         env.setdefault("MKA_QKG_ADDR", str(_qkg["tensor"].buffer_address()))
-    with _setup_context(mesh, env) as pool_stats:
-        S = setup_bench(mesh, True, lambda t: 0.0)
+    _WEIGHTS.clear()
+    _WEIGHTS.update({k: v for k, v in (weights or {}).items() if v})
+    try:
+        with _setup_context(mesh, env) as pool_stats:
+            S = setup_bench(mesh, True, lambda t: 0.0)
+    finally:
+        _WEIGHTS.clear()
     io0 = _io_list(S)
     per_dev = S.get("PROG_PER_DEV")
     try:  # v12's CB plan check (engine/cbplan.py, on -mk-v12cb): the in-model CB base / L1 high-water may differ from 112000
@@ -1523,5 +1532,37 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
 
     program.info = info
     program.setup = S
+    program.xio = make_xio(mesh, S) if os.environ.get("QWEN36_R16_MK_XIO", "1") == "1" else None
     program.blocks = blocks
     return program
+
+
+OWNERS = [(10 + j % 2, j // 2) for j in range(16)]  # AR contract: owner j holds x columns [320 j, 320 j + 320)
+
+
+def make_xio(mesh, S):
+    """The engine residual I/O (AR track contract, R = 32): (seed(x_in), drain(x_out)) as one-kernel generic_ops on the 16
+    owners, or None when the engine has no owner residual (no MK_REAL_AR). seed: x_in [1,1,32,5120] bf16 TILE DRAM ->
+    every owner's v_x0 shard (tiles 10 j .. 10 j + 9); drain: v_x0 -> x_out (same layout). Both trace-capturable.
+    Still missing on the engine side: the layer-0 K-row x delivery from v_x0 (a prologue delivery; today the stand-in
+    delivery is built from the bench's own x at setup), and the MK_AR_RSTD Σx² seed."""
+    import torch
+
+    vx0 = S.get("v_x0")
+    if vx0 is None or not S.get("REAL_AR"):
+        return None
+    tb = ttnn.Tile([32, 32]).get_tile_size(ttnn.bfloat16)
+    kpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "mk_xio.cpp")
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in OWNERS])
+
+    def op(dram_t, direction):
+        rt = ttnn.RuntimeArgs()
+        for j, (x, y) in enumerate(OWNERS):
+            rt[x][y] = [dram_t.buffer_address(), vx0.buffer_address(), 10 * j, 10, tb, direction]
+        k = ttnn.KernelDescriptor(kernel_source=kpath, core_ranges=crs, compile_time_args=[], runtime_args=rt,
+                                  config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
+                                                                          noc=ttnn.NOC.NOC_0))
+        io = [dram_t, vx0] if direction == 0 else [vx0, dram_t]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[]))
+
+    return (lambda x_in: op(x_in, 0)), (lambda x_out: op(x_out, 1))

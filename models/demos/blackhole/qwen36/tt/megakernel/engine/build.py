@@ -127,8 +127,13 @@ class MkEngine(EngineProgram):
         import ttnn
 
         io, desc = self.program(x_in, x_out, per_replay)
+        xio = getattr(self.program, "xio", None)  # residual I/O (v_x0 seed / drain), when the engine has a real AR
+        if xio is not None:
+            xio[0](x_in)
         self.launches += 1
         ttnn.generic_op(io, desc)
+        if xio is not None:
+            xio[1](x_out)
 
 
 def weight_layouts(mesh):
