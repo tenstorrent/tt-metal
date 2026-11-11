@@ -437,7 +437,7 @@ class DSV41UnifiedMoE:
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
-                        fp32_dest_acc_en=os.environ.get("DSV41_UNI_HYBRID_FP32", "0") == "1",
+                        fp32_dest_acc_en=False,  # the fused op refuses fp32 dest accumulation (device_operation.cpp:284)
                         packer_l1_acc=False,
                     ),
                     activation=ttnn.RoutedExpertActivation.SituGlu,
