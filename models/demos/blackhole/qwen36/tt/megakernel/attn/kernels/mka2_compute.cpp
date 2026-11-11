@@ -125,6 +125,15 @@ constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
+#if defined(MKA_STREAMLEAN)
+// one out-of-line copy of the full HW (re)init per TRISC binary instead of one inlined copy per call site (STREAM text)
+__attribute__((noinline, noclone)) static void mk_hw_startup(uint32_t a, uint32_t b, uint32_t o) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o);
+}
+#define MK_HWS(a, b, o) mk_hw_startup(a, b, o)
+#else
+#define MK_HWS(a, b, o) compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o)
+#endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
     constexpr uint32_t HT = get_compile_time_arg_val(2), NDN = get_compile_time_arg_val(3);
@@ -478,7 +487,7 @@ void kernel_main() {
         CZONE("C-QSK");
         const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK;
         MK_RSTD_PART();
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WM, CB_VA);
+        MK_HWS(CB_XK, CB_WM, CB_VA);
         cb_wait_front(CB_XK, V_KTR);
         cb_wait_front(CB_WM, QSK_SLOT);
         if (att_layer) { cb_reserve_back(CB_VA, V_NTM); cb_reserve_back(CB_VOWN, 2); }
@@ -542,7 +551,7 @@ void kernel_main() {
     auto qkv_proj = [&](bool att_layer) {
         CZONE("C-QKV");
         const uint32_t cbw = qrole == 3 ? CB_PQ : CB_WM;
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, cbw, CB_QA);
+        MK_HWS(CB_X, cbw, CB_QA);
         reconfig_data_format(cbw, CB_X);
         matmul_block_init(CB_X, cbw, 0, qnt, 1, KB);
         cb_wait_front(cbw, qnk * qnt);
@@ -657,8 +666,8 @@ void kernel_main() {
 #ifndef V12_OSUM
 #define V12_OSUM(L) do {} while (0)
 #endif
-    if (IS_STREAM) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
-    else compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
+    if (IS_STREAM) MK_HWS(CB_X, CB_W, CB_HL);
+    else MK_HWS(CB_Q, CB_K, CB_P);
     cb_wait_front(CB_ONE, 1);
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = ((uint32_t)(MKA_AMASK) >> L) & 1u;
@@ -695,7 +704,7 @@ void kernel_main() {
             cb_wait_front(CB_X, KT);
             CZONE("C-MIX");
 #if !defined(MKA_NO_REINIT)
-            if (L > 0) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
+            if (L > 0) MK_HWS(CB_X, CB_W, CB_HL);
 #endif
             reconfig_data_format(CB_WM, CB_X);
             matmul_block_init(CB_X, CB_WM, 0, MIXN, 1, KB);
@@ -717,9 +726,9 @@ void kernel_main() {
             // the previous layer's tree adds (fp32 copy_tile = unpack-to-dest) and the root's eltwise normalize leave
             // unpacker / math state that a short matmul_init does not undo: re-run the full HW init per SDPA phase
 #if defined(MKA_RQKV)
-            if (L > 0 || qrole) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
+            if (L > 0 || qrole) MK_HWS(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
 #else
-            if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
+            if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) MK_HWS(CB_Q, CB_K, CB_P);
 #endif
 #endif
             cb_wait_front(CB_Q, QT);
@@ -863,7 +872,7 @@ void kernel_main() {
             const bool own_h = vk < vnn;
             if (L == 0) { cb_wait_front(CB_VI, 1); cb_wait_front(CB_VJ, 1); }
             MK_RSTD_PART();
-            compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WV, CB_VA);
+            MK_HWS(CB_XK, CB_WV, CB_VA);
             cb_wait_front(CB_WV, V_SLOT);
             cb_wait_front(CB_XK, V_KTR);
             cb_reserve_back(CB_VA, V_NTM);
