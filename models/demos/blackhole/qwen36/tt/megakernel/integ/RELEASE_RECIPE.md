@@ -72,7 +72,8 @@ MKA_RMASK=1, MKA_QSK=1, MK_V12=1, MK_REAL_AR=1, MK_OWNER_RESID=0, MKA_RWO=1, MK_
 MKA_RQBAL_HOST=1, MK_V12_NOCBAL=60, MK_V12_NOCBAL_ATT=1, MK_GDN_INPROJ=1, MK_GIN_PERCORE=1, MK_GAMMA_CONS=1.
 
 Engine env: MKA_GDN24=1, MKA_GDN_WAIT=1, MKA_GDNOUT=1, MKA_UPAR=1, MKA_KVA=1, MKA_KVPROD=1, MKA_NKVH=1, MKA_KVH=0, MKA_BS=64,
-MKA_EXT=1, MKA_KVDT=bfp8, MKA_NBB=1, MKA_BUDGET=16384, MKA_CTX=262144, MK_MIXN=1, E1_HOLD_SKIP=1, MK_AR_RSTD=1,
+MKA_EXT=1, MKA_KVDT=bfp8, MKA_NBB=1, MKA_BUDGET=16384, MKA_CTX=262144, MK_MIXN=1, E1_HOLD_SKIP=1, E1_XVC=2, E1_GO_VC=2
+(7b gdnskew, default off in code), MK_AR_RSTD=1,
 MK_AR_RSTD_RED=gdn, MKA_W_ORD=1, MK_STREAM_DM_OS=1 (must reach os.environ at _ks time: build_program applies the env around
 setup_bench and the lazy per-device builds), MKA_GDN_CHECK=0, E1_GO_DBG=0, MKA_ATT0=0 (integration builds the tables per pass).
 (ENGINE_ENV also carries the inert stall knobs MK_SGDN_US=64 / MK_SAR_US=18 / MKA_SWO_US=10.)

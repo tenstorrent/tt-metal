@@ -2411,7 +2411,7 @@ ENGINE_ENV = dict(
     MK_SGDN_US="64", MK_SAR_US="18", MKA_SWO_US="10", MKA_CTX="262144", MKA_KVDT="bfp8", MKA_NBB="1",
     MKA_BUDGET="16384", MKA_EXT="1", MK_MIXN="1",
     MKA_GDN24="1", MKA_GDN_WAIT="1", MKA_GDNOUT="1", MKA_UPAR="1", MKA_KVA="1",
-    E1_HOLD_SKIP="1",
+    E1_HOLD_SKIP="1", E1_XVC="2", E1_GO_VC="2",  # batch 7b gdnskew (-1.05 ms / verify, bit-identical)
     MKA_GDN_CHECK="0", E1_GO_DBG="0",  # in-model: no GDN-role stock-op reference / gdn_out debug DRAM copy (asserted off)  # batch 5f: the GDN role skips state I/O + replay for idle / HOLD rows (padded OR shapes)
     MKA_KVPROD="1", MKA_NKVH="1", MKA_KVH="0", MKA_BS="64",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
