@@ -90,7 +90,13 @@ void kernel_main() {
     uint32_t kvv_addr[NL];   // paged_v per layer (kv_addr = paged_k)
     for (uint32_t L = 0; L < NL; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
 #endif
+#if defined(MKA_RQPOS)
+    const uint32_t user = get_arg_val<uint32_t>(a++);
+    uint32_t b0 = get_arg_val<uint32_t>(a++), b1 = get_arg_val<uint32_t>(a++);   // bounded by kvpos at pass start (below)
+    uint32_t kvp_m0 = KVP_NONE, kvp_m1 = KVP_NONE, kvp_p[MKA_RQ_T];   // masked blocks, per-row positions
+#else
     const uint32_t user = get_arg_val<uint32_t>(a++), b0 = get_arg_val<uint32_t>(a++), b1 = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
     const uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
     const uint32_t par_lvl = get_arg_val<uint32_t>(a++);
@@ -184,7 +190,17 @@ void kernel_main() {
             cb_reserve_back(CB_HG, 11);
             if (hg_addr) {
                 const auto hg = TensorAccessor(qo_args_r, hg_addr, 2048);
+#if defined(MKA_RQPOS)
+                // gamma (qkg table) of the first attention layer (the writer reloads slots 0-7 per layer); cos / sin (slots
+                // 8, 9) = tile 0 of this replay's in-trace cos / sin (prod's per-row values, M-RoPE delta included)
+                for (uint32_t t = 0; t < 8; ++t) noc_async_read(hg.get_noc_addr(hg_page + t), get_write_ptr(CB_HG) + t * 2048, 2048);
+                for (uint32_t cs = 0; cs < 2; ++cs) {
+                    const InterleavedAddrGen<true> rt{.bank_base_address = rq_replay(2 + cs), .page_size = 2048};
+                    noc_async_read(rt.get_noc_addr(0), get_write_ptr(CB_HG) + (8 + cs) * 2048, 2048);
+                }
+#else
                 for (uint32_t t = 0; t < 10; ++t) noc_async_read(hg.get_noc_addr(hg_page + t), get_write_ptr(CB_HG) + t * 2048, 2048);
+#endif
             }
             if (mk_addr) {
                 const auto mk = TensorAccessor(qo_args_r, mk_addr, 2048);
@@ -193,6 +209,44 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(CB_HG, 11);
         }
+    }
+#endif
+#if defined(MKA_RQPOS)
+    {   // kvpos -> this core's KV bound, mask blocks and page-table window (see mka2_common.hpp)
+        const uint32_t scr = get_write_ptr(CB_OA);   // idle until the first masked group / root normalize
+        const InterleavedAddrGen<true> kpa{.bank_base_address = rq_replay(0), .page_size = 128};
+        noc_async_read(kpa.get_noc_addr(0), scr, 128);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr int32_t* kp = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr) + rq_g(user) * MKA_RQ_T;
+        int32_t pmax = -1, pmin = 0x7FFFFFFF;
+        for (uint32_t j = 0; j < MKA_RQ_T; ++j) {
+            const int32_t p = kp[j];
+            if (p < 0) continue;
+            if (p > pmax) pmax = p;
+            if (p < pmin) pmin = p;
+        }
+        if (pmax < 0) pmax = pmin = 0;   // idle user: length 1 (block 0 through its zero-padded table row, finite)
+        // per-row valid limit inside the masked blocks: HOLD rows (-1) take the user's last position (finite)
+        for (uint32_t j = 0; j < MKA_RQ_T; ++j) kvp_p[j] = kp[j] < 0 ? (uint32_t)pmax : (uint32_t)kp[j];
+        const uint32_t lb = (uint32_t)pmax / 32, lb0 = (uint32_t)pmin / 32;
+#if defined(MKA_RQDYN)
+        // dynamic split: the static [b0, b1) of NBK (host weights) rescaled to the user's lb + 1 blocks
+        b0 = b0 * (lb + 1) / NBK; b1 = b1 * (lb + 1) / NBK;
+#endif
+        const uint32_t nv = lb + 1 <= b0 ? 0 : (lb + 1 - b0 < b1 - b0 ? lb + 1 - b0 : b1 - b0);
+        if (lb >= b0 && lb - b0 < nv) kvp_m0 = lb - b0;
+        if (lb0 < lb && lb - 1 >= b0 && lb - 1 - b0 < nv) kvp_m1 = lb - 1 - b0;
+        b1 = b0 + nv;
+        volatile tt_l1_ptr uint32_t* tab = l1w(MKA_KVP_TAB);
+        if (nv) {   // page-table window: entries [b0 / BS32, (b1 - 1) / BS32] of row g, read 64 B aligned
+            const uint32_t e0 = (b0 / KV_BS32) & ~15u, e1 = (b1 - 1) / KV_BS32 + 1;
+            const InterleavedAddrGen<true> pta{.bank_base_address = rq_attn(0), .page_size = rq_attn(2) * 4};
+            noc_async_read(pta.get_noc_addr(rq_g(user)) + e0 * 4, MKA_KVP_TAB + KVP_PT * 4, ((e1 - e0) * 4 + 63) & ~63u);
+            tab[2] = e0;
+            noc_async_read_barrier();
+        }
+        tab[1] = b0;
+        tab[0] = (1u << 31) | nv | (kvp_m0 << 11) | (kvp_m1 << 21);
     }
 #endif
     bool pq_pending = false;
@@ -513,8 +567,14 @@ void kernel_main() {
 #endif
         if (att) {   // SDPA: K stream
             MKZ("R-KV");
+#if defined(MKA_RQPOS)
+            const auto kv = TensorAccessor(kv_args, rq_attn(4 + 2 * (MKA_ATT0 + A)), KVTB);
+            const auto kvv = TensorAccessor(kv_args, rq_attn(5 + 2 * (MKA_ATT0 + A)), KVTB);
+#else
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
-#if defined(MKA_KVPROD)
+#endif
+#if defined(MKA_RQPOS)
+#elif defined(MKA_KVPROD)
             const auto kvv = TensorAccessor(kv_args, kvv_addr[L], KVTB);
             const uint32_t kvn = MKA_BPU;
 #else
@@ -634,6 +694,29 @@ void kernel_main() {
                     if (kv_mode != 2) *l1w(gs[GS_KVPROG]) = A + 1;
                 }
 #endif
+#if defined(MKA_RQPOS)
+                if (b - b0 == (kvp_m1 != KVP_NONE ? kvp_m1 : kvp_m0)) {   // first masked group: the ADDITIVE mask tiles (bf16 0 / -9984)
+                    cb_reserve_back(CB_OA, 8);
+                    const uint32_t mt = get_write_ptr(CB_OA);
+                    for (uint32_t k = 0; k < 2; ++k) {
+                        const uint32_t mb = k ? kvp_m1 : kvp_m0;
+                        if (mb == KVP_NONE) continue;
+                        const int32_t base = (int32_t)((b0 + mb) * 32);
+                        volatile tt_l1_ptr uint32_t* t = l1w(mt + k * 2048);
+                        for (uint32_t r = 0; r < 32; ++r) {
+                            const int32_t lim = r < 6 * MKA_RQ_T ? (int32_t)kvp_p[r % MKA_RQ_T] - base : 31;   // valid cols c <= lim
+                            for (uint32_t h = 0; h < 2; ++h) {
+                                volatile tt_l1_ptr uint32_t* fr = t + (((r / 16) * 2 + h) * 512 + (r % 16) * 32) / 4;
+                                for (uint32_t c2 = 0; c2 < 8; ++c2) {
+                                    const int32_t c = (int32_t)(16 * h + 2 * c2);
+                                    fr[c2] = (c <= lim ? 0u : 0xC61Cu) | ((c + 1 <= lim ? 0u : 0xC61Cu) << 16);
+                                }
+                            }
+                        }
+                    }
+                    cb_push_back(CB_OA, 8);
+                }
+#endif
                 if (!(rd_k || rd_v)) continue;
                 // always a full group: CB_K / CB_V hold a whole number of groups, so groups never straddle the ring end
                 if (rd_k) cb_reserve_back(CB_K, NBB * DH);
@@ -641,7 +724,11 @@ void kernel_main() {
                 const uint32_t wk = rd_k ? get_write_ptr(CB_K) : 0, wv = rd_v ? get_write_ptr(CB_V) : 0;
                 noc_async_read_set_trid(TRID_K);
                 for (uint32_t i = 0; i < nb; ++i) {
+#if defined(MKA_RQPOS)
+                    const uint32_t pk = kv_page_pt(b + i), pv = pk;   // through the real page table (row g)
+#else
                     const uint32_t pk = kv_page(user, b + i, kvn, false), pv = kv_page(user, b + i, kvn, true);
+#endif
                     if (rd_k) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kv.get_noc_addr(pk + t), wk + (i * DH + t) * KVTB, KVTB);
                     if (rd_v) for (uint32_t t = 0; t < DH; ++t) noc_async_read(kvv.get_noc_addr(pv + t), wv + (i * DH + t) * KVTB, KVTB);
                 }
@@ -850,6 +937,9 @@ void kernel_main() {
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
 #if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
     if (kva_w) { noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * aidx(NL)); *l1w(KVA_GS_DONE) = 0; }   // drain, reset
+#endif
+#if defined(MKA_RQPOS)
+    *l1w(MKA_KVP_TAB) = 0;   // writer / compute read it at their first SDPA, long done
 #endif
 #if defined(MKA_RWO)
     if (rw_hlp) *l1w(gs[GS_WOHC]) = 0;
