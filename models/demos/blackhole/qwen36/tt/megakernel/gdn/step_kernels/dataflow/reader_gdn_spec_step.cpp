@@ -122,6 +122,9 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GDN_ST_RING
 #define GDN_ST_RING 0  // BATCH: state / stash DFBs hold GDN_ST_RING users (streamed per user; 0 = all kBatchMax at once)
 #endif
+#ifndef GSTEP_WYPAIR
+#define GSTEP_WYPAIR 0  // engine GDN role (BATCH, T*kBatchMax == 32): kmq tiles carry K_u AND Q_u (Q rows in the other face row)
+#endif
 #ifndef GSTEP_WPRE
 #define GSTEP_WPRE 0  // engine GDN role (GDN_STATE_FIRST + GDN_PREFIXED): w_in (norm weight rows) read before gdn_in_wait
 #endif
@@ -829,6 +832,63 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             noc_async_read_barrier();
             kts.push_back(kBatchMax * kpb);
         }
+#if GSTEP_WYPAIR
+        // GSTEP_WYPAIR: one masked tile per (j, u, i) holds K_u's T rows at row r = (u T) mod 16 (face row 0) and Q_u's at
+        // 16 + r (face row 1): the compute's DST tile (u T >= 16) gets [K S' | Q S'] rows for 4 users, then a DST half swap
+        static_assert(kBatchMax * T == 32, "WYPAIR: users fill one 32-row tile");
+        {
+            DataflowBuffer kmq(dfb::kmq);
+            const uint32_t te = kmq.get_entry_size();
+            constexpr uint32_t rb = T * 64;  // one user's rows in one face (fp32)
+            auto cut_pair = [&](uint32_t dst_tile, uint32_t src_k, uint32_t src_q, uint32_t r0u) {
+                const uint32_t rr = r0u & 15, soff = (r0u >> 4) * 2048 + rr * 64, top = rr * 64, bot = 2048 + rr * 64;
+#if GDN_CUT_FAST
+                uint32_t e = 0;
+                while (e < g_cut_n && g_cut_addr[e] != dst_tile) {
+                    ++e;
+                }
+                if (e == g_cut_n) {
+                    for (uint32_t o = 0; o < te; o += MEM_ZEROS_SIZE) {
+                        noc_async_read(z, dst_tile + o, MEM_ZEROS_SIZE);
+                    }
+                    noc_async_read_barrier();
+                    g_cut_addr[g_cut_n++] = dst_tile;
+                } else if (g_cut_r0[e] != rr) {  // the previous occupant's K and Q rows (disjoint from the new ones)
+                    const uint32_t pt = g_cut_r0[e] * 64;
+                    noc_async_read(z, dst_tile + pt, rb);
+                    noc_async_read(z, dst_tile + pt + 1024, rb);
+                    noc_async_read(z, dst_tile + 2048 + pt, rb);
+                    noc_async_read(z, dst_tile + 2048 + pt + 1024, rb);
+                }
+                g_cut_r0[e] = rr;
+#else
+                for (uint32_t o = 0; o < te; o += MEM_ZEROS_SIZE) {
+                    noc_async_read(z, dst_tile + o, MEM_ZEROS_SIZE);
+                }
+                noc_async_read_barrier();
+#endif
+                noc_async_read(get_noc_addr(src_k + soff), dst_tile + top, rb);
+                noc_async_read(get_noc_addr(src_k + soff + 1024), dst_tile + top + 1024, rb);
+                noc_async_read(get_noc_addr(src_q + soff), dst_tile + bot, rb);
+                noc_async_read(get_noc_addr(src_q + soff + 1024), dst_tile + bot + 1024, rb);
+            };
+            for (uint32_t j = 0; j < Vs; ++j) {
+                for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                    if (GDN_HOLD_SKIP && hold_b[ub_]) {
+                        continue;
+                    }
+                    kmq.reserve_back(Kt);
+                    const uint32_t kb = kmq.get_write_ptr();
+                    for (uint32_t i = 0; i < Kt; ++i) {
+                        cut_pair(kb + i * te, knq_l1 + i * te, knq_l1 + (Kt + i) * te, ub_ * T);
+                    }
+                    noc_async_read_barrier();
+                    kmq.push_back(Kt);
+                }
+            }
+        }
+        if (false)
+#endif
         // kmq stream in the compute's order: for each output o of [K S' | Q S'] (o < Vs: K rows, else Q rows), for each
         // user u, the Kt masked tiles of K_u / Q_u (a 4-chunk ring)
         {

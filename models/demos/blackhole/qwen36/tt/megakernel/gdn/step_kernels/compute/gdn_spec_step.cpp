@@ -55,6 +55,29 @@
 #endif
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
+#ifndef GSTEP_WYPAIR
+#define GSTEP_WYPAIR 0  // engine GDN role (BATCH): c_wy on paired K_u / Q_u tiles (32 matmuls, not 64) + a DST half swap
+#endif
+#if GSTEP_WYPAIR
+#include "api/compute/copy_dest_values.h"
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+// exact fp32 exchange of DST tile a's face row 1 (faces 2, 3) with tile b's face row 0 (faces 0, 1); VectorMode::R
+// runs it for faces 0 and 1 (16 rows each), so the offsets below address a's faces 2 / 3 and b's faces 0 / 1
+template <int ITERATIONS = 8>
+inline void gstep_swap_half(const uint a, const uint b, const uint) {
+    constexpr InstrModLoadStore m = GetSfpLoadStoreInstrMod<DataFormat::Float32>();
+    for (int d = 0; d < ITERATIONS; d++) {
+        TT_SFPLOAD(p_sfpu::LREG0, m, ADDR_MOD_7, a * 64 + 32);
+        TT_SFPLOAD(p_sfpu::LREG1, m, ADDR_MOD_7, b * 64);
+        TT_SFPSTORE(p_sfpu::LREG0, m, ADDR_MOD_7, b * 64);
+        TT_SFPSTORE(p_sfpu::LREG1, m, ADDR_MOD_7, a * 64 + 32);
+        dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+#endif
 
 #ifndef GDN_R16_EARLY_COEF
 #define GDN_R16_EARLY_COEF 0
@@ -2200,6 +2223,36 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         sp.wait_front(nb * KVs);
         ksqs.reserve_back(2 * Vs);
         pack_reconfig_data_format(dfb::ksqs);
+#if GSTEP_WYPAIR
+        // paired: kmq tile (u, i) = K_u rows at (u T) mod 16 + Q_u rows 16 below -> DST 0 (users 0..3) = [K S' | Q S']
+        // rows of users 0..3, DST 1 = users 4..7; same k order per element from a cleared DST, other users' rows add
+        // exact zeros as before. Swap DST 0 face row 1 <-> DST 1 face row 0 (exact fp32): DST 0 = K S', DST 1 = Q S'
+#pragma GCC unroll 1
+        for (uint32_t j = 0; j < Vs; ++j) {
+            tile_regs_acquire();
+            lz_mm_init(dfb::kmq, dfb::sp);
+#pragma GCC unroll 1
+            for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                if (!(live & (1u << ub_))) {
+                    continue;
+                }
+                const uint32_t dd = (ub_ * 4u >= 16u) ? 1u : 0u;  // T = 4 (kBatchMax * T == 32)
+                kmq.wait_front(Kt);
+#pragma GCC unroll 1
+                for (uint32_t i = 0; i < Kt; ++i) {
+                    matmul_tiles(dfb::kmq, dfb::sp, i, ub_ * KVs + i * Vs + j, dd);
+                }
+                kmq.pop_front(Kt);
+            }
+            copy_dest_values_init();
+            MATH((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, gstep_swap_half, (8), 0, 1, 0, VectorMode::R)));
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, dfb::ksqs, j);
+            pack_tile<true>(1, dfb::ksqs, Vs + j);
+            tile_regs_release();
+        }
+#else
 #pragma GCC unroll 1
         for (uint32_t o = 0; o < 2 * Vs; ++o) {
             const uint32_t ro = o >= Vs ? 1u : 0u;
@@ -2223,6 +2276,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             pack_tile(0, dfb::ksqs, o);
             tile_regs_release();
         }
+#endif  // GSTEP_WYPAIR
         // per-user stash K^T pages: transposes of the masked K_u tiles i = s, s + VB, .. (kts, from the reader) --
         // exactly the per-user program's K^T (its own token columns, +0 elsewhere)
         {
