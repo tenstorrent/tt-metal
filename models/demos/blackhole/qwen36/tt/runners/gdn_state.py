@@ -61,6 +61,10 @@ class GdnGeometry:
     conv_history: int = 3
     sequence_parallel_size: int = 1
     tensor_parallel_size: int = 4
+    #: The decode ring's form (tt-blaze ``blaze.models.qwen35_9b.cache_migration``): its GDN runs one q / k head per
+    #: value head, so the q and k conv histories are published per value head (key head ``g // ratio``), 32 heads in
+    #: every branch, as Kimi-K3's contract has them.
+    conv_per_value_head: bool = False
 
     def __post_init__(self):
         tp = self.tensor_parallel_size
@@ -93,7 +97,14 @@ class GdnGeometry:
         return self.num_v_heads // self.tensor_parallel_size
 
     def branch_heads(self, branch: int) -> int:
+        if self.conv_per_value_head:
+            return self.num_v_heads
         return (self.num_k_heads, self.num_k_heads, self.num_v_heads)[branch]
+
+    @property
+    def native_convolution_channels(self) -> int:
+        """Per-chip conv channels the model holds: ``[q | k | v]`` at the key / value head counts."""
+        return (2 * self.local_k_heads + self.local_v_heads) * self.head_dim
 
     def branch_local_heads(self, branch: int) -> int:
         return self.branch_heads(branch) // self.tensor_parallel_size
@@ -110,8 +121,8 @@ class GdnGeometry:
 
     @property
     def convolution_channels(self) -> int:
-        """Per-chip conv channels: ``[q | k | v]``."""
-        return (2 * self.local_k_heads + self.local_v_heads) * self.head_dim
+        """Per-chip conv channels as published: ``[q | k | v]``."""
+        return sum(self.branch_local_heads(b) for b in range(3)) * self.head_dim
 
     @property
     def bands(self) -> int:
@@ -139,7 +150,7 @@ class GdnGeometry:
 
     @property
     def convolution_segments_per_layer(self) -> int:
-        return (2 * self.num_k_heads + self.num_v_heads) * self.halves
+        return sum(self.branch_heads(b) for b in range(3)) * self.halves
 
     @property
     def recurrent_shards_per_layer(self) -> int:
@@ -253,8 +264,27 @@ def convolution_segment_to_torch(raw: bytes, geometry: GdnGeometry):
     return torch.frombuffer(bytearray(raw), dtype=torch.bfloat16).reshape(geometry.conv_history, CONVOLUTION_PAGE_CHANNELS)
 
 
+def native_convolution_per_value_head(rows, geometry: GdnGeometry):
+    """Host mirror of :func:`conv_rows_per_value_head`: native ``[K-1, C]`` -> ``[K-1, 3 * Hv_local * D]`` with q and k
+    repeated per value head (value head ``j`` takes key head ``j // ratio``, HF's ``repeat_interleave``)."""
+    import torch
+
+    k1 = rows.shape[0]
+    kw = geometry.local_k_heads * geometry.head_dim
+    ratio = geometry.local_v_heads // geometry.local_k_heads
+
+    def per_value(branch):
+        return branch.reshape(k1, geometry.local_k_heads, geometry.head_dim).repeat_interleave(ratio, dim=1).reshape(
+            k1, -1
+        )
+
+    return torch.cat([per_value(rows[:, :kw]), per_value(rows[:, kw : 2 * kw]), rows[:, 2 * kw :]], dim=1)
+
+
 def native_convolution_to_slab_rows(rows, geometry: GdnGeometry):
     """Host mirror of the device relayout: native ``[K-1, C]`` (one chip) -> slab rows ``[C / 64, (K-1) * 64]``."""
+    if geometry.conv_per_value_head:
+        rows = native_convolution_per_value_head(rows, geometry)
     k1, c = rows.shape
     assert k1 == geometry.conv_history and c == geometry.convolution_channels, (tuple(rows.shape), geometry)
     return (
@@ -279,7 +309,7 @@ def assemble_convolution(segments, geometry: GdnGeometry):
     """{global segment: [K-1, 64]} -> ``[K-1, 2 * Hk * D + Hv * D]`` bf16 in HF's ``[all q | all k | all v]`` order."""
     import torch
 
-    width = (2 * geometry.num_k_heads + geometry.num_v_heads) * geometry.head_dim
+    width = sum(geometry.branch_heads(b) for b in range(3)) * geometry.head_dim
     out = torch.zeros(geometry.conv_history, width, dtype=torch.bfloat16)
     for seg, rect in segments.items():
         branch, c, h, half = geometry.decompose_convolution(seg)
@@ -287,6 +317,22 @@ def assemble_convolution(segments, geometry: GdnGeometry):
         start = (geometry.branch_base(branch) + g) * geometry.head_dim + half * CONVOLUTION_PAGE_CHANNELS
         out[:, start : start + CONVOLUTION_PAGE_CHANNELS] = rect
     return out
+
+
+def per_value_head_to_native(assembled, geometry: GdnGeometry):
+    """``[K-1, 3 * Hv * D]`` (q / k per value head) -> ``[K-1, (2 Hk + Hv) D]``: each key head's first copy."""
+    import torch
+
+    if not geometry.conv_per_value_head:
+        return assembled
+    k1 = assembled.shape[0]
+    d, hv, hk = geometry.head_dim, geometry.num_v_heads, geometry.num_k_heads
+    ratio = hv // hk
+
+    def first_copy(branch):
+        return branch.reshape(k1, hv, d)[:, ::ratio].reshape(k1, hk * d)
+
+    return torch.cat([first_copy(assembled[:, : hv * d]), first_copy(assembled[:, hv * d : 2 * hv * d]), assembled[:, 2 * hv * d :]], dim=1)
 
 
 def hf_conv_state(assembled):
@@ -386,6 +432,27 @@ def conv_rows_to_slab_rows(conv_rows, geometry: GdnGeometry):
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if x.dtype != ttnn.bfloat16:
         x = ttnn.typecast(x, ttnn.bfloat16)
+    if geometry.conv_per_value_head:
+        x = conv_rows_per_value_head(x, geometry)
     x = ttnn.reshape(x, [1, k1, c // CONVOLUTION_PAGE_CHANNELS, CONVOLUTION_PAGE_CHANNELS])
     x = ttnn.permute(x, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return ttnn.reshape(x, [1, c // CONVOLUTION_PAGE_CHANNELS, k1 * CONVOLUTION_PAGE_CHANNELS])
+
+
+def conv_rows_per_value_head(x, geometry: GdnGeometry):
+    """Device: ``[1, K-1, C]`` bf16 row-major -> ``[1, K-1, 3 * Hv_local * D]``, the q and k histories repeated per
+    value head (:func:`native_convolution_per_value_head` is the host mirror)."""
+    import ttnn
+
+    k1, d = geometry.conv_history, geometry.head_dim
+    kh, vh = geometry.local_k_heads, geometry.local_v_heads
+    kw = kh * d
+
+    def per_value(lo):
+        b = ttnn.slice(x, [0, 0, lo], [1, k1, lo + kw])
+        b = ttnn.reshape(b, [1, k1, kh, d])
+        r = ttnn.repeat_interleave(b, vh // kh, dim=2)
+        return ttnn.reshape(r, [1, k1, vh * d])
+
+    v = ttnn.slice(x, [0, 0, 2 * kw], [1, k1, 2 * kw + vh * d])
+    return ttnn.concat([per_value(0), per_value(kw), v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)

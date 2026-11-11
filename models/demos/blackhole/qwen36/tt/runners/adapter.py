@@ -88,7 +88,7 @@ class Qwen35PupPrefillAdapter(PrefillModelAdapter):
         from models.demos.blackhole.qwen36.tt.runners.kv_table import layer_position_range
 
         _, gdn = layer_ids(int(self.model_config.NUM_LAYERS))
-        return layer_position_range(layer_idx, real_len, gdn, GdnGeometry())
+        return layer_position_range(layer_idx, real_len, gdn, GdnGeometry(conv_per_value_head=True))
 
     # --- caches + runtime --------------------------------------------------------------------------------------
     def _serving_config(self, params: PrefillRunParams) -> PupPrefillConfig:
@@ -111,6 +111,7 @@ class Qwen35PupPrefillAdapter(PrefillModelAdapter):
             conv_history=int(getattr(hf_config, "linear_conv_kernel_dim", 4)) - 1,
             sequence_parallel_size=int(params.mesh_shape[params.sp_axis]),
             tensor_parallel_size=int(params.mesh_shape[params.tp_axis]),
+            conv_per_value_head=True,  # the decode ring's form (tt-blaze qwen35_9b cache_migration)
         )
         return kv_table.allocate(
             mesh_device,

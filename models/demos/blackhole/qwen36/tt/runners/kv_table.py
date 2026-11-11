@@ -6,7 +6,9 @@
 Attention (8 layers): MiniMax-M3's GQA layout (``models/demos/minimax_m3/tt/attention/kv_cache.py``): per chip
 ``[slots * 8, 1, max_seq_len, 256]`` bf8, DRAM ND-sharded, shard ``[1, 1, 32, 256]`` round robin over the banks, written
 with ``ttnn.experimental.deepseek_prefill.update_padded_kv_cache``. Qwen3.5-9B has 4 KV heads on a (1, 4) column, so KV
-head h is chip h, exactly M3's head -> TP-column rule. K is post k-norm + M-RoPE in HF rotate-half order; V raw.
+head h is chip h, exactly M3's head -> TP-column rule. K is post k-norm + M-RoPE, published in the decode ring's
+interleaved-pair RoPE order (:func:`rotate_half_to_interleaved`: device dim 2j = HF dim j, 2j + 1 = HF dim 32 + j over
+the 64 rotary dims, tt-blaze ``blaze.weights.qwen35_9b.rope.head_perm``); V raw.
 
 GDN (24 layers): ``gdn_state.GdnStates``, Kimi-K3's Snapshot contract with Qwen3.5's head counts.
 
@@ -33,6 +35,45 @@ NUM_BANKS_BH = 8
 CHUNK_TOKENS = 32
 BF8_TILE_BYTES = 1088
 KINDS = ("k", "v", "gdn_recurrent", "gdn_convolution")
+#: Rotary dims of a Qwen3.5-9B attention head (partial_rotary_factor 0.25 of 256).
+K_ROPE_DIM = 64
+
+
+def interleaved_k_perm(head_dim: int = 256, rot: int = K_ROPE_DIM):
+    """``perm[ring dim] = HF dim`` within one head (the ring's ``head_perm``)."""
+    import torch
+
+    perm = torch.arange(head_dim)
+    perm[0:rot:2] = torch.arange(rot // 2)
+    perm[1:rot:2] = torch.arange(rot // 2, rot)
+    return perm
+
+
+def rotate_half_to_interleaved_host(k, rot: int = K_ROPE_DIM):
+    """Host mirror of :func:`rotate_half_to_interleaved` on ``[..., head_dim]``."""
+    import torch
+
+    lead = k.shape[:-1]
+    r = k[..., :rot].reshape(*lead, 2, rot // 2).transpose(-2, -1).reshape(*lead, rot)
+    return torch.cat([r, k[..., rot:]], dim=-1)
+
+
+def rotate_half_to_interleaved(x, rot: int = K_ROPE_DIM):
+    """Device: K ``[1, 1, n, head_dim]`` (any dtype) -> bf8 TILE with the rotary dims in the ring's interleaved-pair
+    order. Done in bf16 before the bf8 cast: bf8 shares one exponent per 16-element row segment, so the bf8 bytes of
+    the permuted K are not a permutation of the bf8 bytes."""
+    import ttnn
+
+    n, hd = int(x.shape[-2]), int(x.shape[-1])
+    y = ttnn.to_layout(ttnn.typecast(x, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    r = ttnn.slice(y, [0, 0, 0, 0], [1, 1, n, rot])
+    r = ttnn.reshape(r, [1, n, 2, rot // 2])
+    r = ttnn.permute(r, (0, 1, 3, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    r = ttnn.reshape(r, [1, 1, n, rot])
+    rest = ttnn.slice(y, [0, 0, 0, rot], [1, 1, n, hd])
+    out = ttnn.concat([r, rest], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.typecast(out, ttnn.bfloat8_b)
 
 
 def kv_chunk_bytes(head_dim: int) -> int:

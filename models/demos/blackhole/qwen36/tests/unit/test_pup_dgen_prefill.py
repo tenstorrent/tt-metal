@@ -264,7 +264,7 @@ def test_cache_kind_and_position_range():
     a = Qwen35PupPrefillAdapter()
     assert [a.cache_kind(i) for i in range(11)] == ["kv"] * 8 + ["gdn_recurrent", "gdn_convolution", "other"]
     assert a.layer_position_range(3, 900) == (0, 900)
-    assert a.layer_position_range(0, 900) == (0, 4096)
+    assert a.layer_position_range(0, 900) == (0, 12288)  # the ring form (R.window)
     attn, gdn = layer_ids(32, ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8)
     assert attn == ATTN and gdn == GDN
     assert layer_ids(32) == (ATTN, GDN)
@@ -329,3 +329,60 @@ def test_media_wrong_size_or_missing():
         pm.fetch_values(reader, [_ref(0, 10, 42, b"a" * 32)])
     with pytest.raises(KeyError):
         pm.fetch_values(reader, [_ref(0, 10, 74, b"c" * 32)])
+
+
+# --- the decode ring's forms (tt-blaze blaze.models.qwen35_9b.cache_migration) ------------------------------------
+
+R = gs.GdnGeometry(conv_per_value_head=True)
+
+
+def test_ring_form_geometry():
+    """The ring runs one q / k head per value head: 192 conv chunks a layer, window lcm(128, 192) * 32 with strides
+    96 / 64, the numbers the ring's table publishes."""
+    assert R.convolution_channels == 3 * 1024 and R.native_convolution_channels == 2048
+    assert R.recurrent_segments_per_layer == 128 and R.convolution_segments_per_layer == 192
+    assert R.convolution_shards_per_layer == 48
+    assert R.window == 12288
+    assert R.chunk_n_tokens("gdn_recurrent") == 96 and R.chunk_n_tokens("gdn_convolution") == 64
+    # ring numbering: conv segment (branch * 32 + g) * 2 + half, g = 8c + h, in every branch
+    for branch in range(3):
+        for c in range(4):
+            for h in range(8):
+                for half in range(2):
+                    assert R.convolution_segment(branch, c, h, half) == (branch * 32 + 8 * c + h) * 2 + half
+
+
+def test_ring_form_conv_segments_hold_the_key_head_of_each_value_head():
+    """Native [3, 2048] rows per chip -> ring-form slab -> segments: q / k of value head g = HF key head g // 2."""
+    hf = torch.randn(3, (2 * 16 + 32) * 128).to(torch.bfloat16)
+    segments = {}
+    for c in range(4):
+        parts = []
+        for branch in range(3):
+            n = G.branch_local_heads(branch)
+            a = _hf_conv_layout_channel(branch, c * n, 0)
+            parts.append(hf[:, a : a + n * 128])
+        slab = gs.native_convolution_to_slab_rows(torch.cat(parts, dim=1), R)
+        assert tuple(slab.shape) == (48, 192)
+        for seg, shard in R.local_segments("gdn_convolution", c):
+            raw = slab[shard].contiguous().view(torch.int16).numpy().tobytes()
+            segments[seg] = gs.convolution_segment_to_torch(raw, R)
+    assert len(segments) == 192
+    for seg, rect in segments.items():
+        branch, c, h, half = R.decompose_convolution(seg)
+        g = 8 * c + h
+        src_head = g // 2 if branch < 2 else g
+        a = _hf_conv_layout_channel(branch, src_head, half * 64)
+        assert torch.equal(rect, hf[:, a : a + 64]), (branch, g, half)
+    out = gs.per_value_head_to_native(gs.assemble_convolution(segments, R), R)
+    assert torch.equal(out, hf)
+
+
+def test_k_interleaved_order_is_the_ring_head_perm():
+    """The published K is in the ring's interleaved-pair RoPE order: ring dim 2j = HF dim j, 2j + 1 = HF dim 32 + j
+    for j < 32, the rest unchanged (tt-blaze ``blaze.weights.qwen35_9b.rope.head_perm``)."""
+    perm = kv_table.interleaved_k_perm()
+    assert perm[:6].tolist() == [0, 32, 1, 33, 2, 34] and perm[62:66].tolist() == [31, 63, 64, 65]
+    assert perm[64:].tolist() == list(range(64, 256))
+    k = torch.randn(2, 3, 256)
+    assert torch.equal(kv_table.rotate_half_to_interleaved_host(k), k[..., perm])

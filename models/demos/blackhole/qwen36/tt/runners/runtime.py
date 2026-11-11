@@ -239,6 +239,11 @@ class TtQwen35PupPrefillRuntime:
                 if rows != n:  # n = 32: half a block
                     y = ttnn.slice(x, [0, 0, 0, 0], [1, 1, n, hd])
                     x = y
+                if dst is kv.k:  # the decode ring's interleaved-pair RoPE order, permuted in bf16
+                    z = kv_table.rotate_half_to_interleaved(x)
+                    if x is not blk:
+                        ttnn.deallocate(x)
+                    x = z
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     dst,
                     x,
