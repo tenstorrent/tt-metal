@@ -2,10 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The served speculative round as the generator runs it, for timing and for the device profiler: ``initialize_vllm_model`` and the two-phase warm-up as ``test_v41_spec_generator.py`` (every
-served capture), then ``V41_RP_LIVE`` requests (1: the fused one-slot round, the ``vd:c1`` variant; 32: the uniform
+"""The served speculative round as the generator runs it, for timing and for the device profiler:
+``initialize_vllm_model`` and the two-phase warm-up as ``test_v41_spec_generator.py`` (every
+served capture), then ``V41_RP_LIVE`` requests (1: the fused one-slot round, the ``vd:c1`` variant; 32: the
+uniform
 multi-slot step ``v:32`` and its standalone draft call) prefilled one after another from prompts of
-``V41_RP_PROMPT`` tokens of real text and decoded together through the plugin's ragged contract (``[rows, 1 + K]``
+``V41_RP_PROMPT`` tokens of real text and decoded together through the plugin's ragged contract (``[rows, 1 +
+K]``
 tokens a call, the drafts ``take_drafts`` gave fed back: a call is a round).
 
 ``V41_RP_DISTINCT=1`` (default): every request's prompt is the book rotated by its own offset, so the requests
@@ -14,17 +17,26 @@ expert FFN); ``0``: one prompt for all. ``V41_RP_WARM`` rounds run first (the jo
 ``V41_RP_ROUNDS`` measured rounds. ``V41_RP_PROFILE=1`` (under ``TT_METAL_DEVICE_PROFILER=1`` with the C++
 post-process and mid-run dumps): the device profiler is read after the warm-up, after the
 prefills and after every round, so a round's markers never overflow the buffer and each measured round is one
-replay session of its capture in ``cpp_device_perf_report.csv``. ``V41_RP_DRAIN_SKIP=warm-up,..`` leaves the named
-reads out (their phases overflow the buffers and are dropped). ``V41_RP_TEMP`` (default 0: greedy) samples every
+replay session of its capture in ``cpp_device_perf_report.csv``. ``V41_RP_DRAIN_SKIP=warm-up,..`` leaves the
+named
+reads out (their phases overflow the buffers and are dropped). ``V41_RP_TEMP`` (default 0: greedy) samples
+every
 row at that temperature (the device program is the same). ``V41_RP_OUT`` takes the JSON: per
-round the wall, the verify step's and the draft call's logged items and every row's emitted count.
+round the wall, the verify step's and the draft call's logged items and every row's emitted count and tokens
+(two sessions of one prompt set and seed are compared token for token).
 
-``V41_RP_OPMAP=<path>``: during the warm-up (where every served capture is made) a ``sys.setprofile`` hook records,
-for every call of a function of this model's ``tt/`` sources, the device operation ids it issued (``[start, end)``
-of ``ttnn._ttnn.get_device_operation_id``, the call depth, ``file:function`` and the ``layer`` / ``source`` argument
-if it has one), written to the path as JSON. A replayed op keeps its captured id (the report's ``GLOBAL CALL COUNT``
-is ``id * 1024 + device``), so every row of a traced session is attributed to the model function that issued it by
-the innermost span holding its id, with no anchors on the op order. The hook is removed before the prefills."""
+``V41_RP_OPMAP=<path>``: during the warm-up (where every served capture is made) a ``sys.setprofile`` hook
+records,
+for every call of a function of this model's ``tt/`` sources, the device operation ids it issued (``[start,
+end)``
+of ``ttnn._ttnn.get_device_operation_id``, the call depth, ``file:function`` and the ``layer`` / ``source``
+argument
+if it has one), written to the path as JSON. A replayed op keeps its captured id (the report's ``GLOBAL CALL
+COUNT``
+is ``id * 1024 + device``), so every row of a traced session is attributed to the model function that issued
+it by
+the innermost span holding its id, with no anchors on the op order. The hook is removed before the
+prefills."""
 
 import json
 import os
@@ -57,7 +69,8 @@ class _Params:  # the plugin's TTSamplingParams as lists per row
 
 
 class _OpMap:
-    """The ``sys.setprofile`` hook of ``V41_RP_OPMAP``: spans of device operation ids by the function that issued
+    """The ``sys.setprofile`` hook of ``V41_RP_OPMAP``: spans of device operation ids by the function that
+    issued
     them (the functions under ``root``, this model's ``tt/`` sources; spans that issued no op are dropped)."""
 
     HINTS = ("layer", "layer_idx", "source")
@@ -118,8 +131,10 @@ def test_v41_round_profile(mesh_device, device_params, monkeypatch):
     warm = int(os.environ.get("V41_RP_WARM", 8))
     rounds = int(os.environ.get("V41_RP_ROUNDS", 16))
     profile = os.environ.get("V41_RP_PROFILE", "0") == "1"
-    # the reads to leave out (prefixes of "warm-up", "prefills", "warm round N", "round N"): with the raw device log
-    # written, every read dumps what the buffers hold, and an unread phase only overflows them (its markers dropped)
+    # the reads to leave out (prefixes of "warm-up", "prefills", "warm round N", "round N"): with the raw
+    # device log
+    # written, every read dumps what the buffers hold, and an unread phase only overflows them (its markers
+    # dropped)
     drain_skip = [w for w in os.environ.get("V41_RP_DRAIN_SKIP", "").split(",") if w]
     temperature = float(os.environ.get("V41_RP_TEMP", 0))
     max_seq_len = int(os.environ.get("V41_RP_MAX_SEQ", 1053696))
@@ -250,11 +265,12 @@ def test_v41_round_profile(mesh_device, device_params, monkeypatch):
         wall = time.time() - t0
         given = [len(d) for d in drafts]
         proposed = model.take_drafts()
-        emitted = []
+        emitted, rows_out = [], []
         for i in range(live):
             row = [int(t) for t in out[i].tolist() if t >= 0]
             assert row, f"row {i}: a round emits at least one token"
             emitted.append(len(row))
+            rows_out.append(row)
             emitted_n[i] += len(row)
             last[i] = row[-1]
             drafts[i] = [int(t) for t in proposed.get(i, [])][:k]
@@ -263,6 +279,7 @@ def test_v41_round_profile(mesh_device, device_params, monkeypatch):
             "wall_s": round(wall, 4),
             "given": given,
             "emitted": emitted,
+            "tokens": rows_out,
             "verify": dict(model.decoder.last),
             "draft": dict(model.drafter.last) if live > 1 else None,
         }
