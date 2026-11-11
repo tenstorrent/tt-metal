@@ -285,6 +285,35 @@ def argblock_tensor(dev, cores, payloads, kind=AB_KIND_GDN):
     return ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=mc, **kw)
 
 
+def _audit_cb_transfers(tab, layers, Kt, Vt, T, VB):
+    """Static audit (v1.58 ask): every NoC transfer of the GDN role that lands in a CB fits the CB's page / slot.
+    A 64 B ctrl_r CB under a 256 B ctrl read overran into tmp (the out-only race); this catches that class at build time."""
+    import ttnn
+    ent = {n: (e, nb) for n, e, nb, _ in tab}
+    tile_b = lambda t: 32 * 32 * {ttnn.float32: 4, ttnn.bfloat16: 2, ttnn.uint32: 4}[t.dtype]
+    Vs = Vt // VB
+    for ly in layers:
+        ctrl_b = int(ly["ctrl"].shape[-1]) * 4
+        # rd_ctrl / wr ctrl: one whole ctrl page into ctrl_r / ctrl_w (lean: ctrl_w -> gprev, 4 KB)
+        assert ctrl_b <= ent["ctrl_r"][1], ("ctrl_r", ctrl_b, ent["ctrl_r"])
+        assert ctrl_b <= ent.get("ctrl_w", ent["gprev"])[1], ("ctrl_w", ctrl_b)
+        # state / stash pages (ring, fp32 tiles) into state_in / ktp_in / up_in / gprev (decay page) / S' out of sp
+        rb = tile_b(ly["ring"])
+        for n in ("state_in", "ktp_in", "up_in", "gprev", "sp", "stg", "kt_out", "u_out"):
+            assert rb == ent[n][1], (n, rb, ent[n])
+        # pre tiles (knq | vc | zs | coefficient + gate pages) into knq / vc / zs / coef / gprev
+        pb = tile_b(ly["pre"])
+        for n in ("knq", "vc", "zs", "coef", "gprev"):
+            assert pb == ent[n][1], (n, pb, ent[n])
+        # the norm weight: row 0 (entry / 64 bytes per face row) of a bf16 tile into w_in
+        assert tile_b(ly["weight"]) == ent["w_in"][1], ("w_in", tile_b(ly["weight"]), ent["w_in"])
+        # out rows / whole out tiles from the out CB into the out tensor (same tile format)
+        assert tile_b(ly["out"]) == ent["out"][1], ("out", tile_b(ly["out"]), ent["out"])
+    # slot counts: the per-layer reservations fit the CBs
+    assert ent["coef"][0] >= 15 and ent["kts"][0] >= 8 * ((Kt + VB - 1) // VB) and ent["kmq"][0] >= Kt, (ent["coef"], ent["kts"], ent["kmq"])
+    assert ent["stg"][0] >= 8 * Vs + (8 + VB - 1) // VB and ent["acc_x"][0] >= Vt and ent["sp"][0] >= 8 * Kt * Vs
+
+
 def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
                  out_b16=True, kdir=None, st_ring=None, attn_n=0, skip_cb_ids=(34, 35, 37, 39)):
     """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
@@ -354,6 +383,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     z_tile0, ab_page = (2 * Nk * Kt * 32 + Nv * Vt * 32) // 32, g.QKVZ // 32
     ctrl_bytes = int(tens["ctrl"].shape[-1]) * 4
     assert ctrl_bytes <= CTRL_B, (ctrl_bytes, CTRL_B)  # the ctrl_r / ctrl_w CBs hold the whole ctrl page
+    _audit_cb_transfers(tab, layers, Kt, Vt, T, VB)
     hs = 4294967295
     nR, nW = len(READER_TENSORS), len(WRITER_TENSORS)
     OW, OC, OLR = R_ARGS, R_ARGS + W_ARGS, R_ARGS + W_ARGS + C_ARGS
