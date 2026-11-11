@@ -39,8 +39,43 @@ __attribute__((noinline)) static void mk_colsum(uint32_t idst) {
 #if defined(MKA_ROLE_STREAM) && !defined(MKA_NO_STEXT)
 #define MK_STEXT 1
 #define MK_NOUNROLL _Pragma("GCC unroll 1")
+#elif defined(MKA_ROLE_EXT) && !defined(MKA_NO_OTEXT)
+// OTEXT (spec v1.149, owner / EXT kernel text budget): the same STREAM trims on the EXT (owner) binary, plus a shared out-of-line
+// HW init and no full unrolls of the owners' short fixed loops (head norm, v12 osum, wo unit, AR reduce); bit-identical;
+// MKA_NO_OTEXT = the old EXT binary
+#define MK_OTEXT 1
+#define MK_NOUNROLL _Pragma("GCC unroll 1")
 #else
 #define MK_NOUNROLL
+#endif
+// per-group TRISC masks (bit t = TRISC t; only where de-unrolling shrinks that TRISC): head norm (H), v12 osum (O), wo unit (W), AR reduce (A)
+#ifndef MKA_OT_H
+#define MKA_OT_H 6   // math + pack (offline per-TRISC sweep, v1.149)
+#endif
+#ifndef MKA_OT_O
+#define MKA_OT_O 4   // pack only: unpack +440 / math +1016 B when de-unrolled (offline per-TRISC sweep, v1.149)
+#endif
+#ifndef MKA_OT_W
+#define MKA_OT_W 4   // pack (offline per-TRISC sweep, v1.149)
+#endif
+#ifndef MKA_OT_A
+#define MKA_OT_A 6   // math + pack (offline per-TRISC sweep, v1.149)
+#endif
+#if defined(MK_OTEXT) && ((MKA_OT_H >> COMPILE_FOR_TRISC) & 1)
+#define MK_OU_H _Pragma("GCC unroll 1")
+#else
+#define MK_OU_H
+#endif
+#if defined(MK_OTEXT) && ((MKA_OT_O >> COMPILE_FOR_TRISC) & 1)
+#define MK_OU_O _Pragma("GCC unroll 1")
+#else
+#define MK_OU_O
+#endif
+#if defined(MK_OTEXT) && ((MKA_OT_W >> COMPILE_FOR_TRISC) & 1)
+#define WOU_NOUNROLL _Pragma("GCC unroll 1")    // wo_unit_c.hpp
+#endif
+#if defined(MK_OTEXT) && ((MKA_OT_A >> COMPILE_FOR_TRISC) & 1)
+#define MKAR_NOUNROLL _Pragma("GCC unroll 1")   // mk_ar_reduce.hpp (other includers keep the default: empty)
 #endif
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
 #include "../../kernels/mk_ar_reduce.hpp"   // AR reduce on the owners (MKAR_* defines from ar_phase.py)
@@ -149,14 +184,19 @@ constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
-#if defined(MKA_STREAMLEAN)
-// one out-of-line copy of the full HW (re)init per TRISC binary instead of one inlined copy per call site (STREAM text)
+#if defined(MKA_STREAMLEAN) || defined(MK_OTEXT)
+// one out-of-line copy of the full HW (re)init per TRISC binary instead of one inlined copy per call site (STREAM / OTEXT text)
 __attribute__((noinline, noclone)) static void mk_hw_startup(uint32_t a, uint32_t b, uint32_t o) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o);
 }
 #define MK_HWS(a, b, o) mk_hw_startup(a, b, o)
 #else
 #define MK_HWS(a, b, o) compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o)
+#endif
+#if defined(MK_OTEXT)
+#define MK_HWS_O(a, b, o) mk_hw_startup(a, b, o)   // sites that call the inline form directly (STREAM binaries unchanged)
+#else
+#define MK_HWS_O(a, b, o) compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o)
 #endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
@@ -258,15 +298,17 @@ void kernel_main() {
         CZONE("C-HNR");
         cb_wait_front(CB_HG, 11);   // constants: pushed once, never popped
         cb_wait_front(CB_A, WK);   // full slot (wo reuses CB_A later in the layer)
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_A, CB_HSQ);
+        MK_HWS_O(CB_A, CB_A, CB_HSQ);
         reconfig_data_format(CB_A, CB_A);
         mul_init(CB_A, CB_A);
         pack_reconfig_data_format(CB_HSQ);
         tile_regs_acquire();
+        MK_OU_H
         for (uint32_t t = 0; t < 8; ++t) mul_tiles(CB_A, CB_A, t, t, t);   // x^2
         tile_regs_commit();
         cb_reserve_back(CB_HSQ, 8);
         tile_regs_wait();
+        MK_OU_H
         for (uint32_t t = 0; t < 8; ++t) pack_tile(t, CB_HSQ);
         tile_regs_release();
         cb_push_back(CB_HSQ, 8);
@@ -274,6 +316,7 @@ void kernel_main() {
         reconfig_data_format(CB_ONE, CB_HSQ);   // row sums: (x^2) @ ONES, accumulated over the 8 tiles in fp32 DST
         matmul_init(CB_HSQ, CB_ONE, 0);
         tile_regs_acquire();
+        MK_OU_H
         for (uint32_t t = 0; t < 8; ++t) matmul_tiles(CB_HSQ, CB_ONE, t, 0, 0);
         binop_with_scalar_tile_init();
         mul_unary_tile(0, MKA_INVHD_BITS);
@@ -296,11 +339,13 @@ void kernel_main() {
         reconfig_data_format(CB_A, CB_RS);
         mul_bcast_cols_init(CB_A, CB_RS);
         tile_regs_acquire();
+        MK_OU_H
         for (uint32_t t = 0; t < 8; ++t) mul_tiles_bcast_cols(CB_A, CB_RS, t, 0, t);
         tile_regs_commit();
         cb_reserve_back(CB_HSQ, 8);
         tile_regs_wait();
         pack_reconfig_data_format(CB_HSQ);
+        MK_OU_H
         for (uint32_t t = 0; t < 8; ++t) pack_tile(t, CB_HSQ);
         tile_regs_release();
         cb_push_back(CB_HSQ, 8);
@@ -310,11 +355,13 @@ void kernel_main() {
         reconfig_data_format(CB_HSQ, CB_HG);
         mul_init(CB_HSQ, CB_HG);
         tile_regs_acquire();
+        MK_OU_H
         for (uint32_t t = 0; t < 8; ++t) mul_tiles(CB_HSQ, CB_HG, t, t, t);   // y = x * rstd * gamma
         tile_regs_commit();
         cb_pop_front(CB_HSQ, 8);
         cb_reserve_back(CB_HSQ, 8);
         tile_regs_wait();
+        MK_OU_H
         for (uint32_t t = 0; t < 8; ++t) pack_tile(t, CB_HSQ);
         tile_regs_release();
         cb_push_back(CB_HSQ, 8);
@@ -341,9 +388,11 @@ void kernel_main() {
         reconfig_data_format_srca(CB_HSQ);
         copy_init(CB_HSQ);
         tile_regs_acquire();
+        MK_OU_H
         for (uint32_t t = 2; t < 8; ++t) copy_tile(CB_HSQ, t, t - 2);
         tile_regs_commit();
         tile_regs_wait();
+        MK_OU_H
         for (uint32_t t = 2; t < 8; ++t) pack_tile(t - 2, CB_XO);
         tile_regs_release();
         cb_push_back(CB_XO, 10);   // full slot (8 valid)
@@ -570,7 +619,7 @@ void kernel_main() {
     auto v12_osum = [&](uint32_t L) {
         if (vrole != 2) return;
         if (L == 0) cb_wait_front(CB_VI, 1);
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_VP, CB_VI, CB_VXO);
+        MK_HWS_O(CB_VP, CB_VI, CB_VXO);
         cb_wait_front(CB_VP, V_NCOL * V_OT);
 #if defined(MK_OWNER_RESID) && MK_OWNER_RESID
         if (L == 0) cb_wait_front(CB_VX0, V_OT);
@@ -578,19 +627,24 @@ void kernel_main() {
         cb_reserve_back(CB_VXO, V_OT);
         CZONE("C-OSUM");
         pack_reconfig_data_format(CB_VXO);
+        MK_OU_O
         for (uint32_t b = 0; b < 2; ++b) {
             tile_regs_acquire();
             reconfig_data_format(CB_VI, CB_VP);
             matmul_block_init(CB_VP, CB_VI, 0, 1, 1, 1);
+            MK_OU_O
             for (uint32_t n = 0; n < V_NCOL; ++n)
+                MK_OU_O
                 for (uint32_t t = 0; t < 5; ++t) matmul_block(CB_VP, CB_VI, n * V_OT + b * 5 + t, 0, t, 0, 1, 1, 1);
 #if defined(MK_OWNER_RESID) && MK_OWNER_RESID
             reconfig_data_format(CB_VI, CB_VX0);
             matmul_block_init(CB_VX0, CB_VI, 0, 1, 1, 1);
+            MK_OU_O
             for (uint32_t t = 0; t < 5; ++t) matmul_block(CB_VX0, CB_VI, b * 5 + t, 0, t, 0, 1, 1, 1);
 #endif
             tile_regs_commit();
             tile_regs_wait();
+            MK_OU_O
             for (uint32_t t = 0; t < 5; ++t) pack_tile<true>(t, CB_VXO, b * 5 + t);
             tile_regs_release();
         }
@@ -1060,7 +1114,7 @@ void kernel_main() {
 #if defined(MKA_RWO)
         if (!IS_STREAM && att && wo_nt) {   // real wo, split-N: A_g = A (.) sig(gate) in place over S, then A_g @ Wo slice (ext ring)
             CZONE("C-WO");
-            compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_S, CB_AS);
+            MK_HWS_O(CB_A, CB_S, CB_AS);
             wou::gate_mul(CB_A, CB_S, CB_AS, WK);                              // A_g = A (.) sig(gate), in place over S
             wou::matmul_nt(CB_AS, CB_WSL, WSL_N, CB_QO, QO_SLOT, WK, wo_nt);   // A_g @ Wo slice (ring) -> CB_QO
         }
