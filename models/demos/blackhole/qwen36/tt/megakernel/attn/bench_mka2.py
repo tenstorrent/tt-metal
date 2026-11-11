@@ -56,6 +56,14 @@ _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..
 import program as _mk_program
 globals().update(_mk_program.setup_bench(dev, MESH, mesh_identity))
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
+# rstd the consumers use: MK_AR_RSTD=1 (spec rstd producer) = rsqrt(sum x^2 / H + eps) of the real residual (fp32 sum of the bf16
+# residual); else the static CB 20 stand-in rstd_g (the setup x's)
+_RSTD_REAL = os.environ.get('MK_AR_RSTD', '0') == '1'
+def _rstd_of(x_):
+    if not _RSTD_REAL: return rstd_g
+    xs = x_.double()
+    if xs.shape[0] < M: xs = torch.cat([xs, torch.zeros(M - xs.shape[0], H, dtype=xs.dtype)], 0)
+    return 1.0 / torch.sqrt((xs * xs).sum(-1) / H + EPS)
 for it in range(ITERS):
     t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else ([rsp] if V12 else [])) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([t_ for t_ in (wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j) if t_ is not None] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + (list(GDN_ROLE.get('io', [])) if GDN24 else []) + [out_t], prog); ttnn.synchronize_device(dev)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
@@ -92,7 +100,7 @@ for it in range(ITERS):
         for L_ in range(NL):
             _xin_seq[L_] = _xres.clone()   # layer L_'s mixer x (delivered by the previous MLP AR)
             _g, _u, _d = vlayer(L_)
-            _xn = (rstd_g[:, None] * _xres.double()).float()
+            _xn = (_rstd_of(_xres)[:, None] * _xres.double()).float()
             _pL = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
             _xres = (_xres + AR.ring * _pL).bfloat16().float()
         v_gold = _pL
@@ -133,7 +141,8 @@ for it in range(ITERS):
             _xin = {L_: x_ for L_, x_ in _xin_seq.items() if is_attn_layer(L_) and L_ > 0}
         for L_, x_ in _xin.items():
             if x_.shape[0] < M: x_ = torch.cat([x_, torch.zeros(M - x_.shape[0], H)], 0)   # R < 32: rows >= R are don't-care
-            attn_regold(L_, (rstd_g[:, None] * (x_.double() @ wfq[L_].double())).float())
+            if AR_GAMMA: x_ = (x_ * AR_GTAB[L_, 0][None, :]).bfloat16().float()   # MK_AR_GAMMA: the AR delivers x (.) gamma (layer L's input_layernorm)
+            attn_regold(L_, (_rstd_of(x_)[:, None] * (x_.double() @ wfq[L_].double())).float())
         print(f"[ar] iter {it} qkv/SDPA golds from the AR-delivered x for layers {sorted(_xin)}" if _xin else f"[ar] iter {it} qkv/SDPA golds: static x (no AR chain: MK_AR_DBG=1 at R = 32)", flush=True)
     if RQKV:
         qv = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
