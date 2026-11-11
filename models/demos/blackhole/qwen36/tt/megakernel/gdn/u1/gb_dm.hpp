@@ -74,19 +74,28 @@ constexpr uint32_t kNone = 0xFFFFFFFFu;
 // Scratch (QPX tail): win_l1: 2 x B bf16 tile slots (one window set per conv job); wo_l1: B x 1 KB window-out slots (row Lw
 // zeroed once); ctrl_l1: the ctrl page.
 template <uint32_t B, uint32_t T, uint32_t K, uint32_t CT, uint32_t M, uint32_t NV, uint32_t NC, uint32_t KT_, typename WAcc,
-          typename TAcc, typename CAcc>
+          typename TAcc, typename CAcc, typename DAcc>
 inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc& wa, const WAcc& wb, const TAcc& taps,
                          const CAcc& ctrl, uint32_t ctrl_bytes, uint32_t gin_l1, uint32_t qin_l1, uint32_t win_l1,
                          uint32_t wo_l1, uint32_t ctrl_l1, uint32_t cb_qpx, uint32_t npx, uint32_t cb_sht, uint32_t cb_kq,
-                         volatile tt_l1_ptr uint32_t* in_ready, uint32_t in_target) {
+                         volatile tt_l1_ptr uint32_t* in_ready, uint32_t in_target, const DAcc& dtb, const DAcc& nea) {
     static_assert(B * T == 32, "G-b: B * T == 32 only (the qkv tile is SH_{K-1})");
     const uint32_t nconv = pb[kNconv];
     gpx::Ctrl<B, T, M, NV> c;
     {
         GBZ("GB-RPRE");
         noc_async_read(ctrl.get_noc_addr(0), ctrl_l1, ctrl_bytes);
+        // this device's dt_bias / -exp(A_log) of the gate head (fp32 [1, 1, Nv] tiles: row 0 of face 0 = heads 0..15) into the
+        // per-layer payload words the compute's gate pair reads (per device on the mesh: a replicated host value would be wrong)
+        noc_async_read(dtb.get_noc_addr(0), ctrl_l1 + 512, 64);
+        noc_async_read(nea.get_noc_addr(0), ctrl_l1 + 576, 64);
         noc_async_read_barrier();
         c.parse(ctrl_l1);
+        {
+            const uint32_t hh = pb[kGate];
+            pb[kPerLayer + 2 * L] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_l1 + 512)[hh];
+            pb[kPerLayer + 2 * L + 1] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_l1 + 576)[hh];
+        }
         cb_reserve_back(cb_sht, 4 * nconv);
         for (uint32_t j = 0; j < nconv; ++j) {
             const uint32_t col = pb[kConv + j * kConvW];

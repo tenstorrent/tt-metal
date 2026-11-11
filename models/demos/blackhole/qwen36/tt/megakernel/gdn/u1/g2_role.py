@@ -89,19 +89,7 @@ class GdnRole:
             assert len(state) == NG, (len(state), NG)
             ref = False
             self.ref = False
-            probe = m.LazyCase(dev, g, B, T, seed=0)   # the op's layouts: the model's tensors must match them exactly
-            for l, st in enumerate(state):
-                for k, pk in (("win_a", "win_a"), ("win_b", "win_b"), ("ring", "ring"), ("taps", "taps_d"), ("dtb", "dtb_d"),
-                              ("nea", "nea_d"), ("weight", "w_d")):
-                    a_, b_ = st[k], getattr(probe, pk)
-                    assert a_ is not None, (l, k)
-                    # the kernels address whole tiles / pages: compare the PADDED shape (prod's window pair is logical
-                    # [B, K-1+T, C], padded to the tile height like the probe's [B, 32, C])
-                    ps = lambda t_: tuple(t_.padded_shape) if hasattr(t_, "padded_shape") else tuple(t_.shape)
-                    assert (ps(a_), a_.dtype, a_.layout) == (ps(b_), b_.dtype, b_.layout), \
-                        (l, k, ps(a_), tuple(a_.shape), a_.dtype, a_.layout, ps(b_), b_.dtype, b_.layout)
-            for t_ in (probe.win_a, probe.win_b, probe.ring, probe.taps_d, probe.dtb_d, probe.nea_d, probe.w_d):
-                ttnn.deallocate(t_)
+            self._check_state(state)
         self.LY = [dict(cA=None if state is not None else m.LazyCase(dev, g, B, T, seed=seed + 7 * l),
                         cE=None if state is not None else m.LazyCase(dev, g, B, T, seed=seed + 7 * l),
                         pre=mkz((1, 1, 32, Nv * self.S * 32), f32, mc("pre")), outE=mkz((1, 32, Nv * m.Dv), b16, mc("out")),
@@ -146,9 +134,30 @@ class GdnRole:
                 ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.zeros(list(t_.shape)), dtype=t_.dtype, layout=t_.layout), t_)
                 self._dkeep.append(t_)
                 return c_
+            model = "gdn_state_model" in _dec   # + prod's allocation shapes: window [B, K-1+T, C], norm weight rank 1 [Dv]
+            KT1 = self.K - 1 + T
+            def _model(a_, t_):
+                h_ = ttnn.to_torch(t_)
+                if a_ in ("win_a", "win_b"):   # prod's logical K-1+T rows; the padding rows zero on both sides (the reference too)
+                    h_ = h_.clone()
+                    h_[:, KT1:, :] = 0
+                    return ttnn.from_torch(h_[:, :KT1, :], dtype=t_.dtype, layout=t_.layout, device=dev, memory_config=t_.memory_config())
+                if a_ == "w_d":
+                    return ttnn.from_torch(h_.reshape(-1), dtype=t_.dtype, layout=t_.layout, device=dev, memory_config=t_.memory_config())
+                return None
             for ly in self.LY:
                 for a_ in ("win_a", "win_b", "ring", "taps_d", "dtb_d", "nea_d", "w_d"):
-                    setattr(ly["cE"], a_, _swap(getattr(ly["cE"], a_)))
+                    o_ = getattr(ly["cE"], a_)
+                    m_ = _model(a_, o_) if model else None
+                    if m_ is not None and a_ in ("win_a", "win_b"):   # the reference's window: the same zero padding rows
+                        hA = ttnn.to_torch(getattr(ly["cA"], a_)).clone()
+                        hA[:, KT1:, :] = 0
+                        ttnn.copy_host_to_device_tensor(ttnn.from_torch(hA, dtype=o_.dtype, layout=o_.layout), getattr(ly["cA"], a_))
+                    n_ = _swap(o_)
+                    if m_ is not None:
+                        self._dkeep.append(n_)
+                        n_ = m_
+                    setattr(ly["cE"], a_, n_)
             shared = _swap(self.LY[0]["ctrl"])
             for ly in self.LY[1:]:
                 _swap(ly["ctrl"])
@@ -156,7 +165,8 @@ class GdnRole:
                 ly["ctrl"] = shared
             state = [dict(win_a=ly["cE"].win_a, win_b=ly["cE"].win_b, ring=ly["cE"].ring, taps=ly["cE"].taps_d,
                           dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d) for ly in self.LY]
-            print(f"[decoy] gdn_state: {len(self._dkeep)} bench GDN state / ctrl buffers zeroed; the role binds clones via state= "
+            self._check_state(state)
+            print(f"[decoy] gdn_state{'_model' if model else ''}: {len(self._dkeep)} bench GDN state / ctrl buffers zeroed; the role binds clones via state= "
                   f"(one shared ctrl @{shared.buffer_address()})", flush=True)
         if state is not None:
             self.tl = [dict(qkv=self.qkv, win_a=st["win_a"], win_b=st["win_b"], ring=st["ring"], ctrl=ly["ctrl"], taps=st["taps"],
@@ -303,6 +313,32 @@ class GdnRole:
             self.B, g.QKVZ, conv_kernel=self.K, scale=m.SCALE, hnew_depth=2, memory_config=ttnn.L1_MEMORY_CONFIG,
             output_dtype=c.out_dtype, fast_mode=True, fp32_state=True, value_blocks=4, kernel_opts=self.opt)
 
+    def _check_state(self, state):
+        """(d): the model's state tensors must have the op's page layout (dtype, layout, padded tiles) -- all mismatches at once."""
+        m = self.m
+        probe = m.LazyCase(self.dev, self.g, self.B, self.T, seed=0)   # the op's layouts: the model's tensors must match them exactly
+        # the kernels address whole tiles / pages: compare dtype, layout, the padded last-two dims and the product of the
+        # leading padded dims (prod's window pair is logical [B, K-1+T, C] padded like the probe's [B, 32, C]; rank may differ)
+        def _pg(t_):
+            ps = list(t_.padded_shape) if hasattr(t_, "padded_shape") else list(t_.shape)
+            ps = [1] * (2 - len(ps)) + [int(d_) for d_ in ps]   # rank 1 (prod's norm_w_1d [Dv]) as [1, Dv]
+            if t_.layout == ttnn.TILE_LAYOUT:   # rank-1 TILE pads its single row too
+                ps[-2] = -(-ps[-2] // 32) * 32
+            lead = 1
+            for d_ in ps[:-2]:
+                lead *= int(d_)
+            return (lead, int(ps[-2]), int(ps[-1]), t_.dtype, t_.layout)
+        bad = []
+        for l, st in enumerate(state):
+            for k, pk in (("win_a", "win_a"), ("win_b", "win_b"), ("ring", "ring"), ("taps", "taps_d"), ("dtb", "dtb_d"),
+                          ("nea", "nea_d"), ("weight", "w_d")):
+                a_, b_ = st[k], getattr(probe, pk)
+                if a_ is None or _pg(a_) != _pg(b_):
+                    bad.append((l, k, None if a_ is None else (tuple(a_.shape), _pg(a_)), (tuple(b_.shape), _pg(b_))))
+        assert not bad, f"(d) state layout mismatch vs the op's (layer, name, model (shape, pages), op (shape, pages)): {bad}"
+        for t_ in (probe.win_a, probe.win_b, probe.ring, probe.taps_d, probe.dtb_d, probe.nea_d, probe.w_d):
+            ttnn.deallocate(t_)
+
     def standin_gin(self):
         """g2_standin's G-a stand-in args: [n, qkv addr, staging addr, (xy, slot) per tile] (n = 0 without G-b staging)."""
         if self.gin_stage is None:
@@ -394,6 +430,9 @@ class GdnRole:
             rE = _host(cE.ring).reshape(T, B, Nv, m.Dk, m.Dv).float()
             wA = _host([cA.win_a, cA.win_b][1 - cA.par]).float()
             wE = _host([cE.win_a, cE.win_b][1 - cE.par]).float()
+            if tuple(wE.shape) != tuple(wA.shape):   # prod-shaped window (logical K-1+T rows): compare its rows; the rest are 0
+                assert not wA[:, wE.shape[1]:].abs().sum(), "reference window has data past the model's logical rows"
+                wA = wA[:, :wE.shape[1]].contiguous()
             e_out, e_ring, e_win = torch.equal(iv(outA), iv(outB)), torch.equal(ringbits(rA), ringbits(rE)), torch.equal(iv(wA), iv(wE))
             import hashlib
             _h = lambda t_: hashlib.md5(t_.contiguous().numpy().tobytes()).hexdigest()[:12]
