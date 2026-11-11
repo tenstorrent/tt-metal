@@ -106,6 +106,9 @@ constexpr uint32_t QO_SLOT = WO_MAXT;
 constexpr uint32_t QO_SLOT = 0;
 #endif
 constexpr uint32_t CB_A = 15, CB_S = 21, CB_AS = 22, WK = 48, PQ_QSL = (WO_MAXT * 48 > 320) ? WO_MAXT * 48 : 320, CB_XO = 23, CB_HSQ = 31, CB_HG = 30;
+#if defined(MKA_KVA)   // KV append (mka2_common.hpp): source bf16 tile, BFP8 source + target tiles (full slot)
+constexpr uint32_t CB_KVS = 6, CB_KVB = 8, KVA_NP = 1 + MKA_KVA_PPU * MKA_KVA_NU;
+#endif
 #if defined(MKA_WORING)
 constexpr uint32_t CB_WSL = 31, WSL_N = WO_MAXT * WK;   // own Wo ring
 #else
@@ -119,6 +122,21 @@ constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 #define MKA_AMASK 0xFFFFFFFFu
 #endif
 
+#if defined(MKA_ROLE_STREAM) && defined(MKA_GDN24) && defined(MKA_QSK) && defined(MKA_RWO) && defined(MK_V12) && !defined(MKA_OWNPAR)
+#define MKA_STREAMLEAN 1   // the EXTLEAN pattern on STREAM (RC config): role args every STREAM core shares are constants (program.py asserts them)
+#endif
+#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
+#define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
+#endif
+#if defined(MKA_STREAMLEAN)
+// one out-of-line copy of the full HW (re)init per TRISC binary instead of one inlined copy per call site (STREAM text)
+__attribute__((noinline, noclone)) static void mk_hw_startup(uint32_t a, uint32_t b, uint32_t o) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o);
+}
+#define MK_HWS(a, b, o) mk_hw_startup(a, b, o)
+#else
+#define MK_HWS(a, b, o) compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o)
+#endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
     constexpr uint32_t HT = get_compile_time_arg_val(2), NDN = get_compile_time_arg_val(3);
@@ -132,20 +150,64 @@ void kernel_main() {
 #else
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
 #endif
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
+    constexpr uint32_t IS_GU = 0; a++;   // STREAM under V12: the fm11 gate|up roles are off
+#else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t u = get_arg_val<uint32_t>(a++), nblk = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t nrecv = 0, is_root = 0; a += 2;
+#else
     const uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t qoff = u * DH;
 #if defined(MKA_RQKV)
+#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+    constexpr uint32_t qrole = 3, qk0 = 0, qnk = 0, qnt = 0, gdn_on = 0; a += 5;   // QR_EXT with no qkv tiles under QSK
+#elif defined(MKA_STREAMLEAN)
+    constexpr uint32_t qrole = 1; a++;   // every STREAM core is a QSK K-row partial producer (QR_OWNER)
+    const uint32_t qk0 = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t qnk = QSK_GK; a++;
+    const uint32_t qnt = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t gdn_on = 1; a++;
+#else
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_RWO) || defined(MKA_QSK)
+#if defined(MKA_EXTLEAN) && defined(MKA_QSK) && defined(MKA_RWO)
+    constexpr uint32_t qn0 = 0, wo_nt = WO_MAXT; a += 2;
+#elif defined(MKA_STREAMLEAN)
+    const uint32_t qn0 = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t wo_nt = 0; a++;   // wo runs on the owners
+#else
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
 #endif
+#endif
 #if defined(MKA_RQNR)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t is_head = 0, has_hg = 0; a += 2;   // head-norm cores are owners
+#if defined(MKA_KVA)
+    constexpr uint32_t kva_c = 0;
+#endif
+#elif defined(MKA_KVA)
+    const uint32_t is_head_kva = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
+#if defined(MKA_ROLE_STREAM)
+    const uint32_t is_head = is_head_kva & 0xFF;
+    constexpr uint32_t kva_c = 0;
+#else
+    const uint32_t is_head = is_head_kva & 0xFF, kva_c = is_head_kva >> 8;   // KV append role (0 none) in bits 8+
+#endif
+#else
     const uint32_t is_head = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_RMASK)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t mask_blk = 0xFFFFFFFFu; a++;   // the mask core is never STREAM (RMASK)
+#else
     const uint32_t mask_blk = get_arg_val<uint32_t>(a++);   // local block index of the user's last block, or ~0
+#endif
 #endif
     // q/k head: y = gamma (.) x * rsqrt(mean(x^2) + eps) over the head's 256 columns; RoPE on dims 0-63 (tiles 0, 1)
     auto head_norm_rope = [&]() {
@@ -243,7 +305,12 @@ void kernel_main() {
 #endif
 #endif   // MKA_RQKV (v12 args follow the qkv / head args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t vrole_rt = 2; a++;
+    const uint32_t vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++), vnn = get_arg_val<uint32_t>(a++), vk = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_ROLE_STREAM)
     constexpr uint32_t vrole = 1;
 #elif defined(MKA_ROLE_EXT)
@@ -252,6 +319,45 @@ void kernel_main() {
     const uint32_t vrole = vrole_rt;
 #endif
     const uint32_t vfirst = get_arg_val<uint32_t>(a++);
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+    // rstd producer (DESIGN v1.7x, STREAM-side): core (n = k, k) turns every K-row x delivery (CB_XK, 20 bf16 tiles) into its
+    // per-row Σx² in fp32: transposed copy (X^T, exact to fp32 DST) + SFPU square + SFPU add over the 20 tiles, then SFPU
+    // REDUCE_COL (row 0 = Σ_c x[r, c]^2 at column r: already the Σ tile's row format; same reduce instantiation as the consumers)
+    // CB_SS -> the writer, which multicasts row 0 as row k of the Σ tile. Runs before the site's hw startup (which re-inits after it).
+    const uint32_t vn_c = get_arg_val<uint32_t>(a++);
+    const bool rprod = vn_c == vk;
+    auto rstd_part = [&]() __attribute__((noinline)) {
+        CZONE("C-RSS");
+        cb_wait_front(CB_XK, V_KTR);
+        cb_reserve_back(MK_AR_CB_SS, 1);
+        reconfig_data_format_srca(CB_XK);
+        pack_reconfig_data_format(MK_AR_CB_SS);
+        tile_regs_acquire();
+        copy_init(CB_XK, 1, 1);
+        copy_tile(CB_XK, 0, 0);
+        square_tile_init();
+        square_tile(0);
+        for (uint32_t t0 = 1; t0 < V_KTR; t0 += 6) {
+            const uint32_t n_ = (V_KTR - t0) < 6 ? (V_KTR - t0) : 6;
+            copy_init(CB_XK, 1, 1);
+            for (uint32_t i = 0; i < n_; ++i) copy_tile(CB_XK, t0 + i, 1 + i);
+            square_tile_init();
+            for (uint32_t i = 0; i < n_; ++i) square_tile(1 + i);
+            add_binary_tile_init();
+            for (uint32_t i = 0; i < n_; ++i) add_binary_tile(0, 1 + i, 0);
+        }
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, MK_AR_CB_SS);
+        tile_regs_release();
+        cb_push_back(MK_AR_CB_SS, 1);
+    };
+#define MK_RSTD_PART() do { if (rprod) rstd_part(); } while (0)
+#else
+#define MK_RSTD_PART() do {} while (0)
+#endif
     // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
     auto v_rstd = [&]() {
         cb_wait_front(CB_VRSA, MKA_NOWN);
@@ -324,6 +430,26 @@ void kernel_main() {
             cb_pop_front(MK_AR_CBG, MK_AR_GT);
         }
 #endif
+#if defined(MK_AR_RSTD_OWN)
+        {   // rstd producer (owner-side variant, over budget): per-row Σx² of this owner's residual chunk (v_x0 = CB_VX0, 10 bf16 tiles) as the diagonal of
+            // X X^T (matmul, in1 transposed, fp32 DST accumulate over the 10 tiles) -> CB_SS; the writer extracts the diagonal
+            CZONE("C-RSS");
+            cb_wait_front(MK_AR_CB_RSYN, 1);      // the writer: this chunk of the residual is final (AR done)
+            cb_wait_front(CB_VX0, V_OT);          // pushed once at start, never popped (MK_OWNER_RESID=0)
+            cb_reserve_back(MK_AR_CB_SS, 1);
+            reconfig_data_format(CB_VX0, CB_VX0);
+            pack_reconfig_data_format(MK_AR_CB_SS);
+            matmul_block_init(CB_VX0, CB_VX0, 1, 1, 1, 1);
+            tile_regs_acquire();
+            for (uint32_t t = 0; t < V_OT; ++t) matmul_block(CB_VX0, CB_VX0, t, t, 0, 1, 1, 1, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, MK_AR_CB_SS);
+            tile_regs_release();
+            cb_push_back(MK_AR_CB_SS, 1);
+            cb_pop_front(MK_AR_CB_RSYN, 1);
+        }
+#endif
     };
 #endif
     auto v12_osum = [&](uint32_t L) {
@@ -374,7 +500,8 @@ void kernel_main() {
     auto qsk_mix = [&](bool att_layer) {
         CZONE("C-QSK");
         const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK;
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WM, CB_VA);
+        MK_RSTD_PART();
+        MK_HWS(CB_XK, CB_WM, CB_VA);
         cb_wait_front(CB_XK, V_KTR);
         cb_wait_front(CB_WM, QSK_SLOT);
         if (att_layer) { cb_reserve_back(CB_VA, V_NTM); cb_reserve_back(CB_VOWN, 2); }
@@ -438,7 +565,7 @@ void kernel_main() {
     auto qkv_proj = [&](bool att_layer) {
         CZONE("C-QKV");
         const uint32_t cbw = qrole == 3 ? CB_PQ : CB_WM;
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, cbw, CB_QA);
+        MK_HWS(CB_X, cbw, CB_QA);
         reconfig_data_format(cbw, CB_X);
         matmul_block_init(CB_X, cbw, 0, qnt, 1, KB);
         cb_wait_front(cbw, qnk * qnt);
@@ -553,12 +680,16 @@ void kernel_main() {
 #ifndef V12_OSUM
 #define V12_OSUM(L) do {} while (0)
 #endif
-    if (IS_STREAM) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
-    else compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
+    if (IS_STREAM) MK_HWS(CB_X, CB_W, CB_HL);
+    else MK_HWS(CB_Q, CB_K, CB_P);
     cb_wait_front(CB_ONE, 1);
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = ((uint32_t)(MKA_AMASK) >> L) & 1u;
+#if defined(MK_REAL_GAR) && defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
+        if (!IS_STREAM && !att) { if (vrole == 2) ar_step(MK_AR_CB_AIN); V12_OSUM(L); continue; }   // G-d: GDN mixer AR, then MLP
+#else
         if (!IS_STREAM && !att) { V12_OSUM(L); continue; }
+#endif
 #if defined(MKA_RQKV)
         // attention layers: the real qkv PROJ; GDN-type layers: the STREAM K-half matmul alone stands in for the GDN
         // in-proj (64 x 87 KB BFP8 = 5.6 MB, spec 5.9 MB), output discarded
@@ -580,6 +711,23 @@ void kernel_main() {
 #endif
         }
 #endif  // MKA_QSK
+#if defined(MKA_KVA)
+        if (kva_c) {   // KV append: the bf16 K / V tile -> BFP8 (copy + pack, as paged_update_cache's tilize pack)
+            cb_wait_front(CB_KVS, 1);
+            cb_reserve_back(CB_KVB, KVA_NP);   // full slot (page 0 = packed source; the writer owns pages 1..)
+            reconfig_data_format_srca(CB_KVS);
+            pack_reconfig_data_format(CB_KVB);
+            copy_init(CB_KVS);
+            tile_regs_acquire();
+            copy_tile(CB_KVS, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, CB_KVB);
+            tile_regs_release();
+            cb_push_back(CB_KVB, KVA_NP);
+            cb_pop_front(CB_KVS, 1);
+        }
+#endif
         if (false) {
 #else
         if (IS_STREAM) {
@@ -587,7 +735,7 @@ void kernel_main() {
             cb_wait_front(CB_X, KT);
             CZONE("C-MIX");
 #if !defined(MKA_NO_REINIT)
-            if (L > 0) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
+            if (L > 0) MK_HWS(CB_X, CB_W, CB_HL);
 #endif
             reconfig_data_format(CB_WM, CB_X);
             matmul_block_init(CB_X, CB_WM, 0, MIXN, 1, KB);
@@ -609,9 +757,13 @@ void kernel_main() {
             // the previous layer's tree adds (fp32 copy_tile = unpack-to-dest) and the root's eltwise normalize leave
             // unpacker / math state that a short matmul_init does not undo: re-run the full HW init per SDPA phase
 #if defined(MKA_RQKV)
-            if (L > 0 || qrole) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
+#if defined(MKA_KVA)
+            if (L > 0 || qrole || kva_c) MK_HWS(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul / KV pack
 #else
-            if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
+            if (L > 0 || qrole) MK_HWS(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
+#endif
+#else
+            if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) MK_HWS(CB_Q, CB_K, CB_P);
 #endif
 #endif
             cb_wait_front(CB_Q, QT);
@@ -626,6 +778,10 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < nb; ++i)
                     for (uint32_t t = 0; t < DH; ++t) matmul_tiles(CB_Q, CB_K, qoff + t, i * DH + t, i);
+#if defined(MKA_SCLAMP)
+                unary_min_tile_init();   // RC guard for the no-max softmax: S <= 60 (exp(60) ~ 1e26, fp32-safe sums); bit-identical
+                for (uint32_t i = 0; i < nb; ++i) unary_min_tile(i, 0x42700000u);   // when |S| < 60 (real 8-32K traces: max 21.85)
+#endif
                 exp_tile_init();
                 for (uint32_t i = 0; i < nb; ++i) exp_tile(i);
 #if defined(MKA_RQNR) && defined(MKA_RMASK)
@@ -750,7 +906,8 @@ void kernel_main() {
         if (vrole == 1) {
             const bool own_h = vk < vnn;
             if (L == 0) { cb_wait_front(CB_VI, 1); cb_wait_front(CB_VJ, 1); }
-            compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WV, CB_VA);
+            MK_RSTD_PART();
+            MK_HWS(CB_XK, CB_WV, CB_VA);
             cb_wait_front(CB_WV, V_SLOT);
             cb_wait_front(CB_XK, V_KTR);
             cb_reserve_back(CB_VA, V_NTM);

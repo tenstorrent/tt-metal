@@ -25,6 +25,17 @@
 #include "wo_unit_dm.hpp"
 #endif
 
+#if defined(MKA_ROLE_STREAM) && defined(MKA_GDN24) && defined(MKA_QSK) && defined(MKA_RWO) && defined(MK_V12) && !defined(MKA_OWNPAR)
+#define MKA_STREAMLEAN 1   // the EXTLEAN pattern on STREAM (RC config): role args every STREAM core shares are constants (program.py asserts them)
+#endif
+#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
+#define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
+#endif
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
+#define MKA_WOT_DIV (wo_tiles ? wo_tiles : 1u)   // folded 0: dead code, but -Werror=div-by-zero
+#else
+#define MKA_WOT_DIV wo_tiles
+#endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
     constexpr uint32_t WTB = get_compile_time_arg_val(2), GRP = get_compile_time_arg_val(3);
@@ -60,8 +71,16 @@ void kernel_main() {
     }
     const uint32_t self_rect = get_arg_val<uint32_t>(a++);
     const uint32_t cbh_base = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
+    constexpr uint32_t ROOT = 0xFF; a++;
+#else
     const uint32_t ROOT = get_arg_val<uint32_t>(a++);   // 2/3: NOC1 root; else 0xFF
+#endif
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
+    constexpr uint32_t IS_GU = 0; a++;
+#else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t pgu_layer = get_arg_val<uint32_t>(a++);
     uint32_t gs[NGS];
     for (uint32_t i = 0; i < NGS; ++i) gs[i] = get_arg_val<uint32_t>(a++);
@@ -75,17 +94,35 @@ void kernel_main() {
     const uint32_t NBK = get_arg_val<uint32_t>(a++);
     const uint32_t has_parent = get_arg_val<uint32_t>(a++), par_x = get_arg_val<uint32_t>(a++), par_y = get_arg_val<uint32_t>(a++);
     const uint32_t par_lvl = get_arg_val<uint32_t>(a++);
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t nc0 = 0; a++;
+#else
     const uint32_t nc0 = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t c0x[FANOUT], c0y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c0x[i] = get_arg_val<uint32_t>(a++); c0y[i] = get_arg_val<uint32_t>(a++); }
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t nc1 = 0; a++;
+#else
     const uint32_t nc1 = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t c1x[FANOUT], c1y[FANOUT];
     for (uint32_t i = 0; i < FANOUT - 1; ++i) { c1x[i] = get_arg_val<uint32_t>(a++); c1y[i] = get_arg_val<uint32_t>(a++); }
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t is_root = 0; a++;
+    const uint32_t out_addr = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t is_root = get_arg_val<uint32_t>(a++), out_addr = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t qr_x = get_arg_val<uint32_t>(a++), qr_y = get_arg_val<uint32_t>(a++);
     // STREAM: layer L's wo slice + the next layer's uncovered qkv bytes stream on NOC1 here (scratch), balancing the NoCs
+#if (defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)) && defined(MKA_RWO)
+    const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t wo_tiles = 0, extra_tiles = 0; a += 2;   // RWO: no wo stand-in bytes
+#else
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++), wo_tiles = get_arg_val<uint32_t>(a++);
     const uint32_t extra_tiles = get_arg_val<uint32_t>(a++);
+#endif
     // kv_mode: 0 reader K (NOC1) + writer V (NOC0); 1 reader V + writer K; 2 reader K and V (all KV on NOC1);
     // 3 writer K and V (all KV on NOC0)
     const uint32_t kv_mode = get_arg_val<uint32_t>(a++);
@@ -95,19 +132,42 @@ void kernel_main() {
     for (uint32_t i = 0; i < 2 * FANOUT; ++i) l1w(tfl)[i] = 0;
 #endif
     const bool rd_k = kv_mode == 0 || kv_mode == 2, rd_v = kv_mode == 1 || kv_mode == 2;
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+    // KV append: this core holds one of its user's last 2 KV blocks (where the new rows land); its reader waits the 16
+    // append cores (KVA_DONE) before that group, then raises GS_KVPROG = A + 1 for the writer's reads (kv_mode != 2)
+    const bool kva_w = b1 + 2 > NBK;
+#endif
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t qrole = 1; a++;
+    const uint32_t wq_addr = get_arg_val<uint32_t>(a++);
+#elif defined(MKA_EXTLEAN) && defined(MKA_QSK)
+    constexpr uint32_t qrole = 3; a++;
+    const uint32_t wq_addr = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t qrole = get_arg_val<uint32_t>(a++), wq_addr = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
     const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
 #if defined(MKA_RWO)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t rw_nt = 0; a++;   // no wo slice on STREAM
+    const uint32_t rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t rw_nt = get_arg_val<uint32_t>(a++), rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t wo_addr2 = get_arg_val<uint32_t>(a++), cc_x = get_arg_val<uint32_t>(a++), cc_y = get_arg_val<uint32_t>(a++);
     // MKA_WOHELP: ext cores read only rw_own pages of their Wo slice; STREAM helpers read the rest into their scratch
     // and forward it into the ext ring (spreads the 8.4 MB DRAM issue over 116 readers, like the stand-in's reads)
     const uint32_t rw_own = get_arg_val<uint32_t>(a++), rw_hlp = get_arg_val<uint32_t>(a++);
     const uint32_t h_x = get_arg_val<uint32_t>(a++), h_y = get_arg_val<uint32_t>(a++), h_page = get_arg_val<uint32_t>(a++);
+#if (defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)) && defined(MKA_QSK)
+    constexpr uint32_t h_np = 0; a++;   // no STREAM helpers under QSK
+    const uint32_t h_off = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t h_np = get_arg_val<uint32_t>(a++), h_off = get_arg_val<uint32_t>(a++);
+#endif
     const auto wow = TensorAccessor(wq_args, wo_addr2, MWTB);   // Wo pages: same BFP8 interleaved layout as wq
     constexpr uint32_t TRID_WOR = 10;
 #endif
@@ -134,7 +194,11 @@ void kernel_main() {
 #endif   // MKA_RQKV (the v12 args follow the qkv args when present; V12 also runs on the MIXN stand-in)
 #if defined(MK_V12)
     // ---- v12 MLP args (appended after every other reader arg) ----
+#if defined(MKA_EXTLEAN)
+    constexpr uint32_t vrole_rt = 2; a++;
+#else
     const uint32_t vrole_rt = get_arg_val<uint32_t>(a++);   // 0 none, 1 STREAM, 2 owner
+#endif
 #if defined(MKA_ROLE_STREAM)
     constexpr uint32_t vrole = 1;
 #elif defined(MKA_ROLE_EXT)
@@ -267,6 +331,13 @@ void kernel_main() {
 #else
     auto v_gate = [&]() {};
 #endif
+#if V_NB_ON
+    const uint32_t nb_tot = 3 * V_KTR * vnn * WTB, nb_n0 = v_nb_n0(nb_tot);
+    VNb vnb = {0, 0, 0, get_write_ptr(CB_WV) + nb_n0, nb_tot - nb_n0, vg, 0};
+#define V_NB_WAIT_VA() v_nb_wait(vnb, CB_VA, V_NTM)
+#else
+#define V_NB_WAIT_VA() do {} while (0)
+#endif
 #endif   // MK_V12
 #if defined(MKA_RQKV)
     // next attention layer after L (NL if none) and the length of the GDN-type run right before attention layer La
@@ -384,7 +455,11 @@ void kernel_main() {
 #endif
         if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers
 #if defined(MK_V12)
+#if defined(MK_REAL_GAR) && defined(MK_REAL_AR) && defined(MK_AR_DLV)
+            v12_aardlv(L, L);   // owners: the GDN mixer AR's x (G-d; replaces the MGO stand-in)
+#else
             v12_ox(L);
+#endif
             V12_ARDLV(L);
 #endif
             continue;
@@ -412,6 +487,7 @@ void kernel_main() {
 #if defined(MKA_QSK)
         if (att && vrole == 1) {   // spec §18: this core's qkv partial to the column rows above (NOC1); the writer does rows below
             MKZ("R-QRS");
+            V_NB_WAIT_VA();
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = 2 * L + 1;
             v_rs_send(get_read_ptr(CB_VA), 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
@@ -533,11 +609,18 @@ void kernel_main() {
                         // cap this reader's in-flight weight bytes (NoC/DRAM congestion: fewer outstanding reads drain faster)
                         if (t && (t % MKA_RCAP) == 0) { noc_async_read_barrier_with_trid(TRID_WO); noc_async_read_set_trid(TRID_WO); }
 #endif
-                        noc_async_read(wo.get_noc_addr(wo_page + ((wdone + t) % wo_tiles)), scr, m * WOTB);
+                        noc_async_read(wo.get_noc_addr(wo_page + ((wdone + t) % MKA_WOT_DIV)), scr, m * WOTB);
                     }
                     noc_async_read_set_trid(0);
                     wdone += n;
                 }
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+                if (kva_w && b + nb + 2 > NBK) {
+                    KVA_ZONE("R-KVAW");
+                    noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * (A + 1));
+                    if (kv_mode != 2) *l1w(gs[GS_KVPROG]) = A + 1;
+                }
+#endif
                 if (!(rd_k || rd_v)) continue;
                 // always a full group: CB_K / CB_V hold a whole number of groups, so groups never straddle the ring end
                 if (rd_k) cb_reserve_back(CB_K, NBB * DH);
@@ -646,7 +729,7 @@ void kernel_main() {
             const uint32_t n = wo_tiles + extra_tiles;
             noc_async_read_set_trid(TRID_WO);
             for (uint32_t t = 0; t < n; t += 8)
-                noc_async_read(wo.get_noc_addr(wo_page + (t % wo_tiles)), scr, ((n - t) < 8 ? (n - t) : 8) * WOTB);
+                noc_async_read(wo.get_noc_addr(wo_page + (t % MKA_WOT_DIV)), scr, ((n - t) < 8 ? (n - t) : 8) * WOTB);
             noc_async_read_set_trid(0);
         }
 #endif
@@ -703,12 +786,17 @@ void kernel_main() {
 #endif
 #if defined(MK_V12)
 #if defined(MK_REAL_AAR) && defined(MK_REAL_AR) && defined(MK_AR_DLV)
+#if defined(MK_REAL_GAR)
+        v12_aardlv(L, L);   // owners, attention-type layers: the real attention AR's x (mixer-AR index = L under G-d)
+#else
         v12_aardlv(L, A);   // owners, attention-type layers: the real attention AR's x (replaces the MGO stand-in)
+#endif
 #else
         v12_ox(L);   // owners, attention-type layers (after this core's SDPA work)
 #endif
         V12_ARDLV(L);
         if (vrole == 1) {   // v12 MLP, STREAM core (n, k): RS north, h north, down tiles of the first chunk -> its owner
+            V_NB_WAIT_VA();
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = V_LV(L);
             v_rs_send(get_read_ptr(CB_VA), 0, vk < vnn ? vk : vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows above (NOC1)
@@ -742,6 +830,9 @@ void kernel_main() {
     // reset the tree's global semaphores for the next pass: every inc into them for layer NL - 1 happened before the
     // matching wait above returned, so nothing arrives after this point
     *l1w(gs[GS_LVL0]) = 0; *l1w(gs[GS_LVL1]) = 0; *l1w(gs[GS_DONE]) = 0;
+#if defined(MKA_KVA) && defined(MKA_KVA_WAITER)
+    if (kva_w) { noc_semaphore_wait_min(l1w(KVA_GS_DONE), KVA_PER_LAYER * aidx(NL)); *l1w(KVA_GS_DONE) = 0; }   // drain, reset
+#endif
 #if defined(MKA_RWO)
     if (rw_hlp) *l1w(gs[GS_WOHC]) = 0;
 #endif
