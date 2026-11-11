@@ -62,7 +62,19 @@ for it in range(ITERS):
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
     if REAL_AR and AR_DBG:   # every AR of the pass: res_k = res_{k-1} + ring * in_k (both chunks dumped by the owners)
         _db = ttnn.to_torch(ar_dbgt).float().reshape(TILE, AR_NAR * 2, H)
-        if it == 0: _rprev = xb.clone()
+        if V_R < 32:   # R < 32: input rows < R (tile layout); residual = packed stream (tile t face f at (2t + f) R 32 B) -> [R, H]
+            def _raw(u):   # untilized [32, W] -> raw tile element order [W / 32, 1024]
+                t_ = u.reshape(TILE, -1, TILE).permute(1, 0, 2)
+                return torch.cat([t_[:, :16, :16].reshape(-1, 256), t_[:, :16, 16:].reshape(-1, 256), t_[:, 16:, :16].reshape(-1, 256), t_[:, 16:, 16:].reshape(-1, 256)], 1)
+            def _unpk(u):   # [32, H] dump of packed chunks -> [R, H]
+                o_ = torch.zeros(V_R, H)
+                for j_ in range(16):
+                    r_ = _raw(u[:, j_ * 320:(j_ + 1) * 320]).flatten()[:10 * 2 * V_R * 16].reshape(10, 2, V_R, 16)
+                    for t_ in range(10):
+                        for f_ in range(2): o_[:, j_ * 320 + t_ * 32 + f_ * 16:j_ * 320 + t_ * 32 + f_ * 16 + 16] = r_[t_, f_]
+                return o_
+            _db = torch.stack([(_db[:V_R, i_] if i_ % 2 == 0 else _unpk(_db[:, i_])) for i_ in range(AR_NAR * 2)], 1)
+        if it == 0: _rprev = xb.clone()[:V_R]
         _worst = []
         for k_ in range(AR_NAR):
             _in, _res = _db[:, 2 * k_], _db[:, 2 * k_ + 1]
@@ -71,6 +83,10 @@ for it in range(ITERS):
             _worst.append((round(_p, 6), k_, 'attn' if (AR_ATYPE >> k_) & 1 else 'mlp', round((_res - _g).abs().max().item(), 4), round(_g.abs().max().item(), 3)))
             _rprev = _res
         print(f"[ar] iter {it} per-AR check (res = prev + ring*in): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
+        if it == 0:   # what the first AR's residual started from: the stand-in x (expected) or zero
+            _r0, _i0 = _db[:, 1], _db[:, 0]
+            _pz = torch.corrcoef(torch.stack([_r0.flatten(), (AR.ring * _i0).bfloat16().float().flatten()]))[0, 1].item()
+            print(f"[ar] iter 0 AR 0 residual vs ring*in only (residual started at 0) pcc {_pz:.6f}; vs x + ring*in {_worst[0][0]}", flush=True)
     if REAL_AR and AR_SEQ:   # this pass's golds from the residual the previous pass left (rstd stays the CB 20 stand-in)
         _xin_seq = {}
         for L_ in range(NL):
@@ -116,6 +132,7 @@ for it in range(ITERS):
         elif AR_SEQ:
             _xin = {L_: x_ for L_, x_ in _xin_seq.items() if is_attn_layer(L_) and L_ > 0}
         for L_, x_ in _xin.items():
+            if x_.shape[0] < M: x_ = torch.cat([x_, torch.zeros(M - x_.shape[0], H)], 0)   # R < 32: rows >= R are don't-care
             attn_regold(L_, (rstd_g[:, None] * (x_.double() @ wfq[L_].double())).float())
         print(f"[ar] iter {it} qkv/SDPA golds from the AR-delivered x for layers {sorted(_xin)}" if _xin else f"[ar] iter {it} qkv/SDPA golds: static x (no AR chain: MK_AR_DBG=1 at R = 32)", flush=True)
     if RQKV:
@@ -166,7 +183,12 @@ for it in range(ITERS):
         # residual identity is the [ar] line (ar_out), qkv / v12 xo / sdpa are compared here when they are live
         _mi = ([] if V12 else [('out', y)]) + ([] if QSK else [('ymix', ymix)]) + ([('qkv', qkv_out)] if RQKV else []) + \
               ([('v12 xo', v_xo)] if V12 else []) + [('sdpa', outs)]
-        print(f"[mesh] iter {it} devices {dev.get_num_devices()}: max |dev d - dev 0| " + ' '.join(f"{n_} {mesh_identity(t_):.3e}" for n_, t_ in _mi), flush=True)
+        def _mid_r(t_):   # R < 32: valid rows only (rows >= R of each 32-row tile row are don't-care, spec v0.8)
+            ds = [_to_torch(d).float() for d in ttnn.get_device_tensors(t_)]
+            ds = [d_.reshape(-1, TILE, d_.shape[-1])[:, :V_R] for d_ in ds]
+            return max((d_ - ds[0]).abs().max().item() for d_ in ds)
+        _mif = mesh_identity if V_R == 32 else (lambda t_: _mid_r(t_) if t_ is not outs else mesh_identity(t_))
+        print(f"[mesh] iter {it} devices {dev.get_num_devices()}: max |dev d - dev 0|{'' if V_R == 32 else f' (rows < {V_R})'} " + ' '.join(f"{n_} {_mif(t_):.3e}" for n_, t_ in _mi), flush=True)
 ttnn.ReadDeviceProfiler(dev)
 print('[fm11] profiler read', flush=True)
 ttnn.close_device(dev)

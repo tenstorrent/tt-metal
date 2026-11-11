@@ -332,7 +332,12 @@ void kernel_main() {
     // after the AR (page (2it + 1)*160 + 10j + t) -> DRAM; the bench checks res_it = res_{it-1} + ring * in_it per AR
     auto ar_dbg = [&](uint32_t it, uint32_t in_l1) {
         const auto db = TensorAccessor(qo_args, MK_AR_DBGADDR, 2048);
-        const uint32_t j = 2 * vk + voslot, ro = get_read_ptr(CB_VX0);
+        const uint32_t j = 2 * vk + voslot;
+#if defined(MK_AR_OUT)   // R < 32: the packed residual of its own (ar_out)
+        const uint32_t ro = MK_AR_OUT;
+#else
+        const uint32_t ro = get_read_ptr(CB_VX0);
+#endif
         for (uint32_t t = 0; t < 10; ++t) {
             noc_async_write(in_l1 + t * 2048, db.get_noc_addr((2 * it) * 160 + 10 * j + t), 2048);
             noc_async_write(ro + t * 2048, db.get_noc_addr((2 * it + 1) * 160 + 10 * j + t), 2048);
