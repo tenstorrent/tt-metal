@@ -6,16 +6,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import secrets
 import shutil
-import threading
 import time
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -288,16 +283,16 @@ def _verification_phase(stats: dict, phase: str):
         stats[phase] += time.monotonic() - started
 
 
-def _verify_shard_pair(resident, fresh, stats: dict, *, native: bool = False) -> tuple[bool, bool]:
-    # Workers use only the qualified host conversion; decorated serial conversions
-    # and device readbacks stay on the caller. Release decoded storage on every exit.
+def _verify_shard_pair(resident, fresh, stats: dict) -> tuple[bool, bool]:
+    # Keep public decorated conversions and independent readbacks on the caller.
+    # Release decoded storage before the next logical pair, including on errors.
     import torch
 
     a = b = None
     try:
         with _verification_phase(stats, "convert_s"):
-            a = resident.to_torch() if native else ttnn.to_torch(resident)
-            b = fresh.to_torch() if native else ttnn.to_torch(fresh)
+            a = ttnn.to_torch(resident)
+            b = ttnn.to_torch(fresh)
         with _verification_phase(stats, "compare_s"):
             equal = a.shape == b.shape and torch.equal(a, b)
             finite = bool(torch.isfinite(b).all()) if equal else True
@@ -307,184 +302,20 @@ def _verify_shard_pair(resident, fresh, stats: dict, *, native: bool = False) ->
         a = b = resident = fresh = None
 
 
-_VERIFY_WORKSPACE_BYTES = 512 << 20
-_VERIFY_TO_TORCH = ttnn.to_torch
-
-
-@lru_cache(maxsize=1)
-def _verification_native_build() -> bool:
-    # This experiment is qualified only on these immutable native host converters.
-    # Unknown builds keep the public decorated serial path; extending this list needs
-    # native parity/concurrency evidence. Hash once, never once per parameter.
-    expected = {
-        "ttnn/ttnn/_ttnn.so": "8d3bb729319e9c2e5c26a97c7e5085c59b3a2c6faf92cd331e5b4cf664e4c879",
-        "build/lib/_ttnncpp.so": "d2904ca48fbf9f897a7ba8f7f53bda96b63d2538fda4399a5b1c6a1da03b4e49",
-        "build/lib/libtt_metal.so": "80ff3f818e086373bc3da70a425f60406cfa54ef2e308125f13268144dc5168a",
-    }
-    try:
-        root = Path(ttnn.__file__).parents[2]
-        for name, digest in expected.items():
-            hasher = hashlib.sha256()
-            with (root / name).open("rb") as source:
-                for block in iter(lambda: source.read(1 << 20), b""):
-                    hasher.update(block)
-            if hasher.hexdigest() != digest:
-                return False
-        return True
-    except (OSError, AttributeError, IndexError):
-        return False
-
-
-def _verification_workspace(a, b):
-    # Read-only host handles (or independent blocking device copies) stay alive until
-    # drain. Neither the caller nor a worker mutates their packed storage.
-    try:
-        if (
-            ttnn.to_torch is not _VERIFY_TO_TORCH
-            or ttnn.CONFIG.enable_logging
-            or ttnn.CONFIG.enable_comparison_mode
-            or ttnn.tracer.ENABLE_TRACER
-            or ttnn.graph.is_graph_capture_active()
-            or ttnn.graph.is_python_io_recording_enabled()
-            or ttnn.decorators.PRE_OPERATION_HOOKS
-            or ttnn.decorators.POST_OPERATION_HOOKS
-            or not _verification_native_build()
-        ):
-            return None
-        total = 0
-        for tensor in (a, b):
-            if (
-                type(tensor) is not ttnn.Tensor
-                or tensor.is_sharded()
-                or tensor.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
-                or tensor.layout not in (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)
-            ):
-                return None
-            # Per padded element: packed snapshot <=4B, unpack/untilize/strip/output
-            # <=16B, masks/abs intermediates <=9B; round up to32B plus64KiB overhead.
-            total += 32 * math.prod(tensor.padded_shape) + (64 << 10)
-        return total
-    except (AttributeError, TypeError, ValueError, RuntimeError):
-        return None
-
-
-def _verification_worker(pair):
-    a, b = pair
-    pair.clear()  # The executor work item must not retain snapshots after completion.
-    stats = dict(convert_s=0.0, compare_s=0.0)
-    cpu = time.thread_time()
-    try:
-        equal, finite = _verify_shard_pair(a, b, stats, native=True)
-        return equal, finite, stats, None
-    except Exception as err:
-        return False, True, stats, f"{type(err).__name__}: {err}"
-    finally:
-        stats["cpu_s"] = time.thread_time() - cpu
-        stats["thread_id"] = threading.get_ident()
-        a = b = None
-
-
-class _VerificationPool:
-    def __init__(self, workers, counters):
-        self.workers, self.counters = workers, counters
-        self.executor = None
-        self.pending = deque()
-        self.bytes = 0
-        self.threads = set()
-
-    def take(self):
-        index, future, size = self.pending.popleft()
-        try:
-            with _verification_phase(self.counters, "wait_s"):
-                equal, finite, phases, error = future.result()
-            for phase in ("convert_s", "compare_s", "cpu_s"):
-                self.counters["worker_" + phase] += phases[phase]
-            self.threads.add(phases["thread_id"])
-            self.counters["worker_threads"] = len(self.threads)
-            self.counters["shards_completed"] += int(error is None)
-            if error:
-                logger.error(f"cache worker failed at shard {index}: {error}")
-            return index, equal, finite
-        except Exception as err:
-            logger.error(f"cache worker cancelled/failed at shard {index}: {err}")
-            return index, False, True
-        except BaseException:
-            # result() can be interrupted after this future leaves pending.
-            wait([future])
-            raise
-        finally:
-            self.bytes -= size
-
-    def pairs(self, resident, fresh):
-        try:
-            for index, (a, b) in enumerate(zip(resident, fresh)):
-                size = _verification_workspace(a, b) if self.workers > 1 else None
-                if size is None or size > _VERIFY_WORKSPACE_BYTES:
-                    while self.pending:
-                        yield self.take()
-                    self.counters["serial_pairs"] += 1
-                    if size is not None:
-                        self.counters["oversized_pairs"] += 1
-                        self.counters["largest_serial_workspace_bytes"] = max(
-                            self.counters["largest_serial_workspace_bytes"], size
-                        )
-                    equal, finite = _verify_shard_pair(a, b, self.counters)
-                    self.counters["shards_completed"] += 1
-                    yield index, equal, finite
-                else:
-                    while self.pending and (
-                        len(self.pending) >= self.workers or self.bytes + size > _VERIFY_WORKSPACE_BYTES
-                    ):
-                        yield self.take()
-                    with _verification_phase(self.counters, "snapshot_s"):
-                        a = a.cpu(blocking=True)
-                        b = b.cpu(blocking=True)
-                    if self.executor is None:
-                        self.executor = ThreadPoolExecutor(self.workers, thread_name_prefix="cache-verify")
-                    self.pending.append((index, self.executor.submit(_verification_worker, [a, b]), size))
-                    self.bytes += size
-                    self.counters["parallel_pairs"] += 1
-                    self.counters["peak_inflight_pairs"] = max(self.counters["peak_inflight_pairs"], len(self.pending))
-                    self.counters["peak_workspace_bytes"] = max(self.counters["peak_workspace_bytes"], self.bytes)
-            while self.pending:
-                yield self.take()
-        finally:
-            # Also drain if the caller or a snapshot is interrupted. No future may
-            # retain a temporary device tensor or spill into the next parameter.
-            while self.pending:
-                self.take()
-            a = b = None
-
-    def close(self):
-        if self.executor is not None:
-            self.executor.shutdown(wait=True, cancel_futures=True)
-
-
 def verify_saved_model(
-    tt_model: Module,
-    cache_dir: str | Path,
-    /,
-    *,
-    prefix: str = "",
-    stats: dict | None = None,
-    workers: int | None = None,
+    tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "", stats: dict | None = None
 ) -> bool:
-    """Reload independently; opt in with workers or TT_DIT_CACHE_VERIFY_WORKERS (1..4).
+    """Independently reload all logical shards, retaining one decoded pair at a time.
 
-    Caller owns all loads, blocking snapshots and counters. Only qualified immutable
-    host pairs use one bounded pool. Unsupported paths remain decorated/serial.
-    Parallel workspace is capped at512MiB; an oversized serial pair is reported
-    separately, not claimed bounded. Model weights and the reloaded parameter are
-    additional. Worker phases overlap: do not add them to wall_s or walltime's ledger.
-    load_s/snapshot_s/convert_s include lazy faults, not isolated disk I/O.
-    Callers must keep resident weights and instrumentation unchanged during verification.
+    Public TTNN conversions run serially on the caller, preserving instrumentation.
+    The pair bound excludes resident weights, the reloaded parameter and storage
+    retained by instrumentation. It is not a byte cap on an individual shard.
+    Optional ``stats`` reports completed work and elapsed phases, even on interruption.
+    ``load_s`` includes metadata, mapping and any upload; ``convert_s`` includes
+    readback, lazy page faults and decode. Neither isolates disk I/O. These phases
+    are not added to walltime's ledger: load_model already counts them in weight_load.
+    Callers must keep resident weights unchanged during verification.
     """
-    try:
-        workers = max(
-            1, min(4, int(os.environ.get("TT_DIT_CACHE_VERIFY_WORKERS", "1") if workers is None else workers))
-        )
-    except (TypeError, ValueError):
-        workers = 1
     started = last_report = time.monotonic()
     counters = dict(
         parameters_completed=0,
@@ -495,22 +326,7 @@ def verify_saved_model(
         convert_s=0.0,
         compare_s=0.0,
         completed=False,
-        workers=workers,
-        parallel_pairs=0,
-        serial_pairs=0,
-        oversized_pairs=0,
-        peak_workspace_bytes=0,
-        largest_serial_workspace_bytes=0,
-        peak_inflight_pairs=0,
-        snapshot_s=0.0,
-        wait_s=0.0,
-        worker_convert_s=0.0,
-        worker_compare_s=0.0,
-        worker_cpu_s=0.0,
-        worker_threads=0,
     )
-
-    pool = _VerificationPool(workers, counters)
 
     def report_progress():
         nonlocal last_report
@@ -524,7 +340,7 @@ def verify_saved_model(
     try:
         for name, parameter in _verification_parameters(tt_model, prefix):
             path = cache_dir / f"{name}.tensorbin"
-            reloaded = resident = fresh = pairs = None
+            reloaded = resident = fresh = a = b = None
             parameter_ok = True
             try:
                 if not path.is_file():
@@ -541,8 +357,9 @@ def verify_saved_model(
                         logger.error(f"cache mismatch in '{path.name}': shard count {len(resident)} vs {len(fresh)}")
                     # Do not deduplicate replicated storage: its ordered logical coordinates
                     # are part of the comparison. Only native shard handles are retained here.
-                    pairs = pool.pairs(resident, fresh)
-                    for i, equal, finite in pairs:
+                    for i, (a, b) in enumerate(zip(resident, fresh)):
+                        equal, finite = _verify_shard_pair(a, b, counters)
+                        counters["shards_completed"] += 1
                         if not equal or not finite:
                             parameter_ok = False
                             reason = "mismatch" if not equal else "NaN or inf"
@@ -553,9 +370,7 @@ def verify_saved_model(
                 parameter_ok = False
                 logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
             finally:
-                if pairs is not None:
-                    pairs.close()
-                resident = fresh = pairs = None
+                resident = fresh = a = b = None
                 if reloaded is not None and not parameter.on_host:
                     ttnn.deallocate(reloaded)
                 reloaded = None
@@ -566,7 +381,6 @@ def verify_saved_model(
         counters["completed"] = True
         return ok
     finally:
-        pool.close()
         counters["wall_s"] = time.monotonic() - started
         if stats is not None:
             stats.update(counters)

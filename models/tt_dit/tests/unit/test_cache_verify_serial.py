@@ -122,3 +122,70 @@ def test_decorated_conversions_retain_actual_hooks(tmp_path):
     with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.decorators.register_pre_operation_hook(hook):
         assert cache.verify_saved_model(model(tensor), tmp_path)
     assert calls == [caller, caller]
+
+
+@pytest.mark.parametrize("slow", [False, True])
+def test_allocation_tracking_preserves_public_caller_context(tmp_path, slow):
+    # Allocation wrappers are selected at import time. An isolated child restores
+    # their environment and native configuration even when an assertion fails.
+    import subprocess
+    import sys
+
+    script = r"""
+import os
+os.environ["TT_METAL_TRACE_ALLOC_TRACKING"] = "1"
+import sys, threading
+from pathlib import Path
+from types import SimpleNamespace
+import torch
+from models.tt_dit.utils import cache
+ttnn = cache.ttnn
+assert ttnn.decorators.TRACE_ALLOC_TRACKING
+source = ttnn.from_torch(torch.ones(32, 32), dtype=ttnn.bfloat16)
+ttnn.dump_tensor(Path(sys.argv[1]) / "weight.tensorbin", source)
+p = SimpleNamespace(data=source, on_host=True, device=None)
+m = SimpleNamespace(named_children=lambda: (), named_parameters=lambda: [("weight", p)])
+caller, calls = threading.get_ident(), []
+original = ttnn.decorators.push_allocation_context
+def record(name):
+    if name == "ttnn.to_torch":
+        calls.append(threading.get_ident())
+    return original(name)
+ttnn.decorators.push_allocation_context = record
+try:
+    with ttnn.manage_config("enable_fast_runtime_mode", sys.argv[2] == "False"):
+        assert cache.verify_saved_model(m, sys.argv[1])
+finally:
+    ttnn.decorators.push_allocation_context = original
+assert calls == [caller, caller], calls
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", script, str(tmp_path), str(slow)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_native_decoded_lifetimes_are_one_pair(tmp_path, monkeypatch):
+    import weakref
+
+    ttnn = cache.ttnn
+    shard = ttnn.from_torch(torch.ones(35, 67), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tensor = ttnn.from_host_shards([shard] * 8, ttnn.MeshShape([1, 8]))
+    ttnn.dump_tensor(tmp_path / "weight.tensorbin", tensor)
+    original, refs, peaks = ttnn.to_torch, [], []
+    caller = threading.get_ident()
+
+    def decode(value):
+        assert threading.get_ident() == caller
+        result = original(value)
+        refs.append(weakref.ref(result))
+        peaks.append(sum(ref() is not None for ref in refs))
+        return result
+
+    monkeypatch.setattr(ttnn, "to_torch", decode)
+    assert cache.verify_saved_model(model(tensor), tmp_path)
+    assert len(refs) == 16 and max(peaks) == 2
+    assert all(ref() is None for ref in refs)
