@@ -21,7 +21,7 @@ A multimodal prompt can resume its prefill from a cached prefix like a text prom
 import bisect
 import hashlib
 import os
-from typing import Callable, NamedTuple, Optional, Sequence
+from typing import Callable, NamedTuple, Sequence
 
 import numpy as np
 import torch
@@ -162,14 +162,3 @@ def row_offset(placeholders_before: int, row_base: int) -> int:
     if off < 0:
         raise ValueError(f"segment starts {-off} placeholder rows before the first encoded item")
     return off
-
-
-def identifier_cache_key(modality: str, identifiers: Sequence[str]) -> Optional[str]:
-    """Vision-cache key from the items' content hashes (no pixel hashing on the host)."""
-    if not identifiers:
-        return None
-    h = hashlib.blake2b(digest_size=16)
-    h.update(modality.encode())
-    for i in identifiers:
-        h.update(b"\0" + i.encode())
-    return "id:" + h.hexdigest()

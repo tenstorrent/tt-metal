@@ -208,7 +208,21 @@ class DropInVisionTransformer(torch.nn.Module):
     def spatial_merge_size(self):
         return self.model_args.hf_config.vision_config.spatial_merge_size
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, host_trim: bool = False):
+    def upload_rows(self, rows):
+        """Host bf16 [n_tokens, out_hidden] -> the packed device tensor host_trim returns (host tilize, hidden-sharded,
+        DRAM): a host->device write only, never a new device program."""
+        mesh = self.model_args.mesh_device
+        host_rows = ttnn.from_torch(
+            rows,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=1),
+        )
+        return ttnn.to_device(host_rows, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def forward(
+        self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, host_trim: bool = False, return_host_rows=False
+    ):
         """
         Forward pass mimicking the Qwen3_5_VisionTransformerPretrainedModel interface.
 
@@ -217,6 +231,9 @@ class DropInVisionTransformer(torch.nn.Module):
                                          Shape typically [num_patches, hidden_size] or similar before patch_embed.
             grid_thw (torch.Tensor): Tensor describing the grid dimensions (time, height, width) for each image/video.
                                      Shape [num_images_or_videos, 3].
+
+        return_host_rows (with host_trim): return the list of per-item host bf16 [n_tokens_i, out_hidden] rows instead of
+            uploading them (the vision cache keeps host rows and uploads per request with upload_rows).
 
         host_trim: shape-stable mode for serving. The tower + merger run on the padded bucket only (no device op
             depends on the exact patch count, so nothing new is compiled for a new image size after the prefill
@@ -343,18 +360,12 @@ class DropInVisionTransformer(torch.nn.Module):
             final_outputs.append(tt_out)
 
         if host_trim:
-            rows = torch.cat(final_outputs, dim=0)
-            mesh = self.model_args.mesh_device
+            if return_host_rows:
+                return final_outputs
             # Tilize on the HOST (no device= here): the row count depends on the request's image size, and a device
             # tilize (Tilize / TilizeWithValPadding) is a program keyed by that shape, i.e. one NEW program compiled
             # after the prefill/decode traces are captured per distinct image size.
-            host_rows = ttnn.from_torch(
-                rows,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=1),
-            )
-            return ttnn.to_device(host_rows, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return self.upload_rows(torch.cat(final_outputs, dim=0))
 
         # concatenate all the outputs. With a single image, ttnn.concat aliases
         # its lone input, so deallocating the sources would free the return.

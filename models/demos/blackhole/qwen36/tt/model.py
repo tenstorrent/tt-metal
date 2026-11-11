@@ -608,6 +608,20 @@ class Qwen36Model:
         video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw, host_trim=True)
         return video_features  # packed 2D [num_video_tokens, H] (see get_image_features)
 
+    def get_visual_features_host(self, modality, pixel_values, grid_thw):
+        """The vision tower over one user's items, returning per-item HOST bf16 rows (no upload). Stashes the grid like
+        get_image_features / get_video_features (the caller restages the full grid list when it caches)."""
+        assert self.vision_model is not None, "init_vision_model() must be called first"
+        if modality == "video":
+            self._req_video_grid_thw, self._req_image_grid_thw = grid_thw, None
+        else:
+            self._req_image_grid_thw, self._req_video_grid_thw = grid_thw, None
+        return self.vision_model.forward(pixel_values, grid_thw=grid_thw, host_trim=True, return_host_rows=True)
+
+    def upload_vision_rows(self, rows):
+        """Host bf16 [n_tokens, H] -> the packed device rows the splice reads (same upload as the tower's host_trim)."""
+        return self.vision_model.upload_rows(rows)
+
     def _vision_placeholder_token_id(self):
         """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
         a video request (video grid stashed), else ``image_token_id``. The vision-splice paths

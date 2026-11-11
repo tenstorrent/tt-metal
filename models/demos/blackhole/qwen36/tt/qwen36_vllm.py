@@ -29,7 +29,6 @@ from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.demos.blackhole.qwen36.tt.mm_prefix import (
     MMVision,
-    identifier_cache_key,
     mm_prefix_cache_enabled,
     parse_items,
     placeholders_match,
@@ -488,12 +487,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
         return None
 
-    def _vision_cached(self, model, modality, visual, encode, key=None):
-        """QWEN36_MM_VISION_CACHE=N (default 0 = off): LRU of the last N requests' vision-tower outputs, keyed by
-        modality + a hash of the exact pixel patches + grid. Agent clients re-send the same images every turn; a hit
-        skips the tower (~0.45 s per 1 MP image) and returns the same packed device tensor (the prefill splice only
-        reads it: _set_vision_merge copies it to host). The model-global grid stash that get_*_features does is
-        replayed on a hit, so M-RoPE and the placeholder id are unchanged."""
+    def _vision_cached(self, model, modality, visual, encode, ids=None):
+        """QWEN36_MM_VISION_CACHE=N (default 0 = off): LRU of the vision-tower output of the last N ITEMS (images or
+        videos), as HOST bf16 rows, keyed per item by its content hash (``ids``: vLLM's identifiers, one per item) or,
+        without ids, by a host hash of the item's pixels + grid. A request whose items all hit skips the tower; a miss
+        runs the tower over the missing items only. Either way the request gets a FRESH device tensor (host tilize +
+        host->device write, the upload the tower's host_trim path does: no new device program after capture), so the
+        caller may free it and nothing cached lives in device DRAM.
+
+        Fixes 8c2faf2ec95, which kept the returned DEVICE tensor in the LRU: prefill_paged_slots deallocates its vision
+        tensor after the prefill, so a hit spliced freed / reused DRAM (wrong answers, HTTP 200). That cache was also
+        keyed by the whole request's item set, so a conversation that adds an image missed every turn.
+        The model-global grid stash is set to this call's full grid list, as get_*_features does."""
         import collections
         import hashlib
 
@@ -505,9 +510,20 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if cache is None:
             cache = self._vision_lru = collections.OrderedDict()
             self._vision_lru_stats = [0, 0]
-        if key is None:
-            # no content hashes from vLLM: hash the pixels on the host (~25 ms per 1 MP image)
-            pv = pixel_values.contiguous()
+        grids = grid_thw.reshape(-1, 3)
+        sizes = [int(g.prod()) for g in grids]
+        if sum(sizes) != int(pixel_values.shape[0]):
+            raise ValueError(f"vision cache: {int(pixel_values.shape[0])} patches vs grids {grids.tolist()}")
+        pv_items = list(torch.split(pixel_values, sizes, dim=0))
+        if ids is not None and len(ids) != len(sizes):
+            raise ValueError(f"vision cache: {len(ids)} ids for {len(sizes)} items")
+        keys = []
+        for k, (pv, g) in enumerate(zip(pv_items, grids)):
+            if ids is not None:
+                keys.append(f"{modality}:id:{ids[k]}")
+                continue
+            # no content hash from vLLM: hash the item's pixels on the host (~25 ms per 1 MP image)
+            pv = pv.contiguous()
             h = hashlib.blake2b(digest_size=16)
             h.update(str((modality, tuple(pv.shape), str(pv.dtype))).encode())
             h.update(
@@ -515,26 +531,35 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 if pv.dtype != torch.bfloat16
                 else pv.view(torch.int16).numpy().tobytes()
             )
-            h.update(grid_thw.contiguous().to(torch.int64).numpy().tobytes())
-            key = h.hexdigest()
-        hit = cache.get(key)
+            h.update(g.contiguous().to(torch.int64).numpy().tobytes())
+            keys.append(f"{modality}:px:{h.hexdigest()}")
+        rows = [cache.get(key) for key in keys]
+        miss = [k for k, r in enumerate(rows) if r is None]
         stats = self._vision_lru_stats
-        if hit is not None:
-            cache.move_to_end(key)
-            stats[0] += 1
-            if modality == "video":
-                model._req_video_grid_thw, model._req_image_grid_thw = grid_thw, None
-            else:
-                model._req_image_grid_thw, model._req_video_grid_thw = grid_thw, None
-            if (stats[0] + stats[1]) % 50 == 0:
-                logger.info(f"qwen36 vision cache: {stats[0]} hits / {stats[1]} misses, {len(cache)} entries")
-            return hit
-        stats[1] += 1
-        out = encode(pixel_values, grid_thw)
-        cache[key] = out
-        while len(cache) > cap:
-            cache.popitem(last=False)
-        return out
+        stats[0] += len(rows) - len(miss)
+        stats[1] += len(miss)
+        for k, key in enumerate(keys):
+            if rows[k] is not None:
+                cache.move_to_end(key)
+        if miss:
+            fresh = model.get_visual_features_host(
+                modality, torch.cat([pv_items[k] for k in miss], dim=0), grids[miss].contiguous()
+            )
+            if len(fresh) != len(miss):
+                raise RuntimeError(f"vision tower returned {len(fresh)} items for {len(miss)}")
+            for k, r in zip(miss, fresh):
+                rows[k] = r
+                cache[keys[k]] = r
+                cache.move_to_end(keys[k])
+            while len(cache) > cap:
+                cache.popitem(last=False)
+        if modality == "video":
+            model._req_video_grid_thw, model._req_image_grid_thw = grid_thw, None
+        else:
+            model._req_image_grid_thw, model._req_video_grid_thw = grid_thw, None
+        if (stats[0] + stats[1]) // 50 != (stats[0] + stats[1] - len(rows)) // 50:
+            logger.info(f"qwen36 vision cache: {stats[0]} item hits / {stats[1]} misses, {len(cache)} items cached")
+        return model.upload_vision_rows(torch.cat(rows, dim=0))
 
     def _mm_vision_for(self, model, kwargs, u, tokens):
         """QWEN36_MM_PREFIX_CACHE: the MMVision of user ``u``'s image prompt (None = serve it on the plain multimodal path).
@@ -575,7 +600,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 "image",
                 (pixel_values, grid_thw),
                 model.get_image_features,
-                key=identifier_cache_key("image", ids[first:]),
+                ids=ids[first:],
             )
 
         return MMVision(tokens, items, pv_items, grid_items, encode)
