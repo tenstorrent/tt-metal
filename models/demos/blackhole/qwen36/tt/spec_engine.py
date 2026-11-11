@@ -264,6 +264,12 @@ def _row_vision_of(eng):
     return eng.__dict__.setdefault("_row_vision_map", {})
 
 
+def _is_mm_vision(v):
+    """True for a mm_prefix.MMVision (QWEN36_MM_PREFIX_CACHE: the vision side of a prefix-resumable image prompt), passed
+    where the packed vision rows of the plain multimodal path go (``vision_tokens``) and kept per row like them."""
+    return v is not None and hasattr(v, "rows_for")
+
+
 def _record_row_delta(eng, row, delta):
     """Store engine row ``row``'s M-RoPE delta (request-level: 0 for text, the grid's rope_delta for a multimodal prompt)
     where the verify / draft / join builders read it (model.set_slot_rope_delta). No-op for a model without it."""
@@ -3125,7 +3131,10 @@ class MTPSpecEngine:
         Option A (QWEN36_SPEC_CHUNK_EXACT_RESUME=0): the snapshot is at e-128 and the next chunk (start_pos = e) resumes
         there, recomputing [e-128, e). Option B (default): the snapshot is at the chunk end e and the target hidden row of
         slot e-1 is captured into _last_hidden[slot]; the next chunk (start_pos = e, same prompt prefix and page table, see
-        _chunk_prog) resumes exactly at e and first warms the drafter slot e-1 with (that row, token e)."""
+        _chunk_prog) resumes exactly at e and first warms the drafter slot e-1 with (that row, token e).
+        ``vision_tokens`` may also be a mm_prefix.MMVision (QWEN36_MM_PREFIX_CACHE): the image prompt then takes part in
+        prefix caching like a text prompt (GDN snapshots keyed by tokens + image hashes, resume at s <= start_pos), and the
+        tower runs only over the images that [s, Tp) reaches (see _prefill_row_body)."""
         assert final or vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         if getattr(self, "_split_pending", None) is not None:
@@ -3153,6 +3162,18 @@ class MTPSpecEngine:
         self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None, final=True
     ):
         """``prefill`` of engine row ``slot`` (``final`` False: a non-final chunk, see ``prefill``)."""
+        try:
+            return self._prefill_row_body(
+                slot, prompt_ids, page_table_row, _cap_blocks, start_pos, vision_tokens, final
+            )
+        finally:
+            # QWEN36_MM_PREFIX_CACHE: the row offset base belongs to this prefill only
+            if getattr(self.model, "_vis_row_base", 0):
+                self.model._vis_row_base = 0
+
+    def _prefill_row_body(
+        self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None, final=True
+    ):
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
         # A prefill of the row ends its pending progress (see _chunk_exact_resume): the request it belongs to consumes it, any
@@ -3163,6 +3184,12 @@ class MTPSpecEngine:
         model = self.model
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
+        # QWEN36_MM_PREFIX_CACHE: an image prompt's MMVision; its rows are encoded once the resume position is known.
+        mm_vision = vision_tokens if _is_mm_vision(vision_tokens) else None
+        if mm_vision is not None:
+            if not final:
+                raise RuntimeError("a multimodal prompt cannot be prefilled in non-final chunks")
+            vision_tokens = None
         prompt_row = None
         if prefill_host_tolist_enabled():
             # QWEN36_PREFILL_HOST_TOLIST: one tolist() and an int32 copy of the same ids (see _prompt_ids_fast)
@@ -3188,7 +3215,9 @@ class MTPSpecEngine:
         unaligned_end = (not final) and Tp % 128 != 0
         # A multimodal row keeps its vision rows until it is released / joined: a re-prefill (_reprefill,
         # _reconcile_fresh_rows) needs them. A text prefill on the row clears a previous request's.
-        if vision_tokens is None:
+        if mm_vision is not None:
+            _row_vision_of(self)[slot] = mm_vision  # a re-prefill encodes what its own resume needs
+        elif vision_tokens is None:
             _row_vision_of(self).pop(slot, None)
         else:
             _row_vision_of(self)[slot] = vision_tokens
@@ -3225,7 +3254,9 @@ class MTPSpecEngine:
                 logger.info(
                     f"[spec_engine] chunked prefill: chunk [{start_pos}, {Tp}) is <= 128 tokens: no e-128 snapshot"
                 )
-        exact = self._chunk_exact_resume(prog, digest_ids, start_pos, Tp, pt_row, vision_tokens, exact_mode)
+        exact = self._chunk_exact_resume(
+            prog, digest_ids, start_pos, Tp, pt_row, vision_tokens if mm_vision is None else mm_vision, exact_mode
+        )
         plan_kw = {}
         if force:
             plan_kw["force_points"] = force
@@ -3233,8 +3264,10 @@ class MTPSpecEngine:
             plan_kw["exact_resume"] = exact
         if save_end or unaligned_end:
             plan_kw["nonfinal"] = True  # unaligned: the forced point replaces the end checkpoint; a plan is always made
+        # The GDN snapshot key: the token ids, or for an image prompt (QWEN36_MM_PREFIX_CACHE) the ids + image hashes.
+        key_row = prompt[0] if mm_vision is None else mm_vision.key
         plan = (
-            model.plan_spec_prefix(prompt[0], Tp, start_pos, **plan_kw)
+            model.plan_spec_prefix(key_row, Tp, start_pos, **plan_kw)
             if start_pos is not None and self.B > 1 and vision_tokens is None
             else None
         )
@@ -3247,6 +3280,13 @@ class MTPSpecEngine:
             self._chunk_bump("refusals")
             logger.warning(f"[spec_engine] chunk exact resume: snapshot at {start_pos} evicted, Option A resume")
         self._note_resume_fallback(prompt_list, start_pos, Tp, plan, final)
+        if mm_vision is not None:
+            # Encode only the images [s, Tp) reaches (an image straddling s whole; its rows from s on are spliced). The
+            # M-RoPE table needs every image's grid, the cached ones included: restage the full list after the tower
+            # (get_image_features stashed only the encoded images' grids).
+            resume = 0 if plan is None else int(plan[0])
+            vision_tokens, model._vis_row_base = mm_vision.rows_for(resume)
+            model._req_image_grid_thw, model._req_video_grid_thw = mm_vision.grids, None
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)  # text: the calls are unchanged
         # The prompt the drafter fuses its next-token column from. A non-final fast-prefill segment [a, b) narrows it
         # to prompt[:b+1] so padded bucket rows never fuse (and write drafter KV for) tokens past b.
@@ -3272,6 +3312,8 @@ class MTPSpecEngine:
         if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
             fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
             fast_kw.update(vis_kw)
+            if mm_vision is not None and plan is not None:
+                fast_kw.update(mm_key=mm_vision.key, mm_rope=True)
             if not final:
                 fast_kw["final_row"] = False
                 fast_kw["save_end"] = save_end
@@ -3279,6 +3321,13 @@ class MTPSpecEngine:
         if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
             logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk, **vis_kw)
+        if logits_dev is None and mm_vision is not None and plan is not None:
+            # The eager resumable path has no vision splice: recompute the image prompt from 0 with every image (correct;
+            # the cached KV is rewritten with the same values). Reached when no trace served the prompt.
+            logger.warning(f"[spec_engine] image prompt on row {slot}: no traced prefill, eager recompute from 0")
+            vision_tokens, model._vis_row_base = mm_vision.rows_for(0)
+            vis_kw = dict(vision_tokens=vision_tokens)
+            plan = None
         if logits_dev is None:
             if plan is None:
                 logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, **vis_kw)
@@ -3313,7 +3362,13 @@ class MTPSpecEngine:
         self._fresh[slot] = Tp
         self._active.add(slot)
         _record_row_delta(
-            self, slot, None if vision_tokens is None else getattr(getattr(model, "rope", None), "rope_delta", 0)
+            self,
+            slot,
+            (
+                None
+                if vision_tokens is None and mm_vision is None
+                else getattr(getattr(model, "rope", None), "rope_delta", 0)
+            ),
         )
         return lt.reshape(-1)[: self.vocab].float()
 
@@ -3331,6 +3386,8 @@ class MTPSpecEngine:
         vision_tokens=None,
         final_row=True,
         save_end=False,
+        mm_key=None,
+        mm_rope=False,
     ):
         """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
         were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
@@ -3348,6 +3405,11 @@ class MTPSpecEngine:
         ``vision_tokens`` (multimodal prompt; plan is None then): the packed vision rows, spliced per segment by
         _fast_segment.
 
+        ``mm_key`` / ``mm_rope`` (QWEN36_MM_PREFIX_CACHE, an image prompt WITH a plan): the GDN snapshots are saved under
+        mm_key (mm_prefix.MMKeyedTokens: ids + image hashes), the request RoPE is M-RoPE over every image's grid even when
+        ``vision_tokens`` is None (no image reaches [s, Tp)), and the per-segment split serves the save points (no
+        in-replay snapshots for images).
+
         ``final_row`` False (non-final chunk): the scratch is not written to the row's GDN slot and no host logits are read
         (the returned value is meaningless). ``save_end`` (with final_row False; Option B): the state after tokens[:Tp]
         is also snapshotted into the prefix cache (no extra segment: Tp is the last segment's end)."""
@@ -3364,11 +3426,15 @@ class MTPSpecEngine:
         try:
             self._skip_logits_read = not final_row
             if plan is not None:
-                assert vision_tokens is None, "a multimodal prompt bypasses the prefix cache"
-                model._build_request_rope(prompt, None)  # one table for the whole prompt: every segment slices it
+                if (vision_tokens is not None or mm_rope) and mm_key is None:
+                    raise RuntimeError("a multimodal prompt with a prefix plan needs its image-keyed GDN key (mm_key)")
+                # one table for the whole prompt: every segment slices it
+                model._build_request_rope(prompt, vision_tokens, **({"mm": True} if mm_rope else {}))
                 if s0 > 0:
                     src[0].restore(src[1])
-                run, mb_choice = self._snap_run_plan(prompt, pt_row, s0, Tp, points)
+                run, mb_choice = (
+                    (None, None) if mm_key is not None else self._snap_run_plan(prompt, pt_row, s0, Tp, points)
+                )
                 if run is not None:
                     bounds = [Tp]  # ONE segment: every save point is a replay end or an in-replay snapshot
                     seg_kw = dict(snap=run, mb_choice=mb_choice)
@@ -3399,7 +3465,7 @@ class MTPSpecEngine:
                 if not final:
                     # the bound scratch = the state after tokens[:b]
                     model._prefix_cache.save(
-                        prompt[0],
+                        prompt[0] if mm_key is None else mm_key,
                         b,
                         low_prio=b in getattr(points, "low", ()),
                         protect=b in getattr(points, "end", ()),
@@ -3410,7 +3476,7 @@ class MTPSpecEngine:
                 saved = list(run.saved)  # in position order, as the per-segment saves above would have been
             if save_end:
                 assert plan is not None
-                model._prefix_cache.save(prompt[0], Tp)  # the bound scratch = the state after tokens[:Tp]
+                model._prefix_cache.save(prompt[0] if mm_key is None else mm_key, Tp)  # the state after tokens[:Tp]
                 saved.append(Tp)
             if plan is not None:
                 model._prefix_cache.log(Tp, -1, s0, saved)

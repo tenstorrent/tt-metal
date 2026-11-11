@@ -27,6 +27,13 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.mm_prefix import (
+    MMVision,
+    identifier_cache_key,
+    mm_prefix_cache_enabled,
+    parse_items,
+    placeholders_match,
+)
 from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
 from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_map_after_remap, slot_map_inverse
 from models.demos.blackhole.qwen36.tt.tp_common import (
@@ -481,7 +488,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
         return None
 
-    def _vision_cached(self, model, modality, visual, encode):
+    def _vision_cached(self, model, modality, visual, encode, key=None):
         """QWEN36_MM_VISION_CACHE=N (default 0 = off): LRU of the last N requests' vision-tower outputs, keyed by
         modality + a hash of the exact pixel patches + grid. Agent clients re-send the same images every turn; a hit
         skips the tower (~0.45 s per 1 MP image) and returns the same packed device tensor (the prefill splice only
@@ -498,12 +505,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if cache is None:
             cache = self._vision_lru = collections.OrderedDict()
             self._vision_lru_stats = [0, 0]
-        pv = pixel_values.contiguous()
-        h = hashlib.blake2b(digest_size=16)
-        h.update(str((modality, tuple(pv.shape), str(pv.dtype))).encode())
-        h.update(pv.view(torch.uint8).numpy().tobytes() if pv.dtype != torch.bfloat16 else pv.view(torch.int16).numpy().tobytes())
-        h.update(grid_thw.contiguous().to(torch.int64).numpy().tobytes())
-        key = h.hexdigest()
+        if key is None:
+            # no content hashes from vLLM: hash the pixels on the host (~25 ms per 1 MP image)
+            pv = pixel_values.contiguous()
+            h = hashlib.blake2b(digest_size=16)
+            h.update(str((modality, tuple(pv.shape), str(pv.dtype))).encode())
+            h.update(
+                pv.view(torch.uint8).numpy().tobytes()
+                if pv.dtype != torch.bfloat16
+                else pv.view(torch.int16).numpy().tobytes()
+            )
+            h.update(grid_thw.contiguous().to(torch.int64).numpy().tobytes())
+            key = h.hexdigest()
         hit = cache.get(key)
         stats = self._vision_lru_stats
         if hit is not None:
@@ -522,6 +535,44 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         while len(cache) > cap:
             cache.popitem(last=False)
         return out
+
+    def _mm_vision_for(self, model, kwargs, u, tokens):
+        """QWEN36_MM_PREFIX_CACHE: the MMVision of user ``u``'s image prompt (None = serve it on the plain multimodal path).
+
+        Needs the plugin's ``mm_item_spans`` row (offset, length, vLLM content hash per image), an image-only request, one
+        pixel tensor + grid per item, and placeholder ids exactly on the spans (the splice counts them). The tower runs
+        through the vision cache keyed by the encoded images' content hashes."""
+        if not mm_prefix_cache_enabled():
+            return None
+        span_rows = kwargs.get("mm_item_spans")
+        spans = span_rows[u] if span_rows is not None and u < len(span_rows) else None
+        if not spans or self._has_visual(kwargs, "pixel_values_videos", u):
+            return None
+        pvs, grids = kwargs.get("pixel_values"), kwargs.get("image_grid_thw")
+        if pvs is None or grids is None or pvs[u] is None or grids[u] is None:
+            return None
+        pv_items, grid_items = list(pvs[u]), list(grids[u])
+        items = parse_items(spans)
+        if not (len(items) == len(pv_items) == len(grid_items)):
+            logger.warning(f"qwen36 mm prefix cache: {len(items)} spans vs {len(pv_items)} images; plain multimodal path")
+            return None
+        if not placeholders_match(tokens, items, int(model.args.hf_config.image_token_id)):
+            logger.warning("qwen36 mm prefix cache: image placeholders off the vLLM spans; plain multimodal path")
+            return None
+        ids = [it.identifier for it in items]
+
+        def encode(pixel_values, grid_thw):
+            self._check_vision_bucket(grid_thw)
+            first = len(ids) - int(grid_thw.shape[0])
+            return self._vision_cached(
+                model,
+                "image",
+                (pixel_values, grid_thw),
+                model.get_image_features,
+                key=identifier_cache_key("image", ids[first:]),
+            )
+
+        return MMVision(tokens, items, pv_items, grid_items, encode)
 
     @staticmethod
     def _vision_bucket(num_patches):
@@ -1209,6 +1260,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # QWEN36_SPEC_PREFIX_CACHE=1 (default): APC via the model's GDN snapshot cache (tt/prefix_cache.py); the spec
         # prefill resumes from a snapshot at or below start_pos (B == 1 recomputes from 0).
         "supports_prefix_caching": _spec_prefix_cache_enabled(),
+        # QWEN36_MM_PREFIX_CACHE=1 (default off; needs the spec prefix cache): an image prompt may resume from a prefix-cache
+        # hit. The plugin (VLLM_TT_MM_PREFIX_CACHE=1) then lets image requests read the prefix cache, keeps their pixels and
+        # passes mm_item_spans; the engine keys GDN snapshots by tokens + image hashes and encodes only the images the
+        # resumed suffix reaches (tt/mm_prefix.py).
+        "accepts_mm_prefix_cache": bool(mm_prefix_cache_enabled() and _spec_prefix_cache_enabled()),
         # QWEN36_SPEC_CHUNKED_PREFILL=1 + prefix cache: non-final chunks snapshot the GDN state at e-128 and the next chunk
         # resumes there (spec_engine.prefill final=False); the plugin passes intermediate_prefill_mask.
         **_mtp_chunked_capabilities(),
@@ -1478,6 +1534,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                     f"multimodal prefill row {i} is a non-final chunk: the MTP spec path cannot split a multimodal prompt "
                     "(the scheduler must not chunk it)"
                 )
+            mm_vision = self._mm_vision_for(model, kwargs, i, tokens[i, :L]) if has_mm and starts is not None else None
+            if mm_vision is not None:
+                # QWEN36_MM_PREFIX_CACHE: prefix-cached like a text prompt (start_pos 0 included: it saves the snapshots
+                # the next turn resumes from); the engine encodes the images its resume reaches.
+                out = eng.prefill(
+                    slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], vision_tokens=mm_vision
+                )
+                rows.append(out.float().reshape(-1))
+                continue
             vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
             if nonfinal[i]:
                 assert starts is not None, "non-final prefill chunk without start_pos"

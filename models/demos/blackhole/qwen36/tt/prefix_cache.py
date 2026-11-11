@@ -78,6 +78,19 @@ def _tokens_np(tokens):
     return np.ascontiguousarray(np.asarray(tokens, dtype=np.int32).reshape(-1))
 
 
+def _key_material(tokens):
+    """(buf, kpos, n): a snapshot of tokens[:pos] is keyed by the digest of buf[:kpos(pos)]; n = the token count.
+
+    Plain token ids (text prompts): buf = the int32 ids and kpos is the identity, i.e. the digests are unchanged.
+    A multimodal prompt passes mm_prefix.MMKeyedTokens, whose buf also carries each image's content hash in front of its
+    placeholders, so prompts with equal token ids and different images get different keys (QWEN36_MM_PREFIX_CACHE)."""
+    kpos = getattr(tokens, "kpos", None)
+    if kpos is not None:
+        return tokens.buf, kpos, len(tokens)
+    buf = _tokens_np(tokens)
+    return buf, (lambda pos: pos), int(buf.shape[0])
+
+
 SPEC_PREFIX_ALIGN = 128
 
 
@@ -342,14 +355,15 @@ class GdnPrefixStateCache:
     def lookup(self, tokens, max_pos):
         """Largest stored pos <= max_pos whose digest matches tokens[:pos] -> (pos, slot), else (0, None)."""
         self.stats["lookups"] += 1
-        buf = _tokens_np(tokens)
-        cands = self._positions[: bisect.bisect_right(self._positions, min(int(max_pos), buf.shape[0]))]
+        buf, kpos, n = _key_material(tokens)
+        cands = self._positions[: bisect.bisect_right(self._positions, min(int(max_pos), n))]
         # One running hash over the ascending candidates (copy() at each) == blake2b(tokens[:pos]) per candidate.
         hasher = hashlib.blake2b(digest_size=16)
         found, prev = {}, 0
         for pos in cands:
-            hasher.update(buf[prev:pos].tobytes())
-            prev = pos
+            k = kpos(pos)
+            hasher.update(buf[prev:k].tobytes())
+            prev = k
             dig = hasher.copy().digest()
             if dig in self._by_pos[pos]:
                 found[pos] = dig
@@ -424,7 +438,8 @@ class GdnPrefixStateCache:
     def pin(self, tokens, pos, owner):
         """Pin the snapshot (pos, digest(tokens[:pos])) for ``owner``; replaces the owner's earlier pin. Returns False when the
         snapshot is not in the cache. Over the cap the oldest pin of another owner is dropped (logged)."""
-        key = (int(pos), self._digest(_tokens_np(tokens), int(pos)))
+        buf, kpos, _ = _key_material(tokens)
+        key = (int(pos), self._digest(buf, kpos(int(pos))))
         if key not in self._lru:
             return False
         pins = self._pins()
@@ -534,8 +549,8 @@ class GdnPrefixStateCache:
         state after tokens[:pos] of GDN layer dn into the slot's tensors from another source, an in-replay snapshot
         (Qwen36Model.gdn_snap_copy_fn). Same keys, eviction and accounting either way.
         Returns True when the snapshot is in the cache afterwards."""
-        buf = _tokens_np(tokens)
-        key = (int(pos), self._digest(buf, int(pos)))
+        buf, kpos, _ = _key_material(tokens)
+        key = (int(pos), self._digest(buf, kpos(int(pos))))
         if key in self._lru:
             self._lru.move_to_end(key)
             if not low_prio:

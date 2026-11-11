@@ -20,6 +20,7 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as _tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.blackhole.qwen36.tt.mm_prefix import row_offset as _mm_row_offset
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -617,14 +618,17 @@ class Qwen36Model:
             return int(self.args.hf_config.video_token_id)
         return int(self.args.hf_config.image_token_id)
 
-    def _build_request_rope(self, token_ids, vision_tokens):
+    def _build_request_rope(self, token_ids, vision_tokens, mm=False):
         """Stage the per-request RoPE for this prefill: M-RoPE (3D position ids + rope_delta) when
         the request is multimodal (vision_tokens present -> use the grid stashed by
         get_image_features / get_video_features), else clear to ordinary 1D RoPE. Call once at a
         prefill entry point with the REAL token ids (token_ids[:, :actual_len]); the chunk/tail
-        seams then slice the staged table by sequence position and decode offsets by rope_delta."""
-        image_grid = self._req_image_grid_thw if vision_tokens is not None else None
-        video_grid = self._req_video_grid_thw if vision_tokens is not None else None
+        seams then slice the staged table by sequence position and decode offsets by rope_delta.
+        ``mm`` True: multimodal even with no rows to splice (QWEN36_MM_PREFIX_CACHE: a resume past every image still
+        needs every image's grid for the positions; the caller staged the full grid list)."""
+        multimodal = vision_tokens is not None or mm
+        image_grid = self._req_image_grid_thw if multimodal else None
+        video_grid = self._req_video_grid_thw if multimodal else None
         self.rope.build_request_rope(token_ids, image_grid_thw=image_grid, video_grid_thw=video_grid)
 
     def _alloc_vision_merge_buffers(self, device, chunk_size):
@@ -790,9 +794,13 @@ class Qwen36Model:
         ``chunk_start``: the number of image-placeholder tokens before it. The vision rows are
         packed in image-placeholder order, so this is the index of the first row this segment
         owns — used to splice a large image whose placeholders span multiple chunks / the tail."""
+        # QWEN36_MM_PREFIX_CACHE: a resumed prefill's rows start at the first item it reaches; _vis_row_base = the
+        # placeholder rows of the items before it (0 otherwise, so the offsets are unchanged).
+        base = int(getattr(self, "_vis_row_base", 0) or 0)
         if chunk_start <= 0:
-            return 0
-        return int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
+            return 0 if base == 0 else _mm_row_offset(0, base)
+        n = int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
+        return n if base == 0 else _mm_row_offset(n, base)
 
     def _build_lm_head_weight(self, lm_head_weight, tensor_cache_path, dtype, cache_tag="", rows=None):
         """LM-head weight [dim, vocab] on device, vocab-sharded (or replicated, see __init__) at ``dtype``.
