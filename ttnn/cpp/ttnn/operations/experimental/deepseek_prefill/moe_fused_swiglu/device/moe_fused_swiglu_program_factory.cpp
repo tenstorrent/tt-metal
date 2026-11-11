@@ -610,6 +610,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     }
     if (operation_arguments.activation == RoutedExpertActivation::SituGlu) {
         compute_descriptor.defines.emplace_back("SITU_GLU", "1");
+    } else if (operation_arguments.activation == RoutedExpertActivation::ClampedSiluGlu) {
+        compute_descriptor.defines.emplace_back("CLAMPED_SILU_GLU", "1");
     } else if (operation_arguments.activation == RoutedExpertActivation::SwiGluOai) {
         compute_descriptor.defines.emplace_back("SWIGLU_OAI", "1");
     }
