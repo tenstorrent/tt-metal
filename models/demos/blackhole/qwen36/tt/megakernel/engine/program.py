@@ -3008,6 +3008,15 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
                 co = ttnn.MeshCoordinate(r, c_)
                 descs[(r, c_)] = per_dev(co) if per_dev else S["prog"]
                 AB.check_cb_ids(descs[(r, c_)])
+    try:   # rc_preflight requirement (main, rc1b on): host == kernel == recipe for every RC flag ([rcflags] line)
+        from models.demos.blackhole.qwen36.tt.megakernel.integ import rcflags as _rcf
+
+        _d0 = next(iter(descs.values()))
+        _rcf.report(env, _d0)
+    except AssertionError:
+        raise
+    except Exception as _e:  # noqa: BLE001 -- the report must never break a build unless asked to assert
+        print(f"[rcflags] check skipped: {type(_e).__name__}: {_e}", flush=True)
     info = dict(env=env, nl=int(env["FM_NL"]), nu=int(env["MKA_NU"]), n_io=len(io0), per_device=per_dev is not None,
                 common_args=blocks.common_args(), l1pool=dict(pool_stats), n_gdn=len(gdn_desc or ()), n_attn=len(kv_desc or ()),
                 weights={k: (t.buffer_address() if t is not None else 0) for k, t in wb.items()})
