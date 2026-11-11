@@ -227,9 +227,9 @@ def test_one_pool_across_recursion_and_actual_concurrency(fake, tmp_path, monkey
     real_pool = cache.ThreadPoolExecutor
     pools = []
 
-    def worker(a, b):
+    def worker(pair):
         barrier.wait()
-        return original(a, b)
+        return original(pair)
 
     def executor(*args, **kwargs):
         p = real_pool(*args, **kwargs)
@@ -265,12 +265,12 @@ def test_interrupt_while_waiting_keeps_removed_future_alive(fake, tmp_path, monk
     original_pool = cache.ThreadPoolExecutor
     original_deallocate = cache.ttnn.deallocate
 
-    def worker(a, b):
+    def worker(pair):
         assert release.wait(5)
         # Keep the removed future in flight long enough to expose premature freeing.
         threading.Event().wait(0.05)
         try:
-            return original_worker(a, b)
+            return original_worker(pair)
         finally:
             done.set()
 
@@ -334,3 +334,23 @@ def test_decorated_serial_fallback_retains_actual_hooks(tmp_path):
         assert cache.verify_saved_model(model(tensor), tmp_path, workers=4, stats=stats)
     assert stats["parallel_pairs"] == 0 and stats["serial_pairs"] == 1
     assert calls == [caller, caller]
+
+
+def test_completed_executor_arguments_do_not_retain_snapshots(fake, tmp_path, monkeypatch):
+    original = cache.ThreadPoolExecutor
+    arguments = []
+
+    def pool(*args, **kwargs):
+        executor = original(*args, **kwargs)
+        submit = executor.submit
+
+        def retained_submit(fn, pair):
+            arguments.append(pair)
+            return submit(fn, pair)
+
+        executor.submit = retained_submit
+        return executor
+
+    monkeypatch.setattr(cache, "ThreadPoolExecutor", pool)
+    assert cache.verify_saved_model(fake.model([fake.Tensor()] * 8), tmp_path, workers=4)
+    assert len(arguments) == 8 and all(not pair for pair in arguments)

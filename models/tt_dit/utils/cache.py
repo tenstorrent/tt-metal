@@ -13,7 +13,7 @@ import shutil
 import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -368,7 +368,9 @@ def _verification_workspace(a, b):
         return None
 
 
-def _verification_worker(a, b):
+def _verification_worker(pair):
+    a, b = pair
+    pair.clear()  # The executor work item must not retain snapshots after completion.
     stats = dict(convert_s=0.0, compare_s=0.0)
     cpu = time.thread_time()
     try:
@@ -406,6 +408,10 @@ class _VerificationPool:
         except Exception as err:
             logger.error(f"cache worker cancelled/failed at shard {index}: {err}")
             return index, False, True
+        except BaseException:
+            # result() can be interrupted after this future leaves pending.
+            wait([future])
+            raise
         finally:
             self.bytes -= size
 
@@ -435,7 +441,7 @@ class _VerificationPool:
                         b = b.cpu(blocking=True)
                     if self.executor is None:
                         self.executor = ThreadPoolExecutor(self.workers, thread_name_prefix="cache-verify")
-                    self.pending.append((index, self.executor.submit(_verification_worker, a, b), size))
+                    self.pending.append((index, self.executor.submit(_verification_worker, [a, b]), size))
                     self.bytes += size
                     self.counters["parallel_pairs"] += 1
                     self.counters["peak_inflight_pairs"] = max(self.counters["peak_inflight_pairs"], len(self.pending))
