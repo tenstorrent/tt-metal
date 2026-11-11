@@ -133,3 +133,42 @@ def test_sim_with_budget_slivers_has_no_events(monkeypatch):
         )
         res[flag] = c.n
     assert res["0"] > 0 and res["1"] == 0, res
+
+
+def test_state_debug_line_per_call(monkeypatch):
+    monkeypatch.setenv("DSV41_STATE_DEBUG", "1")
+    msgs = []
+    gen, m, _ = make_gen(monkeypatch, False)
+    logger.remove()
+    h = logger.add(lambda m_: msgs.append(m_.record["message"]), level="INFO")
+    try:
+        toks = torch.randint(1000, 90000, (20000,), dtype=torch.int64)
+        call(gen, toks, 0, 4096, "x", 0, 20000)
+        call(gen, toks, 4096, 4281, "x", 0, 20000)  # a sliver: SKIPPED
+    finally:
+        logger.remove(h)
+    dbg = [x for x in msgs if "state debug call" in x]
+    assert len(dbg) == 2 and "SKIPPED" in dbg[1] and "tracker 4096/4096" in dbg[1] and "pf_resume 4096" in dbg[1], dbg
+
+
+def test_hit_sliver_is_covered_by_the_sliver_flag_alone(monkeypatch):
+    """image-2 B=16: all 29 slivers were the FIRST piece of a prefix-hit request (start = hit tokens), never a continuation"""
+    from models.demos.blackhole.deepseek_v41_flash.tests.test_protect_partial_cpu import Plan
+
+    res = {}
+    for flag in (False, True):
+        monkeypatch.setenv("DSV41_SLIVER_EXTEND", "1" if flag else "0")
+        gen, m, plans = make_gen(monkeypatch, False)
+        c = Count()
+        logger.remove()
+        h = logger.add(c, level="INFO")
+        try:
+            L = 400000
+            toks = torch.randint(1000, 90000, (L,), dtype=torch.int64)
+            plans["hit1"] = Plan(user=1, hit=111616)
+            call(gen, toks, 111616, 111749, "hit1", 1, L)
+            call(gen, toks, 111749, 115712, "hit1", 1, L)
+        finally:
+            logger.remove(h)
+        res[flag] = (c.lost, m.steps[-1][0][1])
+    assert res[False] == (1, 0) and res[True][0] == 0 and res[True][1] > 0, res

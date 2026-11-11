@@ -1630,6 +1630,19 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             f"DSV4.1 prefill (interleave): chunks {[(it[2], it[3]) for it in items]} in slots {empty_slots} (users {phys}), chunk {chunk}, "
             f"S_pad {self.s_pad_cur}, {'host sampling' if want_logits else 'device sampling'}"
         )
+        if (
+            os.environ.get("DSV41_STATE_DEBUG", "0") == "1"
+        ):  # one line per call: what vLLM asked, what the tracker / model hold for every user of the call (T24, state-loss hunt)
+            res_ = self.m.__dict__.get("pf_resume", {})
+            logger.info(
+                "DSV4.1 state debug call: "
+                + "; ".join(
+                    f"row {i} user {phys[i]} vllm [{starts[i]}, {rep_ends[i]}) planned [{items[i][2]}, {items[i][3]}){' SKIPPED' if i in skipped else ''}{' HIT' if i in hit_rows else ''}"
+                    f" tracker {self.inprog.users.get(phys[i], (None,))[0]}/{self.inprog.reported.get(phys[i])} pf_resume {res_.get(phys[i])} reserved {self.paged.idx.reservation(request_ids[i]) is not None if self.paged is not None and request_ids is not None and i < len(request_ids) else None}"
+                    for i in range(N)
+                )
+                + f" | bucket {getattr(self.m, 'slot_buckets_active', lambda: None)()} final {list(prefill_final) if prefill_final is not None else None} total {list(prefill_total) if prefill_total is not None else None}"
+            )
         vis = None
         rows_mm = [self._mm_row(mm, i) for i in range(N)]
         if any(pv is not None for pv, _ in rows_mm) and self.vbook is None:
