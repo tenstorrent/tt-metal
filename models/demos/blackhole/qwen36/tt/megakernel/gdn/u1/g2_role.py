@@ -130,6 +130,31 @@ class GdnRole:
                     c.par = 1 - c.par
             ttnn.synchronize_device(dev)
             self.mi_ctrl = [int(x) for x in torch.randint(0, T, (B,), generator=self.gen)]
+        # MK_DECOY=gdn_state|all (bench, E1_GB): emulate the model's (d) binding -- clone every layer's state / constants and ONE
+        # ctrl page right here (the GdnRole(state=, ctrl=) bind point), zero + keep the bench originals, and bind the clones
+        # through the state= path. A role that still reads a bench buffer (a captured address, a second copy) sees zeros and
+        # its gdn24 check / md5 lines change. The reference copies (cA) and the check keep working on the clones.
+        _dec = {d_.strip() for d_ in os.environ.get("MK_DECOY", "").split(",") if d_.strip()}
+        self.decoy = state is None and gb is not None and ("all" in _dec or "gdn_state" in _dec)
+        if self.decoy:
+            self._dkeep = []
+            def _swap(t_):
+                c_ = ttnn.clone(t_, memory_config=t_.memory_config())
+                ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.zeros(list(t_.shape)), dtype=t_.dtype, layout=t_.layout), t_)
+                self._dkeep.append(t_)
+                return c_
+            for ly in self.LY:
+                for a_ in ("win_a", "win_b", "ring", "taps_d", "dtb_d", "nea_d", "w_d"):
+                    setattr(ly["cE"], a_, _swap(getattr(ly["cE"], a_)))
+            shared = _swap(self.LY[0]["ctrl"])
+            for ly in self.LY[1:]:
+                _swap(ly["ctrl"])
+            for ly in self.LY:
+                ly["ctrl"] = shared
+            state = [dict(win_a=ly["cE"].win_a, win_b=ly["cE"].win_b, ring=ly["cE"].ring, taps=ly["cE"].taps_d,
+                          dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d) for ly in self.LY]
+            print(f"[decoy] gdn_state: {len(self._dkeep)} bench GDN state / ctrl buffers zeroed; the role binds clones via state= "
+                  f"(one shared ctrl @{shared.buffer_address()})", flush=True)
         if state is not None:
             self.tl = [dict(qkv=self.qkv, win_a=st["win_a"], win_b=st["win_b"], ring=st["ring"], ctrl=ly["ctrl"], taps=st["taps"],
                             dtb=st["dtb"], nea=st["nea"], weight=st["weight"], pre=ly["pre"], out=ly["outE"])
@@ -289,7 +314,7 @@ class GdnRole:
         """This step's rows / ctrl, then the producers for every GDN layer (before the engine pass). G-b: no producers."""
         self.hold = list(hold)
         self._rows()
-        if self.state is not None:   # (d): the model stages ctrl (one page, per replay) and owns the state
+        if self.state is not None and not getattr(self, "decoy", False):   # (d): the model stages ctrl and owns the state
             return
         if self.gb is not None:
             cmp_ = os.environ.get("G2_GB_CMP", "0") == "1"
@@ -367,6 +392,9 @@ class GdnRole:
             wA = _host([cA.win_a, cA.win_b][1 - cA.par]).float()
             wE = _host([cE.win_a, cE.win_b][1 - cE.par]).float()
             e_out, e_ring, e_win = torch.equal(iv(outA), iv(outB)), torch.equal(ringbits(rA), ringbits(rE)), torch.equal(iv(wA), iv(wE))
+            import hashlib
+            _h = lambda t_: hashlib.md5(t_.contiguous().numpy().tobytes()).hexdigest()[:12]
+            print(f"[{tag}] md5 L{l} out {_h(iv(outB))} ring {_h(ringbits(rE))} win {_h(iv(wE))}", flush=True)
             if self.out_unwritten:   # gdn_out E1_GO_LOCAL=2: the out tensor is never written -> out not compared (ring / win are)
                 e_out = "NOT CHECKED (gdn_out E1_GO_LOCAL=2; =1 checks)"
             elif os.environ.get("E1_HOLD_SKIP", "0") == "1" and self.hold and B > 1:
