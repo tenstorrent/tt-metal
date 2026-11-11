@@ -28,12 +28,15 @@ from ttml.distributed_checkpointing._errors import (
     CoverageError,
     DtypeMismatch,
     MissingKeyError,
+    RoleMismatch,
     ShapeMismatch,
+    TopologyError,
     UnexpectedKeyError,
 )
 from ttml.distributed_checkpointing._index import data_file_name
 from ttml.distributed_checkpointing._layouts import Identity, Pad, fused_segments
-from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
+from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 
 TP8_DP4 = world([R(), S(2)], (4, 8))
 TP4_DP8 = world([R(), S(2)], (8, 4))
@@ -247,3 +250,70 @@ def test_live_keys_resolve_tied_names():
     plan, shards = ckpt.load({"model/Llama/tok_emb/weight": (SINGLE, Identity(), canonical.shape)})
     assert "model/Llama/tok_emb/weight" in plan.keys and plan.unexpected == []
     np.testing.assert_array_equal(shards["model/Llama/tok_emb/weight"][()], canonical)
+
+
+def test_a_label_whose_boxes_do_not_tile_is_refused_at_save(expect_error):
+    # A shard dim outside the tensor's rank gives every replica group the same box: without the check the save
+    # writes duplicate chunks and every later load fails on coverage.
+    for dim in (-1, 4):
+        label = Label((Placement.replicate(), Placement.shard(dim)), (1, 2), tuple(dist_coords((1, 2))))
+        info = TensorInfo("model/w", "param", "BF16", "TILE", label, (1, 1, 4, 4), Identity(), ("model/w",))
+        with expect_error(TopologyError, "model/w: distribution axis 1 shards dim"):
+            create_save_plan([info], lambda c: data_file_name(0, 0, c))
+
+
+def test_saved_chunks_that_overlap_or_leave_a_gap_are_refused_at_load(expect_error):
+    canonical = arange((1, 1, 64, 32))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (canonical, TP8_DP4, Identity())})
+    chunks = ckpt.index.entries["w"].chunks
+    chunks[3] = chunks[2]  # one box twice, one missing: the volumes still add up
+    for dest in (SINGLE, TP8_DP4):
+        with expect_error(CoverageError, "w: the checkpoint's 8 chunks do not tile"):
+            ckpt.load({"w": (dest, Identity(), canonical.shape)})
+
+
+def test_a_live_tensor_matching_an_entry_of_another_role_is_refused(expect_error):
+    canonical = arange((1, 1, 64, 32))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (canonical, SINGLE, Identity())})
+    state = TensorInfo("w", "optimizer_state", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",))
+    with expect_error(RoleMismatch, "w: resolves to checkpoint entry 'w', a 'param'"):
+        create_load_plan(ckpt.index, [state])
+
+
+def test_a_reshard_reads_only_the_chunks_it_needs():
+    # Rows to columns: every destination shard needs a piece of every saved chunk; columns to columns: one each.
+    canonical = arange((1, 1, 64, 64))
+    for dst_label, reads_per_shard in ((world([R(), S(3)], (1, 8)), 8), (world([R(), S(2)], (1, 8)), 1)):
+        ckpt = FakeCheckpoint()
+        ckpt.save({"w": (canonical, world([R(), S(2)], (1, 8)), Identity())})
+        plan, shards = ckpt.load({"w": (dst_label, Identity(), canonical.shape)})
+        assert len(plan.keys["w"].reads) == 8 * reads_per_shard
+        assert_shards_equal(shards["w"], expected_shards(canonical, dst_label))
+
+
+def test_save_planning_is_cached_per_label_and_shape(expect_error):
+    from ttml.distributed_checkpointing._planner import _replica_layout
+
+    infos = [
+        TensorInfo(f"model/blocks/{i}/w", "param", "BF16", "TILE", TP8_DP4, (1, 1, 32, 64), Identity(), ())
+        for i in range(16)
+    ]
+    _replica_layout.cache_clear()
+    first = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
+    second = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
+    stats = _replica_layout.cache_info()
+    assert stats.misses == 1 and stats.hits == 31, "one grouping for 16 keys of one label, reused by the next save"
+    assert [f.items[0].key for f in first.files] == [f.items[0].key for f in second.files]
+    # A cached failure still names the key that hit it.
+    bad = Label((Placement.replicate(), Placement.shard(5)), (1, 2), tuple(dist_coords((1, 2))))
+    before = _replica_layout.cache_info()
+    for key in ("model/a", "model/b"):
+        info = TensorInfo(key, "param", "BF16", "TILE", bad, (1, 1, 4, 4), Identity(), (key,))
+        with expect_error(TopologyError, f"{key}: distribution axis 1 shards dim 5"):
+            create_save_plan([info], lambda c: data_file_name(0, 0, c))
+    after = _replica_layout.cache_info()
+    assert (
+        after.misses - before.misses == 1 and after.hits - before.hits == 1
+    ), "model/b reuses model/a's cached failure"

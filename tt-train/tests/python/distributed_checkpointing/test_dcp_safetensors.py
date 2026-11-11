@@ -5,6 +5,7 @@
 """The per-device files are real safetensors files: fixed offsets up front, 4 KiB-aligned data, readable by the
 ``safetensors`` package."""
 
+import json
 import os
 
 import numpy as np
@@ -68,3 +69,16 @@ def test_file_written_at_fixed_offsets_opens_with_the_safetensors_package(tmp_pa
         torch.testing.assert_close(f.get_tensor("model/a"), a, rtol=0, atol=0)
         torch.testing.assert_close(f.get_tensor("model/b"), b, rtol=0, atol=0)
         assert f.metadata() == {"ttml.format": "ttml-dcp/1"}
+
+
+def test_metadata_reads_back_exactly_what_was_written(expect_error):
+    metadata = {"format": "ttml-dcp/1", "a": "1", "b": "true", "c": "null", "writer": {"coord": [0, 1]}, "l": [1, 2]}
+    header, _, _ = build_header([("x", "BF16", (1, 1, 1, 2), 4)], metadata)
+    parsed = json.loads(header[8:])
+    assert parsed["__metadata__"]["a"] == "1" and parsed["__metadata__"]["format"] == "ttml-dcp/1", "stored as is"
+    assert read_metadata(parsed) == metadata
+    with expect_error(ValueError, "reads back as JSON"):
+        build_header([], {"a": "[not a list]"})
+    with expect_error(ValueError, "must be a str, dict or list"):
+        build_header([], {"steps": 3})
+    assert read_metadata({"__metadata__": {"foreign": "{not json"}}) == {"foreign": "{not json"}

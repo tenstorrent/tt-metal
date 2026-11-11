@@ -52,7 +52,7 @@ class Box:
     def intersect(self, other: "Box") -> "Box | None":
         """The overlap of two boxes in the same array, or None when they do not overlap."""
         if other.ndim != self.ndim:
-            raise ValueError(f"Box: cannot intersect {self} with {other}")
+            raise ValueError(f"Box: cannot intersect a {self.ndim}-d box with a {other.ndim}-d box: {self} and {other}")
         offsets, sizes = [], []
         for lo_a, hi_a, lo_b, hi_b in zip(self.offsets, self.ends, other.offsets, other.ends):
             lo, hi = max(lo_a, lo_b), min(hi_a, hi_b)
@@ -90,13 +90,34 @@ class Box:
         return Box(tuple(value["offsets"]), tuple(value["sizes"]))
 
 
+def grid_cell_size(boxes: Sequence[Box], origin: Sequence[int]) -> tuple[int, ...] | None:
+    """The common size of ``boxes`` when every one is a cell of one regular grid anchored at ``origin`` (same sizes,
+    every offset a whole number of cells from the origin), else None. Two cells of such a grid are identical or
+    disjoint, which is what lets the checks below run in linear time; every chunk a label describes is one."""
+    if not boxes:
+        return None
+    size = boxes[0].sizes
+    if any(s == 0 for s in size):
+        return None
+    for b in boxes:
+        if b.sizes != size or any((o - z) % s for o, z, s in zip(b.offsets, origin, size)):
+            return None
+    return size
+
+
 def boxes_tile(boxes: Iterable[Box], target: Box) -> bool:
-    """True when ``boxes`` lie inside ``target``, do not overlap pairwise, and together fill it exactly."""
+    """True when ``boxes`` lie inside ``target``, do not overlap pairwise, and together fill it exactly.
+
+    Boxes that are cells of one regular grid (``grid_cell_size``) are checked in linear time: they are disjoint exactly
+    when their offsets are distinct. Anything else falls back to the pairwise check.
+    """
     boxes = [b for b in boxes if not b.is_empty()]
     if any(not target.contains(b) for b in boxes):
         return False
     if sum(b.volume for b in boxes) != target.volume:
         return False
+    if grid_cell_size(boxes, target.offsets) is not None:
+        return len({b.offsets for b in boxes}) == len(boxes)
     for i, a in enumerate(boxes):
         for b in boxes[i + 1 :]:
             if a.intersect(b) is not None:

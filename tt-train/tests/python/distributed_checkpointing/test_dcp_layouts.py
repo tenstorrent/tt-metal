@@ -17,12 +17,23 @@ from ttml.distributed_checkpointing._layouts import (
     Compose,
     Identity,
     Pad,
+    Segments,
     compose,
     declared_transform,
     fused_segments,
     padded_extent,
     transform_from_json,
 )
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+
+
+def _label(placements, dist_shape) -> Label:
+    return Label(tuple(placements), tuple(dist_shape), tuple(dist_coords(dist_shape)))
+
+
+TP4 = _label([Placement.shard(2)], (4,))
+DP2_TP1 = _label([Placement.replicate(), Placement.shard(2)], (2, 1))  # a TP layer's label on a TP-1 axis
+FSDP2_TP4_COLS = _label([Placement.shard(3), Placement.shard(2)], (2, 4))  # FSDP's default dim on a TP weight
 
 
 def _per_shard_fused(canonical: np.ndarray, sizes, shards: int, dim: int) -> np.ndarray:
@@ -88,6 +99,13 @@ def test_segment_pieces_tile_any_sub_box_and_round_trip():
             assert len(back) == 1 and back[0][1] == dev
 
 
+def test_a_segments_map_that_does_not_tile_names_the_side(expect_error):
+    with expect_error(LayoutError, "does not tile the device extent"):
+        Segments(dim=2, map=((0, 0, 4), (6, 4, 4)))  # a gap at device rows 4..6
+    with expect_error(LayoutError, "does not tile the canonical extent"):
+        Segments(dim=2, map=((0, 0, 4), (4, 4, 4), (8, 4, 4)))  # two segments at canonical row 4
+
+
 def test_pad_clips_to_the_logical_extent_and_reports_padding(expect_error):
     pad = Pad(2, logical=130, padded=192)
     assert pad.canonical_shape((1, 1, 192, 64)) == (1, 1, 130, 64)
@@ -141,14 +159,30 @@ def test_transforms_round_trip_through_json(transform):
 
 
 def test_declared_transform_from_declarations(expect_error):
-    shard_count = {2: 4}.get
-    assert isinstance(declared_transform((1, 1, 64, 64), shard_count), Identity)
-    assert declared_transform((1, 1, 192, 64), shard_count, logical_extent=(2, 130)) == Pad(2, 130, 192)
-    assert declared_transform((1, 1, 64, 32), shard_count, fused=(2, (32, 16, 16))) == fused_segments(
+    assert isinstance(declared_transform((1, 1, 64, 64), TP4), Identity)
+    assert declared_transform((1, 1, 192, 64), TP4, logical_extent=(2, 130)) == Pad(2, 130, 192)
+    assert declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16, 16))) == fused_segments(2, (32, 16, 16), 4)
+    assert isinstance(declared_transform((1, 1, 64, 32), DP2_TP1, fused=(2, (32, 16, 16))), Identity)
+    assert declared_transform((1, 1, 64, 32), FSDP2_TP4_COLS, fused=(2, (32, 16, 16))) == fused_segments(
         2, (32, 16, 16), 4
-    )
-    assert isinstance(declared_transform((1, 1, 64, 32), {2: 1}.get, fused=(2, (32, 16, 16))), Identity)
-    both = declared_transform((1, 1, 64, 32), shard_count, fused=(2, (32, 16, 16)), logical_extent=(2, 60))
-    assert isinstance(both, Compose) and isinstance(both.steps[0], Pad)
+    ), "FSDP on the columns leaves the fused rows to TP"
+    # Fusion and padding along different dims compose.
+    both = declared_transform((1, 1, 64, 192), TP4, fused=(2, (32, 16, 16)), logical_extent=(3, 130))
+    assert both == compose(Pad(3, 130, 192), fused_segments(2, (32, 16, 16), 4))
+    assert both.canonical_shape((1, 1, 64, 192)) == (1, 1, 64, 130)
     with expect_error(LayoutError, "sum to"):
-        declared_transform((1, 1, 64, 32), shard_count, fused=(2, (32, 16)))
+        declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16)))
+
+
+def test_declared_transform_refuses_layouts_it_cannot_describe(expect_error):
+    # A fused weight padded along its fused dim: every TP shard would carry its own padding inside its segments.
+    with expect_error(LayoutError, "both declared on dim 2"):
+        declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16, 16)), logical_extent=(2, 60))
+    # FSDP sharding the fused rows next to TP, which would make the label's count describe an interleave the weight
+    # does not have: at TP 1 (fused_segments would claim 2 shards where the rows are canonical) and at TP 4.
+    fsdp2_rows_tp1 = _label([Placement.shard(2), Placement.shard(2)], (2, 1))
+    with expect_error(LayoutError, "model/qkv: fused_segments on dim 2, which 2 mesh axes shard"):
+        declared_transform((1, 1, 64, 32), fsdp2_rows_tp1, fused=(2, (32, 16, 16)), key="model/qkv")
+    fsdp2_rows_tp4 = _label([Placement.shard(2), Placement.shard(2)], (2, 4))
+    with expect_error(LayoutError, "2 mesh axes shard"):
+        declared_transform((1, 1, 64, 32), fsdp2_rows_tp4, fused=(2, (32, 16, 16)))
