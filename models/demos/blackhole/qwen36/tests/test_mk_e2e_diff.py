@@ -40,7 +40,8 @@ TF = os.environ.get("E2E_TF", "1") == "1"  # teacher-forced per-layer mode (spec
 TF_NL = int(os.environ.get("E2E_TF_NL", str(NL)))
 TF_BLOCK = int(os.environ.get("E2E_TF_BLOCK", "4"))  # teacher-forced block (both layer types per engine pass)
 DBG = os.environ.get("E2E_DBG", "1") == "1"  # MK_AR_DBG per-AR residual dumps (more engine text); 0 = final x_out only
-MID = os.environ.get("E2E_MID", "1") == "1"  # with DBG + MK_REAL_GAR: also the post-mixer residual per layer (mixer AR)
+MID = os.environ.get("E2E_MID", "0") == "1"  # (default off: the hooks perturb the op-by-op reference)
+MLPCHK = os.environ.get("E2E_MLPCHK", "1") == "1"  # DBG + GAR: L0 MLP host check on the engine's own post-mixer h  # with DBG + MK_REAL_GAR: also the post-mixer residual per layer (mixer AR)
 REF_MID = {}
 _CUR = [0]
 B, T = 8, tc.K + 1
@@ -142,6 +143,32 @@ def _mlp_ar_index(layer_types, aar=True, gar=False):
     return idx
 
 
+
+def _mlp_check(model, S, L):
+    """Layer L's MLP on the HOST from the engine's own post-mixer residual h (mixer AR 2L residual column) with the model's
+    dense weights (weights_mk.mlp_mats = the repack's source) vs the engine's MLP AR inputs summed over the 8 devices and
+    vs (MLP AR residual - h). Separates the MLP unit (norm gamma / weights / v12) from the mixer at layer L (MK_REAL_GAR)."""
+    from models.demos.blackhole.qwen36.tt.megakernel.integ import weights_mk as WM
+
+    devs = [ttnn.to_torch(d).float().reshape(32, -1) for d in ttnn.get_device_tensors(S["ar_dbgt"])]
+    km, kf = 2 * L, 2 * L + 1
+    col = lambda k: slice(k * DIM, (k + 1) * DIM)
+    h = devs[0][:, col(2 * km + 1)]
+    part = sum(dv[:, col(2 * kf)] for dv in devs)
+    res = devs[0][:, col(2 * kf + 1)]
+    lay = model.layers[L]
+    g = WM.norm_gamma(lay.ffn_norm.norm).float()
+    eps = float(getattr(lay.ffn_norm.norm, "eps", 1e-6))
+    xn = (h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + eps) * g).bfloat16().float()
+    ref = torch.zeros_like(h)
+    for wg, wu, wd in WM.mlp_mats(lay):
+        ref += (torch.nn.functional.silu(xn @ wg.float()) * (xn @ wu.float())).bfloat16().float() @ wd.float()
+    out = dict(layer=L, part_vs_host=round(_pcc(part, ref), 6), resdelta_vs_host=round(_pcc(res - h, ref), 6),
+               resdelta_vs_part=round(_pcc(res - h, part), 6), part_norm_ratio=round(float(part.norm() / max(ref.norm(), 1e-9)), 4),
+               h_absmax=float(h.abs().max()), part_absmax=float(part.abs().max()), ref_absmax=float(ref.abs().max()))
+    logger.info(f"[mlpchk] {json.dumps(out)}")
+    return out
+
 def _diff_case(model, live, tag):
     mk1 = model._vfy_mk1
     prog = mk1.programs[B]
@@ -194,6 +221,8 @@ def _diff_case(model, live, tag):
                 bad.append(dict(case=tag, user=u, layer=Lf, what="nan" if not torch.isfinite(e).all() else "zero"))
             pcc[u], mx[u] = {Lf: round(_pcc(e, r), 6)}, {Lf: float((e - r).abs().max())}
         return pcc, mx, bad, None, dict(tf, kva=kva) if tf else dict(kva=kva)
+    if MLPCHK and gar:
+        _mlp_check(model, S, 0)
     dbg = ttnn.to_torch(ttnn.get_device_tensors(S["ar_dbgt"])[0]).float().reshape(32, -1)
     # the post-AR residual columns (2k+1) must be identical on every device (AR contract: mesh identity 0); the input
     # partial columns (2k) are per-device by design
