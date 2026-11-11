@@ -43,7 +43,8 @@ def gdn_role(b, coords):
     # attn_kv: the Q root raises it at every attention layer's start and SDPA end (MKA_GDN_ATTNKV); the GDN cores drain
     # it to 2 * (attention layers) before their program-end reset
     attn_n = b.NL - NG
-    role = g2_role.GdnRole(dev, coords, NG, B, b.sems, tgt, prod, gen, kdir=KDIR, ref=ref, attn_n=attn_n)
+    role = g2_role.GdnRole(dev, coords, NG, B, b.sems, tgt, prod, gen, kdir=KDIR, ref=ref, attn_n=attn_n,
+                           gdnout=getattr(b, "gdnout", None))   # MKA_GDNOUT: the GDN out_proj via the wo unit
     role.prepare()
     r = role.role
     print(f"[gdn24] G2 role: {NG} GDN layers {list(b.gdn_layers)}, B {B}, out_ready {'multicast' if rects else 'Q root'}, CB ids {r['info']['cb_ids'][0]}.."

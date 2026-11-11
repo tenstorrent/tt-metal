@@ -70,6 +70,7 @@ for it in range(ITERS):
     if KVA: KVA_POST(it)   # SDPA golden over the appended cache (+ MKA_KVA_CHECK: bit-compare vs paged_fused_update_cache)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
+    if GDN24 and callable(GDN_ROLE.get('gdnout_check')): GDN_ROLE['gdnout_check'](it)   # MKA_GDNOUT: gdn_out PCC (every run)
     if REAL_AR and AR_DBG:   # every AR of the pass: res_k = res_{k-1} + ring * in_k (both chunks dumped by the owners)
         _db = ttnn.to_torch(ar_dbgt).float().reshape(TILE, AR_NAR * 2, H)
         if V_R < 32:   # R < 32: input rows < R (tile layout); residual = packed stream (tile t face f at (2t + f) R 32 B) -> [R, H]

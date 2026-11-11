@@ -936,6 +936,21 @@ void kernel_main() {
         noc_async_atomic_barrier();
     };
 #endif
+#if defined(MKA_GDNOUT) && defined(MKA_RWO)
+    // gdn_out (wo unit on the 24 GDN cores) scatters into the owners' CB_XO: owner 0 publishes the uniform CB_XO address
+    // to the GDN cores' xow word (its own copy of the word is the multicast source)
+    if (own_chunk == 0) {
+        constexpr uint32_t gr[2][5] = MKA_GDN_RECTS;
+        *l1w(MKA_GDN_XOW) = get_write_ptr(CB_XO);
+        for (uint32_t i = 0; i < 2; ++i)
+            if (gr[i][4]) noc_semaphore_set_multicast(MKA_GDN_XOW, get_noc_multicast_addr(gr[i][0], gr[i][1], gr[i][2], gr[i][3], MKA_GDN_XOW), gr[i][4], false);
+        noc_async_write_barrier();
+    }
+    // every layer (attention wo or gdn_out) adds 10 to each owner's WOCNT
+#define MKA_WOCNT_AT(L, A) (10 * ((L) + 1))
+#else
+#define MKA_WOCNT_AT(L, A) (10 * ((A) + 1))
+#endif
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = is_attn(L);
         const uint32_t A = aidx(L);
@@ -947,8 +962,13 @@ void kernel_main() {
         if (!IS_STREAM && !att) {   // ATTN-only cores idle through GDN-type layers (owners: v12 MLP)
 #if defined(MK_REAL_GAR) && defined(MKA_ROLE_EXT)
             if (vrole == 2 && ar_on) {   // G-d: the GDN mixer AR (gdn_out -> CB_XO; until G-c: CB_XO stand-in) once the GDN layer is out
+#if defined(MK_GDN_OUT_REAL) && defined(MKA_GDNOUT)
+                // G-c: gdn_out scattered this owner's 10-tile chunk into CB_XO; every layer adds 10 to WOCNT (wo or gdn_out)
+                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), MKA_WOCNT_AT(L, A));
+#else
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_GDN_OUTREADY),
                                        MKA_GDN_NC * (L - __builtin_popcount((MKA_AMASK) & ((1u << L) - 1u)) + 1));
+#endif
 #if defined(MK_GAR_ZERO)   // CB_XO stand-in until gdn_out (G-c) lands: zero (the GDN AR adds 0: the residual chain is unchanged)
                 {
                     const uint32_t xo = get_read_ptr(CB_XO);
@@ -1163,7 +1183,11 @@ void kernel_main() {
                     } else v_pump();
 #endif
                 }
+#if defined(MKA_ZGDNW)
+                { DeviceZoneScopedN("W-GDNI"); issue_some(true); }   // diagnostic: starts when the stall ended
+#else
                 issue_some(true);
+#endif
             }
 #else
             issue_some(true);
@@ -1337,7 +1361,7 @@ void kernel_main() {
             const uint32_t xo = get_write_ptr(CB_XO);   // uniform on the ext cores
             wou::scatter(CB_QO, QO_SLOT, wo_nt, wo_tile, ow_x, ow_y, xo, gs[GS_WOCNT]);   // rot order: farthest owner first
             if (own_chunk < 16) {   // owner: chunk complete -> READY (AR); bench: debug copy + WODONE on the Q root
-                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * (A + 1));
+                noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), MKA_WOCNT_AT(L, A));
 #if defined(MK_REAL_AAR) && defined(MKA_ROLE_EXT)
                 if (ar_on) mixer_ar(L, MK_MI(L, A));   // the real attention AR (spec §19): wo output CB_XO (CB 23) -> residual -> MLP x
 #endif
@@ -1562,6 +1586,9 @@ void kernel_main() {
     *l1w(gs[GS_XRDY]) = 0;
     if (qrole == QR_OWNER) *l1w(gs[GS_QPART]) = 0;
 #if defined(MKA_RWO)
+#if defined(MKA_GDNOUT)
+    if (own_chunk < 16) noc_semaphore_wait_min(l1w(gs[GS_WOCNT]), 10 * NL);   // drain: trailing GDN layers' gdn_out counts
+#endif
     *l1w(gs[GS_ACNT]) = 0; *l1w(gs[GS_AFLAG]) = 0; *l1w(gs[GS_SCNT]) = 0; *l1w(gs[GS_SFLAG]) = 0; *l1w(gs[GS_WOCNT]) = 0; if (is_qroot) *l1w(gs[GS_WODONE]) = 0;
 #endif
     // GS_PQH is reset by the reader after its last wait (see reader)

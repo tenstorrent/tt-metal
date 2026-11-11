@@ -45,7 +45,7 @@ def _host(t):
 
 class GdnRole:
     def __init__(self, dev, cores, NG, B, sems, out_target, prod_cores, gen_dir, kdir=None, opt=4094, seed=901,
-                 hold_users=(), ref=True, attn_n=0):
+                 hold_users=(), ref=True, attn_n=0, gdnout=None):
         """ref=False: no stock-op reference (no priming step, check() skipped) -- the stock op's program does not fit
         the kernel config buffer with device-profiler zones compiled in; the checked step is then FRESH."""
         self.ref = ref
@@ -68,6 +68,11 @@ class GdnRole:
         # pre / out / ctrl (default: none = DRAM). The kernels read / write them through TensorAccessor either way.
         l1 = set(x for x in os.environ.get("MKA_GDN_L1", "").split(",") if x)
         assert l1 <= {"pre", "out", "ctrl"}, l1
+        if gdnout and os.environ.get("E1_GO_LOCAL", "2") == "2" and "out" in l1:
+            # gdn_out local handoff without the out write: `out` is never written, keep it in DRAM (frees its L1 range,
+            # which otherwise lowers the GDN-core CB floor below the role + gdn_out CBs at u8)
+            l1.discard("out")
+            print("[g2] MKA_GDN_L1: 'out' kept in DRAM (gdn_out E1_GO_LOCAL=2 never writes it)", flush=True)
         mc = lambda k: ttnn.L1_MEMORY_CONFIG if k in l1 else ttnn.DRAM_MEMORY_CONFIG
         mkc = lambda: ttnn.from_torch(ctrl0, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev,
                                       memory_config=mc("ctrl"))
@@ -106,7 +111,7 @@ class GdnRole:
                         pre=ly["pre"], out=ly["outE"]) for ly in self.LY]
         self.role = e1_shim.build_engine(dev, self.cores, g, B, T, self.Kt, self.Vt, 4, self.tl, m.SCALE, m.L2_EPS,
                                          m.NORM_EPS, gen_dir, self.S, sems, out_target, kdir=kdir,
-                                         attn_n=attn_n)
+                                         attn_n=attn_n, gdnout=gdnout)
         # the window parity is a per-step input of the producers: the role's window tensors stay fixed (win_a / win_b),
         # the kernels pick by ctrl parity
 

@@ -747,7 +747,7 @@ def setup_bench(dev, MESH, mesh_identity):
             REAL_GAR = ('MK_REAL_GAR', '1') in MKDEF
             if REAL_GAR: assert GDN24 and os.environ.get('MKA_GDN_WAIT', '0') == '1', "MK_REAL_GAR needs GDN24 + MKA_GDN_WAIT (the GDN out_ready gates the GDN AR)"
             # spec v1.94: until gdn_out (G-c) writes CB_XO, the GDN AR reads uninitialised CB_XO (NaN) unless MK_GAR_ZERO zeroes it
-            if REAL_GAR: assert ('MK_GAR_ZERO', '1') in MKDEF or ('MK_GDN_OUT_REAL', '1') in MKDEF, \
+            if REAL_GAR: assert ('MK_GAR_ZERO', '1') in MKDEF or ('MK_GDN_OUT_REAL', '1') in MKDEF or os.environ.get('MKA_GDNOUT', '0') == '1', \
                 "MK_REAL_GAR needs MK_GAR_ZERO=1 until gdn_out (G-c, MK_GDN_OUT_REAL) writes CB_XO (else NaN)"
             _k = 0
             for L_ in range(NL):
@@ -1197,11 +1197,54 @@ def setup_bench(dev, MESH, mesh_identity):
         GDN_SEMS = dict(in_ready=ttnn.create_global_semaphore(dev, gdn_crs, 0), attn_kv=ttnn.create_global_semaphore(dev, gdn_crs, 0),
                         vb0=ttnn.create_global_semaphore(dev, gdn_crs, 0), vb1=ttnn.create_global_semaphore(dev, gdn_crs, 0),
                         out_ready=ttnn.create_global_semaphore(dev, kgrid, 0))   # out_ready: target = the Q root (kgrid)
+        # MKA_GDNOUT (spec v1.8a / v1.50): the GDN out_proj through the wo unit on the 24 GDN cores. gdna: += 1 per GDN core
+        # per layer on every GDN core (all 24 output column tiles of `out` landed); xow: the owners' uniform CB_XO address,
+        # published by owner 0 at program start (a word on the owners AND the GDN cores, so the owner has a source copy)
+        GDNOUT = os.environ.get('MKA_GDNOUT', '0') == '1'
+        if GDNOUT:
+            assert RWO, "MKA_GDNOUT needs MKA_RWO (the owners' CB_XO + WOCNT)"
+            GDN_SEMS['gdna'] = ttnn.create_global_semaphore(dev, gdn_crs, 0)
+            GDN_SEMS['xow'] = ttnn.create_global_semaphore(dev, kgrid.merge(gdn_crs), 0)
         GDN_SA = {k_: ttnn.get_global_semaphore_address(v_) for k_, v_ in GDN_SEMS.items()}
+        GO = None
+        if GDNOUT:
+            WKG, WNG = 24, 160   # A = the 24 `out` column tiles (6 heads x 128); N = the hidden (16 owner chunks of 10)
+            g_layers = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGo = len(g_layers)
+            gcs = list(GDNC)
+            # engine/weight_layouts.py gdn_out_layout (the shared packer, = this branch's layout): rot-order owner chunks,
+            # core c -> tiles flat[c::24], bank-local k-major slices; per-layer stride = pages_per_layer (GDN ordinal g)
+            GLAY = _WEIGHTS['gdn_out']['layout'] if 'gdn_out' in _WEIGHTS else _wl().gdn_out_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], BANK_LOC, banks)
+            assert GLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], "injected gdn_out layout built for other cores"
+            GT = {fi: GLAY.tiles[c_] for c_, fi in enumerate(gcs)}; GB = {fi: GLAY.bank[c_] for c_, fi in enumerate(gcs)}
+            GP = {fi: GLAY.row[c_] for c_, fi in enumerate(gcs)}
+            GMAXT = max(len(v_) for v_ in GT.values())
+            GPL = GLAY.pages_per_layer   # pages per GDN layer (the layer stride)
+            if 'gdn_out' in _WEIGHTS: wg_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
+            else:
+                torch.manual_seed(17)
+                wg_all = _wl().pack_gdn_out([torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE) for _ in range(NGo)], GLAY, dev=dev)
+            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(NGo, GPL, TILE, TILE))
+            gdbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGo * WNG * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
+                      wk=WKG, maxt=GMAXT, w=wg_all, w_addr=wg_all.buffer_address(), w_stride=GPL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
+                      gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in gcs], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
+                      cnt=GSA[13], nt=[len(GT[fi]) for fi in gcs], page=[GP[fi] * banks + GB[fi] for fi in gcs], tiles=[GT[fi] for fi in gcs],
+                      dbg=gdbg, dbg_addr=gdbg.buffer_address(),
+                      # CB ids (ring, A, out) on the GDN cores: 42/43/44 reserved for gdn_out (lean GDN table 0..41, -mk-int 80b43723a3f); before
+                      # them; MKA_GDNOUT_CB=34,35,37 borrows the AR-sender ids for bring-up WITHOUT MK_REAL_AR
+                      cb=tuple(int(v_) for v_ in os.environ.get('MKA_GDNOUT_CB', '42,43,44').split(',')),
+                      # LoFi matmul inside the HiFi4 GDN binary (== HiFi2 on BFP4 weights, the prod BFP4_LAYOUT_LOFI out-proj; MKA_GDNOUT_FID=hifi4: as compiled)
+                      lofi=os.environ.get('MKA_GDNOUT_FID', 'lofi') != 'hifi4')
+            assert not (set(GO['cb']) & {34, 35, 37, 39} and ('MK_REAL_AR', '1') in MKDEF), "MKA_GDNOUT_CB: 34/35/37/39 are the AR senders' ids"
+            assert ('MK_GAR_ZERO', '1') not in MKDEF, "MKA_GDNOUT writes CB_XO: drop the MK_GAR_ZERO stand-in"
+            MKDEF = MKDEF + [('MKA_GDNOUT', '1'), ('MKA_GDN_XOW', f"{GDN_SA['xow']}u"), ('MK_GDN_OUT_REAL', '1')]   # G-d reads CB_XO at WOCNT
+            print(f"[gdnout] GDN out_proj via the wo unit: {NGo} GDN layers, {len(gcs)} cores x {min(GO['nt'])}-{GMAXT} tiles, K {WKG}, BFP4 ring "
+                  f"{WKG * GMAXT} pages, banks {sorted(set(GB.values()))}", flush=True)
         def _gpr(lx0, lx1):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, GY)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, GYF - 1))
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (GYF - GY)]
         _gr = _gpr(0, fsplit - 1) + _gpr(fsplit, GXF - 1)
+        if GO: GO['rects'] = list(_gr)   # gdn_out local A handoff: the two GDN multicast rects (NoC-0 phys)
         assert _gr[4] + _gr[9] == len(GDNC), _gr
         MKDEF = MKDEF + [('MKA_GDN24', '1'), ('MKA_GDN_INREADY', f"{GDN_SA['in_ready']}u"), ('MKA_GDN_ATTNKV', f"{GDN_SA['attn_kv']}u"),
                          ('MKA_GDN_RECTS', '{{' + ','.join(map(str, _gr[:5])) + '},{' + ','.join(map(str, _gr[5:])) + '}}')]
@@ -1224,10 +1267,23 @@ def setup_bench(dev, MESH, mesh_identity):
             b_ = types.SimpleNamespace(dev=dev, mesh=dev if MESH else None, NL=NL, AMASK=AMASK, is_attn=is_attn_layer, NU=NU, CTX=CTX,
                                        gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
                                        cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), out_rects=(RECTS_F[:10] if GDN_WAIT else None), per_replay={},
-                                       free_cb_ids=list(range(45)))
+                                       free_cb_ids=list(range(45)), gdnout=GO)
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
             GDN_ROLE.setdefault('io', [])
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)
+            if GO:
+                def _gdnout_check(it):   # out_proj golden from the engine's own `out` (A) of each GDN layer x the dequantized slices
+                    role_ = GDN_ROLE['role']
+                    dv_ = ttnn.to_torch(gdbg).float().reshape(TILE, NGo, WNG * TILE)
+                    R_ = role_.B * role_.T
+                    for g_ in range(NGo):
+                        A_ = ttnn.to_torch(role_.LY[g_]['outE']).float().reshape(TILE, WKG * TILE)
+                        gg_ = A_ @ wgq[g_]
+                        v_ = dv_[:, g_]
+                        pc_ = torch.corrcoef(torch.stack([v_[:R_].flatten(), gg_[:R_].flatten()]))[0, 1].item()
+                        print(f"[gdnout] iter {it} GDN layer {g_layers[g_]} rows {R_} gdn_out pcc {pc_:.5f} max|err| {(v_[:R_] - gg_[:R_]).abs().max().item():.4f} "
+                              f"|gold|max {gg_[:R_].abs().max().item():.3f}", flush=True)
+                GDN_ROLE['gdnout_check'] = _gdnout_check
             if GDN_WAIT:
                 MKDEF = MKDEF + [('MKA_GDN_WAIT', '1'), ('MKA_GDN_OUTREADY', f"{GDN_SA['out_ready']}u"), ('MKA_GDN_NC', str(len(GDNC)))]
                 print(f"[gdn24] GDN stall = out_ready wait ({len(GDNC)} per GDN layer, multicast to RECTS_F), not the MK_SGDN_US spin", flush=True)
