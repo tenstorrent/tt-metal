@@ -1162,33 +1162,19 @@ def setup_bench(dev, MESH, mesh_identity):
             WKG, WNG = 24, 160   # A = the 24 `out` column tiles (6 heads x 128); N = the hidden (16 owner chunks of 10)
             g_layers = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGo = len(g_layers)
             gcs = list(GDNC)
-            rotg = sorted(range(16), key=lambda j_: (-min(j_ // 2, 8 - j_ // 2), j_))   # same rot order as the attention wo
-            flatg = [n_ for j_ in rotg for n_ in range(10 * j_, 10 * j_ + 10)]
-            GT = {fi: flatg[c_::len(gcs)] for c_, fi in enumerate(gcs)}
+            # engine/weight_layouts.py gdn_out_layout (the shared packer, = this branch's layout): rot-order owner chunks,
+            # core c -> tiles flat[c::24], bank-local k-major slices; per-layer stride = pages_per_layer (GDN ordinal g)
+            GLAY = _WEIGHTS['gdn_out']['layout'] if 'gdn_out' in _WEIGHTS else _wl().gdn_out_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], BANK_LOC, banks)
+            assert GLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], "injected gdn_out layout built for other cores"
+            GT = {fi: GLAY.tiles[c_] for c_, fi in enumerate(gcs)}; GB = {fi: GLAY.bank[c_] for c_, fi in enumerate(gcs)}
+            GP = {fi: GLAY.row[c_] for c_, fi in enumerate(gcs)}
             GMAXT = max(len(v_) for v_ in GT.values())
-            capsg = [len(gcs) // banks + (1 if b_ < len(gcs) % banks else 0) for b_ in range(banks)]
-            GB, GP = {}, {}
-            for d_, fi, b_ in sorted(((abs(fcores[fi].x - bx) + abs(fcores[fi].y - by), fi, b_) for fi in gcs for b_, (bx, by) in enumerate(BANK_LOC))):
-                if fi in GB or capsg[b_] == 0: continue
-                GB[fi] = b_; capsg[b_] -= 1
-            totg = [0] * banks
-            for fi in gcs: GP[fi] = totg[GB[fi]]; totg[GB[fi]] += len(GT[fi]) * WKG
-            GPL = max(totg) * banks   # pages per GDN layer (the layer stride)
-            torch.manual_seed(17)
-            pgg = torch.zeros(NGo * GPL, TILE, TILE)
-            for g_ in range(NGo):
-                wg_ = torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE)
-                for fi in gcs:
-                    for kl in range(WKG):
-                        for jj, n_ in enumerate(GT[fi]):
-                            pgg[g_ * GPL + (GP[fi] + kl * len(GT[fi]) + jj) * banks + GB[fi]] = tl(wg_, kl, n_)
-            wg_all = ttnn.from_torch(pgg.reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            wgq_ = ttnn.to_torch(wg_all).float().reshape(NGo, GPL, TILE, TILE)
-            wgq = torch.zeros(NGo, WKG * TILE, WNG * TILE)
-            for fi in gcs:
-                for kl in range(WKG):
-                    for jj, n_ in enumerate(GT[fi]):
-                        wgq[:, kl * TILE:(kl + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = wgq_[:, (GP[fi] + kl * len(GT[fi]) + jj) * banks + GB[fi]]
+            GPL = GLAY.pages_per_layer   # pages per GDN layer (the layer stride)
+            if 'gdn_out' in _WEIGHTS: wg_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
+            else:
+                torch.manual_seed(17)
+                wg_all = _wl().pack_gdn_out([torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE) for _ in range(NGo)], GLAY, dev=dev)
+            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(NGo, GPL, TILE, TILE))
             gdbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGo * WNG * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
                       wk=WKG, maxt=GMAXT, w=wg_all, w_addr=wg_all.buffer_address(), w_stride=GPL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
