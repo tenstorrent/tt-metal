@@ -296,7 +296,16 @@ void kernel_main() {
             noc_async_write_barrier();
         }
     }
+#if defined(MKA_RQPOS) && !defined(MKA_KVA_ARGBASE)   // MKA_KVA_ARGBASE: negative control (the old, wrong bases)
+    // the caches the SDPA reads: the model's paged_k / paged_v from G's attn block (word 4 + 2 * (ATT0 + A) / + 1), NOT the
+    // per-layer writer args (the bench's own tensors; in the model they are not the vLLM caches -> the append was lost)
+    auto kva_tensor = [&](uint32_t L) {
+        const uint32_t w = 4 + 2 * (MKA_ATT0 + aidx(L)) + (kva > 8 ? 1 : 0);
+        return TensorAccessor(kv_args, rq_attn(w), KVTB);
+    };
+#else
     auto kva_tensor = [&](uint32_t L) { return TensorAccessor(kv_args, kva > 8 ? kvv_addr[L] : kv_addr[L], KVTB); };
+#endif
     auto kva_pre = [&](uint32_t L) {   // layer L's target tiles -> CB_KVB pages 1.. (in flight under KVA_TRID)
         const auto t = kva_tensor(L);
         const uint32_t dst = get_read_ptr(CB_KVB) + KVTB;   // full-slot ring: the base, fixed
