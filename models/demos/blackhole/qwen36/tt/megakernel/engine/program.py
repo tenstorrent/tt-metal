@@ -3091,11 +3091,13 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
                                                             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)), rq_t)
             _cost["n"] += 1
             _cost["us"] += (time.perf_counter() - t0) * 1e6
+            _cost["last"] = h   # QWEN36_R16_MK_FLIGHTREC: the table this replay reads (integ/flightrec.py)
             if _cost["n"] % 1000 == 0:
                 print(f"[rqbal-host] {_cost['n']} stages, mean {_cost['us'] / _cost['n']:.1f} us on the replay path, "
                       f"{_cost['miss']} prediction misses", flush=True)
 
         program.stage, program.precompute = stage, precompute
+        program.rq_t, program.rq_last = rq_t, (lambda: _cost.get("last"))
     program.info = info
     program.setup = S
     program.xio = make_xio(mesh, S) if os.environ.get("QWEN36_R16_MK_XIO", "1") == "1" else None

@@ -4276,6 +4276,23 @@ class Qwen36Model:
         _mk1 = getattr(self, "_vfy_mk1", None)
         if _mk1 is not None and _mk1.ready:
             _mk1.stage_host(pos, inactive, T)
+        _fr = self._vfy_flightrec()
+        if _fr is not None:  # QWEN36_R16_MK_FLIGHTREC (hang diagnostics): this replay's host inputs into the mmap ring
+            _rq = {}
+            for _b, _p in ((_mk1.programs if _mk1 is not None and _mk1.ready else None) or {}).items():
+                _f = getattr(getattr(_p, "program", None), "rq_last", None)
+                if _f is not None:
+                    _rq[f"rq_b{_b}"] = _f()
+            _nz = torch.nonzero(pt.reshape(pt.shape[0], -1).abs().sum(0))
+            _ptw = pt[:, : int(_nz.max()) + 1] if _nz.numel() else pt[:, :1]
+            _fr.stage(dict(bucket=-1 if bucket is None else int(bucket), T=T, B=B, pos=pos, positions=[int(p) for p in positions],
+                           inactive=None if inactive is None else [int(bool(x)) for x in inactive],
+                           mi_prev=[int(m) for m in mi_prev], pt=_ptw, pt_w=int(pt.shape[1]), pt_given=page_tables is not None,
+                           hostset=bool(getattr(self, "_vfy_hostset", False)), kv_split=bool(kv_split), skip_tokens=bool(skip_tokens_h2d),
+                           skip_aux=bool(skip_aux_h2d), skip_kv_check=bool(skip_kv_check), flip=bool(flip_parity),
+                           fwd_only=bool(forward_only), topk=bool(read_topk or execute_topk), mask=bool(execute_mask),
+                           pen=bool(execute_pen), stats=bool(execute_stats), **_rq))
+            _fr.l1_floor(dev)
         _hostset = bool(getattr(self, "_vfy_hostset", False))
         if not _hostset:
             _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
@@ -4441,6 +4458,24 @@ class Qwen36Model:
         handle.post_pending = False
         return handle
 
+    def _vfy_flightrec(self):
+        """QWEN36_R16_MK_FLIGHTREC=N (diagnostics, default off): the per-process hang flight recorder (integ/flightrec.py);
+        on first use it also records the device addresses of the persistent per-replay buffers."""
+        fr = getattr(self, "_vfy_fr", False)
+        if fr is False:
+            from models.demos.blackhole.qwen36.tt.megakernel.integ import flightrec
+
+            fr = flightrec.get()
+            if fr is not None:
+                named = {k: getattr(self, k, None) for k in ("_vfy_kvpos_buf", "_vfy_kvpt_buf", "_vfy_kvpt_users",
+                                                             "_vfy_kvpt1_buf", "_vfy_aux_buf", "_vfy_ctrl", "_vfy_token_buf")}
+                _mk1 = getattr(self, "_vfy_mk1", None)
+                for b, p in ((_mk1.programs if _mk1 is not None and _mk1.ready else None) or {}).items():
+                    named[f"rq_t_b{b}"] = getattr(getattr(p, "program", None), "rq_t", None)
+                fr.set_addrs(**named)
+            self._vfy_fr = fr
+        return fr
+
     def verify_sync_and_read(self, handle):
         """Second half of ``verify_traced``: synchronize the device, then ``verify_after_external_sync``."""
         ttnn.synchronize_device(self.device)
@@ -4449,6 +4484,8 @@ class Qwen36Model:
     def verify_after_external_sync(self, handle):
         """``verify_sync_and_read`` minus the synchronize (the caller synced after enqueueing). Flips the GDN window
         parity (once per replay) and reads ids / logits / topk. Returns what ``verify_traced`` returns."""
+        if getattr(self, "_vfy_fr", None):
+            self._vfy_fr.done()
         if handle.post_pending:
             raise ValueError("verify_after_external_sync: the second half of a forward_only step was never enqueued")
         rows, B = handle.rows, handle.B
