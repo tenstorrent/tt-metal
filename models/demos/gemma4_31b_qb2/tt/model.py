@@ -19,6 +19,8 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 
+HOIST_DECODE_ROPE = os.environ.get("GEMMA4_QB2_HOIST_DECODE_ROPE", "0") == "1"
+
 HF_ID = "google/gemma-4-31B-it"
 HF_REVISION = "842da3794eaa0b77d5f08bae87a17459d91ff475"
 
@@ -48,7 +50,11 @@ class WeightReader:
 
 
 class Gemma4Model:
-    def __init__(self, mesh_device, *, checkpoint=None, layer_indices=None):
+    def __init__(
+        self, mesh_device, *, checkpoint=None, layer_indices=None, decode_weights=True, prefill_tile_pad=False
+    ):
+        """decode_weights=False builds a prefill-only stack; prefill_tile_pad=True pads prefill chunks
+        with length-independent kernels (see Decoder.from_state_dict)."""
         if tuple(mesh_device.shape) != (1, 4):
             raise ValueError("Gemma4 31B QB2 requires a [1, 4] mesh")
         self.mesh = mesh_device
@@ -76,6 +82,8 @@ class Gemma4Model:
                     layer_idx=index,
                     mesh_device=mesh_device,
                     shared_setup=self.shared_setup,
+                    decode_weights=decode_weights,
+                    prefill_tile_pad=prefill_tile_pad,
                 )
             )
         self.ccl = self.shared_setup["ccl"]
@@ -193,9 +201,35 @@ class Gemma4Model:
             )
         return logits
 
+    def capture_tap(self, x, start, end):
+        """Copy of rows [start, end) of a layer output, as replicated [1,1,end-start,5376] DRAM.
+
+        A tile-aligned window may end past the sequence, inside its tile padding: those rows hold the
+        layer's (finite) output for zero input rows, not zeros, and consumers must mask them (the
+        drafter's seed selects them to zero). The window is read from the tile-padded view, so no
+        slice depends on the exact length. The next layer may consume x in place: always a private copy."""
+        if end > x.shape[2]:
+            tiled = ttnn.Shape([1, 1, x.padded_shape[2], x.shape[3]])
+            x = ttnn.reshape(x, tiled, tiled)
+        x = x[:, :, start:end, :] if (start, end) != (0, x.shape[2]) else ttnn.clone(x)
+        return self.gather_hidden(x) if x.shape[-1] != self.config.hidden_size else x
+
     def prefill_device(
-        self, tokens, *, sequence_length, page_tables, kv_cache, all_logits=False, start_pos=0, histories=None
+        self,
+        tokens,
+        *,
+        sequence_length,
+        page_tables,
+        kv_cache,
+        all_logits=False,
+        start_pos=0,
+        histories=None,
+        taps=None,
+        tap_window=None,
     ):
+        """taps (speculative drafting only): {layer index: None} is filled with output rows
+        [start, end) = tap_window (default: the last min(2048, rows)) of each named layer, before
+        the next layer consumes them. See capture_tap for windows that end in tile padding."""
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, sequence_length=sequence_length)
@@ -213,6 +247,9 @@ class Gemma4Model:
             )
             if histories is not None:
                 x, histories[i] = x
+            if taps is not None and self.layer_indices[i] in taps:
+                start, end = tap_window or (max(0, sequence_length - 2048), sequence_length)
+                taps[self.layer_indices[i]] = self.capture_tap(x, start, end)
         if not all_logits:
             # An unaligned slice begin untilizes its entire input. Copy
             # the aligned final tile first, then select its logical row.
@@ -222,10 +259,28 @@ class Gemma4Model:
             x = x[:, :, last_row : last_row + 1, :]
         return self.terminal(x)
 
-    def decode_device(self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None):
+    def decode_device(
+        self,
+        tokens,
+        positions,
+        *,
+        page_tables,
+        kv_cache,
+        batch,
+        rope_positions=None,
+        taps=None,
+        row_update_idxs=None,
+        row_update_ring=None,
+    ):
+        """taps, row_update_idxs and row_update_ring serve speculative verify only (rows of one
+        user, see Decoder.decode_forward): taps {layer index: None} is filled with DRAM copies of
+        those layers' [1,1,batch,5376] outputs."""
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, batch=batch)
+        # Every layer of a kind reads the same table rows: when hoisted, the first
+        # layer of each kind looks them up and later layers reuse the cached tensors.
+        rope_tables = {}
         for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
             x = layer.decode_forward(
                 x,
@@ -234,7 +289,12 @@ class Gemma4Model:
                 kv_cache=cache,
                 rope_positions=rope_positions,
                 cyclic_cache=i not in page_tables,
+                rope_tables=rope_tables.setdefault(layer.kind, {}) if HOIST_DECODE_ROPE else None,
+                row_update_idxs=row_update_idxs,
+                row_update_ring=row_update_ring,
             )
+            if taps is not None and self.layer_indices[i] in taps:
+                taps[self.layer_indices[i]] = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         logits = self.terminal(x)
         # Common samplers own a 32-row tile; inactive padding stays internal.
         shape = ttnn.Shape([1, 1, 32, self.config.vocab_size // 4])

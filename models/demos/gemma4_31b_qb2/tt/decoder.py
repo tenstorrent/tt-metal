@@ -15,6 +15,8 @@ The bounded ring supports forward decoding with complete live history, not
 arbitrary rollback into evicted tokens. Page-ID changes require live KV migration.
 """
 
+import os
+
 import ttnn
 from models.demos.gemma4_31b_qb2.tt.sdpa_l1 import BLACKHOLE_L1_BYTES, full_sdpa_fp32_l1_end
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -30,6 +32,16 @@ class MeshCCL(CCLManager):
         )
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
 
+
+# Experiment: decode SDPA grid for sliding layers, e.g. "11x10" (default keeps 8x4).
+_grid = os.environ.get("GEMMA4_QB2_SLIDING_SDPA_GRID", "")
+SLIDING_DECODE_SDPA_GRID = tuple(int(v) for v in _grid.lower().split("x")) if _grid else None
+# Experiment: prefill chunks of at most this many rows use a 1D multicast matmul over the
+# whole grid (0 disables). The 2D config caps grid rows at M/32 for small M.
+SMALL_PREFILL_1D_ROWS = int(os.environ.get("GEMMA4_QB2_SMALL_PREFILL_1D_ROWS", "0"))
+SMALL_PREFILL_K_BLOCK = int(os.environ.get("GEMMA4_QB2_SMALL_PREFILL_K_BLOCK", "8"))
+# Experiment: batch>1 decode RoPE via rotary_embedding_hf on the height-sharded heads.
+HF_DECODE_ROPE = os.environ.get("GEMMA4_QB2_HF_DECODE_ROPE", "0") == "1"
 
 # Input cores, readers per DRAM bank, and K tiles per decode matmul block.
 DECODE_GEOMETRY = {
@@ -47,8 +59,28 @@ class Decoder:
     PREFILL_CHUNK = 1024
 
     @classmethod
-    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, shared_setup=None):
-        """Load one layer and share the stack's collective and rotary buffers."""
+    def from_state_dict(
+        cls,
+        state_dict,
+        *,
+        hf_config,
+        layer_idx,
+        mesh_device,
+        shared_setup=None,
+        decode_weights=True,
+        prefill_tile_pad=False,
+    ):
+        """Load one layer and share the stack's collective and rotary buffers.
+
+        decode_weights=False builds a prefill-only layer: the DRAM-sharded copies that only
+        _dlinear reads (qkv, gate_up, o, down) are never created, and decode_forward refuses.
+        The rotary tables, including the row-major decode_cos/decode_sin, are kept.
+
+        prefill_tile_pad=True pads each prefill chunk to whole pages with kernels that depend
+        only on tile counts. ttnn.pad from the exact row count compiles a new kernel for every
+        prompt length; here the rows past the prompt in its last tile are zeroed by a select
+        against a persistent row mask, then whole tiles are padded. Results are unchanged.
+        """
         import torch
         from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
@@ -78,6 +110,10 @@ class Decoder:
             raise ValueError("Sliding attention requires its fixed 1024-row history chunk")
         self.residual_width = 5376
         shared_setup = {} if shared_setup is None else shared_setup
+        self.prefill_tile_pad = prefill_tile_pad
+        if prefill_tile_pad and "prefill_row_masks" not in shared_setup:
+            shared_setup["prefill_row_masks"] = self._row_masks(mesh_device, c.hidden_size)
+        self.prefill_row_masks = shared_setup.get("prefill_row_masks")
         if "ccl" not in shared_setup:
             shared_setup["ccl"] = MeshCCL(mesh_device, 2, ttnn.Topology.Ring)
         self.ccl = shared_setup["ccl"]
@@ -195,21 +231,30 @@ class Decoder:
             chunks = [w.chunk(4, dim=0) for w in weights]
             return torch.cat([torch.cat([w[r] for w in chunks], dim=0) for r in range(4)], dim=0).T
 
-        self.qkv = tensor(
-            packed(q, k, v),
-            ttnn.bfloat4_b,
-            dim=1,
-            decode_only="qkv" if not self.sliding else None,
+        # Full-attention qkv and the packed gate_up have no prefill consumer.
+        self.qkv = (
+            tensor(
+                packed(q, k, v),
+                ttnn.bfloat4_b,
+                dim=1,
+                decode_only="qkv" if not self.sliding else None,
+            )
+            if decode_weights or self.sliding
+            else None
         )
         if not self.sliding:
             self.qk = tensor(packed(q, k), ttnn.bfloat4_b, dim=1)
         self.o = linear("self_attn.o_proj")
         self.gate, self.up, self.down = (linear("mlp." + name + "_proj") for name in ("gate", "up", "down"))
-        self.gate_up = tensor(
-            packed(sd["mlp.gate_proj.weight"], sd["mlp.up_proj.weight"]),
-            ttnn.bfloat4_b,
-            dim=1,
-            decode_only="gate_up",
+        self.gate_up = (
+            tensor(
+                packed(sd["mlp.gate_proj.weight"], sd["mlp.up_proj.weight"]),
+                ttnn.bfloat4_b,
+                dim=1,
+                decode_only="gate_up",
+            )
+            if decode_weights
+            else None
         )
         self.norms = {
             name: tensor(sd[name + ".weight"].reshape(1, 1, 1, -1))
@@ -279,7 +324,7 @@ class Decoder:
         dg = mesh_device.dram_grid_size()
         banks = dg.x * dg.y
         grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dg.x - 1, dg.y - 1))})
-        for name in DECODE_GEOMETRY:
+        for name in DECODE_GEOMETRY if decode_weights else ():
             weight = getattr(self, name)
             kdim, ndim = list(weight.shape)[-2:]
             readers = DECODE_GEOMETRY[name][1]
@@ -325,7 +370,9 @@ class Decoder:
         for name, value in shared_setup[table_key].items():
             setattr(self, name, value)
         self.decode_sdpa_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(*[8, 4]),
+            compute_with_storage_grid_size=ttnn.CoreCoord(
+                *(SLIDING_DECODE_SDPA_GRID if self.sliding and SLIDING_DECODE_SDPA_GRID else (8, 4))
+            ),
             q_chunk_size=0,
             k_chunk_size=128,
             exp_approx_mode=False,
@@ -500,6 +547,8 @@ class Decoder:
         import math
 
         weight = getattr(self, name)
+        if 0 < x.padded_shape[-2] <= SMALL_PREFILL_1D_ROWS:
+            return self._pref_linear_1d(x, weight, activation)
         grid = (8, 8) if self.sliding and name in ("qkv", "qk") else (11, 8) if self.sliding else (11, 10)
         wide_qkv = (
             self.sliding
@@ -537,6 +586,38 @@ class Decoder:
             transpose_mcast=False,
             fuse_batch=False,
             fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if activation else None,
+        )
+        return ttnn.linear(
+            x,
+            weight,
+            program_config=config,
+            compute_kernel_config=self.matmul_compute,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _pref_linear_1d(self, x, weight, activation):
+        """Small-M prefill: multicast the activation and let every core stream its own weight columns.
+
+        The 2D config caps grid rows at M/32, so only one row of cores reads weights from DRAM.
+        """
+        grid = self.device.compute_with_storage_grid_size()
+        cores = grid.x * grid.y
+        m, n, kt = x.padded_shape[-2] // 32, weight.shape[-1] // 32, weight.shape[-2] // 32
+        pn = (n + cores - 1) // cores
+        sw = max(i for i in range(1, min(pn, 8) + 1) if pn % i == 0)
+        sh = max(i for i in range(1, min(m, 8 // sw) + 1) if m % i == 0)
+        block = max(i for i in range(1, min(kt, SMALL_PREFILL_K_BLOCK) + 1) if kt % i == 0)
+        config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=block,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            per_core_M=m,
+            per_core_N=pn,
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if activation else None,
+            mcast_in0=True,
         )
         return ttnn.linear(
             x,
@@ -720,6 +801,46 @@ class Decoder:
                 return self.pref_sdpa_by_q[chunk]
         raise ValueError("No configured full-attention SDPA Q chunk fits Blackhole L1")
 
+    @staticmethod
+    def _row_masks(mesh_device, hidden_size):
+        """Persistent bf16 row masks: all-ones rows for every chunk width, and per partial-tile row
+        count r the 32-row tile whose first r rows are one. Allocated with the weights, before any trace."""
+        import torch
+
+        def tensor(x):
+            return ttnn.from_torch(
+                x.contiguous(),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        # Hidden-sharded chunks (S > 128) reach the full-attention compute chunk; replicated ones hold <= 128 rows.
+        rows = {hidden_size // 4: 6656, hidden_size: 128}
+        masks = {"ones": {w: tensor(torch.ones(1, 1, n, w, dtype=torch.bfloat16)) for w, n in rows.items()}}
+        masks["tail"] = {
+            (r, w): tensor((torch.arange(32) < r).to(torch.bfloat16).reshape(1, 1, 32, 1).expand(1, 1, 32, w))
+            for r in range(1, 32)
+            for w in rows
+        }
+        return masks
+
+    def _zero_tile_tail(self, inp, width):
+        """inp at its tile-padded rows, every row past the logical length zero, and the rows still to pad.
+
+        A select, not a multiply, clears the partial tile: a NaN or Inf there must not reach attention."""
+        rows, partial = inp.padded_shape[2], inp.shape[2] % 32
+        tiled = ttnn.Shape([1, 1, rows, width])
+        inp = ttnn.reshape(inp, tiled, tiled)
+        if partial:
+            tail = self.prefill_row_masks["tail"][(partial, width)]
+            ones = self.prefill_row_masks["ones"][width]
+            mask = tail if rows == 32 else ttnn.concat([ones[:, :, : rows - 32, :], tail], dim=2)
+            inp = ttnn.where(mask, inp, 0.0)
+        return inp, -rows % self.PAGE_SIZE
+
     def _concat_heads(self, attn):
         return ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -815,6 +936,8 @@ class Decoder:
                     else x[user : user + 1, :, start:end, :]
                 )
                 pad = -inp.shape[2] % self.PAGE_SIZE
+                if pad and self.prefill_tile_pad:
+                    inp, pad = self._zero_tile_tail(inp, width)
                 if pad:
                     inp = ttnn.pad(inp, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
                 absolute_start = start_pos + start
@@ -961,8 +1084,56 @@ class Decoder:
         result = ttnn.concat(users, dim=0) if batch > 1 else users[0]
         return (result, next_history) if return_history else result
 
-    def decode_forward(self, x, *, positions, page_table, kv_cache, rope_positions=None, cyclic_cache=True):
-        """One token per user; all runtime data inputs and outputs are device tensors."""
+    @staticmethod
+    def decode_rope_index(positions, batch):
+        """Full 32-entry uint32 index row shared by every layer's table lookup."""
+        idx = ttnn.reshape(ttnn.typecast(positions, ttnn.uint32), (1, batch))
+        # A full32-index row selects the embedding kernel with native TILE
+        # output, avoiding separate small tilize operations.
+        return ttnn.pad(idx, [(0, 0), (0, 32 - batch)], value=0)
+
+    def decode_rope_tables(self, idx, batch):
+        """Per-user cos/sin rows for this layer kind; identical for every layer of the kind."""
+        cos = ttnn.embedding(idx, self.decode_cos, layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(idx, self.decode_sin, layout=ttnn.TILE_LAYOUT)
+        # Explicit padded shapes crop logical rows without a device copy.
+        logical = ttnn.Shape([1, 1, batch, self.head_dim])
+        padded = ttnn.Shape([1, 1, 32, self.head_dim])
+        return ttnn.reshape(cos, logical, padded), ttnn.reshape(sin, logical, padded)
+
+    def decode_rope_tables_hf(self, positions, batch, mem):
+        """Per-user cos/sin as [1, B, 1, D], one padded tile row per user, sharded like the heads."""
+        idx = ttnn.reshape(ttnn.typecast(positions, ttnn.uint32), (batch, 1))
+        tables = []
+        for table in (self.decode_cos, self.decode_sin):
+            t = ttnn.embedding(idx, table, layout=ttnn.ROW_MAJOR_LAYOUT)
+            t = ttnn.to_layout(ttnn.reshape(t, (1, batch, 1, self.head_dim)), ttnn.TILE_LAYOUT)
+            tables.append(ttnn.to_memory_config(t, mem))
+        return tuple(tables)
+
+    def decode_forward(
+        self,
+        x,
+        *,
+        positions,
+        page_table,
+        kv_cache,
+        rope_positions=None,
+        cyclic_cache=True,
+        rope_tables=None,
+        row_update_idxs=None,
+        row_update_ring=None,
+    ):
+        """One token per user; all runtime data inputs and outputs are device tensors.
+
+        row_update_idxs (speculative verify only): one index tensor per row, holding that row's
+        position and -1 elsewhere. Verify rows all belong to one user and share cache tiles, while
+        the update kernels read-modify-write one whole tile per row core, so rows are written serially.
+        row_update_ring: (per-row index tensors of position % ring slots, page table of the ring's
+        distinct pages) lets bounded sliding layers write with the fused K/V update.
+        """
+        if not self.decode_weights:
+            raise ValueError("This layer was built with decode_weights=False and serves prefill only")
         batch = x.shape[2]
         assert x.shape[0] == x.shape[1] == 1 and x.shape[3] == self.residual_width
         assert 1 <= batch <= 32 and page_table.shape[0] == batch and (positions.shape[0] == batch)
@@ -976,31 +1147,43 @@ class Decoder:
         ttnn.deallocate(fused)
         ttnn.deallocate(normalized)
         cache_mem = k.memory_config()
+        q_mem = q.memory_config()
         head_mem = ttnn.L1_MEMORY_CONFIG
         if batch != 1:
             q, k, v = (ttnn.to_memory_config(t, head_mem) for t in (q, k, v))
+        # Tables are cached per call; the stack may share one cache across all layers of a kind.
+        rope_tables = {} if rope_tables is None else rope_tables
         # External fixed-slot schedulers may use -1 to suppress cache/SDPA rows.
         # Their separate nonnegative RoPE indices avoid an out-of-bounds lookup.
-        idx = ttnn.reshape(
-            ttnn.typecast(positions if rope_positions is None else rope_positions, ttnn.uint32), (1, batch)
-        )
-        # A full32-index row selects the embedding kernel with native TILE
-        # output, avoiding separate small tilize operations.
-        idx = ttnn.pad(idx, [(0, 0), (0, 32 - batch)], value=0)
-        cos = ttnn.embedding(idx, self.decode_cos, layout=ttnn.TILE_LAYOUT)
-        sin = ttnn.embedding(idx, self.decode_sin, layout=ttnn.TILE_LAYOUT)
-        # Explicit padded shapes crop logical rows without a device copy.
-        logical = ttnn.Shape([1, 1, batch, self.head_dim])
-        padded = ttnn.Shape([1, 1, 32, self.head_dim])
-        cos = ttnn.reshape(cos, logical, padded)
-        sin = ttnn.reshape(sin, logical, padded)
-        q = self._decode_rope(self._norm(q, "self_attn.q_norm"), cos, sin)
-        if not self.sliding:
-            v = self._norm(v)
-            k = self._decode_rope(ttnn.multiply(v, self.norms["self_attn.k_norm"]), cos, sin)
+        rope_pos = positions if rope_positions is None else rope_positions
+        if HF_DECODE_ROPE and batch != 1:
+            # Rotate the height-sharded heads in place of transpose -> rotary -> transpose.
+            if "hf" not in rope_tables:
+                rope_tables["hf"] = self.decode_rope_tables_hf(rope_pos, batch, q_mem)
+
+            def rope(t, mem):
+                return ttnn.experimental.rotary_embedding_hf(
+                    ttnn.to_memory_config(t, mem), *rope_tables["hf"], is_decode_mode=True
+                )
+
+            q = rope(self._norm(q, "self_attn.q_norm"), q_mem)
+            if not self.sliding:
+                v = self._norm(v)
+                k = rope(ttnn.multiply(v, self.norms["self_attn.k_norm"]), cache_mem)
+            else:
+                k = rope(self._norm(k, "self_attn.k_norm"), cache_mem)
+                v = self._norm(v)
         else:
-            k = self._decode_rope(self._norm(k, "self_attn.k_norm"), cos, sin)
-            v = self._norm(v)
+            if "row" not in rope_tables:
+                rope_tables["row"] = self.decode_rope_tables(self.decode_rope_index(rope_pos, batch), batch)
+            cos, sin = rope_tables["row"]
+            q = self._decode_rope(self._norm(q, "self_attn.q_norm"), cos, sin)
+            if not self.sliding:
+                v = self._norm(v)
+                k = self._decode_rope(ttnn.multiply(v, self.norms["self_attn.k_norm"]), cos, sin)
+            else:
+                k = self._decode_rope(self._norm(k, "self_attn.k_norm"), cos, sin)
+                v = self._norm(v)
         k = ttnn.to_memory_config(k, cache_mem)
         # Fused cache update requires disjoint K/V cores. K occupies rows0-3
         # at batch32; V starts at row4 and supports every logical batch1-32.
@@ -1017,7 +1200,26 @@ class Decoder:
         v = ttnn.to_memory_config(v, vmem)
         bounded = cyclic_cache and self.sliding and page_table.padded_shape[1] > kv_cache[0].shape[0]
         modulo = {"cache_position_modulo": self.SLIDING_WINDOW_PAGES * self.PAGE_SIZE} if bounded else {}
-        if bounded:
+        if row_update_idxs is not None and bounded and row_update_ring is not None:
+            idxs, ring_table = row_update_ring
+            for idx in idxs:
+                ttnn.experimental.paged_fused_update_cache(
+                    kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=idx, page_table=ring_table
+                )
+        elif row_update_idxs is not None:
+            for idx in row_update_idxs:
+                if bounded:
+                    ttnn.experimental.paged_update_cache(
+                        kv_cache[0], k, update_idxs_tensor=idx, page_table=page_table, **modulo
+                    )
+                    ttnn.experimental.paged_update_cache(
+                        kv_cache[1], v, update_idxs_tensor=idx, page_table=page_table, **modulo
+                    )
+                else:
+                    ttnn.experimental.paged_fused_update_cache(
+                        kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=idx, page_table=page_table
+                    )
+        elif bounded:
             # Fused update still enforces logical pages <= physical pages.
             # Native separate updates support a bounded pool explicitly. The
             # documented cyclic table repeats its first nine private pages.

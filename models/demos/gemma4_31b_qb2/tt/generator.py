@@ -327,6 +327,15 @@ class Gemma4Generator:
         self.counters["token_readbacks"] += 1
         return ttnn.to_torch(ttnn.get_device_tensors(token)[0]).reshape(-1)[:batch].long()
 
+    @staticmethod
+    def tap_capture_range(start, window):
+        """The absolute positions [lo, hi) a prefill call from `start` captures for the absolute window
+        (a, b): the call's rows begin at the page-aligned rewind of `start` (it recomputes
+        [aligned_start, start)), so lo = max(a, aligned_start). None when the window ends before them."""
+        aligned_start = start // Decoder.PAGE_SIZE * Decoder.PAGE_SIZE
+        lo, hi = max(int(window[0]), aligned_start), int(window[1])
+        return (lo, hi) if hi > lo else None
+
     def prefill_forward(
         self,
         tokens,
@@ -339,10 +348,17 @@ class Gemma4Generator:
         return_device=False,
         start_positions=None,
         history_keys=None,
+        taps=None,
+        tap_windows=None,
         **kwargs,
     ):
+        """taps / tap_windows (speculative drafting only; None leaves every call as before): one {layer: None} dict
+        and one absolute [start, end) window per prompt row. Each row's dict is filled in place with that layer's
+        output rows of the window positions this call computes (tap_capture_range), as model.prefill_device does."""
         state = kv_cache
         self._check_options(kwargs)
+        if taps is not None and (tap_windows is None or len(taps) != len(prompt_lens) or len(tap_windows) != len(taps)):
+            raise ValueError("taps and tap_windows need one entry per prompt row")
         if not isinstance(state, CacheState):
             raise TypeError("kv_cache must be a CacheState; caller may supply its kv tensors and tables")
         slots = list(range(len(prompt_lens))) if slots is None else list(slots)
@@ -411,6 +427,14 @@ class Gemma4Generator:
                     uploaded_rows[key] = self._upload(row_table)
                     self.counters["prefill_table_uploads"] += 1
                 tables[kind] = uploaded_rows[key]
+            tap_kwargs = {}
+            if taps is not None:
+                captured = self.tap_capture_range(start, tap_windows[row])
+                if captured is not None:
+                    tap_kwargs = {
+                        "taps": taps[row],
+                        "tap_window": (captured[0] - aligned_start, captured[1] - aligned_start),
+                    }
             out = self.model.prefill_device(
                 tt_ids,
                 sequence_length=chunk_length,
@@ -419,6 +443,7 @@ class Gemma4Generator:
                 all_logits=return_all_logits,
                 start_pos=aligned_start,
                 histories=histories,
+                **tap_kwargs,
             )
             if history_keys is not None:
                 state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}

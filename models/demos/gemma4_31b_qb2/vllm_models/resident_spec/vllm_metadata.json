@@ -1,0 +1,4 @@
+{
+  "arch": "Gemma4QB2ResidentSpecForCausalLM",
+  "main_class": "models.demos.gemma4_31b_qb2.tt.generator_resident_spec_vllm:Gemma4ResidentSpecForCausalLM"
+}
