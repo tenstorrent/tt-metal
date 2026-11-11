@@ -35,6 +35,8 @@ the step harness adds only `QWEN36_FABRIC_RING=1`). KV stays BFP8 (no `QWEN36_R1
 | `QWEN36_BFP4_LAYOUT_GATEUP` | `dsmc:3:2:4` | op path (prefill, kv-split variants, out-of-scope buckets, engine-off fallback) | yes (r13 tp_common `{BFP4_LAYOUT_ENV}_{TARGET}` override; needs `QWEN36_BFP4_LAYOUT=1`, already prod) |
 | ~~`QWEN36_R16_VERIFY_SDPA_MULTI_CORES`~~ | ~~`16`~~ | **DROPPED from the RC env (main, 11-11)**: +1.08 ms verify at 128K / +0.19 at 64K on 3 users vs prod; helps only at 8x32K | (code stays, default unset) |
 | `QWEN36_GLUE` | `kvwo,guin,kvt` | op path; md5-identical | yes (integ2). The GSNK gate ran WITH it (spec_GSNK.json), so keep it in the RC env |
+| `QWEN36_MTP_QKV_DSMC` | `1` | drafter step's qkv pair in-projection on DSMC (MTPQKV #24; gate 2 PASS d27u08 11-11 05:18-05:31Z: draft_md5 / md5_all identical off vs on, 32K u8 drafter 2.16 -> 2.14 ms, verify unchanged) | yes (-mk-int 010285d984b; code default 0) |
+| `QWEN36_LMHEAD_DSHARD_SCOPE` / `QWEN36_LMHEAD_DSHARD_FP32_DEST` | `all` / `1` | LM head #20 (-0.1 ms / verify) | **STAGED (user decision 11-11)**: in the rc1 env, gated on H+I's acceptance + needle + length with it on; off = today's path (code unchanged) |
 
 The GSNK gate (length ratio 1.027, CI 0.958-1.096; GPQA 87.1 vs 86.4; needle 9/9) ran these on d26u08's in-pod tree,
 not on this RC SHA. **The binding check is the RC's own flag-on length gate: RC SHA + this env (engine on) vs prod r13,
@@ -89,5 +91,6 @@ QWEN36_R16_VERIFY_SDPA_MULTI_CORES (dropped).
 
 Pending: MTP_SDPA_WINDOW (W) pending the OR A/B.
 Pending: QWEN36_LMHEAD_DSHARD_SCOPE=all + QWEN36_LMHEAD_DSHARD_FP32_DEST=1 (LM head #20, -0.1 ms / verify; prod-code env
-change, pending H+I's acceptance arm; off = today's env, so flag-off gate 1 is unaffected).
+change; STAGED in the rc1 env table above, pending H+I's acceptance + needle + length arm with it on -- the spec owner flips
+this line on PASS; off = today's env, so flag-off gate 1 is unaffected).
 If the full set overflows: drop MK_GDN_INPROJ, then GIN_PERCORE. Any drop is a spec-owner decision recorded in DESIGN.
