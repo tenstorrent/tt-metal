@@ -1,12 +1,12 @@
 #!/bin/bash
 # Build the megakernel release-candidate tt-metal branch LOCALLY (no push). One committed SHA, no overlay.
-#   tt-metal RC = anatarajan/qwen38-r16-mk-int (M3 engine; v12 + AR + GDN land there by token)
+#   tt-metal RC = anatarajan/qwen38-r16-mk-on (vLLM engine-ON integration, which merges anatarajan/qwen38-r16-mk-int)
 #               + 8c2faf2ec95 (QWEN36_MM_VISION_CACHE; contains c8c90fe QWEN36_MM_MAX_IMAGES)
-#               + anatarajan/qwen38-r16-mk-integ2 (vLLM integration: QWEN36_R16_MEGAKERNEL, engine/build.py, repack)
+#               + anatarajan/qwen38-r16-mk-int (no-op when -mk-on is current with it)
 # Usage: make_rc.sh <tt-metal checkout> [rc branch name]   -> prints the RC SHA. Stops on any merge conflict.
 set -euo pipefail
 REPO=$1; RC=${2:-anatarajan/qwen38-r16-mk-rc}
-INT=anatarajan/qwen38-r16-mk-int; INTEG=anatarajan/qwen38-r16-mk-integ2; VCACHE=8c2faf2ec95
+INT=anatarajan/qwen38-r16-mk-int; INTEG=${INTEG:-anatarajan/qwen38-r16-mk-on}; VCACHE=8c2faf2ec95
 cd "$REPO"
 WT=$(mktemp -d "${TMPDIR:-/tmp}/mk-rc.XXXXXX")
 git worktree add -q --detach "$WT" "$INTEG"
