@@ -10,11 +10,11 @@ V4.1 adds its own private rings next to it:
 * q_a on 8 receivers (``[5120, 160]`` slabs, 800 tiles), streamed in 80-tile pages.
 * kv on 16 receivers (``[5120, 32]`` slabs), streamed in 32-tile pages.
 * :data:`WIDE_RING` on 80 receivers, which three weights stream through at pages of their own: o_b and
-  the shared expert's down (``N = 5120`` over 64-column slabs; o_b in 32-tile pages, the down in
-  whole-slab ones), and Engram's wkv (bf8, row-parallel under TP; ``[6144 / TP, 320]`` slabs in 30-tile
-  pages). A page is a block of one tensor, which the DRISC senders re-grid the ring to per tensor, so
-  the weights need agree on neither page size nor dtype (o_b is bf4, the other two bf8). The ring holds
-  two of the largest page, the shared down's.
+  the shared expert's down (``N = 5120`` over 64-column slabs, both in whole-slab pages at TP4), and
+  Engram's wkv (bf8, row-parallel under TP; ``[6144 / TP, 320]`` slabs in 30-tile pages). A page is a
+  block of one tensor, which the DRISC senders re-grid the ring to per tensor, so the weights need agree
+  on neither page size nor dtype (o_b is bf4, the other two bf8). The ring holds four of the largest
+  page, o_b's.
 
 The router gate (12 cores) and the shared expert's gate/up (36 cores, 9 per rank at TP4) do not
 divide the 8 DRAM banks a ring spreads over. Their matmuls read the DRAM ND-sharded weight
@@ -57,21 +57,21 @@ SHARED_RING_PAGES = 8
 # 4 pages of 80 tiles (16 rows of q_a's 5-tile-wide slab): ~180 KB per core at bf4.
 _Q_A_PAGE_PIN = {"K": 512, "N": 1280, "n_blocks": 8}
 Q_A_RING_PAGES = 4
-# 4 pages of 32 tiles: ~72 KB per core at bf4.
+# 8 pages of 32 tiles: ~144 KB per core at bf4, within the range q_a's ring sizes.
 _KV_PAGE_PIN = {"K": 1024, "N": 512, "n_blocks": 16}
-KV_RING_PAGES = 4
+KV_RING_PAGES = 8
 # Top-left receiver core (x, y) of each ring: q_a's 4x2 block, then kv's 4x4 below it, right of the
 # shared ring's 8x8.
 Q_A_RING_ORIGIN = (8, 0)
 KV_RING_ORIGIN = (8, 2)
 # The 80-receiver ring o_b, Engram's wkv and the shared expert's down stream through, each at its own
-# page: the ring holds two of the largest, the shared down's.
+# page: the ring is sized by o_b's, 288 KB a core, about what the three took as rings of their own.
 WIDE_RING = "wide_full"
-# o_b's [2048, 64] slab at TP4 (128 tiles) streams in pages of 16 tile-rows (32 tiles, ~18 KB at bf4),
-# pinned by a spec that is not a consumer. Its A is one tile row (decode is batch 1), which is what lets
-# matmul_decode stream a slab over several pages.
-_O_B_PAGE_PIN_K = 512
-O_B_RING_PAGES = 2
+# o_b's [2048, 64] slab at TP4 (128 tiles) streams in whole-slab pages (~72 KB at bf4), pinned by a
+# spec that is not a consumer (at TP1 a slab is 4 such pages). Its A is one tile row (decode is batch
+# 1), which is what lets matmul_decode stream a slab over several pages.
+_O_B_PAGE_PIN_K = 2048
+O_B_RING_PAGES = 4
 # Whole-slab pages: [576, 64] at TP4, ~39 KB per page at bf8.
 SHARED_DOWN_RING_PAGES = 2
 # A [6144, 320] slab of Engram's wkv (1920 tiles, ~2 MB at bf8) is streamed in pages of 3 tile-rows
