@@ -73,13 +73,19 @@ constexpr uint32_t kNone = 0xFFFFFFFFu;
 // SHT = per conv job [SH_0 SH_1 SH_2 | tap] (4 bf16 pages), OUT (fp32: gate pair, silu, convs, pad to even), KQ (raw k | q).
 // Scratch (QPX tail): win_l1: 2 x B bf16 tile slots (one window set per conv job); wo_l1: B x 1 KB window-out slots (row Lw
 // zeroed once); ctrl_l1: the ctrl page.
+// L1 diet (in-model CB floor): compact window / window-out slots -- 512 B per (job, user) = [face-0 rows 0..7 | face-1 rows
+// 0..7] (rows of face hh at hh * 256 + r * 32) instead of whole tiles; HOLD users' whole-tile copy win[par] -> win[1-par]
+// goes through one 2 KB bounce, before in_ready. SHT holds one job (4 pages): job 1's tap waits in tap1_l1.
+constexpr uint32_t kCs = 512;
 template <uint32_t B, uint32_t T, uint32_t K, uint32_t CT, uint32_t M, uint32_t NV, uint32_t NC, uint32_t KT_, typename WAcc,
           typename TAcc, typename CAcc, typename DAcc>
 inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc& wa, const WAcc& wb, const TAcc& taps,
                          const CAcc& ctrl, uint32_t ctrl_bytes, uint32_t gin_l1, uint32_t qin_l1, uint32_t win_l1,
                          uint32_t wo_l1, uint32_t ctrl_l1, uint32_t cb_qpx, uint32_t npx, uint32_t cb_sht, uint32_t cb_kq,
-                         volatile tt_l1_ptr uint32_t* in_ready, uint32_t in_target, const DAcc& dtb, const DAcc& nea) {
-    static_assert(B * T == 32, "G-b: B * T == 32 only (the qkv tile is SH_{K-1})");
+                         volatile tt_l1_ptr uint32_t* in_ready, uint32_t in_target, const DAcc& dtb, const DAcc& nea,
+                         uint32_t bounce_l1, uint32_t tap1_l1) {
+    static_assert(B * T == 32 && K - 1 + T <= 8, "G-b: B * T == 32; the window rows fit face rows 0..7");
+    constexpr uint32_t Lw = K - 1 + T, Lw_w = (Lw + 1) & ~1u;
     const uint32_t nconv = pb[kNconv];
     gpx::Ctrl<B, T, M, NV> c;
     {
@@ -96,20 +102,34 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
             pb[kPerLayer + 2 * L] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_l1 + 512)[hh];
             pb[kPerLayer + 2 * L + 1] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_l1 + 576)[hh];
         }
-        cb_reserve_back(cb_sht, 4 * nconv);
+        cb_reserve_back(cb_sht, 4);  // job 0's [SH | tap]; job 1's tap waits in tap1_l1
         for (uint32_t j = 0; j < nconv; ++j) {
             const uint32_t col = pb[kConv + j * kConvW];
-            gpx::read_window<B, CT>(wa, wb, c, col, win_l1 + j * B * gpx::kTB);
-            noc_async_read(taps.get_noc_addr(col), get_write_ptr(cb_sht) + (4 * j + 3) * gpx::kTB, gpx::kTB);
+            for (uint32_t u = 0; u < B; ++u) {
+                const uint64_t src = c.par ? wb.get_noc_addr(u * CT + col) : wa.get_noc_addr(u * CT + col);
+                const uint32_t d = win_l1 + (j * B + u) * kCs;
+                noc_async_read(src, d, 256);
+                noc_async_read(src + 512, d + 256, 256);
+            }
+            noc_async_read(taps.get_noc_addr(col), j ? tap1_l1 : get_write_ptr(cb_sht) + 3 * gpx::kTB, gpx::kTB);
         }
         noc_async_read_barrier();
-        // the window-out rows 0..K-2 (window rows mi+1..) of every job, before the in-proj lands (own wo slots per job)
+        // HOLD users: the op copies their window tile through unchanged (win[par] -> win[1-par]); off the in-proj's path
         for (uint32_t j = 0; j < nconv; ++j) {
-            const uint32_t wj = win_l1 + j * B * gpx::kTB, oj = wo_l1 + j * B * gpx::kWoSlot;
+            const uint32_t col = pb[kConv + j * kConvW];
             for (uint32_t u = 0; u < B; ++u) {
-                for (uint32_t hh = 0; hh < 2; ++hh) {
-                    gpx::l1cp(oj + u * gpx::kWoSlot + hh * 512, wj + u * gpx::kTB + gpx::row_off(c.mi[u] + 1, hh), (K - 1) * 32);
-                }
+                if (!c.hold[u]) continue;
+                noc_async_read(c.par ? wb.get_noc_addr(u * CT + col) : wa.get_noc_addr(u * CT + col), bounce_l1, gpx::kTB);
+                noc_async_read_barrier();
+                noc_async_write(bounce_l1, c.par ? wa.get_noc_addr(u * CT + col) : wb.get_noc_addr(u * CT + col), gpx::kTB);
+                noc_async_write_barrier();
+            }
+        }
+        // window-out rows 0..K-2 (window rows mi+1..) of every job, before the in-proj lands
+        for (uint32_t j = 0; j < nconv; ++j) {
+            for (uint32_t u = 0; u < B; ++u) {
+                const uint32_t w = win_l1 + (j * B + u) * kCs, o = wo_l1 + (j * B + u) * kCs;
+                for (uint32_t hh = 0; hh < 2; ++hh) gpx::l1cp(o + hh * 256, w + hh * 256 + (c.mi[u] + 1) * 32, (K - 1) * 32);
             }
         }
     }
@@ -132,7 +152,7 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFFu, xy >> 16, reinterpret_cast<uint32_t>(pb + kQinCnt)), 1);
         }
     }
-    noc_async_read_barrier();  // window + taps
+    noc_async_read_barrier();
     {
         GBZ("GB-QIN");
         noc_semaphore_wait_min(pb + kQinCnt, pb[kNin] * (L + 1));
@@ -142,28 +162,44 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
     {
         GBZ("GB-STG");
         for (uint32_t j = 0; j < nconv; ++j) {  // rows K-1.. of the window-out = the qkv rows, then the shifted operands
-            const uint32_t q = qin_l1 + j * gpx::kTB, oj = wo_l1 + j * B * gpx::kWoSlot;
+            const uint32_t q = qin_l1 + j * gpx::kTB;
+            if (j) {  // job 1: its SHT slot after the compute popped job 0; its tap from tap1_l1
+                cb_reserve_back(cb_sht, 4);
+                gpx::l1cp(get_write_ptr(cb_sht) + 3 * gpx::kTB, tap1_l1, gpx::kTB);
+            }
+            const uint32_t sh = get_write_ptr(cb_sht);
             for (uint32_t u = 0; u < B; ++u) {
-                for (uint32_t hh = 0; hh < 2; ++hh) {
-                    gpx::l1cp(oj + u * gpx::kWoSlot + hh * 512 + (K - 1) * 32, q + gpx::row_off(u * T, hh), T * 32);
+                const uint32_t o = wo_l1 + (j * B + u) * kCs;
+                for (uint32_t hh = 0; hh < 2; ++hh) gpx::l1cp(o + hh * 256 + (K - 1) * 32, q + gpx::row_off(u * T, hh), T * 32);
+            }
+            noc_async_read_barrier();
+            for (uint32_t k = 0; k < K - 1; ++k) {
+                for (uint32_t u = 0; u < B; ++u) {
+                    const uint32_t o = wo_l1 + (j * B + u) * kCs;
+                    for (uint32_t hh = 0; hh < 2; ++hh)
+                        gpx::l1cp(sh + k * gpx::kTB + gpx::row_off(u * T, hh), o + hh * 256 + k * 32, T * 32);
                 }
             }
             noc_async_read_barrier();
-            gpx::stage_shift<B, T, K>(oj, get_write_ptr(cb_sht));
-            noc_async_read_barrier();
             cb_push_back(cb_sht, 4);
         }
-        for (uint32_t j = 0; j < nconv; ++j) {  // win[1 - par] (off the convs' path)
-            gpx::write_window<B, T, K, CT>(wa, wb, c, pb[kConv + j * kConvW], wo_l1 + j * B * gpx::kWoSlot,
-                                           win_l1 + j * B * gpx::kTB);
+        for (uint32_t j = 0; j < nconv; ++j) {  // win[1 - par] rows 0..Lw_w-1 of the live users (off the convs' path)
+            const uint32_t col = pb[kConv + j * kConvW];
+            for (uint32_t u = 0; u < B; ++u) {
+                if (c.hold[u]) continue;
+                const uint64_t dst = c.par ? wa.get_noc_addr(u * CT + col) : wb.get_noc_addr(u * CT + col);
+                const uint32_t o = wo_l1 + (j * B + u) * kCs;
+                noc_async_write(o, dst, Lw_w * 32);
+                noc_async_write(o + 256, dst + 512, Lw_w * 32);
+            }
         }
         noc_async_write_barrier();
     }
     if (pb[kRootPost]) {  // L2 root: its Kt raw tiles (from the q / k conv cores) -> the compute's l2
         GBZ("GB-RAWW");
         noc_semaphore_wait_min(pb + kRawCnt, KT_ * (L + 1));
-        cb_reserve_back(cb_kq, 2 * KT_);  // the whole DFB: the raw slots 0..Kt-1 never move
-        cb_push_back(cb_kq, 2 * KT_);
+        cb_reserve_back(cb_kq, KT_);  // the whole DFB (Kt pages): the raw slots never move
+        cb_push_back(cb_kq, KT_);
     }
     noc_async_atomic_barrier();
 }

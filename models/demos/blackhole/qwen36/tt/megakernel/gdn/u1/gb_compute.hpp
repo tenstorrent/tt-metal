@@ -169,9 +169,9 @@ ALWI void gb_l2_root(uint32_t cb_kq, uint32_t cb_out, uint32_t post) {
     DataflowBuffer tmp(dfb::tmp), stats(dfb::stats), scratch(dfb::scratch), inv(dfb::inv), out(dfb::gbout), kq(dfb::kq);
     (void)cb_kq;
     (void)cb_out;
-    kq.wait_front(2 * GB_KT);
+    kq.wait_front(GB_KT);
     gb_l2_rows<GB_KT>(dfb::kq, dfb::gbout, out, tmp, stats, scratch, inv, post);
-    kq.pop_front(2 * GB_KT);
+    kq.pop_front(GB_KT);
 }
 
 // pb: this core's G-b payload block (gb_dm.hpp offsets)
