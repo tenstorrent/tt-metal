@@ -13,6 +13,7 @@ Two loss mechanisms of the T3 / T9 / T12 server logs ("chunk continuation at N w
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 from loguru import logger
 
@@ -346,3 +347,19 @@ def test_no_record_falls_back_to_zero(monkeypatch):
     m.pf_resume.pop(0)
     call(gen, toks, 4096, 8192 - 512, "hit3", 0, L)  # max_hit 4096 < first record at 8192? (records every 8192) -> none
     assert m.steps[-1][0][1] == 0 and gen.protect_stats["record_misses"] == 1
+
+
+# ---- T25: Up = U (non row-aware placement), staggered arrivals: a new prompt first in the call claims the user of a later continuation --------------------
+@pytest.mark.parametrize("skew", [0.3, 1.0, 3.0])
+def test_cont_first_removes_the_up_equals_u_cascade(monkeypatch, skew):
+    from models.demos.blackhole.deepseek_v41_flash.tests import test_prefill_row_placement as T
+
+    res = {}
+    for flag in ("0", "1"):
+        monkeypatch.setenv("DSV41_CONT_FIRST", flag)
+        sim, m, c, _ = T.run_case(
+            row_aware=False, B=16, U=4, up=4, n_req=16, prompt=32772, skew=skew, cap=16, budget=32768, osl_steps=20
+        )
+        res[flag] = (c.n, sim.recomp_tokens, m.computed)
+    assert res["0"][0] > 0 and res["0"][1] > 0, res  # the bug is reproduced with the flag off
+    assert res["1"][0] == 0 and res["1"][1] == 0 and res["1"][2] == 16 * 32772 - 16 * 4 + 16 * 4, res

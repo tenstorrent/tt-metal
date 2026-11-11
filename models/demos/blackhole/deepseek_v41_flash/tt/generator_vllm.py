@@ -53,7 +53,11 @@ from loguru import logger
 
 from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
 from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import protect_partial_on, resume_record_on
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import (
+    cont_first_on,
+    protect_partial_on,
+    resume_record_on,
+)
 
 _PAD_TOKEN = 0
 
@@ -1443,7 +1447,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 mm=mm,
             )
             hit_rows |= self.hit_rows_last
-        for i in range(N):
+        # DSV41_CONT_FIRST=1 (default off): continuations are bound before NEW prompts claim a user (the row-aware placement does this already). Without it a new prompt that comes first in the call
+        # claims the user its logical slot maps to, which is the carried user of a continuation later in the call (the plugin shifts the state slots when the first finisher starts decoding):
+        # that continuation then finds its user taken and recomputes from position 0, and so does every continuation after it (T25: Up = U = 4, 34-43 % of a c16 wave).
+        cont_first = cont_first_on()
+        order = sorted(range(N), key=lambda i: starts[i] <= 0) if cont_first and not rowaware else range(N)
+        by_i = {}
+        for i in order:
             if rowaware:
                 break
             st, e, slot = starts[i], ends[i], empty_slots[i]
@@ -1494,12 +1504,23 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     self.slots.bind(slot, p)
                     self.slots.live.add(p)
                 else:
+                    if (
+                        os.environ.get("DSV41_STATE_DEBUG", "0") == "1"
+                    ):  # (T25: why is the carried state gone? who took the user / what does the tracker say)
+                        taken_ = [(j, q) for j, q in enumerate(phys)]
+                        logger.info(
+                            f"DSV4.1 state debug: row {i} (slot {slot}, start {st}) lost: find -> user {p_old}, pf_resume {self.m.__dict__.get('pf_resume', {}).get(p_old)}, "
+                            f"tracker {None if p_old is None else self.inprog.users.get(p_old, (None,))[0]}, reported {self.inprog.reported.get(p_old)}, "
+                            f"users claimed so far in this call {taken_}, call starts {list(starts)}, slot map phys[slot]={self.slots.phys[slot]}, live={sorted(self.slots.live)}"
+                        )
                     # (with prefix caching vLLM reports hits of its own block cache for NEW requests: the model's snapshot store decides what is reused, see Model.prefill_interleaved)
                     (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
                         f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
                     )
                     st = 0
             if p is None:
+                if cont_first:  # (a user of this call is never claimed by a second prompt)
+                    avoid = list(avoid) + [q for q in phys if q not in avoid]
                 fr_ = self._full_rows(phys) if getattr(self, "protect", False) else ()
                 if self.bucketing and U:
                     p = self.slots.claim_packed(
@@ -1511,8 +1532,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                         if balanced
                         else self.slots.claim([slot], avoid)[0]
                     )
-            items.append((p, toks[i], st, e))
+            by_i[i] = (p, toks[i], st, e)
             phys.append(p)
+        if by_i:
+            items = [by_i[i] for i in range(N)]
+            phys = [it[0] for it in items]
         if len(set(phys)) != N:
             raise ValueError(f"duplicate prefill slots {empty_slots}")
         # a piece must not END INSIDE an image span (the vision splice needs whole images): vLLM rolls a piece back before an image only while the image's encoder output is not cached, a repeat of an

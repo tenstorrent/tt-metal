@@ -57,6 +57,19 @@ def snapshot_on_evict_on():
     return os.environ.get("DSV41_SNAPSHOT_ON_EVICT", "0") == "1"
 
 
+def cont_first_on():
+    """DSV41_CONT_FIRST=1 (default off; live file DSV41_CONT_FIRST_FILE 0 / 1): see ``DeepseekV41ForCausalLM._prefill_interleaved`` (continuations are bound before new prompts claim a user)."""
+    import os
+
+    f = os.environ.get("DSV41_CONT_FIRST_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_CONT_FIRST", "0") == "1"
+
+
 def needs_slot(item, pending_hits):
     """True for a user that will be allocated a slot in the wave it runs in: a new prompt (start 0) or a prefix hit whose restore has not been done (it owns no slot yet)."""
     return item[2] == 0 or item[0] in pending_hits
