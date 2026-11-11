@@ -1685,7 +1685,7 @@ def weight_layouts(mesh):
     (layout_attn split-K qkv, the wo unit, GDN) take over -- resident and addressable, not yet read by the kernels."""
     from models.demos.blackhole.qwen36.tt.megakernel.integ import weights_mk as wm
 
-    from models.demos.blackhole.qwen36.tt.megakernel.engine import weight_layouts as WL
+    WL = _wl()  # the same module object setup_bench uses (engine/__init__ exports a weight_layouts FUNCTION)
 
     bank_loc = [(c.x, c.y) for c in mesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)]
     banks = mesh.dram_grid_size().x
