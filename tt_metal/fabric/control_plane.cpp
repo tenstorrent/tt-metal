@@ -1352,8 +1352,8 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
-    // The most ports of any chip in the local meshes: chips may list different numbers of Ethernet cores (the Keraunos
-    // test chips in tests/tt_metal/tt_fabric/keraunos/), and a table indexed by channel must hold every chip's.
+    // The most ports of any chip in the local meshes: chips may list different numbers of Ethernet cores, and a table
+    // indexed by channel must hold every chip's.
     std::uint32_t num_ports_per_chip = 0;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < router_intra_mesh_routing_table.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
