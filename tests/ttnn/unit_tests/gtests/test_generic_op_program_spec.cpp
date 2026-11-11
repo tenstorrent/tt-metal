@@ -991,7 +991,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallTakesAPipeReCarve
 }
 
 // Every call checks that the run args give a pipe for each PrefetcherPipe parameter the spec declares, and for no other
-// name, before Metal sees them.
+// name, before Metal sees them: a first call, and a later call with validate_program_args on or off.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksThePipesOfEveryCall) {
     auto space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
     auto pipe = space.create_pipe(pipe_sender(), pipe_receivers());
@@ -1001,16 +1001,27 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksThePipesOfEveryCall)
 
     auto no_pipe = program.run_args;
     no_pipe.advanced_options.prefetcher_pipe_args.clear();
-    EXPECT_THAT(
-        [&] { ttnn::experimental::generic_op({output}, program.spec, no_pipe); },
-        ThrowsMessage<std::exception>(HasSubstr("PrefetcherPipeParameter 'pipe' has no pipe in run_args")));
-
     auto extra_pipe = program.run_args;
     extra_pipe.advanced_options.prefetcher_pipe_args.emplace(
         m2::PrefetcherPipeParamName{"other"}, m2::PrefetcherPipeArgument{pipe});
-    EXPECT_THAT(
-        [&] { ttnn::experimental::generic_op({output}, program.spec, extra_pipe); },
-        ThrowsMessage<std::exception>(HasSubstr("has a pipe for 'other', which the ProgramSpec does not declare")));
+    const auto expect_both_rejected = [&] {
+        EXPECT_THAT(
+            [&] { ttnn::experimental::generic_op({output}, program.spec, no_pipe); },
+            ThrowsMessage<std::exception>(HasSubstr("PrefetcherPipeParameter 'pipe' has no pipe in run_args")));
+        EXPECT_THAT(
+            [&] { ttnn::experimental::generic_op({output}, program.spec, extra_pipe); },
+            ThrowsMessage<std::exception>(HasSubstr("has a pipe for 'other', which the ProgramSpec does not declare")));
+    };
+    expect_both_rejected();
+
+    // Later calls reuse the prepared program.
+    ttnn::experimental::prepare_generic_op({output}, program.spec, program.run_args);
+    const auto entries = this->device_->num_program_cache_entries();
+    for (const bool validate : {true, false}) {
+        const auto restore = set_validate_program_args(validate);
+        expect_both_rejected();
+        EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
+    }
 }
 
 // The op does not opt into per-core allocation, so ttnn rejects a per-core allocated tensor before the op sees it.

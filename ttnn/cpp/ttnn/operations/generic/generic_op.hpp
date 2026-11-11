@@ -49,8 +49,8 @@ void prepare_generic_op(
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
 
-// Fixed: a ProgramSpec per mesh coordinate range. The ranges must not overlap, and every device in a range must hold
-// every tensor.
+// Fixed: a ProgramSpec per mesh coordinate range. The ranges must stay inside the mesh and must not overlap, and every
+// device in a range must hold every tensor.
 struct MeshProgramSpec {
     std::vector<std::pair<ttnn::MeshCoordinateRange, ProgramSpec>> programs;
 };

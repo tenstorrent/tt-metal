@@ -873,8 +873,8 @@ def test_run_args_must_match_the_kernels(device, cache_hit, expect_error):
 
 @pytest.mark.parametrize("duplicate", ["kernel", "tensor_parameter"])
 def test_a_name_declared_twice_gets_metals_error(device, duplicate, expect_error):
-    """generic_op's checks go by name, so a spec that declares a kernel or a tensor parameter twice gets past them to
-    Metal's check, which names the duplicate."""
+    """generic_op checks a kernel or tensor parameter declared twice against its first declaration, so a spec that
+    repeats one unchanged gets past generic_op's checks to Metal's, which names the duplicate."""
     _, a, b, out = inputs(device)
     spec, run_args = mul_program(a, b, out)
     if duplicate == "kernel":
@@ -1075,11 +1075,61 @@ def test_the_program_spec_form_runs_on_the_devices_of_its_tensors(mesh_device, e
     )
     assert mesh_device.num_program_cache_entries() == entries + 1
 
-    # a1 decides the devices, so this call keys the same entry, but its output is on the other device.
+    # a1 decides the devices, so this call keys the same entry, but its output is on the other device. Every call checks
+    # this, with validate_program_args off too.
+    ttnn.CONFIG.validate_program_args = False
     _, run_args0 = mul_program(a1, b1, out0)
     with expect_error(RuntimeError, r"a program runs on device .*, which does not hold io_tensors\[2\]"):
         E.generic_op([a1, b1, out0], spec, run_args0)
     assert mesh_device.num_program_cache_entries() == entries + 1
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_one_program_runs_on_every_device_of_its_tensors(mesh_device):
+    """With its tensors on both devices, each holding data of its own, the program runs on both, on a cache hit too,
+    and the MeshProgramSpec form over the whole mesh keys the same entry."""
+    initial = torch.full((1, 1, 64, 64), 7.0, dtype=torch.bfloat16)
+
+    def call(seed, *, tile_limit=None, mesh_form=False):
+        """Runs a * b, with a and b split over the devices. Returns the expected and actual output of each device, in
+        tile order, and the number of entries generic_op added to the program cache (creating the tensors adds some
+        of its own)."""
+        torch.manual_seed(seed)
+        torch_a, torch_b = (torch.randn((2, 1, 64, 64), dtype=torch.bfloat16) for _ in range(2))
+        by_device = ttnn.shard_tensor_to_mesh_mapper(mesh_device, 0)
+        a, b = (
+            ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=by_device)
+            for tensor in (torch_a, torch_b)
+        )
+        out = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        spec, run_args = mul_program(a, b, out, tile_limit=tile_limit)
+        if mesh_form:
+            whole_mesh = mesh_range(mesh_device)
+            spec = E.MeshProgramSpec(programs=[(whole_mesh, spec)])
+            run_args = E.MeshProgramRunArgs(programs=[(whole_mesh, run_args)])
+        entries = mesh_device.num_program_cache_entries()
+        result = E.generic_op([a, b, out], spec, run_args)
+        new_entries = mesh_device.num_program_cache_entries() - entries
+        expected = [tile_order(product) for product in (torch_a * torch_b).split(1)]
+        return expected, [tile_order(ttnn.to_torch(shard)) for shard in ttnn.get_device_tensors(result)], new_entries
+
+    expected, outputs, new_entries = call(seed=23)
+    assert new_entries == 1
+    assert len(outputs) == 2
+    for expected_output, output in zip(expected, outputs):
+        assert_close(expected_output, output)
+
+    # A cache hit with new tensors and only 3 tiles.
+    expected, outputs, new_entries = call(seed=24, tile_limit=3)
+    assert new_entries == 0
+    for expected_output, output in zip(expected, outputs):
+        assert_close(expected_output[: 3 * 1024], output[: 3 * 1024])
+        assert torch.equal(output[3 * 1024 :], tile_order(initial)[3 * 1024 :])
+
+    expected, outputs, new_entries = call(seed=25, mesh_form=True)
+    assert new_entries == 0
+    for expected_output, output in zip(expected, outputs):
+        assert_close(expected_output, output)
 
 
 def test_mesh_form(device):
@@ -1173,6 +1223,13 @@ def test_mesh_form_checks_its_ranges(device, expect_error):
             [a, b, out],
             E.MeshProgramSpec(programs=[(whole_mesh, spec), (whole_mesh, spec)]),
             E.MeshProgramRunArgs(programs=[(whole_mesh, run_args), (whole_mesh, run_args)]),
+        )
+    past_the_mesh = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1))
+    with expect_error(RuntimeError, "mesh range .* reaches outside the MeshDevice"):
+        E.generic_op(
+            [a, b, out],
+            E.MeshProgramSpec(programs=[(past_the_mesh, spec)]),
+            E.MeshProgramRunArgs(programs=[(past_the_mesh, run_args)]),
         )
     with expect_error(RuntimeError, r"have different numbers of programs \(1 and 2\)"):
         E.generic_op(
