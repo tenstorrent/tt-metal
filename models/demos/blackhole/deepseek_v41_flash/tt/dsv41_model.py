@@ -317,7 +317,9 @@ class Model:
             else None
         )
         if self.host_rows is not None:
-            if os.environ.get("DSV41_PF_HASH_FAST", "0") == "1":  # numpy hash (no 8.4 MB history-row copies per slot); bit-identical ids
+            if (
+                os.environ.get("DSV41_PF_HASH_FAST", "0") == "1"
+            ):  # numpy hash (no 8.4 MB history-row copies per slot); bit-identical ids
                 from models.demos.blackhole.deepseek_v41_flash.tt.hostopt import TorchFastNgramHash
 
                 self.hasher = TorchFastNgramHash(self.host_rows.engram.hash)
@@ -1739,16 +1741,32 @@ class Model:
     # lives there) until it is finished or evicted by another user
     def _slot_alloc(self, wave, resume):
         """assign a prefill slot (global index r * Up + i) to every user of ``wave`` [(b, tokens, start, end)]; users that continue keep theirs. Returns {b: slot}."""
-        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import slot_alloc
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import (
+            protect_partial_on,
+            slot_alloc,
+            snapshot_on_evict_on,
+        )
 
         owner = self.__dict__.setdefault("pf_slot_owner", [None] * (self.rows * self.Up))
         of = self.__dict__.setdefault("pf_slot_of", {})
 
         def on_evict(o):
+            pa_ = self.__dict__.get("apc_paged")
+            if pa_ is not None and o in resume and snapshot_on_evict_on():
+                try:
+                    if pa_.snapshot(
+                        o, int(resume[o])
+                    ):  # (the carried halo state of the prompt in progress becomes a record before it is overwritten)
+                        self.log(f"  slot eviction: user {o} snapshotted at {resume[o]}")
+                except Exception as ex:  # noqa: BLE001 - the eviction goes on (the prompt recomputes)
+                    self.log(f"  slot eviction: snapshot of user {o} failed: {ex!r}")
             if self.__dict__.get("_kx_pending"):
                 self.flush_key_exports([o], "slot eviction")  # (its carried key FIFO is about to be overwritten)
 
-        return slot_alloc(owner, of, self.Up, self.U, wave, resume, on_evict)
+        prot = protect_partial_on()
+        return slot_alloc(
+            owner, of, self.Up, self.U, wave, resume, on_evict, cheapest=prot, log=self.log if prot else None
+        )
 
     def enable_apc(self, budget_bytes, policy="pow2"):
         """Automatic prefix caching of the interleaved prefill (tt/prefix_cache.py): host snapshots of the carried prefill state at chunk boundaries, restored into any user."""

@@ -13,6 +13,63 @@ AgentX c8 on the B=16 load-trace server, 2026-11-08).
 """
 
 
+def protect_partial_on():
+    """DSV41_PROTECT_PARTIAL=1 (default off; live switch file DSV41_PROTECT_PARTIAL_FILE holding 0 / 1): a partly prefilled prompt is protected from losing its carried state (T24, PROTECT_PARTIAL notes):
+    the cheapest owner is evicted when an eviction cannot be avoided, a new prompt prefers a mesh row with a free prefill slot, a prefix hit is only reserved on a row with a free prefill slot, and a prefix
+    hit whose first piece would be skipped is computed one chunk instead (its restore is not lost)."""
+    import os
+
+    f = os.environ.get("DSV41_PROTECT_PARTIAL_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_PROTECT_PARTIAL", "0") == "1"
+
+
+def resume_record_on():
+    """DSV41_RESUME_FROM_RECORD=1 (default off; live switch file DSV41_RESUME_FROM_RECORD_FILE holding 0 / 1): a continuation whose carried prefill state is gone resumes from the deepest saved key / halo record
+    of its own prefix (the paged index, as a prefix hit) instead of recomputing from position 0."""
+    import os
+
+    f = os.environ.get("DSV41_RESUME_FROM_RECORD_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_RESUME_FROM_RECORD", "0") == "1"
+
+
+def snapshot_on_evict_on():
+    """DSV41_SNAPSHOT_ON_EVICT=1 (default off; live file DSV41_SNAPSHOT_ON_EVICT_FILE 0 / 1): when a prefill slot is taken from a prompt in progress, its carried halo state is saved as a record of the
+    paged index at the carried position first (device-local copy, ~0.6 MiB per bank), so that DSV41_RESUME_FROM_RECORD resumes exactly there.
+    """
+    import os
+
+    f = os.environ.get("DSV41_SNAPSHOT_ON_EVICT_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_SNAPSHOT_ON_EVICT", "0") == "1"
+
+
+def cont_first_on():
+    """DSV41_CONT_FIRST=1 (default off; live file DSV41_CONT_FIRST_FILE 0 / 1): see ``DeepseekV41ForCausalLM._prefill_interleaved`` (continuations are bound before new prompts claim a user)."""
+    import os
+
+    f = os.environ.get("DSV41_CONT_FIRST_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_CONT_FIRST", "0") == "1"
+
+
 def needs_slot(item, pending_hits):
     """True for a user that will be allocated a slot in the wave it runs in: a new prompt (start 0) or a prefix hit whose restore has not been done (it owns no slot yet)."""
     return item[2] == 0 or item[0] in pending_hits
@@ -40,7 +97,7 @@ def split_waves(grp, Up, U):
     ]
 
 
-def slot_alloc(owner, of, Up, U, wave, resume, on_evict=None):
+def slot_alloc(owner, of, Up, U, wave, resume, on_evict=None, cheapest=False, log=None):
     """Assign a prefill slot (global index r * Up + i) to every user of ``wave`` [(b, tokens, start, end)]; users that continue keep theirs. ``owner`` [rows * Up] / ``of`` {user: slot} are the
     persistent state (updated in place), ``resume`` {user: carried position} loses the evicted owners. -> {b: slot}."""
     out, taken = {}, set()
@@ -59,9 +116,18 @@ def slot_alloc(owner, of, Up, U, wave, resume, on_evict=None):
             sl = of[b]
         else:  # a slot whose owner is finished / not resumable first, else evict (its owner has to recompute from position 0)
             free = [c for c in cand if owner[c] is None or owner[c] not in resume]
-            sl = free[0] if free else cand[0]
+            if free:
+                sl = free[0]
+            elif (
+                cheapest
+            ):  # (DSV41_PROTECT_PARTIAL) every slot holds a prompt in progress: evict the one with the least carried progress (the cheapest to recompute)
+                sl = min(cand, key=lambda c: (resume.get(owner[c], 0), c))
+            else:
+                sl = cand[0]
         o = owner[sl]
         if o is not None and o != b:
+            if log is not None and o in resume:
+                log(f"prefill slot {sl}: partial prompt of user {o} (carried at {resume.get(o)}) evicted by user {b}")
             if on_evict is not None:
                 on_evict(o)
             resume.pop(o, None)

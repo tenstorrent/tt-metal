@@ -53,6 +53,11 @@ from loguru import logger
 
 from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
 from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import (
+    cont_first_on,
+    protect_partial_on,
+    resume_record_on,
+)
 
 _PAD_TOKEN = 0
 
@@ -820,6 +825,17 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         # DSV41_PIECE_LAG=1 (default off): a prefill piece that does not end its prompt is cut back to a chunk boundary (and before an image span); vLLM's next piece (it believes the piece
         # reached its own end) resumes at the model's carried end instead of recomputing the whole prompt from position 0 (IMAGE_CUT_NOTES.md)
         self.piece_lag = os.environ.get("DSV41_PIECE_LAG", "0") == "1"
+        # DSV41_PROTECT_PARTIAL=1 (default off, live DSV41_PROTECT_PARTIAL_FILE; tt/prefill_waves.protect_partial_on): partly prefilled prompts keep their carried state (T24, see _full_rows, _free_users_of_row,
+        # _lag_start, the hit extension in _prefill_interleaved and prefill_waves.slot_alloc(cheapest=True))
+        self.protect = protect_partial_on()
+        self.protect_stats = {
+            "extended_hits": 0,
+            "ahead_resumes": 0,
+            "record_resumes": 0,
+            "record_resume_tokens": 0,
+            "record_misses": 0,
+        }
+        self.resume_record = resume_record_on()
         self.final_seen = False  # the plugin sent prefill_final flags at least once
         self.pf_done = (
             set()
@@ -911,7 +927,51 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 continue
         else:
             return []
-        return [p for p in range(row * U, (row + 1) * U) if p not in live]
+        free = [p for p in range(row * U, (row + 1) * U) if p not in live]
+        if not self.protect_on_sched():
+            return free
+        return self._protect_free(free, row)
+
+    def protect_on_sched(self):
+        """DSV41_PROTECT_PARTIAL as seen by the scheduler thread (the live switch file is read here too)"""
+        self.protect = protect_partial_on()
+        return getattr(self, "protect", False)
+
+    def _in_progress_users(self):
+        """users whose prompt is in progress with an INTACT carried state (their prefill slot holds it): the model's ``pf_resume`` equals the recorded end and the last piece did not end the prompt"""
+        resume = self.m.__dict__.get("pf_resume", {})
+        out = set()
+        for _ in range(3):
+            try:
+                for p, (end, _t) in tuple(self.inprog.users.items()):
+                    if p not in self.pf_done and resume.get(p) == end:
+                        out.add(p)
+                return out
+            except RuntimeError:
+                out.clear()
+        return out
+
+    def _full_rows(self, extra=()):
+        """mesh rows whose ``Up`` prefill slots all hold a prompt in progress (``extra``: users that will hold one in the current call): a NEW prompt (or a hit) placed there evicts one of them"""
+        U, Up = getattr(self.m, "U", None), getattr(self.m, "Up", None)
+        if not (U and Up and Up < U):
+            return set()
+        cnt = {}
+        for p in self._in_progress_users() | set(extra):
+            cnt[p // U] = cnt.get(p // U, 0) + 1
+        return {r for r, c in cnt.items() if c >= Up}
+
+    def _protect_free(self, free, row):
+        """free users of ``row`` that may take a NEW prompt without evicting a prompt in progress: none when the row's prefill slots are all taken (the scheduler's home-row hold / busy-row loss then
+        applies to a prefix hit on that row); users already reserved for a hit take a slot each"""
+        U, Up = getattr(self.m, "U", None), getattr(self.m, "Up", None)
+        if not (U and Up and Up < U) or self.paged is None:
+            return free
+        taken = len({p for p in self._in_progress_users() if p // U == row})
+        reserved = [p for p in self.paged.idx.reserved_all() if p // U == row]
+        left = Up - taken - len([p for p in reserved if p not in self._in_progress_users()])
+        res_free = [p for p in free if p in reserved]
+        return res_free + [p for p in free if p not in reserved][: max(left, 0)]
 
     def init_vision(self, hf_config):
         """Image input (DSV41_VISION=1): the device vision tower on the model's mesh / CCL (built BEFORE the warm-up captures any trace: its weights are persistent tensors) and the per-request
@@ -1109,7 +1169,46 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             return first[rows].to(torch.int32).reshape(N)
         return logits[rows].float().reshape(N, 1, -1)
 
-    def _lag_start(self, p, st):
+    def _resume_from_record(self, i, rid, row_tokens, total, st, p_old, mm=None, avoid=()):
+        """DSV41_RESUME_FROM_RECORD: the carried prefill state of the continuation of request ``rid`` at ``st`` is gone (its slot was taken, a trace was re-captured). Instead of recomputing from position 0
+        the block index is asked for the deepest record of the request's OWN prefix at or below ``st`` (its committed blocks + the halo record at that boundary are still resident unless evicted): the old
+        user is given back and the request is planned / bound like a prefix hit (reservation -> ``prepare_hits`` -> restore). -> (user, hit tokens) or None (no record: recompute from 0).
+        """
+        paged = self.paged
+        if paged is None or rid is None or total is None or st <= 0:
+            return None
+        if mm is not None and self._mm_row(mm, i)[0] is not None:  # (images: the key tokens would need the vision book)
+            return None
+        if p_old is not None:  # (its state is gone anyway: pages, index binding, tracker)
+            if hasattr(self.m, "release_user"):
+                self.m.release_user(p_old)
+            self.inprog.drop(p_old)
+            self.pf_done.discard(p_old)
+            self.slots.live.discard(p_old)
+        try:
+            plan = paged.idx.plan_hit(rid, row_tokens, int(total), max_hit=int(st))
+        except Exception:  # noqa: BLE001 - never worse than the recompute
+            logger.exception("DSV4.1 resume from record: plan_hit failed")
+            plan = None
+        if p_old is not None:
+            self.slots.live.add(p_old)  # (restored below unless the plan took another user)
+        if plan is None or plan.hit_tokens <= 0 or plan.user < 0:
+            self.protect_stats["record_misses"] += 1
+            return None
+        if plan.user in avoid or (plan.user in self.slots.live and plan.user != p_old):
+            paged.idx.cancel(rid)
+            self.protect_stats["record_misses"] += 1
+            return None
+        if p_old is not None and plan.user != p_old:
+            self.slots.live.discard(p_old)
+        self.protect_stats["record_resumes"] += 1
+        self.protect_stats["record_resume_tokens"] += int(plan.hit_tokens)
+        logger.info(
+            f"DSV4.1 resume from record: request {rid} lost its carried state at {st}: resumes at {plan.hit_tokens} (record) on user {plan.user} instead of 0 ({st - plan.hit_tokens} tokens recomputed)"
+        )
+        return plan.user, int(plan.hit_tokens)
+
+    def _lag_start(self, p, st, e=None):
         """start of the continuation piece of user ``p`` that vLLM reports at ``st``: ``st`` when the carried state is at ``st``, the model's carried end when the previous piece was cut back
         (piece lag: tokens [end, st) are computed now), else None (the carried state is gone: recompute from position 0).
         """
@@ -1120,6 +1219,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             end = self.inprog.users[p][0]
             if r == end < st == self.inprog.reported.get(p, end):
                 return end
+            if getattr(self, "protect", False) and r == end > st == self.inprog.reported.get(p, end):
+                self.protect_stats["ahead_resumes"] += 1
+                return end  # (the model is one chunk ahead of vLLM's piece start: a prefix hit extended to a chunk; the piece may end before ``end``: skipped by the caller)
         return None
 
     def _busy_rows(self):
@@ -1146,7 +1248,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         free_rows = {p // U for p in range(self.B) if p not in self.slots.live}
         return len(free_rows - busy)
 
-    def _place_row_aware(self, toks, starts, ends, empty_slots, request_ids=None, avoid=()):
+    def _place_row_aware(self, toks, starts, ends, empty_slots, request_ids=None, avoid=(), totals=None, mm=None):
         """Users of the rows of one prefill call (DSV41_PREFILL_ROW_AWARE=1, few prefill slots per mesh row): first every continuation finds its carried user and is bound to the state slot the
         plugin gave it (the plugin shifts the slots of the continuing prompts when a request leaves the prefill batch, so the logical slot of a NEW prompt can still map to the user of a
         continuation that comes later in the call); then each new prompt takes a free user of a mesh row without an in-progress prompt (fewest live users first, so that the decoders spread
@@ -1176,7 +1278,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     self.slots.live.add(plan.user)
                     hit_rows.add(i)
                     continue
-            p = self.inprog.find(st, toks[i, :st], exclude=[c for c in chosen if c is not None], lag=self.piece_lag)
+            p = self.inprog.find(
+                st,
+                toks[i, :st],
+                exclude=[c for c in chosen if c is not None],
+                lag=self.piece_lag,
+                ahead=getattr(self, "protect", False),
+            )
             r_ = None if p is None else self._lag_start(p, st)
             if p is not None:
                 self.slots.bind(
@@ -1187,6 +1295,25 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             if r_ is not None:
                 eff[i] = r_
             else:
+                rr = None
+                if getattr(self, "resume_record", False):
+                    rr = self._resume_from_record(
+                        i,
+                        rid_i,
+                        toks[i],
+                        None if totals is None or i >= len(totals) else totals[i],
+                        st,
+                        p,
+                        mm,
+                        avoid=list(avoid) + [c for c in chosen if c is not None and c != p],
+                    )
+                if rr is not None:
+                    chosen[i] = rr[0]
+                    self.slots.bind(empty_slots[i], rr[0])
+                    self.slots.live.add(rr[0])
+                    eff[i] = rr[1]
+                    hit_rows.add(i)
+                    continue
                 (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
                     f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
                 )
@@ -1195,7 +1322,15 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         for i in range(N):
             if chosen[i] is not None:
                 continue
-            p, clean = self.slots.claim_rowaware(empty_slots[i], busy, U, avoid)
+            p, clean = self.slots.claim_rowaware(
+                empty_slots[i],
+                busy,
+                U,
+                avoid,
+                full_rows=self._full_rows([c for c in chosen if c is not None])
+                if getattr(self, "protect", False)
+                else (),
+            )
             self.row_stats["placed"] += 1
             if not clean:
                 self.row_stats["conflicts"] += 1
@@ -1260,6 +1395,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         of its prompt is meaningless (the plugin discards it). Positions [start, end) are computed in windows of one chunk (a model-wide constant).
         """
         N = len(ends)
+        self.protect = protect_partial_on()
+        self.resume_record = resume_record_on()
         _pf = os.environ.get(
             "DSV41_PIECE_LAG_FILE"
         )  # live switch (A/B in one boot): the file holds 0 or 1; absent file = the env default
@@ -1299,9 +1436,24 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             for i in range(N):
                 if not 0 <= starts[i] < ends[i]:
                     raise ValueError(f"chunk [{starts[i]}, {ends[i]}) of row {i} is empty or reversed")
-            items, phys = self._place_row_aware(toks, starts, ends, empty_slots, request_ids, avoid)
+            items, phys = self._place_row_aware(
+                toks,
+                starts,
+                ends,
+                empty_slots,
+                request_ids,
+                avoid,
+                totals=prefill_total if prefill_total is not None and len(prefill_total) == N else None,
+                mm=mm,
+            )
             hit_rows |= self.hit_rows_last
-        for i in range(N):
+        # DSV41_CONT_FIRST=1 (default off): continuations are bound before NEW prompts claim a user (the row-aware placement does this already). Without it a new prompt that comes first in the call
+        # claims the user its logical slot maps to, which is the carried user of a continuation later in the call (the plugin shifts the state slots when the first finisher starts decoding):
+        # that continuation then finds its user taken and recomputes from position 0, and so does every continuation after it (T25: Up = U = 4, 34-43 % of a c16 wave).
+        cont_first = cont_first_on()
+        order = sorted(range(N), key=lambda i: starts[i] <= 0) if cont_first and not rowaware else range(N)
+        by_i = {}
+        for i in order:
             if rowaware:
                 break
             st, e, slot = starts[i], ends[i], empty_slots[i]
@@ -1324,34 +1476,67 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     hit_rows.add(i)
             if st > 0 and p is None:
                 p = self.inprog.find(
-                    st, toks[i, :st], exclude=phys, lag=self.piece_lag
+                    st, toks[i, :st], exclude=phys, lag=self.piece_lag, ahead=getattr(self, "protect", False)
                 )  # (prompts with the same prefix have the same carried state: each continuation takes a distinct one)
                 r_ = None if p is None else self._lag_start(p, st)
+                p_old = p
                 if p is not None and r_ is None:
                     p = None  # its carried prefill state was lost (re-captured trace / unmasked trace): recompute from position 0
-                if p is not None:
+                rr = None
+                if p is None and getattr(self, "resume_record", False):
+                    rr = self._resume_from_record(
+                        i,
+                        rid_i,
+                        toks[i],
+                        int(prefill_total[i]) if prefill_total is not None and len(prefill_total) == N else None,
+                        st,
+                        p_old,
+                        mm,
+                        avoid=list(avoid) + list(phys),
+                    )
+                if rr is not None:
+                    p, st = rr
+                    self.slots.bind(slot, p)
+                    self.slots.live.add(p)
+                    hit_rows.add(i)
+                elif p is not None:
                     st = r_  # (the previous piece was cut back: resume at the model's carried end)
                     self.slots.bind(slot, p)
                     self.slots.live.add(p)
                 else:
+                    if (
+                        os.environ.get("DSV41_STATE_DEBUG", "0") == "1"
+                    ):  # (T25: why is the carried state gone? who took the user / what does the tracker say)
+                        taken_ = [(j, q) for j, q in enumerate(phys)]
+                        logger.info(
+                            f"DSV4.1 state debug: row {i} (slot {slot}, start {st}) lost: find -> user {p_old}, pf_resume {self.m.__dict__.get('pf_resume', {}).get(p_old)}, "
+                            f"tracker {None if p_old is None else self.inprog.users.get(p_old, (None,))[0]}, reported {self.inprog.reported.get(p_old)}, "
+                            f"users claimed so far in this call {taken_}, call starts {list(starts)}, slot map phys[slot]={self.slots.phys[slot]}, live={sorted(self.slots.live)}"
+                        )
                     # (with prefix caching vLLM reports hits of its own block cache for NEW requests: the model's snapshot store decides what is reused, see Model.prefill_interleaved)
                     (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
                         f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
                     )
                     st = 0
             if p is None:
+                if cont_first:  # (a user of this call is never claimed by a second prompt)
+                    avoid = list(avoid) + [q for q in phys if q not in avoid]
+                fr_ = self._full_rows(phys) if getattr(self, "protect", False) else ()
                 if self.bucketing and U:
                     p = self.slots.claim_packed(
-                        slot, load, U, avoid
+                        slot, load, U, avoid, full_rows=fr_
                     )  # lowest in-row index: the live set stays inside the smallest decode bucket
                 else:
                     p = (
-                        self.slots.claim_balanced(slot, load, U, avoid)
+                        self.slots.claim_balanced(slot, load, U, avoid, full_rows=fr_)
                         if balanced
                         else self.slots.claim([slot], avoid)[0]
                     )
-            items.append((p, toks[i], st, e))
+            by_i[i] = (p, toks[i], st, e)
             phys.append(p)
+        if by_i:
+            items = [by_i[i] for i in range(N)]
+            phys = [it[0] for it in items]
         if len(set(phys)) != N:
             raise ValueError(f"duplicate prefill slots {empty_slots}")
         # a piece must not END INSIDE an image span (the vision splice needs whole images): vLLM rolls a piece back before an image only while the image's encoder output is not cached, a repeat of an
@@ -1366,7 +1551,32 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             C_ = self._interleave_chunk()
             for i, (p, t, st, e) in enumerate(items):
                 a_ = e // C_ * C_
-                if prefill_final[i] or a_ >= e:
+                if prefill_final[i]:
+                    continue
+                if (
+                    getattr(self, "protect", False) and e <= st
+                ):  # (the model is already ahead of this piece: the one-chunk extension of a prefix hit below)
+                    skipped.add(i)
+                    continue
+                if a_ >= e:
+                    continue
+                tot_i = int(prefill_total[i]) if prefill_total is not None and len(prefill_total) == N else None
+                if (
+                    getattr(self, "protect", False)
+                    and a_ <= st
+                    and i in hit_rows
+                    and st % C_ == 0
+                    and tot_i is not None
+                    and st + C_ < tot_i
+                    and toks.shape[1] >= st + C_
+                ):
+                    # a prefix hit whose first piece is shorter than a chunk (the step budget ran out): skipping it would lose the hit (nothing registered, the next piece finds no carried state and recomputes
+                    # the whole prompt from 0). The hit is restored and ONE chunk computed; the model then runs one chunk ahead of vLLM's piece start (``PrefillTracker.find(ahead)``).
+                    items[i], ends[i] = (p, t, st, st + C_), st + C_
+                    self.protect_stats["extended_hits"] += 1
+                    logger.info(
+                        f"DSV4.1 prefill (interleave): prefix hit piece [{st}, {e}) of user {p} is shorter than a chunk: restore + one chunk computed ([{st}, {st + C_})), vLLM continues at {e}"
+                    )
                     continue
                 if a_ <= st:
                     skipped.add(i)

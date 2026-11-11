@@ -26,6 +26,7 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import apc_paged as AP
 from models.demos.blackhole.deepseek_v41_flash.tt import apc_paged_store as APS
 from models.demos.blackhole.deepseek_v41_flash.tt.kv_paged import PageAllocator
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import protect_partial_on
 
 IDLE_PAGES = 2  # pages of an idle user (released / never used): the decode loop grows every user to ceil((0 + 1 + 128) / 128) = 2 pages
 GRID = 512
@@ -188,6 +189,10 @@ class PagedApc:
             free_users=self._free_users,
             strict_zone_equal=os.environ.get("DSV41_APC_PAGED_ZONE_EQ", "0") == "1",
             halo_budget=int(os.environ.get("DSV41_APC_PAGED_HALO_BUDGET", "32")),
+            halo_spacing=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING", "0")),
+            halo_spacing_min=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING_MIN", "100000")),
+            halo_spacing_max=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING_MAX", "64")),
+            protect_fn=protect_partial_on,
             xrow=os.environ.get("DSV41_APC_PAGED_XROW", "0")
             == "1",  # M3: cross-row copy of the blocks of a busy row (default off)
             xrow_min=int(os.environ.get("DSV41_APC_PAGED_XROW_MIN", "2048")),
@@ -765,6 +770,37 @@ class PagedApc:
             self.idx.finish_chunk(cp)
         self.stats["commits"] += len(cps)
         self.stats["commit_s"] += time.perf_counter() - t0
+
+    def snapshot(self, user, end):
+        """DSV41_SNAPSHOT_ON_EVICT: the prefill slot of ``user`` (a prompt in progress, carried position ``end``, a multiple of the chunk) is about to be taken by another prompt: save its carried halo
+        state as the halo record of the block ending at ``end`` (the block itself was committed with the window). Eager, ordered on the queue before the next replay, like ``commit``. -> True when a record
+        exists at ``end`` afterwards."""
+        if self.ks is None or end <= 0 or end % GRID:
+            return False
+        rid, ent, ln = self.rid.get(user), self.ktok.get(user), self.lane(user)
+        if rid is None or ent is None or ln is None or user in self.auto or user in self.noc:
+            return False
+        try:
+            cp = self.idx.begin_chunk(rid, end - GRID, end, ent[1], self.plen.get(user) or end, force_halo=True)
+        except (KeyError, ValueError) as ex:
+            self.log(f"APC paged: no snapshot for user {user} at {end}: {ex}")
+            return False
+        if cp is None:  # (the record exists already, or the block is not published / has no free slot)
+            return True
+        n = self.model.rows * self.lanes
+        va, vb = [None] * n, [None] * n
+        va[ln] = cp.halo_a if cp.halo_a >= 0 else None
+        vb[ln] = cp.halo_b if cp.halo_b >= 0 else None
+        halos = self.halos()
+        if any(x is not None for x in va):
+            self.hs.set_save("A", va)
+            self.hs.save("A", halos)
+        if any(x is not None for x in vb) and "B" in self.hs.store:
+            self.hs.set_save("B", vb)
+            self.hs.save("B", halos)
+        self.idx.finish_chunk(cp)
+        self.stats["snapshots"] = self.stats.get("snapshots", 0) + 1
+        return True
 
     # ---- lifecycle ---------------------------------------------------------------------------------------------------------------------
     def reset(self):
