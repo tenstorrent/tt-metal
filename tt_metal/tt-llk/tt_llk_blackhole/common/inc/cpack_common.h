@@ -820,11 +820,15 @@ inline void select_packer_dest_registers()
 
 // Program packer destination addresses from GPRs
 // keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from.
-template <bool keep_output_addr = true>
+// w_invalidate: false for llk_pack_block's own packs, which move the CB write pointer past the W offset continuation instead.
+template <bool keep_output_addr = true, bool w_invalidate = true>
 inline void program_packer_destination(std::uint32_t addr)
 {
     LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
-    LLK_PACK_W_INVALIDATE();
+    if constexpr (w_invalidate)
+    {
+        LLK_PACK_W_INVALIDATE();
+    }
     // No packer-drain STALLWAIT is needed before reprogramming the destination: the pack thread issues its
     // instruction stream in order, so each tile's PACR has already started -- and latched L1_Dest_addr,
     // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each

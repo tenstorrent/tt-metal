@@ -633,7 +633,13 @@ inline void _llk_pack_close_fast_untilize_()
  * @note mutex_ADC has to match the value given to @ref _llk_pack_init_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only, see @ref _llk_pack_init_.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false, bool rmw_dest = (Dst == DstSync::SyncFull && pack_mode == PackMode::Default)>
+template <
+    DstSync Dst,
+    bool is_fp32_dest_acc_en,
+    PackMode pack_mode = PackMode::Default,
+    bool mutex_ADC     = false,
+    bool rmw_dest      = (Dst == DstSync::SyncFull && pack_mode == PackMode::Default),
+    bool w_invalidate  = true>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     static_assert(
@@ -645,7 +651,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination<!rmw_dest>(address);
+    program_packer_destination<!rmw_dest, w_invalidate>(address);
 
     ckernel::ckernel_template::run();
 
@@ -660,7 +666,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
  * @tparam pack_mode: Packing layout, must be PackMode::Default.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false, bool w_invalidate = true>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {
     static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
@@ -672,7 +678,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination<!rmw_dest>(address);
+    program_packer_destination<!rmw_dest, w_invalidate>(address);
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
@@ -690,7 +696,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool rmw_dest = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool rmw_dest = false, bool w_invalidate = true>
 inline void _llk_pack_block_closed_(
     const std::uint32_t start_tile_index,
     const std::uint32_t address,
@@ -707,7 +713,7 @@ inline void _llk_pack_block_closed_(
 
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination<!rmw_dest>(address);
+    program_packer_destination<!rmw_dest, w_invalidate>(address);
 
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
     // Rewriting an unchanged stride cost the call up to 8 cycles.
