@@ -449,7 +449,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         go_w = (f'  {{   // gdn_out of GDN layer L\n'
                 f'    {{ DeviceZoneScopedN("GO-A");\n'
                 f'    noc_async_atomic_barrier();\n'
-                f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdna"]}u, {len(cores)}u * (L + 1));\n'
+                + (f'    for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {{GFL}} + t, L + 1);\n' if go_rdhook and os.environ.get("E1_GO_FLAGS", "1") == "1" else
+                f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdna"]}u, {len(cores)}u * (L + 1));\n') +
                 f'    cb_reserve_back({CA_}, {GO["wk"]});\n'
                 + ('' if GO_LOCAL else
                 f'    const auto oa = TensorAccessor(TensorAccessorArgs<{{OUT_OFF}}>(), crta[{CRTA0} + {WRITER_TENSORS.index("out")}], 2048);\n'
@@ -488,10 +489,15 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             inc1h = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])
             if os.environ.get("E1_GO_MCAST", "1") == "0":   # unicast all-gather: n tiles to each of the 24 GDN cores (incl. self)
                 mc1h = "\n".join(f'  noc_async_write(src, get_noc_addr({x}u, {y}u, dst), n * 2048u);' for x, y in GO["gdn_xy"])
+            GO_FLAGS = os.environ.get("E1_GO_FLAGS", "1") == "1"
+            if GO_FLAGS:   # per-source ready flags (arg block words GFL + t, L + 1) written after the tiles landed: no atomics
+                inc1h = " ".join(f'noc_inline_dw_write(get_noc_addr({x}u, {y}u, (uint32_t)(g_ab + {{GFL}} + t0)), g_l + 1);' for x, y in GO["gdn_xy"])
             go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
                            f'  DeviceZoneScopedN("GO-RDH");\n'
                            f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc1h}\n'
-                           f'  noc_async_write_barrier();\n  {inc1h}\n}}\n')
+                           f'  noc_async_write_barrier();\n  {inc1h}\n'
+                           + ('  noc_async_writes_flushed();\n' if GO_FLAGS else '') +
+                           ('  noc_async_atomic_barrier();\n' if os.environ.get("E1_GO_ABAR", "0") == "1" else '') + '}\n')
         GO_RDALL = GO_RD and os.environ.get("E1_GO_RDALL", "1") == "1"
         GO_RINGEARLY = GO_RDALL and os.environ.get("E1_GO_RINGEARLY", "1") == "1"
         # E1_GO_RING2 (default on with the reader hook): 2-slot ring, layer L + 1's slice read right after reader<>(L) (ring 0
@@ -509,7 +515,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             go_w = go_w.replace("{OUT_OFF}", str(woff[WRITER_TENSORS.index("out")])).replace("{DBG_OFF}", str(len(wct)))
             wct = wct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
         OGO = 29 + NG * (len(rtens) + len(WRITER_TENSORS)) + 2   # gdn_out payload words: after the per-layer tensors + OAG / OAG_ME
-        go_r, go_w, go_c, go_local, go_wr = (x.replace("{OGO}", str(OGO)) for x in (go_r, go_w, go_c, go_local, go_wr))
+        GFL = OGO + 2 + GO["maxt"] + 5
+        go_r, go_w, go_c, go_local, go_wr, go_local_rd = (x.replace("{OGO}", str(OGO)).replace("{GFL}", str(GFL)) for x in (go_r, go_w, go_c, go_local, go_wr, go_local_rd))
     hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
     open(hr, "w").write(_bind_header(ids, rtens, roff, CRTA0))
     open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff, CRTA0))
@@ -620,6 +627,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
         + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdna"]}u = 0;\n  *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u = 0;\n' if GO else '')
         + (f'  g_ab[{OGO} + 2 + {GO["maxt"]} + 3] = 0; g_ab[{OGO} + 2 + {GO["maxt"]} + 4] = 0;\n' if GO and GO_RD else '')
+        + (f'  for (uint32_t t = 0; t < {len(cores)}u; ++t) g_ab[{OGO} + 2 + {GO["maxt"]} + 5 + t] = 0;\n' if GO and go_rdhook else '')
         + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not out_rd or GO) else '')   # gdn_out: the writer's tail signals
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
@@ -639,7 +647,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
            ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s)), ("GDN_STATE_FIRST", "1"),
            ("GDN_IN_WAIT", "1"), ("GDN_ST_RING", str(st_ring))] + common + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
         [("GDN_CUT_FAST", "1")] if cut_fast else []) + (
-        [("GDN_SP_RD", "1")] if sp_rd else []) + ([("GDN_OUT_RD", "2" if go_rdhook else "1")] if out_rd else [])
+        [("GDN_SP_RD", "1")] if sp_rd else []) + ([("GDN_OUT_RD", "2" if go_rdhook else "1")] if out_rd else []) + (
+        [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
@@ -673,6 +682,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             assert len(pl) == OGO, (len(pl), OGO)
             pl += [GO["nt"][i], GO["page"][i]] + (list(GO["tiles"][i]) + [0] * GO["maxt"])[:GO["maxt"]]
             pl += [0, 0, 0, 0, 0]   # E1_GO_RD handoff words: src, t0, n, posted (L + 1), done (L + 1)
+            pl += [0] * len(cores)   # GFL: per-source A tile ready flags (E1_GO_FLAGS), L + 1; reset by the writer at program end
         payloads.append(pl)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl

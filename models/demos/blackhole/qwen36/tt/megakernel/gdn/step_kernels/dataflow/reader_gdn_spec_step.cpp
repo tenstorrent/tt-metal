@@ -47,6 +47,9 @@ static uint32_t g_rd_sp_lay = 0;  // GDN layers done by this reader (sp ring off
 #if GDN_OUT_RD
 void gdn_out_signal();  // the including TU (out_ready +1 / the aggregator, issued on this kernel's NOC)
 #endif
+#ifndef GDN_OUT_RD_KEEP
+#define GDN_OUT_RD_KEEP 0
+#endif
 #if GDN_OUT_RD == 2
 void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);  // engine gdn_out: the out tiles into every GDN core's A (TU)
 #endif
@@ -756,9 +759,16 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             const uint32_t page0 = tr * (Nv * Vt) + h * Vt + s * Vs;
 #if GDN_OUT_RD == 2
             // engine gdn_out (MKA_GDNOUT): the out tiles go to every GDN core's A (multicast + barrier + gdna), not `out`
+            gdn_out_local(out.get_read_ptr(), page0 - tr * (Nv * Vt), Vs);
+#if GDN_OUT_RD_KEEP  // + the out tensor rows (gdn24 check / gdn_out PCC gold), off the handoff path
+            for (uint32_t t = 0; t < Vs; ++t) {
+                noc.async_write(out, out_acc, entry, {.offset_bytes = t * entry}, {.page_id = page0 + t});
+            }
+            noc.async_write_barrier();
+#else
             (void)out_acc;
             (void)entry;
-            gdn_out_local(out.get_read_ptr(), page0 - tr * (Nv * Vt), Vs);
+#endif
 #else
             for (uint32_t t = 0; t < Vs; ++t) {
                 noc.async_write(out, out_acc, entry, {.offset_bytes = t * entry}, {.page_id = page0 + t});
