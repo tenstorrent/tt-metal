@@ -1865,6 +1865,9 @@ def setup_bench(dev, MESH, mesh_identity):
                                        gdn_layers=[L for L in range(NL) if not is_attn_layer(L)], fphys=lambda c_: dev.worker_core_from_logical_core(c_),
                                        cbd=cbd, crs=crs, sems=GDN_SA, out_ready_target=(QRP.x, QRP.y), out_rects=(RECTS_F[:10] if GDN_WAIT else None), per_replay={},
                                        free_cb_ids=list(range(45)), gdnout=GO,
+                                       # G-b (d): the model's real GDN state (integ gdn_descriptors, this pass's GDN layers) +
+                                       # the persistent ctrl page integ copies the replay's ctrl into (None: synthetic state)
+                                       gdn_desc=_WEIGHTS.get("_gdn_desc"), gdn_ctrl=_WEIGHTS.get("_gdn_ctrl"),
                                        # MK_GIN_PERCORE: G-a tiles per GDN layer landing on each GDN core (logical xy); column c's
                                        # K-row r tile goes to (c, GY + r % 2), r < nt_c (gin_wargs). None = the Q-root contract
                                        gin_k=({(c_, GY + p_): sum(1 for r_ in range(nt_) if r_ % 2 == p_)
@@ -2714,6 +2717,20 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     # engine reads the model's paged caches in the prod layout instead of CTX-sized synthetic ones
     if "qkv" in _WEIGHTS or "wo" in _WEIGHTS:  # repack order = attention ordinal (weight_layouts)
         env["MKA_W_ORD"] = "1"
+    # G-b (d): bind the GDN role to the model's GDN state (E1_GB=1; QWEN36_R16_MK_GDN_REAL=0 keeps the synthetic state).
+    # ctrl: ONE persistent page [1, ctrl_words] uint32 the replay's in-trace ctrl is copied into right before the engine op.
+    gdn_ctrl_t = None
+    if env.get("E1_GB") == "1" and os.environ.get("QWEN36_R16_MK_GDN_REAL", "1") == "1" and gdn_desc:
+        _nl = int(env.get("FM_NL", len(layer_types)))
+        _gd = [d for d in gdn_desc if d["layer"] < _nl]
+        _cw = int(_gd[0].get("ctrl_words", 0)) if _gd else 0
+        if _gd and _cw:
+            import torch as _torch
+
+            gdn_ctrl_t = ttnn.from_torch(_torch.zeros(1, _cw, dtype=_torch.int32), dtype=ttnn.uint32,
+                                         layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+            _WEIGHTS["_gdn_desc"], _WEIGHTS["_gdn_ctrl"] = _gd, gdn_ctrl_t
     if env.get("MKA_KVA") == "1":  # the in-engine KV append writes every live user's T rows: n_users of this bucket
         env["MKA_KVA_NU"] = str(int(n_users))
     if os.environ.get("QWEN36_R16_MK_KVA", "1") != "1":
@@ -2766,6 +2783,8 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
         (2) -> the engine's io list (+ the arg-block tensors) and mesh program. The engine kernels read the arg blocks
         through the common-arg slots once they adopt them (info['common_args']); today's stand-ins ignore them."""
         pr = dict(per_replay, rqbal=rq_t)
+        if gdn_ctrl_t is not None and per_replay.get("ctrl") is not None:  # the replay's ctrl page -> the role's bound page
+            ttnn.copy(per_replay["ctrl"], gdn_ctrl_t)
         blocks.write_op("replay", [(pr.get(n).buffer_address() if pr.get(n) is not None else 0) for n in PER_REPLAY_ARGS])
         mp = ttnn.MeshProgramDescriptor()
         for (r, c_), d in descs.items():

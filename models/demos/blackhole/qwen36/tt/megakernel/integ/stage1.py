@@ -81,7 +81,8 @@ def gdn_descriptors(model):
 
     out = []
     sel = dict(state_idx_addr=addr(getattr(model, "_vfy_state_idx", None)),
-               conv_sel_addr=addr(getattr(model, "_vfy_conv_sel", None)))
+               conv_sel_addr=addr(getattr(model, "_vfy_conv_sel", None)),
+               ctrl_words=int(getattr(model, "_vfy_ctrl_words", 0) or 0))
     for i, l in enumerate(model.layers):
         if l.is_full_attention:
             continue
