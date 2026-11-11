@@ -86,6 +86,7 @@ for it in range(ITERS):
                 return o_
             _db = torch.stack([(_db[:V_R, i_] if i_ % 2 == 0 else _unpk(_db[:, i_])) for i_ in range(AR_NAR * 2)], 1)
         if it == 0: _rprev = xb.clone()[:V_R]
+        _x0_pass = _rprev.clone()   # this pass's layer-0 mixer x (the residual the previous pass left; x at iter 0)
         _worst = []
         for k_ in range(AR_NAR):
             _in, _res = _db[:, 2 * k_], _db[:, 2 * k_ + 1]
@@ -131,13 +132,32 @@ for it in range(ITERS):
             rat.append((ci, round(r_.item(), 3), round(pc_, 4)))
         bad = [t for t in rat if abs(t[1] - 1) > 0.02 or t[2] < 0.999]
         print(f"[fm11] diag bad cores {len(bad)}: {bad[:40]}", flush=True)
+    if REAL_AR and globals().get('GIN'):   # G-a golds from the x the AR delivered to each GDN layer's mixer: rstd(x) * (x [.] γ_L) @ W
+        _gx = {}
+        if AR_DBG:   # program order of the ARs as in the qkv regold: [attention / GDN AR], MLP AR per layer
+            _k = 0
+            for L_ in range(NL):
+                if not is_attn_layer(L_): _gx[L_] = _db[:, 2 * (_k - 1) + 1] if _k > 0 else _x0_pass
+                _k += 1 + (1 if (REAL_AAR and (is_attn_layer(L_) or ('MK_REAL_GAR', '1') in MKDEF)) else 0)
+        elif AR_SEQ:
+            _gx = {L_: x_ for L_, x_ in _xin_seq.items() if not is_attn_layer(L_)}
+        for g_, L_ in enumerate(GLS):
+            if L_ not in _gx: continue
+            x_ = _gx[L_]
+            if x_.shape[0] < M: x_ = torch.cat([x_, torch.zeros(M - x_.shape[0], H)], 0)
+            _rs_ = _rstd_of(x_)   # rstd of the un-scaled residual; γ scales the normalised x
+            if AR_GAMMA or GAMMA_CONS: x_ = (x_ * AR_GTAB[L_, 0][None, :]).bfloat16().float()
+            gold_gin[g_] = (_rs_[:, None] * (x_.double() @ wgfq[g_].double())).float()
+        print(f"[gin] iter {it} in-proj golds from the AR-delivered x for GDN layers {sorted(_gx)}" if _gx else f"[gin] iter {it} in-proj golds: static x (no AR chain to read)", flush=True)
     if globals().get('GIN'):   # MK_GDN_INPROJ: the in-proj tiles (bench-only DRAM copy) vs rstd * x @ W_gin per GDN layer
         gv_ = ttnn.to_torch(gin_dbg).float().reshape(TILE, NGL, GN * TILE)
         for g_ in range(NGL):
             d_, gg_ = gv_[:V_R, g_], gold_gin[g_][:V_R]
             pc_ = torch.corrcoef(torch.stack([d_.flatten(), gg_.flatten()]))[0, 1].item()
             pad0 = bool((gv_[:, g_, GNR:] == 0).all())
-            print(f"[gin] iter {it} GDN layer {g_} (L{GLS[g_]}) in-proj pcc {pc_:.5f} max|err| {(d_ - gg_).abs().max().item():.4f} |gold|max {gg_.abs().max().item():.3f} pad exact 0 {pad0}", flush=True)
+            nf_ = int((~torch.isfinite(d_)).sum()); nz_ = bool((d_ == 0).all())   # non-finite elements / never written (all 0)
+            print(f"[gin] iter {it} GDN layer {g_} (L{GLS[g_]}) in-proj pcc {pc_:.5f} max|err| {(d_ - gg_).abs().max().item():.4f} |gold|max {gg_.abs().max().item():.3f} pad exact 0 {pad0}"
+                  f" non-finite {nf_}{' NOT WRITTEN' if nz_ else ''}", flush=True)
     pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
     if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the pass's last K-row delivery left on the STREAM cores (rows 0-7 = the
