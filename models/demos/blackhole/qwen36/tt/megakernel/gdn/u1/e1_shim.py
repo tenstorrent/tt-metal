@@ -366,6 +366,24 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         osig = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
                         f'{S["out_ready"]}), 1, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5))
                         if r[4])
+    # E1_OSIG_AGG (default on): out_ready through ONE aggregator (GDN core 0). Every core += 1 on an argblock word of core 0
+    # (same L1 address on every core: OAG), core 0 waits 24 (L + 1) and sends the engine signal once with value 24, then
+    # retires it (atomic barrier). 24 cores x k multicast atomics each lagged ~20 us in the NoC behind the writers'
+    # next-layer traffic (u8: last out signal -> stall end 18-21 us). Core 0 resets the word at program end (every
+    # increment of the pass has arrived once its last wait passed). Same idea as gdn_out a9549c3a166.
+    agg = os.environ.get("E1_OSIG_AGG", "1") == "1"
+    OAG = OLW + NG * nW          # payload word: the aggregation counter (0 at build)
+    OAG_ME = OAG + 1             # payload word: 1 on the aggregator core
+    AGX, AGY = (lambda q: (q.x, q.y))(dev.worker_core_from_logical_core(cores[0]))
+    if agg:
+        NC_ = len(cores)
+        if len(out_target) == 2:
+            sig_n = f'noc_semaphore_inc(get_noc_addr({out_target[0]}u, {out_target[1]}u, {S["out_ready"]}), {NC_});'
+        else:
+            sig_n = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
+                             f'{S["out_ready"]}), {NC_}, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5)) if r[4])
+        osig = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1); '
+                f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {NC_}u * (g_gdn_l + 1)); {sig_n} noc_async_atomic_barrier(); }}')
     AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
     CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
     tr = os.path.join(gen_dir, "g2_reader.cpp")
@@ -401,6 +419,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'  // attn_kv: the engine raises it twice per attention layer (start, SDPA end), {attn_n} attention layers\n'
         + (f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, {2 * attn_n});\n' if attn_n else '')
         + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
+        + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg else '')
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
     open(tc, "w").write(
@@ -445,6 +464,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         pl = [0, h, 0, s, B, M, 0, 0] + [0, h, s] + pxy + [B, M, 0, 0] + [0, 0, s, B, 0, 0]
         pl += [lt[rmap[t]].buffer_address() for lt in layers for t in READER_TENSORS]
         pl += [lt[wmap[t]].buffer_address() for lt in layers for t in WRITER_TENSORS]
+        assert len(pl) == OAG, (len(pl), OAG)
+        pl += [0, 1 if i == 0 else 0]   # OAG (aggregation counter), OAG_ME (aggregator flag)
         payloads.append(pl)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
