@@ -1872,7 +1872,7 @@ ENGINE_ENV = dict(
     MKA_KVPROD="1", MKA_NKVH="1", MKA_KVH="0", MKA_BS="64",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
                "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,"
-               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQDYN=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1",
+               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1",
 )
 # the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
 PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups")
@@ -2046,6 +2046,10 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     from models.demos.blackhole.qwen36.tt.megakernel.engine import argblock as AB
 
     env = engine_env(n_users, len(layer_types), layer_types)
+    # MKA_ATT0 = the attention ordinal of the pass's first attention layer INTO THE TABLES the kernels index (attn block
+    # (k, v) list, qkg). Integ builds those tables pass-relative (kv_desc / repack only_layers = this pass's layers), so it
+    # is 0 for the full pass and for a teacher-forced single layer alike.
+    env["MKA_ATT0"] = "0"
     # model-side addresses the engine's real phases read (persistent, fixed before build): exported as env for setup_bench
     # (attention RQNR / KV append turn them into defines). MKA_AUX_*: _vfy_aux_buf (kvpos row 0, RoPE row 1, ctrl row 2);
     # MKA_ROPE_*: the model's bf16 RM cos / sin tables.
