@@ -1584,7 +1584,11 @@ TT_KERNEL void writer(
 #define GDN_OUT_TILE 0  // engine GDN role: all 32 rows live (nb * T == 32) -> one whole-tile write per out tile, not 4 face-row spans
 #endif
     if (GDN_OUT_TILE && nb * T == 32) {
-        out.wait_front(Vs);
+        {
+            DeviceZoneScopedN("wr_owait");  // the compute's gated output tiles
+            out.wait_front(Vs);
+        }
+        DeviceZoneScopedN("wr_owr");  // the out tile write + its barrier
         const uint32_t entry = out.get_entry_size();
         for (uint32_t t = 0; t < Vs; ++t) {
             noc.async_write(out, out_acc, entry, {.offset_bytes = t * entry}, {.page_id = tr * out_w_tiles + h * Vt + v0 + t});
