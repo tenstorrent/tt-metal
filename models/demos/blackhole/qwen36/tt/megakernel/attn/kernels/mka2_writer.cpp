@@ -825,6 +825,9 @@ void kernel_main() {
 #else
     auto v_pump = [&]() { pump1(sv); };
 #endif
+#if defined(MKA_AWIN) && !defined(MKA_AWIN_GAP)
+#define MKA_AWIN_GAP 0xFFFFFFFFu
+#endif
 #if defined(MKA_QSK)
 #if defined(MKA_QSPREAD)
     // ATTNOV lever 2 (spec v1.139): slot Q = the NEXT attention layer's split-K qkv slice (CB_WM, free since MK_GDN_INPROJ moved
@@ -1443,6 +1446,9 @@ void kernel_main() {
             const uint32_t pqw_dst = get_write_ptr(CB_PQ);   // 1-slot ring: the writer never moves its copy of the pointer
             const uint64_t pqw_src = wm.get_noc_addr(wm_page + wla(L + 1) * pwm_layer);
 #endif
+#if defined(MKA_AWIN)
+            uint32_t aw_t = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+#endif
             for (uint32_t b = vb0; b < vb1; b += NBB) {
 #if defined(MKA_RQKV)
                 if (pqw_go && pqw_done < PQ_WS) {
@@ -1489,7 +1495,12 @@ void kernel_main() {
                 }
                 noc_async_read_set_trid(0);
                 if (IS_STREAM) issue_some(false, minp);   // one budget's worth (or the even share) of weight chunks per KV group
-#if defined(MK_V12)
+#if defined(MK_V12) && defined(MKA_AWIN)
+                // AWIN (ledger #19): the SDPA window is KV-read-bound and this layer's own MLP slice (19.4 MB) competes with it
+                // (MK80_DIAG_NOATTSLICE -65 us / attention layer). Slot V is pumped at most once per MKA_AWIN_GAP cycles here
+                // (default: not at all) and streams in the W-WOAR wait below instead; the MLP's v_slot_ready drains the rest.
+                { const uint32_t tn = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L); if ((uint32_t)(tn - aw_t) >= (uint32_t)(MKA_AWIN_GAP)) { v_pump(); aw_t = tn; } }
+#elif defined(MK_V12)
                 v_pump(); v_pump();
 #endif
                 noc_async_read_barrier_with_trid(TRID_V);
@@ -1574,7 +1585,11 @@ void kernel_main() {
                 mcast_word(gs[GS_ADFLAG], A + 1, rs, self_rect, 0);
                 noc_async_write_barrier();
             }
+#if defined(MK_V12) && defined(MKA_AWIN)
+            do { invalidate_l1_cache(); v_pump(); } while (*l1w(gs[GS_ADFLAG]) < A + 1);   // AWIN: the slice streams under wo / AAR
+#else
             noc_semaphore_wait_min(l1w(gs[GS_ADFLAG]), A + 1);
+#endif
 #if defined(MKA_WO_NOC0)
             noc_async_read_barrier_with_trid(3);   // layer L's wo slice landed
 #endif
