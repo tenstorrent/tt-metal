@@ -1341,15 +1341,21 @@ def setup_bench(dev, MESH, mesh_identity):
             obj = 'static mkar::SendReader ar_s;' if role == 'r' else 'mkar::SendWriter ar_s;   // kernel_main local: the fabric connection'
             loop = _re.search(r'\n  for \(uint32_t L = 0; L < (\d+); \+\+L\) \{\n', txt)
             assert loop, src
-            end = txt.index('\n  }\n', loop.end())
-            body = txt[loop.end():end]
+            # the loop's matching close brace (NOT the first 2-space '}': with MKA_GDNOUT the body ends in its own '  { ... }' block,
+            # which made the splice close that block instead of the loop: AR iterations only inside the GDN branch, fini inside the
+            # loop -> the corner reader ran ahead of its writer (d26u02 hang, 11-11 01:2xZ; root cause by the GDN agent)
+            _d, _i = 1, loop.end()
+            while _d:
+                _d += (txt[_i] == '{') - (txt[_i] == '}'); _i += 1
+            end = _i - 1   # index of the loop's '}'
+            body = txt[loop.end():end].rstrip(' ')
             nc = sp['rd_ncommon'] if role == 'r' else sp['wr_ncommon']
             new_loop = (f'\n  {obj}\n  ar_s.init(0, {nc});\n  uint32_t ar_it = 0, gL = 0;\n'
                         f'  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n'
                         f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
                         f'   for (uint32_t k = 0; k < 1u + (({a2}u >> LL) & 1u); ++k) ar_s.iter(ar_it++);   // this layer\'s ARs\n'
                         '  }\n' + ('  ar_s.fini(MKAR_ITERS);\n' if role == 'r' else '  ar_s.fini();\n'))
-            txt = txt[:loop.start()] + new_loop + txt[end + len('\n  }\n'):]
+            txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
             # the AR phase headers right after the first include (the role's DM_OPT pragma, if any, stays first)
             inc = f'#include "{os.path.join(MKDIR_AR, hdr)}"\n'
             i_ = txt.index('#include')

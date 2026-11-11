@@ -26,6 +26,14 @@
 #if defined(MK_AR_RSTD)
 #include "api/compute/transpose_dest.h"
 #endif
+#if defined(MK_AR_RSTD)
+// one copy of the SFPU fp32 column sum (sfpu_reduce is always-inline): shared by the rstd producer (X^T squares) and the consumer
+// (the Σ tile); STREAM text
+__attribute__((noinline)) static void mk_colsum(uint32_t idst) {
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(idst);
+}
+#endif
 #include "api/debug/kernel_profiler.hpp"
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
 #include "../../kernels/mk_ar_reduce.hpp"   // AR reduce on the owners (MKAR_* defines from ar_phase.py)
@@ -356,8 +364,7 @@ void kernel_main() {
             add_binary_tile_init();
             for (uint32_t i = 0; i < n_; ++i) add_binary_tile(0, 1 + i, 0);
         }
-        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        mk_colsum(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, MK_AR_CB_SS);
@@ -407,8 +414,7 @@ void kernel_main() {
         copy_init(CB_VRSA);
         tile_regs_acquire();
         copy_tile(CB_VRSA, 0, 0);
-        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        mk_colsum(0);
         transpose_dest_init<true>();
         transpose_dest<true>(0);
 #else
