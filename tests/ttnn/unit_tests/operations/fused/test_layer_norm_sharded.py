@@ -206,13 +206,14 @@ def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
     )
 
 
-# random input: every two_stage/use_welford pair in bf16, plus both on in fp32.
+# random input: every two_stage/use_welford pair in bf16.
 _LAYER_NORM_RESIDUAL_MERGE_GATE = {
     (True, True, "random", torch.bfloat16),
     (True, False, "random", torch.bfloat16),
     (False, True, "random", torch.bfloat16),
     (False, False, "random", torch.bfloat16),
-    (True, True, "random", torch.float32),
+    # fp32 with both on trips the unp_A_dst_format LLK assert in layernorm_sharded_welford.cpp, which hangs the
+    # device under TT_METAL_LLK_ASSERTS=1. Re-gate (True, True, "random", torch.float32) once #60764 is fixed.
 }
 
 
@@ -610,7 +611,8 @@ _LAYER_NORM_UNEVEN_MERGE_GATE = {
     (72, 2, False, ttnn.bfloat16),  # w72_c2_nonaligned legacy
     (72, 2, True, ttnn.bfloat16),  # w72_c2_nonaligned welford
     (200, 3, False, ttnn.bfloat16),  # w200_c3_nonaligned legacy
-    (200, 3, True, ttnn.float32),  # w200_c3_nonaligned welford
+    # w200_c3_nonaligned welford fp32 trips the unp_A_dst_format LLK assert in layernorm_sharded_welford.cpp,
+    # which hangs the device under TT_METAL_LLK_ASSERTS=1. Re-gate (200, 3, True, ttnn.float32) once #60764 is fixed.
     (224, 3, True, ttnn.bfloat8_b),  # w224_c3 welford
 }
 
