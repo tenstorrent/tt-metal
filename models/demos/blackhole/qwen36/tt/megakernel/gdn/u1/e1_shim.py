@@ -839,6 +839,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     pre_w = Nv * pre_s
     # #17 F3 (E1_WYPAIR): c_wy on paired K_u / Q_u masked tiles (32 matmuls, not 64) + an exact DST half swap (B * T == 32)
     wypair = os.environ.get("E1_WYPAIR", "0") == "1" and B * T == 32
+    wyord = wypair and os.environ.get("E1_WYORD", "0") == "1"   # F3b: user order 0 1 4 5 2 3 6 7 (reader + compute)
     common = [("GDN_RT_BM", "1"), ("GDN_BATCH", "1")]
     d_r = [("GDN_FAST", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_EARLY_SRC", "1"), ("GDN_LAZY", "1"),
            ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s)), ("GDN_STATE_FIRST", "1"),
@@ -848,7 +849,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else []) + (
         [("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_OUT_PRE", "1")] if go_ring0h else []) + (
         [("GSTEP_WPRE", "1")] if os.environ.get("E1_WPRE", "0") == "1" else []) + (   # #17 F1: norm-W rows before in_ready
-        [("GSTEP_WYPAIR", "1")] if wypair else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else [])
+        [("GSTEP_WYPAIR", "1")] if wypair else []) + ([("GSTEP_WYORD", "1")] if wyord else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
@@ -858,6 +859,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_OUT_TILE", "1")] if out_tile else []) + ([("GDN_OUT_RD", "1")] if out_rd else []) + (
         [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else []) + ([("GDN_LZVC", str(lzvc))] if lzvc else [])
     d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GSTEP_WYPAIR", "1")] if wypair else []) + (
+        [("GSTEP_WYORD", "1")] if wyord else []) + (
         [("GSTEP_KTLATE", "1")] if os.environ.get("E1_KTLATE", "0") == "1" else []) + (
         [("GSTEP_CZ", "1")] if os.environ.get("E1_GSZ", "0") == "1" else []) + ([("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
         "E1_SP_WAIT", "0") == "1" else []) + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (

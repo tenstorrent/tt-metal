@@ -125,6 +125,9 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GSTEP_WYPAIR
 #define GSTEP_WYPAIR 0  // engine GDN role (BATCH, T*kBatchMax == 32): kmq tiles carry K_u AND Q_u (Q rows in the other face row)
 #endif
+#ifndef GSTEP_WYORD
+#define GSTEP_WYORD 0  // WYPAIR: user order 0 1 4 5 2 3 6 7 in the kmq stream / c_wy (compute must match)
+#endif
 #ifndef GSTEP_CUTNZ
 #define GSTEP_CUTNZ 0  // BENCH ONLY (wrong numerics): WYPAIR cuts skip the previous occupant's zeroing (reader-bound probe)
 #endif
@@ -876,8 +879,11 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 noc_async_read(get_noc_addr(src_q + soff + 1024), dst_tile + bot + 1024, rb);
             };
             for (uint32_t j = 0; j < Vs; ++j) {
-                for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
-                    if (GDN_HOLD_SKIP && hold_b[ub_]) {
+                for (uint32_t k_ = 0; k_ < kBatchMax; ++k_) {
+                    // GSTEP_WYORD: users 0 1 4 5 2 3 6 7 -> each kmq ring slot sees row offsets 0 0 8 8 / 4 4 12 12 (fewer
+                    // zeroings); DST 0 / 1 still accumulate 0..3 / 4..7 in order (the compute uses the same order)
+                    const uint32_t ub_ = GSTEP_WYORD ? ((k_ & 1u) + ((k_ >> 1) & 1u) * 4u + (k_ >> 2) * 2u) : k_;
+                    if (ub_ >= nb || (GDN_HOLD_SKIP && hold_b[ub_])) {
                         continue;
                     }
                     kmq.reserve_back(Kt);

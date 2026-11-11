@@ -55,6 +55,9 @@
 #endif
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
+#ifndef GSTEP_WYORD
+#define GSTEP_WYORD 0  // WYPAIR: user order 0 1 4 5 2 3 6 7 (must match the reader's kmq stream)
+#endif
 #ifndef GSTEP_CZ
 #define GSTEP_CZ 0  // bench: extra compute zones (c_wymm)
 #endif
@@ -2286,8 +2289,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             tile_regs_acquire();
             lz_mm_init(dfb::kmq, dfb::sp);
 #pragma GCC unroll 1
-            for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
-                if (!(live & (1u << ub_))) {
+            for (uint32_t k_ = 0; k_ < kBatchMax; ++k_) {
+                const uint32_t ub_ = GSTEP_WYORD ? ((k_ & 1u) + ((k_ >> 1) & 1u) * 4u + (k_ >> 2) * 2u) : k_;  // = reader
+                if (ub_ >= nb || !(live & (1u << ub_))) {
                     continue;
                 }
                 const uint32_t dd = (ub_ * 4u >= 16u) ? 1u : 0u;  // T = 4 (kBatchMax * T == 32)
