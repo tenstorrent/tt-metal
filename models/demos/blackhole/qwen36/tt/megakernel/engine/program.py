@@ -848,7 +848,7 @@ def setup_bench(dev, MESH, mesh_identity):
         torch.manual_seed(7)
         wq_t = torch.randn(H, QN * TILE) / math.sqrt(H)
         gam = 0.5 + torch.rand(H)
-        wf_t = gam[:, None] * wq_t   # diag(γ) W, folded at load (spec v0.4; × NORM_FIX is part of γ here)
+        wf_t = gam[:, None] * wq_t   # diag(γ) W, folded at load (spec v0.4; random γ, no NORM_FIX: consumers form the true rstd)
         def q_pages(scale):
             if QSK: return QLAY.pack(wf_t, scale=scale)
             pg = torch.zeros(PQL, TILE, TILE)
@@ -1106,6 +1106,11 @@ def setup_bench(dev, MESH, mesh_identity):
     # own flag pair (MK_AR_XF0 / XF1: the stand-in v12_ox keeps feeding the MLP after the attention / GDN AR stall); each
     # STREAM core waits its row's two flags instead of the stall, the Q root waits all 16 deliveries (MK_AR_XCNT) before XRDY.
     RRED = False   # MK_AR_RSTD_RED=gdn's GDN-core Σ reducer (set in the AR block)
+    # MK_NORM_FIX (bench γ tables, default 1.0): the consumers form the TRUE rstd = rsqrt(Σx²/H + eps) (v_rstd: MKA_INVH_BITS = 1/H on the
+    # un-scaled Σx² from the STREAM producer / MK_DNORM_SPLIT / the RED reducer), so γ_cons = the model's γ ((1 + w) for Qwen3.6) with NO
+    # √1.25. The old "γ × NORM_FIX, rstd' = rsqrt(Σ·2^-12 + 1.25 eps)" contract belonged to the retired AR-stats producer (MK_PS_STATS).
+    # MK_NORM_FIX=1.118034 reproduces the stale contract (the bench's [norm] check then FAILS at 1.118).
+    NORM_FIX = float(os.environ.get('MK_NORM_FIX', '1.0'))
     # GTEXT (DESIGN v1.156): GDN-role code-size trims for the corner / reducer variants under E1_GB (E1_GTEXT=0 = the old binaries)
     # (explicit E1_GTEXT=1 also without E1_GB: the cgar_iter md5 A/B vs E1_GTEXT unset / 0 = 9f97ada55bb's corner reader)
     GTEXT = os.environ.get('E1_GTEXT', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'
@@ -1164,7 +1169,7 @@ def setup_bench(dev, MESH, mesh_identity):
         if GAMMA_CONS:
             assert V12CB and V_R == 32 and ('MK_AR_GAMMA', '1') not in MKDEF, "MK_GAMMA_CONS: MK_V12_CB (CB 33 = CB_XK, 20 pages), R = 32, not with MK_AR_GAMMA"
             _gg = torch.Generator().manual_seed(19)
-            AR_GTAB = ((0.5 + torch.rand(NL, 2, H, generator=_gg)) * (1.25 ** 0.5)).bfloat16().float()
+            AR_GTAB = ((0.5 + torch.rand(NL, 2, H, generator=_gg)) * NORM_FIX).bfloat16().float()   # γ_model × MK_NORM_FIX (1.0: true RMSNorm)
             gam_c = ttnn.from_torch(AR_GTAB.reshape(NL * 2 * 8, 640).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             gam_c = _dswap('gamma', gam_c)
             MKDEF = MKDEF + [('MK_GC_ADDR', str(gam_c.buffer_address())), ('MK_GC_PAGE', '1280'), ('MK_GC_CB', '22'), ('MK_GC_XKA', '21')]
@@ -1256,7 +1261,7 @@ def setup_bench(dev, MESH, mesh_identity):
         if AR_GAMMA:
             assert AR_DLVR, "MK_AR_GAMMA delivers from the owner reader (MK_AR_DLVR=1)"
             _gg = torch.Generator().manual_seed(19)
-            AR_GTAB = (0.5 + torch.rand(NL, 2, H, generator=_gg)) * (1.25 ** 0.5)
+            AR_GTAB = (0.5 + torch.rand(NL, 2, H, generator=_gg)) * NORM_FIX   # γ_model × MK_NORM_FIX (1.0: true RMSNorm)
             AR_GTAB = AR_GTAB.bfloat16().float()   # as the device sees it
             AR_GT = 10 if AR_PT == 10 else AR_PT
             AR_GEARLY = ('MK_AR_GEARLY', '1') in MKDEF
