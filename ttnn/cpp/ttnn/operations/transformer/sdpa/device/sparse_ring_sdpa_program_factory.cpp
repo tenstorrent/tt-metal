@@ -1354,13 +1354,17 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     uint32_t resident_slots = dense_slots;
     if (balance) {
         // Load balancing moves units between a head's cores: a quarter more slots (at least 2) where L1 allows them
-        // (never past q_blocks_per_pass, never an extra pass). Light cores take the extra units of heavy ones.
+        // (never past q_blocks_per_pass, never an extra pass). Light cores take the extra units of heavy ones. The
+        // extra slots are optional, so they leave kBalanceL1Reserve free: the cached program's CBs must not reach L1
+        // buffers allocated after it was built (a call's fresh inputs or semaphores).
+        constexpr uint32_t kBalanceL1Reserve = 32 * 1024;
+        const uint32_t headroom_l1 = usable_l1 > kBalanceL1Reserve ? usable_l1 - kBalanceL1Reserve : 0;
         const uint32_t most = std::min(
             {kResidentMaxSlots,
              pass_slots + std::max(2u, tt::div_up(pass_slots, 4u)),
              args.q_blocks_per_pass.value_or(kResidentMaxSlots)});
         for (uint32_t n = most; n > resident_slots; --n) {
-            if (cb_bytes_for_slots(n, kv_cb_pages, pair_steps) <= usable_l1) {
+            if (cb_bytes_for_slots(n, kv_cb_pages, pair_steps) <= headroom_l1) {
                 resident_slots = n;
                 break;
             }
