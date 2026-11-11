@@ -31,6 +31,9 @@ wormhole_b0:
   # takes over 40 minutes on the simulator).
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
 
+  # Model-width norm rows (up to 16640 x 5120) are too big for the simulator's time budget.
+  - tests/ttnn/unit_tests/operations/fused/test_norm_model_widths.py
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
@@ -51,6 +54,9 @@ blackhole:
   # exit: #64557's fix lands; then the file moves back to the timeouts above (it also
   # takes over 40 minutes on the simulator).
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+
+  # Model-width norm rows (up to 16640 x 5120) are too big for the simulator's time budget.
+  - tests/ttnn/unit_tests/operations/fused/test_norm_model_widths.py
 
   # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
