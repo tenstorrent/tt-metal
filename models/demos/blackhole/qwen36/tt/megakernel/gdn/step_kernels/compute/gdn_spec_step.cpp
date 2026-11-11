@@ -58,6 +58,9 @@
 #ifndef GSTEP_KTLATE
 #define GSTEP_KTLATE 0  // engine GDN role (BATCH + VSPLIT): the kts -> kt_out transposes in c_D's head-exchange wait
 #endif
+#if GSTEP_KTLATE && !GDN_VSPLIT
+#error "GSTEP_KTLATE needs GDN_VSPLIT (the call sits before the head-exchange wait)"
+#endif
 #ifndef GSTEP_WYPAIR
 #define GSTEP_WYPAIR 0  // engine GDN role (BATCH): c_wy on paired K_u / Q_u tiles (32 matmuls, not 64) + a DST half swap
 #endif
@@ -2731,6 +2734,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     // VS_TAIL: the row statistics need the head's full pre-norm row; the normalized / gated tiles only this block's
     // Vs columns (rmsnorm_rows' scale_rows and gated_out are per tile: the kept tiles see the same ops on the same
     // operands)
+#if GSTEP_KTLATE && GDN_BATCH
+    kt_transposes();  // GSTEP_KTLATE: the K^T stash pages inside the head-exchange wait (same ops, later)
+#endif
     acc_x.wait_front(Vt);
     square_tiles(dfb::acc_x, dfb::tmp, tmp, Vt);
     reduce_rows(Vt);
