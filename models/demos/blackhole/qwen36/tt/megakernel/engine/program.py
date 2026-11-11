@@ -22,6 +22,20 @@ GX, GY = 10, 8; NC = GX * GY; NGU = HT; NDN = KT // NC; XSW = KT // NC
 KB = 16; GRP = int(os.environ.get("FM_GRP", "2")); ITERS = int(os.environ.get("FM_ITERS", "2"))
 
 
+# Real-weight injection (G, vLLM engine-ON / e2e-diff): kind -> dict(tensor=<device DRAM tensor>, layout=<weight_layouts
+# layout object>) from integ/weights_mk.repack. setup_bench then binds that tensor and takes the runtime-arg placement from
+# its layout, skipping the synthetic pack and its golds. Empty = the bench's synthetic weights (same layouts, same code).
+_WEIGHTS = {}
+
+
+def _wl():
+    import sys as _sys
+    _d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine")
+    if _d not in _sys.path: _sys.path.insert(0, _d)
+    import weight_layouts as WL
+    return WL
+
+
 def setup_bench(dev, MESH, mesh_identity):
     try:   # engine/ is on sys.path in the bench (the pushed tree's own module first)
         import cbplan as CBP
@@ -201,6 +215,15 @@ def setup_bench(dev, MESH, mesh_identity):
     if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
+    # MKA_W_ORD=1 (integ repack order): qkv / wo weight tensors hold the attention layers only (ordinal a = aidx(L));
+    # the kernels index them with wla(L); the synthetic packers below follow, so the bench exercises the injected layout
+    W_ORD = os.environ.get('MKA_W_ORD', '0') == '1'
+    if W_ORD and ('MKA_W_ORD', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_W_ORD', '1')]
+    ATTN_L = [L_ for L_ in range(NL) if is_attn_layer(L_)]
+    def wla(L_):   # engine layer -> page block of the qkv / wo tensors (mirrors the kernels' wla)
+        if not W_ORD: return L_
+        a_ = sum(1 for l_ in range(L_) if is_attn_layer(l_)); return min(a_, len(ATTN_L) - 1)
+    WLS = ATTN_L if W_ORD else list(range(NL))   # engine layers whose weights are stored, in tensor order
 
     # ================= MKA2: full grid + SDPA phase setup =================
     gfull = dev.compute_with_storage_grid_size(); GXF, GYF = gfull.x, gfull.y; NCF = GXF * GYF
@@ -245,6 +268,7 @@ def setup_bench(dev, MESH, mesh_identity):
         # MK_REAL_AR + GDN24: the AR corner (x 10-11, rows 8-9) runs the GDN role with the AR sender phases hosted in its
         # reader / writer (see _gdn_host_ar below)
         GDNC = [i for i in range(NCF) if fcores[i].y >= GY]   # row-major: y 8 then 9, x 0..11
+        assert _wl().engine_cores(grid=(GXF, GYF), stream_rect=(GX, GY))['gdn_out'] == [(fi, fcores[fi].x, fcores[fi].y) for fi in GDNC]
         ARC = set()
     RESV = ARC | set(GDNC)
     ACT = [i for i in range(NCF) if i not in RESV]
@@ -290,25 +314,81 @@ def setup_bench(dev, MESH, mesh_identity):
     KVPROD = os.environ.get('MKA_KVPROD', '0') == '1'
     NKVH, KVH, KVBS = int(os.environ.get('MKA_NKVH', '4')), int(os.environ.get('MKA_KVH', '1')), int(os.environ.get('MKA_BS', '64'))
     BS32 = KVBS // TILE; BPU = NBK // BS32
+    # MKA_KVA (stream E): paged KV append of all users' T rows inside the engine (spec v0.9.16). Bench: verify steps with
+    # per-row kvpos (HOLD rows -1, tile / page crossings, duplicates, past-the-table rows) over a page table [NUT, BPU]:
+    # own users (the SDPA's, identity blocks) stay in their last 2 KV blocks (where the readers wait the append); other
+    # users' touched virtual blocks map to extra physical blocks after NU * BPU. The own users' new-row positions start
+    # as V = MKA_KVA_POISON (a stale SDPA read shows), and MKA_KVA_CHECK=1 runs prod's paged_fused_update_cache on twin
+    # caches with the engine's own k / v and compares the caches bit-for-bit.
+    KVA = os.environ.get('MKA_KVA', '0') == '1'
+    KVA_T, KVA_NUT, KVA_STEPS, KVA_EXT, KVA_PTT = 4, 0, [], {}, None
+    if KVA:
+        assert KVPROD, 'MKA_KVA (bench) needs MKA_KVPROD=1'   # MESH: replicated kvpos / page table (mesh path untested)
+        KVA_NUT = int(os.environ.get('MKA_KVA_NU', str(2 * NU if NU == 4 else NU)))
+        KVA_PPU = int(os.environ.get('MKA_KVA_PPU', '2'))
+        assert NU <= KVA_NUT and KVA_NUT * KVA_T <= 32
+        # page-table width (blocks per user): >= the own users' BPU; default 4096 (262144 tokens at block size 64) so the other
+        # users reach past 128K (virtual blocks > 2048): the append reads only the touched rows' page-table entries
+        KVA_PTW = max(BPU, int(os.environ.get('MKA_KVA_PTW', '4096')))
+        def _own(s, u):
+            b_ = CTX - 4
+            if s == 1 and u == 0: return [CTX - 34 + j for j in range(4)]          # 32-row tile crossing (page crossing at BS 32)
+            if s == 1 and u == 1: return [b_, b_ + 1, -1, -1]                      # partial HOLD
+            if s == 2 and u == 0: return [CTX - 2, CTX - 1, CTX - 1, -1]           # duplicate position: the later row wins
+            if s == 2 and u == NU - 1 and NU > 1: return [-1] * 4                  # HOLD user
+            return [b_ + j for j in range(4)]
+        def _other(s, u):
+            k_ = u - NU; base = (5 + 37 * k_) * KVBS
+            if k_ % 4 == 0: return [base + 30 + 3 * s + j for j in range(4)]                       # tile crossings in a page
+            if k_ % 4 == 1:   # page crossings, past 128K (virtual block 2500 + 37 k)
+                base = (2500 + 37 * k_) * KVBS; return [base + KVBS - 2 + 3 * s + j for j in range(4)]
+            if k_ % 4 == 2: return [KVA_PTW * KVBS + j for j in range(4)] if s == 1 else [-1] * 4  # past the table / HOLD
+            return [[base + 9, base + 10, base + 10, -1], [base + j for j in range(4)], [KVA_PTW * KVBS - 4 + j for j in range(4)]][s]   # s 2: the table's last block
+        KVA_STEPS = [sum(((_own(s, u) if u < NU else _other(s, u)) for u in range(KVA_NUT)), []) for s in range(3)]
+        for u in range(NU):
+            assert all(p_ < 0 or CTX - 2 * TILE <= p_ < CTX for s_ in KVA_STEPS for p_ in s_[u * 4:(u + 1) * 4]), 'own rows outside the last 2 blocks'
+        _pt = torch.zeros(KVA_NUT, KVA_PTW, dtype=torch.int32)
+        for u in range(NU): _pt[u, :BPU] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
+        _nx = NU * BPU
+        for u in range(NU, KVA_NUT):
+            for s_ in KVA_STEPS:
+                for p_ in s_[u * 4:(u + 1) * 4]:
+                    vb_ = p_ // KVBS
+                    if p_ >= 0 and vb_ < KVA_PTW and (u, vb_) not in KVA_EXT: KVA_EXT[(u, vb_)] = _nx; _pt[u, vb_] = _nx; _nx += 1
+        KVA_NBLK = max(_nx, KVA_PTW + 1)   # prod's update op needs page-table width < cache blocks
+        KVA_PTT = ttnn.from_torch(_pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        KVA_POS = ttnn.from_torch(torch.tensor(KVA_STEPS[0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        KVA_CHECK = os.environ.get('MKA_KVA_CHECK', '0') == '1'
+        KVA_POISON = float(os.environ.get('MKA_KVA_POISON', '30'))
+        KVA_TWIN = {}
+        print(f"[kva] users {KVA_NUT} (own {NU}) T {KVA_T}, {KVA_NBLK - NU * BPU} extra blocks, steps {KVA_STEPS}", flush=True)
     kvvs = []   # paged_v per layer (KVPROD); kvs holds paged_k (KVPROD) or the interleaved K|V tensor
     if KVPROD:
         assert NBK % BS32 == 0 and 0 <= KVH < NKVH
         MKDEF = MKDEF + [('MKA_KVPROD', '1'), ('MKA_NKVH', str(NKVH)), ('MKA_BS32', str(BS32)), ('MKA_KVH', str(KVH)), ('MKA_BPU', str(BPU))]
         print(f"[mka2] KV prod layout: paged_k / paged_v [{NU * BPU}, {NKVH}, {KVBS}, {DHD}] per layer, head {KVH}", flush=True)
         def to_paged(t):   # [NU, CTX, DHD] -> [NU*BPU, NKVH, KVBS, DHD] with head KVH filled, identity page table
-            full = torch.zeros(NU * BPU, NKVH, KVBS, DHD, dtype=torch.bfloat16)
-            full[:, KVH] = t.reshape(NU * BPU, KVBS, DHD).bfloat16()
+            full = torch.zeros(KVA_NBLK if KVA else NU * BPU, NKVH, KVBS, DHD, dtype=torch.bfloat16)   # KVA: + other users' blocks
+            full[:NU * BPU, KVH] = t.reshape(NU * BPU, KVBS, DHD).bfloat16()
             return full
         def from_paged(tt):
-            return ttnn.to_torch(tt).float().reshape(NU * BPU, NKVH, KVBS, DHD)[:, KVH].reshape(NU, CTX, DHD)
+            return ttnn.to_torch(tt).float()[:NU * BPU].reshape(NU * BPU, NKVH, KVBS, DHD)[:, KVH].reshape(NU, CTX, DHD)
     for L in range(NL):
         if KVPROD and kvs and not is_attn_layer(L):   # GDN-type layers never read KV: share the previous layer's tensors
             q_t = torch.zeros(NU, TILE, DHD); kvs.append(kvs[-1]); kvvs.append(kvvs[-1]); golds_s.append(golds_s[-1]); qs_all.append(q_t); continue
         q_t = torch.zeros(NU, TILE, DHD); q_t[:, :NQH * T] = torch.randn(NU, NQH * T, DHD) / math.sqrt(DHD)
         k_t = torch.randn(NU, CTX, DHD); v_t = torch.randn(NU, CTX, DHD)
         if KVPROD:
+            if KVA:   # poison the own users' new-row positions: an SDPA read that misses the append shows
+                for s_ in KVA_STEPS:
+                    for u_ in range(NU):
+                        for p_ in s_[u_ * 4:(u_ + 1) * 4]:
+                            if p_ >= 0: v_t[u_, p_] = KVA_POISON
             kv = ttnn.from_torch(to_paged(k_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             kvv_ = ttnn.from_torch(to_paged(v_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if KVA and KVA_CHECK:   # prod's write target: same host bytes
+                KVA_TWIN[L] = (ttnn.from_torch(to_paged(k_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                               ttnn.from_torch(to_paged(v_t), dtype=KVDT, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             kq_, vq_ = from_paged(kv), from_paged(kvv_); kvvs.append(kvv_); rows = kvq = None
         else:
             rows = torch.stack([k_t.reshape(NU, NBK, TILE, DHD), v_t.reshape(NU, NBK, TILE, DHD)], dim=2).reshape(1, 1, -1, DHD)
@@ -421,7 +501,8 @@ def setup_bench(dev, MESH, mesh_identity):
         q_slot = {}   # bank-local page offset of each core's slice (slices packed per bank)
         _tot = [0] * banks
         if QSK:
-            _qb, _qo, PQL = LA_.splitk_bank_assign(QSL_, {key: key for key in QSL_}, BANK_LOC, banks)
+            QLAY = _WEIGHTS['qkv']['layout'] if 'qkv' in _WEIGHTS else _wl().QkvSplitKLayout(BANK_LOC, banks)   # engine/weight_layouts.py
+            _qb, _qo, PQL = QLAY.bank, QLAY.off, QLAY.pages_per_layer
             for fi, key in QSKEY.items(): q_bank[fi], q_slot[fi] = _qb[key], _qo[key]
         else:
             for fi in qcores:
@@ -432,7 +513,7 @@ def setup_bench(dev, MESH, mesh_identity):
         gam = 0.5 + torch.rand(H)
         wf_t = gam[:, None] * wq_t   # diag(γ) W, folded at load (spec v0.4; × NORM_FIX is part of γ here)
         def q_pages(scale):
-            if QSK: return LA_.pack_qkv_splitk_layer(wf_t, QSL_, _qb, _qo, banks, PQL, scale)
+            if QSK: return QLAY.pack(wf_t, scale=scale)
             pg = torch.zeros(PQL, TILE, TILE)
             for fi in qcores:
                 ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
@@ -440,15 +521,13 @@ def setup_bench(dev, MESH, mesh_identity):
                     for jj in range(nt):
                         pg[(j_ + kl * nt + jj) * banks + b_] = tl(wf_t, k0 + kl, n0 + jj) * scale
             return pg
-        wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        wqq = ttnn.to_torch(wq_all).float().reshape(NL, PQL, TILE, TILE)
+        _QINJ = QSK and 'qkv' in _WEIGHTS
+        if _QINJ: wq_all = _WEIGHTS['qkv']['tensor']   # real weights (golds skipped)
+        else: wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in WLS]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         wfq = torch.zeros(NL, H, QN * TILE)   # dequantized folded weights as the device sees them, per layer
-        if QSK:
-            for key, sl_ in QSL_.items():
-                for kl in range(sl_.pages // sl_.nt):
-                    for jj in range(sl_.nt):
-                        k_, n_ = sl_.k0 + kl, sl_.first + jj
-                        wfq[:, k_ * TILE:(k_ + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = wqq[:, (_qo[key] + sl_.page_of(kl, jj)) * banks + _qb[key]]
+        if not _QINJ: wqq = ttnn.to_torch(wq_all).float().reshape(len(WLS), PQL, TILE, TILE)
+        if not _QINJ: wqq = wqq[[wla(L_) for L_ in range(NL)]]   # back to engine-layer order for the golds
+        if QSK and not _QINJ: wfq = QLAY.unpack(wqq)
         for fi in ([] if QSK else qcores):
             ro, n0, nt, k0, nk, _ = QROLE[fi]; b_, j_ = q_bank[fi], q_slot[fi]
             for kl in range(nk):
@@ -457,7 +536,13 @@ def setup_bench(dev, MESH, mesh_identity):
         ss = torch.stack([(xb[:, o * (H // NOWN):(o + 1) * (H // NOWN)].double() ** 2).sum(-1) for o in range(NOWN)])   # [NOWN, M]
         rsp_t = torch.zeros(TILE, NOWN * TILE)
         for o in range(NOWN): rsp_t[:, o * TILE] = ss[o].float()
+        # MK_AR_RSTD=1: rsp tile 0 = the Σ tile (rows 0-7 = the STREAM producers' K-row partials; host init: row 0 = Σ of x). Until the
+        # consumers read that format, MK_AR_RSTD_SHADOW=1 keeps rsp the static stand-in and points the producers at a shadow copy (rsp_sh)
+        _RSH = os.environ.get('MK_AR_RSTD_SHADOW', '0') == '1'
+        _sig_t = torch.zeros(TILE, NOWN * TILE); _sig_t[0, :TILE] = ss.sum(0).float()
+        if os.environ.get('MK_AR_RSTD', '0') == '1' and not _RSH: rsp_t = _sig_t
         rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
+        rsp_sh = ttnn.from_torch(_sig_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE)) if (_RSH and os.environ.get('MK_AR_RSTD', '0') == '1') else rsp
         rstd_g = 1.0 / torch.sqrt(ss.sum(0) / H + EPS)   # [M]
         gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
         qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -580,17 +665,17 @@ def setup_bench(dev, MESH, mesh_identity):
                 w_ = [1, k, nn, n] + v_prect(n, n, 0, GY - 1) + [me.x] + cy + [VA('h7'), VA('rs'), oa.x, oa.y, VA('pbuf'),
                       V_R, VA('xpk'), me.x, me.y, 1 if n == 0 else 0, g0.x, g0.y, g1.x, g1.y, wv_all.buffer_address(), fp, PVL, nt] + VGA + z_own
                 r_ = [1, k, nn, n, me.x] + cy + [VA('rs'), VA('h7'), ob.x, ob.y, VA('pbuf'), V_R] + VGA + [0] * 15
-                return w_, r_, [1, nn, k, V_FIRST]
+                return w_, r_, [1, nn, k, V_FIRST] + ([n] if os.environ.get('MK_AR_RSTD', '0') == '1' else [])
             if GX <= c.x <= GX + 1 and c.y < GY:   # owner j = 2k + slot
                 k, slot = c.y, c.x - GX; me = v_ph(c.x, c.y)
                 w_ = [2, k, 0, 0] + [0] * 5 + [0] + [0] * 8 + [0, 0, 0, 0, VA('pbuf'), V_R, 0, me.x, me.y, 0, 0, 0, 0, 0, 0, 0, 0, 0] + VGA + \
                      [slot, VA('xk') + slot * 10 * 2048, VA('xpk') + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + \
                      [v_ph(n_, k).x for n_ in range(GX)] + [v_ph(0, k).y, 1 if (k == 0 and slot == 0) else 0] + V_BRC
                 r_ = [2, k, 0, 0, 0] + [0] * 8 + [0, 0, 0, 0, 0, V_R] + VGA + [slot, VA('xk') + slot * 10 * 2048, VA('xpk') + slot * 10240] + v_prect(0, split - 1, k, k) + v_prect(split, GX - 1, k, k) + [me.x, me.y]
-                return w_, r_, [2, 0, k, 0]
+                return w_, r_, [2, 0, k, 0] + ([255] if os.environ.get('MK_AR_RSTD', '0') == '1' else [])
             w_ = [0] * 4 + [0] * 5 + [0] + [0] * 8 + [0] * 18 + VGA + z_own
             r_ = [0] * 5 + [0] * 8 + [0] * 6 + VGA + [0] * 15
-            return w_, r_, [0, 0, 0, 0]
+            return w_, r_, [0, 0, 0, 0] + ([255] if os.environ.get('MK_AR_RSTD', '0') == '1' else [])
 
     # MK_REAL_AR=1 (AR integration v1, spec v0.9.2 / §18 option a): the real MLP all-reduce on the 1x8 ring replaces the MLP
     # AR stall. Owners (10..11, 0..7) run AR_RECV (mkar::Recv) on the writer after the v12 release and mkar::Reduce on the
@@ -614,9 +699,15 @@ def setup_bench(dev, MESH, mesh_identity):
         AR_NAR, AR_ATYPE = NL, 0
         if REAL_AAR:
             assert ('MKA_RWO', '1') in MKDEF and AR_DLVR, "MK_REAL_AAR needs MKA_RWO (the wo unit's CB_XO) and the reader-side delivery"
+            # MK_REAL_GAR=1 (G-d): the GDN layers' mixer AR too (gdn_out's CB_XO; until G-c a CB_XO stand-in): 2 ARs on every layer
+            REAL_GAR = ('MK_REAL_GAR', '1') in MKDEF
+            if REAL_GAR: assert GDN24 and os.environ.get('MKA_GDN_WAIT', '0') == '1', "MK_REAL_GAR needs GDN24 + MKA_GDN_WAIT (the GDN out_ready gates the GDN AR)"
+            # spec v1.94: until gdn_out (G-c) writes CB_XO, the GDN AR reads uninitialised CB_XO (NaN) unless MK_GAR_ZERO zeroes it
+            if REAL_GAR: assert ('MK_GAR_ZERO', '1') in MKDEF or ('MK_GDN_OUT_REAL', '1') in MKDEF, \
+                "MK_REAL_GAR needs MK_GAR_ZERO=1 until gdn_out (G-c, MK_GDN_OUT_REAL) writes CB_XO (else NaN)"
             _k = 0
             for L_ in range(NL):
-                if is_attn_layer(L_): AR_ATYPE |= 1 << _k; _k += 1
+                if is_attn_layer(L_) or REAL_GAR: AR_ATYPE |= 1 << _k; _k += 1
                 _k += 1
             AR_NAR = _k
             AR_ADLV = ttnn.create_global_semaphore(dev, O_CRS, 0); AR_ASRC = ttnn.create_global_semaphore(dev, O_CRS, 0)
@@ -632,6 +723,17 @@ def setup_bench(dev, MESH, mesh_identity):
         if AR_DLVR: MKDEF = MKDEF + [('MK_AR_DLV', str(ttnn.get_global_semaphore_address(AR_DLV)))]
         MKDEF = MKDEF + [('MK_AR_XF0', str(ttnn.get_global_semaphore_address(AR_XF[0]))), ('MK_AR_XF1', str(ttnn.get_global_semaphore_address(AR_XF[1]))),
                          ('MK_AR_XCNT', str(ttnn.get_global_semaphore_address(AR_XCNT)))]
+        # MK_AR_RSTD=1 (rstd producer, DESIGN v1.7x, STREAM-side): on every K-row x delivery (CB_XK: mixer 2L + 1, MLP 2L + 2) STREAM
+        # core (n = k, k) computes its K-row's per-row Σx² (fp32: copy + SFPU square + add over the 20 tiles, SFPU REDUCE_ROW) into
+        # CB 19 (1 fp32 tile, the 8 producers only), multicasts it as row k of the Σ tile (rsp tile 0) to the STREAM rects, then
+        # MK_AR_RSF += 1 there (8 per delivery: consumers wait >= 8 x (2L + 1) / 8 x (2L + 2), drain at program end). 0 owner text.
+        AR_RSTD = os.environ.get('MK_AR_RSTD', '0') == '1'
+        if AR_RSTD:
+            assert V_R == 32 and RQKV, "MK_AR_RSTD: R = 32 with the rsp Σ tile (MKA_RQKV / QSK)"
+            AR_RSF = ttnn.create_global_semaphore(dev, kgrid, 0)
+            MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(AR_RSF))), ('MK_AR_RSP', str(rsp_sh.buffer_address())),
+                             ('MK_AR_CB_SS', '19')]
+            print(f"[ar] rstd producer: Σ tile = {'rsp_sh (shadow)' if rsp_sh is not rsp else 'rsp'} tile 0 @ {rsp_sh.buffer_address()}, flag MK_AR_RSF @ {ttnn.get_global_semaphore_address(AR_RSF)} (+8 per K-row delivery)", flush=True)
         # GDN24 (AR sender hosted in the GDN role on the corner, spec v1.44): the corner cores do NOT span the owners' RS slot
         # CB (CB_RED, 140-160 KB) or the wo output CB 23 (their GDN-role CB stack would be lifted above the owners' whole CB
         # region). Owners publish both addresses at init into 2 words on the 4 corner cores (MK_AR_PUB / MK_AR_PUBA); the
@@ -725,6 +827,7 @@ def setup_bench(dev, MESH, mesh_identity):
         ro = QROLE.get(fi, (0,))[0]
         return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi) + head_args_r(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
+    if os.environ.get('MKA_SCLAMP', '1') == '1' and ('MKA_SCLAMP', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_SCLAMP', '1')]   # S <= 60 before exp (RC guard)
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
     # GDN24 bring-up: real wo on the 16 owners (10 tiles each, ring 480 pages); the 36-core split (owners + GDN cores) comes
     # with the GDN role's include of the wo unit (spec v1.5)
@@ -740,36 +843,20 @@ def setup_bench(dev, MESH, mesh_identity):
         assert not any(is_attn_layer(L_) and is_attn_layer(L_ + 1) for L_ in range(NL - 1)), "MKA_RWO: no back-to-back attention layers"
         WK_, WN_ = 48, 160
         wo_cores = list(ext_list)
-        # rot chunk order for device 0: owning device o = j // 2, farthest around the 8-ring first, own (o = 0) last
-        rot = sorted(range(16), key=lambda j_: (-min(j_ // 2, 8 - j_ // 2), j_))
-        flat = [n_ for j_ in rot for n_ in range(10 * j_, 10 * j_ + 10)]
-        for c_, fi in enumerate(wo_cores): WOT[fi] = flat[c_::len(wo_cores)]
-        assert max(len(v) for v in WOT.values()) <= WO_MAXT_, (max(len(v) for v in WOT.values()), WO_MAXT_)
-        torch.manual_seed(11)
-        wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
-        # byte-balanced bank-local slices, k-major pages (k * nt + j)
-        caps_ = [len(wo_cores) // banks + (1 if b_ < len(wo_cores) % banks else 0) for b_ in range(banks)]
-        pairs_ = sorted(((abs(fcores[fi].x - bx) + abs(fcores[fi].y - by), fi, b_) for fi in wo_cores for b_, (bx, by) in enumerate(BANK_LOC)))
-        for d_, fi, b_ in pairs_:
-            if fi in WOB or caps_[b_] == 0: continue
-            WOB[fi] = b_; caps_[b_] -= 1
-        tot_ = [0] * banks
-        for fi in wo_cores: WOP[fi] = tot_[WOB[fi]]; tot_[WOB[fi]] += len(WOT[fi]) * WK_
-        WOPL = max(tot_) * banks
-        def wo_pages(scale):
-            pg = torch.zeros(WOPL, TILE, TILE)
-            for fi in wo_cores:
-                for kl in range(WK_):
-                    for jj, n_ in enumerate(WOT[fi]):
-                        pg[(WOP[fi] + kl * len(WOT[fi]) + jj) * banks + WOB[fi]] = tl(wo_t, kl, n_) * scale
-            return pg
-        wo_all = ttnn.from_torch(torch.cat([wo_pages(2.0 ** -(L % 2)) for L in range(NL)]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        woq_ = ttnn.to_torch(wo_all).float().reshape(NL, WOPL, TILE, TILE)
+        # engine/weight_layouts.py wo unit: rot chunk order (device 0: farthest owning device around the 8-ring first, own
+        # last), core c -> tiles flat[c::n], byte-balanced bank-local slices, k-major pages (k * nt + j)
+        WLAY = _WEIGHTS['wo']['layout'] if 'wo' in _WEIGHTS else _wl().wo_unit_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], BANK_LOC, banks, maxt=WO_MAXT_)
+        assert _wl().engine_cores(grid=(GXF, GYF), stream_rect=(GX, GY))['wo'] == [(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], "weight_layouts.engine_cores (integ's pre-build core list) != ext_list"
+        assert WLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], "injected wo layout built for other cores"
+        for c_, fi in enumerate(wo_cores): WOT[fi], WOB[fi], WOP[fi] = WLAY.tiles[c_], WLAY.bank[c_], WLAY.row[c_]
+        WOPL = WLAY.pages_per_layer
         woq = torch.zeros(NL, WK_ * TILE, WN_ * TILE)
-        for fi in wo_cores:
-            for kl in range(WK_):
-                for jj, n_ in enumerate(WOT[fi]):
-                    woq[:, kl * TILE:(kl + 1) * TILE, n_ * TILE:(n_ + 1) * TILE] = woq_[:, (WOP[fi] + kl * len(WOT[fi]) + jj) * banks + WOB[fi]]
+        if 'wo' in _WEIGHTS: wo_all = _WEIGHTS['wo']['tensor']   # real weights (golds skipped)
+        else:
+            torch.manual_seed(11)
+            wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
+            wo_all = _wl().pack_wo_unit([wo_t] * len(WLS), WLAY, scales=[2.0 ** -(L % 2) for L in WLS], dev=dev)
+            woq = WLAY.unpack(ttnn.to_torch(wo_all).float().reshape(len(WLS), WOPL, TILE, TILE)[[wla(L_) for L_ in range(NL)]])
         wod = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, WN_ * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         WCC = wo_cores[0]   # concat core
         owner_fi = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + j_ % 2 and c_.y == j_ // 2)) for j_ in range(16)]
@@ -800,7 +887,7 @@ def setup_bench(dev, MESH, mesh_identity):
                             A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = golds_s[L][u_, 4 * h_ + j_, :]
                 g = (A_ * sg) @ woq[L]
             gold_wo.append(g)
-        print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {rot}, rects {RECTS_E}", flush=True)
+        print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {_wl().rot_order()}, rects {RECTS_E}", flush=True)
     HC = []
     if RQNR:
         assert RQKV and ('MKA_WORING', '1') not in MKDEF and ('MKA_TREEFLAG', '1') not in MKDEF   # RWO optional (GDN24 decouple)
@@ -858,7 +945,7 @@ def setup_bench(dev, MESH, mesh_identity):
         print(f"[rqnr] head cores {HC} (q 0-5, k 6), Q from the real qkv; SDPA golden recomputed", flush=True)
     def head_args_w(fi):
         if not RQNR: return []
-        return [HC.index(fi) if fi in HC else 255] + sum(([fphys[h_].x, fphys[h_].y] for h_ in HC), []) + [kd_t.buffer_address()]
+        return [(HC.index(fi) if fi in HC else 255) | (KVA_ROLE.get(fi, 0) << 8)] + sum(([fphys[h_].x, fphys[h_].y] for h_ in HC), []) + [kd_t.buffer_address()]
     RMASK = ('MKA_RMASK', '1') in MKDEF
     MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if RMASK else {}   # last-block core -> user
     if RMASK:
@@ -921,6 +1008,97 @@ def setup_bench(dev, MESH, mesh_identity):
                 for h_ in range(6):
                     for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
             gold_wo[L] = (A_ * sg) @ woq[L]
+    KVA_ROLE = {}
+    if KVA:
+        assert RQNR, 'MKA_KVA needs MKA_RQNR=1 (the k head output)'
+        # owner (10, c) appends K dim tile c, (11, c) V dim tile c; role word 1 + 8 * is_v + c rides in bits 8+ of the
+        # writer head_id / compute is_head args (no runtime-arg growth)
+        for fi_, c_ in enumerate(fcores):
+            if c_.x in (10, 11) and c_.y < 8 and fi_ in ACT: KVA_ROLE[fi_] = 1 + 8 * (c_.x - 10) + c_.y
+        assert len(KVA_ROLE) == 16, KVA_ROLE
+        _xy = lambda fi_: fphys[fi_].x | (fphys[fi_].y << 8)
+        _byc = {(fcores[f_].x, fcores[f_].y): f_ for f_ in KVA_ROLE}
+        KVA_W = [fi_ for fi_ in ACT if RNG[fi_][1] + 2 > NBK]   # readers of each own user's last 2 KV blocks
+        assert 0 < len(KVA_W) <= 2 * NU, KVA_W
+        # the wait code is compiled only into the non-STREAM roles (STREAM text budget): every waiter must be an ext core
+        assert not any(f_ in stream_idx for f_ in KVA_W), f'MKA_KVA: last-block readers {KVA_W} include STREAM cores (needs MKA_RMASK member order)'
+        KVA_GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(3)]
+        _ga = [ttnn.get_global_semaphore_address(g_) for g_ in KVA_GSEM]
+        _arr = lambda v_: '{' + ','.join(f'{x_}u' for x_ in v_) + '}'
+        MKDEF = MKDEF + [('MKA_KVA', '1'), ('MKA_KVA_NU', str(KVA_NUT)), ('MKA_KVA_T', str(KVA_T)), ('MKA_KVA_PPU', str(KVA_PPU)),
+                         ('MKA_KVA_NB', f'{KVA_PTW}u'), ('MKA_KVA_POS', f'{KVA_POS.buffer_address()}u'), ('MKA_KVA_PT', f'{KVA_PTT.buffer_address()}u'),
+                         ('MKA_KVA_PTS', f'{KVA_PTW * 4}u'), ('MKA_KVA_GS_DONE', f'{_ga[0]}u'), ('MKA_KVA_GS_SRC', f'{_ga[1]}u'), ('MKA_KVA_GS_AD', f'{_ga[2]}u'),
+                         ('MKA_KVA_KXY', _arr([_xy(_byc[(10, t_)]) for t_ in range(8)])), ('MKA_KVA_VXY', _arr([_xy(_byc[(11, t_)]) for t_ in range(8)])),
+                         ('MKA_KVA_NW', str(len(KVA_W))), ('MKA_KVA_WXY', _arr([_xy(f_) for f_ in KVA_W]))]
+        KVA_CRS = crs([fcores[f_] for f_ in sorted(KVA_ROLE)])
+        KVA_SG = {L: torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE]).clone() for L in range(NL) if is_attn_layer(L)}
+        print(f"[kva] append cores {sorted(KVA_ROLE)}; KVA_DONE waiters {KVA_W}; gs {_ga}", flush=True)
+        def KVA_PRE(it):   # this step's kvpos (rewritten in place: the program bakes its address in)
+            _mm = {'mesh_mapper': ttnn.ReplicateTensorToMesh(dev)} if MESH else {}
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor(KVA_STEPS[it % 3], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, **_mm), KVA_POS)
+        def _kva_last(tt, u):   # this own user's positions CTX - 64 .. CTX - 1 (its last 2 blocks) from the cache
+            p1 = (u + 1) * BPU; p0 = p1 - max(1, 2 * TILE // KVBS)
+            try: sl = ttnn.to_torch(ttnn.slice(tt, [p0, 0, 0, 0], [p1, NKVH, KVBS, DHD])).float()
+            except Exception: sl = ttnn.to_torch(tt).float()[p0:p1]
+            return sl[:, KVH].reshape(-1, DHD)[-2 * TILE:]
+        def _kva_regold(L):   # SDPA (and wo) golden over the cache as the engine left it
+            kq_, vq_ = KVQ[L]
+            for u_ in range(NU):
+                kq_[u_, CTX - 2 * TILE:] = _kva_last(kvs[L], u_); vq_[u_, CTX - 2 * TILE:] = _kva_last(kvvs[L], u_)
+            Xq = gold_qkv[L].double()
+            qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
+            g_ = torch.zeros(NU, TILE, DHD)
+            for u_ in range(NU):
+                Qu = torch.zeros(TILE, DHD)
+                for h_ in range(6):
+                    for j_ in range(4): Qu[4 * h_ + j_] = qh[h_][4 * u_ + j_]
+                Qu = Qu.bfloat16().float()
+                p_ = torch.exp(Qu[:NQH * T] @ kq_[u_].T)
+                if RMASK: p_[:, CTX - TILE:] *= mk[u_, :NQH * T]
+                g_[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+            golds_s[L] = g_
+            if RWO:
+                A_ = torch.zeros(M, 48 * TILE)
+                for u_ in range(NU):
+                    for h_ in range(6):
+                        for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+                gold_wo[L] = (A_ * KVA_SG[L]) @ woq[L]
+        def _kva_rows_cfg(first):
+            gx_ = dev.compute_with_storage_grid_size().x
+            cs_ = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(i_ % gx_, i_ // gx_), ttnn.CoreCoord(i_ % gx_, i_ // gx_)) for i_ in range(first, first + KVA_NUT)})
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(cs_, [KVA_T * TILE, DHD], ttnn.ShardOrientation.ROW_MAJOR))
+        def _kva_check(it):   # prod's paged_fused_update_cache on the twins with the engine's k / v, then bit-compare
+            kd_ = ttnn.to_torch(kd_t).float().reshape(NL, M, -1)
+            qv_ = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
+            bad = 0
+            for L, (tk_, tv_) in KVA_TWIN.items():
+                if not is_attn_layer(L): continue
+                ins = []
+                for src_, first_ in ((kd_[L], KVA_NUT), (qv_[L][:, 56 * TILE:64 * TILE], 0)):
+                    x_ = torch.zeros(1, KVA_NUT, KVA_T * TILE, DHD)
+                    for u_ in range(KVA_NUT):
+                        for j_ in range(KVA_T): x_[0, u_, j_ * TILE + KVH] = src_[u_ * KVA_T + j_]
+                    ins.append(ttnn.from_torch(x_.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_kva_rows_cfg(first_)))
+                ttnn.experimental.paged_fused_update_cache(tk_, ins[0], tv_, ins[1], update_idxs_tensor=KVA_POS, page_table=KVA_PTT, rows_per_user=KVA_T)
+                for t_ in ins: ttnn.deallocate(t_)
+                for nm_, e_, p_ in (('K', kvs[L], tk_), ('V', kvvs[L], tv_)):
+                    E = ttnn.to_torch(e_).float(); Pp = ttnn.to_torch(p_).float()
+                    eh, ph = E[:, KVH].contiguous().view(torch.int32), Pp[:, KVH].contiguous().view(torch.int32)
+                    diff = (eh != ph).nonzero()
+                    oth = int((E[:, [h_ for h_ in range(NKVH) if h_ != KVH]] != 0).sum())
+                    bad += len(diff) + oth
+                    loc = [tuple(int(v_) for v_ in diff[0])] if len(diff) else []
+                    print(f"[kva] iter {it} layer {L} {nm_}: head {KVH} mismatches vs paged_fused_update_cache {len(diff)} {loc} "
+                          f"(written rows {int((E[:, KVH] != 0).any(-1).sum())}); other heads nonzero {oth}", flush=True)
+            if MESH:   # every device appends the same rows into its own replica: the caches must be identical
+                _mi = max(max(mesh_identity(kvs[L]), mesh_identity(kvvs[L])) for L in KVA_TWIN if is_attn_layer(L))
+                bad += int(_mi != 0)
+                print(f"[kva] iter {it} mesh: max |dev d - dev 0| over the K / V caches {_mi:.3e}", flush=True)
+            print(f"[kva] iter {it} cache check {'PASS' if bad == 0 else 'FAIL'} (bit-exact vs prod, step {KVA_STEPS[it % 3]})", flush=True)
+        def KVA_POST(it):
+            for L in range(NL):   # MKA_KVA_REGOLD=0: negative control (the poisoned pre-append golden must FAIL)
+                if is_attn_layer(L) and os.environ.get('MKA_KVA_REGOLD', '1') == '1': _kva_regold(L)
+            if KVA_CHECK: _kva_check(it)
     def head_args_r(fi):
         if not RQNR: return []
         return [hg_t.buffer_address() if fi in HC else 0, HC.index(fi) * 10 if fi in HC else 0,
@@ -1080,7 +1258,8 @@ def setup_bench(dev, MESH, mesh_identity):
         ck = {(c.x, c.y) for c in corner}
         from models.demos.blackhole.qwen36.tt.megakernel.oneshot_ar import MKDIR as MKDIR_AR
         _aar = ('MK_REAL_AAR', '1') in MKDEF   # the attention AR (its own branch): two ARs on attention layers
-        nar = [1 + (1 if _aar and is_attn_layer(L_) else 0) for L_ in range(NL)]
+        _gar = ('MK_REAL_GAR', '1') in MKDEF
+        nar = [1 + (1 if _aar and (is_attn_layer(L_) or _gar) else 0) for L_ in range(NL)]
         gmask = sum(1 << L_ for L_ in range(NL) if not is_attn_layer(L_))
         a2 = sum(1 << L_ for L_ in range(NL) if nar[L_] == 2)
         out = []
@@ -1171,6 +1350,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 # CB_VPK: the stand-in's packing scratch (R < 32 only); MK_V12_CB: the same descriptor is v_xpk on STREAM (both 10 tiles)
                 cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, rect.merge(O_CRS) if V12CB else O_CRS)]
         if plan_only: return _order(cbs)   # MK_V12_CB: the list prefix that fixes the v12 addresses (AR / GDN-role CBs follow it)
+        if KVA:   # owners only (CB 6 / 8 are STREAM-rect-only otherwise): source bf16 tile, BFP8 source + target tiles
+            cbs = cbs + [cbd(6, ttnn.bfloat16, 1, KVA_CRS), cbd(8, ttnn.bfloat8_b, 1 + KVA_PPU * KVA_NUT, KVA_CRS)]
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=rect, initial_value=0) for i in range(12)]
         if REAL_AR:   # this device's AR parts: sender kernels / CBs / fabric semaphores, the shared RS slot CB, owner CBs
             arp = ARP[coord[1]]
@@ -1178,6 +1359,12 @@ def setup_bench(dev, MESH, mesh_identity):
             sems = sems + arp['semaphores']
             _red = [CBP.mark_static(ttnn.CBDescriptor(total_size=d_.total_size, core_ranges=(O_CRS if GDN24 else d_.core_ranges), format_descriptors=list(d_.format_descriptors))) for d_ in arp['shared_cbs']]
             cbs = cbs + arp['sender_cbs'] + _red + arp['owner_cbs']
+            if AR_RSTD:   # CB 19 (fp32 Σx² tile, compute -> writer) on the 8 producer cores (n = k, k) only
+                _pc = crs([c_ for c_ in fcores if c_.x == c_.y and c_.y < GY])
+                _pcs = {(c_.x, c_.y) for c_ in ttnn.corerange_to_cores(_pc)}
+                _pid = {f_.buffer_index for c_ in cbs for f_ in c_.format_descriptors if any((q_.x, q_.y) in _pcs for q_ in ttnn.corerange_to_cores(c_.core_ranges))}
+                assert 19 not in _pid, ("MK_AR_RSTD CB 19 taken on the STREAM producer cores", sorted(_pid))
+                cbs = cbs + [cbd(19, ttnn.float32, 1, _pc)]
             if AR_GAMMA and AR_GEARLY:   # MK_AR_GEARLY: a dedicated γ CB (owners' CB region), filled from the MLP start
                 cbs = cbs + [cbd(32, ttnn.bfloat16, AR_GT, O_CRS)]
             elif AR_GAMMA:   # CB 32 on the owners = pbuf+0 (dead from C-OSUM(L) to the next MLP's partials; spec v1.25 note)
@@ -1230,11 +1417,20 @@ def setup_bench(dev, MESH, mesh_identity):
             _wa = wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
                 [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
             nrecv = len(ch0) + len(ch1)
-            _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if (RWO or QSK) else []) + ([1 if fi in HC else 0, 1 if (fi in HC or fi in MASKC) else 0] + ([(RNG[fi][1] - RNG[fi][0] - 1) if fi in MASKC else 0xFFFFFFFF] if RMASK else []) if RQNR else []) if RQKV else [])
+            _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if (RWO or QSK) else []) + ([(1 if fi in HC else 0) | (KVA_ROLE.get(fi, 0) << 8), 1 if (fi in HC or fi in MASKC) else 0] + ([(RNG[fi][1] - RNG[fi][0] - 1) if fi in MASKC else 0xFFFFFFFF] if RMASK else []) if RQNR else []) if RQKV else [])
             if V12:   # v12 arg tails (appended after every other arg)
                 vw_, vr_, vc_ = v_args(fi, c)
                 _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
+            if GDN24 and not isS and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_EXTLEAN: the owner binary folds these role args (kernels)
+                _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
+                assert g_ == 0 and nrecv == 0 and r != 0 and gdn_on(fi) == 0, ("MKA_EXTLEAN owner args", fi, g_, nrecv, r, gdn_on(fi))
+                assert r_mk[14] == 255 and r_mk[15] == 0, ("MKA_EXTLEAN ROOT / IS_GU", fi, r_mk[14:16])
+                if QSK: assert _qr[0] == 3 and _qr[1] == 0 and _qr[2] == 0 and _qr[3] == 0 and _qr[4] == 0, ("MKA_EXTLEAN qkv role", fi, _qr)
+                if QSK and RWO: assert HLP.get(fi, (None, 0, 0))[2] == 0 and len(WOT.get(fi, [])) == WO_MAXT_, ("MKA_EXTLEAN wo", fi)
+                if RWO: assert not rd_w
+                if V12: assert vc_[0] == 2 and vr_[0] == 2 and vw_[0] == 2, ("MKA_EXTLEAN vrole", fi, vc_[0], vr_[0], vw_[0])
             _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
+            if os.environ.get('MKA_ARGDUMP') == '1' and not isS: print(f"[argdump] fi {fi} xy ({c.x},{c.y}) R {list(_ra)} W {list(_wa)} C {list(_ca)}", flush=True)
         acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
         acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
         acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []

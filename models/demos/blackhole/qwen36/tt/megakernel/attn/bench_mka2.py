@@ -56,8 +56,18 @@ _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..
 import program as _mk_program
 globals().update(_mk_program.setup_bench(dev, MESH, mesh_identity))
 def pcc_of(t, g): v = ttnn.to_torch(t).float().reshape(M, H); return torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()
+# rstd the consumers use: MK_AR_RSTD=1 (spec rstd producer) = rsqrt(sum x^2 / H + eps) of the real residual (fp32 sum of the bf16
+# residual); else the static CB 20 stand-in rstd_g (the setup x's)
+_RSTD_REAL = os.environ.get('MK_AR_RSTD', '0') == '1'
+def _rstd_of(x_):
+    if not _RSTD_REAL: return rstd_g
+    xs = x_.double()
+    if xs.shape[0] < M: xs = torch.cat([xs, torch.zeros(M - xs.shape[0], H, dtype=xs.dtype)], 0)
+    return 1.0 / torch.sqrt((xs * xs).sum(-1) / H + EPS)
 for it in range(ITERS):
+    if KVA: KVA_PRE(it)   # this verify step's kvpos (MKA_KVA)
     t1 = time.time(); y = ttnn.generic_op([x, wgu_all, wd_all, wm_all, xbuf, hbuf, ymix, qten, outs, wo_dummy] + kvs + kvvs + ([wq_all, rsp, qkv_out] if RQKV else ([rsp] if V12 else [])) + ([wo_all, wod] if RWO else []) + ([hg_t, kd_t] if RQNR else []) + ([mk_t] if RMASK else []) + ([t_ for t_ in (wv_all, v_xk, v_rs, v_h7, v_xpk, v_pbuf, v_xo, v_x0, v_id, v_j) if t_ is not None] if V12 else []) + ([ar_out, ar_blk] if REAL_AR else []) + (list(GDN_ROLE.get('io', [])) if GDN24 else []) + [out_t], prog); ttnn.synchronize_device(dev)
+    if KVA: KVA_POST(it)   # SDPA golden over the appended cache (+ MKA_KVA_CHECK: bit-compare vs paged_fused_update_cache)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
     if GDN24 and callable(GDN_ROLE.get('gdnout_check')): GDN_ROLE['gdnout_check'](it)   # MKA_GDNOUT: gdn_out PCC (every run)
@@ -93,7 +103,7 @@ for it in range(ITERS):
         for L_ in range(NL):
             _xin_seq[L_] = _xres.clone()   # layer L_'s mixer x (delivered by the previous MLP AR)
             _g, _u, _d = vlayer(L_)
-            _xn = (rstd_g[:, None] * _xres.double()).float()
+            _xn = (_rstd_of(_xres)[:, None] * _xres.double()).float()
             _pL = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
             _xres = (_xres + AR.ring * _pL).bfloat16().float()
         v_gold = _pL
@@ -123,18 +133,34 @@ for it in range(ITERS):
         print(f"[fm11] diag bad cores {len(bad)}: {bad[:40]}", flush=True)
     pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
+    if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the pass's last K-row delivery left on the STREAM cores (rows 0-7 = the
+        # K-row partials) vs Σx² of that x: the residual after AR (NAR - 2) (the last AR feeds no delivery inside the pass)
+        _rs = ttnn.to_torch(rsp_sh).float().reshape(-1, TILE, rsp_sh.shape[-1])   # [cores, 32, NOWN*32], device 0
+        _xl = _db[:, 2 * (AR_NAR - 2) + 1].double()
+        _gs = (_xl * _xl).sum(-1)
+        _gk = torch.stack([(_xl[:, k_ * 640:(k_ + 1) * 640] ** 2).sum(-1) for k_ in range(8)])   # [8, 32]
+        _worst = 0.0
+        for ci_ in (0, 9, 37, 79):
+            S_ = _rs[ci_, :, :TILE].double()
+            _worst = max(_worst, ((S_[:8] - _gk).abs() / _gk.abs().clamp_min(1e-30)).max().item())
+        S0 = _rs[0, :, :TILE].double()
+        _rel = ((S0[:8].sum(0) - _gs).abs() / _gs).max().item()
+        _rt = (1 / torch.sqrt(S0[:8].sum(0) / H + EPS)) / (1 / torch.sqrt(_gs / H + EPS)) - 1
+        print(f"[ar] iter {it} rstd Σ tile: rows 8-31 max|.| {S0[8:].abs().max().item():.3e}; K-row partial max rel err {_worst:.3e} (4 cores); "
+              f"Σ max rel err {_rel:.3e}; rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
     if REAL_AR and RQKV:   # qkv / k / SDPA / wo golds from the x the AR actually delivered to each attention layer (not the static x)
         _xin = {}
         if AR_DBG:   # residual after every AR of this pass (owner dumps); program order: [attention AR], MLP AR per layer
             _k = 0
             for L_ in range(NL):
                 if is_attn_layer(L_) and _k > 0: _xin[L_] = _db[:, 2 * (_k - 1) + 1]
-                _k += 1 + (1 if (REAL_AAR and is_attn_layer(L_)) else 0)
+                _k += 1 + (1 if (REAL_AAR and (is_attn_layer(L_) or ('MK_REAL_GAR', '1') in MKDEF)) else 0)
         elif AR_SEQ:
             _xin = {L_: x_ for L_, x_ in _xin_seq.items() if is_attn_layer(L_) and L_ > 0}
         for L_, x_ in _xin.items():
             if x_.shape[0] < M: x_ = torch.cat([x_, torch.zeros(M - x_.shape[0], H)], 0)   # R < 32: rows >= R are don't-care
-            attn_regold(L_, (rstd_g[:, None] * (x_.double() @ wfq[L_].double())).float())
+            if AR_GAMMA: x_ = (x_ * AR_GTAB[L_, 0][None, :]).bfloat16().float()   # MK_AR_GAMMA: the AR delivers x (.) gamma (layer L's input_layernorm)
+            attn_regold(L_, (_rstd_of(x_)[:, None] * (x_.double() @ wfq[L_].double())).float())
         print(f"[ar] iter {it} qkv/SDPA golds from the AR-delivered x for layers {sorted(_xin)}" if _xin else f"[ar] iter {it} qkv/SDPA golds: static x (no AR chain: MK_AR_DBG=1 at R = 32)", flush=True)
     if RQKV:
         qv = ttnn.to_torch(qkv_out).float().reshape(NL, M, QN * TILE)
