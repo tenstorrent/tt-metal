@@ -294,3 +294,33 @@ def test_mean_multi_dim_2_31_elements(device):
     input_tensor.deallocate()
 
     assert ttnn.to_torch(output_tensor).flatten().tolist() == [1.0]
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype, keepdim, scalar",
+    [
+        ((8, 16, 64, 64), [0], ttnn.bfloat16, True, 1.0),
+        ((8, 16, 64, 64), [1], ttnn.float32, False, 3.0),
+        ((7, 9, 64, 64), [0, 1], ttnn.bfloat16, True, 3.0),
+        ((7, 9, 64, 64), [0, 1], ttnn.float32, False, 1.0),
+        ((64, 4, 32, 64), [0], ttnn.bfloat8_b, False, 3.0),
+        ((3, 7, 100, 100), [1], ttnn.bfloat16, True, 3.0),
+        ((3, 7, 100, 100), [1], ttnn.bfloat8_b, True, 1.0),
+        ((8, 16, 64, 64), [0, 3], ttnn.float32, True, 3.0),
+        ((8, 16, 64, 64), [1, 2, 3], ttnn.bfloat16, False, 1.0),
+    ],
+)
+def test_mean_nc(device, shape, dim, dtype, keepdim, scalar):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape) * 0.25 + 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, float("nan"))
+    # Reference from the device-rounded input so bf8_b's block rounding is not counted as op error.
+    torch_output = torch.mean(ttnn.to_torch(input_tensor).float(), dim=dim, keepdim=keepdim) * scalar
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=keepdim, scalar=scalar))
+
+    if dtype == ttnn.float32:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
+    else:
+        assert_allclose(torch_output, output_tensor.float(), rtol=3e-2 if dtype == ttnn.bfloat8_b else 1e-2, atol=0)
