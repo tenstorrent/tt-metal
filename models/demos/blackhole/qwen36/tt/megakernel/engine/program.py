@@ -1430,6 +1430,7 @@ def weight_layouts(mesh):
     return {
         "mlp": wm.MlpLayout(bank_loc),
         "gamma": None,
+        "qkg": None,  # q/k-norm (1+w) table (weights_mk.qkg_pages), fixed layout
         "qkv": wm.TileOrderLayout("qkv", "bfloat8_b"),
         "wo": wm.TileOrderLayout("wo", "bfloat8_b"),
         "gdn_in": wm.TileOrderLayout("gdn_in", "bfloat4_b"),
@@ -1461,17 +1462,6 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     if "MK_REAL_AR=1" in env.get("MK_DEFINES", "").split(","):
         assert int(env.get("V12_R", "32")) == 32 and int(n_users) * int(T) == 32, (
             f"MK_REAL_AR engine at R={env.get('V12_R')} (n_users {n_users} x T {T}): only R = 32 is allowed; pad onto bucket 8")
-    with _setup_context(mesh, env) as pool_stats:
-        S = setup_bench(mesh, True, lambda t: 0.0)
-    io0 = _io_list(S)
-    per_dev = S.get("PROG_PER_DEV")
-    try:  # v12's CB plan check (engine/cbplan.py, on -mk-v12cb): the in-model CB base / L1 high-water may differ from 112000
-        from models.demos.blackhole.qwen36.tt.megakernel.engine import cbplan as CBP
-    except ImportError:
-        CBP = None
-    if CBP is not None and os.environ.get("QWEN36_R16_MK_CBPLAN_VERIFY", "1") == "1":
-        CBP.verify(mesh, [per_dev(ttnn.MeshCoordinate(r_, c_)) if per_dev else S["prog"]
-                          for r_ in range(mesh.shape[0]) for c_ in range(mesh.shape[1])])
     grid = mesh.compute_with_storage_grid_size()
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     # the integration arg blocks are model-global (KV bases, page table) or rewritten per launch (replay): ONE set per
@@ -1487,9 +1477,28 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
                                                 len(kv_desc or ())] + attn + [kv0.get("block_size", 0), kv0.get("n_kv_heads", 0)]
                                    for c in AB._cores(full)}])
         blocks.add("replay", full, [{}], min_payload=len(PER_REPLAY_ARGS))
+    # the blocks exist BEFORE the engine build: kernels that do not carry the common-arg slots bake the block's L1 address
+    # as a define (MKA_REPLAY_L1 / MKA_ATTN_L1; same address on every core and device); the 'replay' payload is
+    # [kvpos, ctrl, cos, sin, pt_rows, pt_users, pt_groups] (PER_REPLAY_ARGS), written in the trace before each launch.
+    env.setdefault("MKA_REPLAY_L1", str(blocks.blocks["replay"]["addr"]))
+    env.setdefault("MKA_ATTN_L1", str(blocks.blocks["attn"]["addr"]))
+    _qkg = (weights or {}).get("qkg") or {}
+    if _qkg.get("tensor") is not None:
+        env.setdefault("MKA_QKG_ADDR", str(_qkg["tensor"].buffer_address()))
+    with _setup_context(mesh, env) as pool_stats:
+        S = setup_bench(mesh, True, lambda t: 0.0)
+    io0 = _io_list(S)
+    per_dev = S.get("PROG_PER_DEV")
+    try:  # v12's CB plan check (engine/cbplan.py, on -mk-v12cb): the in-model CB base / L1 high-water may differ from 112000
+        from models.demos.blackhole.qwen36.tt.megakernel.engine import cbplan as CBP
+    except ImportError:
+        CBP = None
+    if CBP is not None and os.environ.get("QWEN36_R16_MK_CBPLAN_VERIFY", "1") == "1":
+        CBP.verify(mesh, [per_dev(ttnn.MeshCoordinate(r_, c_)) if per_dev else S["prog"]
+                          for r_ in range(mesh.shape[0]) for c_ in range(mesh.shape[1])])
     # kind 3 ('gdn') is the GDN role's own block (gdn/u1/g2_role.py); the model's GDN state goes into the role's per-layer
     # table (gdn_desc[i]['tensors'], keyed like GdnRole.tl) when the role adopts it, not into a second block here.
-    wb = {k: ((weights or {}).get(k) or {}).get("tensor") for k in ("mlp", "qkv", "wo", "gdn_in", "gdn_out", "gamma")}
+    wb = {k: ((weights or {}).get(k) or {}).get("tensor") for k in ("mlp", "qkv", "wo", "gdn_in", "gdn_out", "gamma", "qkg")}
     descs = {}
     for r in range(mesh.shape[0]):
         for c_ in range(mesh.shape[1]):

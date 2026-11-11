@@ -211,6 +211,31 @@ mul (reads row 0) applies gamma and NORM_FIX at once."""
     return torch.cat(rows).reshape(1, 1, -1, H)
 
 
+def qkg_pages(model):
+    """kind 'qkg' (attention RQPOS): per attention layer a (ordinal) and norm k (0 q_norm, 1 k_norm) the bf16 (1+w)
+    head-dim vector the prod verify multiplies by (tw['qk_norm_dense']: q heads' row / the k head's row; fallback the
+    fp32 tw['q_norm'] / ['k_norm'] rounded to bf16, the same values), as 8 tiles [32, 32] per vector with EVERY row of
+    tile t = v[32t:32t+32] -> tile index (a * 2 + k) * 8 + t. Replicated."""
+    import torch
+
+    tiles = []
+    for l in model.layers:
+        if not l.is_full_attention:
+            continue
+        tw = l.attention.tw
+        if "qk_norm_dense" in tw:
+            d = device_shards(tw["qk_norm_dense"])[0].reshape(-1, tw["qk_norm_dense"].shape[-1])
+            vecs = (d[0], d[-1])  # first row = a q head, last row = the (last) k head
+        else:
+            vecs = tuple(device_shards(tw[n])[0].reshape(-1)[: tw[n].shape[-1]].to(torch.bfloat16) for n in ("q_norm", "k_norm"))
+        for v in vecs:
+            v = v.to(torch.bfloat16).reshape(-1)
+            assert v.numel() % TILE == 0, v.shape
+            for t in range(v.numel() // TILE):
+                tiles.append(v[t * TILE:(t + 1) * TILE].reshape(1, TILE).expand(TILE, TILE))
+    return torch.stack(tiles).reshape(1, 1, -1, TILE)
+
+
 # ---------------------------------------------------------------------------------------------------------------- #
 # 3. assembly
 # ---------------------------------------------------------------------------------------------------------------- #
@@ -238,7 +263,12 @@ def repack(model, layouts=None, kinds=None, only_layers=None):
                             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
         out["gamma"] = dict(tensor=t, pages_per_layer=2 * (H // TILE), layers=list(range(len(model.layers))),
                             dtype="bfloat16")
-    for kind in [k for k in (kinds or sorted(layouts)) if k != "gamma"]:
+    if "qkg" in (kinds or layouts):  # replicated, bf16, fixed layout (qkg_pages)
+        t = ttnn.from_torch(qkg_pages(model), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+        out["qkg"] = dict(tensor=t, pages_per_layer=16, layers=[i for i, l in enumerate(model.layers) if l.is_full_attention],
+                          dtype="bfloat16")
+    for kind in [k for k in (kinds or sorted(layouts)) if k not in ("gamma", "qkg")]:
         lay = layouts[kind]
         want, extract = SOURCES[kind]
         idx = [i for i, l in enumerate(model.layers) if want(l) and (only_layers is None or i in only_layers)]
