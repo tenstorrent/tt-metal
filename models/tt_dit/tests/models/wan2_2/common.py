@@ -58,6 +58,20 @@ TIMING_LIMITS = {
         "vae": (1.6, 3.4),
         "total": (240.0, 460.0),
     },
+    # The bf8 / LoFi config tuned for WH 4x8 (id wh_4x8_sp1tp0_bf8_lofi): 480p denoises in ~64 s, under the lower
+    # limits of the model without it; encoder and VAE are unchanged by it.
+    ("t2v", (4, 8), 480, "wh", "wh_galaxy_bf8_lofi"): {
+        "encoder": (0.037, 0.17),
+        "denoising": (45.0, 87.0),
+        "vae": (0.5, 1.7),
+        "total": (46.0, 88.0),
+    },
+    ("t2v", (4, 8), 720, "wh", "wh_galaxy_bf8_lofi"): {
+        "encoder": (0.038, 0.17),
+        "denoising": (172.0, 332.0),
+        "vae": (1.6, 3.4),
+        "total": (174.0, 335.0),
+    },
     ("t2v", (4, 32), 720, "bh"): {
         "encoder": (0.058, 0.29),
         "denoising": (24.0, 59.0),
@@ -93,13 +107,20 @@ TIMING_LIMITS = {
 BH_4X8_LINEAR_SLACK = 1.10
 
 
-def timing_limits(model_type, mesh_shape, height, topology):
+def timing_limits(model_type, mesh_shape, height, topology, quant_config_name=None):
     """``{metric: (lower, upper)}`` seconds for this config, or None if it has no limits.
 
-    I2V configs without their own entry use the T2V limits.
+    I2V configs without their own entry use the T2V limits, and quant configs without their own entry use the limits
+    of the model without one.
     """
     key = (tuple(mesh_shape), height, "bh" if ttnn.device.is_blackhole() else "wh")
-    limits = TIMING_LIMITS.get((model_type, *key)) or TIMING_LIMITS.get(("t2v", *key))
+    quant = () if quant_config_name is None else (quant_config_name,)
+    limits = (
+        TIMING_LIMITS.get((model_type, *key, *quant))
+        or TIMING_LIMITS.get(("t2v", *key, *quant))
+        or TIMING_LIMITS.get((model_type, *key))
+        or TIMING_LIMITS.get(("t2v", *key))
+    )
     if limits is None:
         return None
     slack = BH_4X8_LINEAR_SLACK if tuple(mesh_shape) == (4, 8) and topology == ttnn.Topology.Linear else 1.0
