@@ -8,6 +8,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from typing import overload
+
+from test_ltx_audio_trace_control import definitions
 
 import torch
 
@@ -195,6 +198,212 @@ class EncoderTraceTests(unittest.TestCase):
                 )
                 self.assertEqual(calls, expected)
                 self.assertFalse(enc.capture_open)
+
+
+class EncoderLifecycleTests(unittest.TestCase):
+    """Real Tracer state transitions; only native tensor transfers/capture are fakes."""
+
+    image = EncoderTraceTests.image
+
+    def setUp(self):
+        EncoderTraceTests.setUp(self)
+        self.created = []
+        self.live = {}
+        self.active = None
+        self.serial = 0
+        native = SimpleNamespace(Tensor=torch.Tensor, clone=lambda x: x.clone())
+
+        def begin(*args, **kwargs):
+            self.serial += 1
+            self.active = self.serial
+            self.live[self.active] = []
+            return self.active
+
+        native.begin_trace_capture = begin
+        native.end_trace_capture = lambda *a, **kw: setattr(self, "active", None)
+        native.release_trace = lambda dev, tid: self.live.pop(tid)
+        native.execute_trace = lambda dev, tid, **kw: [op() for op in self.live[tid]]
+        ns = definitions(
+            ROOT / "utils/tracing.py",
+            {"Tracer", "_tree_map", "_verify_value", "_clone_tensor"},
+            dict(ttnn=native, overload=overload, logger=Mock(), _kernel_prewarm_capturing=False,
+                 _TRACER_VALID_INPUT_TYPES=(torch.Tensor, int, float, str, bool, type(None))),
+        )
+        self.tracer_type = ns["Tracer"]
+        # Native transfer/copy boundaries only; prepare/staging/capture/replay/release are production.
+        self.tracer_type._tensor_to_device = lambda t, value, **kw: value.clone() if torch.is_tensor(value) else value
+        self.tracer_type._update_input = lambda t, prev, new, **kw: prev.copy_(new) if torch.is_tensor(prev) else None
+        self.enc.mesh_device = SimpleNamespace(id=lambda: 1)
+
+        def factory(*args, **kwargs):
+            tracer = self.tracer_type(*args, **kwargs)
+            self.created.append(tracer)
+            return tracer
+
+        self.enc.forward.__globals__["Tracer"] = factory
+
+        def encode(x, h, w):
+            self.enc._last_logical_hw = (h, w)
+            self.events.append(("encode", h, w))
+            out = x.clone()
+            if self.active is not None:
+                self.live[self.active].append(lambda: out.copy_(x))
+            return out
+
+        self.enc.encode_device = encode
+        self.warmup = next(
+            n for n in ast.walk(ast.parse(PIPE.read_text()))
+            if isinstance(n, ast.If) and ast.unparse(n.test) == "self.vae_encoder is not None and warm_encoders"
+        )
+        release = methods(
+            ROOT / "pipelines/ltx/pipeline_ltx.py", "LTXPipeline", ["release_traces"],
+            dict(StateTensor=Mock()),
+        )["release_traces"]
+        self.pipe = SimpleNamespace(
+            vae_encoder=self.enc, vae_decoder=Mock(), _audio_adapter=Mock(),
+            transformer=None, _trace_state={},
+            _warmup_encode=lambda h, w: self.enc.forward(self.image(h)),
+        )
+        self.pipe.release_traces = lambda: release(self.pipe)
+
+    def warm(self):
+        exec(compile(ast.Module([self.warmup], type_ignores=[]), str(PIPE), "exec"),
+             dict(self=self.pipe, warm_encoders=True, height=8, width=8, os=os, logger=Mock(), ref_num_frames=None))
+
+    def assert_released(self, tracers):
+        for tracer in tracers:
+            self.assertFalse(tracer._prepared)
+            self.assertFalse(tracer.trace_captured)
+            self.assertEqual(tracer.inputs, {})
+            self.assertIsNone(tracer._outputs)
+
+    def check_reset(self, captured):
+        self.warm()
+        if captured:
+            self.enc.capture_traces()
+        old = list(self.created)
+        self.pipe.release_traces()
+        self.pipe.release_traces()
+        self.assertEqual(self.enc._encode_tracers, {})
+        self.assertEqual(self.enc._encode_logical_hw, {})
+        self.assertEqual(self.live, {})
+        self.assert_released(old)
+        self.assertEqual(self.pipe.vae_decoder.release_trace.call_count, 2)
+        self.assertEqual(self.pipe._audio_adapter.release_traces.call_count, 2)
+        self.warm()
+        self.enc.capture_traces()
+        torch.testing.assert_close(self.enc.forward(self.image() + 3), self.image() + 3)
+        self.assertEqual(sum(t.replay_count for t in self.created), 1)
+        self.assertEqual(len(self.created), 4)
+
+    def test_pipeline_cleanup_prepared_only(self):
+        self.check_reset(False)
+
+    def test_pipeline_cleanup_captured(self):
+        self.check_reset(True)
+
+    def test_capture_only_prewarm_then_normal_warmup(self):
+        # Execute the real cold-start reset statements, following the capture-only prep pass.
+        self.warm()
+        old = list(self.created)
+        tree = ast.parse((ROOT / "pipelines/ltx/pipeline_ltx.py").read_text())
+        reset = next(n for n in ast.walk(tree) if isinstance(n, ast.Expr)
+                     and ast.unparse(n) == "self.release_traces()")
+        exec(compile(ast.Module([reset], type_ignores=[]), "cold_reset", "exec"), dict(self=self.pipe))
+        self.assert_released(old)
+        self.warm()
+        self.enc.capture_traces()
+        self.assertEqual(len(self.created), 4)
+        self.assertTrue(all(t.trace_captured for t in self.created[2:]))
+
+    def check_prepare_failure(self, error_type, phase, release_error=False):
+        error = error_type("primary preparation failure")
+        original = self.enc.encode_device
+        # Use the actual failed prepare transition, including staged inputs.
+        def fail(*args):
+            raise error
+        self.enc.encode_device = fail
+        if phase == "stage":
+            original_stage = self.tracer_type._stage_inputs
+            def stage_then_fail(tracer, *args):
+                original_stage(tracer, *args)
+                raise error
+            fault = patch.object(self.tracer_type, "_stage_inputs", stage_then_fail)
+        else:
+            fault = patch.object(self.enc, "encode_device", fail)
+        original_release = self.tracer_type.release_trace
+        def release(tracer):
+            original_release(tracer)
+            if release_error:
+                raise RuntimeError("secondary cleanup failure")
+        with fault, patch.object(self.tracer_type, "release_trace", release):
+            with self.assertRaises(error_type) as caught:
+                self.enc.forward(self.image())
+        self.assertIs(caught.exception, error)
+        self.assertEqual(self.enc._encode_tracers, {})
+        self.assertEqual(self.enc._encode_logical_hw, {})
+        self.assert_released(self.created)
+        self.assertEqual(self.events[-1], ("gather", False))
+        self.enc.encode_device = original
+        self.enc.forward(self.image())
+        self.enc.capture_traces()
+        torch.testing.assert_close(self.enc.forward(self.image() + 2), self.image() + 2)
+        self.assertEqual(self.created[-1].replay_count, 1)
+
+    def check_warmup_failure(self, error_type, shape, fail_eager=False):
+        # Existing valid state is unrelated to this two-shape transaction and must survive.
+        self.enc.forward(self.image(12))
+        self.enc.capture_traces()
+        existing = dict(self.enc._encode_tracers)
+        logical = dict(self.enc._encode_logical_hw)
+        start = len(self.created)
+        original = self.enc.encode_device
+        error = error_type("warmup failure")
+        def fail(x, h, w):
+            if h == shape and self.enc.traced != fail_eager:
+                raise error
+            return original(x, h, w)
+        with patch.object(self.enc, "encode_device", fail):
+            with self.assertRaises(error_type) as caught:
+                self.warm()
+        self.assertIs(caught.exception, error)
+        self.assertFalse(self.enc.capture_open)
+        self.assertEqual(self.enc._encode_tracers, existing)
+        self.assertEqual(self.enc._encode_logical_hw, logical)
+        self.assert_released(self.created[start:])
+        self.assertEqual(len(self.live), 1)
+        # Late shapes remain eager even after interruption.
+        count = len(self.created)
+        self.enc.forward(self.image(16))
+        self.assertEqual(len(self.created), count)
+        self.warm()
+        self.enc.capture_traces()
+        for size in (4, 8, 12):
+            torch.testing.assert_close(self.enc.forward(self.image(size) + 1), self.image(size) + 1)
+        self.assertEqual(len(self.enc._encode_tracers), 3)
+
+
+def _preparation_case(error_type, phase, release_error):
+    def test(self):
+        self.check_prepare_failure(error_type, phase, release_error)
+    return test
+
+
+def _warmup_case(error_type, shape, fail_eager):
+    def test(self):
+        self.check_warmup_failure(error_type, shape, fail_eager)
+    return test
+
+
+for _error in (RuntimeError, KeyboardInterrupt):
+    for _phase in ("stage", "prep"):
+        for _secondary in (False, True):
+            setattr(EncoderLifecycleTests, f"test_prepare_{_error.__name__}_{_phase}_cleanup_fault_{_secondary}",
+                    _preparation_case(_error, _phase, _secondary))
+    for _shape in (4, 8):
+        for _eager in (False, True):
+            setattr(EncoderLifecycleTests, f"test_warmup_{_error.__name__}_{_shape}_eager_{_eager}",
+                    _warmup_case(_error, _shape, _eager))
 
 
 if __name__ == "__main__":
