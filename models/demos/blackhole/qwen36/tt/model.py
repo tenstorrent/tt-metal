@@ -3858,11 +3858,25 @@ class Qwen36Model:
         widths = tuple(
             b for b in gate.variant_buckets("verify", buckets) if b <= self._vfy_B and self._vfy_ksp_avail(b, T)
         )
-        # QWEN36_R16_MEGAKERNEL: a width the engine serves gets no split variant (the engine's SDPA is its own; a split
-        # variant would replay the op-by-op layer loop past the gate's context). QWEN36_R16_MK_KSP_KEEP=1 keeps them.
+        # QWEN36_R16_MEGAKERNEL: at a width the engine serves, the split verify variant (op-by-op: the engine never runs
+        # under kv_split) becomes the LONG-CONTEXT FALLBACK: its gate threshold is raised to the engine's max context + 1
+        # (QWEN36_R16_MK_MAX_CTX, default the engine's MKA_CTX = 32768), so a step whose context (max start_pos + T over the
+        # live rows) exceeds what the engine was built for replays op-by-op, and every shorter step replays the engine.
+        # QWEN36_R16_MK_KSP_KEEP=1 keeps prod's thresholds (10240 / 24576: the split wins over the engine there).
         _mk1 = getattr(self, "_vfy_mk1", None)
         if _mk1 is not None and _mk1.ready and os.environ.get("QWEN36_R16_MK_KSP_KEEP") != "1":
-            widths = tuple(b for b in widths if b not in _mk1.programs)
+            mx = int(os.environ.get("QWEN36_R16_MK_MAX_CTX", "0")) or min(
+                int((getattr(p, "info", None) or {}).get("env", {}).get("MKA_CTX", 32768)) for p in _mk1.programs.values())
+            for b in _mk1.programs:
+                if b in widths:
+                    gate.tables["verify"][b] = mx + 1
+            missing = [b for b in _mk1.programs if b not in widths]
+            if missing:
+                logger.warning(f"megakernel: no split verify variant for engine widths {missing}: contexts > {mx} have NO "
+                               "op-by-op fallback (QWEN36_ATTN_KV_SPLIT gate off?)")
+            self._vfy_mk_max_ctx = mx
+            logger.info(f"megakernel: engine widths {sorted(_mk1.programs)} replay the engine up to context {mx}, the "
+                        f"op-by-op split verify variant above it")
         return widths
 
     def prepare_verify_ksp_variants(self, widths):
