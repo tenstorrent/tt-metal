@@ -33,10 +33,19 @@ from ....pipelines.minimax_h3.policy import align_num_frames
 from ....pipelines.minimax_h3.scheduler import shift_sigmas
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES
-from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, check_audio_sanity, is_host, log_pipeline_perf, weights_dir
+from .common_av import (
+    CALIBRATED_FOX_PROMPT,
+    artifact_dir,
+    check_audio_sanity,
+    is_host,
+    log_pipeline_perf,
+    pretest_user_repl,
+    run_user_generations,
+    weights_dir,
+)
 
 HEIGHT, WIDTH = 768, 1344
-DURATIONS_S = (5, 10, 15)
+DURATIONS_S = (15,)  # (5, 10, 15) #use user inputs to get estimates for other runs
 SEED = 0
 PROMPT = CALIBRATED_FOX_PROMPT
 SPARSITY = 0.9
@@ -53,6 +62,7 @@ FASTH3_GATES = 50
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_fast_end_to_end(mesh_device, reset_seeds, duration_s):
+    pretest_user_repl()
     if TASK not in ("fl2va", "t2va"):
         raise ValueError(f"MINIMAX_H3_FAST_TASK must be fl2va or t2va, got {TASK!r}")
     lora_path = os.environ.get("MINIMAX_H3_FAST_LORA_PATH")
@@ -135,3 +145,12 @@ def test_fast_end_to_end(mesh_device, reset_seeds, duration_s):
             audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
         )
         logger.info(f"wrote {mp4}")
+
+    run_user_generations(
+        pipeline,
+        default_aspect_ratio=(16, 9),
+        default_duration_s=duration_s,
+        num_inference_steps=FASTH3_NUM_GRID_POINTS,
+        seed=SEED,
+        default_prompt=PROMPT,
+    )
