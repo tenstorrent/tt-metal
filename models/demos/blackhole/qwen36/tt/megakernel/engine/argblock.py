@@ -20,7 +20,9 @@ import os
 MAGIC = 0x4D4B4142
 HEADER = 4
 KINDS = {"phase": 0, "ar": 1, "v12": 2, "gdn": 3, "attn": 4, "replay": 5}  # = common runtime arg slot; mk_argblock.hpp AB_*
-MAX_CB_ID = 44
+# MK_MAX_CB_ID: the cap is a dispatch-size choice, not a hardware limit. G-b (E1_GB=1) puts its prefix CBs at 45..48
+# (E1_GB_CB) on the GDN cores, whose ids 0..44 are all taken (G2 role 0..40, gin 41, gdnout 42..44): E1_GB needs 48.
+MAX_CB_ID = int(os.environ.get("MK_MAX_CB_ID", "44"))
 
 
 def _cores(crs):
@@ -104,6 +106,7 @@ class ArgBlocks:
 def check_cb_ids(desc):
     """Raise if a ProgramDescriptor (or MeshProgramDescriptor values) uses a CB id > MAX_CB_ID (spec v1.25)."""
     progs = [desc] if hasattr(desc, "cbs") else list(desc.values()) if hasattr(desc, "values") else [desc]
-    bad = sorted({f.buffer_index for p in progs for c in p.cbs for f in c.format_descriptors if f.buffer_index > MAX_CB_ID})
+    cap = int(os.environ.get("MK_MAX_CB_ID", MAX_CB_ID))   # read per call: build_program runs this under the engine env
+    bad = sorted({f.buffer_index for p in progs for c in p.cbs for f in c.format_descriptors if f.buffer_index > cap})
     if bad:
-        raise ValueError(f"CB ids {bad} exceed {MAX_CB_ID}: the CB-config block is program-wide (spec v1.25)")
+        raise ValueError(f"CB ids {bad} exceed {cap}: the CB-config block is program-wide (spec v1.25; MK_MAX_CB_ID)")
