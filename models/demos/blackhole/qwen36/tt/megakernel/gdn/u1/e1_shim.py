@@ -456,7 +456,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'    wou::scatter({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u);   // also retires the debug writes\n'
                 f'    {{OSIG}}\n'
                 + ('    { DeviceZoneScopedN("GO-OSIGB"); noc_async_atomic_barrier(); }\n' if os.environ.get("E1_GO_OSIGB", "0") == "1" else '') +
-                f'  }}\n')
+                f'    }}\n')   # 4-space close: program.py's AR splice (hosted sender on the corners) cuts the layer body at the
+                                # first "\n  }\n" after the loop head -- a 2-space close here ended the body early (mesh hang)
         go_c = f'    {{ DeviceZoneScopedN("C-GOMM"); wou::matmul_nt<{"true" if GO.get("lofi", True) else "false"}>({CA_}, {CR_}, {RP}, {CO_}, {MAXT}, {GO["wk"]}, g_ab[{{OGO}}], 4); }}   // short inits only; half-sync fp32 DST: 4 tiles / pass\n'
     rct, roff = ctas([rmap[t] for t in READER_TENSORS])
     wct, woff = ctas([wmap[t] for t in WRITER_TENSORS])
