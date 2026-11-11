@@ -1835,7 +1835,9 @@ def setup_bench(dev, MESH, mesh_identity):
             import types
             # GTEXT (E1_GTEXT, default on under E1_GB; 0 = the old binaries): the AR corners and the Σ reducer get compute kernels
             # without the G-b L2-root code (GB_NOROOT), so the role places its 4 L2 roots off them (e1_shim _gb_payloads)
-            _gb_noroot = ((([(10, 8), (11, 8), (10, 9), (11, 9)] if REAL_AR else []) + ([(RRED_HC.x, RRED_HC.y)] if RRED else []))
+            # (E1_GTEXT_NOROOT_SIM=1, single-chip A/B only: the mesh root placement without REAL_AR / RRED, no GB_NOROOT kernels)
+            _nrs = GTEXT and os.environ.get('E1_GTEXT_NOROOT_SIM', '0') == '1'
+            _gb_noroot = ((([(10, 8), (11, 8), (10, 9), (11, 9)] if REAL_AR or _nrs else []) + ([(RRED_HC.x, RRED_HC.y)] if RRED else [(1, 8)] if _nrs else []))
                           if GTEXT else [])
             if REAL_AR:   # the hosted AR sender owns CB ids RS / RED / HDR / AG on the corner cores: the GDN step's DFBs skip
                 # them (e1_shim build_engine skip_cb_ids default (34, 35, 37, 39))
