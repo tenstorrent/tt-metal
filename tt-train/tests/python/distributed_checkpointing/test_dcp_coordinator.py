@@ -2,29 +2,34 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The multi-rank coordinator without MPI or devices: the union plan and owner election over the ranks' parts, the
-merge of the ranks' results into one index, and the phase protocol over an in-process transport (a failing rank
-stops every rank with its number; a failing collective is fatal and ends the exchanges)."""
+"""The multi-rank coordinator without MPI or devices: the owner election over the ranks' parts, the merge of the ranks'
+results into one index, and the phase protocol over an in-process transport (a failing rank stops every rank with its
+number; a failing collective is fatal and ends the exchanges)."""
 
 import json
 import threading
 
 import pytest
+import ttnn
 
 from ttml.distributed_checkpointing._boxes import Box
+from ttml.distributed_checkpointing import _coordinator
 from ttml.distributed_checkpointing._coordinator import (
+    Election,
     Group,
+    LoopbackTransport,
     PlanPart,
     RankRecord,
     ResultPart,
-    UnionPlan,
+    checked_payload,
     merge_plan_parts,
     merge_results,
 )
-from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatal
+from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatal, IncompleteCheckpoint
 from ttml.distributed_checkpointing._index import ChunkRecord, Entry, FileRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
+from ttml.distributed_checkpointing._state_dict import check_param_groups, is_structural_scalar, restore_scalars
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 
 
@@ -52,36 +57,40 @@ def _big_mesh_parts():
     ]
 
 
-def test_union_election_gives_every_box_one_owner_that_holds_it():
-    union = merge_plan_parts(_big_mesh_parts())
-    assert [r.rank for r in union.records] == [0, 1] and set(union.infos) == {"model/w", "model/b"}
-    w = union.owners["model/w"]
+def test_the_election_gives_every_box_one_owner_that_holds_it():
+    election = merge_plan_parts(_big_mesh_parts())
+    assert set(election.owners) == {"model/w", "model/b"} and election.keys == 2
+    w = election.owners["model/w"]
     assert len(w) == 4, "a column-sharded weight has four unique boxes"
     for group, (rank, coord) in w.items():
         assert coord == (0, group[0]) and rank == (0 if coord[1] < 2 else 1), "each box is written where it lives"
-    (bias_owner,) = union.owners["model/b"].values()
+    (bias_owner,) = election.owners["model/b"].values()
     assert bias_owner in {(0, (0, 0)), (0, (0, 1)), (1, (0, 2)), (1, (0, 3))}
-    # The same union, serialized and back, elects the same owners on every rank.
-    assert UnionPlan.from_bytes(union.to_bytes()).owners == union.owners
+    # The election every rank decodes from rank 0's broadcast is the one rank 0 made.
+    assert Election.from_bytes(election.to_bytes()) == election
 
 
 def test_each_rank_plans_only_its_owned_chunks_and_files():
     parts = _big_mesh_parts()
-    union = merge_plan_parts(parts)
+    election = merge_plan_parts(parts)
     plans = {}
     for part in parts:
         rank = part.record.rank
         plans[rank] = create_save_plan(
-            part.infos, file_for_coord=lambda c, r=rank: data_file_name(r, 0, c), owner_of=union.owner_of(rank)
+            part.infos, file_for_coord=lambda c, r=rank: data_file_name(r, 0, c), owner_of=election.owner_of(rank)
         )
     for rank, plan in plans.items():
-        assert all(it.chunk.mesh_coord in set(parts[rank].record.local_coords) for its in plan.items.values() for it in its)
-        assert [f.coord for f in plan.files] == sorted({it.chunk.mesh_coord for its in plan.items.values() for it in its})
+        assert all(
+            it.chunk.mesh_coord in set(parts[rank].record.local_coords) for its in plan.items.values() for it in its
+        )
+        assert [f.coord for f in plan.files] == sorted(
+            {it.chunk.mesh_coord for its in plan.items.values() for it in its}
+        )
         assert all(f.path.startswith(f"data/w{rank:03d}_") for f in plan.files)
     assert len(plans[0].items["model/w"]) == 2 and len(plans[1].items["model/w"]) == 2
     assert len(plans[0].items["model/b"]) + len(plans[1].items["model/b"]) == 1
     # A key another rank writes entirely has no entry in this rank's part.
-    bias_writer = union.owners["model/b"][()][0]
+    bias_writer = election.owners["model/b"][()][0]
     other = 1 - bias_writer
     assert "model/b" not in plans[other].entries() and "model/b" in plans[bias_writer].entries()
 
@@ -92,7 +101,9 @@ def test_the_ranks_must_cover_the_label_and_agree_on_its_description():
         merge_plan_parts([PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2)]), infos)])
     different = [_info("model/w", [R, S(2)], (1, 4), (1, 1, 32, 16))]
     with pytest.raises(CheckpointError, match="describes it differently"):
-        merge_plan_parts([PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2), (0, 3)]), different)])
+        merge_plan_parts(
+            [PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2), (0, 3)]), different)]
+        )
 
 
 def test_multi_mesh_ranks_with_their_own_keys_and_one_shared_key():
@@ -104,10 +115,10 @@ def test_multi_mesh_ranks_with_their_own_keys_and_one_shared_key():
         PlanPart(_record(0, [(0, 0), (0, 1)], mesh_id=0, shape=(1, 2)), [stage0, shared]),
         PlanPart(_record(1, [(0, 0), (0, 1)], mesh_id=1, shape=(1, 2)), [stage1, shared]),
     ]
-    union = merge_plan_parts(parts)
-    assert {r for r, _ in union.owners["model/stage0/w"].values()} == {0}
-    assert {r for r, _ in union.owners["model/stage1/w"].values()} == {1}
-    assert len(union.owners["model/norm"]) == 1, "one box, held by four (rank, coordinate) pairs"
+    election = merge_plan_parts(parts)
+    assert {r for r, _ in election.owners["model/stage0/w"].values()} == {0}
+    assert {r for r, _ in election.owners["model/stage1/w"].values()} == {1}
+    assert len(election.owners["model/norm"]) == 1, "one box, held by four (rank, coordinate) pairs"
 
 
 def _result(rank, files, entries, rng_text):
@@ -138,23 +149,45 @@ def _entry(key, chunks, global_shape=(1, 1, 32, 64)):
     )
 
 
-def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_generators():
-    union = merge_plan_parts(_big_mesh_parts())
-    chunk = lambda col, file: ChunkRecord(Box((0, 0, 0, 16 * col), (1, 1, 32, 16)), file, 4096, 1024, (0, col), 7)
+def _chunk(col, file):
+    """Column ``col`` of ``model/w`` (a [1, 1, 32, 16] box) as written by device (0, ``col``) into its rank's file
+    ``file``."""
+    return ChunkRecord(Box((0, 0, 0, 16 * col), (1, 1, 32, 16)), file, 4096, 1024, (0, col), 7)
+
+
+def _big_mesh_save():
+    """The election over ``_big_mesh_parts`` and the two result parts a save on it reports: each rank wrote the two
+    columns of ``model/w`` its devices hold, one file per device, and rank 1 also wrote the replicated bias, so the
+    parts hold exactly one chunk per elected box."""
+    election = merge_plan_parts(_big_mesh_parts())
     r0 = _result(
         0,
-        [FileRecord("data/w000_m0_d0-0.safetensors", 5120, 0, 0, (0, 0)), FileRecord("data/w000_m0_d0-1.safetensors", 5120, 0, 0, (0, 1))],
-        {"model/w": _entry("model/w", [chunk(0, 0), chunk(1, 1)])},
+        [
+            FileRecord("data/w000_m0_d0-0.safetensors", 5120, 0, 0, (0, 0)),
+            FileRecord("data/w000_m0_d0-1.safetensors", 5120, 0, 0, (0, 1)),
+        ],
+        {"model/w": _entry("model/w", [_chunk(0, 0), _chunk(1, 1)])},
         "gen0",
     )
     bias = ChunkRecord(Box((0, 0, 0, 0), (1, 1, 1, 64)), 1, 8192, 128, (0, 3), 9)
     r1 = _result(
         1,
-        [FileRecord("data/w001_m0_d0-2.safetensors", 5120, 1, 0, (0, 2)), FileRecord("data/w001_m0_d0-3.safetensors", 5248, 1, 0, (0, 3))],
-        {"model/w": _entry("model/w", [chunk(2, 0), chunk(3, 1)]), "model/b": _entry("model/b", [bias], (1, 1, 1, 64))},
+        [
+            FileRecord("data/w001_m0_d0-2.safetensors", 5120, 1, 0, (0, 2)),
+            FileRecord("data/w001_m0_d0-3.safetensors", 5248, 1, 0, (0, 3)),
+        ],
+        {
+            "model/w": _entry("model/w", [_chunk(2, 0), _chunk(3, 1)]),
+            "model/b": _entry("model/b", [bias], (1, 1, 1, 64)),
+        },
         "gen1",
     )
-    index, header = merge_results([r1, r0], union, "step_0000003")
+    return election, r0, r1
+
+
+def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_generators():
+    election, r0, r1 = _big_mesh_save()
+    index, header = merge_results([r1, r0], election, "step_0000003")
     assert [f.path for f in index.files] == [
         "data/w000_m0_d0-0.safetensors",
         "data/w000_m0_d0-1.safetensors",
@@ -168,9 +201,9 @@ def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_gene
     assert header["user"] == {"step": 3} and header["train_state"]["scheduler"] == {"m_last_step": 3}
     assert header["train_state"]["rng"]["ranks"] == {"0": {"ttml": "gen0"}, "1": {"ttml": "gen1"}}
     # The index must hold exactly the elected chunks.
-    short = _result(1, r1.files, {"model/w": _entry("model/w", [chunk(2, 0)])}, "gen1")
+    short = _result(1, r1.files, {"model/w": _entry("model/w", [_chunk(2, 0)])}, "gen1")
     with pytest.raises(CheckpointError, match="chunk"):
-        merge_results([r0, short], union, "x")
+        merge_results([r0, short], election, "x")
     # Parts travel as bytes without loss.
     assert ResultPart.from_bytes(r1.to_bytes()).to_bytes() == r1.to_bytes()
 
@@ -191,6 +224,7 @@ class _Fake:
 
         class T:
             def __init__(self):
+                self.broken = None
                 self.rank = rank
                 self.size = fake.size
                 self.world_rank = rank
@@ -242,7 +276,10 @@ def test_phases_gather_and_broadcast_over_three_ranks():
     def body(group, fake):
         assert group.agree("x", 7) == [7, 7, 7]
         parts = group.gather(json.dumps({"rank": group.rank}).encode())
-        merged = group.phase("merge", lambda: json.dumps([json.loads(p)["rank"] for p in parts]).encode() if group.is_coordinator else None)
+        merged = group.phase(
+            "merge",
+            lambda: json.dumps([json.loads(p)["rank"] for p in parts]).encode() if group.is_coordinator else None,
+        )
         return json.loads(group.broadcast(merged))
 
     results, errors = _run_ranks(3, body)
@@ -290,34 +327,69 @@ def test_a_failing_collective_is_fatal_and_ends_the_exchanges():
     assert isinstance(errors[2], CheckpointFatal) and "peer may have died" in str(errors[2])
 
 
+def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything():
+    """A retry must not reach the other ranks: MPI pairs collectives by order, so an exchange on a communicator that
+    failed could hang, or be paired with an unrelated one on a rank that moved on. The transport outlives the group
+    of one save or load and records the failure, so a group built later on it raises before exchanging anything."""
+    fake = _Fake(2)
+    fake.die.add(1)
+    transport = fake.transport(1)
+    with pytest.raises(CheckpointFatal, match="peer may have died"):
+        Group(transport).allgather(1)
+    calls = []
+    transport.allgather_int = lambda value: calls.append(value) or [value, value]  # would succeed if reached
+    with pytest.raises(CheckpointFatal, match="already failed in this process"):
+        Group(transport).phase("a later save", lambda: None)
+    assert calls == [], "the retry reached the transport"
+
+
+def test_the_mpi_transport_is_one_per_process(monkeypatch):
+    monkeypatch.setattr(_coordinator, "_TRANSPORTS", {})
+    for name, value in (
+        ("distributed_context_is_initialized", True),
+        ("distributed_context_get_size", 2),
+        ("distributed_context_get_rank", 1),
+        ("distributed_context_world_rank", 1),
+    ):
+        monkeypatch.setattr(ttnn, name, lambda value=value: value, raising=False)
+    first = _coordinator.current_transport()
+    assert first is _coordinator.current_transport(), "every save and load sees the same transport"
+    first.broken = "rank 1: collective failed"
+    assert _coordinator.current_transport().broken == "rank 1: collective failed"
+
+
 def test_scalar_restore_keeps_each_optimizers_own_param_group_members():
     """On a multi-mesh world the index carries rank 0's optimizer scalars; another rank's optimizer holds other
     parameters, and the membership list must stay its own while steps and learning rates are restored."""
-    from ttml.distributed_checkpointing._state_dict import is_structural_scalar, restore_scalars
 
     class _Opt:
         def __init__(self):
-            self.state = {"steps": 0, "num_param_groups": 1, "param_groups.0.params": "stage1/w,shared/w", "param_groups.0.lr": 1e-3}
+            self.state = {
+                "steps": 0,
+                "num_param_groups": 1,
+                "param_groups.0.params": "shared/w\nstage1/w",
+                "param_groups.0.lr": 1e-3,
+            }
 
         def get_state_dict(self):
             return dict(self.state)
 
         def set_state_dict(self, state):
-            assert state["param_groups.0.params"] == "stage1/w,shared/w", "membership must be this optimizer's own"
+            assert state["param_groups.0.params"] == "shared/w\nstage1/w", "membership must be this optimizer's own"
             self.state = dict(state)
 
     opt = _Opt()
     saved = {
         "optimizer/steps": 7,
         "optimizer/num_param_groups": 1,
-        "optimizer/param_groups.0.params": "stage0/w,shared/w",
+        "optimizer/param_groups.0.params": "shared/w\nstage0/w",
         "optimizer/param_groups.0.lr": 5e-4,
     }
     assert is_structural_scalar("optimizer/param_groups.0.params") and not is_structural_scalar("optimizer/steps")
     applied = restore_scalars(opt, saved)
     assert set(applied) == {"optimizer/steps", "optimizer/num_param_groups", "optimizer/param_groups.0.lr"}
     assert opt.state["steps"] == 7 and opt.state["param_groups.0.lr"] == 5e-4
-    assert opt.state["param_groups.0.params"] == "stage1/w,shared/w"
+    assert opt.state["param_groups.0.params"] == "shared/w\nstage1/w"
 
 
 def test_disagreeing_ranks_are_refused():
@@ -326,3 +398,68 @@ def test_disagreeing_ranks_are_refused():
 
     _, errors = _run_ranks(2, body)
     assert all("disagree" in str(e) for e in errors.values()) and set(errors) == {0, 1}
+
+
+def test_every_rank_raises_the_class_the_failing_rank_raised():
+    def body(group, fake):
+        def work():
+            if group.rank == 1:
+                raise IncompleteCheckpoint("no index.json")
+
+        group.phase("reading the index", work)
+
+    _, errors = _run_ranks(3, body)
+    assert set(errors) == {0, 1, 2}
+    assert all(type(e) is IncompleteCheckpoint and "rank(s) [1]" in str(e) for e in errors.values())
+    assert "no index.json" in str(errors[1]) and "IncompleteCheckpoint on rank 1" in str(errors[0])
+
+
+def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
+    monkeypatch.setattr(_coordinator, "MAX_PAYLOAD", 64)
+
+    def body(group, fake):
+        payload = b"x" * (100 if group.rank == 1 else 10)
+        payload = group.phase("serializing", lambda: checked_payload(payload, "this rank's part"))
+        return group.gather(payload)
+
+    _, errors = _run_ranks(2, body)
+    assert set(errors) == {0, 1} and all("serializing failed on rank(s) [1]" in str(e) for e in errors.values())
+    assert "more than a transfer can carry" in str(errors[1]), "the failing rank names the cause; the others name it"
+
+
+def test_ranks_with_different_scheduler_or_dataloader_state_are_refused():
+    parts = _big_mesh_parts()
+    parts[0].train_state_hash, parts[1].train_state_hash = 11, 12
+    with pytest.raises(CheckpointError, match=r"rank\(s\) \[1\] differs from rank 0"):
+        merge_plan_parts(parts)
+    parts[1].train_state_hash = 11
+    assert merge_plan_parts(parts).owners
+    assert PlanPart.from_bytes(parts[1].to_bytes()).train_state_hash == 11
+
+
+def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset():
+    # Each rank's optimizer holds the shared layer and its own stage; the index records the union of the lists.
+    election, r0, r1 = _big_mesh_save()
+    r0.scalars = {"optimizer/num_param_groups": 1, "optimizer/param_groups.0.params": "shared/w\nstage0/w"}
+    r1.scalars = {"optimizer/num_param_groups": 1, "optimizer/param_groups.0.params": "shared/w\nstage1/w"}
+    index, _ = merge_results([r0, r1], election, "step_0000001")
+    assert index.scalars["optimizer/param_groups.0.params"] == "shared/w\nstage0/w\nstage1/w"
+
+    class _Opt:
+        def __init__(self, members):
+            self.state = {"num_param_groups": 1, "param_groups.0.params": "\n".join(members)}
+
+        def get_state_dict(self):
+            return self.state
+
+    check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars)  # each rank holds part of the union
+    with pytest.raises(CheckpointError, match="holds params the checkpoint's group 0 does not"):
+        check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars)
+
+
+def test_the_group_of_one_runs_phases_directly_and_keeps_error_types():
+    group = Group(LoopbackTransport())
+    assert group.phase("x", lambda: 5) == 5 and group.gather(b"p") == [b"p"] and group.broadcast(b"q") == b"q"
+    assert group.agree("x", 3) == [3] and group.allgather(4) == [4] and group.is_coordinator
+    with pytest.raises(ValueError, match="raw"):
+        group.phase("x", lambda: (_ for _ in ()).throw(ValueError("raw")))

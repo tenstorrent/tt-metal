@@ -26,24 +26,26 @@ the logical vocab rows for the padded LM head).
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import random
 import sys
 import traceback
+from typing import Callable
 
 import numpy as np
 import ttnn
 
 import ttml
 import ttml.distributed_checkpointing as dcp
-from dcp_shards import local_coords, shard_arrays
+from dcp_shards import shard_arrays
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
 from ttml.common.utils import set_seed
+from ttml.distributed_checkpointing._state_dict import label_of, local_coords
+from ttml.distributed_checkpointing._topology import Label, chunk_boxes, global_shape
 from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
 
 from dcp_oracle import Loader
@@ -149,7 +151,16 @@ def loss_of(model, config: LlamaConfig, tokens, mask, targets):
 
 
 def train(
-    model, params, optimizer, scheduler, loader, config, steps: int, seed: int, mark=lambda what: None, start: int = 0
+    model,
+    params,
+    optimizer,
+    scheduler,
+    loader,
+    config,
+    steps: int,
+    seed: int,
+    mark: Callable[[str], None] = lambda what: None,
+    start: int = 0,
 ) -> None:
     """``steps`` training steps numbered from ``start``: step ``n`` draws batch ``seed + n``, so a run resumed from
     a checkpoint repeats the batches the uninterrupted run would have drawn. The generators are seeded only when
@@ -191,20 +202,15 @@ def agree(ok: bool) -> bool:
 
 def local_shards(tensor) -> dict[tuple[int, ...], np.ndarray]:
     """This process's shards of a tensor as float32, by mesh coordinate."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    return shard_arrays(tensor.get_value(NATIVE), local_coords(device))
+    return shard_arrays(tensor.get_value(NATIVE), local_coords())
 
 
 def label_json(tensor) -> str:
-    from ttml.distributed_checkpointing._state_dict import label_of
-
     return json.dumps(label_of(tensor.get_value(NATIVE)).to_json())
 
 
 def assemble(label: str, shards: dict[tuple[int, ...], np.ndarray]) -> np.ndarray:
     """The global device-layout array of a tensor from the shards of every rank, placed by its topology label."""
-    from ttml.distributed_checkpointing._topology import Label, chunk_boxes, global_shape
-
     lab = Label.from_json(json.loads(label))
     local_shape = next(iter(shards.values())).shape
     full = np.zeros(global_shape(lab, local_shape), dtype=np.float32)
@@ -220,29 +226,20 @@ def assemble(label: str, shards: dict[tuple[int, ...], np.ndarray]) -> np.ndarra
     return full
 
 
-def replica_selections(label: str, copies: dict[tuple[int, ...], list[np.ndarray]]) -> list[dict]:
-    """Ways to pick one shard per replica group, one per distinct copy a group has across the devices and ranks
-    holding it: devices that should hold the same box may not (replicas drift apart when a world's collectives do
-    not span its ranks), and the checkpoint holds the copy of the device that was elected to write it."""
-    from ttml.distributed_checkpointing._topology import Label, chunk_boxes
-
+def replicas_differ(label: str, copies: dict[tuple[int, ...], list[np.ndarray]]) -> bool:
+    """Whether the devices (of any rank) that should hold the same box hold different values. A checkpoint keeps one
+    copy of every replicated box, so a world whose copies differ cannot be restored as it ran, and the comparison
+    fails on it. ``copies`` maps a mesh coordinate to every copy dumped for it (several when meshes share
+    coordinates)."""
     lab = Label.from_json(json.loads(label))
     local_shape = next(iter(copies.values()))[0].shape
-    distinct: dict[tuple[int, ...], list[tuple[tuple[int, ...], np.ndarray]]] = {}
+    first: dict[tuple[int, ...], np.ndarray] = {}
     for chunk in chunk_boxes(lab, local_shape):
         for array in copies.get(chunk.mesh_coord, []):
-            kept = distinct.setdefault(chunk.group, [])
-            if not any(np.array_equal(array, a) for _, a in kept):
-                kept.append((chunk.mesh_coord, array))
-    width = max(len(k) for k in distinct.values())
-    selections = []
-    for i in range(width):
-        pick = {}
-        for group, kept in distinct.items():
-            coord, array = kept[min(i, len(kept) - 1)]
-            pick[coord] = array
-        selections.append(pick)
-    return selections
+            seen = first.setdefault(chunk.group, array)
+            if not np.array_equal(seen, array):
+                return True
+    return False
 
 
 def coord_key(coord: tuple[int, ...]) -> str:
@@ -356,7 +353,16 @@ RESUME = "resume:"
 
 
 def resume_reference(
-    model, params, optimizer, scheduler, loader, config, seed: int, rank: int, step: int, mark=lambda what: None
+    model,
+    params,
+    optimizer,
+    scheduler,
+    loader,
+    config,
+    seed: int,
+    rank: int,
+    step: int,
+    mark: Callable[[str], None] = lambda what: None,
 ) -> dict[str, np.ndarray]:
     """One more training step, numbered ``step`` so it draws that step's batch, then this rank's part again under the
     ``resume:`` prefix: the run one step after the checkpoint. Taken on the saving world after its save and on the
@@ -380,20 +386,20 @@ def merge_parts(paths: list[str]) -> dict[str, np.ndarray]:
     return merged
 
 
-def canonical(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[dict[str, np.ndarray], dict[str, list]]:
-    """Every tensor in canonical layout, the full logits and the scalars, from the merged parts; and, per tensor
-    whose replicas differ between the devices or ranks of that world, every distinct canonical copy. The parts
-    dumped after the step that follows the checkpoint come back the same way under the ``resume:`` prefix."""
-    out, replicas = _canonical_part({k: v for k, v in parts.items() if not k.startswith(RESUME)}, config)
+def canonical(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[dict[str, np.ndarray], list[str]]:
+    """Every tensor in canonical layout, the full logits and the scalars, from the merged parts, and the names of the
+    tensors whose replicas differ between the devices or ranks of that world. The parts dumped after the step that
+    follows the checkpoint come back the same way under the ``resume:`` prefix."""
+    out, differ = _canonical_part({k: v for k, v in parts.items() if not k.startswith(RESUME)}, config)
     resume = {k[len(RESUME) :]: v for k, v in parts.items() if k.startswith(RESUME)}
     if resume:
-        after, after_replicas = _canonical_part(resume, config)
+        after, after_differ = _canonical_part(resume, config)
         out.update({RESUME + k: v for k, v in after.items()})
-        replicas.update({RESUME + k: v for k, v in after_replicas.items()})
-    return out, replicas
+        differ += [RESUME + k for k in after_differ]
+    return out, differ
 
 
-def _canonical_part(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[dict[str, np.ndarray], dict[str, list]]:
+def _canonical_part(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[dict[str, np.ndarray], list[str]]:
     meta = json.loads(str(parts["meta"]))
     out: dict[str, np.ndarray] = {}
     copies: dict[str, dict[tuple[int, ...], list[np.ndarray]]] = {}
@@ -409,23 +415,20 @@ def _canonical_part(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[
             copies.setdefault("logits", {}).setdefault(tuple(int(c) for c in coord.split("-")), []).append(value)
         elif key.startswith("scalar:") or key.startswith("train:"):
             out[key] = value
-    replicas: dict[str, list] = {}
+    differ: list[str] = []
     for name, by_coord in copies.items():
         if name == "logits":
             continue
         kind, cname = name.split(":", 1)
         leaf = cname.rsplit(":", 1)[-1] if kind == "state" else cname
-        distinct: list[np.ndarray] = []
-        for selection in replica_selections(str(parts["label:" + name]), by_coord):
-            full = canonicalize(leaf, assemble(str(parts["label:" + name]), selection), config, meta["tp"])
-            if not any(np.array_equal(full, c) for c in distinct):
-                distinct.append(full)
-        out[name] = distinct[0]
-        if len(distinct) > 1:
-            replicas[name] = distinct
+        label = str(parts["label:" + name])
+        if replicas_differ(label, by_coord):
+            differ.append(name)
+        one_copy = {coord: arrays[0] for coord, arrays in by_coord.items()}
+        out[name] = canonicalize(leaf, assemble(label, one_copy), config, meta["tp"])
     by_coord = copies["logits"]
     if any(len(v) > 1 and not all(np.array_equal(v[0], c) for c in v[1:]) for v in by_coord.values()):
-        replicas["logits"] = []
+        differ.append("logits")
     if meta["tp"] > 1:
         axis = meta["tp_axis"]
         columns = []
@@ -436,33 +439,17 @@ def _canonical_part(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[
     else:
         full = next(iter(by_coord.values()))[0]
     out["logits"] = full[..., : config.vocab_size]
-    return out, replicas
+    return out, differ
 
 
-def compare(
-    actual: tuple[dict[str, np.ndarray], dict[str, list]],
-    expected: tuple[dict[str, np.ndarray], dict[str, list]],
-    logits_tolerance: float,
-) -> list[str]:
-    """Every tensor of the loaded world against the saving world's. A box with one copy must match exactly; where
-    the saving world held several copies (its replicas drifted), every loaded copy must equal one of them, and the
-    logits are reported but not judged, since that world's forward was not consistent.
-
-    The entries dumped after the step that follows the checkpoint (``resume:``) are exact on the same layout. Across
-    layouts the forward and the step round differently: the post-step moments must lie within ``logits_tolerance``
-    of their scale and the post-step parameter update within a quarter of its mean size (a fresh optimizer's update
-    differs from the restored one's by about its whole size). A saving world with drifted replicas took its step
-    from inconsistent copies, so its post-step entries are not judged either."""
-    actual, actual_replicas = actual
-    expected, expected_replicas = expected
+def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logits_tolerance: float) -> list[str]:
+    """Every tensor of the loaded world against the saving world's, exactly. The entries dumped after the step that
+    follows the checkpoint (``resume:``) are exact on the same layout too; across layouts the forward and the step
+    round differently, so the logits and the post-step moments must lie within ``logits_tolerance`` of their scale
+    and the post-step parameter update within a quarter of its mean size (a fresh optimizer's update differs from the
+    restored one's by about its whole size)."""
     problems = []
     exact = logits_tolerance == 0.0
-    if expected_replicas:
-        print(
-            f"NOTE: {len(expected_replicas)} tensor(s) had replicas that differ between the saving world's devices or "
-            f"ranks ({', '.join(sorted(expected_replicas)[:4])}{', ...' if len(expected_replicas) > 4 else ''}); a loaded "
-            "value may equal any copy, and the logits are reported but not judged"
-        )
     if set(actual) != set(expected):
         problems.append(
             f"keys differ: only in loaded world {sorted(set(actual) - set(expected))[:5]}, only in reference {sorted(set(expected) - set(actual))[:5]}"
@@ -477,10 +464,8 @@ def compare(
             scale = float(np.max(np.abs(e))) + 1e-6
             rel = float(np.max(np.abs(a - e))) / scale
             print(f"{key}: max |diff| / max |ref| = {rel:.4f} (tolerance {logits_tolerance})")
-            if rel > logits_tolerance and not expected_replicas:
+            if rel > logits_tolerance:
                 problems.append(f"{key} differ by {rel:.4f} of their scale (tolerance {logits_tolerance})")
-            continue
-        if base is not None and expected_replicas:
             continue
         if not exact and base is not None and base.startswith("state:"):
             scale = float(np.max(np.abs(e))) + 1e-6
@@ -499,20 +484,12 @@ def compare(
             if rel > 0.25:
                 problems.append(f"{key}: the update differs by {rel:.2f} of its mean size (tolerance 0.25)")
             continue
-        loaded_copies = actual_replicas.get(key, [a])
-        saved_copies = expected_replicas.get(key, [e])
         if a.dtype.kind in "US" or e.dtype.kind in "US":
             if not np.array_equal(a, e):
                 problems.append(f"{key}: text differs")
-        elif len(saved_copies) == 1 and len(loaded_copies) == 1:
-            if not np.array_equal(a, e):
-                n = int(np.count_nonzero(a != e))
-                problems.append(f"{key}: {n} of {a.size} values differ (max |diff| {float(np.max(np.abs(a - e))):.4g})")
-        else:
-            for copy in loaded_copies:
-                if not any(np.array_equal(copy, saved) for saved in saved_copies):
-                    problems.append(f"{key}: a loaded copy matches none of the {len(saved_copies)} saved copies")
-                    break
+        elif not np.array_equal(a, e):
+            n = int(np.count_nonzero(a != e))
+            problems.append(f"{key}: {n} of {a.size} values differ (max |diff| {float(np.max(np.abs(a - e))):.4g})")
     return problems
 
 
@@ -568,10 +545,12 @@ def main(argv=None) -> int:
     reference_base = args.dir.rstrip("/") + ".reference"
     actual_base = args.dir.rstrip("/") + ".actual"
     saved_resume = False
+    saved_ranks = 1
     if args.command == "load":
         with np.load(reference_base + ".config.npz") as saved:
             sizes = json.loads(str(saved["config"]))
             saved_resume = "resume_step" in saved.files and bool(saved["resume_step"])
+            saved_ranks = int(saved["ranks"]) if "ranks" in saved.files else 1
     else:
         sizes = dict(
             hidden_size=args.hidden,
@@ -634,7 +613,12 @@ def main(argv=None) -> int:
                 print("RESULT: the reference could not be written on every rank")
                 return 1
             if rank == 0:
-                np.savez(reference_base + ".config.npz", config=json.dumps(sizes), resume_step=np.asarray(resumed))
+                np.savez(
+                    reference_base + ".config.npz",
+                    config=json.dumps(sizes),
+                    resume_step=np.asarray(resumed),
+                    ranks=np.asarray(size),
+                )
                 print(
                     json.dumps(
                         {
@@ -672,12 +656,21 @@ def main(argv=None) -> int:
         problems: list[str] = []
         if rank == 0:
             try:
-                expected_parts = merge_parts(glob.glob(reference_base + "-w*.npz"))
+                # Exactly the parts of the two worlds' ranks, by name: the tests share one saved checkpoint across
+                # several load worlds, and a part left by an earlier, larger world must not be merged in.
+                expected_parts = merge_parts([part_path(reference_base, r) for r in range(saved_ranks)])
                 if not resumed:
                     expected_parts = {k: v for k, v in expected_parts.items() if not k.startswith(RESUME)}
-                expected = canonical(expected_parts, config)
-                actual = canonical(merge_parts(glob.glob(actual_base + "-w*.npz")), config)
+                expected, saved_differ = canonical(expected_parts, config)
+                actual, loaded_differ = canonical(merge_parts([part_path(actual_base, r) for r in range(size)]), config)
                 problems = compare(actual, expected, 0.0 if args.same_layout else args.logits_tolerance)
+                # A checkpoint keeps one copy of every replicated tensor, so a world whose copies differ between its
+                # devices or ranks cannot be restored as it ran.
+                for world, differ in (("saving", saved_differ), ("loaded", loaded_differ)):
+                    if differ:
+                        problems.append(
+                            f"the {world} world's replicas differ for {len(differ)} tensor(s): {sorted(differ)[:6]}"
+                        )
             except Exception as err:  # noqa: BLE001
                 traceback.print_exc()
                 problems.append(f"comparison failed: {err}")

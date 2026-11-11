@@ -10,8 +10,12 @@ class CheckpointError(RuntimeError):
 
 
 class CheckpointFatal(CheckpointError):
-    """A collective between the ranks failed (a peer died); the operation cannot be completed or retried in
-    this process, and the staging directory is left in place."""
+    """An exchange between the ranks failed (a peer died); the operation cannot be completed in this process, and
+    the staging directory is left in place.
+
+    It subclasses ``CheckpointError`` so that one handler catches every checkpoint failure. Retrying is harmless but
+    pointless: once an exchange has failed, every later save or load in this process raises ``CheckpointFatal`` at
+    once, without reaching the other ranks."""
 
 
 class IncompleteCheckpoint(CheckpointError):

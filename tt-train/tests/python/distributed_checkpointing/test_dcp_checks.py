@@ -68,7 +68,10 @@ def test_param_groups_are_checked_before_anything_is_placed(expect_error):
     }
     check_param_groups(_StubOptimizer([["a", "b"], ["c"]]), saved)
     check_param_groups(_StubOptimizer([["a"]]), {})  # a model-only checkpoint has nothing to check
-    with expect_error(CheckpointError, "group 0 holds different params"):
+    # The checkpoint's members are the union over the saving ranks, so a live group may hold fewer of them...
+    check_param_groups(_StubOptimizer([["a"], ["c"]]), saved)
+    # ...but not a param the checkpoint's group does not have: swapped groups would get each other's options.
+    with expect_error(CheckpointError, "group 0 holds params the checkpoint's group 0 does not"):
         check_param_groups(_StubOptimizer([["c"], ["a", "b"]]), saved)
     with expect_error(CheckpointError, "2 optimizer param groups, the live optimizer 1"):
         check_param_groups(_StubOptimizer([["a", "b", "c"]]), saved)
