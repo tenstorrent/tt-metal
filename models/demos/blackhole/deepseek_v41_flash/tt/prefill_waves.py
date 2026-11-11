@@ -28,6 +28,20 @@ def protect_partial_on():
     return os.environ.get("DSV41_PROTECT_PARTIAL", "0") == "1"
 
 
+def resume_record_on():
+    """DSV41_RESUME_FROM_RECORD=1 (default off; live switch file DSV41_RESUME_FROM_RECORD_FILE holding 0 / 1): a continuation whose carried prefill state is gone resumes from the deepest saved key / halo record
+    of its own prefix (the paged index, as a prefix hit) instead of recomputing from position 0."""
+    import os
+
+    f = os.environ.get("DSV41_RESUME_FROM_RECORD_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_RESUME_FROM_RECORD", "0") == "1"
+
+
 def needs_slot(item, pending_hits):
     """True for a user that will be allocated a slot in the wave it runs in: a new prompt (start 0) or a prefix hit whose restore has not been done (it owns no slot yet)."""
     return item[2] == 0 or item[0] in pending_hits

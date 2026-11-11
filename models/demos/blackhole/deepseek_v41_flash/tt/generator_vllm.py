@@ -53,7 +53,7 @@ from loguru import logger
 
 from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
 from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import protect_partial_on
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import protect_partial_on, resume_record_on
 
 _PAD_TOKEN = 0
 
@@ -824,7 +824,14 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         # DSV41_PROTECT_PARTIAL=1 (default off, live DSV41_PROTECT_PARTIAL_FILE; tt/prefill_waves.protect_partial_on): partly prefilled prompts keep their carried state (T24, see _full_rows, _free_users_of_row,
         # _lag_start, the hit extension in _prefill_interleaved and prefill_waves.slot_alloc(cheapest=True))
         self.protect = protect_partial_on()
-        self.protect_stats = {"extended_hits": 0, "ahead_resumes": 0}
+        self.protect_stats = {
+            "extended_hits": 0,
+            "ahead_resumes": 0,
+            "record_resumes": 0,
+            "record_resume_tokens": 0,
+            "record_misses": 0,
+        }
+        self.resume_record = resume_record_on()
         self.final_seen = False  # the plugin sent prefill_final flags at least once
         self.pf_done = (
             set()
@@ -1158,6 +1165,45 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             return first[rows].to(torch.int32).reshape(N)
         return logits[rows].float().reshape(N, 1, -1)
 
+    def _resume_from_record(self, i, rid, row_tokens, total, st, p_old, mm=None, avoid=()):
+        """DSV41_RESUME_FROM_RECORD: the carried prefill state of the continuation of request ``rid`` at ``st`` is gone (its slot was taken, a trace was re-captured). Instead of recomputing from position 0
+        the block index is asked for the deepest record of the request's OWN prefix at or below ``st`` (its committed blocks + the halo record at that boundary are still resident unless evicted): the old
+        user is given back and the request is planned / bound like a prefix hit (reservation -> ``prepare_hits`` -> restore). -> (user, hit tokens) or None (no record: recompute from 0).
+        """
+        paged = self.paged
+        if paged is None or rid is None or total is None or st <= 0:
+            return None
+        if mm is not None and self._mm_row(mm, i)[0] is not None:  # (images: the key tokens would need the vision book)
+            return None
+        if p_old is not None:  # (its state is gone anyway: pages, index binding, tracker)
+            if hasattr(self.m, "release_user"):
+                self.m.release_user(p_old)
+            self.inprog.drop(p_old)
+            self.pf_done.discard(p_old)
+            self.slots.live.discard(p_old)
+        try:
+            plan = paged.idx.plan_hit(rid, row_tokens, int(total), max_hit=int(st))
+        except Exception:  # noqa: BLE001 - never worse than the recompute
+            logger.exception("DSV4.1 resume from record: plan_hit failed")
+            plan = None
+        if p_old is not None:
+            self.slots.live.add(p_old)  # (restored below unless the plan took another user)
+        if plan is None or plan.hit_tokens <= 0 or plan.user < 0:
+            self.protect_stats["record_misses"] += 1
+            return None
+        if plan.user in avoid or (plan.user in self.slots.live and plan.user != p_old):
+            paged.idx.cancel(rid)
+            self.protect_stats["record_misses"] += 1
+            return None
+        if p_old is not None and plan.user != p_old:
+            self.slots.live.discard(p_old)
+        self.protect_stats["record_resumes"] += 1
+        self.protect_stats["record_resume_tokens"] += int(plan.hit_tokens)
+        logger.info(
+            f"DSV4.1 resume from record: request {rid} lost its carried state at {st}: resumes at {plan.hit_tokens} (record) on user {plan.user} instead of 0 ({st - plan.hit_tokens} tokens recomputed)"
+        )
+        return plan.user, int(plan.hit_tokens)
+
     def _lag_start(self, p, st, e=None):
         """start of the continuation piece of user ``p`` that vLLM reports at ``st``: ``st`` when the carried state is at ``st``, the model's carried end when the previous piece was cut back
         (piece lag: tokens [end, st) are computed now), else None (the carried state is gone: recompute from position 0).
@@ -1198,7 +1244,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         free_rows = {p // U for p in range(self.B) if p not in self.slots.live}
         return len(free_rows - busy)
 
-    def _place_row_aware(self, toks, starts, ends, empty_slots, request_ids=None, avoid=()):
+    def _place_row_aware(self, toks, starts, ends, empty_slots, request_ids=None, avoid=(), totals=None, mm=None):
         """Users of the rows of one prefill call (DSV41_PREFILL_ROW_AWARE=1, few prefill slots per mesh row): first every continuation finds its carried user and is bound to the state slot the
         plugin gave it (the plugin shifts the slots of the continuing prompts when a request leaves the prefill batch, so the logical slot of a NEW prompt can still map to the user of a
         continuation that comes later in the call); then each new prompt takes a free user of a mesh row without an in-progress prompt (fewest live users first, so that the decoders spread
@@ -1245,6 +1291,25 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             if r_ is not None:
                 eff[i] = r_
             else:
+                rr = None
+                if getattr(self, "resume_record", False):
+                    rr = self._resume_from_record(
+                        i,
+                        rid_i,
+                        toks[i],
+                        None if totals is None or i >= len(totals) else totals[i],
+                        st,
+                        p,
+                        mm,
+                        avoid=list(avoid) + [c for c in chosen if c is not None and c != p],
+                    )
+                if rr is not None:
+                    chosen[i] = rr[0]
+                    self.slots.bind(empty_slots[i], rr[0])
+                    self.slots.live.add(rr[0])
+                    eff[i] = rr[1]
+                    hit_rows.add(i)
+                    continue
                 (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
                     f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
                 )
@@ -1327,6 +1392,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         """
         N = len(ends)
         self.protect = protect_partial_on()
+        self.resume_record = resume_record_on()
         _pf = os.environ.get(
             "DSV41_PIECE_LAG_FILE"
         )  # live switch (A/B in one boot): the file holds 0 or 1; absent file = the env default
@@ -1366,7 +1432,16 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             for i in range(N):
                 if not 0 <= starts[i] < ends[i]:
                     raise ValueError(f"chunk [{starts[i]}, {ends[i]}) of row {i} is empty or reversed")
-            items, phys = self._place_row_aware(toks, starts, ends, empty_slots, request_ids, avoid)
+            items, phys = self._place_row_aware(
+                toks,
+                starts,
+                ends,
+                empty_slots,
+                request_ids,
+                avoid,
+                totals=prefill_total if prefill_total is not None and len(prefill_total) == N else None,
+                mm=mm,
+            )
             hit_rows |= self.hit_rows_last
         for i in range(N):
             if rowaware:
@@ -1394,9 +1469,27 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     st, toks[i, :st], exclude=phys, lag=self.piece_lag, ahead=getattr(self, "protect", False)
                 )  # (prompts with the same prefix have the same carried state: each continuation takes a distinct one)
                 r_ = None if p is None else self._lag_start(p, st)
+                p_old = p
                 if p is not None and r_ is None:
                     p = None  # its carried prefill state was lost (re-captured trace / unmasked trace): recompute from position 0
-                if p is not None:
+                rr = None
+                if p is None and getattr(self, "resume_record", False):
+                    rr = self._resume_from_record(
+                        i,
+                        rid_i,
+                        toks[i],
+                        int(prefill_total[i]) if prefill_total is not None and len(prefill_total) == N else None,
+                        st,
+                        p_old,
+                        mm,
+                        avoid=list(avoid) + list(phys),
+                    )
+                if rr is not None:
+                    p, st = rr
+                    self.slots.bind(slot, p)
+                    self.slots.live.add(p)
+                    hit_rows.add(i)
+                elif p is not None:
                     st = r_  # (the previous piece was cut back: resume at the model's carried end)
                     self.slots.bind(slot, p)
                     self.slots.live.add(p)

@@ -55,12 +55,15 @@ class Plan:
         self.user, self.hit_tokens = user, hit
 
 
-def make_gen(monkeypatch, protect, B=8, U=2, Up=2, lag=True):
+def make_gen(monkeypatch, protect, B=8, U=2, Up=2, lag=True, resume=False, row_aware=False):
     monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "1")
     monkeypatch.setenv("DSV41_VLLM_CHUNK", str(CHUNK))
     monkeypatch.setenv("DSV41_PIECE_LAG", "1" if lag else "0")
     monkeypatch.setenv("DSV41_PROTECT_PARTIAL", "1" if protect else "0")
     monkeypatch.delenv("DSV41_PROTECT_PARTIAL_FILE", raising=False)
+    monkeypatch.delenv("DSV41_RESUME_FROM_RECORD_FILE", raising=False)
+    monkeypatch.setenv("DSV41_RESUME_FROM_RECORD", "1" if resume else "0")
+    monkeypatch.setenv("DSV41_PREFILL_ROW_AWARE", "1" if row_aware else "0")
     from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM
 
     m = HitModel(B, U, Up)
@@ -169,7 +172,7 @@ def test_hit_with_no_room_for_a_chunk_before_the_end_is_not_extended(monkeypatch
 
 def test_off_is_identical_without_the_flag(monkeypatch):
     gen, m, c = run_hit_scenario(monkeypatch, protect=False, second_end=311581)
-    assert gen.protect_stats == {"extended_hits": 0, "ahead_resumes": 0}
+    assert not any(gen.protect_stats.values())
 
 
 # ---- B: slot eviction ---------------------------------------------------------------------------------------------------------------------
@@ -271,3 +274,75 @@ def test_claim_rowaware_avoids_a_full_row():
     assert st.claim_balanced(2, {0: 2, 1: 1}, U, (), full_rows={0}) // U == 1
     st = table()
     assert st.claim_packed(2, {0: 2, 1: 1}, U, (), full_rows={0}) // U == 1
+
+
+# ---- resume from a record ---------------------------------------------------------------------------------------------------------------
+class RecIdx:
+    """index stub: ``plan_hit`` answers with the deepest record <= max_hit (records every 8192 tokens) on the row of ``user``"""
+
+    def __init__(self, plans, user_of):
+        self.plans, self.user_of, self.calls = plans, user_of, []
+
+    def reservation(self, rid):
+        return self.plans.get(rid)
+
+    def reserved_all(self):
+        return tuple(p.user for p in self.plans.values())
+
+    def plan_hit(self, rid, tokens, num_tokens, max_hit=None, **kw):
+        self.calls.append((rid, int(num_tokens), max_hit))
+        hit = (max_hit // 8192) * 8192
+        if hit <= 0:
+            return Plan(-1, 0)
+        self.plans[rid] = Plan(self.user_of, hit)
+        return self.plans[rid]
+
+    def cancel(self, rid):
+        self.plans.pop(rid, None)
+
+
+def lose_scenario(monkeypatch, resume, row_aware):
+    B, U, Up = (16, 4, 2) if row_aware else (8, 2, 2)
+    gen, m, plans = make_gen(monkeypatch, True, B=B, U=U, Up=Up, resume=resume, row_aware=row_aware)
+    gen.paged = SimpleNamespace(idx=RecIdx(plans, user_of=0))
+    c = Count()
+    logger.remove()
+    h = logger.add(c, level="INFO")
+    try:
+        L = 100000
+        toks = torch.randint(1000, 90000, (L,), dtype=torch.int64)
+        call(gen, toks, 0, 20480, "hit2", 0, L)  # a cold prompt in progress (user 0)
+        assert m.pf_resume[0] == 20480
+        m.pf_resume.pop(0)  # its carried state is lost (slot taken / trace re-captured)
+        call(gen, toks, 20480, 24576, "hit2", 0, L)
+    finally:
+        logger.remove(h)
+    return gen, m, c
+
+
+def test_baseline_lost_state_recomputes_from_zero(monkeypatch):
+    for ra in (False, True):
+        gen, m, c = lose_scenario(monkeypatch, resume=False, row_aware=ra)
+        assert c.lost == 1 and m.steps[-1][0][1] == 0, (ra, m.steps)
+
+
+def test_lost_state_resumes_from_the_deepest_record(monkeypatch):
+    for ra in (False, True):
+        gen, m, c = lose_scenario(monkeypatch, resume=True, row_aware=ra)
+        assert c.lost == 0, ra
+        assert m.steps[-1] == [(0, 16384, 24576)], (
+            ra,
+            m.steps,
+        )  # records every 8192: 20480 -> 16384 (4096 tokens recomputed, not 20480)
+        assert gen.protect_stats["record_resumes"] == 1 and gen.protect_stats["record_resume_tokens"] == 16384
+
+
+def test_no_record_falls_back_to_zero(monkeypatch):
+    gen, m, plans = make_gen(monkeypatch, True, resume=True)
+    gen.paged = SimpleNamespace(idx=RecIdx(plans, user_of=0))
+    L = 100000
+    toks = torch.randint(1000, 90000, (L,), dtype=torch.int64)
+    call(gen, toks, 0, 4096, "hit3", 0, L)
+    m.pf_resume.pop(0)
+    call(gen, toks, 4096, 8192 - 512, "hit3", 0, L)  # max_hit 4096 < first record at 8192? (records every 8192) -> none
+    assert m.steps[-1][0][1] == 0 and gen.protect_stats["record_misses"] == 1
