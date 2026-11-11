@@ -52,7 +52,10 @@ D = HIDDEN
 
 def FUSED_ACT():
     """activation passed to moe_fused_swiglu: MF_FUSED_ACT=situ -> SituGlu, which the T16 'fused' kernel overlay (TT_METAL_KERNEL_PATH) turns into the DeepSeek-V4 clamped SiLU-GLU (limit 10); default Silu"""
-    return ttnn.RoutedExpertActivation.SituGlu if os.environ.get("MF_FUSED_ACT") == "situ" else ttnn.RoutedExpertActivation.Silu
+    a = os.environ.get("MF_FUSED_ACT")
+    if a == "clamped":  # T16 C++ patch: moe_fused_swiglu accepts ClampedSiluGlu natively (no kernel overlay)
+        return ttnn.RoutedExpertActivation.ClampedSiluGlu
+    return ttnn.RoutedExpertActivation.SituGlu if a == "situ" else ttnn.RoutedExpertActivation.Silu
 
 
 def rec(d):

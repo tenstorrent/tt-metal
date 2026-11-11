@@ -90,9 +90,21 @@ def sp_kc(ratio, rows, fp8=True):
         return SP_KC_default()  # default OFF: nothing below runs
     if fp8 and (int(ratio) >= 2 or int(rows) >= int(_env("DSV41_SDPA_DEDUP_ROWS", "1024"))):
         _balance(False, int(rows))
+        _note(("dedup", int(ratio), int(rows)), f"SDPA_DEDUP: sparse_sdpa k_chunk 640 (K-row cache) for compress ratio {ratio}, {rows} rows per op")
         return 640
     _balance(True)
+    _note(("kc", int(ratio), int(rows), bool(fp8)), f"SDPA_DEDUP on but not used: sparse_sdpa k_chunk {SP_KC_default()} for compress ratio {ratio}, {rows} rows per op, fp8 pool {bool(fp8)}")
     return SP_KC_default()
+
+
+_SEEN = set()
+
+
+def _note(key, msg):
+    """one log line per distinct (layer kind, rows) so a server log shows which sparse_sdpa configuration was chosen (DSV41_SDPA_DEDUP=1 only)"""
+    if key not in _SEEN:
+        _SEEN.add(key)
+        print(msg, flush=True)
 
 
 _BAL = {}
