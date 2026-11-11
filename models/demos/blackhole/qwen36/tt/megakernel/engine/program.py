@@ -2441,6 +2441,22 @@ def _is_l1(mc):
 
 
 @contextlib.contextmanager
+def _env_ctx(env):
+    """The engine-config env only (no shims): every lazy per-device descriptor build (PROG_PER_DEV -> build()) reads its
+    flags from os.environ (e.g. MK_STREAM_DM_OS / MK_EXT_DM_OS: the DM opt level), so it must run with the build's env."""
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+@contextlib.contextmanager
 def _setup_context(mesh, env):
     """setup_bench's mesh contract (bench_mka2's MESH shims), ONLY while it runs: from_torch replicates (host tilize,
     then to_device with the memory config), to_torch reads device 0. Plus the engine-config env, and the cross-bucket
@@ -2666,17 +2682,19 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     except ImportError:
         CBP = None
     if CBP is not None and os.environ.get("QWEN36_R16_MK_CBPLAN_VERIFY", "1") == "1":
-        CBP.verify(mesh, [per_dev(ttnn.MeshCoordinate(r_, c_)) if per_dev else S["prog"]
-                          for r_ in range(mesh.shape[0]) for c_ in range(mesh.shape[1])])
+        with _env_ctx(env):  # the first per_dev() call builds (and caches) the per-device programs: with the engine env
+            CBP.verify(mesh, [per_dev(ttnn.MeshCoordinate(r_, c_)) if per_dev else S["prog"]
+                              for r_ in range(mesh.shape[0]) for c_ in range(mesh.shape[1])])
     # kind 3 ('gdn') is the GDN role's own block (gdn/u1/g2_role.py); the model's GDN state goes into the role's per-layer
     # table (gdn_desc[i]['tensors'], keyed like GdnRole.tl) when the role adopts it, not into a second block here.
     wb = {k: ((weights or {}).get(k) or {}).get("tensor") for k in ("mlp", "qkv", "wo", "gdn_in", "gdn_out", "gamma", "qkg")}
     descs = {}
-    for r in range(mesh.shape[0]):
-        for c_ in range(mesh.shape[1]):
-            co = ttnn.MeshCoordinate(r, c_)
-            descs[(r, c_)] = per_dev(co) if per_dev else S["prog"]
-            AB.check_cb_ids(descs[(r, c_)])
+    with _env_ctx(env):  # the lazy per-device builds read the engine env (DM opt levels etc.)
+        for r in range(mesh.shape[0]):
+            for c_ in range(mesh.shape[1]):
+                co = ttnn.MeshCoordinate(r, c_)
+                descs[(r, c_)] = per_dev(co) if per_dev else S["prog"]
+                AB.check_cb_ids(descs[(r, c_)])
     info = dict(env=env, nl=int(env["FM_NL"]), nu=int(env["MKA_NU"]), n_io=len(io0), per_device=per_dev is not None,
                 common_args=blocks.common_args(), l1pool=dict(pool_stats), n_gdn=len(gdn_desc or ()), n_attn=len(kv_desc or ()),
                 weights={k: (t.buffer_address() if t is not None else 0) for k, t in wb.items()})
