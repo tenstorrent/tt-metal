@@ -68,6 +68,11 @@ class GdnRole:
         # pre / out / ctrl (default: none = DRAM). The kernels read / write them through TensorAccessor either way.
         l1 = set(x for x in os.environ.get("MKA_GDN_L1", "").split(",") if x)
         assert l1 <= {"pre", "out", "ctrl"}, l1
+        if gdnout and os.environ.get("E1_GO_LOCAL", "2") == "2" and "out" in l1:
+            # gdn_out local handoff without the out write: `out` is never written, keep it in DRAM (frees its L1 range,
+            # which otherwise lowers the GDN-core CB floor below the role + gdn_out CBs at u8)
+            l1.discard("out")
+            print("[g2] MKA_GDN_L1: 'out' kept in DRAM (gdn_out E1_GO_LOCAL=2 never writes it)", flush=True)
         mc = lambda k: ttnn.L1_MEMORY_CONFIG if k in l1 else ttnn.DRAM_MEMORY_CONFIG
         mkc = lambda: ttnn.from_torch(ctrl0, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev,
                                       memory_config=mc("ctrl"))
