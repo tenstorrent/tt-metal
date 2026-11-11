@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "tt_metal.hpp"
+#include "tt_metal/fabric/fabric_init.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_builder.hpp"
@@ -22,6 +23,17 @@ extern "C" bool isFabricUnitTest() __attribute__((weak));
 bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
+
+namespace {
+FabricProgramExtension& fabric_program_extension() {
+    static FabricProgramExtension extension;
+    return extension;
+}
+}  // namespace
+
+void set_fabric_program_extension(FabricProgramExtension extension) {
+    fabric_program_extension() = std::move(extension);
+}
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
     FabricContext& fabric_context, CoreType dispatch_core_type, tt::tt_metal::IDevice* device) {
@@ -41,6 +53,9 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
     builder.connect_routers();
     builder.compile_ancillary_kernels();
     builder.create_kernels();
+    if (const auto& extension = fabric_program_extension()) {
+        extension(device, *fabric_program_ptr);
+    }
 
     // Compile the program
     fabric_program_ptr->impl().compile(device, fabric_context.get_rtoptions().get_fast_dispatch());
