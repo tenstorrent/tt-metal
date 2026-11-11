@@ -207,7 +207,7 @@ instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's 
 | COMB | 3906.8 us (rev 65 build) | 4 K x 16 41.2 ms | moves at a near-tie (strict gate fails) | off |
 | COMB + RS1_EARLY | 3807.9 us | 4 K x 16 40.0 ms, 32 K x 4 22.1 ms | as COMB | off |
 | AGB (on AGK) | - | 4 K x 16 36.8 -> 35.7 ms; with RS1_EARLY 34.3 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical with RS1_EARLY | on |
-| RSB | pending device run | pending device run | pending device run (expected bit-identical: same bytes, page ids, landing order) | off |
+| RSB | 2977.0 -> 2925.4 us (layers 0-3 with UG16; RS1 wait 325 -> 287, RS2 58 -> 45) | 4 K x 16 33.3 -> 32.7 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical | on |
 
 The rows ran on the single-knob trees (wt_mrg e7f7dc8443f, wt_rsc ab4bd43c343 / 4d61833e021, wt_rs1 4e59a2c95c0),
 whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the two-field gates are sound for every
@@ -215,7 +215,7 @@ lane skew: shard_plan.rs1_early_gates); rev 67 alone at 4 K x 16 distinct had le
 which was the routed-expert scratch race (section 12): on the fixed stack RS1_EARLY and AGB give the knob-off digest in
 every one of 3 in-process runs at 4 K x 16.
 
-### RSB: the reduce-scatters in block chunks (2026-11-11, opt-in, pending device run)
+### RSB: the reduce-scatters in block chunks (2026-11-11, default on the 8x4)
 
 Today both scatters signal per token. RS1 (FabricStreamScatter axis 0, one lane) ships per destination t chunks of
 10 pages (one 8-row slice, 9 pages + a pad page) as 10-page batches of 5 two-page packets; the chunk's last packet is a
@@ -291,3 +291,7 @@ an exhaustive interleaving model of one reader over 1-3 stacked layers (the race
 | 32 K x 16, 16 identical prompts | outputs differ | one output, 35.5 ms (28.1 tok/s per user) |
 | 32 K x 4 | ids d032bb00 | ids d032bb00, 22.3 ms |
 | Served 128 K profile, 16 identical prompts | several texts | one text, median ITL 37.6 ms |
+
+Device (chain_mk192, 232d27083c7): the probe's RS1 wait drops 38 us of 325 (the signals were ~12 % of it; at t 16 RS1 moves
+5.1 MB per direction over the column's middle link, ~16 GB/s: bytes-bound), RS2 13 us of 58; -52 us per DSA layer, -0.6 ms
+per 4 K x 16 step. The next RS cut is bytes (the pad pages: 10 % of RS1, 25 % of RS2).

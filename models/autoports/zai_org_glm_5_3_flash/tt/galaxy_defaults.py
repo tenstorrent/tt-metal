@@ -31,6 +31,10 @@ KNOBS = {
     # 35.5 ms (RS1_EARLY), 34.3 ms (both); 32 K x 4 ids identical with both
     "GLM53_DSA_SHARD_AGB": "1",
     "GLM53_DSA_SHARD_RS1_EARLY": "1",
+    # GLM53_DSA_SHARD_RSB: RS1 / RS2 in one 32-row chunk per destination (one completion signal per destination instead of
+    # one per token: 112 -> 7 and 48 -> 3 per source at t 16; same bytes, page ids, order): 4 K x 16 33.3 -> 32.7 ms,
+    # bit-identical over 3 runs; 32 K x 4 ids identical
+    "GLM53_DSA_SHARD_RSB": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
