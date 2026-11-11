@@ -950,7 +950,9 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
                          : (ctx == 1 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
                                      : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     }
-    if (forms == 1) {
+    // A count known only at run time packs per tile, as main. The last output is still marked: these packs move the
+    // packer's output base without invalidating the W offset of another output.
+    if (forms == 1 || !__builtin_constant_p(ntiles)) {
 #ifdef LLK_PACK_W_OFFSET
         llk_pack_state_set_half(output_id + 1);
 #endif
