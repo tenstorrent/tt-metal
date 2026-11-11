@@ -935,6 +935,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                               ("kq", ttnn.float32, Kt, 4096)):
             cbs.append(ttnn.CBDescriptor(total_size=n * pg, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(
                 buffer_index=GBC[nm], data_format=dt, page_size=pg)]))
+        print(f"[gb] hang triage: per GDN core L1 words argblock + {4 * (AB_HDR + OGB + 146)} (reader) / + {4 * (AB_HDR + OGB + 147)} "
+              f"(writer) = (layer << 8) | last G-b wait (r: 1 in_ready 2 QIN 3 root raw 4 knq 5 pulled; w: 1 OUT 2 root reads 3 rest 4 done)", flush=True)
         print(f"[gb] G-b prefix in the role: CB ids {GBC}, {sum(c_.total_size for c_ in cbs[-4:]) // 1024} KB L1 per GDN core, "
               f"payload {len(gb_blocks[0])} words at {OGB}; {gb_info}", flush=True)
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
@@ -1051,8 +1053,8 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
             blk += [0] * 9
         hk_ = (i // VB) // rf   # (h is the first loop's: stale here)
         sub = (i - (hk_ * rf * VB)) * RS // (rf * VB)
-        blk += [xy(roots[(hk_, 0)][sub]), xy(roots[(hk_, 1)][sub]), 0, 0]   # kRootSrc (k root, q root), kRootDone, kOutBase
-        assert len(blk) == 146, len(blk)
+        blk += [xy(roots[(hk_, 0)][sub]), xy(roots[(hk_, 1)][sub]), 0, 0, 0, 0]   # kRootSrc x2, kRootDone, kOutBase, kDbgR/W
+        assert len(blk) == 148, len(blk)
         h = i // VB
         for dt_, ne_ in dn:
             blk += [bits(float(dt_[h])), bits(float(ne_[h]))]

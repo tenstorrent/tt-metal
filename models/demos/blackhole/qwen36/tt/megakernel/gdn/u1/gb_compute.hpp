@@ -178,7 +178,7 @@ ALWI void gb_l2_root(uint32_t cb_kq, uint32_t cb_out, uint32_t post) {
 template <uint32_t K>
 ALWI void compute_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t cb_qpx, uint32_t npx, uint32_t cb_sht,
                         uint32_t cb_cv, uint32_t cb_out, uint32_t cb_kq) {
-    constexpr uint32_t kPerLayer = 146, kRootPost = 133;  // gb_dm.hpp
+    constexpr uint32_t kPerLayer = 148, kRootPost = 133;  // gb_dm.hpp
     const uint32_t nconv = pb[3], root_post = pb[kRootPost];
     cb_wait_front(cb_qpx, npx);  // QIN 0..3, P 4..5 (resident data; the pointer returns to the base every layer)
     {
