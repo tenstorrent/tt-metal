@@ -14,7 +14,8 @@ expert FFN); ``0``: one prompt for all. ``V41_RP_WARM`` rounds run first (the jo
 ``V41_RP_ROUNDS`` measured rounds. ``V41_RP_PROFILE=1`` (under ``TT_METAL_DEVICE_PROFILER=1`` with the C++
 post-process and mid-run dumps): the device profiler is read after the warm-up, after the
 prefills and after every round, so a round's markers never overflow the buffer and each measured round is one
-replay session of its capture in ``cpp_device_perf_report.csv``. ``V41_RP_TEMP`` (default 0: greedy) samples every
+replay session of its capture in ``cpp_device_perf_report.csv``. ``V41_RP_DRAIN_SKIP=warm-up,..`` leaves the named
+reads out (their phases overflow the buffers and are dropped). ``V41_RP_TEMP`` (default 0: greedy) samples every
 row at that temperature (the device program is the same). ``V41_RP_OUT`` takes the JSON: per
 round the wall, the verify step's and the draft call's logged items and every row's emitted count.
 
@@ -117,6 +118,9 @@ def test_v41_round_profile(mesh_device, device_params, monkeypatch):
     warm = int(os.environ.get("V41_RP_WARM", 8))
     rounds = int(os.environ.get("V41_RP_ROUNDS", 16))
     profile = os.environ.get("V41_RP_PROFILE", "0") == "1"
+    # the reads to leave out (prefixes of "warm-up", "prefills", "warm round N", "round N"): with the raw device log
+    # written, every read dumps what the buffers hold, and an unread phase only overflows them (its markers dropped)
+    drain_skip = [w for w in os.environ.get("V41_RP_DRAIN_SKIP", "").split(",") if w]
     temperature = float(os.environ.get("V41_RP_TEMP", 0))
     max_seq_len = int(os.environ.get("V41_RP_MAX_SEQ", 1053696))
     assert 1 <= live <= batch, (live, batch)
@@ -140,7 +144,7 @@ def test_v41_round_profile(mesh_device, device_params, monkeypatch):
     drains = []
 
     def drain(what: str) -> None:
-        if profile:
+        if profile and not any(what.startswith(skip) for skip in drain_skip):
             t0 = time.time()
             ttnn.ReadDeviceProfiler(mesh_device)
             drains.append({"after": what, "s": round(time.time() - t0, 1)})
