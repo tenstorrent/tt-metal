@@ -70,6 +70,7 @@ for it in range(ITERS):
     if KVA: KVA_POST(it)   # SDPA golden over the appended cache (+ MKA_KVA_CHECK: bit-compare vs paged_fused_update_cache)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)
+    if GDN24 and callable(GDN_ROLE.get('gdnout_check')): GDN_ROLE['gdnout_check'](it)   # MKA_GDNOUT: gdn_out PCC (every run)
     if REAL_AR and AR_DBG:   # every AR of the pass: res_k = res_{k-1} + ring * in_k (both chunks dumped by the owners)
         _db = ttnn.to_torch(ar_dbgt).float().reshape(TILE, AR_NAR * 2, H)
         if V_R < 32:   # R < 32: input rows < R (tile layout); residual = packed stream (tile t face f at (2t + f) R 32 B) -> [R, H]
@@ -130,6 +131,13 @@ for it in range(ITERS):
             rat.append((ci, round(r_.item(), 3), round(pc_, 4)))
         bad = [t for t in rat if abs(t[1] - 1) > 0.02 or t[2] < 0.999]
         print(f"[fm11] diag bad cores {len(bad)}: {bad[:40]}", flush=True)
+    if globals().get('GIN'):   # MK_GDN_INPROJ: the in-proj tiles (bench-only DRAM copy) vs rstd * x @ W_gin per GDN layer
+        gv_ = ttnn.to_torch(gin_dbg).float().reshape(TILE, NGL, GN * TILE)
+        for g_ in range(NGL):
+            d_, gg_ = gv_[:V_R, g_], gold_gin[g_][:V_R]
+            pc_ = torch.corrcoef(torch.stack([d_.flatten(), gg_.flatten()]))[0, 1].item()
+            pad0 = bool((gv_[:, g_, GNR:] == 0).all())
+            print(f"[gin] iter {it} GDN layer {g_} (L{GLS[g_]}) in-proj pcc {pc_:.5f} max|err| {(d_ - gg_).abs().max().item():.4f} |gold|max {gg_.abs().max().item():.3f} pad exact 0 {pad0}", flush=True)
     pm, em = pcc_mix = (lambda v, g: (torch.corrcoef(torch.stack([v.flatten(), g.flatten()]))[0, 1].item(), (v - g).abs().max().item()))(ttnn.to_torch(ymix).float().reshape(M, -1), gold_mix)
     print(f"[mk1] iter {it} mixer pcc {pm:.5f} max|err| {em:.4f}", flush=True)
     if REAL_AR and AR_RSTD and AR_DBG:   # rstd producer: the Σ tile the pass's last K-row delivery left on the STREAM cores (rows 0-7 = the
