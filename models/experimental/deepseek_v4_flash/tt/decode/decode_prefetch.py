@@ -208,11 +208,13 @@ def ensure_named_ring(
     specs: list,
     weight_dtype: ttnn.DataType,
     num_pages: int = TP_PRIVATE_RING_PAGES,
+    origin: tuple[int, int] = (0, 0),
 ):
     """Return ``prefetch_buffers[key]``, building that ring on first use.
 
     ``specs`` are ``decode_weight_layout`` dicts whose ``[Kc, Nc]`` slabs fix the ring's page
-    size and receiver count; the returned ring is a list of ``ttnn.experimental.PrefetcherPipe``.
+    size and receiver count, and ``origin`` ``(x, y)`` is the top-left core of its receiver
+    rectangle; the returned ring is a list of ``ttnn.experimental.PrefetcherPipe``.
 
     Mutates the mapping so later layers on the same device reuse the ring. The
     caller must pass the same dict to every layer (see
@@ -220,7 +222,9 @@ def ensure_named_ring(
     rather than the shared-ring depth: these rings serve two weights, not ten.
     """
     if key not in prefetch_buffers:
-        prefetch_buffers[key] = make_shared_decode_pipes(device, specs, weight_dtype, num_pages=num_pages)
+        prefetch_buffers[key] = make_shared_decode_pipes(
+            device, specs, weight_dtype, num_pages=num_pages, origin=origin
+        )
     return prefetch_buffers[key]
 
 
@@ -308,15 +312,18 @@ class PrefetchRing:
     """Which ring a prefetched weight streams through.
 
     ``key`` is its entry in the per-device ``prefetch_buffers`` mapping and ``specs`` the
-    ``decode_weight_layout`` dicts the ring is sized from (their slab gcd is its page). Every
-    weight naming the same ``key`` must give the same ``specs``. ``num_pages=None`` marks the
+    ``decode_weight_layout`` dicts whose slab gcd is the page this weight streams at. Weights naming the
+    same ``key`` give the same ``specs``, unless the mapping's factory built that ring for all of them at
+    once (see :func:`~..layers.make_multi_page_decode_pipes`). ``num_pages=None`` marks the
     shared decode ring, which :func:`make_decode_prefetch_buffers` builds up front under the
-    :data:`DECODE_RING_GROUP` keys; a private ring is built on first use at ``num_pages``.
+    :data:`DECODE_RING_GROUP` keys; a private ring is built on first use at ``num_pages``, its
+    receiver rectangle starting at core ``origin`` ``(x, y)``.
     """
 
     key: str
     specs: tuple
     num_pages: Optional[int] = None
+    origin: tuple[int, int] = (0, 0)
 
 
 def decode_prefetch_rings(tp_size: int = 1) -> dict:
@@ -349,7 +356,9 @@ def ring_prefetch(rings: dict, name: str, prefetch_buffers: dict, device, weight
             raise KeyError(f"{name} streams through the shared decode ring, which this mapping does not hold")
         prefetcher_pipes = prefetch_buffers[ring.key]
     else:
-        prefetcher_pipes = ensure_named_ring(prefetch_buffers, ring.key, device, specs, weight_dtype, ring.num_pages)
+        prefetcher_pipes = ensure_named_ring(
+            prefetch_buffers, ring.key, device, specs, weight_dtype, ring.num_pages, ring.origin
+        )
     return {
         "use_prefetcher": True,
         "prefetcher_pipes": prefetcher_pipes,

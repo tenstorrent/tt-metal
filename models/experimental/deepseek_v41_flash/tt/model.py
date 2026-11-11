@@ -76,6 +76,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     key_split_layers,
     uses_candidate_pool,
 )
+from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import make_prefetch_buffers
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
@@ -231,6 +232,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
     Do not call :meth:`DeepSeekV4Model.__init__`. It builds V4 layers, reads ``compress_rates`` and
     ``mlp_layer_types``, and constructs ``hc_head``, none of which exist on this checkpoint.
     """
+
+    make_prefetch_buffers = staticmethod(make_prefetch_buffers)
 
     def __init__(
         self,
