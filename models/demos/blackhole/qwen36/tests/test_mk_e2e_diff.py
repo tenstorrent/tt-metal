@@ -144,7 +144,7 @@ def _mlp_ar_index(layer_types, aar=True, gar=False):
 
 
 
-def _mlp_check(model, S, L):
+def _mlp_check(model, S, L, x_ref=None, y_ref=None):
     """Layer L's MLP on the HOST from the engine's own post-mixer residual h (mixer AR 2L residual column) with the model's
     dense weights (weights_mk.mlp_mats = the repack's source) vs the engine's MLP AR inputs summed over the 8 devices and
     vs (MLP AR residual - h). Separates the MLP unit (norm gamma / weights / v12) from the mixer at layer L (MK_REAL_GAR)."""
@@ -163,7 +163,21 @@ def _mlp_check(model, S, L):
     ref = torch.zeros_like(h)
     for wg, wu, wd in WM.mlp_mats(lay):
         ref += (torch.nn.functional.silu(xn @ wg.float()) * (xn @ wu.float())).bfloat16().float() @ wd.float()
+    ref_fix = torch.zeros_like(h)   # the same MLP with x · NORM_FIX (γ·NORM_FIX applied to a true-mean rstd)
+    xf = (xn * WM.NORM_FIX).bfloat16().float()
+    for wg, wu, wd in WM.mlp_mats(lay):
+        ref_fix += (torch.nn.functional.silu(xf @ wg.float()) * (xf @ wu.float())).bfloat16().float() @ wd.float()
+    mix = sum(dv[:, col(2 * km)] for dv in devs)   # the mixer AR's inputs (gdn_out partials) summed
+    x_eng = h - mix                                 # the residual the engine's layer L started from
+    xin = dict()
+    if x_ref is not None:
+        xr = x_ref[: x_eng.shape[0]]
+        xin = dict(x_vs_ref=round(_pcc(x_eng, xr), 6), x_maxabs_err=float((x_eng - xr).abs().max()), x_ref_absmax=float(xr.abs().max()))
+    if y_ref is not None:
+        yr = y_ref[: h.shape[0]]
+        xin.update(y_vs_ref=round(_pcc(res, yr), 6), mlp_host_on_engine_h_plus_h_vs_ref=round(_pcc(h + ref, yr), 6))
     out = dict(layer=L, part_vs_host=round(_pcc(part, ref), 6), resdelta_vs_host=round(_pcc(res - h, ref), 6),
+               norm_ratio_vs_host_fix=round(float(part.norm() / max(ref_fix.norm(), 1e-9)), 4), mix_absmax=float(mix.abs().max()), **xin,
                resdelta_vs_part=round(_pcc(res - h, part), 6), part_norm_ratio=round(float(part.norm() / max(ref.norm(), 1e-9)), 4),
                h_absmax=float(h.abs().max()), part_absmax=float(part.abs().max()), ref_absmax=float(ref.abs().max()))
     logger.info(f"[mlpchk] {json.dumps(out)}")
@@ -222,7 +236,7 @@ def _diff_case(model, live, tag):
             pcc[u], mx[u] = {Lf: round(_pcc(e, r), 6)}, {Lf: float((e - r).abs().max())}
         return pcc, mx, bad, None, dict(tf, kva=kva) if tf else dict(kva=kva)
     if MLPCHK and gar:
-        _mlp_check(model, S, 0)
+        _mlp_check(model, S, 0, ref_in.get(0), ref.get(0))
     dbg = ttnn.to_torch(ttnn.get_device_tensors(S["ar_dbgt"])[0]).float().reshape(32, -1)
     # the post-AR residual columns (2k+1) must be identical on every device (AR contract: mesh identity 0); the input
     # partial columns (2k) are per-device by design
