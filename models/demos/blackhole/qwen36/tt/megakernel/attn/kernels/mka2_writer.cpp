@@ -624,7 +624,16 @@ void kernel_main() {
             MKZ("W-MIX");
             v_xk_push(2 * L + 1);
             v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
+#if defined(MK_AR_RSTD)
+            if (att) {   // the qkv mixer's rstd: Σ of this layer's mixer x (K-row delivery 2L + 1) is in the Σ tile
+#if !defined(MK_AR_RSTD_HOST)
+                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 1));
+#endif
+                cb_reserve_back(CB_VRSA, 1); cb_push_back(CB_VRSA, 1);
+            }
+#else
             if (att) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
+#endif
             if (L + 1 < NL) qsk_start(L + 1);   // blocks until compute popped slot M (partial done)
             if (att) {
                 noc_semaphore_wait_min(vw(vg[VG_LA]), 2 * L + 1);
@@ -643,17 +652,7 @@ void kernel_main() {
             MKZ("W-MIX");
             cb_reserve_back(CB_X, KT);   // producer-fed x (XPRE): re-expose it to compute for this layer
             cb_push_back(CB_X, KT);
-#if defined(MK_AR_RSTD)
-            if (att && qrole == QR_OWNER) {   // partners skip the norm; real rstd: Σ of this mixer's x is final
-#if !defined(MK_AR_RSTD_HOST)
-                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 1));   // producer: +N per K-row x delivery (mixer 2L+1, MLP 2L+2)
-#endif
-                cb_reserve_back(CB_RSP, 1);
-                cb_push_back(CB_RSP, 1);
-            }
-#else
             if (att && qrole == QR_OWNER) { cb_reserve_back(CB_RSP, MKA_NOWN); cb_push_back(CB_RSP, MKA_NOWN); }   // partners skip the norm
-#endif
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             noc_async_read_barrier_with_trid(MIX_TRID0 + (L & 1));   // layer L's qkv / in-proj half landed
             if (qrole && (att || gdn_on)) cb_push_back(CB_WM, MIXT);
@@ -1007,7 +1006,16 @@ void kernel_main() {
             }
             const bool own_h = vk < vnn;
             v_slot_ready(sv, CB_WV, V_SLOT, V_TRID0 + (L & 1));   // layer L's MLP slice landed
+#if defined(MK_AR_RSTD)
+            if (own_h) {   // the MLP's rstd: Σ of this layer's MLP x (K-row delivery 2L + 2)
+#if !defined(MK_AR_RSTD_HOST)
+                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 2));
+#endif
+                cb_reserve_back(CB_VRSA, 1); cb_push_back(CB_VRSA, 1);
+            }
+#else
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
+#endif
 #if defined(MK_V12_X2) || defined(MK_RS_QKV)
             const uint32_t vxv = 2 * L + 2;   // two x deliveries per layer: mixer, MLP
 #else

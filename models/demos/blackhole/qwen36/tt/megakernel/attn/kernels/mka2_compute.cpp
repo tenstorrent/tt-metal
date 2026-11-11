@@ -23,6 +23,9 @@
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
+#if defined(MK_AR_RSTD)
+#include "api/compute/transpose_dest.h"
+#endif
 #include "api/debug/kernel_profiler.hpp"
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
 #include "../../kernels/mk_ar_reduce.hpp"   // AR reduce on the owners (MKAR_* defines from ar_phase.py)
@@ -88,9 +91,6 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#if defined(MK_AR_RSTD)
-#include "api/compute/transpose_dest.h"
-#endif
 #endif
 #if defined(MKA_RWO)
 #include "wo_unit_c.hpp"
@@ -257,10 +257,26 @@ void kernel_main() {
     const uint32_t vfirst = get_arg_val<uint32_t>(a++);
     // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
     auto v_rstd = [&]() {
+#if defined(MK_AR_RSTD)
+        // real rstd: the Σ tile (rsp tile 0, bound as CB_VRSA) holds row k = K-row k's per-token partial (row form, fp32).
+        // UnpackToDestFp32 copy (CB 43) -> SFPU column sum (row 0 = Σ_k S[k][c]) -> in-DST transpose (column 0 per token row).
+        cb_wait_front(CB_VRSA, 1);
+        cb_reserve_back(CB_VRT, 1);
+        reconfig_data_format_srca(CB_VRSA);
+        copy_init(CB_VRSA);
+        tile_regs_acquire();
+        copy_tile(CB_VRSA, 0, 0);
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
+        transpose_dest_init<true>();
+        transpose_dest<true>(0);
+#else
         cb_wait_front(CB_VRSA, MKA_NOWN);
         cb_reserve_back(CB_VRT, 1);
         tile_regs_acquire();
-#if MKA_NOWN == 2
+#endif
+#if defined(MK_AR_RSTD)
+#elif MKA_NOWN == 2
         reconfig_data_format(CB_VRSA, CB_VRSA);
         add_init(CB_VRSA, CB_VRSA);
         add_tiles(CB_VRSA, CB_VRSA, 0, 1, 0);
@@ -280,7 +296,11 @@ void kernel_main() {
         pack_tile(0, CB_VRT);
         tile_regs_release();
         cb_push_back(CB_VRT, 1);
+#if defined(MK_AR_RSTD)
+        cb_pop_front(CB_VRSA, 1);
+#else
         cb_pop_front(CB_VRSA, MKA_NOWN);
+#endif
     };
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT)
     mkar::Reduce ar_red;   // [has_work, ring, PT] from the owner's L1 arg table (spec v1.25): has_work = this device owns it
@@ -491,21 +511,6 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(CB_QA, 1);
         }
-#if defined(MK_AR_RSTD)
-        // real rstd (spec rstd producer): Σ tile S = CB_RSP tile 0, row k = K-row k's per-token partial (row form, fp32).
-        // UnpackToDestFp32 on CB 20 (program.py) -> exact copy; SFPU column sum -> row 0 = Σ_k S[k][c]; in-DST transpose ->
-        // column 0 (value per token row) for the bcast-cols scale below. All fp32, no srcA truncation, no DEST-reuse adds.
-        cb_wait_front(CB_RSP, 1);
-        reconfig_data_format_srca(CB_RSP);
-        copy_init(CB_RSP);
-        tile_regs_acquire();
-        copy_tile(CB_RSP, 0, 0);
-        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
-        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
-        transpose_dest_init<true>();
-        transpose_dest<true>(0);
-        cb_pop_front(CB_RSP, 1);
-#else
         // rstd (column 0 of each partial tile holds that owner's per-row Σx²)
         cb_wait_front(CB_RSP, MKA_NOWN);
         tile_regs_acquire();
@@ -519,7 +524,6 @@ void kernel_main() {
         copy_init(CB_RSP);
         copy_tile(CB_RSP, 0, 0);
 #endif
-#endif   // MK_AR_RSTD
         binop_with_scalar_tile_init();
         mul_unary_tile(0, MKA_INVH_BITS);
         add_unary_tile(0, MKA_EPS_BITS);
@@ -532,9 +536,7 @@ void kernel_main() {
         pack_tile(0, CB_RS);
         tile_regs_release();
         cb_push_back(CB_RS, 1);
-#if !defined(MK_AR_RSTD)
         cb_pop_front(CB_RSP, MKA_NOWN);
-#endif
         // scale the output rows at pack
         cb_wait_front(CB_RS, 1);
         cb_wait_front(CB_QA, qnt);

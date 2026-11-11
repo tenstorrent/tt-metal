@@ -460,7 +460,7 @@ def setup_bench(dev, MESH, mesh_identity):
         RSTD = os.environ.get('MK_AR_RSTD', '0') == '1'
         if RSTD:   # real rstd (spec, producer on STREAM): Σ tile = rsp tile 0, row k = K-row k's per-token partial (row form), rows 8-31 = 0;
             # host init = row 0 holds Σ of the prologue x. MK_AR_RSTD_ROWS=8 (bench) spreads it over 8 K-chunk partials instead.
-            assert QSK, "MK_AR_RSTD: the QSK qkv consumer"
+            assert QSK and ("MK_V12", "1") in MKDEF, "MK_AR_RSTD: the QSK + V12 rstd consumer v_rstd (CB 43 = rsp)"
             _nr = int(os.environ.get('MK_AR_RSTD_ROWS', '1'))
             rsp_t = torch.zeros(TILE, TILE)
             for k_ in range(_nr): rsp_t[k_] = (xb[:, k_ * (H // _nr):(k_ + 1) * (H // _nr)].double() ** 2).sum(-1).float()
@@ -1066,10 +1066,10 @@ def setup_bench(dev, MESH, mesh_identity):
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
                                              defines=dfs, runtime_args=rt, **base))
         return out
-    def _mka_ccfg():   # MKA2 compute config; MK_AR_RSTD: the Σ tile CB 20 unpacks straight to DST in fp32 (exact rstd sum)
+    def _mka_ccfg():   # MKA2 compute config; MK_AR_RSTD: the Σ tile CB 43 (v_rstd) unpacks straight to DST in fp32 (exact rstd sum)
         c_ = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False)
         if ('MK_AR_RSTD', '1') in MKDEF:
-            u_ = [ttnn.UnpackToDestMode.Default] * 64; u_[20] = ttnn.UnpackToDestMode.UnpackToDestFp32; c_.unpack_to_dest_mode = u_
+            u_ = [ttnn.UnpackToDestMode.Default] * 64; u_[43] = ttnn.UnpackToDestMode.UnpackToDestFp32   # CB_VRSA (= rsp) under QSK + V12; c_.unpack_to_dest_mode = u_
         return c_
     def build(out, coord=None, plan_only=False):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
