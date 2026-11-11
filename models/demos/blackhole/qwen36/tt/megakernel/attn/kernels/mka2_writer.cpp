@@ -825,6 +825,41 @@ void kernel_main() {
 #else
     auto v_pump = [&]() { pump1(sv); };
 #endif
+#if defined(MKA_QSK)
+#if defined(MKA_QSPREAD)
+    // ATTNOV lever 2 (spec v1.139): slot Q = the NEXT attention layer's split-K qkv slice (CB_WM, free since MK_GDN_INPROJ moved
+    // the GDN in-proj to CB_WMG), started at the first GDN layer after the previous attention layer and pumped at lowest
+    // priority, one 16 KB read per MKA_QSPREAD cycles, ONLY inside GDN step stalls (W-GDN), so the ~21 MB no longer lands
+    // in the pre-attention GDN layer's stall + MLP-AR. Same bytes, same CB, own trid (4): bit-identical by construction.
+#if !defined(MK_GDN_INPROJ) || !defined(MK_V12)
+#error "MKA_QSPREAD needs MK_GDN_INPROJ (GDN in-proj in CB_WMG, CB_WM attention-only) and MK_V12"
+#endif
+    constexpr uint32_t QSP_TRID = 4;   // writer trids in use: 1-3, 5, 6-7, 9, 10-11, 12-13, 14, 15
+    VSlot sq = {0, 0, 0, 0};
+    uint32_t sq_for = 0xFFFFFFFFu, sq_t = 0, sq_gap = 0xFFFFFFFFu;
+    // soft QSPREAD (ATTNOV b3): slot-Q reads in a plain GDN stall collide with the GDN cores' gdn_out write (wr_out +25-35 us,
+    // b2), so the gap is per layer: MKA_QSPREAD in the far GDN layers (0 = never: slot Q only in the pre-attention layer) and
+    // MKA_QSP_NEAR in the layer right before the attention layer (where base already carries the qkv slice as slot M)
+#if !defined(MKA_QSP_NEAR)
+#define MKA_QSP_NEAR MKA_QSPREAD
+#endif
+    auto v_pump_g = [&]() {
+#if V_NB_ON
+        // a split slot V in flight holds slot M as before (letting slot M through = SMPAR: +107 us / 8 layers, b2/b3), but
+        // slot Q may still issue under its gap
+        if (pump1(sv)) { if (!vsplit) return; }
+        else if (pump1(sm)) return;
+        if (!sq.rem) return;
+#else
+        if (pump1(sv) || pump1(sm) || !sq.rem) return;
+#endif
+        const uint32_t tn = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        if ((uint32_t)(tn - sq_t) >= sq_gap && pump1(sq)) sq_t = tn;
+    };
+#else
+#define v_pump_g v_pump
+#endif
+#endif
     auto v_slot_ready = [&](VSlot& s_, uint32_t cb, uint32_t pages, uint32_t trid, uint32_t vd = 0) {
         while (s_.rem) pump1(s_);
         noc_async_read_barrier_with_trid(trid);
@@ -1061,8 +1096,15 @@ void kernel_main() {
             MKZ("W-MIX");
             v_xk_push(2 * L + 1);
 #if defined(MK_GDN_INPROJ)
+            {
+            MKZ("W-SMR");   // slot M / Q drain + landing at the mixer (on path if the slice is not resident yet)
+#if defined(MKA_QSPREAD)
+            if (att && sq_for == L) v_slot_ready(sq, CB_WM, QSK_SLOT, QSP_TRID);   // drains what the GDN stalls left
+            else
+#endif
             if (att) v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
             else v_slot_ready(sm, CB_WMG, GIN_SLOT, 10 + (L & 1));
+            }
             const bool mrs = true, mown = att || gq;   // every layer has a mixer RS; this row sums one (qkv items / its gdn_in tile)
 #else
             v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
@@ -1078,7 +1120,19 @@ void kernel_main() {
 #else
             if (mown) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
 #endif
+#if defined(MKA_QSPREAD)
+            if (!att && L + 1 < NL) {   // next attention layer after L: its qkv slice -> slot Q (CB_WM popped by the previous one)
+                const uint32_t mh = (uint32_t)(MKA_AMASK) >> (L + 1);
+                const uint32_t na = mh ? L + 1 + (uint32_t)__builtin_ctz(mh) : NL;
+                if (na < NL && sq_for != na) {
+                    v_slot_start(sq, CB_WM, QSK_SLOT, wm.get_noc_addr(wm_page + wla(na) * pwm_layer), QSK_KPR * qsk_nt(vn) * MWTB, QSP_TRID);
+                    sq_for = na;
+                }
+            }
+            if (L + 1 < NL && sq_for != L + 1) qsk_start(L + 1);   // blocks until compute popped slot M (partial done)
+#else
             if (L + 1 < NL) qsk_start(L + 1);   // blocks until compute popped slot M (partial done)
+#endif
             if (mrs) {
                 noc_semaphore_wait_min(vw(vg[VG_LA]), 2 * L + 1);
 #if defined(MK_GDN_INPROJ)
@@ -1241,6 +1295,9 @@ void kernel_main() {
             npc = ip = outstanding = 0;
             if (L + 1 < NL) plan_layer(L + 1, true);
             V12_PLAN_MLP(L);
+#if defined(MKA_QSPREAD)
+            sq_gap = (sq_for == L + 1) ? (uint32_t)(MKA_QSP_NEAR) : ((MKA_QSPREAD) ? (uint32_t)(MKA_QSPREAD) : 0xFFFFFFFFu);
+#endif
 #if defined(MKA_GDN_WAIT)
             // G2: the GDN role's step is the stall -- every one of the MKA_GDN_NC GDN cores multicasts out_ready += 1 to
             // every engine core once its output rows landed; GDN layer g (= L - attention layers before L) is done at
@@ -1260,7 +1317,7 @@ void kernel_main() {
                 while ((uint32_t)(reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - t0) < (uint32_t)MKA_S_GDN) {
 #endif
 #if defined(MK_NO_PIECES)
-                    v_pump();
+                    v_pump_g();
 #else
                     if (ip < npc && noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
                         const Piece& pc = pcs[ip++];
