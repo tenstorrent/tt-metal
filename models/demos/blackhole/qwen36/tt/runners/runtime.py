@@ -75,22 +75,30 @@ class TtQwen35PupPrefillRuntime:
 
     # --- runner contract ---------------------------------------------------------------------------------------
     def compile(self, kv_caches) -> None:
-        """Allocate and warm the model's traced prefill paths (eager prepare, then capture), then one export so the
-        publish ops are compiled before the first request."""
+        """Allocate and warm the model's traced prefill paths, then capture them. Everything that must persist across
+        replays (every slot's index scalar, the publish ops' programs) is created BEFORE the first capture: a device
+        buffer allocated after a capture can land on a captured trace's freed intermediates and be overwritten by
+        every replay (seen here as a slot's published GDN state staying zero)."""
         m = self.model
         full_pt = self.page_table.reshape(1, -1)
+        for slot in range(self.config.num_users):
+            self._slot_scalar(slot)
         # the block past every slot's range: padded bucket K / V writes land there (the adapter allocates it)
         m.prefill_trash_block = self.config.num_users * self.blocks_per_slot
-        m.prepare_prefill_trace_chunked(self.mesh_device, full_pt[:, : self.blocks_per_slot], chunk_size=2048)
+        seg = self.config.pup.segment_tokens
+        m.prepare_prefill_trace_chunked(self.mesh_device, full_pt[:, : self.blocks_per_slot], chunk_size=seg)
         if self.config.use_trace:
             m.prepare_prefill_traces_short(self.mesh_device, full_pt[:, : self.blocks_per_slot])
+        self._export(kv_caches, slot=0, actual_start=0, actual_end=128)
+        ttnn.synchronize_device(self.mesh_device)
+        if self.config.use_trace:
             m.record_prefill_trace_chunked(self.mesh_device)
             m.capture_prefill_traces_short(self.mesh_device, full_pt[:, : self.blocks_per_slot])
-        self._export(kv_caches, slot=0, actual_start=0, actual_end=128)
         ttnn.synchronize_device(self.mesh_device)
         logger.info(
             f"[qwen35_9b_pup] compiled: slots {self.config.num_users} x {self.config.max_seq_len} tokens, "
-            f"{len(self.attn_layer_ids)} attention + {len(self.gdn_layer_ids)} GDN layers, trace={self.config.use_trace}"
+            f"{len(self.attn_layer_ids)} attention + {len(self.gdn_layer_ids)} GDN layers, segment {seg}, "
+            f"trace={self.config.use_trace}"
         )
 
     def make_chunk_input(self, token_ids):
@@ -215,19 +223,21 @@ class TtQwen35PupPrefillRuntime:
     def _export(self, kv, *, slot, actual_start, actual_end):
         """Publish the chunk's state into the engine-owned caches (device ops only)."""
         a0, a1 = int(actual_start), int(actual_end)
+        # update_padded_kv_cache writes a window whose length divides the cache length: the next power of two >= the
+        # chunk (rows past actual_end are the slot's stale rows, at positions the migration never reads)
+        n = max(32, 1 << (a1 - a0 - 1).bit_length())
+        assert a0 % n == 0 and a0 + n <= self.config.max_seq_len, (a0, a1, n)
         b0 = slot * self.blocks_per_slot + a0 // self.block
-        b1 = slot * self.blocks_per_slot + -(-a1 // self.block)
+        b1 = b0 + -(-n // self.block)
         rows = (b1 - b0) * self.block
-        off = a0 % self.block
         for pos, li in enumerate(self.attn_layer_ids):
             att = self.model.layers[li].attention
             for src, dst in ((att.paged_k, kv.k), (att.paged_v, kv.v)):
                 hd = int(src.shape[-1])
                 blk = ttnn.slice(src, [b0, 0, 0, 0], [b1, 1, self.block, hd])
                 x = ttnn.reshape(blk, [1, 1, rows, hd])
-                if off:
-                    y = ttnn.slice(x, [0, 0, off, 0], [1, 1, rows, hd])
-                    ttnn.deallocate(x)
+                if rows != n:  # n = 32: half a block
+                    y = ttnn.slice(x, [0, 0, 0, 0], [1, 1, n, hd])
                     x = y
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     dst,

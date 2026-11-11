@@ -177,6 +177,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--table", default="")
     ap.add_argument("--wait-ref", type=float, default=2400.0)
+    ap.add_argument("--segment", type=int, default=0, help="override PupPrefillConfig.segment_tokens")
     a = ap.parse_args()
 
     import ttnn
@@ -194,13 +195,18 @@ def main():
     )
     reader = pm.DictEmbeddingReader()
     adapter = Qwen35PupPrefillAdapter(media_reader=reader)
+    if a.segment:
+        from dataclasses import replace
+
+        adapter.pup_config = replace(adapter.pup_config, segment_tokens=a.segment)
+    results_cfg = vars(adapter.pup_config)
     mesh = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 4),
         l1_small_size=adapter.l1_small_size,
         num_command_queues=2,
         trace_region_size=adapter.trace_region_size,
     )
-    results = {"names": {}, "setup": {}}
+    results = {"names": {}, "setup": {}, "config": {k: str(v) for k, v in results_cfg.items()}}
     try:
         t0 = time.time()
         hf_config = adapter.load_hf_config()

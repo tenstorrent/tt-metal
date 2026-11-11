@@ -33,6 +33,11 @@ class PupPrefillConfig:
     num_users: int = 4
     block_size: int = 64
     """The model's paged-attention block; each slot owns max_seq_len / block_size consecutive blocks."""
+    segment_tokens: int = 4096
+    """The model's chunk trace size: a prompt shorter than this runs as ONE segment (a traced short bucket up to 2048,
+    else one masked bucket of the next 128 multiple), as today's prefill runs a request's tail as one bucket. 2048 (the
+    model default) splits a 3177-token 10-reference request into a 2048 chunk trace + a tail, which gave different
+    image rows past position 2048 (DGEN_PREFILL_LOG h2)."""
 
     # --- session-5 column profile ---
     column_profile: bool = True
@@ -56,6 +61,8 @@ class PupPrefillConfig:
             raise ValueError(f"mlp_fidelity {self.mlp_fidelity!r}")
         if self.max_seq_len % self.block_size or self.chunk_size % self.block_size:
             raise ValueError("max_seq_len and chunk_size must be whole paged-attention blocks")
+        if self.segment_tokens % 128 or self.segment_tokens > self.max_seq_len:
+            raise ValueError(f"segment_tokens {self.segment_tokens}: a multiple of 128, <= max_seq_len")
         if self.chunk_size > self.max_seq_len:
             raise ValueError(f"chunk_size {self.chunk_size} > max_seq_len {self.max_seq_len}")
         if self.media_source not in ("spliced",):
