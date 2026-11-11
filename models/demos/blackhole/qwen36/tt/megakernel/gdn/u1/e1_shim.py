@@ -394,13 +394,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             out += ttnn.TensorAccessorArgs(tens[t]).get_compile_time_args()
         return out, offs
     # ---- MKA_GDNOUT (spec v1.8a): the GDN out_proj through the wo unit (attn/kernels/wo_unit_*.hpp), wrapper-only ----
-    # per GDN layer on core i: ring CB 41 <- its gdn_out slice (BFP4, k-major 24 x nt pages, filled right after reader<>()
+    # per GDN layer on core i: ring CB (42) <- its gdn_out slice (BFP4, k-major 24 x nt pages, filled right after reader<>()
     # of the same layer: filling layer L + 1 there instead blocked the reader on the ring slot until gdn_out(L) and held
     # the next layer's state prefetch to the stall end, +50 us per GDN layer at u8); A CB 42 <- the layer's 24 `out`
     # tiles from DRAM once every GDN core raised GDNA; out = A @ slice -> CB 43 -> the owners' CB_XO chunks (rot order, wo
     # unit scatter, += count on the owners' word), then the engine's out_ready (the GDN-type layer stall ends after gdn_out)
     GO = gdnout
     go_r = go_w = go_c = go_sig = ""
+    go_ring0h = False   # E1_GO_RING0=hook (set below)
     go_inc = ""
     if GO:
         WOU = GO["wou_dir"]
@@ -477,8 +478,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'    const uint32_t nt = g_ab[{{OGO}}];\n'
                 f'    {{ DeviceZoneScopedN("GO-MM"); cb_wait_front({CO_}, {MAXT}); }}\n'
                 f'    DeviceZoneScopedN("GO-SC");\n'
-                f'    const auto dg = TensorAccessor(TensorAccessorArgs<{{DBG_OFF}}>(), {GO["dbg_addr"]}u, 2048);\n'
-                f'    for (uint32_t j = 0; j < nt; ++j) noc_async_write(get_read_ptr({CO_}) + j * 2048, dg.get_noc_addr(L * 160 + tl[j]), 2048);\n'
+                # E1_GO_DBG (default 1): the out tiles' copy into the debug tensor (the [gdnout] PCC's input); 0 = production (no
+                # per-layer DRAM writes on the tail)
+                + (f'    const auto dg = TensorAccessor(TensorAccessorArgs<{{DBG_OFF}}>(), {GO["dbg_addr"]}u, 2048);\n'
+                   f'    for (uint32_t j = 0; j < nt; ++j) noc_async_write(get_read_ptr({CO_}) + j * 2048, dg.get_noc_addr(L * 160 + tl[j]), 2048);\n'
+                   if os.environ.get("E1_GO_DBG", "1") == "1" else '') +
                 f'    wou::scatter({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u);   // also retires the debug writes\n'
                 f'    {{OSIG}}\n'
                 + ('    { DeviceZoneScopedN("GO-OSIGB"); noc_async_atomic_barrier(); }\n' if os.environ.get("E1_GO_OSIGB", "0") == "1" else '') +
@@ -541,6 +545,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # E1_GO_RING2 (default on with the reader hook): 2-slot ring, layer L + 1's slice read right after reader<>(L) (ring 0
         # before the loop): the matmul of layer L never waits for its ring behind the reader's S' writes
         GO_RING2 = go_rdhook and os.environ.get("E1_GO_RING2", "1") == "1"
+        # E1_GO_RING0=hook (with RING2): layer 0's ring slice is read inside reader<>(0) right before rd_owait (the reader
+        # idles there while the compute runs the step) instead of before the layer loop, where its ~26 us of DRAM reads
+        # delayed L0's state-first / pre reads (the +~40 us L0 cost, once per pass)
+        go_ring0h = GO_RING2 and os.environ.get("E1_GO_RING0", "pre") == "hook"
         go_wr = ""
         GO_TAILHOOK = go_rdhook and os.environ.get("E1_GO_TAILHOOK", "1") == "1"
         go_th = ""
@@ -633,10 +641,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (GXY_DECL if GO else '')
         + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '')
         + ((go_local_rd[:go_local_rd.rindex("}")] + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '')
-        + (f'void gdn_hold_publish(uint32_t m) {{ g_ab[{OHM} + (g_l & 1)] = ((g_l + 1) << 8) | m; }}\n' if hold_skip else '') +
+        + (f'void gdn_hold_publish(uint32_t m) {{ g_ab[{OHM} + (g_l & 1)] = ((g_l + 1) << 8) | m; }}\n' if hold_skip else '')
+        + ('void gdn_out_pre() {\n  if (g_l == 0) {\n' + go_r.replace("(L_)", "0u") + '  }\n}\n' if go_ring0h else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         + ('  gdn_cut_reset();\n' if cut_fast else '') +
-        (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) else '') +
+        (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) and not go_ring0h else '') +
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_l = L;\n'
         f'    for (uint32_t t = 0; t < {nR}; ++t) crta[{CRTA0} + t] = g_ab[{OLR} + L * {nR} + t];\n'
         f'    reader<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {K}, {Lw}, {Ct}, {z_tile0}, {ab_page}, {W}, '
@@ -708,7 +717,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_CUT_FAST", "1")] if cut_fast else []) + (
         [("GDN_SP_RD", "1")] if sp_rd else []) + ([("GDN_OUT_RD", "2" if go_rdhook else "1")] if out_rd else []) + (
         [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else []) + (
-        [("GDN_HOLD_SKIP", "1")] if hold_skip else [])
+        [("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_OUT_PRE", "1")] if go_ring0h else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
@@ -764,7 +773,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)),
           ttnn.KernelDescriptor(kernel_source=tc, core_ranges=crs, compile_time_args=[], defines=d_c,
                                 common_runtime_args=ca([]), runtime_args=ttnn.RuntimeArgs(), config=ccfg)]
-    if GO:   # CB 41 ring (the weight format, BFP4), 42 A (24 bf16 tiles), 43 out slot (maxt bf16 tiles)
+    if GO:   # ring CB_R (default 42; the weight format, BFP4), A CB_A (43; 24 bf16 tiles), out slot CB_O (44; maxt bf16 tiles)
         wfmt = GO["w"].dtype
         wpg = ttnn.Tile([32, 32]).get_tile_size(wfmt)
         for idx, dt, n, pg in ((CR_, wfmt, GO["wk"] * GO["maxt"] * (2 if GO_RING2 else 1), wpg), (CA_, ttnn.bfloat16, GO["wk"], 2048), (CO_, ttnn.bfloat16, GO["maxt"], 2048)):
