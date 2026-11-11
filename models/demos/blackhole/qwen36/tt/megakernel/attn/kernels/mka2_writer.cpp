@@ -48,6 +48,9 @@
 #else
 #define MKA_WOT_DIV wo_tiles
 #endif
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && !defined(MK_AR_RSTD_HOST)
+#define MK_AR_RSTD_PROD 1   // the STREAM producer (off with the host Σ: no producer defines then)
+#endif
 void kernel_main() {
     constexpr uint32_t XTB = get_compile_time_arg_val(0), NGU = get_compile_time_arg_val(1);
     constexpr uint32_t NDN = get_compile_time_arg_val(2), KT = get_compile_time_arg_val(3);
@@ -827,7 +830,7 @@ void kernel_main() {
 #endif
         cb_push_back(cb, pages);
     };
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+#if defined(MK_AR_RSTD_PROD)
     // rstd producer (STREAM (n = k, k)): the compute's per-row Σx² (CB_SS, REDUCE_ROW column 0) -> row k of the Σ tile (rsp
     // tile 0: face 0 at k*64 B, face 1 at 1024 + k*64 B) on every STREAM core, then MK_AR_RSF += 1 there (8 per delivery). The
     // atomic multicast cannot include its source: the self rect is split around this core, plus a local increment.
@@ -895,7 +898,7 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         cb_push_back(CB_XK, 2 * V_OT);
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+#if defined(MK_AR_RSTD_PROD)
         if (vn == vk) rstd_send();   // rstd producer (n = k): this K-row's Σx² row -> every STREAM core's Σ tile
 #endif
     };
@@ -1663,7 +1666,7 @@ void kernel_main() {
     // v12 words: every increment into this core's words for layer NL - 1 preceded its last wait above (STREAM: W-VMD;
     // owner: W-OP), and the reader's LA write preceded the writer's last LA wait
     if (vrole) for (uint32_t i = 0; i < NVG; ++i) *vw(vg[i]) = 0;
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+#if defined(MK_AR_RSTD_PROD)
     // rstd flag (device-local): 8 producers x 2 K-row deliveries per layer reach every STREAM core; this core drains, then resets
     // (the consumers only wait)
     noc_semaphore_wait_min(l1w(MK_AR_RSF), 8 * 2 * NL);

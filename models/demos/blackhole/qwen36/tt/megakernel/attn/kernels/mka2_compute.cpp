@@ -349,7 +349,10 @@ void kernel_main() {
     const uint32_t vrole = vrole_rt;
 #endif
     const uint32_t vfirst = get_arg_val<uint32_t>(a++);
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && defined(MK_AR_RSTD_HOST)
+    a++;   // the producer's arg (vn) is still passed with the host Σ
+#define MK_RSTD_PART() do {} while (0)
+#elif defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
     // rstd producer (DESIGN v1.7x, STREAM-side): core (n = k, k) turns every K-row x delivery (CB_XK, 20 bf16 tiles) into its
     // per-row Σx² in fp32: transposed copy (X^T, exact to fp32 DST) + SFPU square + SFPU add over the 20 tiles, then SFPU
     // REDUCE_COL (row 0 = Σ_c x[r, c]^2 at column r: already the Σ tile's row format; same reduce instantiation as the consumers)
@@ -416,8 +419,16 @@ void kernel_main() {
 #define MK_GC_SCALE() do {} while (0)
 #endif
     // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
-    auto v_rstd = [&]() {
-#if defined(MK_AR_RSTD)
+    auto v_rstd = [&]() __attribute__((noinline)) {   // 2 call sites (mixer qkv / gdn_in, MLP): one copy (STREAM text)
+#if defined(MK_AR_RSTD) && defined(MK_AR_RSTD_RED_GDN)
+        // v1.112 (iii'): the FINAL Σ (column 0 = per-token Σx², reduced on a GDN-role core) -> exact fp32 copy (UnpackToDestFp32 CB 43)
+        cb_wait_front(CB_VRSA, 1);
+        cb_reserve_back(CB_VRT, 1);
+        reconfig_data_format_srca(CB_VRSA);
+        copy_init(CB_VRSA);
+        tile_regs_acquire();
+        copy_tile(CB_VRSA, 0, 0);
+#elif defined(MK_AR_RSTD)
         // real rstd: the Σ tile (rsp tile 0, bound as CB_VRSA) holds row k = K-row k's per-token partial (row form, fp32).
         // UnpackToDestFp32 copy (CB 43) -> SFPU column sum (row 0 = Σ_k S[k][c]) -> in-DST transpose (column 0 per token row).
         cb_wait_front(CB_VRSA, 1);
