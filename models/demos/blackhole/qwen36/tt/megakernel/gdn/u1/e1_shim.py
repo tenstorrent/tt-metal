@@ -660,7 +660,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'{DM_OPT}#include "{hr}"\nvoid kernel_main();\nstatic volatile tt_l1_ptr uint32_t* g_ab;\nstatic uint32_t g_l;\n'
         f'inline uint32_t gdn_rt_B() {{ return g_ab[4]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[5]; }}\n'
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
-        + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '') +
+        + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '')
         + (f'void gdn_gin_wait() {{\n  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n'
            f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n}}\n'
            'void gdn_in_wait() { gdn_gin_wait(); }\n' if percore else
