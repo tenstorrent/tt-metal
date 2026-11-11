@@ -2394,6 +2394,8 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     program.info = info
     program.setup = S
     program.xio = make_xio(mesh, S) if os.environ.get("QWEN36_R16_MK_XIO", "1") == "1" else None
+    if callable(S.get("ENGINE_SEED")) and callable(S.get("ENGINE_DRAIN")):  # §20 phase 2 (engine-L1 agent): engine-owned I/O
+        program.seed, program.drain = S["ENGINE_SEED"], S["ENGINE_DRAIN"]
     program.blocks = blocks
     return program
 
