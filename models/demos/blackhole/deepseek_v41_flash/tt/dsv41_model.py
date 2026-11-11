@@ -26,6 +26,7 @@ from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
 from models.demos.blackhole.deepseek_v41_flash.tt import pf_up1 as PU1
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PGM
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PSG
+from models.demos.blackhole.deepseek_v41_flash.tt import slot_buckets as SB
 from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
 from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import DSV41DeviceEmbedding, DSV41DeviceHead
@@ -317,7 +318,9 @@ class Model:
             else None
         )
         if self.host_rows is not None:
-            if os.environ.get("DSV41_PF_HASH_FAST", "0") == "1":  # numpy hash (no 8.4 MB history-row copies per slot); bit-identical ids
+            if (
+                os.environ.get("DSV41_PF_HASH_FAST", "0") == "1"
+            ):  # numpy hash (no 8.4 MB history-row copies per slot); bit-identical ids
                 from models.demos.blackhole.deepseek_v41_flash.tt.hostopt import TorchFastNgramHash
 
                 self.hasher = TorchFastNgramHash(self.host_rows.engram.hash)
@@ -1882,6 +1885,9 @@ class Model:
             t_pick = time.perf_counter() - t_pick
             if pick:
                 return self._prefill_up1(items, chunk, want_logits, vis, final, totals, rids, t_pick)
+        k_slots = self._slot_pick(items, chunk, vis)
+        if k_slots:
+            return self._prefill_slots(k_slots, items, chunk, s_pad_max, want_logits, vis, final, totals, rids)
         buckets = pm.dyn_buckets() if os.environ.get("DSV41_PF_SMALL_BUCKET", "1") != "0" else []
         if PSG.enabled() or self.__dict__.get("_up1") is not None:
             buckets = (
@@ -1937,12 +1943,73 @@ class Model:
         self.timing = tm
         return res
 
+    def _slot_pick(self, items, chunk, vis):
+        """DSV41_PREFILL_SLOT_BUCKETS: the number of prefill slots per mesh row k of the chunk trace this call runs on (0 = the full Up = U trace): the smallest captured bucket that covers the in-row index
+        of every user of the call (slot = user % U in the Up = U layout; ``claim_packed`` hands out the lowest free index first, so a lone prompt sits in slot 0). Image prompts use the full trace.
+        """
+        ks = self.__dict__.get("_slot_ks")
+        if not ks or self.Up != self.U or self.__dict__.get("_up1_active") or not items:
+            return 0
+        sw = os.environ.get(
+            "DSV41_PREFILL_SLOT_BUCKETS_FILE"
+        )  # live switch for A/B in one server: the file holds 0 / 1
+        if sw:
+            try:
+                if open(sw).read().strip() == "0":
+                    return 0
+            except OSError:
+                pass
+        if vis or int(chunk) != self._slot_chunk:
+            return 0
+        pm = self.prefill_model
+        if pm.dyn is None or pm.dyn_key() < 0:
+            return 0
+        return SB.pick(ks, {-k for k in pm.slot_ctx_keys()}, SB.need_slots([it[0] for it in items], self.U))
+
+    def _prefill_slots(self, k, items, chunk, s_pad_max, want_logits, vis, final, totals, rids):
+        """Run the call on the k-slot chunk trace (``warm_serving`` built it on the carried state of the Up = U context): everything else (hand-off, APC, key export records) is the Up = U path's."""
+        pm = self.prefill_model
+        main, saved_up = pm.dyn_key(), self.Up
+        t_in = time.perf_counter()
+        pm.use_dyn(-k)
+        self.Up = k
+        self.__dict__["_slot_k"] = k
+        t_sw = time.perf_counter() - t_in
+        try:
+            res = self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis, final, totals, rids)
+            tm = dict(self.timing)
+        finally:
+            self.__dict__["_slot_k"] = None
+            self.Up = saved_up
+            t_b = time.perf_counter()
+            pm.use_dyn(main)
+            t_back = time.perf_counter() - t_b
+        tm["slot_k"], tm["slot_enter_s"], tm["slot_back_s"] = float(k), t_sw, t_back
+        n_ = self.__dict__.setdefault("_slot_n", {})
+        n_[k] = n_.get(k, 0) + 1
+        if n_[k] <= 3 or n_[k] % 200 == 0:
+            self.log(f"prefill on the {k}-slot context: users {sorted(int(it[0]) for it in items)} (call {n_[k]})")
+        self.timing = tm
+        return res
+
     def _prebuild_other_ctx(self, spec_enq):
         """Last window of a call: the position / mask tables of the first window of a FRESH prompt (all starts 0) are prebuilt (and, with ``spec_enq``, copied in place) for every OTHER prefill
         context too. Without it the call after a context switch (an Up = U call right after a one-slot call, or the reverse) found its prebuilt tables stale (the epoch moved on while the other context
         ran) and re-copied them all inside its first window: +70 ms (``w_dynupd`` 0.03 -> 0.10 s) for a 512-token prompt.
         """
         PU1.prebuild_other_ctx(self.prefill_model, self.__dict__.get("_up1"), self.rows, self.U, spec_enq)
+        if self.__dict__.get(
+            "_slot_ks"
+        ):  # slot-bucket contexts (DSV41_PREFILL_SLOT_BUCKETS): the first window of a fresh prompt in ANY of them
+            pm = self.prefill_model
+            cur = pm.dyn_key()
+            for key, st in pm.dyn_stash.items():
+                d = st["pm"].get("dyn")
+                if d is None or key == cur:
+                    continue
+                d.prebuild([0] * d.nslot)
+                if spec_enq:
+                    d.enqueue_prebuilt(pm._win_count)
 
     def _up1_pick(self, items, chunk, final, vis):
         """DSV41_PF_UP1_SHORT: True when the whole call may run on the one-slot-per-mesh-row context (tt/pf_up1.py: every user from scratch, whole prompt in one window, final, one per mesh row, no prefix hit)."""
@@ -2056,7 +2123,13 @@ class Model:
             raise RuntimeError("a prompt has images but the model was built without DSV41_VISION=1")
         assert C % 128 == 0, "chunk must be a multiple of 128"
         B, pm, Up, U, rows = self.B, self.prefill_model, self.Up, self.U, self.rows
-        general = Up != U
+        kmode = (
+            self.__dict__.get("_slot_k") is not None
+        )  # DSV41_PREFILL_SLOT_BUCKETS: the call runs on the k-slot context (slot = in-row index of the user, state = the main context's)
+        general = Up != U and not kmode
+        sgen = (
+            general or kmode
+        )  # (the hand-off sink of a context with fewer slots than decode users takes a slot -> user map)
         resume = self.__dict__.setdefault("pf_resume", {})
         items = [(int(b), torch.as_tensor(t).long(), int(st), int(e)) for b, t, st, e in items]
         ends = {b: e for b, _, _, e in items}
@@ -2112,7 +2185,7 @@ class Model:
         t_start = time.perf_counter()
         self._admit_idle()
         self.sink.set_lengths(torch.zeros(B, dtype=torch.long))  # (capture / compile pass: every user masked)
-        self.sink.set_map([None] * (rows * Up) if general else None)
+        self.sink.set_map([None] * (rows * Up) if sgen else None)
         self.sink.bind(C)
         self.prepare_for_traces(torch.zeros(B, dtype=torch.long))
         if getattr(self, "_hooks_set", None) is not pm:
@@ -2256,11 +2329,21 @@ class Model:
                         if per_row or not all(it[2] == 0 for it in wave)
                         else new_
                     )
-                slot_of = (
-                    self._slot_alloc(_apc_alloc_view(wave, hit_todo), resume)
-                    if general
-                    else {b: b for b, _, _, _ in wave}
-                )
+                if (
+                    kmode
+                ):  # slot = in-row index of the user: the carried state is the main context's, whose slot of user b is b % U
+                    assert all(b % U < Up for b, _, _, _ in wave), (
+                        "slot bucket too small",
+                        Up,
+                        [b for b, _, _, _ in wave],
+                    )
+                    slot_of = {b: (b // U) * Up + b % U for b, _, _, _ in wave}
+                else:
+                    slot_of = (
+                        self._slot_alloc(_apc_alloc_view(wave, hit_todo), resume)
+                        if general
+                        else {b: b for b, _, _, _ in wave}
+                    )
                 if (
                     hit_todo
                 ):  # Up < U: the hits of THIS wave restore into the lanes of their slots (enqueued behind the replays of the earlier waves, before the first replay of this one)
@@ -2330,7 +2413,7 @@ class Model:
                         look is not None
                         and vw is None
                         and look[0] == _look_key(part, k)
-                        and look[5] == pm.dyn.S_pad  # (built for THIS context's input buffers)
+                        and look[5] == pm.dyn_key()  # (built for THIS context's input buffers)
                     )
                     if look is not None and not look_ok:
                         pm.vis_mark_dirty()  # (discarded: its recorded upload ops, possibly a vision-buffer clear, never run)
@@ -2480,7 +2563,7 @@ class Model:
                     ):  # the copies go into the queue right behind the trace being replayed: the next call's first window finds the inputs in place
                         replay(ops_l)
                         enq_l = pm._win_count
-                    self._look = ((C,) + tuple(sorted(key_l)), hs_l, prepped_l, ops_l, enq_l, pm.dyn.S_pad)
+                    self._look = ((C,) + tuple(sorted(key_l)), hs_l, prepped_l, ops_l, enq_l, pm.dyn_key())
                     pm.timing["lookahead_build"] = pm.timing.get("lookahead_build", 0.0) + time.perf_counter() - t_l0
 
                 ahead = {}
@@ -2523,15 +2606,15 @@ class Model:
                         rec_ops, _UpOnly
                     ):  # (the token half of the uploads was recorded during the previous call: add the position half now)
                         self.sink.set_lengths(lens)
-                        self.sink.set_map(slot_b if general else None)
+                        self.sink.set_map(slot_b if sgen else None)
                         rec_ops = (rec_ops.ops or []) + pm.record_begin(s0v if per_row else k, C, active)
                     s0 = s0v if per_row else k
                     t_hash += th_h
                     self.sink.set_lengths(lens)
-                    self.sink.set_map(slot_b if general else None)
-                    self._slot_b = slot_b if general else None
+                    self.sink.set_map(slot_b if sgen else None)
+                    self._slot_b = slot_b if sgen else None
                     self._last_pos = (
-                        torch.tensor([-1 if b is None else int(lens[b]) - 1 for b in slot_b]) if general else lens - 1
+                        torch.tensor([-1 if b is None else int(lens[b]) - 1 for b in slot_b]) if sgen else lens - 1
                     )
 
                     def _overlap(k_s0=k_s0, lens=lens, slot_b=slot_b, part=part, k=k):
@@ -2572,10 +2655,10 @@ class Model:
                                 continue
                             # the whole host side of the next window's uploads (RoPE tables, masks, hand-off index tables, Engram rows) is built NOW, the device copies are recorded and replayed right before its trace
                             self.sink.set_lengths(nbw[2])
-                            self.sink.set_map(nbw[4] if general else None)
+                            self.sink.set_map(nbw[4] if sgen else None)
                             ops = pm.record_window(nbw[7], nbw[9] if per_row else kn, C, nbw[1])
                             self.sink.set_lengths(lens)
-                            self.sink.set_map(slot_b if general else None)
+                            self.sink.set_map(slot_b if sgen else None)
                             ahead[kn] = nbw + (ops,)
                             return
 
@@ -3073,6 +3156,28 @@ class Model:
                 self.sink.set_map(None)
             self._up1 = {"S": S1, "main": int(s_pad), "C": int(chunk)}
             self.log_dram("after the one-slot (Up=1) prefill context")
+        # DSV41_PREFILL_SLOT_BUCKETS: chunk traces for k < U slots per mesh row on the carried state of the Up = U context (views of its halos / index-key FIFOs): a lone prompt does not pay for U slots.
+        # Allocated + compiled here (own per-chunk tables, input / hand-off buffers), captured with the others below.
+        self._slot_ks, self._slot_chunk = [], int(chunk)
+        sks = SB.parse(os.environ.get("DSV41_PREFILL_SLOT_BUCKETS"), U) if compiled else []
+        if sks and not (PSG.enabled() and Up == U and U >= 2 and PSG.up_batch_enabled() and self._up1 is None):
+            self.log(
+                f"DSV41_PREFILL_SLOT_BUCKETS={sks} ignored: needs the single chunk trace with DSV41_PREFILL_UP_BATCH=1, Up == U >= 2 and no one-slot (UP1_SHORT) context"
+            )
+            sks = []
+        for k in sks:
+            self.log_dram(f"before the {k}-slot prefill context")
+            self.Up = k
+            try:
+                pm.compile_dyn_slots(chunk, int(s_pad), k)
+                pm.use_dyn(-k)
+                self.sink.set_map([None] * (rows * k))
+                self.sink.bind(chunk)
+                pm.use_dyn(int(s_pad))
+            finally:
+                self.Up = Up
+            self.log_dram(f"after the {k}-slot prefill context")
+        self._slot_ks = sks
         guard = None
         if extra:  # (allocated AFTER the max-context tables: DSV41_PF_EXTRA_FIRST=0)
             # the eager pass right before the max-context capture needs ~17 MiB/bank contiguous (the sharded indexer's scores): keep a hole for it until then (the small contexts' tables and
@@ -3136,6 +3241,15 @@ class Model:
                     pm.use_dyn(self._up1["S"])
                     pm.capture_dyn_trace(chunk)
                     self.mem_report(f"after the one-slot (Up=1) S_pad {self._up1['S']} chunk trace")
+                    pm.use_dyn(int(s_pad))
+                finally:
+                    self.Up = Up
+            for k in self.__dict__.get("_slot_ks") or []:
+                self.Up = k
+                try:
+                    pm.use_dyn(-k)
+                    pm.capture_dyn_trace(chunk)
+                    self.mem_report(f"after the {k}-slot S_pad {s_pad} chunk trace")
                     pm.use_dyn(int(s_pad))
                 finally:
                     self.Up = Up

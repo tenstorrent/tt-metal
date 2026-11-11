@@ -759,8 +759,20 @@ class DSV41PrefillIndexer:
             ctx.sg.ensure(r)
         if owner:
             self.keys_rm = None
+            shared = None if getattr(ctx, "share", None) is None else ctx.share["keys"].get(id(self))
             with memitem(md, "index_key_FIFO(per slot)"):
-                self.keys = ttnn.zeros([U, 1, Tl + 32, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
+                if (
+                    shared is not None
+                ):  # slot-bucket context (DSV41_PREFILL_SLOT_BUCKETS): slots 0..U-1 of the main context's FIFO, same buffer
+                    from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel
+
+                    assert int(shared.shape[2]) == Tl + 32, (tuple(shared.shape), Tl)
+                    self.keys = DSV41PrefillModel.slot_prefix_view(shared, U)
+                    self._keys_view = True
+                else:
+                    self.keys = ttnn.zeros(
+                        [U, 1, Tl + 32, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md
+                    )
 
     def add_keys_single(self, lat_pre, tab, Cc, ctx):
         """the chunk's index keys -> scratch (static slice_write) + history (``key_append`` at the tensor-driven offset)"""
@@ -914,7 +926,9 @@ class DSV41PrefillIndexer:
                     cv = ttnn.to_layout(mc.allgather(vals, ccl, axis=1, dim=3), ttnn.ROW_MAJOR_LAYOUT)
                     cp = ttnn.to_layout(mc.allgather(pg, ccl, axis=1, dim=3), ttnn.ROW_MAJOR_LAYOUT)
                 else:
-                    cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
+                    cv = mc.allgather(
+                        ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3
+                    )  # [1,1,C,cols*512]
                     cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
                 tk.tick("allgathers")
                 pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
@@ -1224,8 +1238,12 @@ class DSV41PrefillSparse:
             if ix is not None:
                 ix.sh = None
             if ix is not None and ix.key_owner is None and ix.keys is not None:
-                ttnn.deallocate(ix.keys)
+                if not getattr(
+                    ix, "_keys_view", False
+                ):  # (a slot-bucket view shares the main context's buffer: never freed through the view)
+                    ttnn.deallocate(ix.keys)
                 ix.keys = None
+                ix._keys_view = False
                 if ix.keys_rm is not None:
                     ttnn.deallocate(ix.keys_rm)
                     ix.keys_rm = None
@@ -1275,7 +1293,9 @@ class DSV41PrefillSparse:
         pr = getattr(ctx, "per_row", False)
         s0s = PS.slot_s0(s0, ctx.rows * ctx.U if pr else 1)  # (one start per prefill slot)
         mp = ctx._shard if pr else ctx._rep
-        pos_dev = os.environ.get("DSV41_PF_POS_DEV", "0") == "1"  # (memoised host values: they depend on "first chunk or not" only)
+        pos_dev = (
+            os.environ.get("DSV41_PF_POS_DEV", "0") == "1"
+        )  # (memoised host values: they depend on "first chunk or not" only)
         memo = ctx.__dict__.setdefault("_upd_memo", {}) if pos_dev else None
 
         def pt_(f):
@@ -1496,7 +1516,9 @@ class DSV41PrefillSparse:
             qpad = None
             if qbufs is not None:
                 qu = qbufs[u]
-            elif retile_res is not None:  # DSV41_PF_RETILE=1: one op (tt/pf_retile.py) instead of slice + to_layout + slice_write
+            elif (
+                retile_res is not None
+            ):  # DSV41_PF_RETILE=1: one op (tt/pf_retile.py) instead of slice + to_layout + slice_write
                 from models.demos.blackhole.deepseek_v41_flash.tt import pf_retile
 
                 qpad = _qpad_buf(self.md, C)

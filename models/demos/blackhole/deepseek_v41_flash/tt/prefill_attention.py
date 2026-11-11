@@ -406,8 +406,16 @@ class DSV41PrefillAttention:
         # users differ per mesh row but the content starts as zeros: replicate then it is overwritten SPMD by the first chunk
         from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import memitem
 
+        shared = None if getattr(ctx, "share", None) is None else ctx.share["halo"].get(id(self))
         with memitem(self.md, "halo"):
-            self.halo = z([U, 1, WINDOW, HEAD_DIM])
+            if (
+                shared is not None
+            ):  # slot-bucket context (DSV41_PREFILL_SLOT_BUCKETS): slots 0..U-1 of the main context's halo, same buffer
+                from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel
+
+                self.halo = DSV41PrefillModel.slot_prefix_view(shared, U)
+            else:
+                self.halo = z([U, 1, WINDOW, HEAD_DIM])
         del rows
         if self.sparse is not None:
             self.sparse.alloc_dyn(ctx)

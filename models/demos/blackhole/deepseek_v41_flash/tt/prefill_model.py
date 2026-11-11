@@ -958,6 +958,10 @@ class DSV41PrefillModel:
             ratios.add(pl.pa.ratio)
             rope_src.setdefault(pl.pa.compressed, pl.pa.a)
         self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src, per_row=_PS.per_row_enabled(self.U), U=self.U)
+        # DSV41_PREFILL_SLOT_BUCKETS: a context with fewer slots than the main one at the SAME S_pad: its key (stash / ``use_dyn`` argument) is ``-k``; ``share`` = the carried per-slot tensors of the
+        # main context (halo, index-key FIFO) it views through a prefix of its slots instead of allocating its own
+        self.dyn.ctx_key = self.__dict__.pop("_ctx_key_next", None) or S_pad
+        self.dyn.share = self.__dict__.get("_share_state")
         # interleaved prefill (DSV41_PF_UMASK=1): per-user 0/1 mask [U,1,1,1] (per mesh row, persistent, refreshed before every replay) that gates every write of
         # the carried per-user prefill state (halo, latent / index-key FIFOs) INSIDE the trace, so users that are not part of a replay keep their state
         self.dyn.umask = None
@@ -983,11 +987,11 @@ class DSV41PrefillModel:
     # ---- several S_pad contexts (small-prompt buckets): each owns its DynCtx, per-layer carried tables and chunk trace; one is ACTIVE (the attributes the forward reads), the others are stashed
     _PA_ATTRS = ("dyn", "halo", "lat_buf", "_lat_pre")
     _SP_ATTRS = ("ctx", "dyn_on", "kvt", "ids")
-    _IX_ATTRS = ("keys", "keys_rm", "KL", "KL_full", "sh")
+    _IX_ATTRS = ("keys", "keys_rm", "KL", "KL_full", "sh", "_keys_view")
     _PM_ATTRS = ("dyn", "dyn_trace", "dyn_trace_b", "dyn_out", "head_out", "_dyn_compiled")
     _PA_FRESH = {"dyn": None, "halo": None, "lat_buf": None, "_lat_pre": None}
     _SP_FRESH = {"ctx": None, "dyn_on": False, "kvt": None, "ids": None}
-    _IX_FRESH = {"keys": None, "keys_rm": None, "sh": None}
+    _IX_FRESH = {"keys": None, "keys_rm": None, "sh": None, "_keys_view": False}
 
     # users-per-row bundle of a context (DSV41_PF_UP1_SHORT: a second context with ONE prefill slot per mesh row next to the Up = U one): everything whose shape follows the number of prefill slots
     # and is not already part of the context's own tables. Saved / loaded with the context so that ``use_dyn`` switches the whole model between the two.
@@ -1121,7 +1125,7 @@ class DSV41PrefillModel:
         for o in sps:
             self._put(o, self._SP_ATTRS, dict(self._SP_FRESH))
         for o in ixs:
-            self._put(o, ("keys", "keys_rm", "sh"), dict(self._IX_FRESH))
+            self._put(o, ("keys", "keys_rm", "sh", "_keys_view"), dict(self._IX_FRESH))
 
     @property
     def dyn_stash(self):
@@ -1131,12 +1135,12 @@ class DSV41PrefillModel:
         """move the active context aside (kept alive, not freed)"""
         if self.dyn is None:
             return
-        self.dyn_stash[self.dyn.S_pad] = self._dyn_save()
+        self.dyn_stash[self.dyn_key()] = self._dyn_save()
         self._dyn_blank()
 
     def use_dyn(self, S_pad):
         """make the context of ``S_pad`` the active one (a no-op when it is)"""
-        if self.dyn is not None and self.dyn.S_pad == S_pad:
+        if self.dyn is not None and self.dyn_key() == S_pad:
             return
         st = self.dyn_stash.pop(S_pad)
         self.stash_dyn()
@@ -1144,9 +1148,57 @@ class DSV41PrefillModel:
 
     def dyn_buckets(self):
         """S_pads of every context holding a CAPTURED chunk trace (active + stashed), ascending"""
-        out = [] if self.dyn is None or self.dyn_trace is None else [self.dyn.S_pad]
-        out += [k for k, st in self.dyn_stash.items() if st["pm"].get("dyn_trace") is not None]
+        out = [] if self.dyn is None or self.dyn_trace is None or self.dyn_key() < 0 else [self.dyn.S_pad]
+        out += [k for k, st in self.dyn_stash.items() if k > 0 and st["pm"].get("dyn_trace") is not None]
         return sorted(out)
+
+    def dyn_key(self):
+        """key of the ACTIVE context: its S_pad, or -k for a slot-bucket context (DSV41_PREFILL_SLOT_BUCKETS) of k slots per mesh row"""
+        return getattr(self.dyn, "ctx_key", self.dyn.S_pad)
+
+    def slot_ctx_keys(self):
+        """keys (-k) of the slot-bucket contexts holding a captured trace, ascending in k"""
+        out = [] if self.dyn is None or self.dyn_trace is None or self.dyn_key() >= 0 else [self.dyn_key()]
+        out += [k for k, st in self.dyn_stash.items() if k < 0 and st["pm"].get("dyn_trace") is not None]
+        return sorted(out, reverse=True)
+
+    # ---- slot-bucket contexts (DSV41_PREFILL_SLOT_BUCKETS): a chunk trace for k < U slots per mesh row on the SAME carried state as the main context
+    def _share_snapshot(self):
+        """the carried per-slot tensors of the ACTIVE (main) context: {id(object): tensor} for the halos and the index-key FIFOs"""
+        pas, sps, ixs = self._dyn_objs()
+        return {
+            "halo": {id(pa): pa.halo for pa in pas if pa.halo is not None},
+            "keys": {id(ix): ix.keys for ix in ixs if ix.keys is not None},
+        }
+
+    @staticmethod
+    def slot_prefix_view(t, k):
+        """[U,...] tensor viewed as [k,...] over the SAME buffer (slots 0..k-1; leading dim, tile layout: a prefix of the pages). Never deallocate the view (it would free the owner's buffer)."""
+        shp = [int(k)] + [int(x) for x in t.shape][1:]
+        return ttnn.reshape(t, shp, shp)
+
+    def compile_dyn_slots(self, C, S_pad, k, after_setup=None):
+        """Allocate + compile ONE ADDITIONAL context with ``k`` prefill slots per mesh row on the carried state (halos, index-key FIFOs) of the active context: own per-chunk tables, input / hand-off buffers
+        and chunk trace(s). Left stashed under key ``-k`` with its trace not captured (``use_dyn(-k)`` + ``capture_dyn_trace(C)``); the active context is active again afterwards.
+        """
+        assert C % 128 == 0 and self.dyn is not None and self.dyn.S_pad == S_pad and 1 <= k < self.U, (k, self.U)
+        key = -int(k)
+        assert key not in self.dyn_stash
+        cur = self.dyn_key()
+        share = self._share_snapshot()
+        self.stash_dyn()
+        try:
+            self._set_up(k)
+            self.__dict__["_share_state"] = share
+            self.__dict__["_ctx_key_next"] = key
+            self._compile_dyn_body(C, S_pad, after_setup)
+            self.stash_dyn()
+        finally:
+            self.__dict__.pop("_share_state", None)
+            self.__dict__.pop("_ctx_key_next", None)
+            if self.dyn is None:
+                self.use_dyn(cur)
+        self.use_dyn(cur)
 
     def teardown_dyn(self):
         """Release the chunk trace(s) and the per-chunk buffers of EVERY context (a different chunk size / padded prompt length needs a new capture)."""
@@ -1289,7 +1341,7 @@ class DSV41PrefillModel:
         """PF_TRACES line: how many prefill chunk traces are held and what this capture added to the trace region (MiB per DRAM bank; x 8 banks... = per chip)."""
         after = self._trace_region_mib()
         print(
-            f"PF_TRACES prefill chunk trace{tag and ' ' + tag} captured: C={C} S_pad={self.dyn.S_pad} single={os.environ.get('DSV41_PF_SINGLE', '0')} -> chunk traces held {len(self.dyn_buckets())} "
+            f"PF_TRACES prefill chunk trace{tag and ' ' + tag} captured: C={C} S_pad={self.dyn.S_pad} slots={self.U}{' (view of the main carried state)' if self.dyn_key() < 0 else ''} single={os.environ.get('DSV41_PF_SINGLE', '0')} -> chunk traces held {len(self.dyn_buckets())} "
             f"(S_pads {self.dyn_buckets()}); this capture +{after - before:.1f} MiB/bank, trace region now {after:.1f} MiB/bank",
             flush=True,
         )
