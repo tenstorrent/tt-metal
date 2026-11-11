@@ -31,6 +31,7 @@ protected:
     }
 
     void TearDown() override {
+        ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::ENABLED);
         ttml::autograd::ctx().reset_graph();
     }
 };
@@ -323,4 +324,108 @@ TEST_F(MLAKVAssembleTest, BackwardCacheHitWithFreshTensors_TwoCoreGroups) {
     EXPECT_NE(dk_pe_c.buffer()->address(), dk_pe_b.buffer()->address()) << "dk_pe C vs B";
     expect_bw_matches(dkv_up_c, dk_pe_c, expected_a, "launch C (cache hit on launch A's inputs)");
     expect_bw_matches(dkv_up_b, dk_pe_b, expected_b, "launch B after launch C");
+}
+
+
+TEST_F(MLAKVAssembleTest, AutogradWrapperOnlyKUsedInLoss) {
+    const AssembleShape shape{"only_k_loss", 2, 64, 4, 64, 32, 64};
+    auto kv_up = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 8101U),
+        /*requires_grad=*/true);
+    auto k_pe = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 8102U), /*requires_grad=*/true);
+
+    auto [k, v] =
+        ttml::ops::mla_kv_assemble(kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+    auto loss = ttml::ops::mean(k);
+    loss->backward();
+
+    EXPECT_TRUE(k->is_grad_initialized());
+    EXPECT_FALSE(v->is_grad_initialized());
+    const auto zero_dV = ttml::core::zeros_like(v->get_value());
+    expect_bw_matches(
+        kv_up->get_grad(), k_pe->get_grad(), reference_bw(k->get_grad(), zero_dV, shape), "only_k_loss");
+}
+
+TEST_F(MLAKVAssembleTest, AutogradWrapperOnlyVUsedInLoss) {
+    const AssembleShape shape{"only_v_loss", 2, 64, 4, 64, 32, 64};
+    auto kv_up = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 8201U),
+        /*requires_grad=*/true);
+    auto k_pe = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 8202U), /*requires_grad=*/true);
+
+    auto [k, v] =
+        ttml::ops::mla_kv_assemble(kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+    auto loss = ttml::ops::mean(v);
+    loss->backward();
+
+    EXPECT_FALSE(k->is_grad_initialized());
+    EXPECT_TRUE(v->is_grad_initialized());
+    const auto zero_dK = ttml::core::zeros_like(k->get_value());
+    expect_bw_matches(
+        kv_up->get_grad(), k_pe->get_grad(), reference_bw(zero_dK, v->get_grad(), shape), "only_v_loss");
+}
+
+TEST_F(MLAKVAssembleTest, AutogradWrapperPartialInputRequiresGrad) {
+    const AssembleShape shape{"partial_input_grad", 2, 32, 2, 32, 32, 32};
+    const auto kv_up_raw =
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 8301U);
+    const auto k_pe_raw = make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 8302U);
+
+    // Only kv_up trainable; k_pe frozen.
+    {
+        auto kv_up = ttml::autograd::create_tensor(kv_up_raw, /*requires_grad=*/true);
+        auto k_pe = ttml::autograd::create_tensor(k_pe_raw, /*requires_grad=*/false);
+        auto [k, v] =
+            ttml::ops::mla_kv_assemble(kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+        ttml::ops::add(ttml::ops::mean(k), ttml::ops::mean(v))->backward();
+
+        EXPECT_TRUE(kv_up->is_grad_initialized());
+        EXPECT_FALSE(k_pe->is_grad_initialized());
+        const auto expected = reference_bw(k->get_grad(), v->get_grad(), shape);
+        EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(kv_up->get_grad()), expected.dkv_up, 0.0, 0.0));
+        ttml::autograd::ctx().reset_graph();
+    }
+
+    // Only k_pe trainable; kv_up frozen.
+    {
+        auto kv_up = ttml::autograd::create_tensor(kv_up_raw, /*requires_grad=*/false);
+        auto k_pe = ttml::autograd::create_tensor(k_pe_raw, /*requires_grad=*/true);
+        auto [k, v] =
+            ttml::ops::mla_kv_assemble(kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+        ttml::ops::add(ttml::ops::mean(k), ttml::ops::mean(v))->backward();
+
+        EXPECT_FALSE(kv_up->is_grad_initialized());
+        EXPECT_TRUE(k_pe->is_grad_initialized());
+        const auto expected = reference_bw(k->get_grad(), v->get_grad(), shape);
+        EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(k_pe->get_grad()), expected.dk_pe, 5e-3, 5e-3));
+        ttml::autograd::ctx().reset_graph();
+    }
+}
+
+TEST_F(MLAKVAssembleTest, AutogradWrapperSkipsBackwardWhenNoGradRequired) {
+    const AssembleShape shape{"no_grad_assemble", 2, 32, 2, 32, 32, 32};
+    const auto kv_up_raw =
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 8401U);
+    const auto k_pe_raw = make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 8402U);
+
+    auto kv_up_frozen = ttml::autograd::create_tensor(kv_up_raw, /*requires_grad=*/false);
+    auto k_pe_frozen = ttml::autograd::create_tensor(k_pe_raw, /*requires_grad=*/false);
+    auto [k_frozen, v_frozen] = ttml::ops::mla_kv_assemble(
+        kv_up_frozen, k_pe_frozen, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+    EXPECT_FALSE(k_frozen->get_requires_grad());
+    EXPECT_FALSE(v_frozen->get_requires_grad());
+    EXPECT_FALSE(k_frozen->get_node().has_value());
+    EXPECT_FALSE(v_frozen->get_node().has_value());
+
+    auto kv_up_train = ttml::autograd::create_tensor(kv_up_raw, /*requires_grad=*/true);
+    auto k_pe_train = ttml::autograd::create_tensor(k_pe_raw, /*requires_grad=*/true);
+    ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::DISABLED);
+    auto [k_disabled, v_disabled] = ttml::ops::mla_kv_assemble(
+        kv_up_train, k_pe_train, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+    EXPECT_FALSE(k_disabled->get_requires_grad());
+    EXPECT_FALSE(v_disabled->get_requires_grad());
+    EXPECT_FALSE(k_disabled->get_node().has_value());
+    EXPECT_FALSE(v_disabled->get_node().has_value());
 }
