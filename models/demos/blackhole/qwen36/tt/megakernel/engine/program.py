@@ -623,6 +623,9 @@ def setup_bench(dev, MESH, mesh_identity):
             # MK_REAL_GAR=1 (G-d): the GDN layers' mixer AR too (gdn_out's CB_XO; until G-c a CB_XO stand-in): 2 ARs on every layer
             REAL_GAR = ('MK_REAL_GAR', '1') in MKDEF
             if REAL_GAR: assert GDN24 and os.environ.get('MKA_GDN_WAIT', '0') == '1', "MK_REAL_GAR needs GDN24 + MKA_GDN_WAIT (the GDN out_ready gates the GDN AR)"
+            # spec v1.94: until gdn_out (G-c) writes CB_XO, the GDN AR reads uninitialised CB_XO (NaN) unless MK_GAR_ZERO zeroes it
+            if REAL_GAR: assert ('MK_GAR_ZERO', '1') in MKDEF or ('MK_GDN_OUT_REAL', '1') in MKDEF, \
+                "MK_REAL_GAR needs MK_GAR_ZERO=1 until gdn_out (G-c, MK_GDN_OUT_REAL) writes CB_XO (else NaN)"
             _k = 0
             for L_ in range(NL):
                 if is_attn_layer(L_) or REAL_GAR: AR_ATYPE |= 1 << _k; _k += 1
