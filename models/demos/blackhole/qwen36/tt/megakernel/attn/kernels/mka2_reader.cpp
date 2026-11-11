@@ -144,6 +144,11 @@ void kernel_main() {
 #endif
     const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
     const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
+#if defined(MK_GDN_INPROJ) && defined(MKA_ROLE_EXT)
+    constexpr uint32_t gnt = 0; a++;
+#elif defined(MK_GDN_INPROJ)
+    const uint32_t gnt = get_arg_val<uint32_t>(a++);   // this column's gdn_in tiles (the RS rows above)
+#endif
 #if defined(MKA_RWO)
     const uint32_t rw_nt = get_arg_val<uint32_t>(a++), rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
     const uint32_t wo_addr2 = get_arg_val<uint32_t>(a++), cc_x = get_arg_val<uint32_t>(a++), cc_y = get_arg_val<uint32_t>(a++);
@@ -474,12 +479,20 @@ void kernel_main() {
         }
 #endif
 #if defined(MKA_QSK)
+#if defined(MK_GDN_INPROJ)
+        if (vrole == 1) {   // every layer: qkv (attention) or gdn_in (GDN) partial to the column rows above
+#else
         if (att && vrole == 1) {   // spec §18: this core's qkv partial to the column rows above (NOC1); the writer does rows below
+#endif
             MKZ("R-QRS");
             V_NB_WAIT_VA();
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = 2 * L + 1;
+#if defined(MK_GDN_INPROJ)
+            v_rs_send(get_read_ptr(CB_VA), 0, vk, att ? qsk_nt(vn) : gnt, 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+#else
             v_rs_send(get_read_ptr(CB_VA), 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
+#endif
             noc_semaphore_wait_min(vw(vg[VG_LB]), 2 * L + 1);
             cb_pop_front(CB_VA, V_NTM);
         }

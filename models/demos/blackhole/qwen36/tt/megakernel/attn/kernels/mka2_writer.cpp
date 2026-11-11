@@ -159,6 +159,21 @@ void kernel_main() {
 #else
     const uint32_t gdn_on = get_arg_val<uint32_t>(a++);   // this core runs the GDN in-proj stand-in in GDN-type layers
 #endif
+#if defined(MK_GDN_INPROJ) && defined(MKA_ROLE_EXT)   // STREAM-only args: constants on the owners (EXT text budget)
+    constexpr uint32_t gnt = 0, gq = 0, gtile = 0, gw_page = 0, pgw_layer = 0, gin_x = 0, gin_y = 0, gin_addr = 0, gcnt = 0;
+    a += 11;
+    const auto wg = TensorAccessor(wm_args, 0, MKA_GWTB);
+    const auto gdbg = TensorAccessor(qo_args, 0, 2048);
+#elif defined(MK_GDN_INPROJ)
+    // column nt, owned tile (0/1) and its index, BFP4 weight slice, destination (GDN core xy + staging slot address),
+    // the Q root's tile counter, bench-only DRAM debug copy
+    const uint32_t gnt = get_arg_val<uint32_t>(a++), gq = get_arg_val<uint32_t>(a++), gtile = get_arg_val<uint32_t>(a++);
+    const uint32_t gw_addr = get_arg_val<uint32_t>(a++), gw_page = get_arg_val<uint32_t>(a++), pgw_layer = get_arg_val<uint32_t>(a++);
+    const uint32_t gin_x = get_arg_val<uint32_t>(a++), gin_y = get_arg_val<uint32_t>(a++), gin_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t gcnt = get_arg_val<uint32_t>(a++), gdbg_addr = get_arg_val<uint32_t>(a++);
+    const auto wg = TensorAccessor(wm_args, gw_addr, MKA_GWTB);
+    const auto gdbg = TensorAccessor(qo_args, gdbg_addr, 2048);
+#endif
 #if defined(MKA_RWO)
     // wo: tiles (rot order), concat role, owner chunk, wo-core multicast rects, the 16 owners' coords, debug output
     const uint32_t wo_nt = get_arg_val<uint32_t>(a++);
@@ -845,6 +860,9 @@ void kernel_main() {
 #if defined(MKA_QSK)
     // slot M: layer L's split-K qkv slice (attention: 20 K tiles x nt, k-major) or the GDN in-proj stand-in (QSK_GK K tiles)
     auto qsk_start = [&](uint32_t L) {
+#if defined(MK_GDN_INPROJ)   // GDN-type layer: its own gdn_in slice at the GDN ordinal (not the qkv block)
+        if (!is_attn(L)) { v_slot_start(sm, CB_WMG, GIN_SLOT, wg.get_noc_addr(gw_page + (L - aidx(L)) * pgw_layer), QSK_KPR * gnt * MKA_GWTB, 10 + (L & 1)); return; }
+#endif
         v_slot_start(sm, CB_WM, QSK_SLOT, wm.get_noc_addr(wm_page + wla(L) * pwm_layer), (is_attn(L) ? QSK_KPR : QSK_GK) * qsk_nt(vn) * MWTB, 10 + (L & 1));
     };
 #endif
@@ -939,17 +957,51 @@ void kernel_main() {
             // owned rows {k, k + 8} of the N-list; GDN-type layers: partial only (in-proj stand-in, discarded)
             MKZ("W-MIX");
             v_xk_push(2 * L + 1);
+#if defined(MK_GDN_INPROJ)
+            if (att) v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
+            else v_slot_ready(sm, CB_WMG, GIN_SLOT, 10 + (L & 1));
+            const bool mrs = true, mown = att || gq;   // every layer has a mixer RS; this row sums one (qkv items / its gdn_in tile)
+#else
             v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
-            if (att) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
+            const bool mrs = att, mown = att;
+#endif
+            if (mown) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
             if (L + 1 < NL) qsk_start(L + 1);   // blocks until compute popped slot M (partial done)
-            if (att) {
+            if (mrs) {
                 noc_semaphore_wait_min(vw(vg[VG_LA]), 2 * L + 1);
+#if defined(MK_GDN_INPROJ)
+                v_rs_send(vabase, vk + 1, V_NROW, att ? qsk_nt(vn) : gnt, 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
+#else
                 v_rs_send(vabase, vk + 1, V_NROW, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
+#endif
                 *vw(vg[VG_LB]) = 2 * L + 1;
-                { MKZ("W-QRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * ((vk < vnn ? L : 0) + A + 1)); }
-                cb_reserve_back(CB_VRS, 2 * V_NROW);
-                cb_push_back(CB_VRS, 2 * V_NROW);
-                qkv_route(L);
+                if (mown) {
+                    { MKZ("W-QRW"); noc_semaphore_wait_min(vw(vg[VG_RS]), (V_NROW - 1) * ((vk < vnn ? L : 0) + QMIX(L, A))); }
+                    cb_reserve_back(CB_VRS, 2 * V_NROW);
+                    cb_push_back(CB_VRS, 2 * V_NROW);
+#if defined(MK_GDN_INPROJ)
+                    if (!att) {   // owned gdn_in tile -> the GDN core's staging slot, then count it at the Q root
+                        MKZ("W-GIN");
+                        { MKZ("W-GINQ"); cb_wait_front(CB_QO, QO_SLOT ? QO_SLOT : qnt); }
+                        const uint32_t gsrc = get_read_ptr(CB_QO);
+                        noc_async_write(gsrc, get_noc_addr(gin_x, gin_y, gin_addr), 2048);
+#if !defined(MK_GIN_PERCORE)   // count at the Q root (acked; the role waits in_ready >= g + 1). Its incs cross the DRAM column (+33 us on the Q root wait)
+                        { MKZ("W-GINB"); noc_async_write_barrier(); }
+                        noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gcnt), 1);
+#else   // per GDN core: in_ready += 1 on the tile's own core, ordered behind the data on the same path (flushed)
+                        noc_async_writes_flushed();
+                        noc_semaphore_inc(get_noc_addr(gin_x, gin_y, MKA_GDN_INREADY), 1);
+                        noc_async_atomic_barrier();
+#endif
+#if !defined(MKA_NOQDBG)   // bench-only DRAM copy (in-proj PCC), after the staging write + count
+                        noc_async_write(gsrc, gdbg.get_noc_addr((L - A) * GIN_NT + gtile), 2048);
+                        noc_async_write_barrier();
+#endif
+                        cb_pop_front(CB_QO, QO_SLOT ? QO_SLOT : qnt);
+                    } else
+#endif
+                    qkv_route(L);
+                }
             }
         } else if (qrole == QR_EXT) {
             MKZ("W-XQKV");
@@ -1049,7 +1101,13 @@ void kernel_main() {
 #if defined(MKA_GDN24)
             // GDN role (spec §17 / §20): this GDN-type layer's step may read its prefix input -> in_ready += 1 on the 24
             // GDN cores (rows 8-9), from the Q root (device-local global sem; the GDN cores wait >= g + 1, then reset)
+#if defined(MK_GDN_INPROJ)
+#if !defined(MK_GIN_PERCORE)
+            if (is_qroot) { noc_semaphore_wait_min(l1w(gcnt), GIN_NT * (L - A + 1)); gdn_inc(MKA_GDN_INREADY); }   // all 65 tiles landed
+#endif   // (default: each GDN core's in_ready counts its own tiles, raised by their writers)
+#else
             if (is_qroot) gdn_inc(MKA_GDN_INREADY);
+#endif
 #endif
 #if defined(MKA_MIXTRID) && MKA_MIXTRID
             // GDN-type layer: the MLP slots of layer L are pushed here (before plan_layer(L + 1) reserves the other slot)
@@ -1431,6 +1489,11 @@ void kernel_main() {
 #endif
     }
     if (is_qroot) { *l1w(gs[GS_MIXDONE]) = 0; *l1w(gs[GS_ADONE]) = 0; }
+#if defined(MK_GDN_INPROJ)
+#if !defined(MK_GIN_PERCORE)
+    if (is_qroot) *l1w(gcnt) = 0;   // device-local: every increment was awaited (65 per GDN layer) before the last in_ready
+#endif
+#endif
 #if defined(MK_V12)
     // v12 words: every increment into this core's words for layer NL - 1 preceded its last wait above (STREAM: W-VMD;
     // owner: W-OP), and the reader's LA write preceded the writer's last LA wait

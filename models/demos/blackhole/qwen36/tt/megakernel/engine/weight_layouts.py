@@ -224,3 +224,64 @@ def roundtrip(layout, w, quantize=True):
     q = lambda t: ttnn.to_torch(ttnn.from_torch(t.reshape(1, 1, -1, t.shape[-1]).to(torch.bfloat16), dtype=dt,
                                                 layout=ttnn.TILE_LAYOUT)).float().reshape(t.shape)
     return ok_fp, torch.equal(layout.unpack(q(pg)), q(w))
+
+
+# ------------------------------------------------------------------------------------------------------------------- #
+# gdn_in (G-a, MK_GDN_INPROJ, v12 unit): the GDN in-projection through the same STREAM split-K as qkv
+# ------------------------------------------------------------------------------------------------------------------- #
+GIN_TILES, GIN_COLS = 65, 2060   # per device: tw["qkvz"] = fused [q k v z (a b)], 2060 columns = 64 tiles + 12
+
+
+def gdn_in_dense(w):
+    """One device's gdn_in [H, 2060] (weights_mk.gdn_in_mats, or tile-padded [H, 2080]) -> float [H, 2080], pad = 0."""
+    import torch
+
+    w = w.float().reshape(-1, w.shape[-1])
+    assert w.shape[1] in (GIN_COLS, GIN_TILES * TILE), w.shape
+    if w.shape[1] == GIN_COLS:
+        w = torch.nn.functional.pad(w, (0, GIN_TILES * TILE - GIN_COLS))
+    assert not w[:, GIN_COLS:].any(), "gdn_in pad columns must be zero"
+    return w
+
+
+class GdnInSplitKLayout(QkvSplitKLayout):
+    """gdn_in split-K slices over the GX STREAM columns: 65 tiles (7 x 5 + 6 x 5 at GX = 10), 20 K tiles per K-row,
+    k-major pages, nearest-bank placement; BFP4 (CB 15 on the GDN-type layers). No γ fold (x arrives γ-scaled from the
+    AR owner, spec §19). The owning K-row r < nt of column c writes output tile first(c) + r to GDN core (c, 8 + r % 2),
+    slot r // 2 (MK_GDN_INPROJ writer)."""
+
+    dtype = "bfloat4_b"
+
+    def __init__(self, bank_loc, banks, gx=10):
+        la = _layout_attn()
+        self.la, self.banks, self.gamma_fold = la, banks, None
+        self.slices = la.qkv_splitk_slices(qn=GIN_TILES, cols=gx)
+        self.bank, self.off, self.pages_per_layer = la.splitk_bank_assign(self.slices, {k: k for k in self.slices},
+                                                                          bank_loc, banks)
+
+    def pack(self, w, layer_idx=None, scale=1.0):
+        w = gdn_in_dense(w)
+        return self.la.pack_qkv_splitk_layer(w, self.slices, self.bank, self.off, self.banks, self.pages_per_layer, scale)
+
+    def unpack(self, pg):
+        """[..., pages_per_layer, 32, 32] -> [..., H, 2080]."""
+        import torch
+
+        w = torch.zeros(*pg.shape[:-3], self.la.H, GIN_TILES * TILE, dtype=pg.dtype)
+        for key, sl in self.slices.items():
+            for kl in range(sl.pages // sl.nt):
+                for j in range(sl.nt):
+                    k, n = sl.k0 + kl, sl.first + j
+                    w[..., k * TILE:(k + 1) * TILE, n * TILE:(n + 1) * TILE] = pg[..., self.page(key, kl, j), :, :]
+        return w
+
+    def core_fields(self, col, krow):
+        """STREAM core (col, krow): (first page, column nt, owns a tile, owned tile index first + krow)."""
+        sl = self.slices[(col, krow)]
+        return self.off[(col, krow)] * self.banks + self.bank[(col, krow)], sl.nt, int(krow < sl.nt), sl.first + krow
+
+
+def pack_gdn_in(ws, layout, scales=None, dev=None):
+    """Per-GDN-layer gdn_in matrices (GDN ordinal order: layer g at g * pages_per_layer) -> pages / the wg_all tensor."""
+    pg = pack_layers(ws, layout, scales)
+    return pg if dev is None else to_device(pg, layout, dev)

@@ -63,7 +63,19 @@ constexpr uint32_t V_FACE_B = 512, V_ROW_B = 32, V_XPK_SLOT_B = 10 * 2 * 16 * V_
 constexpr uint32_t QSK_SLOT = 240, QSK_KPR = 20;
 FORCE_INLINE uint32_t qsk_nt(uint32_t col) { return col < 2 ? 12u : 11u; }
 #define V_LV(L) (2 * (L) + 2)
+#if defined(MK_GDN_INPROJ)
+// real GDN in-proj (spec v1.78 G-a): every layer's mixer is a split-K + column RS on STREAM -> one mixer RS phase per
+// layer. gdn_in = 65 tiles over the 10 columns (7 x 5 + 6 x 5), 20 K tiles per K-row, BFP4 in its own slot CB 15
+// (shares slot M's turn: the next layer's slice starts once compute popped this one). Owned tile -> the GDN cores'
+// staging CB 41 (tile of column c, K-row r -> GDN core (c, 8 + r % 2), slot r / 2); the Q root raises in_ready once
+// 65 (g + 1) tiles landed.
+constexpr uint32_t CB_WMG = 15, GIN_NT = 65, GIN_SLOT = 20 * 7;
+#define V_NRS(L) (2 * (L) + 2)
+#define QMIX(L, A) ((L) + 1)
+#else
 #define V_NRS(L) ((L) + 1 + aidx(L) + (is_attn(L) ? 1u : 0u))
+#define QMIX(L, A) ((A) + 1)
+#endif
 #else
 #define V_LV(L) ((L) + 1)
 #define V_NRS(L) ((L) + 1)
