@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Layer norm and RMS norm at model widths, which the small Sanity shapes do not reach.
+
+The widest rows in the other fused Sanity tests are W=4096. Model hidden sizes of 5120 and up pick a
+different program: the large-tensor factory, when a whole row no longer fits in L1. That is where
+#53419 regressed (BH DeepSeek RMS norm, PCC 0.984), and where #52081 doubled the L1 use of the
+pre-all-gather stage by following fp32_dest_acc_en.
+
+These tests are skipped on the simulator (tests/pipeline_reorg/ttsim-skip-list.yaml): the rows are too
+big for its time budget.
+"""
+
+import pytest
+import torch
+import torch.nn.functional as F
+
+import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+EPS = 1e-5
+
+
+def norm_reference(op, x, weight, bias):
+    x = x.float()
+    if op == "layer_norm":
+        return F.layer_norm(x, (x.shape[-1],), weight.float(), bias.float(), EPS)
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + EPS) * weight.float()
+
+
+@pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
+# Where the large-tensor factory starts depends on L1, so all three widths run. 4 tile rows per core is
+# what the large-tensor path loops over; one row per core is enough at the other widths.
+@pytest.mark.parametrize("w, tile_rows_per_core", [(4096, 1), (5120, 4), (8192, 1)])
+def test_norm_model_width_hifi2_fp32_acc(device, op, w, tile_rows_per_core):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    h = 32 * tile_rows_per_core * grid.x * grid.y
+
+    torch_input = torch.randn((1, h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+    if op == "layer_norm":
+        tt_output = ttnn.layer_norm(
+            tt_input, epsilon=EPS, weight=tt_weight, bias=tt_bias, compute_kernel_config=compute_config
+        )
+    else:
+        tt_output = ttnn.rms_norm(tt_input, epsilon=EPS, weight=tt_weight, compute_kernel_config=compute_config)
+    output = ttnn.to_torch(tt_output).float()
+
+    # Every core gets rows: compare a sample that spans all of them, so the reference stays cheap.
+    rows = torch.arange(0, h, 17)
+    golden = norm_reference(op, torch_input[:, rows], torch_weight, torch_bias)
+    assert_with_pcc(golden, output[:, rows], 0.999)
+
+
+@pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
+# The widest rows that fit L1 with fp32 intermediates. Every buffer holds a whole row, so rows wider than
+# these throw at allocation: no residual at W=8192 (x^2 and input are ~1 MB each) and a residual at W=4096
+# (four row buffers, ~2 MB). Model hidden sizes reach this stage divided by the number of devices.
+@pytest.mark.parametrize("w, with_residual", [(2048, False), (4096, False), (5120, False), (1024, True), (2048, True)])
+def test_pre_all_gather_fp32_acc_fits_l1(device, op, w, with_residual):
+    """bf16 input with fp32_dest_acc_en must still fit L1 at the widest widths that fit (#54697: after #52081
+    stored the x^2 and pre-add buffers as fp32, a W=4096 row threw at allocation), with the right statistics."""
+    torch.manual_seed(0)
+    h = 64
+    torch_input = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
+    torch_residual = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
+    fused = (torch_input + torch_residual if with_residual else torch_input).float()
+    sum_x2 = fused.pow(2).sum(-1)[0, 0]
+    sum_x = fused.sum(-1)[0, 0]
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    extra = {}
+    if with_residual:
+        extra["residual_input_tensor"] = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
+    pre_all_gather = ttnn.layer_norm_pre_all_gather if op == "layer_norm" else ttnn.rms_norm_pre_all_gather
+    stats = ttnn.to_torch(
+        pre_all_gather(tt_input, compute_kernel_config=compute_config, dtype=ttnn.bfloat16, **extra)
+    ).float()
+
+    # Column 0 of the stats tile holds sum(x^2) per row; layer_norm adds sum(x) in column 32. The bound is
+    # about twice the bf16 rounding of the sum, so a wrong buffer format or a dropped block still fails.
+    torch.testing.assert_close(stats[0, 0, :, 0], sum_x2, rtol=0.02, atol=1.0)
+    if op == "layer_norm":
+        torch.testing.assert_close(stats[0, 0, :, 32], sum_x, rtol=0.02, atol=2.0)
