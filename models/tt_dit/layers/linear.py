@@ -17,7 +17,7 @@ from ..utils.matmul import (
     get_matmul_config,
     get_matmul_core_grid,
 )
-from ..utils.tensor import prepare_for_fused_swiglu
+from ..utils.tensor import prepare_for_fused_swiglu, shape_tuple
 from .module import Module, Parameter
 
 # Fidelity per weight dtype. Quantized dtypes (e.g. bfloat8_b) are deliberately absent: callers
@@ -823,9 +823,11 @@ def _linear(
     matmul_config=None,
 ) -> ttnn.Tensor:
     core_grid = get_matmul_core_grid(mesh_device)
-    *_, rows, in_features = x.padded_shape
-    *_, out_features = weight.padded_shape
-    total_rows = math.prod(list(x.padded_shape)[:-1])
+    # Index the shapes rather than unpack them: unpacking a ttnn.Shape costs about 2.5 us.
+    x_shape = shape_tuple(x.padded_shape)
+    *_, rows, in_features = x_shape
+    out_features = weight.padded_shape[-1]
+    total_rows = math.prod(x_shape[:-1])
 
     if (
         total_rows <= MAX_1D_MATMUL_ROWS

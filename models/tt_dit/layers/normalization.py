@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 
+from ..utils.tensor import shape_tuple
 from .linear import _apply_activation_fn
 from .module import Module, Parameter
 
@@ -439,7 +440,7 @@ class DistributedLayerNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                ("ln", tuple(x.shape)),
+                ("ln", shape_tuple(x.shape)),
                 lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
