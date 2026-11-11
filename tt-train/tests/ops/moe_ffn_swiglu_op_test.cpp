@@ -6,13 +6,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/random_data.hpp"
+#include "utils/memory_utils.hpp"
 
 namespace {
 
@@ -30,6 +33,10 @@ protected:
         if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "moe_ffn_swiglu is only supported on Blackhole.";
         }
+    }
+    void TearDown() override {
+        ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::ENABLED);
+        ttml::autograd::ctx().reset_graph();
     }
 };
 
@@ -88,7 +95,7 @@ struct FfnCase {
 // [E, K, N]. The list is what the op consumes; the stacked xtensor stays
 // around for the CPU reference to use.
 std::vector<ttml::autograd::TensorPtr> make_expert_weight_list(
-    const xt::xarray<float>& w3d, ttnn::distributed::MeshDevice* device) {
+    const xt::xarray<float>& w3d, ttnn::distributed::MeshDevice* device, bool requires_grad = true) {
     const std::size_t E = w3d.shape()[0];
     const std::size_t K = w3d.shape()[1];
     const std::size_t N = w3d.shape()[2];
@@ -99,7 +106,7 @@ std::vector<ttml::autograd::TensorPtr> make_expert_weight_list(
         xt::xarray<float> w4d = xt::xarray<float>::from_shape(shape4d);
         const auto src = xt::view(w3d, e, xt::all(), xt::all());
         std::copy(src.cbegin(), src.cend(), w4d.begin());
-        out.push_back(ttml::autograd::create_tensor(ttml::core::from_xtensor(w4d, device), /*requires_grad=*/true));
+        out.push_back(ttml::autograd::create_tensor(ttml::core::from_xtensor(w4d, device), requires_grad));
     }
     return out;
 }
@@ -241,6 +248,10 @@ protected:
             GTEST_SKIP() << "moe_ffn_swiglu is only supported on Blackhole.";
         }
     }
+    void TearDown() override {
+        ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::ENABLED);
+        ttml::autograd::ctx().reset_graph();
+    }
 };
 
 TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_EmptyExpert_dWZeroForEmpty) {
@@ -350,4 +361,220 @@ TEST_F(MoeFfnSwigluBackwardTest, NIGHTLY_EmptyExpert_dWZeroForEmpty) {
     }
 
     autograd::ctx().reset_graph();
+}
+
+
+TEST_F(MoeFfnSwigluForwardTest, DeallocatesIntermediatesAndReducesPeakWhenNoGrad) {
+    SKIP_FOR_WATCHER();
+    using namespace ttml;
+
+    constexpr uint32_t E = 2U;
+    constexpr uint32_t H = 64U;
+    constexpr uint32_t I = 128U;
+    const std::vector<uint32_t> offsets = {0U, 32U, 64U};
+    constexpr uint32_t T_cap = 64U;
+
+    auto* device = &autograd::ctx().get_device();
+    auto& rng = autograd::ctx().get_generator();
+
+    const auto grouped_4d = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4U>{1U, 1U, T_cap, H}, -0.5F, 0.5F, rng());
+    const auto w_gate = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 3U>{E, I, H}, -0.5F, 0.5F, rng());
+    const auto w_up = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 3U>{E, I, H}, -0.5F, 0.5F, rng());
+    const auto w_down = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 3U>{E, H, I}, -0.5F, 0.5F, rng());
+
+    const auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/false);
+    auto t_wg = make_expert_weight_list(w_gate, device, /*requires_grad=*/false);
+    auto t_wu = make_expert_weight_list(w_up, device, /*requires_grad=*/false);
+    auto t_wd = make_expert_weight_list(w_down, device, /*requires_grad=*/false);
+
+    const auto& g_val = t_grouped->get_value();
+    const long long out_bytes =
+        static_cast<long long>(g_val.padded_shape().volume()) * static_cast<long long>(g_val.element_size());
+    const long long inter_bytes = (out_bytes / H) * I;
+
+    // Warm up program cache before measuring DRAM allocations.
+    (void)ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+
+    utils::MemoryUsageTracker::clear();
+    utils::DRAMUsage usage_no_grad{};
+    {
+        const auto guard = utils::MemoryUsageTracker::begin_capture();
+        auto out_no_grad = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+        utils::MemoryUsageTracker::end_capture("moe_no_grad");
+        usage_no_grad = utils::MemoryUsageTracker::get_dram_usage("moe_no_grad");
+        EXPECT_FALSE(out_no_grad->get_requires_grad());
+        EXPECT_FALSE(out_no_grad->get_node().has_value());
+    }
+    EXPECT_EQ(usage_no_grad.total_allocations - usage_no_grad.total_deallocations, out_bytes);
+    EXPECT_EQ(usage_no_grad.peak, std::max(3 * inter_bytes, inter_bytes + out_bytes));
+
+    t_grouped->set_requires_grad(true);
+    for (uint32_t e = 0; e < E; ++e) {
+        t_wg[e]->set_requires_grad(true);
+        t_wu[e]->set_requires_grad(true);
+        t_wd[e]->set_requires_grad(true);
+    }
+    (void)ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+    autograd::ctx().reset_graph();
+
+    utils::MemoryUsageTracker::clear();
+    utils::DRAMUsage usage_with_grad{};
+    {
+        const auto guard = utils::MemoryUsageTracker::begin_capture();
+        auto out_with_grad = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+        utils::MemoryUsageTracker::end_capture("moe_with_grad");
+        usage_with_grad = utils::MemoryUsageTracker::get_dram_usage("moe_with_grad");
+        EXPECT_TRUE(out_with_grad->get_requires_grad());
+        EXPECT_TRUE(out_with_grad->get_node().has_value());
+    }
+    EXPECT_EQ(usage_with_grad.total_allocations - usage_with_grad.total_deallocations, out_bytes + 2 * inter_bytes);
+    EXPECT_EQ(usage_with_grad.peak, 3 * inter_bytes + out_bytes);
+    EXPECT_LT(usage_no_grad.peak, usage_with_grad.peak);
+    autograd::ctx().reset_graph();
+
+    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
+    utils::MemoryUsageTracker::clear();
+    utils::DRAMUsage usage_disabled{};
+    {
+        const auto guard = utils::MemoryUsageTracker::begin_capture();
+        auto out_disabled = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
+        utils::MemoryUsageTracker::end_capture("moe_disabled");
+        usage_disabled = utils::MemoryUsageTracker::get_dram_usage("moe_disabled");
+        EXPECT_FALSE(out_disabled->get_requires_grad());
+        EXPECT_FALSE(out_disabled->get_node().has_value());
+    }
+    EXPECT_EQ(usage_disabled.total_allocations - usage_disabled.total_deallocations, out_bytes);
+    EXPECT_EQ(usage_disabled.peak, usage_no_grad.peak);
+}
+
+TEST_F(MoeFfnSwigluBackwardTest, PartialRequiresGradMatchesFullBackward) {
+    using namespace ttml;
+
+    constexpr uint32_t E = 3U;
+    constexpr uint32_t H = 64U;
+    constexpr uint32_t I = 128U;
+    const std::vector<uint32_t> counts = {32U, 0U, 40U};
+
+    std::vector<uint32_t> offsets(E + 1U, 0U);
+    for (uint32_t e = 0; e < E; ++e) {
+        const uint32_t padded = ((counts[e] + 31U) / 32U) * 32U;
+        offsets[e + 1U] = offsets[e] + padded;
+    }
+    const uint32_t T_cap = offsets.back();
+
+    auto* device = &autograd::ctx().get_device();
+    auto& rng = autograd::ctx().get_generator();
+
+    xt::xarray<float> grouped_4d = xt::zeros<float>(
+        std::vector<std::size_t>{1U, 1U, static_cast<std::size_t>(T_cap), static_cast<std::size_t>(H)});
+    for (uint32_t e = 0; e < E; ++e) {
+        if (counts[e] == 0U) {
+            continue;
+        }
+        const std::array<std::size_t, 4U> slice_shape{
+            1U, 1U, static_cast<std::size_t>(counts[e]), static_cast<std::size_t>(H)};
+        const auto slice = test_utils::make_uniform_xarray<float>(slice_shape, -0.5F, 0.5F, rng());
+        xt::view(grouped_4d, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
+    }
+
+    const auto w_gate =
+        test_utils::make_uniform_xarray<float>(std::array<std::size_t, 3U>{E, I, H}, -0.5F, 0.5F, rng());
+    const auto w_up =
+        test_utils::make_uniform_xarray<float>(std::array<std::size_t, 3U>{E, I, H}, -0.5F, 0.5F, rng());
+    const auto w_down =
+        test_utils::make_uniform_xarray<float>(std::array<std::size_t, 3U>{E, H, I}, -0.5F, 0.5F, rng());
+    const auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
+
+    // Baseline: all inputs require gradients.
+    auto ref_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
+    auto ref_wg = make_expert_weight_list(w_gate, device, /*requires_grad=*/true);
+    auto ref_wu = make_expert_weight_list(w_up, device, /*requires_grad=*/true);
+    auto ref_wd = make_expert_weight_list(w_down, device, /*requires_grad=*/true);
+    auto ref_out = ops::moe_ffn_swiglu_fw(ref_grouped, t_offsets, ref_wg, ref_wu, ref_wd);
+    ref_out->set_grad(core::ones_like(ref_out->get_value()));
+    ref_out->backward();
+
+    const auto expected_dgrouped = core::to_xtensor(ref_grouped->get_grad());
+    std::vector<xt::xarray<float>> expected_dwg(E), expected_dwu(E), expected_dwd(E);
+    for (uint32_t e = 0; e < E; ++e) {
+        expected_dwg[e] = core::to_xtensor(ref_wg[e]->get_grad());
+        expected_dwu[e] = core::to_xtensor(ref_wu[e]->get_grad());
+        expected_dwd[e] = core::to_xtensor(ref_wd[e]->get_grad());
+    }
+    autograd::ctx().reset_graph();
+
+    // Exhaustively test all 15 non-zero {grouped, w_gate, w_up, w_down} requires_grad boolean masks.
+    for (uint32_t mask = 1U; mask < 16U; ++mask) {
+        const bool req_grouped = (mask & 1U) != 0U;
+        const bool req_wg = (mask & 2U) != 0U;
+        const bool req_wu = (mask & 4U) != 0U;
+        const bool req_wd = (mask & 8U) != 0U;
+
+        auto g = autograd::create_tensor(core::from_xtensor(grouped_4d, device), req_grouped);
+        auto wg = make_expert_weight_list(w_gate, device, req_wg);
+        auto wu = make_expert_weight_list(w_up, device, req_wu);
+        auto wd = make_expert_weight_list(w_down, device, req_wd);
+        auto out = ops::moe_ffn_swiglu_fw(g, t_offsets, wg, wu, wd);
+        out->set_grad(core::ones_like(out->get_value()));
+        out->backward();
+
+        EXPECT_EQ(g->is_grad_initialized(), req_grouped) << "mask=" << mask;
+        if (req_grouped) {
+            EXPECT_TRUE(xt::allclose(core::to_xtensor(g->get_grad()), expected_dgrouped, 1e-4F, 1e-4F))
+                << "mask=" << mask;
+        }
+        for (uint32_t e = 0; e < E; ++e) {
+            EXPECT_EQ(wg[e]->is_grad_initialized(), req_wg) << "mask=" << mask << " e=" << e;
+            EXPECT_EQ(wu[e]->is_grad_initialized(), req_wu) << "mask=" << mask << " e=" << e;
+            EXPECT_EQ(wd[e]->is_grad_initialized(), req_wd) << "mask=" << mask << " e=" << e;
+            if (req_wg) {
+                EXPECT_TRUE(xt::allclose(core::to_xtensor(wg[e]->get_grad()), expected_dwg[e], 1e-4F, 1e-4F))
+                    << "mask=" << mask << " e=" << e;
+            }
+            if (req_wu) {
+                EXPECT_TRUE(xt::allclose(core::to_xtensor(wu[e]->get_grad()), expected_dwu[e], 1e-4F, 1e-4F))
+                    << "mask=" << mask << " e=" << e;
+            }
+            if (req_wd) {
+                EXPECT_TRUE(xt::allclose(core::to_xtensor(wd[e]->get_grad()), expected_dwd[e], 1e-4F, 1e-4F))
+                    << "mask=" << mask << " e=" << e;
+            }
+        }
+        autograd::ctx().reset_graph();
+    }
+
+    // Heterogeneous per-expert requires_grad: only wg[2] (non-empty) and wd[1] (empty expert) trainable.
+    {
+        auto g = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/false);
+        auto wg = make_expert_weight_list(w_gate, device, /*requires_grad=*/false);
+        auto wu = make_expert_weight_list(w_up, device, /*requires_grad=*/false);
+        auto wd = make_expert_weight_list(w_down, device, /*requires_grad=*/false);
+        wg[2]->set_requires_grad(true);
+        wd[1]->set_requires_grad(true);
+        auto out = ops::moe_ffn_swiglu_fw(g, t_offsets, wg, wu, wd);
+        out->set_grad(core::ones_like(out->get_value()));
+        out->backward();
+
+        EXPECT_FALSE(g->is_grad_initialized());
+        EXPECT_FALSE(wg[0]->is_grad_initialized());
+        EXPECT_FALSE(wg[1]->is_grad_initialized());
+        EXPECT_TRUE(wg[2]->is_grad_initialized());
+        EXPECT_TRUE(xt::allclose(core::to_xtensor(wg[2]->get_grad()), expected_dwg[2], 1e-4F, 1e-4F));
+        for (uint32_t e = 0; e < E; ++e) {
+            EXPECT_FALSE(wu[e]->is_grad_initialized());
+        }
+        EXPECT_FALSE(wd[0]->is_grad_initialized());
+        EXPECT_TRUE(wd[1]->is_grad_initialized());
+        EXPECT_TRUE(xt::allclose(core::to_xtensor(wd[1]->get_grad()), expected_dwd[1], 1e-4F, 1e-4F));
+        EXPECT_FALSE(wd[2]->is_grad_initialized());
+        autograd::ctx().reset_graph();
+    }
 }
