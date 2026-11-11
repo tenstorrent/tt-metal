@@ -89,6 +89,9 @@ def test_minimal_matmul(
             f"exceeds the device grid {compute_grid.x}x{compute_grid.y}"
         )
     logger.info(f"Running on {compute_with_storage_grid_size} cores starting at logical {origin}")
+    logger.info(
+        f"in0 source {os.environ.get('TT_MM_IN0_SOURCE', 'partner')}, in1 source {os.environ.get('TT_MM_IN1_SOURCE', 'partner')}"
+    )
 
     in0_shape = [M, K]
     in1_shape = [K, N]

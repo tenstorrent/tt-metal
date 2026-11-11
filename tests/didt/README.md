@@ -123,6 +123,20 @@ In a row window, each core reads its own in1 from DRAM. If the suspect column fa
 suspect the in1 path down that column. If one row fails at (`BAD_X`,y), suspect that core.
 A thin window gives each core 10-12x more work per iteration than the full grid, so a pass does not prove a core is good.
 
+### Input source: DRAM or partner
+
+`TT_MM_IN0_SOURCE` and `TT_MM_IN1_SOURCE` choose where each core gets in0 and in1. `partner` (default) is the chain
+above: the injector reads from DRAM and each core forwards the block to the next. `dram` makes every core read its own
+block from DRAM and forward nothing. They are read when the program is built, so set them before pytest starts.
+
+```bash
+TT_MM_IN1_SOURCE=dram pytest "tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]" ...
+TT_MM_IN0_SOURCE=dram TT_MM_IN1_SOURCE=dram tests/didt/nd_origin_sweep.sh col
+```
+
+If an ND goes away with `dram` on one input, the forwarding of that input is in the failing path. `dram` adds DRAM
+traffic: every core reads its block, not one injector per row or column.
+
 ## Analysis Tools
 
 ```bash

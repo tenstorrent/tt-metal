@@ -23,8 +23,10 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -392,8 +394,21 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // exist and the spec is unchanged; on a 1-wide / 1-tall grid (single-core Quasar emulator) the
     // absent receiver kernels and their empty work-unit regions must not be declared -- the spec
     // validator rejects a kernel that no WorkUnitSpec references, and CoreRange rejects start > end.
-    const bool has_in0_receivers = in1_parallel_axis_cores > 1;
-    const bool has_in1_receivers = in0_parallel_axis_cores > 1;
+    // TT_MM_IN0_SOURCE / TT_MM_IN1_SOURCE: ND investigation knobs. "partner" (default) forwards the input along the
+    // core chain from the injector; "dram" makes every core an injector and a sink, so each core reads its own block
+    // from DRAM and nothing is forwarded. Read when the program is built, so set them before the first run.
+    auto from_dram = [](const char* var) {
+        const char* v = std::getenv(var);
+        if (v == nullptr || std::string_view(v) == "partner") {
+            return false;
+        }
+        TT_FATAL(std::string_view(v) == "dram", "{} must be 'partner' or 'dram', got '{}'", var, v);
+        return true;
+    };
+    const bool in0_from_dram = from_dram("TT_MM_IN0_SOURCE");
+    const bool in1_from_dram = from_dram("TT_MM_IN1_SOURCE");
+    const bool has_in0_receivers = !in0_from_dram && in1_parallel_axis_cores > 1;
+    const bool has_in1_receivers = !in1_from_dram && in0_parallel_axis_cores > 1;
 
     ProgramSpec spec;
     spec.name = "minimal_matmul";
@@ -865,8 +880,12 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
      * Work units. The sender/receiver core ranges partition the grid on each axis, so each node
      * carries exactly one in0 kernel, one in1 kernel, and compute -- four distinct pairings.
      */
-    auto in0_kernel_for = [&](uint32_t in1_idx) { return in1_idx == 0 ? K_IN0_SENDER : K_IN0_RECEIVER; };
-    auto in1_kernel_for = [&](uint32_t in0_idx) { return in0_idx == 0 ? K_IN1_SENDER : K_IN1_RECEIVER; };
+    auto in0_kernel_for = [&](uint32_t in1_idx) {
+        return (in0_from_dram || in1_idx == 0) ? K_IN0_SENDER : K_IN0_RECEIVER;
+    };
+    auto in1_kernel_for = [&](uint32_t in0_idx) {
+        return (in1_from_dram || in0_idx == 0) ? K_IN1_SENDER : K_IN1_RECEIVER;
+    };
 
     auto add_work_unit = [&](const std::string& name, const CoreRange& nodes, uint32_t in0_idx, uint32_t in1_idx) {
         Group<KernelSpecName> kernels;
@@ -990,12 +1009,12 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         // Defer write to K block with same coordinate as core (but not K block 0, see defer_write_k_block_for)
         uint32_t defer_write_k_block = defer_write_k_block_for(core);
 
-        bool is_in0_sink = core == in0_core_order.back();
-        bool is_in1_sink = core == in1_core_order.back();
+        bool is_in0_sink = in0_from_dram || core == in0_core_order.back();
+        bool is_in1_sink = in1_from_dram || core == in1_core_order.back();
 
         // AddRuntimeArgsForNode takes an initializer_list, so the always-present args go in one
         // call and the conditional ternary arg in a second.
-        auto& in0_rt = (in1_idx == 0 ? in0_sender_args : in0_receiver_args).runtime_arg_values;
+        auto& in0_rt = ((in0_from_dram || in1_idx == 0) ? in0_sender_args : in0_receiver_args).runtime_arg_values;
         AddRuntimeArgsForNode(
             in0_rt,
             placed(core),
@@ -1011,7 +1030,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
              {"defer_write_k_block", defer_write_k_block},
              {"max_defer_write_k_block", max_defer_write_k_block}});
 
-        auto& in1_rt = (in0_idx == 0 ? in1_sender_args : in1_receiver_args).runtime_arg_values;
+        auto& in1_rt = ((in1_from_dram || in0_idx == 0) ? in1_sender_args : in1_receiver_args).runtime_arg_values;
         AddRuntimeArgsForNode(
             in1_rt,
             placed(core),

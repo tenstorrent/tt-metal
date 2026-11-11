@@ -8,6 +8,7 @@
 #   usage: tests/didt/nd_origin_sweep.sh [cases...]   cases: col excl rows cols (default: col excl rows)
 #   env:   BAD_X suspect column (6)  GX/GY device grid (12/10)  ITERS (200)  INTERVAL (20)  CASE_TIMEOUT s (900)
 #          OUT log dir (~/nd_validate/origin_sweep)  TT_SMI tt-smi binary used for the reset after a hang (tt-smi)
+#          TT_MM_IN0_SOURCE / TT_MM_IN1_SOURCE partner (default) or dram, see the README
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT" && { [ -f python_env/bin/activate ] && source python_env/bin/activate; }
 ITERS=${ITERS:-200}; INTERVAL=${INTERVAL:-20}; CASE_TIMEOUT=${CASE_TIMEOUT:-900}
@@ -15,6 +16,7 @@ BAD_X=${BAD_X:-6}; GX=${GX:-12}; GY=${GY:-10}; TT_SMI=${TT_SMI:-tt-smi}
 O=${OUT:-~/nd_validate/origin_sweep}; mkdir -p $O
 NODE="tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"
 export TT_MM_ALLOW_THIN_GRID=1
+echo "in0 source ${TT_MM_IN0_SOURCE:-partner}, in1 source ${TT_MM_IN1_SOURCE:-partner}"
 
 run() {  # name gridXxY originXxY
   local name=$1 grid=$2 origin=$3 log=$O/$1.log
