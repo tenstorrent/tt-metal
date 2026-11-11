@@ -449,7 +449,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         go_w = (f'  {{   // gdn_out of GDN layer L\n'
                 f'    {{ DeviceZoneScopedN("GO-A");\n'
                 f'    noc_async_atomic_barrier();\n'
-                + (f'    for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {{GFL}} + t, L + 1);\n' if go_rdhook and os.environ.get("E1_GO_FLAGS", "1") == "1" else
+                + (f'    noc_semaphore_wait_min(g_ab + {{GRDY}}, L + 1);\n' if go_rdhook and os.environ.get("E1_GO_GATHER", "0") == "1" else
+                   f'    for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {{GFL}} + t, L + 1);\n' if go_rdhook and os.environ.get("E1_GO_FLAGS", "1") == "1" else
                 f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdna"]}u, {len(cores)}u * (L + 1));\n') +
                 f'    cb_reserve_back({CA_}, {GO["wk"]});\n'
                 + ('' if GO_LOCAL else
@@ -498,6 +499,32 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                            f'  noc_async_write_barrier();\n  {inc1h}\n'
                            + ('  noc_async_writes_flushed();\n' if GO_FLAGS else '') +
                            ('  noc_async_atomic_barrier();\n' if os.environ.get("E1_GO_ABAR", "0") == "1" else '') + '}\n')
+        GO_GATHER = go_rdhook and os.environ.get("E1_GO_GATHER", "0") == "1"
+        if GO_GATHER:
+            # (i) gather + rect multicast: every core writes its tile(s) to the 2 rect roots (first core of each rect) + a
+            # per-source flag there; each root waits for all 24 flags, multicasts the full A (24 x 2 KB) into its rect and
+            # then sets the rect's A-ready word (arg block GRDY = L + 1). 2 x 24 unicasts in, 2 big multicasts out.
+            gr_ = GO["rects"]
+            rts = []
+            for r in (gr_[0:5], gr_[5:10]):
+                if r[4]: rts.append((r[0], r[1], r))   # root = the rect's first (x0, y0) core
+            NC_ = len(cores)
+            wr_ = "\n".join(f'  noc_async_write(src, get_noc_addr({x}u, {y}u, dst), n * 2048u);' for x, y, _ in rts)
+            fl_ = " ".join(f'noc_inline_dw_write(get_noc_addr({x}u, {y}u, (uint32_t)(g_ab + {{GFL}} + t0)), g_l + 1);' for x, y, _ in rts)
+            root_ = "\n".join(
+                f'  if (my_x[0] == {x}u && my_y[0] == {y}u) {{\n'
+                f'    for (uint32_t t = 0; t < {NC_}u; ++t) noc_semaphore_wait_min(g_ab + {{GFL}} + t, g_l + 1);\n'
+                f'    const uint32_t a0 = get_write_ptr({CA_});\n'
+                f'    noc_async_write_multicast_loopback_src(a0, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, a0), {NC_}u * 2048u, {r[4]}u, false);\n'
+                f'    noc_async_write_barrier();\n'
+                f'    g_ab[{{GRDY}}] = g_l + 1;\n'
+                f'    noc_semaphore_set_multicast_loopback_src((uint32_t)(g_ab + {{GRDY}}), get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, (uint32_t)(g_ab + {{GRDY}})), {r[4]}u, false);\n'
+                f'    noc_async_write_barrier();\n  }}'
+                for x, y, r in rts)
+            go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
+                           f'  DeviceZoneScopedN("GO-RDH");\n'
+                           f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{wr_}\n'
+                           f'  noc_async_write_barrier();\n  {fl_}\n  noc_async_writes_flushed();\n{root_}\n}}\n')
         GO_RDALL = GO_RD and os.environ.get("E1_GO_RDALL", "1") == "1"
         GO_RINGEARLY = GO_RDALL and os.environ.get("E1_GO_RINGEARLY", "1") == "1"
         # E1_GO_RING2 (default on with the reader hook): 2-slot ring, layer L + 1's slice read right after reader<>(L) (ring 0
@@ -516,7 +543,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             wct = wct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
         OGO = 29 + NG * (len(rtens) + len(WRITER_TENSORS)) + 2   # gdn_out payload words: after the per-layer tensors + OAG / OAG_ME
         GFL = OGO + 2 + GO["maxt"] + 5
-        go_r, go_w, go_c, go_local, go_wr, go_local_rd = (x.replace("{OGO}", str(OGO)).replace("{GFL}", str(GFL)) for x in (go_r, go_w, go_c, go_local, go_wr, go_local_rd))
+        GRDY = GFL + len(cores)
+        go_r, go_w, go_c, go_local, go_wr, go_local_rd = (x.replace("{OGO}", str(OGO)).replace("{GFL}", str(GFL)).replace("{GRDY}", str(GRDY)) for x in (go_r, go_w, go_c, go_local, go_wr, go_local_rd))
     hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
     open(hr, "w").write(_bind_header(ids, rtens, roff, CRTA0))
     open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff, CRTA0))
@@ -627,7 +655,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
         + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdna"]}u = 0;\n  *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u = 0;\n' if GO else '')
         + (f'  g_ab[{OGO} + 2 + {GO["maxt"]} + 3] = 0; g_ab[{OGO} + 2 + {GO["maxt"]} + 4] = 0;\n' if GO and GO_RD else '')
-        + (f'  for (uint32_t t = 0; t < {len(cores)}u; ++t) g_ab[{OGO} + 2 + {GO["maxt"]} + 5 + t] = 0;\n' if GO and go_rdhook else '')
+        + (f'  for (uint32_t t = 0; t <= {len(cores)}u; ++t) g_ab[{OGO} + 2 + {GO["maxt"]} + 5 + t] = 0;\n' if GO and go_rdhook else '')
         + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not out_rd or GO) else '')   # gdn_out: the writer's tail signals
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
@@ -682,7 +710,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             assert len(pl) == OGO, (len(pl), OGO)
             pl += [GO["nt"][i], GO["page"][i]] + (list(GO["tiles"][i]) + [0] * GO["maxt"])[:GO["maxt"]]
             pl += [0, 0, 0, 0, 0]   # E1_GO_RD handoff words: src, t0, n, posted (L + 1), done (L + 1)
-            pl += [0] * len(cores)   # GFL: per-source A tile ready flags (E1_GO_FLAGS), L + 1; reset by the writer at program end
+            pl += [0] * len(cores) + [0]   # GFL: per-source A tile ready flags (E1_GO_FLAGS), L + 1; GRDY (E1_GO_GATHER); writer resets
         payloads.append(pl)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
