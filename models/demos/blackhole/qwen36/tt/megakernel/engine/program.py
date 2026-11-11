@@ -752,7 +752,6 @@ def setup_bench(dev, MESH, mesh_identity):
         assert not any(is_attn_layer(L_) and is_attn_layer(L_ + 1) for L_ in range(NL - 1)), "MKA_RWO: no back-to-back attention layers"
         WK_, WN_ = 48, 160
         wo_cores = list(ext_list)
-        # rot chunk order for device 0: owning device o = j // 2, farthest around the 8-ring first, own (o = 0) last
         # engine/weight_layouts.py wo unit: rot chunk order (device 0: farthest owning device around the 8-ring first, own
         # last), core c -> tiles flat[c::n], byte-balanced bank-local slices, k-major pages (k * nt + j)
         WLAY = _WEIGHTS['wo']['layout'] if 'wo' in _WEIGHTS else _wl().wo_unit_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in wo_cores], BANK_LOC, banks, maxt=WO_MAXT_)
@@ -795,7 +794,7 @@ def setup_bench(dev, MESH, mesh_identity):
                             A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = golds_s[L][u_, 4 * h_ + j_, :]
                 g = (A_ * sg) @ woq[L]
             gold_wo.append(g)
-        print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {rot}, rects {RECTS_E}", flush=True)
+        print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {_wl().rot_order()}, rects {RECTS_E}", flush=True)
     HC = []
     if RQNR:
         assert RQKV and ('MKA_WORING', '1') not in MKDEF and ('MKA_TREEFLAG', '1') not in MKDEF   # RWO optional (GDN24 decouple)
