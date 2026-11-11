@@ -25,14 +25,17 @@ KNOBS = {
     # composes). GLM53_DSA_SHARD_AGK: the key-packed all-gather -- AG1 ships each token's candidate keys in one page (2
     # pages per token instead of 6: a third of both AG rounds' bytes); 4 K x 16 42.6 -> 41.0 ms, 32 K x 4 ids identical
     "GLM53_DSA_SHARD_AGK": "1",
+    # GLM53_DSA_SHARD_AGB (on AGK): one y_ag chunk per block -- 16 + 32 staging batches per launch instead of 144 at t 16;
+    # GLM53_DSA_SHARD_RS1_EARLY: pass 0's RS1 slices stream while pass 1 computes (two-field gates, MLA_REV 67). 4 K x 16
+    # distinct, 3 in-process runs each, outputs bit-identical to both off (ids + top-4 values): 36.8 -> 35.7 ms (AGB),
+    # 35.5 ms (RS1_EARLY), 34.3 ms (both); 32 K x 4 ids identical with both
+    "GLM53_DSA_SHARD_AGB": "1",
+    "GLM53_DSA_SHARD_RS1_EARLY": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
-    # opt-in, not defaults: GLM53_DSA_SHARD_RS1_EARLY (pass 0's RS1 slices stream while pass 1 computes, two-field
-    # gates of MLA_REV 67; 4 K x 16 42.6 -> 41.6 ms, but alone it moved user 0 off the KPH ids at decode id 9 -- out
-    # until the knob-off control of the same tree decides), GLM53_DSA_SHARD_COMB (the fold combine on the lane roots:
-    # correct, but its fp32 order moves the ids at a near-tie -- fails the strict ids gate) and GLM53_DSA_SHARD_AGB (on
-    # AGK: one y_ag chunk per block; its device run is pending)
+    # opt-in, not a default: GLM53_DSA_SHARD_COMB (the fold combine on the lane roots: correct, but its fp32 order moves
+    # the ids at a near-tie -- fails the strict ids gate)
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
     "GLM53_MOE_SHARE_M": "1",  # one shared-expert intermediate per stack (mk_moe.MkMoE)
@@ -68,6 +71,8 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
     if tuple(int(v) for v in mesh_shape) != GALAXY:
         return {}
     want = dict(KNOBS)
+    if os.environ.get("GLM53_DSA_SHARD_AGK", want["GLM53_DSA_SHARD_AGK"]) != "1":
+        want.pop("GLM53_DSA_SHARD_AGB")  # AGB rides on AGK: an explicit AGK=0 drops the AGB default with it
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
     ladder = sparse_t(int(seq))
     if ladder:

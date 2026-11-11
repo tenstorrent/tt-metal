@@ -196,22 +196,22 @@ combine (att_c / att_dsa_shard_dm1), `GLM53_DSA_SHARD_RS1_EARLY` the roots' RS1 
 (merge helpers, ix_dm1). AGK and RS1_EARLY both edit fs_read.cpp but different streams: FS_KEYPACK builds the AG1 lane
 (plain FS_WAIT gate), FS_WAIT2 the RS1 scatter lane; one build never takes both (FS_KEYPACK `#error`s under
 FS_SCATTER). With every knob off the shard kernels are instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to
-the compiler's two stack-slot variants). `tt/galaxy_defaults.py` turns on AGK only.
+the compiler's two stack-slot variants). `tt/galaxy_defaults.py` turns on AGK, AGB and RS1_EARLY (2026-11-11).
 
 | knob | probe: B 16, pos 4095, layers 0-3 (one DSA layer) | e2e (45 layers, greedy) | ids | 8x4 default |
 |---|---|---|---|---|
 | none (rev 64, KPH auto) | 4021.6 us | 4 K x 16 42.6 ms, 32 K x 4 22.8 ms | the reference | |
 | AGK | 3867.6 us (AG window 548 -> 431 us) | 4 K x 16 41.0 ms, 32 K x 4 22.9 ms | 32 K x 4 identical | on |
-| RS1_EARLY | 3925.0 us (rev 65 build) | 4 K x 16 41.6 ms (rev 67; with COMB: 41.2 -> 40.0 ms) | B 4 bit-identical; 4 K x 16 user 0 leaves the KPH ids at decode id 9 | off (pending) |
+| RS1_EARLY | 3925.0 us (rev 65 build) | 4 K x 16 41.6 ms (rev 67); on 5bf638d7f74 + timing fix: 36.8 -> 35.5 ms | bit-identical at B 4 and, since the scratch fix, at B 16 (3 runs) | on |
 | COMB | 3906.8 us (rev 65 build) | 4 K x 16 41.2 ms | moves at a near-tie (strict gate fails) | off |
 | COMB + RS1_EARLY | 3807.9 us | 4 K x 16 40.0 ms, 32 K x 4 22.1 ms | as COMB | off |
-| AGB (on AGK) | pending | pending | | off |
+| AGB (on AGK) | - | 4 K x 16 36.8 -> 35.7 ms; with RS1_EARLY 34.3 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical with RS1_EARLY | on |
 
 The rows ran on the single-knob trees (wt_mrg e7f7dc8443f, wt_rsc ab4bd43c343 / 4d61833e021, wt_rs1 4e59a2c95c0),
 whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the two-field gates are sound for every
-lane skew: shard_plan.rs1_early_gates), yet rev 67 alone at 4 K x 16 distinct left the KPH run's user 0 at decode id 9
-(785 1196 702 3267 291 264 1467 429 374, then 7548 vs 16897); it stays opt-in until a knob-off run of the same tree at
-B 16 shows whether the KPH reference itself reproduces.
+lane skew: shard_plan.rs1_early_gates); rev 67 alone at 4 K x 16 distinct had left the KPH run's user 0 at decode id 9,
+which was the routed-expert scratch race (section 12): on the fixed stack RS1_EARLY and AGB give the knob-off digest in
+every one of 3 in-process runs at 4 K x 16.
 
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 86b8fac2888 defaults)
 
