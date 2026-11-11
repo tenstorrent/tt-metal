@@ -906,6 +906,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                                     {n: ids[n][0] for n in ("vc", "zs", "kq", "knq")}, scale,
                                                     noroot=gb.get("noroot", ()))
     payloads = []
+    GB_TS, OTS = os.environ.get("E1_GB_TS", "0") == "1", None
     for i, c in enumerate(cores):
         h, s = i // VB, i % VB
         pxy = []
@@ -932,7 +933,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         if GB:
             assert len(pl) == OGB, (len(pl), OGB)
             pl += gb_blocks[i]
+        if GB_TS:   # E1_GB_TS (bench probe): 32 wall-clock stamp words per GDN layer (gbts slots), host reads the arg block back
+            assert OTS in (None, len(pl)), (OTS, len(pl))
+            OTS = len(pl)
+            pl += [0] * (NG * 32)
         payloads.append(pl)
+    if GB_TS:
+        d_r, d_w, d_c = (d_ + [("GB_TS", "1"), ("GB_TS_OFF", str(OTS))] for d_ in (d_r, d_w, d_c))
+        print(f"[gbts] stamp words at payload {OTS} (argblock word {AB_HDR + OTS}), 32 per GDN layer x {NG}", flush=True)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
     utd = [ttnn.UnpackToDestMode.Default] * 64
@@ -969,7 +977,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]] + ([GO["w"], GO["dbg"]] if GO else [])
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab) + (sum(c_.total_size for c_ in cbs[-3:]) if GO else 0),
                 gb_roots=(gb_roots if GB else None),   # G-b L2 root core indices (GTEXT: program.py asserts GB_NOROOT cores hold none)
-                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
+                ab_words=len(payloads[0]), NG=NG, ts_off=(AB_HDR + OTS if GB_TS else None), st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
 
 

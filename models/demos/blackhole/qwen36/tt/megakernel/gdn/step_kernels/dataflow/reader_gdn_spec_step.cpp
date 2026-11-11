@@ -155,6 +155,11 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GSTEP_WPRE
 #define GSTEP_WPRE 0  // engine GDN role (GDN_STATE_FIRST + GDN_PREFIXED): w_in (norm weight rows) read before gdn_in_wait
 #endif
+#if defined(GB_TS) && GB_TS  // E1_GB_TS bench probe: wall-clock stamps into the arg block (gbts slots, 32 per GDN layer)
+#define GBTS(n) (g_ab[GB_TS_OFF + g_l * 32u + (n)] = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
+#else
+#define GBTS(n) ((void)0)
+#endif
 #ifndef GDN_IN_WAIT
 #define GDN_IN_WAIT 0  // engine GDN role: gdn_in_wait() (the including TU) gates the reads of `pre`
 #endif
@@ -720,7 +725,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #endif
 #if GDN_IN_WAIT
     // engine GDN role: this layer's prefix output (pre) is complete once in_ready reaches the layer's target
+    GBTS(0);
     gdn_in_wait();
+    GBTS(8);
 #endif
     {
         DeviceZoneScopedN("rd_pre");
@@ -772,6 +779,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if GDN_GB_DIRECT
         gdn_gb_wait(1);  // vc / zs / the head's gate rows have landed
 #endif
+        GBTS(11);
         zs.push_back(Vt);
 #if GDN_RAWKQ
 #if !GDN_GB_DIRECT
@@ -986,6 +994,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 DeviceZoneScopedN("rd_owait");  // the compute's gated output tiles
                 out.wait_front(Vs);
             }
+            GBTS(12);
             DeviceZoneScopedN("rd_owr");  // the out tile write + its barrier + the out signal
             const uint32_t entry = out.get_entry_size();
             const uint32_t page0 = tr * (Nv * Vt) + h * Vt + s * Vs;
@@ -1009,6 +1018,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #endif
             out.pop_front(Vs);
             gdn_out_signal();
+            GBTS(13);
         }
 #endif
 #if GDN_PRE_SP_HOOK

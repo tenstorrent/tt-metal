@@ -37,6 +37,9 @@
 #define GBZ(n)
 #endif
 #endif
+#ifndef GBTS
+#define GBTS(n) ((void)0)
+#endif
 namespace gb {
 inline uint32_t g_gb_pb;  // L1 address of the G-b payload block (same on every GDN core)
 inline uint32_t g_gb_coef;  // L1 base of the step writer's coef DFB (captured at kernel start)
@@ -133,10 +136,12 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
             }
         }
     }
+    GBTS(1);
     {
         GBZ("GB-GIN");
         if (pb[kNpush]) noc_semaphore_wait_min(in_ready, in_target);  // no landed tiles (AR corners): nothing to wait for
     }
+    GBTS(2);
     {
         GBZ("GB-PUSH");
         const uint32_t np = pb[kNpush];
@@ -152,11 +157,13 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFFu, xy >> 16, reinterpret_cast<uint32_t>(pb + kQinCnt)), 1);
         }
     }
+    GBTS(3);
     noc_async_read_barrier();
     {
         GBZ("GB-QIN");
         noc_semaphore_wait_min(pb + kQinCnt, pb[kNin] * (L + 1));
     }
+    GBTS(4);
     cb_reserve_back(cb_qpx, npx);
     cb_push_back(cb_qpx, npx);
     {
@@ -182,6 +189,7 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
             }
             noc_async_read_barrier();
             cb_push_back(cb_sht, 4);
+            if (j == 0) GBTS(5);
         }
         for (uint32_t j = 0; j < nconv; ++j) {  // win[1 - par] rows 0..Lw_w-1 of the live users (off the convs' path)
             const uint32_t col = pb[kConv + j * kConvW];
@@ -195,11 +203,13 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
         }
         noc_async_write_barrier();
     }
+    GBTS(6);
     if (pb[kRootPost]) {  // L2 root: its Kt raw tiles (from the q / k conv cores) -> the compute's l2
         GBZ("GB-RAWW");
         noc_semaphore_wait_min(pb + kRawCnt, KT_ * (L + 1));
         cb_reserve_back(cb_kq, KT_);  // the whole DFB (Kt pages): the raw slots never move
         cb_push_back(cb_kq, KT_);
+        GBTS(7);
     }
     noc_async_atomic_barrier();
 }
@@ -226,6 +236,7 @@ inline void pull_knq(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t knq_l
         GBZ("GB-KQW");
         noc_semaphore_wait_min(pb + kKqCnt, 2 * (L + 1));
     }
+    GBTS(9);
 #if GB_KQPUSH == 1
     (void)knq_l1;
     return;
@@ -237,6 +248,7 @@ inline void pull_knq(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t knq_l
         noc_async_read(get_noc_addr(rq & 0xFFFFu, rq >> 16, out_l1 + (4 + j) * 4096, GB_PULL_NOC), knq_l1 + (KT_ + j) * 4096, 4096, GB_PULL_NOC);
     }
     noc_async_read_barrier(GB_PULL_NOC);
+    GBTS(10);
     noc_semaphore_inc(get_noc_addr(rk & 0xFFFFu, rk >> 16, reinterpret_cast<uint32_t>(pb + kRootDone)), 1);
     noc_semaphore_inc(get_noc_addr(rq & 0xFFFFu, rq >> 16, reinterpret_cast<uint32_t>(pb + kRootDone)), 1);
 }
@@ -433,14 +445,17 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
     // layer): conv 0 (raw q / k -> the L2 roots: the long pole) and silu go out before the gate rows are built
     constexpr uint32_t NU = B / VB;
     cb_wait_front(cb_out, 4);
+    GBTS(17);
     {
         GBZ("GB-WOUT");
         // conv 0 first: on the q / k cores it feeds the L2 roots (the long pole); the gate rows are built after
         send_out(get_read_ptr(cb_out) + 3 * 4096, const_cast<const uint32_t*>(pb + kConv + 1));
     }
+    GBTS(18);
     if (root) {  // the root's Kt normalized tiles (OUT pages 4..7 of its 8-page layer) before its gate rows
         GBZ("GB-ROOTW");
         cb_wait_front(cb_out, 4 + KT_);  // the Kt normalized tiles sit in OUT pages 4..7 (the consumers pull them)
+        GBTS(19);
 #if GB_KQPUSH
         const uint32_t* dr = const_cast<const uint32_t*>(pb + kRootDst);
         for (uint32_t j = 0; j < KT_; ++j) send_out(get_read_ptr(cb_out) + (4 + j) * 4096, dr, j, false);
@@ -449,26 +464,32 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
 #else
         inc_all(const_cast<const uint32_t*>(pb + kRootDst), kKqCnt, 1);
 #endif
+        GBTS(20);
     }
     // (L2 roots: the ready signal above went out first -- the pulls of 12 consumers wait on it)
     send_out(get_read_ptr(cb_out) + 2 * 4096, dz);
+    GBTS(21);
     gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1);
+    GBTS(22);
     {
         GBZ("GB-GATE");
         gate_rows_send<T, NU>(pre, pb[kGcore] * NU, pb[kGdst], sc_l1, dz, g_gb_coef, sc_l1 + 8192);
         inc_all(dz, kRest);  // the head's cores (= zs's consumers) read these rows
     }
+    GBTS(23);
     if (root) {
         GBZ("GB-ROOTR");
 #if GB_KQPUSH != 1
         noc_semaphore_wait_min(pb + kRootDone, RD_ * (L + 1));
 #endif  // every consumer has pulled the normalized tiles
+        GBTS(24);
     }
     cb_pop_front(cb_out, root ? 4 + KT_ : 4);
     uint32_t n = root ? 4 + KT_ : 4;
     if (nconv == 2) {
         out1(const_cast<const uint32_t*>(pb + kConv + kConvW + 1));
         ++n;
+        GBTS(25);
     }
     for (; n & 3u; ++n) {  // the compute's pads
         cb_wait_front(cb_out, 1);
