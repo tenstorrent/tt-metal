@@ -526,7 +526,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # each STREAM core runs the binary of its variant, so code a core never runs drops out of its text. Tree parents are
     # moved off the 8 rstd producers (STREAM (n = k, k)); the owners stay leaves (EXTLEAN). KV block ranges / mask: `members`.
     SVAR = os.environ.get('MKA_SVAR', '0') == '1'
-    _RSTDP = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1'
+    _RSTDP = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1' and os.environ.get('MK_DNORM_SPLIT', '0') != '1'
     def sv_prod(f_): return _RSTDP and fcores[f_].x < GX and fcores[f_].y < GY and fcores[f_].x == fcores[f_].y
     TMEM = members
     _SV_RQB = ('MKA_RQBAL', '1') in MKDEF   # MKA_RQBAL: trees are per pass (any STREAM core may parent): variants split by rstd producer only
@@ -1084,6 +1084,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # GTEXT (DESIGN v1.156): GDN-role code-size trims for the corner / reducer variants under E1_GB (E1_GTEXT=0 = the old binaries)
     # (explicit E1_GTEXT=1 also without E1_GB: the cgar_iter md5 A/B vs E1_GTEXT unset / 0 = 9f97ada55bb's corner reader)
     GTEXT = os.environ.get('E1_GTEXT', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'
+    DNORM_SPLIT, RRED_ARR = False, 8   # MK_DNORM_SPLIT (DNORM ii; set in the AR block)
     REAL_AR = ('MK_REAL_AR', '1') in MKDEF
     if REAL_AR:
         assert MESH and V12, "MK_REAL_AR needs MK_MESH=1 and MK_V12=1"
@@ -1157,6 +1158,16 @@ def setup_bench(dev, MESH, mesh_identity):
         # CB 37; its compute sums the 8 tiles, SFPU column-reduces and transposes (column 0 = per-token Σx², the consumers' format)
         # into CB 39; the writer multicasts the 4 KB tile to the STREAM rects at MK_AR_RSP, then MK_AR_RSF += 1 there.
         RRED = AR_RSTD and RED_GDN
+        # MK_DNORM_SPLIT=1 (DNORM ii): every STREAM core (n, k) computes the per-token Σx² partial of its 2 tiles (2n, 2n + 1) of the K-row x
+        # (transposed copy + square + add + column sum) and writes that 32-float row into row n of page k of CB 37 (rows 10-31 zeroed once by
+        # the reducer's writer): the reducer waits 80 arrivals per delivery; its sum + column sum + transpose are unchanged. Replaces the 8
+        # diagonal producers' 20-tile C-RSS (on the matmul path of columns 0-7) by a uniform 2-tile one.
+        DNORM_SPLIT = os.environ.get('MK_DNORM_SPLIT', '0') == '1'
+        if DNORM_SPLIT:
+            assert RRED, "MK_DNORM_SPLIT: MK_AR_RSTD + MK_AR_RSTD_RED=gdn (+ MK_REAL_AR, no MK_AR_RSTD_HOST)"
+            RRED_ARR = 80
+            MKDEF = MKDEF + [('MK_DNORM_SPLIT', '1')]
+            print("[dnorm] split Σx²: 80 STREAM cores x 2 tiles -> reducer rows (80 arrivals per delivery)", flush=True)
         # MK_RRED_LATE=1 (GINSTREAM, default off): on the reducer core the GDN layer's mixer-Σ reduce runs from the step's
         # gdn_pre_in_hook() (after c_replay / wr_rcoef) instead of at the layer top, so the replay overlaps the MLP window like
         # on the other 23 GDN cores (mesh RC: the reducer core's head started its step +25 µs late on most devices)
@@ -2060,6 +2071,11 @@ def setup_bench(dev, MESH, mesh_identity):
             else:
                 head = (f'\n  uint32_t gL = 0;\n  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n   {fn}(2u * LL);   // delivery 2 LL: this layer\'s mixer x\n'
                         f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n')
+            if DNORM_SPLIT and role == 'w':   # rows 10-31 of CB 37's 8 pages = 0 once (never written; rows 0-9 rewritten every delivery)
+                head = ('\n  {   // MK_DNORM_SPLIT\n'
+                        f'    volatile tt_l1_ptr uint32_t* z_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>({VADDR["rred"]}u);\n'
+                        '    for (uint32_t p = 0; p < 8; ++p) {\n      for (uint32_t i = 160; i < 256; ++i) { z_[p * 1024 + i] = 0; z_[p * 1024 + 256 + i] = 0; }\n'
+                        '      for (uint32_t i = 512; i < 1024; ++i) z_[p * 1024 + i] = 0;\n    }\n  }') + head
             new_loop = (head + f'   {fn}(2u * LL + 1u);   // delivery 2 LL + 1: this layer\'s MLP x\n  }}\n'
                         + (f'  *(volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u = 0;   // device-local: all {16 * NL} increments awaited\n' if role == 'w' else ''))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
@@ -2067,7 +2083,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 mc = '\n'.join(f'  noc_async_write_multicast(s_, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsp_a}u), 4096, {r[4]}u, false);' for r in rects)
                 mi = '\n'.join(f'  noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsf_a}u), 1, {r[4]}u);' for r in rects)
                 fdef = (f'__attribute__((noinline)) static void rred_w(uint32_t d) {{   // MK_AR_RSTD_RED=gdn: delivery d\n'
-                        f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u, 8u * (d + 1u));\n'
+                        f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u, {RRED_ARR}u * (d + 1u));\n'
                         f'  cb_reserve_back(37, 8);\n  cb_push_back(37, 8);\n  cb_wait_front(39, 1);\n  const uint32_t s_ = get_read_ptr(39);\n'
                         f'{mc}\n  noc_async_write_barrier();   // the Σ tile has landed before its flag\n{mi}\n  noc_async_atomic_barrier();\n  cb_pop_front(39, 1);\n}}\n')
                 inc = ''
@@ -2213,8 +2229,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 _sid = {f_.buffer_index for c_ in cbs for f_ in c_.format_descriptors if any(q_.x < GX and q_.y < GY for q_ in ttnn.corerange_to_cores(c_.core_ranges))}
                 assert 22 not in _sid, ("MK_GAMMA_CONS: CB 22 taken on STREAM", sorted(_sid))
                 cbs = cbs + [cbd(22, ttnn.bfloat16, 20, rect)]
-            if AR_RSTD:   # CB 19 (fp32 Σx² tile, compute -> writer) on the 8 producer cores (n = k, k) only
-                _pc = crs([c_ for c_ in fcores if c_.x == c_.y and c_.y < GY])
+            if AR_RSTD:   # CB 19 (fp32 Σx² tile, compute -> writer) on the 8 producer cores (n = k, k) only (MK_DNORM_SPLIT: every STREAM core)
+                _pc = crs([c_ for c_ in fcores if (DNORM_SPLIT or c_.x == c_.y) and c_.x < GX and c_.y < GY])
                 _pcs = {(c_.x, c_.y) for c_ in ttnn.corerange_to_cores(_pc)}
                 _pid = {f_.buffer_index for c_ in cbs for f_ in c_.format_descriptors if any((q_.x, q_.y) in _pcs for q_ in ttnn.corerange_to_cores(c_.core_ranges))}
                 assert 19 not in _pid, ("MK_AR_RSTD CB 19 taken on the STREAM producer cores", sorted(_pid))
@@ -2498,7 +2514,7 @@ ENGINE_ENV = dict(
     MKA_KVPROD="1", MKA_NKVH="1", MKA_KVH="0", MKA_BS="64",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
                "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,"
-               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MKA_RQBAL_HOST=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GIN_PERCORE=1,MK_GAMMA_CONS=1",
+               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MKA_RQBAL_HOST=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GIN_PERCORE=1,MK_GAMMA_CONS=1,MKA_QSPREAD=13500,MKA_AWIN=1,MK_DNORM_SPLIT=1",
     MK_STREAM_DM_OS="1",  # batch 6b (reaches os.environ for setup_bench AND the lazy per-device builds: _env_ctx)
     MKA_W_ORD="1", MKA_ATT0="0",  # qkv / wo by attention ordinal (integ repack order); integ's tables are pass-relative
     MK_AR_RSTD="1", MK_AR_RSTD_RED="gdn",  # 6e: a GDN-role core reduces the Σ partials  # batch 6 (a445c147d35): real rstd producer + gamma at the consumers (the model's gammas: weights_mk 'gamma_cons')

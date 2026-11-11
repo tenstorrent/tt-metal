@@ -7,6 +7,10 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/reg_api.h"
 
+#ifndef WOU_NOUNROLL
+#define WOU_NOUNROLL
+#endif
+
 namespace wou {
 using namespace ckernel;   // MathFidelity, state_configure, throttled_mop_status
 
@@ -20,10 +24,12 @@ ALWI void gate_mul(uint32_t cb_a, uint32_t cb_s, uint32_t cb_as, uint32_t wk) {
     for (uint32_t t = 0; t < wk; t += 8) {
         const uint32_t n = (wk - t) < 8 ? (wk - t) : 8;
         tile_regs_acquire();
+        WOU_NOUNROLL
         for (uint32_t i = 0; i < n; ++i) mul_tiles(cb_a, cb_s, t + i, t + i, i);
         tile_regs_commit();
         cb_reserve_back(cb_as, n);
         tile_regs_wait();
+        WOU_NOUNROLL
         for (uint32_t i = 0; i < n; ++i) pack_tile(i, cb_as);   // S slots t.., already unpacked this round
         tile_regs_release();
         cb_push_back(cb_as, n);
@@ -74,9 +80,11 @@ ALWI void matmul_nt(uint32_t cb_a, uint32_t cb_w, uint32_t ring_pages, uint32_t 
         const uint32_t nw = (nt - j0) < max_nw ? (nt - j0) : max_nw;
         mm_block_init_f<kLoFi>(cb_a, cb_w, nw, wk);
         tile_regs_acquire();
+        WOU_NOUNROLL
         for (uint32_t k = 0; k < wk; ++k) mm_block_f<kLoFi>(cb_a, cb_w, k, k * nt + j0, nw, wk);
         tile_regs_commit();
         tile_regs_wait();
+        WOU_NOUNROLL
         for (uint32_t j = 0; j < nw; ++j) pack_tile<true>(j, cb_out, j0 + j);
         tile_regs_release();
     }
