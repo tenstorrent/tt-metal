@@ -18,14 +18,28 @@
 #ifndef GB_PULL_NOC
 #define GB_PULL_NOC noc_index
 #endif
+#ifndef GB_GATE_DIRECT
+#define GB_GATE_DIRECT 0
+#endif
+#ifndef GB_COEF_REP
+#define GB_COEF_REP 9
+#endif
 #ifndef GB_KQPUSH
 #define GB_KQPUSH 0
 #endif
 #ifndef GB_MCAST
 #define GB_MCAST 0
 #endif
+#ifndef GBZ
+#if defined(GB_ZONES) && GB_ZONES
+#define GBZ(n) DeviceZoneScopedN(n)
+#else
+#define GBZ(n)
+#endif
+#endif
 namespace gb {
 inline uint32_t g_gb_pb;  // L1 address of the G-b payload block (same on every GDN core)
+inline uint32_t g_gb_coef;  // L1 base of the step writer's coef DFB (captured at kernel start)
 
 constexpr uint32_t kRest = 0;    // arrivals of vc (1) + zs (Vt) + the head's gate rows (VB) per layer (+1 each)
 constexpr uint32_t kQinCnt = 1;  // QIN counter (+1 per tile pushed into this core's QIN)
@@ -69,7 +83,7 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
     const uint32_t nconv = pb[kNconv];
     gpx::Ctrl<B, T, M, NV> c;
     {
-        DeviceZoneScopedN("GB-RPRE");
+        GBZ("GB-RPRE");
         noc_async_read(ctrl.get_noc_addr(0), ctrl_l1, ctrl_bytes);
         noc_async_read_barrier();
         c.parse(ctrl_l1);
@@ -81,11 +95,11 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
         }
     }
     {
-        DeviceZoneScopedN("GB-GIN");
+        GBZ("GB-GIN");
         if (pb[kNpush]) noc_semaphore_wait_min(in_ready, in_target);  // no landed tiles (AR corners): nothing to wait for
     }
     {
-        DeviceZoneScopedN("GB-PUSH");
+        GBZ("GB-PUSH");
         const uint32_t np = pb[kNpush];
         for (uint32_t i = 0; i < np; ++i) {
             const uint32_t* e = const_cast<const uint32_t*>(pb + kPush + 3 * i);
@@ -101,13 +115,13 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
     }
     noc_async_read_barrier();  // window + taps
     {
-        DeviceZoneScopedN("GB-QIN");
+        GBZ("GB-QIN");
         noc_semaphore_wait_min(pb + kQinCnt, pb[kNin] * (L + 1));
     }
     cb_reserve_back(cb_qpx, npx);
     cb_push_back(cb_qpx, npx);
     {
-        DeviceZoneScopedN("GB-STG");
+        GBZ("GB-STG");
         for (uint32_t j = 0; j < nconv; ++j) {
             const uint32_t col = pb[kConv + j * kConvW];
             const uint32_t wj = win_l1 + j * B * gpx::kTB;
@@ -122,7 +136,7 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
         noc_async_write_barrier();
     }
     if (pb[kRootPost]) {  // L2 root: its Kt raw tiles (from the q / k conv cores) -> the compute's l2
-        DeviceZoneScopedN("GB-RAWW");
+        GBZ("GB-RAWW");
         noc_semaphore_wait_min(pb + kRawCnt, KT_ * (L + 1));
         cb_reserve_back(cb_kq, 2 * KT_);  // the whole DFB: the raw slots 0..Kt-1 never move
         cb_push_back(cb_kq, 2 * KT_);
@@ -149,14 +163,14 @@ template <uint32_t KT_>
 inline void pull_knq(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t knq_l1) {
     const uint32_t out_l1 = pb[kOutBase];
     {
-        DeviceZoneScopedN("GB-KQW");
+        GBZ("GB-KQW");
         noc_semaphore_wait_min(pb + kKqCnt, 2 * (L + 1));
     }
 #if GB_KQPUSH == 1
     (void)knq_l1;
     return;
 #endif
-    DeviceZoneScopedN("GB-PULL");
+    GBZ("GB-PULL");
     const uint32_t rk = pb[kRootSrc], rq = pb[kRootSrc + 1];
     for (uint32_t j = 0; j < KT_; ++j) {
         noc_async_read(get_noc_addr(rk & 0xFFFFu, rk >> 16, out_l1 + (4 + j) * 4096, GB_PULL_NOC), knq_l1 + j * 4096, 4096, GB_PULL_NOC);
@@ -237,8 +251,8 @@ inline void inc_all(const uint32_t* d, uint32_t w, uint32_t v) {
 // pair gt (dec over a's tile, beta over b's tile), same float ops in the same order. W / C_u (6..14) are not written:
 // under GDN_EARLY_REPLAY the step writer builds them itself from the stash (wr_rcoef). Per tile, the users' NU*T rows
 // = two 16-column face runs (sc_l1: 7 x [face A rows | face B rows]).
-template <uint32_t T, uint32_t NV, uint32_t NU, typename PAcc>
-inline void gate_rows(const PAcc& pre, uint32_t h, uint32_t u0, uint32_t pg0, uint32_t gt_l1, uint32_t sc_l1) {
+template <uint32_t T, uint32_t NV, uint32_t NU>
+inline void gate_rows_build(uint32_t h, uint32_t u0, uint32_t gt_l1, uint32_t sc_l1) {
     constexpr uint32_t R = NU * T, CH = R * 64;  // rows per core, bytes per face run
     static_assert(16 % R == 0, "a core's rows inside one face row");
     constexpr uint32_t kSign = 0x80000000u;
@@ -266,7 +280,7 @@ inline void gate_rows(const PAcc& pre, uint32_t h, uint32_t u0, uint32_t pg0, ui
         }
     }
     const uint32_t R0 = u0 * T;
-    DeviceZoneScopedN("GB-GROW");
+    GBZ("GB-GROW");
     {
         const uint64_t z = get_noc_addr(MEM_ZEROS_BASE);
         for (uint32_t o = 0; o < 7 * 2 * CH; o += MEM_ZEROS_SIZE) noc_async_read(z, sc_l1 + o, MEM_ZEROS_SIZE);
@@ -304,12 +318,42 @@ inline void gate_rows(const PAcc& pre, uint32_t h, uint32_t u0, uint32_t pg0, ui
             ra(6)[1] = beta_all[v][t];
         }
     }
+}
+
+template <uint32_t T, uint32_t NU, typename PAcc>
+inline void gate_rows_send(const PAcc& pre, uint32_t u0, uint32_t pg0, uint32_t sc_l1, const uint32_t* dz, uint32_t coef_l1,
+                           uint32_t gd_l1) {
+    constexpr uint32_t R = NU * T, CH = R * 64;
+    static constexpr uint8_t kTiles[7] = {0, 1, 2, 3, 4, 5, 15};
+    const uint32_t R0 = u0 * T;
     const uint32_t off = (R0 >> 4) * 2048 + (R0 & 15) * 64;  // face (R0 >> 4) * 2 (cols 0..15), + 1024 (cols 16..31)
+#if GB_GATE_DIRECT
+    // straight into the head's cores (the zs consumers' rects dz): NGB..EYE -> their coef slots kCoefRep + n (the early-replay
+    // writer reserves / pushes them without reading), GD -> their scratch gd page (copied into gprev by wr_pgates); L1 only
+    (void)pre;
+    (void)pg0;
+    for (uint32_t r = 0; r < dz[0]; ++r) {
+        const uint32_t a = dz[1 + 3 * r], b = dz[2 + 3 * r];
+        for (uint32_t x = a & 0xFFFFu; x <= (b & 0xFFFFu); ++x) {
+            const uint32_t y = a >> 16;
+            for (uint32_t n = 0; n < 7; ++n) {
+                const uint32_t base = n < 6 ? coef_l1 + (GB_COEF_REP + n) * 4096 : gd_l1;
+                const uint64_t d = get_noc_addr(x, y, base + off);
+                noc_async_write(sc_l1 + n * 2 * CH, d, CH);
+                noc_async_write(sc_l1 + n * 2 * CH + CH, d + 1024, CH);
+            }
+        }
+    }
+#else
+    (void)dz;
+    (void)coef_l1;
+    (void)gd_l1;
     for (uint32_t n = 0; n < 7; ++n) {
         const uint64_t d = pre.get_noc_addr(pg0 + kTiles[n]) + off;
         noc_async_write(sc_l1 + n * 2 * CH, d, CH);
         noc_async_write(sc_l1 + n * 2 * CH + CH, d + 1024, CH);
     }
+#endif
     noc_async_write_barrier();
 }
 
@@ -327,14 +371,17 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
     const uint32_t* dz = const_cast<const uint32_t*>(pb + kSilu + 1);
     // the first 4 OUT pages of a layer = [gate pair | silu | conv 0] (the layer starts at the base: 4 pages, multiple of 4 per
     // layer): conv 0 (raw q / k -> the L2 roots: the long pole) and silu go out before the gate rows are built
+    constexpr uint32_t NU = B / VB;
+    cb_wait_front(cb_out, 2);  // the gate pair (computed first): build this core's gate rows while the convs run
+    gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1);
     cb_wait_front(cb_out, 4);
     {
-        DeviceZoneScopedN("GB-WOUT");
+        GBZ("GB-WOUT");
         send_out(get_read_ptr(cb_out) + 3 * 4096, const_cast<const uint32_t*>(pb + kConv + 1));
         send_out(get_read_ptr(cb_out) + 2 * 4096, dz);
     }
     if (root) {  // the root's Kt normalized tiles (OUT pages 4..7 of its 8-page layer) before its gate rows
-        DeviceZoneScopedN("GB-ROOTW");
+        GBZ("GB-ROOTW");
         cb_wait_front(cb_out, 4 + KT_);  // the Kt normalized tiles sit in OUT pages 4..7 (the consumers pull them)
 #if GB_KQPUSH
         const uint32_t* dr = const_cast<const uint32_t*>(pb + kRootDst);
@@ -346,13 +393,12 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
 #endif
     }
     {
-        DeviceZoneScopedN("GB-GATE");
-        constexpr uint32_t NU = B / VB;
-        gate_rows<T, NV, NU>(pre, pb[kGate], pb[kGcore] * NU, pb[kGdst], get_read_ptr(cb_out), sc_l1);
+        GBZ("GB-GATE");
+        gate_rows_send<T, NU>(pre, pb[kGcore] * NU, pb[kGdst], sc_l1, dz, g_gb_coef, sc_l1 + 8192);
         inc_all(dz, kRest);  // the head's cores (= zs's consumers) read these rows
     }
     if (root) {
-        DeviceZoneScopedN("GB-ROOTR");
+        GBZ("GB-ROOTR");
 #if GB_KQPUSH != 1
         noc_semaphore_wait_min(pb + kRootDone, RD_ * (L + 1));
 #endif  // every consumer has pulled the normalized tiles
@@ -368,7 +414,7 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
         cb_pop_front(cb_out, 1);
     }
     {
-        DeviceZoneScopedN("GB-RESTW");
+        GBZ("GB-RESTW");
         noc_semaphore_wait_min(pb + kRest, RN * (L + 1));  // this core's gate rows / vc / zs (wr_pgates reads the rows)
     }
 }

@@ -96,6 +96,12 @@ constexpr uint32_t kCoefN = 7 + kBatchMax;  // NGB G E BETA NBE EYE W + C_u
 #endif
 #if GDN_W_IN_WAIT
 void gdn_in_wait();
+#ifndef GDN_GB_GATE_DIRECT
+#define GDN_GB_GATE_DIRECT 0
+#endif
+#if GDN_GB_GATE_DIRECT
+uint32_t gdn_gb_gd_l1();  // G-b: the L1 address of this core's gate page (written by its head's cores)
+#endif
 #endif
 #if GDN_EARLY_REPLAY
 constexpr uint32_t kCoefRep = 1 + kBatchMax;  // W | C_0..C_7, pushed first; then NGB G E BETA NBE EYE
@@ -642,10 +648,18 @@ TT_KERNEL void writer(
         // the 6 WY tiles (pre's NGB G E BETA NBE EYE = its coefficient tiles 0..5) behind W / C_u
         constexpr uint32_t nwy = kCoefN - kCoefRep;
         coef.reserve_back(nwy);
-        read_tiles_at(pre_acc, coef, noc, pbase, nwy, 0);
         gprev.reserve_back(1);
+#if GDN_GB_GATE_DIRECT
+        // G-b: the WY tiles already sit in these coef slots (written by the head's cores); the gate page is in the G-b scratch
+        (void)pre_acc;
+        (void)pbase;
+        noc_async_read(get_noc_addr(gdn_gb_gd_l1()), gprev.get_write_ptr(), 4096);
+        noc_async_read_barrier();
+#else
+        read_tiles_at(pre_acc, coef, noc, pbase, nwy, 0);
         read_tiles_at(pre_acc, gprev, noc, pbase + ncoef, 1, 0);
         noc.async_read_barrier();
+#endif
         coef.push_back(nwy);
 #else
         coef.reserve_back(ncoef);

@@ -670,7 +670,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         NC = len(cores)
         OGB = OGK + 6   # after the PERCORE words (k, n_fwd, 2 x (x, y))
         XWO = 2 * B * 2048; XRC = XWO + B * 1024; XWC = XRC + CTRL_B; XDP = XWC + CTRL_B; XSC = XDP + B * 256
-        XS_B = -(-(XSC + 2 * 4096) // 2048) * 2048
+        XS_B = -(-(XSC + 3 * 4096) // 2048) * 2048   # + the gate page landing area (XSC + 8192)
         NPX = 6 + XS_B // 2048   # QPX pages: QIN 0..3, P 4..5, then the raw scratch
         HERE_ = os.path.dirname(os.path.abspath(__file__))
         ri = {t: i for i, t in enumerate(rtens)}
@@ -683,7 +683,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  const auto wa = {racc("win_a", 2048)};\n  const auto wb = {racc("win_b", 2048)};\n'
                 f'  const auto tp = {racc("taps", 2048)};\n  const auto ct = {racc("ctrl", ctrl_bytes)};\n'
                 f'  gb::reader_layer<{B}, {T}, {K}, {Ct}, {M}, {Nv}, {NC}, {Kt}>(g_ab + {OGB}, g_l, wa, wb, tp, ct, {ctrl_bytes}u, '
-                f'{int(gb["gin_addr"])}u, g_gb_qin, g_gb_xs, g_gb_xs + {XWO}u, g_gb_xs + {XRC}u, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, {GBC["kq"]}u, '
+                f'{("get_write_ptr(41)" if gb["gin_addr"] == "cb41" else str(int(gb["gin_addr"])) + "u")}, g_gb_qin, g_gb_xs, g_gb_xs + {XWO}u, g_gb_xs + {XRC}u, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, {GBC["kq"]}u, '
                 f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n}}\n'
                 f'void gdn_gb_wait(uint32_t w) {{ (void)w; noc_semaphore_wait_min(g_ab + {OGB}, {1 + Vt + VB}u * (g_l + 1)); }}\n'
                 f'void gdn_gb_knq(uint32_t a) {{ gb::pull_knq<{Kt}>(g_ab + {OGB}, g_l, a); }}\n')
@@ -692,10 +692,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         _q = [dev.worker_core_from_logical_core(c) for c in cores]
         GB_RN = 1 + Vt + VB   # rest arrivals per layer: vc + zs (Vt) + the head's gate rows (VB)
         GB_W = (f'static uint32_t g_gb_xs;\n#include "{HERE_}/gb_dm.hpp"\n'
+                f'uint32_t gdn_gb_gd_l1() {{ return g_gb_xs + {XSC + 8192}u; }}\n'
                 f'void gdn_in_wait() {{\n  {CRD}\n'
                 f'  const auto pre = {wacc("pre_w", 4096)};\n'
                 f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}, {Kt}, {(Nv // Nk) * VB // int(os.environ.get("E1_GB_RSPLIT", "1"))}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u);\n}}\n')
-        GB_WINIT = f'  g_gb_xs = get_write_ptr({GBC["qpx"]}) + 6u * 2048u; g_ab[{OGB} + 145] = get_read_ptr({GBC["out"]});\n'
+        GB_WINIT = (f'  g_gb_xs = get_write_ptr({GBC["qpx"]}) + 6u * 2048u; g_ab[{OGB} + 145] = get_read_ptr({GBC["out"]});\n'
+                    f'  gb::g_gb_coef = get_write_ptr({ids["coef"][0]});\n')
         GB_WEND = f'  g_ab[{OGB}] = 0; g_ab[{OGB} + 1] = 0; g_ab[{OGB} + 131] = 0; g_ab[{OGB} + 132] = 0; g_ab[{OGB} + 144] = 0;\n'
         GB_C = (f'#include "{HERE_}/gb_compute.hpp"\nstatic uint32_t g_gb_l;\n'
                 f'void gdn_gb_compute() {{ gb::compute_layer<{K}>(g_ab + {OGB}, g_gb_l, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, '
@@ -816,6 +818,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]) + (
             [("GB_PULL_NOC", os.environ["E1_GB_PULL_NOC"])] if "E1_GB_PULL_NOC" in os.environ else [])
         d_w = d_w + [("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]
+        if os.environ.get("E1_GB_GDIRECT", "1") == "1":   # gate rows straight into the head's coef slots / gate page (no DRAM)
+            d_w = d_w + [("GB_GATE_DIRECT", "1"), ("GDN_GB_GATE_DIRECT", "1"), ("GB_COEF_REP", "9")]
+        gz = os.environ.get("E1_GB_ZONES", "")   # G-b profiler zones per kernel, e.g. "rwc" / "r" (off by default: config space)
+        d_r = d_r + ([("GB_ZONES", "1")] if "r" in gz or gz == "1" else [])
+        d_w = d_w + ([("GB_ZONES", "1")] if "w" in gz or gz == "1" else [])
+        d_c = d_c + ([("GB_ZONES", "1")] if "c" in gz or gz == "1" else [])
         d_c = d_c + [("GDN_GB", "1"), ("GB_CB_MASK", str(GBC["qpx"])), ("GB_MASK_TILE", "5"),
                      ("GB_CV_PAGES", str(max(Kt, Vt))), ("GB_KT", str(Kt))]
         gb_blocks, gb_info = _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gb["gin_map"],

@@ -1836,7 +1836,14 @@ def setup_bench(dev, MESH, mesh_identity):
                                        # K-row r tile goes to (c, GY + r % 2), r < nt_c (gin_wargs). None = the Q-root contract
                                        gin_k=({(c_, GY + p_): sum(1 for r_ in range(nt_) if r_ % 2 == p_)
                                                for c_, nt_ in {k_[0]: s_.nt for k_, s_ in GSL_.items()}.items() for p_ in (0, 1)}
-                                              if GIN and ('MK_GIN_PERCORE', '1') in MKDEF else None))
+                                              if GIN and ('MK_GIN_PERCORE', '1') in MKDEF else None),
+                                       # G-b (E1_GB): where G-a lands each in-proj tile -- tile first_c + r of column c -> logical
+                                       # (c, GY + r % 2), staging slot r // 2 at CB 41's planned address -- and the bench-only DRAM
+                                       # copy of every layer's tiles (the role's stock-op reference reads the real in-proj from it)
+                                       gb_gin=(dict(gin_addr='cb41', dbg=gin_dbg,   # 'cb41': the role reads CB 41's base itself (planned later)
+                                                    tiles=sorted((s_.first + r_, c_, GY + r_ % 2, r_ // 2)
+                                                                 for c_, s_ in {k_[0]: s_ for k_, s_ in GSL_.items()}.items() for r_ in range(s_.nt)))
+                                               if GIN else None))
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
             GDN_ROLE.setdefault('io', [])
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)

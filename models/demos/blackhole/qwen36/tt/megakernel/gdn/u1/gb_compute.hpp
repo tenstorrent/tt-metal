@@ -27,6 +27,13 @@
 #ifndef GB_CV_PAGES
 #define GB_CV_PAGES 4
 #endif
+#ifndef GBZ
+#if defined(GB_ZONES) && GB_ZONES
+#define GBZ(n) DeviceZoneScopedN(n)
+#else
+#define GBZ(n)
+#endif
+#endif
 namespace gb {
 
 template <typename F, typename... Args>
@@ -175,17 +182,17 @@ ALWI void compute_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t cb
     const uint32_t nconv = pb[3], root_post = pb[kRootPost];
     cb_wait_front(cb_qpx, npx);  // QIN 0..3, P 4..5 (resident data; the pointer returns to the base every layer)
     {
-        DeviceZoneScopedN("GB-CGATE");  // first: needs only the a|b tile, fills the wait for the conv staging
+        GBZ("GB-CGATE");  // first: needs only the a|b tile, fills the wait for the conv staging
         gates_page(cb_qpx, 3, cb_out, pb[kPerLayer + 2 * L], pb[kPerLayer + 2 * L + 1]);
     }
     silu_page(cb_qpx, 2, cb_out);
     for (uint32_t j = 0; j < nconv; ++j) {
-        DeviceZoneScopedN("GB-CCONV");
+        GBZ("GB-CCONV");
         conv_place<K>(cb_sht, cb_qpx, j, cb_cv, cb_out);  // conv 0 = the q / k tile on the q / k cores
     }
     uint32_t n = 3 + nconv;
     if (root_post) {  // L2 root: the key head's Kt raw k (or q) tiles -> l2norm rows (the op's sequence) -> OUT
-        DeviceZoneScopedN("GB-CROOT");
+        GBZ("GB-CROOT");
         gb_l2_root(cb_kq, cb_out, root_post);
         n += GB_KT;
     }

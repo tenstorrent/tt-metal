@@ -242,10 +242,10 @@ class GdnRole:
         c = self.m._ctrl_lazy(self.g, self.B, self.mi_ctrl, ly["cE"].par, hold)
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(c, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), ly["ctrl"])
 
-    def _plain(self, c, ctrl):
+    def _plain(self, c, ctrl, qkv=None):
         m, g = self.m, self.g
         return ttnn.experimental.kda.gdn_spec_step(
-            self.qkv, c.win_a, c.win_b, c.ring, ctrl, c.taps_d, c.dtb_d, c.nea_d, c.w_d, g.Nv, g.Nk, m.Dk, m.Dv, self.T,
+            self.qkv if qkv is None else qkv, c.win_a, c.win_b, c.ring, ctrl, c.taps_d, c.dtb_d, c.nea_d, c.w_d, g.Nv, g.Nk, m.Dk, m.Dv, self.T,
             self.B, g.QKVZ, conv_kernel=self.K, scale=m.SCALE, hnew_depth=2, memory_config=ttnn.L1_MEMORY_CONFIG,
             output_dtype=c.out_dtype, fast_mode=True, fp32_state=True, value_blocks=4, kernel_opts=self.opt)
 
@@ -318,7 +318,16 @@ class GdnRole:
                 cnt = collections.Counter((b_[2], b_[1]) for b_ in bad)
                 print(f"[{tag}] pre vs producers layer {l}: {len(bad)} tiles differ; (slot, j): n heads {sorted(cnt.items())}; "
                       f"max|d| {max([b_[4] for b_ in bad] or [0]):.3e}", flush=True)
-        oAs = [self._plain(ly["cA"], ly["ctrl"]) for ly in self.LY]
+        qkvs = [None] * len(self.LY)
+        if self.gb is not None and self.gb.get("dbg") is not None:
+            # engine G-b: the step's input is G-a's real in-proj (CB 41), not the role's synthetic rows -> the reference reads
+            # the bench-only DRAM copy G-a writes of every layer's tiles ([32 rows, NG x 65 tiles], same bits as staging)
+            d = _host(self.gb["dbg"]).reshape(32, -1)
+            W = self.g.W
+            assert d.shape[1] == len(self.LY) * W, (d.shape, len(self.LY), W)
+            qkvs = [ttnn.from_torch(d[:, l * W:(l + 1) * W].reshape(1, 32, W).bfloat16(), dtype=b16, layout=ttnn.TILE_LAYOUT,
+                                    device=self.dev, memory_config=ttnn.DRAM_MEMORY_CONFIG) for l in range(len(self.LY))]
+        oAs = [self._plain(ly["cA"], ly["ctrl"], qkvs[l]) for l, ly in enumerate(self.LY)]
         ttnn.synchronize_device(self.dev)
         ok_all = True
         for l, ly in enumerate(self.LY):
