@@ -89,25 +89,46 @@ def sp_kc(ratio, rows, fp8=True):
     if _env("DSV41_SDPA_DEDUP", "0") != "1":
         return SP_KC_default()  # default OFF: nothing below runs
     if fp8 and (int(ratio) >= 2 or int(rows) >= int(_env("DSV41_SDPA_DEDUP_ROWS", "1024"))):
-        _balance(False)
+        _balance(False, int(rows))
+        _note(("dedup", int(ratio), int(rows)), f"SDPA_DEDUP: sparse_sdpa k_chunk 640 (K-row cache) for compress ratio {ratio}, {rows} rows per op")
         return 640
     _balance(True)
+    _note(("kc", int(ratio), int(rows), bool(fp8)), f"SDPA_DEDUP on but not used: sparse_sdpa k_chunk {SP_KC_default()} for compress ratio {ratio}, {rows} rows per op, fp8 pool {bool(fp8)}")
     return SP_KC_default()
+
+
+_SEEN = set()
+
+
+def _note(key, msg):
+    """one log line per distinct (layer kind, rows) so a server log shows which sparse_sdpa configuration was chosen (DSV41_SDPA_DEDUP=1 only)"""
+    if key not in _SEEN:
+        _SEEN.add(key)
+        print(msg, flush=True)
 
 
 _BAL = {}
 
 
-def _balance(orig):
+_MAP512 = "85.65,83.92,84.63,84.05,84.69,83.99,84.41,84.77,84.78,84.09,85.67,85.21,86.46,86.20,86.21,86.33,86.19,76.03,85.95,85.77,86.58,86.77,85.77,86.27,87.58,87.65,87.30,86.56,87.27,87.53,87.34,87.31,87.61,87.62,87.44,87.31,86.28,85.47,86.21,86.08,85.75,86.02,85.64,86.25,86.75,86.15,86.43,86.20,84.44,85.68,85.06,83.97,83.71,84.09,84.77,85.47,84.76,85.56,85.97,86.07,75.17,73.97,75.09,75.89,83.48,84.15,84.76,82.60,84.02,85.28,85.98,85.97,70.87,71.82,74.01,75.52,82.74,83.34,84.27,81.92,83.52,84.86,85.69,85.47,70.27,71.24,73.59,74.35,82.56,82.48,83.82,75.27,81.80,83.73,85.10,84.94,69.80,70.14,71.77,72.59,75.59,75.58,82.86,75.08,75.47,82.03,83.97,84.18,68.94,69.70,71.04,72.22,74.21,75.15,75.76,73.99,74.61,74.76,83.07,82.87"  # per-core us-per-token of the K-row-cache kernel at 512 rows (measured, tests/test_t16_sdpa.py zone profile: cold first token 133-191 us by core position + 53 us per warm token), for DSV41_SDPA_BALANCE_MAP
+
+
+def _balance(orig, rows=0):
     """The op reads DSV41_SDPA_BALANCE when its program is created (the per-core token counts of the position-dependent gather cost table of the baseline kernel). The K-row-cache kernel has a uniform
     per-token cost: its ops are created with the balance table OFF, every other sparse_sdpa with the process value (only when DSV41_SDPA_DEDUP=1)."""
     if "v" not in _BAL:
         _BAL["v"] = os.environ.get("DSV41_SDPA_BALANCE")
+        if "DSV41_SDPA_BALANCE_MAP" in os.environ:
+            _BAL["m"] = os.environ["DSV41_SDPA_BALANCE_MAP"]
     if orig:
+        os.environ.pop("DSV41_SDPA_BALANCE_MAP", None) if "m" not in _BAL else os.environ.__setitem__("DSV41_SDPA_BALANCE_MAP", _BAL["m"])
         if _BAL["v"] is None:
             os.environ.pop("DSV41_SDPA_BALANCE", None)
         else:
             os.environ["DSV41_SDPA_BALANCE"] = _BAL["v"]
+    elif rows == 512 and _env("DSV41_SDPA_DEDUP_MAP", "0") == "1":  # DSV41_SDPA_DEDUP_MAP=1 (default OFF): the measured per-core table (-5 % op time at 512 rows)
+        os.environ["DSV41_SDPA_BALANCE"] = "1"
+        os.environ["DSV41_SDPA_BALANCE_MAP"] = _MAP512
     else:
         os.environ["DSV41_SDPA_BALANCE"] = "0"
 
