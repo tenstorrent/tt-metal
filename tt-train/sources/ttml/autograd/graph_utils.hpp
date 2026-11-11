@@ -65,14 +65,19 @@ bool any_requires_grad(Tensors&&... tensors) {
  * @param tensors The input tensors.
  * @return The node id of the added node.
  * This function helps implement branch pruning autograd optimization.
- * Node is added only if any of the input tensors requires gradients.
- * In other words, if all inputs of the operation do not require gradients, then we don't need to propagate gradients
- * through this operation. Note: ctx().add_backward_node adds a node unconditionally.
+ * Node is added only when gradient mode is enabled and at least one input tensor requires gradients.
+ * In other words, if gradient mode is disabled or all inputs of the operation do not require gradients, then we don't
+ * need to propagate gradients through this operation. Note: ctx().add_backward_node adds a node unconditionally.
  */
 template <typename... Tensors>
     requires(... && !std::is_same_v<std::remove_cvref_t<Tensors>, std::vector<TensorPtr>>)
 std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const TensorPtr& output, Tensors&&... tensors) {
     static_assert(core::are_same_type<Tensors...>(), "All nodes must have the same type!");
+
+    if (ctx().get_gradient_mode() != GradMode::ENABLED) {
+        output->set_requires_grad(false);
+        return std::nullopt;
+    }
 
     // Check if any input tensor requires gradients
     bool needs_grad = any_requires_grad(std::forward<Tensors>(tensors)...);
@@ -97,6 +102,11 @@ std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const Tens
  */
 inline std::optional<NodeId> add_backward_node(
     GradFunction&& grad_function, const TensorPtr& output, const std::vector<TensorPtr>& inputs) {
+    if (ctx().get_gradient_mode() != GradMode::ENABLED) {
+        output->set_requires_grad(false);
+        return std::nullopt;
+    }
+
     bool needs_grad = false;
     for (const auto& t : inputs) {
         if (t != nullptr && t->get_requires_grad()) {
@@ -130,12 +140,17 @@ inline std::optional<NodeId> add_backward_node(
  * @param output The output tensor.
  * @param tensors The input tensors.
  * @return The node id of the added node.
- * This function is used to add a backward node unconditionally. This skips branch pruning optimization.
+ * This function adds a backward node when gradient mode is enabled, skipping input branch pruning optimization.
  */
 template <typename... Tensors>
 std::optional<NodeId> add_backward_node_always(
     GradFunction&& grad_function, const TensorPtr& output, Tensors&&... tensors) {
     static_assert(core::are_same_type<Tensors...>(), "All nodes must have the same type!");
+
+    if (ctx().get_gradient_mode() != GradMode::ENABLED) {
+        output->set_requires_grad(false);
+        return std::nullopt;
+    }
 
     // Set output tensor's requires_grad to true
     output->set_requires_grad(true);
