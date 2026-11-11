@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import local_device_to_torch
+from ..utils.tensor import local_device_to_torch, shape_tuple
 
 
 class CCLManager:
@@ -29,6 +29,8 @@ class CCLManager:
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        # The mesh shape is fixed; reading it from the device costs a nanobind round trip per call.
+        self._mesh_axis_sizes = tuple(mesh_device.shape)
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -162,8 +164,9 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters
+        shape = shape_tuple(shape)
         dim = self.get_dim(dim, shape)
-        cache_key = (tuple(shape), dim, mesh_axis)
+        cache_key = (shape, dim, mesh_axis)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -173,7 +176,7 @@ class CCLManager:
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
-            output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
+            output_buffer_shape[dim] //= self._mesh_axis_sizes[mesh_axis]
 
             # The op's tiled intermediate is input-shaped, except on Linear topology where it holds
             # two slices stacked on dim 0. Matching this exactly is required: reduce_scatter rejects
@@ -239,9 +242,10 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
+        shape = shape_tuple(shape)
         dim = self.get_dim(dim, shape)
         output_buffer_shape = list(shape)
-        output_buffer_shape[dim] = capacity or shape[dim] * self.mesh_device.shape[mesh_axis]
+        output_buffer_shape[dim] = capacity or shape[dim] * self._mesh_axis_sizes[mesh_axis]
         cache_key = ("ag", tuple(output_buffer_shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
@@ -893,27 +897,28 @@ class CCLManager:
         num_workers_per_link: int | None = None,
     ) -> ttnn.Tensor:
         """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count)."""
-        if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
+        if mesh_axis is None or self._mesh_axis_sizes[mesh_axis] == 1:
             return tensor
 
-        rank = len(tensor.shape)
+        shape = shape_tuple(tensor.shape)
+        rank = len(shape)
         if dim < 0:
             dim += rank
 
         # all_gather_async currently supports tensors of rank 4 only
         if rank < 4:
-            shape = [1] * (4 - rank) + list(tensor.shape)
-            tensor = ttnn.reshape(tensor, shape)
+            shape = (1,) * (4 - rank) + shape
+            tensor = ttnn.reshape(tensor, list(shape))
             dim += 4 - rank
 
-        params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
+        params = self.get_ag_hyperparams(shape) if use_hyperparams else {}
         if num_workers_per_link is not None:
             params["num_workers_per_link"] = num_workers_per_link
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,
             persistent_output_buffer=(
-                self.get_ag_ping_pong_buffer(tensor.shape, dim, mesh_axis, dtype=tensor.get_dtype())
+                self.get_ag_ping_pong_buffer(shape, dim, mesh_axis, dtype=tensor.get_dtype())
                 if use_persistent_buffer
                 else None
             ),
@@ -927,8 +932,7 @@ class CCLManager:
         )
 
         if rank < 4:
-            shape = list(tensor.shape)[4 - rank :]
-            tensor = ttnn.reshape(tensor, shape)
+            tensor = ttnn.reshape(tensor, list(shape_tuple(tensor.shape)[4 - rank :]))
 
         return tensor
 
@@ -946,22 +950,23 @@ class CCLManager:
         mesh_axis: int | None,
         use_persistent_buffer: bool = False,
     ) -> ttnn.Tensor:
-        if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
+        if mesh_axis is None or self._mesh_axis_sizes[mesh_axis] == 1:
             return tensor
 
-        rank = len(tensor.shape)
+        shape = shape_tuple(tensor.shape)
+        rank = len(shape)
         if dim < 0:
             dim += rank
 
         if rank < 4:
-            shape = [1] * (4 - rank) + list(tensor.shape)
-            tensor = ttnn.reshape(tensor, shape)
+            shape = (1,) * (4 - rank) + shape
+            tensor = ttnn.reshape(tensor, list(shape))
             dim += 4 - rank
 
         tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
             persistent_output_buffers=(
-                self.get_rs_ping_pong_buffer(tensor.shape, dim, mesh_axis) if use_persistent_buffer else None
+                self.get_rs_ping_pong_buffer(shape, dim, mesh_axis) if use_persistent_buffer else None
             ),
             barrier_semaphore=self.get_barrier_semaphore(mesh_axis) if not use_persistent_buffer else None,
             dim=dim,
@@ -970,12 +975,11 @@ class CCLManager:
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
             topology=self.topology,
             cluster_axis=mesh_axis,
-            **self.get_rs_hyperparams(tensor.shape),
+            **self.get_rs_hyperparams(shape),
         )
 
         if rank < 4:
-            shape = list(tensor.shape)[4 - rank :]
-            tensor = ttnn.reshape(tensor, shape)
+            tensor = ttnn.reshape(tensor, list(shape_tuple(tensor.shape)[4 - rank :]))
 
         return tensor
 

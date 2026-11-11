@@ -20,6 +20,24 @@ if TYPE_CHECKING:
     from types import EllipsisType
 
 
+def shape_tuple(shape: ttnn.Shape | tuple[int, ...]) -> tuple[int, ...]:
+    """The dimensions of a `ttnn.Shape` as a tuple; a tuple is returned as is.
+
+    `ttnn.Shape` has no `__iter__`, so `tuple(shape)`, `list(shape)` and unpacking fall back to the
+    sequence protocol and its terminating `IndexError`, about 2.5 us per call. Indexing costs a
+    fraction of that, which matters on the eager path where this runs several times per block.
+    `ttnn.Shape` also hashes by identity, so it cannot be used in a cache key; the tuple can.
+    """
+    if isinstance(shape, tuple):
+        return shape
+    n = len(shape)
+    if n == 4:
+        return (shape[0], shape[1], shape[2], shape[3])
+    if n == 3:
+        return (shape[0], shape[1], shape[2])
+    return tuple([shape[i] for i in range(n)])
+
+
 def prepare_for_fused_swiglu(
     tensor: torch.Tensor, ndev: int, tile_width: int = 32, *, gate_is_first: bool = False
 ) -> torch.Tensor:
