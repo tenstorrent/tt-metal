@@ -101,9 +101,10 @@ def inputs(config: LlamaConfig, seed: int):
 def padding_mask(padded_vocab: int, vocab: int, tp_axis: int):
     """``-1e4`` on the LM head's padded vocab columns and ``0`` elsewhere, sharded over the TP axis like the logits.
     Added to the logits it takes the padded entries out of the vocab-parallel loss's softmax: that loss normalizes
-    over every local column (it is given no vocab size), so a TP world whose vocab is padded would otherwise train
-    a different loss than a world whose LM head output is sliced to the logical vocab, and their steps could never
-    be compared. (With a vocab of 130 and TP 2 the padding is 62 of 192 columns.)"""
+    over every local column (it is given no vocab size, issue #64714), so a TP world whose vocab is padded would
+    otherwise train a different loss than a world whose LM head output is sliced to the logical vocab, and their
+    steps could never be compared. (With a vocab of 130 and TP 2 the padding is 62 of 192 columns.) Once #64714 is
+    fixed the loss leaves the padding out itself, and this mask and its use in ``loss_of`` can go."""
     mesh = ttml.mesh()
     shape = tuple(mesh.shape)
     columns = np.where(np.arange(padded_vocab) < vocab, 0.0, -1e4).astype(np.float32)

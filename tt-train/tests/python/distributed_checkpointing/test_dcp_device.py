@@ -13,6 +13,7 @@ device of its own.
 groups must not interleave: the TP tests come first, the FSDP test last.
 """
 
+import numpy as np
 import pytest
 import torch
 import ttnn
@@ -20,11 +21,12 @@ from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
-from ttml.modules import AbstractModuleBase, LinearLayer
+from ttml.fsdp import _ShardedState
+from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
-DIM = 64
+DIM = 64  # tile-aligned per device after a 2-way split (32 rows / cols per shard)
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
@@ -180,6 +182,143 @@ def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_pa
     assert dcp.is_complete(path)
 
 
+class _LoraQKV(AbstractModuleBase):
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        from ttml.modules import ColumnParallelLinear
+        from ttml.modules.lora import LoraColumnParallelLinear, LoraConfig
+
+        base = ColumnParallelLinear(dim, 2 * dim, has_bias=False, fused_segments=(dim, dim // 2, dim // 2))
+        self.qkv_linear = LoraColumnParallelLinear(base, LoraConfig(rank=8))
+
+    def forward(self, x):
+        return self.qkv_linear(x)
+
+
+def test_lora_on_a_fused_layer_declares_the_rows_it_adds_to(tp_mesh, expect_error):
+    from ttml.distributed_checkpointing._layouts import fused_segments
+    from ttml.distributed_checkpointing._state_dict import collect_model
+    from ttml.modules import ColumnParallelLinear
+
+    infos = {lt.key.rsplit("/", 1)[-1]: lt.info for lt in collect_model(_LoraQKV(DIM))}
+    segments = (DIM, DIM // 2, DIM // 2)
+    assert infos["weight"].transform == fused_segments(2, segments, 2)
+    assert infos["lora_B"].transform == fused_segments(2, segments, 2), "lora_B follows the base's per-shard rows"
+    # A segment that does not split evenly over the TP shards is refused when the layer is built, not at the first save.
+    with expect_error(ValueError, "must each divide"):
+        ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(63, 33))
+
+
+def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_path, monkeypatch, expect_error):
+    import os
+
+    from ttml.distributed_checkpointing import _save
+
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    with expect_error(dcp.CheckpointError, r"header at /step: a int64 has no JSON form"):
+        dcp.save(str(tmp_path / "bad_header"), model=model, optimizer=opt, header={"step": np.int64(3)})
+    assert os.listdir(tmp_path) == [], "refused before any staging directory existed"
+
+    # A data file that cannot be created mid-way: the save fails, and every descriptor it opened is closed.
+    open_fds = len(os.listdir("/proc/self/fd"))
+    real_create = _save.create_file
+    calls = []
+
+    def failing_create(path, header, data_bytes):
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError("simulated EDQUOT")
+        return real_create(path, header, data_bytes)
+
+    monkeypatch.setattr(_save, "create_file", failing_create)
+    with expect_error(OSError, "simulated EDQUOT"):
+        dcp.save(str(tmp_path / "quota"), model=model, optimizer=opt)
+    monkeypatch.setattr(_save, "create_file", real_create)
+    assert len(os.listdir("/proc/self/fd")) == open_fds
+    assert os.listdir(tmp_path) == [], "the staging directory is removed"
+
+
+def test_a_truncated_data_file_is_refused_before_anything_is_placed(tp_mesh, tmp_path, expect_error):
+    import glob
+    import os
+
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    path = str(tmp_path / dcp.step_dir_name(1))
+    dcp.save(path, model=model, optimizer=opt)
+    victim = sorted(glob.glob(os.path.join(path, "data", "*.safetensors")))[0]
+    os.truncate(victim, os.path.getsize(victim) - 1)
+
+    model2, params2, opt2 = fresh_tp(DIM)
+    before = _model_shards(params2)
+    with expect_error(dcp.IncompleteCheckpoint, "truncated or corrupt"):
+        dcp.load(path, model=model2, optimizer=opt2)
+    _assert_same_shards(_model_shards(params2), before)
+
+
+class _OddRows(AbstractModuleBase):
+    """One ``[1, 1, 96, DIM]`` weight, split on dim 2 over the TP axis or replicated. Split over two devices, each
+    holds 48 rows: a tile and a half, so every shard ends inside a tile."""
+
+    def __init__(self, sharded: bool, seed: int) -> None:
+        super().__init__()
+        rows = np.random.default_rng(seed).standard_normal((1, 1, 96, DIM), dtype=np.float32)
+        mapper = ttml.mesh().axis_mapper("tp", tdim=2) if sharded else None
+        self.weight = Parameter(ttml.autograd.Tensor.from_numpy(rows, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper))
+
+    def forward(self, x):
+        return x
+
+
+def test_shards_that_end_inside_a_tile_round_trip_and_reshard(tp_mesh, tmp_path):
+    sharded = _OddRows(sharded=True, seed=0)
+    saved = _model_shards(sharded.parameters())
+    (pieces,) = saved.values()
+    assert [p.shape[2] for p in pieces] == [48, 48], "precondition: a tile and a half per device"
+    path = str(tmp_path / "sharded")
+    dcp.save(path, model=sharded)
+
+    same = _OddRows(sharded=True, seed=1)
+    _assert_some_differ(_model_shards(same.parameters()), saved)
+    assert dcp.load(path, model=same).fast_path_keys, "each device reads back its own chunk"
+    _assert_same_shards(_model_shards(same.parameters()), saved)
+
+    # Onto a replicated weight: every device gets all 96 rows, put back together from the two 48-row chunks.
+    replicated = _OddRows(sharded=False, seed=2)
+    assert not dcp.load(path, model=replicated).fast_path_keys
+    (whole,) = _model_shards(replicated.parameters()).values()
+    assert all(torch.equal(w, torch.cat(pieces, dim=2)) for w in whole)
+
+    # And back: the replicated weight's checkpoint cut into 48-row shards.
+    path = str(tmp_path / "replicated")
+    dcp.save(path, model=replicated)
+    resharded = _OddRows(sharded=True, seed=3)
+    assert not dcp.load(path, model=resharded).fast_path_keys
+    _assert_same_shards(_model_shards(resharded.parameters()), saved)
+
+
+def _cpp_llama():
+    """The C++ tensor-parallel Llama: its fused kv_linear cannot declare its layout from Python."""
+    cfg = ttml.models.llama.CppLlamaConfig()
+    cfg.num_heads, cfg.num_groups, cfg.embedding_dim, cfg.num_blocks = 2, 2, DIM, 1
+    cfg.vocab_size, cfg.max_sequence_length = DIM, 32
+    return ttml.models.distributed.llama.create_llama_model(cfg)
+
+
+def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_size_works(tp_mesh, tmp_path):
+    model = _cpp_llama()
+    saved = _model_shards(model.parameters())
+    path = str(tmp_path / "ckpt")
+    with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
+        dcp.save(path, model=model)
+    fresh = _cpp_llama()
+    _assert_some_differ(_model_shards(fresh.parameters()), saved)
+    with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
+        dcp.load(path, model=fresh)
+    _assert_same_shards(_model_shards(fresh.parameters()), saved)
+
+
 def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
@@ -188,9 +327,9 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
     train_step(model, opt, DIM)
     before = _model_shards(params)
     before_state, before_scalars = _state(opt)
-    path = str(tmp_path / dcp.step_dir_name(5))
+    path = str(tmp_path / dcp.step_dir_name(1))
 
-    dcp.save(path, model=model, optimizer=opt, header={"step": 5})
+    dcp.save(path, model=model, optimizer=opt, header={"step": 1})
 
     model2 = _Stack(DIM)
     ttml.fsdp.fully_shard(model2)
@@ -198,7 +337,7 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
     opt2 = make_adamw(params2)
     _assert_some_differ(_model_shards(params2), before)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
-    assert loaded.header == {"step": 5} and loaded.fast_path_keys
+    assert loaded.header == {"step": 1} and loaded.fast_path_keys
     _assert_same_shards(_model_shards(params2), before)
     _assert_same_shards(_state(opt2)[0], before_state)
     assert _state(opt2)[1] == before_scalars
@@ -217,14 +356,10 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
     params3 = model3.parameters()
     opt3 = make_adamw(params3)
     train_step(model3, opt3, DIM)
-    import numpy as np
-
     x = ttml.autograd.Tensor.from_numpy(
         np.zeros((1, 1, DIM, DIM), dtype=np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
     model3(x)  # leaves the module UNSHARDED
-    from ttml.fsdp import _ShardedState
-
     assert model3._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
     with pytest.raises(dcp.FSDPStateError):  # allow-pytest.raises: the fixture matches on device error text
         dcp.save(str(tmp_path / "gathered"), model=model3, optimizer=opt3, reshard_fsdp=False)
