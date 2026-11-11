@@ -52,11 +52,14 @@ On the dense variants (31B / 12B, no MoE block) the same flags fuse the layer ta
 """
 
 
+import contextlib
+
 import torch
 
 import ttnn
 from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_reduce_scatter_rows, deferred_tp_reduce
 from models.demos.gemma4.tt.decode_matmul import flag, is_decode_rows
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
@@ -364,6 +367,7 @@ class Gemma4DecoderLayer:
         mm_attn_mask=None,
         traced_short_bucket=False,
         continuation=None,
+        seq_shard=False,
     ):
         """
         Decoder layer forward pass.
@@ -378,6 +382,9 @@ class Gemma4DecoderLayer:
             shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
             keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
             is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
+            seq_shard: GEMMA4_PREFILL_SEQ_PARALLEL (model._prefill_seq_parallel_applies): ``hidden_states`` and the
+                result are this chip's ``S / tp`` rows; the normed inputs are all-gathered over rows for attention
+                and the MLP, whose partial sums come back reduce-scattered over rows (ccl.py)
 
         Returns:
             hidden_states: [1, 1, seq_len, hidden_size] on device
@@ -392,35 +399,39 @@ class Gemma4DecoderLayer:
             if wqkv_act is not None
             else self.input_layernorm.forward(hidden_states, prefill=not is_decode)
         )
+        seq_shard = bool(seq_shard) and not is_decode
+        if seq_shard:
+            normed = ccl_allgather(normed, self.shared_mlp.mesh_config, self.shared_mlp.ccl_manager, dim=2)
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
             attn_in = normed
-        attn_output = self.self_attn(
-            attn_in,
-            rope_mats=rope_mats,
-            position_idx=position_idx,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            is_decode=is_decode,
-            token_index=token_index,
-            shared_kv=shared_kv,
-            keep_kv=keep_kv,
-            is_kv_shared=is_kv_shared,
-            position_idx_cache=position_idx_cache,
-            batch_size=batch_size,
-            user_id=user_id,
-            valid_seq_len=valid_seq_len,
-            sequential_kv_write=sequential_kv_write,
-            rope_presliced=rope_presliced,
-            rope_prepared=rope_prepared,
-            packed=packed,
-            chunk_start_idx=chunk_start_idx,
-            chunk_page_table=chunk_page_table,
-            mm_attn_mask=mm_attn_mask,
-            traced_short_bucket=traced_short_bucket,
-            continuation=continuation,
-        )
+        with deferred_tp_reduce() if seq_shard else contextlib.nullcontext():
+            attn_output = self.self_attn(
+                attn_in,
+                rope_mats=rope_mats,
+                position_idx=position_idx,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                is_decode=is_decode,
+                token_index=token_index,
+                shared_kv=shared_kv,
+                keep_kv=keep_kv,
+                is_kv_shared=is_kv_shared,
+                position_idx_cache=position_idx_cache,
+                batch_size=batch_size,
+                user_id=user_id,
+                valid_seq_len=valid_seq_len,
+                sequential_kv_write=sequential_kv_write,
+                rope_presliced=rope_presliced,
+                rope_prepared=rope_prepared,
+                packed=packed,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+                mm_attn_mask=mm_attn_mask,
+                traced_short_bucket=traced_short_bucket,
+                continuation=continuation,
+            )
 
         if (
             not isinstance(attn_output, torch.Tensor)
@@ -442,6 +453,10 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
+            if seq_shard:
+                attn_output = ccl_reduce_scatter_rows(
+                    attn_output, self.shared_mlp.mesh_config, self.shared_mlp.ccl_manager
+                )
             attn_output = self.post_attention_layernorm.forward(attn_output, prefill=not is_decode)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
@@ -461,8 +476,15 @@ class Gemma4DecoderLayer:
             if gate_up_act is not None
             else self.pre_feedforward_layernorm.forward(hidden_states, prefill=not is_decode)
         )
-        mlp_output = self.shared_mlp(normed, prefill=not is_decode)
-        normed.deallocate(True)
+        if seq_shard:
+            normed = ccl_allgather(normed, self.shared_mlp.mesh_config, self.shared_mlp.ccl_manager, dim=2)
+            with deferred_tp_reduce():
+                mlp_output = self.shared_mlp(normed, prefill=True)
+            normed.deallocate(True)
+            mlp_output = ccl_reduce_scatter_rows(mlp_output, self.shared_mlp.mesh_config, self.shared_mlp.ccl_manager)
+        else:
+            mlp_output = self.shared_mlp(normed, prefill=not is_decode)
+            normed.deallocate(True)
 
         if self.enable_moe_block:
             # post_feedforward_layernorm_1 on MLP output

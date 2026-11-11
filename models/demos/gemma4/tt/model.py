@@ -1364,6 +1364,19 @@ class Gemma4Model:
             ):
                 continuation = candidate
 
+        # GEMMA4_PREFILL_SEQ_PARALLEL: the layers take and return this chip's S / tp rows (ccl.py)
+        seq_shard = self._prefill_seq_parallel_applies(hidden_states, is_decode, batch_size)
+        if seq_shard:
+            if not getattr(self, "_g4_seq_parallel_logged", False):
+                self._g4_seq_parallel_logged = True
+                logger.info(
+                    f"GEMMA4_PREFILL_SEQ_PARALLEL: prefill rows sharded over tp={self.mesh_config.tp} "
+                    f"({int(hidden_states.shape[-2])} rows)"
+                )
+            hidden_states = ttnn.mesh_partition(
+                hidden_states, dim=2, cluster_axis=self.mesh_config.tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
         # copy-mode dFlash taps index buffers per forward
         self._dflash_tap_idx = 0
         for i, layer in enumerate(self.layers):
@@ -1491,6 +1504,7 @@ class Gemma4Model:
                 mm_attn_mask=mm_attn_masks,
                 traced_short_bucket=traced_short_bucket,
                 continuation=continuation.for_layer(i) if continuation is not None else None,
+                seq_shard=seq_shard,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1557,6 +1571,11 @@ class Gemma4Model:
         ):
             # Intermediate generator chunk: do not flush (last chunk owns the ring).
             return None
+
+        if seq_shard:  # back to the replicated rows the final norm / last-token tile / lm_head expect
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            hidden_states = ccl_allgather(hidden_states, self.mesh_config, self.ccl_manager, dim=2)
 
         # Final norm (must run before batched early-return). Generator then
         # defers lm_head per slot via ``process_logits_after_prefill_trace``,
@@ -2601,6 +2620,26 @@ class Gemma4Model:
         tt_embeds = self._reshape_prefill_embeds(tt_embeds, seq_len)
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
+
+    def _prefill_seq_parallel_applies(self, hidden_states, is_decode, batch_size) -> bool:
+        """GEMMA4_PREFILL_SEQ_PARALLEL=1 on an eager single-user dense prefill over a TP axis whose rows split into
+        whole tiles per chip (S % (32 tp) == 0). Excluded: decode, batched prefill, the prefill trace, fractured /
+        lane-sharded meshes, MoE layers, per-layer inputs and dFlash taps (they read the full residual)."""
+        from models.demos.gemma4.tt.ccl import prefill_seq_parallel_enabled
+
+        if is_decode or batch_size != 1 or not prefill_seq_parallel_enabled():
+            return False
+        mc = self.mesh_config
+        if mc is None or int(getattr(mc, "tp", 1) or 1) <= 1:
+            return False
+        if getattr(mc, "weight_fracture", False) or getattr(mc, "lane_sharded", False):
+            return False
+        if getattr(self, "_prefill_trace_mode", False) or self._dflash_tap_layers is not None:
+            return False
+        if any(layer.enable_moe_block or layer.hidden_size_per_layer_input for layer in self.layers):
+            return False
+        shape = [int(s) for s in hidden_states.shape]
+        return len(shape) == 4 and shape[0] == 1 and shape[1] == 1 and shape[2] % (32 * int(mc.tp)) == 0
 
     def ttnn_prefill_forward(
         self,

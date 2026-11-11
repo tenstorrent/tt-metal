@@ -474,6 +474,27 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     )
 
 
+def prefill_divisor_slab(m, slab):
+    """GEMMA4_PREFILL_DIVISOR_SLAB=1 (opt-in): when the L1 slab does not divide ``m`` (a 4096-row chunk against the
+    31B's 2240-row fp32 slab ran 2240 + 1024 + 832 rows: three matmuls, three slices and a concat per projection,
+    ~96 ms of the 813 ms device time of a 4K chunk on a Galaxy row), the largest tile multiple <= ``slab`` that
+    divides ``m`` and is at least half the slab (2048 for 4096 / 8192), so the batch-reshape path runs one matmul
+    with no slice / concat; per_core_M never grows (fewer rows per slab), so the CBs still fit. Else ``slab``."""
+    if m <= slab or m % slab == 0:
+        return slab
+    from models.demos.gemma4.tt.mesh_orientation import decode_flag  # env when set, else the build profile
+
+    if decode_flag("GEMMA4_PREFILL_DIVISOR_SLAB") != "1":
+        return slab
+    for tiles in range(slab // TILE_SIZE, 0, -1):
+        rows = tiles * TILE_SIZE
+        if 2 * rows < slab:
+            break
+        if m % rows == 0:
+            return rows
+    return slab
+
+
 def prefill_row_chunks(m, slab=None, remainder=None):
     """Row ranges of a prefill matmul whose M is not a multiple of the slab: full slabs first, then the leftover in
     chunks of at most ``remainder`` rows (the pre-slab configs; see ``__call__``)."""
@@ -758,7 +779,7 @@ class DramShardedLinear:
             self._l1_dumped = True  # diagnostics: the L1 residents a program's CBs must stay below
             ttnn.dump_device_memory_state(x_work.device(), f"prefill_matmul_k{self.k}_n{self.n}_M{M}")
         fp32 = fp32_dest_acc(compute_kernel_config)
-        slab = self._slab_rows_by_acc[fp32]
+        slab = prefill_divisor_slab(M, self._slab_rows_by_acc[fp32])
         if M <= slab:
             pc = self._prefill_pc(M, fp32_acc=fp32)
             out = ttnn.linear(

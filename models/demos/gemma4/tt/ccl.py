@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import contextvars
 import os
 
 from loguru import logger
@@ -607,6 +609,9 @@ def ccl_allreduce(
     """
     if mesh_config is None or (axis is None and mesh_config.tp <= 1):
         return tensor
+    if axis is None and _DEFER_TP_REDUCE.get():
+        # sequence-parallel prefill: the caller reduce-scatters the partial sums over rows itself
+        return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis if axis is None else axis
@@ -833,6 +838,77 @@ def ccl_lane_scatter_rows(tensor, mesh_config, memory_config=None, ccl_manager=N
     reduced = sync_all_reduce(scattered, mesh_config.tp_axis, memory_config, ccl_manager)
     scattered.deallocate(True)
     return reduced
+
+
+# GEMMA4_PREFILL_SEQ_PARALLEL=1 (opt-in): a dense single-user prefill keeps the residual stream row-sharded over the
+# TP axis (each chip holds S / tp rows). The row-parallel o_proj / down_proj partial sums are reduce-scattered over
+# rows instead of all-reduced, the norms and residual adds between them run on the chip's own rows only, and the
+# next normed input is all-gathered over rows: the same reduce-scatter + all-gather bytes as the all-reduce composite,
+# 1 / tp of the norm and add work (every chip normed all S replicated rows before). Model side: model.py
+# (_prefill_seq_parallel_applies, mesh_partition before the layers, the row all-gather after) and layer.py.
+PREFILL_SEQ_PARALLEL_ENV = "GEMMA4_PREFILL_SEQ_PARALLEL"
+_DEFER_TP_REDUCE = contextvars.ContextVar("gemma4_defer_tp_reduce", default=False)
+
+
+def prefill_seq_parallel_enabled() -> bool:
+    """``GEMMA4_PREFILL_SEQ_PARALLEL``: the row-sharded residual for dense single-user prefill (the env when set, else
+    the build profile: on for the 31B (1,8) line, mesh_orientation.GALAXY_LINE_PAIR_ON; off elsewhere)."""
+    from models.demos.gemma4.tt.mesh_orientation import decode_flag
+
+    return decode_flag(PREFILL_SEQ_PARALLEL_ENV) == "1"
+
+
+@contextlib.contextmanager
+def deferred_tp_reduce():
+    """Inside this block ``ccl_allreduce`` on the TP axis returns its input unreduced (the caller owns the reduction:
+    ``ccl_reduce_scatter_rows``)."""
+    token = _DEFER_TP_REDUCE.set(True)
+    try:
+        yield
+    finally:
+        _DEFER_TP_REDUCE.reset(token)
+
+
+def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Sum the TP partials and keep this chip's block of rows: ``[1, 1, S, W]`` partial -> ``[1, 1, S / tp, W]``.
+
+    Default: reduce-scatter over COLUMNS (dim 3, the all-reduce composite's own reduction, so every sum is bitwise the
+    replicated path's) and an all-to-all that trades column blocks for row blocks (each chip sends (tp - 1) / tp of
+    an S x W / tp shard, 1 / tp of the all-gather's bytes). ``GEMMA4_PREFILL_SEQ_PARALLEL_RS=rows``: one
+    reduce-scatter over rows instead, measured 2026-11-11 on a Galaxy row at 1.05x the all-reduce's relative error
+    (4.59e-3 vs 4.36e-3 against an fp64 sum of bf16 partials) and -0.014 top-1 on the 31B / 12B 2K prose gates."""
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    l1_small = ccl_semaphores_in_l1_small(tensor.device())
+    if os.environ.get("GEMMA4_PREFILL_SEQ_PARALLEL_RS", "a2a") == "rows":
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=2,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=memory_config,
+            use_l1_small_for_semaphores=l1_small,
+        )
+        tensor.deallocate(True)
+        return scattered
+    cols = ttnn.reduce_scatter(
+        tensor,
+        dim=3,
+        cluster_axis=mesh_config.tp_axis,
+        memory_config=memory_config,
+        use_l1_small_for_semaphores=l1_small,
+    )
+    tensor.deallocate(True)
+    rows = ttnn.experimental.all_to_all_async_generic(
+        cols,
+        in_dim=3,  # the op grows in_dim by tp and splits out_dim by tp: [S, W / tp] -> [S / tp, W]
+        out_dim=2,
+        persistent_output_buffer=None,
+        num_links=ccl_manager.num_links,
+        memory_config=memory_config,
+        topology=ccl_manager.topology,
+        cluster_axis=mesh_config.tp_axis,
+    )
+    cols.deallocate(True)
+    return rows
 
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
