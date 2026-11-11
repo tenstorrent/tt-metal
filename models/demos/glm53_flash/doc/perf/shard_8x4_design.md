@@ -213,18 +213,21 @@ lane skew: shard_plan.rs1_early_gates); rev 67 alone at 4 K x 16 distinct had le
 which was the routed-expert scratch race (section 12): on the fixed stack RS1_EARLY and AGB give the knob-off digest in
 every one of 3 in-process runs at 4 K x 16.
 
-## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 86b8fac2888 defaults)
+## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 
 | users at 1 M each | 1 | 2 | 4 | 8 | 16 |
 |---|---|---|---|---|---|
-| decode step | 18.9 ms | 19.9 | 24.3 | 30.6 | 44.5 |
-| tok/s per user | 52.8 | 50.2 | 41.1 | 32.7 | 22.5 |
-| TTFT (all users back to back) | 345 s | 690 s | 1378 s | 2779 s | 5520 s |
+| decode step | 18.9 ms | 19.9 | 23.6 | 29.4 | 42.1 |
+| tok/s per user | 52.8 | 50.2 | 42.4 | 34.1 | 23.8 |
+| TTFT (all users back to back) | 345 s | 690 s | 1378 s | 2779 s | 5518 s |
+
+1 and 2 users ran on 86b8fac2888 (before RS1_EARLY + AGB, whose savings scale with t); 4 / 8 / 16 users there were 24.3 /
+30.6 / 44.5 ms, with user 0's ids and text identical to these rows.
 
 Decode is timed inside the e2e's one generate_batch call (`Glm53Generator.last_batch_timing`, 86b8fac2888). The
 2026-11-10 table (19.1 / 20.8 / 25.4 / 36.1 / 46.2 ms) subtracted a separately timed prefill, so the difference of two
 1 M prefills landed in every step: two such runs at 1 M x 8 read 36.1 and 26.8 ms around the one-call 30.6 ms. Of the
-1 M x 16 step, ~7.7 ms is context (4 K x 16: 36.8 ms).
+1 M x 16 step, ~7.8 ms is context (4 K x 16: 34.3 ms).
 
 16 x 1 M is resident on one 8x4. The MoE x-row coalesce (`GLM53_MKX_XROWS_COAL`, default) adds -2.8 ms at 4 K x 16
 (40.8 -> 38.0 ms) and -0.8 ms at 32 K x 4 (ids identical).
