@@ -62,40 +62,27 @@ not on this RC SHA. **The binding check is the RC's own flag-on length gate: RC 
 - Gates: flag-off md5 = r13; rowind (tests/test_mk_row_independence.py, k = 1, 2, 5, 7); length / accuracy / OR replay
   with the engine on.
 
-## Engine config (in code: engine/program.py ENGINE_ENV; the vLLM runtime spec sets only QWEN36_R16_* knobs)
-Applied by build_program around setup_bench AND the lazy per-device builds (DM opt levels are read there). Override per key
-with QWEN36_R16_MK_ENV="K=V ..." or QWEN36_R16_MK_ENV_FILE (debug only; the RC uses the code defaults).
+## RC engine env (spec owner; source of truth in code = ENGINE_ENV in engine/program.py; the two must match)
+vLLM process env (in addition to the table above): QWEN36_R16_MEGAKERNEL=1, QWEN36_R16_MK_BUCKETS=8, QWEN36_R16_MK_PAD_MIN=1,
+QWEN36_R16_MK_SEMPOOL=1 (NEW; code default flips after the multi-build TF e2e), QWEN36_R16_MK_L1POOL default (1).
+Also code defaults: QWEN36_R16_MK_KV_INJECT=1, QWEN36_R16_MK_KVA=1, QWEN36_R16_MK_W_ATTN=1, QWEN36_R16_MK_MAX_CTX = the engine's MKA_CTX.
 
-| kind | value |
-|---|---|
-| MK_DEFINES | `MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MKA_RQBAL_HOST=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GIN_PERCORE=1,MK_GAMMA_CONS=1` |
-| env `QWEN36_R16_MK_ENV` | `MK_DEFINES=...` |
-| env `MK_SGDN_US` | `64` |
-| env `MK_SAR_US` | `18` |
-| env `MKA_SWO_US` | `10` |
-| env `MKA_CTX` | `262144` |
-| env `MKA_KVDT` | `bfp8` |
-| env `MKA_NBB` | `1` |
-| env `MKA_BUDGET` | `16384` |
-| env `MKA_EXT` | `1` |
-| env `MK_MIXN` | `1` |
-| env `MKA_GDN24` | `1` |
-| env `MKA_GDN_WAIT` | `1` |
-| env `MKA_GDNOUT` | `1` |
-| env `MKA_UPAR` | `1` |
-| env `MKA_KVA` | `1` |
-| env `E1_HOLD_SKIP` | `1` |
-| env `MKA_GDN_CHECK` | `0` |
-| env `E1_GO_DBG` | `0` |
-| env `MKA_KVPROD` | `1` |
-| env `MKA_NKVH` | `1` |
-| env `MKA_KVH` | `0` |
-| env `MKA_BS` | `64` |
-| env `MK_STREAM_DM_OS` | `1` |
-| env `MK_AR_RSTD` | `1` |
-| env `MK_AR_RSTD_RED` | `gdn` |
-| set per build | `FM_NL` (pass layers), `MKA_NU` (4), `V12_R` (32), `MK_AMASK` (from the layer types), `MKA_ATT0=0`, `MKA_KVA_NU` (n_users), KV injection: `MKA_KVPROD=1 MKA_NKVH MKA_KVH=0 MKA_BS MKA_KVDT`, `MKA_REPLAY_L1 / MKA_ATTN_L1 / MKA_QKG_ADDR`, `MKA_AUX_* / MKA_ROPE_* / MKA_PT_*` |
+MK_DEFINES: MKA_GUPRE=1, MK_DNPIPE=1, MK_FLAG_FLUSH=1, MKA_MIXTRID=1, MKA_RQKV=1, MKA_PQGDN=1, MKA_PQDELAY=27000, MKA_RQNR=1,
+MKA_RMASK=1, MKA_QSK=1, MK_V12=1, MK_REAL_AR=1, MK_OWNER_RESID=0, MKA_RWO=1, MK_REAL_AAR=1, MK_REAL_GAR=1, MKA_RQPOS=1, MKA_RQBAL=1,
+MKA_RQBAL_HOST=1, MK_V12_NOCBAL=60, MK_V12_NOCBAL_ATT=1, MK_GDN_INPROJ=1, MK_GIN_PERCORE=1, MK_GAMMA_CONS=1.
 
-vLLM-side knobs (code defaults = RC): `QWEN36_R16_MEGAKERNEL=1`, `QWEN36_R16_MK_BUCKETS=8`, `QWEN36_R16_MK_PAD_MIN=1`,
-`QWEN36_R16_MK_KV_INJECT=1`, `QWEN36_R16_MK_KVA=1`, `QWEN36_R16_MK_W_ATTN=1`, `QWEN36_R16_MK_L1POOL=1`, `QWEN36_R16_MK_SEMPOOL` (0 until
-verified), `QWEN36_R16_MK_MAX_CTX` (default the engine's MKA_CTX; contexts above it replay the op-by-op split fallback).
+Engine env: MKA_GDN24=1, MKA_GDN_WAIT=1, MKA_GDNOUT=1, MKA_UPAR=1, MKA_KVA=1, MKA_KVPROD=1, MKA_NKVH=1, MKA_KVH=0, MKA_BS=64,
+MKA_EXT=1, MKA_KVDT=bfp8, MKA_NBB=1, MKA_BUDGET=16384, MKA_CTX=262144, MK_MIXN=1, E1_HOLD_SKIP=1, MK_AR_RSTD=1,
+MK_AR_RSTD_RED=gdn, MKA_W_ORD=1, MK_STREAM_DM_OS=1 (must reach os.environ at _ks time: build_program applies the env around
+setup_bench and the lazy per-device builds), MKA_GDN_CHECK=0, E1_GO_DBG=0, MKA_ATT0=0 (integration builds the tables per pass).
+(ENGINE_ENV also carries the inert stall knobs MK_SGDN_US=64 / MK_SAR_US=18 / MKA_SWO_US=10.)
+
+Code defaults ON (no env): MK_V12_CB, MKA_STREAMLEAN / MKA_EXTLEAN, MKA_SCLAMP, E1_GO_RING0=hook, MK_L1P2_EXTCB / MK_L1P2_QOVXO /
+MK_L1P2_TENS / MK_L1P2_SEED (QOVXO pending the mesh identity A/B).
+
+Explicitly OFF: MK_EXT_DM_OS, MK_AR_GAMMA (GAR race), MKA_GDN_L1, MKA_OWNPAR, MKA_SVAR (0 B at the binding variant under RQBAL),
+MKA_CTADDR (parked), E1_GO_KSTREAM (noise), MKA_RQDYN (superseded by RQBAL), MK_AR_RSTD_HOST (test only),
+QWEN36_R16_VERIFY_SDPA_MULTI_CORES (dropped).
+
+Pending: MTP_SDPA_WINDOW (W) pending the OR A/B; G-b's E1_GB + E1_C_OS=p land with the G-b batch.
+If the full set overflows: drop MK_GDN_INPROJ, then GIN_PERCORE. Any drop is a spec-owner decision recorded in DESIGN.
