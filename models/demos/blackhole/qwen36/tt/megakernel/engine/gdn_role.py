@@ -20,6 +20,18 @@ os.environ.setdefault("E1_KDIR", KDIR)
 sys.path.insert(0, os.path.join(_GDN, "u1"))
 
 
+def _gb(b, coords):
+    """E1_GB=1 with MK_GDN_INPROJ: dict(gin_addr, gin_map = [(GDN core index, slot)] per in-proj tile, dbg) for build_engine."""
+    gg = getattr(b, "gb_gin", None)
+    if os.environ.get("E1_GB", "0") != "1":
+        return None
+    assert gg is not None, "E1_GB needs MK_GDN_INPROJ (G-a lands the in-proj tiles in the GDN cores' staging CB 41)"
+    ix = {(c.x, c.y): i for i, c in enumerate(coords)}
+    tl = gg["tiles"]
+    assert [t[0] for t in tl] == list(range(len(tl))), "G-a tile list not contiguous"
+    return dict(gin_addr=gg["gin_addr"], gin_map=[(ix[(x, y)], sl) for _, x, y, sl in tl], dbg=gg["dbg"])
+
+
 def gdn_role(b, coords):
     import ttnn
     import g2_role
@@ -45,7 +57,8 @@ def gdn_role(b, coords):
     attn_n = b.NL - NG
     role = g2_role.GdnRole(dev, coords, NG, B, b.sems, tgt, prod, gen, kdir=KDIR, ref=ref, attn_n=attn_n,
                            gdnout=getattr(b, "gdnout", None),   # MKA_GDNOUT: the GDN out_proj via the wo unit
-                           gin_k=getattr(b, "gin_k", None))     # MK_GIN_PERCORE: per-core in_ready targets
+                           gin_k=getattr(b, "gin_k", None),     # MK_GIN_PERCORE: per-core in_ready targets
+                           gb=_gb(b, coords))   # E1_GB: the type-10 prefix in the role, from G-a's staging tiles
     # MKA_GDN_HOLD (bench): HOLD users of every step, e.g. "0,1,3,4,6" = 3 live users (2, 5, 7) -- the padded-row shape
     hold = [int(x) for x in os.environ.get("MKA_GDN_HOLD", "").split(",") if x.isdigit() and int(x) < B]
     role.prepare(hold)

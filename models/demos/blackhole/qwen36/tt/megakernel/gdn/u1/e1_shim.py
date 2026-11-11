@@ -317,7 +317,7 @@ def _audit_cb_transfers(tab, layers, Kt, Vt, T, VB):
 
 
 def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
-                 out_b16=True, kdir=None, st_ring=None, attn_n=0, skip_cb_ids=(34, 35, 37, 39), gdnout=None, gin_k=None):
+                 out_b16=True, kdir=None, st_ring=None, attn_n=0, skip_cb_ids=(34, 35, 37, 39), gdnout=None, gin_k=None, gb=None):
     """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
     as build's tens). sems: {in_ready, attn_kv, vb0, vb1, out_ready} L1 addresses; out_target: (noc x, noc y) of the
     core whose out_ready gets +1 per GDN core per layer. Core i of `cores` (row-major) = head i // VB, value block i % VB.
@@ -385,6 +385,16 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     free_ids = [i for i in range(45) if i not in set(skip_cb_ids)]
     assert len(tab) <= len(free_ids), (len(tab), len(free_ids))
     ids = {n: (free_ids[i], f) for i, (n, _, _, f) in enumerate(tab)}
+    # G-b (E1_GB, gb = dict(gin_addr, gin_map[, cb])): the type-10 prefix inside the role (gb_dm.hpp / gb_compute.hpp).
+    # CB ids (qin, sh, tap, p, cv, out, xs, kc, qc) above the role table / G-a 41 / gdn_out 42-44 (spec owner: 45..53)
+    GB = gb is not None
+    if GB:
+        GBC = dict(zip(("qpx", "sht", "out", "kq"),
+                       gb.get("cb", tuple(int(v) for v in os.environ.get("E1_GB_CB", "45,46,47,48").split(",")))))
+        assert not (set(GBC.values()) & ({v[0] for v in ids.values()} | {41, 42, 43, 44} | set(skip_cb_ids))), GBC
+        assert max(GBC.values()) < 50, ("spec v1.25: ids >= 50 are the AR sender's", GBC)
+        ids["kq"] = (GBC["kq"], F32)
+        ids["gbout"] = (GBC["out"], F32)
     for a, b in (list(LEAN_ALIAS.items()) if lean else []) + list(ALIAS.items()):  # LEAN first: ALIAS gsc -> ctrl_w
         if a not in ids:
             ids[a] = ids[b]
@@ -684,6 +694,45 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                       f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {len(cores)}u * (g_l + 1)); {osig_r} noc_async_atomic_barrier(); }}')
     else:
         osig_r = osig.replace("g_gdn_l", "g_l")
+    GB_R = GB_RINIT = GB_W = GB_WINIT = GB_WEND = GB_C = ""
+    if GB:
+        assert B * T == 32 and early and lean and VB == Vt and abs(l2_eps - norm_eps) < 1e-12, \
+            "E1_GB: B*T == 32, early replay, lean table (eps_l2 = eps_norm: l2 eps == norm eps), VB == Vt"
+        NC = len(cores)
+        OGB = OGK + 6   # after the PERCORE words (k, n_fwd, 2 x (x, y))
+        XWO = 2 * B * 2048; XRC = XWO + B * 1024; XWC = XRC + CTRL_B; XDP = XWC + CTRL_B; XSC = XDP + B * 256
+        XS_B = -(-(XSC + 3 * 4096) // 2048) * 2048   # + the gate page landing area (XSC + 8192)
+        NPX = 6 + XS_B // 2048   # QPX pages: QIN 0..3, P 4..5, then the raw scratch
+        HERE_ = os.path.dirname(os.path.abspath(__file__))
+        ri = {t: i for i, t in enumerate(rtens)}
+        wi = {t: i for i, t in enumerate(WRITER_TENSORS)}
+        racc = lambda t, pg: f'TensorAccessor(TensorAccessorArgs<{roff[ri[t]]}>(), crta[{CRTA0 + ri[t]}], {pg})'
+        wacc = lambda t, pg: f'TensorAccessor(TensorAccessorArgs<{woff[wi[t]]}>(), crta[{CRTA0 + wi[t]}], {pg})'
+        CRD = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
+        GB_R = (f'static uint32_t g_gb_xs, g_gb_qin;\n#include "{HERE_}/gb_dm.hpp"\n'
+                f'void gdn_in_wait() {{\n  {CRD}\n'
+                f'  const auto wa = {racc("win_a", 2048)};\n  const auto wb = {racc("win_b", 2048)};\n'
+                f'  const auto tp = {racc("taps", 2048)};\n  const auto ct = {racc("ctrl", ctrl_bytes)};\n'
+                f'  gb::reader_layer<{B}, {T}, {K}, {Ct}, {M}, {Nv}, {NC}, {Kt}>(g_ab + {OGB}, g_l, wa, wb, tp, ct, {ctrl_bytes}u, '
+                f'{("get_write_ptr(41)" if gb["gin_addr"] == "cb41" else str(int(gb["gin_addr"])) + "u")}, g_gb_qin, g_gb_xs, g_gb_xs + {XWO}u, g_gb_xs + {XRC}u, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, {GBC["kq"]}u, '
+                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n}}\n'
+                f'void gdn_gb_wait(uint32_t w) {{ (void)w; noc_semaphore_wait_min(g_ab + {OGB}, {1 + Vt + VB}u * (g_l + 1)); }}\n'
+                f'void gdn_gb_knq(uint32_t a) {{ gb::pull_knq<{Kt}>(g_ab + {OGB}, g_l, a); }}\n')
+        GB_RINIT = (f'  g_gb_qin = get_write_ptr({GBC["qpx"]}); g_gb_xs = g_gb_qin + 6u * 2048u;\n'
+                    f'  gb::reader_init(g_gb_xs + {XWO}u, {B * 1024}u, g_gb_qin + 4u * 2048u);\n')
+        _q = [dev.worker_core_from_logical_core(c) for c in cores]
+        GB_RN = 1 + Vt + VB   # rest arrivals per layer: vc + zs (Vt) + the head's gate rows (VB)
+        GB_W = (f'static uint32_t g_gb_xs;\n#include "{HERE_}/gb_dm.hpp"\n'
+                f'uint32_t gdn_gb_gd_l1() {{ return g_gb_xs + {XSC + 8192}u; }}\n'
+                f'void gdn_in_wait() {{\n  {CRD}\n'
+                f'  const auto pre = {wacc("pre_w", 4096)};\n'
+                f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}, {Kt}, {(Nv // Nk) * VB // int(os.environ.get("E1_GB_RSPLIT", "1"))}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u);\n}}\n')
+        GB_WINIT = (f'  g_gb_xs = get_write_ptr({GBC["qpx"]}) + 6u * 2048u; g_ab[{OGB} + 145] = get_read_ptr({GBC["out"]});\n'
+                    f'  gb::g_gb_coef = get_write_ptr({ids["coef"][0]});\n')
+        GB_WEND = f'  g_ab[{OGB}] = 0; g_ab[{OGB} + 1] = 0; g_ab[{OGB} + 131] = 0; g_ab[{OGB} + 132] = 0; g_ab[{OGB} + 144] = 0;\n'
+        GB_C = (f'#include "{HERE_}/gb_compute.hpp"\nstatic uint32_t g_gb_l;\n'
+                f'void gdn_gb_compute() {{ gb::compute_layer<{K}>(g_ab + {OGB}, g_gb_l, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, '
+                f'{ids["tmp"][0]}u, {GBC["out"]}u, {GBC["kq"]}u); }}\n')
     AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
     CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
     tr = os.path.join(gen_dir, "g2_reader.cpp")
@@ -692,7 +741,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'inline uint32_t gdn_rt_B() {{ return g_ab[4]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[5]; }}\n'
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '')
-        + (f'void gdn_gin_wait() {{\n  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n'
+        + (GB_R if GB else f'void gdn_gin_wait() {{\n  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n'
            + ('' if gin_fwdw else f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n') + '}\n'
            'void gdn_in_wait() { gdn_gin_wait(); }\n' if percore else
            f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n')
@@ -701,7 +750,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + ((go_local_rd[:go_local_rd.rindex("}")] + (go_r0s_done if go_ring0s else '') + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '')
         + (f'void gdn_hold_publish(uint32_t m) {{ g_ab[{OHM} + (g_l & 1)] = ((g_l + 1) << 8) | m; }}\n' if hold_skip else '')
         + ('void gdn_out_pre() {\n  if (g_l == 0) {\n' + (go_r0s if go_ring0s else go_r.replace("(L_)", "0u")) + '  }\n}\n' if go_ring0h else '') +
-        f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
+        f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n' + GB_RINIT
         + ('  gdn_cut_reset();\n' if cut_fast else '') +
         (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) and not go_ring0h else '') +
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_l = L;\n'
@@ -736,11 +785,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'void gdn_out_signal() {{ {go_inc if GO else osig} }}\n'
         + (f'void gdn_lazy_gate() {{ for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {GFL} + t, g_gdn_l + 1); }}\n' if lazy_gate else '')
         + (go_local if GO and not go_rdhook else '')
-        + ((f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")});\n'
+        + (GB_W if GB else (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")});\n'
             f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n}}\n')
            if gin_fwdw else
            f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")}); }}\n' if early else '')
-        + f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
+        + f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n' + GB_WINIT +
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_gdn_l = L;\n'
         f'    for (uint32_t t = 0; t < {nW}; ++t) crta[{CRTA0} + t] = g_ab[{OLW} + L * {nW} + t];\n'
         + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("L")});\n')
@@ -751,7 +800,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached);\n'
         f'  // attn_kv: the engine raises it twice per attention layer (start, SDPA end), {attn_n} attention layers\n'
         + (f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, {2 * attn_n});\n' if attn_n else '')
-        + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
+        + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1")) + GB_WEND
         + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdna"]}u = 0;\n  *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u = 0;\n' if GO else '')
         + (f'  g_ab[{OGO} + 2 + {GO["maxt"]} + 3] = 0; g_ab[{OGO} + 2 + {GO["maxt"]} + 4] = 0;\n' if GO and GO_RD else '')
         + (f'  for (uint32_t t = 0; t <= {len(cores)}u; ++t) g_ab[{OGO} + 2 + {GO["maxt"]} + 5 + t] = 0;\n' if GO and go_rdhook else '')
@@ -759,17 +808,21 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
     open(tc, "w").write(
+        # E1_C_OS: 1 = the whole compute TU at Os; 2 = only the unpack / pack threads (TRISC0 / TRISC2) at Os, math at O3
+        (({"1": '#pragma GCC optimize ("Os")\n', "2": '#if defined(TRISC_UNPACK) || defined(TRISC_PACK)\n#pragma GCC optimize ("Os")\n#endif\n'}
+         | {"u": '#if defined(TRISC_UNPACK)\n#pragma GCC optimize ("Os")\n#endif\n', "p": '#if defined(TRISC_PACK)\n#pragma GCC optimize ("Os")\n#endif\n'}
+         ).get(os.environ.get("E1_C_OS", "p" if gb is not None else "0"), '')) +
         f'#include "{hc}"\nvoid kernel_main();\nuint32_t gdn_rt_B();\n'
         + ('uint32_t gdn_live_mask();\n' if hold_skip else '') +
         f'#include "{kd}/compute/gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_c.hpp"\n' if GO else '') +
-        f'static volatile tt_l1_ptr uint32_t* g_ab;\nuint32_t gdn_rt_B() {{ return g_ab[{OC + 3}]; }}\n'
+        f'static volatile tt_l1_ptr uint32_t* g_ab;\nuint32_t gdn_rt_B() {{ return g_ab[{OC + 3}]; }}\n' + GB_C
         + ('static uint32_t g_gl = 0;\n'
            f'uint32_t gdn_live_mask() {{ volatile tt_l1_ptr uint32_t* w = g_ab + {OHM} + (g_gl & 1); uint32_t v; '
            'do { invalidate_l1_cache(); v = *w; } while ((v >> 8) != g_gl + 1); return v & 0xFFu; }\n' if hold_skip else '')
         + f'void kernel_main() {{\n  g_ab = {AB};\n'
         + ('  g_sp_pending = 0;\n' if sp_late else '')
-        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    ' + ('g_gl = L; ' if hold_skip else '') + f'compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    ' + ('g_gl = L; ' if hold_skip else '') + ('g_gb_l = L; ' if GB else '') + f'compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
         f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '')
         + '  // @@GDN_LAYER_BODY_END@@ (engine host splices: exactly once)\n  }\n'
         + ('  gdn_sp_drain();\n' if sp_late else '') + '}\n')
@@ -797,6 +850,20 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                                     "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
                                                     "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
     fphys = dev.worker_core_from_logical_core
+    if GB:
+        d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]) + (
+            [("GB_PULL_NOC", os.environ["E1_GB_PULL_NOC"])] if "E1_GB_PULL_NOC" in os.environ else [])
+        d_w = d_w + [("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]
+        if os.environ.get("E1_GB_GDIRECT", "1") == "1":   # gate rows straight into the head's coef slots / gate page (no DRAM)
+            d_w = d_w + [("GB_GATE_DIRECT", "1"), ("GDN_GB_GATE_DIRECT", "1"), ("GB_COEF_REP", "9")]
+        gz = os.environ.get("E1_GB_ZONES", "")   # G-b profiler zones per kernel, e.g. "rwc" / "r" (off by default: config space)
+        d_r = d_r + ([("GB_ZONES", "1")] if "r" in gz or gz == "1" else [])
+        d_w = d_w + ([("GB_ZONES", "1")] if "w" in gz or gz == "1" else [])
+        d_c = d_c + ([("GB_ZONES", "1")] if "c" in gz or gz == "1" else [])
+        d_c = d_c + [("GDN_GB", "1"), ("GB_CB_MASK", str(GBC["qpx"])), ("GB_MASK_TILE", "5"),
+                     ("GB_CV_PAGES", str(max(Kt, Vt))), ("GB_KT", str(Kt))]
+        gb_blocks, gb_info = _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gb["gin_map"],
+                                          {n: ids[n][0] for n in ("vc", "zs", "kq", "knq")}, scale)
     payloads = []
     for i, c in enumerate(cores):
         h, s = i // VB, i % VB
@@ -821,6 +888,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         pl += [0, 0]   # OHM x 2 (HOLD_SKIP live mask by layer parity; always present)
         assert len(pl) == OGK, (len(pl), OGK)
         pl += [gk_k[i], len(gk_f[i])] + [v_ for xy_ in (gk_f[i] + [(0, 0)] * 2)[:2] for v_ in xy_]   # OGK: MK_GIN_PERCORE k_c, forwards
+        if GB:
+            assert len(pl) == OGB, (len(pl), OGB)
+            pl += gb_blocks[i]
         payloads.append(pl)
     abt = argblock_tensor(dev, cores, payloads)
     ca = lambda tl: [0, 0, 0, abt.buffer_address(), 0] + tl
@@ -846,8 +916,119 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         for idx, dt, n, pg in ((CR_, wfmt, GO["wk"] * GO["maxt"] * (2 if GO_RING2 else 1), wpg), (CA_, ttnn.bfloat16, GO["wk"], 2048), (CO_, ttnn.bfloat16, GO["maxt"], 2048)):
             cbs.append(ttnn.CBDescriptor(total_size=n * pg, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(
                 buffer_index=idx, data_format=dt, page_size=pg)]))
+    if GB:   # G-b CBs (gb_dm.hpp): QIN 4 bf16 pages (fixed slots), SH 2 jobs x (K-1), TAP 2, P 2 (one-hot | L2 mask), CV, OUT 2,
+        # XS raw scratch (window sets / window-out / ctrl / decay rows / gate-tile scratch), kc / qc raw k / q (Kt fp32 each)
+        for nm, dt, n, pg in (("qpx", ttnn.bfloat16, NPX, 2048), ("sht", ttnn.bfloat16, 4 * 2, 2048), ("out", ttnn.float32, 8, 4096),
+                              ("kq", ttnn.float32, 2 * Kt, 4096)):
+            cbs.append(ttnn.CBDescriptor(total_size=n * pg, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(
+                buffer_index=GBC[nm], data_format=dt, page_size=pg)]))
+        print(f"[gb] G-b prefix in the role: CB ids {GBC}, {sum(c_.total_size for c_ in cbs[-4:]) // 1024} KB L1 per GDN core, "
+              f"payload {len(gb_blocks[0])} words at {OGB}; {gb_info}", flush=True)
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]] + ([GO["w"], GO["dbg"]] if GO else [])
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab) + (sum(c_.total_size for c_ in cbs[-3:]) if GO else 0),
                 ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
+
+
+def gin_map_engine(nts=(7,) * 5 + (6,) * 5, ncol=12):
+    """G-a's tile -> (GDN core index, staging slot) map (program.py gin_wargs): column c holds tiles first_c .. first_c + nt_c - 1;
+    K-row r lands on GDN core (c, 8 + r % 2) (role index (r % 2) * ncol + c), slot r // 2."""
+    m, t = [], 0
+    for c, nt in enumerate(nts):
+        for r in range(nt):
+            m.append(((r % 2) * ncol + c, r // 2))
+            t += 1
+    return m
+
+
+def _gb_rects(fp, idx):
+    """Consumer cores (role indices) -> <= 2 NOC0 rects [x0 | y0 << 16, x1 | y1 << 16, n] (one row, split at x gaps)."""
+    pts = sorted((fp[i].y, fp[i].x) for i in idx)
+    runs = []
+    for y, x in pts:
+        if runs and runs[-1][0] == y and runs[-1][2] + 1 == x:
+            runs[-1][2] = x
+        else:
+            runs.append([y, x, x])
+    assert len(runs) <= 2, runs
+    out = [len(runs)]
+    for y, x0, x1 in runs + [[0, 0, 0]] * (2 - len(runs)):
+        out += [x0 | (y << 16), x1 | (y << 16), (x1 - x0 + 1) if x1 or x0 or y else 0]
+    return out
+
+
+def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map, cbid, scale):
+    """G-b job tables (gb_dm.hpp payload offsets). Core i = (head h = i // VB, block s = i % VB): conv of v tile i (vc of
+    (h, s)), silu of z tile i (zs of (h, s)); cores < 2 Nk Kt also conv q / k tile i (raw, to the kn / qn slots of the
+    key head's rf value heads); cores 2 Nk Kt .. + Nv - 1 the gate tiles of head i - 2 Nk Kt. Each job tile is PUSHED by
+    the core where G-a landed it (gin_map) into the consumer's QIN page (conv j -> j, silu -> 2, gate -> 3)."""
+    import struct
+    bits = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]
+    NC, S, rf = len(cores), pre_s, Nv // Nk
+    q0, v0 = 0, 2 * Nk * Kt
+    z0 = v0 + Nv * Vt
+    ab = g.QKVZ // 32
+    assert NC == Nv * VB and VB == Vt and v0 + Nv <= NC and len(gin_map) == ab + 1, (NC, len(gin_map), ab)
+    fp = [dev.worker_core_from_logical_core(c) for c in cores]
+    xy = lambda i: fp[i].x | (fp[i].y << 16)
+    pushes = [[] for _ in range(NC)]
+    blocks, maxc = [], 0
+    # L2 roots (the fallback without the cross-core root in the step: one core per (key head, k | q), the last 2 Nk cores,
+    # 1 conv each): Kt raw tiles in, the key head's Kt normalized tiles out to its rf * VB value-head cores' knq
+    # E1_GB_RSPLIT (default 2): roots per (key head, k | q), each serving 1 / RS of the key head's consumers (the send is the
+    # long pole: 48 x 4 KB from one core took ~8.6 us); the raw tiles go to all RS roots, each computes the same l2
+    RS = int(os.environ.get("E1_GB_RSPLIT", "1"))
+    nr = 2 * Nk * RS
+    roots = {(hk, isq): [NC - nr + (2 * hk + isq) * RS + k for k in range(RS)] for hk in range(Nk) for isq in (0, 1)}
+    assert all(r >= v0 for rs in roots.values() for r in rs), roots
+    rinfo = {r: (hk, isq, k) for (hk, isq), rs in roots.items() for k, r in enumerate(rs)}
+    for i in range(NC):
+        h, s = i // VB, i % VB
+        conv = []
+        # descriptor counter flags (bits 8..11): 0 = rest, 1 = knq arrivals, 2 = an L2 root's raw arrivals
+        dst = lambda cons, cb, slot, cw=0: _gb_rects(fp, cons) + [cbid[cb] | (cw << 8) | (slot << 16)]
+        if i < v0:   # raw q / k tile i -> the L2 root of (key head, q | k), KQ slot jj
+            hk, jj = divmod(i % (Nk * Kt), Kt)
+            conv.append((q0 + i, dst(roots[(hk, i < Nk * Kt)], "kq", jj, 2)))
+        conv.append((v0 + i, dst([i], "vc", 0)))
+        for j, (t, _) in enumerate(conv):
+            ci, sl = gin_map[t]
+            pushes[ci].append((sl, xy(i), j))
+        ci, sl = gin_map[z0 + i]
+        pushes[ci].append((sl, xy(i), 2))
+        ci, sl = gin_map[ab]
+        pushes[ci].append((sl, xy(i), 3))   # every core: the a|b tile (its head's gate pair; it writes its users' gate rows)
+        blk = [0, 0, len(conv) + 2, len(conv)]
+        for t, d in conv + [(0, [0] * 8)] * (2 - len(conv)):
+            blk += [t] + d
+        blk += [1] + dst([h * VB + s2 for s2 in range(VB)], "zs", s)
+        blk += [h, h * S + 2 * Kt + 2 * Vt, s]
+        blocks.append(blk)
+        maxc = max(maxc, len(conv))
+    import ttnn
+    dn = [(ttnn.to_torch(lt["dtb"]).float().flatten(), ttnn.to_torch(lt["nea"]).float().flatten()) for lt in layers]
+    assert B % VB == 0 and 16 % ((B // VB) * T) == 0, (B, VB, T)
+    for i in range(NC):
+        assert len(pushes[i]) <= 32, (i, len(pushes[i]))
+        blk = blocks[i] + [len(pushes[i])]
+        for e in pushes[i] + [(0, 0, 0)] * (32 - len(pushes[i])):
+            blk += list(e)
+        blk += [0, 0]   # kKqCnt, kRawCnt
+        if i in rinfo:
+            hk, isq, k_ = rinfo[i]
+            grp = [h2 * VB + s2 for h2 in range(hk * rf, hk * rf + rf) for s2 in range(VB)]   # the key head's value-head cores
+            grp = grp[k_ * len(grp) // RS:(k_ + 1) * len(grp) // RS]
+            blk += [bits(scale) if isq else bits(1.0)] + _gb_rects(fp, grp) + [cbid["knq"] | (1 << 8) | ((1 << 12) if os.environ.get("E1_GB_RMC", "0") == "1" else 0) | ((Kt if isq else 0) << 16)]
+        else:
+            blk += [0] * 9
+        hk_ = (i // VB) // rf   # (h is the first loop's: stale here)
+        sub = (i - (hk_ * rf * VB)) * RS // (rf * VB)
+        blk += [xy(roots[(hk_, 0)][sub]), xy(roots[(hk_, 1)][sub]), 0, 0]   # kRootSrc (k root, q root), kRootDone, kOutBase
+        assert len(blk) == 146, len(blk)
+        h = i // VB
+        for dt_, ne_ in dn:
+            blk += [bits(float(dt_[h])), bits(float(ne_[h]))]
+        blocks[i] = blk
+    info = f"pushes per core {[len(p_) for p_ in pushes]}, conv jobs max {maxc}"
+    return blocks, info

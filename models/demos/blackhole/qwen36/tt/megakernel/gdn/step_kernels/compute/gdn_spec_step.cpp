@@ -105,6 +105,15 @@ void gdn_pre_in_hook();  // defined by the including TU (engine MK_RRED_LATE)
 #ifndef GDN_PREFIXED_GATES
 #define GDN_PREFIXED_GATES 0  // kernel_opts bit 22: coefficient tiles (C included) from `prefixed`; no SFPU gates here
 #endif
+#ifndef GDN_RAWKQ
+#define GDN_RAWKQ 0  // G-b (E1_GB): kc / qc arrive raw (conv + SiLU); l2norm here (the L2-root fallback)
+#endif
+#ifndef GDN_GB
+#define GDN_GB 0  // G-b (E1_GB): the in-role prefix (gdn_gb_compute(), defined by the including TU) before c_B
+#endif
+#if GDN_GB
+void gdn_gb_compute();
+#endif
 #ifndef GDN_PREFIXED
 #define GDN_PREFIXED 0  // kernel_opts bit 21 (K4 only): knq / vc / zs arrive from the u1 prefix (reader-produced)
 #endif
@@ -348,6 +357,54 @@ inline void row_times_matrix_acc(
     out_dfb.push_back(Nt);
 }
 
+#if GDN_GB
+#ifndef GB_CB_MASK
+#error "GDN_RAWKQ needs GB_CB_MASK / GB_MASK_TILE (the col-0 ones mask in the G-b QPX DFB)"
+#endif
+// l2norm_rows with the mask at tile GB_CB_MASK[1] (1.0 at (r, 0), r < 32): the same op sequence as inverse_l2 (add eps,
+// rsqrt, * post, pack scratch, * mask -> inv) and scale_rows, so bit-identical to the op / the u1 L2 roots
+// one out-of-line body, called for k then q (code size: the two inlined / constprop copies cost ~3 KB each on TRISC1)
+template <uint32_t N>
+__attribute__((noinline, noclone)) void gb_l2_rows(uint32_t src, uint32_t dst, DataflowBuffer& dst_dfb, DataflowBuffer& tmp,
+                                                   DataflowBuffer& stats, DataflowBuffer& scratch, DataflowBuffer& inv,
+                                                   uint32_t post_bits) {
+    square_tiles(src, dfb::tmp, tmp, N);
+    reduce_rows(N);
+    stats.wait_front(1);
+    scratch.reserve_back(1);
+    pack_reconfig_data_format(dfb::scratch);
+    reconfig_data_format(dfb::stats, dfb::eps_l2);
+    add_init(dfb::stats, dfb::eps_l2);
+    tile_regs_acquire();
+    add_tiles(dfb::stats, dfb::eps_l2, 0, 0, 0);
+    rsqrt_tile_init();
+    rsqrt_tile(0);
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, post_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, dfb::scratch, 0);
+    tile_regs_release();
+    scratch.push_back(1);
+    scratch.wait_front(1);
+    inv.reserve_back(1);
+    pack_reconfig_data_format(dfb::inv);
+    reconfig_data_format(dfb::scratch, GB_CB_MASK);
+    mul_init(dfb::scratch, GB_CB_MASK);
+    tile_regs_acquire();
+    mul_tiles(dfb::scratch, GB_CB_MASK, 0, GB_MASK_TILE, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, dfb::inv, 0);
+    tile_regs_release();
+    inv.push_back(1);
+    scratch.pop_front(1);
+    stats.pop_front(1);
+    inv.wait_front(1);
+    scale_rows(src, dfb::inv, dst, dst_dfb, N);
+    inv.pop_front(1);
+}
+#endif
 // dst = l2norm(src) * post per row; rows whose `mask` column-0 entry is 0 -> exactly 0
 template <uint32_t N>
 inline void l2norm_rows(
@@ -1962,6 +2019,20 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     {
         DeviceZoneScopedN("c_B");
 #if GDN_PREFIXED
+#if GDN_GB
+        gdn_gb_compute();  // this core's prefix jobs (their outputs feed `pre`, which the reader reads after the barrier)
+#endif
+#if GDN_RAWKQ
+        {
+            DataflowBuffer kq_(dfb::kq);  // [k raw 0..Kt) | q raw [Kt, 2Kt)]: k first, popped before q
+            kq_.wait_front(Kt);
+            gb_l2_rows<Kt>(dfb::kq, dfb::knq, knq, tmp, stats, scratch, inv, kOneBits);
+            kq_.pop_front(Kt);
+            kq_.wait_front(Kt);
+            gb_l2_rows<Kt>(dfb::kq, dfb::knq, knq, tmp, stats, scratch, inv, scale_bits);
+            kq_.pop_front(Kt);
+        }
+#endif
         // the prefix delivered [kn | qn] (l2norm_rows of the placed conv tiles) and vc: nothing to normalize here
         vc.wait_front(Vs);
         (void)mask_T;
