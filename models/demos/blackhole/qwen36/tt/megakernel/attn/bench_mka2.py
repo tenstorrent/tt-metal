@@ -79,6 +79,11 @@ for it in range(ITERS):
     _rsp_t = RSP_DUMP() if RSP_DUMP is not None else rsp_sh   # MK_L1P2_SEED: CB 43 read back (the AR's rstd checks), same place
     if ENGINE_DRAIN is not None: ENGINE_DRAIN()   # MK_L1P2_SEED: residual CB 5 -> ENGINE_X0 (the next launch's seed), same place
     _res_t = ENGINE_X0 if ENGINE_X0 is not None else globals().get('ar_out')
+    if GDN24 and os.environ.get('E1_GB_TS', '0') == '1':   # E1_GB_TS probe: the GDN cores' wall-clock stamps (arg block words) of this launch
+        _ti = GDN_ROLE['role'].role['info']; _o = _ti['ts_off']; _tt_ = ttnn.to_torch(GDN_ROLE['io'][0])
+        _tt_ = _tt_.reshape(len(GDN_ROLE['role'].cores), -1)[:, _o:_o + 32 * _ti['NG']].to(torch.int64) & 0xFFFFFFFF
+        with open(os.environ.get('E1_GB_TS_OUT', 'gbts') + f'.it{it}.txt', 'w') as _f:   # per core: x y NG then NG x 32 stamps (0 = not reached)
+            for c_, r_ in zip(GDN_ROLE['role'].cores, _tt_.tolist()): _f.write(f"{c_.x} {c_.y} {_ti['NG']} " + " ".join(map(str, r_)) + "\n")
     if KVA: KVA_POST(it)   # SDPA golden over the appended cache (+ MKA_KVA_CHECK: bit-compare vs paged_fused_update_cache)
     if GDN24 and it == 0 and callable(GDN_ROLE.get('check')):   # GDN role bit-identity: after the FIRST run only (later runs advance its state)
         print(f"[gdn24] check {'PASS' if GDN_ROLE['check']() else 'FAIL'}", flush=True)

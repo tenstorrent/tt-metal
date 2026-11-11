@@ -91,6 +91,11 @@ constexpr uint32_t kCoefN = 7 + kBatchMax;  // NGB G E BETA NBE EYE W + C_u
 #ifndef GDN_EARLY_REPLAY
 #define GDN_EARLY_REPLAY 0  // engine GDN role (BATCH + PREFIXED_GATES): W / C_u built here before in_ready (see wr_rcoef)
 #endif
+#if defined(GB_TS) && GB_TS  // E1_GB_TS bench probe: wall-clock stamps into the arg block (gbts slots, 32 per GDN layer)
+#define GBTS(n) (g_ab[GB_TS_OFF + g_gdn_l * 32u + (n)] = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
+#else
+#define GBTS(n) ((void)0)
+#endif
 #ifndef GDN_W_IN_WAIT
 #define GDN_W_IN_WAIT 0  // engine GDN role: gdn_in_wait() (the including TU) gates this writer's reads of `pre`
 #endif
@@ -673,7 +678,9 @@ TT_KERNEL void writer(
     gdn_pre_in_hook();  // engine (MK_RRED_LATE): the Σ reducer's mixer delivery, after wr_rcoef's replay tiles are out
 #endif
 #if GDN_W_IN_WAIT
+    GBTS(16);
     gdn_in_wait();
+    GBTS(26);
 #endif
     {
         DeviceZoneScopedN("wr_pgates");

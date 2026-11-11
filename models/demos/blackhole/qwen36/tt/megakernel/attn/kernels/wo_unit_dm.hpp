@@ -34,6 +34,8 @@ FORCE_INLINE void ring_fill(uint32_t cb_ring, uint64_t src, uint32_t p0, uint32_
 
 // Scatter this core's nt output tiles (front of cb_out, `slot` pages reserved per phase) to the owners' chunk buffers
 // (uniform L1 address xo on every owner), then += count on each owner's counter word. tile[j] = global output tile.
+// kVc (GOTAIL E1_GO_SCVC): the writes + count incs on that unicast VC (default: the API default, i.e. unchanged code).
+template <uint32_t kVc = NOC_UNICAST_WRITE_VC>
 FORCE_INLINE void scatter(uint32_t cb_out, uint32_t slot, uint32_t nt, const uint32_t* tile, const uint32_t* ow_x,
                           const uint32_t* ow_y, uint32_t xo, uint32_t cnt_word) {
     const uint32_t tb = get_tile_size(cb_out), src = get_read_ptr(cb_out);
@@ -41,12 +43,36 @@ FORCE_INLINE void scatter(uint32_t cb_out, uint32_t slot, uint32_t nt, const uin
     for (uint32_t i = 0; i < 16; ++i) cnt[i] = 0;
     for (uint32_t j = 0; j < nt; ++j) {
         const uint32_t ch = tile[j] / CHUNK;
-        noc_async_write(src + j * tb, get_noc_addr(ow_x[ch], ow_y[ch], xo + (tile[j] % CHUNK) * tb), tb);
+        noc_async_write(src + j * tb, get_noc_addr(ow_x[ch], ow_y[ch], xo + (tile[j] % CHUNK) * tb), tb, noc_index, kVc);
         ++cnt[ch];
     }
     noc_async_write_barrier();
     for (uint32_t ch = 0; ch < 16; ++ch)
-        if (cnt[ch]) noc_semaphore_inc(get_noc_addr(ow_x[ch], ow_y[ch], cnt_word), cnt[ch]);
+        if (cnt[ch]) noc_semaphore_inc(get_noc_addr(ow_x[ch], ow_y[ch], cnt_word), cnt[ch], noc_index, kVc);
+    cb_pop_front(cb_out, slot);
+}
+
+// GOTAIL E1_GO_SCPASS: as scatter(), but the output tiles arrive in DST passes of nw (matmul_nt_ks<., ., true>): each
+// pass's tiles are written as soon as they are pushed (the next pass computes meanwhile); one barrier + the incs at the end.
+template <uint32_t kVc = NOC_UNICAST_WRITE_VC>
+FORCE_INLINE void scatter_ps(uint32_t cb_out, uint32_t slot, uint32_t nt, const uint32_t* tile, const uint32_t* ow_x,
+                             const uint32_t* ow_y, uint32_t xo, uint32_t cnt_word, uint32_t nw) {
+    const uint32_t tb = get_tile_size(cb_out), src = get_read_ptr(cb_out);
+    uint32_t cnt[16];
+    for (uint32_t i = 0; i < 16; ++i) cnt[i] = 0;
+    for (uint32_t j0 = 0; j0 < nt; j0 += nw) {
+        const uint32_t j1 = (nt - j0) < nw ? nt : j0 + nw;
+        cb_wait_front(cb_out, j1);
+        for (uint32_t j = j0; j < j1; ++j) {
+            const uint32_t ch = tile[j] / CHUNK;
+            noc_async_write(src + j * tb, get_noc_addr(ow_x[ch], ow_y[ch], xo + (tile[j] % CHUNK) * tb), tb, noc_index, kVc);
+            ++cnt[ch];
+        }
+    }
+    cb_wait_front(cb_out, slot);   // the padding push (nt < slot) before the pop
+    noc_async_write_barrier();
+    for (uint32_t ch = 0; ch < 16; ++ch)
+        if (cnt[ch]) noc_semaphore_inc(get_noc_addr(ow_x[ch], ow_y[ch], cnt_word), cnt[ch], noc_index, kVc);
     cb_pop_front(cb_out, slot);
 }
 

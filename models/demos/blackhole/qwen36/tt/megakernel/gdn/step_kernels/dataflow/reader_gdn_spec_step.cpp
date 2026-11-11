@@ -83,6 +83,57 @@ void gdn_pre_sp_hook();
 #if GDN_HOLD_SKIP
 void gdn_hold_publish(uint32_t live);  // the including TU: this layer's live-user mask -> the compute (L1 word + seq)
 #endif
+#ifndef GDN_STNARROW
+#define GDN_STNARROW 0  // engine GDN role (BATCH, ST_RING 0; E1_STNARROW): the previous verify's per-user stash pages are read
+                        // narrow: a user's K^T page has only its T token columns live (faces {0,2} or {1,3} read, 2 x 1 KB) and
+                        // its U page only its T rows (2 x T*64 B); the rest of each slot is +0 like the page itself (the
+                        // writer's masked copies). Zeroed once per slot base, never overwritten elsewhere -> same L1 bytes as
+                        // the full-page read (layout of the ring unchanged). 160 -> 68 KB of DRAM reads per core at u8
+#endif
+#ifndef GDN_KTDD
+#define GDN_KTDD 0  // engine GDN role (STNARROW, VB > 1; E1_KTDD): the 4 value-block cores of a head need the SAME K^T stash tiles;
+                    // block s reads only tiles i = s mod VB (narrow) and writes them into its VB - 1 peers' ktp_in slots
+                    // (same L1 address on every GDN core). Two argblock counters per core (the including TU): [0] = peers
+                    // whose ktp_in slot is reserved + zeroed for this layer, [1] = peers whose K^T share has landed here;
+                    // cumulative (VB - 1) per layer, reset by the TU at program end (every increment awaited in-program)
+#endif
+#if GDN_KTDD
+uint32_t gdn_ktdd_peer(uint32_t p);  // the including TU: NoC (x << 16 | y) of value block p of this core's head
+volatile tt_l1_ptr uint32_t* gdn_ktdd_sem();  // the including TU: the 2 counter words (same address on every GDN core)
+static uint32_t g_ktdd_l = 0;  // GDN layers done by this reader (reset with gdn_stn_reset)
+// +1 on counter word `w` (0 / 1) of every peer except block s (one call site: code size)
+__attribute__((noinline)) void gdn_ktdd_bump(uint32_t s, uint32_t vb, uint32_t w) {
+    for (uint32_t p = 0; p < vb; ++p) {
+        if (p != s) {
+            const uint32_t xy = gdn_ktdd_peer(p);
+            noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, (uint32_t)(gdn_ktdd_sem() + w)), 1);
+        }
+    }
+}
+// the 1 KB at L1 `a` -> the same address of every peer except block s
+__attribute__((noinline)) void gdn_ktdd_fwd(uint32_t s, uint32_t vb, uint32_t a) {
+    for (uint32_t p = 0; p < vb; ++p) {
+        if (p != s) {
+            const uint32_t xy = gdn_ktdd_peer(p);
+            noc_async_write(a, get_noc_addr(xy >> 16, xy & 0xFFFFu, a), 1024);
+        }
+    }
+}
+#endif
+#if GDN_STNARROW
+static uint32_t g_stn_kb = 0;  // ktp_in / up_in write pointers whose slots hold zeros outside the live parts
+static uint32_t g_stn_ub = 0;
+inline void gdn_stn_reset() {
+    g_stn_kb = 0;
+    g_stn_ub = 0;
+#if GDN_KTDD
+    g_ktdd_l = 0;
+#endif
+}  // once per program (the including TU's kernel_main)
+#endif
+#ifndef GDN_RPX
+#define GDN_RPX 0  // REPLAY bench-only stash-read timing diagnostics (E1_RPX; never in production)
+#endif
 #ifndef GDN_CUT_FAST
 #define GDN_CUT_FAST 0  // engine GDN role (BATCH): masked K_u / Q_u slots (kts, kmq) keep their zeros across uses: only the
                         // previous occupant's T rows are re-zeroed (no full-tile zero fill + barrier per tile)
@@ -154,6 +205,11 @@ constexpr uint32_t kBatchMax = 8;
 #endif
 #ifndef GSTEP_WPRE
 #define GSTEP_WPRE 0  // engine GDN role (GDN_STATE_FIRST + GDN_PREFIXED): w_in (norm weight rows) read before gdn_in_wait
+#endif
+#if defined(GB_TS) && GB_TS  // E1_GB_TS bench probe: wall-clock stamps into the arg block (gbts slots, 32 per GDN layer)
+#define GBTS(n) (g_ab[GB_TS_OFF + g_l * 32u + (n)] = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
+#else
+#define GBTS(n) ((void)0)
 #endif
 #ifndef GDN_IN_WAIT
 #define GDN_IN_WAIT 0  // engine GDN role: gdn_in_wait() (the including TU) gates the reads of `pre`
@@ -676,6 +732,20 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         state_in.reserve_back(nb * KVs);
         ktp_in.reserve_back(nb * Kt);
         up_in.reserve_back(nb * Vs);
+#if GDN_STNARROW
+        if (ktp_in.get_write_ptr() != g_stn_kb || up_in.get_write_ptr() != g_stn_ub) {
+            zero_tiles_at(ktp_in, noc, 0, nb * Kt);  // slot base moved (first layer of the program, or B < 8): all +0
+            zero_tiles_at(up_in, noc, 0, nb * Vs);
+            noc.async_read_barrier();  // the zeros land before the narrow reads below overwrite the live parts
+            g_stn_kb = ktp_in.get_write_ptr();
+            g_stn_ub = up_in.get_write_ptr();
+        }
+#if GDN_KTDD
+        // this core's ktp_in slots are reserved (the compute popped the previous layer's) and +0 outside the live parts:
+        // the peers may write their K^T shares into them
+        gdn_ktdd_bump(s, VB, 0);
+#endif
+#endif
         for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
             if (GDN_HOLD_SKIP && hold_b[ub_]) {
                 continue;  // HOLD_SKIP: the compute never reads this user's state / stash slots
@@ -685,15 +755,78 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 read_tiles_at(ring_acc, state_in, noc, blk_u * KV + i * Vt + s * Vs, Vs, ub_ * KVs + i * Vs);
             }
             const uint32_t stash_u = ((1 + par) * Mr + ub_) * Nv + h;
+#if GDN_RPX  // REPLAY bench-only timing diagnostics (wrong numerics): 1 = never read the stash (zeros), 2 = read it even
+             // when nothing is replayed, 4 = K^T from DRAM on value block 0 only (zeros elsewhere)
+            const bool rd_st = (GDN_RPX & 1) ? false : ((GDN_RPX & 2) ? !hold_b[ub_] : !(hold_b[ub_] || mi_b[ub_] >= T));
+            if (!rd_st) {
+                zero_tiles_at(ktp_in, noc, ub_ * Kt, Kt);
+                zero_tiles_at(up_in, noc, ub_ * Vs, Vs);
+            } else {
+                if ((GDN_RPX & 4) && s != 0) {
+                    zero_tiles_at(ktp_in, noc, ub_ * Kt, Kt);
+                } else {
+                    read_tiles_at(ring_acc, ktp_in, noc, stash_u * KV, Kt, ub_ * Kt);
+                }
+                read_tiles_at(ring_acc, up_in, noc, stash_u * KV + Kt + s * Vs, Vs, ub_ * Vs);
+            }
+#else
             if (hold_b[ub_] || mi_b[ub_] >= T) {
                 zero_tiles_at(ktp_in, noc, ub_ * Kt, Kt);
                 zero_tiles_at(up_in, noc, ub_ * Vs, Vs);
             } else {
+#if GDN_STNARROW
+                // user ub_'s tokens = rows / columns r0u .. r0u + T - 1 (16 % T == 0: inside one face row / column)
+                const uint32_t r0u = ub_ * T;
+                const uint32_t kf = (r0u >> 4) * 1024u;                      // K^T: faces 0 / 2 (cols < 16) or 1 / 3
+                const uint32_t uo = (r0u >> 4) * 2048u + (r0u & 15u) * 64u;  // U: the T rows in faces 0-1 or 2-3
+                const uint32_t te = ktp_in.get_entry_size();
+                for (uint32_t i = GDN_KTDD ? s : 0; i < Kt; i += GDN_KTDD ? VB : 1) {
+                    const uint32_t d = (ub_ * Kt + i) * te;
+                    noc.async_read(ring_acc, ktp_in, 1024, {.page_id = stash_u * KV + i, .offset_bytes = kf},
+                                   {.offset_bytes = d + kf});
+                    noc.async_read(ring_acc, ktp_in, 1024, {.page_id = stash_u * KV + i, .offset_bytes = kf + 2048},
+                                   {.offset_bytes = d + kf + 2048});
+                }
+                for (uint32_t j = 0; j < Vs; ++j) {
+                    const uint32_t d = (ub_ * Vs + j) * te;
+                    const uint32_t pg = stash_u * KV + Kt + s * Vs + j;
+                    noc.async_read(ring_acc, up_in, T * 64, {.page_id = pg, .offset_bytes = uo}, {.offset_bytes = d + uo});
+                    noc.async_read(ring_acc, up_in, T * 64, {.page_id = pg, .offset_bytes = uo + 1024},
+                                   {.offset_bytes = d + uo + 1024});
+                }
+#else
                 read_tiles_at(ring_acc, ktp_in, noc, stash_u * KV, Kt, ub_ * Kt);
                 read_tiles_at(ring_acc, up_in, noc, stash_u * KV + Kt + s * Vs, Vs, ub_ * Vs);
+#endif
             }
+#endif
         }
         noc.async_read_barrier();
+#if GDN_KTDD
+        {
+            // own K^T share (tiles i = s mod VB, the user's 2 faces) -> the same slots of the VB - 1 peers, once each
+            // peer's slots are ready; then wait for the peers' shares to land here
+            volatile tt_l1_ptr uint32_t* ks = gdn_ktdd_sem();
+            const uint32_t want = (VB - 1) * (g_ktdd_l + 1);
+            noc_semaphore_wait_min(ks, want);
+            const uint32_t kb = ktp_in.get_write_ptr(), te = ktp_in.get_entry_size();
+            for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                if (hold_b[ub_] || mi_b[ub_] >= T) {
+                    continue;  // HOLD: no slot use; FRESH: every block zero-fills locally (ctrl is per user / head)
+                }
+                const uint32_t kf = ((ub_ * T) >> 4) * 1024u;
+                for (uint32_t i = s; i < Kt; i += VB) {
+                    const uint32_t a = kb + (ub_ * Kt + i) * te + kf;
+                    gdn_ktdd_fwd(s, VB, a);
+                    gdn_ktdd_fwd(s, VB, a + 2048);
+                }
+            }
+            noc_async_write_barrier();
+            gdn_ktdd_bump(s, VB, 1);
+            noc_semaphore_wait_min(ks + 1, want);
+            ++g_ktdd_l;
+        }
+#endif
         state_in.push_back(nb * KVs);
         ktp_in.push_back(nb * Kt);
         up_in.push_back(nb * Vs);
@@ -720,7 +853,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #endif
 #if GDN_IN_WAIT
     // engine GDN role: this layer's prefix output (pre) is complete once in_ready reaches the layer's target
+    GBTS(0);
     gdn_in_wait();
+    GBTS(8);
 #endif
     {
         DeviceZoneScopedN("rd_pre");
@@ -772,6 +907,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if GDN_GB_DIRECT
         gdn_gb_wait(1);  // vc / zs / the head's gate rows have landed
 #endif
+        GBTS(11);
         zs.push_back(Vt);
 #if GDN_RAWKQ
 #if !GDN_GB_DIRECT
@@ -986,6 +1122,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 DeviceZoneScopedN("rd_owait");  // the compute's gated output tiles
                 out.wait_front(Vs);
             }
+            GBTS(12);
             DeviceZoneScopedN("rd_owr");  // the out tile write + its barrier + the out signal
             const uint32_t entry = out.get_entry_size();
             const uint32_t page0 = tr * (Nv * Vt) + h * Vt + s * Vs;
@@ -1009,6 +1146,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #endif
             out.pop_front(Vs);
             gdn_out_signal();
+            GBTS(13);
         }
 #endif
 #if GDN_PRE_SP_HOOK
