@@ -598,14 +598,14 @@ def setup_bench(dev, MESH, mesh_identity):
             assert QSK and GDN24, "MK_GDN_INPROJ needs MKA_QSK, MKA_GDN24 and MK_V12_CB (default on) (tiles land in the GDN cores' staging CB 41, planned address)"
             GN, GNR = 65, 2060
             GLS = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGL = len(GLS)
-            GLAY = _WEIGHTS['gdn_in']['layout'] if 'gdn_in' in _WEIGHTS else _wl().GdnInSplitKLayout(BANK_LOC, banks, gx=GX)   # engine/weight_layouts.py
-            GSL_, _gb, _go, PGL = GLAY.slices, GLAY.bank, GLAY.off, GLAY.pages_per_layer
+            GINLAY = _WEIGHTS['gdn_in']['layout'] if 'gdn_in' in _WEIGHTS else _wl().GdnInSplitKLayout(BANK_LOC, banks, gx=GX)   # engine/weight_layouts.py
+            GSL_, _gb, _go, PGL = GINLAY.slices, GINLAY.bank, GINLAY.off, GINLAY.pages_per_layer
             # gdn_in source: injected (G: _WEIGHTS['gdn_in'] = dict(tensor, layout), GDN-ordinal pages, golds skipped);
             # MK_GIN_W=<torch file {layer: [H, 2060 | 2080]}>: real per-device gdn_in (integ gdn_in_mats, device 0), exactly
             # the model's tiles, cycled over the GDN layers; else random, γ-folded, x 2^(g % 2)
             _gw_path = os.environ.get('MK_GIN_W')
             if 'gdn_in' in _WEIGHTS:
-                wg_all = _WEIGHTS['gdn_in']['tensor']; _gws = None
+                gin_w_all = _WEIGHTS['gdn_in']['tensor']; _gws = None
             else:
                 if _gw_path:
                     _gw = torch.load(_gw_path); _gk = sorted(_gw)
@@ -616,9 +616,9 @@ def setup_bench(dev, MESH, mesh_identity):
                     torch.manual_seed(11)
                     gw_t = torch.randn(H, GN * TILE) / math.sqrt(H); gw_t[:, GNR:] = 0   # (wg_t is the MLP gate)
                     _gws = [gam[:, None] * gw_t] * NGL; _gsc = [2.0 ** (g_ % 2) for g_ in range(NGL)]
-                wg_all = _wl().pack_gdn_in(_gws, GLAY, scales=_gsc, dev=dev)
-            wgq = ttnn.to_torch(wg_all).float().reshape(NGL, PGL, TILE, TILE)
-            wgfq = GLAY.unpack(wgq)   # as the device holds it
+                gin_w_all = _wl().pack_gdn_in(_gws, GINLAY, scales=_gsc, dev=dev)
+            gin_wq = ttnn.to_torch(gin_w_all).float().reshape(NGL, PGL, TILE, TILE)
+            wgfq = GINLAY.unpack(gin_wq)   # as the device holds it
             if _gw_path and _gws is not None: print(f"[gin] real gdn_in BFP4 round trip lossless (device tiles == model tiles): {all(torch.equal(wgfq[g_], _gws[g_]) for g_ in range(NGL))}", flush=True)
             gold_gin = [(rstd_g[:, None] * (xb.double() @ wgfq[g_].double())).float() for g_ in range(NGL)]
             gin_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGL * GN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -924,7 +924,7 @@ def setup_bench(dev, MESH, mesh_identity):
         # tile (column c, K-row r) -> the GDN core straight below the column, (c, 8 + r % 2), slot r // 2: a pure +y NOC0
         # write that never crosses the DRAM column (crossing it cost 32-46 us under the weight stream, d30u20 chip 16)
         ph = dev.worker_core_from_logical_core(ttnn.CoreCoord(key[0], GY + key[1] % 2))
-        return [sl_.nt, own, t_, wg_all.buffer_address(), _go[key] * banks + _gb[key], PGL, ph.x, ph.y, VADDR['gin'] + (key[1] // 2) * 2048,
+        return [sl_.nt, own, t_, gin_w_all.buffer_address(), _go[key] * banks + _gb[key], PGL, ph.x, ph.y, VADDR['gin'] + (key[1] // 2) * 2048,
                 ttnn.get_global_semaphore_address(GIN_CNT), gin_dbg.buffer_address()]
     def gin_cargs(fi):
         if not (RQKV and GIN): return []
