@@ -59,6 +59,13 @@ void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);  // engine gdn_out
 #if GDN_OUT_PRE
 void gdn_out_pre();
 #endif
+#ifndef GDN_PRE_SP_HOOK
+#define GDN_PRE_SP_HOOK 0  // engine AR-sender corner cores (MK_CGAR_EARLY): gdn_pre_sp_hook() (TU) after the out / gdn_out tail,
+                           // before the S' write-back -- the hosted GDN-AR sender iteration runs there instead of after the body
+#endif
+#if GDN_PRE_SP_HOOK
+void gdn_pre_sp_hook();
+#endif
 #ifndef GDN_HOLD_SKIP
 #define GDN_HOLD_SKIP 0  // engine GDN role (BATCH, ST_RING 0; RC v1.89): HOLD (idle) users get no state / stash reads and no
                          // masked K_u / Q_u copies; the compute skips their replay, K S' / Q S' terms and K^T transposes
@@ -861,6 +868,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             out.pop_front(Vs);
             gdn_out_signal();
         }
+#endif
+#if GDN_PRE_SP_HOOK
+        gdn_pre_sp_hook();
 #endif
 #if GDN_SP_RD
         // ---- S'_u -> ring slot 0 block (u, h) (this block's columns) from the compute's sp (waited on, never popped
