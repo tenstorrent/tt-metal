@@ -425,8 +425,9 @@ the wrong routing harmlessly for a while: with `("srcA", "srcB")` and
 `srcA @ srcB` the product is still `arg0 @ arg1`. It only becomes a real bug once
 an architecture defines an asymmetric `mantissa_split`, because the split is
 indexed by *register* — so the SrcA penalty would be charged to the wrong
-operand. Wormhole/Blackhole will hit exactly that when their split is filled in,
-SrcA there losing its least significant bit.
+operand. Wormhole and Blackhole hit exactly that: they split `(4, 6)` and their
+multiplier reaches only 9 of SrcA's 10 mantissa bits, so routing an operand to
+the wrong register would charge it the wrong penalty.
 
 ### Cross-validation against the lightweight golden
 
@@ -562,6 +563,51 @@ Available today: `QuasarDataCopyGolden`, `QuasarMatmulGolden`,
 `QuasarEltwiseBinaryGolden`, `QuasarEltwiseBinaryReuseDestGolden`, plus
 datacopy / eltwise / matmul for Wormhole and Blackhole.
 
+## What the prefix means
+
+`QuasarDataCopyGolden` is the caller's handle for "the datacopy golden on
+Quasar". It says nothing about *why* it is Quasar's, and that is deliberate. The
+caller does not care whether the pipeline is the shared one or Quasar's own, and
+the name should not have to change the day that answer changes.
+
+The factory table answers the implementation question one line over, in the
+first argument:
+
+```python
+QuasarDataCopyGolden = _factory(DataCopyGolden, QUASAR)   # the shared pipeline
+QuasarDataCopyGolden = _factory(QuasarDataCopy, QUASAR)   # Quasar's own chain
+```
+
+So "does this architecture run a different chain" is read off the table rather
+than guessed from the name. The prefix carries its weight for a second reason
+too: a test that cross-validates imports both goldens into one namespace, and
+`MatmulGolden` is already taken by the lightweight one.
+
+## When an architecture differs
+
+The chain is not fixed per operation. `build_chain` runs at call time with the
+architecture's blocks in hand, so it already emits different shapes. Eltwise
+emits one Dest write per fidelity phase and matmul nests a K-face loop inside
+each phase, and both ask the blocks how many phases there are.
+
+There are four ways to express a difference, in the order to reach for them.
+
+1. **It is a question about behaviour.** Ask the blocks. `fpu_models_fidelity`
+   and `fpu_phases` exist because fidelity needed them. If no method asks your
+   question, add one to the blocks rather than answering it in the operation.
+2. **It is which register, format or order.** Make it a class attribute, the way
+   `MatmulGolden.OPERAND_REGISTERS` names which src register each operand rides.
+   A subclass overrides the attribute and `build_chain` is left alone.
+3. **The chain shape genuinely differs.** Subclass the operation, override
+   `build_chain`, and bind the subclass in the factory table. One new row.
+4. **The operation does not exist there.** Leave the factory out, the way
+   `EltwiseBinaryReuseDestGolden` has a Quasar row and no others.
+
+**Never branch on `arch.name` inside `build_chain`.** That field exists so a
+refusal can say which device refused. Branching on it puts hardware knowledge
+back into the operations layer, which is the one thing this split is for, and it
+hides the difference from anyone reading the factory table.
+
 ---
 
 # Adding an operation
@@ -589,13 +635,6 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
   the device measures 71); a fitted `2^-15` magnitude flush (fit the numbers
   well, no mechanism); per-operand mantissa asymmetry (WH/BH only, Quasar is
   symmetric); and mask-versus-subtract in the split (provably equivalent).
-- **The WH/BH per-phase mantissa split.** The `Fpu` unit carries one for
-  Quasar only, so a Wormhole or Blackhole multiply — matmul and Elwmul alike —
-  runs as a single exact product and `math_fidelity` is ignored. That is wrong at
-  *every* fidelity, HiFi4 included, since their per-phase masks never cover
-  SrcA's least significant bit. Constructing one of those goldens warns. The
-  lightweight golden does model these masks, so this is a gap here, not a gap
-  in the suite.
 - **Whether the matmul AL×BL phase is observable** — this model says HiFi3 ==
   HiFi4; the lightweight golden says otherwise. Unresolved for matmul, though
   hardware agrees with this model for eltwise.
