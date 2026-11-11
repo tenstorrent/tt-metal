@@ -609,14 +609,21 @@ FORCE_INLINE bool is_valid_multicast_branch(const MeshMcastRange& branch) {
     return (branch.e != 0) != (branch.w != 0);
 }
 
+// A branch leaves on its own cardinal and, when that cardinal's axis carries the express chords, may
+// also (or instead) launch a chord from the anchor.
 FORCE_INLINE uint8_t multicast_branch_allowed_root_outputs(const MeshMcastRange& branch) {
+    uint8_t cardinal = Routing2DCodec::ACTION_WEST;
+    Fabric2DAxis axis = Fabric2DAxis::X;
     if (branch.n != 0) {
-        return Routing2DCodec::ACTION_NORTH | Routing2DCodec::ACTION_Z;
+        cardinal = Routing2DCodec::ACTION_NORTH;
+        axis = Fabric2DAxis::Y;
+    } else if (branch.s != 0) {
+        cardinal = Routing2DCodec::ACTION_SOUTH;
+        axis = Fabric2DAxis::Y;
+    } else if (branch.e != 0) {
+        cardinal = Routing2DCodec::ACTION_EAST;
     }
-    if (branch.s != 0) {
-        return Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_Z;
-    }
-    return branch.e != 0 ? Routing2DCodec::ACTION_EAST : Routing2DCodec::ACTION_WEST;
+    return cardinal | (Fabric2DRoutingConfig::axis_actions(axis) & Routing2DCodec::ACTION_Z);
 }
 
 // Acquires one shared header and encodes one same-mesh multicast branch, anchored at the manager's

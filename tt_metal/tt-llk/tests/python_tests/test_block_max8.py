@@ -31,20 +31,9 @@ CALL_STRIDE = 3
 def _run_block_max8(
     source, dst_index, valid, pattern, negative_zero_result, fpu_calls=None
 ):
-    """Check all pooled blocks and preserve every other tile in both DST halves.
+    """Check every pooled block and that all other tiles in both DST halves are unchanged.
 
-    Three batches reuse the first half after exercising the second. Directed
-    winners cover every position within each eight-score block. Ordinary patterns
-    put large positive values in invalid tails to detect masking omissions.
-    The negative-zero and denormal patterns are injected directly into DST
-    because the input unpack/datacopy path can canonicalize or flush them before
-    the kernel sees them. The denormal pattern (FPU kernel only) makes some block
-    maxima positive or negative denormals, which GMPOOL returns as +0.0.
-    negative_zero_result is the expected output for a block whose maximum is
-    -0.0. Both kernels encode an exact -0.0 result as -1 before packing, which
-    otherwise canonicalizes zeros, so -1.0 checks that the sign survived and
-    0.0 checks that it was flushed. fpu_calls (FPU kernel only) is the number
-    of calls per DST acquire, each on a different slot.
+    negative_zero_result is the expected output for a -0.0 block maximum (-1.0 keeps the sign, 0.0 flushes it).
     """
     pooled = (
         [dst_index]

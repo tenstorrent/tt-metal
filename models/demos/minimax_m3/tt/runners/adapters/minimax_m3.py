@@ -22,6 +22,9 @@ indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``)
 A multi-turn continuation may resume mid-chunk at any 32-token boundary (the KV-cache writer's tile grid),
 as the producer's ``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode does.
 
+Packed forwards: with ``PREFILL_FORWARD_TOKENS_BUDGET`` above ``PREFILL_CHUNK_SIZE`` the runner drives
+``TtPrefillRuntime.prefill_forward`` with several chunks per forward, from one or several slots.
+
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
 for the H2D producer (which reads only path/trace attributes).
@@ -115,6 +118,9 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
     # importing the adapter stays cheap).
     l1_small_size = 1152
+
+    # TtPrefillRuntime.prefill_forward runs PREFILL_FORWARD_TOKENS_BUDGET / PREFILL_CHUNK_SIZE chunks per forward.
+    supports_packed_forward = True
 
     # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property
@@ -221,6 +227,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
             chunk_size=params.chunk_size,
+            forward_tokens_budget=params.forward_chunks * params.chunk_size,
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,

@@ -16,7 +16,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
@@ -283,6 +282,7 @@ tt::tt_metal::ProgramDescriptor SendAsyncProgramFactory::create_descriptor(
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
         std::vector<uint32_t> fabric_connection_rt_args;
         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+            *socket_mesh_device,
             sender_fabric_node_id,
             receiver_fabric_node_id,
             selected_link_index,
@@ -322,7 +322,7 @@ void SendAsyncProgramFactory::override_runtime_arguments(
     tt::tt_metal::IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(input_tensor, mesh_dispatch_coordinate, "send_async");
 
-    auto* input_buffer = input_tensor.buffer();
+    const auto* input_buffer = &input_tensor.mesh_buffer();
     TT_FATAL(input_buffer != nullptr, "send_async: input tensor buffer is null");
 
     // Everything else in the runtime args (page counts, offsets, bank ids, fabric connection

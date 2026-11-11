@@ -8,9 +8,7 @@ set -euo pipefail
 
 FIXES_DIR="$1"
 shift
-# Set by the "Install clang-tidy <version>" workflow step for non-20 runs
-# (e.g. the PR-gate v23 shadow job); defaults to the CI image's baked-in binary.
-CLANG_TIDY="${CLANG_TIDY_BIN:-clang-tidy-20}"
+CLANG_TIDY="clang-tidy-23"
 
 mkdir -p "$FIXES_DIR"
 

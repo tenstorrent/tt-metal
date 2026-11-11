@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -46,6 +47,13 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     if (output_ind_cb_data_format == tt::DataFormat::Int32) {
         output_ind_cb_data_format = tt::DataFormat::UInt32;
     }
+    // tt-metal does not yet support UInt16 dataflow buffers on Quasar. Int16 has the same 2-byte tile layout,
+    // and the sort only moves the index datums alongside the values (it never compares or computes on them),
+    // so the 16-bit index buffers run as Int16 there and the writer copies the raw tile bytes into the UINT16
+    // output unchanged.
+    if (tensor_args.input.device()->arch() == tt::ARCH::QUASAR && output_ind_cb_data_format == tt::DataFormat::UInt16) {
+        output_ind_cb_data_format = tt::DataFormat::Int16;
+    }
 
     // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
     // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
@@ -68,7 +76,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
-    const uint32_t Wt = input_shape[3] / tile_width;
+    const uint32_t Wt = (input_shape[3] / tile_width) + topk_reader_pad_tiles(tensor_args.input);
 
     // Single core selection from the provided core grid
     const auto
@@ -249,12 +257,14 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"total_number_of_cores", total_number_of_cores},  // Total number of cores
                 // Index width must match the index tensor dtype: fp32 requires 32-bit iota.
                 // 16-bit iota packs two indices per word, producing incorrect INT32 reads.
-                {"uint16_output",
-                 static_cast<uint32_t>(output_ind_cb_data_format == tt::DataFormat::UInt16)},  // Index format flag
+                {"uint16_output", static_cast<uint32_t>(uint16_output)},  // Index format flag
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    for (const auto& [name, value] : topk_width_padding_defines(tensor_args.input, args.largest)) {
+        reader.compiler_options.defines.emplace(name, value);
+    }
 
     KernelSpec writer{
         .unique_id = WRITER,

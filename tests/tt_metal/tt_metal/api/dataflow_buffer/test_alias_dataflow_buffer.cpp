@@ -712,7 +712,7 @@ TEST_F(UnitMeshFixture, AliasDFBAllocSecondarySkipped) {
     const auto cfg_b = make_1sx1s_config(256, 16);
     const auto cfg_c = make_1sx1s_config(512, 4);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
     const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
     const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
@@ -743,7 +743,7 @@ TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     const auto cfg_b = make_1sx1s_config(256,  16);
     const auto cfg_c = make_1sx1s_config(1024, 4);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
     const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
     const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
@@ -776,7 +776,7 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
     const auto cfg_b = make_1sx1s_config(256, 16);  // total 4096 (secondary)
     const auto cfg_c = make_1sx1s_config(512, 4);   // total 2048 (trailing, non-aliased)
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
     const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
     const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
