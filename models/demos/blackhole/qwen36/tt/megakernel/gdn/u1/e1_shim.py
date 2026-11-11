@@ -683,18 +683,18 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  const auto tp = {racc("taps", 2048)};\n  const auto ct = {racc("ctrl", ctrl_bytes)};\n'
                 f'  gb::reader_layer<{B}, {T}, {K}, {Ct}, {M}, {Nv}, {NC}>(g_ab + {OGB}, g_l, wa, wb, tp, ct, {ctrl_bytes}u, '
                 f'{int(gb["gin_addr"])}u, g_gb_qin, g_gb_xs, g_gb_xs + {XWO}u, g_gb_xs + {XRC}u, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, '
-                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n}}\n')
+                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n}}\n'
+                f'void gdn_gb_wait(uint32_t w) {{ noc_semaphore_wait_min(g_ab + {OGB} + (w ? 0u : 131u), (w ? {1 + Vt + VB}u : {2 * Kt}u) * (g_l + 1)); }}\n')
         GB_RINIT = (f'  g_gb_qin = get_write_ptr({GBC["qpx"]}); g_gb_xs = g_gb_qin + 6u * 2048u;\n'
                     f'  gb::reader_init(g_gb_xs + {XWO}u, {B * 1024}u, g_gb_qin + 4u * 2048u);\n')
         _q = [dev.worker_core_from_logical_core(c) for c in cores]
+        GB_RN = 1 + Vt + VB   # rest arrivals per layer: vc + zs (Vt) + the head's gate rows (VB)
         GB_W = (f'static uint32_t g_gb_xs;\n#include "{HERE_}/gb_dm.hpp"\n'
-                f'static constexpr uint8_t gb_gx[{NC}] = {{{", ".join(f"{q.x}u" for q in _q)}}}, '
-                f'gb_gy[{NC}] = {{{", ".join(f"{q.y}u" for q in _q)}}};\n'
                 f'void gdn_in_wait() {{\n  {CRD}\n'
                 f'  const auto pre = {wacc("pre_w", 4096)};\n'
-                f'  gb::writer_layer<{B}, {T}, {Nv}, {NC}, {VB}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u, gb_gx, gb_gy);\n}}\n')
+                f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u);\n}}\n')
         GB_WINIT = f'  g_gb_xs = get_write_ptr({GBC["qpx"]}) + 6u * 2048u;\n'
-        GB_WEND = f'  g_ab[{OGB}] = 0; g_ab[{OGB} + 1] = 0;\n'
+        GB_WEND = f'  g_ab[{OGB}] = 0; g_ab[{OGB} + 1] = 0; g_ab[{OGB} + 131] = 0;\n'
         GB_C = (f'#include "{HERE_}/gb_compute.hpp"\nstatic uint32_t g_gb_l;\n'
                 f'void gdn_gb_compute() {{ gb::compute_layer<{K}>(g_ab + {OGB}, g_gb_l, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, '
                 f'{ids["tmp"][0]}u, {GBC["out"]}u); }}\n')
@@ -929,7 +929,7 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
     for i in range(NC):
         h, s = i // VB, i % VB
         conv = []
-        dst = lambda cons, cb, slot: _gb_rects(fp, cons) + [cbid[cb] | (slot << 16)]
+        dst = lambda cons, cb, slot: _gb_rects(fp, cons) + [cbid[cb] | (slot << 16) | (0x100 if cb == "kq" else 0)]
         if i < v0:
             hk, jj = divmod(i % (Nk * Kt), Kt)
             grp = [h2 * VB + s2 for h2 in range(hk * rf, hk * rf + rf) for s2 in range(VB)]   # the key head's value-head cores
@@ -957,7 +957,8 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
         blk = blocks[i] + [len(pushes[i])]
         for e in pushes[i] + [(0, 0, 0)] * (32 - len(pushes[i])):
             blk += list(e)
-        assert len(blk) == 131, len(blk)
+        blk += [0]   # kKqCnt
+        assert len(blk) == 132, len(blk)
         h = i // VB
         for dt_, ne_ in dn:
             blk += [bits(float(dt_[h])), bits(float(ne_[h]))]

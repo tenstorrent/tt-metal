@@ -124,6 +124,9 @@ void gdn_in_wait();
 #ifndef GDN_GB_DIRECT
 #define GDN_GB_DIRECT 0  // G-b: the prefix writes zs / kc / qc / vc straight into this core's DFB slots (no `pre` reads)
 #endif
+#if GDN_GB_DIRECT
+void gdn_gb_wait(uint32_t which);  // G-b (the including TU): 0 = raw k / q landed, 1 = vc / zs / gate rows landed
+#endif
 #ifndef GDN_RAWKQ
 #define GDN_RAWKQ 0  // G-b (E1_GB): `pre` holds raw conv'd k / q; the compute's l2norm (L2-root fallback)
 #endif
@@ -686,6 +689,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         kq.reserve_back(2 * Kt);
 #if !GDN_GB_DIRECT
         read_tiles_at(pre_acc, kq, noc, base, 2 * Kt, 0);
+#else
+        gdn_gb_wait(0);  // the 2 Kt raw k / q tiles have landed: the compute's l2 starts while vc / zs / gates arrive
+        kq.push_back(2 * Kt);
 #endif
 #else
         knq.reserve_back(2 * Kt);
@@ -704,9 +710,14 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             read_row0_at(w_acc, w_in, noc, t, t);
         }
         noc.async_read_barrier();
+#if GDN_GB_DIRECT
+        gdn_gb_wait(1);  // vc / zs / the head's gate rows have landed
+#endif
         zs.push_back(Vt);
 #if GDN_RAWKQ
+#if !GDN_GB_DIRECT
         kq.push_back(2 * Kt);
+#endif
 #else
         knq.push_back(2 * Kt);
 #endif
