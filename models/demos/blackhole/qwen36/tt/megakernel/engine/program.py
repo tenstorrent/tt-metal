@@ -1821,19 +1821,24 @@ import contextlib
 # The engine configuration used inside vLLM (the §16 v1.22 baseline of run_si_mixed.sh + the attention defines).
 # Override per key with QWEN36_R16_MK_ENV="KEY=VAL KEY=VAL ...". MKA_NU / FM_NL / MK_AMASK are set per bucket.
 ENGINE_ENV = dict(
-    # spec owner, canonical vLLM 1x8-mesh env (batch 3b, -mk-int b1d67e77745): config B + real wo + real attention AR
-    # (u8 1470.6 / u1 1186.3 us per 8 layers, d26u02 mesh). GDN = the MK_SGDN_US stand-in (MKA_GDN24 off until gdnar). MKA_GDN_L1 must stay off (per bucket).
-    MK_SGDN_US="64", MK_SAR_US="18", MKA_SWO_US="10", MKA_CTX="32768", MKA_KVDT="bfp8", MKA_NBB="1",
+    # spec owner, canonical vLLM engine env = the M3 target at -mk-int 1be0c7938bc (batch 5b). The AR agent's -mk-ar5
+    # all-on command line is authoritative for define vs env placement. Defaults on in code: MK_V12_CB, STREAMLEAN /
+    # EXTLEAN, SCLAMP. Off: MK_EXT_DM_OS, MK_AR_GAMMA, MKA_GDN_L1 (per bucket), OWNPAR. Batch 6 adds MK_GAMMA_CONS=1 +
+    # MK_AR_RSTD=1 (real rstd + gamma; until then the norm is the static stand-in). If the full set overflows the
+    # kernel config: drop MK_GDN_INPROJ first, then MKA_RQDYN (QWEN36_R16_MK_ENV="MK_DEFINES=...").
+    MK_SGDN_US="64", MK_SAR_US="18", MKA_SWO_US="10", MKA_CTX="262144", MKA_KVDT="bfp8", MKA_NBB="1",
     MKA_BUDGET="16384", MKA_EXT="1", MK_MIXN="1",
+    MKA_GDN24="1", MKA_GDN_WAIT="1", MKA_GDNOUT="1", MKA_UPAR="1", MKA_KVA="1",
+    MKA_KVPROD="1", MKA_NKVH="1", MKA_KVH="0", MKA_BS="64",
     MK_DEFINES="MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,"
-               "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1",  # MK_V12_CB default-on under MK_V12 since -mk-int 9565e5e6b1d
-    MK_EXT_DM_OS="1",  # batch 3b: needed to fit the EXT text with MK_REAL_AAR (without AAR the attention out is never reduced)
+               "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,"
+               "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQDYN=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1",
 )
 # the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
 PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups")
 
 
-def engine_env(n_users, n_layers):
+def engine_env(n_users, n_layers, layer_types=None):
     env = dict(ENGINE_ENV)
     for kv in os.environ.get("QWEN36_R16_MK_ENV", "").split():
         k, v = kv.split("=", 1)
@@ -1842,6 +1847,8 @@ def engine_env(n_users, n_layers):
     env["FM_NL"] = str(nl)
     env["MKA_NU"] = str(max(1, -(-int(n_users) // 2)))  # own users per chip (u8 -> 4, u1 -> 1)
     env.setdefault("V12_R", str(min(32, 4 * int(n_users))))  # rows of the bucket (u8 32, u1 4)
+    if layer_types is not None:  # the pass's own layer types (a teacher-forced single layer may start anywhere)
+        env.setdefault("MK_AMASK", hex(sum(1 << L for L in range(nl) if layer_types[L] == "attention")))
     env.setdefault("MK_AMASK", hex(sum(1 << L for L in range(nl) if L % 4 == 3)))  # Qwen3.8: every 4th is attention
     return env
 
@@ -1998,7 +2005,7 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     one-core writer op right before the engine op in every replay (their addresses are fixed per capture). x_in / x_out: the stand-in engine runs on its own x; x_out is left to the caller."""
     from models.demos.blackhole.qwen36.tt.megakernel.engine import argblock as AB
 
-    env = engine_env(n_users, len(layer_types))
+    env = engine_env(n_users, len(layer_types), layer_types)
     # model-side addresses the engine's real phases read (persistent, fixed before build): exported as env for setup_bench
     # (attention RQNR / KV append turn them into defines). MKA_AUX_*: _vfy_aux_buf (kvpos row 0, RoPE row 1, ctrl row 2);
     # MKA_ROPE_*: the model's bf16 RM cos / sin tables.
@@ -2049,11 +2056,13 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     # engine reads the model's paged caches in the prod layout instead of CTX-sized synthetic ones
     if "qkv" in _WEIGHTS or "wo" in _WEIGHTS:  # repack order = attention ordinal (weight_layouts)
         env["MKA_W_ORD"] = "1"
-    if os.environ.get("QWEN36_R16_MK_KV_INJECT", "0") == "1" and kv_desc and all(d.get("paged") for d in kv_desc):
+    if env.get("MKA_KVA") == "1":  # the in-engine KV append writes every live user's T rows: n_users of this bucket
+        env["MKA_KVA_NU"] = str(int(n_users))
+    if os.environ.get("QWEN36_R16_MK_KVA", "1") != "1":
+        env["MKA_KVA"] = "0"
+    if os.environ.get("QWEN36_R16_MK_KV_INJECT", "1") == "1" and kv_desc and all(d.get("paged") for d in kv_desc):
         _WEIGHTS["_kv_inject"] = [(d["k"], d["v"]) for d in kv_desc]
         kv0 = kv_desc[0]
-        if os.environ.get("QWEN36_R16_MK_KVA", "0") == "1":  # stream E's in-engine KV append on the model's caches
-            env.update(MKA_KVA="1", MKA_KVA_NU=str(int(n_users)))
         env.update(MKA_KVPROD="1", MKA_NKVH=str(kv0["n_kv_heads"]), MKA_KVH="0", MKA_BS=str(kv0["block_size"]),
                    MKA_KVDT="bfp8" if "BFLOAT8" in str(kv0.get("dtype", "")).upper() else os.environ.get("QWEN36_R16_MK_KVDT", "bfp8"))
     try:
