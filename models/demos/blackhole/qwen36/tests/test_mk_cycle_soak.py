@@ -78,6 +78,10 @@ def test_mk_cycle_soak(mesh_device, monkeypatch):
     untap = _hash_tap(model) if HASH else (lambda: None)
     g = torch.Generator().manual_seed(SEED)
     drv = AsyncDriver(eng, seed=SEED, sampled=lambda s: False)
+    # AsyncDriver is built with recycle=False (its pipeline may _finish a row that the pending step still carries). Rows
+    # here are only released after pipeline() drained (max_new = STEPS * T is never reached inside it), so recycling is
+    # safe, and needed: without it the free list ran dry at cycle 9 (E25a "pop from empty list").
+    drv.recycle = True
     rid = 0
     try:
         for c in range(N):
