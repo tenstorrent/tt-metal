@@ -98,6 +98,18 @@ for it in range(ITERS):
             _g = (_rprev + AR.ring * _in).bfloat16().float()
             _p = torch.corrcoef(torch.stack([_res.flatten(), _g.flatten()]))[0, 1].item()
             _worst.append((round(_p, 6), k_, 'attn' if (AR_ATYPE >> k_) & 1 else 'mlp', round((_res - _g).abs().max().item(), 4), round(_g.abs().max().item(), 3)))
+            if os.environ.get('MK_AR_CHK_DEV', '0') == '1' and _p < 0.99999:   # where, and do the inputs differ by device?
+                _e = (_res - _g).abs() > 4 * (2.0 ** (torch.floor(torch.log2(_g.abs() + 1e-30)) - 7))   # > 4 bf16 ulps
+                _dvt = [_to_torch(t_).float().reshape(TILE, AR_NAR * 2, H)[:V_R] for t_ in ttnn.get_device_tensors(ar_dbgt)]
+                _dv = [t_[:, 2 * k_] for t_ in _dvt]
+                _gs = (_rprev + sum(_dv)).bfloat16().float()
+                _ps = torch.corrcoef(torch.stack([_res.flatten(), _gs.flatten()]))[0, 1].item()
+                _ez = _e.nonzero()
+                print(f"[archk] iter {it} AR {k_}: {int(_e.sum())} elems > 4 ulp; rows {sorted(set(_ez[:, 0].tolist()))[:32]}; owner chunks (320 cols) "
+                      f"{sorted(set((_ez[:, 1] // 320).tolist()))}; vs prev + sum_d in_d pcc {_ps:.6f} max|err| {(_res - _gs).abs().max().item():.4f}; "
+                      f"in max|d - d0| {[round((d_ - _dv[0]).abs().max().item(), 4) for d_ in _dv]}; "
+                      f"res max|d - d0| {[round((t_[:, 2 * k_ + 1] - _res).abs().max().item(), 4) for t_ in _dvt]}; "
+                      f"prev max|d - d0| {[round((t_[:, 2 * k_ - 1] - _rprev).abs().max().item(), 4) for t_ in _dvt] if k_ else '-'}", flush=True)
             _rprev = _res
         print(f"[ar] iter {it} per-AR check (res = prev + ring*in{' | UPAR attn: ring/2*(in_d0+in_d1)' if _UP else ''}): min pcc {min(_worst)} all {[w[0] for w in _worst]}", flush=True)
         if it == 0:   # what the first AR's residual started from: the stand-in x (expected) or zero
