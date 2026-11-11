@@ -87,6 +87,15 @@ def _tokpar_pc(m, k, n, bw, act=None, lim=4, prefer_h=False):
     )
 
 
+
+def _l1_rows_ok(flag, rows_per_chip, args):
+    """A token-parallel L1 placement switch: False / 0 = DRAM, True = L1 at every size, an int = L1 only while the
+    prefill's total rows (rows_per_chip * TP) are <= it (the larger buckets keep the activation in DRAM, where the
+    fp32-accumulating MLP's circular buffers would not fit next to it)."""
+    if isinstance(flag, bool) or not flag:
+        return bool(flag)
+    return rows_per_chip * int(args.cluster_shape[1]) <= int(flag)
+
 class _FusedDistRMSNorm(RMSNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
     (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
@@ -386,7 +395,8 @@ class Qwen36DecoderLayer:
             x8 = ttnn.typecast(x, ttnn.bfloat8_b, memory_config=dram)
         # prefill_tokpar_mlp_l1: gate / up / hidden in L1 (interleaved); prefill_tokpar_silu_mul: SiLU applied by the
         # multiply (input activation) instead of the gate matmul's packer
-        act_mc = ttnn.L1_MEMORY_CONFIG if getattr(self.args, "prefill_tokpar_mlp_l1", False) else dram
+        mlp_l1 = _l1_rows_ok(getattr(self.args, "prefill_tokpar_mlp_l1", False), M, self.args)
+        act_mc = ttnn.L1_MEMORY_CONFIG if mlp_l1 else dram
         silu_mul = getattr(self.args, "prefill_tokpar_silu_mul", False)
         # prefill_tokpar_mlp_cfg2: gate/up with bf16 dest accumulation and 1x8 subblocks,
         # down with in0_block_w 16 / 3x1 subblocks, bf16 dest (263 vs 267-273 us and 242 vs ~258 us at M=672)
@@ -508,7 +518,9 @@ class Qwen36DecoderLayer:
             ttnn.deallocate(a8)
         # prefill_tokpar_res_l1: the [S/tp, dim] residual stream lives in L1 (interleaved, ~46 KB/core at S/tp=672)
         res_mc = (
-            ttnn.L1_MEMORY_CONFIG if getattr(self.args, "prefill_tokpar_res_l1", False) else ttnn.DRAM_MEMORY_CONFIG
+            ttnn.L1_MEMORY_CONFIG
+            if _l1_rows_ok(getattr(self.args, "prefill_tokpar_res_l1", False), x.shape[-2], self.args)
+            else ttnn.DRAM_MEMORY_CONFIG
         )
         h = ttnn.add(x, at, memory_config=res_mc)
         ttnn.deallocate(at)
