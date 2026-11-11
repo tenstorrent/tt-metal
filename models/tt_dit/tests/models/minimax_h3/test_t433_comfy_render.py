@@ -92,9 +92,11 @@ def test_t433_render(mesh_device):
             t1 = time.time()
             output = gen(seed)
             dt = time.time() - t1
-            logger.info(f"t433 warm seed={seed} {dt:.2f}s {dt / STEPS:.2f}s/step")
+            logger.info(f"t433 warm seed={seed} {dt:.2f}s {dt / (STEPS - 1):.2f}s/step")
             with open(OUT / "times.jsonl", "a") as f:
-                f.write(f'{{"seed": {seed}, "gen_s": {dt:.3f}, "steps": {STEPS}, "end": {time.time():.0f}}}\n')
+                f.write(
+                    f'{{"seed": {seed}, "gen_s": {dt:.3f}, "steps": {STEPS}, "forwards": {STEPS - 1}, "end": {time.time():.0f}}}\n'
+                )
             write(output, seed)
         return
     for run in range(int(os.environ.get("T433_RUNS", "2"))):

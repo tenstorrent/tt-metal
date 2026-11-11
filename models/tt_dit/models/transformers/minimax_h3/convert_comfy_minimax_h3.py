@@ -189,7 +189,7 @@ def select_step_heads(
     `heads` order. `channels` maps each projection to its per-head width (video: in_channels * prod(patch_size)).
     Returns the number of heads left per projection (1 when the file has single heads)."""
     storage = (metadata or {}).get("pdd_head_storage", "")
-    offsets = _OFFSET_STORAGE in storage or not storage
+    offsets = _OFFSET_STORAGE in storage
     counts = set()
     for name in STEP_HEAD_KEYS:
         c = channels[name]
@@ -198,6 +198,8 @@ def select_step_heads(
         counts.add(count)
         if count == 1:
             continue
+        if not storage:
+            raise ValueError(f"{name} stacks {count} heads but the file names no pdd_head_storage")
         for part in ("weight", "bias"):
             state[f"{name}.{part}"] = unfold_step_heads(state[f"{name}.{part}"], c, heads, offsets=offsets)
     if counts == {1}:
@@ -207,16 +209,30 @@ def select_step_heads(
     return len(heads)
 
 
-def step_head_selector(step: int, num_steps: int, num_slots: int, channels: int) -> torch.Tensor:
-    """One-hot `[num_slots * C, C]` that picks forward `step`'s head out of the stacked projection output.
+def step_head_slots(sigmas: list[float], heads: list[int], metadata: dict[str, str] | None) -> list[int]:
+    """Slot in `heads` for each forward, picked by its sigma: the head whose point on the contract's pdd grid
+    (`1 - k / pdd_steps` under its video shift) is nearest. With the contract's own schedule this is forward
+    i -> slot i; another step count still runs each forward on the head trained nearest its noise level."""
+    import json
 
-    With the contract's step count, forward i uses slot i; another count spreads the slots evenly, first
-    forward on the first slot and last on the last.
-    """
-    if num_steps == num_slots:
-        slot = step
-    else:
-        slot = round(step * (num_slots - 1) / (num_steps - 1)) if num_steps > 1 else 0
+    raw = (metadata or {}).get("source_inference_contract")
+    contract = json.loads(raw) if raw else {}
+    pdd_steps, shift = contract.get("pdd_steps"), contract.get("video_scheduler_shift")
+    if not pdd_steps or not shift:
+        if len(sigmas) != len(heads):
+            raise ValueError(
+                f"{len(sigmas)} forwards on a {len(heads)}-head contract with no pdd_steps/video_scheduler_shift"
+            )
+        return list(range(len(heads)))
+    grid = [1.0 - h / float(pdd_steps) for h in heads]
+    grid = [shift * g / (1 + (shift - 1) * g) for g in grid]
+    return [min(range(len(grid)), key=lambda k: abs(grid[k] - float(s))) for s in sigmas]
+
+
+def step_head_selector(slot: int, num_slots: int, channels: int) -> torch.Tensor:
+    """One-hot `[num_slots * C, C]` that picks head `slot` out of the stacked projection output."""
+    if not 0 <= slot < num_slots:
+        raise ValueError(f"head slot {slot} out of range for {num_slots} slots")
     sel = torch.zeros(num_slots * channels, channels)
     sel[slot * channels : (slot + 1) * channels] = torch.eye(channels)
     return sel

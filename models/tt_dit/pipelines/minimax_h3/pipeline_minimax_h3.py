@@ -902,7 +902,10 @@ class MiniMaxH3Pipeline:
         if self.transformer_file is None:
             return self.transformer_subfolder
         stat = self.transformer_file.stat()
-        return f"{self.transformer_layout}_{self.transformer_file.stem}_{stat.st_size}"
+        name = f"{self.transformer_layout}_{self.transformer_file.stem}_{stat.st_size}"
+        heads = self._step_head_plan()
+        # The converted cache holds only the planned heads: a new plan must not reuse it.
+        return f"{name}_h{'-'.join(map(str, heads))}" if heads else name
 
     def _head_channels(self) -> dict[str, int]:
         cfg = self.transformer_config
@@ -3010,8 +3013,26 @@ class MiniMaxH3Pipeline:
             return slot_levels(slot_roles, **level_kwargs), slot_levels(slot_roles, **endpoint_kwargs)
 
         step_heads = self._step_head_plan() if self.transformer_file is not None else []
-        if step_heads and len(timesteps) != len(step_heads):
-            logger.warning(f"{len(timesteps)} steps on a {len(step_heads)}-step head contract: heads spread evenly")
+        head_selectors = []
+        if step_heads:
+            # timesteps are 1 - sigma; each forward runs the head trained nearest its sigma.
+            head_slots = comfy_h3.step_head_slots(
+                [1.0 - float(t) for t in timesteps], step_heads, self._transformer_metadata
+            )
+            if head_slots != list(range(len(step_heads))):
+                logger.warning(
+                    f"{len(timesteps)} forwards on a {len(step_heads)}-forward head contract: "
+                    f"heads {[step_heads[s] for s in head_slots]} picked by sigma"
+                )
+            channels = self._head_channels()
+            built = {
+                slot: tuple(
+                    comfy_h3.step_head_selector(slot, len(step_heads), channels[name])
+                    for name in ("proj_out", "audio_proj_out")
+                )
+                for slot in set(head_slots)
+            }
+            head_selectors = [built[slot] for slot in head_slots]
 
         def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None], step: int) -> None:
             timestep, endpoint = levels
@@ -3023,12 +3044,9 @@ class MiniMaxH3Pipeline:
                 timestep_value = comfy_h3.pad_curve(curve).reshape(1, 1, -1, comfy_h3.CURVE_PAD)
             self._tt_timestep.update(timestep_value, traced=traced, dtype=ttnn.float32, device=self.mesh_device)
             if step_heads:
-                channels = self._head_channels()
-                for state_tensor, name in (
-                    (self._tt_video_head_select, "proj_out"),
-                    (self._tt_audio_head_select, "audio_proj_out"),
+                for state_tensor, selector in zip(
+                    (self._tt_video_head_select, self._tt_audio_head_select), head_selectors[step]
                 ):
-                    selector = comfy_h3.step_head_selector(step, len(timesteps), len(step_heads), channels[name])
                     state_tensor.update(selector, traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
             if endpoint is not None:
                 self._tt_endpoint_timestep.update(

@@ -189,17 +189,63 @@ def test_mixed_head_counts_are_refused(expect_error):
         cc.select_step_heads(state, BETA7_CHANNELS, BETA7_HEADS, BETA7_METADATA)
 
 
-@pytest.mark.parametrize("num_steps", [8, 6, 12])
-def test_step_head_selector_picks_one_slot(num_steps):
+def test_multi_head_file_without_storage_is_refused(expect_error):
+    state = {
+        "proj_out.weight": torch.randn(3072, 8),
+        "proj_out.bias": torch.randn(3072),
+        "audio_proj_out.weight": torch.randn(1024, 8),
+        "audio_proj_out.bias": torch.randn(1024),
+    }
+    with expect_error(ValueError, "pdd_head_storage"):
+        cc.select_step_heads(state, BETA7_CHANNELS, BETA7_HEADS, {})
+
+
+BETA7_SIGMA_METADATA = {
+    **BETA7_METADATA,
+    "source_inference_contract": json.dumps(
+        {**json.loads(BETA7_METADATA["source_inference_contract"]), "video_scheduler_shift": 12.0}
+    ),
+}
+
+
+def _forward_sigmas(points: int, shift: float = 12.0) -> list[float]:
+    from models.tt_dit.pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
+
+    sched = MiniMaxH3Scheduler(shift=shift)
+    sched.set_timesteps(points)
+    return [1.0 - float(t) for t in sched.timesteps]  # the pipeline's timesteps are 1 - sigma
+
+
+def test_contract_schedule_runs_each_forward_on_its_contract_head():
+    # 9 sigma points at shift 12 = 8 forwards on the pdd grid's points 0, 4, ..., 28.
+    sigmas = _forward_sigmas(9)
+    assert len(sigmas) == 8
+    slots = cc.step_head_slots(sigmas, BETA7_HEADS, BETA7_SIGMA_METADATA)
+    assert [BETA7_HEADS[s] for s in slots] == list(range(0, 32, 4))
+
+
+@pytest.mark.parametrize("points", [8, 5, 13])
+def test_other_step_counts_pick_the_head_nearest_each_sigma(points):
+    sigmas = _forward_sigmas(points)
+    slots = cc.step_head_slots(sigmas, BETA7_HEADS, BETA7_SIGMA_METADATA)
+    grid = [12 * (1 - h / 32) / (1 + 11 * (1 - h / 32)) for h in BETA7_HEADS]
+    for sigma, slot in zip(sigmas, slots):
+        assert all(abs(grid[slot] - sigma) <= abs(g - sigma) for g in grid)
+    assert slots == sorted(slots) and slots[0] == 0
+
+
+def test_forward_count_mismatch_without_a_sigma_grid_is_refused(expect_error):
+    assert cc.step_head_slots(_forward_sigmas(9), BETA7_HEADS, BETA7_METADATA) == list(range(8))
+    with expect_error(ValueError, "7 forwards"):
+        cc.step_head_slots(_forward_sigmas(8), BETA7_HEADS, BETA7_METADATA)
+
+
+@pytest.mark.parametrize("slot", [0, 3, 7])
+def test_step_head_selector_picks_one_slot(slot, expect_error):
     c, slots = 96, 8
     stacked = torch.randn(5, slots * c)
-    used = []
-    for step in range(num_steps):
-        sel = cc.step_head_selector(step, num_steps, slots, c)
-        assert sel.shape == (slots * c, c)
-        picked = stacked @ sel
-        slot = next(s for s in range(slots) if torch.equal(picked, stacked[:, s * c : (s + 1) * c]))
-        used.append(slot)
-    assert used == sorted(used) and used[0] == 0 and used[-1] == slots - 1
-    if num_steps == slots:
-        assert used == list(range(slots))
+    sel = cc.step_head_selector(slot, slots, c)
+    assert sel.shape == (slots * c, c)
+    assert torch.equal(stacked @ sel, stacked[:, slot * c : (slot + 1) * c])
+    with expect_error(ValueError, "out of range"):
+        cc.step_head_selector(slots, slots, c)
