@@ -244,9 +244,85 @@ using namespace gdn_step;
 
 namespace {
 
+#ifndef GDN_GTEXT2
+#define GDN_GTEXT2 0
+#endif
+// GTEXT2 (E1_GTEXT2): one out-of-line copy per TRISC of the gdn_step row helpers the step inlines at several sites
+// (same calls, same order -> same bits). Per-helper TRISC masks (bit t = TRISC t), chosen by a per-TRISC size sweep.
+#if defined(UCK_CHLKC_UNPACK)
+#define GT2_TB 1
+#elif defined(UCK_CHLKC_MATH)
+#define GT2_TB 2
+#else
+#define GT2_TB 4
+#endif
+// per-variant defaults (bit t = TRISC t; offline sweep of all 32 subsets on the d27u08 mesh capture, all GDN flags on):
+// reducer (GDN_PRE_IN_HOOK) t1 IR; AR corner (GB_NOROOT) t0 RR, t1 IR; plain t0 RR, t1 RR SQ IR. TRISC2 none (grows).
+#if defined(GDN_PRE_IN_HOOK)
+#define GT2_D_RR 0
+#define GT2_D_SQ 0
+#define GT2_D_IR 2
+#elif defined(GB_NOROOT)
+#define GT2_D_RR 1
+#define GT2_D_SQ 0
+#define GT2_D_IR 2
+#else
+#define GT2_D_RR 3
+#define GT2_D_SQ 2
+#define GT2_D_IR 2
+#endif
+#ifndef GT2_M_RR
+#define GT2_M_RR GT2_D_RR  // reduce_rows
+#endif
+#ifndef GT2_M_SQ
+#define GT2_M_SQ GT2_D_SQ  // square_tiles
+#endif
+#ifndef GT2_M_SC
+#define GT2_M_SC 0  // scale_rows (never smaller)
+#endif
+#ifndef GT2_M_IL
+#define GT2_M_IL 0  // inverse_l2 (no change)
+#endif
+#ifndef GT2_M_IR
+#define GT2_M_IR GT2_D_IR  // inverse_rms
+#endif
+#define GT2_ON(m) (GDN_GTEXT2 && ((m) & GT2_TB))
+#if GT2_ON(GT2_M_SQ)
+__attribute__((noinline, noclone)) void gt2_square_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
+    square_tiles(a, out, out_dfb, n);
+}
+#define square_tiles gt2_square_tiles
+#endif
+#if GT2_ON(GT2_M_SC)
+__attribute__((noinline, noclone)) void gt2_scale_rows(uint32_t a, uint32_t b, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
+    scale_rows(a, b, out, out_dfb, n);
+}
+#define scale_rows gt2_scale_rows
+#endif
+#if GT2_ON(GT2_M_IL)
+__attribute__((noinline, noclone)) void gt2_inverse_l2(uint32_t stats, uint32_t eps, uint32_t mask, uint32_t scratch,
+                                                        DataflowBuffer& scratch_dfb, uint32_t inv, DataflowBuffer& inv_dfb,
+                                                        uint32_t post_scale_bits) {
+    inverse_l2(stats, eps, mask, scratch, scratch_dfb, inv, inv_dfb, post_scale_bits);
+}
+#define inverse_l2 gt2_inverse_l2
+#endif
+#if GT2_ON(GT2_M_IR)
+__attribute__((noinline, noclone)) void gt2_inverse_rms(uint32_t stats, uint32_t eps, uint32_t scratch, DataflowBuffer& scratch_dfb,
+                                                         uint32_t inv, DataflowBuffer& inv_dfb, uint32_t inv_n_bits) {
+    inverse_rms(stats, eps, scratch, scratch_dfb, inv, inv_dfb, inv_n_bits);
+}
+#define inverse_rms gt2_inverse_rms
+#endif
+
 // stats = row sums of `tmp` (n tiles); shared by the k l2norm, the q stats (kept through the token loop) and the
 // rmsnorm (one DFB, three call sites)
-inline void reduce_rows(uint32_t n) {
+#if GT2_ON(GT2_M_RR)
+__attribute__((noinline, noclone))
+#else
+inline
+#endif
+void reduce_rows(uint32_t n) {
     compute_kernel_lib::
         reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
             compute_kernel_lib::ReduceInputBlockShape::of(1, n));
