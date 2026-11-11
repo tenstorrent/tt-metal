@@ -181,3 +181,39 @@ def test_native_host_tensorbin_roundtrip(tmp_path, dtype_name):
     model = Model({"weight": SimpleNamespace(data=tensor, on_host=True, device=None)})
     assert cache.verify_saved_model(model, tmp_path)
     assert ttnn.to_torch(tensor).shape == (35, 67)
+
+
+def test_failure_does_not_skip_later_parameters(fake, tmp_path):
+    model = fake.model([torch.ones(2, 3)], RuntimeError("bad first tensor"))
+    other = fake.model([torch.ones(2, 3)], name="next")
+    model.parameters.update(other.parameters)
+    stats = {}
+    assert not cache.verify_saved_model(model, tmp_path, stats=stats)
+    assert stats["parameters_completed"] == 2 and stats["parameters_failed"] == 1
+    assert stats["shards_completed"] == 1 and stats["completed"]
+
+
+def test_interrupt_releases_fresh_tensor_and_marks_incomplete(fake, tmp_path):
+    model = fake.model([torch.ones(2, 3)], [KeyboardInterrupt()], on_host=False)
+    stats = {}
+    try:
+        cache.verify_saved_model(model, tmp_path, stats=stats)
+    except KeyboardInterrupt:
+        pass
+    else:
+        pytest.fail("interrupt was swallowed")
+    assert not stats["completed"] and stats["shards_completed"] == 0
+    assert sum(kind == "deallocate" for kind, _ in fake.events) == 1
+
+
+def test_failed_publication_keeps_unrelated_leaf_and_cleans_staging(fake, tmp_path, monkeypatch):
+    model = fake.model([torch.ones(2, 3)], [torch.zeros(2, 3)])
+    sentinel = tmp_path / "unrelated" / "weight.tensorbin"
+    sentinel.parent.mkdir()
+    sentinel.write_bytes(b"unrelated model stays intact")
+    model.save = lambda directory: (directory / "weight.tensorbin").write_bytes(b"owned fixture")
+    monkeypatch.setenv("TT_DIT_CACHE_VERIFY", "1")
+    cache._publish_cache(model, tmp_path / "candidate", None)
+    assert sentinel.read_bytes() == b"unrelated model stays intact"
+    assert not (tmp_path / "candidate").exists()
+    assert not list(tmp_path.glob(".candidate.staging-*"))
