@@ -386,11 +386,15 @@ def setup_bench(dev, MESH, mesh_identity):
         for kt in range(KT): up_mask[(s0 + 2 * kt + 1) * banks + b] = 1
     def gu_L(L): return gq.reshape(PGU, TILE, TILE) * (1 + up_mask * (2.0 ** (L % 2) - 1))  # exact BFP4 values
     def dn_L(L): return dq.reshape(PDN, TILE, TILE) * (2.0 ** -(L % 3))
-    wgu_all = ttnn.from_torch(torch.cat([gu_L(L).bfloat16() for L in range(NL)]).reshape(1, 1, -1, TILE), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    wd_all = ttnn.from_torch(torch.cat([dn_L(L).bfloat16() for L in range(NL)]).reshape(1, 1, -1, TILE), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # MK_SYNTH_1L (default on in-model: QSK + injected MLP): the fm11 stand-in gate_up / down (never read under MK_V12:
+    # reader / writer guard them with !MK_V12) and the MIXN mixer pages (under QSK the writer's wm runtime arg is wq_all,
+    # and its CB_WM stand-in read is !kQsk) are 1 layer, not NL: 26.2 MB/layer of dead DRAM (1.68 GB/device at NL=64).
+    _NLW = 1 if (QSK and "mlp" in _WEIGHTS and os.environ.get("MK_SYNTH_1L", "1") == "1") else NL
+    wgu_all = ttnn.from_torch(torch.cat([gu_L(L).bfloat16() for L in range(_NLW)]).reshape(1, 1, -1, TILE), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    wd_all = ttnn.from_torch(torch.cat([dn_L(L).bfloat16() for L in range(_NLW)]).reshape(1, 1, -1, TILE), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     PWM = mx_pages.shape[0]
-    wm_all = ttnn.from_torch(torch.cat([(mx_pages * (2.0 ** (L % 2))).bfloat16() for L in range(NL)]).reshape(1, 1, -1, TILE), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    mq = ttnn.to_torch(wm_all).float().reshape(-1, TILE, TILE)[(NL - 1) * PWM:NL * PWM]
+    wm_all = ttnn.from_torch(torch.cat([(mx_pages * (2.0 ** (L % 2))).bfloat16() for L in range(_NLW)]).reshape(1, 1, -1, TILE), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    mq = ttnn.to_torch(wm_all).float().reshape(-1, TILE, TILE)[(_NLW - 1) * PWM:_NLW * PWM]   # (1-layer stand-in: golds unused in-model)
     wmq = torch.zeros(H, NC * MIXN * TILE)
     for c in range(NC):
         b, s0 = mx_slot(c)
