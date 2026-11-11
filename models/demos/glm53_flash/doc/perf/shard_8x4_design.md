@@ -193,9 +193,11 @@ at B 16 (~-2.6 ms per 45-layer step), ~-110 us at B 8, ~-55 us at B 4.
 Each knob is its own kernel define / stream argument, so any subset composes: `GLM53_DSA_SHARD_COMB` the roots' combine
 (att_c / att_dsa_shard_dm1), `GLM53_DSA_SHARD_RS1_EARLY` the roots' RS1 signals + the RS1 lane's gate (fs_read.cpp
 FS_WAIT2), `GLM53_DSA_SHARD_AGK` the AG1 lane's pack (fs_read / fs_send FS_KEYPACK) + the y_ag readers (merge helpers,
-ix_dm1), `GLM53_DSA_SHARD_RSB` the two scatters' chunk geometry (stream arguments only, below). AGK and RS1_EARLY both
+ix_dm1), `GLM53_DSA_SHARD_RSB` the two scatters' chunk geometry (stream arguments only, below), `GLM53_DSA_SHARD_RSNP`
+(on RSB) the scatter lanes' staged pages (fs_read / fs_send FS_SUBPC / FS_SUBD, below). AGK and RS1_EARLY both
 edit fs_read.cpp but different streams: FS_KEYPACK builds the AG1 lane (plain FS_WAIT gate), FS_WAIT2 the RS1 scatter
-lane; one build never takes both (FS_KEYPACK `#error`s under FS_SCATTER). With every knob off the shard kernels are
+lane; one build never takes both (FS_KEYPACK `#error`s under FS_SCATTER; FS_SUBD `#error`s without FS_SCATTER or with
+FS_KEYPACK, and composes with FS_WAIT2). With every knob off the shard kernels are
 instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's two stack-slot variants).
 `tt/galaxy_defaults.py` turns on AGK, AGB and RS1_EARLY (2026-11-11).
 
@@ -209,6 +211,7 @@ instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's 
 | AGB (on AGK) | - | 4 K x 16 36.8 -> 35.7 ms; with RS1_EARLY 34.3 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical with RS1_EARLY | on |
 | RSB | 2977.0 -> 2925.4 us (layers 0-3 with UG16; RS1 wait 325 -> 287, RS2 58 -> 45) | 4 K x 16 33.3 -> 32.7 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical | on |
 | R8 (8-bit radix digits) | 2925.5 -> 2899.6 us (B 16 pos 4095; merge 121 -> 89.5 us) | 4 K x 16 32.7 (both); 1 M x 16 40.5 -> 38.2 ms | bit-identical at B 16 (3 runs); 32 K x 4 and 1 M x 16 user 0 identical | on |
+| RSNP (on RSB) | pending device run (expected RS1 wait 287 -> ~258 us, RS2 45 -> <= ~34 us) | pending device run | pending (offline: every landed byte = RSB's) | off |
 
 The rows ran on the single-knob trees (wt_mrg e7f7dc8443f, wt_rsc ab4bd43c343 / 4d61833e021, wt_rs1 4e59a2c95c0),
 whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the two-field gates are sound for every
@@ -293,6 +296,52 @@ Expected at B 16, 4 K: 2 tokens per lane x (4 + 4) handshakes x ~5 us minus 16 p
 select and merge pass. Probe (test_mk_backend_probe, MLA_PROBE=1): owner_dm1_max 0 -> 1 (the local select) and 1 -> 2
 (AG + merge), ix_dm0 4 -> 5 (the merge alone: ~121 us at B 16 today) must drop; the AG window and everything after mark 2
 must not move.
+
+### RSNP: the reduce-scatters without pad pages (2026-11-11, opt-in, MLA_REV 71)
+
+Why the pad page exists: fs_send.cpp ships PAGE PAIRS -- one fabric scatter packet = 2 x 2 KiB to two NoC addresses --
+and a pair never straddled a batch or a chunk (`static_assert(PPC % NB == 0 && NB % 2 == 0)`), so the per-token
+slice chunk was rounded up to an even page count: the RS1 slice (16 O tiles + 2 stats tiles, 8 rows of fp32 each) is
+18 KB = 9 pages -> RS2_PPC = 10, the RS2 slice 4.5 KB = 3 pages -> RS2B_PPC = 4. Nothing else needs it: the roots write
+bytes [0, DT ob + ST pb) of a slice and every landing read (land_rows, the fold pulls) reads the same range, so the
+pad page is never written (x_rs1 / x_rs2b are ttnn.zeros) and never read; it is no alignment or consumer requirement
+beyond the 10 / 4-page stride. So 1 / 10 of RS1's and 1 / 4 of RS2's bytes and packets are pad.
+
+`GLM53_DSA_SHARD_RSNP=1` (8x4 only, needs RSB: on per-token chunks an odd page count keeps its pad): fabric_stream.py
+`sub=(stride, data)` -> FS_SUBPC / FS_SUBD on both lane kernels. fs_read stages only the slices' data pages in order
+(x page (base + chunk) PPC + sub_col(s)); fs_send pairs them as staged -- slice k's 9th page with slice k + 1's 1st --
+and writes each page of the pair to its own RSB y page (the scatter write's two addresses are independent; consecutive
+pages already land in different DRAM banks); the chunk-end signal stays on the block's last pair (`col + 2 == DPC`). Odd
+t keeps the last slice's first pad page in the last pair (as RSB). Unchanged: x / y shapes and page ids, the roots, the
+signals and waiter counts, every runtime arg; only NB and the two defines differ. Batches: RS1 12 pages in 3 slots
+(72 KB, within RSB's 80 KB; AG2's 3-slot ring), RS2 RSB's 8 in 2 slots. Host: shard_plan.shard_rsnp / rs_slice_bytes /
+fs_sub_col / fs_scatter_packets / rsnp_header_check, rs_stream_args(rsnp=), rs_stream_counts(rsnp=) (bytes, middle-link
+bytes); tests/test_shard_plan_8x4.py (test_rev65_knobs, test_block_chunks_keep_pages, test_block_audits,
+test_shard_knobs_compose, test_galaxy_defaults_shard_tail: 314 pass on RSB, 318 with R8's).
+
+| per source per launch, RSB -> RSNP | t 4 | t 8 | t 16 |
+|---|---|---|---|
+| RS1 / RS2 pages per destination | 40 -> 36 / 16 -> 12 | 80 -> 72 / 32 -> 24 | 160 -> 144 / 64 -> 48 |
+| RS1 packets / batches | 140 / 28 -> 126 / 21 | 280 / 56 -> 252 / 42 | 560 / 112 -> 504 / 84 |
+| RS2 packets / batches | 24 / 6 -> 18 / 6 | 48 / 12 -> 36 / 9 | 96 / 24 -> 72 / 18 |
+| column / row middle link, per direction | 1.25 -> 1.125 MiB / 128 -> 96 KiB | 2.5 -> 2.25 MiB / 256 -> 192 KiB | 5.0 -> 4.5 MiB / 512 -> 384 KiB |
+| chunk-end signals (RS1 + RS2) | 7 + 3 | 7 + 3 | 7 + 3 |
+
+Offline (no device): fs_send / fs_read compiled as fabric_stream.py builds them (_rsnp_kc/cmp_rsnp.sh): knob off
+(RSB and pre-RSB args, RS1_EARLY and probe on / off, AGK + AGB) objdump-identical to 0687018fd13 at t 4 / 8 / 16; RSNP
+compiles at t 1 / 2 / 3 / 4 / 8 / 16 with RS1_EARLY and probe on / off; FS_SUBD without FS_SCATTER and a batch not
+dividing DPC fail to compile. On R8 (3be1572d06a, MLA_REV 70 -> 71; _rsnp2_kc/cmp_rsnp2.sh): fs_send / fs_read knob
+off objdump-identical to 3be1572d06a and RSNP compiling at t 4 / 8 / 16 (RS1_EARLY, probe on / off); ix_dm0 /
+att_dsa_shard_dm1 / ix_dm1 (R8 on / off, RS1_EARLY on / off, probe) objdump-identical with -DMLA_REV=71 for 70 -- the
+define's value is the only difference (no kernel reads it; MLA_SRC 0xc7a14a50 unchanged: RSNP edits no hashed
+directory). FabricStreamScatter.parts() under a stub ttnn for all 32 chips, t 1 .. 32, RS1_EARLY on /
+off (_rsnp_kc/rsnp_args.py) with a line-by-line port of the two kernels' loops: RSB's runtime args, RSB's pages minus
+the pads in RSB's order, one signal per destination; the landed y bit-identical to RSB's and the bytes the landing roots
+read identical even with garbage in x's pad pages. Expected: if RS1 stays bytes-bound at RSB's rate, its wait (probe
+owner_dm1 marks 5 -> 6) drops 287 -> ~258 us at B 16; RS2 (7 -> 8) 45 -> at most ~34 us (not fully bytes-bound): up to
+~40 us per DSA layer (~0.4 ms per 4 K x 16 step), proportionally less at B 4 / 8; marks 6 -> 7 and 8 -> 9 are root-local
+and must not move. The device run: ids / top-4 values bit-identical to the RSB default (4 K x 16 distinct, 3 runs;
+32 K x 4), then the probe.
 
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 

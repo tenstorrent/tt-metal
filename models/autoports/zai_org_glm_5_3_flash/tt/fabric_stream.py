@@ -169,14 +169,18 @@ class _FabricStream:
     lane's NCRISC packs each staged chunk's record keys into one page (fs_read.cpp FS_KEYPACK) and its BRISC ships the
     first H / 32 pages (fs_send.cpp FS_KEYPACK); the staging CB holds slots whole x chunks. keypack=(.., .., xper) (the
     AGK block chunks): one y chunk (H / 32 = xper (q pages + 1) pages) packs xper x chunks in order -- `chunks` counts
-    y chunks, the lane reads xper x chunks per y chunk and signals once per y chunk (fs_send.cpp FS_KP_XPER)."""
+    y chunks, the lane reads xper x chunks per y chunk and signals once per y chunk (fs_send.cpp FS_KP_XPER).
+    sub=(stride, data) (GLM53_DSA_SHARD_RSNP, the scatter only): a chunk = H / 32 / stride sub-chunks of `stride` pages
+    whose first `data` pages hold data -- the lane stages and sends only those (an odd count per chunk keeps the last
+    sub-chunk's first pad page), each to its knob-off page (fs_read.cpp / fs_send.cpp FS_SUBPC / FS_SUBD); nb then
+    divides the staged pages per chunk."""
 
     scatter = False  # FabricStreamScatter: per-destination unicast (fs_send.cpp / fs_read.cpp FS_SCATTER)
 
     def __init__(self, mesh, chunks: int, hidden: int, dst_rows: int, *, lanes=None, nb: int = 16, slots: int = 4,
                  wait: tuple | None = None, cons: tuple | None = None, link_base: int = 0,
                  after: int | None = None, axis: int | None = None, y=None, sync=None,
-                 keypack: tuple | None = None):  # fmt: skip
+                 keypack: tuple | None = None, sub: tuple | None = None):  # fmt: skip
         """link_base: lane h sends on ethernet link link_base + h. after=(semaphore id): the lane opens its
         connections only around its sends (fs_send.cpp FS_LATE_OPEN) and only once that semaphore on the lane core
         was incremented by the link's other holder (FS_AFTER_SEM); it closes before DONE / the consumers' signal.
@@ -202,7 +206,15 @@ class _FabricStream:
         assert chunks % len(self.lanes) == 0, (chunks, len(self.lanes))
         nb = min(nb, self.ppc)
         self.nb, self.slots = nb, slots
-        assert self.ppc % nb == 0 and nb % 2 == 0, (self.ppc, nb)
+        self.sub = None
+        if sub is not None:  # GLM53_DSA_SHARD_RSNP: (stride, data pages, staged pages per chunk)
+            stride, data = (int(v) for v in sub)
+            spc = -(-(self.ppc // stride * data) // 2) * 2
+            assert self.scatter and keypack is None and self.ppc % stride == 0 and 0 < data < stride, (sub, self.ppc)
+            assert spc % nb == 0 and nb % 2 == 0, (spc, nb)
+            self.sub = (stride, data, spc)
+        else:
+            assert self.ppc % nb == 0 and nb % 2 == 0, (self.ppc, nb)
         self.keypack = None
         if (
             keypack is not None
@@ -306,6 +318,10 @@ class _FabricStream:
             rdefs += [("FS_KEYPACK", str(yp)), ("FS_KP_QPAGES", str(self.keypack[1]))]
             if xper > 1:  # the AGK block chunks: one signal per y chunk of xper x chunks
                 sdefs.append(("FS_KP_XPER", str(xper)))
+        if self.sub:  # GLM53_DSA_SHARD_RSNP: both lane kernels stage / send the sub-chunks' data pages only
+            sd = [("FS_SUBPC", str(self.sub[0])), ("FS_SUBD", str(self.sub[1]))]
+            sdefs += sd
+            rdefs += sd
         if self.n > 2 and not row_barrier_defines():  # THE PER-HOP DRAIN: a multi-hop line -> the waiter's row barrier
             sdefs.append(("FS_ROW_BARRIER", "1"))
         if pr:

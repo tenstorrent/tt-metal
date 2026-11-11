@@ -211,7 +211,14 @@ class TPMlaShard(TPM.TPMla):
             # per source; RS2 in 8-page batches; the staging CBs keep their bytes; no kernel change
             # (shard_plan.rs_stream_args: Geometry.streams(t, rsb=) takes the same numbers for the block audit below)
             rsb = SP.shard_rsb(self.P)
-            rsa = SP.rs_stream_args(t, rsb=rsb, P=self.P)
+            # GLM53_DSA_SHARD_RSNP (on RSB): the scatter lanes stage / send only the slices' data pages (9 of 10 / 3 of 4),
+            # paired across slices (fabric_stream.py sub=, fs_read / fs_send FS_SUBPC / FS_SUBD): every data page lands
+            # at its RSB page with the same bytes, the pad pages (never written by the roots, never read) stay home;
+            # x / y / the roots / the signals unchanged (shard_plan.rs_stream_args / fs_scatter_packets)
+            rsnp = SP.shard_rsnp(self.P)
+            if rsnp:
+                SP.rsnp_header_check()
+            rsa = SP.rs_stream_args(t, rsb=rsb, P=self.P, rsnp=rsnp)
             assert (rsa["rs1"]["width"], rsa["rs2"]["width"]) == ((W8 * t, W2B * t) if rsb else (W8, W2B)), rsa
             x_ag = z(t * 32, W32)
             x_rs = z(32, W_RS)
@@ -249,10 +256,11 @@ class TPMlaShard(TPM.TPMla):
             # the scatters' x / y hold the knob-off pages (RSB: the same page ids in block chunks)
             assert pages(x_rs1) == pages(rs1.y) == self.P * t * SP.RS2_PPC, (tuple(x_rs1.shape), tuple(rs1.y.shape))
             assert pages(x_rs2b) == pages(rs2.y) == self.L * t * SP.RS2B_PPC, (tuple(x_rs2b.shape), tuple(rs2.y.shape))
+            assert (rs1.sub is not None, rs2.sub is not None) == (rsnp, rsnp), (rs1.sub, rs2.sub)
             ypg = (SP.AGK_PPC if agk else SP.AG32_PPC) * t  # y_ag pages per block: AGB keeps AGK's page ids
             assert int(ag1.y.shape[-2]) * int(ag1.y.shape[-1]) == geo.n * ypg * 1024, (tuple(ag1.y.shape), ypg)
             return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, agk=agk, agb=agb, rsb=rsb, r8=r8,
-                        x_ag=x_ag, y_ag=ag1.y,
+                        rsnp=rsnp, x_ag=x_ag, y_ag=ag1.y,
                         x_rs=x_rs, y_rs=x_rs,
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],

@@ -1730,37 +1730,132 @@ def shard_rsb(pair: int) -> bool:
     return pair > 2 and _flag("GLM53_DSA_SHARD_RSB")
 
 
-def rs_stream_args(t: int, rsb: bool = False, P: int = 8) -> dict:
+def rs_stream_args(t: int, rsb: bool = False, P: int = 8, rsnp: bool = False) -> dict:
     """the 8x4 shard's RS1 / RS2 FabricStreamScatter arguments (tt/tp_dsa_shard.py builds both scatters and their x
     tensors from these, the plan Geometry.streams(t, rsb=) / block from the same numbers): rows (rows_local: 32 per
     chunk), width (hidden) and the extras (nb=, slots=). Knob off: t chunks of RS2_PPC / RS2B_PPC pages (one per
     token), the default batches (nb = min(16, PPC) = one chunk) in 4 slots -- exactly the pre-RSB constructor calls.
     RSB: one chunk of t PPC pages per destination block; RS1 keeps its 10-page batches in 4 slots (80 KB: the knob-off
     CB), RS2 ships 8-page batches in 2 slots (32 KB: the knob-off CB) when 4 t pages split into them, else the knob-off
-    4-page batches in 4 slots"""
+    4-page batches in 4 slots. RSNP (GLM53_DSA_SHARD_RSNP, on RSB): the same rows / width (x / y / every page id
+    unchanged) plus sub=(PPC, data pages) -- each chunk stages / sends rs_sent_pages(t) pages (t slices' data pages,
+    paired across slices) in batches of the largest even divisor up to RSNP_NB_CAP (RS1 12: 3 slots of 12 = 72 KB,
+    AG2's 3-slot ring, fewer batches than RSB's 10; RS2 RSB's batch), in RSB's slots or as many as RSB's CB holds"""
     assert P > 2, ("the 8x4 scatters", P)
+    assert rsb or not rsnp, "RSNP: on RSB's block chunks"
     if not rsb:
         return dict(rs1=dict(rows=t * 32, width=32 * RS2_PPC, extra={}),
                     rs2=dict(rows=t * 32, width=32 * RS2B_PPC, extra={}))  # fmt: skip
     nb2 = 8 if (RS2B_PPC * t) % 8 == 0 else RS2B_PPC
     slots2 = FS_SLOTS * RS2B_PPC // nb2  # the knob-off bytes: 4 slots x 4 pages
-    return dict(rs1=dict(rows=32, width=32 * RS2_PPC * t, extra=dict(nb=RS2_PPC, slots=FS_SLOTS)),
-                rs2=dict(rows=32, width=32 * RS2B_PPC * t, extra=dict(nb=nb2, slots=slots2)))  # fmt: skip
+    out = dict(rs1=dict(rows=32, width=32 * RS2_PPC * t, extra=dict(nb=RS2_PPC, slots=FS_SLOTS)),
+               rs2=dict(rows=32, width=32 * RS2B_PPC * t, extra=dict(nb=nb2, slots=slots2)))  # fmt: skip
+    if rsnp:
+        for name, stride, data in (("rs1", RS2_PPC, RS1_DATA_PAGES), ("rs2", RS2B_PPC, RS2B_DATA_PAGES)):
+            e, spc = out[name]["extra"], rs_sent_pages(t, data)
+            nb = max(k for k in range(2, RSNP_NB_CAP.get(name, e["nb"]) + 1, 2) if spc % k == 0)
+            slots = min(e["slots"], e["slots"] * e["nb"] // nb)  # the staging CB within RSB's bytes
+            out[name]["extra"] = dict(nb=nb, slots=slots, sub=(stride, data))
+    return out
+
+
+# ------------------------------------------------------------------ the scatters without pad pages (GLM53_DSA_SHARD_RSNP)
+RSNP_NB_CAP = {"rs1": 12}  # RSNP's RS1 batch bound (rs_stream_args; RS2: RSB's batch)
+
+
+def rs_slice_bytes(rows: int, otb: int = 4096, ptb: int = 4096) -> int:
+    """bytes of one 8x4 RS slice (rs_layout: the DT O tiles then the ST stats tiles, `rows` rows of each): the roots'
+    att_dsa_shard_dm1.cpp writes / landing reads cover exactly [0, DT ob + ST pb) of the slice chunk (rsnp_header_check);
+    fp32 O and stats (the largest tiles) 18 KB (8 rows) / 4.5 KB (2 rows); bf16 O 10 / 2.5 KB"""
+    kind, _, off = rs_layout(rows, otb, ptb)[-1]
+    assert kind == "s"
+    return off + ptb * rows // 32
+
+
+RS1_DATA_PAGES = -(-rs_slice_bytes(8) // TB)  # 9 of RS1_PPC = 10: the 8-row slice's pages, then one pad page
+RS2B_DATA_PAGES = -(-rs_slice_bytes(2) // TB)  # 3 of RS2B_PPC = 4: the 2-row slice's pages, then one pad page
+assert (RS1_DATA_PAGES, RS2B_DATA_PAGES) == (RS2_PPC - 1, RS2B_PPC - 1), (RS1_DATA_PAGES, RS2B_DATA_PAGES)
+
+
+def shard_rsnp(pair: int) -> bool:
+    """GLM53_DSA_SHARD_RSNP (default 0; needs GLM53_DSA_SHARD_RSB=1): the 8x4 scatters WITHOUT PAD PAGES. A slice
+    chunk is RS2_PPC = 10 / RS2B_PPC = 4 pages for 9 / 3 data pages (rs_slice_bytes) because fs_send.cpp ships PAGE
+    PAIRS (one 2 x 2 KiB fabric scatter packet) and a pair never straddled a chunk; the roots never write the pad page
+    and no reader reads it. On RSB's block chunks the lane stages only the data pages and pairs them across slices
+    (fs_read.cpp / fs_send.cpp FS_SUBPC / FS_SUBD, fabric_stream.py sub=): every data page lands at its knob-off page
+    with the same bytes, the chunk-end signal stays on each destination's last pair; x / y / the roots unchanged. RS1 10
+    t -> 9 t, RS2 4 t -> 3 t pages per destination (t even; odd t keeps the last slice's pad page). The 8x4 only"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_RSNP")
+    if on and not shard_rsb(pair):
+        raise ValueError("GLM53_DSA_SHARD_RSNP=1 needs GLM53_DSA_SHARD_RSB=1 (the pad-free pairs span a block chunk)")
+    return on
+
+
+def rs_sent_pages(t: int, data: int) -> int:
+    """pages a destination's block chunk of t slices stages / sends under RSNP: t data pages per slice, rounded up to a
+    pair (fs_send.cpp / fs_read.cpp DPC: an odd count keeps the last slice's first pad page)"""
+    return -(-(t * data) // 2) * 2
+
+
+def fs_sub_col(s: int, ppc: int, sub: tuple) -> int:
+    """fs_send.cpp / fs_read.cpp sub_col (FS_SUBPC, FS_SUBD = sub; checked on their text: fs_stage): staged page s of a
+    chunk of ppc pages -> its page in the chunk (sub-chunk s // data, data page s % data; s = the filler of an odd count
+    -> the last sub-chunk's first pad page)"""
+    stride, data = sub
+    k = s // data
+    return k * stride + (s - k * data) if k < ppc // stride else ppc - stride + data
+
+
+def rsnp_header_check() -> None:
+    """the RSNP host mirrors vs the kernels' text: the roots write / land a slice as DT O runs of ob = 2 slice_run(rows,
+    otb) bytes then ST stats runs of pb = 2 slice_run(rows, ptb) bytes from byte 0 of its chunk (att_dsa_shard_dm1.cpp
+    -- rs_slice_bytes, so the pad pages hold nothing anyone reads); fs_read.cpp and fs_send.cpp stage / send the same
+    DPC pages per chunk through the same sub_col"""
+    with open(os.path.join(KDIR, "mla", "att_dsa_shard_dm1.cpp")) as f:
+        dm1 = f.read()
+    for line_ in ("const uint32_t ob = 2 * mlashard::slice_run(mlashard::RS1_ROWS, otb);",
+                  "const uint32_t pb = 2 * mlashard::slice_run(mlashard::RS1_ROWS, ptb);",
+                  "ASSERT(DT * ob + ST * pb <= mlashard::RS1_PPC * mlashard::TB);",
+                  "const uint32_t ob = 2 * mlashard::slice_run(mlashard::RS2_ROWS, otb);",
+                  "ASSERT(DT * ob + ST * pb <= mlashard::RS2B_PPC * mlashard::TB);",
+                  "const uint32_t b = DT * ob + i * pb;", "const uint32_t b = d * ob;",
+                  "const uint32_t ob = 2 * mlashard::slice_run(rows, otb), pb = 2 * mlashard::slice_run(rows, ptb);",
+                  "const uint32_t sl1 = 2 * mlashard::slice_run(mlashard::RS1_ROWS, otb);",
+                  "const uint32_t sl2 = 2 * mlashard::slice_run(mlashard::RS2_ROWS, otb);"):  # fmt: skip
+        assert line_ in dm1, ("att_dsa_shard_dm1.cpp RS slices", line_)
+    with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
+        assert "constexpr uint32_t RS1_PPC = RS2_PPC;" in f.read(), "dsa_shard.hpp RS1_PPC"
+    assert slice_run(8, 4096) * 2 * (DT + ST) == rs_slice_bytes(8) == 18432
+    assert slice_run(2, 4096) * 2 * (DT + ST) == rs_slice_bytes(2) == 4608
+    for k in ("fs_send.cpp", "fs_read.cpp"):
+        with open(os.path.join(KDIR, "fabric_stream", k)) as f:
+            src = f.read()
+        for line_ in ("constexpr uint32_t DPC = (SUB_N * FS_SUBD + 1) / 2 * 2;",
+                      "return k < SUB_N ? k * FS_SUBPC + (s - k * FS_SUBD) : PPC - FS_SUBPC + FS_SUBD;",
+                      "nbat = c_n * DPC / NB;"):  # fmt: skip
+            assert line_ in src, (k, line_)
 
 
 def fs_stage(rows: int, width: int, extra: dict) -> dict:
     """tt/fabric_stream.py _FabricStream (no keypack) from (rows_local, hidden, extras), checked on its text: chunks per
-    block, pages per chunk, the effective batch (nb = min(nb, ppc)), slots, the staging CB bytes (slots x nb pages)"""
+    block, pages per chunk, the effective batch (nb = min(nb, ppc)), slots, the staging CB bytes (slots x nb pages);
+    spc = the pages each chunk stages / sends (ppc; sub= (GLM53_DSA_SHARD_RSNP): the data pages, rs_sent_pages), sub"""
     with open(os.path.join(os.path.dirname(KDIR), "fabric_stream.py")) as f:
         src = f.read()
     for line_ in (f"lanes=None, nb: int = {FS_NB}, slots: int = {FS_SLOTS},", "nb = min(nb, self.ppc)",
-                  "total_size=self.slots * xnb * TB,"):  # fmt: skip
+                  "total_size=self.slots * xnb * TB,", "spc = -(-(self.ppc // stride * data) // 2) * 2",
+                  'sd = [("FS_SUBPC", str(self.sub[0])), ("FS_SUBD", str(self.sub[1]))]'):  # fmt: skip
         assert line_ in src, ("fabric_stream.py _FabricStream", line_)
     ppc = width // 32
     nb = min(int(extra.get("nb", FS_NB)), ppc)
     slots = int(extra.get("slots", FS_SLOTS))
-    assert width % 32 == 0 and ppc % nb == 0 and nb % 2 == 0, (width, nb)
-    return dict(chunks=rows // 32, ppc=ppc, nb=nb, slots=slots, cb_bytes=slots * nb * TB)
+    sub = tuple(int(v) for v in extra["sub"]) if extra.get("sub") is not None else None
+    spc = ppc
+    if sub is not None:
+        assert ppc % sub[0] == 0 and 0 < sub[1] < sub[0], (ppc, sub)
+        spc = rs_sent_pages(ppc // sub[0], sub[1])
+    assert width % 32 == 0 and spc % nb == 0 and nb % 2 == 0, (width, nb, sub)
+    return dict(chunks=rows // 32, ppc=ppc, nb=nb, slots=slots, cb_bytes=slots * nb * TB, spc=spc, sub=sub)
 
 
 def fs_scatter_block(p: int, n: int, chunks: int, first: list | None = None) -> tuple:
@@ -1800,17 +1895,54 @@ def fs_scatter_sends(rows: int, width: int, extra: dict, p: int, dsts: list) -> 
     return out
 
 
-def rs_stream_counts(t: int, rsb: bool = False, P: int = 8, L: int = 4) -> dict:
+def fs_scatter_packets(rows: int, width: int, extra: dict, p: int, dsts: list) -> list:
+    """fs_read.cpp then fs_send.cpp FS_SCATTER, with or without FS_SUBPC / FS_SUBD (extra sub=: GLM53_DSA_SHARD_RSNP),
+    line by line on the scatter's one lane (c_lo = 0, c_n = the block's chunks) of the chip at position p: per
+    destination in `dsts` order fs_read stages its batches (x pages in CB order), fs_send pops them as pairs -> per
+    packet (q, (x page of each staged page), (y page each lands on), signal = the chunk-end packet: `col + 2 == PPC` /
+    DPC). Knob off / RSB: the pairs of fs_scatter_sends (y pages g0, g0 + 1)"""
+    st = fs_stage(rows, width, extra)
+    chunks, ppc, nb, spc, sub = st["chunks"], st["ppc"], st["nb"], st["spc"], st["sub"]
+    row_base, c_lo, c_n = p * chunks, 0, chunks
+    nbat = c_n * spc // nb
+    out = []
+    for q, base, _, _ in dsts:
+        staged = []  # fs_read.cpp: the lane's staged pages of destination q, in CB order
+        for b in range(nbat):
+            for i in range(nb):
+                idx = b * nb + i
+                if sub is None:
+                    staged.append((base + c_lo) * ppc + b * nb + i)
+                else:
+                    staged.append((base + c_lo + idx // spc) * ppc + fs_sub_col(idx % spc, ppc, sub))
+        for b in range(nbat):  # fs_send.cpp: the same batches, a pair per packet
+            for i in range(0, nb, 2):
+                idx = b * nb + i
+                chunk, col = c_lo + idx // spc, idx % spc
+                if sub is None:
+                    g0 = (row_base + chunk) * ppc + col
+                    g1 = g0 + 1
+                else:
+                    g0 = (row_base + chunk) * ppc + fs_sub_col(col, ppc, sub)
+                    g1 = (row_base + chunk) * ppc + fs_sub_col(col + 1, ppc, sub)
+                out.append((q, (staged[idx], staged[idx + 1]), (g0, g1), col + 2 == spc))
+    return out
+
+
+def rs_stream_counts(t: int, rsb: bool = False, P: int = 8, L: int = 4, rsnp: bool = False) -> dict:
     """per source chip and launch, the 8x4 scatters' staging batches (one DRAM read barrier + one send flush each),
     fabric packets (2 pages each), chunk-end signals (flushed atomic incs at the receivers) and the waiter's count per
-    source lane (fs_send.cpp n_lane_ch: chunks per lane), plus each lane's staging CB bytes"""
-    a = rs_stream_args(t, rsb=rsb, P=P)
+    source lane (fs_send.cpp n_lane_ch: chunks per lane), plus each lane's staging CB bytes; bytes = the payload a
+    source sends, mid_bytes = the payload one direction of the line's middle link carries (the n / 2 sources below it
+    to the n / 2 destinations above: RS1's bound, design section 10)"""
+    a = rs_stream_args(t, rsb=rsb, P=P, rsnp=rsnp)
     out = {}
-    for name, n_dst in (("rs1", P - 1), ("rs2", L - 1)):
+    for name, n in (("rs1", P), ("rs2", L)):
         st = fs_stage(a[name]["rows"], a[name]["width"], a[name]["extra"])
-        pages = n_dst * st["chunks"] * st["ppc"]
-        out[name] = dict(batches=pages // st["nb"], packets=pages // 2, signals=n_dst * st["chunks"],
-                         wait_per_source=st["chunks"], cb_bytes=st["cb_bytes"])  # fmt: skip
+        pages = (n - 1) * st["chunks"] * st["spc"]
+        out[name] = dict(batches=pages // st["nb"], packets=pages // 2, signals=(n - 1) * st["chunks"],
+                         wait_per_source=st["chunks"], cb_bytes=st["cb_bytes"], bytes=pages * TB,
+                         mid_bytes=(n // 2) ** 2 * st["chunks"] * st["spc"] * TB)  # fmt: skip
     return out
 
 

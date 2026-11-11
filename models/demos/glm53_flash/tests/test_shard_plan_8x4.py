@@ -700,13 +700,16 @@ def test_rs1_early_gates_sound_random():
 
 
 def test_rev65_knobs(monkeypatch):
-    """GLM53_DSA_SHARD_COMB / GLM53_DSA_SHARD_RS1_EARLY / GLM53_DSA_SHARD_RSB / GLM53_DSA_SHARD_R8: default off, the 8x4
-    only, 0 / 1 only (RSB / R8 need no other knob); the fold's message size is the header's; R8's rounds, mailbox layout
-    (the fine counts after the 4-round messages: 16-B aligned, never more bytes than the 4-bit mailbox) and the merge
-    message count are the kernels'"""
-    for k in ("GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_R8"):
+    """GLM53_DSA_SHARD_COMB / GLM53_DSA_SHARD_RS1_EARLY / GLM53_DSA_SHARD_RSB / GLM53_DSA_SHARD_R8 /
+    GLM53_DSA_SHARD_RSNP: default off, the 8x4 only, 0 / 1 only (RSB / R8 need no other knob, RSNP needs RSB); the fold's
+    message size is the header's; R8's rounds, mailbox layout (the fine counts after the 4-round messages: 16-B aligned,
+    never more bytes than the 4-bit mailbox) and the merge message count are the kernels'; RSNP's data pages per slice
+    (9 of 10 / 3 of 4) are the bytes the roots write and land (checked on the kernels' text)"""
+    for k in ("GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_R8",
+              "GLM53_DSA_SHARD_RSNP"):  # fmt: skip
         monkeypatch.delenv(k, raising=False)
     assert not SP.shard_comb(8) and not SP.shard_rs1_early(8) and not SP.shard_rsb(8) and not SP.shard_r8(8)
+    assert not SP.shard_rsnp(8)
     monkeypatch.setenv("GLM53_DSA_SHARD_R8", "1")
     assert SP.shard_r8(8) and not SP.shard_r8(2)  # on its own (the select / merge kernels and the mailbox only)
     assert not (SP.shard_comb(8) or SP.shard_rs1_early(8) or SP.shard_rsb(8) or SP.shard_agk(8))
@@ -720,8 +723,22 @@ def test_rev65_knobs(monkeypatch):
     with expect_error(ValueError, "GLM53_DSA_SHARD_R8=yes: 0 or 1"):
         SP.shard_r8(8)
     monkeypatch.delenv("GLM53_DSA_SHARD_R8")
+    monkeypatch.setenv("GLM53_DSA_SHARD_RSNP", "1")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_RSNP=1 needs GLM53_DSA_SHARD_RSB=1"):
+        SP.shard_rsnp(8)
+    assert not SP.shard_rsnp(2)  # the pair / the 2x4: never (no RSB there either)
     monkeypatch.setenv("GLM53_DSA_SHARD_RSB", "1")
     assert SP.shard_rsb(8) and not SP.shard_rsb(2)  # on its own (the scatters only)
+    assert SP.shard_rsnp(8) and not SP.shard_rsnp(2)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RSNP", "yes")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_RSNP=yes: 0 or 1"):
+        SP.shard_rsnp(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_RSNP")
+    SP.rsnp_header_check()
+    assert (SP.RS1_DATA_PAGES, SP.RS2B_DATA_PAGES) == (9, 3)  # + one pad page each: RS2_PPC = 10, RS2B_PPC = 4
+    assert [SP.rs_slice_bytes(r, otb) for r in (8, 2) for otb in (4096, 2048)] == [18432, 10240, 4608, 2560]
+    with expect_error(AssertionError, "RSNP: on RSB's block chunks"):
+        SP.rs_stream_args(4, rsnp=True)
     monkeypatch.setenv("GLM53_DSA_SHARD_COMB", "1")
     monkeypatch.setenv("GLM53_DSA_SHARD_RS1_EARLY", "1")
     assert SP.shard_comb(8) and SP.shard_rs1_early(8)
@@ -866,7 +883,12 @@ def test_block_chunks_keep_pages(t):
     the same pages with one signal per block; the batch / signal counts per launch. GLM53_DSA_SHARD_RSB: the 8x4
     scatters' block chunks send every chip's page pairs in the knob-off order (RS1 early's order too) from the roots'
     rs1_page / rs2b_page chunks to the landing roots' reads of source block p, each landed page once, the chunk-end
-    signal on each destination's last pair only; the staging CBs keep their bytes"""
+    signal on each destination's last pair only; the staging CBs keep their bytes. GLM53_DSA_SHARD_RSNP (on RSB): the
+    same lanes stage / send only the slices' data pages (fs_scatter_packets: fs_read.cpp + fs_send.cpp FS_SUBPC /
+    FS_SUBD) -- every page goes from RSB's x page to RSB's y page, in RSB's order, all data pages and no pad page (odd t:
+    the last slice's first pad page closes the last pair, as in RSB), the signal on each destination's last pair; the
+    landed y equals RSB's (x's pads zero) and the bytes the landing roots read are identical; 9 / 10 and 3 / 4 of the
+    bytes and packets at even t, the staging CB within RSB's bytes"""
     T, seen = t, {}
     for blk in range(32):
         sends = SP.agb_ag1_sends(T, blk)
@@ -910,11 +932,64 @@ def test_block_chunks_keep_pages(t):
         assert (off["wait_per_source"], on["wait_per_source"]) == (t, 1)  # the waiter's count per source lane
         assert on["packets"] == off["packets"] == (n - 1) * t * ppc // 2 and on["cb_bytes"] == off["cb_bytes"]
         assert on["batches"] == (off["batches"] // 2 if (name == "rs2" and t % 2 == 0) else off["batches"])
+        # RSNP: the RSB lanes without the pad pages
+        data = SP.RS1_DATA_PAGES if name == "rs1" else SP.RS2B_DATA_PAGES
+        a_b, a_n = SP.rs_stream_args(t, rsb=True)[name], SP.rs_stream_args(t, rsb=True, rsnp=True)[name]
+        assert (a_n["rows"], a_n["width"]) == (a_b["rows"], a_b["width"]) and a_n["extra"]["sub"] == (ppc, data)
+        st_b, st_n = (SP.fs_stage(a["rows"], a["width"], a["extra"]) for a in (a_b, a_n))
+        assert (
+            st_n["spc"] == SP.rs_sent_pages(t, data) == t * data + (t * data) % 2
+            and st_n["cb_bytes"] <= st_b["cb_bytes"]
+        )
+        for p in range(n):
+            for first in (None, SP.rs1_early_first(p, 8)) if name == "rs1" else (None,):
+                *_, dsts = SP.fs_scatter_block(p, n, 1, first)
+                pk_b = SP.fs_scatter_packets(a_b["rows"], a_b["width"], a_b["extra"], p, dsts)
+                pk_n = SP.fs_scatter_packets(a_n["rows"], a_n["width"], a_n["extra"], p, dsts)
+                sends_b = SP.fs_scatter_sends(a_b["rows"], a_b["width"], a_b["extra"], p, dsts)
+                assert [(q, xs[0], ys[0], sig) for q, xs, ys, sig in pk_b] == sends_b  # the two RSB ports agree
+                assert all(xs[1] == xs[0] + 1 and ys[1] == ys[0] + 1 for _, xs, ys, _ in pk_b)
+                pg_b = [(q, xs[j], ys[j]) for q, xs, ys, _ in pk_b for j in (0, 1)]
+                pg_n = [(q, xs[j], ys[j]) for q, xs, ys, _ in pk_n for j in (0, 1)]
+                fill = page(t, p, t - 1) + data if (t * data) % 2 else None  # odd t: the pair filler
+                assert pg_n == [e for e in pg_b if e[2] % ppc < data or e[2] == fill]
+                assert all(x_ - page(t, q, 0) == y_ - page(t, p, 0) for q, x_, y_ in pg_n)  # x page -> its RSB y page
+                lastq = {q: i for i, (q, _, _, _) in enumerate(pk_n)}
+                assert [sig for *_, sig in pk_n] == [i == lastq[q] for i, (q, _, _, _) in enumerate(pk_n)]
+                # landing: random x data pages, zero pads (ttnn.zeros, never written by the roots); y zeros
+                gen = torch.Generator().manual_seed(1000 * p + t)
+                xv = torch.randint(1, 1 << 30, (n * t * ppc,), generator=gen)
+                xv[torch.arange(n * t * ppc) % ppc >= data] = 0
+                y_b, y_n = {}, {}
+                for pg_, yd in ((pg_b, y_b), (pg_n, y_n)):
+                    for q, x_, y_ in pg_:
+                        yd[(q, y_)] = int(xv[x_])
+                assert {k: v for k, v in y_b.items() if v} == {k: v for k, v in y_n.items() if v}  # y bit-identical
+                for q, _, _, _ in dsts:  # the landing root of q reads [0, DT ob + ST pb) of block p's slices
+                    for otb in (4096, 2048):
+                        nbytes = SP.rs_slice_bytes(8 if name == "rs1" else 2, otb)
+                        for tok in range(t):
+                            for b in range(0, nbytes, 256):
+                                y_ = page(t, p, tok) + b // SP.TB
+                                assert y_n[(q, y_)] == y_b[(q, y_)] == int(xv[page(t, q, tok) + b // SP.TB])
+        c_n = SP.rs_stream_counts(t, rsb=True, rsnp=True)[name]
+        assert (c_n["signals"], c_n["wait_per_source"]) == (on["signals"], on["wait_per_source"]) == (n - 1, 1)
+        assert c_n["packets"] * 2 == c_n["bytes"] // SP.TB == (n - 1) * SP.rs_sent_pages(t, data)
+        if t % 2 == 0:  # 9 / 10 (RS1), 3 / 4 (RS2) of RSB's bytes, packets and middle-link bytes
+            assert c_n["bytes"] * ppc == on["bytes"] * data and c_n["packets"] * ppc == on["packets"] * data
+            assert c_n["mid_bytes"] * ppc == on["mid_bytes"] * data
     if t == 16:  # per source and launch: 112 + 48 chunk-end signals -> 7 + 3; RS2 48 -> 24 batches
         c0, c1 = SP.rs_stream_counts(16), SP.rs_stream_counts(16, rsb=True)
         assert [c0[k]["signals"] for k in c0] == [112, 48] and [c1[k]["signals"] for k in c1] == [7, 3]
         assert (c0["rs2"]["batches"], c1["rs2"]["batches"]) == (48, 24)
         assert [c1[k]["cb_bytes"] for k in c1] == [c0[k]["cb_bytes"] for k in c0] == [81920, 32768]
+        # RSNP at t 16, per source and launch: RS1 560 -> 504 packets (84 batches of 12 in 3 slots), RS2 96 -> 72 (18
+        # of 8); the column's middle link 5.0 -> 4.5 MiB per direction, the row's 512 -> 384 KiB; signals stay 7 + 3
+        c2 = SP.rs_stream_counts(16, rsb=True, rsnp=True)
+        assert [(c1[k]["packets"], c2[k]["packets"]) for k in c1] == [(560, 504), (96, 72)]
+        assert [(c1[k]["batches"], c2[k]["batches"]) for k in c1] == [(112, 84), (24, 18)]
+        assert [(c1[k]["mid_bytes"], c2[k]["mid_bytes"]) for k in c1] == [(5242880, 4718592), (524288, 393216)]
+        assert [c2[k]["signals"] for k in c2] == [7, 3] and [c2[k]["cb_bytes"] for k in c2] == [73728, 32768]
 
 
 @pytest.mark.parametrize("t", [1, 2, 3, 4, 8, 16, 32])
@@ -946,6 +1021,8 @@ def test_block_audits(t):
             assert (st[name]["chunks"], st[name]["width"]) == (a[name]["rows"] // 32, a[name]["width"])
             assert st[name]["chunks"] * st[name]["width"] // 32 == ppc * t  # a destination block: t slices
         assert geo.holders(0, 1, t) == geo.holders(0, 1, 1) and geo.header_budget(0, 1, t) == geo.header_budget(0, 1, 1)
+    a, an = SP.rs_stream_args(t, rsb=True), SP.rs_stream_args(t, rsb=True, rsnp=True)  # RSNP: RSB's rows / width
+    assert all((an[k]["rows"], an[k]["width"]) == (a[k]["rows"], a[k]["width"]) for k in a)  # -> RSB's blocks / audit
     if t > 1:
         bad = "chip (0, 0) stream rs1: blocks {'p': 0, 'src': None, 'dst': 0, 'local': False, 'up': 7, 'dn': 0, 'dsts': [(1, 1, 0, 1),"
         with expect_error(ValueError, re.escape(bad) + f".*'dsts': \\[\\(1, {t}, 0, 1\\),"):
@@ -973,6 +1050,7 @@ KNOB_ENV = {
     "agk": "GLM53_DSA_SHARD_AGK",
     "agb": "GLM53_DSA_SHARD_AGB",
     "rsb": "GLM53_DSA_SHARD_RSB",
+    "rsnp": "GLM53_DSA_SHARD_RSNP",
 }
 
 
@@ -988,22 +1066,31 @@ def _knob_env(monkeypatch, on: dict) -> None:
 @pytest.mark.parametrize("t", [1, 4, 16])
 @pytest.mark.parametrize("bits", range(1 << len(KNOB_ENV)))
 def test_shard_knobs_compose(monkeypatch, bits, t):
-    """every subset of COMB / RS1_EARLY / AGK / AGB / RSB: each flag reads its own variable only (the 8x4 only; AGB
-    without AGK is refused), and every chip's stream plan takes RS1_EARLY's destination order, AGK / AGB's AG format and
-    RSB's scatter chunks independently -- RS1 early reorders the column scatter's destinations and nothing else, the
-    AG blocks follow the AG knobs only, the scatters' chunk bases follow RSB only (the streams' blocks == the plan's:
-    audit_ag_blocks / audit_rs_blocks), link holders / packet headers are the knob-off plan's; AGK's key-packed y_ag
-    keeps every page once and the q pieces where the merge / ix_dm1 read them"""
+    """every subset of COMB / RS1_EARLY / AGK / AGB / RSB / RSNP: each flag reads its own variable only (the 8x4 only;
+    AGB without AGK and RSNP without RSB are refused), and every chip's stream plan takes RS1_EARLY's destination order,
+    AGK / AGB's AG format and RSB's scatter chunks independently -- RS1 early reorders the column scatter's destinations
+    and nothing else, the AG blocks follow the AG knobs only, the scatters' chunk bases follow RSB only (RSNP keeps
+    RSB's rows / width: only the lanes' staged pages change), the streams' blocks == the plan's (audit_ag_blocks /
+    audit_rs_blocks), link holders / packet headers are the knob-off plan's; AGK's key-packed y_ag keeps every page once
+    and the q pieces where the merge / ix_dm1 read them"""
     on = {k: bool(bits >> i & 1) for i, k in enumerate(KNOB_ENV)}
     _knob_env(monkeypatch, on)
     if on["agb"] and not on["agk"]:
         with expect_error(ValueError, "GLM53_DSA_SHARD_AGB=1 needs GLM53_DSA_SHARD_AGK=1"):
             SP.shard_agb(8)
         return
+    if on["rsnp"] and not on["rsb"]:
+        with expect_error(ValueError, "GLM53_DSA_SHARD_RSNP=1 needs GLM53_DSA_SHARD_RSB=1"):
+            SP.shard_rsnp(8)
+        return
     got = dict(comb=SP.shard_comb(8), rs1_early=SP.shard_rs1_early(8), agk=SP.shard_agk(8), agb=SP.shard_agb(8),
-               rsb=SP.shard_rsb(8))  # fmt: skip
+               rsb=SP.shard_rsb(8), rsnp=SP.shard_rsnp(8))  # fmt: skip
     assert got == on
     assert not (SP.shard_comb(2) or SP.shard_rs1_early(2) or SP.shard_agk(2) or SP.shard_agb(2) or SP.shard_rsb(2))
+    assert not SP.shard_rsnp(2)
+    a, a0 = SP.rs_stream_args(t, rsb=on["rsb"], rsnp=on["rsnp"]), SP.rs_stream_args(t, rsb=on["rsb"])
+    assert all((a[k]["rows"], a[k]["width"]) == (a0[k]["rows"], a0[k]["width"]) for k in a)
+    assert all(("sub" in a[k]["extra"]) == on["rsnp"] for k in a)
     g, early, ag, rs = SP.Geometry(8, 4), on["rs1_early"], dict(agk=on["agk"], agb=on["agb"]), dict(rsb=on["rsb"])
     SP.audit_ag_blocks(g, t, **ag)
     SP.audit_rs_blocks(g, t, rs1_early=early, **rs)
@@ -1037,7 +1124,8 @@ def _protect_env(monkeypatch, keys) -> None:
 
 def test_galaxy_defaults_shard_tail(monkeypatch):
     """tt/galaxy_defaults.py: the 8x4 default turns on AGK, AGB, RS1_EARLY, RSB and R8 (validated: 4 K x 16 bit-identical
-    to knob-off over 3 runs, 32 K x 4 ids identical) and leaves COMB (ids move at a near-tie) opt-in; an explicit
+    to knob-off over 3 runs, 32 K x 4 ids identical) and leaves COMB (ids move at a near-tie) and RSNP (pending its
+    device run) opt-in; an explicit
     environment value wins (an explicit AGK=0 drops the AGB default with it); other meshes get nothing"""
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
 
@@ -1046,6 +1134,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_RS1_EARLY"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_AGB"] == "1"
     assert "GLM53_DSA_SHARD_COMB" not in GD.KNOBS
     assert GD.KNOBS["GLM53_DSA_SHARD_RSB"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_R8"] == "1"
+    assert "GLM53_DSA_SHARD_RSNP" not in GD.KNOBS  # opt-in until its device run
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
     keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB"]
     _protect_env(monkeypatch, keys)
@@ -1053,7 +1142,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     got = GD.apply((8, 4), 4096, 4096)
     assert got["GLM53_DSA_SHARD_AGK"] == got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_RS1_EARLY"] == "1"
     assert SP.shard_agk(8) and SP.shard_agb(8) and SP.shard_rs1_early(8) and not SP.shard_comb(8)
-    assert got["GLM53_DSA_SHARD_RSB"] == "1" and SP.shard_rsb(8)
+    assert got["GLM53_DSA_SHARD_RSB"] == "1" and SP.shard_rsb(8) and not SP.shard_rsnp(8)
     assert got["GLM53_DSA_SHARD_R8"] == "1" and SP.shard_r8(8)
     _protect_env(monkeypatch, keys)
     monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "0")  # an explicit value wins

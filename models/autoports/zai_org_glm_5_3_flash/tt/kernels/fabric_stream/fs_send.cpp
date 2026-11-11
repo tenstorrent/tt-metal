@@ -23,7 +23,12 @@
 // (count-prefixed). FS_KEYPACK (rev 68, tt/fabric_stream.py keypack=): a staged batch = one x chunk that fs_read.cpp
 // packed in place; only its first FS_KEYPACK pages go out (y holds FS_KEYPACK pages per chunk, one chunk-end signal
 // each as before). FS_KP_XPER (the AGK block chunks, tt/fabric_stream.py keypack=(.., xper)): one y chunk = FS_KP_XPER
-// x chunks' packed pages in order (row_base counts y chunks), the signal only on its last x chunk. MK_PROBE_ARG
+// x chunks' packed pages in order (row_base counts y chunks), the signal only on its last x chunk. FS_SUBPC / FS_SUBD
+// (GLM53_DSA_SHARD_RSNP, tt/fabric_stream.py sub=; the scatter only): a chunk = PPC / FS_SUBPC sub-chunks of FS_SUBPC
+// pages whose first FS_SUBD hold data (the 8x4 RS slices: 9 of 10 / 3 of 4, the rest a pad page): only the data pages
+// are staged (fs_read.cpp, in order) and sent, so a pair may join sub-chunk k's last data page with k + 1's first --
+// the scatter write's two destination addresses are independent (sub_col: each page lands where the knob-off sends
+// it); an odd data count per chunk keeps its last sub-chunk's first pad page in the last pair. MK_PROBE_ARG
 // (tt/fabric_stream.py probe=, the shard phase probe: kernels/mk/probe.hpp): the probe pair after the scatter block
 // (before the fabric connections); marks: start, the first batch staged + the link opened, the sends done, closed
 // (DONE), the waiter's completion (lane 0) -> one row of the MkMla probe tensor.
@@ -45,7 +50,24 @@ constexpr uint32_t NB = get_compile_time_arg_val(1);   // pages per staging batc
 constexpr uint32_t CB_STAGE = get_compile_time_arg_val(2);
 constexpr uint32_t TB = 2048;
 constexpr uint32_t NHDR = 4;  // data-header ring per direction: flush only when a header is reused
+// GLM53_DSA_SHARD_RSNP: the chunk's data pages only (fs_read.cpp: the same sub_col)
+#if defined(FS_SUBD)
+#if !defined(FS_SCATTER) || defined(FS_KEYPACK)
+#error "FS_SUBD: the scatter's plain chunks only"
+#endif
+constexpr uint32_t SUB_N = PPC / FS_SUBPC;               // sub-chunks per chunk
+constexpr uint32_t DPC = (SUB_N * FS_SUBD + 1) / 2 * 2;  // pages staged / sent per chunk (pairs)
+static_assert(PPC % FS_SUBPC == 0 && FS_SUBD > 0 && FS_SUBD < FS_SUBPC, "sub-chunks: data pages, then pad");
+static_assert(DPC % NB == 0 && NB % 2 == 0, "page pairs never straddle a batch or a chunk");
+// staged page s of a chunk -> its page in the chunk: sub-chunk s / FS_SUBD, data page s % FS_SUBD; s = SUB_N FS_SUBD
+// (the filler of an odd data count) -> the last sub-chunk's first pad page
+inline uint32_t sub_col(uint32_t s) {
+    const uint32_t k = s / FS_SUBD;
+    return k < SUB_N ? k * FS_SUBPC + (s - k * FS_SUBD) : PPC - FS_SUBPC + FS_SUBD;
+}
+#else
 static_assert(PPC % NB == 0 && NB % 2 == 0, "page pairs never straddle a batch or a chunk");
+#endif
 
 using Hdr = tt::tt_fabric::LowLatencyPacketHeader;
 
@@ -147,7 +169,11 @@ void kernel_main() {
         d.conn.send_payload_without_header_non_blocking_from_address(src, 2 * TB);
         d.conn.send_payload_flush_non_blocking_from_address((uint32_t)h, sizeof(Hdr));
     };
+#if defined(FS_SUBD)
+    const uint32_t nbat = c_n * DPC / NB;
+#else
     const uint32_t nbat = c_n * PPC / NB;
+#endif
 #if defined(FS_LATE_OPEN)  // tt/fabric_stream.py after=: the link is held only around the sends, opened once the
     // lane that owns the link signalled its release (FS_AFTER_SEM on this core)
     bool opened = false;
@@ -187,6 +213,12 @@ void kernel_main() {
 #else
                 const uint32_t g0 = (row_base + chunk) * FS_KEYPACK + col;
 #endif
+#elif defined(FS_SUBD)  // the staged pair (col, col + 1) of the chunk -> pages sub_col(col), sub_col(col + 1)
+            for (uint32_t i = 0; i < NB; i += 2) {
+                const uint32_t idx = b * NB + i;  // this lane's staged page index
+                const uint32_t chunk = c_lo + idx / DPC, col = idx % DPC;
+                const uint32_t g0 = (row_base + chunk) * PPC + sub_col(col);
+                const uint32_t g1 = (row_base + chunk) * PPC + sub_col(col + 1);
 #else
             for (uint32_t i = 0; i < NB; i += 2) {
                 const uint32_t idx = b * NB + i;  // this lane's page index
@@ -196,13 +228,23 @@ void kernel_main() {
                 const uint32_t src = buf + i * TB;
                 if (local) {
                     noc_async_write_page(g0, y, src);
+#if defined(FS_SUBD)
+                    noc_async_write_page(g1, y, src + TB);
+#else
                     noc_async_write_page(g0 + 1, y, src + TB);
+#endif
                 }
+#if defined(FS_SUBD)
+                const uint64_t d0 = y.get_noc_addr(g0, 0, 0), d1 = y.get_noc_addr(g1, 0, 0);
+#else
                 const uint64_t d0 = y.get_noc_addr(g0, 0, 0), d1 = y.get_noc_addr(g0 + 1, 0, 0);
+#endif
 #if defined(FS_KEYPACK) && defined(FS_KP_XPER)
                 const bool last = col + 2 == FS_KEYPACK && (chunk + 1) % FS_KP_XPER == 0;
 #elif defined(FS_KEYPACK)
                 const bool last = col + 2 == FS_KEYPACK;
+#elif defined(FS_SUBD)
+                const bool last = col + 2 == DPC;  // the chunk's last staged pair
 #else
                 const bool last = col + 2 == PPC;
 #endif

@@ -8,6 +8,8 @@
 // send. FS_SCATTER (tt/fabric_stream.py FabricStreamScatter): after the wait count, n_dst then the n_dst source chunk
 // bases (block q of x for destination q): the lane streams its share of each destination's block in turn, in the order
 // fs_send.cpp sends them. FS_KEYPACK (rev 68, below): each staged chunk's candidate records -> one key page.
+// FS_SUBPC / FS_SUBD (GLM53_DSA_SHARD_RSNP, the scatter only; fs_send.cpp): a chunk's sub-chunks of FS_SUBPC pages
+// stage only their first FS_SUBD (data) pages, in order -- the pad pages are never read nor sent.
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -16,7 +18,21 @@ constexpr uint32_t PPC = get_compile_time_arg_val(0);  // pages per chunk
 constexpr uint32_t NB = get_compile_time_arg_val(1);   // pages per batch
 constexpr uint32_t CB_STAGE = get_compile_time_arg_val(2);
 constexpr uint32_t TB = 2048;
+#if defined(FS_SUBD)  // GLM53_DSA_SHARD_RSNP: fs_send.cpp's SUB_N / DPC / sub_col (the same staged order)
+#if !defined(FS_SCATTER) || defined(FS_KEYPACK)
+#error "FS_SUBD: the scatter's plain chunks only"
+#endif
+constexpr uint32_t SUB_N = PPC / FS_SUBPC;
+constexpr uint32_t DPC = (SUB_N * FS_SUBD + 1) / 2 * 2;
+static_assert(PPC % FS_SUBPC == 0 && FS_SUBD > 0 && FS_SUBD < FS_SUBPC, "sub-chunks: data pages, then pad");
+static_assert(DPC % NB == 0, "a batch never straddles a chunk");
+inline uint32_t sub_col(uint32_t s) {
+    const uint32_t k = s / FS_SUBD;
+    return k < SUB_N ? k * FS_SUBPC + (s - k * FS_SUBD) : PPC - FS_SUBPC + FS_SUBD;
+}
+#else
 static_assert(PPC % NB == 0, "a batch never straddles a chunk");
+#endif
 #if defined(FS_KEYPACK)
 // rev 68, the KEY PACK (tt/fabric_stream.py keypack=; the 8x4 DSA shard's AG round 1, kernels/mla/dsa_shard.hpp AGK):
 // a staged batch is ONE x chunk (NB = PPC pages: FS_KP_QPAGES q-piece pages, then the candidate bytes = a KP_REC_HDR-
@@ -55,7 +71,11 @@ void kernel_main() {
     noc_semaphore_wait_min(wsem, wait_count);
 #endif
 #endif
+#if defined(FS_SUBD)
+    const uint32_t nbat = c_n * DPC / NB;
+#else
     const uint32_t nbat = c_n * PPC / NB;
+#endif
 #if defined(FS_SCATTER)
 #if defined(FS_WAIT)
     constexpr uint32_t SC0 = 5;
@@ -88,9 +108,16 @@ void kernel_main() {
         for (uint32_t b = 0; b < nbat; b++) {
             cb_reserve_back(CB_STAGE, NB);
             const uint32_t wp = get_write_ptr(CB_STAGE);
+#if defined(FS_SUBD)  // staged page idx of the lane: chunk idx / DPC, its page sub_col(idx % DPC)
+            for (uint32_t i = 0; i < NB; i++) {
+                const uint32_t idx = b * NB + i;
+                noc_async_read_page((base + c_lo + idx / DPC) * PPC + sub_col(idx % DPC), x, wp + i * TB);
+            }
+#else
             for (uint32_t i = 0; i < NB; i++) {
                 noc_async_read_page((base + c_lo) * PPC + b * NB + i, x, wp + i * TB);
             }
+#endif
             noc_async_read_barrier();
 #if defined(FS_KEYPACK)
             {
