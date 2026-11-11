@@ -55,6 +55,9 @@
 #endif
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
+#ifndef GSTEP_KTLATE
+#define GSTEP_KTLATE 0  // engine GDN role (BATCH + VSPLIT): the kts -> kt_out transposes in c_D's head-exchange wait
+#endif
 #ifndef GSTEP_WYPAIR
 #define GSTEP_WYPAIR 0  // engine GDN role (BATCH): c_wy on paired K_u / Q_u tiles (32 matmuls, not 64) + a DST half swap
 #endif
@@ -64,14 +67,16 @@
 namespace ckernel::sfpu {
 // exact fp32 exchange of DST tile a's face row 1 (faces 2, 3) with tile b's face row 0 (faces 0, 1); VectorMode::R
 // runs it for faces 0 and 1 (16 rows each), so the offsets below address a's faces 2 / 3 and b's faces 0 / 1
+// (DST tiles a = 0, b = 1: constant offsets, so the instructions are immediates)
 template <int ITERATIONS = 8>
-inline void gstep_swap_half(const uint a, const uint b, const uint) {
+inline void gstep_swap_half(const uint, const uint, const uint) {
     constexpr InstrModLoadStore m = GetSfpLoadStoreInstrMod<DataFormat::Float32>();
+#pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, m, ADDR_MOD_7, a * 64 + 32);
-        TT_SFPLOAD(p_sfpu::LREG1, m, ADDR_MOD_7, b * 64);
-        TT_SFPSTORE(p_sfpu::LREG0, m, ADDR_MOD_7, b * 64);
-        TT_SFPSTORE(p_sfpu::LREG1, m, ADDR_MOD_7, a * 64 + 32);
+        TTI_SFPLOAD(p_sfpu::LREG0, m, ADDR_MOD_7, 32);
+        TTI_SFPLOAD(p_sfpu::LREG1, m, ADDR_MOD_7, 64);
+        TTI_SFPSTORE(p_sfpu::LREG0, m, ADDR_MOD_7, 64);
+        TTI_SFPSTORE(p_sfpu::LREG1, m, ADDR_MOD_7, 32);
         dst_reg++;
     }
 }
@@ -2213,6 +2218,45 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
 #endif  // GDN_BATCH
     }
 #endif
+#if GDN_BATCH
+    // per-user stash K^T pages: transposes of the masked K_u tiles i = s, s + VB, .. (kts, from the reader) --
+    // exactly the per-user program's K^T (its own token columns, +0 elsewhere). GSTEP_KTLATE: they only feed the
+    // writer's stash write (after the head exchange), so they run in c_D's exchange wait instead of ahead of ksqs
+    auto kt_transposes = [&]() {
+    {
+            constexpr uint32_t kpb = (Kt + VB - 1) / VB;  // K^T pages per block per user
+            DataflowBuffer kts(dfb::kts);
+            kts.wait_front(kBatchMax * kpb);
+            kt_out.reserve_back(kBatchMax * kpb);
+            pack_reconfig_data_format(dfb::kt_out);
+            reconfig_data_format_srca(dfb::kts);
+#pragma GCC unroll 1
+            for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+                if (!(live & (1u << ub_))) {
+                    continue;  // HOLD: no stash write-back (writer), no K^T page
+                }
+#pragma GCC unroll 1
+                for (uint32_t q = 0; q < kpb; ++q) {
+                    if (s + q * VB >= Kt) {
+                        continue;
+                    }
+                    copy_init(dfb::kts);
+                    tile_regs_acquire();
+                    copy_tile(dfb::kts, ub_ * kpb + q, 0);
+                    transpose_dest_init<true>(dfb::kts);
+                    transpose_dest<true>(0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    // HOLD_SKIP: skipped users leave gaps, so the index must be honoured (in-order packing ignores it)
+                    pack_tile<GDN_HOLD_SKIP != 0>(0, dfb::kt_out, ub_ * kpb + q);
+                    tile_regs_release();
+                }
+            }
+            kt_out.push_back(kBatchMax * kpb);
+            kts.pop_front(kBatchMax * kpb);
+        }
+    };
+#endif
     {
         DeviceZoneScopedN("c_wy");
 #if GDN_BATCH
@@ -2277,40 +2321,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             tile_regs_release();
         }
 #endif  // GSTEP_WYPAIR
-        // per-user stash K^T pages: transposes of the masked K_u tiles i = s, s + VB, .. (kts, from the reader) --
-        // exactly the per-user program's K^T (its own token columns, +0 elsewhere)
-        {
-            constexpr uint32_t kpb = (Kt + VB - 1) / VB;  // K^T pages per block per user
-            DataflowBuffer kts(dfb::kts);
-            kts.wait_front(kBatchMax * kpb);
-            kt_out.reserve_back(kBatchMax * kpb);
-            pack_reconfig_data_format(dfb::kt_out);
-            reconfig_data_format_srca(dfb::kts);
-#pragma GCC unroll 1
-            for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
-                if (!(live & (1u << ub_))) {
-                    continue;  // HOLD: no stash write-back (writer), no K^T page
-                }
-#pragma GCC unroll 1
-                for (uint32_t q = 0; q < kpb; ++q) {
-                    if (s + q * VB >= Kt) {
-                        continue;
-                    }
-                    copy_init(dfb::kts);
-                    tile_regs_acquire();
-                    copy_tile(dfb::kts, ub_ * kpb + q, 0);
-                    transpose_dest_init<true>(dfb::kts);
-                    transpose_dest<true>(0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    // HOLD_SKIP: skipped users leave gaps, so the index must be honoured (in-order packing ignores it)
-                    pack_tile<GDN_HOLD_SKIP != 0>(0, dfb::kt_out, ub_ * kpb + q);
-                    tile_regs_release();
-                }
-            }
-            kt_out.push_back(kBatchMax * kpb);
-            kts.pop_front(kBatchMax * kpb);
-        }
+#if !GSTEP_KTLATE
+        kt_transposes();
+#endif
 
         ksqs.push_back(2 * Vs);
 #if GDN_EARLY_REPLAY
@@ -2746,6 +2759,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     copy_tiles(dfb::gq, dfb::out, out, Vs);
     gq.pop_front(Vs);
 #elif GDN_VSPLIT
+#if GSTEP_KTLATE && GDN_BATCH
+    kt_transposes();  // GSTEP_KTLATE: the K^T stash pages inside the head-exchange wait (same ops, later)
+#endif
     // the head's full pre-norm row (every block's last-token tiles, exact bytes), assembled by the writer
     acc_x.wait_front(Vt);
     rmsnorm_rows<Vt>(dfb::acc_x, dfb::on, on, tmp, stats, scratch, inv, inv_dv_bits);
