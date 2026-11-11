@@ -327,6 +327,33 @@ void kernel_main() {
         }
     };
 #endif
+#if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_RSTD)
+    // rstd producer: x chunk j ready -> token to the compute (fp32 X X^T over the chunk's 10 tiles, diagonal = per-row Σx²) ->
+    // row j of the STREAM consumers' Σ tile (rsp tile 0: face 0 at j*64 B, face 1 at 1024 + j*64 B) -> MK_AR_RSF += 1 on the same rects
+    auto ar_rstd_send = [&]() __attribute__((noinline)) {
+        cb_reserve_back(MK_AR_CB_RSYN, 1);
+        cb_push_back(MK_AR_CB_RSYN, 1);
+        cb_wait_front(MK_AR_CB_SS, 1);
+        volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(MK_AR_CB_SS));
+        for (uint32_t r_ = 0; r_ < 16; ++r_) { d[512 + r_] = d[r_ * 17]; d[528 + r_] = d[768 + r_ * 17]; }   // stage in face 2 (off-diagonal)
+        const uint32_t st = get_read_ptr(MK_AR_CB_SS) + 2048, jo = (2 * vk + voslot) * 64;
+        for (uint32_t i = 0; i < 2; ++i) {
+            if (rs[i][4] == 0) continue;
+            noc_async_write_multicast(st, get_noc_multicast_addr(rs[i][0], rs[i][1], rs[i][2], rs[i][3], MK_AR_RSP + jo), 64, rs[i][4], false);
+            noc_async_write_multicast(st + 64, get_noc_multicast_addr(rs[i][0], rs[i][1], rs[i][2], rs[i][3], MK_AR_RSP + 1024 + jo), 64, rs[i][4], false);
+        }
+        noc_async_write_barrier();   // the row has landed before its flag
+        for (uint32_t i = 0; i < 2; ++i) {
+            if (rs[i][4] == 0) continue;
+            noc_semaphore_inc_multicast(get_noc_multicast_addr(rs[i][0], rs[i][1], rs[i][2], rs[i][3], MK_AR_RSF), 1, rs[i][4]);
+        }
+        noc_async_atomic_barrier();
+        cb_pop_front(MK_AR_CB_SS, 1);
+    };
+#define MK_AR_RSTD_SEND() ar_rstd_send()
+#else
+#define MK_AR_RSTD_SEND() do {} while (0)
+#endif
 #if defined(MK_REAL_AR) && defined(MKA_ROLE_EXT) && defined(MK_AR_DBGADDR)
     // MK_AR_DBG (validation, R = 32): after AR `it`, this owner's AR input chunk (page (2it)*160 + 10j + t) and the residual
     // after the AR (page (2it + 1)*160 + 10j + t) -> DRAM; the bench checks res_it = res_{it-1} + ring * in_it per AR
@@ -395,6 +422,9 @@ void kernel_main() {
 #elif !defined(MKAR_DLV_SIGNAL) && !defined(MKAR_DLV_NONE)
             noc_semaphore_inc(get_noc_addr(qr_x, qr_y, MK_AR_XCNT), 1);   // x of layer L + 1 delivered to this K-row
 #endif   // (MKAR_DLV_SIGNAL: the reader delivers on NOC1 and counts it, mka2_reader.cpp v12_ardlv)
+#if !defined(MK_AR_GAMMA)
+            MK_AR_RSTD_SEND();   // the residual chunk is final: Σx² row -> the consumers' Σ tile (off the delivery path)
+#endif
         }
 #endif
         cb_pop_front(CB_VXO, V_OT);
@@ -404,6 +434,7 @@ void kernel_main() {
             cb_wait_front(CB_VXO, V_OT);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_DLV) = L + 1;
             cb_pop_front(CB_VXO, V_OT);   // reuse is gated transitively: the next C-OSUM needs partials that follow delivery(L)
+            MK_AR_RSTD_SEND();
         }
 #endif
         v_busy(vg[VG_BUSY], 2 * L + 2, vbmirror, vbrc);
@@ -954,6 +985,7 @@ void kernel_main() {
 #else
                     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MK_AR_ADLV) = A + 1;   // the NOC1 reader delivers
 #endif
+                    MK_AR_RSTD_SEND();
                 }
 #endif
                 noc_semaphore_inc(get_noc_addr(qr_x, qr_y, gs[GS_WODONE]), 1);   // READY first; the copy is bench-only

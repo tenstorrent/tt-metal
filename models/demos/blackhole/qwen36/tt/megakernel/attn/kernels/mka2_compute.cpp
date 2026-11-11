@@ -324,6 +324,26 @@ void kernel_main() {
             cb_pop_front(MK_AR_CBG, MK_AR_GT);
         }
 #endif
+#if defined(MK_AR_RSTD)
+        {   // rstd producer: per-row Σx² of this owner's residual chunk (v_x0 = CB_VX0, 10 bf16 tiles) as the diagonal of
+            // X X^T (matmul, in1 transposed, fp32 DST accumulate over the 10 tiles) -> CB_SS; the writer extracts the diagonal
+            CZONE("C-RSS");
+            cb_wait_front(MK_AR_CB_RSYN, 1);      // the writer: this chunk of the residual is final (AR done)
+            cb_wait_front(CB_VX0, V_OT);          // pushed once at start, never popped (MK_OWNER_RESID=0)
+            cb_reserve_back(MK_AR_CB_SS, 1);
+            reconfig_data_format(CB_VX0, CB_VX0);
+            pack_reconfig_data_format(MK_AR_CB_SS);
+            matmul_block_init(CB_VX0, CB_VX0, 1, 1, 1, 1);
+            tile_regs_acquire();
+            for (uint32_t t = 0; t < V_OT; ++t) matmul_block(CB_VX0, CB_VX0, t, t, 0, 1, 1, 1, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, MK_AR_CB_SS);
+            tile_regs_release();
+            cb_push_back(MK_AR_CB_SS, 1);
+            cb_pop_front(MK_AR_CB_RSYN, 1);
+        }
+#endif
     };
 #endif
     auto v12_osum = [&](uint32_t L) {
