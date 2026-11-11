@@ -94,6 +94,7 @@ class VisionEncoder:
         self.trace = bool(options.get("trace", True))
         self.warm_grids = [[tuple(g) for g in grids] for grids in options.get("warm_grids", ())]
         self.dv = None
+        self._grids = {}
         self.last = {}
 
     def load(self):
@@ -112,18 +113,48 @@ class VisionEncoder:
         reference = load_reference_visual(self.weights_path or args.CKPT_DIR)
         self.dv = DPVision(_TowerShim(args, reference), ttnn)
         logger.info(f"Qwen3.5 vision encoder on {tuple(self.mesh.shape)}: weights in {time.perf_counter() - t0:.1f} s")
-        for grids in self.warm_grids:
-            self._entry(torch.tensor([list(g) for g in grids], dtype=torch.long))
+        self._ensure([torch.tensor([list(g) for g in grids], dtype=torch.long) for grids in self.warm_grids])
+
+    @staticmethod
+    def _key(grid):
+        return tuple(tuple(int(v) for v in g) for g in grid.tolist())
+
+    def _ensure(self, grids):
+        """Every grid set in grids ready to replay. Trace safety: a trace's intermediates are freed when its capture
+        ends, so a buffer allocated AFTER a capture (another grid set's pixel buffer, constants or output) can sit in
+        memory that trace overwrites on every replay. All grid sets are therefore allocated (prepare_trace) before any
+        is captured; a new grid set at request time releases the traces, allocates, and captures every set again."""
+        new = [g for g in grids if self._key(g) not in self._grids]
+        if not new:
+            return
+        t0 = time.perf_counter()
+        if self.trace:
+            self._release_traces()
+        for g in new:
+            self._grids[self._key(g)] = g
+            self.dv.prepare_trace(g)
+        if self.trace:
+            for g in self._grids.values():
+                self.dv.capture(g)
+        logger.info(
+            f"vision grid sets {[self._key(g) for g in new]}: compiled + (re)captured {len(self._grids)} set(s) in "
+            f"{time.perf_counter() - t0:.1f} s"
+        )
+
+    def _release_traces(self):
+        import ttnn
+
+        for c in self.dv.cache.values():
+            if c.get("tid") is not None:
+                ttnn.release_trace(self.mesh, c["tid"])
+                c["tid"] = None
+                if c.get("out") is not None:
+                    ttnn.deallocate(c["out"])
+                    c["out"] = None
 
     def _entry(self, grid):
-        t0 = time.perf_counter()
-        c = self.dv.capture(grid) if self.trace else self.dv.prepare_trace(grid)
-        if "_t_built" not in c:
-            c["_t_built"] = time.perf_counter() - t0
-            logger.info(
-                f"vision grid set {[tuple(g.tolist()) for g in grid]}: compiled + captured in {c['_t_built']:.1f} s"
-            )
-        return c
+        self._ensure([grid])
+        return self.dv._entry(grid)
 
     def run(self, items):
         """Device pass for items: [n_tokens_total, hidden] bf16 host rows in image-token order (+ timings in .last)."""
