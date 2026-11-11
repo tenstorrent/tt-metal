@@ -1836,7 +1836,8 @@ class TPAttention:
         k, n = self.args.dim, (4 * self.NH + 2 * self.NKV) * self.HD
         self.tw["wqkvg_pair"] = ttnn.to_memory_config(w, tpc.create_dram_sharded_mem_config(k, n))
         ttnn.deallocate(w)
-        self._qkv_pair_dsmc = (tpc.create_activation_shard_config(k), tpc.create_dram_sharded_mc_progcfg(k, n, 4, 3, 2))
+        act = getattr(self.args, "act_shard_hidden", None) or tpc.create_activation_shard_config(k)
+        self._qkv_pair_dsmc = (act, tpc.create_dram_sharded_mc_progcfg(k, n, 4, 3, 2))
         tpc.logger.info("MTP drafter: qkv pair in-projection on DSMC W3 ibw2 pcn4 (QWEN36_MTP_QKV_DSMC=1)")
         return True
 
@@ -1845,7 +1846,7 @@ class TPAttention:
         NH2, NKV, HD = 2 * self.NH, self.NKV, self.HD
         if self._qkv_pair_dsmc is not None:  # QWEN36_MTP_QKV_DSMC (drafter layer): same bits as the 1D call below
             act, pc = self._qkv_pair_dsmc
-            x_sh = ttnn.to_memory_config(x, act)
+            x_sh = x if x.memory_config() == act else ttnn.to_memory_config(x, act)  # the attn norm's decode layout
             y = ttnn.linear(
                 x_sh, self.tw["wqkvg_pair"], program_config=pc, compute_kernel_config=self.qkv_cfg,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
