@@ -8,9 +8,6 @@ A ``Label`` is the ttnn ``TensorTopology`` in plain Python: one placement per di
 shape, and the physical mesh coordinate of every distribution coordinate in row-major order. Both forms a label can
 take are handled directly: an N-D label with one placement per mesh axis, and the collapsed ``{N}, [placement]``
 label of the whole-mesh mappers, whose single axis walks the mesh in row-major order.
-
-The label is trusted: the chunk a device holds is computed from the placements and the device's local shape, never
-verified against the data. The PRs that made the labels honest are the reason this is enough.
 """
 
 from __future__ import annotations
@@ -31,6 +28,7 @@ class Placement:
     dim: int | None = None
 
     def __post_init__(self) -> None:
+        # TODO: #62347 - accept a "partial" kind here once tensor placements carry a partial-sum label.
         if self.kind not in ("replicate", "shard"):
             raise TopologyError(f"unknown placement kind {self.kind!r}")
         if (self.kind == "shard") != (self.dim is not None):
@@ -92,10 +90,6 @@ class Label:
                 fixed.append(p)
         return Label(tuple(fixed), tuple(dist_shape), tuple(tuple(c) for c in mesh_coords))
 
-    @property
-    def num_devices(self) -> int:
-        return len(self.mesh_coords)
-
     def shard_axes(self, dim: int) -> list[int]:
         """The distribution axes that shard ``dim``, outermost first."""
         return [a for a, p in enumerate(self.placements) if p.kind == "shard" and p.dim == dim]
@@ -142,8 +136,6 @@ def local_shape(label: Label, global_shape_: Sequence[int]) -> tuple[int, ...]:
 class Chunk:
     """One device's box of a tensor's global array."""
 
-    dist_index: int
-    dist_coord: tuple[int, ...]
     mesh_coord: tuple[int, ...]
     box: Box
     group: tuple[int, ...]  # identical for every replica of the same box
@@ -166,7 +158,7 @@ def chunk_boxes(label: Label, local_shape_: Sequence[int]) -> list[Chunk]:
                 linear = linear * label.dist_shape[a] + coord[a]
             offsets.append(linear * n)
         group = tuple(coord[a] for a, p in enumerate(label.placements) if p.kind == "shard")
-        chunks.append(Chunk(index, coord, label.mesh_coords[index], Box(tuple(offsets), local), group))
+        chunks.append(Chunk(label.mesh_coords[index], Box(tuple(offsets), local), group))
     return chunks
 
 

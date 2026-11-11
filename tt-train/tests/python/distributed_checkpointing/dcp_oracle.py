@@ -54,13 +54,11 @@ class FakeCheckpoint:
     def __init__(self) -> None:
         self.index: Index | None = None
         self.files: dict[int, bytearray] = {}
-        self.save_plan = None
 
     def save(self, tensors: dict[str, tuple[np.ndarray, Label, object]]) -> Index:
         """``tensors[key] = (device-layout global array, label, transform)``."""
         infos = [info(key, label, arr.shape, transform) for key, (arr, label, transform) in tensors.items()]
         plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord))
-        self.save_plan = plan
         self.files = {}
         records = []
         for fplan in plan.files:

@@ -171,8 +171,8 @@ def _entry_to_json(entry: Entry) -> dict:
         "nbytes": _broadcast([c.nbytes for c in chunks]),
         "writer_coord": [list(c.writer_coord) for c in chunks],
     }
-    if all(c.crc32 is not None for c in chunks):
-        table["crc32"] = [f"{c.crc32:08x}" for c in chunks]
+    if any(c.crc32 is not None for c in chunks):
+        table["crc32"] = [None if c.crc32 is None else f"{c.crc32:08x}" for c in chunks]
     value = {
         "role": entry.role,
         "dtype": entry.dtype,
@@ -201,8 +201,14 @@ def _entry_from_json(key: str, value: dict) -> Entry:
     nbytes = _expand(table["nbytes"], n)
     coords = table["writer_coord"]
     crcs = table.get("crc32")
-    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == len(coords) == n):
+    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == len(coords) == n) or (
+        crcs is not None and len(crcs) != n
+    ):
         raise CheckpointError(f"index entry {key!r}: chunk table columns disagree with n={n}")
+    try:
+        crc_values = [None if c is None else int(c, 16) for c in crcs] if crcs is not None else [None] * n
+    except (TypeError, ValueError):
+        raise CheckpointError(f"index entry {key!r}: malformed crc32 column") from None
     chunks = [
         ChunkRecord(
             box=Box(tuple(offsets[i]), tuple(sizes[i])),
@@ -210,7 +216,7 @@ def _entry_from_json(key: str, value: dict) -> Entry:
             data_offset=int(data_offsets[i]),
             nbytes=int(nbytes[i]),
             writer_coord=tuple(coords[i]),
-            crc32=int(crcs[i], 16) if crcs is not None else None,
+            crc32=crc_values[i],
         )
         for i in range(n)
     ]
@@ -267,7 +273,10 @@ def parse_dir_name(name: str) -> tuple[str, int] | None:
 
 
 def is_complete(path: str) -> bool:
-    """A final directory name (no staging or replaced suffix) with a readable ``index.json``."""
+    """A final directory name (no staging or replaced suffix) that holds an ``index.json``.
+
+    Only the file's presence is checked, so the call stays cheap for ``find_latest``; ``read_index`` raises
+    ``IncompleteCheckpoint`` for an index that does not parse."""
     name = os.path.basename(path.rstrip("/"))
     if PARTIAL_MARK in name or REPLACED_MARK in name:
         return False
@@ -276,8 +285,13 @@ def is_complete(path: str) -> bool:
 
 def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> str | None:
     """The complete checkpoint directory under ``root`` with the highest step, ordered by the step parsed from the
-    name (never by mtime, which on NFS comes from the server clock)."""
-    best: tuple[int, str] | None = None
+    name (never by mtime, which on NFS comes from the server clock).
+
+    ``include_replaced`` also considers ``.replaced-`` directories, which ``finalize_staging`` leaves behind only if
+    a process dies between moving the old checkpoint aside and moving the new one in. It is a recovery aid: a final
+    directory always wins a step tie, and a replaced directory it returns must be renamed back to its final name
+    before ``load`` (or ``is_complete``) accepts it."""
+    best: tuple[int, int, str, str] | None = None
     try:
         names = os.listdir(root)
     except FileNotFoundError:
@@ -296,9 +310,10 @@ def find_latest(root: str, prefix: str = "", include_replaced: bool = False) -> 
         path = os.path.join(root, name)
         if not os.path.isfile(os.path.join(path, INDEX_NAME)):
             continue
-        if best is None or parsed[1] > best[0]:
-            best = (parsed[1], path)
-    return best[1] if best else None
+        rank = (parsed[1], 0 if REPLACED_MARK in name else 1, name, path)
+        if best is None or rank > best:
+            best = rank
+    return best[3] if best else None
 
 
 # --- staging and JSON files ----------------------------------------------------------------------------------------
@@ -313,16 +328,31 @@ def begin_staging(final_dir: str) -> tuple[str, int]:
 
 
 def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> None:
-    """Rename the staging directory to its final name after fsyncing it, then fsync the parent."""
+    """Rename the staging directory to its final name after fsyncing it, then fsync the parent.
+
+    With ``overwrite`` an existing final directory is first moved aside to ``<final>.replaced-<nonce>`` and deleted
+    once the new one is in place. If moving the new one in fails, the old one is moved back before the error is
+    raised, so a failed overwrite leaves the previous checkpoint where it was."""
     final_dir = final_dir.rstrip("/")
+    if os.path.exists(final_dir) and not overwrite:
+        raise CheckpointError(f"{final_dir} already exists; pass overwrite=True to replace it")
+    _fsync_dir(staging)
     replaced = None
     if os.path.exists(final_dir):
-        if not overwrite:
-            raise CheckpointError(f"{final_dir} already exists; pass overwrite=True to replace it")
         replaced = f"{final_dir}{REPLACED_MARK}{secrets.randbits(31)}"
         os.rename(final_dir, replaced)
-    _fsync_dir(staging)
-    os.rename(staging, final_dir)
+    try:
+        os.rename(staging, final_dir)
+    except BaseException as err:
+        if replaced is not None:
+            try:
+                os.rename(replaced, final_dir)
+            except OSError as rollback:
+                raise CheckpointError(
+                    f"could not move {staging} to {final_dir} ({err}), nor move the previous checkpoint back from "
+                    f"{replaced} ({rollback}); rename it back by hand"
+                ) from err
+        raise
     _fsync_dir(os.path.dirname(final_dir) or ".")
     if replaced is not None:
         import shutil
@@ -358,8 +388,13 @@ def read_index(directory: str) -> Index:
     path = os.path.join(directory, INDEX_NAME)
     if not os.path.isfile(path):
         raise IncompleteCheckpoint(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
-    with open(path, "r", encoding="utf-8") as f:
-        return Index.from_json(json.load(f))
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return Index.from_json(json.load(f))
+    except (ValueError, KeyError, TypeError, IndexError, AttributeError) as err:
+        raise IncompleteCheckpoint(
+            f"{path} is not a readable index ({type(err).__name__}: {err}); the checkpoint is corrupt or truncated"
+        ) from err
 
 
 def write_header(directory: str, header: dict) -> None:
@@ -370,8 +405,18 @@ def read_header(directory: str) -> dict:
     path = os.path.join(directory, HEADER_NAME)
     if not os.path.isfile(path):
         raise IncompleteCheckpoint(f"{directory} has no {HEADER_NAME}")
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except ValueError as err:
+        raise IncompleteCheckpoint(
+            f"{path} is not readable JSON ({err}); the checkpoint is corrupt or truncated"
+        ) from err
+
+
+def read_user_header(directory: str) -> dict:
+    """The custom user-defined header dict passed to ``save``, without touching any device."""
+    return read_header(directory).get("user", {})
 
 
 def data_file_name(world_rank: int, mesh_id: int, coord: Sequence[int]) -> str:

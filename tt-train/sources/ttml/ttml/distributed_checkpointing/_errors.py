@@ -10,7 +10,7 @@ class CheckpointError(RuntimeError):
 
 
 class IncompleteCheckpoint(CheckpointError):
-    """The directory is a staging directory, or has no readable ``index.json``."""
+    """The directory is a staging directory, or has no readable ``index.json`` (missing, truncated or malformed)."""
 
 
 class VersionError(CheckpointError):
@@ -38,7 +38,12 @@ class UnexpectedKeyError(CheckpointError):
 
 
 class CoverageError(CheckpointError):
-    """The planned reads do not tile a destination shard exactly."""
+    """Boxes that must tile a shape exactly do not: a key's chunks on save, the saved chunks of a checkpoint entry,
+    or the planned reads of a destination shard on load."""
+
+
+class RoleMismatch(CheckpointError):
+    """A live tensor resolved to a checkpoint entry of another role (a parameter to optimizer state, say)."""
 
 
 class TopologyError(CheckpointError):

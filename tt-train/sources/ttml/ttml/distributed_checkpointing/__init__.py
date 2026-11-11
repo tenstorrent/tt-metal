@@ -27,19 +27,14 @@ from ._errors import (
     LayoutError,
     LazyParameterError,
     MissingKeyError,
+    RoleMismatch,
     ShapeMismatch,
     TopologyError,
     UnexpectedKeyError,
     VersionError,
 )
 from ._index import find_latest, is_complete, parse_dir_name, read_index, step_dir_name
-
-
-def read_header(ckpt_dir: str) -> dict:
-    """The header dict passed to ``save``, without touching any device."""
-    from ._index import read_header as _read
-
-    return _read(ckpt_dir).get("user", {})
+from ._index import read_user_header as read_header
 
 
 __all__ = [
@@ -51,6 +46,7 @@ __all__ = [
     "LayoutError",
     "LazyParameterError",
     "MissingKeyError",
+    "RoleMismatch",
     "ShapeMismatch",
     "TopologyError",
     "UnexpectedKeyError",
