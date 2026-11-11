@@ -326,6 +326,7 @@ class TPAttention:
             self._wo_pair_pc = tpc.create_matmul_1d_decode_progcfg(
                 1, _nh2 * self.HD, args.dim, num_cores=84, grid_w=_gw
             )
+        self._qkv_pair_dsmc = None  # QWEN36_MTP_QKV_DSMC: (act shard cfg, DSMC progcfg) once enable_qkv_pair_dsmc ran
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -1828,12 +1829,42 @@ class TPAttention:
             return 0
         return nh
 
+    def enable_qkv_pair_dsmc(self):
+        """QWEN36_MTP_QKV_DSMC=1 (default 0; called for the MTP drafter layer under QWEN36_MTP_LAYER_BFP4 only): the
+        drafter step's pair in-projection on the multi-core DRAM-sharded pipeline (W3 ibw2 pcn4) instead of the 1D 60-core
+        matmul. The bfloat4_b wqkvg_pair is replaced by a DRAM-width-sharded copy made on device (no extra DRAM; only the
+        drafter step reads it). Bit-identical to the 1D path at LoFi (mk80c CEILINGS 4d: 42.8 -> 34.5 us per call)."""
+        if os.environ.get("QWEN36_MTP_QKV_DSMC", "0") != "1" or not self._kv_split_ready:
+            return False
+        w = self.tw["wqkvg_pair"]
+        if w.dtype != ttnn.bfloat4_b or self.B > ttnn.TILE_SIZE:
+            return False
+        k, n = self.args.dim, (4 * self.NH + 2 * self.NKV) * self.HD
+        self.tw["wqkvg_pair"] = ttnn.to_memory_config(w, tpc.create_dram_sharded_mem_config(k, n))
+        ttnn.deallocate(w)
+        act = getattr(self.args, "act_shard_hidden", None) or tpc.create_activation_shard_config(k)
+        self._qkv_pair_dsmc = (act, tpc.create_dram_sharded_mc_progcfg(k, n, 4, 3, 2))
+        tpc.logger.info("MTP drafter: qkv pair in-projection on DSMC W3 ibw2 pcn4 (QWEN36_MTP_QKV_DSMC=1)")
+        return True
+
     def _kv_split_qkv(self, x):
         """Pair in-projection: x [1,1,R,dim] -> (q|k|v block [1,1,R,(2NH+2NKV)*HD] L1, gate [1,1,R,2NH*HD])."""
         NH2, NKV, HD = 2 * self.NH, self.NKV, self.HD
-        qkv = tpc.matmul_1d_decode(
-            x, self.tw["wqkvg_pair"], self._qkv_pair_pc, self.qkv_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        if self._qkv_pair_dsmc is not None:  # QWEN36_MTP_QKV_DSMC (drafter layer): same bits as the 1D call below
+            act, pc = self._qkv_pair_dsmc
+            x_sh = x if x.memory_config() == act else ttnn.to_memory_config(x, act)  # the attn norm's decode layout
+            y = ttnn.linear(
+                x_sh, self.tw["wqkvg_pair"], program_config=pc, compute_kernel_config=self.qkv_cfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            if x_sh is not x:
+                ttnn.deallocate(x_sh)
+            qkv = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(y)
+        else:
+            qkv = tpc.matmul_1d_decode(
+                x, self.tw["wqkvg_pair"], self._qkv_pair_pc, self.qkv_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         qkv3_dim = NH2 * HD + 2 * NKV * HD
         sh = list(qkv.shape)
         qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
