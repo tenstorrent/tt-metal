@@ -112,9 +112,9 @@ fi
 
 # Validate required environment variables
 missing_vars=()
-[[ -z "${TT_METAL_SIMULATOR_BASE:-}" ]] && missing_vars+=("TT_METAL_SIMULATOR_BASE (or TT_METAL_SIMULATOR)")
-[[ -z "${NNG_SOCKET_ADDR:-}" ]]       && missing_vars+=("NNG_SOCKET_ADDR")
-[[ -z "${NNG_SOCKET_LOCAL_PORT:-}" ]] && missing_vars+=("NNG_SOCKET_LOCAL_PORT")
+[[ -z "${TT_METAL_SIMULATOR_BASE:-}" && -z "${TTSIM_LIB:-}" ]] && missing_vars+=("TT_METAL_SIMULATOR_BASE (or TT_METAL_SIMULATOR)")
+[[ -z "${NNG_SOCKET_ADDR:-}" && -z "${TTSIM_LIB:-}" ]] && missing_vars+=("NNG_SOCKET_ADDR")
+[[ -z "${NNG_SOCKET_LOCAL_PORT:-}" && -z "${TTSIM_LIB:-}" ]] && missing_vars+=("NNG_SOCKET_LOCAL_PORT")
 
 if [[ ${#missing_vars[@]} -gt 0 ]]; then
     echo "ERROR: Required environment variables not set:"
@@ -149,6 +149,11 @@ fi
 
 simulator_path_for_config() {
     local config="$1"
+    # TTSIM_LIB: run every config against one libttsim.so instead of an emulator directory.
+    if [[ -n "${TTSIM_LIB:-}" ]]; then
+        echo "$TTSIM_LIB"
+        return
+    fi
     echo "$SIMULATOR_BASE/emu-quasar-${config}"
 }
 
@@ -969,14 +974,18 @@ run_test_invocation() {
         fi
     fi
 
-    if [[ ! -d "$sim_path" ]]; then
+    if [[ ! -d "$sim_path" && ! ( -n "${TTSIM_LIB:-}" && -f "$sim_path" ) ]]; then
         echo "  SKIP: simulator path not found: $sim_path"
         skipped=$((skipped + 1))
         results+=("SKIP  $label  (simulator not found)")
         return
     fi
 
-    export TT_METAL_SIMULATOR="$sim_path/"
+    if [[ -n "${TTSIM_LIB:-}" ]]; then
+        export TT_METAL_SIMULATOR="$sim_path"
+    else
+        export TT_METAL_SIMULATOR="$sim_path/"
+    fi
     apply_env_vars "$envvars"
     print_run_env
 
