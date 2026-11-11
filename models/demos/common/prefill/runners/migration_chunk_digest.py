@@ -8,7 +8,8 @@ through a published KV chunk table and this host's device map (``mesh chip uniqu
 different layouts still name the same logical chunk the same way.
 
 compare: merge every host's digest per side and compare the two sides key by key. It fails on any byte difference
-and on any chunk that only one side hashed (a host left out of a digest).
+and on any chunk that only one side hashed (a host left out of a digest). Two files of one side that hash the
+same chunk differently are an error, not a merge.
 
 Run digest after a P->D run with the KV Manager fleet down and before any board reset: device DRAM keeps its
 contents after the processes exit. Decode writes slot 1 only at positions >= P after the migration, so [0, P)
@@ -81,9 +82,12 @@ def digest(args) -> None:
 
 def compare(args) -> int:
     def load(pattern):
-        merged = {}
+        merged, origin = {}, {}
         for f in sorted(glob.glob(pattern)):
-            merged.update(json.load(open(f))["chunks"])
+            for key, digest in json.load(open(f))["chunks"].items():
+                if key in merged and merged[key] != digest:
+                    raise SystemExit(f"{key}: {origin[key]} and {f} hashed different bytes for the same chunk")
+                merged[key], origin[key] = digest, f
         return merged
 
     src, dst = load(args.src), load(args.dst)
