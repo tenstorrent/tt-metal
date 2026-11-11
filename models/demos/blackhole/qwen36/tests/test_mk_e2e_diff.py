@@ -168,7 +168,7 @@ def _mlp_check(model, S, L, x_ref=None, y_ref=None):
     ref = torch.zeros_like(h)
     for wg, wu, wd in WM.mlp_mats(lay):
         ref += (torch.nn.functional.silu(xn @ wg.float()) * (xn @ wu.float())).bfloat16().float() @ wd.float()
-    ref_fix = torch.zeros_like(h)   # the same MLP with x · NORM_FIX (γ·NORM_FIX applied to a true-mean rstd)
+    ref_fix = torch.zeros_like(h)   # scale check: the same MLP with x · sqrt(1.25) (the retired NORM_FIX; ratio ~0.82 when the engine is right)
     xf = (xn * WM.NORM_FIX).bfloat16().float()
     for wg, wu, wd in WM.mlp_mats(lay):
         ref_fix += (torch.nn.functional.silu(xf @ wg.float()) * (xf @ wu.float())).bfloat16().float() @ wd.float()

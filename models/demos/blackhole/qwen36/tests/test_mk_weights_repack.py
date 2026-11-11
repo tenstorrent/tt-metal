@@ -29,7 +29,7 @@ def test_mk_weights_repack_lossless(mesh_device, monkeypatch):
     want_g = wm.gamma_pages(model).reshape(-1, wm.H).bfloat16().float()
     assert all(torch.equal(x.reshape(-1, wm.H), want_g) for x in g), "gamma pages differ from the model norm weights"
     l0 = model.layers[0]
-    assert torch.equal(want_g[0], (wm.norm_gamma(l0.attention_norm.norm).float() * wm.NORM_FIX).bfloat16().float())
+    assert torch.equal(want_g[0], (wm.norm_gamma(l0.attention_norm.norm).float() * wm.norm_fix()).bfloat16().float())
     assert not want_g[1:wm.TILE].any(), "gamma rows 1-31 must be zero"
     print(f"repack gamma: {want_g.shape[0] // wm.TILE} (layer, norm) rows x {len(g)} devices exact")
     for kind, r in rep.items():

@@ -204,7 +204,7 @@ def gamma_pages(model, layers=None):
     attention_norm, 1 post_attention_layernorm = ffn_norm) one tile row [32, H] bf16 with gamma in row 0 (rows 1-31
     zero) -> page ((L * 2 + n) * 160 + chunk * 10 + t) = owner chunk ``chunk`` (16 x 10 tiles), tile t. Identical on
     every device (each device reads its own owner chunks). Values: bf16(gamma * sqrt(1.25)), so the AR owner's bcast-rows
-mul (reads row 0) applies gamma and NORM_FIX at once."""
+mul (reads row 0) applies gamma and norm_fix() (default 1.0) at once."""
     import torch
 
     rows = []
@@ -220,7 +220,7 @@ mul (reads row 0) applies gamma and NORM_FIX at once."""
 
 def gamma_cons_rows(model, layers=None):
     """kind 'gamma_cons' (MK_GAMMA_CONS: gamma applied by the x consumers): bf16 ROW_MAJOR [NL * 2 * 8, 640], row
-    (L * 2 + n) * 8 + k = bf16(gamma_n(L) * NORM_FIX)[640 k : 640 k + 640] (n 0 = input_layernorm, 1 = post_attention).
+    (L * 2 + n) * 8 + k = bf16(gamma_n(L) * norm_fix())[640 k : 640 k + 640] (n 0 = input_layernorm, 1 = post_attention).
     The same fp32 product / one bf16 rounding as gamma_pages."""
     import torch
 
