@@ -55,6 +55,9 @@
 #endif
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
+#ifndef GSTEP_CZ
+#define GSTEP_CZ 0  // bench: extra compute zones (c_wymm)
+#endif
 #ifndef GSTEP_KTLATE
 #define GSTEP_KTLATE 0  // engine GDN role (BATCH + VSPLIT): the kts -> kt_out transposes in c_D's head-exchange wait
 #endif
@@ -2274,6 +2277,10 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         // paired: kmq tile (u, i) = K_u rows at (u T) mod 16 + Q_u rows 16 below -> DST 0 (users 0..3) = [K S' | Q S']
         // rows of users 0..3, DST 1 = users 4..7; same k order per element from a cleared DST, other users' rows add
         // exact zeros as before. Swap DST 0 face row 1 <-> DST 1 face row 0 (exact fp32): DST 0 = K S', DST 1 = Q S'
+        {  // GSTEP_CZ (bench): zone c_wymm = the paired matmuls + swap + pack
+#if GSTEP_CZ
+        DeviceZoneScopedN("c_wymm");
+#endif
 #pragma GCC unroll 1
         for (uint32_t j = 0; j < Vs; ++j) {
             tile_regs_acquire();
@@ -2298,6 +2305,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             pack_tile<true>(0, dfb::ksqs, j);
             pack_tile<true>(1, dfb::ksqs, Vs + j);
             tile_regs_release();
+        }
         }
 #else
 #pragma GCC unroll 1
