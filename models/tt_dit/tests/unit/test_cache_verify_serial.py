@@ -75,7 +75,9 @@ def test_portable_native_verification_needs_no_binary_fingerprint(tmp_path, monk
 )
 def test_native_padding_and_replicated_logical_coordinates(tmp_path, dtype, layout):
     ttnn = cache.ttnn
-    values = torch.arange(35 * 67).float().reshape(35, 67) / 4096
+    # Exactly representable with either pad exponent: changing block-float padding
+    # can otherwise change logical quantization, which is a real mismatch.
+    values = torch.ones(35, 67)
     values[0, 0] = -0.0
     options = dict(dtype=getattr(ttnn, dtype), layout=getattr(ttnn, layout))
     a = ttnn.from_torch(values, pad_value=0.0, **options)
