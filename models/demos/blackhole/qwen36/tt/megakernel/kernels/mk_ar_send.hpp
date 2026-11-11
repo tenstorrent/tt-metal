@@ -56,6 +56,9 @@ struct SendReader {
     }
     FORCE_INLINE uint32_t rarg(uint32_t i) const { return get_arg_val<uint32_t>(rbase + i); }
     FORCE_INLINE uint32_t readyp(uint32_t i) const {
+#if defined(GDN_GTEXT2) && GDN_GTEXT2
+        static  // GTEXT2 (GDN-hosted sender): read in place; the stack copy pulled memcpy (300 B) into the corner reader
+#endif
         constexpr uint32_t rp[8] = {MKAR_S_READYP0, MKAR_S_READYP1, MKAR_S_READYP2, MKAR_S_READYP3,
                                     MKAR_S_READYP4, MKAR_S_READYP5, MKAR_S_READYP6, MKAR_S_READYP7};
         return rp[i < 8 ? i : 7];

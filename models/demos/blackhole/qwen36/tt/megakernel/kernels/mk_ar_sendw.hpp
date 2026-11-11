@@ -13,7 +13,14 @@
 
 namespace mkar {
 
-FORCE_INLINE void send_pkt(tt::tt_fabric::WorkerToFabricEdmSender& connection, volatile PACKET_HEADER_TYPE* pkt_hdr,
+#if defined(GDN_GTEXT2) && GDN_GTEXT2 && !defined(MKAR_GT2_SP_INLINE)
+// GTEXT2 (GDN-hosted sender on the AR corners only): one out-of-line copy of the packet send (it was inlined at every RS / AG
+// fwd / bwd site, ~1.5 KB of BRISC text); same header writes, same payload send, same order
+__attribute__((noinline)) void send_pkt(tt::tt_fabric::WorkerToFabricEdmSender& connection,
+#else
+FORCE_INLINE void send_pkt(tt::tt_fabric::WorkerToFabricEdmSender& connection,
+#endif
+                           volatile PACKET_HEADER_TYPE* pkt_hdr,
                            uint32_t l1_read_addr, uint64_t dest_noc_addr, uint64_t sem_noc_addr, uint32_t payload_bytes,
                            bool last) {
     if (last) {

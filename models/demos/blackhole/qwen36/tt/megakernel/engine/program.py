@@ -1109,6 +1109,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # GTEXT (DESIGN v1.156): GDN-role code-size trims for the corner / reducer variants under E1_GB (E1_GTEXT=0 = the old binaries)
     # (explicit E1_GTEXT=1 also without E1_GB: the cgar_iter md5 A/B vs E1_GTEXT unset / 0 = 9f97ada55bb's corner reader)
     GTEXT = os.environ.get('E1_GTEXT', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'
+    GTEXT2 = os.environ.get('E1_GTEXT2', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'   # GTEXT2 (e1_shim: GDN_GTEXT2)
     DNORM_SPLIT, RRED_ARR = False, 8   # MK_DNORM_SPLIT (DNORM ii; set in the AR block)
     REAL_AR = ('MK_REAL_AR', '1') in MKDEF
     if REAL_AR:
@@ -2118,7 +2119,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 inc = ''
             else:
                 fdef = ('__attribute__((noinline)) static void rred_c(uint32_t) {   // MK_AR_RSTD_RED=gdn: 8 K-row tiles -> final Σ (column 0)\n'
-                        '  compute_kernel_hw_startup(37, 37, 39);   // compute() re-runs its own startup per layer\n'
+                        + ('  GDN_HWS(37, 37, 39);   // compute() re-runs its own startup per layer (GTEXT2: one out-of-line copy)\n' if GTEXT2 else
+                           '  compute_kernel_hw_startup(37, 37, 39);   // compute() re-runs its own startup per layer\n') +
                         '  cb_wait_front(37, 8);\n  cb_reserve_back(39, 1);\n  reconfig_data_format_srca(37);\n  pack_reconfig_data_format(39);\n'
                         '  copy_init(37);\n  tile_regs_acquire();\n  copy_tile(37, 0, 0);\n'
                         '  for (uint32_t t = 1; t < 8; ++t) {\n    copy_init(37);\n    copy_tile(37, t, 1);\n    add_binary_tile_init();\n    add_binary_tile(0, 1, 0);\n  }\n'

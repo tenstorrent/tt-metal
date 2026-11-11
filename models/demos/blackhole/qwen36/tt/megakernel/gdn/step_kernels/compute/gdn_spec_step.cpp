@@ -287,6 +287,13 @@ namespace {
 #define GT2_M_IR GT2_D_IR  // inverse_rms
 #endif
 #define GT2_ON(m) (GDN_GTEXT2 && ((m) & GT2_TB))
+// the reducer (GDN_PRE_IN_HOOK) re-runs the full HW init up to 3x per layer (step start, after the hook, rred_c): one copy
+#if GDN_GTEXT2 && defined(GDN_PRE_IN_HOOK) && !defined(GT2_HWS_INLINE)
+__attribute__((noinline, noclone)) void gt2_hw_startup(uint32_t a, uint32_t b, uint32_t o) { compute_kernel_hw_startup(a, b, o); }
+#define GDN_HWS(a, b, o) gt2_hw_startup(a, b, o)
+#else
+#define GDN_HWS(a, b, o) compute_kernel_hw_startup(a, b, o)
+#endif
 #if GT2_ON(GT2_M_SQ)
 __attribute__((noinline, noclone)) void gt2_square_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
     square_tiles(a, out, out_dfb, n);
@@ -1714,7 +1721,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     const uint32_t kc_id = dfb::kc;
     const uint32_t vc_id = dfb::vc;
 
-    compute_kernel_hw_startup(dfb::src_in, dfb::state_in, dfb::out);
+    GDN_HWS(dfb::src_in, dfb::state_in, dfb::out);
     scaler.wait_front(1);
 #if !GDN_NO_EPS_L2
     eps_l2.wait_front(1);
@@ -2138,7 +2145,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     // engine (MK_RRED_LATE): this core's per-layer pre-in_ready work (the Σ reducer's mixer delivery) AFTER the replay, so the
     // replay keeps its early slot; then this kernel's startup again (the reducer reprograms unpack / math / pack)
     gdn_pre_in_hook();
-    compute_kernel_hw_startup(dfb::src_in, dfb::state_in, dfb::out);
+    GDN_HWS(dfb::src_in, dfb::state_in, dfb::out);
 #endif
 #endif
 #if GDN_LAZY
