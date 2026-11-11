@@ -235,15 +235,17 @@ void kernel_main() {
         noc_async_read(kpa.get_noc_addr(0), scr, 128);
         noc_async_read_barrier();
 #if defined(MKA_RQBAL)
-        // proportional cross-user membership: every SDPA core derives the same assignment of the global core list
-        // (MKA_RQB_TAB: N words phys x | y << 8 | is_stream << 16, = the static user groups concatenated) to the own
-        // users: m_u ∝ blocks (min 1, <= blocks while cores last), contiguous slices; inside a slice the tree-internal
-        // ranks (r % FAN == 0) get STREAM cores (owners stay leaves: EXTLEAN); tree = the static 2-level FAN scheme,
-        // extended by a level-2 for groups > FAN^2. Equal lengths reproduce the static groups / trees (RQDYN) exactly.
+        // proportional cross-user membership: every SDPA core derives the same per-pass assignment from kvpos.
+        // MKA_RQB_TAB = [STREAM pool (MKA_RQB_NS) | EXT pool] words phys x | y << 8 (the same layout rule builds the static
+        // groups under MKA_RQPOS: engine/program.py rq_layout). m_u ∝ blocks (min 1, <= blocks while cores last); each
+        // user takes s_u STREAM + e_u EXT cores (s_u ∝ m_u, >= 1); rank r: STREAM at tree-internal ranks (r % FAN == 0,
+        // so owners stay leaves: EXTLEAN) and once the EXT share is used, else EXT. Tree = the static 2-level FAN scheme,
+        // + a level 2 for groups > FAN^2. Equal lengths reproduce the static groups / trees (RQDYN) bit for bit.
         {
             volatile tt_l1_ptr int32_t* ka = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
+            constexpr uint32_t NS = MKA_RQB_NS;
             const uint32_t N = b1, me = b0;
-            uint32_t nb[NUSR], mu[NUSR], W = 0;
+            uint32_t nb[NUSR], mu[NUSR], su[NUSR], W = 0;
             for (uint32_t u = 0; u < NUSR; ++u) {
                 int32_t pm = -1;
                 for (uint32_t j = 0; j < MKA_RQ_T; ++j) { const int32_t p = ka[rq_g(u) * MKA_RQ_T + j]; if (p > pm) pm = p; }
@@ -269,22 +271,35 @@ void kernel_main() {
                 if (k == NUSR) { cap = false; continue; }
                 ++mu[k]; ++tot;
             }
-            uint32_t s0 = 0, u = 0;
-            while (me >= s0 + mu[u]) s0 += mu[u++];
-            const uint32_t m = mu[u];
-            uint8_t perm[MKA_RQB_N];   // slice position -> rank order: internal ranks take STREAM cores
-            for (uint32_t r = 0; r < m; ++r) perm[r] = r;
-            volatile tt_l1_ptr uint32_t* ct = l1w(MKA_RQB_TAB) + s0;
-            for (uint32_t r = 0; r < m; r += FANOUT) {
-                if (ct[perm[r]] >> 16) continue;
-                for (uint32_t q = r + 1; q < m; ++q)
-                    if (q % FANOUT && (ct[perm[q]] >> 16)) { const uint8_t t = perm[r]; perm[r] = perm[q]; perm[q] = t; break; }
+            tot = 0;   // STREAM share per user: ∝ m_u, 1 <= s_u <= m_u, sum NS
+            for (uint32_t u = 0; u < NUSR; ++u) {
+                uint32_t sv = NS * mu[u] / N;
+                if (sv < 1) sv = 1;
+                if (sv > mu[u]) sv = mu[u];
+                su[u] = sv; tot += sv;
             }
+            while (tot > NS) { uint32_t k = 0; for (uint32_t u = 1; u < NUSR; ++u) if (su[u] > su[k]) k = u; --su[k]; --tot; }
+            while (tot < NS) {
+                uint32_t k = NUSR;
+                for (uint32_t u = 0; u < NUSR; ++u) if (su[u] < mu[u] && (k == NUSR || mu[u] - su[u] > mu[k] - su[k])) k = u;
+                ++su[k]; ++tot;
+            }
+            // my user: the one whose STREAM (me < NS) or EXT slice holds me
+            uint32_t u = 0, s0 = 0, e0 = 0;
+            for (; u + 1 < NUSR; ++u) {
+                if (me < NS ? me < s0 + su[u] : me - NS < e0 + mu[u] - su[u]) break;
+                s0 += su[u]; e0 += mu[u] - su[u];
+            }
+            const uint32_t m = mu[u], sN = su[u], eN = m - sN;
+            uint8_t lay[MKA_RQB_N];   // rank -> table index
+            for (uint32_t r = 0, si = 0, ei = 0; r < m; ++r)
+                lay[r] = (((r % FANOUT == 0 || ei == eN) && si < sN) || ei == eN) ? (uint8_t)(s0 + si++) : (uint8_t)(NS + e0 + ei++);
             uint32_t r = 0;
-            while (perm[r] != me - s0) ++r;
+            while (lay[r] != me) ++r;
+            volatile tt_l1_ptr uint32_t* ct = l1w(MKA_RQB_TAB);
             user = u;
             b0 = r; b1 = m;   // even split of this user's blocks over its m cores (below)
-            auto xy = [&](uint32_t rr, uint32_t* x, uint32_t* y) { const uint32_t w = ct[perm[rr]]; *x = w & 0xFF; *y = (w >> 8) & 0xFF; };
+            auto xy = [&](uint32_t rr, uint32_t* x, uint32_t* y) { const uint32_t w = ct[lay[rr]]; *x = w & 0xFF; *y = (w >> 8) & 0xFF; };
             uint32_t h = 0, f = FANOUT;   // height of rank r: the largest l with FAN^l | r (root: 3)
             if (r == 0) h = 3;
             else while (r % f == 0) { ++h; f *= FANOUT; }

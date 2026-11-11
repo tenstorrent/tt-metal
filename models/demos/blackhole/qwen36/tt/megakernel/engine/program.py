@@ -278,7 +278,31 @@ def setup_bench(dev, MESH, mesh_identity):
     for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
     members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
     if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
-    if ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
+    RQ_S = [i for i in ACT if fcores[i].x < GX and fcores[i].y < GY]   # MKA_RQPOS / RQBAL pools: STREAM, then EXT
+    RQ_E = [i for i in ACT if i not in RQ_S]
+    def rq_layout(mu):
+        """MKA_RQPOS member layout (kernel twin: mka2_reader.cpp MKA_RQBAL block): users take contiguous slices of the
+        STREAM and EXT pools, s_u ∝ m_u (1 <= s_u <= m_u, sum = len(RQ_S)); rank r takes STREAM at the tree-internal
+        ranks (r % FAN == 0) and once the user's EXT share is used, else EXT (owners stay tree leaves)."""
+        NS_, N_ = len(RQ_S), sum(mu)
+        su = [min(m_, max(1, NS_ * m_ // N_)) for m_ in mu]
+        while sum(su) > NS_: k_ = max(range(len(su)), key=lambda u_: (su[u_], -u_)); su[k_] -= 1
+        while sum(su) < NS_:
+            k_ = max((u_ for u_ in range(len(su)) if su[u_] < mu[u_]), key=lambda u_: (mu[u_] - su[u_], -u_)); su[k_] += 1
+        out, s0, e0 = [], 0, 0
+        for u_, m_ in enumerate(mu):
+            sN, eN, si, ei, lay = su[u_], m_ - su[u_], 0, 0, []
+            for r_ in range(m_):
+                if ((r_ % FAN == 0 or ei == eN) and si < sN) or ei == eN: lay.append(RQ_S[s0 + si]); si += 1
+                else: lay.append(RQ_E[e0 + ei]); ei += 1
+            out.append(lay); s0 += sN; e0 += eN
+        return out
+    if ('MKA_RQPOS', '1') in MKDEF:   # static groups by the RQBAL rule at equal lengths (RQDYN == RQBAL bit for bit)
+        assert len(ACT) % NU == 0, (len(ACT), NU)
+        members = rq_layout([len(ACT) // NU] * NU)
+        for u_, m_ in enumerate(members):
+            for i_ in m_: grp[i_] = u_
+    elif ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
         _sx = lambda f_: fcores[f_].x < GX and fcores[f_].y < GY
         for m_ in members:
             e_ = [f_ for f_ in m_ if not _sx(f_) and f_ != m_[0]]
@@ -1080,14 +1104,14 @@ def setup_bench(dev, MESH, mesh_identity):
             KVP_PT = 4 + T + (-(kvp_t.buffer_address() + 4 * (4 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
             assert (kvp_t.buffer_address() + 4 * KVP_PT) % 64 == 0, ('KVP table alignment', kvp_t.buffer_address(), KVP_PT)
             RQ_TENS += [rq_kvpos, rq_cos, rq_sin, rq_pt, kvp_t]
-            RQB_L = sum((list(m_) for m_ in members), [])   # MKA_RQBAL global SDPA core list = the static groups concatenated
+            RQB_L = RQ_S + RQ_E   # MKA_RQBAL table: STREAM pool, then EXT pool (rq_layout)
             RQB_IDX = {f_: i_ for i_, f_ in enumerate(RQB_L)}
             if RQBAL:
                 assert sorted(RQB_L) == sorted(ACT) and len(RQB_L) <= 255
-                _w = [fphys[f_].x | (fphys[f_].y << 8) | ((1 if f_ in stream_idx else 0) << 16) for f_ in RQB_L]
+                _w = [fphys[f_].x | (fphys[f_].y << 8) for f_ in RQB_L]
                 rqb_t = _l1_tab([_w + [0] * (-len(_w) % 4)] * _ncore, kgrid)
                 RQ_TENS.append(rqb_t)
-                MKDEF = MKDEF + [('MKA_RQB_TAB', f"{rqb_t.buffer_address()}u"), ('MKA_RQB_N', str(len(RQB_L)))]
+                MKDEF = MKDEF + [('MKA_RQB_TAB', f"{rqb_t.buffer_address()}u"), ('MKA_RQB_N', str(len(RQB_L))), ('MKA_RQB_NS', str(len(RQ_S)))]
             torch.manual_seed(17)
             qk_w = 0.1 * torch.randn(ATT0 + NATT_, 2, 256)   # checkpoint w; applied gamma = bf16(1 + w)
             qk_g = (1.0 + qk_w).bfloat16().float()
