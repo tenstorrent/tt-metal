@@ -367,6 +367,16 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # reference's), their ring / window untouched. The live mask goes reader -> compute through an argblock word
     # ((layer + 1) << 8 | mask, 2 parity slots, the payload's last 2 words; the compute's 3 TRISCs spin on it).
     hold_skip = os.environ.get("E1_HOLD_SKIP", "0") == "1" and B > 1 and early and st_ring == 0
+    # E1_XVC (out-ready skew, default 0 = off): the head acc / gate-slot exchange (writer lz_xchg data + its ready / valid
+    # increments) on static unicast VC E1_XVC instead of VC 1. The late head's exchange otherwise queues on NOC0 behind the
+    # early heads' stash / S' DRAM writes (1.6 us typical -> 8-17 us spikes on the last head). Same bytes / order.
+    xvc = int(os.environ.get("E1_XVC", "0"))
+    assert xvc in (0, 2, 3), ("E1_XVC: a unicast request VC other than the default 1", xvc)
+    # E1_LAZY_GATE (out-ready skew, default off; needs the gdn_out reader hook + GO flags): the writer's batched stash writes
+    # (wr_lazy, NOC0 -> DRAM) start once every GDN core's out tiles reached this core's A (the 24 GO flags = every head's
+    # exchange is past), so they never sit in front of a later head's exchange
+    lazy_gate = os.environ.get("E1_LAZY_GATE", "0") == "1"
+    assert not lazy_gate or (gdnout and go_rdhook and os.environ.get("E1_GO_FLAGS", "1") == "1"), "E1_LAZY_GATE needs MKA_GDNOUT + the reader hook + E1_GO_FLAGS"
     # lean CB table (E1_LEAN, default on): 3 ids freed (LEAN_ALIAS) and kmq 4 -> 2 user slots (-32 KB)
     lean = os.environ.get("E1_LEAN", "1") == "1"
     tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring, lean=lean, kmq_users=2 if lean else 4)
@@ -401,7 +411,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # unit scatter, += count on the owners' word), then the engine's out_ready (the GDN-type layer stall ends after gdn_out)
     GO = gdnout
     go_r = go_w = go_c = go_sig = ""
-    go_ring0h = False   # E1_GO_RING0=hook (set below)
+    go_ring0h = go_ring0s = False   # E1_GO_RING0=hook / split (set below)
     go_inc = ""
     if GO:
         WOU = GO["wou_dir"]
@@ -457,6 +467,13 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'get_tile_size({CR_}));\n'
                 f'    wou::ring_fill({CR_}, gw.get_noc_addr(g_ab[{{OGO}} + 1] + (L_) * {GO["w_stride"]}u), 0, {GO["wk"]}u * g_ab[{{OGO}}], 16, 2, 13, []() {{}});\n'
                 f'    cb_push_back({CR_}, {RP}); }}\n')
+        go_r0s = (f'  {{ DeviceZoneScopedN("GO-RING"); cb_reserve_back({CR_}, {RP}); const auto gw = TensorAccessor(TensorAccessorArgs<{{GW_OFF}}>(), {GO["w_addr"]}u, '
+                  f'get_tile_size({CR_}));\n'
+                  f'    const uint64_t s_ = gw.get_noc_addr(g_ab[{{OGO}} + 1]); const uint32_t pb_ = get_tile_size({CR_}), d_ = get_write_ptr({CR_}), n_ = {GO["wk"]}u * g_ab[{{OGO}}];\n'
+                  f'    noc_async_read_set_trid(13);\n'
+                  f'    for (uint32_t p = 0; p < n_; p += 16) noc_async_read(s_ + p * pb_, d_ + p * pb_, ((n_ - p) < 16u ? (n_ - p) : 16u) * pb_);\n'
+                  f'    noc_async_read_set_trid(0); }}   // E1_GO_RING0=split: retired + pushed at the tail head\n')
+        go_r0s_done = f'  if (g_l == 0) {{ noc_async_read_barrier_with_trid(13); cb_push_back({CR_}, {RP}); }}   // E1_GO_RING0=split\n'
         owx = ", ".join(f"{x}u" for x, _ in GO["owners"]); owy = ", ".join(f"{y}u" for _, y in GO["owners"])
         go_w = (f'  {{   // gdn_out of GDN layer L\n'
                 f'    {{ DeviceZoneScopedN("GO-A");\n'
@@ -493,6 +510,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     wct, woff = ctas([wmap[t] for t in WRITER_TENSORS])
     if GO:   # gdn_out accessors appended after the step's (reader: the weight slices; writer: the debug output copy)
         go_r = go_r.replace("{GW_OFF}", str(len(rct)))
+        go_r0s = go_r0s.replace("{GW_OFF}", str(len(rct)))
         rct = rct + ttnn.TensorAccessorArgs(GO["w"]).get_compile_time_args()
         go_local_rd = ""
         if go_rdhook:
@@ -503,11 +521,15 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  else noc_async_write_multicast(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);'
                 for r in (gr_[0:5], gr_[5:10]) if r[4])
             inc1h = _loop(f'noc_semaphore_inc(get_noc_addr(go_gx[gi_], go_gy[gi_], {GO["gdna"]}u), 1);')
+            # E1_GO_VC (out-ready skew, default 0 = off; unicast A + flags): the A all-gather's unicasts + per-source flags on static
+            # unicast VC E1_GO_VC instead of VC 1: the last core's handoff took 5-15 us behind the NOC1 DRAM traffic at L4
+            go_vc = int(os.environ.get("E1_GO_VC", "0"))
+            assert go_vc in (0, 2, 3), ("E1_GO_VC", go_vc)
             if os.environ.get("E1_GO_MCAST", "0") == "0":   # unicast all-gather (default; the 2 rect multicasts were 15-35 us): n tiles to each of the 24 GDN cores (incl. self)
-                mc1h = '  ' + _loop('noc_async_write(src, get_noc_addr(go_gx[gi_], go_gy[gi_], dst), n * 2048u);')
+                mc1h = '  ' + _loop('noc_async_write(src, get_noc_addr(go_gx[gi_], go_gy[gi_], dst), n * 2048u' + (f', noc_index, {go_vc}' if go_vc else '') + ');')
             GO_FLAGS = os.environ.get("E1_GO_FLAGS", "1") == "1"
             if GO_FLAGS:   # per-source ready flags (arg block words GFL + t, L + 1) written after the tiles landed: no atomics
-                inc1h = _loop('noc_inline_dw_write(get_noc_addr(go_gx[gi_], go_gy[gi_], (uint32_t)(g_ab + {GFL} + t0)), g_l + 1);')
+                inc1h = _loop('noc_inline_dw_write(get_noc_addr(go_gx[gi_], go_gy[gi_], (uint32_t)(g_ab + {GFL} + t0)), g_l + 1' + (f', 0xF, noc_index, {go_vc}' if go_vc else '') + ');')
             go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
                            f'  DeviceZoneScopedN("GO-RDH");\n'
                            f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc1h}\n'
@@ -548,9 +570,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # E1_GO_RING0=hook (default; =pre restores the old order) (with RING2): layer 0's ring slice is read inside reader<>(0) right before rd_owait (the reader
         # idles there while the compute runs the step) instead of before the layer loop, where its ~26 us of DRAM reads
         # delayed L0's state-first / pre reads (the +~40 us L0 cost, once per pass)
-        go_ring0h = GO_RING2 and os.environ.get("E1_GO_RING0", "hook") == "hook"
+        go_ring0h = GO_RING2 and os.environ.get("E1_GO_RING0", "hook") in ("hook", "split")
+        # E1_GO_RING0=split (out-ready skew; with the hook + TAILHOOK): L0's ring reads are only ISSUED in the hook (trid 13,
+        # no barrier) and retired + pushed at the head of the gdn_out tail. With =hook the reader barriers them before
+        # rd_owait, so on cores whose ~100 KB ring read outlasts the step, L0's out handoff waited up to ~7 us for it
         go_wr = ""
         GO_TAILHOOK = go_rdhook and os.environ.get("E1_GO_TAILHOOK", "1") == "1"
+        go_ring0s = go_ring0h and GO_TAILHOOK and os.environ.get("E1_GO_RING0", "hook") == "split"
+        assert go_ring0s or os.environ.get("E1_GO_RING0", "hook") != "split", "E1_GO_RING0=split needs the reader hook + RING2 + TAILHOOK"
         go_th = ""
         if GO_TAILHOOK:
             # E1_GO_TAILHOOK (default on with the reader hook): the whole gdn_out tail (A ready wait, A push, matmul wait,
@@ -572,7 +599,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         OGO = 29 + NG * (len(rtens) + len(WRITER_TENSORS)) + 2   # gdn_out payload words: after the per-layer tensors + OAG / OAG_ME
         GFL = OGO + 2 + GO["maxt"] + 5
         GRDY = GFL + len(cores)
-        go_r, go_w, go_c, go_local, go_wr, go_local_rd, go_th = (x.replace("{OGO}", str(OGO)).replace("{GFL}", str(GFL)).replace("{GRDY}", str(GRDY)) for x in (go_r, go_w, go_c, go_local, go_wr, go_local_rd, go_th))
+        go_r, go_w, go_c, go_local, go_wr, go_local_rd, go_th, go_r0s = (x.replace("{OGO}", str(OGO)).replace("{GFL}", str(GFL)).replace("{GRDY}", str(GRDY)) for x in (go_r, go_w, go_c, go_local, go_wr, go_local_rd, go_th, go_r0s))
     hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
     open(hr, "w").write(_bind_header(ids, rtens, roff, CRTA0))
     open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff, CRTA0))
@@ -625,6 +652,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         assert max(len(f_) for f_ in gk_f) <= 2, gk_f
         gk_k = [1 if k_ == -1 else k_ for k_ in gk_k]
         print(f"[gin] PERCORE in_ready targets k {gk_k}, forwarders {[(i, f_) for i, f_ in enumerate(gk_f) if f_]}", flush=True)
+    # E1_GIN_FWD=w (out-ready skew, default r; needs EARLY_REPLAY): the corner bump goes out from the forwarder's WRITER (NOC0,
+    # eastward: 1-2 hops to the corners) right after its own in_ready wait, instead of the reader (NOC1: an eastward target is the
+    # long way round the row ring, through the GDN rows' DRAM traffic: the corners saw in_ready 7-10 us after the forwarder)
+    gin_fwdw = percore and early and os.environ.get("E1_GIN_FWD", "r") == "w"
     # in_ready target of GDN layer g on this core: k_c * (g + 1) (PERCORE) else g + 1
     IRT = (lambda l_: f'g_ab[{OGK}] * ({l_} + 1)') if percore else (lambda l_: f'{l_} + 1')
     AGX, AGY = (lambda q: (q.x, q.y))(dev.worker_core_from_logical_core(cores[0]))
@@ -662,14 +693,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '')
         + (f'void gdn_gin_wait() {{\n  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n'
-           f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n}}\n'
+           + ('' if gin_fwdw else f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n') + '}\n'
            'void gdn_in_wait() { gdn_gin_wait(); }\n' if percore else
            f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n')
         + (GXY_DECL if GO else '')
         + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '')
-        + ((go_local_rd[:go_local_rd.rindex("}")] + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '')
+        + ((go_local_rd[:go_local_rd.rindex("}")] + (go_r0s_done if go_ring0s else '') + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '')
         + (f'void gdn_hold_publish(uint32_t m) {{ g_ab[{OHM} + (g_l & 1)] = ((g_l + 1) << 8) | m; }}\n' if hold_skip else '')
-        + ('void gdn_out_pre() {\n  if (g_l == 0) {\n' + go_r.replace("(L_)", "0u") + '  }\n}\n' if go_ring0h else '') +
+        + ('void gdn_out_pre() {\n  if (g_l == 0) {\n' + (go_r0s if go_ring0s else go_r.replace("(L_)", "0u")) + '  }\n}\n' if go_ring0h else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         + ('  gdn_cut_reset();\n' if cut_fast else '') +
         (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) and not go_ring0h else '') +
@@ -703,8 +734,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'uint32_t gdn_xsem_addr(uint32_t i) {{ return i ? {S["vb1"]} : {S["vb0"]}; }}\n'
         + (GXY_DECL if GO else '') +
         f'void gdn_out_signal() {{ {go_inc if GO else osig} }}\n'
+        + (f'void gdn_lazy_gate() {{ for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {GFL} + t, g_gdn_l + 1); }}\n' if lazy_gate else '')
         + (go_local if GO and not go_rdhook else '')
-        + (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")}); }}\n' if early else '')
+        + ((f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")});\n'
+            f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n}}\n')
+           if gin_fwdw else
+           f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")}); }}\n' if early else '')
         + f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_gdn_l = L;\n'
         f'    for (uint32_t t = 0; t < {nW}; ++t) crta[{CRTA0} + t] = g_ab[{OLW} + L * {nW} + t];\n'
@@ -753,7 +788,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
            ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + ([("GDN_OUT_LOCAL", str(GO_LOCAL))] if GO and GO_LOCAL and not go_rdhook else []) + common + (
         [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
         [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else []) + (
-        [("GDN_OUT_TILE", "1")] if out_tile else []) + ([("GDN_OUT_RD", "1")] if out_rd else [])
+        [("GDN_OUT_TILE", "1")] if out_tile else []) + ([("GDN_OUT_RD", "1")] if out_rd else []) + (
+        [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else [])
     d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
         "E1_SP_WAIT", "0") == "1" else []) + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
         [("GDN_ZS_LATE", "1")] if zs_late else []) + ([("GDN_EARLY_REPLAY", "1")] if early else []) + (

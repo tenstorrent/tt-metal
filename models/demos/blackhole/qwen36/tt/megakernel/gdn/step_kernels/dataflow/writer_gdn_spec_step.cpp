@@ -160,6 +160,15 @@ inline uint32_t gdn_bits(float f) {
 #ifndef GDN_OUT_SIGNAL
 #define GDN_OUT_SIGNAL 0  // engine GDN role: gdn_out_signal() (the including TU) after the output rows are written
 #endif
+#ifndef GDN_XVC
+#define GDN_XVC 0  // engine GDN role (E1_XVC): static unicast VC of the head exchange (lz_xchg data + increments); 0 = default VC
+#endif
+#ifndef GDN_LAZY_GATE
+#define GDN_LAZY_GATE 0  // engine GDN role (E1_LAZY_GATE): gdn_lazy_gate() (the including TU) before the batched stash writes
+#endif
+#if GDN_LAZY_GATE
+void gdn_lazy_gate();
+#endif
 #if GDN_EXT_SEM
 uint32_t gdn_xsem_addr(uint32_t i);
 // the subset of Semaphore the head exchange uses, on a global semaphore (same L1 address on every GDN core); counts are
@@ -167,7 +176,13 @@ uint32_t gdn_xsem_addr(uint32_t i);
 struct GdnXSem {
     uint32_t a;
     explicit GdnXSem(uint32_t addr) : a(addr) {}
+#if GDN_XVC
+    // GDN_XVC: the head exchange's increments on static unicast VC GDN_XVC (not the default VC 1 that the other heads'
+    // stash / S' DRAM writes fill), so a late head's exchange is not queued behind them
+    void up(Noc&, uint32_t x, uint32_t y, uint32_t v) { noc_semaphore_inc(get_noc_addr(x, y, a), v, noc_index, GDN_XVC); }
+#else
     void up(Noc&, uint32_t x, uint32_t y, uint32_t v) { noc_semaphore_inc(get_noc_addr(x, y, a), v); }
+#endif
     void wait(uint32_t v) const { noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a), v); }
 };
 #endif
@@ -266,12 +281,16 @@ __attribute__((noinline)) void lz_xchg(
     ready.wait(VB * GDN_SEM_K);
     if (bytes != 0) {
         for (uint32_t p = 0; p < VB; ++p) {
+#if GDN_XVC
+            noc_async_write(src.get_read_ptr() + src_off, get_noc_addr(px[p], py[p], dst), bytes, noc_index, GDN_XVC);
+#else
             noc.async_write(
                 src,
                 UnicastEndpoint{},
                 bytes,
                 {.offset_bytes = src_off},
                 {.noc_x = px[p], .noc_y = py[p], .addr = dst});
+#endif
         }
         noc.async_write_barrier();  // the data landed before `sem` is raised
     }
@@ -1660,6 +1679,9 @@ TT_KERNEL void writer(
         spd.reserve_back(1);
         spd.push_back(1);
     }
+#endif
+#if GDN_LAZY_GATE
+    gdn_lazy_gate();  // E1_LAZY_GATE: the stash writes (NOC0 DRAM) wait until every head's exchange is past
 #endif
     wr_lazy_fn();
 #endif
