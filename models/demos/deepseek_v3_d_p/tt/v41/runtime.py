@@ -118,6 +118,10 @@ class V41PrefillRuntime:
         self.num_layers = int(cfg.n_layers)
         self._ack = None
         self._request_id = 0
+        # tt-blaze DS41F-0152: per slot, the prompt tokens prefix reuse did not compute (skipped or restored chunks, less any
+        # chunk a resume recomputed silently), published to the runner's reuse table before each chunk's acks
+        self._reuse_table = None
+        self._reused = [0] * self.num_users
         # prefill-side prefix reuse H1 (V41_PREFILL_PREFIX_REUSE=1, tt/v41/prefix_reuse.py): built in compile(); None = off.
         # H2 (+ V41_PREFILL_PREFIX_STORE_GB > 0): its host chunk store
         self._prefix = None
@@ -219,6 +223,8 @@ class V41PrefillRuntime:
         ids = input_tensor if isinstance(input_tensor, list) else self._token_ids_from_device(input_tensor)
         real = int(actual_end) - int(actual_start)
         assert 0 < real <= self.chunk_size and len(ids) >= real
+        if not warmup and int(actual_start) == 0:
+            self._reused[int(slot_id)] = 0
         if not warmup and os.environ.get("V41_PREFILL_ISLANDS", "0") == "1" and not self.pf.islands:
             # capture at the FIRST REQUEST, not at the warm-up: the runner builds its H2D input service AFTER the warm-up,
             # and a buffer allocated after a capture can sit in the islands' intermediates -- the socket's next chunk then
@@ -237,6 +243,9 @@ class V41PrefillRuntime:
                 )
                 reuse.after_acks(int(slot_id), last)  # H2: a burst's last chunk -> the tips of the prompts it left
                 return None
+            if getattr(reuse, "last_silent", 0):
+                # the resume recomputed chunks counted as reused above: they were computed after all
+                self._reused[int(slot_id)] = max(0, self._reused[int(slot_id)] - reuse.last_silent * self.chunk_size)
         if int(actual_start) == 0:
             self.pf.reset()
             kv_caches.zero_slot(int(slot_id))
@@ -280,6 +289,8 @@ class V41PrefillRuntime:
             reuse.capture(int(slot_id), ids[:real], int(actual_start), int(actual_end)) if reuse is not None else 0.0
         )
         t3 = time.time()
+        if not warmup:
+            self._publish_reuse(int(slot_id))  # before the acks: tt-d-gen reads it once the last chunk's acks are in
         if self._ack is not None and not warmup:
             for L in range(self.num_layers):
                 self._ack(L)
@@ -347,6 +358,8 @@ class V41PrefillRuntime:
         chunk partition) -- every contract layer acknowledged at once, nothing computed. H2 (``restored``): its rows were
         written back from the host store instead (the export's rows included)."""
         self._request_id = int(request_id)
+        self._reused[slot_id] += int(end) - int(start)
+        self._publish_reuse(slot_id)  # before the acks, as for a computed chunk
         if self._ack is not None:
             for L in range(self.num_layers):
                 self._ack(L)
@@ -525,6 +538,14 @@ class V41PrefillRuntime:
 
     def set_layer_completion_sink(self, sink) -> None:
         self._ack = lambda layer_idx: sink(layer_idx, self._request_id)
+
+    def set_reuse_table(self, table) -> None:
+        """tt-blaze DS41F-0152: the runner's per-slot reuse table (models/demos/common/prefill/runners/reuse_table.py)."""
+        self._reuse_table = table
+
+    def _publish_reuse(self, slot: int) -> None:
+        if self._reuse_table is not None:
+            self._reuse_table.set(slot, self._reused[slot])
 
     def flush_acks(self) -> None:
         return None

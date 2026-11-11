@@ -931,6 +931,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             )
         )
         source_desc = "host on_layer_complete callback"
+    # tt-blaze DS41F-0152: a runtime that reuses part of a prompt itself publishes, per slot, the tokens it did not compute;
+    # the dgen prefill worker reports them to the decode side as the source's cache hit. The master rank owns the table.
+    reuse_table = None
+    if rank == master_rank and getattr(runtime, "set_reuse_table", None) is not None:
+        from models.demos.common.prefill.runners.reuse_table import ReuseTable, shm_name
+
+        reuse_table = ReuseTable(shm_name(service_id), NUM_USERS)
+        runtime.set_reuse_table(reuse_table)
+        logger.info(f"[migration] prefill reuse table {reuse_table.path} ({NUM_USERS} slot(s))")
     logger.info(
         f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
         f"ring={ring_shm_name} source={source_desc} "

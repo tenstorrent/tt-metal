@@ -225,6 +225,7 @@ class V41PrefixReuse:
         self.on = True
         self.last_restored = False  # the last begin_chunk restored its chunk from the host store (H2)
         self.replayed = False  # the last begin_chunk ran silent chunks (island replays) before its chunk
+        self.last_silent = 0  # how many (tt-blaze DS41F-0152: runtime's reuse count drops them)
         self.stores = self._build_stores(runtime) if store_gb() > 0 else {}  # H2; {} = off
         self.spill_tips = int(os.environ.get(ENV_SPILL_TIPS, "2"))
         h2 = {
@@ -329,6 +330,7 @@ class V41PrefixReuse:
         pr = self.ret[slot]
         self.last_restored = False
         self.replayed = False  # the resume below ran chunks through the model (silent rebuild): runtime._ids_stale
+        self.last_silent = 0
         if start == 0:
             self.bypass[slot] = False
             rss = f"; runner RSS {_rss_gib():.1f} GiB" if pr.store is not None else ""
@@ -345,6 +347,7 @@ class V41PrefixReuse:
             silent0 = pr.stats.silent_chunks
             skipped = pr.begin_chunk(torch.tensor([int(t) for t in ids], dtype=torch.int32), start, end, last)
             self.replayed = pr.stats.silent_chunks > silent0
+            self.last_silent = pr.stats.silent_chunks - silent0
             assert not (image and skipped), "an image-span chunk was skipped / restored"
         except BaseException:
             pr.invalidate("begin_chunk failed")
