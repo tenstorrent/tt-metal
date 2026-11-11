@@ -9,6 +9,7 @@
 #include <set>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
