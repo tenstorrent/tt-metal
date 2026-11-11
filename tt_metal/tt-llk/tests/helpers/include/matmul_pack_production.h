@@ -25,14 +25,15 @@ using namespace ckernel;
 
 struct State
 {
-    bool seen            = false; // pack_w_last == the output
-    bool valid           = false;
+    std::uint32_t seen   = 0; // pack_w_last == the output; words: a byte store may alias anything and force reloads (dest_offset_id)
+    std::uint32_t valid  = 0;
     std::uint32_t page   = 0;
     std::uint32_t next   = 0;
     std::uint32_t tiles  = 0;
 };
 
-inline State state;
+// internal: the no-LTO test build keeps a write-only global with external linkage, production drops write-only pack state
+static State state;
 
 constexpr bool wide_format(const DataFormat f)
 {
@@ -94,8 +95,8 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     }
     if (forms == 1)
     {
-        state.seen  = true;
-        state.valid = false;
+        state.seen  = 1;
+        state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
@@ -106,14 +107,14 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (sync == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE()))
     {
         _llk_pack_close_fast_untilize_<sync>();
-        state.valid = false;
+        state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
         }
         return;
     }
-    const bool first        = MATMUL_PACK_STATE != 0 || !state.seen;
+    const bool first        = MATMUL_PACK_STATE != 0 || state.seen == 0;
     const char f = forms == 2 ? 'B' : matmul_pack_tables::llk_pack_block_form_k<fp32, MATMUL_PACK_NOK ? 0 : key_kt>(
         row,
         key_nt != 0 ? key_nt : num_tiles,
@@ -125,14 +126,14 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         src32,
         int8,
         true); // a matmul init ran on the kernel: the masks behind matmul math (llk_pack_matmul_context)
-    state.seen = true;
+    state.seen = 1;
     if (first)
     {
         _llk_pack_close_fast_untilize_<sync>();
     }
     if (f == 'T')
     {
-        state.valid = false;
+        state.valid = 0;
         for (std::uint32_t i = 0; i < num_tiles; i++)
         {
             _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, address + i * page);
@@ -141,7 +142,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     }
     if (f != 'W')
     {
-        state.valid = false;
+        state.valid = 0;
         _llk_pack_close_fast_untilize_<sync>();
         if constexpr (form == 1)
         {
@@ -154,7 +155,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
         return;
     }
     constexpr std::uint32_t max_tiles = wide_format(out_format) ? 64 : 127; // LLK_PACK_W_MAX_TILES_W
-    const bool cont = state.valid && state.page == page && state.next == address && state.tiles + num_tiles <= max_tiles;
+    const bool cont = state.valid != 0 && state.page == page && state.next == address && state.tiles + num_tiles <= max_tiles;
     if (!cont)
     {
         // llk_pack_w_take: the output base is programmed again, the stride only when it changed
@@ -165,7 +166,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
             cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
             pack_ch1_w_stride = tile_stride;
         }
-        state.valid = true;
+        state.valid = 1;
         state.page  = page;
         state.next  = address;
         state.tiles = 0;
