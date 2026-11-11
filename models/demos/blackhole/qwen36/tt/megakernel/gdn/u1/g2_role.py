@@ -95,8 +95,11 @@ class GdnRole:
                               ("nea", "nea_d"), ("weight", "w_d")):
                     a_, b_ = st[k], getattr(probe, pk)
                     assert a_ is not None, (l, k)
-                    assert (tuple(a_.shape), a_.dtype, a_.layout) == (tuple(b_.shape), b_.dtype, b_.layout), \
-                        (l, k, tuple(a_.shape), a_.dtype, a_.layout, tuple(b_.shape), b_.dtype, b_.layout)
+                    # the kernels address whole tiles / pages: compare the PADDED shape (prod's window pair is logical
+                    # [B, K-1+T, C], padded to the tile height like the probe's [B, 32, C])
+                    ps = lambda t_: tuple(t_.padded_shape) if hasattr(t_, "padded_shape") else tuple(t_.shape)
+                    assert (ps(a_), a_.dtype, a_.layout) == (ps(b_), b_.dtype, b_.layout), \
+                        (l, k, ps(a_), tuple(a_.shape), a_.dtype, a_.layout, ps(b_), b_.dtype, b_.layout)
             for t_ in (probe.win_a, probe.win_b, probe.ring, probe.taps_d, probe.dtb_d, probe.nea_d, probe.w_d):
                 ttnn.deallocate(t_)
         self.LY = [dict(cA=None if state is not None else m.LazyCase(dev, g, B, T, seed=seed + 7 * l),
