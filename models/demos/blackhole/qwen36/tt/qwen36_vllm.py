@@ -472,14 +472,56 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         video = self._gather_user_visual(kwargs, u, "pixel_values_videos", "video_grid_thw")
         if video is not None:
             self._check_vision_bucket(video[1])
-            return model.get_video_features(*video)
+            return self._vision_cached(model, "video", video, model.get_video_features)
 
         image = self._gather_user_visual(kwargs, u, "pixel_values", "image_grid_thw")
         if image is not None:
             self._check_vision_bucket(image[1])
-            return model.get_image_features(*image)
+            return self._vision_cached(model, "image", image, model.get_image_features)
 
         return None
+
+    def _vision_cached(self, model, modality, visual, encode):
+        """QWEN36_MM_VISION_CACHE=N (default 0 = off): LRU of the last N requests' vision-tower outputs, keyed by
+        modality + a hash of the exact pixel patches + grid. Agent clients re-send the same images every turn; a hit
+        skips the tower (~0.45 s per 1 MP image) and returns the same packed device tensor (the prefill splice only
+        reads it: _set_vision_merge copies it to host). The model-global grid stash that get_*_features does is
+        replayed on a hit, so M-RoPE and the placeholder id are unchanged."""
+        import collections
+        import hashlib
+
+        cap = int(os.environ.get("QWEN36_MM_VISION_CACHE", "0") or 0)
+        pixel_values, grid_thw = visual
+        if cap <= 0:
+            return encode(pixel_values, grid_thw)
+        cache = getattr(self, "_vision_lru", None)
+        if cache is None:
+            cache = self._vision_lru = collections.OrderedDict()
+            self._vision_lru_stats = [0, 0]
+        pv = pixel_values.contiguous()
+        h = hashlib.blake2b(digest_size=16)
+        h.update(str((modality, tuple(pv.shape), str(pv.dtype))).encode())
+        h.update(pv.view(torch.uint8).numpy().tobytes() if pv.dtype != torch.bfloat16 else pv.view(torch.int16).numpy().tobytes())
+        h.update(grid_thw.contiguous().to(torch.int64).numpy().tobytes())
+        key = h.hexdigest()
+        hit = cache.get(key)
+        stats = self._vision_lru_stats
+        if hit is not None:
+            cache.move_to_end(key)
+            stats[0] += 1
+            if modality == "video":
+                model._req_video_grid_thw, model._req_image_grid_thw = grid_thw, None
+            else:
+                model._req_image_grid_thw, model._req_video_grid_thw = grid_thw, None
+            if (stats[0] + stats[1]) % 50 == 0:
+                logger.info(f"qwen36 vision cache: {stats[0]} hits / {stats[1]} misses, {len(cache)} entries")
+            return hit
+        stats[1] += 1
+        out = encode(pixel_values, grid_thw)
+        cache[key] = out
+        while len(cache) > cap:
+            cache.popitem(last=False)
+        return out
 
     @staticmethod
     def _vision_bucket(num_patches):
