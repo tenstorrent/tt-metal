@@ -61,3 +61,41 @@ not on this RC SHA. **The binding check is the RC's own flag-on length gate: RC 
   (bucket 1 op-by-op). No KV-split verify variant at engine widths.
 - Gates: flag-off md5 = r13; rowind (tests/test_mk_row_independence.py, k = 1, 2, 5, 7); length / accuracy / OR replay
   with the engine on.
+
+## Engine config (in code: engine/program.py ENGINE_ENV; the vLLM runtime spec sets only QWEN36_R16_* knobs)
+Applied by build_program around setup_bench AND the lazy per-device builds (DM opt levels are read there). Override per key
+with QWEN36_R16_MK_ENV="K=V ..." or QWEN36_R16_MK_ENV_FILE (debug only; the RC uses the code defaults).
+
+| kind | value |
+|---|---|
+| MK_DEFINES | `MKA_GUPRE=1,MK_DNPIPE=1,MK_FLAG_FLUSH=1,MKA_MIXTRID=1,MKA_RQKV=1,MKA_PQGDN=1,MKA_PQDELAY=27000,MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MKA_RQBAL_HOST=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GIN_PERCORE=1,MK_GAMMA_CONS=1` |
+| env `QWEN36_R16_MK_ENV` | `MK_DEFINES=...` |
+| env `MK_SGDN_US` | `64` |
+| env `MK_SAR_US` | `18` |
+| env `MKA_SWO_US` | `10` |
+| env `MKA_CTX` | `262144` |
+| env `MKA_KVDT` | `bfp8` |
+| env `MKA_NBB` | `1` |
+| env `MKA_BUDGET` | `16384` |
+| env `MKA_EXT` | `1` |
+| env `MK_MIXN` | `1` |
+| env `MKA_GDN24` | `1` |
+| env `MKA_GDN_WAIT` | `1` |
+| env `MKA_GDNOUT` | `1` |
+| env `MKA_UPAR` | `1` |
+| env `MKA_KVA` | `1` |
+| env `E1_HOLD_SKIP` | `1` |
+| env `MKA_GDN_CHECK` | `0` |
+| env `E1_GO_DBG` | `0` |
+| env `MKA_KVPROD` | `1` |
+| env `MKA_NKVH` | `1` |
+| env `MKA_KVH` | `0` |
+| env `MKA_BS` | `64` |
+| env `MK_STREAM_DM_OS` | `1` |
+| env `MK_AR_RSTD` | `1` |
+| env `MK_AR_RSTD_RED` | `gdn` |
+| set per build | `FM_NL` (pass layers), `MKA_NU` (4), `V12_R` (32), `MK_AMASK` (from the layer types), `MKA_ATT0=0`, `MKA_KVA_NU` (n_users), KV injection: `MKA_KVPROD=1 MKA_NKVH MKA_KVH=0 MKA_BS MKA_KVDT`, `MKA_REPLAY_L1 / MKA_ATTN_L1 / MKA_QKG_ADDR`, `MKA_AUX_* / MKA_ROPE_* / MKA_PT_*` |
+
+vLLM-side knobs (code defaults = RC): `QWEN36_R16_MEGAKERNEL=1`, `QWEN36_R16_MK_BUCKETS=8`, `QWEN36_R16_MK_PAD_MIN=1`,
+`QWEN36_R16_MK_KV_INJECT=1`, `QWEN36_R16_MK_KVA=1`, `QWEN36_R16_MK_W_ATTN=1`, `QWEN36_R16_MK_L1POOL=1`, `QWEN36_R16_MK_SEMPOOL` (0 until
+verified), `QWEN36_R16_MK_MAX_CTX` (default the engine's MKA_CTX; contexts above it replay the op-by-op split fallback).
