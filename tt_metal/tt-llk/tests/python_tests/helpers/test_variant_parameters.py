@@ -2191,6 +2191,9 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
             out += "\n#define MATMUL_PACK_PROD 1"
         if os.environ.get("LLK_MATMUL_PACK_NOK") == "1" or os.environ.get("LLK_MATMUL_PACK_PROD") == "1":
             out += "\n#define MATMUL_PACK_NOK 1"
+        # LLK_MATMUL_PACK_CONST=1: the pack thread takes the tile count as a compile-time constant, as ttnn's matmul kernels call pack_block
+        if os.environ.get("LLK_MATMUL_PACK_CONST") == "1":
+            out += "\n#define MATMUL_PACK_CONST 1"
         return out
 
 

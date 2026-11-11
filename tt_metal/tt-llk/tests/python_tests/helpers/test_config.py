@@ -1789,6 +1789,15 @@ class TestConfig:
 
         for parameter in self.templates:
             header_content.append(parameter.convert_to_cpp())
+        # LLK_MATMUL_PACK_CONST=1: the matmul tile dims also as compile-time constants, for the pack thread (ttnn passes pack_block a constant count)
+        if os.environ.get("LLK_MATMUL_PACK_CONST") == "1" and not TestConfig.SPEED_OF_LIGHT:
+            for parameter in self.runtimes:
+                if type(parameter).__name__ == "CRK_TILE_DIMM":
+                    header_content.append(
+                        f"#define MATMUL_CONST_DIMS\nconstexpr std::uint32_t MATMUL_CONST_RT = {parameter.r_dimm}, MATMUL_CONST_CT = {parameter.c_dimm};"
+                    )
+                if type(parameter).__name__ == "NUM_TILES_IN_BLOCK":
+                    header_content.append(f"constexpr std::uint32_t MATMUL_CONST_NTB = {parameter.num_tiles_in_block};")
 
         if self.compile_time_formats:
             header_content.extend(self.generate_compile_time_data_formats())

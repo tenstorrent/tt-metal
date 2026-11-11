@@ -597,8 +597,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
     const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
+#if defined(MATMUL_PACK_CONST)
+#ifndef MATMUL_CONST_DIMS
+#error MATMUL_PACK_CONST needs MATMUL_CONST_DIMS
+#endif
+    // ttnn's matmul kernels pass pack_block a compile-time tile count (out_subblock_num_tiles)
+    constexpr std::uint32_t CT_DIM = MATMUL_CONST_CT;
+    constexpr std::uint32_t RT_DIM = MATMUL_CONST_RT;
+#ifdef MATMUL_PACK_KEYS
+    static_assert(CT_DIM == MATMUL_PK_CT && RT_DIM == MATMUL_PK_RT, "pack keys and tile dims disagree");
+#endif
+#else
     const std::uint32_t CT_DIM         = params.CT_DIM;
     const std::uint32_t RT_DIM         = params.RT_DIM;
+#endif
+#line 318
     const Operand& buffer_Res          = params.buffer_Res;
 #endif
 
