@@ -152,16 +152,17 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
-    static_assert(reuse_dir == 0 || !may_stream_narrow, "a forced reuse direction does not stream 8-bit operands");
-    if (may_stream_narrow && _llk_unpack_AB_matmul_stream_narrow_(
-                                 ct_dim,
-                                 rt_dim,
-                                 unpack_src_format[operandA_id],
-                                 unpack_src_format[operandB_id],
-                                 dest_max_tiles,
-                                 unpB_face_r_dim,
-                                 MATH_FIDELITY == ckernel::MathFidelity::HiFi4,
-                                 MATH_FIDELITY == ckernel::MathFidelity::LoFi)) {
+    // a forced reuse direction streams on the default body
+    if (reuse_dir == 0 && may_stream_narrow &&
+        _llk_unpack_AB_matmul_stream_narrow_(
+            ct_dim,
+            rt_dim,
+            unpack_src_format[operandA_id],
+            unpack_src_format[operandB_id],
+            dest_max_tiles,
+            unpB_face_r_dim,
+            MATH_FIDELITY == ckernel::MathFidelity::HiFi4,
+            MATH_FIDELITY == ckernel::MathFidelity::LoFi)) {
         llk_unpack_AB_matmul_init_impl<auto_ttsync, true>(
             transpose,
             ct_dim,

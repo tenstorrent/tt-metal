@@ -47,10 +47,11 @@ constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt
     return reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
 }
 
-// A 32-bit tile takes twice the unpacker cycles of a 16-bit one (32 against 64 datums per cycle), and the streamed operand is unpacked once per
-// output tile, the held one once per row: with one operand of 32 bits and the other of 16 bits at LoFi the block holds the 32-bit operand and
-// streams the 16-bit one, which halves the unpack stream of a block of 4 tiles or more where the held operand is reused (>= 2 rows or columns).
-// The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and ct_dim < rt_dim.
+// A 32-bit tile takes twice the unpacker cycles of a 16-bit or Bfp8_b / Bfp4_b one (32 against 64 datums per cycle), and the streamed operand
+// is unpacked once per output tile, the held one once per row: with one operand of 32 bits and the other of 16 bits or Bfp8_b / Bfp4_b at LoFi
+// the block holds the 32-bit operand and streams the other, which halves the unpack stream of a block of 4 tiles or more where the held operand
+// is reused (>= 2 rows or columns). The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and
+// ct_dim < rt_dim.
 constexpr bool matmul_format_is_32bit(const DataFormat f)
 {
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
@@ -60,11 +61,18 @@ constexpr bool matmul_format_is_16bit(const DataFormat f)
     return f == DataFormat::Float16 || f == DataFormat::Float16_b;
 }
 
+// Under a static throttle the math is the bound and a held 32-bit operand against Bfp8_b or Bfp4_b reads slower (up to 4 percent)
+constexpr bool matmul_format_streams_fast(const DataFormat f, const bool throttled = false)
+{
+    return matmul_format_is_16bit(f) || (!throttled && (f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b));
+}
+
 // A Float32 x Float32 LoFi block is bound by the unpack of its 32-bit tiles; with two rows of in0 in the two SrcB banks each in1 tile is
 // unpacked once for two rows (rt_dim + rt_dim * ct_dim / 2 tiles a block instead of the default direction's).
 // pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower
 // two_row_off: the blocks the two-row scheme does not serve or reads slower on: a static throttle, tiles other than 32x32, half sync with
 // a Float32 output and one k step
+// throttled: a static throttle, which keeps the default direction against a block float operand
 constexpr std::uint32_t matmul_reuse_dir(
     const MathFidelity fidelity,
     const DataFormat in0,
@@ -72,7 +80,8 @@ constexpr std::uint32_t matmul_reuse_dir(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const bool pack_bound  = false,
-    const bool two_row_off = true)
+    const bool two_row_off = true,
+    const bool throttled   = false)
 {
     if (fidelity == MathFidelity::LoFi && !two_row_off && in0 == DataFormat::Float32 && in1 == DataFormat::Float32 && rt_dim >= 2 && (rt_dim % 2) == 0 &&
         ct_dim >= 2)
@@ -83,11 +92,11 @@ constexpr std::uint32_t matmul_reuse_dir(
     {
         return 0;
     }
-    if (matmul_format_is_32bit(in1) && matmul_format_is_16bit(in0) && ct_dim >= rt_dim && rt_dim >= 2)
+    if (matmul_format_is_32bit(in1) && matmul_format_streams_fast(in0, throttled) && ct_dim >= rt_dim && rt_dim >= 2)
     {
         return 2;
     }
-    if (matmul_format_is_32bit(in0) && matmul_format_is_16bit(in1) && ct_dim < rt_dim && ct_dim >= 2)
+    if (matmul_format_is_32bit(in0) && matmul_format_streams_fast(in1, throttled) && ct_dim < rt_dim && ct_dim >= 2)
     {
         return 1;
     }

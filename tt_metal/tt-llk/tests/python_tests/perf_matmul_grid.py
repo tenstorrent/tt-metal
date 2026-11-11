@@ -313,7 +313,12 @@ def test_perf_matmul_grid(
             math_fidelity=math_fidelity,
         ),
         *MATMUL_REUSE_DIR.for_block(
-            formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync
+            formats,
+            math_fidelity,
+            dims.ct_dim,
+            dims.rt_dim,
+            dest_sync,
+            throttle=throttle,
         ),
         *MATMUL_STREAM_Z.for_block(
             formats,
@@ -333,6 +338,7 @@ def test_perf_matmul_grid(
             dims.rt_dim,
             dims.kt_dim,
             dest_sync,
+            throttle=throttle,
         ),
         *MATMUL_K_LOOP.for_block(
             formats,
@@ -352,6 +358,7 @@ def test_perf_matmul_grid(
             dims.ct_dim,
             dims.rt_dim,
             dims.kt_dim,
+            throttle=throttle,
         ),
         *form_keys,
         MATMUL_PACK_BLOCK(

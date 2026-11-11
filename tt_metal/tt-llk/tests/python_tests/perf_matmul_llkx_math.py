@@ -561,6 +561,7 @@ def test_perf_matmul_llkx_math(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
                 matmul_config.dest_sync,
+                throttle=throttle,
             ),
             *MATMUL_STREAM_Z.for_block(
                 formats,
@@ -603,6 +604,7 @@ def test_perf_matmul_llkx_math(
                     matmul_config.tile_dimensions.rt_dim,
                     matmul_config.tile_dimensions.kt_dim,
                     num_blocks,
+                    throttle=throttle,
                 )
                 if math_fidelity == MathFidelity.LoFi
                 and matmul_config.dest_sync == DestSync.Full
