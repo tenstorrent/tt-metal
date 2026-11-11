@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import torch
 
 import ttnn
@@ -14,11 +12,9 @@ from ....blocks.attention_opt import Attention
 from ....layers.linear import ColParallelLinear, RowParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedLayerNorm
+from ....parallel.config import DiTParallelConfig
+from ....parallel.manager import CCLManager
 from ....utils.tensor import prepare_weight_for_concatenated_input
-
-if TYPE_CHECKING:
-    from ....parallel.config import DiTParallelConfig
-    from ....parallel.manager import CCLManager
 
 HIDDEN = 3072
 HEADS = 24

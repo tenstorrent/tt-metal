@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""FLUX 3 Klein serving: after ``warmup`` the DiT compiles nothing, at every warmed size, for a short prompt and for one
-that fills the whole 4096-row text sequence, without a reference and with references that fill or only partly fill a
-reference token bucket.
+"""FLUX 3 Klein serving: after ``warmup`` the DiT compiles nothing, at every warmed size, for prompts whose attended text
+lengths differ from warmup's and from each other (at least 160 rows, at least 2000 rows, the full 4096-row sequence;
+warmup's prompt attends 80), without a reference and with references that fill or only partly fill a reference token
+bucket.
 
 The prompt length and the reference's size within its bucket reach ring SDPA only as the device tensors the transformer
 writes per request, so every request runs the programs warmup compiled for its bucket. A reference of a new shape still
@@ -27,6 +28,7 @@ import ttnn
 from ....pipelines.flux3_klein.packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH
 from ....pipelines.flux3_klein.pipeline_flux3_klein import (
     REFERENCE_TOKEN_BUCKETS,
+    WARMUP_PROMPT,
     Flux3KleinPipeline,
     Flux3KleinRequest,
     prepare_reference,
@@ -34,14 +36,59 @@ from ....pipelines.flux3_klein.pipeline_flux3_klein import (
 )
 from ....utils.test import ring_params_8k
 
-SHORT_PROMPT = "A red apple on a wooden table."
-_FILLER = (
-    "a sunlit harbor town with pastel houses, fishing boats, gulls over the water, a lighthouse on the cliff, "
-    "market stalls with fruit and flowers, children chasing a dog along the pier, clouds over distant hills, "
-)
-LONG_PROMPT = _FILLER * 64  # truncated to the full text sequence
+_FILLER = [
+    "a",
+    "sunlit",
+    "harbor",
+    "town",
+    "with",
+    "pastel",
+    "houses,",
+    "fishing",
+    "boats,",
+    "gulls",
+    "over",
+    "the",
+    "water,",
+    "a",
+    "lighthouse",
+    "on",
+    "the",
+    "cliff,",
+    "market",
+    "stalls",
+    "with",
+    "fruit",
+    "and",
+    "flowers,",
+    "children",
+    "chasing",
+    "a",
+    "dog",
+    "along",
+    "the",
+    "pier,",
+    "clouds",
+    "over",
+    "distant",
+    "hills,",
+]
+# attended text rows the test prompts reach at least (multiples of 80; the last is the whole sequence)
+TEXT_ROW_TARGETS = (160, 2000, MAX_TEXT_LENGTH)
 # square references: each bucket filled (as warmup does) and each only partly filled
 REFERENCE_SIDES = (1024, 2048, 768, 1536)
+
+
+def _prompt_for(rows: int, attended) -> str:
+    """The shortest filler prompt whose attended text length is at least ``rows``."""
+    words = 1
+    while attended(" ".join(_FILLER[i % len(_FILLER)] for i in range(words))) < rows:
+        words *= 2
+    lo, hi = words // 2, words
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        lo, hi = (mid, hi) if attended(" ".join(_FILLER[i % len(_FILLER)] for i in range(mid))) < rows else (lo, mid)
+    return " ".join(_FILLER[i % len(_FILLER)] for i in range(hi))
 
 
 def _reference(side: int) -> Image.Image:
@@ -59,13 +106,18 @@ def test_serving(*, mesh_device: ttnn.MeshDevice, model: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     pipeline = Flux3KleinPipeline.create(mesh_device, models=(model,))
-    attended = {
-        name: pipeline._prompt_encoder.tokenize(prompt, MAX_TEXT_LENGTH)[2]
-        for name, prompt in (("short", SHORT_PROMPT), ("long", LONG_PROMPT))
-    }
-    logger.info(f"SERVE attended text rows {attended}")
-    assert attended["long"] == MAX_TEXT_LENGTH
-    assert attended["short"] < MAX_TEXT_LENGTH
+
+    def attended_rows(prompt: str) -> int:
+        return pipeline._prompt_encoder.tokenize(prompt, MAX_TEXT_LENGTH)[2]
+
+    prompts = {f"text{rows}": _prompt_for(rows, attended_rows) for rows in TEXT_ROW_TARGETS}
+    attended = {name: attended_rows(prompt) for name, prompt in prompts.items()}
+    warmup_rows = attended_rows(WARMUP_PROMPT)
+    logger.info(f"SERVE attended text rows {attended}, warmup {warmup_rows}")
+    # every test prompt runs a text length warmup never ran, and no two share one
+    assert warmup_rows not in attended.values(), (warmup_rows, attended)
+    assert len(set(attended.values())) == len(attended), attended
+    assert attended[f"text{MAX_TEXT_LENGTH}"] == MAX_TEXT_LENGTH
 
     references = {None: None, **{side: _reference(side) for side in REFERENCE_SIDES}}
     tokens = {side: (side // DOWNSAMPLING_RATIO) ** 2 for side in REFERENCE_SIDES}
@@ -82,7 +134,7 @@ def test_serving(*, mesh_device: ttnn.MeshDevice, model: str) -> None:
             pipeline._vae.encode(prepare_reference(reference))
             logger.info(f"SERVE reference {side}: {tokens[side]} tokens in bucket {reference_bucket(tokens[side])}")
         for size in sizes:
-            for name, prompt in (("short", SHORT_PROMPT), ("long", LONG_PROMPT)):
+            for name, prompt in prompts.items():
                 ttnn.synchronize_device(mesh_device)
                 programs = mesh_device.num_program_cache_entries()
                 images = () if reference is None else (reference,)

@@ -48,6 +48,7 @@ MAX_REFERENCES = 1
 MATCH_MAX_PIXELS = 4 * 1024 * 1024  # the reference canvas, padding included
 MIN_SIDE, MAX_SIDE = 64, 4096
 REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)  # up to 1 MP and up to 4 MP
+WARMUP_PROMPT = "warmup"
 
 
 @dataclass(frozen=True)
@@ -239,7 +240,7 @@ class Flux3KleinPipeline:
                         side = math.isqrt(bucket) * DOWNSAMPLING_RATIO
                         images = (Image.new("RGB", (side, side)),)
                     self.generate(
-                        Flux3KleinRequest("warmup", model=model, width=size, height=size, seed=0, images=images)
+                        Flux3KleinRequest(WARMUP_PROMPT, model=model, width=size, height=size, seed=0, images=images)
                     )
 
     def generate(self, request: Flux3KleinRequest) -> Flux3KleinResult:
