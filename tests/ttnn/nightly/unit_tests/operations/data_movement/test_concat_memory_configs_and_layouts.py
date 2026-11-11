@@ -1256,6 +1256,35 @@ class TestEdgeCases:
         ttnn_out = ttnn.to_torch(ttnn_out)
         assert_equal(torch_out, ttnn_out)
 
+    @pytest.mark.parametrize("position", ["first", "last", "middle"])
+    @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["RM", "TILE"])
+    @pytest.mark.parametrize("width", [32, 50, 64])
+    def test_empty_along_concat_dim(self, device, position, layout, width):
+        """Issue #61543: an input that is empty along the concat dim must be dropped per
+        torch.cat semantics. Previously it produced wrong data (RM, any position) and
+        SIGFPE (TILE + unaligned width, empty first) because the factory read an
+        alignment-padded non-zero page_size for a width-0 buffer and the untilize fallback
+        underflowed `ends[dim] = logical[dim] - 1`.
+        """
+        a = torch.arange(2 * 32 * width).reshape(1, 2, 32, width).to(torch.bfloat16)
+        ta = ttnn.from_torch(a, layout=layout, device=device)
+        e = ttnn.from_torch(torch.zeros(1, 2, 32, 0, dtype=torch.bfloat16), layout=layout, device=device)
+        inputs = {"first": [e, ta], "last": [ta, e], "middle": [ta, e, ta]}[position]
+        expected = {"first": a, "last": a, "middle": torch.cat([a, a], dim=-1)}[position]
+        out = ttnn.to_torch(ttnn.concat(inputs, dim=-1))
+        assert_equal(expected, out)
+
+    def test_all_empty_along_concat_dim(self, device):
+        """Issue #61543: all inputs empty along dim returns an empty tensor, not a crash."""
+        e1 = ttnn.from_torch(
+            torch.zeros(1, 2, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        e2 = ttnn.from_torch(
+            torch.zeros(1, 2, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        out = ttnn.to_torch(ttnn.concat([e1, e2], dim=-1))
+        assert tuple(out.shape) == (1, 2, 32, 0)
+
 
 # ===========================================================================
 # 8. Groups parameter (height-sharded only)
