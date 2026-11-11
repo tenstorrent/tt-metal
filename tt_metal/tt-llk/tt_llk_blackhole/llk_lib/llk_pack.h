@@ -589,9 +589,10 @@ inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_form
         pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 }
 
-// Out of line: the call sites of the block packs carry a load, a branch and a call.
+// Cold, so out of line: the call sites of the block packs carry a load, a branch and a call. Not noinline: a kernel without a fast untilize
+// init folds the call away, and the body with it.
 template <DstSync Dst>
-__attribute__((noinline)) void pack_close_fast_untilize_slow_()
+__attribute__((cold)) inline void pack_close_fast_untilize_slow_()
 {
     _llk_pack_restore_default_program_(pack_fast_untilize_src);
     // The fast untilize moved the DEST offset registers to its strip offsets; the offset id is the one the math thread flips with, so it stays.
@@ -605,7 +606,7 @@ __attribute__((noinline)) void pack_close_fast_untilize_slow_()
 template <DstSync Dst>
 inline void _llk_pack_close_fast_untilize_()
 {
-    if (pack_fast_untilize_open)
+    if (pack_fast_untilize_seen && pack_fast_untilize_open)
     {
         pack_close_fast_untilize_slow_<Dst>();
     }

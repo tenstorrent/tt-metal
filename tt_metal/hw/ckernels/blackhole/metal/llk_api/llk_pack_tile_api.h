@@ -530,41 +530,42 @@ constexpr char llk_pack_next_form_dc[12][4][17] = {
 
 // Behind matmul math (a matmul init ran, or the K is given) a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the W offset (no_w: the block instead), then the block (no_block) at n tiles,
 // or, with the K given, takes the W offset (take_w) or the block (take_b). Rows: LoFi K not given, K 1, K above 1, HiFi2 to HiFi4 together, then LoFi and HiFi in a kernel
-// without a matmul init (the other unpack and math contexts; take_w and take_b only with the K: without the first group or the last two); one entry per row of the form tables.
+// without a matmul init (the other unpack and math contexts). LoFi without the K and HiFi count those contexts too, for a matmul kernel may pack behind a bias add or an activation.
+// take_w and take_b only with the K (without the first group or the last two); one entry per row of the form tables.
 constexpr std::uint64_t llk_pack_mm_no_block[2][6][12] = {
     {  // datacopy family
-        {0x0020002000000020, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K not given
+        {0x0023002300030023, 0x00030003000B00DB, 0x0003000300030003, 0x0003000300030023, 0x0003000300030003, 0x00030003000B00AB, 0x00030003000B002B, 0x00FF0003000700EB, 0x0000000100000081, 0x00010001000100A1, 0x00010001000100A1, 0x0000000100000081},  // LoFi, K not given
         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
         {0x0020002000000020, 0x00000000000800D8, 0, 0x0000000000000020, 0, 0x00000000000800A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K above 1
-        {0x00000000000E00FE, 0x00000000000A00AA, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0, 0, 0x0000000000000040},  // HiFi
-        {0x0020002000020022, 0x00000000000A00DA, 0x0000000000020002, 0x0000000000020022, 0x0000000000020002, 0x00020002000A00AA, 0x00020002000A002A, 0x00160002000600EA, 0x0000000100000081, 0x00010001000100A1, 0x00010001000100A1, 0x0000000100000081},  // LoFi, no matmul init
-        {0x00000000000E00FE, 0x00000000000A00AA, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0002000200020062, 0x0002000200020022, 0x0016000200060022, 0x0000000100000041, 0x0001000100010001, 0x0001000100010001, 0x0000000100000041},  // HiFi, no matmul init
+        {0x00030003000F00FF, 0x00030003000F00EF, 0x00030003000F00EF, 0x00030003000F00DF, 0x00030003000F00FF, 0x001F000F000F00FF, 0x000F0007000F00EF, 0x00FF0007000F006F, 0x00000003000000FD, 0x00030001000300F3, 0x00030001000300F3, 0x00000003000000FD},  // HiFi
+        {0x0003000300030003, 0x0003000300030003, 0x0003000300030003, 0x0003000300030003, 0x0003000300030003, 0x0003000300030003, 0x0003000300030003, 0x00FF000300070003, 0x0000000100000081, 0x00010001000100A1, 0x0001000100010001, 0x0000000100000001},  // LoFi, no matmul init
+        {0x0003000300030003, 0x00030003000700C7, 0x00030003000700E7, 0x00030003000B009B, 0x00030003000B009B, 0x001F000F000F00FF, 0x000F0007000F00EF, 0x00FF0007000F006F, 0x00000003000000FD, 0x00030001000300F3, 0x00030001000300F3, 0x00000003000000FD},  // HiFi, no matmul init
     },
     {  // 32 bit input family
-        {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K not given
+        {0x00230020000B0020, 0x00010000000F00D8, 0x0003000000030000, 0x0003000000070020, 0x00030000000F0000, 0x001F0000000F00A8, 0x000F0000000F0028, 0x00FF0000000F00E8, 0x0001000000090080, 0x00010000000F00A0, 0x00010000000F00A0, 0x0001000000090080},  // LoFi, K not given
         {0, 0, 0, 0, 0, 0x0000000000080000, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
         {0x0020002000000020, 0x00000000000C00D8, 0, 0x0000000000040020, 0x00000000000C0000, 0x00000000000E00A8, 0x0000000000080028, 0x00000000000000E8, 0x0000000000000080, 0x00000000000000A0, 0x00000000000000A0, 0x0000000000000080},  // LoFi, K above 1
-        {0x00000000000E00FE, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000060062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0, 0, 0x0000000000000040},  // HiFi
-        {0x0020002000020020, 0x00000000000E00D8, 0x0000000000020000, 0x0000000000060020, 0x00000000000E0000, 0x00000000000E00A8, 0x00000000000A0028, 0x00160000000600E8, 0x0001000000010080, 0x00010000000100A0, 0x00010000000100A0, 0x0001000000010080},  // LoFi, no matmul init
-        {0x00000000000E00FE, 0x00000000000E00AA, 0x00000000000E00EA, 0x00000000000E00CE, 0x00000000000E00EE, 0x0000000000060062, 0x0000000000020022, 0x0016000000060022, 0x0001000000010040, 0x0001000000010000, 0x0001000000010000, 0x0001000000010040},  // HiFi, no matmul init
+        {0x00030000000F00FE, 0x00010000000F00AA, 0x00030000000F00EA, 0x00030000000F00CE, 0x00030000000F00EE, 0x001F0000000F0062, 0x000F0000000F0022, 0x00FF0000000F0022, 0x00070000000F0040, 0x00030000000F0000, 0x00030000000F0000, 0x00070000000F0040},  // HiFi
+        {0x00030020000B0020, 0x00010000000300D8, 0x0003000000030000, 0x0003000000030020, 0x0003000000030000, 0x001F0000000300A8, 0x000F0000000F0028, 0x00FF0000000F00E8, 0x0001000000090080, 0x00010000000F00A0, 0x00010000000F00A0, 0x0001000000090080},  // LoFi, no matmul init
+        {0x00030000000B00FE, 0x00010000000700AA, 0x00030000000700EA, 0x00030000000B00CE, 0x00030000000B00EE, 0x001F0000000F0062, 0x000F0000000F0022, 0x00FF0000000F0022, 0x00070000000F0040, 0x00030000000F0000, 0x00030000000F0000, 0x00070000000F0040},  // HiFi, no matmul init
     },
 };
 constexpr std::uint64_t llk_pack_mm_no_w[2][6][12] = {
     {  // datacopy family
-        {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0, 0x00000000000000A0, 0},  // LoFi, K not given
+        {0x007F007F000F002F, 0x00FD01FD000F009F, 0x007F007F000F000F, 0x003F003F00070067, 0x001F003F00070087, 0x0003000B000B00BB, 0x0003000B000B002B, 0x00010003000700EB, 0x000000010000000F, 0x00010001000700A7, 0x00010001000700A7, 0x000000010000000F},  // LoFi, K not given
         {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0, 0, 0, 0, 0, 0, 0},  // LoFi, K 1
         {0x000E000E00000020, 0x0000000000000090, 0, 0x0000000000000060, 0x0002000000000080, 0x0000000A000800B8, 0x0002000A00080028, 0x00000002000000E8, 0, 0x00000000000000A0, 0x00000000000000A0, 0},  // LoFi, K above 1
-        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00CE, 0x00000000000E00AE, 0x0000000000020062, 0x0000000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002, 0x0000000000020002, 0x0000000000000040},  // HiFi
-        {0x000E000E00000020, 0x0004000000000090, 0x0004004000000000, 0x0004000000000060, 0x0006000000000080, 0x0000000A000A00BA, 0x0002000A000A002A, 0x00000002000200EA, 0x0000000100000009, 0x00010001000100A1, 0x00010001000100A1, 0x0000000100000009},  // LoFi, no matmul init
-        {0x00060000000E00EE, 0x00040000000E00AE, 0x00040040000A00EA, 0x00040000000E00CE, 0x00040000000E00AE, 0x0000000000020062, 0x0000000000020022, 0x0000000000020022, 0x0000000100000049, 0x0001000100030003, 0x0001000100030003, 0x0000000100000049},  // HiFi, no matmul init
+        {0x007F007B000F00EF, 0x00050001000F00AF, 0x00070043000F00EF, 0x00070007000F00DF, 0x00070007000F00BF, 0x00030003000F00FF, 0x00030003000F002F, 0x00010003000F002F, 0x00000001000000FF, 0x00010001000F000F, 0x00010001000F000F, 0x00000001000000FF},  // HiFi
+        {0x007F007F000F000F, 0x00FD01FD000F000F, 0x007F007F000F000F, 0x003F003F00070007, 0x001F003F00070007, 0x0003000300030023, 0x0003000300030003, 0x0001000300070003, 0x000000010000000F, 0x00010001000700A7, 0x0001000100070007, 0x000000010000000F},  // LoFi, no matmul init
+        {0x007F007B000F000F, 0x00050001000F000F, 0x00070043000F008F, 0x0007000700070017, 0x0007000700070017, 0x00030003000F00FF, 0x00030003000F002F, 0x00010003000F002F, 0x00000001000000FF, 0x00010001000F000F, 0x00010001000F000F, 0x00000001000000FF},  // HiFi, no matmul init
     },
     {  // 32 bit input family
-        {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0, 0x00000000000200A0, 0x00000000000A0000},  // LoFi, K not given
+        {0x007F000E00070020, 0x00FD0000000F0090, 0x007D0000000F0000, 0x003D000000070060, 0x003F0000000F0080, 0x0003000A000B00B8, 0x0003000A000B0028, 0x00010002000F00E8, 0x00010000000F0000, 0x00010000000F00A0, 0x00010000000F00A0, 0x00010000000F0000},  // LoFi, K not given
         {0x0002000200000000, 0, 0, 0, 0x0002000000000000, 0x00000000000A0000, 0x00020000000A0000, 0, 0, 0, 0, 0},  // LoFi, K 1
         {0x000E000E00000020, 0x00000000000C0090, 0x0000000000040000, 0x0000000000000060, 0x0002000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000000E8, 0x00000000000A0000, 0x00000000000200A0, 0x00000000000200A0, 0x00000000000A0000},  // LoFi, K above 1
-        {0x00020000000E00EE, 0x00000000000E00AE, 0x00000000000E00EA, 0x00000000000E00CE, 0x00020000000E00AE, 0x00000000000E0062, 0x0002000000020022, 0x0000000000000022, 0x0000000000000040, 0x0000000000020002, 0x0000000000020002, 0x0000000000000040},  // HiFi
-        {0x000E000E00000020, 0x00040000000C0090, 0x0004000000040000, 0x0004000000000060, 0x0006000000080080, 0x0000000A000A00B8, 0x0002000A000A0028, 0x00000002000200E8, 0x00010000000B0000, 0x00010000000300A0, 0x00010000000300A0, 0x00010000000B0000},  // LoFi, no matmul init
-        {0x00060000000E00EE, 0x00040000000E00AE, 0x00040000000E00EA, 0x00040000000E00CE, 0x00060000000E00AE, 0x00000000000E0062, 0x0002000000020022, 0x0000000000020022, 0x0001000000010040, 0x0001000000030002, 0x0001000000030002, 0x0001000000010040},  // HiFi, no matmul init
+        {0x007F0000000F00EE, 0x00050000000F00AE, 0x00050000000F00EA, 0x00050000000F00CE, 0x00070000000F00AE, 0x00030000000F0062, 0x00030000000F0022, 0x00010000000F0022, 0x00010000000F0040, 0x00010000000F0002, 0x00010000000F0002, 0x00010000000F0040},  // HiFi
+        {0x007D000E00070020, 0x00FD0000000B0090, 0x007D0000000F0000, 0x003D000000070060, 0x003D0000000F0080, 0x0003000A000300B8, 0x0003000A00030028, 0x00010002000F00E8, 0x00010000000F0000, 0x00010000000F00A0, 0x00010000000D00A0, 0x00010000000F0000},  // LoFi, no matmul init
+        {0x007D0000000700EE, 0x00050000000F00AE, 0x00050000000F00EA, 0x00050000000700CE, 0x00050000000F00AE, 0x00030000000F0062, 0x00030000000F0022, 0x00010000000F0022, 0x00010000000F0040, 0x00010000000F0002, 0x00010000000F0002, 0x00010000000F0040},  // HiFi, no matmul init
     },
 };
 constexpr std::uint64_t llk_pack_mm_take_w[2][3][12] = {
@@ -592,23 +593,21 @@ constexpr std::uint64_t llk_pack_mm_take_b[2][3][12] = {
     },
 };
 
-// Set by the matmul inits on the pack thread: the masks are for blocks behind matmul math. Only matmul kernels write it, so the others fold the test away.
+// Set by the matmul inits on the pack thread: the masks of a matmul kernel apply. Only matmul kernels write it, so the others fold the test away.
 [[maybe_unused]] static bool llk_pack_matmul_seen = false;
 inline void llk_pack_matmul_context() { llk_pack_matmul_seen = true; }
 
+// Form of a block of a row of the form tables, the Int8 rule aside: evaluated at compile time only, into llk_pack_form_words.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
-inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32_t ntiles, const char (*table)[4][17], const bool next) {
-    const std::uint32_t row = llk_pack_block_class(output_id);
+constexpr char llk_pack_block_form_of(
+    const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const bool next, const bool matmul_ctx) {
     const std::uint32_t column = (DST_SYNC_MODE == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);
     const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;
-    if (!is_fp32_dest_acc_en && llk_pack_dst_is_int8(output_id)) {
-        return 'T';
-    }
     const char form = table[row][column][count];
     constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;
     constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));
     constexpr std::uint32_t group_other = MATH_FIDELITY != MathFidelity::LoFi ? 5 : 4;
-    const std::uint32_t mask_group = (matmul_kt != 0 || llk_pack_matmul_seen) ? group : group_other;
+    const std::uint32_t mask_group = (matmul_kt != 0 || matmul_ctx) ? group : group_other;
     const std::uint32_t bit = column * 16 + count;
     char out = form;
     if (out == 'W' && ((llk_pack_mm_no_w[family][mask_group][row] >> bit) & 1) != 0) {
@@ -629,14 +628,66 @@ inline char llk_pack_block_form(const std::uint32_t output_id, const std::uint32
 }
 
 template <bool is_fp32_dest_acc_en>
-inline const char (*llk_pack_form_table(const char (*u)[4][17], const char (*dc)[4][17]))[4][17] {
+constexpr const char (*llk_pack_form_table(const char (*u)[4][17], const char (*dc)[4][17]))[4][17] {
     return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;
 }
 
-// The per-tile packs of a block that takes none of the block forms: main's loop.
-template <bool is_fp32_dest_acc_en>
+// The form of every row and tile count from the init, reconfigure and next states (0, 1, 2), behind matmul math (1) or not (0), two bits
+// per tile count (T 0, B 1, W 2). Built at compile time: a lookup reads one word, and at most these 288 bytes sit in the pack thread's local memory.
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+struct llk_pack_form_words_t {
+    std::uint32_t w[2][3][12];
+    constexpr llk_pack_form_words_t() : w() {
+        const char(*tables[3])[4][17] = {
+            llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc),
+            llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc),
+            llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_next_form, llk_pack_next_form_dc)};
+        for (std::uint32_t ctx = 0; ctx < 2; ctx++) {
+            for (std::uint32_t state = 0; state < 3; state++) {
+                for (std::uint32_t row = 0; row < 12; row++) {
+                    for (std::uint32_t n = 1; n <= 16; n++) {
+                        const char f = llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state == 2, ctx != 0);
+                        w[ctx][state][row] |= static_cast<std::uint32_t>(f == 'T' ? 0 : (f == 'B' ? 1 : 2)) << (2 * (n - 1));
+                    }
+                }
+            }
+        }
+    }
+};
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+inline constexpr llk_pack_form_words_t<is_fp32_dest_acc_en, matmul_kt> llk_pack_form_words{};
+
+// Form of a block of ntiles of an output from a state (0 init, 1 reconfigure, 2 next): T per-tile packs, B the block, W the block with the W offset.
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+__attribute__((always_inline)) inline char llk_pack_block_form(
+    const std::uint32_t output_id, const std::uint32_t ntiles, const std::uint32_t state, const bool matmul_ctx = llk_pack_matmul_seen) {
+    if (!is_fp32_dest_acc_en && llk_pack_dst_is_int8(output_id)) {
+        return 'T';
+    }
+    const std::uint32_t row = llk_pack_block_class(output_id);
+    const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;
+    const auto& words = llk_pack_form_words<is_fp32_dest_acc_en, matmul_kt>.w;
+    const std::uint32_t code = ((matmul_ctx ? words[1][state][row] : words[0][state][row]) >> (2 * count)) & 3;
+    return code == 0 ? 'T' : (code == 1 ? 'B' : 'W');
+}
+
+// The forms a block of ntiles takes from the init, reconfigure and next states, as a mask: 1 per tile, 2 block, 4 W offset.
+template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
+__attribute__((always_inline)) inline std::uint32_t llk_pack_block_forms(const std::uint32_t output_id, const std::uint32_t ntiles, const bool matmul_ctx) {
+    const char init = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0, matmul_ctx);
+    const char reconf = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1, matmul_ctx);
+    const char next = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2, matmul_ctx);
+    return (init == 'T' || reconf == 'T' || next == 'T' ? 1 : 0) | (init == 'B' || reconf == 'B' || next == 'B' ? 2 : 0) |
+           (init == 'W' || reconf == 'W' || next == 'W' ? 4 : 0);
+}
+
+// The per-tile packs of a block that takes none of the block forms: main's loop. Without close_fast_untilize, main's exactly: a kernel whose
+// blocks all pack per tile then reads no pack flag.
+template <bool is_fp32_dest_acc_en, bool close_fast_untilize = true>
 inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles) {
-    _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+    if constexpr (close_fast_untilize) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+    }
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
         llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr, output_id);
@@ -668,6 +719,22 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
+    // With a constant output and tile count the forms of every state fold at compile time (0 otherwise): a block of one form reads no
+    // state, and a kernel whose blocks never take W keeps no W state, so its per-tile packs are main's.
+    std::uint32_t forms = 0;
+    if (__builtin_constant_p(output_id) && __builtin_constant_p(ntiles)) {
+        forms = llk_pack_matmul_seen ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, true)
+                                     : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, false);
+    }
+    if (forms == 1) {
+#ifdef LLK_PACK_W_OFFSET
+        pack_reconfigured = false;
+        pack_w_last = output_id;
+#endif
+        llk_pack_block_per_tile<is_fp32_dest_acc_en, false>(start_tile_index, output_id, ntiles);
+        return;
+    }
+
     // The block forms run the default pack program: after a tilize, untilize or pack rows init, main's per-tile packs. So too while the packer
     // accumulates in L1 under half sync, where a block behind matmul math reads up to 64 cycles slower (full sync: faster).
     if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE())) {
@@ -677,24 +744,23 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
 
 #ifdef LLK_PACK_W_OFFSET
     const bool first_block = pack_w_last != output_id;
-    const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(
-        output_id,
-        ntiles,
-        first_block ? (pack_reconfigured ? llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc)
-                                         : llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc))
-                    : llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_next_form, llk_pack_next_form_dc),
-        !first_block);
+    // A constant block selects among its folded forms; a variable one reads the word of its state.
+    const char form = forms == 2 ? 'B'
+                      : forms != 0
+                          ? (first_block ? (pack_reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
+                                                              : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
+                                         : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2))
+                          : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2);
     pack_reconfigured = false;
     pack_w_last = output_id;
 #else
-    const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(
-        output_id, ntiles, llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc), false);
+    const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0);
 #endif
     if (form == 'T') {
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
     }
-    const bool take_w = form == 'W';
+    const bool take_w = form == 'W' && (forms == 0 || (forms & 4) != 0);
     if (!take_w) {
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
     }
