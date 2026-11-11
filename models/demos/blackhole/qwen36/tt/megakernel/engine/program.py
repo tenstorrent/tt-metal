@@ -1448,6 +1448,9 @@ def setup_bench(dev, MESH, mesh_identity):
                       gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in go_cores], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
                       cnt=GSA[13], nt=[len(GO_T[fi]) for fi in go_cores], page=[GO_P[fi] * banks + GO_B[fi] for fi in go_cores], tiles=[GO_T[fi] for fi in go_cores],
                       dbg=go_dbg, dbg_addr=go_dbg.buffer_address(),
+                      # E1_GO_DBG: the per-layer copy of gdn_out's tiles into go_dbg (the [gdnout] PCC input). Bench checker only:
+                      # default on iff the GDN check runs (MKA_GDN_CHECK, profiler off); never inside the model (asserted below)
+                      dbg_copy=os.environ.get('E1_GO_DBG', os.environ.get('MKA_GDN_CHECK', '0' if os.environ.get('TT_METAL_DEVICE_PROFILER') == '1' else '1')) == '1',
                       # CB ids (ring, A, out) on the GDN cores: 42/43/44 reserved for gdn_out (lean GDN table 0..41, -mk-int 80b43723a3f); before
                       # them; MKA_GDNOUT_CB=34,35,37 borrows the AR-sender ids for bring-up WITHOUT MK_REAL_AR
                       cb=tuple(int(v_) for v_ in os.environ.get('MKA_GDNOUT_CB', '42,43,44').split(',')),
@@ -1455,6 +1458,8 @@ def setup_bench(dev, MESH, mesh_identity):
                       lofi=os.environ.get('MKA_GDNOUT_FID', 'lofi') != 'hifi4')
             assert not (set(GO['cb']) & {34, 35, 37, 39} and ('MK_REAL_AR', '1') in MKDEF), "MKA_GDNOUT_CB: 34/35/37/39 are the AR senders' ids"
             assert ('MK_GAR_ZERO', '1') not in MKDEF, "MKA_GDNOUT writes CB_XO: drop the MK_GAR_ZERO stand-in"
+            assert not (GO['dbg_copy'] and os.environ.get('QWEN36_R16_MEGAKERNEL', '0') == '1'), \
+                "MKA_GDNOUT debug copy (E1_GO_DBG / MKA_GDN_CHECK) must not run inside the model: per-layer DRAM writes on the tail"
             MKDEF = MKDEF + [('MKA_GDNOUT', '1'), ('MKA_GDN_XOW', f"{GDN_SA['xow']}u"), ('MK_GDN_OUT_REAL', '1')]   # G-d reads CB_XO at WOCNT
             print(f"[gdnout] GDN out_proj via the wo unit: {GO_NG} GDN layers, {len(go_cores)} cores x {min(GO['nt'])}-{GO_MAXT} tiles, K {GO_WK}, BFP4 ring "
                   f"{GO_WK * GO_MAXT} pages, banks {sorted(set(GO_B.values()))}", flush=True)
@@ -1492,6 +1497,9 @@ def setup_bench(dev, MESH, mesh_identity):
             if GO:
                 def _gdnout_check(it):   # out_proj golden from the engine's own `out` (A) of each GDN layer x the dequantized slices
                     role_ = GDN_ROLE['role']
+                    if not GO['dbg_copy']:
+                        print(f"[gdnout] iter {it} gdn_out PCC NOT CHECKED (no debug copy: E1_GO_DBG=0 / profiled run; E1_GO_DBG=1 or MKA_GDN_CHECK=1 checks)", flush=True)
+                        return
                     dv_ = ttnn.to_torch(go_dbg).float().reshape(TILE, GO_NG, GO_WN * TILE)
                     R_ = role_.B * role_.T
                     if os.environ.get('E1_GO_LOCAL', '2') == '2':

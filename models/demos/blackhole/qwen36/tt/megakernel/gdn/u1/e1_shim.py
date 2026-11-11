@@ -478,11 +478,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'    const uint32_t nt = g_ab[{{OGO}}];\n'
                 f'    {{ DeviceZoneScopedN("GO-MM"); cb_wait_front({CO_}, {MAXT}); }}\n'
                 f'    DeviceZoneScopedN("GO-SC");\n'
-                # E1_GO_DBG (default 1): the out tiles' copy into the debug tensor (the [gdnout] PCC's input); 0 = production (no
-                # per-layer DRAM writes on the tail)
+                # GO["dbg_copy"] (E1_GO_DBG; program.py: bench checker only, never in the model): the out tiles' copy into the
+                # debug tensor (the [gdnout] PCC's input); off = production (no per-layer DRAM writes on the tail)
                 + (f'    const auto dg = TensorAccessor(TensorAccessorArgs<{{DBG_OFF}}>(), {GO["dbg_addr"]}u, 2048);\n'
                    f'    for (uint32_t j = 0; j < nt; ++j) noc_async_write(get_read_ptr({CO_}) + j * 2048, dg.get_noc_addr(L * 160 + tl[j]), 2048);\n'
-                   if os.environ.get("E1_GO_DBG", "1") == "1" else '') +
+                   if GO.get("dbg_copy", False) else '') +
                 f'    wou::scatter({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u);   // also retires the debug writes\n'
                 f'    {{OSIG}}\n'
                 + ('    { DeviceZoneScopedN("GO-OSIGB"); noc_async_atomic_barrier(); }\n' if os.environ.get("E1_GO_OSIGB", "0") == "1" else '') +
