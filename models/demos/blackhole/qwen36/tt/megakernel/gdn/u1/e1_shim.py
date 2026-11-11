@@ -531,7 +531,16 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # before the loop): the matmul of layer L never waits for its ring behind the reader's S' writes
         GO_RING2 = go_rdhook and os.environ.get("E1_GO_RING2", "1") == "1"
         go_wr = ""
-        if GO_RDALL:
+        GO_TAILHOOK = go_rdhook and os.environ.get("E1_GO_TAILHOOK", "1") == "1"
+        go_th = ""
+        if GO_TAILHOOK:
+            # E1_GO_TAILHOOK (default on with the reader hook): the whole gdn_out tail (A ready wait, A push, matmul wait,
+            # debug copy, scatter, out_ready) runs INSIDE the reader hook right after the handoff, ahead of the reader's S'
+            # write: the writer's tail started only when writer<>() returned (up to ~40 us after A was ready, u8)
+            go_th = re.sub(r"\bL\b", "g_l", go_w.replace("{DBG_OFF}", str(len(rct))))
+            rct = rct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
+            go_w = ""
+        elif GO_RDALL:
             # E1_GO_RDALL (default on with E1_GO_RD): the whole gdn_out tail (A push, wait the matmul, debug copy, scatter,
             # out_ready) also runs on the reader (NOC1) right after the handoff: on the writer it waited for writer<>()'s
             # trailing writes (S' / stash; wr_out ~60 us at u8) although A was ready ~25 us earlier
@@ -544,7 +553,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         OGO = 29 + NG * (len(rtens) + len(WRITER_TENSORS)) + 2   # gdn_out payload words: after the per-layer tensors + OAG / OAG_ME
         GFL = OGO + 2 + GO["maxt"] + 5
         GRDY = GFL + len(cores)
-        go_r, go_w, go_c, go_local, go_wr, go_local_rd = (x.replace("{OGO}", str(OGO)).replace("{GFL}", str(GFL)).replace("{GRDY}", str(GRDY)) for x in (go_r, go_w, go_c, go_local, go_wr, go_local_rd))
+        go_r, go_w, go_c, go_local, go_wr, go_local_rd, go_th = (x.replace("{OGO}", str(OGO)).replace("{GFL}", str(GFL)).replace("{GRDY}", str(GRDY)) for x in (go_r, go_w, go_c, go_local, go_wr, go_local_rd, go_th))
     hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
     open(hr, "w").write(_bind_header(ids, rtens, roff, CRTA0))
     open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff, CRTA0))
@@ -609,7 +618,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '') +
         f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n'
-        + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '') + (go_local_rd if GO and go_rdhook else '') +
+        + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '')
+        + ((go_local_rd[:go_local_rd.rindex("}")] + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         + ('  gdn_cut_reset();\n' if cut_fast else '') +
         (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) else '') +
@@ -628,7 +638,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         (f'    if (L + 1 < {NG}) {{\n' + go_r.replace("(L_)", "(L + 1)") + '    }\n' if GO and GO_RINGEARLY else '') +
         f'  }}\n'
         # GDN_OUT_RD: the reader's out signals retire here; the aggregator's word resets once its last wait passed
-        + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and not GO else '') if out_rd else '')
+        + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not GO or GO_TAILHOOK) else '') if out_rd else '')
         + '}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
@@ -656,7 +666,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdna"]}u = 0;\n  *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u = 0;\n' if GO else '')
         + (f'  g_ab[{OGO} + 2 + {GO["maxt"]} + 3] = 0; g_ab[{OGO} + 2 + {GO["maxt"]} + 4] = 0;\n' if GO and GO_RD else '')
         + (f'  for (uint32_t t = 0; t <= {len(cores)}u; ++t) g_ab[{OGO} + 2 + {GO["maxt"]} + 5 + t] = 0;\n' if GO and go_rdhook else '')
-        + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not out_rd or GO) else '')   # gdn_out: the writer's tail signals
+        + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not out_rd or (GO and not GO_TAILHOOK)) else '')   # gdn_out: the writer's tail signals
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
     open(tc, "w").write(
