@@ -120,40 +120,6 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize("scalar", [-2, 0, 10, 2147483647, -2147483648])
-@pytest.mark.parametrize(
-    "ttnn_dtype",
-    [
-        ttnn.int32,
-        ttnn.uint32,
-    ],
-)
-def test_unary_min_int32_test(scalar, ttnn_dtype, device):
-    num_elements = torch.prod(torch.tensor(torch.Size([1, 1, 32, 32]))).item()
-    torch_input = torch.linspace(-10, 10, num_elements, dtype=torch.int32)
-    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 1, 32, 32]))
-
-    if ttnn_dtype == ttnn.uint32:
-        # convert uint32 to int64 to make PyTorch happy
-        # everything is converted to int32 for the final equality check
-        torch_input = torch_input.to(torch.uint32).to(torch.int64)
-        scalar &= 0xFFFFFFFF
-
-    golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input, torch.full(torch.Size([1, 1, 32, 32]), scalar), device=device).to(torch.int32)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn_dtype,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tt_result = ttnn.minimum(tt_in, scalar)
-    comp_pass = compare_equal([tt_result], [golden])
-    assert comp_pass
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (

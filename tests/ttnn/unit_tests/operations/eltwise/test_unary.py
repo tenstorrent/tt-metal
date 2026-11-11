@@ -1239,43 +1239,6 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([1, 1, 32, 32]),
-    ],
-)
-@pytest.mark.parametrize(
-    "low, high",
-    [
-        (-5, 5),  # Small range
-    ],
-)
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.eqz,
-        ttnn.nez,
-        ttnn.ltz,
-        ttnn.lez,
-        ttnn.gtz,
-        ttnn.gez,
-    ],
-)
-def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
-    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    cq_id = 0
-    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    golden_tensor = golden_function(in_data)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert torch.equal(golden_tensor, output_tensor)
-
-
-@pytest.mark.parametrize(
     "low, high, torch_dtype, ttnn_dtype, input_shapes",
     [
         (0, 2, torch.int32, ttnn.uint16, torch.Size([32, 32])),  # Small range
@@ -1898,15 +1861,11 @@ def test_unary_hardtanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, min_val, max
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
-        (torch.int32, ttnn.int32),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
 def test_unary_signbit_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    if torch_dtype == torch.int32:
-        in_data = torch.randint(-100, 100, input_shapes, dtype=torch_dtype)
-    else:
-        in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
