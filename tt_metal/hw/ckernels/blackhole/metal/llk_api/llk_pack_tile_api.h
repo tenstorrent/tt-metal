@@ -774,6 +774,26 @@ constexpr std::uint64_t llk_pack_mm_tail_no_w[2][4][3][12] = {
     },
 };
 
+// Cells decided finer than the mask groups: per fidelity, per matmul K, and, for a 32 bit input CB with a 32 bit DEST, per whether a CB unpacks to
+// DEST. One word per cell, the last matching word wins: bits 0-2 the family (datacopy, 32 bit input to SrcA, 32 bit input to DEST), 3-6 the fidelity
+// (LoFi, HiFi2, HiFi3, HiFi4), 7-12 the K (not given, 1, 2, 4, 8, other), 13-15 the context, as masks; 16-17 the state, 18-21 the row, 22-23 the column,
+// 24-27 the tile count - 1, 28-29 the form (0 per tile, 1 block, 2 W offset). Sorted by state and row; read at compile time only, like the masks.
+constexpr std::uint32_t llk_pack_form_cells[] = {0};
+// First word of each state and row in llk_pack_form_cells (state * 12 + row), so a form looks at its own cells only.
+struct llk_pack_form_cells_at_t {
+    std::uint16_t at[3 * 12 + 1];
+    constexpr llk_pack_form_cells_at_t() : at() {
+        constexpr std::uint32_t n = sizeof(llk_pack_form_cells) / sizeof(llk_pack_form_cells[0]);
+        std::uint32_t i = 0;
+        for (std::uint32_t b = 0; b <= 3 * 12; b++) {
+            while (i < n && llk_pack_form_cells[i] != 0 && ((llk_pack_form_cells[i] >> 16) & 3) * 12 + ((llk_pack_form_cells[i] >> 18) & 15) < b) {
+                i++;
+            }
+            at[b] = static_cast<std::uint16_t>(i);
+        }
+    }
+};
+constexpr llk_pack_form_cells_at_t llk_pack_form_cells_at{};
 // Form of a block of a row of the form tables, the Int8 rule aside: evaluated at compile time only, into llk_pack_form_words.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 constexpr char llk_pack_block_form_of(
@@ -805,6 +825,16 @@ constexpr char llk_pack_block_form_of(
         }
         if (state == 2 && out == 'T' && (((llk_pack_mm_take_b[family][group - 1][row] & ~tail_b) >> bit) & 1) != 0) {
             out = 'B';
+        }
+    }
+    constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);
+    constexpr std::uint32_t fid_bit = MATH_FIDELITY == MathFidelity::LoFi ? 1 : (MATH_FIDELITY == MathFidelity::HiFi2 ? 2 : (MATH_FIDELITY == MathFidelity::HiFi3 ? 4 : 8));
+    constexpr std::uint32_t k_bit = matmul_kt == 0 ? 1 : (matmul_kt == 1 ? 2 : (matmul_kt == 2 ? 4 : (matmul_kt == 4 ? 8 : (matmul_kt == 8 ? 16 : 32))));
+    const std::uint32_t cell = (state << 16) | (row << 18) | (column << 22) | (count << 24);
+    for (std::uint32_t i = llk_pack_form_cells_at.at[state * 12 + row]; i < llk_pack_form_cells_at.at[state * 12 + row + 1]; i++) {
+        const std::uint32_t e = llk_pack_form_cells[i];
+        if ((e & fam_bit) != 0 && ((e >> 3) & fid_bit) != 0 && ((e >> 7) & k_bit) != 0 && ((e >> 13) & (1u << ctx)) != 0 && (e & 0x0FFF0000u) == cell) {
+            out = "TBW"[(e >> 28) & 3];
         }
     }
     return out;
