@@ -590,6 +590,7 @@ def setup_bench(dev, MESH, mesh_identity):
         _DKEEP.append(t_)
         print(f"[decoy] {cls_}: bench buffer @{t_.buffer_address()} zeroed; the engine binds the clone @{c_.buffer_address()}", flush=True)
         return c_
+    KVQP = {}   # mesh + UPAR + KVA: per-parity KV golds (each parity appends into its own block copy)
     RQNR = ('MKA_RQNR', '1') in MKDEF
     KVPROD = os.environ.get('MKA_KVPROD', '0') == '1'
     NKVH, KVH, KVBS = int(os.environ.get('MKA_NKVH', '4')), int(os.environ.get('MKA_KVH', '1')), int(os.environ.get('MKA_BS', '64'))
@@ -657,8 +658,10 @@ def setup_bench(dev, MESH, mesh_identity):
             assert all(p_ < CTX for s_ in KVA_STEPS for p_ in s_[KVA_OWNG[u] * 4:(KVA_OWNG[u] + 1) * 4]), 'own rows past MKA_CTX'
         _pt = torch.zeros(KVA_NUT, KVA_PTW, dtype=torch.int32)
         for u in range(NU): _pt[KVA_OWNG[u], :BPU] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
-        for g_, u_ in (KVA_OWNALL or {}).items(): _pt[g_, :BPU] = torch.arange(u_ * BPU, (u_ + 1) * BPU, dtype=torch.int32)
-        _nx = NU * BPU
+        # mesh + UPAR: user row g = 2u + p -> its OWN copy of local user u's blocks (parity p copy at p * NU * BPU): rows 2u /
+        # 2u + 1 must not share physical blocks (one parity's append would land, unwaited, in the other's SDPA range)
+        for g_, u_ in (KVA_OWNALL or {}).items(): _pt[g_, :BPU] = torch.arange((g_ % 2) * NU * BPU + u_ * BPU, (g_ % 2) * NU * BPU + (u_ + 1) * BPU, dtype=torch.int32)
+        _nx = (2 if KVA_OWNALL else 1) * NU * BPU
         for u in [g_ for g_ in range(KVA_NUT) if g_ not in (KVA_OWNALL or KVA_OWNG)]:
             for s_ in KVA_STEPS:
                 for p_ in s_[u * 4:(u + 1) * 4]:
@@ -684,6 +687,7 @@ def setup_bench(dev, MESH, mesh_identity):
         def to_paged(t):   # [NU, CTX, DHD] -> [NU*BPU, NKVH, KVBS, DHD] with head KVH filled at the physical blocks
             full = torch.zeros(KVA_NBLK if KVA else NU * BPU, NKVH, KVBS, DHD, dtype=torch.bfloat16)   # KVA: + other users' blocks
             full[KV_PERM, KVH] = t.reshape(NU * BPU, KVBS, DHD).bfloat16()
+            if KVA and KVA_OWNALL: full[NU * BPU:2 * NU * BPU, KVH] = full[:NU * BPU, KVH]   # the parity-1 copy (same data)
             return full
         def from_paged(tt):
             return ttnn.to_torch(tt).float()[:NU * BPU].reshape(NU * BPU, NKVH, KVBS, DHD)[:, KVH][KV_PERM].reshape(NU, CTX, DHD)
@@ -714,6 +718,7 @@ def setup_bench(dev, MESH, mesh_identity):
         for u in range(NU):
             p = torch.exp(qq_[u] @ kq_[u].T); g_[u] = (p @ vq_[u]) / p.sum(-1, keepdim=True)
         if RQNR: KVQ[L] = (kq_.clone(), vq_.clone())
+        if RQNR and KVPROD and KVA and KVA_OWNALL: KVQP[L] = {p_: (kq_.clone(), vq_.clone()) for p_ in (0, 1)}   # per-parity copies
         if os.environ.get('MKA_SAMEDATA') == '1' and L > 0: kv, g_, q_t = kvs[0], golds_s[0], qs_all[0]
         kvs.append(kv); golds_s.append(g_); qs_all.append(q_t)
         del rows, kvq, kq_, vq_
@@ -1562,7 +1567,7 @@ def setup_bench(dev, MESH, mesh_identity):
         qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_, L) for h_ in range(6)]
         if par is None: gold_k[L] = norm_rope(Xq[:, 48 * TILE:56 * TILE].float(), 6, L)
         g_ = torch.zeros(NU, TILE, DHD)
-        kq_, vq_ = KVQ[L]
+        kq_, vq_ = KVQP[L][par if par is not None else UPAR_PAR()] if L in KVQP else KVQ[L]
         _ar = torch.arange(CTX).float()[None, :]
         for u_ in range(NU):
             gu_ = _ug(u_)
@@ -1694,8 +1699,19 @@ def setup_bench(dev, MESH, mesh_identity):
             except Exception: return ttnn.to_torch(tt).float()[pb, KVH]
         def _kva_regold(L):   # SDPA (and wo) golden over the cache as the engine left it
             kq_, vq_ = KVQ[L]
+            if KVA_RQ and KVA_OWNALL:   # mesh + UPAR: refresh each parity's copy from its own physical blocks
+                for p_ in (0, 1):
+                    kqp_, vqp_ = KVQP[L][p_]
+                    for u_ in range(NU):
+                        g_ = 2 * u_ + p_
+                        for vb_ in sorted({q_ // KVBS for q_ in KVA_STEPS[0][g_ * 4:(g_ + 1) * 4] if q_ >= 0}):
+                            pb_ = p_ * NU * BPU + u_ * BPU + vb_
+                            kqp_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvs[L], pb_)
+                            vqp_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvvs[L], pb_)
+                rq_gold(L, gold_qkv[L])
+                return
             if KVA_RQ:   # ragged: refresh each own user's blocks that hold its new rows, then the RQPOS golds
-                for u_ in range(NU):   # (mesh + UPAR: both parities' rows land in local user u's blocks)
+                for u_ in range(NU):
                     _gs = [g_ for g_, v_ in KVA_OWNALL.items() if v_ == u_] if KVA_OWNALL else [KVA_OWNG[u_]]
                     for vb_ in sorted({p_ // KVBS for g_ in _gs for p_ in KVA_STEPS[0][g_ * 4:(g_ + 1) * 4] if p_ >= 0}):
                         kq_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvs[L], u_ * BPU + vb_)
