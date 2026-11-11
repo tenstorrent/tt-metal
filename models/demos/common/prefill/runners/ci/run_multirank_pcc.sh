@@ -65,6 +65,8 @@ TABLE_WAIT_DEFAULT=3600
 VARIANT_MAX_SEQ_LEN=""
 MTP=0
 DFLASH=0
+# 0 for a model with no golden: the producer drives the request and the PCC gate is skipped.
+PRODUCER_CHECK_PCC=1
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
@@ -158,6 +160,36 @@ case "${MODEL}" in
     # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
     # gate reads one chunk's KV from the next.
     REQUEST_LEN=$((2 * CHUNK_SIZE))
+    # PREFILL_K31_SC4_SMOKE=1: sc4, all 93 layers, with a single-rank producer that only feeds tokens (no
+    # read-back, no PCC gate), to check the four-stage pipeline runs before a P->D migration.
+    K31_SC4_SMOKE=0
+    if [ "${CONFIG}" = sc4 ] && [ "${PREFILL_K31_SC4_SMOKE:-0}" = 1 ]; then
+      K31_SC4_SMOKE=1
+      PRODUCER_CHECK_PCC=0
+      REQUEST_LEN="${PREFILL_SC4_REQUEST_LEN:-${GOLDEN_LEN}}"
+      # At the manifest's 1M-context shape the expert weights no longer fit in DRAM beside K3.1's indexer cache
+      # (bank_manager OOM on load). 245,760 is sc1's shape, 24 layers per galaxy as here.
+      VARIANT_MAX_SEQ_LEN="${PREFILL_SC4_MAX_SEQ_LEN:-245760}"
+      RUNNER_ENV="${RUNNER_ENV/LOGURU_LEVEL=ERROR/LOGURU_LEVEL=INFO}"
+      if [ "${PREFILL_K31_PD:-0}" = 1 ]; then
+        # P->D through tt-d-gen's KV Manager: the runners export the table (PREFILL_PD_TABLE_PATH) and each
+        # host's device map to files, and migration_driver replaces the producer: it feeds the prompt, POSTs
+        # /migrate to the prefill leader KVM, then writes the handoff and the DONE sentinel for decode.
+        : "${PREFILL_PD_TABLE_PATH:?PREFILL_K31_PD=1 needs PREFILL_PD_TABLE_PATH on shared storage}"
+        : "${PREFILL_MIGRATION_KVM_URL:?PREFILL_K31_PD=1 needs PREFILL_MIGRATION_KVM_URL}"
+        RUNNER_ENV+=" export PREFILL_MIGRATION_EXPORT_TO_FILE=1; \
+          export PREFILL_MIGRATION_DEVICE_MAP_PATH=${PREFILL_PD_DEVICE_MAP:-/tmp/prefill_device_map.txt};"
+        PRODUCER_MODULE=migration_driver
+        PRODUCER_ENV+=" export PREFILL_MIGRATION_KVM_URL='${PREFILL_MIGRATION_KVM_URL}'; \
+          export PREFILL_MIGRATION_KVM_RECEIVER='${PREFILL_MIGRATION_KVM_RECEIVER:-decode-0}'; \
+          export PREFILL_MIGRATION_PAIRS='${PREFILL_MIGRATION_PAIRS:-0:1}'; \
+          export PREFILL_MIGRATION_SRC_ENDPOINT_ID=1; export PREFILL_MIGRATION_DEST_ENDPOINT_ID=0; \
+          export MIGRATION_DONE_FILE='${MIGRATION_DONE_FILE:?}'; \
+          export PREFILL_MIGRATION_HANDOFF_PATH='${PREFILL_MIGRATION_HANDOFF_PATH:?}'; \
+          export PREFILL_VERIFY_MIGRATION=off; \
+          ${PREFILL_MIGRATION_DUMP_SRC_KV:+export PREFILL_MIGRATION_DUMP_SRC_KV='${PREFILL_MIGRATION_DUMP_SRC_KV}';}"
+      fi
+    fi
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -254,7 +286,7 @@ mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${RUN_NAME}_prefill_ci_mr.XXXXXX")
 GATE_LOG="${MR_DIR}/gates.log"
-export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
+export TABLE_PATH="${PREFILL_PD_TABLE_PATH:-${MR_DIR}/kv_chunk_table.pb}"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 PRODUCER_LOG="${MR_DIR}/producer.log"
@@ -426,6 +458,12 @@ if [ "${PP_RANKS}" -eq 0 ]; then
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+if [ "${K31_SC4_SMOKE:-0}" = 1 ]; then
+  # Feed-only: one producer on rank 0's host. A multi-rank producer only runs validators, which need a golden.
+  HOSTS="${HOSTS%%,*}"
+  PRODUCER_PLACEMENT=(-np 1 --map-by slot)
+  echo "K3.1 sc4 smoke: single-rank feed-only producer on ${HOSTS}"
+fi
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
@@ -467,14 +505,14 @@ set +e
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-    export PREFILL_PRODUCER_CHECK_PCC=1; \
+    export PREFILL_PRODUCER_CHECK_PCC=${PRODUCER_CHECK_PCC}; \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
+    exec python3 -m models.demos.common.prefill.runners.${PRODUCER_MODULE:-prefill_producer}" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
 

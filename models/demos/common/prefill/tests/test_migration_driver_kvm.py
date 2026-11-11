@@ -12,10 +12,18 @@ import pytest
 from models.demos.common.prefill.runners.migration_driver import MigrationDriver
 
 
-def _serve(replies):
+def _serve(replies, health=()):
     seen = []
+    health = list(health)
 
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, None))
+            code = health.pop(0) if health else 200
+            self.send_response(code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen.append((self.path, body))
@@ -37,8 +45,8 @@ def _serve(replies):
 
 @pytest.fixture
 def kvm_driver(monkeypatch):
-    def make(replies, **env):
-        server, seen = _serve(replies)
+    def make(replies, health=(), **env):
+        server, seen = _serve(replies, health)
         monkeypatch.setenv("PREFILL_MIGRATION_HANDOFF_TAIL", "1")
         monkeypatch.setenv("PREFILL_MIGRATION_KVM_URL", f"http://127.0.0.1:{server.server_port}/")
         monkeypatch.setenv("PREFILL_MIGRATION_KVM_SESSION_ID", "700")
@@ -95,4 +103,20 @@ def test_kvm_migrate_raises_unless_successful(kvm_driver, code, reply):
         driver._post_kvm_migrate(
             command_id=1, migration_id=1, src_slot=0, dst_slot=1, layer_begin=0, layer_end=1, pos_begin=0, pos_end=1
         )
+    server.shutdown()
+
+
+def test_kvm_health_wait_retries_until_200(kvm_driver, monkeypatch):
+    monkeypatch.setattr("models.demos.common.prefill.runners.migration_driver.time.sleep", lambda s: None)
+    driver, seen, server = kvm_driver([], health=[503, 503, 200])
+    driver._wait_kvm_healthy()
+    server.shutdown()
+    assert [p for p, _ in seen] == ["/health"] * 3
+
+
+def test_kvm_health_wait_gives_up(kvm_driver, monkeypatch):
+    monkeypatch.setattr("models.demos.common.prefill.runners.migration_driver.time.sleep", lambda s: None)
+    driver, _, server = kvm_driver([], health=[503] * 50, PREFILL_MIGRATION_KVM_HEALTH_WAIT_S="0")
+    with pytest.raises(RuntimeError, match="/health not 200"):
+        driver._wait_kvm_healthy()
     server.shutdown()
