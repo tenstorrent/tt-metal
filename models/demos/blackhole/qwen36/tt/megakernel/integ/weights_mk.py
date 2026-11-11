@@ -27,11 +27,11 @@ TILE = 32
 H = 5120
 QN = 112  # qkv(g) output tiles per chip (layout_attn.QN)
 NORM_FIX = 1.25 ** 0.5  # spec §19: stored pre-multiplied in the gamma table (fp32 product, one bf16 rounding)
-# QWEN36_R16_MK_NORM_FIX: the factor the gamma tables actually carry (default NORM_FIX). Gate 9 E20t: in-model the engine's
+# QWEN36_R16_MK_NORM_FIX: the factor the gamma tables actually carry (default 1.0; NORM_FIX was the retired 2^-12 AR-stats contract). Gate 9 E20t: in-model the engine's
 # MLP matched the host MLP on x * NORM_FIX (ratio 0.967; 1.22 without), i.e. the in-model rstd path already uses the
 # true mean and the extra NORM_FIX over-scales every norm by 1.118. Set 1.0 to test / until the AR contract is fixed.
 def norm_fix():
-    return float(os.environ.get("QWEN36_R16_MK_NORM_FIX", str(NORM_FIX)))
+    return float(os.environ.get("QWEN36_R16_MK_NORM_FIX", "1.0"))   # default 1.0: the engine rstd is the true rsqrt(Σx²/H + eps) (DNORM)
 
 
 # ---------------------------------------------------------------------------------------------------------------- #
