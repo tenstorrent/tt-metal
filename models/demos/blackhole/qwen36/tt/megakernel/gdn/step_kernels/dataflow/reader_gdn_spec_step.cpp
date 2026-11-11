@@ -59,6 +59,15 @@ void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);  // engine gdn_out
 #if GDN_OUT_PRE
 void gdn_out_pre();
 #endif
+#if defined(GSTEP_NO_ATTHOLD) && defined(GSTEP_ATTHOLD)
+#undef GSTEP_ATTHOLD  // AR-sender corners / the Sigma reducer (engine program.py): never hold (their post-body work feeds the attention layer)
+#endif
+#ifndef GSTEP_ATTHOLD
+#define GSTEP_ATTHOLD 0  // engine GDN role (E1_ATTHOLD): gdn_att_hold() (the including TU) before rd_sp
+#endif
+#if GSTEP_ATTHOLD
+void gdn_att_hold();
+#endif
 #ifndef GDN_PRE_SP_HOOK
 #define GDN_PRE_SP_HOOK 0  // engine AR-sender corner cores (MK_CGAR_EARLY): gdn_pre_sp_hook() (TU) after the out / gdn_out tail,
                            // before the S' write-back -- the hosted GDN-AR sender iteration runs there instead of after the body
@@ -1001,6 +1010,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #endif
 #if GDN_PRE_SP_HOOK
         gdn_pre_sp_hook();
+#endif
+#if GSTEP_ATTHOLD
+        gdn_att_hold();  // E1_ATTHOLD: a pre-attention GDN layer's S' write-back waits for the attention layer's SDPA end
 #endif
 #if GDN_SP_RD
         // ---- S'_u -> ring slot 0 block (u, h) (this block's columns) from the compute's sp (waited on, never popped

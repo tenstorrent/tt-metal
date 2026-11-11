@@ -630,6 +630,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     OW, OC, OLR = R_ARGS, R_ARGS + W_ARGS, R_ARGS + W_ARGS + C_ARGS
     OLW = OLR + NG * nR
     S = {k: f"{int(sems[k])}u" for k in ("in_ready", "attn_kv", "vb0", "vb1", "out_ready")}
+    # #17 (GSTEP) E1_ATTHOLD=P (default 0 = off; P = GDN layers per attention layer, 3 for Qwen3.8): a GDN layer right before an
+    # attention layer (g mod P == P - 1) holds its stash writes (writer) and its S' write-back (reader) until the engine's
+    # attn_kv reaches that attention layer's SDPA end (2 per attention layer: start, SDPA end) -> 2 (g / P + 1). Same bytes /
+    # order, issued later: they stop competing with the SDPA KV stream (the GDN step got shorter, so they landed on it).
+    atthold = int(os.environ.get("E1_ATTHOLD", "0"))
+    assert atthold >= 0
+    ATT_HOLD = lambda lv: (f'void gdn_att_hold() {{ if ({lv} % {atthold}u == {atthold - 1}u) noc_semaphore_wait_min('
+                           f'(volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, 2u * ({lv} / {atthold}u + 1u)); }}\n')
     if len(out_target) == 2:   # one target core (e.g. the Q root): +1 per GDN core per layer
         ox, oy = out_target
         osig = f'noc_semaphore_inc(get_noc_addr({ox}u, {oy}u, {S["out_ready"]}), 1);'
@@ -759,6 +767,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'inline uint32_t gdn_rt_B() {{ return g_ab[4]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[5]; }}\n'
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '')
+        + (ATT_HOLD("g_l") if atthold else '')
         + (GB_R if GB else f'void gdn_gin_wait() {{\n  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")});\n'
            + ('' if gin_fwdw else f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n') + '}\n'
            'void gdn_in_wait() { gdn_gin_wait(); }\n' if percore else
@@ -802,6 +811,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (GXY_DECL if GO else '') +
         f'void gdn_out_signal() {{ {go_inc if GO else osig} }}\n'
         + (f'void gdn_lazy_gate() {{ for (uint32_t t = 0; t < {len(cores)}u; ++t) noc_semaphore_wait_min(g_ab + {GFL} + t, g_gdn_l + 1); }}\n' if lazy_gate else '')
+        + (ATT_HOLD("g_gdn_l") if atthold else '')
         + (go_local if GO and not go_rdhook else '')
         + (GB_W if GB else (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")});\n'
             f'  for (uint32_t f = 0; f < g_ab[{OGK} + 1]; ++f) noc_semaphore_inc(get_noc_addr(g_ab[{OGK} + 2 + 2 * f], g_ab[{OGK} + 3 + 2 * f], {S["in_ready"]}), 1);\n}}\n')
@@ -856,7 +866,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_SP_RD", "1")] if sp_rd else []) + ([("GDN_OUT_RD", "2" if go_rdhook else "1")] if out_rd else []) + (
         [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else []) + (
         [("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_OUT_PRE", "1")] if go_ring0h else []) + (
-        [("GSTEP_WPRE", "1")] if os.environ.get("E1_WPRE", "0") == "1" else []) + (   # #17 F1: norm-W rows before in_ready
+        [("GSTEP_WPRE", "1")] if os.environ.get("E1_WPRE", "0") == "1" else []) + ([("GSTEP_ATTHOLD", "1")] if atthold else []) + (   # #17 F1: norm-W rows before in_ready
         [("GSTEP_WYPAIR", "1")] if wypair else []) + ([("GSTEP_WYORD", "1")] if wyord else []) + ([("GSTEP_CUTST", "1")] if wypair and os.environ.get("E1_CUTST", "0") == "1" else []) + (
         [("GSTEP_KTSLATE", "1")] if wypair and os.environ.get("E1_KTLATE", "0") == "1" and os.environ.get("E1_KTSLATE", "0") == "1" else []) + (
         [("GSTEP_CZ", "1")] if os.environ.get("E1_GSZ", "0") == "1" else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else [])
@@ -867,7 +877,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
         [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else []) + (
         [("GDN_OUT_TILE", "1")] if out_tile else []) + ([("GDN_OUT_RD", "1")] if out_rd else []) + (
-        [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else []) + ([("GDN_LZVC", str(lzvc))] if lzvc else [])
+        [("GDN_XVC", str(xvc))] if xvc else []) + ([("GDN_LAZY_GATE", "1")] if lazy_gate else []) + ([("GDN_LZVC", str(lzvc))] if lzvc else []) + ([("GSTEP_ATTHOLD", "1")] if atthold else [])
     d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GSTEP_WYPAIR", "1")] if wypair else []) + (
         [("GSTEP_WYORD", "1")] if wyord else []) + (
         [("GSTEP_KTLATE", "1")] if os.environ.get("E1_KTLATE", "0") == "1" else []) + (
