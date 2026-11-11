@@ -184,14 +184,25 @@ for it in range(ITERS):
         _gs = (_xl * _xl).sum(-1)
         _gk = torch.stack([(_xl[:, k_ * 640:(k_ + 1) * 640] ** 2).sum(-1) for k_ in range(8)])   # [8, 32]
         _worst = 0.0
-        for ci_ in (0, 9, 37, 79):
+        for ci_ in ((0, 9, 37, 79) if not globals().get('RRED') else ()):
             S_ = _rs[ci_, :, :TILE].double()
             _worst = max(_worst, ((S_[:8] - _gk).abs() / _gk.abs().clamp_min(1e-30)).max().item())
-        S0 = _rs[0, :, :TILE].double()
-        _rel = ((S0[:8].sum(0) - _gs).abs() / _gs).max().item()
-        _rt = (1 / torch.sqrt(S0[:8].sum(0) / H + EPS)) / (1 / torch.sqrt(_gs / H + EPS)) - 1
-        print(f"[ar] iter {it} rstd Σ tile: rows 8-31 max|.| {S0[8:].abs().max().item():.3e}; K-row partial max rel err {_worst:.3e} (4 cores); "
-              f"Σ max rel err {_rel:.3e}; rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
+        if globals().get('RRED'):   # MK_AR_RSTD_RED=gdn: rsp tile 0 = the FINAL Σ in column 0 (every STREAM core); the K-row partials
+            # are the 8 un-reduced tiles the producers left on the reducer core (CB 37 = rred_in: tile k = Σ_t (x_t^T)^2, column = token)
+            _ri = ttnn.to_torch(rred_in).float().reshape(8, TILE, TILE).double()
+            _worst = ((_ri.sum(1) - _gk).abs() / _gk.abs().clamp_min(1e-30)).max().item()
+            _sc = torch.stack([_rs[ci_, :, 0].double() for ci_ in (0, 9, 37, 79)])
+            _rel = ((_sc - _gs[None]).abs() / _gs[None]).max().item()
+            _off = max(_rs[ci_, :, 1:TILE].abs().max().item() for ci_ in (0, 9, 37, 79))
+            _rt = (1 / torch.sqrt(_sc / H + EPS)) / (1 / torch.sqrt(_gs[None] / H + EPS)) - 1
+            print(f"[ar] iter {it} rstd Σ (red=gdn): columns 1-31 max|.| {_off:.3e}; K-row tile partial max rel err {_worst:.3e}; "
+                  f"Σ max rel err {_rel:.3e} (4 cores); rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
+        else:
+            S0 = _rs[0, :, :TILE].double()
+            _rel = ((S0[:8].sum(0) - _gs).abs() / _gs).max().item()
+            _rt = (1 / torch.sqrt(S0[:8].sum(0) / H + EPS)) / (1 / torch.sqrt(_gs / H + EPS)) - 1
+            print(f"[ar] iter {it} rstd Σ tile: rows 8-31 max|.| {S0[8:].abs().max().item():.3e}; K-row partial max rel err {_worst:.3e} (4 cores); "
+                  f"Σ max rel err {_rel:.3e}; rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
     if REAL_AR and RQKV:   # qkv / k / SDPA / wo golds from the x the AR actually delivered to each attention layer (not the static x)
         _xin = {}
         if AR_DBG:   # residual after every AR of this pass (owner dumps); program order: [attention AR], MLP AR per layer

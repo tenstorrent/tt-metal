@@ -834,10 +834,24 @@ void kernel_main() {
     // rstd producer (STREAM (n = k, k)): the compute's per-row Σx² (CB_SS, REDUCE_ROW column 0) -> row k of the Σ tile (rsp
     // tile 0: face 0 at k*64 B, face 1 at 1024 + k*64 B) on every STREAM core, then MK_AR_RSF += 1 there (8 per delivery). The
     // atomic multicast cannot include its source: the self rect is split around this core, plus a local increment.
+#if !defined(MK_AR_RSTD_RED_GDN)
     auto rstd_inc = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) __attribute__((noinline)) {
         if (x0 > x1 || y0 > y1) return;
         noc_semaphore_inc_multicast(get_noc_multicast_addr(x0, y0, x1, y1, MK_AR_RSF), 1, (x1 - x0 + 1) * (y1 - y0 + 1));
     };
+#endif
+#if defined(MK_AR_RSTD_RED_GDN)
+    // v1.112 (iii'): the un-reduced fp32 tile (Σ over the 20 tiles of (x^T)^2, elementwise) -> page k of the GDN host core's Σ-in
+    // CB (MK_AR_RRED_IN, 8 pages), then the host's arrival word += 1; the host reduces and multicasts the final Σ + MK_AR_RSF
+    auto rstd_send = [&]() __attribute__((noinline)) {
+        cb_wait_front(MK_AR_CB_SS, 1);
+        noc_async_write(get_read_ptr(MK_AR_CB_SS), get_noc_addr(MK_AR_RRED_X, MK_AR_RRED_Y, MK_AR_RRED_IN + vk * 4096), 4096);
+        noc_async_write_barrier();   // the tile has landed before its flag
+        noc_semaphore_inc(get_noc_addr(MK_AR_RRED_X, MK_AR_RRED_Y, MK_AR_RRED_SEM), 1);
+        noc_async_atomic_barrier();
+        cb_pop_front(MK_AR_CB_SS, 1);
+    };
+#else
     auto rstd_send = [&]() __attribute__((noinline)) {
         cb_wait_front(MK_AR_CB_SS, 1);
         const uint32_t sp = get_read_ptr(MK_AR_CB_SS), ko = vk * 64;   // row 0 = face 0 [0, 64) + face 1 [1024, 1088)
@@ -863,6 +877,7 @@ void kernel_main() {
         noc_async_atomic_barrier();
         cb_pop_front(MK_AR_CB_SS, 1);
     };
+#endif
 #endif
 #if defined(MK_GAMMA_CONS) && defined(MKA_ROLE_STREAM)
     // γ at the consumers: delivery xv (2L + 1 mixer: input_layernorm; 2L + 2 MLP: post_attention_layernorm) of K-row vk ->
@@ -1669,7 +1684,7 @@ void kernel_main() {
 #if defined(MK_AR_RSTD_PROD)
     // rstd flag (device-local): 8 producers x 2 K-row deliveries per layer reach every STREAM core; this core drains, then resets
     // (the consumers only wait)
-    noc_semaphore_wait_min(l1w(MK_AR_RSF), 8 * 2 * NL);
+    noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * 2 * NL);   // RED_GDN: 1 per delivery (the host's multicast)
     *l1w(MK_AR_RSF) = 0;
 #endif
 #if defined(MK_REAL_AR)
