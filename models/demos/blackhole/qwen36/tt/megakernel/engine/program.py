@@ -1352,7 +1352,7 @@ def setup_bench(dev, MESH, mesh_identity):
             if V12:   # v12 arg tails (appended after every other arg)
                 vw_, vr_, vc_ = v_args(fi, c)
                 _wa = wrt[c.x][c.y] = list(_wa) + vw_; _ra = rrt[c.x][c.y] = list(_ra) + vr_; _ca = crt[c.x][c.y] = list(_ca) + vc_
-            if GDN24 and not isS and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_EXTLEAN: the owner binary folds these role args (kernels)
+            if GDN24 and NU >= 4 and not isS and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_EXTLEAN (u8 only): the owner binary folds these role args (kernels)
                 _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
                 assert g_ == 0 and nrecv == 0 and r != 0 and gdn_on(fi) == 0, ("MKA_EXTLEAN owner args", fi, g_, nrecv, r, gdn_on(fi))
                 assert r_mk[14] == 255 and r_mk[15] == 0, ("MKA_EXTLEAN ROOT / IS_GU", fi, r_mk[14:16])
