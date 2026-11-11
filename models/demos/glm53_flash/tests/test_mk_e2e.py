@@ -7,6 +7,11 @@ text. Prefill runs through the backend's decode-program chunks (GLM53_STACK_PREF
 
     GLM53_MESH_SHAPE=8,4 GLM53_FABRIC=1d GLM53_MK_EP=1 GLM53_STACK_DSA=1 GLM53_MK_B=4 GLM53_MK_ISL=128 GLM53_MK_OSL=128 \
         pytest .../test_mk_e2e.py -s
+
+GLM53_MK_PREFIX=1 (needs GLM53_MK_B >= 3): the device prefix cache through the generator's serving API instead (run_prefix:
+a request A whose state at GLM53_MK_PREFIX_LEN = 32,768 tokens is snapshotted into a pool entry, a request B with the
+same document and another question attaching to it with A's pages shared, and B prefilled from scratch); B's greedy ids
+must equal the cold run's. Logs MK_PREFIX: lines (TTFT of the attach vs the cold prefill, decode, ids, counters).
 """
 
 from __future__ import annotations
@@ -29,7 +34,13 @@ MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "8,4").split(","
 B = int(os.environ.get("GLM53_MK_B", "4"))
 ISL = int(os.environ.get("GLM53_MK_ISL", "128"))
 OSL = int(os.environ.get("GLM53_MK_OSL", "128"))
-SEQ = int(os.environ.get("GLM53_MK_SEQ", str(max(2048, 1 << (ISL + OSL + 64).bit_length()))))
+# GLM53_MK_PREFIX=1: the prefix-cache run (run_prefix) instead of the batch; the shared boundary PREFIX_LEN is a multiple of
+# the prefill chunk (8,192 with the 8x4 defaults' buckets), so the attach and the cold prefill run the same chunks past it
+PREFIX = os.environ.get("GLM53_MK_PREFIX", "0") == "1"
+PREFIX_LEN = int(os.environ.get("GLM53_MK_PREFIX_LEN", "32768"))
+PREFIX_TAIL = 256  # the prompts' document runs about this many tokens past the boundary (then the question)
+_ISL_SEQ = PREFIX_LEN + PREFIX_TAIL if PREFIX else ISL  # the longest prompt the cache must hold
+SEQ = int(os.environ.get("GLM53_MK_SEQ", str(max(2048, 1 << (_ISL_SEQ + OSL + 64).bit_length()))))
 GALAXY = tuple(MESH) == GD.GALAXY
 # the validated 8x4 configuration (tt/galaxy_defaults.py: TP32 x EP32, the sequence-sharded DSA pool, the TP prefill with
 # the indexer, the pooled intermediates; the trace region / buckets / sparse ladder from SEQ) is applied INSIDE the test
@@ -46,6 +57,7 @@ FILLER = (
     "every token. Hyper-connections keep four residual streams per token and mix them before each sublayer. "
 )
 QUESTION = "Summarize the text above in two sentences."
+QUESTION_B = "Which parts of the system does the text above describe? Answer in one sentence."
 
 
 def _layers() -> list[int]:
@@ -60,11 +72,13 @@ def _layers() -> list[int]:
     return out
 
 
-def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
+def chat_prompt(tok, isl: int, user: int = 0, question: str = QUESTION) -> list[int]:
     """a chat-rendered prompt of (about) isl tokens: filler text cut to the token budget + a question; or the text of
     GLM53_MK_PROMPT (=@file) as the whole user message (the HF greedy reference's prompt: ISL = its length).
     GLM53_MK_DISTINCT=1: user u's filler starts 7 u tokens into the text (the users route to different experts:
-    every user of a batch with the same prompt picks the same experts, which flatters the EP expert phase)."""
+    every user of a batch with the same prompt picks the same experts, which flatters the EP expert phase).
+    question: the question after the filler (the filler's budget is QUESTION's, so prompts that differ only in the
+    question share the same filler)."""
     fixed = os.environ.get("GLM53_MK_PROMPT", "")
     if fixed.startswith("@"):
         with open(fixed[1:]) as f:
@@ -75,9 +89,86 @@ def chat_prompt(tok, isl: int, user: int = 0) -> list[int]:
     budget = max(8, isl - overhead - 2)
     skip = 7 * user if os.environ.get("GLM53_MK_DISTINCT", "0") == "1" else 0
     filler_ids = tok.encode(FILLER * ((budget + skip) // 16 + 2))[skip : skip + budget]
-    content = tok.decode(filler_ids) + "\n\n" + QUESTION
+    content = tok.decode(filler_ids) + "\n\n" + question
     ids = tok.encode_chat([{"role": "user", "content": content}])
     return ids
+
+
+def prefix_prompts(tok, prefix_len: int) -> tuple[list[int], list[int]]:
+    """GLM53_MK_PREFIX: two chat prompts that share their first prefix_len tokens (the filler document, which runs about
+    PREFIX_TAIL tokens past the boundary) and end in different questions (QUESTION, QUESTION_B)"""
+    if os.environ.get("GLM53_MK_PROMPT"):
+        raise ValueError("GLM53_MK_PREFIX builds its own prompts: unset GLM53_MK_PROMPT")
+    isl = prefix_len + PREFIX_TAIL
+    a, b = chat_prompt(tok, isl, question=QUESTION), chat_prompt(tok, isl, question=QUESTION_B)
+    common = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+    assert prefix_len < common < min(len(a), len(b)), f"prompts of {len(a)} / {len(b)} tokens share {common}"
+    return a, b
+
+
+def run_prefix(gen, kv, ids_a: list[int], ids_b: list[int], prefix_len: int, osl: int, sync) -> dict:
+    """GLM53_MK_PREFIX=1: the device prefix cache (tt/generator.py prefill_forward's prefix_attach / snapshot_after) on a
+    caller-owned cache (allocate_kv_cache(null_block=0), vLLM's null block 0; gen.shared_pages) with explicit page-table
+    rows, P = prefix_len:
+      A      ids_a in slot 0: [0, P) head-less with snapshot_after -> pool entry 0 (the KDA state + the DSA pooled keys /
+             ring at P), then [P, end) -> A's first token; A is then released (its blocks stay mapped: cached);
+      B      ids_b in slot 1: a NEW request attaching to entry 0 at start P (prefix_attach), A's first P / 64 blocks at
+             the head of its row (shared pages, read-only), only [P, end) prefilled;
+      B_cold ids_b in slot 2 from position 0 on its own blocks: P is on the chunk grid, so its chunks past P are B's.
+    B and B_cold then decode osl - 1 more greedy tokens together. sync() waits for the device (the TTFT bounds).
+    Returns the first tokens, the ids, the TTFTs (s), the decode wall (s) and steps."""
+    from models.autoports.zai_org_glm_5_3_flash.tt.sampling import GREEDY
+
+    bs, entry = gen.backend.block_size, 0
+    assert prefix_len % gen.backend.prefill_chunk_tokens == 0, (prefix_len, gen.backend.prefill_chunk_tokens)
+    gen.check_context(len(ids_b), osl)
+    nxt = [1]  # block 0 is the null block
+
+    def fresh(n_tok: int) -> list[int]:
+        n = -(-n_tok // bs)
+        nxt[0] += n
+        return list(range(nxt[0] - n, nxt[0]))
+
+    row_a = fresh(len(ids_a))
+    row_b = row_a[: prefix_len // bs] + fresh(len(ids_b) + osl - prefix_len)  # the decode's blocks too
+    row_c = fresh(len(ids_b) + osl)
+    pt = lambda row: torch.tensor([row], dtype=torch.int64)  # noqa: E731
+    ids = lambda v: torch.tensor([v], dtype=torch.int64)  # noqa: E731
+    gen.shared_pages = True
+    out = {}
+    sync()
+    t0 = time.perf_counter()
+    gen.prefill_forward(ids(ids_a[:prefix_len]), page_table=pt(row_a), kv_cache=kv, prompt_lens=[prefix_len],
+                        empty_slots=[0], start_pos=[0], sampling_params=[GREEDY], sample_rows=[False],
+                        snapshot_after={0: entry})  # fmt: skip
+    first = gen.prefill_forward(ids(ids_a[prefix_len:]), page_table=pt(row_a), kv_cache=kv,
+                                prompt_lens=[len(ids_a) - prefix_len], empty_slots=[0], start_pos=[prefix_len],
+                                sampling_params=[GREEDY])  # fmt: skip
+    out["ttft_a"], out["first_a"] = time.perf_counter() - t0, int(first[0])
+    gen.release_slot(kv, 0)  # A finished: its blocks are cached, the entry holds its state at P
+    sync()
+    t0 = time.perf_counter()
+    first = gen.prefill_forward(ids(ids_b[prefix_len:]), page_table=pt(row_b), kv_cache=kv,
+                                prompt_lens=[len(ids_b) - prefix_len], empty_slots=[1], start_pos=[prefix_len],
+                                sampling_params=[GREEDY], prefix_attach={0: entry})  # fmt: skip
+    out["ttft_b"], first_b = time.perf_counter() - t0, int(first[0])
+    sync()
+    t0 = time.perf_counter()
+    first = gen.prefill_forward(ids(ids_b), page_table=pt(row_c), kv_cache=kv, prompt_lens=[len(ids_b)],
+                                empty_slots=[2], start_pos=[0], sampling_params=[GREEDY])  # fmt: skip
+    out["ttft_cold"], first_c = time.perf_counter() - t0, int(first[0])
+    toks_b, toks_c = [first_b], [first_c]
+    pos = len(ids_b)
+    t0 = time.perf_counter()
+    for _ in range(osl - 1):
+        tok = gen.decode_forward(torch.tensor([-1, -1]), torch.tensor([pos, pos]), page_table=None, kv_cache=kv,
+                                 slots=[1, 2], sampling_params=[GREEDY, GREEDY])  # fmt: skip
+        toks_b.append(int(tok[0]))
+        toks_c.append(int(tok[1]))
+        pos += 1
+    out["decode_s"], out["decode_steps"] = time.perf_counter() - t0, osl - 1
+    out["ids_b"], out["ids_cold"] = toks_b, toks_c
+    return out
 
 
 @pytest.mark.parametrize(
@@ -99,7 +190,8 @@ def test_mk_e2e(mesh_device, monkeypatch):
     from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import StackBackend
     from models.autoports.zai_org_glm_5_3_flash.tt.tokenizer_chat import load_tokenizer
 
-    DEFAULTS = GD.apply(MESH, SEQ, ISL)  # every knob an explicit environment value does not already set
+    # every knob an explicit environment value does not already set (the prefix run's prompts take the 8,192 buckets)
+    DEFAULTS = GD.apply(MESH, SEQ, _ISL_SEQ)
     snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
     tok = load_tokenizer(snapshot)
@@ -128,6 +220,9 @@ def test_mk_e2e(mesh_device, monkeypatch):
     if isinstance(source, MkTileCacheSource) and not source.ready:
         source.complete()
     gen = Glm53Generator(backend, tokenizer=tok, max_batch=B, max_seq_len=SEQ)
+    if PREFIX:
+        _prefix_e2e(gen, tok, mesh_device, source)
+        return
     t0 = time.perf_counter()
     gen.warmup(capture=True)
     ttnn.synchronize_device(mesh_device)
@@ -180,6 +275,53 @@ def test_mk_e2e(mesh_device, monkeypatch):
     floor = float(os.environ.get("GLM53_MK_MIN_TOKS", "0") or 0)
     if floor:
         assert 1e3 / step_ms >= floor, f"decode {1e3 / step_ms:.1f} tok/s/u < the floor {floor}"
+    if isinstance(source, TileCache) and not source.ready:
+        source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run
+    if isinstance(source, MkTileCacheSource) and source._added:
+        source.save_manifest()
+        logger.info(f"MkTileCacheSource: {source._added} tensors added to the manifest")
+
+
+def _prefix_e2e(gen, tok, mesh_device, source) -> None:
+    """GLM53_MK_PREFIX=1: run_prefix on a serving-style cache (the plugin's pool: B x SEQ / 64 blocks + one per user,
+    block 0 = vLLM's null block) warmed on that cache as the adapter does; B's greedy ids must equal B_cold's"""
+    if B < 3:
+        raise ValueError(f"GLM53_MK_PREFIX needs GLM53_MK_B >= 3 (slots A, B, B_cold), got {B}")
+    kv = gen.allocate_kv_cache(B, SEQ, num_blocks=B * SEQ // 64 + B, null_block=0)
+    entries = int(getattr(gen.backend, "snapshot_entries", 0))
+    if not entries:
+        raise ValueError("GLM53_MK_PREFIX needs the device snapshot pool (GLM53_PREFIX_DEVICE_ENTRIES > 0)")
+    t0 = time.perf_counter()
+    gen.warmup(kv, capture=True)
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"generator warm-up on the serving cache {time.perf_counter() - t0:.1f} s")
+    ids_a, ids_b = prefix_prompts(tok, PREFIX_LEN)
+    n_sfx = len(ids_b) - PREFIX_LEN
+    logger.info(f"MK_PREFIX: mesh {MESH} B {B} cache {SEQ}: A {len(ids_a)} / B {len(ids_b)} tokens sharing {PREFIX_LEN} "
+                f"(pool entry 0 of {entries}), B's suffix {n_sfx}; prefill chunk {gen.backend.prefill_chunk_tokens}, "
+                f"continuation {gen.backend.continuation_align}, in-trace state I/O {gen.backend.prefill_state_io}; "
+                f"OSL {OSL}")  # fmt: skip
+    r = run_prefix(gen, kv, ids_a, ids_b, PREFIX_LEN, OSL, lambda: ttnn.synchronize_device(mesh_device))
+    ttnn.synchronize_device(mesh_device)
+    c = gen.counters
+    step_ms = r["decode_s"] / max(1, r["decode_steps"]) * 1e3
+    same = r["ids_b"] == r["ids_cold"]
+    diverge = next((i for i, (x, y) in enumerate(zip(r["ids_b"], r["ids_cold"])) if x != y), None)
+    text = lambda v: tok.decode([t for t in v if 0 <= t < tok.vocab_size])  # noqa: E731
+    logger.info(f"MK_PREFIX: TTFT A {r['ttft_a'] * 1e3:.0f} ms (cold, snapshot at {PREFIX_LEN}), B {r['ttft_b'] * 1e3:.0f} "
+                f"ms (attach + {n_sfx} tokens), B_cold {r['ttft_cold'] * 1e3:.0f} ms ({len(ids_b)} tokens): "
+                f"x{r['ttft_cold'] / max(r['ttft_b'], 1e-9):.1f}")  # fmt: skip
+    logger.info(f"MK_PREFIX: decode {step_ms:.1f} ms/step = {1e3 / step_ms if step_ms else 0:.1f} tok/s/u "
+                f"(B + B_cold, {r['decode_steps']} steps)")  # fmt: skip
+    logger.info(f"MK_PREFIX: ids B == B_cold {same} (first divergence {diverge}; first tokens A {r['first_a']} B "
+                f"{r['ids_b'][0]} B_cold {r['ids_cold'][0]}); B {r['ids_b'][:24]} B_cold {r['ids_cold'][:24]}")  # fmt: skip
+    logger.info(f"MK_PREFIX_TEXT B: {text(r['ids_b'])!r}")
+    if not same:
+        logger.info(f"MK_PREFIX_TEXT B_cold: {text(r['ids_cold'])!r}")
+    logger.info(f"MK_PREFIX counters: prefix_attaches {c['prefix_attaches']} prefix_snapshots {c['prefix_snapshots']} "
+                f"snapshot_copies {c['snapshot_copies']}; {gen.counters_report()}")  # fmt: skip
+    assert same, f"B attached at {PREFIX_LEN} != B_cold from token {diverge}: {r['ids_b'][:12]} vs {r['ids_cold'][:12]}"
+    assert c["prefix_attaches"] == 1 and c["prefix_snapshots"] >= 1, (c["prefix_attaches"], c["prefix_snapshots"])
     if isinstance(source, TileCache) and not source.ready:
         source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run
     if isinstance(source, MkTileCacheSource) and source._added:
