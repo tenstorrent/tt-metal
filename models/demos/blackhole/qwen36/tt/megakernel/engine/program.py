@@ -572,6 +572,24 @@ def setup_bench(dev, MESH, mesh_identity):
     torch.manual_seed(1)
     kvs, golds_s, qs_all = [], [], []
     KVQ = {}
+    # MK_DECOY=all | comma list of {qkv, gdn_in, mlp, gamma, wo, qkg, gdn_out, x, kv}: emulate the model's binding (spec gate 9).
+    # The model hands the engine its OWN buffers (weights_mk tensors injected through _WEIGHTS, x_in / x_out through
+    # ENGINE_SEED / ENGINE_DRAIN, the KV caches through G's attn block). Here each class's bench tensor is cloned right where the
+    # model's tensor would be bound; the clone takes the bench name (what injection does) and the ORIGINAL is zeroed and kept
+    # alive. Any role that still reads / writes the original (an address captured before the bind, a second copy, a setup
+    # runtime arg) now sees zeros -> its PCC / check breaks, i.e. it would read the bench buffer, not the model's, in gate 9.
+    _DECOY = {d_.strip() for d_ in os.environ.get('MK_DECOY', '').split(',') if d_.strip()}
+    _DKEEP = []
+    def _dec(cls_): return 'all' in _DECOY or cls_ in _DECOY
+    def _dswap(cls_, t_):
+        if t_ is None or not _dec(cls_): return t_
+        try: c_ = ttnn.clone(t_, memory_config=t_.memory_config())
+        except Exception:
+            c_ = ttnn.from_torch(ttnn.to_torch(t_), dtype=t_.dtype, layout=t_.layout, device=dev, memory_config=t_.memory_config())
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.zeros(list(t_.shape)), dtype=t_.dtype, layout=t_.layout), t_)
+        _DKEEP.append(t_)
+        print(f"[decoy] {cls_}: bench buffer @{t_.buffer_address()} zeroed; the engine binds the clone @{c_.buffer_address()}", flush=True)
+        return c_
     RQNR = ('MKA_RQNR', '1') in MKDEF
     KVPROD = os.environ.get('MKA_KVPROD', '0') == '1'
     NKVH, KVH, KVBS = int(os.environ.get('MKA_NKVH', '4')), int(os.environ.get('MKA_KVH', '1')), int(os.environ.get('MKA_BS', '64'))
@@ -820,6 +838,7 @@ def setup_bench(dev, MESH, mesh_identity):
         _QINJ = QSK and 'qkv' in _WEIGHTS
         if _QINJ: wq_all = _WEIGHTS['qkv']['tensor']   # real weights (golds skipped)
         else: wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in WLS]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        wq_all = _dswap('qkv', wq_all)
         wfq = torch.zeros(NL, H, QN * TILE)   # dequantized folded weights as the device sees them, per layer
         if not _QINJ: wqq = ttnn.to_torch(wq_all).float().reshape(len(WLS), PQL, TILE, TILE)
         if not _QINJ: wqq = wqq[[wla(L_) for L_ in range(NL)]]   # back to engine-layer order for the golds
@@ -884,6 +903,7 @@ def setup_bench(dev, MESH, mesh_identity):
                     gw_t = torch.randn(H, GN * TILE) / math.sqrt(H); gw_t[:, GNR:] = 0   # (wg_t is the MLP gate)
                     _gws = [gam[:, None] * gw_t] * NGL; _gsc = [2.0 ** (g_ % 2) for g_ in range(NGL)]
                 gin_w_all = _wl().pack_gdn_in(_gws, GINLAY, scales=_gsc, dev=dev)
+            gin_w_all = _dswap('gdn_in', gin_w_all)
             gin_wq = ttnn.to_torch(gin_w_all).float().reshape(NGL, PGL, TILE, TILE)
             wgfq = GINLAY.unpack(gin_wq)   # as the device holds it
             if _gw_path and _gws is not None: print(f"[gin] real gdn_in BFP4 round trip lossless (device tiles == model tiles): {all(torch.equal(wgfq[g_], _gws[g_]) for g_ in range(NGL))}", flush=True)
@@ -963,6 +983,7 @@ def setup_bench(dev, MESH, mesh_identity):
         t_v = time.time()
         wv_all = ttnn.from_torch(torch.cat([LM.pack_layer(*vlayer(L), v_bank, v_rank, v_nsb, banks) for L in range(NL)]).reshape(1, 1, -1, TILE),
                                  dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        wv_all = _dswap('mlp', wv_all)
         # gold of the last layer's owner output (x static in the engine): Σ down partials (+ x while the AR is a stall)
         _g, _u, _d = vlayer(NL - 1)
         _xn = (rstd_g[:, None] * xb.double()).float()
@@ -1122,6 +1143,7 @@ def setup_bench(dev, MESH, mesh_identity):
             _gg = torch.Generator().manual_seed(19)
             AR_GTAB = ((0.5 + torch.rand(NL, 2, H, generator=_gg)) * (1.25 ** 0.5)).bfloat16().float()
             gam_c = ttnn.from_torch(AR_GTAB.reshape(NL * 2 * 8, 640).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gam_c = _dswap('gamma', gam_c)
             MKDEF = MKDEF + [('MK_GC_ADDR', str(gam_c.buffer_address())), ('MK_GC_PAGE', '1280'), ('MK_GC_CB', '22'), ('MK_GC_XKA', '21')]
             print(f"[gc] gamma at the consumers: table {NL}x2x8 rows of 640 at DRAM {gam_c.buffer_address()}, CB 22 (20 tiles) + CB 21 = CB 33 alias", flush=True)
         AR_RSTD = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1'   # HOST: static Σ, no producer
@@ -1224,6 +1246,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 _rep = _g[:, :, :, :, :, None, :].expand(NL, 2, 16, 10, 2, _R, 16)   # [.., t, f, r, c]
                 _pk[..., :10 * 2 * _R * 16] = _rep.reshape(NL, 2, 16, -1)
                 ar_gam = ttnn.from_torch(_pk.reshape(1, 1, NL * 2 * 16, AR_GT * 1024), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ar_gam = _dswap('gamma', ar_gam)
             MKDEF = MKDEF + [('MK_AR_CBG', '32'), ('MK_AR_GT', str(AR_GT)),
                              ('MK_AR_GROWS', '0' if AR_PT == 10 else str(V_R))]
             print(f"[ar] gamma: table {NL}x2x16x10 tiles at DRAM {ar_gam.buffer_address()}, CB 32 = pbuf+0 ({AR_GT} tiles)", flush=True)
@@ -1325,6 +1348,7 @@ def setup_bench(dev, MESH, mesh_identity):
             wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
             wo_all = _wl().pack_wo_unit([wo_t] * len(WLS), WLAY, scales=[2.0 ** -(L % 2) for L in WLS], dev=dev)
             woq = WLAY.unpack(ttnn.to_torch(wo_all).float().reshape(len(WLS), WOPL, TILE, TILE)[[wla(L_) for L_ in range(NL)]])
+            wo_all = _dswap('wo', wo_all)
         wod = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, WN_ * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         WCC = wo_cores[0]   # concat core
         owner_fi = [fcores.index(next(c_ for c_ in fcores if c_.x == 10 + j_ % 2 and c_.y == j_ // 2)) for j_ in range(16)]
@@ -1479,7 +1503,7 @@ def setup_bench(dev, MESH, mesh_identity):
             for a_ in range(ATT0 + NATT_):
                 for k_ in range(2):
                     for t_ in range(8): qkg[a_, k_, t_] = qk_g[a_, k_, t_ * 32:(t_ + 1) * 32][None, :].repeat(TILE, 1)
-            hg_t = _dram(qkg.reshape(1, 1, -1, TILE).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            hg_t = _dswap('qkg', _dram(qkg.reshape(1, 1, -1, TILE).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT))
             HG_ADDR = int(os.environ['MKA_QKG_ADDR']) if os.environ.get('MKA_QKG_ADDR') else hg_t.buffer_address()
             MKDEF = MKDEF + [('MKA_KVP_INFO', f"{ttnn.get_global_semaphore_address(KVP_GS[0])}u"), ('MKA_KVP_ASGN', f"{ttnn.get_global_semaphore_address(KVP_GS[1])}u"), ('MKA_RQ_T', str(T)),
                              ('MKA_REPLAY_L1', f"{RQ_REPLAY}u"), ('MKA_ATTN_L1', f"{RQ_ATTN}u"), ('MKA_ATT0', str(ATT0)),
@@ -1802,6 +1826,7 @@ def setup_bench(dev, MESH, mesh_identity):
             else:
                 torch.manual_seed(17)
                 go_w_all = _wl().pack_gdn_out([torch.randn(GO_WK * TILE, GO_WN * TILE) / math.sqrt(GO_WK * TILE) for _ in range(GO_NG)], GO_LAY, dev=dev)
+            go_w_all = _dswap('gdn_out', go_w_all)
             go_wq = GO_LAY.unpack(ttnn.to_torch(go_w_all).float().reshape(GO_NG, GO_PL, TILE, TILE))
             go_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, GO_NG * GO_WN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
@@ -2100,7 +2125,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # so the cache check / SDPA PCC stay clean only if nothing touches the args
     _KV_DECOY = []
     def _kv_arg_addrs():
-        if os.environ.get('MKA_KV_ARGS_DECOY', '0') == '1' and ('MKA_RQPOS', '1') in MKDEF:
+        if (os.environ.get('MKA_KV_ARGS_DECOY', '0') == '1' or _dec('kv')) and ('MKA_RQPOS', '1') in MKDEF:
             if not _KV_DECOY:
                 _u = {}
                 for t_ in kvs + kvvs:
@@ -2416,7 +2441,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 return _rsp_dbg
         if AR_BLK_IMG is not None:   # MK_L1P2_ARBLK: owner j's 256 B row -> CB 28 + 1024
             _seed_c.append((AR_BLK_IMG, [(c_, AR_BLK_ADDR, j_, 1) for j_, c_ in enumerate(_own_xy)], AR.BLK_NW * 4))
-        ENGINE_X0 = ttnn.from_torch(xb.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ENGINE_X0 = _dswap('x', ttnn.from_torch(xb.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         _x0_e = [(c_, VADDR['x0'], 10 * j_, 10) for j_, c_ in enumerate(_own_xy)]
         def ENGINE_SEED(x_in=None):
             l1io(dev, _seed_c + [(x_in if x_in is not None else ENGINE_X0, _x0_e, None)], 0)
