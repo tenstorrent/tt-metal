@@ -486,6 +486,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  else noc_async_write_multicast(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);'
                 for r in (gr_[0:5], gr_[5:10]) if r[4])
             inc1h = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])
+            if os.environ.get("E1_GO_MCAST", "1") == "0":   # unicast all-gather: n tiles to each of the 24 GDN cores (incl. self)
+                mc1h = "\n".join(f'  noc_async_write(src, get_noc_addr({x}u, {y}u, dst), n * 2048u);' for x, y in GO["gdn_xy"])
             go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
                            f'  DeviceZoneScopedN("GO-RDH");\n'
                            f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc1h}\n'
