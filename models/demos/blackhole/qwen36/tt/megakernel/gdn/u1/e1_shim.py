@@ -522,7 +522,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'    noc_async_write_barrier();\n  }}'
                 for x, y, r in rts)
             go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
-                           f'  DeviceZoneScopedN("GO-RDH");\n'
+                           f'  DeviceZoneScopedN("GO-GATH");\n'
                            f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{wr_}\n'
                            f'  noc_async_write_barrier();\n  {fl_}\n  noc_async_writes_flushed();\n{root_}\n}}\n')
         GO_RDALL = GO_RD and os.environ.get("E1_GO_RDALL", "1") == "1"
