@@ -55,8 +55,13 @@ class PupPrefillConfig:
     # --- fast runtime (fast_runtime.py): system-turn snapshot + traced buckets + per-layer-group publish ---
     fast: bool = True
     """The grouped (session-5) prefill with a system-turn snapshot; False = the generic B=1 path (runtime.py)."""
-    fast_buckets: tuple = (128, 256, 384, 512, 640, 768, 1024, 1280, 1536, 2048, 2560, 3072, 3584)
-    """Traced tail buckets (rows; multiples of 128). A tail runs in the smallest bucket >= its length."""
+    fast_buckets: tuple = (
+        128, 256, 384, 512, 640, 768, 896, 1024, 1152, 1280, 1536, 1792, 2048, 2304, 2560, 2688, 2816, 3072, 3328,
+        3584,
+    )  # fmt: skip
+    """Traced tail buckets (rows; multiples of 128). A tail runs in the smallest bucket >= its length: 128 apart up to
+    1280 (1 MP tail 1088 -> 1152), then 256 (10 refs: 2656 -> 2688). No 1408: its one-row (non token-parallel) body
+    is slower than the token-parallel 1536 (5 refs: 75.4 vs 72.0 ms)."""
     publish_segments: int = 4
     """Traces per bucket = layer groups published (and reported to the engine) as each finishes."""
     prefix_max: int = 1024

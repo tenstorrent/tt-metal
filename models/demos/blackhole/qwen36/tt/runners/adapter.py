@@ -94,12 +94,17 @@ class Qwen35PupPrefillAdapter(PrefillModelAdapter):
     def _serving_config(self, params: PrefillRunParams) -> PupPrefillConfig:
         # PUP_PREFILL_FAST=0: the generic B=1 runtime (A/B against the fast one); unset = the config's choice
         fast = os.environ.get("PUP_PREFILL_FAST")
-        return self.pup_config.with_serving(
+        cfg = self.pup_config.with_serving(
             num_users=params.num_users,
             max_seq_len=params.max_seq_len,
             chunk_size=params.chunk_size,
             fast=None if fast is None else fast != "0",
         )
+        if os.environ.get("PUP_PREFILL_TOKPAR_MIN"):  # A/B of the token-parallel threshold
+            from dataclasses import replace
+
+            cfg = replace(cfg, tokpar_min_rows=int(os.environ["PUP_PREFILL_TOKPAR_MIN"]))
+        return cfg
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
         from models.demos.blackhole.qwen36.tt.runners import kv_table
