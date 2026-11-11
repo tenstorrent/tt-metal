@@ -9,6 +9,13 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -1831,3 +1838,50 @@ def test_sort_out_writes_into_caller_tensor(shape, dim, descending, device):
     assert_equal(torch_indices, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
     assert_equal(torch_values, ttnn.to_torch(values_alias))
     assert_equal(torch_indices, ttnn.to_torch(indices_alias, dtype=torch.int32).to(torch.int64))
+
+
+def assert_sorted(input_values, values, indices):
+    """``values`` sorts the last dim of ``input_values``, and each one equals the input value at its index.
+
+    Sort orders by value and -0.0 equals +0.0, so zeros are compared by value, not by sign.
+    """
+    input_values = input_values.to(torch.float64)
+    assert_exact(torch.sort(input_values, dim=-1).values, values, signed_zeros=False)
+    assert_exact(torch.gather(input_values, -1, indices.to(torch.int64)), values, signed_zeros=False)
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.sort))
+@pytest.mark.parametrize(
+    "dtype, layout", docstring_dtype_layout_params(ttnn.sort, "Supported dtypes and layouts for input tensor values")
+)
+def test_sort_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every input dtype, layout and interleaved buffer type the ttnn.sort docstring lists."""
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    # The docstring requires input values that are not NaN.
+    torch_values = full_range_input((32, 64), dtype, nan=False)
+    input_tensor = ttnn.from_torch(torch_values, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    values, indices = ttnn.sort(input_tensor, dim=-1, memory_config=memory_config)
+
+    assert values.dtype == dtype
+    for output in (values, indices):
+        assert output.layout == layout
+        assert output.memory_config().buffer_type == buffer_type
+    assert_sorted(ttnn.to_torch(input_tensor), ttnn.to_torch(values), ttnn.to_torch(indices))
+
+
+@pytest.mark.parametrize(
+    "index_dtype, layout",
+    docstring_dtype_layout_params(ttnn.sort, "Supported dtypes and layouts for index tensor values"),
+)
+def test_sort_docstring_supported_index_outputs(index_dtype, layout, device):
+    """Writes the indices into every preallocated index dtype and layout the ttnn.sort docstring lists."""
+    check_readable(index_dtype, layout)
+    shape = [32, 64]
+    input_tensor = ttnn.from_torch(full_range_input(shape, ttnn.bfloat16, nan=False), layout=layout, device=device)
+    out_values = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=layout, device=device)
+    out_indices = ttnn.zeros(shape, dtype=index_dtype, layout=layout, device=device)
+    values, indices = ttnn.sort(input_tensor, dim=-1, out=(out_values, out_indices))
+
+    assert indices.dtype == index_dtype
+    assert_sorted(ttnn.to_torch(input_tensor), ttnn.to_torch(values), ttnn.to_torch(indices))
