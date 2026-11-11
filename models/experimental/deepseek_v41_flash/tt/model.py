@@ -76,7 +76,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     key_split_layers,
     uses_candidate_pool,
 )
-from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import make_prefetch_buffers
+from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import SHARED_RING_PAGES, make_prefetch_buffers
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
@@ -222,6 +222,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
     (:meth:`commit_prefill_state`, :meth:`seed_prefill`). ``None`` (the default) keeps every prefill layer on its
     decode layer's stage.
 
+    ``num_prefetch_pages`` is the shared decode ring's depth, :data:`~.decode.decode_prefetch.SHARED_RING_PAGES` by
+    default rather than the system profile's (V4's) depth.
+
     ``verify_rows > 1`` builds every layer for DSpark's parallel verify (:meth:`decode_verify`), one step
     over ``verify_rows`` consecutive positions.
 
@@ -284,7 +287,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         weight_dtype = self.weight_dtype
         self.use_prefetcher = True if use_prefetcher is None else bool(use_prefetcher)
         if num_prefetch_pages is None:
-            num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
+            num_prefetch_pages = SHARED_RING_PAGES
         self._prefetch_buffers_by_device: dict[int, tuple] = {}
         self._gcb_headroom: dict[int, ttnn.Tensor] = {}
         self._prefetch_released = False

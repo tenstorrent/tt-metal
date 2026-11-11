@@ -50,8 +50,10 @@ from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     decode_ring_group_specs,
 )
 from models.experimental.deepseek_v4_flash.tt.layers import make_coallocated_decode_pipes, make_multi_page_decode_pipes
-from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 
+# Depth of the shared ring in 32-tile pages: 144 KB per core at bf4, half V4's profile default, with no
+# decode slowdown. The co-allocated range is then sized by q_a's 180 KB ring.
+SHARED_RING_PAGES = 8
 # 4 pages of 80 tiles (16 rows of q_a's 5-tile-wide slab): ~180 KB per core at bf4.
 _Q_A_PAGE_PIN = {"K": 512, "N": 1280, "n_blocks": 8}
 Q_A_RING_PAGES = 4
@@ -116,7 +118,7 @@ def prefetch_rings(tp_size: int = 1) -> dict:
 
 
 def make_prefetch_buffers(
-    device, weight_dtype, num_prefetch_pages: Optional[int] = None, tp_size: Optional[int] = None
+    device, weight_dtype, num_prefetch_pages: int = SHARED_RING_PAGES, tp_size: Optional[int] = None
 ) -> dict:
     """The per-device ``prefetch_buffers`` mapping: V4's shared ring under the :data:`DECODE_RING_GROUP` keys
     (as :func:`~models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch.make_decode_prefetch_buffers`
@@ -124,12 +126,10 @@ def make_prefetch_buffers(
 
     ``weight_dtype`` is the attention projections'; :data:`WIDE_RING` is sized for o_b at it and for the shared
     expert's down and Engram's wkv at :data:`SHARED_EXPERT_ENGRAM_DTYPE`. ``num_prefetch_pages`` is the shared
-    ring's depth, ``None`` taking the active system profile's. ``tp_size`` is the stage's TP width, ``None``
+    ring's depth. ``tp_size`` is the stage's TP width, ``None``
     taking ``device``'s chip count (a decode stage is a 1 x TP mesh). Build it once per device and hand it to
     every layer there.
     """
-    if num_prefetch_pages is None:
-        num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
     if tp_size is None:
         tp_size = device.get_num_devices()
     rings = prefetch_rings(tp_size)

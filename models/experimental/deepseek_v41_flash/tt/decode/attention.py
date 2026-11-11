@@ -518,9 +518,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         self.scaling = self.head_dim**-0.5
 
         if use_prefetcher and prefetch_buffers is None:
-            prefetch_buffers = make_prefetch_buffers(
-                device, weight_dtype, sys_cfg.prefetcher.num_prefetch_pages, tp_size=tp_size
-            )
+            prefetch_buffers = make_prefetch_buffers(device, weight_dtype, tp_size=tp_size)
         rings = prefetch_rings(tp_size) if use_prefetcher else {}
         replicate = ttnn.ReplicateTensorToMesh(device) if tp_size > 1 else None
         self.qkv_tp_strategy = "replicated"
