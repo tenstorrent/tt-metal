@@ -213,7 +213,8 @@ def setup_bench(dev, MESH, mesh_identity):
     if ('MK_V12', '1') in MKDEF and not any(k_ == 'MK_V12_CB' for k_, _ in MKDEF):
         MKDEF = MKDEF + [('MK_V12_CB', '1')]
     MKDEF += [('MKA_AMASK', f'{AMASK & 0xFFFFFFFF}u'), ('MKA_S_GDN', str(int(S_GDN_US * 1350)))]
-    if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
+    if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]
+    if os.environ.get('MKA_STREAM_LEANZ', '0') == '1': MKDEF += [('MKA_STREAM_LEANZ', '1')]   # profiled runs: STREAM DM zones out (W-ARWAIT kept)   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
     # MKA_W_ORD=1 (integ repack order): qkv / wo weight tensors hold the attention layers only (ordinal a = aidx(L));

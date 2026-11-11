@@ -1485,7 +1485,7 @@ void kernel_main() {
         }
 #if defined(MK_REAL_AR)
         {   // the real MLP AR: this K-row's two owners delivered x of layer L + 1 (flags = per-pass delivery count)
-            MKZ("W-ARWAIT");
+            MKZK("W-ARWAIT");
 #if defined(MK_V12_X2) || defined(MK_RS_QKV)   // X2 (QSK): AR(L) delivers layer L + 1's mixer x, flag 2(L + 1) + 1
 #define MK_AR_XWAIT(L) (*vw(vg[VG_XA]) < 2 * (L) + 3 || *vw(vg[VG_XB]) < 2 * (L) + 3)
 #else
