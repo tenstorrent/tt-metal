@@ -545,10 +545,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # E1_GO_RING2 (default on with the reader hook): 2-slot ring, layer L + 1's slice read right after reader<>(L) (ring 0
         # before the loop): the matmul of layer L never waits for its ring behind the reader's S' writes
         GO_RING2 = go_rdhook and os.environ.get("E1_GO_RING2", "1") == "1"
-        # E1_GO_RING0=hook (with RING2): layer 0's ring slice is read inside reader<>(0) right before rd_owait (the reader
+        # E1_GO_RING0=hook (default; =pre restores the old order) (with RING2): layer 0's ring slice is read inside reader<>(0) right before rd_owait (the reader
         # idles there while the compute runs the step) instead of before the layer loop, where its ~26 us of DRAM reads
         # delayed L0's state-first / pre reads (the +~40 us L0 cost, once per pass)
-        go_ring0h = GO_RING2 and os.environ.get("E1_GO_RING0", "pre") == "hook"
+        go_ring0h = GO_RING2 and os.environ.get("E1_GO_RING0", "hook") == "hook"
         go_wr = ""
         GO_TAILHOOK = go_rdhook and os.environ.get("E1_GO_TAILHOOK", "1") == "1"
         go_th = ""
