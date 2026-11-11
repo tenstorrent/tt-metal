@@ -30,6 +30,12 @@
 #ifndef GB_MCAST
 #define GB_MCAST 0
 #endif
+#ifndef GB_GEARLY
+#define GB_GEARLY 0  // GBCOST (E1_GBC_GEARLY): the writer builds the gate rows as soon as the gate pair lands (conv0 / root ready serviced between rows)
+#endif
+#ifndef GB_WBAR
+#define GB_WBAR 0  // GBCOST (E1_GBC_WBAR): the win[1 - par] write barrier leaves the in_wait path (next layer start / the step's own barriers)
+#endif
 #ifndef GBZ
 #if defined(GB_ZONES) && GB_ZONES
 #define GBZ(n) DeviceZoneScopedN(n)
@@ -91,6 +97,9 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
     constexpr uint32_t Lw = K - 1 + T, Lw_w = (Lw + 1) & ~1u;
     const uint32_t nconv = pb[kNconv];
     gpx::Ctrl<B, T, M, NV> c;
+#if GB_WBAR
+    noc_async_write_barrier();  // the previous layer's win[1 - par] writes read wo_l1 (rewritten below)
+#endif
     {
         GBZ("GB-RPRE");
         noc_async_read(ctrl.get_noc_addr(0), ctrl_l1, ctrl_bytes);
@@ -201,7 +210,9 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
                 noc_async_write(o + 256, dst + 512, Lw_w * 32);
             }
         }
+#if !GB_WBAR
         noc_async_write_barrier();
+#endif
     }
     GBTS(6);
     if (pb[kRootPost]) {  // L2 root: its Kt raw tiles (from the q / k conv cores) -> the compute's l2
@@ -323,8 +334,11 @@ inline void inc_all(const uint32_t* d, uint32_t w, uint32_t v) {
 // pair gt (dec over a's tile, beta over b's tile), same float ops in the same order. W / C_u (6..14) are not written:
 // under GDN_EARLY_REPLAY the step writer builds them itself from the stash (wr_rcoef). Per tile, the users' NU*T rows
 // = two 16-column face runs (sc_l1: 7 x [face A rows | face B rows]).
-template <uint32_t T, uint32_t NV, uint32_t NU>
-inline void gate_rows_build(uint32_t h, uint32_t u0, uint32_t gt_l1, uint32_t sc_l1) {
+struct NoSvc {
+    void operator()() const {}
+};
+template <uint32_t T, uint32_t NV, uint32_t NU, typename Svc = NoSvc>
+inline void gate_rows_build(uint32_t h, uint32_t u0, uint32_t gt_l1, uint32_t sc_l1, const Svc& svc = Svc{}) {
     constexpr uint32_t R = NU * T, CH = R * 64;  // rows per core, bytes per face run
     static_assert(16 % R == 0, "a core's rows inside one face row");
     constexpr uint32_t kSign = 0x80000000u;
@@ -362,6 +376,7 @@ inline void gate_rows_build(uint32_t h, uint32_t u0, uint32_t gt_l1, uint32_t sc
     for (uint32_t v = 0; v < NU; ++v) {
         const uint32_t r0 = (u0 + v) * T;
         for (uint32_t t = 0; t < T; ++t) {
+            svc();  // GB_GEARLY: the urgent sends (conv0, the L2 root's ready) as soon as they are available
             const uint32_t row = r0 + t, rr = (row - R0) * 16;
             // tile n's run A (cols 0..15) / run B (cols 16..31) of this row
             auto ra = [&](uint32_t n) { return reinterpret_cast<volatile uint32_t*>(sc_l1 + n * 2 * CH) + rr; };
@@ -444,6 +459,38 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
     // the first 4 OUT pages of a layer = [gate pair | silu | conv 0] (the layer starts at the base: 4 pages, multiple of 4 per
     // layer): conv 0 (raw q / k -> the L2 roots: the long pole) and silu go out before the gate rows are built
     constexpr uint32_t NU = B / VB;
+#if GB_GEARLY
+    // the gate pair (OUT 0..1, the compute's first job) is enough for the gate rows: build them while the convs run; conv0
+    // (q / k -> the L2 roots: the long pole) and the root's ready go out from inside the build as soon as they land
+    cb_wait_front(cb_out, 2);
+    bool c0 = false, rr = !root;
+    auto svc = [&]() {
+        if (!c0 && cb_pages_available_at_front(cb_out, 4)) {
+            GBTS(17);
+            send_out(get_read_ptr(cb_out) + 3 * 4096, const_cast<const uint32_t*>(pb + kConv + 1));
+            GBTS(18);
+            c0 = true;
+        }
+        if (c0 && !rr && cb_pages_available_at_front(cb_out, 4 + KT_)) {
+            GBTS(19);
+            inc_all(const_cast<const uint32_t*>(pb + kRootDst), kKqCnt, 1);
+            GBTS(20);
+            rr = true;
+        }
+    };
+    gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1, svc);
+    GBTS(22);
+    if (!c0) {
+        cb_wait_front(cb_out, 4);
+        svc();
+    }
+    if (!rr) {
+        cb_wait_front(cb_out, 4 + KT_);
+        svc();
+    }
+    send_out(get_read_ptr(cb_out) + 2 * 4096, dz);
+    GBTS(21);
+#else
     cb_wait_front(cb_out, 4);
     GBTS(17);
     {
@@ -471,6 +518,7 @@ inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc
     GBTS(21);
     gate_rows_build<T, NV, NU>(pb[kGate], pb[kGcore] * NU, get_read_ptr(cb_out), sc_l1);
     GBTS(22);
+#endif
     {
         GBZ("GB-GATE");
         gate_rows_send<T, NU>(pre, pb[kGcore] * NU, pb[kGdst], sc_l1, dz, g_gb_coef, sc_l1 + 8192);

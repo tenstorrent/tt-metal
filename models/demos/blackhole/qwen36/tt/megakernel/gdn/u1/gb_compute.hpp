@@ -34,7 +34,7 @@
 #define GBZ(n)
 #endif
 #endif
-#if defined(GB_TS) && GB_TS && defined(TRISC_PACK)
+#if defined(GB_TS) && GB_TS && defined(TRISC_UNPACK)  // unpack: its cb waits are real RISC polls
 #define GBTSC(L, n) (g_ab[GB_TS_OFF + (L) * 32u + (n)] = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
 #else
 #define GBTSC(L, n) ((void)0)
@@ -185,15 +185,14 @@ ALWI void compute_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t cb
                         uint32_t cb_cv, uint32_t cb_out, uint32_t cb_kq) {
     constexpr uint32_t kPerLayer = 146, kRootPost = 133;  // gb_dm.hpp
     const uint32_t nconv = pb[3], root_post = pb[kRootPost];
-    cb_wait_front(cb_qpx, npx);  // QIN 0..3, P 4..5 (resident data; the pointer returns to the base every layer)
     GBTSC(L, 28);
+    cb_wait_front(cb_qpx, npx);  // QIN 0..3, P 4..5 (resident data; the pointer returns to the base every layer)
+    GBTSC(L, 29);
     {
         GBZ("GB-CGATE");  // first: needs only the a|b tile, fills the wait for the conv staging
         gates_page(cb_qpx, 3, cb_out, pb[kPerLayer + 2 * L], pb[kPerLayer + 2 * L + 1]);
     }
-    GBTSC(L, 29);
     silu_page(cb_qpx, 2, cb_out);
-    GBTSC(L, 30);
     for (uint32_t j = 0; j < nconv; ++j) {
         GBZ("GB-CCONV");
         conv_place<K>(cb_sht, cb_qpx, j, cb_cv, cb_out);  // conv 0 = the q / k tile on the q / k cores

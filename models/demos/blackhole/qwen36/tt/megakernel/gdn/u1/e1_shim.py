@@ -845,12 +845,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'#include "{kd}/compute/gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_c.hpp"\n' if GO else '') +
         f'static volatile tt_l1_ptr uint32_t* g_ab;\nuint32_t gdn_rt_B() {{ return g_ab[{OC + 3}]; }}\n' + GB_C
+        + ('static uint32_t g_ts_l;\nvoid gb_ts_hook(uint32_t n) {\n#if defined(TRISC_UNPACK)\n  g_ab[GB_TS_OFF + g_ts_l * 32u + n] = '
+           '*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);\n#else\n  (void)n;\n#endif\n}\n' if os.environ.get("E1_GB_TS", "0") == "1" else '')
         + ('static uint32_t g_gl = 0;\n'
            f'uint32_t gdn_live_mask() {{ volatile tt_l1_ptr uint32_t* w = g_ab + {OHM} + (g_gl & 1); uint32_t v; '
            'do { invalidate_l1_cache(); v = *w; } while ((v >> 8) != g_gl + 1); return v & 0xFFu; }\n' if hold_skip else '')
         + f'void kernel_main() {{\n  g_ab = {AB};\n'
         + ('  g_sp_pending = 0;\n' if sp_late else '')
-        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    ' + ('g_gl = L; ' if hold_skip else '') + ('g_gb_l = L; ' if GB else '') + f'compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    ' + ('g_gl = L; ' if hold_skip else '') + ('g_gb_l = L; ' if GB else '') + ('g_ts_l = L; ' if os.environ.get("E1_GB_TS", "0") == "1" else '') + f'compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
         f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '')
         + '  // @@GDN_LAYER_BODY_END@@ (engine host splices: exactly once)\n  }\n'
         + ('  gdn_sp_drain();\n' if sp_late else '') + '}\n')
@@ -894,6 +896,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         d_w = d_w + [("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]
         if os.environ.get("E1_GB_GDIRECT", "1") == "1":   # gate rows straight into the head's coef slots / gate page (no DRAM)
             d_w = d_w + [("GB_GATE_DIRECT", "1"), ("GDN_GB_GATE_DIRECT", "1"), ("GB_COEF_REP", "9")]
+        if os.environ.get("E1_GBC_GEARLY", "0") == "1":   # GBCOST: gate rows built while the convs run (bit-identical)
+            assert os.environ.get("E1_GB_KQPUSH", "0") == "0", "E1_GBC_GEARLY: pull model only"
+            d_w = d_w + [("GB_GEARLY", "1")]
+        if os.environ.get("E1_GBC_WBAR", "0") == "1":   # GBCOST: win[1 - par] write barrier off the in_wait path (bit-identical)
+            d_r = d_r + [("GB_WBAR", "1")]
         gz = os.environ.get("E1_GB_ZONES", "")   # G-b profiler zones per kernel, e.g. "rwc" / "r" (off by default: config space)
         d_r = d_r + ([("GB_ZONES", "1")] if "r" in gz or gz == "1" else [])
         d_w = d_w + ([("GB_ZONES", "1")] if "w" in gz or gz == "1" else [])

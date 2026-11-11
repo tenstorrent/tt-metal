@@ -145,6 +145,12 @@ void gdn_pre_in_hook();  // defined by the including TU (engine MK_RRED_LATE)
 #ifndef GDN_RAWKQ
 #define GDN_RAWKQ 0  // G-b (E1_GB): kc / qc arrive raw (conv + SiLU); l2norm here (the L2-root fallback)
 #endif
+#if defined(GB_TS) && GB_TS  // E1_GB_TS bench probe (unpack-thread stamps via the including TU)
+void gb_ts_hook(uint32_t n);
+#define GBTSU(n) gb_ts_hook(n)
+#else
+#define GBTSU(n) ((void)0)
+#endif
 #ifndef GDN_GB
 #define GDN_GB 0  // G-b (E1_GB): the in-role prefix (gdn_gb_compute(), defined by the including TU) before c_B
 #endif
@@ -1997,6 +2003,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     //      so it runs at layer start, before the prefix output (knq / vc / the WY tiles) is ready
     {
         DeviceZoneScopedN("c_replay");
+        GBTSU(27);
 #if GDN_SP_LATE
         gdn_sp_drain();  // the previous layer's S' (written out by now, behind its output rows)
 #endif
@@ -2049,6 +2056,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         ktp_in.pop_front(Kt);
         up_in.pop_front(Vs);
 #endif  // GDN_BATCH
+        GBTSU(30);
     }
 #if defined(GDN_PRE_IN_HOOK)
     // engine (MK_RRED_LATE): this core's per-layer pre-in_ready work (the Σ reducer's mixer delivery) AFTER the replay, so the
