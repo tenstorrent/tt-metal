@@ -40,6 +40,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # docker-bake-publish signs each image's SBOM (actions/attest).
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     runs-on: tt-ubuntu-2204-large-stable
     outputs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
@@ -154,23 +158,20 @@ jobs:
             SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
             SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
           fi
+          # docker-bake-publish requires a revision label on every published image.
+          SET+="${TARGET}.labels.org.opencontainers.image.revision=${GIT_SHA}"$'\n'
           {
             echo "set<<EOF"
             echo "$SET"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          # Consumed directly by manual-docker-bake.sh (SBOM generator, oras
-          # binary for enrichment), not as a build-stage context.
-          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> "$GITHUB_OUTPUT"
-          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
-        uses: ./.github/actions/manual-docker-bake
+        uses: tenstorrent/.github/actions/docker-bake-publish@afebb429d7751ccdd0e00d4e7d8121291044b961 # nsexton/docker-sbom
         with:
+          bake-file: dockerfile/docker-bake.hcl
           targets: ${{ inputs.image }}
           set-lines: ${{ steps.bake.outputs.set }}
-          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
-          oras-image: ${{ steps.bake.outputs.oras-image }}
           # Cheap insurance against transient blips - the actual fix for the
           # timeouts we hit is the proxy env forwarded above.
           retries: "2"

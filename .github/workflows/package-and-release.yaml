@@ -44,6 +44,10 @@ permissions:
   actions: write
   id-token: write
   checks: read
+  # publish-release-image (via release-build-test-publish) signs each image's
+  # SBOM (actions/attest).
+  attestations: write
+  artifact-metadata: write
 
 # =============================================================================
 # Default commit SHAs to ignore when analyzing version bumps.

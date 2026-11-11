@@ -429,27 +429,29 @@ jobs:
           TARGETS="${TARGETS%,}"
 
           echo "targets=$TARGETS" >> $GITHUB_OUTPUT
+          # docker-bake-publish requires a revision label on every published image.
+          SET+="*.labels.org.opencontainers.image.revision=$(git rev-parse HEAD)"$'\n'
           {
             echo "set<<EOF"
             echo "$SET"
             echo "EOF"
           } >> $GITHUB_OUTPUT
-          # Consumed directly by manual-docker-bake.sh (SBOM attest generator,
-          # oras binary for SBOM enrichment), not as a build-stage context.
-          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> $GITHUB_OUTPUT
-          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> $GITHUB_OUTPUT
 
       - name: Build and push Ubuntu images
         if: steps.bake.outputs.targets != ''
-        uses: ./.github/actions/manual-docker-bake
+        uses: tenstorrent/.github/actions/docker-bake-publish@afebb429d7751ccdd0e00d4e7d8121291044b961 # nsexton/docker-sbom
+        env:
+          # Bake variables are read from the environment.
+          UBUNTU_VERSION: ${{ fromJson(needs.metadata.outputs.platform_data).version }}
+          PYTHON_VERSION: ${{ fromJson(needs.metadata.outputs.platform_data).python_version }}
         with:
+          bake-file: dockerfile/docker-bake.hcl
           targets: ${{ steps.bake.outputs.targets }}
           set-lines: ${{ steps.bake.outputs.set }}
-          ubuntu-version: ${{ fromJson(needs.metadata.outputs.platform_data).version }}
-          python-version: ${{ fromJson(needs.metadata.outputs.platform_data).python_version }}
+          # Signing needs id-token/attestations permissions on every workflow that
+          # reaches this job (pr-gate, merge-gate, ...). Off until those are granted.
+          attest-sbom: "false"
           harbor-prefix: ${{ inputs.harbor-prefix }}
-          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
-          oras-image: ${{ steps.bake.outputs.oras-image }}
           # See publish-release-image.yaml's "Build and push" step for why:
           # transient network blips against any external host, not a
           # specific-registry problem.
@@ -521,24 +523,24 @@ jobs:
           SET+="manylinux.tags=${MANYLINUX_TAG}"$'\n'
           SET+="manylinux.output=${BAKE_OUTPUT}"$'\n'
 
+          # docker-bake-publish requires a revision label on every published image.
+          SET+="*.labels.org.opencontainers.image.revision=$(git rev-parse HEAD)"$'\n'
           {
             echo "set<<EOF"
             echo "$SET"
             echo "EOF"
           } >> $GITHUB_OUTPUT
-          # Consumed directly by manual-docker-bake.sh (SBOM attest generator,
-          # oras binary for SBOM enrichment), not as a build-stage context.
-          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> $GITHUB_OUTPUT
-          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> $GITHUB_OUTPUT
 
       - name: Build and push ManyLinux image
-        uses: ./.github/actions/manual-docker-bake
+        uses: tenstorrent/.github/actions/docker-bake-publish@afebb429d7751ccdd0e00d4e7d8121291044b961 # nsexton/docker-sbom
         with:
+          bake-file: dockerfile/docker-bake.hcl
           targets: manylinux
+          # Signing needs id-token/attestations permissions on every workflow that
+          # reaches this job (pr-gate, merge-gate, ...). Off until those are granted.
+          attest-sbom: "false"
           set-lines: ${{ steps.bake.outputs.set }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
-          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
-          oras-image: ${{ steps.bake.outputs.oras-image }}
           retries: "2"
           retry-delay-seconds: "15"
 

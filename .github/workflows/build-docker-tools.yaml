@@ -101,9 +101,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.tool }}
-        uses: ./.github/actions/manual-docker-bake
+        uses: tenstorrent/.github/actions/docker-bake-publish@afebb429d7751ccdd0e00d4e7d8121291044b961 # nsexton/docker-sbom
         with:
+          bake-file: dockerfile/docker-bake.hcl
           targets: ${{ matrix.tool }}
           set-lines: |
             ${{ matrix.tool }}.tags=${{ matrix.tag }}
             ${{ matrix.tool }}.output=${{ env.BAKE_OUTPUT }}
+            ${{ matrix.tool }}.labels.org.opencontainers.image.revision=${{ github.sha }}
+          # Signing needs id-token/attestations permissions on every workflow that
+          # reaches this job (pr-gate, merge-gate, ...). Off until those are granted.
+          attest-sbom: "false"
