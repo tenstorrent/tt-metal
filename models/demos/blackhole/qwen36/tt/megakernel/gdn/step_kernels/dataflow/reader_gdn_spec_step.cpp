@@ -926,7 +926,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             // local addresses change per read (same reads, same bytes)
             noc_async_read_one_packet_set_state(z, rb);
 #endif
+#pragma GCC unroll 1
             for (uint32_t j = 0; j < Vs; ++j) {
+#pragma GCC unroll 1
                 for (uint32_t k_ = 0; k_ < kBatchMax; ++k_) {
                     // GSTEP_WYORD: users 0 1 4 5 2 3 6 7 -> each kmq ring slot sees row offsets 0 0 8 8 / 4 4 12 12 (fewer
                     // zeroings); DST 0 / 1 still accumulate 0..3 / 4..7 in order (the compute uses the same order)
@@ -936,6 +938,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                     }
                     kmq.reserve_back(Kt);
                     const uint32_t kb = kmq.get_write_ptr();
+#pragma GCC unroll 1
                     for (uint32_t i = 0; i < Kt; ++i) {
                         cut_pair(kb + i * te, knq_l1 + i * te, knq_l1 + (Kt + i) * te, ub_ * T);
                     }
