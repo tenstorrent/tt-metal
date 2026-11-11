@@ -707,6 +707,14 @@ Tensor reduce(
         (dim.size() < static_cast<size_t>(in_shape.rank()) ||
          input_tensor.logical_volume() > static_cast<uint64_t>(in_shape[-2]) * in_shape[-1]);
 
+    if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
+        // INT32 accumulates in a 32-bit DEST; with no config, both reduce paths default fp32_dest_acc_en on.
+        TT_FATAL(
+            input_tensor.dtype() != DataType::INT32 || !compute_kernel_config.has_value() ||
+                std::get<2>(
+                    ttnn::get_compute_kernel_config_args(input_tensor.device()->arch(), *compute_kernel_config)),
+            "ttnn.sum with INT32 input requires fp32_dest_acc_en=true in the compute kernel config");
+    }
     if (call_fast_nc<reduce_type>(input_tensor.dtype(), scalar)) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;

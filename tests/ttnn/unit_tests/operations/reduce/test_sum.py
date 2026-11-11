@@ -299,6 +299,19 @@ def test_sum_nc_int32_fp32(device, shape, dim, dtype):
         assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=2)
 
 
+@pytest.mark.parametrize("dim", [[0], [3]])
+def test_sum_int32_requires_fp32_dest_acc(device, expect_error, dim):
+    x = ttnn.from_torch(
+        torch.randint(-1000, 1000, (4, 8, 32, 32), dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    config = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=False)
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
+        ttnn.sum(x, dim=dim, keepdim=True, compute_kernel_config=config)
+
+
 @pytest.mark.parametrize("op", [ttnn.sum, ttnn.mean])
 def test_reduce_rank0_dim(device, op):
     torch_input = torch.tensor(3.0, dtype=torch.bfloat16)
