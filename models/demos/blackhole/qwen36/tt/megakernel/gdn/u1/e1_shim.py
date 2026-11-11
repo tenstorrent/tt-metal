@@ -472,6 +472,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         go_r = go_r.replace("{GW_OFF}", str(len(rct)))
         rct = rct + ttnn.TensorAccessorArgs(GO["w"]).get_compile_time_args()
         GO_RDALL = GO_RD and os.environ.get("E1_GO_RDALL", "1") == "1"
+        GO_RINGEARLY = GO_RDALL and os.environ.get("E1_GO_RINGEARLY", "1") == "1"
         go_wr = ""
         if GO_RDALL:
             # E1_GO_RDALL (default on with E1_GO_RD): the whole gdn_out tail (A push, wait the matmul, debug copy, scatter,
@@ -552,15 +553,19 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'void gdn_out_signal() {{ {osig_r} }}\n' if out_rd else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
         + ('  gdn_cut_reset();\n' if cut_fast else '') +
+        (go_r.replace("(L_)", "0u") if GO and GO_RINGEARLY else '') +
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_l = L;\n'
         f'    for (uint32_t t = 0; t < {nR}; ++t) crta[{CRTA0} + t] = g_ab[{OLR} + L * {nR} + t];\n'
         f'    reader<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {K}, {Lw}, {Ct}, {z_tile0}, {ab_page}, {W}, '
         f'1, 1, {bits(l2_eps)}u, {bits(norm_eps)}u, {ctrl_bytes}, {hs}u, 0, {VB}>(g_ab[0], g_ab[1], g_ab[2], g_ab[3]);\n'
         # gdn_out ring of layer L right after the step's reads of layer L (the slot of L - 1 was popped at the end of L - 1):
         # never blocks, and the next layer's state-first prefetch is not held behind it
-        + (go_r.replace("(L_)", "L") if GO else '') +
+        + (go_r.replace("(L_)", "L") if GO and not GO_RINGEARLY else '') +
         (go_rd.replace("{OGO}", str(OGO)) if GO and GO_RD else '') +
         (go_wr.replace("{OSIG}", osig_rd) if GO and GO_RDALL else '') +
+        # E1_GO_RINGEARLY: the next layer's ring right after this layer's gdn_out tail (the compute popped ring L before the
+        # scatter, so the reserve never blocks); the handoff then no longer waits behind a 97 KB ring read (12 us at u8)
+        (f'    if (L + 1 < {NG}) {{\n' + go_r.replace("(L_)", "(L + 1)") + '    }\n' if GO and GO_RINGEARLY else '') +
         f'  }}\n'
         # GDN_OUT_RD: the reader's out signals retire here; the aggregator's word resets once its last wait passed
         + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg else '') if out_rd else '')
