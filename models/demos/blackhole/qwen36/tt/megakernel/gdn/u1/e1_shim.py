@@ -1,3 +1,4 @@
+import re
 """E1a: run gdn_spec_step's own Metal2 kernels (prefixed + lever-1 path: K4, SFPU gates, VB 4) as a CLASSIC generic_op,
 so the GDN role binaries of the engine can host the unchanged step code (spec §17).
 
@@ -461,10 +462,20 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     if GO:   # gdn_out accessors appended after the step's (reader: the weight slices; writer: the debug output copy)
         go_r = go_r.replace("{GW_OFF}", str(len(rct)))
         rct = rct + ttnn.TensorAccessorArgs(GO["w"]).get_compile_time_args()
-        go_w = go_w.replace("{OUT_OFF}", str(woff[WRITER_TENSORS.index("out")])).replace("{DBG_OFF}", str(len(wct)))
-        wct = wct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
+        GO_RDALL = GO_RD and os.environ.get("E1_GO_RDALL", "1") == "1"
+        go_wr = ""
+        if GO_RDALL:
+            # E1_GO_RDALL (default on with E1_GO_RD): the whole gdn_out tail (A push, wait the matmul, debug copy, scatter,
+            # out_ready) also runs on the reader (NOC1) right after the handoff: on the writer it waited for writer<>()'s
+            # trailing writes (S' / stash; wr_out ~60 us at u8) although A was ready ~25 us earlier
+            go_wr = go_w.replace("{DBG_OFF}", str(len(rct)))
+            rct = rct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
+            go_w = ""
+        else:
+            go_w = go_w.replace("{OUT_OFF}", str(woff[WRITER_TENSORS.index("out")])).replace("{DBG_OFF}", str(len(wct)))
+            wct = wct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
         OGO = 29 + NG * (len(READER_TENSORS) + len(WRITER_TENSORS)) + 2   # gdn_out payload words: after the per-layer tensors + OAG / OAG_ME
-        go_r, go_w, go_c, go_local = (x.replace("{OGO}", str(OGO)) for x in (go_r, go_w, go_c, go_local))
+        go_r, go_w, go_c, go_local, go_wr = (x.replace("{OGO}", str(OGO)) for x in (go_r, go_w, go_c, go_local, go_wr))
     hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
     open(hr, "w").write(_bind_header(ids, READER_TENSORS, roff, CRTA0))
     open(hw, "w").write(_bind_header(ids, WRITER_TENSORS, woff, CRTA0))
@@ -504,6 +515,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                              f'{S["out_ready"]}), {NC_}, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5)) if r[4])
         osig = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1); '
                 f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {NC_}u * (g_gdn_l + 1)); {sig_n} noc_async_atomic_barrier(); }}')
+    # the out_ready signal issued from the reader (NOC1): loop variable g_l, multicast corners swapped for NOC1
+    osig_rd = re.sub(r"get_noc_multicast_addr\((\w+), (\w+), (\w+), (\w+), ", r"get_noc_multicast_addr(\3, \4, \1, \2, ",
+                     osig.replace("g_gdn_l", "g_l"))
     AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
     CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
     tr = os.path.join(gen_dir, "g2_reader.cpp")
@@ -523,6 +537,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # never blocks, and the next layer's state-first prefetch is not held behind it
         + (go_r.replace("(L_)", "L") if GO else '') +
         (go_rd.replace("{OGO}", str(OGO)) if GO and GO_RD else '') +
+        (go_wr.replace("{OSIG}", osig_rd) if GO and GO_RDALL else '') +
         f'  }}\n}}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
     open(tw, "w").write(
