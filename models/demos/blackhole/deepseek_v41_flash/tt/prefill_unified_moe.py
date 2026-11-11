@@ -440,7 +440,11 @@ class DSV41UnifiedMoE:
                         fp32_dest_acc_en=False,  # the fused op refuses fp32 dest accumulation (device_operation.cpp:284)
                         packer_l1_acc=False,
                     ),
-                    activation=ttnn.RoutedExpertActivation.SituGlu,
+                    activation=(
+                        ttnn.RoutedExpertActivation.ClampedSiluGlu
+                        if os.environ.get("DSV41_UNI_HYBRID_ACT", "situ") == "clamped"  # native activation of the T16 C++ patch (moe_fused_swiglu accepts ClampedSiluGlu); default: SituGlu + kernel overlay
+                        else ttnn.RoutedExpertActivation.SituGlu
+                    ),
                     output=out,
                     expert_region_offsets=region_offsets,
                     read_x_at_offset=True,
