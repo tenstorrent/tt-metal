@@ -55,9 +55,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     using enum DataType;
     switch (val) {
         case ADD:
-        case SUB:
         case RSUB:
             return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+        case SUB:
+            return !fast_and_approximate_mode ||
+                   (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16 || a == UINT8 || a == INT8));
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
