@@ -2149,7 +2149,17 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         }
 
         ksqs.push_back(2 * Vs);
-#if GDN_SP_LATE
+#if GDN_EARLY_REPLAY
+        // the WY coefficient tiles (NGB G E BETA NBE EYE) come from the writer's wr_pgates AFTER in_ready, behind the
+        // W / C_u tiles the replay waited for: wait for all kCoefN before their first use (N / PO below). Without this
+        // the only ordering was the spd wait (the writer's S' write sat after wr_pgates); with GDN_SP_LATE / GDN_SP_RD
+        // the compute could read G / NGB before they landed (out-only mismatch on one core's block, rows 0..2)
+        coef.wait_front(kCoefN);
+#endif
+#ifndef GDN_SP_WAIT
+#define GDN_SP_WAIT 0  // diagnostic (needs SP_RD): the compute still waits spd + pops sp here, as without SP_LATE
+#endif
+#if GDN_SP_LATE && !GDN_SP_WAIT
         g_sp_pending = nb * KVs;  // popped at the next layer's replay (or gdn_sp_drain) once the writer's S' write is out
 #else
         {

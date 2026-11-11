@@ -21,6 +21,11 @@ assert KDIR.startswith("/"), "set E1_KDIR to the private kernels dir (absolute)"
 bits = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]
 
 
+# ctrl page bytes (B + B*Nv u32 = 64 words since v1.13): the ctrl_r / ctrl_w CBs must hold the WHOLE page. At 64 B the
+# reader's 256 B ctrl read overran ctrl_r by 192 B into the next CB (tmp: rows 0..2 of its first tile, the compute's
+# squares for the RMS norm) -- harmless while the next layer's rd_ctrl ran before the compute's c_D, an out-only
+# mismatch (one core's block, rows 0..2) once SP_LATE let the compute reach c_D first
+CTRL_B = 256
 # engine GDN role (build_engine, lean=True): DFBs dropped from the table and bound to another id instead (spec v1.50:
 # frees 3 CB ids on the GDN cores for gdn_out). ctrl_w / gnew -> gprev: writer-local, never pushed across a gprev use
 # (ctrl_w's reserve/push/pop runs at the writer's layer start, before wr_rcoef stages into gprev; gnew is dead code
@@ -45,7 +50,7 @@ def _dfb_table(Kt, Vt, T, VB, out_b16, batch, st_ring, kmq_users):
         # GDN_ST_RING (batch): the state / stash slots are a ring of st_ring users (streamed per user)
         ("state_in", (st_ring or NBm) * KVs, t32, F32), ("ktp_in", (st_ring or NBm) * Kt, t32, F32),
         ("up_in", (st_ring or NBm) * Vs, t32, F32),
-        ("knq", 2 * Kt, t32, F32), ("vc", Vs, t32, F32), ("zs", Vt, t32, F32), ("ctrl_r", 1, 64, U32),
+        ("knq", 2 * Kt, t32, F32), ("vc", Vs, t32, F32), ("zs", Vt, t32, F32), ("ctrl_r", 1, CTRL_B, U32),
         # compute-local
         ("tmp", max(Kt, Vt), t32, F32), ("stats", 1, t32, F32), ("scratch", 1, t32, F32), ("inv", 1, t32, F32),
         ("kt", Kt, t32, F32), ("gq", Vt, t32, F32), ("on", Vt, t32, F32), ("sp", NBm * KVs, t32, F32),
@@ -56,7 +61,7 @@ def _dfb_table(Kt, Vt, T, VB, out_b16, batch, st_ring, kmq_users):
         ("out", Vs, t16 if out_b16 else t32, B16 if out_b16 else F32), *([] if batch else [("dnew", KVs, t32, F32)]),
         ("kt_out", (NBm * ((Kt + VB - 1) // VB)) if batch else Kt, t32, F32), ("u_out", Vs, t32, F32), ("acc_mine", Vs, t32, F32),
         # writer
-        ("ctrl_w", 1, 64, U32), ("bounce", Ch, t16, B16), ("gprev", 1, t32, F32), ("gnew", 1, t32, F32),
+        ("ctrl_w", 1, CTRL_B, U32), ("bounce", Ch, t16, B16), ("gprev", 1, t32, F32), ("gnew", 1, t32, F32),
         ("acc_x", Vt, t32, F32), ("coef", 15 if batch else 8, t32, F32),
     ] + ([("l12", 1, t32, F32)] if T > 4 else []) + ([("kmq", kmq_users * Kt, t32, F32), ("kts", NBm * ((Kt + VB - 1) // VB), t32, F32),
                                                 # stg: [U_u (8 * Vs) | the decay pages of users u = s mod VB]
@@ -142,6 +147,7 @@ def build(dev, cores, g, B, T, Kt, Vt, VB, tens, kopts, scale, l2_eps, norm_eps,
     z_tile0, ab_page = (2 * Nk * Kt * 32 + Nv * Vt * 32) // 32, g.QKVZ // 32
     # one row-major uint32 page [1, N]: N*4 bytes (64 at B = 1, 256 at B = 8: 1 + B + B*Nv words padded to 16)
     ctrl_bytes = int(tens["ctrl"].shape[-1]) * 4
+    assert ctrl_bytes <= CTRL_B, (ctrl_bytes, CTRL_B)  # the ctrl_r / ctrl_w CBs hold the whole ctrl page
     hs = 4294967295
     TB, TM = (1, 1) if RT_BM else (B, M)   # template B / M: fixed under GDN_RT_BM (the runtime values are args 4/5, 11/12)
     tr = os.path.join(gen_dir, "e1_reader.cpp")
@@ -279,6 +285,35 @@ def argblock_tensor(dev, cores, payloads, kind=AB_KIND_GDN):
     return ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=mc, **kw)
 
 
+def _audit_cb_transfers(tab, layers, Kt, Vt, T, VB):
+    """Static audit (v1.58 ask): every NoC transfer of the GDN role that lands in a CB fits the CB's page / slot.
+    A 64 B ctrl_r CB under a 256 B ctrl read overran into tmp (the out-only race); this catches that class at build time."""
+    import ttnn
+    ent = {n: (e, nb) for n, e, nb, _ in tab}
+    tile_b = lambda t: 32 * 32 * {ttnn.float32: 4, ttnn.bfloat16: 2, ttnn.uint32: 4}[t.dtype]
+    Vs = Vt // VB
+    for ly in layers:
+        ctrl_b = int(ly["ctrl"].shape[-1]) * 4
+        # rd_ctrl / wr ctrl: one whole ctrl page into ctrl_r / ctrl_w (lean: ctrl_w -> gprev, 4 KB)
+        assert ctrl_b <= ent["ctrl_r"][1], ("ctrl_r", ctrl_b, ent["ctrl_r"])
+        assert ctrl_b <= ent.get("ctrl_w", ent["gprev"])[1], ("ctrl_w", ctrl_b)
+        # state / stash pages (ring, fp32 tiles) into state_in / ktp_in / up_in / gprev (decay page) / S' out of sp
+        rb = tile_b(ly["ring"])
+        for n in ("state_in", "ktp_in", "up_in", "gprev", "sp", "stg", "kt_out", "u_out"):
+            assert rb == ent[n][1], (n, rb, ent[n])
+        # pre tiles (knq | vc | zs | coefficient + gate pages) into knq / vc / zs / coef / gprev
+        pb = tile_b(ly["pre"])
+        for n in ("knq", "vc", "zs", "coef", "gprev"):
+            assert pb == ent[n][1], (n, pb, ent[n])
+        # the norm weight: row 0 (entry / 64 bytes per face row) of a bf16 tile into w_in
+        assert tile_b(ly["weight"]) == ent["w_in"][1], ("w_in", tile_b(ly["weight"]), ent["w_in"])
+        # out rows / whole out tiles from the out CB into the out tensor (same tile format)
+        assert tile_b(ly["out"]) == ent["out"][1], ("out", tile_b(ly["out"]), ent["out"])
+    # slot counts: the per-layer reservations fit the CBs
+    assert ent["coef"][0] >= 15 and ent["kts"][0] >= 8 * ((Kt + VB - 1) // VB) and ent["kmq"][0] >= Kt, (ent["coef"], ent["kts"], ent["kmq"])
+    assert ent["stg"][0] >= 8 * Vs + (8 + VB - 1) // VB and ent["acc_x"][0] >= Vt and ent["sp"][0] >= 8 * Kt * Vs
+
+
 def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_eps, gen_dir, pre_s, sems, out_target,
                  out_b16=True, kdir=None, st_ring=None, attn_n=0, skip_cb_ids=(34, 35, 37, 39), gdnout=None):
     """The GDN role's kernels / CBs / io for the engine program. layers: one tensor dict per GDN layer of the pass (keys
@@ -299,9 +334,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # GDN_EARLY_REPLAY (default on): the writer builds W / C_u before in_ready (its own in_ready wait, GDN_W_IN_WAIT),
     # the compute replays before the prefix inputs
     early = os.environ.get("E1_EARLY_REPLAY", "1") == "1"
-    # GDN_SP_LATE (default OFF until the out race is root-caused): S' leaves sp after the output rows (writer), the compute pops sp at the next layer's
+    # GDN_SP_LATE (default on): S' leaves sp after the output rows (writer), the compute pops sp at the next layer's
     # replay / program end -- the S' DRAM write is off the step's critical path
-    sp_late = os.environ.get("E1_SP_LATE", "0") == "1"
+    sp_late = os.environ.get("E1_SP_LATE", "1") == "1"
     # GDN_RCOEF_FAST (default on, needs early): wr_rcoef reads each user's decay rows (256 B) under one barrier and fills
     # C_u by NoC doubling instead of 1024 RISC stores per user (~36 us of writer time per layer at u8)
     rcoef_fast = os.environ.get("E1_RCOEF_FAST", "1") == "1"
@@ -309,6 +344,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     sp_rd = sp_late and os.environ.get("E1_SP_RD", "0") == "1"
     # GDN_ZS_LATE (default on, needs early): the compute waits zs right before the gated output, not before the replay
     zs_late = early and os.environ.get("E1_ZS_LATE", "1") == "1"
+    # GDN_CUT_FAST (default on): kts / kmq slots re-zero only the previous occupant's rows (one barrier per chunk)
+    cut_fast = os.environ.get("E1_CUT_FAST", "1") == "1"
+    # GDN_OUT_TILE (default on): at B * T == 32 the out tiles go out as whole tiles (1 write each, same bytes)
+    out_tile = os.environ.get("E1_OUT_TILE", "1") == "1"
     # lean CB table (E1_LEAN, default on): 3 ids freed (LEAN_ALIAS) and kmq 4 -> 2 user slots (-32 KB)
     lean = os.environ.get("E1_LEAN", "1") == "1"
     tab = dfb_table(Kt, Vt, T, VB, out_b16, True, st_ring, lean=lean, kmq_users=2 if lean else 4)
@@ -401,7 +440,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         rct = rct + ttnn.TensorAccessorArgs(GO["w"]).get_compile_time_args()
         go_w = go_w.replace("{OUT_OFF}", str(woff[WRITER_TENSORS.index("out")])).replace("{DBG_OFF}", str(len(wct)))
         wct = wct + ttnn.TensorAccessorArgs(GO["dbg"]).get_compile_time_args()
-        OGO = 29 + NG * (len(READER_TENSORS) + len(WRITER_TENSORS))   # gdn_out payload words follow the per-layer tensors
+        OGO = 29 + NG * (len(READER_TENSORS) + len(WRITER_TENSORS)) + 2   # gdn_out payload words: after the per-layer tensors + OAG / OAG_ME
         go_r, go_w, go_c = (x.replace("{OGO}", str(OGO)) for x in (go_r, go_w, go_c))
     hr, hw, hc = (os.path.join(gen_dir, f"gbind_{k}.h") for k in ("r", "w", "c"))
     open(hr, "w").write(_bind_header(ids, READER_TENSORS, roff, CRTA0))
@@ -410,6 +449,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     W = g.W // 32
     z_tile0, ab_page = (2 * Nk * Kt * 32 + Nv * Vt * 32) // 32, g.QKVZ // 32
     ctrl_bytes = int(tens["ctrl"].shape[-1]) * 4
+    assert ctrl_bytes <= CTRL_B, (ctrl_bytes, CTRL_B)  # the ctrl_r / ctrl_w CBs hold the whole ctrl page
+    _audit_cb_transfers(tab, layers, Kt, Vt, T, VB)
     hs = 4294967295
     nR, nW = len(READER_TENSORS), len(WRITER_TENSORS)
     OW, OC, OLR = R_ARGS, R_ARGS + W_ARGS, R_ARGS + W_ARGS + C_ARGS
@@ -422,21 +463,24 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         osig = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
                         f'{S["out_ready"]}), 1, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5))
                         if r[4])
-    go_osig = osig
-    if GO and GO.get("gdnb") and os.environ.get("E1_GO_AGG", "1") == "1":
-        # gdn_out done -> out_ready through ONE aggregator (GDN core 0): every core += 1 on its gdnb word, the aggregator
-        # waits for all 24 and sends the engine signal once with value 24 (+ atomic barrier). 24 cores x 2 multicast
-        # atomics to 96 engine cores each sat ~50 us in the NoC behind the writers' next-layer traffic (u8, 11-10).
-        AX, AY = GO["gdn_xy"][0]
+    # E1_OSIG_AGG (default on): out_ready through ONE aggregator (GDN core 0). Every core += 1 on an argblock word of core 0
+    # (same L1 address on every core: OAG), core 0 waits 24 (L + 1) and sends the engine signal once with value 24, then
+    # retires it (atomic barrier). 24 cores x k multicast atomics each lagged ~20 us in the NoC behind the writers'
+    # next-layer traffic (u8: last out signal -> stall end 18-21 us). Core 0 resets the word at program end (every
+    # increment of the pass has arrived once its last wait passed). Same idea as gdn_out a9549c3a166.
+    agg = os.environ.get("E1_OSIG_AGG", "1") == "1"
+    OAG = OLW + NG * nW          # payload word: the aggregation counter (0 at build)
+    OAG_ME = OAG + 1             # payload word: 1 on the aggregator core
+    AGX, AGY = (lambda q: (q.x, q.y))(dev.worker_core_from_logical_core(cores[0]))
+    if agg:
         NC_ = len(cores)
         if len(out_target) == 2:
             sig_n = f'noc_semaphore_inc(get_noc_addr({out_target[0]}u, {out_target[1]}u, {S["out_ready"]}), {NC_});'
         else:
             sig_n = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
                              f'{S["out_ready"]}), {NC_}, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5)) if r[4])
-        go_osig = (f'noc_semaphore_inc(get_noc_addr({AX}u, {AY}u, {GO["gdnb"]}u), 1);\n'
-                   f'    if (my_x[0] == {AX}u && my_y[0] == {AY}u) {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdnb"]}u, {NC_}u * (L + 1)); '
-                   f'{sig_n} noc_async_atomic_barrier(); }}')
+        osig = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1); '
+                f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {NC_}u * (g_gdn_l + 1)); {sig_n} noc_async_atomic_barrier(); }}')
     AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
     CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
     tr = os.path.join(gen_dir, "g2_reader.cpp")
@@ -447,7 +491,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '') +
         f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n'
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
-
+        + ('  gdn_cut_reset();\n' if cut_fast else '') +
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_l = L;\n'
         f'    for (uint32_t t = 0; t < {nR}; ++t) crta[{CRTA0} + t] = g_ab[{OLR} + L * {nR} + t];\n'
         f'    reader<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {K}, {Lw}, {Ct}, {z_tile0}, {ab_page}, {W}, '
@@ -473,14 +517,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n')
         + f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
         + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n"
-        + (go_w.replace("{OSIG}", go_osig) if GO else '') + "  }\n"
+        + (go_w.replace("{OSIG}", osig) if GO else '') + "  }\n"
         f'  noc_async_atomic_barrier();\n'
         f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached);\n'
         f'  // attn_kv: the engine raises it twice per attention layer (start, SDPA end), {attn_n} attention layers\n'
         + (f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["attn_kv"]}, {2 * attn_n});\n' if attn_n else '')
         + "".join(f'  *(volatile tt_l1_ptr uint32_t*){S[k]} = 0;\n' for k in ("in_ready", "attn_kv", "vb0", "vb1"))
         + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdna"]}u = 0;\n  *(volatile tt_l1_ptr uint32_t*){GO["xow"]}u = 0;\n' if GO else '')
-        + (f'  *(volatile tt_l1_ptr uint32_t*){GO["gdnb"]}u = 0;\n' if GO and GO.get("gdnb") else '')
+        + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg else '')
         + '}\n')
     tc = os.path.join(gen_dir, "g2_compute.cpp")
     open(tc, "w").write(
@@ -498,6 +542,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     d_r = [("GDN_FAST", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_EARLY_SRC", "1"), ("GDN_LAZY", "1"),
            ("GDN_PREFIXED", "1"), ("GDN_PRE_W", str(pre_w)), ("GDN_PRE_S", str(pre_s)), ("GDN_STATE_FIRST", "1"),
            ("GDN_IN_WAIT", "1"), ("GDN_ST_RING", str(st_ring))] + common + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
+        [("GDN_CUT_FAST", "1")] if cut_fast else []) + (
         [("GDN_SP_RD", "1")] if sp_rd else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
@@ -505,7 +550,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
            ("GDN_PRE_S", str(pre_s)), ("GDN_LOOP", "1"), ("GDN_EXT_SEM", "1"), ("GDN_OUT_SIGNAL", "1")] + ([("GDN_OUT_LOCAL", str(GO_LOCAL))] if GO and GO_LOCAL else []) + common + (
         [("GDN_EARLY_REPLAY", "1"), ("GDN_W_IN_WAIT", "1")] if early else []) + ([("GDN_SP_LATE", "1")] if sp_late else []) + (
         [("GDN_RCOEF_FAST", "1")] if early and rcoef_fast else []) + ([("GDN_SP_RD", "1")] if sp_rd else [])
-    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
+    d_c = [("GDN_BATCH", "1"), ("GDN_ST_RING", str(st_ring))] + ([("GDN_SP_WAIT", "1")] if sp_rd and os.environ.get(
+        "E1_SP_WAIT", "0") == "1" else []) + ([("GDN_NO_EPS_L2", "1")] if lean else []) + (
         [("GDN_ZS_LATE", "1")] if zs_late else []) + ([("GDN_EARLY_REPLAY", "1")] if early else []) + (
         [("GDN_SP_LATE", "1")] if sp_late else []) + [(k, "1") for k in ("GDN_FAST", "GDN_FP32_STATE", "GDN_GATE_SCALARS", "GDN_LAZY",
                                                     "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
@@ -524,6 +570,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         pl = [0, h, 0, s, B, M, 0, 0] + [0, h, s] + pxy + [B, M, 0, 0] + [0, 0, s, B, 0, 0]
         pl += [lt[rmap[t]].buffer_address() for lt in layers for t in READER_TENSORS]
         pl += [lt[wmap[t]].buffer_address() for lt in layers for t in WRITER_TENSORS]
+        assert len(pl) == OAG, (len(pl), OAG)
+        pl += [0, 1 if i == 0 else 0]   # OAG (aggregation counter), OAG_ME (aggregator flag)
         if GO:   # [nt, slice base page, output tiles (rot order) x maxt]
             assert len(pl) == OGO, (len(pl), OGO)
             pl += [GO["nt"][i], GO["page"][i]] + (list(GO["tiles"][i]) + [0] * GO["maxt"])[:GO["maxt"]]
@@ -555,5 +603,5 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     io = [abt] + [x for lt in layers for x in (lt["win_a"], lt["win_b"], lt["ring"], lt["ctrl"], lt["taps"], lt["dtb"],
                                                 lt["nea"], lt["weight"], lt["pre"], lt["out"])] + [layers[0]["qkv"]] + ([GO["w"], GO["dbg"]] if GO else [])
     info = dict(cb_ids=sorted({ids[n][0] for n, _, _, _ in tab}), cb_bytes=sum(e * nb for _, e, nb, _ in tab) + (sum(c_.total_size for c_ in cbs[-3:]) if GO else 0),
-                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late)
+                ab_words=len(payloads[0]), NG=NG, st_ring=st_ring, early_replay=early, sp_late=sp_late, lean=lean, rcoef_fast=rcoef_fast, sp_rd=sp_rd, zs_late=zs_late, cut_fast=cut_fast, out_tile=out_tile)
     return dict(kernels=ks, cbs=cbs, io=io, info=info)
