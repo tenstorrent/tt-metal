@@ -416,7 +416,7 @@ void kernel_main() {
 #define MK_GC_SCALE() do {} while (0)
 #endif
     // rstd' from the CB 20 stand-in (same producer as the qkv PROJ): rsqrt(Σ partials / H + eps), col 0 -> CB_VRT
-    auto v_rstd = [&]() {
+    auto v_rstd = [&]() __attribute__((noinline)) {   // 2 call sites (mixer qkv / gdn_in, MLP): one copy (STREAM text)
 #if defined(MK_AR_RSTD)
         // real rstd: the Σ tile (rsp tile 0, bound as CB_VRSA) holds row k = K-row k's per-token partial (row form, fp32).
         // UnpackToDestFp32 copy (CB 43) -> SFPU column sum (row 0 = Σ_k S[k][c]) -> in-DST transpose (column 0 per token row).
