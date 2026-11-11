@@ -84,11 +84,11 @@ void kernel_main() {
     const uint32_t pgu_layer = get_arg_val<uint32_t>(a++);
     uint32_t gs[NGS];
     for (uint32_t i = 0; i < NGS; ++i) gs[i] = get_arg_val<uint32_t>(a++);
-    uint32_t kv_addr[NL];
-    for (uint32_t L = 0; L < NL; ++L) kv_addr[L] = get_arg_val<uint32_t>(a++);
+    uint32_t kv_addr[MKA_KVN];
+    for (uint32_t L = 0; L < MKA_KVN; ++L) kv_addr[L] = get_arg_val<uint32_t>(a++);
 #if defined(MKA_KVPROD)
-    uint32_t kvv_addr[NL];   // paged_v per layer (kv_addr = paged_k)
-    for (uint32_t L = 0; L < NL; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
+    uint32_t kvv_addr[MKA_KVN];   // paged_v per layer (kv_addr = paged_k)
+    for (uint32_t L = 0; L < MKA_KVN; ++L) kvv_addr[L] = get_arg_val<uint32_t>(a++);
 #endif
 #if defined(MKA_RQPOS)
 #if defined(MKA_RQBAL)
@@ -718,11 +718,11 @@ void kernel_main() {
             const auto kv = TensorAccessor(kv_args, rq_attn(4 + 2 * (MKA_ATT0 + A)), KVTB);
             const auto kvv = TensorAccessor(kv_args, rq_attn(5 + 2 * (MKA_ATT0 + A)), KVTB);
 #else
-            const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
+            const auto kv = TensorAccessor(kv_args, kv_addr[MKA_KVI(L)], KVTB);
 #endif
 #if defined(MKA_RQPOS)
 #elif defined(MKA_KVPROD)
-            const auto kvv = TensorAccessor(kv_args, kvv_addr[L], KVTB);
+            const auto kvv = TensorAccessor(kv_args, kvv_addr[MKA_KVI(L)], KVTB);
             const uint32_t kvn = MKA_BPU;
 #else
             const auto& kvv = kv;

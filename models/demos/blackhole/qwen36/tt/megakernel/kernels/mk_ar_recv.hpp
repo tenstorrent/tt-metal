@@ -218,6 +218,13 @@ struct Recv {
     }
 
     // one all-reduce (index it within the pass)
+#if defined(MKAR_ATYPE) && !defined(MKAR_ABIT)
+#if defined(MKAR_ATYPE_PER)   // NL64: 2 NL > 64 ARs per pass; the AR type pattern repeats with period 64 (host-asserted)
+#define MKAR_ABIT(it) ((static_cast<uint64_t>(MKAR_ATYPE) >> ((it) & 63u)) & 1)
+#else
+#define MKAR_ABIT(it) ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1)
+#endif
+#endif
 #if defined(MKAR_ATYPE)   // engine MK_REAL_AAR: two call sites (MLP AR, attention AR) share one copy (EXT text budget)
     __attribute__((noinline)) void iter(uint32_t it) {
 #else
@@ -268,7 +275,7 @@ struct Recv {
         noc_async_read_set_trid(MKAR_TRID);
 #endif
 #if defined(MKAR_ATYPE)
-        const uint32_t in_addr = ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
+        const uint32_t in_addr = (MKAR_ABIT(it)) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
 #endif
         size_t s_idx = seg_base;
         for (uint32_t s = 0; s < num_segs; s++) {

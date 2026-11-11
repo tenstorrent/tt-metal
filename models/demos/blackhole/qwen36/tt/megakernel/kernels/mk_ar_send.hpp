@@ -91,17 +91,24 @@ struct SendReader {
 #if defined(MKAR_SZONE)
         DeviceZoneScopedN("S-RIT");
 #endif
+#if defined(MKAR_ATYPE) && !defined(MKAR_ABIT)
+#if defined(MKAR_ATYPE_PER)   // NL64: 2 NL > 64 ARs per pass; the AR type pattern repeats with period 64 (host-asserted)
+#define MKAR_ABIT(it) ((static_cast<uint64_t>(MKAR_ATYPE) >> ((it) & 63u)) & 1)
+#else
+#define MKAR_ABIT(it) ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1)
+#endif
+#endif
 #if defined(MKAR_ATYPE)   // engine (MK_REAL_AAR): bit it set = an attention AR, its input is the wo output CB on the owners
         // (the CB also spans these sender cores, so its local address is the owners' address)
 #if defined(MKAR_S_PUBA)   // hosted (GDN24): no CB_AIN on this core; the owners publish its address at init
         uint32_t in_addr = this->in_addr;
-        if ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) {
+        if (MKAR_ABIT(it)) {
             volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKAR_S_PUBA);
             while (*pw == 0) {}
             in_addr = *pw;
         }
 #else
-        const uint32_t in_addr = ((static_cast<uint64_t>(MKAR_ATYPE) >> it) & 1) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
+        const uint32_t in_addr = (MKAR_ABIT(it)) ? get_read_ptr(MKAR_CB_AIN) : this->in_addr;
 #endif
 #endif
         CircularBuffer cb_rs(MKAR_S_CB_RS);
