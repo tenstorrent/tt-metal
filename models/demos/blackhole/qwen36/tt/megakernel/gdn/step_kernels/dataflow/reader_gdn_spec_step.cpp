@@ -30,6 +30,29 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
+#ifndef GDN_GTEXT2
+#define GDN_GTEXT2 0  // GTEXT2 (E1_GTEXT2, default on under E1_GB): GDN-role code-size trims (0 = the old binaries)
+#endif
+#ifndef GDN_LK_DEFINED
+#define GDN_LK_DEFINED
+#if GDN_GTEXT2
+// GTEXT2: on WH/BH a DFB scoped lock only records NoC-debug events (lock_acquire_impl / lock_release_impl) and hands out the
+// fifo pointer; copying its release lambda pulled memcpy (300 B) + an out-of-line lock clone into the GDN DM binaries.
+// GdnLk = the same pointer, no events (the debug-only lock tracking is lost; values / order unchanged).
+struct GdnLk {
+    uint32_t p;
+    template <typename T = uint32_t>
+    CoreLocalMem<T> get_ptr() const {
+        return CoreLocalMem<T>(p);
+    }
+};
+#define GDN_WLK(d, n) (GdnLk{(d).get_write_ptr()})
+#define GDN_RLK(d, n) (GdnLk{(d).get_read_ptr()})
+#else
+#define GDN_WLK(d, n) (d).scoped_write_lock(n)
+#define GDN_RLK(d, n) (d).scoped_read_lock(n)
+#endif
+#endif
 
 #ifndef GDN_SP_RD
 #define GDN_SP_RD 0  // engine GDN role (BATCH + SP_LATE): S' is written by this reader (NOC1) after the kmq stream, not by
@@ -101,6 +124,33 @@ void gdn_hold_publish(uint32_t live);  // the including TU: this layer's live-us
 uint32_t gdn_ktdd_peer(uint32_t p);  // the including TU: NoC (x << 16 | y) of value block p of this core's head
 volatile tt_l1_ptr uint32_t* gdn_ktdd_sem();  // the including TU: the 2 counter words (same address on every GDN core)
 static uint32_t g_ktdd_l = 0;  // GDN layers done by this reader (reset with gdn_stn_reset)
+#if GDN_GTEXT2
+// GTEXT2: one peer loop for both uses. a != 0: the user's two K^T faces at L1 a and a + 2048 -> the same addresses of every
+// peer except block s (face-major, exactly as the two gdn_ktdd_fwd calls); a == 0: +1 on counter word w of every peer except
+// block s (as gdn_ktdd_bump)
+__attribute__((noinline)) void gdn_ktdd_peers(uint32_t s, uint32_t vb, uint32_t a, uint32_t w) {
+#pragma GCC unroll 1
+    for (uint32_t f = 0; f < (a ? 4096u : 1u); f += 2048) {
+        for (uint32_t p = 0; p < vb; ++p) {
+            if (p != s) {
+                const uint32_t xy = gdn_ktdd_peer(p);
+                if (a) {
+                    noc_async_write(a + f, get_noc_addr(xy >> 16, xy & 0xFFFFu, a + f), 1024);
+                } else {
+                    noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, (uint32_t)(gdn_ktdd_sem() + w)), 1);
+                }
+            }
+        }
+    }
+}
+#define GDN_KTDD_BUMP(s_, vb_, w_) gdn_ktdd_peers(s_, vb_, 0u, w_)
+#define GDN_KTDD_FWD2(s_, vb_, a_) gdn_ktdd_peers(s_, vb_, a_, 0u)
+#else
+#define GDN_KTDD_BUMP(s_, vb_, w_) gdn_ktdd_bump(s_, vb_, w_)
+#define GDN_KTDD_FWD2(s_, vb_, a_) \
+    gdn_ktdd_fwd(s_, vb_, a_);     \
+    gdn_ktdd_fwd(s_, vb_, (a_) + 2048)
+#endif
 // +1 on counter word `w` (0 / 1) of every peer except block s (one call site: code size)
 __attribute__((noinline)) void gdn_ktdd_bump(uint32_t s, uint32_t vb, uint32_t w) {
     for (uint32_t p = 0; p < vb; ++p) {
@@ -402,7 +452,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         noc.async_read(ctrl_acc, ctrl_r, ctrl_bytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         {
-            auto lock = ctrl_r.scoped_write_lock(1);
+            auto lock = GDN_WLK(ctrl_r, 1);
             auto p = lock.template get_ptr<volatile uint32_t>();
             par = p[0] & 1u;
             mi = p[1 + u];
@@ -525,7 +575,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     csel.reserve_back(2);
     zero_reserved(csel, noc, 2);
     {
-        auto lock = csel.scoped_write_lock(2);
+        auto lock = GDN_WLK(csel, 2);
         auto p16 = lock.template get_ptr<volatile uint16_t>();
         for (uint32_t j = 0; j < 32; ++j) {
             set_one(p16, 0, h & 31u, j);
@@ -537,7 +587,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     rsel.reserve_back(T);
     zero_reserved(rsel, noc, T);
     {
-        auto lock = rsel.scoped_write_lock(T);
+        auto lock = GDN_WLK(rsel, T);
         auto p16 = lock.template get_ptr<volatile uint16_t>();
         for (uint32_t t = 0; t < T; ++t) {
             for (uint32_t i = 0; i < 32; ++i) {
@@ -563,7 +613,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         sel.reserve_back(3 + K);
         zero_reserved(sel, noc, 3 + K);
         {
-            auto lock = sel.scoped_write_lock(3 + K);
+            auto lock = GDN_WLK(sel, 3 + K);
             auto p16 = lock.template get_ptr<volatile uint16_t>();
             for (uint32_t i = 0; i < K - 1; ++i) {
                 set_one(p16, 0, i, mi + 1 + i);
@@ -656,7 +706,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         mask_T.reserve_back(1);
         zero_reserved(mask_T, noc, 1);
         {
-            auto lock = mask_T.scoped_write_lock(1);
+            auto lock = GDN_WLK(mask_T, 1);
             auto p16 = lock.template get_ptr<volatile uint16_t>();
             for (uint32_t t = 0; t < T; ++t) {
                 set_one(p16, 0, r0 + t, 0);
@@ -667,7 +717,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         e_t.reserve_back(T);
         zero_reserved(e_t, noc, T);
         {
-            auto lock = e_t.scoped_write_lock(T);
+            auto lock = GDN_WLK(e_t, T);
             auto p16 = lock.template get_ptr<volatile uint16_t>();
             for (uint32_t t = 0; t < T; ++t) {
                 set_one(p16, t, r0 + t, 0);
@@ -743,7 +793,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if GDN_KTDD
         // this core's ktp_in slots are reserved (the compute popped the previous layer's) and +0 outside the live parts:
         // the peers may write their K^T shares into them
-        gdn_ktdd_bump(s, VB, 0);
+        GDN_KTDD_BUMP(s, VB, 0);
 #endif
 #endif
         for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
@@ -817,12 +867,11 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 const uint32_t kf = ((ub_ * T) >> 4) * 1024u;
                 for (uint32_t i = s; i < Kt; i += VB) {
                     const uint32_t a = kb + (ub_ * Kt + i) * te + kf;
-                    gdn_ktdd_fwd(s, VB, a);
-                    gdn_ktdd_fwd(s, VB, a + 2048);
+                    GDN_KTDD_FWD2(s, VB, a);
                 }
             }
             noc_async_write_barrier();
-            gdn_ktdd_bump(s, VB, 1);
+            GDN_KTDD_BUMP(s, VB, 1);
             noc_semaphore_wait_min(ks + 1, want);
             ++g_ktdd_l;
         }
@@ -1235,7 +1284,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         uint32_t beta_bits[T];
         uint32_t dec_bits[T];
         {
-            auto lock = ab_in.scoped_write_lock(1 + AB2);
+            auto lock = GDN_WLK(ab_in, 1 + AB2);
             auto p16 = lock.template get_ptr<volatile uint16_t>();
             const uint32_t b_tile = (AB2 != 0) ? b_idx : 0u;
             for (uint32_t t = 0; t < T; ++t) {

@@ -400,6 +400,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # G-b (E1_GB, gb = dict(gin_addr, gin_map[, cb])): the type-10 prefix inside the role (gb_dm.hpp / gb_compute.hpp).
     # CB ids (qin, sh, tap, p, cv, out, xs, kc, qc) above the role table / G-a 41 / gdn_out 42-44 (spec owner: 45..53)
     GB = gb is not None
+    # GTEXT2 (E1_GTEXT2, default on under E1_GB; 0 = the old binaries byte-for-byte): GDN-role code-size trims, md5-identical
+    GT2 = os.environ.get("E1_GTEXT2", "1" if GB else "0") == "1"
     if GB:
         GBC = dict(zip(("qpx", "sht", "out", "kq"),
                        gb.get("cb", tuple(int(v) for v in os.environ.get("E1_GB_CB", "45,46,47,48").split(",")))))
@@ -801,6 +803,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     AB = f"(volatile tt_l1_ptr uint32_t*)(get_common_arg_val<uint32_t>({AB_KIND_GDN}) + {4 * AB_HDR})"
     CR = "volatile tt_l1_ptr uint32_t* crta = (volatile tt_l1_ptr uint32_t*)get_common_arg_addr(0);"
     tr = os.path.join(gen_dir, "g2_reader.cpp")
+    # GTEXT2: with the reader hook (layer-0 ring in gdn_out_pre) + RING2 the ring block had two inlined copies
+    gt2_ring = GT2 and GO and go_ring0h and not go_ring0s
+    gr_ = (lambda l_: f'  gt2_ring({l_});\n') if gt2_ring else (lambda l_: go_r.replace("(L_)", l_))
     open(tr, "w").write(
         f'{DM_OPT}#include "{hr}"\nvoid kernel_main();\nstatic volatile tt_l1_ptr uint32_t* g_ab;\nstatic uint32_t g_l;\n'
         f'inline uint32_t gdn_rt_B() {{ return g_ab[4]; }}\ninline uint32_t gdn_rt_M() {{ return g_ab[5]; }}\n'
@@ -817,7 +822,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'void gdn_hold_publish(uint32_t m) {{ g_ab[{OHM} + (g_l & 1)] = ((g_l + 1) << 8) | m; }}\n' if hold_skip else '')
         + (f'uint32_t gdn_ktdd_peer(uint32_t p) {{ return (g_ab[{OW + 3} + 2 * p] << 16) | g_ab[{OW + 4} + 2 * p]; }}\n'
            f'volatile tt_l1_ptr uint32_t* gdn_ktdd_sem() {{ return g_ab + {OKT}; }}\n' if ktdd else '')
-        + ('void gdn_out_pre() {\n  if (g_l == 0) {\n' + (go_r0s if go_ring0s else go_r.replace("(L_)", "0u")) + '  }\n}\n' if go_ring0h else '') +
+        + (('__attribute__((noinline)) static void gt2_ring(uint32_t Lx) {   // GTEXT2: one copy of the gdn_out ring block\n'
+            + go_r.replace("(L_)", "Lx") + '}\n') if gt2_ring else '')
+        + ('void gdn_out_pre() {\n  if (g_l == 0) {\n' + (go_r0s if go_ring0s else gr_("0u")) + '  }\n}\n' if go_ring0h else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n' + GB_RINIT
         + ('  gdn_cut_reset();\n' if cut_fast else '') + ('  gdn_stn_reset();\n' if stnarrow else '') +
         (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) and not go_ring0h else '') +
@@ -828,12 +835,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # gdn_out ring of layer L right after the step's reads of layer L (the slot of L - 1 was popped at the end of L - 1):
         # never blocks, and the next layer's state-first prefetch is not held behind it
         + (go_r.replace("(L_)", "L") if GO and not GO_RINGEARLY and not GO_RING2 else '') +
-        (f'    if (L + 1 < {NG}) {{\n' + go_r.replace("(L_)", "(L + 1)") + '    }\n' if GO and GO_RING2 else '') +
+        (f'    if (L + 1 < {NG}) {{\n' + gr_("(L + 1)") + '    }\n' if GO and GO_RING2 else '') +
         (go_rd.replace("{OGO}", str(OGO)) if GO and GO_RD else '') +
         (go_wr.replace("{OSIG}", osig_rd) if GO and GO_RDALL else '') +
         # E1_GO_RINGEARLY: the next layer's ring right after this layer's gdn_out tail (the compute popped ring L before the
         # scatter, so the reserve never blocks); the handoff then no longer waits behind a 97 KB ring read (12 us at u8)
-        (f'    if (L + 1 < {NG}) {{\n' + go_r.replace("(L_)", "(L + 1)") + '    }\n' if GO and GO_RINGEARLY else '') +
+        (f'    if (L + 1 < {NG}) {{\n' + gr_("(L + 1)") + '    }\n' if GO and GO_RINGEARLY else '') +
         f'  // @@GDN_LAYER_BODY_END@@ (engine _gdn_host_ar splices the AR sender here; exactly once)\n  }}\n'
         # GDN_OUT_RD: the reader's out signals retire here; the aggregator's word resets once its last wait passed
         + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not GO or GO_TAILHOOK) else '') if out_rd else '')
@@ -934,6 +941,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                                     "GDN_PREFIXED", "GDN_PREFIXED_GATES", "GDN_SFPU_GATE",
                                                     "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
     fphys = dev.worker_core_from_logical_core
+    # GTEXT2 (E1_GTEXT2, default on under E1_GB; 0 = the old binaries byte-for-byte): GDN-role code-size trims, md5-identical
+    if GT2:
+        d_r, d_w, d_c = (d_ + [("GDN_GTEXT2", "1")] for d_ in (d_r, d_w, d_c))
     if GB:
         d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]) + (
             [("GB_PULL_NOC", os.environ["E1_GB_PULL_NOC"])] if "E1_GB_PULL_NOC" in os.environ else [])
