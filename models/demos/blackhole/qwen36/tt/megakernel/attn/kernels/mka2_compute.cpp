@@ -99,7 +99,7 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#if defined(MKA_RQPOS)
+#if defined(MKA_RQPOS) && defined(MKA_RQZFILL)
 #include "api/compute/eltwise_unary/fill.h"
 #endif
 #endif
@@ -169,8 +169,12 @@ void kernel_main() {
 #else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
 #endif
-#if defined(MKA_RQPOS)
+#if defined(MKA_RQBAL)
+    uint32_t u = get_arg_val<uint32_t>(a++);   // the reader's per-pass assignment (KVP table word 3 + T)
+#elif defined(MKA_RQPOS)
     const uint32_t u = get_arg_val<uint32_t>(a++);
+#endif
+#if defined(MKA_RQPOS)
     uint32_t nblk = get_arg_val<uint32_t>(a++), kvp_m0 = 0x3FF, kvp_m1 = 0x3FF;   // bounded by kvpos at the first SDPA
     bool kvp_rd = false;
 #else
@@ -178,10 +182,16 @@ void kernel_main() {
 #endif
 #if defined(MKA_EXTLEAN)
     constexpr uint32_t nrecv = 0, is_root = 0; a += 2;
+#elif defined(MKA_RQBAL)
+    uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
 #else
     const uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
 #endif
+#if defined(MKA_RQBAL)
+    uint32_t qoff = u * DH;
+#else
     const uint32_t qoff = u * DH;
+#endif
 #if defined(MKA_RQKV)
 #if defined(MKA_EXTLEAN) && defined(MKA_QSK)
     constexpr uint32_t qrole = 3, qk0 = 0, qnk = 0, qnt = 0, gdn_on = 0; a += 5;   // QR_EXT with no qkv tiles under QSK
@@ -873,6 +883,15 @@ void kernel_main() {
                 uint32_t v;
                 do { asm volatile("fence" ::: "memory"); v = *w; } while (!(v >> 31));
                 nblk = v & 0x7FF; kvp_m0 = (v >> 11) & 0x3FF; kvp_m1 = (v >> 21) & 0x3FF;
+#if defined(MKA_RQBAL)
+                {
+                    const uint32_t ws = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_KVP_TAB)[3 + 4];   // MKA_RQ_T = 4
+                    u = ws & 0xFF; qoff = u * DH;
+#if !defined(MKA_EXTLEAN)
+                    nrecv = (ws >> 8) & 0xFF; is_root = (ws >> 16) & 1;
+#endif
+                }
+#endif
                 kvp_rd = true;
             }
 #endif
@@ -946,9 +965,11 @@ void kernel_main() {
             cb_pop_front(CB_Q, QT);
 #if defined(MKA_RQPOS)
             if (first) {   // no valid KV block on this core (short user): zero partial (O, l) for the tree
-                tile_regs_acquire();
+                tile_regs_acquire();   // DST half is zero: the packer clears it on release (ZEROACC in pack_dest_section_done)
+#if defined(MKA_RQZFILL)
                 fill_tile_init();
                 for (uint32_t t = 0; t <= DH; ++t) fill_tile(t, 0.0f);
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(CB_O);

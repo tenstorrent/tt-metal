@@ -279,7 +279,31 @@ def setup_bench(dev, MESH, mesh_identity):
     for j_, i_ in enumerate(ACT): grp[i_] = j_ * NU // len(ACT)
     members = [[i for i in ACT if grp[i] == u] for u in range(NU)]
     if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
-    if ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
+    RQ_S = [i for i in ACT if fcores[i].x < GX and fcores[i].y < GY]   # MKA_RQPOS / RQBAL pools: STREAM, then EXT
+    RQ_E = [i for i in ACT if i not in RQ_S]
+    def rq_layout(mu):
+        """MKA_RQPOS member layout (kernel twin: mka2_reader.cpp MKA_RQBAL block): users take contiguous slices of the
+        STREAM and EXT pools, s_u ∝ m_u (1 <= s_u <= m_u, sum = len(RQ_S)); rank r takes STREAM at the tree-internal
+        ranks (r % FAN == 0) and once the user's EXT share is used, else EXT (owners stay tree leaves)."""
+        NS_, N_ = len(RQ_S), sum(mu)
+        su = [min(m_, max(1, NS_ * m_ // N_)) for m_ in mu]
+        while sum(su) > NS_: k_ = max(range(len(su)), key=lambda u_: (su[u_], -u_)); su[k_] -= 1
+        while sum(su) < NS_:
+            k_ = max((u_ for u_ in range(len(su)) if su[u_] < mu[u_]), key=lambda u_: (mu[u_] - su[u_], -u_)); su[k_] += 1
+        out, s0, e0 = [], 0, 0
+        for u_, m_ in enumerate(mu):
+            sN, eN, si, ei, lay = su[u_], m_ - su[u_], 0, 0, []
+            for r_ in range(m_):
+                if ((r_ % FAN == 0 or ei == eN) and si < sN) or ei == eN: lay.append(RQ_S[s0 + si]); si += 1
+                else: lay.append(RQ_E[e0 + ei]); ei += 1
+            out.append(lay); s0 += sN; e0 += eN
+        return out
+    if ('MKA_RQPOS', '1') in MKDEF:   # static groups by the RQBAL rule at equal lengths (RQDYN == RQBAL bit for bit)
+        assert len(ACT) % NU == 0, (len(ACT), NU)
+        members = rq_layout([len(ACT) // NU] * NU)
+        for u_, m_ in enumerate(members):
+            for i_ in m_: grp[i_] = u_
+    elif ('MKA_RMASK', '1') in MKDEF:   # the user's last KV block (causal mask) must sit on a non-STREAM core: move one last
         _sx = lambda f_: fcores[f_].x < GX and fcores[f_].y < GY
         for m_ in members:
             e_ = [f_ for f_ in m_ if not _sx(f_) and f_ != m_[0]]
@@ -1112,13 +1136,25 @@ def setup_bench(dev, MESH, mesh_identity):
                                     sum(([kvs[L_].buffer_address(), kvvs[L_].buffer_address()] for L_ in _att_l), []) + [KVBS, NKVH])] * _ncore, kgrid)
                 RQ_REPLAY, RQ_ATTN = _rb.buffer_address(), _ab.buffer_address()
                 RQ_TENS += [_rb, _ab]
-            # per-core KVP table: [0] info, [1] b0, [2] pt window base, [KVP_PT ..] page-table window (64 B aligned)
+            # per-core KVP table: [0] info, [1] b0, [2] pt window base, [3, 3 + T) row limits, [3 + T] RQBAL assignment
+            # (user | nrecv << 8 | root << 16), [KVP_PT ..] page-table window (64 B aligned)
+            RQBAL = ('MKA_RQBAL', '1') in MKDEF
+            assert not RQBAL or ('MKA_RQDYN', '1') not in MKDEF, 'MKA_RQBAL includes the dynamic split (no MKA_RQDYN)'
             _smax = max(RNG[fi_][1] - RNG[fi_][0] for fi_ in ACT)
+            if RQBAL: _smax = max(_smax, -(-NU * NBK // len(ACT)) + 4)   # proportional membership: ~ total blocks / cores
             KVP_PTW = (_smax + BS32 - 1) // BS32 + 1 + 16
-            kvp_t = _l1_tab([[0] * (-(-(3 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
-            KVP_PT = 3 + T + (-(kvp_t.buffer_address() + 4 * (3 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
+            kvp_t = _l1_tab([[0] * (-(-(4 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
+            KVP_PT = 4 + T + (-(kvp_t.buffer_address() + 4 * (4 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
             assert (kvp_t.buffer_address() + 4 * KVP_PT) % 64 == 0, ('KVP table alignment', kvp_t.buffer_address(), KVP_PT)
             RQ_TENS += [rq_kvpos, rq_cos, rq_sin, rq_pt, kvp_t]
+            RQB_L = RQ_S + RQ_E   # MKA_RQBAL table: STREAM pool, then EXT pool (rq_layout)
+            RQB_IDX = {f_: i_ for i_, f_ in enumerate(RQB_L)}
+            if RQBAL:
+                assert sorted(RQB_L) == sorted(ACT) and len(RQB_L) <= 255
+                _w = [fphys[f_].x | (fphys[f_].y << 8) for f_ in RQB_L]
+                rqb_t = _l1_tab([_w + [0] * (-len(_w) % 4)] * _ncore, kgrid)
+                RQ_TENS.append(rqb_t)
+                MKDEF = MKDEF + [('MKA_RQB_TAB', f"{rqb_t.buffer_address()}u"), ('MKA_RQB_N', str(len(RQB_L))), ('MKA_RQB_NS', str(len(RQ_S)))]
             torch.manual_seed(17)
             qk_w = 0.1 * torch.randn(ATT0 + NATT_, 2, 256)   # checkpoint w; applied gamma = bf16(1 + w)
             qk_g = (1.0 + qk_w).bfloat16().float()
@@ -1220,7 +1256,7 @@ def setup_bench(dev, MESH, mesh_identity):
         return [(HC.index(fi) if fi in HC else 255) | (KVA_ROLE.get(fi, 0) << 8)] + sum(([fphys[h_].x, fphys[h_].y] for h_ in HC), []) + [kd_t.buffer_address()] + \
             ([HG_ADDR if fi in HC else 0] if ('MKA_RQPOS', '1') in MKDEF else [])
     RMASK = ('MKA_RMASK', '1') in MKDEF
-    MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if RMASK else {}   # last-block core -> user
+    MASKC = {m_[-1]: u_ for u_, m_ in enumerate(members)} if (RMASK and ('MKA_RQPOS', '1') not in MKDEF) else {}   # last-block core -> user (RQPOS: masks from kvpos)
     if RMASK:
         assert RQNR
         mk = torch.ones(NU, TILE, TILE)
@@ -1433,28 +1469,28 @@ def setup_bench(dev, MESH, mesh_identity):
         GDN_SA = {k_: ttnn.get_global_semaphore_address(v_) for k_, v_ in GDN_SEMS.items()}
         GO = None
         if GDNOUT:
-            WKG, WNG = 24, 160   # A = the 24 `out` column tiles (6 heads x 128); N = the hidden (16 owner chunks of 10)
-            g_layers = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGo = len(g_layers)
-            gcs = list(GDNC)
+            GO_WK, GO_WN = 24, 160   # A = the 24 `out` column tiles (6 heads x 128); N = the hidden (16 owner chunks of 10)
+            go_layers = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; GO_NG = len(go_layers)
+            go_cores = list(GDNC)
             # engine/weight_layouts.py gdn_out_layout (the shared packer, = this branch's layout): rot-order owner chunks,
             # core c -> tiles flat[c::24], bank-local k-major slices; per-layer stride = pages_per_layer (GDN ordinal g)
-            GLAY = _WEIGHTS['gdn_out']['layout'] if 'gdn_out' in _WEIGHTS else _wl().gdn_out_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], BANK_LOC, banks)
-            assert GLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], "injected gdn_out layout built for other cores"
-            GT = {fi: GLAY.tiles[c_] for c_, fi in enumerate(gcs)}; GB = {fi: GLAY.bank[c_] for c_, fi in enumerate(gcs)}
-            GP = {fi: GLAY.row[c_] for c_, fi in enumerate(gcs)}
-            GMAXT = max(len(v_) for v_ in GT.values())
-            GPL = GLAY.pages_per_layer   # pages per GDN layer (the layer stride)
-            if 'gdn_out' in _WEIGHTS: wg_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
+            GO_LAY = _WEIGHTS['gdn_out']['layout'] if 'gdn_out' in _WEIGHTS else _wl().gdn_out_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in go_cores], BANK_LOC, banks)
+            assert GO_LAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in go_cores], "injected gdn_out layout built for other cores"
+            GO_T = {fi: GO_LAY.tiles[c_] for c_, fi in enumerate(go_cores)}; GO_B = {fi: GO_LAY.bank[c_] for c_, fi in enumerate(go_cores)}
+            GO_P = {fi: GO_LAY.row[c_] for c_, fi in enumerate(go_cores)}
+            GO_MAXT = max(len(v_) for v_ in GO_T.values())
+            GO_PL = GO_LAY.pages_per_layer   # pages per GDN layer (the layer stride)
+            if 'gdn_out' in _WEIGHTS: go_w_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
             else:
                 torch.manual_seed(17)
-                wg_all = _wl().pack_gdn_out([torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE) for _ in range(NGo)], GLAY, dev=dev)
-            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(NGo, GPL, TILE, TILE))
-            gdbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGo * WNG * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                go_w_all = _wl().pack_gdn_out([torch.randn(GO_WK * TILE, GO_WN * TILE) / math.sqrt(GO_WK * TILE) for _ in range(GO_NG)], GO_LAY, dev=dev)
+            go_wq = GO_LAY.unpack(ttnn.to_torch(go_w_all).float().reshape(GO_NG, GO_PL, TILE, TILE))
+            go_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, GO_NG * GO_WN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
-                      wk=WKG, maxt=GMAXT, w=wg_all, w_addr=wg_all.buffer_address(), w_stride=GPL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
-                      gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in gcs], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
-                      cnt=GSA[13], nt=[len(GT[fi]) for fi in gcs], page=[GP[fi] * banks + GB[fi] for fi in gcs], tiles=[GT[fi] for fi in gcs],
-                      dbg=gdbg, dbg_addr=gdbg.buffer_address(),
+                      wk=GO_WK, maxt=GO_MAXT, w=go_w_all, w_addr=go_w_all.buffer_address(), w_stride=GO_PL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
+                      gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in go_cores], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
+                      cnt=GSA[13], nt=[len(GO_T[fi]) for fi in go_cores], page=[GO_P[fi] * banks + GO_B[fi] for fi in go_cores], tiles=[GO_T[fi] for fi in go_cores],
+                      dbg=go_dbg, dbg_addr=go_dbg.buffer_address(),
                       # CB ids (ring, A, out) on the GDN cores: 42/43/44 reserved for gdn_out (lean GDN table 0..41, -mk-int 80b43723a3f); before
                       # them; MKA_GDNOUT_CB=34,35,37 borrows the AR-sender ids for bring-up WITHOUT MK_REAL_AR
                       cb=tuple(int(v_) for v_ in os.environ.get('MKA_GDNOUT_CB', '42,43,44').split(',')),
@@ -1463,8 +1499,8 @@ def setup_bench(dev, MESH, mesh_identity):
             assert not (set(GO['cb']) & {34, 35, 37, 39} and ('MK_REAL_AR', '1') in MKDEF), "MKA_GDNOUT_CB: 34/35/37/39 are the AR senders' ids"
             assert ('MK_GAR_ZERO', '1') not in MKDEF, "MKA_GDNOUT writes CB_XO: drop the MK_GAR_ZERO stand-in"
             MKDEF = MKDEF + [('MKA_GDNOUT', '1'), ('MKA_GDN_XOW', f"{GDN_SA['xow']}u"), ('MK_GDN_OUT_REAL', '1')]   # G-d reads CB_XO at WOCNT
-            print(f"[gdnout] GDN out_proj via the wo unit: {NGo} GDN layers, {len(gcs)} cores x {min(GO['nt'])}-{GMAXT} tiles, K {WKG}, BFP4 ring "
-                  f"{WKG * GMAXT} pages, banks {sorted(set(GB.values()))}", flush=True)
+            print(f"[gdnout] GDN out_proj via the wo unit: {GO_NG} GDN layers, {len(go_cores)} cores x {min(GO['nt'])}-{GO_MAXT} tiles, K {GO_WK}, BFP4 ring "
+                  f"{GO_WK * GO_MAXT} pages, banks {sorted(set(GO_B.values()))}", flush=True)
         def _gpr(lx0, lx1):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, GY)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, GYF - 1))
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (GYF - GY)]
@@ -1499,14 +1535,22 @@ def setup_bench(dev, MESH, mesh_identity):
             if GO:
                 def _gdnout_check(it):   # out_proj golden from the engine's own `out` (A) of each GDN layer x the dequantized slices
                     role_ = GDN_ROLE['role']
-                    dv_ = ttnn.to_torch(gdbg).float().reshape(TILE, NGo, WNG * TILE)
+                    dv_ = ttnn.to_torch(go_dbg).float().reshape(TILE, GO_NG, GO_WN * TILE)
                     R_ = role_.B * role_.T
-                    for g_ in range(NGo):
-                        A_ = ttnn.to_torch(role_.LY[g_]['outE']).float().reshape(TILE, WKG * TILE)
-                        gg_ = A_ @ wgq[g_]
+                    if os.environ.get('E1_GO_LOCAL', '2') == '2':
+                        # the step's out tiles go straight into gdn_out's A (never to the out tensor): no gold. Sanity only;
+                        # run E1_GO_LOCAL=1 (GDN_OUT_RD_KEEP writes the out rows too) for the real PCC
+                        for g_ in range(GO_NG):
+                            v_ = dv_[:R_, g_]
+                            print(f"[gdnout] iter {it} GDN layer {go_layers[g_]} gdn_out PCC NOT CHECKED (E1_GO_LOCAL=2: no gold; E1_GO_LOCAL=1 checks) "
+                                  f"sanity: finite {bool(torch.isfinite(v_).all())} |out|max {v_.abs().max().item():.3f} zero frac {(v_ == 0).float().mean().item():.3f}", flush=True)
+                        return
+                    for g_ in range(GO_NG):
+                        A_ = ttnn.to_torch(role_.LY[g_]['outE']).float().reshape(TILE, GO_WK * TILE)
+                        gg_ = A_ @ go_wq[g_]
                         v_ = dv_[:, g_]
                         pc_ = torch.corrcoef(torch.stack([v_[:R_].flatten(), gg_[:R_].flatten()]))[0, 1].item()
-                        print(f"[gdnout] iter {it} GDN layer {g_layers[g_]} rows {R_} gdn_out pcc {pc_:.5f} max|err| {(v_[:R_] - gg_[:R_]).abs().max().item():.4f} "
+                        print(f"[gdnout] iter {it} GDN layer {go_layers[g_]} rows {R_} gdn_out pcc {pc_:.5f} max|err| {(v_[:R_] - gg_[:R_]).abs().max().item():.4f} "
                               f"|gold|max {gg_[:R_].abs().max().item():.3f}", flush=True)
                 GDN_ROLE['gdnout_check'] = _gdnout_check
             if GDN_WAIT:
@@ -1762,6 +1806,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 for k in range(FAN - 1): o += [fphys[lst[k]].x, fphys[lst[k]].y] if k < len(lst) else [0, 0]
                 return o
             pp = fphys[par]
+            if ('MKA_RQBAL', '1') in MKDEF: sb0, sb1 = RQB_IDX[fi], len(RQB_L)   # reader: global index / list length
+            elif ('MKA_RQDYN', '1') in MKDEF: sb0, sb1 = r, n                    # reader: rank / group size (even split)
             sdpa_r = [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, has_p, pp.x, pp.y, plvl, len(ch0)] + xy(ch0) + [len(ch1)] + xy(ch1) + [1 if r == 0 else 0, outs.buffer_address(), QRP.x, QRP.y]
             isS = fi in stream_idx
             WO_NOC0 = ('MKA_WO_NOC0', '1') in MKDEF

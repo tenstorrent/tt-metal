@@ -159,7 +159,9 @@ for it in range(ITERS):
         _v = ttnn.to_torch(v_xo).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
         if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(v_xo), os.environ['V12_SAVE'])
         _bad = [j_ for j_ in range(16) if torch.corrcoef(torch.stack([_v[:, j_*320:(j_+1)*320].flatten(), _g2[:, j_*320:(j_+1)*320].flatten()]))[0, 1].item() < 0.999]
-        print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
+        if REAL_AR and (REAL_AAR or globals().get('GAMMA_CONS')):   # the AR_SEQ gold chains the MLPs only (no mixer ARs, no γ): meaningless here
+            print(f"[v12] iter {it} last-layer MLP (owner xo) AR_SEQ gold: NOT VALID under AAR/GAR/MK_GAMMA_CONS (no PCC reported; use the per-layer [v12] line)", flush=True)
+        else: print(f"[v12] iter {it} last-layer MLP (owner xo) pcc {torch.corrcoef(torch.stack([_v.flatten(), _g2.flatten()]))[0, 1].item():.5f} max|err| {(_v - _g2).abs().max().item():.4f} |gold|max {_g2.abs().max().item():.3f} bad owner chunks {_bad}", flush=True)
     if REAL_AR and AR_SEQ and v_xk is not None:   # x of the next pass's layer 0 as the last AR delivered it into the K-row slots (STREAM (0, k)); MK_V12_CB: CB, not readable
         _xk = ttnn.to_torch(v_xk).float().reshape(TILE, NC * 20 * TILE)
         _xd = torch.cat([_xk[:, (10 * (j_ // 2)) * 640 + (j_ % 2) * 320:(10 * (j_ // 2)) * 640 + (j_ % 2 + 1) * 320] for j_ in range(16)], 1)
@@ -327,6 +329,10 @@ for it in range(ITERS):
                 _pp.append(f"g{gu_}:{_pc(vs[L][uu, :NQH * T], o_):.6f}/{_pc(golds_s[L][uu, :NQH * T], o_):.6f}")
             print(f"[rqpos] layer {L} PROD-OP SDPA (prod q, softmax with -inf causal mask) per user engine/torch-gold vs prod: {' '.join(_pp)}", flush=True)
             for t_ in (qkt, gam, nrm, qkm, part, rop, tail): ttnn.deallocate(t_)
+    if ('MKA_RQPOS', '1') in MKDEF and it == ITERS - 1:   # bit-identity fingerprints of this iteration's SDPA / wo outputs
+        import hashlib
+        _h = lambda t_: hashlib.md5(ttnn.to_torch(t_).float().numpy().tobytes()).hexdigest()[:12]
+        print(f"[rqpos] iter {it} md5 sdpa {_h(outs)}" + (f" wo {_h(wod)}" if RWO else ''), flush=True)
     if MESH and ('MKA_RQPOS', '1') in MKDEF and os.environ.get('MKA_UPAR', '0') == '1':
         # per device d (own users g = 2u + d % 2): SDPA / wo vs that parity's golds -> every user 0-7 covered on the mesh
         _od = [_to_torch(t_).float().reshape(NL, NU, TILE, DHD) for t_ in ttnn.get_device_tensors(outs)]
@@ -360,6 +366,45 @@ for it in range(ITERS):
             return max((d_ - ds[0]).abs().max().item() for d_ in ds)
         _mif = mesh_identity if V_R == 32 else (lambda t_: _mid_r(t_) if t_ is not outs else mesh_identity(t_))
         print(f"[mesh] iter {it} devices {dev.get_num_devices()}: max |dev d - dev 0|{'' if V_R == 32 else f' (rows < {V_R})'} " + ' '.join(f"{n_} {_mif(t_):.3e}" for n_, t_ in _mi), flush=True)
+def _prof_decollide():
+    """The device profiler keys zones by a 16-bit hash of 'name,__FILE__,line'. __FILE__ holds the per-run pod dir, so with
+    ~300 zone sites a run collides with probability ~0.5 and the host readout throws ("Source location hashes are colliding",
+    rc 134, no CSV). Before the readout keep ONE location per colliding hash in the zone logs (the layer-timing zones win);
+    the dropped zone's markers are then reported under the kept name. Prints what it dropped."""
+    d = os.environ.get('TT_METAL_PROFILER_DIR')
+    if not d: return
+    keep_pref = ("W-ARSTALL", "W-ARWAIT", "W-MIX", "C-MIX", "W-SDPA", "C-SDPA", "R-KV", "R-RED", "W-WOAR", "C-GU", "C-DN", "W-HWAIT",
+                 "W-VX", "W-VMD", "W-OREL", "C-OSUM", "W-AR", "C-AR", "R-ARDLVW", "R-ARDLV", "C-ARG", "W-ARG")
+    def h16(s_):
+        h_ = 2166136261
+        for c_ in s_.encode():
+            h_ = ((h_ ^ c_) * 16777619) & 0xFFFFFFFF
+        return ((h_ & 0xFFFF) ^ (h_ >> 16)) & 0xFFFF
+    dl = "'#pragma message: "
+    files = [os.path.join(d, '.logs', f_) for f_ in ('zone_src_locations.log', 'new_zone_src_locations.log')]
+    locs = {}
+    for f_ in files:
+        if not os.path.exists(f_): continue
+        for ln in open(f_):
+            i_ = ln.find(dl)
+            if i_ < 0: continue
+            loc = ln[i_ + len(dl):].rstrip('\n')[:-1]
+            locs.setdefault(h16(loc), []).append(loc)
+    drop = set()
+    for h_, ls in locs.items():
+        u_ = list(dict.fromkeys(ls))
+        if len(u_) < 2: continue
+        u_.sort(key=lambda l_: 0 if l_.split(',')[0] in keep_pref else 1)
+        drop.update(u_[1:])
+        print(f"[prof] zone hash {h_:#06x} collision: keep {u_[0].split(',')[0]}@{u_[0].split(',')[2]}, drop {[l_.split(',')[0] + '@' + l_.split(',')[2] for l_ in u_[1:]]}", flush=True)
+    if not drop: return
+    for f_ in files:
+        if not os.path.exists(f_): continue
+        lines = open(f_).readlines()
+        open(f_, 'w').writelines(l_ for l_ in lines if not (l_.find(dl) >= 0 and l_[l_.find(dl) + len(dl):].rstrip('\n')[:-1] in drop))
+
+
+_prof_decollide()
 ttnn.ReadDeviceProfiler(dev)
 print('[fm11] profiler read', flush=True)
 ttnn.close_device(dev)
