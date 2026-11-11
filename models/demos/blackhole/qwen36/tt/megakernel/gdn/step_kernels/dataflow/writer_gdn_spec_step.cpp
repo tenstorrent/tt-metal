@@ -82,6 +82,12 @@ constexpr uint32_t kCoefN = 7 + kBatchMax;  // NGB G E BETA NBE EYE W + C_u
 #ifndef GDN_PREFIXED_GATES
 #define GDN_PREFIXED_GATES 0  // kernel_opts bit 22: coefficient tiles + gate page from `prefixed`
 #endif
+#ifndef GDN_SP_LATE
+#define GDN_SP_LATE 0  // engine GDN role (BATCH): S' written after the output rows (see the compute's sp pop)
+#endif
+#ifndef GDN_RCOEF_FAST
+#define GDN_RCOEF_FAST 0  // engine GDN role (EARLY_REPLAY): batched decay-row reads + NoC-doubled C_u fill in wr_rcoef
+#endif
 #ifndef GDN_EARLY_REPLAY
 #define GDN_EARLY_REPLAY 0  // engine GDN role (BATCH + PREFIXED_GATES): W / C_u built here before in_ready (see wr_rcoef)
 #endif
@@ -505,10 +511,73 @@ TT_KERNEL void writer(
     {
         DeviceZoneScopedN("wr_rcoef");
         DataflowBuffer coef(dfb::coef);
-        DataflowBuffer gprev(dfb::gprev);  // staging for one decay page at a time (writer-local)
+        DataflowBuffer gprev(dfb::gprev);  // staging for the decay rows (writer-local)
         coef.reserve_back(kCoefN);
         const uint32_t cb0 = coef.get_write_ptr();
         const uint64_t zr = get_noc_addr(MEM_ZEROS_BASE);
+#if GDN_RCOEF_FAST
+        // GDN_RCOEF_FAST: only W needs zeros (every C_u tile is filled whole below); each user's T decay rows (column
+        // 0 lives in the left face: rows r0u .. r0u + T - 1 = T * 64 contiguous bytes) are read at their own offset of
+        // ONE staging tile (users' rows don't overlap), all under one barrier; C_u = one 256 B RISC seed + 4 local NoC
+        // doublings (256 B -> 4 KB). Same bits as the per-user path.
+        for (uint32_t o = 0; o < 4096u; o += MEM_ZEROS_SIZE) {
+            noc_async_read(zr, cb0 + o, MEM_ZEROS_SIZE);
+        }
+        gprev.reserve_back(1);
+        const uint32_t gpa = gprev.get_write_ptr();
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            const uint32_t r0u = ub_ * T;
+            const uint32_t rr = (hold_b[ub_] || mi_b[ub_] >= T) ? 0u : mi_b[ub_] + 1;
+            if (rr > 0) {
+                const uint32_t sr = ((1 + par) * Mr + ub_) * Nv + h;
+                const uint32_t off = ((r0u >> 4) * 512 + (r0u & 15) * 16) * 4;
+                noc.async_read(ring_acc, gprev, T * 64, {.page_id = sr * KV + Kt + Vt, .offset_bytes = off},
+                               {.offset_bytes = off});
+            }
+        }
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+        volatile tt_l1_ptr uint32_t* c32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb0);
+        volatile tt_l1_ptr uint32_t* gp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gpa);
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            const uint32_t r0u = ub_ * T;
+            const uint32_t rr = (hold_b[ub_] || mi_b[ub_] >= T) ? 0u : mi_b[ub_] + 1;
+            float wrp[T];
+            float crp = 1.0f;
+            if (rr > 0) {
+                float acc = 1.0f;
+                for (uint32_t i = rr; i-- > 0;) {
+                    wrp[i] = acc;
+                    acc = acc * gdn_f32(gp[tile_elem_index(r0u + i, 0)]);
+                }
+                crp = acc;
+            }
+            for (uint32_t t = 0; t < T; ++t) {
+                const uint32_t wb = (t < rr) ? gdn_bits(wrp[t]) : 0u;
+                for (uint32_t c = 0; c < 32; ++c) {
+                    c32[tile_elem_index(r0u + t, c)] = wb;
+                }
+            }
+            const uint32_t cbits = gdn_bits(crp);
+            for (uint32_t i = 0; i < 64; ++i) {
+                c32[(1 + ub_) * 1024 + i] = cbits;
+            }
+        }
+        // users >= nb: C tiles stay +0 as with the full zero fill (never read: the replay runs nb users)
+        for (uint32_t ub_ = nb; ub_ < kBatchMax; ++ub_) {
+            for (uint32_t i = 0; i < 64; ++i) {
+                c32[(1 + ub_) * 1024 + i] = 0u;
+            }
+        }
+        asm volatile("fence" ::: "memory");  // the RISC seeds reach L1 before the NoC reads them
+        for (uint32_t sz = 256; sz < 4096u; sz <<= 1) {
+            for (uint32_t ub_ = 0; ub_ < kBatchMax; ++ub_) {
+                const uint32_t t0 = cb0 + (1 + ub_) * 4096u;
+                noc_async_read(get_noc_addr(t0), t0 + sz, sz);
+            }
+            noc_async_read_barrier();
+        }
+#else
         for (uint32_t o = 0; o < kCoefRep * 4096u; o += MEM_ZEROS_SIZE) {
             noc_async_read(zr, cb0 + o, MEM_ZEROS_SIZE);
         }
@@ -545,6 +614,7 @@ TT_KERNEL void writer(
                 c32[(1 + ub_) * 1024 + i] = cbits;
             }
         }
+#endif
         coef.push_back(kCoefRep);
     }
 #endif
@@ -1294,12 +1364,14 @@ TT_KERNEL void writer(
         constexpr uint32_t kpb = (Kt + VB - 1) / VB;
         u_out.wait_front(Vs);
         kt_out.wait_front(kBatchMax * kpb);
-        stg.reserve_back(kBatchMax * (Vs + 1));
+        // [U_u (kBatchMax * Vs) | the decay pages of users u = s mod VB (kStgDec)]
+        constexpr uint32_t kStgDec = (kBatchMax + VB - 1) / VB;
+        stg.reserve_back(kBatchMax * Vs + kStgDec);
         const uint32_t sb = stg.get_write_ptr();
         const uint32_t utb = u_out.get_read_ptr();
         {
             const uint64_t z = get_noc_addr(MEM_ZEROS_BASE);
-            for (uint32_t o = 0; o < kBatchMax * (Vs + 1) * entry; o += MEM_ZEROS_SIZE) {
+            for (uint32_t o = 0; o < (kBatchMax * Vs + kStgDec) * entry; o += MEM_ZEROS_SIZE) {
                 noc_async_read(z, sb + o, MEM_ZEROS_SIZE);
             }
             noc_async_read_barrier();
@@ -1317,7 +1389,7 @@ TT_KERNEL void writer(
                     noc_async_read(get_noc_addr(src + 1024), dst + 1024, T * 64);
                 }
                 if (ub_ % VB == s) {
-                    volatile uint32_t* gn = reinterpret_cast<volatile uint32_t*>(sb + (kBatchMax * Vs + ub_) * entry);
+                    volatile uint32_t* gn = reinterpret_cast<volatile uint32_t*>(sb + (kBatchMax * Vs + ub_ / VB) * entry);
                     for (uint32_t t = 0; t < T; ++t) {
                         gn[tile_elem_index(r0u + t, 0)] = gp[tile_elem_index(r0u + t, 0)];
                     }
@@ -1342,7 +1414,7 @@ TT_KERNEL void writer(
                 }
             }
             if (ub_ % VB == s) {
-                noc.async_write(stg, ring_acc, entry, {.offset_bytes = (kBatchMax * Vs + ub_) * entry},
+                noc.async_write(stg, ring_acc, entry, {.offset_bytes = (kBatchMax * Vs + ub_ / VB) * entry},
                                 {.page_id = sw_u * KV + Kt + Vt});
             }
         }
@@ -1427,7 +1499,7 @@ TT_KERNEL void writer(
     }
 #endif
 
-#if GDN_LAZY && GDN_BATCH
+#if GDN_LAZY && GDN_BATCH && !GDN_SP_LATE
     // ---- S'_u -> ring slot 0 block (u, h) (this block's columns) straight out of the compute's sp (no dnew copy): sp
     //      is waited on (not popped: the compute pops it after K S' / Q S'), read at its ring offset for this layer, and
     //      `spd` tells the compute the reads have left L1
@@ -1493,7 +1565,18 @@ TT_KERNEL void writer(
     // ---- the user's T output rows of the head's Vt output tiles
     DeviceZoneScopedN("wr_out");
 #if GDN_BATCH
-    if (true) {
+#ifndef GDN_OUT_TILE
+#define GDN_OUT_TILE 0  // engine GDN role: all 32 rows live (nb * T == 32) -> one whole-tile write per out tile, not 4 face-row spans
+#endif
+    if (GDN_OUT_TILE && nb * T == 32) {
+        out.wait_front(Vs);
+        const uint32_t entry = out.get_entry_size();
+        for (uint32_t t = 0; t < Vs; ++t) {
+            noc.async_write(out, out_acc, entry, {.offset_bytes = t * entry}, {.page_id = tr * out_w_tiles + h * Vt + v0 + t});
+        }
+        noc.async_write_barrier();
+        out.pop_front(Vs);
+    } else if (true) {
         write_rows(out_acc, out, noc, tr * out_w_tiles + h * Vt + v0, Vs, 0, nb * T);
     } else
 #endif
@@ -1503,9 +1586,50 @@ TT_KERNEL void writer(
         write_rows_single(out_acc, out, noc, tr * out_w_tiles + h * Vt + v0, Vs, r0, T);
     }
 #if GDN_LAZY && GDN_BATCH
-    noc.async_write_barrier();
+    {
+        DeviceZoneScopedN("wr_obar");  // the out rows' write barrier + the out signal (wr_out spans to the end)
+        noc.async_write_barrier();
 #if GDN_OUT_SIGNAL
-    gdn_out_signal();  // engine GDN role: this core's output rows have landed (the stash writes trail)
+        gdn_out_signal();  // engine GDN role: this core's output rows have landed (the stash writes trail)
+#endif
+    }
+#ifndef GDN_SP_RD
+#define GDN_SP_RD 0
+#endif
+#if GDN_SP_LATE && !GDN_SP_RD
+    // GDN_SP_LATE (engine GDN role): S' leaves sp only now, behind the output rows and the out signal (the compute pops
+    // sp at the next layer's replay / program end, after spd)
+    // ---- S'_u -> ring slot 0 block (u, h) (this block's columns) straight out of the compute's sp (no dnew copy): sp
+    //      is waited on (not popped: the compute pops it after K S' / Q S'), read at its ring offset for this layer, and
+    //      `spd` tells the compute the reads have left L1
+    {
+        DeviceZoneScopedN("wr_sp");
+        DataflowBuffer sp(dfb::sp);
+        DataflowBuffer spd(dfb::spd);
+        const uint32_t entry = sp.get_entry_size();
+        sp.wait_front(nb * KVs);
+#if GDN_LOOP
+        const uint32_t lay = gdn_loop_k() - 1;
+#else
+        const uint32_t lay = 0;
+#endif
+        const uint32_t base_t = (lay * nb * KVs) % (kBatchMax * KVs);
+        for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
+            if (hold_b[ub_]) {
+                continue;
+            }
+            const uint32_t bh_u = ub_ * Nv + h;
+            for (uint32_t i = 0; i < Kt; ++i) {
+                for (uint32_t j = 0; j < Vs; ++j) {
+                    noc.async_write(sp, ring_acc, entry, {.offset_bytes = (base_t + ub_ * KVs + i * Vs + j) * entry},
+                                    {.page_id = bh_u * KV + v0 + i * Vt + j});
+                }
+            }
+        }
+        noc.async_writes_flushed();
+        spd.reserve_back(1);
+        spd.push_back(1);
+    }
 #endif
     wr_lazy_fn();
 #endif
