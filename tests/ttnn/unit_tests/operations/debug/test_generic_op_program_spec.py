@@ -873,8 +873,9 @@ def test_run_args_must_match_the_kernels(device, cache_hit, expect_error):
 
 @pytest.mark.parametrize("duplicate", ["kernel", "kernel_with_other_arguments", "tensor_parameter"])
 def test_a_name_declared_twice_gets_metals_error(device, duplicate, expect_error):
-    """generic_op checks a kernel or tensor parameter declared twice once, against its first declaration, so when the
-    run args fit that declaration, the call gets past generic_op's checks to Metal's, which names the duplicate."""
+    """When a kernel or tensor parameter is declared twice, generic_op checks it once, against its first declaration,
+    so when the run args fit that declaration, the call gets past generic_op's checks to Metal's, which names the
+    duplicate."""
     _, a, b, out = inputs(device)
     spec, run_args = mul_program(a, b, out)
     if duplicate == "kernel":

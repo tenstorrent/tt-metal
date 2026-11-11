@@ -159,9 +159,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         "MeshProgramSpec",
         R"doc(
         Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range.
-        generic_op raises if it has no programs, if a range reaches outside the mesh, if two ranges overlap, if a
-        device in a range does not hold every tensor, or if the MeshProgramRunArgs does not give run args for exactly
-        these ranges. Lists are copied in and out.
+        generic_op raises if the MeshProgramSpec has no programs, if a range reaches outside the mesh, if two ranges
+        overlap, if a device in a range does not hold every tensor, or if the MeshProgramRunArgs does not give run
+        args for exactly these ranges. Lists are copied in and out.
         )doc")
         .def(
             "__init__",
