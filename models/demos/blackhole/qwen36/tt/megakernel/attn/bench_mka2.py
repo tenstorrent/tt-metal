@@ -179,9 +179,9 @@ for it in range(ITERS):
             _k += 1
         print(f"[v12] iter {it} per-layer MLP vs AR-delivered-x gold pcc min {min(_mp)} all {_mp}", flush=True)
         if _nr:
-            _ok = all(abs(r_ - 1.0) <= 0.05 for r_ in _nr)
+            _ok = all(abs(r_ - 1.0) <= 0.03 for r_ in _nr)
             print(f"[norm] iter {it} MLP |dev| / |RMSNorm(x)*gamma_model MLP| per layer {_nr} (MK_NORM_FIX {globals().get('NORM_FIX', 1.0):.6f}) "
-                  f"{'PASS' if _ok else 'FAIL'} (1.000 +- 5%, interim band)", flush=True)
+                  f"{'PASS' if _ok else 'FAIL'} (1.000 +- 3%; RC has MK_RSTD_HIFI4 + MK_GC_HIFI4)", flush=True)
     if V12 and not (REAL_AR and AR_GAMMA):   # (MK_AR_GAMMA: v_xo ends the pass holding x_deliver, not the partial)
         _v = ttnn.to_torch(_xo_t).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
         if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(_xo_t), os.environ['V12_SAVE'])
@@ -294,7 +294,7 @@ for it in range(ITERS):
             if os.environ.get('MK_NORM_DIAG') == '1': print(f"[normdiag] iter {it} layer {L} qkv cols<64T |dev|/|gold| {(qv[L][:, :64 * TILE].norm() / gq_[:, :64 * TILE].norm()).item():.4f}", flush=True)
             if globals().get('GAMMA_CONS') or globals().get('AR_GAMMA'):   # [norm] q/k/v columns (pre-sigmoid, linear in γ): |dev| / |true RMSNorm · γ_model @ W|
                 _r = (qv[L][:, :64 * TILE].norm() / (gq_[:, :64 * TILE].norm() / globals().get('NORM_FIX', 1.0))).item()
-                print(f"[norm] iter {it} layer {L} qkv |dev| / |RMSNorm(x)*gamma_model @ W| {_r:.4f} {'PASS' if abs(_r - 1.0) <= 0.05 else 'FAIL'}", flush=True)
+                print(f"[norm] iter {it} layer {L} qkv |dev| / |RMSNorm(x)*gamma_model @ W| {_r:.4f} {'PASS' if abs(_r - 1.0) <= 0.03 else 'FAIL'}", flush=True)
     vs = ttnn.to_torch(outs).float().reshape(NL, NU, TILE, DHD)
     for L in range(NL):
         v_, g2 = vs[L][:, :NQH * T], golds_s[L][:, :NQH * T]
