@@ -19,6 +19,7 @@ RECIPE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RELEASE_RECIP
 E1_TO_GDN = {
     "E1_LZVC": "GDN_LZVC", "E1_WPRE": "GSTEP_WPRE", "E1_ATTHOLD": "GSTEP_ATTHOLD", "E1_WYPAIR": "GSTEP_WYPAIR",
     "E1_WYORD": "GSTEP_WYORD", "E1_CUTST": "GSTEP_CUTST", "E1_KTLATE": "GSTEP_KTLATE", "E1_KTSLATE": "GSTEP_KTSLATE",
+    "E1_STNARROW": "GDN_STNARROW", "E1_KTDD": "GDN_KTDD",   # rc1b (7u REPLAY): RC B=8 / VB>1 satisfy their gates
 }
 # recipe flags that are code defaults (the recipe names them with "default"): an unset host env is the RC value
 CODE_DEFAULT = {"E1_EARLY_REPLAY"}
