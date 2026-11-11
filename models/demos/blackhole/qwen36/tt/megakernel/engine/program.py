@@ -194,7 +194,11 @@ def setup_bench(dev, MESH, mesh_identity):
         for k_ in ('MK_V12', 'MK_RS_QKV', 'MKA_RQKV'):
             if (k_, '1') not in MKDEF: MKDEF = MKDEF + [(k_, '1')]
         QSK_GK = int(os.environ.get('QSK_GK', '6')); MKDEF = MKDEF + [('QSK_GK', str(QSK_GK))]
+    # spec v1.67: MK_V12_CB is the default under MK_V12 (v12's landing buffers as role-local CBs, §20); MK_V12_CB=0 opts out
+    if ('MK_V12', '1') in MKDEF and not any(k_ == 'MK_V12_CB' for k_, _ in MKDEF):
+        MKDEF = MKDEF + [('MK_V12_CB', '1')]
     MKDEF += [('MKA_AMASK', f'{AMASK & 0xFFFFFFFF}u'), ('MKA_S_GDN', str(int(S_GDN_US * 1350)))]
+    if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
 
@@ -497,6 +501,14 @@ def setup_bench(dev, MESH, mesh_identity):
         V_RESID = ('MK_OWNER_RESID', '1') in MKDEF
         V_R = int(os.environ.get('V12_R', '32')); V_FIRST = int(os.environ.get('V12_FIRST', '1'))
         assert V_R == 32 or 1 <= V_R <= 16
+        # spec v1.71 (RC rule): MK_REAL_AR at R < 32 has an open residual blow-up (u1, R=4). The RC engine is the R = 32 (8-user)
+        # program only (1-7 users padded onto it). Never inside the model (QWEN36_R16_MEGAKERNEL=1); bench debugging needs the
+        # explicit opt-in MK_ALLOW_REAL_AR_R_LT32=1.
+        if V_R < 32 and ('MK_REAL_AR', '1') in MKDEF:
+            assert os.environ.get('QWEN36_R16_MEGAKERNEL', '0') != '1', \
+                f"engine with MK_REAL_AR at R={V_R} < 32 is forbidden in the model (spec v1.71: open R<32 real-AR bug)"
+            assert os.environ.get('MK_ALLOW_REAL_AR_R_LT32', '0') == '1', \
+                f"MK_REAL_AR at R={V_R} < 32 is numerically wrong (spec v1.71); set MK_ALLOW_REAL_AR_R_LT32=1 to debug it"
         if os.environ.get('MK_V12_RCT', '1') == '1': MKDEF = MKDEF + [('MK_V12_RCT', str(V_R))]   # compile-time R (text budget)
         def q4(w): return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
         vwg, vwu, vwd = q4(wg_t), q4(wu_t), q4(wd_t)   # BFP4 values are tile-local, so layout independent
@@ -611,8 +623,9 @@ def setup_bench(dev, MESH, mesh_identity):
             MKDEF = MKDEF + [('MK_AR_ADLV', str(ttnn.get_global_semaphore_address(AR_ADLV))), ('MK_AR_ASRC', str(ttnn.get_global_semaphore_address(AR_ASRC))),
                              ('MK_AR_CB_AIN', '23')]
             print(f"[ar] attention AR on: {AR_NAR} ARs / pass, attention mask {AR_ATYPE:#x}", flush=True)
-        # MK_AR_DBG=1 (validation, R = 32): per-AR input / residual chunks -> DRAM (see mka2_writer.cpp ar_dbg)
-        AR_DBG = os.environ.get('MK_AR_DBG', '0') == '1' and V_R == 32
+        # MK_AR_DBG=1 (validation): per-AR input / residual chunks -> DRAM (see mka2_writer.cpp ar_dbg); R < 32: the input in tile
+        # layout (rows < R), the residual packed (MK_AR_OUT), both unpacked by the bench
+        AR_DBG = os.environ.get('MK_AR_DBG', '0') == '1'
         if AR_DBG:
             ar_dbgt = ttnn.from_torch(torch.zeros(1, 1, TILE, AR_NAR * 2 * H).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             MKDEF = MKDEF + [('MK_AR_DBGADDR', str(ar_dbgt.buffer_address()))]
@@ -648,7 +661,17 @@ def setup_bench(dev, MESH, mesh_identity):
         # residual stream (AR output = next AR's residual, in place). R = 32: it IS v_x0 (owner j: x tiles 10j.., unused by the
         # owner sum with MK_OWNER_RESID=0), so the stand-in x delivery feeds each MLP the real residual stream and no extra
         # lockstep L1 is spent (the owners' CB region is ~50 KB short otherwise); R < 32: a packed residual of its own
-        ar_out = v_x0 if AR_PT == 10 else ttnn.from_torch(torch.zeros(TILE, 16 * AR_PT * TILE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_arw(AR_PT))
+        def _pack_res(x_):   # [M, H] -> [TILE, 16 * AR_PT * TILE] whose tile bytes are the packed residual stream (rows < R)
+            raw = torch.zeros(16, AR_PT * 1024)
+            xr = x_[:V_R].reshape(V_R, 16, 10, 2, 16).permute(1, 2, 3, 0, 4)   # [chunk, t, f, r, c]: tile t face f at (2t + f) R 32 B
+            raw[:, :10 * 2 * V_R * 16] = xr.reshape(16, -1)
+            raw = raw.reshape(16 * AR_PT, 4, 16, 16)                             # [tile, face, row, col] (faces 0-3 row-major)
+            t_ = torch.zeros(16 * AR_PT, TILE, TILE)
+            t_[:, :16, :16], t_[:, :16, 16:], t_[:, 16:, :16], t_[:, 16:, 16:] = raw[:, 0], raw[:, 1], raw[:, 2], raw[:, 3]
+            return t_.permute(1, 0, 2).reshape(TILE, -1)
+        # R < 32: the residual stream starts as the packed x (the R = 32 residual v_x0 holds x already); before 2026-11-11 it
+        # started at 0 (every u1 MK_REAL_AR run: the residual was the MLP sum without x; the AR arithmetic itself was exact)
+        ar_out = v_x0 if AR_PT == 10 else ttnn.from_torch(_pack_res(xb.bfloat16().float()), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_arw(AR_PT))
         if AR_DLVR and AR_PT != 10: MKDEF = MKDEF + [('MK_AR_OUT', str(ar_out.buffer_address()))]   # reader's packed source
         # MK_AR_GAMMA=1 (spec §19): x_deliver = residual ⊙ γ_next on every owner; γ table in DRAM [NL x 2 (input_ln,
         # post_attn_ln) x 16 chunks x 10 tiles] bf16, γ in row 0, page (L*2+n)*160 + chunk*10 + t (√1.25 host-folded)
@@ -871,6 +894,33 @@ def setup_bench(dev, MESH, mesh_identity):
                     for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
             if RWO: gold_wo[L] = (A_ * sg) @ woq[L]
         print(f"[rmask] causal mask on last-block cores {sorted(MASKC)}", flush=True)
+    def attn_regold(L, gq):   # MK_REAL_AR checker: attention layer L's qkv / k / SDPA / wo golds from the x the AR delivered
+        """gq: the raw qkv gold [M, QN*TILE] = rstd (CB 20 stand-in) * x_L @ Wqkv, x_L = the residual the previous AR delivered."""
+        gold_qkv[L] = gq
+        if not RQNR: return
+        Xq = gq.double()
+        qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
+        gold_k[L] = norm_rope(Xq[:, 48 * TILE:56 * TILE].float(), 6)
+        g_ = torch.zeros(NU, TILE, DHD)
+        kq_, vq_ = KVQ[L]
+        for u_ in range(NU):
+            Qu = torch.zeros(TILE, DHD)
+            for h_ in range(6):
+                for j_ in range(4): Qu[4 * h_ + j_] = qh[h_][4 * u_ + j_]
+            Qu = Qu.bfloat16().float()
+            p_ = torch.exp(Qu[:NQH * T] @ kq_[u_].T)
+            if RMASK:
+                GOLD_NOMASK.setdefault(L, torch.zeros(NU, TILE, DHD))[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+                p_[:, CTX - TILE:] *= mk[u_, :NQH * T]
+            g_[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+        golds_s[L] = g_
+        if RWO:
+            A_ = torch.zeros(M, 48 * TILE)
+            sg = torch.sigmoid(gq[:, 64 * TILE:112 * TILE])
+            for u_ in range(NU):
+                for h_ in range(6):
+                    for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+            gold_wo[L] = (A_ * sg) @ woq[L]
     def head_args_r(fi):
         if not RQNR: return []
         return [hg_t.buffer_address() if fi in HC else 0, HC.index(fi) * 10 if fi in HC else 0,

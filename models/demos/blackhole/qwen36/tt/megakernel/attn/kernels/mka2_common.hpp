@@ -5,6 +5,15 @@
 // ATTN synchronisation uses GLOBAL semaphores (spec v0.1): uniform L1 addresses passed in runtime args; all counters
 // are cumulative across layers (value for layer L = (L + 1) x per-layer count), so nothing is reset inside a pass.
 #pragma once
+
+// MKA_EXT_LEANZ (profiled runs only): the EXT (owner) data-movement kernels keep only the zones the layer / AR reports
+// use (W-OREL, W-WOAR, the MK_AR_ZONE ones); the rest compile out. The profiler zones alone put the owners-only EXT
+// binary over the 70656 B kernel config buffer under GDN24 + RWO + MK_REAL_AR + MK_REAL_AAR (fits at O2 without them).
+#if defined(MKA_ROLE_EXT) && defined(MKA_EXT_LEANZ)
+#define MKZ(n)
+#else
+#define MKZ(n) DeviceZoneScopedN(n)
+#endif
 #include "../../kernels/fm11_common.hpp"
 constexpr uint32_t CB_WM = 6, CB_YM = 7, CB_GO = 8;
 constexpr uint32_t CB_Q = 9, CB_K = 10, CB_V = 11, CB_O = 12;
