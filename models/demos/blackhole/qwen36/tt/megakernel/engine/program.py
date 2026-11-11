@@ -725,6 +725,7 @@ def setup_bench(dev, MESH, mesh_identity):
         ro = QROLE.get(fi, (0,))[0]
         return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + wo_rargs(fi) + head_args_r(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
+    if os.environ.get('MKA_SCLAMP', '1') == '1' and ('MKA_SCLAMP', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_SCLAMP', '1')]   # S <= 60 before exp (RC guard)
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
     # GDN24 bring-up: real wo on the 16 owners (10 tiles each, ring 480 pages); the 36-core split (owners + GDN cores) comes
     # with the GDN role's include of the wo unit (spec v1.5)

@@ -650,6 +650,10 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < nb; ++i)
                     for (uint32_t t = 0; t < DH; ++t) matmul_tiles(CB_Q, CB_K, qoff + t, i * DH + t, i);
+#if defined(MKA_SCLAMP)
+                unary_min_tile_init();   // RC guard for the no-max softmax: S <= 60 (exp(60) ~ 1e26, fp32-safe sums); bit-identical
+                for (uint32_t i = 0; i < nb; ++i) unary_min_tile(i, 0x42700000u);   // when |S| < 60 (real 8-32K traces: max 21.85)
+#endif
                 exp_tile_init();
                 for (uint32_t i = 0; i < nb; ++i) exp_tile(i);
 #if defined(MKA_RQNR) && defined(MKA_RMASK)
