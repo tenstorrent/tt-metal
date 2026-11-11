@@ -2105,15 +2105,22 @@ def setup_bench(dev, MESH, mesh_identity):
             if DNORM_SPLIT and role == 'w':   # rows 10-31 of CB 37's 8 pages = 0 once (never written; rows 0-9 rewritten every delivery)
                 head = ('\n  {   // MK_DNORM_SPLIT\n'
                         f'    volatile tt_l1_ptr uint32_t* z_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>({VADDR["rred"]}u);\n'
-                        '    for (uint32_t p = 0; p < 8; ++p) {\n      for (uint32_t i = 160; i < 256; ++i) { z_[p * 1024 + i] = 0; z_[p * 1024 + 256 + i] = 0; }\n'
-                        '      for (uint32_t i = 512; i < 1024; ++i) z_[p * 1024 + i] = 0;\n    }\n  }') + head
+                        + ('    for (uint32_t p = 0; p < 8; ++p) {\n      for (uint32_t i = 160; i < 256; ++i) z_[p * 1024 + i] = 0;\n'
+                           '      for (uint32_t i = 416; i < 1024; ++i) z_[p * 1024 + i] = 0;\n    }\n  }' if GTEXT2 else
+                           '    for (uint32_t p = 0; p < 8; ++p) {\n      for (uint32_t i = 160; i < 256; ++i) { z_[p * 1024 + i] = 0; z_[p * 1024 + 256 + i] = 0; }\n'
+                           '      for (uint32_t i = 512; i < 1024; ++i) z_[p * 1024 + i] = 0;\n    }\n  }')) + head
             new_loop = (head + f'   {fn}(2u * LL + 1u);   // delivery 2 LL + 1: this layer\'s MLP x\n  }}\n'
                         + (f'  *(volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u = 0;   // device-local: all {16 * NL} increments awaited\n' if role == 'w' else ''))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
             if role == 'w':
                 mc = '\n'.join(f'  noc_async_write_multicast(s_, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsp_a}u), 4096, {r[4]}u, false);' for r in rects)
                 mi = '\n'.join(f'  noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsf_a}u), 1, {r[4]}u);' for r in rects)
-                fdef = (f'__attribute__((noinline)) static void rred_w(uint32_t d) {{   // MK_AR_RSTD_RED=gdn: delivery d\n'
+                if GTEXT2:   # one copy of each multicast sequence (2 STREAM rects), constant addresses, same order
+                    mc = '\n'.join(f'  rred_mcw(s_, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsp_a}u), {r[4]}u);' for r in rects)
+                    mi = '\n'.join(f'  rred_mci(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsf_a}u), {r[4]}u);' for r in rects)
+                fdef = (('__attribute__((noinline)) static void rred_mcw(uint32_t s, uint64_t a, uint32_t n) { noc_async_write_multicast(s, a, 4096, n, false); }\n'
+                         '__attribute__((noinline)) static void rred_mci(uint64_t a, uint32_t n) { noc_semaphore_inc_multicast(a, 1, n); }\n' if GTEXT2 else '') +
+                        f'__attribute__((noinline)) static void rred_w(uint32_t d) {{   // MK_AR_RSTD_RED=gdn: delivery d\n'
                         f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u, {RRED_ARR}u * (d + 1u));\n'
                         f'  cb_reserve_back(37, 8);\n  cb_push_back(37, 8);\n  cb_wait_front(39, 1);\n  const uint32_t s_ = get_read_ptr(39);\n'
                         f'{mc}\n  noc_async_write_barrier();   // the Σ tile has landed before its flag\n{mi}\n  noc_async_atomic_barrier();\n  cb_pop_front(39, 1);\n}}\n')
@@ -2123,8 +2130,11 @@ def setup_bench(dev, MESH, mesh_identity):
                         + ('  GDN_HWS(37, 37, 39);   // compute() re-runs its own startup per layer (GTEXT2: one out-of-line copy)\n' if GTEXT2 else
                            '  compute_kernel_hw_startup(37, 37, 39);   // compute() re-runs its own startup per layer\n') +
                         '  cb_wait_front(37, 8);\n  cb_reserve_back(39, 1);\n  reconfig_data_format_srca(37);\n  pack_reconfig_data_format(39);\n'
-                        '  copy_init(37);\n  tile_regs_acquire();\n  copy_tile(37, 0, 0);\n'
-                        '  for (uint32_t t = 1; t < 8; ++t) {\n    copy_init(37);\n    copy_tile(37, t, 1);\n    add_binary_tile_init();\n    add_binary_tile(0, 1, 0);\n  }\n'
+                        + ('  for (uint32_t t = 0; t < 8; ++t) {   // GTEXT2: tile 0 folded in (same call sequence)\n    copy_init(37);\n'
+                           '    if (t == 0) {\n      tile_regs_acquire();\n    }\n    copy_tile(37, t, t ? 1u : 0u);\n'
+                           '    if (t) {\n      add_binary_tile_init();\n      add_binary_tile(0, 1, 0);\n    }\n  }\n' if GTEXT2 else
+                           '  copy_init(37);\n  tile_regs_acquire();\n  copy_tile(37, 0, 0);\n'
+                           '  for (uint32_t t = 1; t < 8; ++t) {\n    copy_init(37);\n    copy_tile(37, t, 1);\n    add_binary_tile_init();\n    add_binary_tile(0, 1, 0);\n  }\n') +
                         '  sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();\n  sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);\n'
                         '  transpose_dest_init<true>();\n  transpose_dest<true>(0);\n'
                         '  tile_regs_commit();\n  tile_regs_wait();\n  pack_tile(0, 39);\n  tile_regs_release();\n  cb_push_back(39, 1);\n  cb_pop_front(37, 8);\n}\n')

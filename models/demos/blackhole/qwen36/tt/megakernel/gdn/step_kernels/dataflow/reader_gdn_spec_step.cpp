@@ -124,6 +124,33 @@ void gdn_hold_publish(uint32_t live);  // the including TU: this layer's live-us
 uint32_t gdn_ktdd_peer(uint32_t p);  // the including TU: NoC (x << 16 | y) of value block p of this core's head
 volatile tt_l1_ptr uint32_t* gdn_ktdd_sem();  // the including TU: the 2 counter words (same address on every GDN core)
 static uint32_t g_ktdd_l = 0;  // GDN layers done by this reader (reset with gdn_stn_reset)
+#if GDN_GTEXT2
+// GTEXT2: one peer loop for both uses. a != 0: the user's two K^T faces at L1 a and a + 2048 -> the same addresses of every
+// peer except block s (face-major, exactly as the two gdn_ktdd_fwd calls); a == 0: +1 on counter word w of every peer except
+// block s (as gdn_ktdd_bump)
+__attribute__((noinline)) void gdn_ktdd_peers(uint32_t s, uint32_t vb, uint32_t a, uint32_t w) {
+#pragma GCC unroll 1
+    for (uint32_t f = 0; f < (a ? 4096u : 1u); f += 2048) {
+        for (uint32_t p = 0; p < vb; ++p) {
+            if (p != s) {
+                const uint32_t xy = gdn_ktdd_peer(p);
+                if (a) {
+                    noc_async_write(a + f, get_noc_addr(xy >> 16, xy & 0xFFFFu, a + f), 1024);
+                } else {
+                    noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, (uint32_t)(gdn_ktdd_sem() + w)), 1);
+                }
+            }
+        }
+    }
+}
+#define GDN_KTDD_BUMP(s_, vb_, w_) gdn_ktdd_peers(s_, vb_, 0u, w_)
+#define GDN_KTDD_FWD2(s_, vb_, a_) gdn_ktdd_peers(s_, vb_, a_, 0u)
+#else
+#define GDN_KTDD_BUMP(s_, vb_, w_) gdn_ktdd_bump(s_, vb_, w_)
+#define GDN_KTDD_FWD2(s_, vb_, a_) \
+    gdn_ktdd_fwd(s_, vb_, a_);     \
+    gdn_ktdd_fwd(s_, vb_, (a_) + 2048)
+#endif
 // +1 on counter word `w` (0 / 1) of every peer except block s (one call site: code size)
 __attribute__((noinline)) void gdn_ktdd_bump(uint32_t s, uint32_t vb, uint32_t w) {
     for (uint32_t p = 0; p < vb; ++p) {
@@ -766,7 +793,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if GDN_KTDD
         // this core's ktp_in slots are reserved (the compute popped the previous layer's) and +0 outside the live parts:
         // the peers may write their K^T shares into them
-        gdn_ktdd_bump(s, VB, 0);
+        GDN_KTDD_BUMP(s, VB, 0);
 #endif
 #endif
         for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
@@ -840,12 +867,11 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 const uint32_t kf = ((ub_ * T) >> 4) * 1024u;
                 for (uint32_t i = s; i < Kt; i += VB) {
                     const uint32_t a = kb + (ub_ * Kt + i) * te + kf;
-                    gdn_ktdd_fwd(s, VB, a);
-                    gdn_ktdd_fwd(s, VB, a + 2048);
+                    GDN_KTDD_FWD2(s, VB, a);
                 }
             }
             noc_async_write_barrier();
-            gdn_ktdd_bump(s, VB, 1);
+            GDN_KTDD_BUMP(s, VB, 1);
             noc_semaphore_wait_min(ks + 1, want);
             ++g_ktdd_l;
         }
