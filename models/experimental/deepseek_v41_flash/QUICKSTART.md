@@ -39,10 +39,11 @@ hf download deepseek-ai/DeepSeek-V4.1-Flash-1017
 
 To keep it somewhere else, pass `--model-dir /path/to/checkpoint` to the server (and to the script in step 5).
 
-## 4. Pick a weight cache directory
+## 4. (Optional) Pick a weight cache directory
 
 The first run converts every weight into ttnn tiles and saves them here; later runs load them from the cache.
-Use the same value for the fill script and the server:
+Without it the cache goes in `../cache` (relative to the repo root, where you run the commands from). If you
+set it, set it in the shell you run both the fill script and the server from:
 
 ```bash
 export DEEPSEEK_V4_CACHE_DIR=/path/to/cache
