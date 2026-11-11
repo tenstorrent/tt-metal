@@ -16,9 +16,14 @@
 // page and its newest word 2 (a per-step host row: a capture must not bake in the slot); a user past the tile's
 // rows reads row 0 of the query (the newest is then the sentinel: nothing is read).
 //
+// A core works one or more units, one after another (the live rows of a decode tile scored in
+// one launch): a unit is one split row of one query, (key user, split row r, query row), and takes the chunks
+// c = r mod NCORES of that user's keys; NCORES is the split rows of a query, whatever the cores of the launch. The
+// single-query launch gives every core one unit, its own split row.
+//
 // compile_time_args = [cb_qrm, cb_wrm, cb_k, cb_meta, CHUNK, TR, NCORES, PIN_ROWS, DYN, TensorAccessorArgs(q)...,
 //                      TensorAccessorArgs(w)..., TensorAccessorArgs(k)..., TensorAccessorArgs(pin)...]
-// runtime args = [q_addr, w_addr, k_addr, pin_addr, user, core_index, row]
+// runtime args = [q_addr, w_addr, k_addr, pin_addr, n_units, then per unit: user, split row, query row]
 
 #include <cstdint>
 
@@ -30,9 +35,9 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(1);
     const uint32_t k_addr = get_arg_val<uint32_t>(2);
     const uint32_t pin_addr = get_arg_val<uint32_t>(3);
-    const uint32_t user_arg = get_arg_val<uint32_t>(4);  // the key user
-    const uint32_t core = get_arg_val<uint32_t>(5);
-    const uint32_t row_arg = get_arg_val<uint32_t>(6);  // the query row and pin entry (the user's own row, or a verify row)
+    const uint32_t n_units = get_arg_val<uint32_t>(4);
+    constexpr uint32_t UNIT_ARGS = 5;   // per unit: the key user, the split row, the query row and pin entry
+    constexpr uint32_t MAX_UNITS = 16;  // units a core (range_scores asserts it)
 
     constexpr uint32_t cb_qrm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_wrm = get_compile_time_arg_val(1);
@@ -73,51 +78,72 @@ void kernel_main() {
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_l1);
     volatile tt_l1_ptr uint32_t* pins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pin_l1);
-    const uint32_t user = DYN ? (pins[0] < 32 ? pins[0] : 0) : user_arg;  // the key user
-    const uint32_t row = DYN ? user : row_arg;                               // the query row and pin entry
-    const uint32_t newest = DYN ? pins[2] : pins[row];
-    const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
-    uint32_t vt = (visible + 31) / 32;
-    if (vt > TR) {
-        vt = TR;
+    // every unit's user, split row, query row and bound, before the page that holds the pins is handed over
+    uint32_t unit_user[MAX_UNITS];
+    uint32_t unit_core[MAX_UNITS];
+    uint32_t unit_row[MAX_UNITS];
+    uint32_t unit_vt[MAX_UNITS];
+    for (uint32_t u = 0; u < n_units; ++u) {
+        const uint32_t user = DYN ? (pins[0] < 32 ? pins[0] : 0) : get_arg_val<uint32_t>(UNIT_ARGS + 3 * u);
+        const uint32_t row = DYN ? user : get_arg_val<uint32_t>(UNIT_ARGS + 3 * u + 2);
+        const uint32_t newest = DYN ? pins[2] : pins[row];
+        const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
+        uint32_t vt = (visible + 31) / 32;
+        if (vt > TR) {
+            vt = TR;
+        }
+        unit_user[u] = user;
+        unit_core[u] = get_arg_val<uint32_t>(UNIT_ARGS + 3 * u + 1);
+        unit_row[u] = row;
+        unit_vt[u] = vt;
     }
-    words[0] = vt;
-    meta.push_back(1);
 
-    // the query (both pages of cb_wrm: zero rows 1..31 once; row 0 is the user's weights)
+    // both pages of cb_wrm: zero rows 1..31 once (row 0 is overwritten per unit with the query row's weights)
     {
         volatile tt_l1_ptr uint32_t* wz = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wrm.get_write_ptr());
         for (uint32_t i = 0; i < 2 * TILE_BYTES / 4; ++i) {
             wz[i] = 0;
         }
     }
-    qrm.reserve_back(DIM_TILES);
-    noc_async_read(q.get_noc_addr(row, 0), qrm.get_write_ptr(), Q_BYTES);
-    wrm.reserve_back(1);
-    noc_async_read(w.get_noc_addr(row, 0), wrm.get_write_ptr(), W_BYTES);
-    noc_async_read_barrier();
-    qrm.push_back(DIM_TILES);
-    wrm.push_back(1);
 
-    const uint32_t tile_base = user * TR * DIM_TILES;
-    for (uint32_t c = core; c < NCHUNKS; c += NCORES) {
-        const uint32_t t0 = c * CHUNK;
-        if (t0 >= vt) {
-            break;
+    for (uint32_t u = 0; u < n_units; ++u) {
+        const uint32_t vt = unit_vt[u];
+        if (u > 0) {
+            meta.reserve_back(1);  // the compute has taken the previous unit's bound
+            words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta.get_write_ptr());
         }
-        uint32_t t1 = t0 + CHUNK;
-        if (t1 > vt) {
-            t1 = vt;
-        }
-        // whole chunks of pages always (a partial push would leave the CB's pointers off the wrap); the compute
-        // reads the first t1 - t0 tile rows
-        kt.reserve_back(DIM_TILES * CHUNK);
-        uint32_t l1 = kt.get_write_ptr();
-        for (uint32_t id = tile_base + t0 * DIM_TILES; id < tile_base + t1 * DIM_TILES; ++id) {
-            noc_async_read(k.get_noc_addr(id, 0), l1, TILE_BYTES);
-            l1 += TILE_BYTES;
-        }
+        words[0] = vt;
+        meta.push_back(1);
+
+        // the unit's query
+        qrm.reserve_back(DIM_TILES);
+        noc_async_read(q.get_noc_addr(unit_row[u], 0), qrm.get_write_ptr(), Q_BYTES);
+        wrm.reserve_back(1);
+        noc_async_read(w.get_noc_addr(unit_row[u], 0), wrm.get_write_ptr(), W_BYTES);
         noc_async_read_barrier();
-        kt.push_back(DIM_TILES * CHUNK);
+        qrm.push_back(DIM_TILES);
+        wrm.push_back(1);
+
+        const uint32_t tile_base = unit_user[u] * TR * DIM_TILES;
+        for (uint32_t c = unit_core[u]; c < NCHUNKS; c += NCORES) {
+            const uint32_t t0 = c * CHUNK;
+            if (t0 >= vt) {
+                break;
+            }
+            uint32_t t1 = t0 + CHUNK;
+            if (t1 > vt) {
+                t1 = vt;
+            }
+            // whole chunks of pages always (a partial push would leave the CB's pointers off the wrap); the compute
+            // reads the first t1 - t0 tile rows
+            kt.reserve_back(DIM_TILES * CHUNK);
+            uint32_t l1 = kt.get_write_ptr();
+            for (uint32_t id = tile_base + t0 * DIM_TILES; id < tile_base + t1 * DIM_TILES; ++id) {
+                noc_async_read(k.get_noc_addr(id, 0), l1, TILE_BYTES);
+                l1 += TILE_BYTES;
+            }
+            noc_async_read_barrier();
+            kt.push_back(DIM_TILES * CHUNK);
+        }
     }
 }

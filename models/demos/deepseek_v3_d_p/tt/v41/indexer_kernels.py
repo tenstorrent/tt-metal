@@ -403,8 +403,20 @@ def split_geometry(width: int, rows: int | None = None) -> tuple[int, int, int, 
     return rows, nchunks, per_row, per_row * chunk_cols
 
 
+RANGE_MAX_UNITS = 16  # rangescore_reader.cpp MAX_UNITS: the (live row, split row) units one core takes
+
+
 def range_scores(
-    q, w, k, pin, user: int, width: int, rows: int | None = None, dyn: bool = False, row: int | None = None
+    q,
+    w,
+    k,
+    pin,
+    user: int,
+    width: int,
+    rows: int | None = None,
+    dyn: bool = False,
+    row: int | None = None,
+    live: list | None = None,
 ):
     """One user's query of the decode tile against the visible prefix of its own index keys, in the pool's tiled
     form (the single-query scorer of the densely scored sources).
@@ -420,7 +432,12 @@ def range_scores(
     scored by core ``c % rows`` into slot ``c // rows`` of its row; the bound is read on device, so only the visible
     chunks are read and computed and the op is trace-safe. One op (kernels/rangescore_*). ``dyn``: the user and its
     newest row are words 0 and 2 of ``pin`` (a per-step host page; ``user`` is ignored): the one-live-row capture's
-    selection of the live user alone, whichever slot it is."""
+    selection of the live user alone, whichever slot it is. ``live``:
+    a list of ``(user, row)``, the live rows of the tile (``user`` and ``row`` are ignored) -> bf16 row-major
+    [1, 1, L * rows, row width], live row ``l``'s split layout at rows ``l * rows .. (l + 1) * rows - 1`` (what
+    ``TtV41Indexer.select_split_rows`` takes), bit-equal to the ``L`` single launches' outputs concatenated, in
+    one launch: its ``L * rows`` (live row, split row) units go round the first ``min(L * rows, grid)`` cores,
+    each core working its units one after another."""
     for t, what in ((q, "query"), (w, "weights")):
         _check_row_major(t, ttnn.bfloat16, f"range_scores {what}")
     _check_row_major(pin, ttnn.uint32, "range_scores pin")
@@ -428,34 +445,42 @@ def range_scores(
     assert k.layout == ttnn.TILE_LAYOUT and k.dtype == ttnn.bfloat16, "range_scores index-K must be tiled bf16"
     assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), "index-K must be DRAM-interleaved"
     assert width % 32 == 0 and (k.shape[2], k.shape[3]) == (width, 128), (width, tuple(k.shape))
-    row = user if row is None else row
-    assert 0 <= user < k.shape[0] and q.shape[2] > row and w.shape[2] > row, (user, row, tuple(k.shape))
+    if live is None:
+        live = [(user, user if row is None else row)]
+    else:
+        assert not dyn and live, "live rows: the users and rows are constants of the launch"
+    for user_l, row_l in live:
+        assert 0 <= user_l < k.shape[0] and q.shape[2] > row_l and w.shape[2] > row_l, (live, tuple(k.shape))
+        assert pin.shape[2] == 1 and pin.shape[3] > row_l, (tuple(pin.shape), row_l)
     assert q.shape[3] == 32 * 128 and w.shape[3] == 32, (tuple(q.shape), tuple(w.shape))
-    assert pin.shape[2] == 1 and pin.shape[3] > row, (tuple(pin.shape), row)
     pin_rows = pin.shape[3]
     pin_slot = _round_up(pin_rows * 4, 64)
     tile_rows = width // 32
     chunk = RANGE_CHUNK
     nrows, _, per_row, row_width = split_geometry(width, rows)
     device = q.device()
-    coords, core_set = _cores(device, nrows)
-    assert len(coords) == nrows, (len(coords), nrows)
+    # a unit is one split row of one live row: (key user, split row, query row, output row); unit i on core i mod
+    # the launch's cores, so a core's units are spread over the live rows
+    units = [(user_l, r, row_l, l * nrows + r) for l, (user_l, row_l) in enumerate(live) for r in range(nrows)]
+    coords, core_set = _cores(device, len(units))
+    assert len(live) > 1 or len(coords) == nrows, (len(coords), nrows)
+    assert -(-len(units) // len(coords)) <= RANGE_MAX_UNITS, (len(units), len(coords))
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, nrows, row_width]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, 1, len(live) * nrows, row_width]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
     reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for i, (cx, cy) in enumerate(coords):
-        reader_args[cx][cy] = [
-            q.buffer_address(),
-            w.buffer_address(),
-            k.buffer_address(),
-            pin.buffer_address(),
-            user,
-            i,
-            row,
+        mine = units[i :: len(coords)]
+        addresses = [q.buffer_address(), w.buffer_address(), k.buffer_address(), pin.buffer_address()]
+        reader_args[cx][cy] = addresses + [len(mine)] + [v for user_u, r, row_u, _ in mine for v in (user_u, r, row_u)]
+        writer_args[cx][cy] = [out.buffer_address(), pin.buffer_address(), len(mine)] + [
+            v for _, r, row_u, out_row in mine for v in (r, row_u, out_row)
         ]
-        writer_args[cx][cy] = [out.buffer_address(), pin.buffer_address(), user, i, row]
-        compute_args[cx][cy] = [i]
+        compute_args[cx][cy] = [len(mine)] + [r for _, r, _, _ in mine]
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/rangescore_reader.cpp",

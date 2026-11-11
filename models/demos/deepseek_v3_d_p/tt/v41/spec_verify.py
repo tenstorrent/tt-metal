@@ -131,6 +131,10 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         # (``TtV41Indexer.select_rows_in_blocks``) instead of ``select_user_in_blocks`` once a
         # live row (``row``, the default); no constant of its own
         self.merge_blocks = os.environ.get("V41_VR_MERGE_BLOCKS", "row") == "rows"
+        # V41_VR_MERGE_SCORES=rows: the densely scored live rows in one ``range_scores`` launch that writes their
+        # stacked split layouts instead of a launch a row and a concat (``row``, the default);
+        # taken where the merged selection is (a prepared stack page)
+        self.merge_scores = os.environ.get("V41_VR_MERGE_SCORES", "row") == "rows"
         self._published: tuple | None = None  # (tile rows, ids [1, 1, L, K]) the candidate source published stacked
 
     def attach_drafter(self, drafter, users: list[int] | None = None, max_k: int = 3) -> None:
@@ -823,7 +827,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         )
         q_rm, w_rm = indexer.decode_query(q, w)
         parts = {}
-        dense: list[tuple[int, ttnn.Tensor]] = []  # (tile row, its split-layout score) of the densely scored rows
+        dense: list[tuple[int, int]] = []  # (tile row, user) of the densely scored rows
         if published is not None:
             self._published = None
         merged = []  # the (tile row, user) pairs whose selection in their blocks is merged (V41_VR_MERGE_BLOCKS)
@@ -856,13 +860,20 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                     q_rm, w_rm, blocks_of, pin_r, mine.ids, row, cap, base, cfg.INDEX_TOPK
                 )
                 continue
-            dense.append((row, range_scores(q_rm, w_rm, k, pins.newest, u, cap + 32, row=row)))
+            dense.append((row, u))
         n_rows = split_geometry(cap + 32)[0]
         stack_key = (tuple(row for row, _ in dense), n_rows)
-        if len(dense) > 1 and stack_key in self._stack_idx:
+        merge = len(dense) > 1 and stack_key in self._stack_idx
+        if merge and self.merge_scores:
+            scores = []
+            stacked = range_scores(q_rm, w_rm, k, pins.newest, 0, cap + 32, live=[(u, row) for row, u in dense])
+        else:
+            scores = [range_scores(q_rm, w_rm, k, pins.newest, u, cap + 32, row=row) for row, u in dense]
+        if merge:
             # the live rows' selections merged in one chain: the scores stacked along the
             # rows, the pins gathered into one page, one select over all of them, the rows sliced apart
-            stacked = ttnn.concat([score for _, score in dense], dim=2)
+            if scores:
+                stacked = ttnn.concat(scores, dim=2)
             idx = self._stack_idx[stack_key]
             wide = pins.newest
             if idx.shape[3] > wide.shape[3]:
@@ -882,7 +893,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                         None if ids is None else ttnn.slice(ids, [0, 0, l, 0], [1, 1, l + 1, ids.shape[3]])
                     )
         else:
-            for row, score in dense:
+            for (row, _), score in zip(dense, scores):
                 mine = candidates[row] if candidates is not None else None
                 pin_r = ttnn.slice(pins.newest, [0, 0, 0, row], [1, 1, 1, row + 1])
                 topk, blocks = indexer.select_split(score, pin_r, cap + 32, cfg.INDEX_TOPK, mine)

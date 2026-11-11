@@ -10,11 +10,13 @@
 // PER_ROW * CHUNK * 32]: the split layout, one page a core; the selection merges the rows, tt/v41/indexer.py
 // select_split). Two chunk buffers alternate so a write overlaps the next collection. The bound is entry `user` of
 // the pin page (uint32 [1, 1, 1, PIN_ROWS]: the user's newest visible row, SENTINEL for none, which makes every
-// row -inf). With DYN the newest is word 2 of the pin page (the reader's DYN: the one-live-row capture).
+// row -inf). With DYN the newest is word 2 of the pin page (the reader's DYN: the one-live-row capture). A core works
+// its units one after another (rangescore_reader.cpp): per unit the split row r (its chunks c = r mod NCORES), the
+// pin entry and the output row it fills (r of a single query; l * NCORES + r of live row l in a stacked output).
 //
 // compile_time_args = [cb_out, cb_scratch, CHUNK, TR, NCORES, PIN_ROWS, PER_ROW, DYN, TensorAccessorArgs(out)...,
 //                      TensorAccessorArgs(pin)...]
-// runtime args      = [out_addr, pin_addr, user, core_index, row]
+// runtime args      = [out_addr, pin_addr, n_units, then per unit: split row, pin row, output row]
 
 #include <cstdint>
 
@@ -24,10 +26,8 @@
 void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t pin_addr = get_arg_val<uint32_t>(1);
-    const uint32_t user = get_arg_val<uint32_t>(2);
-    const uint32_t core = get_arg_val<uint32_t>(3);
-    const uint32_t row = get_arg_val<uint32_t>(4);  // the pin entry (the user's own row, or a verify row)
-    (void)user;
+    const uint32_t n_units = get_arg_val<uint32_t>(2);
+    constexpr uint32_t UNIT_ARGS = 3;  // per unit: the split row, the pin entry, the output row
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
@@ -62,54 +62,59 @@ void kernel_main() {
     noc_async_read(pin.get_noc_addr(0, 0), base_l1, PIN_BYTES);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* pins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_l1);
-    const uint32_t newest = DYN ? pins[2] : pins[row];
-    const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
-    uint32_t vt = (visible + 31) / 32;
-    if (vt > TR) {
-        vt = TR;
-    }
-
     uint32_t slot = 0;
-    for (uint32_t j = 0; j < PER_ROW; ++j) {
-        const uint32_t c = j * NCORES + core;
-        const uint32_t t0 = c * CHUNK;
-        uint32_t t1 = t0 + CHUNK;
-        if (t1 > TR) {
-            t1 = TR;
+    for (uint32_t u = 0; u < n_units; ++u) {
+        const uint32_t core = get_arg_val<uint32_t>(UNIT_ARGS + 3 * u);
+        const uint32_t row = get_arg_val<uint32_t>(UNIT_ARGS + 3 * u + 1);
+        const uint32_t out_row = get_arg_val<uint32_t>(UNIT_ARGS + 3 * u + 2);
+        const uint32_t newest = DYN ? pins[2] : pins[row];
+        const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
+        uint32_t vt = (visible + 31) / 32;
+        if (vt > TR) {
+            vt = TR;
         }
-        uint32_t n = 0;  // computed tile rows of this chunk (none past the last chunk or the bound)
-        if (c < NCHUNKS && t0 < vt) {
-            n = (t1 < vt ? t1 : vt) - t0;
-        }
-        volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buf_l1[slot]);
-        volatile tt_l1_ptr uint16_t* dst16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf_l1[slot]);
-        noc_async_write_barrier();  // the write issued from this buffer two chunks ago has left it
-        if (n > 0) {
-            res.wait_front(CHUNK);
-            volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(res.get_read_ptr());
-            for (uint32_t b = 0; b < n; ++b) {
-                for (uint32_t i = 0; i < 8; ++i) {
-                    dst[b * ROW_U32 + i] = t[i];
-                    dst[b * ROW_U32 + 8 + i] = t[FACE1_U32 + i];
-                }
-                t += 32 * 32 * 2 / 4;  // the next result tile
+
+        for (uint32_t j = 0; j < PER_ROW; ++j) {
+            const uint32_t c = j * NCORES + core;
+            const uint32_t t0 = c * CHUNK;
+            uint32_t t1 = t0 + CHUNK;
+            if (t1 > TR) {
+                t1 = TR;
             }
-            res.pop_front(CHUNK);
-            // the last computed tile row may reach past the user's newest key
-            const uint32_t g = t0 + n - 1;
-            if (g * 32 + 31 > newest) {
-                for (uint32_t j = 0; j < 32; ++j) {
-                    if (g * 32 + j > newest) {
-                        dst16[(n - 1) * 32 + j] = NEG_INF;
+            uint32_t n = 0;  // computed tile rows of this chunk (none past the last chunk or the bound)
+            if (c < NCHUNKS && t0 < vt) {
+                n = (t1 < vt ? t1 : vt) - t0;
+            }
+            volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buf_l1[slot]);
+            volatile tt_l1_ptr uint16_t* dst16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf_l1[slot]);
+            noc_async_write_barrier();  // the write issued from this buffer two chunks ago has left it
+            if (n > 0) {
+                res.wait_front(CHUNK);
+                volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(res.get_read_ptr());
+                for (uint32_t b = 0; b < n; ++b) {
+                    for (uint32_t i = 0; i < 8; ++i) {
+                        dst[b * ROW_U32 + i] = t[i];
+                        dst[b * ROW_U32 + 8 + i] = t[FACE1_U32 + i];
+                    }
+                    t += 32 * 32 * 2 / 4;  // the next result tile
+                }
+                res.pop_front(CHUNK);
+                // the last computed tile row may reach past the user's newest key
+                const uint32_t g = t0 + n - 1;
+                if (g * 32 + 31 > newest) {
+                    for (uint32_t j = 0; j < 32; ++j) {
+                        if (g * 32 + j > newest) {
+                            dst16[(n - 1) * 32 + j] = NEG_INF;
+                        }
                     }
                 }
             }
+            for (uint32_t i = n * ROW_U32; i < CHUNK * ROW_U32; ++i) {
+                dst[i] = NEGINF_PAIR;
+            }
+            noc_async_write(buf_l1[slot], out.get_noc_addr(out_row, j * CHUNK_BYTES), CHUNK_BYTES);
+            slot ^= 1;
         }
-        for (uint32_t i = n * ROW_U32; i < CHUNK * ROW_U32; ++i) {
-            dst[i] = NEGINF_PAIR;
-        }
-        noc_async_write(buf_l1[slot], out.get_noc_addr(core, j * CHUNK_BYTES), CHUNK_BYTES);
-        slot ^= 1;
     }
     noc_async_write_barrier();
 }

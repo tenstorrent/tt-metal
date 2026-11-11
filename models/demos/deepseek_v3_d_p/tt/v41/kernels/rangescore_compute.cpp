@@ -13,9 +13,10 @@
 // which is candidate_scores's arithmetic (candscore_compute.cpp). The writer takes row 0 of every O tile. The
 // visible tile-row count comes from the reader through cb_meta (word 0); chunk c belongs to core c mod NCORES, and
 // a chunk at or past the bound is not computed. CB traffic is in whole chunks (CHUNK result tiles pushed, the
-// first n meaningful) so the pointers never straddle the wrap.
+// first n meaningful) so the pointers never straddle the wrap. A core works its units one after another
+// (rangescore_reader.cpp: a unit is one split row r of one query; its chunks are c = r mod NCORES).
 //
-// compile_time_args = [CHUNK, TR, NCORES]; runtime args = [core_index].
+// compile_time_args = [CHUNK, TR, NCORES]; runtime args = [n_units, then per unit: split row].
 
 #include <cstdint>
 
@@ -46,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t CHUNK = get_compile_time_arg_val(0);
     constexpr uint32_t TR = get_compile_time_arg_val(1);
     constexpr uint32_t NCORES = get_compile_time_arg_val(2);
-    const uint32_t core = get_arg_val<uint32_t>(0);
+    const uint32_t n_units = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t cb_qrm = tt::CBIndex::c_0;
     constexpr uint32_t cb_wrm = tt::CBIndex::c_1;
@@ -70,58 +71,61 @@ void kernel_main() {
     matmul_init(cb_q, cb_k, 1);
     MATH((llk_math_reconfig_remap(true)));
 
-    meta.wait_front(1);
-    const uint32_t vt = meta.read_tile_value(0, 0);
-    meta.pop_front(1);
+    for (uint32_t u = 0; u < n_units; ++u) {
+        const uint32_t core = get_arg_val<uint32_t>(1 + u);
+        meta.wait_front(1);
+        const uint32_t vt = meta.read_tile_value(0, 0);
+        meta.pop_front(1);
 
-    tilize_blocks<DIM_TILES, cb_qrm, cb_q>(1);
-    tilize_blocks<1, cb_wrm, cb_w>(1);
-    q.wait_front(DIM_TILES);
-    w.wait_front(1);
+        tilize_blocks<DIM_TILES, cb_qrm, cb_q>(1);
+        tilize_blocks<1, cb_wrm, cb_w>(1);
+        q.wait_front(DIM_TILES);
+        w.wait_front(1);
 
-    for (uint32_t c = core; c < NCHUNKS; c += NCORES) {
-        const uint32_t t0 = c * CHUNK;
-        if (t0 >= vt) {
-            break;
-        }
-        uint32_t t1 = t0 + CHUNK;
-        if (t1 > vt) {
-            t1 = vt;
-        }
-        const uint32_t n = t1 - t0;
-
-        matmul_init(cb_q, cb_k, 1);
-        pack_relu_config(ReluConfig::zero());
-        kt.wait_front(DIM_TILES * CHUNK);
-        s.reserve_back(CHUNK);
-        for (uint32_t b = 0; b < n; ++b) {
-            tile_regs_acquire();
-            for (uint32_t d = 0; d < DIM_TILES; ++d) {
-                matmul_tiles(cb_q, cb_k, d, b * DIM_TILES + d, 0);
+        for (uint32_t c = core; c < NCHUNKS; c += NCORES) {
+            const uint32_t t0 = c * CHUNK;
+            if (t0 >= vt) {
+                break;
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, cb_s, b);
-            tile_regs_release();
-        }
-        s.push_back(CHUNK);
-        kt.pop_front(DIM_TILES * CHUNK);
-        pack_relu_config(ReluConfig::none());
+            uint32_t t1 = t0 + CHUNK;
+            if (t1 > vt) {
+                t1 = vt;
+            }
+            const uint32_t n = t1 - t0;
 
-        matmul_init(cb_w, cb_s, 0);
-        s.wait_front(CHUNK);
-        out.reserve_back(CHUNK);
-        for (uint32_t b = 0; b < n; ++b) {
-            tile_regs_acquire();
-            matmul_tiles(cb_w, cb_s, 0, b, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, cb_out, b);
-            tile_regs_release();
+            matmul_init(cb_q, cb_k, 1);
+            pack_relu_config(ReluConfig::zero());
+            kt.wait_front(DIM_TILES * CHUNK);
+            s.reserve_back(CHUNK);
+            for (uint32_t b = 0; b < n; ++b) {
+                tile_regs_acquire();
+                for (uint32_t d = 0; d < DIM_TILES; ++d) {
+                    matmul_tiles(cb_q, cb_k, d, b * DIM_TILES + d, 0);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, cb_s, b);
+                tile_regs_release();
+            }
+            s.push_back(CHUNK);
+            kt.pop_front(DIM_TILES * CHUNK);
+            pack_relu_config(ReluConfig::none());
+
+            matmul_init(cb_w, cb_s, 0);
+            s.wait_front(CHUNK);
+            out.reserve_back(CHUNK);
+            for (uint32_t b = 0; b < n; ++b) {
+                tile_regs_acquire();
+                matmul_tiles(cb_w, cb_s, 0, b, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, cb_out, b);
+                tile_regs_release();
+            }
+            out.push_back(CHUNK);
+            s.pop_front(CHUNK);
         }
-        out.push_back(CHUNK);
-        s.pop_front(CHUNK);
+        q.pop_front(DIM_TILES);
+        w.pop_front(1);
     }
-    q.pop_front(DIM_TILES);
-    w.pop_front(1);
 }
