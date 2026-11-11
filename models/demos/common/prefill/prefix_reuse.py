@@ -20,6 +20,8 @@ of ``[0, e)`` would: ``export_carries(slot, e, final)`` writes the non-positiona
 checkpoint at ``e``, or the live state when ``e == L``); so such a chunk is skipped only when that state is held.
 ``final`` = known to be the last (a marked last header or a ragged chunk); ``export_carries`` returns True when it also
 CLEARED the export past ``e`` (V4.1: the zero a cold prefill's chunk 0 does), and the retention then forgets ``[e, L)``.
+``skip_partial_last=False`` (V4.1) never skips a partial (ragged) chunk: it is computed, resumed at its start, because the
+export's state at a partial end needs more than the carries at ``e`` (V4.1's window ring also holds the previous boundary's).
 
 Which chunk is last: the prefill worker marks it (tt-d-gen ``device.prefill.mark_last_chunk``): every chunk header's slot
 word carries bit 29 ("this header is marked") and, on a burst's last chunk, bit 30 (``split_slot_word``). Per header, so
@@ -156,8 +158,12 @@ class PrefixRetention:
         on_resume: Optional[Callable[[int], None]] = None,
         log: Callable[[str], None] = print,
         tag: str = "prefix",
+        skip_partial_last: bool = True,
     ):
         self.chunk = int(chunk)
+        # False: a matching PARTIAL chunk (always a burst's last) is computed, resumed at its start, never skipped -- for an
+        # export whose state at a partial end is more than one checkpoint can hold (V4.1's window ring, device check 11-11)
+        self.skip_partial_last = bool(skip_partial_last)
         self.pool = CheckpointPool(n_ckpts, chunk)
         self._save, self._restore, self._export = save, restore, export_carries
         self._set_next_start, self._compute_silent, self._on_resume = set_next_start, compute_silent, on_resume
@@ -199,8 +205,15 @@ class PrefixRetention:
         if start == 0:
             self._new_prompt()
         ids = ids.to(torch.int32).flatten()
-        if self.matching and start == self.cursor and end <= self.length and torch.equal(ids, self.tokens[start:end]):
-            final = bool(last) or (end - start) < self.chunk  # a ragged chunk is always the burst's last
+        partial = (end - start) < self.chunk  # a partial (ragged) chunk is always the burst's last
+        if (
+            self.matching
+            and start == self.cursor
+            and end <= self.length
+            and (self.skip_partial_last or not partial)
+            and torch.equal(ids, self.tokens[start:end])
+        ):
+            final = bool(last) or partial
             may_be_last = final or last is None
             if not may_be_last:
                 self._skipped(start, end)

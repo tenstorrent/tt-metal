@@ -8,8 +8,10 @@ GLM-5.3's G53F-0311 suite, ported to the V4.1 export semantics:
 ``FakeDevice`` holds what the runner's device holds: a model row per position whose value depends on the chunk it was
 computed in (the carries at the chunk's start, its start, its tokens so far; padding rows of a ragged chunk too), live carries
 that depend on the chunk partition, the model's contiguity check, checkpoint slots -- and V4.1's export: a cold prompt's chunk 0
-clears it, every chunk writes its FULL width of rows and the window ring (one, the last carry). Every scenario compares the
-WHOLE export (rows past the prompt included) and the model's rows with a cold prefill of the same prompt.
+clears it, every chunk writes its FULL width of rows and the carry at its end into ONE of the window ring's two blocks (V4.1's
+256-row ring: a chunk boundary -- even here -- writes block 1, a partial end writes block ``end % 2``, so after a partial last
+chunk the ring holds two carries: device check 11-11, S.17). Every scenario compares the WHOLE export (rows past the prompt
+included) and the model's rows with a cold prefill of the same prompt.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ class FakeDevice:
         self.next_start = 0
         self.slots = [None] * n_ckpts
         self.slab: dict[int, int] = {}  # the export's entry rows
-        self.window = None  # the export's window ring
+        self.window = {0: None, 1: None}  # the export's window ring: two blocks
         self.model_chunks: list[tuple[int, int, str]] = []
 
     def prefill(self, ids, start: int, kind: str = "chunk") -> None:
@@ -59,14 +61,14 @@ class FakeDevice:
         self.model_chunks.append((start, start + len(ids), kind))
 
     def zero_slot(self) -> None:
-        self.slab, self.window = {}, None
+        self.slab, self.window = {}, {0: None, 1: None}
 
     def export(self, start: int, end: int) -> None:
         for p in range(start, start + C):
             self.slab[p] = self.rows[p]
-        self.window = self.carries
+        self.window[end % 2] = self.carries  # C is even: a chunk boundary is always block 1
 
-    def retention(self, chunk: int, n_ckpts: int, logs=None) -> PrefixRetention:
+    def retention(self, chunk: int, n_ckpts: int, logs=None, skip_partial_last: bool = False) -> PrefixRetention:
         def save(slot):
             self.slots[slot] = self.carries
 
@@ -74,8 +76,9 @@ class FakeDevice:
             assert self.slots[slot] is not None
             self.carries = self.slots[slot]
 
-        def export_carries(slot, end, final):
-            self.window = self.carries if slot is None else self.slots[slot]
+        def export_carries(slot, end, final):  # V4.1's: the ring zeroed, the carry at `end` written (ONE block)
+            self.window = {0: None, 1: None}
+            self.window[end % 2] = self.carries if slot is None else self.slots[slot]
             if final:
                 tail = -(-end // C) * C
                 self.slab = {p: v for p, v in self.slab.items() if p < tail}
@@ -89,7 +92,8 @@ class FakeDevice:
 
         def on_resume(pos):
             assert self.next_start == pos
-            self.window = self.carries
+            self.window = {0: None, 1: None}
+            self.window[pos % 2] = self.carries
             self.slab = {p: v for p, v in self.slab.items() if p < pos + C}
 
         return PrefixRetention(
@@ -102,6 +106,7 @@ class FakeDevice:
             compute_silent=silent,
             on_resume=on_resume,
             log=(logs.append if logs is not None else (lambda m: None)),
+            skip_partial_last=skip_partial_last,
         )
 
 
@@ -211,10 +216,10 @@ def test_pool_nearest_and_drop():
 
 
 # ----------------------------------------------------------------------------------------------------- scenarios
-def _setup(n_ckpts=8):
+def _setup(n_ckpts=8, skip_partial_last=False):
     dev = FakeDevice(n_ckpts)
     logs = []
-    return dev, dev.retention(C, n_ckpts, logs=logs), logs
+    return dev, dev.retention(C, n_ckpts, logs=logs, skip_partial_last=skip_partial_last), logs
 
 
 def test_extension_skips_the_shared_chunks_and_matches_cold():
@@ -230,13 +235,34 @@ def test_extension_skips_the_shared_chunks_and_matches_cold():
     assert "silent" not in [k for _, _, k in dev.model_chunks]
 
 
-def test_identical_resend_skips_everything_and_ships_the_live_carries():
+def test_identical_resend_recomputes_only_its_partial_last_chunk():
     dev, pr, _ = _setup()
-    P = toks(4 * C + 3, 3)
+    P = toks(4 * C + 3, 3)  # ends at an odd position: a cold ring holds the carries at 4C AND at 4C + 3
     run_prompt(dev, pr, P, C)
-    dev.window = "stale"  # whatever another prompt left there
+    dev.window = {0: "stale", 1: "stale"}  # whatever another prompt left there
     did = run_prompt(dev, pr, P, C)
-    assert did == ["S"] * 5
+    assert did == ["S"] * 4 + ["C"], did  # resumed at 4C from its checkpoint, the partial chunk computed
+    check_equal(dev, P, C)
+    assert pr.stats.silent_chunks == 0
+
+
+@pytest.mark.parametrize("marks", [True, False])
+def test_skipping_a_partial_last_chunk_loses_the_rings_other_carry(marks):
+    """Why V4.1 runs skip_partial_last=False (device check 11-11, S.17): skipping the partial last chunk of an exact
+    re-send rebuilds the ring from the carry at its end only, while a cold ring also holds the previous boundary's."""
+    dev, pr, _ = _setup(skip_partial_last=True)
+    P = toks(4 * C + 3, 3)
+    run_prompt(dev, pr, P, C, marks=marks)
+    assert run_prompt(dev, pr, P, C, marks=marks) == ["S"] * 5
+    with pytest.raises(AssertionError, match="window ring"):  # allow-pytest.raises: no ttnn conftest
+        check_equal(dev, P, C)
+
+
+def test_a_partial_last_chunk_ending_on_the_same_block_as_a_boundary_is_also_computed():
+    dev, pr, _ = _setup()
+    P = toks(4 * C + 4, 36)  # even end: its carry and a boundary's share block 1 (the device's E = 0 mod 256 case)
+    run_prompt(dev, pr, P, C)
+    assert run_prompt(dev, pr, P, C) == ["S"] * 4 + ["C"]
     check_equal(dev, P, C)
 
 
@@ -244,7 +270,7 @@ def test_full_chunk_resend_ends_on_a_boundary():
     dev, pr, _ = _setup()
     P = toks(3 * C, 4)
     run_prompt(dev, pr, P, C)
-    dev.window = "stale"
+    dev.window = {0: "stale", 1: "stale"}
     assert run_prompt(dev, pr, P, C) == ["S", "S", "S"]
     check_equal(dev, P, C)
 
@@ -257,7 +283,7 @@ def test_shorter_prompt_that_is_a_prefix_clears_the_rows_past_it():
     assert run_prompt(dev, pr, P2, C) == ["S", "S", "C"]
     check_equal(dev, P2, C)
     P3 = P2[: 2 * C]  # now ends ON a boundary whose carries are held: all skipped, the export cleared past 2C
-    dev.window = "stale"
+    dev.window = {0: "stale", 1: "stale"}
     assert run_prompt(dev, pr, P3, C) == ["S", "S"]
     check_equal(dev, P3, C)
     assert pr.length == 2 * C  # the export past 2C is gone: nothing there is retained any more
@@ -430,7 +456,7 @@ def test_off_is_untouched():
     assert run_prompt(dev, None, P, C) == ["C"] * 4
 
 
-@pytest.mark.parametrize("seed", range(40))
+@pytest.mark.parametrize("seed", range(60))
 def test_fuzz_equals_cold(seed):
     """Random conversations, siblings, truncations, cuts, empty chunks, pool sizes and mark modes: whatever the retention
     skips or rebuilds, the export (whole, with marked headers; the shipped rows, unmarked) equals a cold prefill's."""

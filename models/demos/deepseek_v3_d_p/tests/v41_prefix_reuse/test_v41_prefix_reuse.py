@@ -242,6 +242,27 @@ def test_reuse_sequence_equals_cold(layout):
         assert st.skipped_chunks == 16 and st.resumed_prompts == 7, s.rt._prefix.ret[0].summary()
 
 
+@pytest.mark.parametrize("marks", [True, False])
+@pytest.mark.parametrize("tail", [384, 256])
+def test_full_repeat_of_a_partial_last_chunk_equals_cold(marks, tail):
+    """Device check run1 (11-11, S.17): A2 sent again (41600 = 5 x 8192 + 640, every chunk matching) exported different
+    window rings than cold. A partial last chunk ending at E = 128 (mod 256) leaves TWO carries in a cold export's
+    256-row ring (its own at rows [0, 128), the previous chunk boundary's at [128, 256)); skipping it rebuilt only one.
+    tail 384 (E = 128 mod 256) is that case; tail 256 (E = 0 mod 256) is the other half."""
+    layout = "cp2"
+    P = A[: 3 * C] + toks(tail, 21)
+    with _env(**_base_env(layout, flag=True)):
+        s = System(flag=True)
+        s.prompt(X, marks=marks)
+        s.prompt(P, marks=marks)
+        did = s.prompt(P, marks=marks)
+        assert did == ["S"] * 3 + ["C"], did  # the partial chunk computed, resumed at 3C (skip_partial_last=False)
+        assert_cold(s, layout, P, what=f"P ({len(P)} tokens) sent again")
+        assert s.prompt(P, marks=marks) == ["S"] * 3 + ["C"]
+        assert_cold(s, layout, P, what="P a third time")
+        assert s.rt._prefix.ret[0].stats.silent_chunks == 0
+
+
 def test_unmarked_headers_equal_cold_without_a_strict_prefix():
     layout = "cp2"
     with _env(**_base_env(layout, flag=True)):
@@ -482,3 +503,19 @@ def test_counters_not_set_is_caught(monkeypatch):
         s.prompt(A)
         with pytest.raises(AssertionError):  # allow-pytest.raises: no ttnn conftest
             s.prompt(A2)
+
+
+def test_skipping_the_partial_last_chunk_is_caught(monkeypatch):
+    """The 11-11 device failure (S.17) on the host: with the old rule (skip a matching partial last chunk) the full repeat
+    of a prompt ending at E = 128 (mod 256) exports different window rings than cold."""
+    real = PR.PrefixRetention
+    monkeypatch.setattr(PR, "PrefixRetention", lambda **kw: real(**{**kw, "skip_partial_last": True}))
+    layout = "cp2"
+    P = A[: 3 * C] + toks(384, 21)
+    with _env(**_base_env(layout, flag=True)):
+        s = System(flag=True)
+        s.prompt(X)
+        s.prompt(P)
+        assert s.prompt(P) == ["S"] * 4
+        with pytest.raises(AssertionError, match=r"\['swa', 'win'\]"):  # allow-pytest.raises: no ttnn conftest
+            assert_cold(s, layout, P)

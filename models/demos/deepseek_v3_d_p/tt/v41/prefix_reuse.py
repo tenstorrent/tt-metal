@@ -29,6 +29,13 @@ The decisions (skip / resume / checkpoints) are the model-independent ``PrefixRe
 held (and a skipped last chunk then leaves the export's rows past it as the older prompt wrote them: never shipped as KV,
 but not byte-identical to cold in the <= 256 index-key rows the seal moves past the keys -- use marked headers).
 
+A PARTIAL last chunk is always computed (resumed at its chunk start), never skipped -- device check 11-11 (host 30, run1,
+S.17): A2 sent again (41600 = 5 x 8192 + 640, every chunk matching) exported different window rings than cold. A cold export's
+256-row ring after a partial chunk ending at E = 128 (mod 256) holds TWO carries: the chunk's own (rows [0, 128)) and the
+previous chunk boundary's (rows [128, 256), written by the chunk before); a skip rebuilt only the first. Computing that one
+partial chunk costs at most one chunk on an exact re-send and writes the ring as a cold prefill does (a resume at a boundary
+already restores the boundary's carry: _on_resume). Skips ending ON a chunk boundary (one carry) are unaffected.
+
 Image prompts: a chunk with a virtual image-span id (>= vocab) is never matched (the same span layout gives the same ids for
 different images); its prompt is computed whole and nothing of it is retained.
 """
@@ -184,6 +191,8 @@ class V41PrefixReuse:
                 on_resume=partial(self._on_resume, s),
                 log=logger.info,
                 tag=f"{TAG} slot {s}",
+                # a partial last chunk is computed, never skipped: see the module docstring (device check 11-11, S.17)
+                skip_partial_last=False,
             )
             for s in range(runtime.num_users)
         }
