@@ -947,10 +947,15 @@ def setup_bench(dev, MESH, mesh_identity):
                     _gws = [gam[:, None] * gw_t] * NGL; _gsc = [2.0 ** (g_ % 2) for g_ in range(NGL)]
                 gin_w_all = _wl().pack_gdn_in(_gws, GINLAY, scales=_gsc, dev=dev)
             gin_w_all = _dswap('gdn_in', gin_w_all)
-            gin_wq = ttnn.to_torch(gin_w_all).float().reshape(NGL, PGL, TILE, TILE)
-            wgfq = GINLAY.unpack(gin_wq)   # as the device holds it
-            if _gw_path and _gws is not None: print(f"[gin] real gdn_in BFP4 round trip lossless (device tiles == model tiles): {all(torch.equal(wgfq[g_], _gws[g_]) for g_ in range(NGL))}", flush=True)
-            gold_gin = [(rstd_g[:, None] * (xb.double() @ wgfq[g_].double())).float() for g_ in range(NGL)]
+            _GINJ = 'gdn_in' in _WEIGHTS   # injected model weights (mesh, every GDN layer of the repack): no bench golds (as _QINJ)
+            if _GINJ:
+                wgfq = gold_gin = None
+                print(f"[gin] model gdn_in injected (weights_mk GdnInSplitKLayout, {PGL} pages/layer, GDN-ordinal order); golds skipped", flush=True)
+            else:
+                gin_wq = ttnn.to_torch(gin_w_all).float().reshape(NGL, PGL, TILE, TILE)
+                wgfq = GINLAY.unpack(gin_wq)   # as the device holds it
+                if _gw_path and _gws is not None: print(f"[gin] real gdn_in BFP4 round trip lossless (device tiles == model tiles): {all(torch.equal(wgfq[g_], _gws[g_]) for g_ in range(NGL))}", flush=True)
+                gold_gin = [(rstd_g[:, None] * (xb.double() @ wgfq[g_].double())).float() for g_ in range(NGL)]
             gin_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGL * GN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             GIN_CNT = ttnn.create_global_semaphore(dev, kgrid, 0)
             MKDEF = MKDEF + [('MKA_GWTB', str(ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat4_b)))]
@@ -2810,7 +2815,11 @@ def weight_layouts(mesh):
         # the attention track's engine-layout packs (lossless; setup_bench binds the tensor + takes placement from .layout)
         "qkv": WL.QkvSplitKLayout(bank_loc, banks),
         "wo": WL.wo_unit_layout(C["wo"], bank_loc, banks),
-        "gdn_in": wm.TileOrderLayout("gdn_in", "bfloat4_b"),
+        # gate 9 (GBREAL): MK_GDN_INPROJ's real packer. A TileOrderLayout here is a placeholder that build_program drops from
+        # _WEIGHTS, so G-a silently ran on setup_bench's RANDOM gdn_in (seed 11) in-model. QWEN36_R16_MK_W_GIN=0: placeholder.
+        "gdn_in": (WL.GdnInSplitKLayout(bank_loc, banks, gx=GX)
+                   if ("MK_GDN_INPROJ=1" in env.get("MK_DEFINES", "").split(",") and os.environ.get("QWEN36_R16_MK_W_GIN", "1") == "1")
+                   else wm.TileOrderLayout("gdn_in", "bfloat4_b")),
         "gdn_out": (WL.gdn_out_layout(C["gdn_out"], bank_loc, banks) if C["gdn_out"]
                     else wm.TileOrderLayout("gdn_out", "bfloat4_b")),
     }
