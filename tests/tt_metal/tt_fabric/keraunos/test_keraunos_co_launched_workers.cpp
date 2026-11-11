@@ -192,19 +192,17 @@ void add_line_workers(
     }
 }
 
-// The worker's result block, read through the cluster, so it works while the device is open or closed.
-std::vector<uint32_t> read_results(const Worker& worker, const WorkerMemMap& map) {
+// `num_words` words of the worker's result block from `first_word`, read through the cluster, so it works while the
+// device is open or closed. Fatal on a short read.
+std::vector<uint32_t> read_results(
+    const Worker& worker, const WorkerMemMap& map, uint32_t first_word, uint32_t num_words) {
     std::vector<uint32_t> words;
     MetalContext::instance().get_cluster().read_core(
         words,
-        map.test_results_size_bytes,
+        num_words * sizeof(uint32_t),
         tt_cxy_pair(worker.chip, worker.virtual_core),
-        map.test_results_address - map.kernel_view_offset);
-    TT_FATAL(
-        words.size() == map.test_results_size_bytes / sizeof(uint32_t),
-        "Result read on chip {} returned {} words",
-        worker.chip,
-        words.size());
+        map.test_results_address - map.kernel_view_offset + first_word * sizeof(uint32_t));
+    TT_FATAL(words.size() == num_words, "Result read on chip {} returned {} words", worker.chip, words.size());
     return words;
 }
 
@@ -213,20 +211,15 @@ uint64_t bytes_of(const std::vector<uint32_t>& results) {
     return (static_cast<uint64_t>(results[TT_FABRIC_WORD_CNT_INDEX + 1]) << 32) | results[TT_FABRIC_WORD_CNT_INDEX];
 }
 
-// Polls the worker's result block once a second until its last word holds `nonce` or `timeout` has passed, and returns
-// the last block read. The block is read word by word and the nonce is the worker's last store, so once a read shows
-// the nonce the block is read again; earlier words of that read may predate the worker's final stores.
+// Polls the nonce word, the last of the worker's result block, once a second until it holds `nonce` or `deadline` has
+// passed, then reads the whole block. The nonce is the worker's last store, so a block read after it is complete.
 std::vector<uint32_t> wait_for_results(
-    const Worker& worker, const WorkerMemMap& map, uint32_t nonce, std::chrono::seconds timeout) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    auto words = read_results(worker, map);
-    while (words.back() != nonce && std::chrono::steady_clock::now() < deadline) {
+    const Worker& worker, const WorkerMemMap& map, uint32_t nonce, std::chrono::steady_clock::time_point deadline) {
+    const uint32_t nonce_word = map.test_results_size_bytes / sizeof(uint32_t) - 1;
+    while (read_results(worker, map, nonce_word, 1)[0] != nonce && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        words = read_results(worker, map);
     }
-    if (words.back() == nonce) {
-        words = read_results(worker, map);
-    }
+    auto words = read_results(worker, map, 0, nonce_word + 1);
     log_info(
         tt::LogTest,
         "Chip {} worker {} status {:#x} bytes {} nonce {:#x} (run {:#x})",
@@ -373,15 +366,14 @@ TEST_F(KeraunosCoLaunchedWorkers, LineUnicast) {
                         "nothing launches.";
     }
 
-    const auto receiver_results = wait_for_results(line.receiver, map, nonce, kTimeout);
-    const auto sender_results = wait_for_results(line.sender, map, nonce, kTimeout);
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
     const uint64_t expected_bytes = uint64_t{map.packet_payload_size_bytes} * kNumPackets;
-    EXPECT_EQ(receiver_results.back(), nonce) << "receiver did not finish this run";
-    EXPECT_EQ(receiver_results[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-    EXPECT_EQ(bytes_of(receiver_results), expected_bytes);
-    EXPECT_EQ(sender_results.back(), nonce) << "sender did not finish this run";
-    EXPECT_EQ(sender_results[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-    EXPECT_EQ(bytes_of(sender_results), expected_bytes);
+    for (const auto& [worker, role] : {std::pair{line.receiver, "receiver"}, std::pair{line.sender, "sender"}}) {
+        const auto results = wait_for_results(worker, map, nonce, deadline);
+        EXPECT_EQ(results.back(), nonce) << role << " did not finish this run";
+        EXPECT_EQ(results[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS) << role;
+        EXPECT_EQ(bytes_of(results), expected_bytes) << role;
+    }
 
     const auto routers = all_routers();
     DoTearDownTestSuite();
