@@ -222,6 +222,8 @@ class MigrationDriver:
             logger.info(f"[migration_driver] migrating layer subset {self.layers}")
         migrated = 0
         next_uuid = 1
+        if self.via_kvm and triples:
+            self._wait_kvm_healthy()
         for src_slot, dst_slot, real_len in triples:
             runs = _layer_runs(layers, real_len, producer.ADAPTER.layer_position_range)
             for layer_start, layer_end, pos_start, pos_end in runs:
@@ -260,6 +262,31 @@ class MigrationDriver:
             migrated += 1
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
         return migrated
+
+    def _wait_kvm_healthy(self) -> None:
+        """Block until the leader KVM's /health answers 200: the fleet comes up only once both sides' tables
+        exist, which can be after this prefill has finished. PREFILL_MIGRATION_KVM_HEALTH_WAIT_S bounds it."""
+        import urllib.error
+        import urllib.request
+
+        budget = float(os.environ.get("PREFILL_MIGRATION_KVM_HEALTH_WAIT_S", "3600"))
+        deadline = time.monotonic() + budget
+        last = None
+        while True:
+            try:
+                with urllib.request.urlopen(f"{self.kvm_url}/health", timeout=10) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[migration_driver] KVM {self.kvm_url} healthy")
+                        return
+                    last = f"HTTP {resp.status}"
+            except urllib.error.HTTPError as e:
+                last = f"HTTP {e.code}"
+            except (urllib.error.URLError, OSError) as e:
+                last = str(e)
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"[migration_driver] KVM {self.kvm_url}/health not 200 after {budget:.0f}s: {last}")
+            logger.info(f"[migration_driver] waiting for KVM {self.kvm_url}/health ({last})")
+            time.sleep(10)
 
     def _post_kvm_migrate(
         self,
