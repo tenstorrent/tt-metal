@@ -338,6 +338,9 @@ struct NoSvc {
     void operator()() const {}
 };
 template <uint32_t T, uint32_t NV, uint32_t NU, typename Svc = NoSvc>
+#if GB_GEARLY
+__attribute__((noinline))
+#endif
 inline void gate_rows_build(uint32_t h, uint32_t u0, uint32_t gt_l1, uint32_t sc_l1, const Svc& svc = Svc{}) {
     constexpr uint32_t R = NU * T, CH = R * 64;  // rows per core, bytes per face run
     static_assert(16 % R == 0, "a core's rows inside one face row");
