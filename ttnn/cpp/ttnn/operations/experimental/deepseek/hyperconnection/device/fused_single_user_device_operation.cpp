@@ -101,8 +101,9 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
         "post_bias must be [1,1,1,H], got {}",
         post_bias.logical_shape());
     TT_FATAL(
-        comb_bias.logical_shape() == ttnn::Shape({1, 1, hc, hc}),
-        "comb_bias must be [1,1,H,H], got {}",
+        comb_bias.logical_shape() == ttnn::Shape({1, 1, hc, hc}) ||
+            comb_bias.logical_shape() == ttnn::Shape({1, 1, 1, hc * hc}),
+        "comb_bias must be [1,1,H,H] or [1,1,1,H*H], got {}",
         comb_bias.logical_shape());
 
     validate_width_shard(fused_w, 1, static_cast<uint32_t>(fused_w.padded_shape()[-1]), "fused_w");

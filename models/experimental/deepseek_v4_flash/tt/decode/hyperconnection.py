@@ -155,15 +155,20 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                 num_cores=_HC_FN_CORES,
                 rms_norm_epsilon=self.norm_eps,
             )
+        # The single-user program reads these three tiles on its critical path; L1 saves the DRAM
+        # round trip (~0.2 us per call) for 6 KB per module.
+        bias_memory = ttnn.L1_MEMORY_CONFIG if row_major_streams else ttnn.DRAM_MEMORY_CONFIG
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
             device,
             cache_file_name=cache.file("pre_b"),
+            memory_config=bias_memory,
         )
         self.post_b = _load_weight(
             _materialize(lambda: base()[hc : 2 * hc].reshape(1, 1, 1, hc), cache.file("post_b"), ttnn.bfloat16),
             device,
             cache_file_name=cache.file("post_b"),
+            memory_config=bias_memory,
         )
         self.comb_b = _load_weight(
             _materialize(
@@ -173,6 +178,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             ),
             device,
             cache_file_name=cache.file("comb_b"),
+            memory_config=bias_memory,
         )
         self.pre_scale, self.post_scale, self.comb_scale = (float(scale[0]), float(scale[1]), float(scale[2]))
 

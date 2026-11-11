@@ -2279,9 +2279,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         before anything is compiled.
 
         A verify round decodes ``[bonus, draft_1 .. draft_k]`` at consecutive positions, and the rows the
-        rejected drafts wrote must leave no trace. Every stage keeps a shadow of each sliding ring, whose
-        rows :meth:`_spec_fixup` puts back over the rejected slots. A ratio > 1 kv source's compressor window
-        grows to :attr:`spec_window_rows` rows (slot ``pos % rows``): a round's rejected rows, fewer than
+        rejected drafts wrote must leave no trace. Every stage keeps a shadow of each sliding ring (every
+        session slot of it), whose rows :meth:`_spec_fixup` puts back over the rejected slots. A ratio > 1 kv
+        source's compressor window grows to :attr:`spec_window_rows` rows (slot ``pos % rows``; with several
+        sessions each slot of the window already has that many): a round's rejected rows, fewer than
         that, then never overwrite the row of the last verified position, which the next group pairs with
         through ``win_prev``, and the next round rewrites them before they are read. Everything else a step
         writes is keyed by position, so the accepted token at that position rewrites it before anything
@@ -2303,8 +2304,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         if self._traces_compiled or self._traced_captured:
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
-        if self._slotted:
-            raise NotImplementedError("speculative decode restores one session's rings: prepare with num_sessions=1")
+        if self._slotted and self.verify_rows > 1:
+            raise NotImplementedError("several sessions' rings decode one row at a time: use verify_rows=1")
         if self.device_sampler is not None:
             raise NotImplementedError(
                 "speculative decode accepts against the steps' logits: prepare without device_sampling"
@@ -2317,14 +2318,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
         window, head_dim = self.sliding_window, cfg.head_dim
         win_rows = _WIN_SLOT_ROWS
         self.spec_window_rows = win_rows
+        ring_rows = self._max_sessions * window
         for sm in self.submeshes_io:
             device = sm["device"]
-            sm["ring_shadow"] = {li: _device_zeros((1, 1, window, head_dim), device) for li in sm["layers"]}
-            sm["fix_mask"] = _device_zeros((1, 1, window, 1), device)
-            sm["fix_keep"] = _device_zeros((1, 1, window, 1), device)
+            sm["ring_shadow"] = {li: _device_zeros((1, 1, ring_rows, head_dim), device) for li in sm["layers"]}
+            sm["fix_mask"] = _device_zeros((1, 1, ring_rows, 1), device)
+            sm["fix_keep"] = _device_zeros((1, 1, ring_rows, 1), device)
             sources = [li for li in sm["layers"] if li in cfg.kv_source_layer_ids and int(cfg.compress_ratios[li]) > 1]
             sm["deep_windows"] = bool(sources)
-            for li in sources:
+            # Several sessions' windows already hold _WIN_SLOT_ROWS rows per slot.
+            for li in sources if not self._slotted else ():
                 old_kv, old_gate = sm["scaches"][li].win_kv, sm["scaches"][li].win_gate
                 win_kv = _device_zeros((1, 1, win_rows, head_dim), device)
                 win_gate = _device_zeros((1, 1, win_rows, head_dim), device)
@@ -2539,9 +2542,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``rejected`` positions."""
         self._wait_replays_dispatched()
         window = self.sliding_window
-        mask = torch.zeros(1, 1, window, 1)
+        sid = self._resident[0] if self._resident else None
+        base = self._slot_of.get(sid, 0) * window
+        mask = torch.zeros(1, 1, self._max_sessions * window, 1)
         for p in rejected:
-            mask[0, 0, p % window, 0] = 1
+            mask[0, 0, base + p % window, 0] = 1
         for sm in self.submeshes_io:
             host_to_device(mask, sm["fix_mask"])
             host_to_device(1 - mask, sm["fix_keep"])

@@ -25,8 +25,9 @@ are logged.
 built with the parallel verify's traces only when a mode needs them. The parallel verify is off by default
 until its rows match the single-row decode (``test_parallel_verify_rows``).
 ``DEEPSEEK_V4_SPEC_EXACT=0`` logs a divergence from the baseline instead of failing.
-With the pipelined verify alone, every run is on the Rust host runtime (``model.start_host_runtime``) when the
-extension is built, as the server runs; ``DEEPSEEK_V41_RUST_HOST=0`` keeps the Python dispatch and reader instead.
+With the pipelined verify alone, every run is on the Rust host runtime (``model.start_host_runtime``), as the
+server runs, and an unbuilt extension (``host_rs/build.sh``) fails the test; ``DEEPSEEK_V41_RUST_HOST=0`` keeps the
+Python dispatch and reader instead.
 
 Progress logging while it runs:
 

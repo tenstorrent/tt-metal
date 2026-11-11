@@ -854,6 +854,11 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             if not pool:
                 return None
             windows = (scache.win_kv, scache.win_gate)
+            if win_offset is not None:
+                rows = scache.win_view_kv.shape[2]
+                for view, win in zip((scache.win_view_kv, scache.win_view_gate), windows):
+                    ttnn.fill_cache(view, win, 0, input_row_offset_tensor=win_offset, num_input_rows=rows)
+                windows = (scache.win_view_kv, scache.win_view_gate)
             if win_prev is not None:
                 # One-hot products are exact.
                 k0, g0 = (ttnn.matmul(win_prev, w, compute_kernel_config=_HIFI4) for w in windows)
@@ -862,11 +867,6 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 assert (
                     win_offset is not None or scache.win_kv.shape[2] == self.compress_ratio
                 ), "a window deeper than the ratio pairs through win_prev"
-                if win_offset is not None:
-                    rows = scache.win_view_kv.shape[2]
-                    for view, win in zip((scache.win_view_kv, scache.win_view_gate), windows):
-                        ttnn.fill_cache(view, win, 0, input_row_offset_tensor=win_offset, num_input_rows=rows)
-                    windows = (scache.win_view_kv, scache.win_view_gate)
                 k0, k1, g0, g1 = (
                     ttnn.slice(t, [0, 0, j, 0], [1, 1, j + 1, self.head_dim]) for t in windows for j in (0, 1)
                 )

@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Rust host runtime (``host_rs/``, the ``dsv41_host`` extension) from Python.
 
-With the Rust host runtime on (the default; ``DEEPSEEK_V41_RUST_HOST=0`` turns it off, and so does a missing
-``dsv41_host`` extension) the model hands its per-step host work to native threads that never take the GIL:
+With the Rust host runtime on (the default; only ``DEEPSEEK_V41_RUST_HOST=0`` turns it off, and a missing
+``dsv41_host`` extension is an error, not a fallback) the model hands its per-step host work to native threads that
+never take the GIL:
 
 * :class:`RustEngramLookup` is :class:`~.engram_lookup.EngramHostLookup` with the hashing, the per-session token
   histories and the table reads in Rust (bit-exact; the checkpoint-derived constants still come from
@@ -15,13 +16,15 @@ With the Rust host runtime on (the default; ``DEEPSEEK_V41_RUST_HOST=0`` turns i
   address, :func:`native_handle`). A socket can instead be given by the id it was exported under
   (``export_descriptor``), which ``DecodeHost`` connects to: that is how another process would attach.
 
-Build the extension first (host-only)::
+``demo/server.py`` builds the extension at startup (:func:`build`); elsewhere, build it first (host-only)::
 
     models/experimental/deepseek_v41_flash/host_rs/build.sh
 """
 
 import importlib.util
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import torch
@@ -34,11 +37,25 @@ _module = None
 
 
 def enabled() -> bool:
-    """Whether the Rust host runtime is used: the default, unless ``DEEPSEEK_V41_RUST_HOST`` turns it off, or the
-    extension is not built (then the Python lookup and the traced-replay path serve, as they always did)."""
-    if os.environ.get("DEEPSEEK_V41_RUST_HOST", "1") in ("0", "", "false", "False"):
-        return False
-    return _EXTENSION.is_file()
+    """Whether the Rust host runtime is used: the default, unless ``DEEPSEEK_V41_RUST_HOST`` turns it off (then the
+    Python lookup and the traced-replay path serve). An unbuilt extension does not turn it off: :func:`module`
+    raises instead."""
+    return os.environ.get("DEEPSEEK_V41_RUST_HOST", "1") not in ("0", "", "false", "False")
+
+
+def build() -> None:
+    """Build the extension with ``host_rs/build.sh`` (incremental: a no-op when it is up to date), against this
+    interpreter. Raises if the build fails or leaves no extension behind."""
+    script = _EXTENSION.parent / "build.sh"
+    try:
+        subprocess.run([str(script)], env={**os.environ, "PYTHON": sys.executable}, check=True)
+    except (OSError, subprocess.CalledProcessError) as err:
+        raise RuntimeError(
+            f"building the Rust host runtime ({script}) failed: {err}; "
+            "--no-rust-host (or DEEPSEEK_V41_RUST_HOST=0) serves on the Python host runtime instead"
+        ) from err
+    if not _EXTENSION.is_file():
+        raise RuntimeError(f"{script} succeeded but left no {_EXTENSION}")
 
 
 def module():
