@@ -40,7 +40,6 @@ def test_mk_build_sweep(mesh_device, monkeypatch):
     lt = ["attention" if l.is_full_attention else "gdn" for l in model.layers][:NL]
     kv = [d for d in S1.kv_descriptors(model) if d["layer"] < NL]
     gdn = [d for d in S1.gdn_descriptors(model) if d["layer"] < NL]
-    w = WM.repack(model, layouts=EP.weight_layouts(mesh), only_layers=list(range(NL)))
     base_defs = EP.ENGINE_ENV["MK_DEFINES"].split(",")
     res = []
     for item in [s for s in SWEEP.split(";") if s.strip()]:
@@ -51,6 +50,7 @@ def test_mk_build_sweep(mesh_device, monkeypatch):
         monkeypatch.setenv("QWEN36_R16_MK_NL", str(NL))
         r = dict(name=name, drop=drop, env=envs)
         try:
+            w = WM.repack(model, layouts=EP.weight_layouts(mesh), only_layers=list(range(NL)))  # layouts follow the env
             p = EP.build_program(mesh, 8, 4, lt, w, kv, gdn)
             r.update(ok=True, l1pool=p.info.get("l1pool"))
             del p
