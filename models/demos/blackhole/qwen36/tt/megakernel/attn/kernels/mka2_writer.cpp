@@ -1657,7 +1657,15 @@ void kernel_main() {
                 noc_async_write_barrier();
             }
 #if defined(MK_V12) && defined(MKA_AWIN)
+#if defined(MKA_WOAR_SVONLY) && defined(MKA_QSK)
+            // ATTNMID: only slot V (this layer's MLP slice) streams in this wait; slot M (the NEXT GDN layer's gdn_in slice,
+            // started at this layer's mixer) waits for ADFLAG. Pumped here it landed on the SDPA stragglers' KV tail (cores
+            // done early issue it while rows 0-2 still stream K / V): middle attention layers +34 us vs the launch's last one.
+            // Same bytes / slots / trids, issue time only (bit-identical).
+            do { invalidate_l1_cache(); pump1(sv); } while (*l1w(gs[GS_ADFLAG]) < A + 1);
+#else
             do { invalidate_l1_cache(); v_pump(); } while (*l1w(gs[GS_ADFLAG]) < A + 1);   // AWIN: the slice streams under wo / AAR
+#endif
 #else
             noc_semaphore_wait_min(l1w(gs[GS_ADFLAG]), A + 1);
 #endif
