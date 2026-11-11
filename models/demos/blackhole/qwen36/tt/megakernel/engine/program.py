@@ -1464,15 +1464,9 @@ def setup_bench(dev, MESH, mesh_identity):
             if 'gdn_out' in _WEIGHTS: go_w_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
             else:
                 torch.manual_seed(17)
-<<<<<<< HEAD
-                wg_all = _wl().pack_gdn_out([torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE) for _ in range(NGo)], GLAY, dev=dev)
-            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(-1, GPL, TILE, TILE)[:NGo])   # injected: all model GDN layers
-            gdbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGo * WNG * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-=======
                 go_w_all = _wl().pack_gdn_out([torch.randn(GO_WK * TILE, GO_WN * TILE) / math.sqrt(GO_WK * TILE) for _ in range(GO_NG)], GO_LAY, dev=dev)
-            go_wq = GO_LAY.unpack(ttnn.to_torch(go_w_all).float().reshape(GO_NG, GO_PL, TILE, TILE))
+            go_wq = GO_LAY.unpack(ttnn.to_torch(go_w_all).float().reshape(-1, GO_PL, TILE, TILE)[:GO_NG])   # injected: all model GDN layers
             go_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, GO_NG * GO_WN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
->>>>>>> 2df96b54a5b
             GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
                       wk=GO_WK, maxt=GO_MAXT, w=go_w_all, w_addr=go_w_all.buffer_address(), w_stride=GO_PL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
                       gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in go_cores], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
