@@ -35,6 +35,11 @@
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
+#if defined(MKA_EXTLEAN)
+#define MKA_WOT_DIV (wo_tiles ? wo_tiles : 1u)   // folded 0: dead code, but -Werror=div-by-zero
+#else
+#define MKA_WOT_DIV wo_tiles
+#endif
 void kernel_main() {
     constexpr uint32_t XTB = get_compile_time_arg_val(0), NGU = get_compile_time_arg_val(1);
     constexpr uint32_t NDN = get_compile_time_arg_val(2), KT = get_compile_time_arg_val(3);
@@ -589,7 +594,7 @@ void kernel_main() {
 #endif
     auto plan_wo = [&]() {   // layer L's wo slice + the next layer's uncovered qkv bytes (real bytes into a scratch region)
         for (uint32_t t = 0; t < wo_tiles; t += 8) add(wo.get_noc_addr(wo_page + t), get_write_ptr(CB_SCR), (wo_tiles - t < 8 ? wo_tiles - t : 8) * WOTB, 3, true);
-        for (uint32_t t = 0; t < extra_tiles; t += 8) add(wo.get_noc_addr(wo_page + (t % wo_tiles)), get_write_ptr(CB_SCR), (extra_tiles - t < 8 ? extra_tiles - t : 8) * WOTB, 3, true);
+        for (uint32_t t = 0; t < extra_tiles; t += 8) add(wo.get_noc_addr(wo_page + (t % MKA_WOT_DIV)), get_write_ptr(CB_SCR), (extra_tiles - t < 8 ? extra_tiles - t : 8) * WOTB, 3, true);
     };
 #if defined(MKA_QSK) && defined(MK_V12) && !defined(MKA_WO_NOC0)
     // §18 + v12: no planned weight pieces remain on STREAM (qkv = slot M, MLP = slot V, wo = ext ring): the piece issue

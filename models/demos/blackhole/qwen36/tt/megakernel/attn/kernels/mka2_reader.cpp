@@ -28,6 +28,11 @@
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
+#if defined(MKA_EXTLEAN)
+#define MKA_WOT_DIV (wo_tiles ? wo_tiles : 1u)   // folded 0: dead code, but -Werror=div-by-zero
+#else
+#define MKA_WOT_DIV wo_tiles
+#endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
     constexpr uint32_t WTB = get_compile_time_arg_val(2), GRP = get_compile_time_arg_val(3);
@@ -576,7 +581,7 @@ void kernel_main() {
                         // cap this reader's in-flight weight bytes (NoC/DRAM congestion: fewer outstanding reads drain faster)
                         if (t && (t % MKA_RCAP) == 0) { noc_async_read_barrier_with_trid(TRID_WO); noc_async_read_set_trid(TRID_WO); }
 #endif
-                        noc_async_read(wo.get_noc_addr(wo_page + ((wdone + t) % wo_tiles)), scr, m * WOTB);
+                        noc_async_read(wo.get_noc_addr(wo_page + ((wdone + t) % MKA_WOT_DIV)), scr, m * WOTB);
                     }
                     noc_async_read_set_trid(0);
                     wdone += n;
@@ -689,7 +694,7 @@ void kernel_main() {
             const uint32_t n = wo_tiles + extra_tiles;
             noc_async_read_set_trid(TRID_WO);
             for (uint32_t t = 0; t < n; t += 8)
-                noc_async_read(wo.get_noc_addr(wo_page + (t % wo_tiles)), scr, ((n - t) < 8 ? (n - t) : 8) * WOTB);
+                noc_async_read(wo.get_noc_addr(wo_page + (t % MKA_WOT_DIV)), scr, ((n - t) < 8 ? (n - t) : 8) * WOTB);
             noc_async_read_set_trid(0);
         }
 #endif
