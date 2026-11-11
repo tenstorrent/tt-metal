@@ -303,6 +303,9 @@ def setup_bench(dev, MESH, mesh_identity):
         KVA_NUT = int(os.environ.get('MKA_KVA_NU', str(2 * NU if NU == 4 else NU)))
         KVA_PPU = int(os.environ.get('MKA_KVA_PPU', '2'))
         assert NU <= KVA_NUT and KVA_NUT * KVA_T <= 32
+        # page-table width (blocks per user): >= the own users' BPU; default 4096 (262144 tokens at block size 64) so the other
+        # users reach past 128K (virtual blocks > 2048): the append reads only the touched rows' page-table entries
+        KVA_PTW = max(BPU, int(os.environ.get('MKA_KVA_PTW', '4096')))
         def _own(s, u):
             b_ = CTX - 4
             if s == 1 and u == 0: return [CTX - 34 + j for j in range(4)]          # 32-row tile crossing (page crossing at BS 32)
@@ -313,21 +316,22 @@ def setup_bench(dev, MESH, mesh_identity):
         def _other(s, u):
             k_ = u - NU; base = (5 + 37 * k_) * KVBS
             if k_ % 4 == 0: return [base + 30 + 3 * s + j for j in range(4)]                       # tile crossings in a page
-            if k_ % 4 == 1: return [base + KVBS - 2 + 3 * s + j for j in range(4)]                 # page crossings
-            if k_ % 4 == 2: return [BPU * KVBS + j for j in range(4)] if s == 1 else [-1] * 4     # past the table / HOLD
-            return [[base + 9, base + 10, base + 10, -1], [base + j for j in range(4)], [BPU * KVBS - 4 + j for j in range(4)]][s]
+            if k_ % 4 == 1:   # page crossings, past 128K (virtual block 2500 + 37 k)
+                base = (2500 + 37 * k_) * KVBS; return [base + KVBS - 2 + 3 * s + j for j in range(4)]
+            if k_ % 4 == 2: return [KVA_PTW * KVBS + j for j in range(4)] if s == 1 else [-1] * 4  # past the table / HOLD
+            return [[base + 9, base + 10, base + 10, -1], [base + j for j in range(4)], [KVA_PTW * KVBS - 4 + j for j in range(4)]][s]   # s 2: the table's last block
         KVA_STEPS = [sum(((_own(s, u) if u < NU else _other(s, u)) for u in range(KVA_NUT)), []) for s in range(3)]
         for u in range(NU):
             assert all(p_ < 0 or CTX - 2 * TILE <= p_ < CTX for s_ in KVA_STEPS for p_ in s_[u * 4:(u + 1) * 4]), 'own rows outside the last 2 blocks'
-        _pt = torch.zeros(KVA_NUT, BPU, dtype=torch.int32)
-        for u in range(NU): _pt[u] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
+        _pt = torch.zeros(KVA_NUT, KVA_PTW, dtype=torch.int32)
+        for u in range(NU): _pt[u, :BPU] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
         _nx = NU * BPU
         for u in range(NU, KVA_NUT):
             for s_ in KVA_STEPS:
                 for p_ in s_[u * 4:(u + 1) * 4]:
                     vb_ = p_ // KVBS
-                    if p_ >= 0 and vb_ < BPU and (u, vb_) not in KVA_EXT: KVA_EXT[(u, vb_)] = _nx; _pt[u, vb_] = _nx; _nx += 1
-        KVA_NBLK = _nx
+                    if p_ >= 0 and vb_ < KVA_PTW and (u, vb_) not in KVA_EXT: KVA_EXT[(u, vb_)] = _nx; _pt[u, vb_] = _nx; _nx += 1
+        KVA_NBLK = max(_nx, KVA_PTW + 1)   # prod's update op needs page-table width < cache blocks
         KVA_PTT = ttnn.from_torch(_pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         KVA_POS = ttnn.from_torch(torch.tensor(KVA_STEPS[0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         KVA_CHECK = os.environ.get('MKA_KVA_CHECK', '0') == '1'
@@ -992,8 +996,8 @@ def setup_bench(dev, MESH, mesh_identity):
         _ga = [ttnn.get_global_semaphore_address(g_) for g_ in KVA_GSEM]
         _arr = lambda v_: '{' + ','.join(f'{x_}u' for x_ in v_) + '}'
         MKDEF = MKDEF + [('MKA_KVA', '1'), ('MKA_KVA_NU', str(KVA_NUT)), ('MKA_KVA_T', str(KVA_T)), ('MKA_KVA_PPU', str(KVA_PPU)),
-                         ('MKA_KVA_NB', f'{BPU}u'), ('MKA_KVA_POS', f'{KVA_POS.buffer_address()}u'), ('MKA_KVA_PT', f'{KVA_PTT.buffer_address()}u'),
-                         ('MKA_KVA_PTS', f'{BPU * 4}u'), ('MKA_KVA_GS_DONE', f'{_ga[0]}u'), ('MKA_KVA_GS_SRC', f'{_ga[1]}u'), ('MKA_KVA_GS_AD', f'{_ga[2]}u'),
+                         ('MKA_KVA_NB', f'{KVA_PTW}u'), ('MKA_KVA_POS', f'{KVA_POS.buffer_address()}u'), ('MKA_KVA_PT', f'{KVA_PTT.buffer_address()}u'),
+                         ('MKA_KVA_PTS', f'{KVA_PTW * 4}u'), ('MKA_KVA_GS_DONE', f'{_ga[0]}u'), ('MKA_KVA_GS_SRC', f'{_ga[1]}u'), ('MKA_KVA_GS_AD', f'{_ga[2]}u'),
                          ('MKA_KVA_KXY', _arr([_xy(_byc[(10, t_)]) for t_ in range(8)])), ('MKA_KVA_VXY', _arr([_xy(_byc[(11, t_)]) for t_ in range(8)])),
                          ('MKA_KVA_NW', str(len(KVA_W))), ('MKA_KVA_WXY', _arr([_xy(f_) for f_ in KVA_W]))]
         KVA_CRS = crs([fcores[f_] for f_ in sorted(KVA_ROLE)])
