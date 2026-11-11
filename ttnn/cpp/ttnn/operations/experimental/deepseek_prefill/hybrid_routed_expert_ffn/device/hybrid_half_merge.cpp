@@ -4,13 +4,21 @@
 #include "hybrid_half_merge.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <limits>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <variant>
+#include <vector>
+
+#include <fmt/format.h>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
+#include "kernels/hybrid_rt_table.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_geometry.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
@@ -24,10 +32,10 @@ using tt::tt_metal::SemaphoreDescriptor;
 
 // Both halves' semaphores live in ONE id space and the two passes reuse it.
 //
-// They can, because the passes are strictly ordered: pass A is finished everywhere before pass B
-// begins anywhere, so no id is ever live for both. The pass barrier is what makes that true, and
-// it also has to zero the shared ids -- pass A leaves them at arbitrary values and pass B's
-// waits assume they start at zero.
+// They can, because the passes are strictly ordered: the first is finished everywhere before the
+// second begins anywhere, so no id is ever live for both. The pass barrier is what makes that true,
+// and it also has to zero the shared ids -- the first pass leaves them at arbitrary values and the
+// second's waits assume they start at zero.
 //
 // The barrier's own semaphore is therefore the one id that must NOT be reused, so it sits above
 // both halves' blocks and is never reset.
@@ -87,7 +95,7 @@ uint32_t overlay_circular_buffers(
     ProgramDescriptor& out) {
     const uint32_t alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    // Pass A off: its buffers are never touched, so they are not placed and no arena is needed.
+    // Fused pass off: its buffers are never touched, so they are not placed and no arena is needed.
     // Every remaining CB is the unified half's and is allocated the ordinary way.
     if (!run_fused_pass) {
         for (auto& cb : unified.cbs) {
@@ -161,10 +169,9 @@ uint32_t overlay_circular_buffers(
 // choose, and a wrong choice here is wrong numbers with no error.
 //
 // bfp8_pack_precise is the one field they genuinely differ on: the fused half sets it, the unified
-// half leaves it clear. The merged program keeps it SET -- the more precise packing of the two --
-// which means the unified half's bf8 output in a merged program is not bit-for-bit what the
-// standalone unified op produces. That is a deliberate, accepted difference; grade that half on
-// PCC against the standalone op, not on equality.
+// half leaves it clear. The merged program keeps it SET for the fused half, and
+// mark_unified_pack_precision hands the unified half's circular buffers back their truncated
+// packing, so each half packs bit-for-bit as its standalone op does.
 //
 // Every other field must already agree. Taking a silent majority on math fidelity or the dst
 // accumulator would change one half's arithmetic without any signal.
@@ -215,6 +222,9 @@ KernelDescriptor merge_kernel(
     bool is_coordinator_kernel,
     uint32_t barrier_semaphore_id,
     uint32_t shared_semaphore_count,
+    const WeightTablePlan& weight_table,
+    uint32_t weight_table_cb,
+    uint32_t weight_table_bytes,
     MergeReport::Bases& bases_out) {
     TT_FATAL(
         fused.core_ranges == unified.core_ranges,
@@ -298,11 +308,32 @@ KernelDescriptor merge_kernel(
         merged.buffer_bindings.push_back(
             tt::tt_metal::BufferBinding{binding.core, binding.arg_idx + fused_block, binding.buffer});
     }
-    TT_FATAL(
-        unified.common_runtime_args.empty() && fused.common_runtime_args.empty(),
-        "a half grew common runtime args; the merge does not rebase them yet");
+    // Common runtime args are not rebased: both halves read the same buffer bases from one block of one layout
+    // (routed_expert_common_args), so the merged kernel keeps a single copy -- `merged` already holds the fused
+    // half's. A role that only one half carries (the compute kernels carry none) contributes its own.
+    if (merged.common_runtime_args.empty()) {
+        merged.common_runtime_args = unified.common_runtime_args;
+        merged.common_buffer_bindings = unified.common_buffer_bindings;
+    } else if (!unified.common_runtime_args.empty()) {
+        TT_FATAL(
+            unified.common_runtime_args == fused.common_runtime_args,
+            "the two halves carry different common runtime args ({} vs {} words); the merged kernel has one block "
+            "both read unrebased",
+            unified.common_runtime_args.size(),
+            fused.common_runtime_args.size());
+    }
 
     reconcile_config(fused, unified, merged);
+    // The data-movement kernels at O2, the level each half has alone, not the Os that would save ring:
+    // both halves issue their DRAM weight reads back to back, and Os cost the fused half 2-6 us per
+    // expert and the unified half up to 1.4x at 512 tokens. The compute kernel keeps its default O3,
+    // trimmed where it can afford it in hybrid_compute.cpp.
+    //
+    // The JIT cache does not key on the opt level, so a change here needs those kernels' cache
+    // entries cleared before it shows on the device.
+    if (!std::holds_alternative<tt::tt_metal::ComputeConfigDescriptor>(merged.config)) {
+        merged.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
     if (run_fused_pass) {
         merged.defines.emplace_back("HYB_RUN_FUSED_PASS", "1");
     }
@@ -320,7 +351,7 @@ KernelDescriptor merge_kernel(
             args.resize(barrier_base, 0);
             // Coordinator, not just master CORE: both data-movement kernels run this body, and a
             // second one entering the master block would re-zero the shared semaphores after
-            // pass B had already started on them.
+            // the second pass had already started on them.
             args.push_back(static_cast<uint32_t>(is_coordinator_kernel && core == barrier.master_logical));
             args.push_back(barrier.master_noc_x);
             args.push_back(barrier.master_noc_y);
@@ -334,7 +365,55 @@ KernelDescriptor merge_kernel(
             args.push_back(shared_semaphore_count);
         }
     }
+    // Both data-movement kernels read the weight table's L1 page; see kernels/hybrid_weight_table.hpp.
+    if (weight_table.buffer != nullptr && runs_barrier) {
+        merged.defines.emplace_back("HYB_WEIGHT_TABLE", "1");
+        merged.defines.emplace_back("HYB_WEIGHT_TABLE_CB", std::to_string(weight_table_cb));
+        merged.defines.emplace_back("HYB_WEIGHT_TABLE_BYTES", std::to_string(weight_table_bytes));
+        // Only the reader loads it, so only the reader takes the address. Bound like any other
+        // buffer argument, so a cache hit re-patches it.
+        if (is_coordinator_kernel) {
+            std::optional<uint32_t> index;
+            for (auto& [core, args] : merged.runtime_args) {
+                TT_FATAL(
+                    !index.has_value() || *index == args.size(),
+                    "the weight table's runtime arg must sit at one index on every core");
+                index = static_cast<uint32_t>(args.size());
+                args.push_back(static_cast<uint32_t>(weight_table.buffer->address()));
+                merged.buffer_bindings.push_back(tt::tt_metal::BufferBinding{core, *index, weight_table.buffer});
+            }
+            TT_FATAL(index.has_value(), "the reader runs on no core, so nothing can load the weight table");
+            merged.defines.emplace_back("HYB_WEIGHT_TABLE_RT", std::to_string(*index));
+        }
+    }
     return merged;
+}
+
+size_t compute_role() { return KernelDescriptor::ConfigDescriptor(tt::tt_metal::ComputeConfigDescriptor{}).index(); }
+
+// The merged compute binary packs block-float the precise way whenever the fused half does (see
+// reconcile_config). Naming the unified half's CB indices lets the kernel give those back the
+// truncated packing the unified half is built with alone (hybrid_pack_precision.hpp), so each half
+// packs exactly as its standalone op does.
+void mark_unified_pack_precision(
+    const ProgramDescriptor& unified, const KernelDescriptor& unified_compute, ProgramDescriptor& merged) {
+    const auto& own = std::get<tt::tt_metal::ComputeConfigDescriptor>(unified_compute.config);
+    for (auto& kernel : merged.kernels) {
+        const auto* config = std::get_if<tt::tt_metal::ComputeConfigDescriptor>(&kernel.config);
+        if (config == nullptr || config->bfp8_pack_precise == own.bfp8_pack_precise) {
+            continue;
+        }
+        TT_FATAL(!own.bfp8_pack_precise, "the merged binary packs less precisely than the unified half asked for");
+        uint64_t mask = 0;
+        for (const auto& cb : unified.cbs) {
+            for (const auto& format : cb.format_descriptors) {
+                TT_FATAL(
+                    format.buffer_index < 64, "CB index {} does not fit the pack-precision mask", format.buffer_index);
+                mask |= uint64_t{1} << format.buffer_index;
+            }
+        }
+        kernel.defines.emplace_back("HYB_APPROX_PACK_CB_MASK", fmt::format("{:#x}ull", mask));
+    }
 }
 
 // The kernels a half emits, keyed by the processor class they run on.
@@ -356,15 +435,59 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     bool run_fused_pass,
     tt::tt_metal::Buffer* l1_arena,
     const PassBarrierPlan& barrier,
+    const WeightTablePlan& weight_table,
     MergeReport& report) {
     TT_FATAL(
         !run_fused_pass || l1_arena != nullptr,
-        "pass A runs, so both halves' circular buffers need the shared L1 arena to be laid over");
+        "the fused pass runs, so both halves' circular buffers need the shared L1 arena to be laid over");
 
     ProgramDescriptor merged;
     report.barrier_semaphore_id = merge_semaphores(fused, unified, merged);
     report.semaphore_count = static_cast<uint32_t>(merged.semaphores.size());
     report.arena_bytes_per_core = overlay_circular_buffers(fused, unified, run_fused_pass, l1_arena, merged);
+
+    // The weight table's page goes PAST both halves' buffers, not over them: it is loaded once,
+    // before the first pass, and read by both. Its index is the next one up, so the program's CB
+    // config -- which spans every index up to the highest -- grows by one entry and no more.
+    uint32_t weight_table_cb = 0;
+    uint32_t weight_table_bytes = 0;
+    if (weight_table.buffer != nullptr) {
+        TT_FATAL(run_fused_pass && !merged.cbs.empty(), "only a merged program reads the weight table");
+        uint32_t highest = 0;
+        for (const auto& cb : merged.cbs) {
+            for (const auto& format : cb.format_descriptors) {
+                highest = std::max<uint32_t>(highest, format.buffer_index);
+            }
+        }
+        weight_table_cb = highest + 1;
+        TT_FATAL(
+            weight_table_cb < tt::tt_metal::hal::get_num_dataflow_buffers(),
+            "no circular-buffer index is left for the weight table");
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        weight_table_bytes =
+            (3 * weight_table.experts_per_chip * static_cast<uint32_t>(sizeof(uint32_t)) + dram_alignment - 1) /
+            dram_alignment * dram_alignment;
+        const uint32_t offset = report.arena_bytes_per_core;
+        TT_FATAL(
+            offset + weight_table_bytes <= l1_arena->aligned_size_per_bank(),
+            "the weight table's {} bytes do not fit past both halves' {} bytes of the {}-byte L1 arena",
+            weight_table_bytes,
+            offset,
+            l1_arena->aligned_size_per_bank());
+        tt::tt_metal::CBDescriptor table_cb{
+            .total_size = weight_table_bytes,
+            .core_ranges = merged.cbs.front().core_ranges,
+            .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(weight_table_cb),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = weight_table_bytes,
+            }},
+        };
+        table_cb.buffer = l1_arena;
+        table_cb.address_offset = offset;
+        merged.cbs.push_back(std::move(table_cb));
+        report.arena_bytes_per_core = offset + weight_table_bytes;
+    }
 
     const auto fused_by_role = index_by_role(fused, "fused");
     const auto unified_by_role = index_by_role(unified, "unified");
@@ -406,9 +529,186 @@ tt::tt_metal::ProgramDescriptor merge_halves(
                 KernelDescriptor::ConfigDescriptor(tt::tt_metal::ReaderConfigDescriptor{}).index(),
             report.barrier_semaphore_id,
             /*shared_semaphore_count=*/report.barrier_semaphore_id,
+            weight_table,
+            weight_table_cb,
+            weight_table_bytes,
             *bases_it->second));
     }
+    mark_unified_pack_precision(unified, *unified_by_role.at(compute_role()), merged);
     return merged;
+}
+
+void compact_runtime_args(tt::tt_metal::ProgramDescriptor& desc) {
+    for (auto& kernel : desc.kernels) {
+        if (!kernel.kernel_source.ends_with("hybrid_reader.cpp") &&
+            !kernel.kernel_source.ends_with("hybrid_writer.cpp")) {
+            continue;
+        }
+        auto& per_core = kernel.runtime_args;
+        if (per_core.empty()) {
+            continue;
+        }
+        size_t count = 0;
+        for (const auto& [core, args] : per_core) {
+            count = std::max(count, args.size());
+        }
+        // A list shorter than the longest reads nothing past its own end, so padding it does not change what it reads.
+        for (auto& [core, args] : per_core) {
+            args.resize(count, 0);
+        }
+        // A buffer-bound slot is re-patched on a program-cache hit. Bound to one buffer on every core it is shared and
+        // re-patched once as a common binding; otherwise it stays per core.
+        std::vector<uint32_t> bound_cores(count, 0);
+        std::vector<tt::tt_metal::Buffer*> bound_buffer(count, nullptr);
+        std::vector<bool> mixed(count, false);
+        for (const auto& binding : kernel.buffer_bindings) {
+            const uint32_t i = binding.arg_idx;
+            mixed[i] = mixed[i] || (bound_cores[i] != 0 && bound_buffer[i] != binding.buffer);
+            bound_buffer[i] = binding.buffer;
+            ++bound_cores[i];
+        }
+        std::vector<bool> bound(count, false);
+        for (size_t i = 0; i < count; ++i) {
+            bound[i] = bound_cores[i] != 0 && (mixed[i] || bound_cores[i] != per_core.size());
+        }
+
+        // A value that varies only along one axis of cores is a function of the core's logical y (or x), which the
+        // kernel knows: kept as a common table over that axis -- or, linear in it, as the line's two coefficients --
+        // it is no longer part of every core's list. The common arguments share the kernel-config ring with the
+        // binaries, so the cheaper form wins and identical tables are stored once.
+        uint32_t axis_min[2] = {std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max()};
+        uint32_t axis_max[2] = {0, 0};
+        for (const auto& [core, args] : per_core) {
+            const uint32_t at[2] = {static_cast<uint32_t>(core.y), static_cast<uint32_t>(core.x)};
+            for (int axis = 0; axis < 2; ++axis) {
+                axis_min[axis] = std::min(axis_min[axis], at[axis]);
+                axis_max[axis] = std::max(axis_max[axis], at[axis]);
+            }
+        }
+        // The value of slot i for each position along `axis` (0: rows, 1: columns), if it depends on nothing else.
+        const auto along = [&](size_t i, int axis) -> std::optional<std::vector<uint32_t>> {
+            std::vector<uint32_t> line(axis_max[axis] - axis_min[axis] + 1, 0);
+            std::vector<bool> seen(line.size(), false);
+            for (const auto& [core, args] : per_core) {
+                const uint32_t at = (axis == 0 ? core.y : core.x) - axis_min[axis];
+                if (seen[at] && line[at] != args[i]) {
+                    return std::nullopt;
+                }
+                seen[at] = true;
+                line[at] = args[i];
+            }
+            return line;
+        };
+        // a, b with line[k] == a + b * (axis_min + k) for every position a core sits at, in uint32 arithmetic.
+        const auto linear = [&](int axis, const std::vector<uint32_t>& line) -> std::optional<std::array<uint32_t, 2>> {
+            std::vector<bool> present(line.size(), false);
+            for (const auto& [core, args] : per_core) {
+                present[(axis == 0 ? core.y : core.x) - axis_min[axis]] = true;
+            }
+            std::optional<size_t> first;
+            std::optional<uint32_t> slope;
+            for (size_t k = 0; k < line.size(); ++k) {
+                if (!present[k]) {
+                    continue;
+                }
+                if (!first) {
+                    first = k;
+                    continue;
+                }
+                if (!slope) {
+                    slope = (line[k] - line[*first]) / static_cast<uint32_t>(k - *first);
+                }
+                if (line[k] != line[*first] + *slope * static_cast<uint32_t>(k - *first)) {
+                    return std::nullopt;
+                }
+            }
+            if (!slope) {
+                return std::nullopt;
+            }
+            const uint32_t origin = axis_min[axis] + static_cast<uint32_t>(*first);
+            return std::array<uint32_t, 2>{line[*first] - *slope * origin, *slope};
+        };
+
+        const auto table_base = static_cast<uint32_t>(kernel.common_runtime_args.size());
+        const auto shared_base = table_base + static_cast<uint32_t>(count);
+        std::vector<uint32_t> table(count);
+        std::vector<uint32_t> shared;
+        std::map<std::pair<int, std::vector<uint32_t>>, uint32_t> stored_lines;
+        std::vector<int64_t> compact_slot(count, -1);
+        uint32_t next_slot = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t value = per_core.front().second[i];
+            const bool same_everywhere =
+                !bound[i] && std::all_of(per_core.begin(), per_core.end(), [&](const auto& entry) {
+                    return entry.second[i] == value;
+                });
+            const auto slot = shared_base + static_cast<uint32_t>(shared.size());
+            if (same_everywhere) {
+                table[i] = hybrid_rt_entry(kHybridRtShared, slot);
+                shared.push_back(value);
+                if (bound_cores[i] != 0) {
+                    kernel.common_buffer_bindings.push_back({slot, bound_buffer[i]});
+                }
+                continue;
+            }
+            bool placed = false;
+            for (int axis = 0; axis < 2 && !placed && bound_cores[i] == 0; ++axis) {
+                const auto line = along(i, axis);
+                if (!line) {
+                    continue;
+                }
+                if (const auto ab = linear(axis, *line)) {
+                    table[i] = hybrid_rt_entry(axis == 0 ? kHybridRtLinearInRow : kHybridRtLinearInColumn, slot);
+                    shared.insert(shared.end(), ab->begin(), ab->end());
+                    placed = true;
+                    continue;
+                }
+                // The kernel indexes the table by its absolute coordinate, so the entry points axis_min before it.
+                auto [stored, inserted] = stored_lines.emplace(std::pair{axis, *line}, slot);
+                if (inserted) {
+                    shared.insert(shared.end(), line->begin(), line->end());
+                }
+                TT_FATAL(
+                    stored->second >= axis_min[axis], "hybrid routed expert: a common table starts before its axis");
+                table[i] =
+                    hybrid_rt_entry(axis == 0 ? kHybridRtPerRow : kHybridRtPerColumn, stored->second - axis_min[axis]);
+                placed = true;
+            }
+            if (!placed) {
+                compact_slot[i] = next_slot;
+                table[i] = hybrid_rt_entry(kHybridRtPerCore, next_slot++);
+            }
+        }
+        TT_FATAL(
+            (shared_base + shared.size()) <= kHybridRtSlotMask,
+            "hybrid routed expert: {} common runtime args do not fit the table",
+            shared_base + shared.size());
+
+        for (auto& [core, args] : per_core) {
+            std::vector<uint32_t> compact;
+            compact.reserve(next_slot);
+            for (size_t i = 0; i < count; ++i) {
+                if (compact_slot[i] >= 0) {
+                    compact.push_back(args[i]);
+                }
+            }
+            args = std::move(compact);
+        }
+        auto& bindings = kernel.buffer_bindings;
+        bindings.erase(
+            std::remove_if(
+                bindings.begin(),
+                bindings.end(),
+                [&](const auto& binding) { return compact_slot[binding.arg_idx] < 0; }),
+            bindings.end());
+        for (auto& binding : kernel.buffer_bindings) {
+            binding.arg_idx = static_cast<uint32_t>(compact_slot[binding.arg_idx]);
+        }
+        kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), table.begin(), table.end());
+        kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), shared.begin(), shared.end());
+        kernel.defines.emplace_back("HYB_RTX_CRT", std::to_string(table_base));
+        kernel.defines.emplace_back("HYB_RTX_COUNT", std::to_string(count));
+    }
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

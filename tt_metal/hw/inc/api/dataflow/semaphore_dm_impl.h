@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <cstddef>
-
 #include "api/dataflow/semaphore_binding_token.h"  // SemScope + semaphore_detail::always_false
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
 #include "dev_mem_map.h"
-#include "tools/profiler/kernel_profiler.hpp"  // SYNC_SIGNAL / SYNC_WAIT
+#include "api/debug/kernel_profiler.hpp"  // SYNC_SIGNAL / SYNC_WAIT
 
 namespace semaphore_detail {
 
@@ -118,9 +116,25 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
         ASSERT(false);  // the host census never bakes DM_LOCAL_CACHED for this platform
 #endif
     } else if (scope == SemScope::EXTERNAL) {
-#if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL) && !defined(NOC_API_V1)
+#if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL)
         noc_async_atomic_barrier();
         const std::uint64_t sem_noc = ::get_noc_addr(l1_offset);
+#if defined(NOC_API_V1)
+        // v1 has no NOC CAS. Only this node's DM cores take the lock, so a RISC-V atomic does; the fences order the
+        // NOC accesses made under it.
+        auto* lock_word = reinterpret_cast<std::uint32_t*>(external_lock_l1_offset<core_type>(l1_offset));
+        const auto try_lock = [&]() -> bool {
+            if (__atomic_exchange_n(lock_word, 1u, __ATOMIC_ACQUIRE) != 0) {
+                return false;
+            }
+            noc_io_fence();
+            return true;
+        };
+        const auto unlock = [&]() {
+            noc_io_fence();
+            __atomic_store_n(lock_word, 0u, __ATOMIC_RELEASE);
+        };
+#else
         const std::uint64_t lock_noc = ::get_noc_addr(external_lock_l1_offset<core_type>(l1_offset));
         const std::uint32_t ret_slot = cas_ret_slot();
         auto* ret_word = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
@@ -130,6 +144,9 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
             noc_async_atomic_barrier();
             return *ret_word;
         };
+        const auto try_lock = [&]() -> bool { return lock_cas(0, 1) == 0; };
+        const auto unlock = [&]() { lock_cas(1, 0); };
+#endif
         for (;;) {
             {
                 SYNC_WAIT("SYNC-SEM-WAIT", l1_offset);
@@ -137,7 +154,7 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
                     invalidate_l1_cache();
                 } while (*sem_addr < value);
             }
-            if (lock_cas(0, 1) != 0) {
+            if (!try_lock()) {
                 continue;
             }
             invalidate_l1_cache();
@@ -147,9 +164,11 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
                 noc_semaphore_inc(sem_noc, static_cast<std::uint32_t>(0u - value));
                 noc_async_atomic_barrier();
             }
-            lock_cas(1, 0);
+            unlock();
             if (sufficient) {
+#if !defined(NOC_API_V1)
                 noc_restore_default_atomic_ret_addr(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+#endif
                 return;
             }
         }
@@ -300,62 +319,3 @@ inline void inc_multicast(
 }
 
 }  // namespace semaphore_detail
-
-#ifdef ARCH_QUASAR
-namespace sem_internal {
-
-// Cached-pool entry/exit for the DM_LOCAL_CACHED semaphores a kernel binds. The generated
-// header lists them (sem_internal::kCachedSemaphores) and these are called around
-// kernel_main(). A cached semaphore's pool row must be seeded with its init value once per
-// program, by exactly one hart, before anyone touches it, and is left clean for the next
-// program. Each 8B row is [0] = the counter, [1] = a bookkeeping word: entered[15:0],
-// exited[30:16], seeded[31]. On entry, each binder hart increments `entered`; whoever got
-// there first copies the init value from the ring into the pool counter and sets `seeded`;
-// everyone else waits for that bit. On exit, each hart increments `exited`; the last one
-// zeroes the bookkeeping word so the next program starts fresh. Any number of local
-// kernels/threads works.
-__attribute__((always_inline)) inline std::uint32_t* cached_pool_row(std::uint32_t id) {
-    return reinterpret_cast<std::uint32_t*>(
-        static_cast<std::uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + id * MEM_SEM_CACHED_POOL_ROW);
-}
-
-template <ProgrammableCoreType core_type>
-__attribute__((always_inline)) inline void seed_cached_row(const CachedSemaphore& sem) {
-    auto* row = cached_pool_row(sem.id);
-    if ((__atomic_fetch_add(row + 1, 1u, __ATOMIC_ACQ_REL) & 0xFFFFu) == 0u) {
-        row[0] = *reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
-            ::get_semaphore<core_type>(sem.id) + MEM_L1_UNCACHED_BASE);
-        __atomic_fetch_or(row + 1, 0x80000000u, __ATOMIC_RELEASE);
-    } else {
-        while ((__atomic_load_n(row + 1, __ATOMIC_ACQUIRE) & 0x80000000u) == 0u) {
-        }
-    }
-}
-
-__attribute__((always_inline)) inline void restore_cached_row(const CachedSemaphore& sem) {
-    auto* row = cached_pool_row(sem.id);
-    if (((__atomic_fetch_add(row + 1, 0x10000u, __ATOMIC_ACQ_REL) >> 16) & 0x7FFFu) == sem.binder_harts - 1u) {
-        __atomic_store_n(row + 1, 0u, __ATOMIC_RELEASE);
-    }
-}
-
-// Handles the semaphores one after another with no loop: the recursion over I unrolls at compile
-// time into one block per semaphore.
-template <ProgrammableCoreType core_type, std::size_t N, std::size_t I = 0>
-__attribute__((always_inline)) inline void init_dm_local_cached(const CachedSemaphore (&sems)[N]) {
-    if constexpr (I < N) {
-        seed_cached_row<core_type>(sems[I]);
-        init_dm_local_cached<core_type, N, I + 1>(sems);
-    }
-}
-
-template <std::size_t N, std::size_t I = 0>
-__attribute__((always_inline)) inline void finish_dm_local_cached(const CachedSemaphore (&sems)[N]) {
-    if constexpr (I < N) {
-        restore_cached_row(sems[I]);
-        finish_dm_local_cached<N, I + 1>(sems);
-    }
-}
-
-}  // namespace sem_internal
-#endif

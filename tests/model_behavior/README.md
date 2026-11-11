@@ -133,7 +133,10 @@ the model loader requires local files when `CI=true`, even if `HF_HUB_OFFLINE=0`
 The other Llama runners continue using their mounted model caches.
 
 Gemma and Qwen use their production factories' linear `FABRIC_1D` configuration.
-Qwen reserves 24 KiB of `L1_SMALL` for GDN prefill convolution. For a
+Qwen reserves 24 KiB of `L1_SMALL` for GDN prefill convolution. GPT-OSS
+reserves 16 KiB, like its production factory, so the throughput experts'
+fabric mux in `selective_reduce_combine` keeps its semaphores above the mux
+instead of failing device setup on Wormhole Galaxy. For a
 local eight-chip Gemma run on Wormhole Galaxy, the adapter opens the 32-chip
 parent mesh so fabric neighbors are initialized, then gives the model a `1x8`
 submesh. Reserve the whole Galaxy for that run; model weights and requests still
@@ -257,7 +260,11 @@ not its selection or generation of an analysis channel.
 
 Token budgets drive completion, even after EOS. Blocking readback keeps scheduler
 and asynchronous execution outside this suite. Layout changes pass complete
-surviving histories. Paged adapters require the generator's public
+surviving histories. Decode follows the version-1 decode update contract
+(`models/common/sampling/README.md`) the way the SGLang bridge does: the adapter is
+host-authoritative, so `reload_inputs` is commanded every step, while
+`reload_sampling_params` and `reset_sampling_state` are commanded only on a layout
+change, together with those histories. Paged adapters require the generator's public
 `release_request(slot)` hook at completion, as serving does; tests do not reset private KV or
 sampler state between requests. Traced decode must create a model trace. Unseeded decode also requires
 a sampler trace unless the model explicitly disables that path in production

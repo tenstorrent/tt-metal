@@ -68,9 +68,9 @@ EOF
 # Parse command line arguments
 HOSTS=""
 DOCKER_IMAGE=""
-# Default image used when --image is omitted (or passed with no value). Bump to the current
-# last-known-good tag as needed (see tools/scaleout/exabox/README.md).
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260929-17-gdc0d2c494ce"
+# Default image used when --image is omitted (or passed with no value). The tag moves when the
+# exabox-tools image workflow is run with "make latest" (see tools/scaleout/exabox/README.md).
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/exabox-tools:latest"
 SKIP_VERSION_CHECK=false
 SKIP_CROSS_HOST_PORT_DOWN=false
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"

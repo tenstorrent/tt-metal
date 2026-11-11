@@ -124,7 +124,8 @@ elif cmd in ("delta", "show"):
                 f"  {label} since {since}: {json.loads(r.stdout)['data']['search']['issueCount']}"
             )
         print(
-            f"  refresh: fetch_repo.py {m['repo']} MINE/raw --since {since} (MINE = the mined store), then build/triage/deep-read the new cases"
+            f"  refresh: fetch_repo.py {m['repo']} MINE/raw/{m['repo'].split('/')[-1]} --since {since} (MINE = the mined store), "
+            "then build/triage/deep-read the new cases"
         )
 else:
     sys.exit(__doc__)

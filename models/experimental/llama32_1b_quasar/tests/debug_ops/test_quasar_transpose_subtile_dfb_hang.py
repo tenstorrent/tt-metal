@@ -27,8 +27,11 @@ forced JIT compile (fast dispatch is unsupported on Quasar):
 Add TTSIM_QSR_DFB_TRACE=1 to emit the [qsr-rocc-issue]/[qsr-dfb-rocc-counter] credit traces;
 the spin shows the same (src_coord,dst_coord,dst) read re-issued over and over.
 
-EXPECTED RESULT TODAY: the test HANGS (does not finish) on Quasar. With a correct sub-tile
-credit model in the sim, it should complete and pass PCC.
+EXPECTED RESULT TODAY (Quasar craq-sim): the ``small_2core`` shape reaches the transpose and HANGS
+(does not finish) on the sub-tile-credit bug; with a correct sub-tile credit model in the sim it should
+complete and pass PCC. The ``resnet_fold`` shape is 7 MB and only fits a device with enough cores (>= ~16);
+on the 2-core emulator it instead OOMs at input allocation (3.5 MB/bank) BEFORE the transpose, so it does
+not exercise this bug there — run it on a larger grid.
 
 Key difference from the existing tests/.../misc/test_transpose.py::test_fold_transpose: that
 test builds its input in TILE_LAYOUT, so the transpose runs the tiled (full-tile-transfer)
@@ -45,12 +48,22 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-# Resnet50-fold transpose shape. W=224 -> 448 B row-major stick, well under the 2048 B DFB tile,
-# so every reader NOC read is sub-tile -> triggers the per-op auto-credit / explicit-credit race.
+# W=224 -> 448 B row-major stick, well under the 2048 B DFB tile, so every reader NOC read is sub-tile ->
+# triggers the per-op auto-credit / explicit-credit race (this is the bug; W is what matters, not N/C/H).
+#
+# TWO shapes:
+#   * resnet_fold (16,4,256,224) = 7 MB: the real fold input. Height-shards over num_cores=min(N,grid). On a
+#     small grid (e.g. the 2-core craq-sim emulator) only 2 cores → 3.5 MB/bank → OOM at allocation, BEFORE
+#     the transpose runs (a device-too-small OOM, not the sub-tile hang). Use on a device with >= ~16 cores.
+#   * small_2core (2,4,32,224) = 112 KB: fits 2 banks (~56 KB/core over 2 cores), so the transpose actually
+#     RUNS and exercises the sub-tile stick reader on the 2-core emulator — where it HANGS today on the
+#     craq-sim sub-tile-credit bug (see module docstring / the craq-sim ticket). It should pass PCC once the
+#     sim's partial-tile credit model is fixed.
 @pytest.mark.parametrize(
     "input_shape",
     [
-        (16, 4, 256, 224),  # the resnet50 fold transpose input
+        pytest.param((16, 4, 256, 224), id="resnet_fold"),  # 7 MB — OOMs on a 2-core device (use a big grid)
+        pytest.param((2, 4, 32, 224), id="small_2core"),  # 112 KB — fits 2 cores; reaches the transpose (sub-tile hang)
     ],
 )
 def test_quasar_transpose_wh_rm_sharded_subtile_dfb_hang(device, input_shape):

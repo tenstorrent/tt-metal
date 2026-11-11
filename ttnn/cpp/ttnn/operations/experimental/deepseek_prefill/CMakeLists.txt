@@ -1,9 +1,13 @@
 # Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for
 # this domain here without touching ttnn/CMakeLists.txt.
+add_subdirectory(attn_res_block_mix)
+add_subdirectory(attn_res_block_stats)
 add_subdirectory(attn_res_gather_softmax)
 add_subdirectory(attn_res_weighted_reduce_nc)
 add_subdirectory(combine)
 add_subdirectory(combine_fabric2d)
+add_subdirectory(compressor_state_exchange)
+add_subdirectory(csa_compressor)
 add_subdirectory(dispatch)
 add_subdirectory(dispatch_fabric2d)
 add_subdirectory(extract)
@@ -35,10 +39,14 @@ add_library(TTNN::Ops::Experimental::DeepSeekPrefill ALIAS ttnn_op_deepseek_pref
 target_link_libraries(
     ttnn_op_deepseek_prefill
     INTERFACE
+        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockMix
+        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockStats
         TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax
         TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d
+        TTNN::Ops::Experimental::DeepSeekPrefill::CompressorStateExchange
+        TTNN::Ops::Experimental::DeepSeekPrefill::CsaCompressor
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
@@ -77,10 +85,14 @@ target_link_libraries(
 target_sources(
     ttnn_op_deepseek_prefill
     INTERFACE
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockMix>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockStats>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CompressorStateExchange>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CsaCompressor>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>

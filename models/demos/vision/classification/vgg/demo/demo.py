@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -11,6 +13,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.utils.common_demo_utils import report_generation_rate
 from models.demos.vision.classification.vgg.demo_utils import get_batch, get_data_loader
 from models.demos.vision.classification.vgg.tt import ttnn_vgg
 
@@ -60,6 +63,7 @@ def run_vgg_imagenet_inference_vgg(
     # load ImageNet batch by batch
     # and run inference
     correct = 0
+    inference_elapsed_s = 0.0
     for iter in range(iterations):
         predictions = []
         torch_predictions = []
@@ -67,8 +71,10 @@ def run_vgg_imagenet_inference_vgg(
         torch_outputs = torch_model(inputs)
         permuted_inputs = torch.permute(inputs, (0, 2, 3, 1))
         tt_batched_input_tensor = ttnn.from_torch(permuted_inputs, ttnn.bfloat16)
+        inference_start = time.perf_counter()
         tt_output = ttnn_model(device, tt_batched_input_tensor, parameters, batch_size, model_config)
         tt_output = ttnn.to_torch(tt_output)
+        inference_elapsed_s += time.perf_counter() - inference_start
         prediction = tt_output[:, 0, 0, :].argmax(dim=-1)
         torch_prediction = torch_outputs[:, :].argmax(dim=-1)
         for i in range(batch_size):
@@ -84,6 +90,8 @@ def run_vgg_imagenet_inference_vgg(
     accuracy = correct / (batch_size * iterations)
     logger.info(f"Model {model_name}")
     logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
+    # Report-only perf for the CI dashboard (#58596). No-op outside CI.
+    report_generation_rate("vggnet", inference_elapsed_s, batch_size * iterations, batch_size=batch_size)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

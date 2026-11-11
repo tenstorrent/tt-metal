@@ -106,6 +106,7 @@ Core
    ttnn.to_memory_config
    ttnn.to_torch
    ttnn.typecast
+   ttnn.verify_shards_match_topology
 
 Tensor Creation
 ===============
@@ -525,6 +526,7 @@ Transformer
    ttnn.transformer.concatenate_heads
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.fused_recurrent_gated_delta_rule
    ttnn.transformer.gated_delta_attn_seq
    ttnn.transformer.joint_scaled_dot_product_attention
    ttnn.transformer.paged_flash_multi_latent_attention_decode

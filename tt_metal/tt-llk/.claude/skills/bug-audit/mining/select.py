@@ -3,6 +3,7 @@
 
   select.py holdout --cases cases.jsonl --triage triage.jsonl --out holdout.jsonl [--n 60] [--seed 7]
                     [--code-glob 'tt_metal/**' ...] [--test-glob '*/tests/*' ...]
+                    [--exclude F ...] [--deep deep.jsonl ...] [--deep-cases old_cases.jsonl ...]
   select.py screened --cases picked.jsonl --screen <holdout-screen output> --out holdout.jsonl --n 60 [--triage x]
   select.py deep --cases cases.jsonl --triage triage.jsonl --exclude holdout.jsonl --out-dir deep/ \
                  [--min-priority 2] [--per-batch 4] [--max 0] [--include-test-bugs]
@@ -42,9 +43,12 @@ p.add_argument("--out")
 p.add_argument("--out-dir")
 p.add_argument(
     "--exclude",
-    action="append",
+    action="extend",
+    nargs="+",
     default=[],
-    help="jsonl files of cases to exclude (by id AND by fix commit): old holdouts, the deep-read store",
+    help="jsonl files of cases to exclude: old holdouts, the deep-read store. By id, and by fix commit: a case sharing "
+    "a holdout's fix is always excluded; one sharing a deep-read fix is excluded from a holdout, and from deep reads "
+    "only when every fix it has was read",
 )
 p.add_argument("--n", type=int, default=60)
 p.add_argument("--seed", type=int, default=7)
@@ -73,9 +77,19 @@ p.add_argument(
 )
 p.add_argument(
     "--deep",
-    action="append",
+    action="extend",
+    nargs="+",
     default=[],
-    help="deep-read stores; cases a deep read judged not real are excluded",
+    help="deep-read stores: their cases are not read again, cases a deep read judged not real are excluded, and fixes "
+    "they read count as read (see --exclude)",
+)
+p.add_argument(
+    "--deep-cases",
+    action="extend",
+    nargs="+",
+    default=[],
+    help="case files used only to look up the fix commits of excluded or deep-read ids that --cases does not hold "
+    "(a refresh: pass every case file the deep store was built from; one flag takes several, so a glob works)",
 )
 p.add_argument(
     "--reject",
@@ -98,28 +112,69 @@ tri = (
     if a.triage
     else {}
 )
-excl, excl_fix = set(), set()
+# fix commits of ids the current case file may not hold (a refresh builds it from the new dumps only)
+lookup = dict(cases)
+for f in a.deep_cases:
+    for c in map(json.loads, filter(str.strip, open(f))):
+        lookup.setdefault(c["id"], c)
+unresolved = set()
+
+
+def fixes_of(cid):
+    c = lookup.get(cid)
+    if c is None:
+        unresolved.add(cid)
+        return set()
+    return {fx["oid"] for fx in c.get("fix", [])}
+
+
+# hold_fix: the fix commits of held-out cases (rows that carry fix_commit); read_fix: those of cases already
+# deep-read (rows without one, looked up). An issue case and its PR case can share one fix commit.
+excl, hold_fix, read_fix = set(), set(), set()
 for f in a.exclude:
     for x in filter(str.strip, open(f)):
         r = json.loads(x)
         excl.add(str(r["id"]))
         if r.get("fix_commit"):
-            excl_fix.add(
-                r["fix_commit"]
-            )  # an issue case and its PR case can share one fix commit
+            hold_fix.add(r["fix_commit"])
+        else:
+            read_fix |= fixes_of(r["id"])
 only = set(open(a.only_ids).read().split()) if a.only_ids else None
 is_test = lambda f: any(fnmatch.fnmatch(f, g) for g in a.test_glob)  # noqa: E731
 CODE_EXT = (".c", ".cc", ".cpp", ".h", ".hpp", ".inl", ".py", ".rs", ".go")
 
-not_real, deep_fix = set(), set()
+not_real, deep_ids = set(), set()
 for f in a.deep:
     for d in map(json.loads, filter(str.strip, open(f))):
+        deep_ids.add(d["id"])
         if d.get("is_real_bug") == "no":
             not_real.add(d["id"])
-        if (
-            d["id"] in cases
-        ):  # a deep-read fix may be in the pack, so no holdout case may share it
-            deep_fix |= {fx["oid"] for fx in cases[d["id"]]["fix"]}
+        read_fix |= fixes_of(d["id"])
+
+
+def already_read(c):
+    """A case to leave out of the deep reads: read under its own id, the twin of a holdout (whose fix must not reach
+    the pack), or every one of its fixes already read under another id. A case with a fix nobody has read is read:
+    that fix is a defect the pack has not seen (an umbrella issue's other fixes, a later fix of the same bug).
+    """
+    fixes = {fx["oid"] for fx in c.get("fix", [])}
+    return (
+        c["id"] in deep_ids
+        or bool(fixes & hold_fix)
+        or bool(fixes and fixes <= read_fix)
+    )
+
+
+if unresolved:
+    msg = (
+        f"{len(unresolved)} excluded or deep-read case ids (e.g. {', '.join(sorted(unresolved)[:3])}) are in neither "
+        "--cases nor any --deep-cases, so a new case sharing one of their fixes cannot be recognised. Pass the case "
+        "file they were built from with --deep-cases."
+    )
+    if a.cmd == "holdout":
+        # a holdout sharing a fix with the pack measures memory, not skill
+        sys.exit(msg)
+    print("WARNING: " + msg, file=sys.stderr)
 
 
 # An include, a comment, or a block-comment continuation (`*`, `* text`, `*/`). Not a bare `#` (a `#define` or `#if`
@@ -157,8 +212,9 @@ if a.cmd == "holdout":
             or cid in excl
         ):
             continue
-        if any(fx["oid"] in excl_fix or fx["oid"] in deep_fix for fx in c["fix"]):
-            continue  # same fix as an excluded or deep-read case under another id
+        if any(fx["oid"] in hold_fix or fx["oid"] in read_fix for fx in c["fix"]):
+            # same fix as a held-out or deep-read case under another id: a deep-read fix may be in the pack
+            continue
         if reject.search(c["title"]) or any(
             reject.search(fx["subject"]) for fx in c["fix"]
         ):
@@ -215,8 +271,8 @@ else:
         c = cases.get(cid)
         if not c:
             continue
-        if any(fx["oid"] in excl_fix for fx in c.get("fix", [])):
-            continue  # a held-out bug's twin case (an issue and its PR share one fix) must not reach the pack
+        if already_read(c):
+            continue
         later = c.get("later") or {}
         suspicious = bool(later.get("reverts") or later.get("citing_later"))
         ok_verdict = t["verdict"] == "code-bug" or (
@@ -236,7 +292,7 @@ else:
                 or cid in excl
                 or cid in not_real
                 or cid not in cases
-                or any(fx["oid"] in excl_fix for fx in cases[cid].get("fix", []))
+                or already_read(cases[cid])
                 or (only and cid not in only)
             ):
                 continue

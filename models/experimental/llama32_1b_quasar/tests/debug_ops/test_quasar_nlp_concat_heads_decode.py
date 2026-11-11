@@ -167,3 +167,50 @@ def test_nlp_concat_heads_decode_grid_agnostic(mesh_device, batch):
     assert torch.isfinite(o).all(), "grid-agnostic head-merge produced non-finite output"
     assert got.shape[-1] == Q_DIM, f"unexpected hidden dim {got.shape}"
     assert pcc > 0.99, f"grid-agnostic head-merge mismatch vs torch reference: PCC={pcc}"
+
+
+def _grid_agnostic_head_merge_device(x, batch):
+    """Device head-merge from a HEIGHT_SHARDED TILE input, mirroring the e2e helper's REAL path
+    (_install_quasar_concat_heads_grid_agnostic._grid_agnostic_merge): deshard -> untilize -> reshape -> pad ->
+    tilize. Unlike _grid_agnostic_head_merge above (host row-major input, which skips deshard+untilize), this
+    exercises the x.is_sharded()/sharded_to_interleaved + untilize branches the e2e actually runs on the decode
+    SDPA output -- so the regression test can't pass while the e2e helper still fails on its sharded input."""
+    q = getattr(ttnn.experimental, "quasar", None)
+    _s2i = getattr(q, "sharded_to_interleaved", None) or ttnn.sharded_to_interleaved
+    _untilize = getattr(q, "untilize", None) or ttnn.untilize
+    _tilize = getattr(q, "tilize", None) or ttnn.tilize
+    if x.is_sharded():
+        x = _s2i(x, ttnn.DRAM_MEMORY_CONFIG)
+    x = _untilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # row-major [1, batch, N_HEADS, HEAD_DIM]
+    x = ttnn.reshape(x, (1, 1, batch, N_HEADS * HEAD_DIM))  # contiguous head-merge
+    pad_to = ((batch + 31) // 32) * 32
+    if pad_to != batch:
+        x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_to - batch), (0, 0)], value=0.0)
+    return _tilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("batch", [1], ids=["decode-batch1"])
+def test_nlp_concat_heads_decode_grid_agnostic_sharded(mesh_device, batch):
+    """Grid-agnostic merge from the REAL decode SDPA layout: a HEIGHT_SHARDED input (via _batch_height_sharded),
+    run through the same deshard -> untilize -> reshape -> pad -> tilize the e2e helper installs. Covers the
+    x.is_sharded()/sharded_to_interleaved + untilize branch that the host-row-major variant above bypasses, so
+    this guards _install_quasar_concat_heads_grid_agnostic's actual code path, not just the reshape fidelity."""
+    torch.manual_seed(0)
+    attn = torch.randn(1, batch, N_HEADS, HEAD_DIM, dtype=torch.bfloat16)
+    attn_sharded = _batch_height_sharded(attn, mesh_device, batch)
+    assert attn_sharded.is_sharded(), "input must be height-sharded to exercise the deshard branch"
+
+    out = _grid_agnostic_head_merge_device(attn_sharded, batch)
+    ttnn.synchronize_device(mesh_device)
+    o = ttnn.to_torch(out)
+
+    ref = attn.reshape(1, 1, batch, N_HEADS * HEAD_DIM)
+    got = o.reshape(1, 1, -1, Q_DIM)[:, :, :batch, :]  # slice off any tile-padding on the batch axis
+    pcc = _pcc(got, ref)
+    logger.info(
+        f"[concat-heads-grid-agnostic-sharded] out {tuple(o.shape)} finite={torch.isfinite(o).all().item()} "
+        f"PCC={pcc:.5f}"
+    )
+    assert torch.isfinite(o).all(), "sharded grid-agnostic head-merge produced non-finite output"
+    assert got.shape[-1] == Q_DIM, f"unexpected hidden dim {got.shape}"
+    assert pcc > 0.99, f"sharded grid-agnostic head-merge mismatch vs torch reference: PCC={pcc}"

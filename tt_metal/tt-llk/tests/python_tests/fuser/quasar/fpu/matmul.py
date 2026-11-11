@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.matmul import matmul_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import fidelity_source_formats
 
 
 class MatmulFpu(Fpu):
@@ -38,10 +39,13 @@ class MatmulFpu(Fpu):
         ct_dim = block.block_cols
         src_b_shape = compute_unit.src_a.tile_shape.cpp_value
         src_a_shape = compute_unit.src_b.tile_shape.cpp_value
+        src_a_format, src_b_format = fidelity_source_formats(
+            config, operation, compute_unit
+        )
 
         return (
             f"// Operation {stage}: Matmul FPU\n"
-            f"_llk_math_matmul_init_<{math_fidelity}>({ct_dim}, {rt_dim}, {src_b_shape}, {src_a_shape});\n"
+            f"_llk_math_matmul_init_<{math_fidelity}>({src_a_format}, {src_b_format}, {ct_dim}, {rt_dim}, {src_b_shape}, {src_a_shape});\n"
         )
 
     def calculate(

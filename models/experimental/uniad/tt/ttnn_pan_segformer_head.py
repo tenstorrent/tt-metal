@@ -214,9 +214,11 @@ class TtPansegformerHead(nn.Module):
         # exclude background
         self.loss_cls = True
         if self.loss_cls:
-            cls_score = cls_score.sigmoid()
-            # TODO Raised issue fo - <https://github.com/tenstorrent/tt-metal/issues/26183>
-            scores, indexes = cls_score.view(-1).topk(max_per_img)
+            cls_score = ttnn.reshape(ttnn.sigmoid(cls_score), (1, -1))
+            # bf16 sigmoid scores tie often; stable=True breaks ties by lowest index, as the reference does.
+            scores, indexes = ttnn.topk(cls_score, max_per_img, stable=True)
+            scores = ttnn.to_torch(scores).reshape(-1)
+            indexes = ttnn.to_torch(indexes).reshape(-1).to(torch.int64)
             det_labels = indexes % self.num_things_classes
             bbox_index = indexes // self.num_things_classes
             bbox_pred = bbox_pred[bbox_index]
@@ -261,7 +263,6 @@ class TtPansegformerHead(nn.Module):
             img_shape = (self.canvas_size[0], self.canvas_size[1], 3)
             ori_shape = (self.canvas_size[0], self.canvas_size[1], 3)
             scale_factor = 1
-            cls_score = ttnn.to_torch(cls_score)
             bbox_pred = ttnn.to_torch(bbox_pred)
             index, bbox, labels = self._get_bboxes_single(cls_score, bbox_pred, img_shape, scale_factor, rescale)
 
@@ -350,7 +351,7 @@ class TtPansegformerHead(nn.Module):
             scores_all = ttnn.mul(scores_all, seg_scores)
 
             scores_all = ttnn.unsqueeze(scores_all, dim=0)
-            scores_all, index = ttnn.sort(scores_all, descending=True)
+            scores_all, index = ttnn.sort(scores_all, descending=True, stable=True)
             scores_all = ttnn.squeeze(scores_all, dim=0)
             index = ttnn.squeeze(index, dim=0)
             index = ttnn.to_torch(index).to(torch.int64)

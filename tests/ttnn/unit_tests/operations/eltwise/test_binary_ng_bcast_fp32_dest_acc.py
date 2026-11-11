@@ -18,7 +18,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 
 pytestmark = pytest.mark.use_module_device
 

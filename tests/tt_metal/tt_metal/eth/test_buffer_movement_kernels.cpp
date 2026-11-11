@@ -39,8 +39,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -125,7 +126,7 @@ bool chip_to_chip_dram_buffer_transfer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto sender_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = processor};
     eth_test_common::set_arch_specific_eth_config(sender_eth_config);
@@ -152,7 +153,7 @@ bool chip_to_chip_dram_buffer_transfer(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto receiver_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .processor = processor};
     eth_test_common::set_arch_specific_eth_config(receiver_eth_config);
@@ -239,7 +240,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     /*std::vector<uint32_t> input_packed =
@@ -296,7 +297,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto output_buffer =
         distributed::MeshBuffer::create(receiver_buffer_config, receiver_dram_config, receiver_mesh_device.get());
@@ -367,12 +368,15 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
 namespace tt::tt_metal {
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -417,12 +421,15 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
 }
 
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
     const auto& sender_mesh_device = devices_.at(1);
     const auto& receiver_mesh_device = devices_.at(0);
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -467,10 +474,13 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
-    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
     const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -557,7 +567,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
     uint32_t page_size = 2 * 32 * 32;
     uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
             const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
             if (sender_device->id() == receiver_device_id) {
@@ -639,6 +649,9 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
 }
 
 TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllConnectedChips) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
@@ -647,7 +660,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
             const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
             if (sender_device->id() >= receiver_device_id) {
@@ -713,6 +726,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
 }
 
 TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -723,7 +739,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
-        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->impl().get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
             const auto receiver_device_id = receiver_mesh_device->get_device_ids()[0];
             if (sender_device->id() >= receiver_device_id) {

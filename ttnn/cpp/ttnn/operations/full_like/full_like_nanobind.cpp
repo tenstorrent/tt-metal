@@ -23,6 +23,10 @@ void bind_full_like_operation(nb::module_& mod) {
     Create a tensor with the same shape of the given tensor and filled with given fill_value, with the specified `memory_config` and converting its data type to `dtype`.
     This operation only supports TILE_LAYOUT for now.
 
+    On a mesh device the output keeps the input's tensor topology (mesh placements and distribution shape) whenever the
+    input is distributed over the whole mesh, so a full_like of a sharded tensor is itself sharded. An input distributed
+    over only part of the mesh yields a fully replicated output, as with :func:`ttnn.empty_like`.
+
     Args:
         * :attr:`input`: The tensor has shape which will be based on to make the output tensor
         * :attr:`fill_value`: The value which will be used to fill the output tensor

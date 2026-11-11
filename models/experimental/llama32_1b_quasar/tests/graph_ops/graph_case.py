@@ -58,6 +58,7 @@ suspicion, or on an emulator where PCC of a bfloat8_b path is not the point).
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 from typing import Any
@@ -67,6 +68,7 @@ import torch
 
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
+from tests.ttnn.utils_for_testing import assert_allclose
 
 # Re-exported so generated files need one import only.
 with_default_mesh = U.with_default_mesh
@@ -475,6 +477,15 @@ _DTYPE_BYTES = {
 # full-table device embedding these cases capture is never actually executed in the e2e.
 _HOST_TENSOR_RAM_BUDGET = 256_000_000  # ~256 MB
 
+# Output-readback budget (elements), Quasar-only. Reading a device tensor back to host crosses the
+# ~50 KHz simulated memory interface, so a large output (e.g. a [1,1,1024,8192] = 8.4M-element multiply
+# result) takes minutes per readback — and golden ops were reading each output back TWICE (once for the
+# finiteness check, once for the PCC check). The dedup below reads each output once; for outputs still
+# larger than this budget we read only a leading tile-aligned slice (or, if that device slice isn't
+# possible, skip the value/finiteness checks — shape/dtype/placement already ran and need no readback).
+# WH/BH and any real HW always read the full output (gated on _is_quasar), so their coverage is unchanged.
+_READBACK_BUDGET_ELEMS = 1_000_000  # ~2 MB bf16 per readback
+
 
 def _host_tensor_bytes(spec):
     return math.prod(spec["shape"]) * _DTYPE_BYTES.get(spec["dtype"], 4)
@@ -515,8 +526,12 @@ def _quasar_tilize_build(data, tt_dtype, memory_config, mesh_device):
 
 def build_tensor(spec, mesh_device, case, op_name, key):
     """Materialize one captured input tensor. Returns (ttnn tensor, torch source)."""
+    # Quasar-only: the host RAM budget is a Quasar-emulator constraint. On WH/BH (and any real HW) a >256MB
+    # input is materializable, so don't silently drop coverage there. Gate on _is_quasar rather than the grid
+    # size: the emulator's compute_with_storage_grid_size is unreliable (dispatch-mode grid trap), and Quasar
+    # today is only the emulator/sim.
     nbytes = _host_tensor_bytes(spec)
-    if nbytes > _HOST_TENSOR_RAM_BUDGET:
+    if _is_quasar(mesh_device) and nbytes > _HOST_TENSOR_RAM_BUDGET:
         pytest.skip(
             f"input {key} {spec['shape']} {spec['dtype']} ~{nbytes / 1e6:.0f} MB exceeds the emulator host RAM "
             f"budget (~{_HOST_TENSOR_RAM_BUDGET / 1e6:.0f} MB) — materializing it would OOM-kill the worker"
@@ -1023,7 +1038,41 @@ def _input_elements(case):
     return total
 
 
-def _check_finite(host, case, op_name, index):
+def _read_output_host(got, mesh_device):
+    """Compose one ttnn output to host, bounding the readback on Quasar for oversized outputs.
+
+    Returns ``(host_tensor, partial)``:
+      * WH/BH, or a host/within-budget tensor -> the full host tensor, ``partial=False`` (unchanged).
+      * Quasar + on-device + larger than ``_READBACK_BUDGET_ELEMS`` -> a leading tile-aligned slice read
+        back to host, ``partial=True`` (the slow sim readback is bounded to the budget).
+      * Quasar + oversized but the device slice isn't possible -> ``(None, True)``: the caller skips the
+        value/finiteness checks for this output (shape/dtype/placement already ran and need no readback).
+    """
+    if not ttnn.is_tensor_storage_on_device(got):
+        return from_tt(got, mesh_device), False
+
+    shape = [int(d) for d in got.shape]
+    numel = math.prod(shape) if shape else 1
+    if not (_is_quasar(mesh_device) and numel > _READBACK_BUDGET_ELEMS):
+        return from_tt(got, mesh_device), False
+
+    # Oversized on the emulator: read only a leading tile-aligned slice along the second-to-last dim.
+    try:
+        if len(shape) >= 2:
+            last = max(shape[-1], 1)
+            rows = max(U.TILE, (_READBACK_BUDGET_ELEMS // last) // U.TILE * U.TILE)
+            if rows < shape[-2]:
+                begins = tuple([0] * len(shape))
+                ends = tuple(shape[:-2] + [rows, shape[-1]])
+                sliced = ttnn.slice(got, begins, ends)
+                return from_tt(sliced, mesh_device), True
+    except Exception:
+        pass
+    # Can't cheaply bound the readback for this oversized output -> skip the value/finiteness checks.
+    return None, True
+
+
+def _check_finite(host, case, op_name, index, partial=False):
     """Assert the region the op can actually define is finite.
 
     An output with more elements than *all* of its inputs combined cannot be fully
@@ -1037,7 +1086,12 @@ def _check_finite(host, case, op_name, index):
     head, …), which is exactly the region the op writes; a NaN/Inf there still
     fails, and checking the leading slice rather than merely counting finite values
     means finite garbage in the padding cannot mask it.
+
+    ``partial`` means ``host`` is itself only a leading tile-aligned prefix of the output (the
+    bounded-readback path for oversized Quasar outputs); the leading-region logic below is unchanged,
+    the counts just describe that prefix rather than the whole tensor.
     """
+    tail = " (bounded leading readback)" if partial else ""
     finite = torch.isfinite(host)
     n_finite, n_total = int(finite.sum()), host.numel()
     if n_finite == n_total:
@@ -1051,12 +1105,12 @@ def _check_finite(host, case, op_name, index):
             return  # only the padding the op cannot define is non-finite
         assert False, (
             f"{op_name}: output[{index}] has {bad} non-finite value(s) in the leading {budget} "
-            f"element(s) the op must define ({n_total - n_finite} of {n_total} non-finite overall; "
+            f"element(s) the op must define ({n_total - n_finite} of {n_total} non-finite overall{tail}; "
             f"the tail beyond {budget} is batch/tile padding the op does not write)"
         )
 
     assert False, (
-        f"{op_name}: output[{index}] has {n_total - n_finite} non-finite of {n_total} element(s) "
+        f"{op_name}: output[{index}] has {n_total - n_finite} non-finite of {n_total} element(s){tail} "
         f"(inputs account for {budget}, so the whole output should be written)"
     )
 
@@ -1136,8 +1190,16 @@ def _check_output(out, case, mesh_device, op_name):
             assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != {source} {want_dtype}"
         _check_placement(got, spec, mesh_device, op_name, i, source)
 
+    # Read each output back to host ONCE (the sim device->host readback dominates runtime) and reuse it
+    # for both the finiteness check here and the golden/PCC check in run_case. On Quasar an oversized
+    # output is bounded to a leading tile-aligned slice, or (host is None) its value checks are skipped.
+    hosts = []
     for i, t in enumerate(tensors):
-        _check_finite(from_tt(t, mesh_device), case, op_name, i)
+        host, partial = _read_output_host(t, mesh_device)
+        if host is not None:
+            _check_finite(host, case, op_name, i, partial=partial)
+        hosts.append((host, partial))
+    return hosts
 
 
 def _golden_pcc(case, op_name):
@@ -1174,11 +1236,31 @@ _QUASAR_UNSUPPORTED_OPS = {
 }
 
 
-def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+def _bfp_specs(case):
+    """The capture's tensor specs (args, kwargs, outs) whose dtype is a Bfp format, as "where:dtype"."""
+    found = []
+
+    def visit(node, where):
+        if isinstance(node, dict):
+            if node.get("dtype") in _BLOCK_FLOAT_DTYPES:
+                found.append(f"{where}:{node['dtype']}")
+            for key, value in node.items():
+                visit(value, f"{where}.{key}")
+        elif isinstance(node, (list, tuple)):
+            for i, value in enumerate(node):
+                visit(value, f"{where}[{i}]")
+
+    for key in ("args", "kwargs", "outs"):
+        visit(case.get(key), key)
+    return found
+
+
+def run_case(op, case, mesh_device, *, op_name=None, pcc=None, rtol=None):
     """Materialize one captured call, run it, and check the result.
 
     ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
+    ``rtol`` also checks the golden with allclose (atol = rtol x the golden's largest magnitude).
     """
     op_name = op_name or case["op"]
 
@@ -1186,6 +1268,11 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     # RuntimeErrors -- so skip them pre-flight, before any device work, rather than hanging the run.
     if _is_quasar(mesh_device) and op_name in _QUASAR_UNSUPPORTED_OPS:
         pytest.skip(f"{op_name} faults on Quasar: {_QUASAR_UNSUPPORTED_OPS[op_name]}")
+    # Quasar has no Bfp formats (bfloat8_b / bfloat4_b): skip such a capture pre-flight rather than fail it.
+    if _is_quasar(mesh_device):
+        bfp = _bfp_specs(case)
+        if bfp:
+            pytest.skip(f"Quasar has no Bfp formats; this capture uses {', '.join(bfp)}")
 
     torch_inputs: dict[str, torch.Tensor] = {}
 
@@ -1204,7 +1291,11 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
         out = op(*args, **kwargs)
     except RuntimeError as e:
         msg = str(e)
-        _too_small = (
+        # Quasar-only: these grid/capacity errors are 2-node-emulator constraints (captured 8x8-grid configs
+        # and L1 shapes that don't fit the emulator). On WH/BH (and any real HW) they'd be genuine regressions,
+        # so let them propagate there instead of masking them as a skip. Gate on _is_quasar (not grid size):
+        # the emulator misreports its grid, and Quasar today is only the emulator/sim.
+        _too_small = _is_quasar(mesh_device) and (
             "Target number of cores" in msg  # e.g. nlp_concat_heads_decode num_heads(32) > device cores
             or "must not contain more cores than the device" in msg  # SDPA program-config grid > device
             or "exceeds grid size" in msg
@@ -1215,7 +1306,7 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             pytest.skip(f"captured case does not fit this device (grid/memory): {msg.splitlines()[0][:200]}")
         raise
 
-    _check_output(out, case, mesh_device, op_name)
+    hosts = _check_output(out, case, mesh_device, op_name)
 
     post_fn = POSTCONDITION.get(op_name)
     if post_fn is not None:
@@ -1232,6 +1323,60 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             floor = pcc or _golden_pcc(case, op_name)
             for i, one in enumerate(refs):
                 if one is not None and i < len(tensors):
-                    U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device)
+                    # Reuse the host tensor already composed in _check_output (avoids a 2nd sim readback).
+                    # host is None only for an oversized Quasar output whose value checks were skipped there
+                    # -> skip the PCC check too (shape/dtype/placement already ran).
+                    host = hosts[i][0] if i < len(hosts) else None
+                    if host is None and i < len(hosts):
+                        continue
+                    U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device, host=host)
+                    if rtol is not None:
+                        got = (host if host is not None else from_tt(tensors[i], mesh_device)).reshape(-1)
+                        ref = one.float().reshape(-1)[: got.numel()]
+                        assert_allclose(ref, got[: ref.numel()], rtol=rtol, atol=rtol * ref.abs().max().item())
 
     return out
+
+
+# Ops the model runs through the Quasar fork with no program config on Quasar (utility_functions.linear,
+# executor.py); their generated files also run every case that way.
+_NO_PROGRAM_CONFIG_OP = {
+    "ttnn.linear": ttnn.experimental.quasar.linear,
+    "ttnn.matmul": ttnn.experimental.quasar.matmul,
+}
+_BLOCK_FLOAT_DTYPES = ("BFLOAT8_B", "BFLOAT4_B")
+
+
+def run_case_without_program_config(case, mesh_device):
+    """Run a captured ``ttnn.linear`` / ``ttnn.matmul`` case through ``ttnn.experimental.quasar.linear`` /
+    ``matmul`` with no program config: the unified matmul on Quasar, as the model calls it there.
+
+    The op places the matmul itself, so the output's shard detail is not compared. Block-float operands and
+    outputs are bf16 (Quasar has no block-float formats; the model's Quasar weights are bf16), input shard grids
+    this device lacks are DRAM-interleaved (as test_llama_e2e.py forces them on Quasar), and so is every input
+    off Quasar, where no program config means the fork's legacy auto config: it takes an interleaved B only and its
+    1D path FATALs on case 07's L1-sharded A (cb_in0 with no consumer on an idle core). Checked with allclose on top
+    of the PCC, to 10% of the largest output: bf16 partial sums over K reach ~7% on WH at K=8192.
+    """
+    case = copy.deepcopy(case)
+    case["kwargs"].pop("program_config", None)
+    case["kwargs"].pop("core_grid", None)
+    dtype = case["kwargs"].get("dtype")
+    if dtype is not None and dtype["v"] in _BLOCK_FLOAT_DTYPES:
+        dtype["v"] = "BFLOAT16"
+    for spec in case["args"]:
+        if spec["k"] != "t":
+            continue
+        if spec["dtype"] in _BLOCK_FLOAT_DTYPES:
+            spec["dtype"] = "BFLOAT16"
+        mem = spec.get("mem")
+        if mem is not None and (not _is_quasar(mesh_device) or not _shard_grid_fits(mem, mesh_device)[0]):
+            spec["mem"] = {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None}
+    for spec in case["outs"]:
+        if spec is None:
+            continue
+        if spec.get("dtype") in _BLOCK_FLOAT_DTYPES:
+            spec["dtype"] = "BFLOAT16"
+        if spec.get("mem") is not None:
+            spec["mem"]["shard"] = None
+    return run_case(_NO_PROGRAM_CONFIG_OP[case["op"]], case, mesh_device, op_name=case["op"], rtol=0.1)

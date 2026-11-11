@@ -46,6 +46,12 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
         // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
         std::optional<uint32_t> tp_axis;
+        // Input row window (tokens, multiples of 32): write rows [input_row_offset, input_row_offset +
+        // input_rows) of every head of `input`, as if that slice were the input. Lets a batched prefill
+        // step write each request's KV from the stacked input without a slice. input_rows is hashed; the
+        // offset is a runtime arg. nullopt input_rows = every row from the offset on.
+        uint32_t input_row_offset = 0;
+        std::optional<uint32_t> input_rows;
     };
 
     struct tensor_args_t {
@@ -60,6 +66,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         std::optional<Tensor> kv_actual_global;
         // Optional, METADATA path only: 1-element uint32 valid_global (= actual_end). Same clamp.
         std::optional<Tensor> valid_global;
+        // Optional tiled BF16 RoPE input: fuse packing and untilization into the row-major cache write.
+        std::optional<Tensor> rope;
+        // Optional FP32 scales: selects mixed-field ROW_MAJOR FP8 packing.
+        std::optional<Tensor> scales;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -134,6 +144,10 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::Tensor>& valid_global_tensor = std::nullopt,
     std::optional<uint32_t> valid_global = std::nullopt,
-    std::optional<uint32_t> tp_axis = std::nullopt);
+    std::optional<uint32_t> tp_axis = std::nullopt,
+    const std::optional<ttnn::Tensor>& rope = std::nullopt,
+    const std::optional<ttnn::Tensor>& scales = std::nullopt,
+    uint32_t input_row_offset = 0,
+    std::optional<uint32_t> input_rows = std::nullopt);
 
 }  // namespace ttnn::prim

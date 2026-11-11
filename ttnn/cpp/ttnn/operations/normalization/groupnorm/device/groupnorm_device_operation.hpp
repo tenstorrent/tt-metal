@@ -15,6 +15,13 @@
 
 namespace ttnn::prim {
 
+// L1-dependent identity of an interleaved GroupNorm descriptor. The second
+// core group exists only for uneven non-multicast batch distributions.
+struct GroupNormInterleavedPlan {
+    bool replay_group_1 = false;
+    bool replay_group_2 = false;
+};
+
 struct GroupNormDeviceOperation {
     using operation_attributes_t = GroupNormParams;
     using tensor_args_t = GroupNormInputs;
@@ -47,6 +54,10 @@ struct GroupNormDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    static GroupNormInterleavedPlan select_interleaved_plan(const operation_attributes_t&, const tensor_args_t&);
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -66,7 +77,6 @@ Tensor group_norm(
     std::optional<Tensor> beta,
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
-    std::optional<Tensor> reciprocals,
     bool synthesize_negative_mask = false);
 
 }  // namespace ttnn::prim

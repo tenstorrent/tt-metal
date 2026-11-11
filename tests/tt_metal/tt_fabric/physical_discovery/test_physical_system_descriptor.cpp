@@ -45,15 +45,33 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         /*run_live_discovery*/ true);
     physical_system_desc.merge(std::move(new_psd));
     auto hostnames = physical_system_desc.get_all_hostnames();
-    // Validate number of hosts discovered
-    EXPECT_EQ(hostnames.size(), *(distributed_context->size()));
-    // Validate Graph Nodes
+    const auto world_size = static_cast<size_t>(*(distributed_context->size()));
+    const auto local_rank = physical_system_desc.get_local_mpi_rank();
+    // A hostname is a machine. Ranks that share one mock cluster file share that name, so the
+    // hostname count is at most the world size. Every rank's chips must still have arrived.
+    EXPECT_FALSE(hostnames.empty());
+    EXPECT_LE(hostnames.size(), world_size);
+    EXPECT_NE(std::find(hostnames.begin(), hostnames.end(), physical_system_desc.my_host_name()), hostnames.end());
     const auto& asic_descs = physical_system_desc.get_asic_descriptors();
+    std::unordered_set<uint32_t> ranks_seen;
+    for (const auto& [_, desc] : asic_descs) {
+        ranks_seen.insert(desc.mpi_rank);
+    }
+    EXPECT_EQ(ranks_seen.size(), world_size);
+    const auto local_asics = physical_system_desc.get_asics_for_mpi_rank(local_rank);
+    EXPECT_EQ(local_asics.size(), cluster.get_unique_chip_ids().size());
+    // Validate Graph Nodes
     for (const auto& host : hostnames) {
         auto asics = physical_system_desc.get_asics_connected_to_host(host);
-        // Ensure that the number of asics discovered per host is consistent
-        // with tt_cluster
-        EXPECT_EQ(asics.size(), cluster.get_unique_chip_ids().size());
+        size_t asics_on_this_rank = 0;
+        for (const auto& asic : asics) {
+            if (physical_system_desc.get_mpi_rank_for_asic(asic) == local_rank) {
+                ++asics_on_this_rank;
+            }
+        }
+        if (host == physical_system_desc.my_host_name()) {
+            EXPECT_EQ(asics_on_this_rank, cluster.get_unique_chip_ids().size());
+        }
 
         for (const auto& asic : asics) {
             // Ensure that descriptors were correctly populated for each asic
@@ -85,22 +103,24 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
     }
 
-    // Validate UMD unique ID mapping (AsicID -> ChipId)
-    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+    // Validate UMD unique ID mapping (AsicID -> ChipId) for this rank's chips. Other ranks on the
+    // same machine are in the descriptor but not in this process's cluster.
+    for (auto asic : local_asics) {
         auto expected_chip_id = asic_id_to_chip_id.at(asic);
         EXPECT_EQ(physical_system_desc.get_umd_unique_id(asic), expected_chip_id)
             << "get_umd_unique_id(asic_id) should match cluster's ChipId for asic " << *asic;
     }
 
     // Local Connectivity
-    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+    for (auto asic : local_asics) {
         auto chip_id = asic_id_to_chip_id.at(asic);
         auto eth_links = local_eth_links.at(chip_id);
         auto neighbors = physical_system_desc.get_asic_neighbors(asic);
 
         for (auto neighbor : neighbors) {
-            if (physical_system_desc.get_host_name_for_asic(neighbor) != my_host) {
-                // Skip exit nodes
+            if (physical_system_desc.get_mpi_rank_for_asic(neighbor) != local_rank) {
+                // Another rank on this machine, or an exit node. This process's ethernet map only
+                // has links among its own chips.
                 continue;
             }
             // Ensure that local eth links are populated correctly on the current host
@@ -142,6 +162,9 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         auto exit_nodes = physical_system_desc.get_connecting_exit_nodes(my_host, host);
         for (const auto& exit_node : exit_nodes) {
             auto src_asic = exit_node.src_exit_node;
+            if (physical_system_desc.get_mpi_rank_for_asic(src_asic) != local_rank) {
+                continue;
+            }
             auto src_chip = asic_id_to_chip_id.at(src_asic);
             auto src_chan = exit_node.eth_conn.src_chan;
             auto dst_asic = exit_node.dst_exit_node;
@@ -211,9 +234,9 @@ TEST(PhysicalDiscovery, TestUmdUniqueIdSerializationRoundtrip) {
     auto bytes = tt::tt_metal::serialize_physical_system_descriptor_to_bytes(physical_system_desc);
     auto deserialized = tt::tt_metal::deserialize_physical_system_descriptor_from_bytes(bytes);
 
-    // Verify umd_unique_id is preserved for each local asic
-    auto my_host = physical_system_desc.my_host_name();
-    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+    // Verify umd_unique_id is preserved for each asic this rank discovered. Chips owned by another
+    // rank on the same machine are not in this process's cluster.
+    for (auto asic : physical_system_desc.get_asics_for_mpi_rank(physical_system_desc.get_local_mpi_rank())) {
         auto expected_chip_id = asic_id_to_chip_id.at(asic);
         EXPECT_EQ(deserialized.get_umd_unique_id(asic), expected_chip_id)
             << "umd_unique_id should be preserved after serialize/deserialize for asic " << *asic;

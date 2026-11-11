@@ -4,7 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include <algorithm>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
@@ -108,6 +108,7 @@ void matmul_blocks_split(
     const uint32_t subblock_h,
     const uint32_t subblock_w,
     const bool transpose) {
+    reconfig_data_format(in1_hi_cb, in0_hi_cb);
     matmul_block_init(
         in0_hi_cb,
         in1_hi_cb,
@@ -118,8 +119,6 @@ void matmul_blocks_split(
 
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-
-    reconfig_data_format(in1_hi_cb, in0_hi_cb);
 
     CircularBuffer out_cb_obj(out_cb);
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <nanobind/ndarray.h>
+#include <yaml-cpp/yaml.h>
 
 #include <source_location>
 
@@ -21,7 +22,7 @@ nb::object make_numpy_tensor(
 
 // Fast path for standard NumPy dtypes (validated by nanobind)
 ttnn::Tensor make_metal_tensor(
-    nb::ndarray<nb::numpy> data,
+    nb::ndarray<nb::numpy, nb::ro> data,
     tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
     std::optional<tt::tt_metal::DataType> new_type = std::nullopt,
     const ttnn::distributed::TensorToMesh* mapper = nullptr);
@@ -32,6 +33,10 @@ ttnn::Tensor make_metal_tensor(
     tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
     std::optional<tt::tt_metal::DataType> new_type = std::nullopt,
     const ttnn::distributed::TensorToMesh* mapper = nullptr);
+
+// Converts a Python config (dicts, lists, bools, ints, floats, strings) into the YAML::Node the C++ config readers
+// take. Anything else becomes a null node.
+YAML::Node obj_to_yaml(nb::object obj);
 
 [[noreturn]] void throw_exception(
     std::source_location source_location,

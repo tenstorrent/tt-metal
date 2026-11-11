@@ -25,6 +25,10 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     ckl::eltwise_chain(
@@ -37,6 +41,6 @@ void kernel_main() {
                 ckl::WaitPolicy::PerTile,
                 ckl::PopPolicy::PerTile,
                 ckl::InputTileMapping::Col,
-                ckl::DataFormatReconfig::Disabled)>{},
-        ckl::PackTile<ckl::output(cb_out)>{});
+                ckl::DataFormatReconfig::Disabled)>{cb_a_obj, cb_b_obj},
+        ckl::PackTile<ckl::output(cb_out)>{cb_out_obj});
 }

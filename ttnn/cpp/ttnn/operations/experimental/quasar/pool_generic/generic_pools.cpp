@@ -14,6 +14,8 @@
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
+#include "ttnn/operations/experimental/quasar/op_slicing/op_slicing.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
@@ -22,6 +24,7 @@
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/bfloat16.hpp>
@@ -336,7 +339,7 @@ static std::vector<Tensor> pool2d_L1(
 
     // call the halo uop
     const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -447,7 +450,8 @@ public:
         Layout output_layout,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config,
         bool config_tensor_in_dram,
-        MeshDevice* device) :
+        MeshDevice* device,
+        bool block_shard_width_rm_slices = false) :
         batch_size(batch_size),
         input_shape(input_shape),
         channels(channels),
@@ -502,6 +506,16 @@ public:
                 // Fallback to height sharding if autosharding fails
                 shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
             }
+        }
+        // run_sliced_op writes each slice back with the quasar slice_write, which takes only sharded input.
+        // A ROW_MAJOR slice must be height or block sharded: a width-sharded one is moved to interleaved L1
+        // first, which that slice_write rejects. The slices are internal (the result is DRAM interleaved), so
+        // pool width-sharded ROW_MAJOR slices block-sharded instead (only for the attr that runs the slices).
+        if (block_shard_width_rm_slices && output_layout == Layout::ROW_MAJOR &&
+            shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            log_debug(
+                tt::LogOp, "Pool2D DRAM slicing: ROW_MAJOR output, pooling the width-sharded slices block-sharded");
+            shard_layout = TensorMemoryLayout::BLOCK_SHARDED;
         }
 
         sliding_window_config = sliding_window::SlidingWindowConfig{
@@ -763,36 +777,50 @@ static std::vector<Tensor> pool2d_DRAM(
     uint32_t output_height = output_shape[1];
     uint32_t output_width = output_shape[2];
 
-    // Create pool slice attribute for slice configuration
-    auto pool_slice_attr = Pool2dSliceAttr(
-        batch_size,
-        Pool2dSliceAttr::IOShape{input_h, input_w},
-        channels,
-        kernel_size,
-        stride,
-        sliding_window::get_pair_n4_padding(padding),
-        dilation,
-        ceil_mode,
-        count_include_pad,
-        divisor_override,
-        applied_shard_scheme,
-        return_indices,
-        pool_type,
-        input_tensor.dtype(),
-        dtype,
-        input_tensor.layout(),
-        output_layout,
-        compute_kernel_config,
-        config_tensor_in_dram,
-        input_tensor.device());
+    auto make_pool_slice_attr = [&](Layout input_layout, DataType input_dtype, bool for_slices) {
+        return Pool2dSliceAttr(
+            batch_size,
+            Pool2dSliceAttr::IOShape{input_h, input_w},
+            channels,
+            kernel_size,
+            stride,
+            sliding_window::get_pair_n4_padding(padding),
+            dilation,
+            ceil_mode,
+            count_include_pad,
+            divisor_override,
+            applied_shard_scheme,
+            return_indices,
+            pool_type,
+            input_dtype,
+            dtype,
+            input_layout,
+            output_layout,
+            compute_kernel_config,
+            config_tensor_in_dram,
+            input_tensor.device(),
+            for_slices);
+    };
+    // Runs the slices. Every slice is gathered ROW_MAJOR (a TILE input is untilized below, BFLOAT8_B -> BFLOAT16),
+    // so size the slices for what the per-slice pool actually reads: TILE would align the channels to the tile
+    // width and the NHW to the tile height, which the ROW_MAJOR gather does not produce.
+    auto pool_slice_attr = make_pool_slice_attr(
+        Layout::ROW_MAJOR,
+        input_tensor.layout() == Layout::TILE
+            ? ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype())
+            : input_tensor.dtype(),
+        /*for_slices=*/true);
 
     // Determine slice configuration (automatic if not provided or num_slices==0)
     Op2DSliceConfig dram_slice_config;
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
         dram_slice_config = dram_slice_config_.value();
     } else {
+        // Count with the input as given: a single slice falls back to pool2d_L1 on that input, so its estimate
+        // must hold for it (more slices than the ROW_MAJOR gather needs is fine).
+        auto count_slice_attr = make_pool_slice_attr(input_tensor.layout(), input_tensor.dtype(), /*for_slices=*/false);
         dram_slice_config = op_slicing::determine_slice_config(
-            &pool_slice_attr,
+            &count_slice_attr,
             ttnn::Shape{batch_size, input_h, input_w, channels},
             ttnn::Shape{batch_size, output_height, output_width, channels},
             dram_slice_config_,
@@ -908,10 +936,18 @@ static std::vector<Tensor> pool2d_DRAM(
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_h, input_w, channels};
     Tensor input_tensor_for_slicing = input_tensor;
 
+    // padded_slice (run_sliced_op's per-slice input gather) only has a ROW_MAJOR program factory on
+    // Quasar; its TILE factory still builds legacy kernels. The pool reads ROW_MAJOR sticks either way,
+    // so untilize a TILE source first, as conv2d_DRAM does.
+    if (input_tensor_for_slicing.layout() != Layout::ROW_MAJOR) {
+        input_tensor_for_slicing =
+            ttnn::operations::experimental::quasar::to_layout(input_tensor_for_slicing, Layout::ROW_MAJOR);
+    }
+
     // Only reshape if the current shape doesn't match what we need
-    if (input_tensor.logical_shape() != unflattened_input_shape) {
+    if (input_tensor_for_slicing.logical_shape() != unflattened_input_shape) {
         input_tensor_for_slicing = ttnn::operations::experimental::quasar::reshape(
-            input_tensor, unflattened_input_shape, unflattened_input_shape);
+            input_tensor_for_slicing, unflattened_input_shape, unflattened_input_shape);
     }
 
     // Create output tensors for DRAM slicing
@@ -928,7 +964,9 @@ static std::vector<Tensor> pool2d_DRAM(
         input_tensor_for_slicing.device());
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
 
-    ttnn::operations::op_slicing::run_sliced_op(
+    // The quasar run_sliced_op: its per-slice padded_slice / slice_write are the quasar Metal-2 ops
+    // (the shared one builds legacy kernels that Quasar rejects).
+    ttnn::operations::experimental::quasar::op_slicing::run_sliced_op(
         input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
 
     return {dram_output_tensor};
@@ -1112,12 +1150,32 @@ static std::vector<Tensor> pool2d(
             input = ttnn::operations::experimental::quasar::to_layout(input, Layout::ROW_MAJOR);
         }
 
+        // pad_to_tile pads W on every H row, which the fold below would sum as data.
+        // Slice to the logical shape unless the padding is already a trailing suffix.
+        if (input.layout() == Layout::ROW_MAJOR) {
+            const auto& logical = input.logical_shape();
+            const auto& padded = input.padded_shape();
+            const bool tight_w = padded[2] == logical[2];
+            const bool tight_h = padded[1] == logical[1];
+            const bool readable_suffix =
+                (tight_w && (tight_h || batch_size == 1)) || (batch_size == 1 && logical[1] == 1);
+            if (!readable_suffix) {
+                const auto rank = logical.rank();
+                // slice end is exclusive.
+                input = ttnn::prim::qsr::slice(
+                    input,
+                    ttnn::Shape(ttsl::SmallVector<uint32_t>(rank, 0)),
+                    logical,
+                    ttnn::Shape(ttsl::SmallVector<uint32_t>(rank, 1)),
+                    input.memory_config(),
+                    /*use_tensor_args=*/false);
+            }
+        }
+
         // Canonicalize to (batch_size, 1, H*W, C) form using an explicit logical+padded reshape.
-        // This is format-agnostic: it accepts both flat (1, 1, N*H*W, C) input from direct
-        // avg_pool2d callers and NHWC (N, H, W, C) input from the global_avg_pool2d Python
-        // wrapper, and it preserves any pre-existing padding (e.g., legacy callers that
-        // pad_to_tile zero-pad the spatial dim) by carrying padded_shape through. The gate
-        // above ensures total_padded_spatial divides cleanly by batch_size.
+        // This accepts both flat (1, 1, N*H*W, C) input from direct avg_pool2d callers and NHWC
+        // (N, H, W, C) input from the global_avg_pool2d Python wrapper. The gate above ensures
+        // total_padded_spatial divides cleanly by batch_size.
         const auto& post_padded = input.padded_shape();
         uint32_t total_padded_spatial = post_padded[0] * post_padded[1] * post_padded[2];
         uint32_t channels_padded = post_padded[3];

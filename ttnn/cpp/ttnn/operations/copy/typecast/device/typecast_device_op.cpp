@@ -93,8 +93,20 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
+        input_tensor.is_allocated(),
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
+
+    // Quasar: UInt32/UInt16 are not supported DFB formats (is_supported_quasar, tt_backend_api_types.cpp), and
+    // the generic Quasar typecast LLK path has no uint32/uint16 store mode. Remapping the output DFB to the
+    // byte-size-equal RawUInt32/RawUInt16 lets the program build but the SFPU->pack conversion produces WRONG
+    // values (verified: all-zero for uint32, bit-garbage for uint16). Reject here with a clear message instead
+    // of silent wrong output. Cast to INT32 instead (supported on Quasar), or add a uint32/uint16 SFPU store
+    // mode to the Quasar LLK. INT32/FLOAT32/BFLOAT16 outputs are unaffected.
+    TT_FATAL(
+        !(input_tensor.device()->arch() == tt::ARCH::QUASAR &&
+          (args.output_dtype == DataType::UINT32 || args.output_dtype == DataType::UINT16)),
+        "Typecast to {} is not supported on Quasar (no uint32/uint16 LLK store mode); cast to INT32 instead.",
+        args.output_dtype);
 
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
@@ -111,9 +123,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor.is_sharded()) {
         const uint32_t l1_alignment = hal::get_l1_alignment();
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         TT_FATAL(
-            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",
             page_size_bytes,
             l1_alignment);

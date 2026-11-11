@@ -78,7 +78,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/train_${{ inputs.test-category }}_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -91,9 +91,23 @@ jobs:
         run: pip3 install PyYAML
 
 
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -127,14 +141,7 @@ jobs:
       image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
-        TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         TT_LOGGER_LEVEL: warn
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -145,7 +152,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -165,10 +172,12 @@ jobs:
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
-      - name: Install ttml module
-        if: ${{ inputs.wheel-artifact-name }}
+      - name: Set up tt-train
+        uses: ./docker-job/.github/actions/setup-tt-train
         timeout-minutes: 10
-        run: bash -c ./tt-train/scripts/setup_pth.sh
+        with:
+          install-ttml: ${{ inputs.wheel-artifact-name != '' }}
+          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}

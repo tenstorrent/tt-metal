@@ -10,6 +10,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -489,16 +490,29 @@ inline bool is_layout_or_scalar([[maybe_unused]] unary::ScalarVariant input, [[m
     return true;
 }
 
-inline Tensor to_layout(const Tensor& input, Layout layout) {
+inline Tensor to_layout(
+    const Tensor& input, Layout layout, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     if (detail::is_layout_or_scalar(input, layout)) {
         return input;
     }
 
-    return ttnn::to_layout(input, layout);
+    // A sharded tensor is converted where its shards live; the tilize/untilize factories reject a grid for it.
+    return ttnn::to_layout(
+        input, layout, std::nullopt, std::nullopt, input.is_sharded() ? std::nullopt : sub_core_grids);
 }
 
-inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
-inline unary::ScalarVariant to_layout(unary::ScalarVariant input, [[maybe_unused]] Layout layout) { return input; }
+inline float to_layout(
+    float input,
+    [[maybe_unused]] Layout layout,
+    [[maybe_unused]] const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return input;
+}
+inline unary::ScalarVariant to_layout(
+    unary::ScalarVariant input,
+    [[maybe_unused]] Layout layout,
+    [[maybe_unused]] const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return input;
+}
 
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
@@ -552,6 +566,16 @@ inline Tensor binary_impl(
     }
     if (binary_op_type == BinaryOpType::EQ) {
         return ttnn::eqz(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
+    }
+    // s > t is t < s: reuse the tensor-scalar compare instead of subtracting.
+    if (binary_op_type == BinaryOpType::GT) {
+        return ttnn::lt_unary(rhs, lhs, memory_config, output);
+    }
+    if (binary_op_type == BinaryOpType::LT) {
+        return ttnn::gt_unary(rhs, lhs, memory_config, output);
+    }
+    if (binary_op_type == BinaryOpType::NE) {
+        return ttnn::ne_unary(rhs, lhs, memory_config, output);
     }
 
     TT_THROW("Unsupported operation");
@@ -657,17 +681,6 @@ inline auto invoke_binary_ng_impl(
     // faithful only for a finite integer inside the destination's range. Fractional values are
     // truncated, and out-of-range or non-finite ones are undefined: measured before this check,
     // inf reached an int32 kernel as INT32_MIN and 2^32 reached a uint32 one as 0, both silently.
-    // The bounds are written as powers of two because those are exactly representable as floats,
-    // so the comparison cannot round the limit it is testing -- INT32_MAX is not a float32, 2^31 is.
-    const auto integer_path_is_exact = [](float value, DataType dt) {
-        if (!std::isfinite(value) || std::trunc(value) != value) {
-            return false;
-        }
-        if (dt == DataType::INT32) {
-            return value >= -2147483648.0f && value < 2147483648.0f;
-        }
-        return value >= 0.0f && value < 4294967296.0f;
-    };
 
     // A float scalar cannot survive pack_scalar_runtime_arg against a 32-bit integer tensor: it is
     // cast to int32/uint32 there, so 2.5 arrives as 2 and 0.5 as 0, silently. The tensor-tensor path
@@ -723,7 +736,7 @@ inline auto invoke_binary_ng_impl(
             // scalar they cannot represent has to be rejected too instead of being truncated.
             const float scalar_value = std::get<float>(rhs);
             TT_FATAL(
-                integer_path_is_exact(scalar_value, a_dtype),
+                operations::binary::utils::scalar_fits_integer_dtype(scalar_value, a_dtype),
                 "Binary operation {} with a {} tensor cannot represent the scalar {}: only a finite integer within "
                 "the range of {} survives being packed as one, and this value would be changed silently. Typecast "
                 "the input to a floating-point dtype first.",
@@ -833,8 +846,8 @@ inline auto invoke_binary_ng_impl(
         return dispatch(lhs_eff, rhs_eff);
     }
     // Either one or both are tiles
-    const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);
-    const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE);
+    const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
+    const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids);
 
     auto result = dispatch(input_a, input_b);
 
@@ -842,7 +855,7 @@ inline auto invoke_binary_ng_impl(
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
     // since it leads to better perf
     if (input_a_rm and input_b_rm) {
-        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
+        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR, sub_core_grids);
     }
 
     return result;
@@ -950,8 +963,8 @@ Tensor invoke_binary_ng_isclose(
             equal_nan);
     }
 
-    const auto input_a = operations::binary::detail::to_layout(fa, Layout::TILE);
-    const auto input_b = operations::binary::detail::to_layout(fb, Layout::TILE);
+    const auto input_a = operations::binary::detail::to_layout(fa, Layout::TILE, sub_core_grids);
+    const auto input_b = operations::binary::detail::to_layout(fb, Layout::TILE, sub_core_grids);
     auto result = ttnn::prim::binary_ng(
         input_a,
         input_b,
@@ -974,7 +987,7 @@ Tensor invoke_binary_ng_isclose(
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
     // since it leads to better perf
     if (input_a_rm && input_b_rm) {
-        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
+        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR, sub_core_grids);
     }
     return result;
 }

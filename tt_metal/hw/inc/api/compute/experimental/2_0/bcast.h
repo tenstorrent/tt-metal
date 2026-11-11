@@ -19,7 +19,7 @@
 #endif
 
 // =====================================================================================================
-// Id-free (2.0) unary broadcast (unary_bcast): unpacks one L1 tile (with the requested broadcast mode) and
+// Id-free (2.0) unary broadcast (unary_bcast_tile): unpacks one L1 tile (with the requested broadcast mode) and
 // datacopies it into DST. Takes an LLKOperand<Format,Shape> instead of a CB id: Format + Shape are
 // compile-time NTTPs, l1_address is the only runtime state.
 //
@@ -38,7 +38,7 @@ namespace experimental {
 
 namespace detail {
 // A2D/B2D data-copy direction for the unary broadcast, folded to a constant. Shared by unary_bcast_init /
-// unary_bcast so the policy is spelled once.
+// unary_bcast_tile so the policy is spelled once.
 template <BroadcastType bcast_type, DataFormat Format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 constexpr DataCopyType unary_bcast_dcopy() {
     return (is_unpack_to_dest<Format, is_fp32_dest_acc_en>() || bcast_type == BroadcastType::NONE) ? DataCopyType::A2D
@@ -48,8 +48,8 @@ constexpr DataCopyType unary_bcast_dcopy() {
 
 // clang-format off
 /**
- * Paired init for unary_bcast. Configures the unpack + math pipeline for the given broadcast mode and
- * operand Format; call before unary_bcast. compute_kernel_hw_startup must already have run.
+ * Paired init for unary_bcast_tile. Configures the unpack + math pipeline for the given broadcast mode and
+ * operand Format; call before unary_bcast_tile. compute_kernel_hw_startup must already have run.
  *
  * | Param Type | Name      | Description                                                  | Type          | Valid Range           | Required |
  * |------------|-----------|--------------------------------------------------------------|---------------|-----------------------|----------|
@@ -95,14 +95,14 @@ ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
  * | Template   | Format         | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat    | N/A         | True     |
  * | Template   | Shape          | Tile geometry (deduced from the LLKOperand argument)        | TensorShape   | N/A         | True     |
  * | Function   | src            | The source L1 operand (format + shape + address)            | LLKOperand    | N/A         | True     |
- * | Function   | dst_tile_index | Tile index in the DST register for the result               | uint32_t      | 0 to 15     | True     |
+ * | Function   | dst_tile_index | Tile index in the DST register for the result               | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
 template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index) {
+ALWI void unary_bcast_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index) {
     static_assert(
         is_legal_tile_shape(Shape),
-        "unary_bcast: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
+        "unary_bcast_tile: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A<
@@ -118,27 +118,6 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
           is_fp32_dest_acc_en,
           bcast_type,
           enable_unpack_to_dest>(dst_tile_index)));
-}
-
-// clang-format off
-/**
- * Paired uninit for unary_bcast. Restores the unpack + math pipeline; the operand is only used to select
- * the matching 32-bit unpack-to-dest uninit variant.
- *
- * | Param Type | Name      | Description                                                  | Type          | Valid Range | Required |
- * |------------|-----------|--------------------------------------------------------------|---------------|-------------|----------|
- * | Template   | bcast_type          | Broadcast mode (must match the paired unary_bcast_init)      | BroadcastType | N/A         | True     |
- * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                                    | bool          | N/A         | False    |
- * | Template   | Format              | Buffer L1 data format (deduced from the LLKOperand argument)  | DataFormat    | N/A         | True     |
- * | Template   | Shape     | Tile geometry (deduced from the LLKOperand argument)         | TensorShape   | N/A         | True     |
- * | Function   | src       | The source L1 operand (format + shape; address unused here)  | LLKOperand    | N/A         | True     |
- */
-// clang-format on
-template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-ALWI void unary_bcast_uninit(LLKOperand<Format, Shape> /*src*/) {
-    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
-    UNPACK((llk_unpack_A_uninit<bcast_type>()));
-    MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, enable_unpack_to_dest>()));
 }
 
 // =====================================================================================================
@@ -197,7 +176,7 @@ ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
  * | Template   | BFormat/BShape  | Operand B L1 format + geometry (deduced)               | DataFormat/TensorShape | N/A    | True     |
  * | Function   | a / b           | Input operands (A -> SrcA, broadcast B -> SrcB)        | LLKOperand        | N/A         | True     |
  * | Function   | itile0 / itile1 | Tile indices within A / B                              | uint32_t          | N/A         | True     |
- * | Function   | idst            | DST register index for the result                     | uint32_t          | 0 to 15     | True     |
+ * | Function   | idst            | DST register index for the result                     | uint32_t          | Must be less than the acquired size of DST REG | True     |
  * | Function   | bcast_row_idx   | ROW broadcast: which row of B's tile to broadcast     | uint32_t          | N/A         | False    |
  */
 // clang-format on
@@ -244,7 +223,7 @@ ALWI void any_tiles_bcast(
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode           | bool          | N/A         | False    |
  * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
  * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
- * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
+ * | Function   | idst           | DST register index for the result        | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
 template <
@@ -276,7 +255,7 @@ ALWI void add_tiles_bcast(
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode           | bool          | N/A         | False    |
  * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
  * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
- * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
+ * | Function   | idst           | DST register index for the result        | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
 template <
@@ -308,7 +287,7 @@ ALWI void sub_tiles_bcast(
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode           | bool          | N/A         | False    |
  * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
  * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
- * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
+ * | Function   | idst           | DST register index for the result        | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
 template <

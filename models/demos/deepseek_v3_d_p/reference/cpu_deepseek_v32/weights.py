@@ -47,6 +47,16 @@ CANONICAL_TO_CPU = {
     "indexer.weights_proj.weight": "indexer.weights_proj.weight",
 }
 
+# Kimi-K3 gated MLA only: the output gate. Kept OUT of CANONICAL_TO_CPU so ungated variants (DS-V3.2, GLM)
+# never require it; callers pick the key set for a config with canonical_to_cpu(gated=...).
+GATE_CANONICAL_TO_CPU = {"g_proj.weight": "g_proj.weight"}
+
+
+def canonical_to_cpu(gated: bool = False) -> dict[str, str]:
+    """Canonical -> CPU-port name map for one MLA flavour: ``CANONICAL_TO_CPU`` plus ``g_proj`` when gated."""
+    return {**CANONICAL_TO_CPU, **GATE_CANONICAL_TO_CPU} if gated else dict(CANONICAL_TO_CPU)
+
+
 # HF (transformers-style) submodule name -> CPU param prefix, derived from CANONICAL_TO_CPU (mirrors
 # inference/convert.py). The HF-checkpoint key equals the canonical key for every tensor except the
 # indexer LayerNorm bias, which rides under the ``indexer.k_norm`` submodule (so it's excluded here —

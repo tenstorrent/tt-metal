@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "roll.hpp"
+
+#include <algorithm>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -39,6 +41,11 @@ ttnn::Tensor roll(
             num_dims - 1);
     }
 
+    if (input_tensor.logical_volume() == 0) {
+        return memory_config.has_value() ? ttnn::to_memory_config(input_tensor, *memory_config, std::nullopt)
+                                         : input_tensor;
+    }
+
     std::vector<int> adjusted_shifts(shifts.begin(), shifts.end());
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
@@ -59,6 +66,14 @@ ttnn::Tensor roll(
     // Preserve input layout by default; caller may override with an explicit memory_config.
     const auto& native_mem_config = input_tensor.memory_config();
     const auto output_mem_config = memory_config.value_or(native_mem_config);
+
+    // A zero shift never reaches the device op below, so padding only matters for non-zero shifts.
+    const bool has_shift = std::any_of(adjusted_shifts.begin(), adjusted_shifts.end(), [](int s) { return s != 0; });
+    if (is_sharded && has_shift && ttnn::prim::sharded_roll_input_has_padding(input_tensor)) {
+        // The native roll would move padding into real data, so roll the logical shape in DRAM.
+        const ttnn::Tensor interleaved = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
+        return ttnn::to_memory_config(roll(interleaved, shifts, input_dims), output_mem_config, std::nullopt);
+    }
 
     if (is_sharded) {
         bool native_ok = true;

@@ -1,0 +1,153 @@
+# Full-row top-32 over 256 value columns, using the topk_test.cpp merge tree.
+# Separate L1 intermediates preserve each iteration for golden validation.
+# Each handoff carries one group: DEST values 0/1 and indices 2/3.
+# Final outputs have shape [128, 32], with each 32x32 tile still transposed.
+dest_acc: false
+
+operands:
+  - name: values
+    dims: [128, 256]
+    format: Float16_b
+  - name: indices
+    dims: [128, 256]
+    format: UInt16
+    stimuli: [0, 255]
+  - name: values_iter0
+    dims: [128, 256]
+    format: Float16_b
+  - name: indices_iter0
+    dims: [128, 256]
+    format: UInt16
+  - name: values_iter1
+    dims: [128, 256]
+    format: Float16_b
+  - name: indices_iter1
+    dims: [128, 256]
+    format: UInt16
+  - name: values_out
+    dims: [128, 32]
+    format: Float16_b
+  - name: indices_out
+    dims: [128, 32]
+    format: UInt16
+
+operations:
+  # Iteration 0: pairs (0,1), (2,3), (4,5), (6,7) in each tile row.
+  # Only this initial load transposes the tiles.
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: values
+        block_size: [32, 64]
+        transpose_faces: true
+        transpose_within_face: true
+        indexes:
+          in0: &adjacent [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
+          dest: [0]
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: indices
+        block_size: [32, 64]
+        transpose_faces: true
+        transpose_within_face: true
+        indexes: {in0: *adjacent, dest: [2]}
+      - type: TopKSfpu
+        operation: TopKLocalSort
+        indexes: {dest: [0]}
+      - type: TopKSfpu
+        operation: TopKMerge
+        m_iter: 0
+        indexes: {dest: [0]}
+    pack:
+      - output: values_iter0
+        packer: Packer
+        block_size: [32, 64]
+        indexes: {dest: [0], out: *adjacent}
+      - output: indices_iter0
+        packer: Packer
+        block_size: [32, 64]
+        indexes: {dest: [2], out: *adjacent}
+
+  # Iteration 1: reload pairs (0,2), (4,6), with no transpose.
+  # Keep original tile positions; unused intermediate tiles remain zero.
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: values_iter0
+        indexes: {in0: &distance2_left [0, 4, 8, 12, 16, 20, 24, 28], dest: [0]}
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: values_iter0
+        indexes: {in0: &distance2_right [2, 6, 10, 14, 18, 22, 26, 30], dest: [1]}
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: indices_iter0
+        indexes: {in0: *distance2_left, dest: [2]}
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: indices_iter0
+        indexes: {in0: *distance2_right, dest: [3]}
+      - type: TopKSfpu
+        operation: TopKRebuild
+        m_iter: 1
+        indexes: {dest: [0]}
+      - type: TopKSfpu
+        operation: TopKMerge
+        m_iter: 1
+        indexes: {dest: [0]}
+    pack:
+      - output: values_iter1
+        packer: Packer
+        indexes: {dest: [0, 1], out: *adjacent}
+      - output: indices_iter1
+        packer: Packer
+        indexes: {dest: [2, 3], out: *adjacent}
+
+  # Iteration 2: reload pair (0,4) in each tile row, then finish the top-32.
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: values_iter1
+        indexes: {in0: &distance4_left [0, 8, 16, 24], dest: [0]}
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: values_iter1
+        indexes: {in0: &distance4_right [4, 12, 20, 28], dest: [1]}
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: indices_iter1
+        indexes: {in0: *distance4_left, dest: [2]}
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: indices_iter1
+        indexes: {in0: *distance4_right, dest: [3]}
+      - type: TopKSfpu
+        operation: TopKRebuild
+        m_iter: 2
+        indexes: {dest: [0]}
+      - type: TopKSfpu
+        operation: TopKMerge
+        m_iter: 2
+        indexes: {dest: [0]}
+      - type: TopKSfpu
+        operation: TopKRebuild
+        m_iter: 2
+        skip_second: true
+        indexes: {dest: [0]}
+    pack:
+      - output: values_out
+        packer: Packer
+        indexes: {dest: [0], out: [0, 1, 2, 3]}
+      - output: indices_out
+        packer: Packer
+        indexes: {dest: [2], out: [0, 1, 2, 3]}

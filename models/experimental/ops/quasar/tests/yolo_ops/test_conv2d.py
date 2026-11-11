@@ -218,7 +218,7 @@ def test_conv2d(
         packer_l1_acc=False,
     )
 
-    [tt_out, [tt_out_h, tt_out_w], [_, _]] = ttnn.conv2d(
+    [tt_out, [tt_out_h, tt_out_w], [_, _]] = U.op("conv2d")(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         in_channels=in_ch,

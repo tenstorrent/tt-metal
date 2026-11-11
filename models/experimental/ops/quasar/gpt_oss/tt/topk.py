@@ -24,6 +24,9 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
         g = ttnn.typecast(g, dtype=ttnn.bfloat16)
 
     expert_weights, expert_indices = ttnn.topk(g, k=experts_per_token, dim=-1, sorted=True)
+    # ttnn.scatter needs input and src in one dtype and the weights are bfloat16, so take the zeros from the bfloat16 g.
+    # zeros_like(g, dtype=...) on a bfloat8_b g would fill on host and write to device, which trace capture rejects.
+    dense_zeros = None if use_throughput_experts else ttnn.zeros_like(g)
     if typecast_needed:
         g.deallocate(True)
         g = g_og
@@ -41,7 +44,7 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
     if use_throughput_experts:
         return expert_indices, expert_weights
     else:
-        return expert_indices, ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
+        return expert_indices, ttnn.scatter(dense_zeros, dim=1, index=expert_indices, src=expert_weights)
 
 
 class TopKRouter:
@@ -179,11 +182,8 @@ class TopKRouter:
         if needs_typecast:
             ttnn.deallocate(hidden_states_bf16)
 
-        # Kernel produces uint16 RM [B, k_padded] and bf16 RM [B, k_padded].
-        # Slice to [B, top_k] in RM and return directly.
-        # fused_decode.py handles RM input natively (zero-cost reshape to 4D).
-        expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
-        expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
-        ttnn.deallocate(indices_rm)
-        ttnn.deallocate(weights_rm)
-        return expert_indices, expert_weights
+        # The op already reports uint16 / bf16 RM [B, top_k] (32 physical rows), so return its outputs as they are;
+        # fused_decode.py handles RM input natively (zero-cost reshape to 4D). Do not slice + deallocate here: a slice
+        # that covers the whole logical shape is a no-op that aliases its input, and ttnn.deallocate (force=True)
+        # would then free the tensors returned to the caller.
+        return indices_rm, weights_rm

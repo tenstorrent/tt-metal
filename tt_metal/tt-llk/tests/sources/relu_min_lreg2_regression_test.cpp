@@ -69,8 +69,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "sfpu/ckernel_sfpu_relu.h"
 
 using namespace ckernel;
 
@@ -83,7 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
     // relu_min needs only the invariant SFPU config + ADDR_MOD_7 and a dest RWC reset,
     // which is what the production relu_min_tile_init reduces to -- so the bare init is

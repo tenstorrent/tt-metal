@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -9,7 +10,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"
@@ -48,10 +49,11 @@ void kernel_main() {
 
     uint32_t arg_idx = 0;
     // Load the input tensor spec
-    address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    address_t input_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::ReduceScatterCommonArgs::input);
+    address_t intermediate_tensor_address =
+        get_common_arg_val<address_t>(ttnn::ccl::ReduceScatterCommonArgs::intermediate);
+    address_t output_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::ReduceScatterCommonArgs::output);
+    size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::semaphore_0);
     Semaphore<> fwd_bwd_sem(get_arg_val<uint32_t>(arg_idx++));
     const bool is_forward = get_arg_val<uint32_t>(arg_idx++);
     const bool is_first_device_in_direction = get_arg_val<uint32_t>(arg_idx++);

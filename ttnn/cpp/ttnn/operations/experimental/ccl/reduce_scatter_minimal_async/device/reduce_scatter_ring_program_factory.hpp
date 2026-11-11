@@ -4,44 +4,42 @@
 
 #pragma once
 
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+
+#include <optional>
+#include <vector>
 
 namespace ttnn::experimental::prim {
 
-// Use ReduceScatterProgramArtifacts as the shared variables type for consistency
-using RingReduceScatterSharedVariables = ReduceScatterProgramArtifacts;
-
-struct RingReduceScatterMeshWorkloadFactory {
-    using shared_variables_t = RingReduceScatterSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+// One ProgramDescriptor per mesh coordinate (ring index, neighbours and fabric connections are per device).
+struct RingReduceScatterProgramFactory {
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const ReduceScatterMinimalAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const ReduceScatterMinimalAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
+    // Called on every cache hit after the buffer bindings are applied. Re-applies the hash-excluded caller-owned
+    // GlobalSemaphores (see ReduceScatterMinimalAsyncParams) and re-writes the tensor slots of the common args by role.
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const ReduceScatterMinimalAsyncParams& operation_attributes,
         const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate = std::nullopt);
 };
 
-// Builder function for ring topology - creates program artifacts
-ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
-    tt::tt_metal::Program& program,
+ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     const std::optional<Tensor>& penult_intermediate_tensor,
@@ -65,25 +63,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     CoreCoord core_grid_offset,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
 
-// Override runtime arguments helper for ring topology
-void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+void apply_ring_reduce_scatter_semaphore_args(
     tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
-    uint32_t normalized_dim,
-    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
-    const Tensor& input,
-    const Tensor& intermed,
-    const Tensor& output,
-    // Contiguous staging layout only: the penult intermediate, whose address must be re-published because
-    // the op reallocates it per invocation. nullopt on the tiled layout, where the kernels never read it.
-    const std::optional<Tensor>& penult_intermediate);
+    const ReduceScatterDescriptorArtifacts& artifacts,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::vector<GlobalSemaphore>& semaphore);
 
 }  // namespace ttnn::experimental::prim

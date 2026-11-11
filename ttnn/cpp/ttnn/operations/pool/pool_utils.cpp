@@ -5,6 +5,7 @@
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "tt-metalium/constants.hpp"

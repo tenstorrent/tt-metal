@@ -10,6 +10,10 @@
 
 #include "distributed.hpp"
 
+namespace ttml::autograd {
+class Tensor;
+}  // namespace ttml::autograd
+
 namespace ttml::core::distributed {
 
 using ttnn::distributed::EndpointSocketType;
@@ -47,6 +51,10 @@ public:
     // [[deprecated("Use unified API instead")]]
     [[nodiscard]] ttnn::Tensor recv(
         ttnn::Tensor tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
+
+    // Receives a tensor's value, which the sender sends as its bf16 view (get_value()). A bf16 tensor receives it in
+    // place. Any other tensor receives it into a new buffer, and assign() installs it in the tensor's stored dtype.
+    void recv_value(ttml::autograd::Tensor& tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
 
     // New unified API supporting both inter-host and intra-mesh communication
     void send(

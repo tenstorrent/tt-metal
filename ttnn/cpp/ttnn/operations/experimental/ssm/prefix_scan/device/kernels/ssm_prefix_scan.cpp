@@ -9,6 +9,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/assert.h"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 
@@ -48,27 +49,68 @@ FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out) {
     pack_untilize_uninit(cb_out);
 }
 
-// Tilize the full 32-tile block from cb_in to cb_out, but only push num_valid_tiles.
-// The tilize must always process the full NUM_TILES_IN_TILIZED_CHUNK block to correctly
-// reconstruct the tile layout from row-major format (inverse of pack_block_rows_into_tiles, i.e. the 32-tile untilize).
-FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, uint32_t num_valid_tiles) {
+FORCE_INLINE void tilize_full_chunk(uint32_t cb_in, uint32_t cb_dst) {
     CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_dst_obj(cb_dst);
 
     reconfig_data_format_srca(cb_in);
-    pack_reconfig_data_format(cb_out);
+    pack_reconfig_data_format(cb_dst);
 
-    tilize_init(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+    tilize_init(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_dst);
 
     cb_in_obj.wait_front(NUM_TILES_IN_TILIZED_CHUNK);
-    cb_out_obj.reserve_back(num_valid_tiles);
+    cb_dst_obj.reserve_back(NUM_TILES_IN_TILIZED_CHUNK);
 
-    tilize_block(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+    tilize_block(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_dst);
 
-    cb_out_obj.push_back(num_valid_tiles);
+    cb_dst_obj.push_back(NUM_TILES_IN_TILIZED_CHUNK);
     cb_in_obj.pop_front(NUM_TILES_IN_TILIZED_CHUNK);
 
-    tilize_uninit(cb_in, cb_out);
+    tilize_uninit(cb_in, cb_dst);
+}
+
+FORCE_INLINE void copy_valid_tiles(uint32_t cb_src, uint32_t cb_dst, uint32_t num_valid_tiles) {
+    CircularBuffer cb_src_obj(cb_src);
+    CircularBuffer cb_dst_obj(cb_dst);
+
+    cb_src_obj.wait_front(NUM_TILES_IN_TILIZED_CHUNK);
+
+    reconfig_data_format_srca(cb_src);
+    pack_reconfig_data_format(cb_dst);
+    copy_init(cb_src);
+
+    for (uint32_t tile_idx = 0; tile_idx < num_valid_tiles; ++tile_idx) {
+        cb_dst_obj.reserve_back(1);
+
+        tile_regs_acquire();
+        copy_tile(cb_src, tile_idx, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_dst);
+        tile_regs_release();
+
+        cb_dst_obj.push_back(1);
+    }
+
+    cb_src_obj.pop_front(NUM_TILES_IN_TILIZED_CHUNK);
+}
+
+// tilize_block writes 32 tiles; cb_out only has room for num_valid_tiles.
+FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, uint32_t num_valid_tiles) {
+    constexpr uint32_t cb_scratch = get_compile_time_arg_val(11);
+    constexpr bool partial_row = get_compile_time_arg_val(12) != 0;
+
+    if constexpr (partial_row) {
+        if (num_valid_tiles != NUM_TILES_IN_TILIZED_CHUNK) {
+            tilize_full_chunk(cb_in, cb_scratch);
+            copy_valid_tiles(cb_scratch, cb_out, num_valid_tiles);
+            return;
+        }
+    } else {
+        // Row length is a multiple of 32 here, so every chunk is full.
+        ASSERT(num_valid_tiles == NUM_TILES_IN_TILIZED_CHUNK);
+    }
+    tilize_full_chunk(cb_in, cb_out);
 }
 
 FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {

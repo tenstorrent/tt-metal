@@ -342,7 +342,9 @@ def run_test_create_min_width_shard(
 @pytest.mark.parametrize("batch", (1, 8, 16, 32))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
-    ((8, 1, 128), (8, 4, 96), (16, 2, 64)),
+    # (10, 7, 32): 24 input cores (8x3). With overlap_coregrid=False the Q/V reader skips K from
+    # x=2 over 7 cores, so x has to carry into the next row.
+    ((8, 1, 128), (8, 4, 96), (16, 2, 64), (10, 7, 32)),
 )
 @pytest.mark.parametrize("overlap_coregrid", (True, False))
 def test_create_min_width_shard(
@@ -559,3 +561,28 @@ def test_create_width_shard_by_head(
             n_local_kv_heads,
             head_dim,
         )
+
+
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("n_local_heads, n_local_kv_heads, head_dim", ((36, 2, 32), (34, 2, 32)))
+@pytest.mark.parametrize("overlap_coregrid", (True, False))
+def test_create_min_width_shard_subcoregrid_more_than_32_q_heads(
+    device, n_local_heads, n_local_kv_heads, head_dim, overlap_coregrid
+):
+    """Q and KV heads pad to different tile counts once there are more than 32 Q heads."""
+    torch.manual_seed(0)
+    sub_core_grids = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    run_test_create_min_width_shard(
+        device=device,
+        batch=8,
+        n_local_heads=n_local_heads,
+        n_local_kv_heads=n_local_kv_heads,
+        head_dim=head_dim,
+        overlap_coregrid=overlap_coregrid,
+        sub_core_grids=sub_core_grids,
+    )

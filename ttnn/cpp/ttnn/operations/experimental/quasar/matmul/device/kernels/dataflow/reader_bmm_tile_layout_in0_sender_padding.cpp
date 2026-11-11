@@ -110,12 +110,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
-    // unpadded tile of data into each padded slot, and tiles are laid out / multicast at the padded
-    // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
-    constexpr uint32_t in0_aligned_tile_size_bytes =
-        (in0_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    constexpr uint32_t in0_aligned_tile_size_bytes = (in0_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                     NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
 #ifdef IN0_SHARDED
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
 #else
@@ -173,7 +173,20 @@ void kernel_main() {
     // count_nonzero(sparsity) == num_batch_compute when nnz is supplied (see num_batch_compute above).
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
-    for (uint32_t b = 0; b < in0_B; ++b) {
+    // Broadcast-A reuse (in0_B == 1, in1_B > 1): the in0 buffer holds one per-core copy of A
+    // (per_core_M * K tiles, i.e. num_blocks_h_dim * num_blocks_inner_dim blocks), but compute consumes
+    // num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim blocks per batch. Batch 0 leaves the
+    // buffer in exactly the order compute re-reads it only when one outer block count is 1: with
+    // h == 1 each W block is the same K pass again, and with w == 1 the buffer is the whole M x K image
+    // filled once. Then the extra batches just replay pointer credits. With both > 1 later W blocks
+    // overwrite earlier M blocks, so the extra batches re-read A from DRAM instead.
+    // See https://github.com/tenstorrent/tt-metal/issues/57183.
+    constexpr bool in0_replay_in_buffer = in0_reuse_in_CB && (num_blocks_h_dim == 1 || num_blocks_w_dim == 1);
+    constexpr bool in0_reread_per_batch = in0_reuse_in_CB && !in0_replay_in_buffer;
+    constexpr uint32_t in0_num_batches_read = in0_reread_per_batch ? in1_B : in0_B;
+
+    for (uint32_t b = 0; b < in0_num_batches_read; ++b) {
+        [[maybe_unused]] const uint32_t in0_batch_start_tile_id = in0_tensor_start_tile_id;
         if constexpr (batchB > 0) {
             noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
@@ -412,13 +425,17 @@ void kernel_main() {
         // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
         // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
         // CB so compute kernel thinks it has new data
-        if (in0_reuse_in_CB) {
+        if constexpr (in0_replay_in_buffer) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
-                for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
+                for (uint32_t blk = 0; blk < num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim; ++blk) {
                     cb_in0.reserve_back(in0_block_num_tiles);
                     cb_in0.push_back(in0_block_num_tiles);
                 }
             }
+        }
+        if constexpr (in0_reread_per_batch) {
+            // Every weight batch reads the same A slice.
+            in0_tensor_start_tile_id = in0_batch_start_tile_id;
         }
     }
     noc.async_write_barrier();

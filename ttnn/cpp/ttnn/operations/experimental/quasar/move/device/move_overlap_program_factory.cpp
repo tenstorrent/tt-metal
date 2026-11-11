@@ -10,7 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
@@ -37,16 +38,18 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
     std::vector<CoreRange> logical_core_ranges;
     // splitting the controller-containing range adds one range to the input set
     logical_core_ranges.reserve(all_cores.ranges().size() + 1);
+    // Either split can be empty (single row, single column, or controller only).
     auto split_core_range_containing_controller = [&](const CoreRange& controller_core_range) {
         TT_ASSERT(controller_core_range.start_coord == logical_controller);
-        CoreRange right_block(
-            CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end_coord);
-        CoreRange remaining_stick = CoreRange(
-            CoreCoord(logical_controller.x, logical_controller.y + 1),
-            CoreCoord(logical_controller.x, controller_core_range.end_coord.y));
-
-        logical_core_ranges.push_back(right_block);
-        logical_core_ranges.push_back(remaining_stick);
+        if (controller_core_range.end_coord.x > logical_controller.x) {
+            logical_core_ranges.push_back(
+                CoreRange(CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end_coord));
+        }
+        if (controller_core_range.end_coord.y > logical_controller.y) {
+            logical_core_ranges.push_back(CoreRange(
+                CoreCoord(logical_controller.x, logical_controller.y + 1),
+                CoreCoord(logical_controller.x, controller_core_range.end_coord.y)));
+        }
     };
 
     CoreRange range_0 = *all_cores.ranges().begin();
@@ -65,7 +68,7 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
         }
     }
 
-    TT_ASSERT(logical_core_ranges.size() == 2 or logical_core_ranges.size() == 3);
+    TT_ASSERT(logical_core_ranges.size() <= 3);
     return logical_core_ranges;
 }
 
@@ -94,7 +97,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
-    const uint32_t page_size = input.buffer()->page_size();
+    const uint32_t page_size = input.mesh_buffer().page_size();
 
     const uint32_t num_pages =
         tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
@@ -106,10 +109,14 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
+        output.mesh_buffer().device_local_size(),
+        output.mesh_buffer().page_size(),
+        num_l1_banks,
+        tt::tt_metal::hal::get_l1_alignment());
 
     // Scratch CB is a temp L1 buffer to copy src data into before writing to dst.
-    const uint32_t aligned_page_size = round_up_to_mul32(page_size);
+    // Round like size_per_l1_bank, or a 16-mod-32 page size leaves no whole entry.
+    const uint32_t aligned_page_size = tt::align(page_size, tt::tt_metal::hal::get_l1_alignment());
 
     //
     // -------- Build the ProgramSpec --------
@@ -183,11 +190,28 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
     // positional slot; the legacy src/dst-address (slots 0,1) and semaphore-id (slot 4)
     // slots are gone — those are now bindings.
     m2::Group<std::string> rta_names = {
-        "start_id",      "num_pages",           "controller_noc_x",    "controller_noc_y",  "control_value",
-        "is_controller", "range_0_start_noc_x", "range_0_start_noc_y", "range_0_end_noc_x", "range_0_end_noc_y",
-        "range_0_size",  "range_1_start_noc_x", "range_1_start_noc_y", "range_1_end_noc_x", "range_1_end_noc_y",
-        "range_1_size",  "range_2_start_noc_x", "range_2_start_noc_y", "range_2_end_noc_x", "range_2_end_noc_y",
-        "range_2_size",  "do_third_multicast",
+        "start_id",
+        "num_pages",
+        "controller_noc_x",
+        "controller_noc_y",
+        "control_value",
+        "is_controller",
+        "range_0_start_noc_x",
+        "range_0_start_noc_y",
+        "range_0_end_noc_x",
+        "range_0_end_noc_y",
+        "range_0_size",
+        "range_1_start_noc_x",
+        "range_1_start_noc_y",
+        "range_1_end_noc_x",
+        "range_1_end_noc_y",
+        "range_1_size",
+        "range_2_start_noc_x",
+        "range_2_start_noc_y",
+        "range_2_end_noc_x",
+        "range_2_end_noc_y",
+        "range_2_size",
+        "num_multicast_regions",
     };
     if (!tilized) {
         rta_names.push_back("aligned_page_size");
@@ -256,9 +280,17 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
         noc_multicast_regions.push_back(noc_cr);
     }
 
-    const CoreRange range_0_noc = noc_multicast_regions[0];
-    const CoreRange range_1_noc = noc_multicast_regions[1];
-    const bool do_third_multicast = (noc_multicast_regions.size() == 3);
+    // 0-3 regions; unused slots are zero and the kernel skips them.
+    const uint32_t num_multicast_regions = static_cast<uint32_t>(noc_multicast_regions.size());
+    const auto region = [&](uint32_t index) {
+        return index < num_multicast_regions ? noc_multicast_regions[index] : CoreRange(CoreCoord{0, 0});
+    };
+    const auto region_size = [&](uint32_t index) {
+        return index < num_multicast_regions ? static_cast<uint32_t>(logical_multicast_regions[index].size()) : 0u;
+    };
+    const CoreRange range_0_noc = region(0);
+    const CoreRange range_1_noc = region(1);
+    const CoreRange range_2_noc = region(2);
 
     m2::ProgramRunArgs run_args;
     m2::KernelRunArgs reader_run_args;
@@ -295,18 +327,18 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
                 {"range_0_start_noc_y", static_cast<uint32_t>(range_0_noc.start_coord.y)},
                 {"range_0_end_noc_x", static_cast<uint32_t>(range_0_noc.end_coord.x)},
                 {"range_0_end_noc_y", static_cast<uint32_t>(range_0_noc.end_coord.y)},
-                {"range_0_size", static_cast<uint32_t>(logical_multicast_regions[0].size())},
+                {"range_0_size", region_size(0)},
                 {"range_1_start_noc_x", static_cast<uint32_t>(range_1_noc.start_coord.x)},
                 {"range_1_start_noc_y", static_cast<uint32_t>(range_1_noc.start_coord.y)},
                 {"range_1_end_noc_x", static_cast<uint32_t>(range_1_noc.end_coord.x)},
                 {"range_1_end_noc_y", static_cast<uint32_t>(range_1_noc.end_coord.y)},
-                {"range_1_size", static_cast<uint32_t>(logical_multicast_regions[1].size())},
-                {"range_2_start_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x)},
-                {"range_2_start_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y)},
-                {"range_2_end_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x)},
-                {"range_2_end_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y)},
-                {"range_2_size", static_cast<uint32_t>(logical_multicast_regions.back().size())},
-                {"do_third_multicast", static_cast<uint32_t>(do_third_multicast)},
+                {"range_1_size", region_size(1)},
+                {"range_2_start_noc_x", static_cast<uint32_t>(range_2_noc.start_coord.x)},
+                {"range_2_start_noc_y", static_cast<uint32_t>(range_2_noc.start_coord.y)},
+                {"range_2_end_noc_x", static_cast<uint32_t>(range_2_noc.end_coord.x)},
+                {"range_2_end_noc_y", static_cast<uint32_t>(range_2_noc.end_coord.y)},
+                {"range_2_size", region_size(2)},
+                {"num_multicast_regions", num_multicast_regions},
             });
         if (!tilized) {
             reader_rtas["aligned_page_size"][core] = aligned_page_size;

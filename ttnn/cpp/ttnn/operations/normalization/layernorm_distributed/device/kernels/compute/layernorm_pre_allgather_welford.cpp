@@ -293,6 +293,7 @@ void kernel_main() {
         transpose_tile(dfb::scratch, 1, dst1);
         dfb_scratch.pop_front(2);
 
+        dfb_out.reserve_back(2);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, dfb::out);

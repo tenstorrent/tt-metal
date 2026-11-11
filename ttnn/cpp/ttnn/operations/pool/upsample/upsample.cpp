@@ -12,7 +12,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::upsample {
 
@@ -68,6 +68,7 @@ static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const
 
     const uint32_t total_input_sticks = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
+    TT_FATAL(total_input_sticks > 0, "upsample: input shape {} must be non-empty", input_shape);
     const uint32_t num_shards = std::min(max_num_cores, total_input_sticks);
     const uint32_t shard_height = tt::round_up(total_input_sticks, num_shards) / num_shards;
 
@@ -115,8 +116,10 @@ ttnn::Tensor upsample(
 
     // Validation is handled by the device operation's validate_on_program_cache_miss
 
-    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
+    auto* device = input_tensor.device();
+    TT_FATAL(device != nullptr, "upsample expects an allocated device tensor as input");
+    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
+        ttnn::init_device_compute_kernel_config(device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
 
     // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {

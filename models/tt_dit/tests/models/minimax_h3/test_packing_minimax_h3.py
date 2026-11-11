@@ -50,11 +50,6 @@ def _digest(tensor):
     return hashlib.sha256(tensor.contiguous().numpy().tobytes()).hexdigest()[:16]
 
 
-@pytest.mark.parametrize("num_frames,expected", [(1, 5), (5, 5), (6, 22), (22, 22), (120, 124), (192, 192)])
-def test_align_num_frames(num_frames, expected):
-    assert p.align_num_frames(num_frames) == expected
-
-
 @pytest.mark.parametrize("num_frames,latents", [(5, 2), (22, 7), (39, 12), (124, 37), (192, 57), (362, 107)])
 def test_video_latent_num_frames(num_frames, latents):
     assert p.video_latent_num_frames(num_frames) == latents
@@ -210,6 +205,21 @@ def test_slot_routing_rejects_a_role_it_would_drop(expect_error):
     layout = _layout(latent_height, latent_width, num_frames, ("first",))
     with expect_error(ValueError, "rows for roles"):
         p.build_slot_routing(layout, roles=("video", "audio"))
+
+
+@pytest.mark.parametrize("case", [BRINGUP, CANONICAL, T2VA], ids=lambda c: c[0])
+def test_adaln_indices_are_unsigned_table_rows(case):
+    """The pipeline uploads the slot and adaLN rows as uint32 with no device typecast: all >= 0, inside the table."""
+    _, latent_height, latent_width, num_frames, anchors = case
+    layout = _layout(latent_height, latent_width, num_frames, anchors)
+    row_slot, roles = p.build_slot_routing(layout)
+    rows = p.adaln_indices(layout.token_tags, row_slot)
+    assert row_slot.min().item() >= 0
+    assert rows.min().item() >= 0
+    assert rows.max().item() < len(roles) * p.MINIMAX_H3_MODALITY_NUM
+    # the reference tags padding rows -1; the clamp keeps them on the slot's first row
+    padded = p.adaln_indices(torch.full((4,), -1, dtype=torch.long), row_slot[:4])
+    assert torch.equal(padded, row_slot[:4] * p.MINIMAX_H3_MODALITY_NUM)
 
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])

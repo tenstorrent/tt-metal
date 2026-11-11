@@ -5,29 +5,33 @@ from typing import List
 
 import pytest
 import torch
-from helpers.data_format_inference import infer_data_formats
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.constraints import (
+    is_valid_data_format_conversion,
+    is_valid_quasar_dest_mode_conversion,
+)
+from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
     get_golden_generator,
     quantize_mx_tensor_chunked,
+    saturate_integer,
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
-    DestSync,
-    ImpliedMathFormat,
     PackerReluType,
     PerfRunType,
-    format_dict,
 )
 from helpers.param_config import (
+    generate_dest_depth_input_dimensions,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     runtime,
     select_perf_tile_sizes,
 )
@@ -39,7 +43,6 @@ from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -57,7 +60,7 @@ from helpers.tile_constants import (
     is_mx_unsupported_tile_dims,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_qsr_pack_combinations(
@@ -78,16 +81,6 @@ def generate_qsr_pack_combinations(
         tile_dimensions) tuples.
     """
 
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        # If input format is Int16, output format must also be Int16, and vice versa
-        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
-            return False
-        return True
-
     def get_dest_acc_modes(in_fmt):
         """Determine valid dest register modes depending on the input format."""
         # Having Int16 in src registers and Int32 in the dest register is not supported
@@ -97,24 +90,6 @@ def generate_qsr_pack_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
-            out_fmt.is_32_bit()
-            and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
-            dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
-        ):
-            return False
-        return True
-
     all_relu_types = [
         PackerReluType.NoRelu,
         PackerReluType.ZeroRelu,
@@ -122,24 +97,26 @@ def generate_qsr_pack_combinations(
         PackerReluType.MaxThresholdRelu,
     ]
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
 
-        if not is_supported_format_conversion(in_fmt, out_fmt):
+        if not is_valid_data_format_conversion(fmt):
             continue
 
         # Threshold ReLU modes are not supported for integer pack_src formats
-        # (mirroring the pytest.skip guard in the test body).
-        relu_types = (
-            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-            if in_fmt.is_integer()
-            else all_relu_types
-        )
+        # (mirroring the pytest.skip guard in the test body), and the packer
+        # passes Int16 through with no ReLU of any kind applied.
+        if in_fmt == DataFormat.Int16:
+            relu_types = [PackerReluType.NoRelu]
+        elif in_fmt.is_integer():
+            relu_types = [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+        else:
+            relu_types = all_relu_types
         for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+            if is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
                 tile_sizes = (
                     select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
                     if is_perf
@@ -151,8 +128,7 @@ def generate_qsr_pack_combinations(
                             continue
                         # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
                         if (
-                            in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
+                            unpacks_to_dest(in_fmt, dest_acc)
                             and tile_dims not in MX_SUPPORTED_TILE_SIZES
                         ):
                             continue
@@ -173,7 +149,7 @@ def generate_qsr_pack_combinations(
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        runtime(dimensions) if is_perf else dimensions,
+                                        runtime(dimensions),
                                         runtime(relu_type),
                                         runtime(tile_dims),
                                     )
@@ -185,12 +161,13 @@ def generate_qsr_pack_combinations(
 PACK_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int16,
+        DataFormat.Int4,
+        DataFormat.UInt4,
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
         DataFormat.MxFp4,
@@ -201,6 +178,31 @@ PACK_FORMATS = input_output_formats(
 )
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
+
+# 4 and 8 full Dest sections per run. Float32 takes the unpack-to-Dest path, Float16_b the FPU one.
+PACK_DEST_DEPTH_COMBINATIONS = [
+    (
+        fmt,
+        dest_acc,
+        dest_sync,
+        runtime(dimensions),
+        runtime(PackerReluType.NoRelu),
+        runtime((32, 32)),
+    )
+    for fmt, dest_acc_modes in (
+        (
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            (DestAccumulation.No, DestAccumulation.Yes),
+        ),
+        (
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+            (DestAccumulation.Yes,),
+        ),
+    )
+    for dest_acc in dest_acc_modes
+    for dest_sync in quasar_dest_sync_modes()
+    for dimensions in generate_dest_depth_input_dimensions(dest_acc, dest_sync)
+]
 
 
 @pytest.mark.quasar
@@ -249,9 +251,7 @@ def test_pack_quasar(
     )
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     data_formats = infer_data_formats(
         input_format=formats.input_format,
         output_format=formats.output_format,
@@ -274,12 +274,18 @@ def test_pack_quasar(
         # divergence from HW that grows with threshold-relu (most visible for
         # MxFp4 -> MxInt4 + MaxThresholdRelu). For MX outputs we route through
         # pack_src instead and apply the single output MX quantization ourselves
-        # after relu. Non-MX outputs keep the existing path (saturate_integer etc.).
+        # after relu. Signed integer -> UInt8 outputs also route through pack_src and
+        # apply the UInt8 conversion after relu, which runs before the packer format
+        # conversion.
 
         generate_golden = get_golden_generator(DataCopyGolden)
+        signed_integer_to_uint8 = (
+            formats.output_format == DataFormat.UInt8
+            and data_formats.pack_src in (DataFormat.Int8, DataFormat.Int32)
+        )
         datacopy_out_format = (
             data_formats.pack_src
-            if formats.output_format.is_mx_format()
+            if formats.output_format.is_mx_format() or signed_integer_to_uint8
             else formats.output_format
         )
         golden_tensor = generate_golden(
@@ -311,6 +317,9 @@ def test_pack_quasar(
             data_formats.pack_src,
         )
 
+        if signed_integer_to_uint8:
+            golden_tensor = saturate_integer(golden_tensor, formats.output_format)
+
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
@@ -318,7 +327,6 @@ def test_pack_quasar(
         "test_name": "sources/quasar/pack_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -351,7 +359,6 @@ def test_pack_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": (formats.input_format.is_mx_format()),
     }
 
     # Single output MX quantization, after relu — matches HW's pack-time
@@ -373,12 +380,7 @@ def test_pack_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     test_passed = passed_test(
         golden_tensor,
@@ -419,3 +421,10 @@ def test_pack_quasar(
         test_passed = True
 
     assert test_passed, "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(formats_dest_acc_sync_dims_relu=PACK_DEST_DEPTH_COMBINATIONS)
+def test_pack_dest_depth_quasar(formats_dest_acc_sync_dims_relu):
+    # A lone parametrize argument arrives wrapped in a 1-tuple.
+    test_pack_quasar(formats_dest_acc_sync_dims_relu[0], [PerfRunType.L1_TO_L1], 1)

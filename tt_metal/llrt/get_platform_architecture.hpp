@@ -5,16 +5,50 @@
 #pragma once
 
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 
 #include <tt_stl/assert.hpp>
 #include "llrt/rtoptions.hpp"
 #include "tracy/Tracy.hpp"
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/simulation/tt_sim_communicator.hpp>
+#include <tt-umd-workload/simulation/simulation_chip.hpp>
 
 namespace tt::tt_metal {
+
+// The simulator's soc_descriptor.yaml when it ships one, else empty: a wh/bh ttsim image needs none.
+inline std::string find_simulator_soc_descriptor_path(const std::filesystem::path& simulator_path) {
+    std::string soc_desc = umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(simulator_path);
+    return std::filesystem::exists(soc_desc) ? soc_desc : "";
+}
+
+// Declared by the simulator's soc_descriptor.yaml when it ships one, else read from the PCI device id its
+// ttsim image reports. The first probe of an image must come before any simulator is brought up; UMD caches
+// the answer per image, so later calls are safe once a simulator is running.
+inline tt::ARCH get_simulator_architecture(const std::filesystem::path& simulator_path) {
+    const std::string soc_desc = find_simulator_soc_descriptor_path(simulator_path);
+    if (!soc_desc.empty()) {
+        return umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+    }
+    const std::string expected_soc_desc =
+        umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(simulator_path);
+    TT_FATAL(
+        simulator_path.extension() == ".so",
+        "{} not found: an RTL simulator declares its architecture only through its SoC descriptor.",
+        expected_soc_desc);
+    const tt::ARCH arch = umd::arch_from_pci_device_id(umd::TTSimCommunicator::read_pci_device_id(simulator_path));
+    TT_FATAL(
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+        "Simulator {} reports {}, which has no built-in SoC descriptor. Place its soc_descriptor.yaml at {}.",
+        simulator_path.string(),
+        tt::arch_to_str(arch),
+        expected_soc_desc);
+    return arch;
+}
 
 inline tt::ARCH get_physical_architecture() {
     ZoneScoped;
@@ -79,17 +113,30 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
     // If running in mock mode, derive architecture from provided cluster descriptor
     if (rtoptions.get_target_device() == tt::TargetDevice::Mock ||
         rtoptions.get_target_device() == tt::TargetDevice::Emule) {
-        auto cluster_desc = umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
+        // Parse each descriptor once: ttnn.get_arch_name() lands here per op in model code. Keyed by path
+        // rather than call_once because tests open several mock descriptors in one process.
+        static std::mutex mock_arch_mutex;
+        static std::unordered_map<std::string, tt::ARCH> mock_arch_by_path;
+        const std::string& path = rtoptions.get_mock_cluster_desc_path();
+        {
+            std::lock_guard<std::mutex> lock(mock_arch_mutex);
+            if (auto it = mock_arch_by_path.find(path); it != mock_arch_by_path.end()) {
+                return it->second;
+            }
+        }
+        auto cluster_desc = umd::ClusterDescriptor::create_from_yaml(path);
         if (cluster_desc && cluster_desc->get_number_of_chips() > 0) {
             auto chips = cluster_desc->get_all_chips();
             arch = cluster_desc->get_arch(*chips.begin());
         }
+        if (arch != tt::ARCH::Invalid) {
+            std::lock_guard<std::mutex> lock(mock_arch_mutex);
+            mock_arch_by_path.emplace(path, arch);
+        }
         return arch;
     }
     if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
-        auto soc_desc =
-            umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-        arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+        arch = get_simulator_architecture(rtoptions.get_simulator_path());
     } else {
         arch = get_physical_architecture();
     }

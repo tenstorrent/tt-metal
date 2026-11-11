@@ -80,7 +80,7 @@ ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
             total *= static_cast<uint32_t>(dim);
         }
         const uint32_t new_rows = total / new_cols;
-        return ttnn::reshape(t, ttnn::Shape{ttnn::SmallVector<uint32_t>{new_rows, new_cols}});
+        return ttnn::reshape(t, ttnn::Shape{ttsl::SmallVector<uint32_t>{new_rows, new_cols}});
     }
 
     // Large source page: prefer rebank_rm (DRAM-to-DRAM, CB = 8 KB).
@@ -119,7 +119,7 @@ ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
     // Append (B_total, src_pow2 - src_cols) zeros via concat along dim=1.
     // CB = 2 × src_pow2 × elem_bytes ≤ 1 MB (for src_pow2 ≤ 131072 fp32).
     auto zeros_tail = ttnn::zeros(
-        ttnn::Shape{ttnn::SmallVector<uint32_t>{B_total, src_pow2 - src_cols}},
+        ttnn::Shape{ttsl::SmallVector<uint32_t>{B_total, src_pow2 - src_cols}},
         t.dtype(),
         t.layout(),
         std::ref(*dev),
@@ -134,9 +134,9 @@ ttnn::Tensor shrink_reshape(const ttnn::Tensor& t, uint32_t new_cols) {
     const uint32_t n_want = B_total * (src_cols / new_cols);
     const uint32_t n_have = B_total * (src_pow2 / new_cols);
     if (n_have > n_want) {
-        const ttnn::SmallVector<uint32_t> beg = {0u, 0u};
-        const ttnn::SmallVector<uint32_t> end = {n_want, new_cols};
-        const ttnn::SmallVector<uint32_t> stp = {1u, 1u};
+        const ttsl::SmallVector<uint32_t> beg = {0u, 0u};
+        const ttsl::SmallVector<uint32_t> end = {n_want, new_cols};
+        const ttsl::SmallVector<uint32_t> stp = {1u, 1u};
         rebankd = ttnn::slice(rebankd, beg, end, stp, mc);
     }
     return rebankd;
@@ -189,7 +189,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_chunked(
     if (total_rows <= b_safe) {
         // Small enough: one complex_mul call.
         auto [cr, ci] = complex_mul(ar_f, ai_f, br_f, bi_f);
-        const auto orig = ttnn::Shape{ttnn::SmallVector<uint32_t>{B, P_col}};
+        const auto orig = ttnn::Shape{ttsl::SmallVector<uint32_t>{B, P_col}};
         return {ttnn::reshape(cr, orig), ttnn::reshape(ci, orig)};
     }
 
@@ -200,9 +200,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_chunked(
 
     for (uint32_t start = 0u; start < total_rows; start += b_safe) {
         const uint32_t end_r = std::min(start + b_safe, total_rows);
-        const ttnn::SmallVector<uint32_t> beg_idx = {start, 0u};
-        const ttnn::SmallVector<uint32_t> end_idx = {end_r, 1024u};
-        const ttnn::SmallVector<uint32_t> step_idx = {1u, 1u};
+        const ttsl::SmallVector<uint32_t> beg_idx = {start, 0u};
+        const ttsl::SmallVector<uint32_t> end_idx = {end_r, 1024u};
+        const ttsl::SmallVector<uint32_t> step_idx = {1u, 1u};
         auto arc = ttnn::slice(ar_f, beg_idx, end_idx, step_idx, mc);
         auto aic = ttnn::slice(ai_f, beg_idx, end_idx, step_idx, mc);
         auto brc = ttnn::slice(br_f, beg_idx, end_idx, step_idx, mc);
@@ -223,7 +223,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_chunked(
     if ((uint64_t)P_col * elem_bytes > kBluesteinRebankThreshold) {
         return {ttnn::prim::rebank_rm_merge(cr_f, nchunks), ttnn::prim::rebank_rm_merge(ci_f, nchunks)};
     }
-    const auto orig = ttnn::Shape{ttnn::SmallVector<uint32_t>{B, P_col}};
+    const auto orig = ttnn::Shape{ttsl::SmallVector<uint32_t>{B, P_col}};
     return {ttnn::reshape(cr_f, orig), ttnn::reshape(ci_f, orig)};
 }
 
@@ -271,7 +271,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_safe(
         kBluesteinRebankThreshold,
         kBluesteinRebankThreshold);
 
-    const ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+    const ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
         {{0u, 0u}},
         {{0u, pad_len}},
     };
@@ -283,9 +283,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_safe(
     auto [cr_p, ci_p] = complex_mul_chunked(ar_p, ai_p, br_p, bi_p, B, P_pad);
 
     // Slice result back to (B, P) — zero-padded positions are 0 × anything = 0.
-    const ttnn::SmallVector<uint32_t> begins = {0u, 0u};
-    const ttnn::SmallVector<uint32_t> ends = {B, P};
-    const ttnn::SmallVector<uint32_t> step = {1u, 1u};
+    const ttsl::SmallVector<uint32_t> begins = {0u, 0u};
+    const ttsl::SmallVector<uint32_t> ends = {B, P};
+    const ttsl::SmallVector<uint32_t> step = {1u, 1u};
     auto cr = ttnn::slice(cr_p, begins, ends, step, mc);
     auto ci = ttnn::slice(ci_p, begins, ends, step, mc);
     return {std::move(cr), std::move(ci)};
@@ -340,7 +340,7 @@ ttnn::Tensor zero_pad_to_m(const ttnn::Tensor& t, uint32_t M) {
 
         auto rebankd = ttnn::prim::rebank_rm(t, 1024u);
         auto zeros_r = ttnn::zeros(
-            ttnn::Shape{ttnn::SmallVector<uint32_t>{pad_chunks, 1024u}}, t.dtype(), t.layout(), std::ref(*dev), mc);
+            ttnn::Shape{ttsl::SmallVector<uint32_t>{pad_chunks, 1024u}}, t.dtype(), t.layout(), std::ref(*dev), mc);
         auto stacked = ttnn::concat({rebankd, zeros_r}, /*dim=*/0);
         return ttnn::prim::rebank_rm_merge(stacked, M / 1024u);
     }
@@ -349,7 +349,7 @@ ttnn::Tensor zero_pad_to_m(const ttnn::Tensor& t, uint32_t M) {
     // Only reached when M × elem_bytes ≤ kBluesteinRebankThreshold (≤ 64 KB),
     // so CB ≤ 128 KB — well within the 1.5 MB L1 limit.
     auto zeros_tail =
-        ttnn::zeros(ttnn::Shape{ttnn::SmallVector<uint32_t>{B, M - N}}, t.dtype(), t.layout(), std::ref(*dev), mc);
+        ttnn::zeros(ttnn::Shape{ttsl::SmallVector<uint32_t>{B, M - N}}, t.dtype(), t.layout(), std::ref(*dev), mc);
     return ttnn::concat({t, zeros_tail}, /*dim=*/1);
 }
 
@@ -393,9 +393,9 @@ ttnn::Tensor trim_to_n(const ttnn::Tensor& t, uint32_t N) {
 
     // Row-slice: keep first B·n_chunks rows.
     // page = 4 KB → CB = 32 × 2 × 4 KB = 256 KB.
-    const ttnn::SmallVector<uint32_t> beg = {0u, 0u};
-    const ttnn::SmallVector<uint32_t> end = {B * n_chunks, 1024u};
-    const ttnn::SmallVector<uint32_t> stp = {1u, 1u};
+    const ttsl::SmallVector<uint32_t> beg = {0u, 0u};
+    const ttsl::SmallVector<uint32_t> end = {B * n_chunks, 1024u};
+    const ttsl::SmallVector<uint32_t> stp = {1u, 1u};
     auto flat_n = ttnn::slice(flat_m, beg, end, stp, mc);
 
     // Reassemble (B·n_chunks, 1024) → (B, N).
@@ -404,7 +404,7 @@ ttnn::Tensor trim_to_n(const ttnn::Tensor& t, uint32_t N) {
         return ttnn::prim::rebank_rm_merge(flat_n, n_chunks);
     }
     // Small N: page-growing reshape, CB = 2 × N × elem_bytes ≤ 1 MB.
-    return ttnn::reshape(flat_n, ttnn::Shape{ttnn::SmallVector<uint32_t>{B, N}});
+    return ttnn::reshape(flat_n, ttnn::Shape{ttsl::SmallVector<uint32_t>{B, N}});
 }
 
 // Build a (1, N) zeros tensor matching `like` for the implicit zero-imag
@@ -479,7 +479,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> bluestein_fft(
         a_pad_re = zero_pad_to_m(a_re, M);
         a_pad_im = zero_pad_to_m(a_im, M);
     } else {
-        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+        ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
             {{0u, 0u}},
             {{0u, M - N}},
         };
@@ -521,9 +521,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> bluestein_fft(
         c_re_n = trim_to_n(c_re, N);
         c_im_n = trim_to_n(c_im, N);
     } else {
-        ttnn::SmallVector<uint32_t> begins = {0u, 0u};
-        ttnn::SmallVector<uint32_t> ends = {B, N};
-        ttnn::SmallVector<uint32_t> step = {1u, 1u};
+        ttsl::SmallVector<uint32_t> begins = {0u, 0u};
+        ttsl::SmallVector<uint32_t> ends = {B, N};
+        ttsl::SmallVector<uint32_t> step = {1u, 1u};
         c_re_n = ttnn::slice(c_re, begins, ends, step, c_re.memory_config());
         c_im_n = ttnn::slice(c_im, begins, ends, step, c_im.memory_config());
     }

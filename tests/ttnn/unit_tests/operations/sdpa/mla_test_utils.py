@@ -8,7 +8,7 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.common.utility_functions import nearest_y
+from tt_py_test_utils_common.utility_functions import nearest_y
 
 import ttnn
 from loguru import logger
@@ -27,11 +27,12 @@ def comp_pcc_lowmem(golden, calculated, pcc=0.99, chunk=1 << 23):
     """
     Memory-frugal drop-in for comp_pcc on very large tensors.
 
-    Computes the same Pearson correlation coefficient as comp_pcc, but in a
-    chunked two-pass scan instead of np.ma.corrcoef (which flattens to float64
-    and allocates several full-size temporaries, ~16x the input — enough to
-    OOM-kill the CI host on the largest prefill outputs). Non-finite elements
-    are excluded pairwise, matching np.ma.masked_invalid. Returns
+    Scans the tensors in chunks, in two passes, instead of making full-size
+    float64 copies of both (comp_pcc needs ~20-26 bytes per element, 10-13 GiB
+    on the largest prefill outputs). On finite, non-constant data the PCC agrees
+    with comp_pcc up to float32 rounding. It skips pairs where either value is
+    non-finite, while comp_pcc sets those values to 0, and it scores constant
+    tensors 1.0 or 0.0 where comp_pcc falls back to allclose. Returns
     (passing, output_str) so it can substitute for comp_pcc directly.
     """
     if golden.dtype != calculated.dtype:
@@ -208,6 +209,7 @@ def run_flash_mla_decode_impl(
     block_size=ttnn.TILE_SIZE,
     reuse_k=False,
     max_cores_per_head_batch=16,
+    q_column_groups=False,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 3
@@ -293,13 +295,7 @@ def run_flash_mla_decode_impl(
     start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
-    sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
-        max_cores_per_head_batch=max_cores_per_head_batch,
-    )
+    sdpa_grid = device.compute_with_storage_grid_size()
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -329,6 +325,23 @@ def run_flash_mla_decode_impl(
         q_core_grid = ttnn.num_cores_to_corerangeset(
             q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
         )
+        if q_column_groups:
+            # One 32 row Q shard per virtual batch on its group's output core (column major groups on an 8x8 grid).
+            num_shards = batch * nh // ttnn.TILE_SIZE
+            max_cores_per_head_batch = 64 // num_shards
+            groups_per_row = 8 // max_cores_per_head_batch
+            group_rows = num_shards // groups_per_row
+            q_core_grid = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(g * max_cores_per_head_batch, 0),
+                        ttnn.CoreCoord(g * max_cores_per_head_batch, group_rows - 1),
+                    )
+                    for g in range(groups_per_row)
+                ]
+            )
+            sdpa_grid = ttnn.CoreCoord(8, 8)
+            block_height = ttnn.TILE_SIZE
         if q_mem_config is None:
             q_mem_config = ttnn.create_sharded_memory_config(
                 shape=(block_height, q.shape[-1]),
@@ -348,6 +361,14 @@ def run_flash_mla_decode_impl(
     # GQA only supports DRAM memory config for output
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=max_cores_per_head_batch,
+    )
 
     tt_q = ttnn.from_torch(
         q_for_tt,
@@ -607,10 +628,9 @@ def run_flash_mla_prefill_impl(
         pcc_threshold = 0.98
 
     # The full prefill output is [B, nh, S, d] — up to ~0.5G elements. The
-    # shared comp_pcc routes through np.ma.corrcoef, which flattens to float64
-    # and builds several full-size temporaries (~16x input), OOM-killing the CI
-    # host on the largest configs. comp_pcc_lowmem computes the same Pearson PCC
-    # in a chunked two-pass scan, keeping peak memory at the input size.
+    # shared comp_pcc makes full-size float64 copies of both tensors (10-13 GiB
+    # at that size). comp_pcc_lowmem computes the Pearson PCC in a chunked
+    # two-pass scan, keeping peak memory at the input size.
     out_pass, out_pcc = comp_pcc_lowmem(tt_out_torch, out_t, pcc_threshold)
     logger.debug(f"Output PCC: {out_pcc}")
 

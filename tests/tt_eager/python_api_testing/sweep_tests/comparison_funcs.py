@@ -1,1 +1,11 @@
-../../../../ttnn/tt_lib/_internal/comparison_funcs.py
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Re-export shim. Implementation lives in tt_py_test_utils_common.comparison_funcs."""
+
+import sys
+
+from tt_py_test_utils_common import comparison_funcs as _impl
+
+sys.modules[__name__] = _impl

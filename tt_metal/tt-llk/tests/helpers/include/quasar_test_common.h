@@ -11,6 +11,54 @@
 #include "perf.h"
 #include "tensor_shape.h"
 
+/**
+ * @brief Tiles per Dest section when a run of tile_cnt 32x32 tiles is split into full sections.
+ *
+ * @tparam DST_SYNC: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
+ * @param tile_cnt: Tiles in the run; a run longer than one section must be a multiple of it.
+ */
+template <ckernel::DstSync DST_SYNC, bool EN_32BIT_DEST>
+inline std::uint32_t tiles_per_dest_section(const std::uint32_t tile_cnt)
+{
+    constexpr std::uint32_t section_tiles = ckernel::trisc::get_dest_max_tiles<DST_SYNC, EN_32BIT_DEST, ckernel::trisc::DstTileShape::Tile32x32>();
+    return tile_cnt < section_tiles ? tile_cnt : section_tiles;
+}
+
+/**
+ * @brief Dest sections in a run of tile_cnt tiles split into sections of section_tiles.
+ *
+ * @param tile_cnt: Tiles in the run; must be a whole number of sections.
+ * @param section_tiles: Tiles per section, e.g. from @ref tiles_per_dest_section.
+ */
+inline std::uint32_t dest_section_count(const std::uint32_t tile_cnt, const std::uint32_t section_tiles)
+{
+    LLK_ASSERT(section_tiles == 0 || tile_cnt % section_tiles == 0, "A run longer than one Dest section must be a whole number of sections");
+    return section_tiles == 0 ? 0 : tile_cnt / section_tiles;
+}
+
+/**
+ * @brief Matmul output rows per Dest section: the tallest divisor of rt_dim whose rows x ct_dim fit one section.
+ *
+ * @tparam DST_SYNC: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
+ * @param rt_dim: Output row tiles.
+ * @param ct_dim: Output column tiles; one output row must fit a Dest section.
+ */
+template <ckernel::DstSync DST_SYNC, bool EN_32BIT_DEST>
+inline std::uint32_t matmul_rows_per_dest_section(const std::uint32_t rt_dim, const std::uint32_t ct_dim)
+{
+    constexpr std::uint32_t section_tiles = ckernel::trisc::get_dest_max_tiles<DST_SYNC, EN_32BIT_DEST, ckernel::trisc::DstTileShape::Tile32x32>();
+    LLK_ASSERT(ct_dim <= section_tiles, "One matmul output row must fit a Dest section");
+    std::uint32_t rows = ct_dim == 0 ? rt_dim : section_tiles / ct_dim;
+    rows               = rows < rt_dim ? rows : rt_dim;
+    while (rows > 1 && rt_dim % rows != 0)
+    {
+        rows--;
+    }
+    return rows;
+}
+
 inline void perf_unpack_set_srcb_once_then_srca_per_face(std::uint32_t srcb_once_count, std::uint32_t srca_per_face_count)
 {
     _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(srcb_once_count);
@@ -21,30 +69,6 @@ inline void perf_math_clear_srca_per_face_then_srcb_once(std::uint32_t srca_per_
 {
     _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(srca_per_face_count);
     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(srcb_once_count);
-}
-
-template <bool implied_math_format, bool fp32_dest_acc_en>
-inline void configure_math_hardware_for_float32_int32_or_default(DataFormat math_format, DataFormat dest_format)
-{
-    if constexpr (fp32_dest_acc_en)
-    {
-        if (dest_format == DataFormat::Float32)
-        {
-            _llk_math_srcAB_hw_configure_<implied_math_format, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-        else if (dest_format == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<implied_math_format, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<implied_math_format, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-    }
-    else
-    {
-        _llk_math_srcAB_hw_configure_<implied_math_format, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-    }
 }
 
 template <ckernel::dest_dvalid_client thread>

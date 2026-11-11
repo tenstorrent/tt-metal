@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 
 import ttnn
@@ -14,13 +16,21 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.tensor import pad_single
+from ....utils.matmul import get_matmul_config, get_matmul_core_grid
+from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
+from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
+
+# Any served per-device row count gives the output heads the same generic blocking (M_tiles >= 8).
+_HEAD_CONFIG_ROWS = 4736
+
+# all_gather_async workers per link on the dynamic-length path: the op's byte-based pick for every served
+# length (the audio gather clears its 256 KB/link threshold by 1.2 %), pinned so the key cannot move.
+_DYNAMIC_AG_WORKERS_PER_LINK = 4
 
 
 class MiniMaxH3TimestepEmbedding(Module):
@@ -44,6 +54,18 @@ class MiniMaxH3TimestepEmbedding(Module):
         return self.linear_2(ttnn.silu(self.linear_1(x)))
 
 
+@dataclass
+class MiniMaxH3TwoTime:
+    """Interval `(t, r)` conditioning: `temb = emb_t + gate * (emb_r - emb_t)`.
+
+    Not a child module on purpose: a registered child would join the cached weight set and invalidate
+    every existing cache.
+    """
+
+    embedder: MiniMaxH3TimestepEmbedding
+    gate: float
+
+
 class MiniMaxH3AdaLayerNormOut(Module):
     """Final norm of the packed sequence, shift/scale modulated per row.
 
@@ -62,12 +84,16 @@ class MiniMaxH3AdaLayerNormOut(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         fsdp_mesh_axis: int | None = None,
+        dynamic_length: bool = False,
+        norm_row_capacity: int | None = None,
     ) -> None:
         super().__init__()
 
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
         self.hidden_local = hidden_size // self.tp_factor
+        # Dynamic-length path: ROW_MAJOR gather tables (no untilize per gather) and a capacity-sized norm.
+        self.dynamic_length = dynamic_length
 
         self.norm = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -76,6 +102,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            **({"row_capacity": norm_row_capacity} if dynamic_length else {}),
         )
         self.linear = ColParallelLinear(
             time_embed_dim,
@@ -123,10 +150,13 @@ class MiniMaxH3AdaLayerNormOut(Module):
             table = ttnn.slice(projected, [0, 0, 0, p * self.hidden_local], [1, 1, rows, (p + 1) * self.hidden_local])
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
-            tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
+            tables.append(table if self.dynamic_length else ttnn.to_layout(table, ttnn.TILE_LAYOUT))
 
         def gather(table: ttnn.Tensor) -> ttnn.Tensor:
-            return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
+            return ttnn.unsqueeze(
+                ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length),
+                0,
+            )
 
         shift, scale = gather(tables[0]), gather(tables[1])
         return ttnn.add(ttnn.mul(self.norm(hidden), ttnn.add(scale, 1.0)), shift)
@@ -147,7 +177,8 @@ class MiniMaxH3Transformer3DModel(Module):
     movement, so the assembly happens *before* fracturing instead, as a row gather over fixed-capacity
     streams so every program has a request-independent (traceable) shape: the projected streams form a
     source table `[text | condition video | condition audio | audio | video]`, `assembly_indices`
-    gathers it into packed order, and `ttnn.mesh_partition` fractures it across SP.
+    gathers it into packed order, and `ttnn.mesh_partition` fractures it across SP (or, with indices
+    already sharded on SP, each device gathers only its own rows and no partition is needed).
 
     Padding
     -------
@@ -192,16 +223,34 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
+        dynamic_length: bool = False,
     ) -> None:
+        """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
+        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour."""
         super().__init__()
 
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        self.dynamic_length = dynamic_length
+        # Per-device row capacity of the fused norms on the dynamic-length path (the K/V gather capacity / SP).
+        norm_row_capacity = None
+        if dynamic_length and kv_gather_capacity is not None:
+            norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
-        self._timestep_idx_state: dict[int, StateTensor] = {}
-        self._static_source_state = StateTensor()
+        self._timestep_idx_state: dict[int, StateTensor] = {}  # traced path only, keyed by padded length
+        self._eye_states: dict[int, StateTensor] = {}
+        # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
+        # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
+        # by concat every step: a fragmented heap cannot supply a table-sized block each step. Allocated on
+        # the first request, never freed (eviction skips non-weights). Static prefix written once per request.
+        self._source_table: ttnn.Tensor | None = None
+        self._static_prefix_rows = 0
+        self._pending_prefix: list[ttnn.Tensor] | None = None
+        self._prompt_windows_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
@@ -246,6 +295,7 @@ class MiniMaxH3Transformer3DModel(Module):
             out_dim=time_embed_dim,
             mesh_device=mesh_device,
         )
+        self.two_time: MiniMaxH3TwoTime | None = None
 
         # 3. Text stream refiner. It runs before the packed sequence is fractured, so its text stream
         # is replicated on SP and attention is local.
@@ -262,6 +312,7 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
 
         # 4. The block stack.
@@ -280,6 +331,10 @@ class MiniMaxH3Transformer3DModel(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
+                    kv_gather_capacity=kv_gather_capacity,
+                    use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+                    dynamic_length=dynamic_length,
+                    norm_row_capacity=norm_row_capacity,
                 )
                 for _ in range(num_layers)
             ]
@@ -295,15 +350,24 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            dynamic_length=dynamic_length,
+            norm_row_capacity=norm_row_capacity,
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+        # The heads' generic blocking is the same for every served length; resolve it once so the
+        # dynamic-length path neither scans the tables nor takes the small-M 1D branch per call.
+        self._head_configs: dict[str, ttnn.MinimalMatmulConfig] = {}
+        if dynamic_length:
+            grid = get_matmul_core_grid(mesh_device)
+            for name, width in (("video", video_patch_dim), ("audio", audio_in_channels)):
+                self._head_configs[name] = get_matmul_config(_HEAD_CONFIG_ROWS, hidden_size, width, grid)
 
     def prepare_static_sources(
         self,
         *,
         prompt_1BLP: ttnn.Tensor,
-        prompt_windows: ttnn.Tensor | None = None,
+        prompt_len: int,
         condition_video_1BKC: ttnn.Tensor | None = None,
         condition_audio_1BKC: ttnn.Tensor | None = None,
         prompt_cap: int,
@@ -312,6 +376,7 @@ class MiniMaxH3Transformer3DModel(Module):
         """Refine and project the step-invariant streams, once per request.
 
         Stores the `[text | condition video | condition audio]` source-table prefix that `forward` reads.
+        `prompt_len` is the true prompt length; the rows past it are padding.
         """
         tile = ttnn.TILE_SIZE
         streams = {
@@ -323,16 +388,54 @@ class MiniMaxH3Transformer3DModel(Module):
             if stream is not None and stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
 
+        # Padding before the refiner, not after, keeps its programs independent of prompt length.
+        if prompt_1BLP.shape[2] < prompt_cap:
+            prompt_1BLP = pad_single(prompt_1BLP, dim=2, back=prompt_cap - prompt_1BLP.shape[2])
+        prompt_windows = None
+        if prompt_len < prompt_cap:
+            self._prompt_windows_state.update(
+                from_torch(
+                    torch.tensor([0, prompt_len, prompt_cap], dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.Layout.ROW_MAJOR,
+                    mesh_axes=[None],
+                ),
+                traced=traced,
+            )
+            prompt_windows = self._prompt_windows_state.value
         refined = self.token_refiner(self.context_embedder(prompt_1BLP), cu_window_seqlens=prompt_windows)
-        if refined.shape[2] < prompt_cap:
-            refined = pad_single(refined, dim=2, back=prompt_cap - refined.shape[2])
         segments = [refined]
         if condition_video_1BKC is not None:
             segments.append(self.proj_in(condition_video_1BKC))
         if condition_audio_1BKC is not None:
             segments.append(self.audio_proj_in(condition_audio_1BKC))
-        prefix = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=2)
-        self._static_source_state.update(prefix, traced=traced)
+        # ROW_MAJOR is what `ttnn.embedding` reads (a TILE table would be untilized every step).
+        # The segments are written into the persistent source table by the first `forward` of the
+        # request, which is where the audio/video capacities -- and so the table size -- are known.
+        if self._pending_prefix:
+            for segment in self._pending_prefix:
+                ttnn.deallocate(segment)
+        self._pending_prefix = [ttnn.to_layout(segment, ttnn.ROW_MAJOR_LAYOUT) for segment in segments]
+        self._static_prefix_rows = sum(segment.shape[2] for segment in self._pending_prefix)
+
+    def _write_source_rows(self, segment_1BRC: ttnn.Tensor, row: int) -> int:
+        """Write a ``[1, 1, rows, C]`` ROW_MAJOR segment into the source table at ``row``; return the next row."""
+        rows, width = segment_1BRC.shape[2], segment_1BRC.shape[3]
+        ttnn.experimental.slice_write(
+            segment_1BRC, self._source_table, [0, 0, row, 0], [1, 1, row + rows, width], [1, 1, 1, 1]
+        )
+        return row + rows
+
+    def _ensure_source_table(self, total_rows: int, width: int, dtype: ttnn.DataType) -> None:
+        table = self._source_table
+        if table is not None and (table.shape[2] < total_rows or table.shape[3] != width or table.dtype != dtype):
+            ttnn.deallocate(table)
+            table = None
+        if table is None:
+            self._source_table = ttnn.zeros(
+                (1, 1, total_rows, width), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            )
 
     def forward(
         self,
@@ -349,7 +452,10 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_sin: ttnn.Tensor,
         logical_n: ttnn.Tensor,
         pad_to: int,
+        endpoint_timestep: ttnn.Tensor | None = None,
         traced: bool = False,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -360,12 +466,16 @@ class MiniMaxH3Transformer3DModel(Module):
         video_out_indices / audio_out_indices: [1, 1, 1, V_cap] / [1, 1, 1, A_cap] integers, the
             packed row of each target row.
         timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
+        endpoint_timestep: like `timestep`, each slot's step endpoint `r`. Required when `two_time` is set.
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
-        pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
+        pad_to: the padded packed length; keys the trace together with the presence of the tile-row map (one
+            capture per `(pad_to, map present)`).
+        adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
+            their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -373,8 +483,20 @@ class MiniMaxH3Transformer3DModel(Module):
         alignment = self.sp_factor * tile
         if pad_to % alignment:
             raise ValueError(f"pad_to={pad_to} must be a multiple of sp_factor * TILE = {alignment}")
-        if assembly_indices.shape[-1] != pad_to:
-            raise ValueError(f"assembly_indices has {assembly_indices.shape[-1]} rows, pad_to is {pad_to}")
+        if self.dynamic_length and (traced or ttnn.is_trace_capture_active(self.mesh_device)):
+            raise RuntimeError(
+                "dynamic_length is eager-only: the row count is a runtime argument, so a trace captured now would "
+                "replay this length whatever the buffers hold; use the bucketed preset for a traced denoise"
+            )
+        # Indices already sharded on SP only need to gather the local rows, so the full-sequence
+        # intermediate doesn't need to be materialised
+        local_rows = pad_to // self.sp_factor
+        indices_already_sharded = self.sp_factor > 1 and assembly_indices.shape[-1] == local_rows
+        if assembly_indices.shape[-1] != pad_to and not indices_already_sharded:
+            raise ValueError(
+                f"assembly_indices has {assembly_indices.shape[-1]} rows; expected pad_to={pad_to} (replicated) "
+                f"or pad_to / sp_factor = {local_rows} (sharded on SP)"
+            )
         if video_out_indices.shape[-1] != video_1BVC.shape[2]:
             raise ValueError("video_out_indices must match the video stream's capacity")
         if audio_out_indices.shape[-1] != audio_1BAC.shape[2]:
@@ -382,28 +504,67 @@ class MiniMaxH3Transformer3DModel(Module):
         for name, stream in (("audio_1BAC", audio_1BAC), ("video_1BVC", video_1BVC)):
             if stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
-        static_prefix = self._static_source_state.value
-        if static_prefix is None:
+        if self._static_prefix_rows == 0:
             raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
 
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
             t = ttnn.reshape(t, (1, t.shape[-1]))
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
-        source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
-        source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
+        audio_rows = ttnn.to_layout(self.audio_proj_in(audio_1BAC), ttnn.ROW_MAJOR_LAYOUT)
+        video_rows = ttnn.to_layout(self.proj_in(video_1BVC), ttnn.ROW_MAJOR_LAYOUT)
+        total_rows = self._static_prefix_rows + audio_rows.shape[2] + video_rows.shape[2]
+        self._ensure_source_table(total_rows, audio_rows.shape[3], audio_rows.dtype)
+        if self._pending_prefix is not None:
+            row = 0
+            for segment in self._pending_prefix:
+                row = self._write_source_rows(segment, row)
+                ttnn.deallocate(segment)
+            self._pending_prefix = None
+        row = self._write_source_rows(audio_rows, self._static_prefix_rows)
+        self._write_source_rows(video_rows, row)
+        ttnn.deallocate(audio_rows)
+        ttnn.deallocate(video_rows)
 
-        hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
+        # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
+        # `total_rows`, so rows beyond it (a smaller table layout than an earlier request) are inert.
+        hidden = ttnn.embedding(
+            as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+        )
         hidden = ttnn.unsqueeze(hidden, 0)
-        hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
+        if not indices_already_sharded:
+            hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
+        temb = self.time_embedder(self.time_proj(timestep))
+        if self.two_time is not None:
+            if endpoint_timestep is None:
+                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
-        ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
-        ts_state.update(as_indices(timestep_indices), traced=traced)
-        timestep_idx = ts_state.value
+        if traced:
+            # `norm_out` reads it eagerly after the traced block loop, but a replay may overwrite any buffer
+            # allocated after its capture, so the traced path keeps one persistent copy per length.
+            ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
+            ts_state.update(as_indices(timestep_indices), traced=True)
+            timestep_idx = ts_state.value
+        else:
+            # Eager (every dynamic-length forward): nothing replays, and a per-length copy would pin one
+            # buffer per served length.
+            timestep_idx = as_indices(timestep_indices)
+
+        # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
+        # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
+        rows = temb.shape[2] * MODALITY_NUM
+        eye_state = self._eye_states.setdefault(rows, StateTensor())
+        if self.dynamic_length:
+            eye_state.update(onehot_identity(rows, self.mesh_device), traced=traced)
+        else:
+            eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+        eye = eye_state.value
 
         hidden = self.run_blocks(
             hidden,
@@ -412,8 +573,11 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
+            eye=eye,
+            adaln_tile_map=adaln_tile_map,
+            adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
-            tracer_trace_key=pad_to,
+            tracer_trace_key=(pad_to, adaln_tile_map is not None),
         )
 
         hidden = self.norm_out(
@@ -421,22 +585,29 @@ class MiniMaxH3Transformer3DModel(Module):
             temb,
             timestep_idx,
         )
+        ag_kwargs = {"num_workers_per_link": _DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
         if self.tp_factor > 1:
-            hidden = self.ccl_manager.all_gather(hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
+            hidden = self.ccl_manager.all_gather(
+                hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs
+            )
 
-        video_all = self.proj_out(hidden)
-        audio_all = self.audio_proj_out(hidden)
+        video_all = self.proj_out(hidden, matmul_config=self._head_configs.get("video"))
+        audio_all = self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
         if self.sp_factor > 1:
             video_all = self.ccl_manager.all_gather(
-                video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+                video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
             audio_all = self.ccl_manager.all_gather(
-                audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+                audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
 
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
-            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
+            # runtime_rows keeps the gather's and the TILE table's untilize's programs free of the request's length.
+            gathered = ttnn.embedding(
+                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+            )
+            return ttnn.unsqueeze(gathered, 0)
 
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
 
@@ -449,7 +620,12 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        eye: ttnn.Tensor | None = None,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
+        tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
         for block in self.transformer_blocks:
             hidden = block(
                 hidden,
@@ -458,7 +634,12 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                onehot=onehot,
+                tilerow=tilerow,
             )
+        ttnn.deallocate(onehot)
+        if tilerow is not None:
+            ttnn.deallocate(tilerow[1])
         return hidden
 
     def release_traces(self) -> None:

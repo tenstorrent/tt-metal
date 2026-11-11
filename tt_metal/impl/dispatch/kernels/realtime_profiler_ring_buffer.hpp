@@ -17,7 +17,9 @@
 // base from this header so layout decisions live in one place; both this file and
 // that one must stay in sync.
 
-constexpr uint32_t RT_PROFILER_RING_CAPACITY = 4096;  // must be power-of-2
+// Largest power of 2 whose ring fits the RT-profiler core's L1 above the dispatch carve-outs on both WH and BH
+// (1 MiB of ~1.4 MiB free on BH p100a). The host FIFO must stay at least this deep.
+constexpr uint32_t RT_PROFILER_RING_CAPACITY = 16384;  // must be power-of-2
 constexpr uint32_t RT_PROFILER_ENTRY_SIZE = 64;       // matches D2H socket page size
 
 // NCRISC progress / heartbeat (cq_realtime_profiler_push.cpp). Host may read via L1 for
@@ -60,7 +62,7 @@ struct RtProfilerRingBuffer {
     uint8_t data[RT_PROFILER_RING_CAPACITY][RT_PROFILER_ENTRY_SIZE];
 };
 
-// 64 + 4096*64 = 262208 bytes total
+// 64 + 16384*64 = 1048640 bytes total
 static_assert(sizeof(RtProfilerRingBuffer) == 64 + RT_PROFILER_RING_CAPACITY * RT_PROFILER_ENTRY_SIZE);
 static_assert(offsetof(RtProfilerRingBuffer, data) == 64);
 

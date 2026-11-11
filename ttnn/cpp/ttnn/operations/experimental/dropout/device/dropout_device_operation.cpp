@@ -42,7 +42,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
+        input_tensor.is_allocated(),
         "Operands to dropout need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(
@@ -66,13 +66,13 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (preallocated_output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_output_tensor.value().logical_shape();
+        // Match the input. compute_output_specs returns the preallocated tensor.
+        const auto preallocated_output_shape = preallocated_output_tensor->logical_shape();
         TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "When preallocted output tensor is used, Dropout operation requires its shape to match the computed "
-            "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
-            computed_output_shape,
+            preallocated_output_shape == input_tensor.logical_shape(),
+            "When preallocated output tensor is used, Dropout operation requires its shape to match the input "
+            "shape. Input shape: {}, Shape in preallocated output tensor: {}",
+            input_tensor.logical_shape(),
             preallocated_output_shape);
 
         if (!input_tensor.is_sharded()) {

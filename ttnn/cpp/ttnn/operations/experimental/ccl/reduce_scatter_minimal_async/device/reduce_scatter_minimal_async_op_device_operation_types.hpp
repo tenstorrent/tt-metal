@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include <tt_stl/reflection.hpp>
 
 #include <cstdint>
@@ -19,16 +21,11 @@
 
 namespace ttnn::experimental::prim {
 
-// Shared struct for program artifacts - used for caching kernel handles and core info
-struct ReduceScatterProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link;
-    uint32_t num_workers_per_direction;
-    uint32_t num_mux_cores_per_direction_per_link;
-    uint32_t num_cores_per_link;
-    uint32_t normalized_dim;
+// Kernel indices of the reduce-scatter reader and writer inside a ProgramDescriptor. A Program built from the
+// descriptor uses the same indices as kernel handles, which is how cache-hit overrides find the common args.
+struct ReduceScatterDescriptorArtifacts {
+    size_t reader_kernel_index = 0;
+    size_t writer_kernel_index = 0;
 };
 
 struct ReduceScatterMinimalAsyncParams {
@@ -51,7 +48,9 @@ struct ReduceScatterMinimalAsyncParams {
     std::optional<ttnn::MeshShape> mesh_shape;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_nodes;
 
-    // Compile-time attributes drive the default program-cache reflection hash and the canonical key
+    // Compile-time attributes drive the default program-cache reflection hash and the canonical key. The semaphore
+    // and barrier addresses are deliberately left out (only the barrier's presence is keyed): callers cycle them, so
+    // Ring/LineReduceScatterProgramFactory::override_runtime_arguments re-applies them on every cache hit.
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",

@@ -6,6 +6,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 
@@ -33,16 +34,24 @@ bool uses_contiguous_staging(
         ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config));
 }
 
+template <typename ProgramFactory>
+using DescriptorAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<
+    ReduceScatterMinimalAsyncDeviceOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
+
+// The cache-hit re-application of the caller-owned semaphores depends on the adapter reaching these hooks.
+static_assert(DescriptorAdapter<RingReduceScatterProgramFactory>::has_override_runtime_arguments());
+static_assert(DescriptorAdapter<LineReduceScatterProgramFactory>::has_override_runtime_arguments());
+
 }  // unnamed namespace
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-        return RingReduceScatterMeshWorkloadFactory{};
+        return RingReduceScatterProgramFactory{};
     }
     TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
-    return LineReduceScatterMeshWorkloadFactory{};
+    return LineReduceScatterProgramFactory{};
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
@@ -50,7 +59,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         TT_FATAL(
@@ -272,49 +281,18 @@ std::vector<Tensor> ReduceScatterMinimalAsyncDeviceOperation::create_output_tens
 
 std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperation::compute_output_topologies(
     const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
-    // TODO(#48421): Enforce input invariants with TT_FATAL instead of sanitising malformed topologies.
-    // Output is sharded along `dim` across `cluster_axis`; intermediate keeps the input topology.
+    // Output is sharded along `dim` across `cluster_axis`; the intermediate keeps the input topology. The helper
+    // expands a collapsed 1-D label to one placement per mesh axis first, writes the normalised `dim`, and when
+    // another axis already shards `dim` returns the collapsed row-major label (that is the true layout; replicating
+    // the other axis, as this op used to, claimed identical rows and lost data on serialisation) or refuses a
+    // layout no label can express. `operation_attributes.dim` is already normalised by the host wrapper. No honest
+    // label (nullopt, already reported): the output keeps the input's label too. Returning {} would instead hand the
+    // framework the union over every tensor argument, the optional intermediate / output tensors' labels included.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    // Normalize `dim` so Shard placements are stored consistently (avoids [Shard(-1), Shard(3)]).
-    const int rank = static_cast<int>(tensor_args.input_tensor.logical_shape().rank());
-    const int dim = ((static_cast<int>(operation_attributes.dim) % rank) + rank) % rank;
-    const auto shard_placement = tt::tt_metal::distributed::MeshMapperConfig::Shard{dim};
-
-    // Replicate any other mesh axis still sharding the same tensor dim — concat_ndim requires unique dims.
-    auto clear_same_dim = [&](auto& placement) {
-        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement)) {
-            if (((shard->dim % rank) + rank) % rank == dim) {
-                placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-            }
-        }
-    };
-
-    if (operation_attributes.cluster_axis.has_value()) {
-        const auto axis = operation_attributes.cluster_axis.value();
-        if (axis < output_placements.size()) {
-            for (size_t i = 0; i < output_placements.size(); ++i) {
-                if (i != axis) {
-                    clear_same_dim(output_placements[i]);
-                }
-            }
-            output_placements[axis] = shard_placement;
-        }
-    } else {
-        // Whole-mesh reduce_scatter: shard only real (>1) axes on `dim`; replicate size-1 axes to keep dims unique.
-        const auto& mesh_shape = input_topology.distribution_shape();
-        for (size_t i = 0; i < output_placements.size(); ++i) {
-            if (i < mesh_shape.dims() && mesh_shape[static_cast<int>(i)] > 1) {
-                output_placements[i] = shard_placement;
-            } else {
-                output_placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-            }
-        }
-    }
-
-    auto output_topology = tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
+    auto output_topology =
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim))
+            .value_or(input_topology);
 
     // The count must match create_output_tensors exactly, so the contiguous staging path contributes a
     // third entry for the penult intermediate. It is device-local scratch with no distribution semantics of
@@ -421,10 +399,10 @@ ReduceScatterMinimalAsyncDeviceOperation::create_op_performance_model(
     // take max(read_bw, write_bw) rather than summing them.
     // =========================================================================
     const auto& output_tensor = output_tensors[1];  // [0] is intermediate, [1] is output
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;

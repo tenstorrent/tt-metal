@@ -98,6 +98,14 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a.dtype() == DataType::UINT16,
             "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs with ROW_MAJOR layout, got {}",
             input_tensor_a.dtype());
+        // Quasar: the kernel-side DataFormat enum has no UInt32, and the UInt32 input branches are compiled
+        // out (#ifndef ARCH_QUASAR in argmax_common.hpp / reader_argmax_interleaved_multicore.cpp), so a
+        // UINT32 input cannot build on Quasar. Reject it here with a clear message instead of a cryptic
+        // unsupported-DFB / kernel compile failure. BFLOAT16/FLOAT32/INT32/UINT16 inputs are unaffected, and
+        // the UINT32 *output* is remapped to the byte-identical RawUInt32 in the multicore factory.
+        TT_FATAL(
+            !(input_tensor_a.dtype() == DataType::UINT32 && input_tensor_a.device()->arch() == tt::ARCH::QUASAR),
+            "ArgMax does not support UINT32 inputs on Quasar; cast to INT32 (or use BFLOAT16/FLOAT32/UINT16).");
     } else {
         TT_FATAL(
             input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32,

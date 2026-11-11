@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from fuser.operand import Operand
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackGolden
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import DestSync, PerfRunType
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
@@ -62,7 +62,10 @@ def pack_dest_init(
         return "set_up_zero_dest_dvalid_handshake_for_pack();\n"
     if operation.stage_id != 1:
         return ""
-    return f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
+    code = f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
+    if config.uses_unpack_to_dest_sync:
+        code = "set_up_zero_dest_dvalid_handshake_for_pack();\n" + code
+    return code
 
 
 def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> str:
@@ -72,6 +75,18 @@ def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> st
 
 
 def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if config.uses_unpack_to_dest_pack_sync:
+        code = (
+            "_llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);\n"
+            "_llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);\n"
+        )
+        if operation.dest_sync == DestSync.Half:
+            code += (
+                f"_update_dest_register_offset_<{config.dest_acc.cpp_enum_value}>();\n"
+                "_llk_stall_cfg_on_<p_stall::PACK0>();\n"
+                f"_set_packer_dest_registers_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
+            )
+        return code
     if config.skip_sync:
         return ""
     dest_sync = operation.dest_sync.cpp_enum_value

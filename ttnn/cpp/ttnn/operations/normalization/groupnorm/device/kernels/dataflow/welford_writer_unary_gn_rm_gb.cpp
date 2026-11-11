@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -26,8 +26,10 @@ void async_read_row_face0(
     noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), row_bytes, {.page_id = page_id}, {});
 }
 
+namespace {
+
 // L1->L1-copy the row's second half into face 1. Only legal after the face-0 read barrier.
-static void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_t element_bytes) {
+void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_t element_bytes) {
     const uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
     const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
     const UnicastEndpoint self;
@@ -38,6 +40,8 @@ static void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_
         {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_dst_addr + half_row_bytes},
         {});
 }
+
+}  // namespace
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
@@ -73,7 +77,9 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<decltype(out_args)::next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
+#if !defined(MASK_SYNTHESIZE)
     constexpr auto input_mask_args = TensorAccessorArgs<decltype(beta_args)::next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
@@ -85,11 +91,15 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(2);
     const uint32_t beta_addr = get_arg_val<uint32_t>(3);
+#if !defined(MASK_SYNTHESIZE)
     const uint32_t input_mask_addr = get_arg_val<uint32_t>(4);
+#endif
     const uint32_t out_start_id = get_arg_val<uint32_t>(5);
     const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(6);
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(7);
+#if !defined(MASK_SYNTHESIZE)
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(8);
+#endif
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
@@ -115,7 +125,9 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_out_id);
     constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
 
+#if !defined(MASK_SYNTHESIZE)
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
+#endif
 
 #if defined(MASK_SYNTHESIZE)
     // Full group size, distinct from num_cols_per_group above, which is that value
@@ -141,16 +153,15 @@ void kernel_main() {
 
     dfb_input_mask.reserve_back(block_w * num_groups_per_core);
     uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
-    uint32_t input_mask_tile_id = input_mask_tile_start_id;
 #if defined(MASK_SYNTHESIZE)
     // start_stride for the first group on this core is 0. Subsequent groups
     // advance row_offset by group_size_mod_tile_w with wrapping.
     uint32_t mask_row_offset = 0;
+#else
+    uint32_t input_mask_tile_id = input_mask_tile_start_id;
 #endif
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
 #if defined(MASK_SYNTHESIZE)
-        // Write face 0 row 0 + face 1 row 0 of each of the block_w mask tiles
-        // for this group directly — no DRAM read.
         tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
             l1_write_addr_input_mask,
             mask_row_offset,

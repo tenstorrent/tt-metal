@@ -17,6 +17,1692 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-11-02 — maximum and minimum run native, and the Metal 2.0 factory is deprecated on Quasar
+
+## 1. TL;DR
+
+- **`maximum` and `minimum` run native**, in bf16 and fp32, on the SFPU kernel, beside every broadcast type that the
+  other SFPU ops take. The change is in the gate alone. The op defines (`binary_max_tile`, `binary_min_tile`) and the
+  kernel's hooks (`BINARY_SFPU_INIT`, `BINARY_SFPU_OP`) are the ones that the Metal 2.0 SFPU kernels use.
+- **Both ops are exact.** They select an operand, so the tests compare with `torch.maximum` and `torch.minimum` on the
+  device's operands at 0 ULP, in bf16 and in fp32. Every case passes on craq-sim. A plant that gives `maximum` the
+  `minimum` define fails all 7 maximum cases, in every tile, and no minimum case.
+- **Tensor-scalar `maximum` and `minimum` do not reach binary_ng.** The op sends a Python scalar to the unary clamp
+  (`UnaryOpType::MAXIMUM`, `MINIMUM`). The gate admits no such program, and no test covers one. A probe run bound no
+  binary_ng kernel (`tM_scalar_probe`).
+- **Why now.** A census ran the six Quasar suites with the native factory on and the Metal 2.0 factory raising on
+  Quasar. 50 of the 404 cases still reached it: the 16 bf16 `maximum` and `minimum` cases of the bcast suite (they pass
+  on it), 24 activation-format cases with fp32 inputs and a bf16 output (they pass on it), and the 10 BFP8 and BFP4
+  cases (they fail on it too). The first group runs native now.
+- **Verified** on craq-sim `67b8926b`: the native module 210 passed, 1 skipped, with the same test ids as before,
+  because the new cases run inside existing tests. The bcast suite binds 402 native kernels and no Metal 2.0 kernel, and
+  its 134 cases pass. The five other suite files keep their counts. Slide 3 gives each run, and slide 4 the planted
+  defect.
+- **The Metal 2.0 factory is deprecated on Quasar.** It runs only what the native gate refuses, and the
+  `TTNN_QSR_NATIVE=0` reference arm. It gets no new work, and its removal waits for the emulator campaign, which
+  compares the two arms. No behavior changes: the fallback still runs, and `TTNN_QSR_NATIVE=0` still selects it. The
+  reason is the census above. With `maximum` and `minimum` native, 34 of the 404 cases still reach it (8%), and 10 of
+  them fail on it. The design doc (§7.5), the comment of its gate, the comment of `select_program_factory` and the
+  factory's header say so.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): MAXIMUM and MINIMUM join ADD, SUB, MUL and DIV. In bf16 they run the SFPU
+  kernel, as multiply and divide do. In fp32 all six ops run it. The check that keeps an SFPU add or subtract out of
+  bf16 exempts them, and the comment above it names the kernel of each op.
+- **Tests** (`test_binary_ng_quasar_native.py`): the shard arm knows both ops. Its bf16 results are `torch.maximum` and
+  `torch.minimum`, and its fp32 results are the same torch calls, at the 0 ULP bound that `_ULP` holds. The dense tables
+  run each op in each format on two mixes: the NoC path with partial tiles, and borrowed inputs beside an output that
+  moves. The broadcast tables run bf16 ROW b (`row_b/maximum`), a held COL b (`col_b/minimum`) and a ROW a beside a COL
+  b (`row_a_col_b/maximum`), and, through the reader fill in fp32, ROW b, COL a and SCALAR b (`row_b/fp32/minimum`,
+  `col_a/fp32/maximum`, `scalar_b/fp32/minimum`). Each broadcast case declares its modes and its walk. All cases sit
+  inside existing tests, so the module has the same test ids. `_runs_sfpu` names the two ops. The inputs are normal
+  draws: `maximum` and `minimum` differ at 99.9% of the elements in bf16 and at all of them in fp32.
+- **Kernel comment**: the header of the SFPU kernel lists the ops that the gate runs on it. No kernel code changed.
+- **Docs**: the design doc states the two ops in the table of what native accepts, in the row of F2, and in the oracle
+  section (§6.1).
+- **Deprecation** (docs and comments only): the design doc, §7.5 item 1, no longer says that the Metal 2.0 factory stays
+  byte-identical and reachable for ever. It says that the factory is deprecated, names what still reaches it in the
+  suites, and names what it admits with no Quasar test behind it. The comment of `matches_metal_v2_slice` says that its
+  list is what the gate admits, not what Quasar validates. The comment of `select_program_factory` and the header of the
+  factory say that the factory is deprecated.
+- **Removing it later involves**: the factory (`binary_ng_metal_v2_factory.cpp`) and its gate
+  (`matches_metal_v2_slice`); the kernels in `kernels_dfb/`; the `TTNN_QSR_NATIVE` knob; the native-off controls in the
+  tests and the `_off` runs of the suites; and the 34 activation-format cases that still reach it. Those are the 24 with
+  fp32 inputs and a bf16 output, which need a native path or a decision to drop them, and the 10 BFP8 and BFP4 cases,
+  which fail on it today.
+
+---
+
+## 3. Verification
+
+The numbers below are lines of the untracked run log. Every run used craq-sim `67b8926b`, the default.
+
+- **Red, then green**, on the 29 ids that the change touches: the 5 dense, 3 fp32, 4 ROW, 5 held, 5 mixed and 5 filled
+  tests, and the 2 no-device table tests. Before the gate change, 27 failed and the 2 table tests passed (`tM_red`). In
+  the dense, ROW, held and mixed tests the new cases bound the Metal 2.0 kernels (`expected every op on kernels_qsr`,
+  `dfb=12` for the four cases of a dense test, `dfb=3` for the one case of a broadcast test), and a broadcast case ran
+  with no mode (`row_b/maximum`: [0, 0, 0, 0] where the case expects [0, 1, 0, 0]). In the 5 filled tests the op raised
+  "is not supported": the Metal 2.0 gate refuses an fp32 subtile broadcast. No case gave a wrong value. With the gate,
+  all 29 pass (`tM_green`), with the declared modes and walks and with exact bits.
+- **The plant** (slide 4): all 7 maximum cases fail, and the revert passes (`tM_plant_swap`: 22 failed, 7 passed;
+  `tM_plant_swap_revert`: 29 passed). The 7 that pass are the 5 held tests, which hold a minimum case only, and the 2
+  table tests.
+- **The whole module** (`tM_module`): 210 passed, 1 skipped, as `t7_module` before.
+- **The six suite files**, one process each (`tM_<suite>`): no_bcast 105 passed and 2 expected failures, resnet_add 10,
+  descriptor_cache_hit 4, bcast 134, scalar 27. The activation-format file: 112 passed and 10 failed, the same 10 BFP8
+  and BFP4 cases. Each count equals the one before this change. The inspector's kernel list shows where the cases ran.
+  The bcast run bound 402 native kernels (3 for each of its 134 cases) and no Metal 2.0 kernel, so its 16 `maximum` and
+  `minimum` cases run native. The activation-format run bound 72 Metal 2.0 kernels, which are the 24 cases with fp32
+  inputs and a bf16 output; the 10 BFP cases bind none, because the DFB validator refuses them first. (The other three
+  suite files open a device for each test, so their lists hold the last test only.)
+- **Also run, though this change does not need them**: the six suite files with `TTNN_QSR_NATIVE=0` keep their counts
+  (`tM_<suite>_off`), and the 30 listings of the pinned dense A/B are identical (`tM_ab_diff`; its planted-mnemonic
+  control fails, `tM_ab_control`). This change touches neither the native-off arm nor a dense program.
+- **Tensor-scalar.** `maximum(tensor, 0.5)` and `minimum(tensor, -0.5)`, in bf16 and fp32, bound no binary_ng kernel
+  (`tM_scalar_probe`). The unary kernels (`reader_unary.cpp`, `eltwise_sfpu_metal2.cpp`, `writer_unary.cpp`) ran them,
+  and all 4096 elements of each output matched torch.
+- **clang-tidy**: 0 findings in the gate (`tidy tM`). On scratch copies, a brace-less `if` in the edited check gives 1
+  finding, and the clean copy gives 0 (`tidy tM scratch`), so the instrument works.
+- **Format**: `git clang-format` is clean on the C++ edits. black and pyflakes are clean on the test module, and
+  pyflakes on the two child scripts that it embeds (`lint tM`).
+- **Not run**: `maximum` or `minimum` with an activation, with a VALUE operand (a tensor whose every dim is 1) or with
+  an outer-dim broadcast alone, which the gate admits as it admits the other SFPU ops, and which no case covers; a
+  Wormhole or Blackhole device; any performance measurement.
+
+---
+
+## 4. Planted defects
+
+The plant broke what the table names, and the named tests caught it. The revert built, and the tests passed again. It
+changed a host source, so each step rebuilt the library.
+
+| Commit | Plant | What it broke | Caught by | Result |
+|---|---|---|---|---|
+| maximum and minimum run native | `MAXIMUM`'s float SFPU define names `binary_min_tile` | all 7 maximum cases, in every tile: the dense `I.I.I_partial/maximum` 256 of 256 tiles and `B32.B32.I/maximum` 512 of 512, the same two in fp32, `row_b/maximum`, `row_a_col_b/maximum` and `col_a/fp32/maximum` 60 of 60; no minimum case | the dense, fp32, ROW, mixed and filled oracle tests at every configuration | 22 failed, 7 passed; 29 passed after the revert |
+
+---
+
+# ► Week of 2026-10-26 — broadcast runs native
+
+## 1. TL;DR
+
+- **Outer-dim broadcast runs native** in every dim through −6, in bf16 and fp32. The reader reads each operand through
+  its Map (its page strides over the output's dims, 0 in a broadcast dim), with one cursor per tile counter.
+- **ROW, COL, SCALAR and mixed subtile broadcast run native**, in bf16 and fp32. In bf16 they expand with
+  `unary_bcast`. It takes no 32-bit operand on Quasar, so in fp32 the reader expands the operand in software, and the
+  SFPU kernel copies it.
+- **A tensor whose every dim is 1 (VALUE) runs native**, in bf16 and fp32. Each Neo gets one full tile, which the
+  reader fills inside `scoped_write_lock`. The Neo reads that tile for all its tiles.
+- **Tensor-scalar runs native**, in bf16 and fp32. The scalar is VALUE: the reader fills the tile from the packed
+  scalar. The writer stays output-only.
+- **Milestone 3 is reached: every broadcast type runs native, in bf16 and fp32.** The Metal 2.0 gate admits subtile
+  broadcast in bf16 only, so with `TTNN_QSR_NATIVE=0` an fp32 subtile broadcast raises an error.
+- **One batch rule on every placement.** The DM batch is the max batch size, in L1 and in DRAM. The compute batch is
+  the same wherever each Neo owns one tile counter of each ring. Since the rebase onto main, the FPU kernel batches
+  above ring stride 1 too, because #62954's `llk_unpack_AB` fix makes every batch exact. dchen kept this rule in place
+  of #62954's share rule beside DRAM. With the batches pinned to the same values, a dense program compiles to the
+  same instructions as on main (30 disassemblies).
+- **The final review found no wrong output.** Its follow-ups are in: six cache-hit repeats of broadcast cases, R2C4W2
+  for the held, mixed and filled tests, ROW, COL and outer-dim cases on a shape that is not a multiple of 32, and a COL
+  b in a DRAM shard. The comments and the design doc now follow the code.
+- **Verified** on craq-sim `67b8926b`, after the rebase onto main: the native module 210 passed, 1 skipped. Five of
+  the six other suite files pass, native on and off. The activation-format file has the same 10 BFP8 and BFP4 failures
+  as at the base. A craq-sim older than `b05091aa` now fails the FPU add and subtract cases, because the oracle keeps
+  only the two-rounding add. Slide 3 gives each run, and slide 4 the planted defects.
+
+---
+
+## 2. Changes
+
+- **Batch size** (`resolve_native_config`; the commit "the batch size is the max batch size, beside every placement"):
+  the DM batch was 8 in L1 and 1 beside a DRAM operand. It is now the tiles that one DST section holds, as the
+  compute batch is: 8 on the FPU kernel, 4 on the SFPU kernel in a 16-bit DST, 2 in a 32-bit DST. Each ring holds two
+  batches per thread. The compute batches wherever each Neo owns one tile counter of each ring; every batch is exact.
+  Main's #62954 made the batches follow each Neo's share beside DRAM, and dchen kept this one rule in its place.
+  `TTNN_QSR_DRAM_BATCH` is gone, and setting it now does nothing. `TTNN_QSR_DM_BATCH=1` with
+  `TTNN_QSR_TILES_PER_CYCLE=1` turns batching off.
+- **Walk header** (`kernels_qsr/common/operand_walk.hpp`; the commit "outer-dim broadcast runs native"): each operand
+  has a mode (FULL, ROW, COL, SCALAR or VALUE) and a Map. A cursor per tile counter keeps the output position as
+  mixed-radix digits, and each operand's page there. A step is adds and one compare per digit, so no kernel divides per
+  tile. Dim −6 is a digit of its own. A dense program defines no mode.
+- **Reader** (`reader_binary_dfb.cpp`): it reads each operand through its Map. A held operand (COL, SCALAR) moves only
+  where its page changed, and every other entry of its ring is a credit only: a push that carries no new data. A VALUE
+  operand fills one full tile per Neo inside `scoped_write_lock`: from page 0 of a tensor whose every dim is 1, or,
+  for tensor-scalar, from the packed scalar (the define `B_VALUE_FROM_SCALAR` and the argument `packed_scalar`). A
+  filled operand (an fp32 ROW, COL or SCALAR; the defines `A_FILLED` and `B_FILLED`) is expanded after the batch's
+  barrier, inside `scoped_write_lock`. For each entry that the batch read, the reader copies the first row, column or
+  element of the tile across the tile, with the fill helpers of the op's own copy of production's
+  `fill_tile_utils.hpp`. Entry i of a batch sits i ring strides on. A filled ROW operand costs a full-tile fill in the
+  DM on every tile; it is not measured, and craq-sim cannot price it.
+- **Compute kernels** (`eltwise_binary_dfb.cpp`, `eltwise_binary_sfpu_dfb.cpp`): the FPU kernel expands each batch of
+  ROW tiles with `unary_bcast` into a staging ring. The SFPU kernel expands a ROW tile straight into the operand's DST
+  slot. For a held operand, the compute expands each new page once into a held ring of two entries per Neo, with the
+  operand's activation. A batch ends at the next multiple of the batch size, or earlier where a held page changes. Each
+  Neo waits once for its VALUE entry, so tensor-scalar needs no compute code of its own. In fp32 the SFPU kernel copies
+  a filled ROW tile into its DST slot, and a filled held page into the held ring (`expand_dfb` with
+  `BroadcastType::NONE`). The FPU kernel runs no fp32, and an `#error` stops a filled operand there.
+- **Factory** (`create_native_artifacts`): only an operand whose Map is the identity is borrowed. No anchor with pad
+  slots goes beside a held operand. R must not exceed C beside a held or VALUE operand. The legacy cluster count
+  follows production's broadcast rule, and its rule for a scalar, where b is `nullptr`. The FPU kernel gets a staging
+  ring per ROW operand, and the packer's RELU stays off beside a subtile broadcast. The writer has no `in1` binding and
+  no scalar argument. A ROW, COL or SCALAR operand in fp32 is filled (`A_FILLED` and `B_FILLED`, set on the reader and
+  the compute), and the held rings take the unpack mode of their format.
+- **Gate** (`matches_quasar_native_slice`): no full-rank shape equality. Subtile broadcast needs bf16 or fp32.
+  Tensor-scalar needs subtile type NONE, bf16 or fp32, and a scalar that packs in a's format. R must not exceed C
+  beside a COL, SCALAR, VALUE or scalar operand. The error that `select_program_factory` raises names the subtile
+  broadcasts that stay unsupported: a dtype other than bf16 or fp32, and fp32 with `TTNN_QSR_NATIVE=0` or with more
+  reader than compute threads beside a COL or SCALAR operand.
+- **Tests and docs**: each broadcast case declares its walk: the operands that it borrows, and whether its reader skips
+  pad slots. The arm reads them from the generated headers, and the table test makes every case declare one (the
+  commit "binary_ng tests: check each broadcast case's borrowing; uneven shards and fast multiply beside ROW").
+  Tensor-scalar has its own table, in bf16 and fp32, on both kernels and beside a borrowed a. The fp32 table
+  (`_FILLED`, tested by `test_native_filled_broadcast_matches_the_oracle`) runs ROW b on all four ops, and ROW a, COL,
+  SCALAR and mixed on at least one op each. It has an activation, batches that end early, and the cases with many
+  tiles per cluster (`col_b_split`, `row_b_full_batches`, `scalar_b_slabs`, `row_a_full_batches` and `scalar_a_slabs`),
+  whose fill sits at entry 1 of a batch. Each case declares its walk. The design doc and this page state each kind's
+  support.
+- **After the rebase**: the oracle keeps only the two-rounding bf16 add (`_FPU_ADD_ROUNDINGS` holds `_fpu_add_bf16`),
+  and a failed add or subtract comparison says that a craq-sim older than `b05091aa` rounds once. The tail-ring tests
+  run the rule too, and the tests that read the device profiler pin batch 1; a profiling run asserts the pin, and a
+  no-device check keeps the 16 tiles per compute thread of `height_67`. The broadcast table test drops its
+  defect-model loop and takes the name `test_native_broadcast_tables_name_their_modes_and_walks`: the model predicts no
+  wrong tile, and the oracle tests catch any wrong tile. The design doc's lines about the removed descriptor factory,
+  and the comments on how the native gate compares with the Metal 2.0 gate, now match the code.
+- **After the final review**: six broadcast cases repeat their spec while the first tensors are alive (the cases named
+  `_again`), so each is a program-cache hit that must rebind its borrowed shards, held operand or fill. The shard arm
+  keeps the first run's tensors only until the last repeat has run, so large repeats fit in L1. The table test checks
+  that a repeat follows the case it names and has its spec. The held, mixed and filled tests also run R2C4W2, where each
+  reader thread owns two tile counters of the input rings, and a new test runs a COL operand with more reader than
+  compute threads, which falls back to the Metal 2.0 factory, beside a dense add at the same knobs, which stays native.
+  ROW, COL and outer-dim broadcast run on a shape that is not a multiple of 32, and a COL b runs from a DRAM height
+  shard. The two table tests run off Quasar too. The mapped reader has no `dm_batch == 1` arm of its own: the general
+  arm visits the same tiles in the same order. The error for an unsupported op names the R > C case. The factory lost
+  its inherited header, and the longest comments moved their facts into the design doc.
+
+---
+
+## 3. Verification
+
+The numbers below are lines of the untracked run log. `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory as the reference
+arm.
+
+**On the final tree**, after the final review's follow-ups. Every run used craq-sim `67b8926b`, the default.
+
+- **The new and changed tests** (`t7_green2`): 34 passed. They are the seven broadcast oracle tests (4 or 5
+  configurations each), the two table tests and the R > C test. The last edits touched the two table tests and the R > C
+  test, and they pass again (`t7f1_tables`: 2 passed; `t7f1_rgtc`: 1 passed). The R > C test also runs a dense add of
+  the same shape at the same knobs, which stays native, so only the COL operand's program leaves the native factory.
+- **The whole module**, native on (`t7_module`): 210 passed, 1 skipped. That is `t6r1_module`'s 206 plus 4 ids: R2C4W2
+  for the held, mixed and filled tests, and the R > C test. With `TTNN_QSR_NATIVE=0` (`t7_module_off`): 3 passed, 208
+  skipped. The 3 are the native-off control and the two table tests, which no longer skip off Quasar.
+- **The six suite files**, one process each, native on (`t7_<suite>`) and with `TTNN_QSR_NATIVE=0` (`t7_<suite>_off`):
+  no_bcast 105 passed and 2 expected failures, resnet_add 10, descriptor_cache_hit 4, bcast 134, scalar 27, all the same
+  on and off. The activation-format file: 112 passed and 10 failed on and off, the same 10 BFP8 and BFP4 cases. Each
+  count equals the one before the follow-ups (`t6_<suite>`; `t6r1_bcast` for bcast).
+- **Dense programs.** With the batches pinned to 8, 2 and 16 (DM batch, compute batch and ring depth), the 30 listings
+  of the dense programs on the final tree (`ab/t7`) and on the rebased tip (`ab/tip1031`) are identical (`t7_ab_diff`):
+  5 programs and 15 kernels, with every kernel recompiled in this capture (`t7_dense_ab`). The comparison failed on a
+  planted change of one mnemonic (`t7_ab_control`).
+- **The mapped reader at DM batch 1.** The reader lost its `dm_batch == 1` arm, which no test had compiled. All seven
+  broadcast tables ran at DM batch 1 on R1C1W1 and on R1C4W1, where one reader thread feeds four tile counters, and
+  every case was exact (`t7_dm1_per_tile`, `t7_dm1_R1C4W1`).
+- **The repeat check and the R > C arm.** A planted repeat with equal values and another key order fails the table test,
+  which compares the arm's own key, `json.dumps` of the spec (`t7f1_guard_plant`: 1 failed), and the revert passes
+  (`t7f1_tables`). The two table tests pass with an arch name other than Quasar and no simulator, where the device tests
+  skip (`t7f1_offquasar`, `t7f1_offquasar_skip`). The same COL entry as the R > C test runs native at R=2, so the test's
+  fallback expectation fails there (`t7_rgtc_control`).
+- **clang-tidy**: 0 findings in the factory, the gate and `binary_ng_utils.cpp` (`tidy t7`). On scratch copies with a
+  planted brace-less `if`, it finds 1 in each, and it finds 0 in the clean copies (`tidy t7 scratch`, the six lines with
+  exit 0), so the instrument works.
+
+**With the fp32 reader fill**, on the rebased tip. Every run used craq-sim `67b8926b`, the default.
+
+- **Red, then green.** Before the code, the native gate refuses every fp32 ROW, COL, SCALAR and mixed case, and the op
+  raises "is not supported". The four configurations of `test_native_filled_broadcast_matches_the_oracle` fail, and the
+  table test passes (`t6_red`: 4 failed, 1 passed). With the code, all five pass (`t6r1_green`: 5 passed). The test
+  checks each case's compute modes and the reader's walk against its declaration, and the output against the oracle's
+  bits.
+- **Planted defects**, at `[rule]`: six plants in the reader's fill (slide 4). One skips the b fill and failed the 11
+  cases that have a filled b (`t6_plant7`). One skips the a fill and failed the 6 cases that have a filled a
+  (`t6r1_plant7_a`). Two change only the b entries after entry 0. Each failed `col_b_split/fp32`,
+  `row_b_full_batches/fp32` and `scalar_b_slabs/fp32`, so those cases read b into entry 1 of a batch (`t6_plant_first`,
+  `t6_plant_entry`). The same two plants on the a fill failed `row_a_full_batches/fp32` and `scalar_a_slabs/fp32`, and
+  no other case (`t6r1_plant_first_a`, `t6r1_plant_entry_a`). Each revert passed (`t6_plant7_revert`,
+  `t6_plant_first_revert`, `t6_plant_entry_revert`, `t6r1_plant7_a_revert`, `t6r1_plant_first_a_revert`,
+  `t6r1_plant_entry_a_revert`: 1 passed each).
+- **Not run**: a Quasar device. craq-sim has no store reordering, so these tests cannot show a missing fence between
+  the fill and `push_back`; `scoped_write_lock` supplies it, as it does for the VALUE fill.
+
+**After the rebase onto main (`f5694bd1d22`).** Every run used craq-sim `67b8926b`, the default, unless a bullet names
+`b9d8e2f4`.
+
+- **The oracle keeps only the two-rounding add.** craq-sim rounds a bf16 FPU add twice from `b05091aa`, as the
+  hardware and ttsim do, so the default `67b8926b` does. `_FPU_ADD_ROUNDINGS` now holds only `_fpu_add_bf16`, and the
+  TODO of the week of 2026-10-19, part 3, is done. A craq-sim older than `b05091aa` rounds once. The FPU add and
+  subtract cases fail on it, with a message that says so (the control, below).
+- **The rebase.** Every commit built. Before the oracle changed, the whole native module passed on both builds:
+  `rb_module` on `67b8926b`, 197 passed, 1 skipped; `rb_module_b9` on `b9d8e2f4`, 197 passed, 1 skipped. The skip is
+  the native-off control. `rb_bcast`, the six broadcast oracle tests at `rule`, `rule-n1`, `R1C1W1` and `R1C4W1` and
+  the table test: 25 passed. These ran the FPU kernel at a compute batch of 8 above ring stride 1 beside ROW, COL,
+  SCALAR, VALUE, mixed and tensor-scalar operands for the first time.
+- **The compute batch, probed.** One FPU case of each of those kinds read `num_tiles_per_cycle` from its compute
+  kernel's generated arguments: 8 at `rule` beside every broadcast mode, and 1 at `rule-n1`. Both arms exited 0
+  (`probe_batch.log`).
+- **The tail rings at the rule.** The tail-ring tests now run `rule` too, so a borrowed shard runs full batches before
+  its tail block: 8 on the FPU kernel, 4 and 2 on the SFPU kernel. The tests that read the device profiler pin batch 1
+  in every role. `s2_tail_rule`: 6 passed. `s3_height67`: 13 passed (the other-op, fp32 and indivisible-shard tests,
+  every configuration). `s2_profiler`, the eight profiler tests: 77 passed, 126 deselected. dchen dropped #63305's
+  uneven-slice borrowing.
+- **The whole module**, native on (`fix1_module`): 202 passed, 1 skipped. That is `rb_module`'s 197 plus the five
+  `[rule]` ids that the borrowed configurations gained, with the same skip. The skip is the native-off control, which
+  `fix1_module_off` runs: 1 passed, 202 skipped.
+- **The six suite files**, one process each, native on (`t_<suite>`) and with `TTNN_QSR_NATIVE=0` (`t_<suite>_off`):
+  no_bcast 105 passed and 2 expected failures (the divide special values), resnet_add 10, descriptor_cache_hit 4, bcast
+  134, scalar 27, all the same on and off. The activation-format file: 112 passed and 10 failed on and off, the same 10
+  BFP8 and BFP4 cases as at the base, which the DFB validator refuses on Quasar. Each count equals the one that #62591
+  recorded for main on `b9d8e2f4`.
+- **The control: a craq-sim that rounds once.** Three FPU bf16 cases of the module fail on `b9d8e2f4`
+  (`t2_b9_control`: 3 failed in 33.02s) and pass on `67b8926b` (`t2_control_default`: 3 passed in 34.42s). They are
+  `test_native_output_matches_the_prediction` (an add: 15 of 1280 tiles differ),
+  `test_native_uneven_tile_counts_multithread[R1C1W1-batching=per-tile]` (an add arm: 1 to 27 tiles differ in 9 of its
+  11 shapes) and `test_native_other_ops_match_the_prediction[rule]` (8 subtract cases differ, and no multiply or
+  divide case). Each failure carries, once, the message that an older build rounds once and fails here.
+- **Dense programs against main.** With the batches pinned to the same values on both trees (DM batch 8, compute batch
+  2, ring depth 16), the 30 dense listings of main (`f5694bd1d22`) and of this branch's tip are identical
+  (`ab/main1031` against `ab/tip1031`): 5 programs (a DRAM add, an L1 multiply, a block-shard walk, a bank walk and an
+  fp32 L1 add) and 15 kernels, compared after the script masks objdump's trailing label notes and the `.LM` label
+  numbers. A second capture of the branch with every kernel recompiled (`ab/tip1031f`) is identical too. The
+  comparison failed on a planted change of a mnemonic, of an operand and of an encoding, and it passed on a change in
+  the masked notes alone. The pins exclude the batch rule itself, which differs from main on purpose. So this shows
+  that the rest of a dense program is main's.
+- **Not run**: any performance measurement (the native path is the best-performance option by rule, with no
+  measurement); a Wormhole or Blackhole device; tensor-scalar with an RHS or post activation, which neither the
+  module's table nor the scalar suite covers (both cover an activation on a only).
+- **A risk on ttsim, not run.** A batched sharded operand that moves over the NoC aborted on ttsim (issue #63492), so
+  #62954 kept it at batch 1 for H.I.I and W.I.I. These are the test module's names for a height- or width-sharded a in
+  L1, beside a b and an output that are interleaved in DRAM. ijankowskiTT reports in #63305 that the abort is the host
+  profiler's marker check, that only functional ttsim hits it (ttsim-perf and craq-sim profile these programs), and that
+  the output is exact. The rule now batches those programs by default, and this branch has not run them on ttsim. The
+  tests that read the device profiler pin batch 1. A program off the profiler should not be affected.
+
+**Before the rebase**, on craq-sim `b9d8e2f4` unless a bullet names `67b8926b`:
+
+- **The default craq-sim moved.** The new default `67b8926b` rounds a bf16 FPU add twice, as the hardware does. The
+  branch's oracle rounded once then; main's two-rounding model came with the rebase, and the oracle now keeps only it.
+  On `67b8926b`, two mixed-broadcast cases differed by one ULP in the FPU add (`row_a_col_b_act` 2 of 60 tiles,
+  `row_a_col_b_split` 3 of 480), and the four mixed configurations failed: 4 failed, 1 passed. The same command passed
+  on `b9d8e2f4`: 5 passed. A probe found the device output equal to the two-rounding model at every element on
+  `67b8926b`, in both factories, and equal to the branch's oracle at every element on `b9d8e2f4`.
+- **Tensor-scalar, red then green.** Before the code, the four configurations fail, because every op binds the Metal
+  2.0 kernels: 4 failed, 1 passed. With the code, all pass: 5 passed. The cases include 0.1, which bf16 cannot hold:
+  the golden takes the host's rounding to nearest even.
+- **A plant in the borrow decision beside a scalar.** A `legacy_borrows_output_shard` that returns false for a scalar
+  fails all four configurations on `scalar_borrowed_a_2_shards` alone: the reader walks the NoC where the anchored walk
+  is expected. `scalar_borrowed_a` passes, because both decisions give it the same cluster count. That run: 4 failed.
+  With the plant removed, 5 passed.
+- **The scalar suite runs native.** One process per case: 27 of 27 pass with the native path on, and the compile
+  commands of all 27 cases carry `-DB_VALUE_FROM_SCALAR=1`. With `TTNN_QSR_NATIVE=0`, 8 of 8 chosen cases pass and bind
+  only Metal 2.0 kernels. The program-cache test is one of the 27: the same scalar adds no cache entry, and a new
+  scalar adds one.
+- **Module and suites**, native on, before the last edits to comments, docs, one gate check and one assert, and
+  before one new test case: the native module 193 passed, 1 skipped, 2 strict expected failures (both pass since
+  #62954); no_bcast 104 passed, 2 expected failures; resnet_add 10; descriptor_cache_hit 4; bcast 134; scalar 27;
+  activation formats 112 passed and 10 failed, the same 10 BFP8 and BFP4 cases as at the base. With
+  `TTNN_QSR_NATIVE=0`: the module 1 passed, 195 skipped; no_bcast 104 passed, 2 expected failures; bcast 134; scalar
+  27.
+- **After those edits**, the tensor-scalar tests pass again (5 passed, with the new case), and the scalar suite
+  passes (27 passed).
+- **Dense programs**: the 30 disassemblies equal the baseline's, taken after the batch-size change, once the
+  comparison script masks objdump's trailing label notes and the `.LM` label numbers: IDENTICAL.
+- **clang-tidy**: 0 findings in the factory and the gate, before and after those edits. On scratch copies with a
+  planted `else` after an early return, it finds 2 and 3, so the instrument works.
+
+---
+
+## 4. Planted defects
+
+Each plant broke what the table names, and the named test caught it. Each revert built, and the test passed again. The
+first rows ran before the rebase, on the commits that the table names. The last six ran after it, on the fp32 change.
+Each changed a kernel source only, so an edit reverted it, with no host build.
+
+| Commit | Plant | What it broke | Caught by | Result |
+|---|---|---|---|---|
+| the batch size is the max batch size, beside every placement | the SFPU kernel's DM batch fixed at 8 | the settings line shows `dm_batch=8` for the SFPU kernel | `test_native_tuning_log_names_each_source[name=rule]` | 1 failed; 6 passed after the revert |
+| outer-dim broadcast runs native | b's N stride without the `bN > 1` factor | 11 cases; `outer_b` 30 of 60 tiles | `test_native_outer_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| ROW broadcast runs native | the packer's RELU kept on beside a subtile broadcast | `row_b/relu` 60 of 60 tiles | `test_native_row_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| binary_ng tests: check each broadcast case's borrowing; uneven shards and fast multiply beside ROW | `eligible` returns false at once, so no anchor | the reader walks the NoC: 4 outer-dim cases and 3 ROW cases fail the walk check, and every value stays exact | the walk check in the outer-dim and ROW tests at `[rule]` | 1 failed in each; after the revert the outer-dim test passed, and the module run passed the ROW test |
+| same commit | the FPU kernel's per-batch re-init skipped beside a ROW b | 7 ROW cases wrong at `[R1C1W1]`, `row_b` 60 of 60 tiles | `test_native_row_broadcast_matches_the_oracle[R1C1W1]` | 1 failed; 1 passed after the revert |
+| COL and SCALAR broadcast, and a one-element tensor, run native | pad slots allowed beside a held operand | `col_b_uneven_shard` walks with pad slots; at `[R1C1W1]` also 3 L1 cases, and `col_b_uneven_shard` 20 of 420 tiles | the walk check in `test_native_held_broadcast_matches_the_oracle` | 2 failed; 2 passed after the revert. With the factory's `TT_FATAL` for it: 2 failed, then 2 passed |
+| same commit | the reader reads a held page only for the first tile of each tile counter | 8 held cases, `col_b_shard_walk` 384 of 512 tiles | `test_native_held_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| same commit | the compute expands only a held operand's first page | the same 8 cases, the same counts | `test_native_held_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| same commit | the VALUE fill stores through the cached address, outside `scoped_write_lock` | all 11 b-side VALUE cases, every tile (`value_b` 60 of 60) | `test_native_value_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| same commit | a held compute batch takes the full batch size, so it can cross a multiple of it | `col_b_split/multiply` 324 of 448 tiles at `[rule]` | `test_native_held_broadcast_matches_the_oracle[rule]` and `[R1C1W1]` | 2 failed; 2 passed after the revert |
+| fp32 ROW, COL and SCALAR broadcast by a reader fill | the reader skips the b fill | the 11 cases with a filled b, every tile (`row_b/fp32/add` 60 of 60) | `test_native_filled_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| same commit | the b fill writes entry 0 of a batch only | `col_b_split/fp32` 224 of 448 tiles, `row_b_full_batches/fp32` 192 of 448, `scalar_b_slabs/fp32` 128 of 256 | the same test | 1 failed; 1 passed after the revert |
+| same commit | the b fill steps one entry, not one ring stride | the same three cases: 192, 160 and 96 tiles | the same test | 1 failed; 1 passed after the revert |
+| same commit | the reader skips the a fill | the 6 cases with a filled a, every tile (`row_a/fp32` 60 of 60, `row_a_full_batches/fp32` 448 of 448) | the same test | 1 failed; 1 passed after the revert |
+| same commit | the a fill writes entry 0 of a batch only | `row_a_full_batches/fp32` 192 of 448 tiles, `scalar_a_slabs/fp32` 128 of 256 | the same test | 1 failed; 1 passed after the revert |
+| same commit | the a fill steps one entry, not one ring stride | the same two cases: 160 of 448 and 96 of 256 tiles | the same test | 1 failed; 1 passed after the revert |
+
+---
+
+# ► Week of 2026-10-26 — batching beside DRAM
+
+- **#61774 fixed:** `llk_unpack_AB` steps a batch by the ring stride, so every compute batch is exact.
+- **The DRAM batch:** with every operand interleaved and an input in DRAM, both batches follow a compute thread's
+  share, up to a DST section. On craq-sim, bf16 add is 2.10x faster at 256 tiles per cluster, bit-identical.
+  `TTNN_QSR_DRAM_BATCH=0` turns it off.
+
+---
+
+# ► Week of 2026-10-19, part 3 — the tests follow the hardware: the arch from the device, the FPU add's two roundings
+
+## 1. TL;DR
+
+- **Three test issues from the ttsim team, none in the factory** (#62286, #62287, #62289; each reproduces with
+  `TTNN_QSR_NATIVE=0`). ttsim v1.13.0 checks its FPU and SFPU math against the hardware design, so its numbers are
+  the hardware's, and craq-sim has to follow it. tt-metal's own Quasar merge gate runs ttsim too.
+- **The arch comes from the device** (#62286). The tests read `ARCH_NAME` and `CHIP_ARCH`. Without them, the native
+  tests skipped, the fallback control failed, and the two router tests that must skip on Quasar ran and failed
+  (9 cases). Production's `is_quasar()` reads `ttnn.get_arch_name()`, which says `quasar` under both simulators.
+- **The FPU rounds a bf16 add twice** (#62289). It aligns the operand with the smaller exponent with 7 bits below the
+  ULP, rounds it half away from zero, and rounds the sum to nearest even: about 1 element in 80,000 is 1 ULP from
+  torch. craq-sim rounds once. The oracle accepts either rounding, element by element; the rest stays exact.
+- **Two SFPU bounds follow ttsim** (#62287): bf16 SIGMOID after a multiply 5 ULP (was 4), fp32 divide 2 (was 1).
+- **TODO, blocked on craq-sim#516**: craq-sim rounds the bf16 FPU add once. When it rounds twice,
+  `_FPU_ADD_ROUNDINGS` keeps only `_fpu_add_bf16`, and the oracle is the hardware's rule alone.
+- **TODO, blocked on craq-sim#517**: craq-sim's bf16 SIGMOID and SILU differ from ttsim on about 6% of the elements
+  (tip `1bfae892`). The bounds are ttsim's, so no test waits on it. When it closes, run the activation tests on
+  craq-sim and confirm that its largest distances equal ttsim's.
+
+---
+
+## 2. Changes
+
+- **Arch** (`binary_ng_quasar_test_utils.py`): `_on_quasar()` is gone, and the four files that used it call
+  production's `is_quasar()`. `test_fallback_factory_is_engaged` no longer checks the environment against the
+  device. The run instructions in five file headers no longer set `ARCH_NAME` and `CHIP_ARCH`.
+- **Oracle**: `_fpu_add_bf16` models the FPU add, and `_FPU_ADD_ROUNDINGS` holds it beside the single rounding. The
+  native module's add and subtract goldens use both, in the parent and in both child scripts, and so does every
+  activation chained on them.
+- **Bounds** (`_ULP`, `_ACT_ULP`): SIGMOID 5 and divide 2, and the comments say where each bound was measured.
+- **Docs**: design §6.1 (the two roundings) and the fp32 paragraph after it.
+
+---
+
+## 3. Verification
+
+- **Before, on ttsim**: main's eight binary_ng files gave 28 failures without `ARCH_NAME` and 160 with it.
+- **ttsim v1.13.0, without `ARCH_NAME`, as its CI runs**: the native module 170 passed, 1 skipped, 2 strict expected
+  failures, and 1 failure, `IL1.IL1.B12`: there the device profiler's parser aborts on unpaired TRISC1 zone markers,
+  on ttsim only. The other files fail only the activation-format file's 10 BFP8 and BFP4 cases.
+- **craq-sim `b9d8e2f4`, without `ARCH_NAME`, one file per process**: the native module 171 passed, 1 skipped, 2
+  strict expected failures, as before; no-broadcast 104 passed and 2 strict expected failures; bcast 134 and scalar
+  27 passed, with the router tests skipped; resnet_add 10, descriptor_cache_hit 4; the activation formats 112 passed
+  and the 10 BFP failures. The composite file stops at SFPSHFT2, which this build lacks; craq-sim `1bfae892` runs it
+  (14 passed).
+- **`TTNN_QSR_NATIVE=0`**: the fallback control passes on both simulators, and 173 tests skip.
+- **Real Wormhole**: the eight files 701 passed, 183 skipped.
+- **The model**: `_fpu_add_bf16` equals ttsim on 21M elements (four operand families, add and subtract), and craq-sim
+  equals the single rounding on all of them; no element matches neither rounding on either target. The two
+  batching-defect tests still find exactly their predicted wrong tiles.
+
+---
+
+# ► Week of 2026-10-19, part 2 — the native factory is the default on Quasar
+
+## 1. TL;DR
+
+- **The native factory runs by default on Quasar.** `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory instead, as the
+  A/B reference arm; any value but `0` and `1` is refused. Wormhole and Blackhole do not change: the gate checks the
+  arch before it reads any `TTNN_QSR_*` variable.
+- **A default must give the right answer, so the rule batches the FPU kernel only at ring stride 1**
+  (R = C = W = 1). Above it, the FPU kernel's two-operand unpack steps one ring entry per tile, and only one tile
+  of each batch comes out right. At the old rule the whole no-broadcast file failed 22 FPU cases at 4,4,2. The
+  SFPU kernel keeps 4 tiles in a 16-bit DST and 2 in a 32-bit DST, exact at every stride.
+  `TTNN_QSR_TILES_PER_CYCLE` still sets any batch.
+- **TODO, blocked on #61774**: `llk_unpack_AB` steps one ring entry per tile of a batch. A two-line fix that
+  mirrors `llk_unpack_A` made every FPU op exact at a batch of 8 on craq-sim (4,4,2: 160 of 288 and 1792 of 2080
+  tiles wrong before; 1,4,1: 224 of 256), with the module and the suites otherwise unchanged. When it lands,
+  `native_compute_batch_exact` returns true for the FPU kernel, and the rule batches it at 8 at 4,4,2 and 1,4,1
+  (design §8, F19).
+- **Verified** on craq-sim `b9d8e2f4`, with nothing set: the native module 171 passed, 1 skipped, 2 strict
+  expected failures (the two batching-defect tests, which now set the batch of 8); every Quasar suite file in one
+  process each, all passing except the activation-format file's 10 BFP8 and BFP4 cases, which fail the DFB
+  validator with the native factory off too.
+
+---
+
+## 2. Changes
+
+- **Switch** (`native_tuning`): on unless `TTNN_QSR_NATIVE=0`; a value other than `0` or `1` throws.
+- **Gate** (`matches_quasar_native_slice`): the arch check comes before `native_tuning()`, so off Quasar no knob is
+  parsed and the settings line is not logged.
+- **Rule** (`resolve_native_config`): `native_compute_batch_exact(config, sfpu)` says where every tile of a batch
+  comes out right; the rule batches only there, and the factory's wrong-output warning uses the same helper.
+- **Tests**: the native tests run on Quasar unless `TTNN_QSR_NATIVE=0`, and skip off Quasar, so the Wormhole and
+  Blackhole nightly jobs that collect this directory run as before; the fallback control checks that the
+  environment's arch agrees with the device's. The Python model of the rule follows the change, the two
+  batching-defect tests set the batch of 8, the `rule-batch-depth` guard now trips on the DM batch, and a log case
+  pins the default settings line.
+- **Docs**: design §3.3, §3.6, the comparison table and §8 (the default; F13 is no longer a precondition).
+
+---
+
+## 3. Verification
+
+- **The old rule, known bad**: the whole no-broadcast file at the rule's former FPU batch of 8 failed 22 add and
+  subtract cases on L1 operands (PCC 0.12 to 0.5). The same file now passes: 104 passed, 2 strict expected
+  failures, at the default and with `TTNN_QSR_NATIVE=0`.
+- **The native module**: 171 passed, 1 skipped, 2 strict expected failures with nothing set; with
+  `TTNN_QSR_NATIVE=0`, the fallback control passes and 173 tests skip.
+- **The other suite files, default**: resnet_add 10, descriptor_cache_hit 4, bcast 134 and scalar 27 passed; the
+  activation formats 112 passed and the same 10 BFP8 and BFP4 failures as with the native factory off.
+- **`TTNN_QSR_NATIVE=false`** fails with "TTNN_QSR_NATIVE must be 0 or 1, got 'false'".
+- **Off Quasar**: the test-side switch keeps every native test skipped and runs the fallback control, for every
+  combination of arch and setting; not run on a Wormhole device.
+
+---
+
+# ► Week of 2026-10-19 — F5: fp32 runs native, on the SFPU kernel
+
+## 1. TL;DR
+
+- **The native gate admits fp32**: a, b and the output in one format, bf16 or fp32. In fp32, add, subtract,
+  multiply and divide all run the SFPU kernel; fast mode changes only the routing, which in fp32 is the SFPU kernel
+  either way.
+- **Every fp32 operand reaches the DST by `UnpackToDest`.** Main's LLK keeps the path's four rules since
+  2026-10-19 (design §3.6.1). The native kernels already kept their side: one acquire and one commit around each
+  batch's copies, and one hardware startup. No kernel change for fp32.
+- **The rule takes the compute batch from the kernel and the DST mode**: the slots of one DST section (8 in a
+  16-bit DST, 4 in a 32-bit DST) over the slots per tile (1 on the FPU kernel, 2 on the SFPU kernel). fp32 runs
+  at 2; a larger set batch is refused, and the settings line names both SFPU batches.
+- **Exact oracles, measured on craq-sim**: add, subtract and multiply match torch fp32 bit for bit; divide is
+  within one fp32 step of torch's quotient (on the Metal 2.0 factory, the largest relative error was 1.19e-7); a
+  zero product or quotient is +0.0; SQUARE on fp32 is the fp32 product bit for bit.
+- **The base moved** to main through 2026-10-19 (#60847's queued head). Main made `DataflowBuffer` a class
+  template on Quasar, so the native helpers that took a bare `DataflowBuffer&` stopped compiling (149 of 164
+  module tests failed); they now take each DFB as a template type, as main's Metal 2.0 kernels do.
+- **Verified** on craq-sim `b9d8e2f4`: the native module 165 passed, 1 skipped, 7 strict expected failures; native
+  off 1 passed, 172 skipped; the bf16 suites 84 of 84 and the bf16 activation formats 88 of 88 at both settings; the fp32
+  no-broadcast suite cases, now native, 8 of 8 at the rule and at `1,1,1`; clang-tidy 0 findings on the three
+  host files.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): bf16 or fp32, one format for a, b and the output. Two checks, so that
+  a routing change falls back: fp32 runs only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
+- **Rule**: `native_max_tiles_per_cycle(sfpu, dst_32bit)` replaces `kNativeSfpuMaxTilesPerCycle` and reads the
+  section from `get_dest_reg_count`; `NativeMoves`
+  carries the DST mode; the factory derives `fp32_dest_acc_en` before the rule; the refusal of a larger set batch
+  covers both kernels and names the DST mode.
+- **Kernels**: the native preprocess helper and the SFPU kernel's batch function take template DFB types.
+- **Tests**: a `dtype` option in the arm child with the fp32 oracles, compared in fp32 steps; fp32 ops over the
+  nine op mixes at three configurations, on the tail-ring shards at the two configurations that have tail rings,
+  and with SQUARE on a, SQUARE on b and RELU on the result; a guard arm for a set batch of 4 in fp32; the settings
+  line's 32-bit batch.
+- **Docs**: design §3.6 and §3.6.1 (how the LLK keeps the rules), §6.1 (the fp32 oracles), §8 (F5 done; ND
+  shards added to milestone 3).
+
+---
+
+## 3. Verification
+
+- **RED, then GREEN.** On the build without F5, all 14 new tests fail for the expected reasons: every fp32 case
+  binds `kernels_dfb` (the Metal 2.0 factory), the fp32 guard runs instead of refusing, and the settings line
+  lacks the 32-bit batch. With F5, all 14 pass.
+- **Before the stack**, on the Metal 2.0 factory: fp32 add and divide stall on craq-sim (killed at 240 s). With
+  main's unpack-to-dest LLK they finish in about 10 s, exact.
+- **The fp32 activation-format cases**, which mostly ask for a bf16 output (a mixed format, so the Metal 2.0
+  factory runs them): 24 of 24. The 8 BFP8 cases of the same selection fail the DFB validator, on Quasar as at the
+  base.
+- **Not run**: fp32 with GELU or TANH (no exact model).
+
+---
+
+# ► Week of 2026-10-12, part 2 — F7: activations run native, on both kernels
+
+## 1. TL;DR
+
+- **The native gate admits activations on a, on b and on the result**, in every layout mix the native path takes,
+  on the FPU and the SFPU kernel. The Metal 2.0 factory already ran them.
+- **Three changes make them correct beside C compute threads.**
+  - The FPU preprocess helper takes the kernel's DataflowBuffer objects, as main's does since #60207. An object
+    that a call builds drains when the call returns.
+  - Each Neo fills and empties its own tile counter of an activation ring, so the ring holds one compute batch
+    per compute thread. A ring of one batch at C = 4 is a host `TT_FATAL`.
+  - The tail rings carry no activation. Beside one, an anchor that borrows all three operands must divide by the
+    compute count, as a slice must, else the op takes the NoC path. The factory reads the activation from the
+    compute defines, as the kernels' tail blocks do.
+- **Exact oracles, measured on craq-sim** (32 of 32 cases, 0 elements differ): SQUARE truncates its fp32 result to
+  bf16 on both kernels, the op keeps its own rounding, and a lone post RELU, which the packer applies, clips the
+  rounded result.
+- **RELU on the SFPU**, on a or b or on the result beside a chain, gives +0.0 for every negative
+  input: 13 of 13 cases exact, on add, multiply and divide. It executes SFPGT, so it runs from craq-sim
+  `b9d8e2f4` on; on `ad401613` the new RELU cases abort the process.
+- **GELU and TANH have no exact model.** Their native outputs equal the Metal 2.0 factory's bit for bit.
+- **Verified** on craq-sim `b9d8e2f4`: the native module 156 passed, 1 skipped, 7 strict expected failures with
+  exact tile counts; 1 / 164 native off; 84 of 84 suite cases at the rule with compute batch 1 and at `1,1,1`,
+  post RELU and lhs RELU now native; the bf16 activation-format cases 88 of 88 at both settings; the 16 GELU, TANH,
+  SQUARE and SIGMOID suite cases and the 2 SiLU SwiGLU cases, one process each at both settings: 36 of 36 runs, each
+  on `kernels_qsr` only; clang-tidy 0 findings on the two files.
+- **Found** (reported, not investigated):
+  - GELU shifts the SFPU results of the later programs on the same device, on both factories: each multiply,
+    SQUARE and divide gains about +2.76e-5. Measured 10-20 bit for bit before and after one GELU program: 8192 of
+    8192 fp32 products changed, and 3507 of 8192 bf16 products. TANH and SIGMOID change nothing, and later TANH,
+    SIGMOID or SQUARE programs do not clear it; closing and opening the device does. Cause, by code reading: GELU's
+    approximate init loads its lookup table into LREG9 to LREG14, the SFPU multiply adds LREG9 as its zero, and
+    `_init_sfpu_config_reg_` restores only SFPU_CTRL and LREG11. The suites open a new device for each test, so
+    they do not see it.
+  - This base's fallback hangs on a lone post RELU beside L1-interleaved operands, and beside `I.I.W32`, with
+    main's fixed `kernels_dfb` copied in. The native factory runs both.
+  - Killed simulator runs had filled `/dev/shm` with 671 segments since July.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): the activation refusal is gone. Divide in fast and approximate mode,
+  a reciprocal pass on b before an FPU multiply, stays refused: it is not validated natively.
+- **Factory**: `TailRings` in `select_borrow_anchor`; the activation flag from the compute defines, which now come
+  before the anchor; the activation rings, and the subtile-broadcast rings that native does not run yet, hold one
+  compute batch per compute thread.
+- **Kernels**: `kernels_qsr/compute/eltwise_utils_dfb.hpp` is main's helper; the FPU kernel builds the pre objects
+  that a chain reads. The tail blocks' `#error` names the factory rule.
+- **Tests**: an `act` option in the arm child, with the measured models; 54 cases in three configurations, among
+  them SQUARE on both inputs (two activation rings on each Neo), RELU on a and RELU beside a chain, which run on
+  the SFPU, and a 6-tile shard that takes the NoC path.
+- **Docs**: design §3 (what native accepts), §6.1 (the oracles), §8 (F7 done; milestone 2 except F5).
+
+---
+
+## 3. Verification
+
+- **The differential**, at compute batch 1: 54 of 54 native outputs equal the Metal 2.0 factory's bit for bit:
+  SQUARE, RELU, GELU, TANH and a GELU→SQUARE chain; add and multiply; DRAM, L1 slices, block shards, and 6-tile
+  shards on the NoC path. Two more cases hang on the fallback (above).
+- **The batched output**, under the rule: the wrong tiles equal the batch model, with activations as without. The
+  strict expected failures check each count: 192 of the 256 tiles of a shard mix, on both kernels.
+- **Each part has a test that fails without it**, one build each:
+  - the gate's refusal restored: `expected every op on kernels_qsr, bound qsr=0 dfb=39`;
+  - one-batch activation rings: `TT_FATAL: Num entries in DFB 1 must be divisible by max of num producers and
+    consumers 4`;
+  - tail rings beside an activation: the kernel's `#error` stops the compute build.
+- **RELU on the SFPU** needs the newer simulator: the `relu_lhs` and `relu_chain` cases abort on `ad401613` (SFPGT
+  `0x97001021`) and pass on `b9d8e2f4`.
+- **The review** (code-review-tt): approved after two rounds. It moved the activation flag to the compute defines
+  and added the case with SQUARE on both inputs; with the rule's batch that case gives the predicted 192 wrong
+  tiles on both kernels.
+
+---
+
+# ► Week of 2026-10-12 — F2: subtract, multiply and divide run native, on a native SFPU kernel
+
+## 1. TL;DR
+
+- **The native gate admits bf16 `subtract`, `multiply` and `divide`** besides `add`, in every layout mix the
+  native path takes. The Metal 2.0 factory already ran them.
+- **`multiply` and `divide` needed a native SFPU kernel.** In this op bf16 `multiply` and `divide` run the SFPU
+  kernel unless fast and approximate mode is on. `kernels_qsr/` gains the SFPU compute kernel and its preprocess
+  helper: the Metal 2.0 ones, with a share per compute thread, the compute batch and the tail rings, as the
+  native FPU kernel has. `divide` in fast and approximate mode is a reciprocal pass on b before an FPU multiply,
+  an activation chain, and stays on the Metal 2.0 factory. F5 is now fp32 only (dchen).
+- **The SFPU rule batch is 4.** The SFPU kernel holds each tile in two DST slots, so 4 tiles fill the DST in
+  bf16. The legacy binary_ng runs it at 2, because 4 fails on Blackhole for a reason not yet known; on craq-sim
+  4 is exact at ring stride 1. A set `TTNN_QSR_TILES_PER_CYCLE` above 4 is refused for it.
+- **craq-sim moved to `b9d8e2f4`**, the tip of its `quasar` branch on 2026-10-14. `divide` executes SFPGT, which
+  the earlier build `ad401613` did not decode, so the whole process aborted there; craq-sim decodes it since its
+  #360. The new divide cases fail on `ad401613` and pass on `b9d8e2f4`.
+- **Exact oracles, measured on craq-sim**: the FPU kernel rounds to nearest even (`subtract`, fast `multiply`);
+  the SFPU multiply truncates the fp32 product to bf16, and a zero product is +0.0; `divide` rounds to nearest
+  even, and a zero quotient is +0.0.
+- **Verified** on craq-sim `b9d8e2f4`, at the SFPU batch of 4, with the activation change on top, which changes no
+  program without an activation: the native module 156 passed, 1 skipped, 7 strict expected failures with exact
+  tile counts; 1 / 164 native off; 84 of 84 suite cases at the rule with compute batch 1 and at `1,1,1`, bf16
+  divide among them; clang-tidy 0 findings.
+- **Found on `ad401613`: four planted +0.0 pairs in one tile hang the SFPU multiply**, on both factories. Single
+  zero operands, and -0.0 operands, run. `b9d8e2f4` runs the pairs too, and every such product is +0.0.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): ADD, SUB, MUL and DIV; the SFPU kernel for MUL and DIV; DIV in fast
+  and approximate mode is refused.
+- **Rule** (`resolve_native_config`): `NativeMoves::sfpu`; the SFPU compute batch is `kNativeSfpuMaxTilesPerCycle`
+  (4). The settings line names it.
+- **Factory**: the host precondition admits the SFPU kernel; a set batch above 4 is refused for it.
+- **Kernels**: `kernels_qsr/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp`, which shares the FPU kernel's
+  preprocess helper, `eltwise_utils_dfb.hpp`. The DataflowBuffer objects live in `kernel_main` and are passed
+  by reference, as on main since #60207.
+- **Tests**: an `op` option in the arm child (subtract, multiply, fast multiply, divide), with each kernel's
+  rounding as the oracle; the prediction model gives the SFPU its batch of 4.
+
+---
+
+## 3. Verification
+
+- **The oracles**, on the Metal 2.0 factory with the device's operands, 32 tiles, two seeds: `subtract` and
+  fast `multiply` match round to nearest even on 32768 of 32768 elements, and `multiply` matches truncation on
+  32768 of 32768; the other rule differs on 8811 to 15427 of them. Planted zeros of both signs: every zero
+  product is +0.0, on the native and on the Metal 2.0 factory.
+- **The divide oracle**, native at compute batch 1: round to nearest even on 32768 of 32768 elements, for randn
+  divisors and for divisors of 0.5 to 2; truncation misses half of them. A zero quotient is +0.0: 32768 of 32768
+  with RELU zeros in a and with planted ±0.0 in a.
+- **The new tests**: 8 mixes and `B.B.B_partial` for each op, exact in five configurations; under the rule a
+  strict expected failure with every count as predicted, `B.B.B_partial` included (192 wrong tiles for the
+  SFPU batch of 4 and for the FPU batch of 8; a batch of 2 leaves 128). The tail rings: exact in four
+  configurations; at `1,1,1` `height_5` runs a batch of 4 and a short one. The guard: a set batch of 8 for
+  `multiply` is refused with its own message.
+- **The native module**, on `b9d8e2f4`, at the SFPU batch of 4 and with the activation change on top: 156 passed,
+  1 skipped, 7 strict expected failures; native off 1 passed, 163 skipped. The tests of this change alone: 22
+  passed, 1 strict expected failure. On `ad401613` the divide cases abort the simulator on SFPGT.
+- **The suites** (`no_bcast`, `resnet_add`, `descriptor_cache_hit`, native on): 84 of 84 at the rule with compute
+  batch 1, 84 of 84 at `1,1,1`, the bf16 divide and lhs RELU cases included. fp32 stays deselected: on
+  `b9d8e2f4` it runs but gives a wrong output. The cases that the native gate refuses run on the Metal 2.0
+  factory, which hangs on this base when a core makes several calls, so the suites ran with main's fixed
+  `kernels_dfb` copied in.
+- **clang-tidy**: 0 findings on the factory, the utils and the device operation.
+
+---
+
+# ► Week of 2026-10-05, part 5 — F4 on the new main: rings drain at kernel exit, and a new batch pattern
+
+## 1. TL;DR
+
+- **Rebased onto main `2c1e1ebdd63`**, with no conflicts. #59064 is on main as `888d50efb33`; F4 part 1 sits on
+  it as `0bb5f4b8d60`, and parts 2a to 4 are staged on top.
+- **Main drains every DFB at scope exit.** `finish()` is now a no-op: each `DataflowBuffer` object drains its
+  thread's credits in its destructor. Two kernel rules follow:
+  - The writer pops every entry of a borrowed output, once per tile counter. Without the pops the compute's out
+    destructor waits forever: 4 of 4 borrowed-output cases hung at kernel exit.
+  - The reader keeps a borrowed input's object alive to kernel exit. The compute pops a borrowed entry only after
+    the matching entry of the other input, which this thread reads later over the NoC.
+- **Main's fix for #56194 changed the batch pattern.** Above ring stride 1 one tile of each compute batch is right,
+  where `ceil(n/s)` were. The batched output stays wrong, as accepted, and the tests pin the new counts. The likely
+  remaining cause is the unpack index, which still steps by one entry (design doc §4.3).
+- **Verified**: the native module 144 passed, 1 skipped, 5 strict expected failures with exact tile counts; 1 / 150
+  native off; 78 of 78 suite cases at the rule with compute batch 1 and at `1,1,1`; clang-tidy 0 findings on the
+  three files, with a control that reported 1.
+- **Found on the way: the fallback hangs on main.** Since the destructor drain, the Metal 2.0 compute kernels
+  build their DataflowBuffer objects per chunk, so the drain runs at every return and hangs when a core makes
+  several calls. The fix is a separate PR to main (branch `dchen/binary_ng_quasar_fallback_dfb_scope`). The suites
+  above route every op but `add` through the fallback, so they ran with that fix applied.
+
+---
+
+## 2. Changes
+
+- **Writer, borrowed output**: per tile counter, `wait_front(n)` and `pop_front(n)`, n the counter's share. The
+  explicit `finish()` calls are gone in both dataflow kernels.
+- **Reader**: `borrowed_in0` and `borrowed_in1` live at kernel scope.
+- **A stale comment is gone.** Since main's #54628 each DM kernel owns a barrier slot, so two multi-thread reader
+  kernels no longer collide. The reader still reads both inputs, as production's reader does.
+- **The batch model** (`_batched_wrong_tiles`, was `_pack_stride_wrong_tiles`): one right tile per batch above
+  ring stride 1. The comments and the factory's warning no longer name a cause.
+- **Not changed by main**: a thread with zero tiles still skips the barrier inside `handle_final_credits`, so the
+  implicit-sync overloads stay unused; tt-metal#57623 (one capacity per tile counter) and #49937 stay open;
+  production's fix for D7 (PR #58568) is not merged.
+
+---
+
+## 3. Verification
+
+- **The drain**: 11 of 11 cases that hung, or that borrow one input, pass; one process each, 240 s timeout.
+- **The walk defines, known-bad** (each forced to 0 in both kernels, compute batch 1): `SHARD_WALK_WIDTH` and
+  `BANK_WALK_STRIDE` each give a wrong output in the reader and in the writer. `WALK_PADS` gives a wrong output in
+  the writer (`B32u.B32u.I`) and stays exact in the reader (`I.I.B32u`): there it only stops unused reads. With the
+  kernels restored, 6 of 6 cases are exact.
+- **The batch pattern**: 12 configurations on one core with all three operands borrowed (C = 2 and 4, n = 2, 4 and
+  8, 64 and 56 tiles): slot p holds the result of tile floor(p/s) for 720 of 720 tiles. NoC-path counts match
+  (`l1_288`: 160 wrong, `l1_2080`: 1792). With only main's pack fix reverted, the old counts return.
+
+---
+
+# ► Week of 2026-10-05, part 4 — F4: the native path never uses fewer clusters than production
+
+## 1. TL;DR
+
+- **One condition joins the anchor rule.** An anchor must run on at least as many clusters as production's
+  `binary_ng` uses for the op: the cores that hold the output's shards where production borrows the output, else
+  its split of the output tiles over the worker grid. Among those anchors, the one that borrows the most operands
+  wins, as in part 3.
+- **The reason.** A Quasar cluster costs about the same per tile borrowed or over the NoC (46.50 against 46.25
+  cyc/tile at `4,4,2`, F16), so a program on fewer clusters takes longer. `H.I.I` (1280 tiles) took 15968 cycles
+  on a's 4 clusters; it now takes 3078 on production's 32 (5.2x, device span).
+- **Where the native path now matches production**: 40 of the 63 mixes of part 3 changed their anchor. Each is a
+  mix that production moves over the NoC on all 32 clusters. `H.I.H`, the part-3 example of borrowing beyond
+  production, is one of them.
+- **Where Quasar keeps its own rule**, because it is faster on Quasar (device span in cycles):
+
+| Mix | Production's placement | Native placement | Native | Nearest program on production's clusters |
+|---|---|---|---|---|
+| `IL1.IL1.H`: L1-interleaved a and b, height-sharded c, 1024 tiles | c borrowed on its 4 clusters | the a and b slices borrowed on 32 clusters; c moves | 2686 (rule: 1935) | `IL1.H.H`: 12903 (rule: 4285) |
+| `IL1.IL1.B9`: 81 tiles, 9 per core | c borrowed on its 9 cores | all three over the NoC on 32 clusters | 1660 (rule: 1738) | `B9.B9.B9`: 2726 (rule: 2654) |
+| a shard on all 32 clusters, beside any mix | NoC split on 32 | the shard borrowed on the same 32 | the same clusters | fewer NoC bytes |
+
+  The comparison programs borrow more than production's placement would, so production's placement is slower
+  still. The figures in brackets time the rule's own programs, whose batches of 8 leave some output tiles wrong
+  until the pack-stride fix (`IL1.IL1.B9`'s output stays exact). In `IL1.IL1.B9` the DFB cannot borrow a 9-tile
+  ring beside operands that move, until it gives each tile counter its own capacity (tt-metal#57623). Then the rule
+  takes production's placement by itself.
+- **The full comparison with production** is in the design doc, §3.5: what native accepts, where each mix runs
+  and what it borrows, the threads and batches inside a core, and the drift of the shared code.
+- **Verified**: RED 10 of 10; GREEN: the native module 144 passed, 1 skipped, 5 strict expected failures with
+  exact tile counts; 78 of 78 suite cases in both native configs.
+
+---
+
+## 2. Design
+
+- **`legacy_borrows_output_shard`** copies production's decision for two inputs of one shape without a
+  broadcast: `is_native_L1_sharding`, and the uneven-output guard of `get_shard_specs`. A sweep of 803,736
+  placement triples against a line-by-line port of production's code found no disagreement.
+- **Production's wrong-layout borrow is not copied.** Where a and b share a shard config on the output's grid but
+  not its layout, production borrows all three, which gives a wrong output on WH. The native path runs on the same
+  cores and borrows only the operands with the output's exact memory config.
+- **`legacy_cluster_count`**: the output's cores with data where production borrows the output, else
+  min(output tiles, worker-grid cores), the count that `split_work_to_cores` gives.
+- **The kernels do not change.** The shard walks stay in use: for a shard on all 32 clusters, and for production's
+  own output borrow where the slices do not divide (`IL1.IL1.B12`).
+- **Open: the copy can drift from production**, and no test can see it, because production's factory does not run
+  on Quasar. A call to production's `get_shard_volumes` would remove the copy. It would be the first include of an
+  `eltwise/binary_ng` header in the Quasar tree, so it is a separate decision.
+
+---
+
+## 3. Verification
+
+- **Model**: two independent Python models of the rule agree with all 71 expected anchors.
+- **RED** (the part-3 build): 10 of 10 selected tests failed. The changed mixes ran on 4 or 16 clusters, and the
+  rule's wrong-tile counts followed the old anchors.
+- **GREEN** (craq-sim ad401613): the native module 144 passed, 1 skipped, 5 strict expected failures, and 1 / 150
+  native off; 78 of 78 suite cases at the rule with compute batch 1 and at `1,1,1`; clang-tidy 0 findings on the
+  factory, with a control that reported 1.
+- **Tests**: the mixed table has 71 cases. 8 are new: shards on all 32 clusters (height, width, block across (N, C)
+  slabs, block in column-major order, and an uneven block in the reader and in the writer), and `IL1.IL1.B12`,
+  production's own output borrow. Routing covers 51. A route shows a borrow only where it changes the reader or
+  writer threads; it always shows the clusters.
+- **Measurements**: `debug/qsrnative/wh_parity/measure.py`, one op per process with the device profiler. The span
+  runs from the first kernel start to the last kernel end over all clusters.
+
+---
+
+# ► Week of 2026-10-05, part 3 — F4 part 2b: each operand is borrowed where it sits, by one rule
+
+## 1. TL;DR
+
+- **Each operand is borrowed or moves on its own.** One rule, the anchor, replaces the borrow kinds of 2a. A
+  shard anchor is an L1 shard config, and it borrows every operand with exactly that memory config. The slice
+  anchor is the L1 banks, and it borrows every L1-interleaved operand. The factory takes the anchor that
+  borrows the most operands; a tie goes to the one that borrows the output, then to the one on more cores.
+  Every other operand moves over the NoC in the anchor's tile order.
+- **Beyond production.** dchen's example, an L1-sharded a beside a DRAM-interleaved b, now borrows a and the
+  output and reads b in a's shard order; production moves all three over the NoC. Two L1-interleaved inputs
+  beside an L1-sharded output borrow the two input slices on 32 clusters and write the output over the NoC;
+  2a borrowed the output alone, on its shard grid. Part 4 keeps the second and drops the first: an anchor
+  never runs on fewer clusters than production, so this `H.I.H` now runs on production's 32.
+- **Pad slots** of an uneven shard or a short bank are skipped by every walk. In a block or width shard a pad
+  column is a real page of the next row: with the writer's skip off, a test loses 4 of 100 tiles.
+- **The shipping path does not change**: the all-NoC reader and writer compile to the same instructions.
+- **Partial tiles**: 11 cases with shapes that are not a multiple of 32 run exact, on each anchor kind and walk.
+- **Verified** (slide 3): RED 23 of 27, then 5 of 5 for the pad bounds; GREEN: the native module 134 passed,
+  1 skipped, 5 strict expected failures with exact tile counts; 78 of 78 suite cases in all three configs.
+
+---
+
+## 2. Design
+
+- **`select_borrow_anchor`**: the candidates are the output's shard config, a's, b's, and the banks. A
+  borrowed ring must divide by its max(producers, consumers); with all three borrowed, F3's tail rings and pad
+  slots stay as before. A shard anchor runs on the allocator's own core list (`cores_with_data`), so a grid
+  core without a shard does not run, and that list must lie in the worker grid.
+- **Walks**: a 2D shard walk, page = start + (k / w) * Wt + k % w, and a bank walk, page = bank + k * B; the
+  linear walk does not change. The writer walks too. With pad slots, `WALK_PADS` checks each tile against the
+  core's `valid_rows` and `valid_cols`, two runtime args that only such programs get.
+- **Kernels**: `SRC_SHARDED` and `SRC_SHARDED_B` are independent again, and `finish()` runs on NoC rings only.
+  The compute kernel does not change.
+- **Pairing**: a borrowed ring of S entries pairs with a NoC ring of 64. The unpacker reads each DFB at its own
+  tile counter, so each ring is a FIFO per counter, and both deliver anchor tile t + C * j as entry j of
+  counter t.
+- **Open: parallelism** (code-review-tt). The rule counts borrowed operands, not cores: I.I.H, I.W.W and H.I.I
+  now run on their anchor's 4 clusters, where 2a and production use all 32. On silicon that can raise the NoC
+  traffic per cluster, which craq-sim does not model. It needs a go/no-go threshold on silicon. Resolved in
+  part 4: no anchor runs on fewer clusters than production.
+
+---
+
+## 3. Verification
+
+- **Tests**: one mixed table of 63 cases, each with its anchor and the operands it borrows, in five bit-exact
+  configurations and the rule's own; routing on 41 of them and on 3 slice cases beside DRAM, from the device
+  profiler (DM cores and clusters); 9 cases with pad slots, which must be exact in every configuration. The
+  coverage test lists the cases with pad slots by name, so a split that miscounts a tile fails it. In 9 cases
+  the op resolves the output config, as production does: from the inputs with no `memory_config`, or by
+  completing a sharded config without a shard spec. Each checks the placement the output takes.
+- **Partial tiles**: in 11 cases the shape is not a multiple of 32, so the last tile row or tile column is
+  partial. They cover each anchor kind and each walk, in the reader and in the writer. One is rank 4, with a
+  partial tile row in every (N, C) slab, and one has pad slots. Each takes the anchor of its padded shape, as
+  the 16x16-tile cases do.
+- **RED** (the 2a build with the DRAM rule): 23 of 27 selected tests failed on the DM-core and cluster counts,
+  the settings line and the rule column's tile counts. Before the pad bounds, the 5 pad routes failed. Before
+  the test helpers counted a partial tile as a whole one, they took 9 of the 10 partial cases for cases with
+  pad slots: the coverage test failed on the 2 that predict wrong tiles, and the tile mask of the test could
+  not reshape a 511 x 511 output. With the pad-slot cases listed by name, the same helpers fail the coverage
+  test on 9 cases.
+- **GREEN** (craq-sim ad401613): the native module 134 passed, 1 skipped, 5 strict expected failures, and
+  1 / 140 native off; 78 of 78 suite cases with the rule's threads at compute batch 1; clang-tidy 0 findings on
+  the factory. The partial-tile cases change only the test module, so the suite and clang-tidy results stand.
+  A case whose expected output placement is wrong fails on the placement check. A golden with one bit flipped
+  in its last element gave exactly 1 wrong tile in each partial case (4 in the rank-4 case, one per slab), out
+  of the padded tile count. Before the review fixes, the same tree minus those fixes gave 78 of 78 suite cases
+  with 1,1,1 and native off too, and clang-tidy 0 findings on all three sources, with a control that reported 1.
+- **Machine code**: the JIT ELFs of the all-NoC reader and writer at 4,4,2 beside DRAM, at 4,4,2 in L1 with DM
+  batch 8, and at 1,1,1 have 0 differing instructions before and after.
+- **code-review-tt**: request changes (minor; no correctness defect). Its port of the allocator's page map
+  matched the anchor on 414 shard specs. Applied: a shard anchor must lie in the worker grid, a test for the
+  slice anchor that borrows only the output, one derivation of the anchor's size, comments.
+
+---
+
+# ► Week of 2026-10-05, part 2 — F4 part 2a: every layout mix runs native, the output borrowed as production does; no batching beside DRAM
+
+## 1. TL;DR
+
+- **Every same-shape mix of interleaved (L1 or DRAM), L1-sharded and DRAM-sharded operands runs on the
+  native factory.** Before, a mix with an L1 shard ran on the Metal 2.0 fallback unless all three were L1
+  shards with one memory config, and a DRAM shard beside an L1 shard did not run on Quasar at all.
+- **Borrowing follows production's rule.** Beside L1-interleaved a and b, an even L1-sharded output is
+  borrowed in place, and the reader reads a and b over the NoC in the output shard's tile order. Two native
+  conditions: the compute count divides the shard (no tail rings beside NoC operands), and the shards fill
+  their grid (an idle grid core would read past the inputs' end). Every other mix moves all three operands
+  over the NoC through their sharding-aware TensorAccessors.
+- **No batching beside DRAM** (dchen, 2026-10-06). Where a, b or c is in DRAM, interleaved or sharded, the
+  rule runs DM batch 1 and compute batch 1 in rings of 2 entries per thread, as production's reader does. It is
+  a decision: the batching gains are craq-sim numbers, and craq-sim models no DRAM time. Every DRAM op is now
+  exact by rule, and the NoC path's rings beside DRAM take 48 KiB of L1 per cluster, not 384 KiB.
+- **Verified** (slide 3): RED 14 of 14 mixed tests on the old build; GREEN: the native module 108 passed,
+  1 skipped, 5 strict expected failures with exact tile counts; 78 of 78 suite cases in both bit-exact
+  configs and native off.
+
+---
+
+## 2. Design
+
+- **Gate**: each operand on its own is interleaved, an L1 2D shard or a DRAM 2D shard (ND shards stay out).
+- **Factory**: a third borrow kind, the output alone. It reuses production's `get_shard_volumes`, which
+  reports the output's volume only in that case. The rule then runs R = 4, W = 1: 5 DM cores on the output's
+  shard grid. Placement is the borrowed shard path's (`c_start_id`, `get_shards_per_width`), and the fill
+  condition keeps its core order equal to the allocator's.
+- **Reader**: a define, `SHARD_WALK_WIDTH`. 0 keeps the linear walk byte-identical; w > 0 walks page =
+  start + (k / w) * Wt + k % w, the Metal 2.0 reader's row wrap. A height shard is the linear walk.
+- **Not in 2a**: borrowing one input without the other. Production's rule never does it, since a and b share
+  one memory config; it is part of 2b, with pad slots and the pairing of rings of different sizes.
+- **The DRAM rule**: `NativeMoves` gets a third fact, `dram`, which the factory sets from each operand's buffer
+  type. Unset, the ring depth now follows the batches: two batches per thread, a multiple of each, so 16 at the
+  rule's batches of 8 and 2 beside DRAM. A batch A/B that must hold the depth fixed sets
+  `TTNN_QSR_ENTRIES_PER_THREAD`. The tests that used the rule's batches beside DRAM tensors now set them, so the
+  batched walks stay tested over DRAM.
+- **Open: L1, now live.** The rule's rings with every operand in L1 (384 KiB per cluster on the NoC path,
+  256 KiB of input rings beside a borrowed output) now sit beside resident shards, where the fallback used
+  12 KiB. An op whose L1 buffers leave less room fails at launch with "clash with L1 buffers". The suite's
+  two-shard case still fit.
+
+---
+
+## 3. Verification
+
+- **Tests**: 28 mixed cases (9 with the output borrowed: height, block, width, a cache repeat, column-major
+  block and height, rank 4 with and without shards that cross (N, C) slabs, a supplied output tensor; 19 over
+  the NoC, among them every negative of the rule: an uneven output, 9 tiles per core, idle grid cores, DRAM
+  inputs, a and b placed differently, a DRAM shard beside L1 shards, plus a cache repeat, an in-place add and
+  an uneven L1 input), and 3 sharded-input cases with an interleaved output.
+  Configs: the rule's threads at compute batch 1, 1,1,1, one reader on four counters, 4,4,2 per tile, and the
+  rule itself with exact predicted tile counts. The device profiler pins the routing: 5 DM cores on the shard
+  grid for a borrowed output, 6 on 32 clusters otherwise.
+- **RED** (old build): the 14 mixed tests failed, each on kernels_dfb or on the descriptor's
+  "DataMovementKernel is not supported on Quasar".
+- **GREEN** (craq-sim ad401613): the native module 99 passed, 1 skipped, 13 strict expected failures native
+  ON, and 1 / 112 OFF; 78 of 78 suite cases with the rule's threads at compute batch 1, with 1,1,1 at the
+  rule's batches, and native off; clang-tidy 0 findings, with a control that reported 1.
+- **The DRAM rule**: RED 13 failed, exactly the tests that predicted wrong tiles beside DRAM or used the rule's
+  batches there. GREEN: the native module 108 passed, 1 skipped, 5 strict expected failures (13 before: the 8
+  DRAM cases that the pack defect corrupted are exact now), 1 / 114 OFF; 78 of 78 suite cases in all three
+  configs; clang-tidy 0 findings, with a control that reported 1. code-review-tt: request changes (minor; no
+  correctness defect). Applied: configs that set a DM batch beside DRAM, so no config pair runs one program
+  twice; comments that stated the rule as a measurement; separate DM and compute batch constants. In both native
+  configs the gate now sends the suites' bf16 add mixed cases to the native factory; the suites assert
+  values, and the module's routing tests assert where the same mixes run.
+- **code-review-tt**: request changes (minor; no correctness defect), then approve. Applied: column-major and
+  rank-4 cases, a supplied output tensor, comments that had become wrong, the settings line with all three
+  program shapes and a log test that checks each shape on its own, one derivation of the output geometry.
+  Deferred to 2b: reading the placement from the allocator's own core list.
+
+---
+
+# ► Week of 2026-10-05 — F4 part 1: the fast paths are the rule, and the knobs are overrides
+
+## 1. TL;DR
+
+- **With every knob unset, the native factory runs the rule** (dchen: the best option by rule, no perf
+  measurement): 4 compute threads; where the operands move over the NoC, a reader thread per compute thread
+  and the writer threads the 6 DM cores leave (4,4,2); where all are borrowed, 1,4,1; DM batch 8 and compute
+  batch 8, in rings of 16 entries per thread. Before, unset meant 1,1,1, depth 2 and DM batch 1, with a
+  compute batch of 8 only when everything was borrowed at ring stride 1.
+- **The knobs stay, as overrides.** A set knob replaces only its own value. R and W follow the effective C,
+  so `TTNN_QSR_COMPUTE_THREADS=2` alone runs 2,2,2.
+- **`TTNN_QSR_NATIVE=1` alone now gives wrong output on most shapes**, by design: above ring stride 1 a
+  compute batch packs wrong until the pack path applies the ring stride per tile. On the 32x40 benchmark
+  896 of 1280 tiles are wrong. The flag stays opt-in. `TTNN_QSR_TILES_PER_CYCLE=1` runs the rule's program
+  with the compute batch at 1, and it is bit-exact.
+- **Verified** (slide 3): the native module 79 passed, 1 skipped and 11 strict expected failures, each wrong
+  on exactly its predicted tiles; 78 of 78 suite cases in both bit-exact configs and native off.
+
+---
+
+## 2. Design
+
+- **One function holds the rule**, `resolve_native_config(tuning, NativeMoves{inputs, output})`. The gate
+  checks the STRIDED ratio on the NoC path's values, and the factory resolves its program after the borrow
+  decision. Every message names each value's source: `dm_batch=8 (rule)`,
+  `entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)`. The settings line at startup does the same.
+- **Compute batching needs R <= C and W <= C.** A compute thread beside more DM threads owns several tile
+  counters of that ring, and a batch reads or fills one counter. On craq-sim 9f6314bf, R2C1W1 and R1C1W2 hung
+  at batch 8 and ran exact at batch 1. The rule gives 1 there, and a set batch above 1 there is refused. The
+  DM kernels have no such limit: they walk the counters in order.
+- **Routing at the rule's C = 4**: an L1-interleaved slice is borrowed only when 4 divides its tiles per bank,
+  else the op takes the NoC path; an L1 shard that 4 does not divide runs its last tiles in the tail rings.
+  Both behaviours existed at C = 4; only the default moved.
+- **Open: L1.** The NoC path's three rule rings take 384 KiB per cluster, against 12 KiB at the old default.
+  Nothing shrinks them yet, so a NoC-path op whose L1 buffers leave less room fails with "clash with L1
+  buffers".
+
+---
+
+## 3. Verification
+
+- **Tests predict their output.** A Python mirror of the rule and of the pack-stride defect gives each case
+  its wrong 32x32 tiles from its configuration: in-process tests from the invocation's knobs, the arms from
+  their own. A nonzero prediction makes the test a strict expected failure that passes only on exactly those
+  tile counts. Bit-exact arms set `TTNN_QSR_TILES_PER_CYCLE=1`, or 1,1,1, or one tile per transfer.
+- **RED** (craq-sim ad401613, old build, first version of the tests): 38 failed, 44 passed, 1 skipped,
+  exactly the tests that assert the rule. Examples: 1 Neo where the rule needs 4; exact output where the rule
+  predicts 896 wrong tiles. The guards and log cases added after review assert messages that only the new
+  code prints.
+- **GREEN** (ad401613): the native module 79 passed, 1 skipped, 11 strict expected failures native ON, and
+  1 / 90 OFF; 78 of 78 suite cases with the rule's threads at compute batch 1, with 1,1,1 at the rule's
+  batches, and native off; clang-tidy 0 findings, with a control that reported 1. On 9f6314bf, R2C1W1,
+  R1C1W2 and R4C2 under the rule ran exact over 288, 512 and 2080 tiles, and a set batch of 8 at R2C1 was
+  refused.
+- **code-review-tt**: request changes, then approve after a second pass. Applied: the compute batch rule
+  above, exact tile counts in place of a 1-point element tolerance, tests for the DM-core limit (a set W,
+  and a set R that leaves no DM core for a writer), a device check that a borrowed program ignores set
+  reader and writer counts, the writer rule `min(C, 6 - R)`, and pre-commit fixes. Open: the L1 fit
+  (slide 2), for dchen.
+
+---
+
+# ► Week of 2026-09-29, part 2 — DRAM-sharded operands run on the native NoC path
+
+## 1. TL;DR
+
+- **DRAM-sharded operands run on the native factory**, alone or beside DRAM- and L1-interleaved
+  operands: height, width and block sharding, even and uneven. Only L1 can back a DFB, so a DRAM shard is
+  never borrowed. The reader and the writer move it by page id through its sharding-aware
+  TensorAccessor, as they move an interleaved operand. The change is in the gate only.
+- **Before, these ops did not run on Quasar at all.** Both the native and the Metal 2.0 gates rejected a
+  DRAM shard, and the descriptor fallback stops with `DataMovementKernel is not supported on Quasar`.
+  The Metal 2.0 gate is unchanged, so with `TTNN_QSR_NATIVE` unset they still stop there.
+- **Still outside the native factory:** an L1 shard beside a DRAM shard or an interleaved operand (the
+  mixed-layout milestone), and ND sharding.
+- **Verified** (slide 3): RED 2 of 2; GREEN 9 of 9 on craq-sim 9f6314bf and on ad401613; the native
+  module 68 passed, 1 skipped, 2 expected failures native ON, and 1 / 70 OFF; 78 of 78 suite cases through
+  each factory; clang-tidy 0 findings, with a control that reported 1.
+
+---
+
+## 2. Design: the gate admits a DRAM shard as a NoC operand
+
+- **Gate** (`matches_quasar_native_slice`): with an L1 shard among the operands, the rule is unchanged:
+  all three are L1 shards with one memory config, and the factory borrows them. Without an L1 shard, each
+  operand must be interleaved or a DRAM shard with a 2D shard spec (`noc_operand_ok`). The 2D spec is
+  needed because the factory's shard helpers (`is_uneven`) dereference it.
+- **Factory and kernels: no change.** The Quasar `is_native_L1_sharding` returns false for any DRAM
+  operand, and the slice check needs three L1-interleaved operands. So the factory takes the NoC path:
+  `split_work_to_cores` over the worker grid and a TensorBinding per operand, for which Metal 2.0 emits
+  DRAM-sharded TensorAccessor args. The writer needs no shard-row wrap: each core writes a linear page
+  range, and the accessor maps each page to its shard.
+- **A DRAM shard grid is in DRAM-bank coordinates** (craq-sim: `dram_grid_size` is 2 x 1).
+  `get_worker_grid`, the same code as production, finds the sub-device by numeric overlap with the Tensix
+  workers, so it works because both grids start at (0, 0). A test pins that the op spreads over all 32
+  clusters, not over one cluster per DRAM bank.
+- **Simulator:** craq-sim builds before 9f6314bf re-map DRAM streams as if they were interleaved (removed
+  in craq-sim #335), which can corrupt a single-bank stream such as a DRAM shard's. These cases passed on
+  both builds.
+- **Not measured** (the rule picks the path, no perf work): the sharded accessor divides per page, and on
+  silicon a DRAM shard is one bank, so a thread's run of pages from one shard hits one bank.
+
+---
+
+## 3. Verification
+
+- **RED** (craq-sim 9f6314bf, before the gate change): both new tests failed on the descriptor's
+  `TT_FATAL: DataMovementKernel is not supported on Quasar`.
+- **GREEN, 9 of 9 on craq-sim 9f6314bf and on ad401613:**
+  - `test_native_dram_sharded_is_bit_exact` at 1,1,1, 1,4,1 and 4,4,2, each with DM batch 1 and 8, over 16
+    ops per child: every layout alone and beside another placement (a mapping error that a, b and c share
+    would still give c = a + b), a DRAM-sharded output from interleaved inputs, a 1024-tile case for full
+    DM batches, a cache-hit repeat and an in-place `add_`.
+  - `test_native_dram_sharded_spreads_over_the_worker_grid` on 3 cases: the device profiler shows 32
+    clusters, each with 6 DM cores and 4 Neos at 4,4,2.
+- **Regression** (craq-sim ad401613): the native module 68 passed, 1 skipped, 2 expected failures native
+  ON, and 1 / 70 OFF; 78 of 78 suite cases through each factory. The arm scripts' routing check now also
+  fails on any binary_ng kernel outside `kernels_qsr/` and `kernels_dfb/`, such as the descriptor's.
+- **code-review-tt**: approve after fixes, all applied except one test, which would pin that an L1 shard
+  beside a DRAM shard stays off the native factory. It needs a harness mode that expects the descriptor's
+  failure, and the mixed-layout milestone changes that case anyway.
+
+---
+
+# ► Week of 2026-09-29 — F16: L1-interleaved operands borrowed in place; the default `1,1,1` runs at 46.75 cyc/tile
+
+## 1. TL;DR
+
+- **Three L1-interleaved operands are borrowed on the native factory** (F16). Bank k of an
+  L1-interleaved tensor holds its pages k, k+32, k+64, ... back to back, and each cluster owns one bank.
+  So each cluster computes its slices of a, b and c in place, as it does a shard: the reader publishes
+  credits, the writer has nothing to do, and no tile moves over the NoC. The change is host-only; the
+  kernels are F3's (slide 2).
+- **No tail rings** (dchen): a slice is borrowed only when the compute count divides it, and any other
+  slice keeps the NoC path. For L1-interleaved the alternative to a tail is the NoC path at the same
+  slope, so on craq-sim a tail would cost about 800 cycles of latency and gain no throughput (slide 2).
+  The decision rests on the tail rings being temporary: they go away for every layout with tt-metal#57623.
+- **At the default tuning, `1,1,1`, an L1-interleaved add goes from `773 + 185.00*T` to
+  `1021 + 46.75*T`**: 3.96x on throughput and 3.14x on latency at 64 tiles per cluster, because a
+  borrowed ring lets the compute batch. That is within 0.50 cyc/tile of the tuned NoC path (`4,4,2`,
+  46.25), on 2 DM cores and 1 Neo instead of 6 and 4 (slide 3).
+- **At the tuned `4,4,2` the slope stays within 0.25 cyc/tile** (46.25 to 46.50), as for shards:
+  craq-sim charges nothing for transport. The program runs as `1,4,1`, with 268 cycles less fixed cost
+  and 4 of 6 DM cores per cluster free. `1,4,1` itself goes from reader-bound 166.00 to 46.50. The
+  borrowed slices cost what F3's borrowed shards cost, within 5 cycles.
+- **On silicon the mesh bisection would bind the NoC path** (slide 4). Half of all L1-interleaved
+  traffic crosses the four links in the middle of the mesh, a floor of 48.0 cyc/tile at any N, so the
+  NoC path's batched 26.44 cannot be reached there. The borrowed path moves no NoC bytes: at `4,4,2`
+  N=8 it is predicted at about 4.1x the NoC path (11.69 against 48.0), once #56194 lands. On craq-sim,
+  which has no NoC timing, the NoC path's DM cores bind it from the first batching step: at `4,4,2` N=2
+  the borrowed path is 1.61x faster, while the port would be only 56% busy.
+- **Verified** (slide 5): RED, 3 of 3 borrow tests failed on the DM count alone; GREEN 15 of 15; the
+  native module 59 passed, 1 skipped, 2 expected failures native ON, and 1 / 61 OFF; 78 of 78 suite
+  cases through each factory. A build without the gate's worker-grid checks failed both sub-grid tests.
+
+---
+
+## 2. Design: a bank slice is a shard, with no tail
+
+**Why it works.**
+- Page `i` of an interleaved buffer lives in bank `i mod N`, at `address + (i / N) * aligned_page_size`,
+  and each worker core owns one L1 bank at offset 0. So `buffer->address()`, which the runtime attaches
+  to a borrowed DFB on every core, is where each core's slice starts.
+- a, b and c map page `i` to the same bank, so one core's three slices hold the same page indices,
+  whatever bank id the allocator gave the core (it shuffles them). An elementwise op is right on every
+  core, and the placement only has to cover every core that holds a bank.
+- Every bank reserves `ceil(P/N)` pages. A bank with one real page fewer computes one pad slot inside
+  its allocation, which no page reads: F3's rule for uneven shards.
+- The kernels need no change. The borrowed branches read only the tile count, never a tile id, and with
+  no tail the writer has nothing to do.
+
+**The gate** (`l1_interleaved_borrow_tiles`): a, b and c are L1 (not L1_SMALL), interleaved and tiled;
+each page stride equals its tile size; one allocator and one page count; the op's worker grid is exactly
+the cores that hold the allocator's L1 banks, so a sub-device grid keeps the NoC path; and
+`S = ceil(P/N)` divides by the tuned `C`. The reader and the writer then run one thread each, as for
+shards. Tensor-scalar stays out: it counts as broadcast (dchen), and the factory takes none.
+
+**No tail rings.** In F3 the tail rings beat running fewer Neos, by 4x or 2x on throughput. For
+L1-interleaved the alternative already runs four Neos at the same slope. Recorded craq-sim fits, N=1:
+
+| tile count per cluster | borrow + tail rings (09-22) | NoC path `4,4,2` | borrow minus NoC |
+|---|---|---|---|
+| `S mod 4 = 0` | `851 + 46.50*T` | `1119 + 46.25*T` | about -250 cycles |
+| `S mod 4 = 1` or `2` | `1910` or `1929 + 46.50*T` | the same | about +800 cycles (derived) |
+| `S` = 1, 2, 3 | 1694, 1790, 1894 | about 1165-1258 (derived) | about +600 cycles (derived) |
+
+"Derived" applies the NoC fit from 64/128/192 at other tile counts. So on craq-sim a tail costs latency
+and buys no throughput, and tailed slices keep the NoC path. On silicon the NoC path meets the cut at
+48.0 (slide 4), so there a tail would pay back above about 530 tiles per cluster at N=1 (derived, with the
+cut as the NoC path's slope). The decision rests on the tail rings being temporary. At `C = 4` only page
+counts `P` in `[128m - 31, 128m]` divide, one in four; at `C = 1` every one does.
+
+---
+
+## 3. Measured: the NoC path against borrowed slices, on one basis
+
+craq-sim `ad401613`, L1-interleaved over the 8x4 grid, 64/128/192 tiles per cluster (32 banks), span
+fit as in every recorded number. Each arm ran with the same environment before and after the change,
+except the default `1,1,1` row: its NoC-path figure is the `TILES_PER_CYCLE=1` arm, which the code runs
+as the default, because the NoC path batches only with the knob.
+
+| arm | NoC path (before) | borrowed (after) | throughput | span at 64 t/c |
+|---|---|---|---|---|
+| `1,1,1`, the default (N = min(8, S) when borrowed) | `773 + 185.00*T` | `1021 + 46.75*T` | 3.96x | 12613 → 4013 |
+| `1,1,1` N=8, both knobs | `1390 + 94.62*T` | `1021 + 46.75*T` | 2.02x | 7446 → 4013 |
+| `1,1,1` N=1 | `773 + 185.00*T` | `754 + 186.00*T` | 0.99x | 12613 → 12658 |
+| `1,4,1` N=1 | `1324 + 166.00*T` | `847 + 46.50*T` | 3.57x | 11948 → 3823 |
+| `4,4,2` N=1, the tuned config | `1115 + 46.25*T` | `847 + 46.50*T`, as `1,4,1` | 0.99x | 4075 → 3823 |
+| control: DRAM `4,4,2` N=1 | `1115 + 46.25*T` | `1115 + 46.25*T` | unchanged | 4075 → 4075 |
+
+- **A borrowed slice costs what a borrowed shard costs**: F3 measured `757 + 186.00*T`, `851 + 46.50*T`
+  and `1016 + 46.75*T` on this basis. On craq-sim, placement does not enter.
+- **Batching acts on the compute chain alone**, as for shards: 186.00 to 46.75 at `C = 1`. The NoC path
+  stopped at 94.62 because a DM chain bound it.
+- **The control holds**: the DRAM arm is identical to the cycle, so the NoC path is untouched. The
+  NoC-path fits sit 3 to 129 cycles of fixed cost below the 09-22 records (DRAM-interleaved), with the
+  same slopes, after two rebases, so this slide compares only against its own control.
+- **On silicon** (a prediction, not a measurement): the borrowed part moves no byte through the NIU or
+  across the mesh. Slide 4 prices both pipes for the NoC path.
+
+---
+
+## 4. NoC: on silicon the mesh bisection binds the NoC path; the borrowed path moves no NoC bytes
+
+craq-sim charges nothing for transport, so the NoC is absent from its cycles. This slide puts the NoC
+model next to the measured cycles at `4,4,2`, on 64/128/192 tiles per cluster. The NoC path was measured
+on L1 operands directly, with the borrow disabled in a temporary build; it equals the DRAM arm to the
+cycle. Both N=8 outputs are wrong until #56194, so those rows are timing only.
+
+| `4,4,2` | craq-sim | port (floor 24.0) | bisection (floor 48.0) | predicted on silicon |
+|---|---|---|---|---|
+| NoC path, N=1 | `1115 + 46.25*T` | 52% | 104% | about 48.0: the bisection |
+| NoC path, N=8, both knobs | `1817 + 26.44*T` | 91% | 182% | about 48.0: the bisection |
+| borrowed, N=1 (runs as `1,4,1`) | `847 + 46.50*T` | 0 | 0 | 46.50: the compute chain |
+| borrowed, N=8 (runs as `1,4,1`) | `1114 + 11.69*T` | 0 | 0 | 11.69: the compute chain |
+
+The port and bisection columns give the load at the simulated rate as a share of each pipe's capacity.
+
+- **The port.** On the NoC path a cluster fetches 4096 B and writes 2048 B per tile, and serves the same
+  amounts to the clusters that read and write its bank, so 6144 B pass its NIU port each way. At
+  256 B/cyc that is a floor of 24.0 cyc/tile, which no configuration reaches first.
+- **The bisection.** The 8x4 mesh has one NoC, and the cut between the fourth and fifth columns severs
+  four links of 256 B/cyc each way. Each cluster spreads its pages evenly over all 32 banks, and 16 of
+  those banks sit across the cut, so exactly half of all traffic crosses it: 49,152 B each way per round
+  of 32 tiles, a floor of 48.0 cyc/tile at any N. It binds by 4% at N=1 and by 1.8x at N=8, so on silicon the NoC path
+  gains nothing from batching.
+- **The borrowed path** moves no byte through the NIU or across the cut. Its L1 traffic uses the Tensix
+  unpacker and packer ports (20 read and 12 write per cluster), whose floor is about 3 cyc/tile. At N=8
+  it is predicted at about 4.1x the NoC path's throughput on silicon (11.69 against 48.0), against 2.26x
+  on craq-sim.
+- **A correction.** The 09-17 slide put the bisection load at about 105% on its basis (44.00-44.12
+  cyc/tile, 60/120/180 tiles per cluster), from a floor of about 46.5 cyc/tile. That count took half of
+  the remote traffic (31/32 of the total). Half of all traffic crosses, so the floor is 48.0: 109% on that
+  basis, and 104% on this slide's.
+- **Limits of the model.** It counts link bandwidth only. Router contention and packet overhead would
+  slow the NoC path further, so 48.0 is its best case. It treats the NoC clock (1.35 GHz) and the Tensix
+  clock (about 1.4 GHz) as one, an error near 4%.
+
+**Where the NoC path binds on craq-sim, and the NoC load at that point.** craq-sim has no NoC timing:
+`qsr_rocc_issue_cmd_buf` copies each transfer inside the issue instruction, and only DFB flow control
+stalls it. So on craq-sim only the DM cores' work per tile can bind the NoC path: command-buffer setup,
+address math, DFB credits and completion polling. Both knobs, ring depth 2N, 64/128/192 tiles per
+cluster. The NoC path ran on DRAM operands, which equal the L1 NoC path to the cycle (checked at N=1 and
+N=8 for both configs). The loads are the NoC path's, at the craq-sim rate: port = 24.0 / slope, and
+bisection = 48.0 / slope. The borrowed path moves no NoC bytes.
+
+| config | N | NoC path | borrowed | borrowed faster by | port | bisection |
+|---|---|---|---|---|---|---|
+| `4,4,2` | 1 | 46.25 | 46.50 | none | 52% | 104% |
+| `4,4,2` | **2** | **42.75** | **26.50** | **1.61x** | **56%** | **112%** |
+| `4,4,2` | 4 | 31.88 | 16.62 | 1.92x | 75% | 151% |
+| `4,4,2` | 8 | 26.44 | 11.69 | 2.26x | 91% | 182% |
+| `1,1,1` | 1 | 185.00 | 186.00 | none | 13% | 26% |
+| `1,1,1` | **2** | **141.50** | **111.00** | **1.27x** | **17%** | **34%** |
+| `1,1,1` | 4 | 110.25 | 66.50 | 1.66x | 22% | 44% |
+| `1,1,1` | 8 | 94.62 | 46.75 | 2.02x | 25% | 51% |
+
+- **The NoC path binds from the first batching step.** Batching makes the compute almost 4x faster
+  (46.50 to 11.69), but the DM work that drives the NoC only 1.75x (46.25 to 26.44). `4,4,2` already
+  uses all six DM cores (R + W <= 6), so the NoC path has no thread left to add.
+- **At that point no link is full.** At `4,4,2` N=2 the port would be 56% busy, and at `1,1,1` N=2 only
+  17%. The DM cores bind first. The bisection demand is already 112% at `4,4,2`, but craq-sim does not
+  charge for it.
+- **On silicon the bisection binds first**, at 48.0 cyc/tile. When it saturates, each port is 50% busy.
+- Unbatched, the M1 rule holds: the compute binds only with about one reader thread per Neo and one
+  writer thread per two Neos. `1,4,1` runs its NoC path at 166.00 against 46.50 borrowed (3.57x), at 14%
+  of the port.
+- The `4,4,2` rows above N=1 are timing only: both outputs are wrong until #56194. `1,1,1` has ring
+  stride 1, which #56194 does not affect.
+
+---
+
+## 5. Verification
+
+- RED first: `test_native_l1_interleaved_borrows_in_place` at tuned `4,4,2` failed 3 of 3 on the DM count
+  alone, 6 DM cores per cluster with 4 Neos and bit-exact output. The two paths bind the same
+  `kernels_qsr/` sources, so the routing check cannot tell them apart; the thread count, read from the
+  device profiler, can. The five NoC-path cases passed with 6, which validates the count on a known case.
+- GREEN, 15 of 15. All 13 cases are bit-exact at `1,1,1`, `1,2,1`, `1,4,1` and `4,4,2`. The profiler
+  tests run at `4,4,2`, and each also checks how many cores ran the op.
+  - Borrowed: 128 and 256 tiles, 100 and 250 tiles (a pad slot on the high banks), a cache repeat at new
+    addresses, and an in-place `add_`. Three of them (128, 250 and the `add_`) show 2 DM cores and 4 Neos
+    on each of the 32 bank cores. An F3 borrowed shard on 4 cores, a known case that does not pass
+    through this gate, also shows 2.
+  - The NoC path at `C = 4`, with 6 DM cores: 160 and 64 tiles (5 and 2 per bank) on 32 cores, 8 tiles
+    (1 per bank) on 8 cores, a 4x4 sub-grid on 16 cores, and a DRAM a, b or c.
+- The mutation check. A temporary build without the gate's two worker-grid checks failed both sub-grid
+  tests: at `4,4,2` it borrowed on the 16 sub-grid cores and left the other 16 banks uncomputed, so 2 DM
+  cores ran and 65,476 of 131,072 elements differed. The factory was then restored byte for byte, rebuilt,
+  and both tests passed again.
+- The native module: 59 passed, 1 skipped, 2 expected failures native ON; 1 passed, 61 skipped OFF.
+- The no-broadcast, ResNet-add and descriptor cache-hit suites, through both factories: 78 / 78 each.
+  Native ON, the cache-hit test's L1 case now borrows 8 tiles over 32 banks, so 24 clusters compute a
+  pad slot only, and it hits the program cache at new addresses. The profiler shows it: at `1,1,1` its
+  shape runs on all 32 bank cores, and the same shape in DRAM, on the NoC path, runs on 8.
+- 32 cases of those files were deselected: fp32 takes the SFPU path, which stalls on `ad401613`
+  (craq-sim #326), and the activation and SFPU cases abort it on SFPGT. None of them reaches the native
+  factory, which takes no activations and no SFPU op; neither do the activation, broadcast and scalar
+  files. Two earlier runs stopped on these defects: the 671 cases of all six other files on the fp32
+  stall, and the three files without the activation filter on the SFPGT abort.
+- clang-tidy on the factory: 0 findings, from the compile database without PCH flags. A control copy
+  with one planted redundant `? true : false` reported exactly that finding, so the check runs live.
+
+---
+
+## 6. Next
+
+1. **F4 mixed layouts**: gate widening only; the NoC kernels already take sharded pages through the
+   accessor.
+2. **Per-operand borrow**, for example a and b borrowed and c written over the NoC to DRAM: it needs a
+   strided NoC walk, `page = k + j*N`, in place of today's linear `start_tile_id + k`. A kernel change;
+   measure first.
+3. **`1,4,1` at N=8 once #56194 lands**, now for slices as well as shards.
+4. **Remove the tail rings once the DFB supports a capacity per tile counter** (tt-metal#57623). Then
+   every L1-interleaved slice borrows, not only those that divide by `C`.
+5. **Move the development simulator to `9f6314bf` or later.** It fixes the fp32 stall and the SFPGT
+   abort, the two defects that narrowed this week's suite run.
+
+---
+
+# ► Week of 2026-09-22 — F3: borrowed L1 shards run native; `1,4,1` equals `4,4,2`; `1,4,1` at N=8 measures 11.69 cyc/tile
+
+## 1. TL;DR
+
+- **Borrowed L1-sharded operands run on the native factory** (F3). When all three operands are L1
+  shards with one memory config, each DFB is the resident shard: the reader publishes credits, the writer
+  has nothing to do for the borrowed part, and none of it moves over the NoC. Only the 1-3 tiles past
+  the largest multiple of `C` are copied, through the tail rings (slide 6). Height, block and width shards are bit-exact at `1,1,1`, `1,4,1` and
+  `4,4,2`; the module is 44 passed, 1 skipped and 2 expected failures native ON, and 1 / 46 OFF; the
+  ResNet-add and sharded no-broadcast suites pass through both factories, 24 / 24, and the
+  mixed-layout suites 44 / 44 (slide 4).
+- **The stride guard is lifted, and borrowed `1,4,1` at N=8 measures `1231 + 11.69*T`**: 3.98x the
+  throughput of N=1 (`851 + 46.50*T`). It is exactly `1,1,1` at N=8 (46.75) divided by `C = 4`: the
+  four Neos split the batched compute chain evenly. The output is wrong until tt-metal#56194: 74.9% of
+  elements, where the pack defect's model predicts 75%. Two strict expected-failure tests hold that
+  state (slide 5).
+- **`1,4,1` is the borrowed configuration.** Measured while a tuned `4,4,2` still ran four readers and
+  two writers, the two had the same slope to the digit, 46.50. `R` and `W` move no data for the
+  borrowed part, so only `C` enters, and four DM cores per cluster are freed (slide 3). The factory
+  therefore runs every borrowed program with one reader and one writer thread: a tuned `4,4,2` runs as
+  `1,4,1`, which fits `851 + 46.50*T`.
+- **Compute batching is worth 3.98x on the compute chain**: `1,1,1` at N=1 is 186.00 cyc/tile and at
+  the default N=8 it is 46.75. Interleaved `1,1,1` at N=8 is DM-bound at 94.62 on the same basis;
+  borrowed has no DM chain to bind (slide 3).
+- **A basis caveat, recorded for every later comparison.** Interleaved `4,4,2` N=1 fits 44.00 on
+  60/120/180 tiles per cluster and 46.25 on 64/128/192; `1,1,1` fits 176.00 (176.5 in the cost model)
+  and 185.00. HEAD's kernels fit the same 46.25 and 185.00 on 64/128/192, so the shift is the basis
+  and not this change. The slope depends on the tile-count basis by about 5%, so borrowed and
+  interleaved are compared here on one basis only: on 64/128/192 the two are within 1 cyc/tile at
+  `C = 1` and within 0.25 at `C = 4`.
+- **One rule shapes the whole feature**: a borrowed ring is the shard, and the DFB host requires its
+  entry count to divide by `max(producers, consumers)`. So the factory always runs the tuned compute
+  count: the borrowed ring takes the largest multiple of it, and the 1-3 tiles past it go through three
+  small owned tail rings (slide 6); a shard of 1-3 tiles goes through the rings whole. The tail rings
+  stay until the DFB can give each tile counter its own capacity. The reader and the writer run one
+  thread each. Every borrowed shape stays native.
+- **Reviews found two real defects, both in the shared predicate**: `is_native_L1_sharding` compared
+  only the grids of input and output shards, so inputs height-sharded and an output width-sharded on
+  one grid were borrowed in place by both factories and came out wrong (12274 of 16384 elements). The
+  first fix compared the shard spec, and the PR review found that this is still not enough: height
+  inputs and a block output with an identical shard spec put the second shard on different cores (2046
+  of 4096 elements wrong on craq-sim, and a near-constant output on the real Wormhole). The predicate
+  now compares the full memory config. Mixed-layout cases that run without the native flag hold both,
+  in the WH and BH nightly jobs as well (slide 4).
+
+---
+
+## 2. Design: the gate rule, and one push per counter
+
+Three things blocked the borrowed path: the gate rejected every sharded operand, the native kernels had
+no borrowed branch, and the factory set `num_tiles_per_cycle = min(8, S)` whenever all operands were
+borrowed, which above `1,1,1` batches at a ring stride above 1, where the pack path loses tiles (#56194).
+
+**Gate and thread counts.** Sharded operands are admitted when all three are L1-sharded tiled shards
+with one memory config (`get_shard_volumes` reports all three), at any per-core tile count `S`.
+A borrowed DFB has `num_entries = S`, cannot be rounded up past its backing shard, and the DFB host
+asserts that `S` divides by `max(producers, consumers)`. So the factory picks the thread counts per
+program: the compute always runs the tuned `C`, the borrowed rings take the first `S - (S mod C)`
+tiles, and the leftover tiles go through the tail rings (slide 6); a shard smaller than `C` has no
+borrowed ring. The reader and writer run one thread each, since they copy only the tail tiles. Both
+ring strides then equal the compute count and divide the borrowed part by construction. At `C = 4`,
+every shard runs on four Neos. Mixed layouts stay on the fallback (F4). The shared
+predicate behind `get_shard_volumes` now requires the output's exact memory config on every sharded
+input, not only its grid or its shard spec: in-place borrowing cannot be right when core i's input
+shards and its output shard cover different tiles, and every factory that borrows inherits the check.
+
+**Reader and writer.** The reference kernels publish with one `reserve_back(S)`, `push_back(S)`, which
+is right only for one thread on one counter: `push_back(n)` credits the active counter and rotates once,
+so a bulk push of `S` on a counter of capacity `S / max` never completes. The native kernels publish per
+counter. Thread `t` owns `num_tcs` counters; counter `c` holds the tiles from `t + c*T` in steps of
+`num_tcs*T`, so its count is the closed form of the counter-major walk, and with the divisibility rule
+every count is exactly the counter's capacity. The writer does no credit work for the borrowed part
+(below). In both kernels the NoC path is the pre-F3 code, byte for byte, behind `#else`.
+
+**Why not one push, as on WH and BH.** On WH and BH the borrowed reader publishes the whole shard in one
+call: one `reserve_back(S)` and one `push_back(S)` in `kernels_ng/dataflow/reader_interleaved_no_bcast.cpp`.
+That works because the buffer there is a circular buffer with one credit counter, fed by one reader
+RISC. On Quasar a ring shared by several threads is split into `max(P,C)` tile counters of
+`S / max(P,C)` entries each. `reserve_back(n)` asks the active counter for `n` free entries, and
+`push_back(n)` credits that counter and then rotates to the next. So a single `reserve_back(S)` asks one
+counter for more than it holds: with the watcher on, the DFB's capacity assert fires; otherwise the
+thread waits forever. Each thread therefore publishes its counters one at a time, `S / max(P,C)` entries
+each. At `1,1,1` there is one counter of `S` entries, and the loop reduces to the single WH/BH push. That
+is also why the single-threaded fallback keeps its one-call publish.
+
+**Why the writer does nothing for the borrowed part, as on WH and BH.** The WH/BH writer does no credit work for a sharded
+output, and the native Quasar writer now does none either. The protocol never needs the output's credits
+drained. Each kernel launch resets every tile counter and rewrites its capacity before the buffer is
+marked ready, so no credit state reaches the next program. The pack thread's firmware calls
+`tensix_sync()`, which blocks until the Tensix core is idle, before it reports done, so every packed tile
+is in L1 when the program completes. And the borrowed ring is the whole shard, so the compute never waits
+for freed space. The writer used to drain only because it then called `finish()`, which on a DM consumer
+waits until every posted tile is acked. Without a drain, that `finish()` is a race. On craq-sim it
+returned at once when it ran before the compute's first post, and it hung when the writer was delayed
+past that post. With neither the drain nor `finish()`, the borrowed path is bit-exact at `1,1,1`,
+`1,4,1` and `4,4,2`, including a repeated shape in one process. The writer's interleaved path is
+byte-identical to the one before F3. The single-threaded fallback writer still drains, in one call.
+The first borrowed measurements were made while the writer still drained: `1,4,1` fit
+`1002 + 46.50*T` at N=1 and `1406 + 11.69*T` at N=8. Remeasured with the idle
+writer, borrowed `1,4,1` fits `939 + 46.75*T` at N=1 and `1358 + 11.69*T` at N=8. The N=1 slope moves
+by 0.54%, and the N=8 slope does not move. The intercept is lower because the per-cluster span now
+ends when the last pack thread returns, where it used to end at the writer's last pop, just after that
+thread's final post. After the second review the reader's borrowed branch sets up its own buffers, so
+that its NoC path is the pre-F3 code again. Borrowed `1,4,1` then fits `851 + 46.50*T` at N=1 and
+`1231 + 11.69*T` at N=8, the shipped numbers that the other slides quote; `1,1,1` is unchanged at
+`757 + 186.00*T` and `1016 + 46.75*T`. An A/B of the
+two reader versions on one build reproduced both `1,4,1` fits exactly, so the reorder moved them. How
+it does so inside the simulator is not traced; the N=8 slope, 11.69, holds.
+
+**Batch default.** On the borrowed path `num_tiles_per_cycle` defaults to `min(8, S)` only when both
+ring strides are 1, else 1, until #56194. A borrowed ring is walked exactly once, so a batch never wraps
+and `S % n` is not required; the knob's double-buffer and wrap guards are skipped for it. Above stride
+1 the knob runs with a warning and wrong output (slide 5).
+
+**Consequences.** No thread draws zero tiles on the borrowed path, since the borrowed part divides by the
+ring stride. Every borrowed shape runs native, and every shard keeps all `C` Neos (slide 6). At the same
+batch size, four Neos measure 4.00x one Neo (46.50 against 186.00 at N=1, 11.69 against 46.75 at N=8).
+A shard of 1 tile per core goes through the tail rings on four Neos, three on padding.
+
+---
+
+## 3. Measured: borrowed against interleaved on one basis
+
+craq-sim `ad401613`, block shards over the full 8x4 grid, 64/128/192 tiles per cluster, span fit as in
+every recorded number. The borrowed column is the shipped code. The interleaved arms were rerun on the
+same basis in the session of the first borrowed measurement, and their NoC path has not changed since.
+
+| config | interleaved (DRAM) | borrowed (L1 block shards) |
+|---|---|---|
+| `1,1,1` N=1 | `776 + 185.00*T` | `757 + 186.00*T` |
+| `1,4,1` N=1 | `1450 + 166.00*T` | `851 + 46.50*T` |
+| `4,4,2` N=1 | `1119 + 46.25*T` | runs as `1,4,1` |
+| `1,1,1` N=8, both knobs (the borrowed default) | `1519 + 94.62*T`, DM-bound | `1016 + 46.75*T` |
+| `1,4,1` N=8, compute knob, output wrong until #56194 | not measured | `1231 + 11.69*T` (slide 5) |
+
+Before a tuned `4,4,2` ran as `1,4,1`, with the draining writer of slide 2, `4,4,2` fit
+`1021 + 46.50*T` and `1,4,1` fit `1002 + 46.50*T`: the same slope, so the rule costs no throughput.
+
+Three readings. **The cycle count does not move with placement on craq-sim**: borrowed and interleaved
+agree within 1 cyc/tile at the same `C`, because the simulator charges nothing for transport either way.
+What moves is the roof: the DRAM floor of ~349 cyc/tile and the NoC port both vanish, so 46.50 is a
+silicon prediction here and an upper bound everywhere else (week of 09-10, slide 6). **The thread budget
+collapses**: interleaved `1,4,1` is reader-bound at 166.00 and needs `4,4,2` to reach 46.25; borrowed
+`1,4,1` reaches 46.50 with two DM cores. **Batching acts on the compute chain alone**: 186.00 → 46.75
+at `C = 1`, a 3.98x on throughput, where the interleaved pipeline stopped at 94.62 because a DM chain
+bound it. At `C = 4` the same batch measures 11.69 (slide 5); its output is right once #56194 lets the
+pack apply the ring stride.
+
+The basis caveat: the recorded 44.00 and 176.00 came from 60/120/180. On 64/128/192 the same interleaved
+arms fit 46.25 and 185.00, with HEAD's kernels and with this change's kernels alike, to the digit in
+prologue and slope. So the shift is the basis and not the kernel edit, and the NoC path is confirmed
+unchanged. All fits are exact (zero residual): the per-tile cost depends on the tile-count basis by
+about 5%. Compare only within one basis.
+
+---
+
+## 4. Verification
+
+- RED first: the four native arms failed on routing alone (`kernels_qsr` 0, `kernels_dfb` 12) with
+  bit-exact output, and the fallback test passed as predicted. GREEN after the kernels and the gate:
+  5 of 5.
+- Module native ON 44 passed, 1 skipped, 2 expected failures (slide 5); OFF 1 passed / 46 skipped. The
+  count includes the tail-ring tests of slide 6.
+- `test_binary_ng_no_bcast.py -k sharded` and `test_binary_ng_resnet_add.py`: 24 / 24 native ON, where
+  every all-sharded bf16 ADD without activations now routes to `kernels_qsr` at the default `1,1,1`
+  with `n = min(8, S)`; 24 / 24 native OFF. The mixed-layout, mixed-grid and interleaved-output cases,
+  which the predicate change can re-route: 44 / 44 through each factory, with the cases of the third
+  review and the PR review.
+- Shards: 16 tiles per core height, block and width; 12 (one full chunk of 8 plus a tail of 4); 1 and
+  2 per core, including the uneven column whose boundary core holds a partial shard; height inputs with
+  a width output on one grid, which must fall back and stay bit-exact.
+- Uneven shards, where the tensor does not divide into whole shards and the last clusters hold fewer
+  real tiles: height and width with 1 real tile of 4 on the last cluster, and block corners with 1 of 4
+  and 1 of 16, at `1,1,1`, `1,4,1` and `4,4,2`, routed native and bit-exact. Shards that do not divide
+  by 4 -- 1, 2, 6, 9 and 10 tiles per core, including an uneven width shard and a shard grid of four
+  clusters of which two hold no real tile -- stay native and bit-exact at all three splits. Every
+  cluster processes its full shard, so the kernels never see the smaller count; at `1,4,1` three of
+  the four compute threads on a last cluster with one real tile work only on padding.
+- **Review** (the local reviewer with the PR-bot parity pass) found the shard-spec hole above and four
+  smaller items, all applied: the factory reads the shard tile count from the gate's helper instead of a
+  second derivation; the basis claim was isolated by rerunning HEAD's kernels; two output-tensor guards
+  that `compute_output_specs` already covers were deleted; `sharded_operand_ok` lost an argument every
+  caller derived from the same object.
+- **The `2,1,2` arm, DM side 2 against Tensix side 1 on both rings, is bit-exact on craq-sim `9f6314bf`
+  for borrowed and interleaved operands, and wrong on `ad401613` for both**, about half the elements.
+  That is the simulator defect recorded in the week of 09-03, now shown independent of NoC fill. The arm
+  stays out of the committed module until the simulator in use moves past it. Since the second review,
+  a borrowed program runs one reader and one writer thread, so its DM side never outnumbers its Tensix
+  side and that defect cannot reach it.
+- **Second review** (code-review-tt with the PR-bot parity pass) found no defect in any admitted
+  configuration. Applied:
+  - one reader and one writer thread on the borrowed path;
+  - three entries in the borrowed shard set: a repeat of an earlier spec while its tensors are still
+    alive (a program-cache hit that must rebind the borrowed shards to the new buffers), an in-place
+    `add_`, and 256 tiles per core;
+  - the two strict expected failures accept only the pack defect's own signature (slide 5);
+  - the reader's NoC path restored to the pre-F3 code, byte for byte;
+  - comments that still said the gate checks divisibility, that the borrow rule is grid equality, or
+    that the borrowed writer drains.
+- **Third review** (code-review-tt with the PR-bot parity pass, after the tail rings) found no defect
+  in any admitted configuration. Applied:
+  - a same-grid mixed-layout case in `test_binary_ng_no_bcast.py` (height inputs, a width output),
+    which runs without the native flag. With the spec check reverted to grids, it failed through both
+    factories (PCC 0.06); with the check, it passes;
+  - the DM-ring guards (the DM batch against the ring depth, and the 255-entry limit) now skip
+    borrowed programs, which build none of those rings;
+  - a compile guard that refuses a fused RELU as well as an activation chain on the tail path;
+  - `sharded_operand_ok` in a unity-build-safe namespace;
+  - the profiler test strips the DPRINT and streaming-profiler variables that the runtime refuses next
+    to the device profiler, and skips on a build without Tracy;
+  - comments and docs that the tail rings made stale.
+- **Rebase onto main** found a conflict that the text merge and the host build did not show: main's
+  fused-activation SrcA fix made the shared Quasar preprocess helper name `dfb::pre_lhs`, and a program
+  with no borrowed ring has no such DFB, so every shard smaller than `C` failed to JIT-compile. The
+  compute kernel now includes that helper only when a borrowed ring exists. The default `1,1,1` suites
+  never build tail rings, so only the native module caught it.
+- **PR review** (the PR bots and an AI-assisted review by blozano-tt) found a second hole in the shared
+  predicate. Height inputs and a block output on one 2x2 grid had identical shard specs, but the second
+  shard sits on `(1,0)` in one layout and on `(0,1)` in the other. The spec-only check borrowed them in
+  place: 2046 of 4096 elements wrong on craq-sim through both factories, and a near-constant output on
+  the real Wormhole through the Metal 2.0 factory. Applied:
+  - the predicate compares the full memory config when both are sharded, before the uneven-shard branch,
+    so that branch is covered too; the comment says why `b` needs no check of its own;
+  - new cases that run without the native flag: `H.H.B@same-spec`, `H.H.Hcol@same-grid` (row-major
+    inputs into a column-major output), and a supplied output tensor whose config differs from
+    `memory_config`. The same-spec and output-tensor cases failed before the fix on craq-sim and on the
+    real Wormhole; the orientation case passed before too, since the shard spec holds the orientation;
+  - the borrowed rings of `a`, `b` and `c` take one count, since borrowing needs one config.
+
+  Kept by decision: the batching-above-stride-1 warning, rather than a refusal with an opt-in; and the
+  `TTNN_QSR_NATIVE` skip, because the WH and BH nightly jobs collect this directory and the native
+  factory does not run there.
+- Two more `ad401613` limits met on the way, neither ours: fp32 add stalls in UnpackToDest, and an lhs
+  RELU activation aborts the simulator on an undecoded SFPGT. Both are fixed in later craq-sim.
+
+---
+
+## 5. The stride guard lifted: `1,4,1` at N=8, and two expected failures
+
+The factory refused compute batching above ring stride 1, because the pack path loses tiles there
+(#56194). That refusal is now a warning with the same condition, so the knob runs and its timing can be
+measured. The default derivation is unchanged: it batches only at stride 1, so no default
+configuration produces wrong output.
+
+| borrowed `1,4,1`, 64/128/192 tiles per cluster | fit | output |
+|---|---|---|
+| N=1, the default | `851 + 46.50*T` | bit-exact |
+| N=8, `TTNN_QSR_TILES_PER_CYCLE=8` | `1231 + 11.69*T` | 74.9% of elements wrong |
+
+- **Throughput 3.98x; latency 1.93x at 64 tiles per cluster, 2.81x at 192.** The slope falls from
+  46.50 to 11.69. The span gains less at small counts because the batched arm pays about 380 cycles
+  more fixed cost.
+- **The slope is the compute chain divided by `C`, exactly**: `1,1,1` at N=8 measures 46.75, and
+  46.75 divided by `C = 4` is 11.69. The DM side does no per-tile work on this path, so nothing else
+  enters. The 4 is the thread count, not a batching factor: the batching gain is the separate 3.98x,
+  and that number was measured, not predicted.
+- **The per-stage model under-predicted batching.** It took 131 of the 176.5-cycle compute chain as
+  amortizable and predicted 61.9 per Neo at N=8, so 15.5 at `C = 4` (60/120/180 basis). Measured:
+  46.75 and 11.69 (64/128/192 basis, about 5% higher at N=1, which does not close the gap). Fitted to
+  `a/N + b`, 186.00 at N=1 and 46.75 at N=8 give about 159 of 186 amortizable: a derived split under the
+  model's form, not a measurement.
+- **The timing is measured with the defect present.** The pack still issues one pack per tile, only at
+  the wrong addresses, so the number stands for the fixed pack unless the fix adds per-tile cost. The
+  error count confirms that the batched path ran: a batch of 8 at stride 4 covers ceil(8/4) = 2 slots,
+  so 75% of each batch is lost, against 74.9% measured.
+
+**Tests.** Each arm script exits 2 only when every op ran, routed as expected, and produced wrong
+output, and `_check_arm` turns exit 2 into `_WrongOutput`. Two tests carry
+`xfail(raises=_WrongOutput, strict=True)`: `test_native_tiles_per_cycle_above_stride_one` (interleaved
+`4,4,2`, both knobs at 8) and `test_native_borrowed_tiles_per_cycle_above_stride_one` (borrowed
+`1,4,1`, N=8). A hang, a refusal or a fallback still fails them. When the pack fix lands they pass,
+`strict` turns that into a failure, and the markers come off. RED was watched first: against the
+guarded build both failed on the guard's message, not as expected failures. The guard test lost its
+stride arm; its four ring-depth arms still refuse.
+
+Wrong output alone is not enough: each test also requires the pack defect's own signature. A batch of
+`n` tiles at ring stride `s` lands `ceil(n/s)` of them, and each thread's share runs in full batches and
+one tail, which predicts the fraction of wrong elements per shape:
+
+| test | shape | predicted | measured |
+|---|---|---|---|
+| interleaved `4,4,2` | 288 tiles, 9 per cluster | 55.56% | 55.51% |
+| interleaved `4,4,2` | 2080 tiles, 65 per cluster | 73.85% | 73.78% |
+| borrowed `1,4,1` | 64 tiles per core | 75.00% | 74.94% |
+
+A shape more than 1 percentage point away fails the test, so a second defect cannot hide behind the
+first.
+
+---
+
+## 6. Tail rings: every shard of 4 or more tiles runs on four Neos
+
+A borrowed ring must divide by the compute count `C`, so a shard of `S` tiles with `S mod C != 0` used to
+run on fewer Neos. Now the factory always runs the tuned `C` (one rule for every shard: dchen, "a single
+rule always use c=4 is easier to manage") and splits the shard:
+
+- The borrowed rings hold the first `S - r` tiles, where `r = S mod C`: a multiple of `C`. A shard
+  smaller than `C` has no borrowed ring, and all of it is the tail.
+- Three owned rings of `C` entries each (`in0_tail`, `in1_tail`, `out_tail`) carry the `r` leftover
+  tiles. The reader copies them out of the shard with a local NoC loopback read, which stays inside the
+  shard, one entry per compute thread; the entries past `r` stay padding. Each compute thread runs its
+  main tiles, then one tail entry. The writer copies the `r` real results back into the output shard,
+  just past the borrowed part, and drops the padding. The shard's L1 base comes from a
+  `LocalTensorAccessor` binding on each borrowed tensor, which the runtime keeps current on a cache hit.
+- The tail code compiles in only when `TAIL_TILES > 0`, and the borrowed-ring code only when
+  `HAS_MAIN_RING`. The NoC paths of the reader and the writer stay the pre-F3 code, byte for byte.
+
+**The tail rings are interim.** They exist only because the DFB gives every tile counter of a ring the
+same capacity. tt-metal#57623 asks for a capacity per tile counter. The DFB owner replied that the
+uniform capacity was chosen for simplicity, that a per-counter capacity can be looked into now that it
+has a use case, and that it looks possible in the implicit-sync path as well. With it, a borrowed ring
+holds the whole shard, and the tail rings, their L1 and their kernel paths go away.
+
+**One trap, known from the activation path.** On Quasar `pack_tile(i, dfb)` keeps writing to the ring
+that the packer was set up for, whatever id it gets. The first build packed each thread's tail result
+into the borrowed output ring, which wrapped onto that thread's first tile. A probe with tile-indexed
+values showed it: tile 0 of a 9-tile shard held tile 8's result, and tile 8 held zeros. `pack_init` on the
+tail output ring before the tail pack fixed it, as `eltwise_utils_dfb.hpp` already does for the
+activation rings.
+
+**Measured** (craq-sim `ad401613`, tuned `4,4,2` borrowed, so `1,4,1`, N=1, block shards 1 tile tall over
+8x4; the profiler shows 4 Neos and 2 DM cores on every cluster):
+
+| shard tile counts | before | tail rings |
+|---|---|---|
+| 65/129/193 (`r = 1`) | `C = 1`: `757 + 186.00*T` | `1910 + 46.50*T` |
+| 66/130/194 (`r = 2`) | `C = 2`: `851 + 93.00*T` | `1929 + 46.50*T` |
+| 64/128/192 (`r = 0`) | `C = 4`: `851 + 46.50*T` | `851 + 46.50*T`, unchanged |
+
+- **Throughput at the same batch size: 4.00x for `S mod 4 = 1`, 2.00x for `S mod 4 = 2`.**
+- **The tail costs about 1070 cycles of fixed time** (latency, not throughput). On one 65-tile cluster
+  against a 64-tile one the profiler shows the reader starting about 470 cycles later, since it now sets
+  up 8 more producer tile counters before its kernel starts. That start is not on the critical path:
+  with the copy-in moved to the writer instead, the fit stayed `1910 + 46.50*T` to the cycle, and shards
+  of 1-3 tiles got 420-560 cycles slower, because the writer then set up all three tail rings alone.
+  The cost sits on the compute side: one more tile per Neo (about 210) plus the setup of the tail
+  rings and the tail block. The writer's copy-out ends 20 cycles after the compute.
+- **So the tail rings pay off above a size.** Derived from the fits, not measured at those sizes: at
+  N=1 they pass the `C = 1` path above about 9 tiles and the `C = 2` path above about 23. Against the
+  path an `S mod 4 = 1` shard took before them, `C = 1` at its default N=8 (`1152 + 46.75*T`), they
+  have the same slope and about 760 cycles more intercept until #56194 lets `C = 4` batch, where
+  `C = 4` measured 11.69 cyc/tile at N=8.
+- **Shards of 1-3 tiles pay the fixed cost with nothing to amortize it.** On one build, shards of 1, 2
+  and 3 tiles take 1694, 1790 and 1894 cycles through the tail rings on four Neos, against 1132, 1178
+  and 1258 in place on the one or two Neos that divide them: about 50% more, about 600 cycles per op.
+  The unit test `test_binary_ng_resnet_add.py` uses 1-tile shards. The ResNet model's own residual add
+  fuses a RELU, which the native gate does not admit, so this cost does not reach the model today.
+
+**Tests.** `test_native_borrowed_indivisible_shards_use_every_compute_thread` (shards of 1, 2, 3, 6, 7
+and 67 tiles at tuned `1,4,1`) reads the Neo count from the device profiler, one shard per child; it
+failed first with 1 or 2 Neos, for the shards of 4 or more tiles and again for the 1-3 tile shards once
+the single rule replaced the small-shard exception. The indivisible-shard test gained shards of 3, 5, 7
+and 67 tiles, an in-place `add_` with a tail, a cache repeat with a tail, and a tuned `1,2,1` arm (2-entry
+tail rings).
+
+---
+
+## 7. Next
+
+1. **Borrow-from-interleaved** (a cluster's share of an L1-interleaved tensor is contiguous in its own
+   bank), then **F4 mixed layouts**, which is gate widening only: the NoC kernels already take sharded
+   pages through the accessor.
+2. **`1,4,1` at N=8 once #56194 lands**: 11.69 cyc/tile measured with the defect present. The two
+   expected-failure tests are the tripwire. When they turn into strict failures, remove the markers
+   and let the default derivation batch above stride 1.
+3. **Done 2026-09-24: every borrowed shard keeps all `C` Neos** through the tail rings (slide 6).
+4. **Remove the tail rings once the DFB supports a capacity per tile counter** (tt-metal#57623; the
+   DFB owner will look into it, slide 6). Then a borrowed ring holds the whole shard, and the tail's
+   fixed cost goes with it. Until then the tail rings are not tuned further: moving the copy-in to the
+   writer was measured and saved nothing (slide 6).
+5. **Move the development simulator to `9f6314bf` or later.** It fixes the DM-outnumbers-Tensix
+   corruption, the fp32 stall and the SFPGT abort, runs implicit sync (craq-sim#338 closed), and would
+   let `2,1,2` and the other 18 DM-heavy configurations back into the committed module.
+6. **Implicit sync**: adopt it for the coming removal of the opt-out; expect no throughput change
+   against `dm_batch = E/2`.
+
+---
+
 # ► Week of 2026-09-17 — dataflow batching works everywhere; `4,4,2` N=8 runs at 1.66x; a walk regression caught and fixed
 
 ## 1. TL;DR
@@ -877,13 +2563,13 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | 1.5 | F5 | fp32 + SFPU (divide) | **bit-exact oracle expires here** |
 | 1.6 | F7 | activations (lhs/rhs/post) | re-measure cyc/tile; `binary_tiles_init` added cost since our branch point |
 | **2.0** | — | **milestone 2 — once F7 lands** | dtype/layout/memory/activation-complete for whole-tile operands |
-| 2.1 | F13 | **outer-dim broadcast** | **a regression, not a feature** — `kernels_dfb/` has it, `kernels_qsr/` lost it; until it lands every broadcast `add` falls back |
-| 2.2 | F8 | subtile broadcast ROW/COL/SCALAR | gated on `#51291` |
-| 2.3 | F9 | mixed broadcast | keep the ROW-via-LLK / COL-via-reader-fill hybrid |
-| 2.4 | F10 | tensor-scalar | writer fills `in1` once |
+| 2.1 | F13 | **outer-dim broadcast — done** | each operand is read through its Map, a cursor per tile counter, in bf16 and fp32; a dense program compiles to the same instructions |
+| 2.2 | F8 | subtile broadcast ROW/COL/SCALAR — done | bf16 by `unary_bcast`, fp32 by a reader fill; COL and SCALAR held, read and expanded once per page change; a tensor whose every dim is 1 is one value, in bf16 and fp32 |
+| 2.3 | F9 | mixed broadcast — done | bf16 and fp32; the ROW operand as ROW, the COL operand held; in fp32 the reader fills both |
+| 2.4 | F10 | tensor-scalar — done | bf16 and fp32; the reader fills one full tile per Neo from the packed scalar; the writer stays output-only |
 | 2.5 | F14 | **per-operand reader allocation** | **emulator-only** — no roofline gain (per-core reads are `T/2` either way); the case is DRAM/NoC locality, which craq-sim cannot price. Hypothesis: tile-split pairs `in0[k]`/`in1[k]` on the **same bank**. Proportional allocation matters from F4 (mixed layouts) onward, not just broadcast. STRIDED rule limits splits to `p in {1,2,4}` at `C=4` |
 | 2.6 | F15 | **in-flight concurrency** (`implicit_sync`, ring depth, batching) | **batching PULLED FORWARD and measured on craq-sim: 1.81x at `1,1,1`, n=1 -> n=8** (research §5.0.8-§5.0.13) — the "no latency to hide" reasoning held for `implicit_sync` and ring depth, not for batching. **The two knobs ship together.** Dataflow batching works at every clean `(R,C,W)` with a counter-major walk (a batch from one counter strides by `num_tcs * num_threads`; 260 runs bit-exact). Compute batching is correct only at ring stride 1 until tt-metal#56194 lands. **The deliverable is `4,4,2` n=8: 26.56 cyc/tile measured vs n=1's 44.00 on the same basis — 1.66x — blocked only by #56194**, which therefore gates the op's largest available speedup. `2,2,2` n=8 (48.70 projected) is an engine-constrained option. **Above stride 1 compute batching is not "blocked" — it DATA-CORRUPTS, silently.** At `2,2,2` n=8 the dataflow half is bit-exact; the compute half writes 50% of each batch to the wrong L1 offset and returns wrong data with no error, hang or warning. Our factory `TT_FATAL`s so the corruption cannot escape, which is the only reason it looks like a refusal. ONE bug: the metal LLK pack path adds +1 entry per tile where the cursor converter divides by `stride_size_tiles`, so a batch of n at stride S covers only `ceil(n/S)` slots (**tt-metal#56194**, `hw/ckernels/quasar/metal/llk_api/llk_pack_tile_api.h:58-74`). `implicit_sync` and ring depth remain emulator-only, same campaign as F14. One axis, not three (`capacity >= 2n`). Writer batching is a known negative |
-| **3.0** | — | **milestone 3 — once F10 lands** | broadcast-complete; the rest is the long tail |
+| **3.0** | — | **milestone 3 — reached 2026-10-31** | broadcast-complete; the rest is the long tail |
 | 3.1 | F11 | row-major | 16-byte RM shard-width alignment |
 | 3.2 | F12 | where / quantization / int32 | own kernel families; int32 blocked on the DFB-compute bug |
 | 3.3 | F6 | MX formats | **last**; cost is dominated by work outside this op |
@@ -898,10 +2584,10 @@ layout, op families with their own kernels, and a format TTNN cannot represent y
 **F13 opens Milestone 2 because it is a regression, not a feature.** `SubtileBroadcastType::NONE` compares H
 and W only, so outer dims are a separate axis that a `no_bcast` kernel still has to carry — the shared
 `kernels_dfb/` path does, and `kernels_qsr/` lost it when Task 4 collapsed the stride cascade (an
-unmandated narrowing of the copy; design §3.4.1). Correctness is safe today — the gate rejects those
-shapes, the fallback runs, verified bit-exact — but **every broadcast `add` gets zero benefit from the
+unmandated narrowing of the copy; design §3.4.1). Correctness was safe — the gate rejected those
+shapes, the fallback ran, verified bit-exact — but **every broadcast `add` got zero benefit from the
 native path**, and leading-dim broadcast is common (bias add, residual with a unit batch dim). That
-caps the reachable model-level win. It sits with the other broadcast work rather than being ranked
+capped the reachable model-level win. It sits with the other broadcast work rather than being ranked
 against it — which is also what makes Milestone 3's "broadcast-complete" literally true.
 
 **Cross-cutting, before any of this is production-ready:** validate fast dispatch for DFB-bearing specs,

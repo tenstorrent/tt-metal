@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -344,6 +344,37 @@ def test_clone_sharded_tilized(
     )
 
 
+def test_clone_sharded_tilized_non_rectangular_grid(device):
+    # Regression: sharded runtime args used a (0,0)-anchored bbox rectangle instead of the shard's real
+    # CoreRangeSet; this is the issue's 10-core L-shaped grid (8 cores along y=0, 2 more along y=1).
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
+        }
+    )
+    shape = [1, 1, 320, 64]  # 10 shards of (32, 64) over the 10-core grid above.
+
+    shard_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 64),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    run_clone(
+        shape=shape,
+        input_memory_config=shard_memory_config,
+        output_memory_config=shard_memory_config,
+        input_dtype="bfloat16",
+        output_dtype=None,
+        tilized=True,
+        compute_kernel_options=None,
+        device=device,
+    )
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -452,3 +483,25 @@ def test_clone_sharded_dtype_conversion(
         compute_kernel_options=None,
         device=device,
     )
+
+
+@pytest.mark.parametrize(
+    "layout, dtype",
+    [(ttnn.TILE_LAYOUT, None), (ttnn.TILE_LAYOUT, ttnn.float32), (ttnn.ROW_MAJOR_LAYOUT, None)],
+)
+def test_clone_sub_core_grids(device, layout, dtype):
+    """
+    Clone restricted to two core ranges away from core (0, 0), like a sub-device partition.
+    8 cores give an uneven work split, so both core groups run.
+    """
+    torch.manual_seed(2024)
+    torch_input = torch.randn((3, 97, 160), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 1)),
+        ]
+    )
+    output = ttnn.clone(input_tensor, dtype=dtype, sub_core_grids=sub_core_grids)
+    assert torch.equal(ttnn.to_torch(output).to(torch.bfloat16), torch_input)

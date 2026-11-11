@@ -32,8 +32,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
+    const auto* input_buffer = &input_tensor.mesh_buffer();
+    const auto* output_buffer = &output_tensor.mesh_buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -44,9 +44,13 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size();
-    bool strided = std::any_of(stride.cbegin(), stride.cend(), [](int val) { return val != 1; });
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    TT_FATAL(
+        num_dims <= ttnn::MAX_NUM_DIMENSIONS,
+        "slice_write supports rank <= {}, got {}",
+        ttnn::MAX_NUM_DIMENSIONS,
+        num_dims);
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
@@ -61,18 +65,14 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     accumulated_total_per_dim[0] = 1;
     rev_stride[0] = stride[num_dims - 1];
 
-    for (int32_t i = 1; i < num_dims; i++) {
+    for (int32_t i = 1; i < static_cast<int32_t>(num_dims); i++) {
         uint32_t num_unpadded_dim = input_shape[-(i + 1)];
         uint32_t num_total_dim = output_shape[-(i + 1)];
         rev_stride[i] = stride[num_dims - (i + 1)];
-        uint32_t num_padded_dim;
-        if (strided) {
-            uint32_t dims_traversed = (rev_stride[i] * (num_unpadded_dim - 1));
-            uint32_t num_dims_to_skip = (num_total_dim - dims_traversed);
-            num_padded_dim = num_dims_to_skip * accumulated_total_per_dim[i - 1];
-        } else {
-            num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
-        }
+        // Residual after the kernel's rev_stride step.
+        const uint32_t enclosing_stride = (i + 1 < static_cast<int32_t>(num_dims)) ? stride[num_dims - (i + 2)] : 1;
+        uint32_t num_padded_dim =
+            (num_total_dim * enclosing_stride - rev_stride[i] * num_unpadded_dim) * accumulated_total_per_dim[i - 1];
 
         num_input_sticks_per_dim[i] = num_unpadded_dim;
         num_output_sticks_per_dim[i] = num_padded_dim;
@@ -98,10 +98,12 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     }
 
     using namespace tt::tt_metal::experimental;
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    uint32_t page_alignment_offset = (output_tensor_start[-1] * input_tensor.element_size()) % src_buffer_alignment;
+    uint32_t input_row_size_bytes_offset =
+        tt::round_up(input_row_size_bytes + page_alignment_offset, src_buffer_alignment);
 
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address(),
@@ -204,21 +206,21 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    tt::tt_metal::Buffer* src0_buffer = input.buffer();
+    const auto* src0_buffer = &input.mesh_buffer();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t input_row_size_bytes = input_padded_shape[-1] * input.element_size();
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t max_read_size = 4096;
 
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -235,7 +237,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;  // cb for reading in input
     const uint32_t dst0_cb_index = tt::CBIndex::c_1;  // cb for reading in output pages for last dim striding
-    uint32_t cb_page_size = tt::round_up(input_row_size_bytes, alignment);
+    uint32_t cb_page_size = tt::round_up(input_row_size_bytes + page_alignment_offset, alignment);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
@@ -255,7 +257,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     std::map<std::string, std::string> writer_defines;
     if (stride[-1] != 1) {
         writer_defines["LAST_DIM_STRIDED"] = "1";
-        uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
+        uint32_t output_row_size_bytes = output.padded_shape()[-1] * output.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
         tt::tt_metal::CircularBufferConfig cb_dst0_config =
             tt::tt_metal::CircularBufferConfig(

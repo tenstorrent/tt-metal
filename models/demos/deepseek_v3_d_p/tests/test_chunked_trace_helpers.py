@@ -8,13 +8,18 @@ golden and the Kimi vllm row-sharded layout into one [seq, 576] tensor.
 Device-level chunked correctness (full transformer, both variants) is covered by the standalone
 runner's KV-cache PCC; this only guards the trace-format handling so a layout change is caught in CI."""
 
+import json
 from pathlib import Path
 
 import pytest
 
 from models.demos.common.prefill.adapter import get_adapter
-from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
-from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
+from models.demos.common.prefill.runners.runner_utils import (
+    load_trace_golden_span,
+    load_trace_token_ids,
+    resolve_trace_dir,
+)
+from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_index_k, _load_golden_kv_post
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 KVPE_DIM = 576  # kv_lora_rank (512) + qk_rope_head_dim (64)
@@ -65,3 +70,87 @@ def test_golden_row_shard_concat_is_contiguous():
     short = _load_golden_kv_post(trace, 0, 4096)
     long = _load_golden_kv_post(trace, 0, 8192)
     assert torch.equal(short, long[:4096])
+
+
+def _write_windowed_trace(root: Path, *, capture_rows, rows_per_shard=64, total_rows=256, dim=8):
+    import torch
+    from safetensors.torch import save_file
+
+    (root / "kv_cache" / "layer_0").mkdir(parents=True)
+    (root / "dsa" / "indexer_k_layer_0").mkdir(parents=True)
+    for first in range(0, total_rows, rows_per_shard):
+        last = first + rows_per_shard
+        name = f"rows_{first:08d}_{last:08d}.safetensors"
+        rows = torch.arange(first, last, dtype=torch.float32).unsqueeze(1).expand(rows_per_shard, dim).contiguous()
+        save_file({"kv_post_transform_layer_0": rows}, str(root / "kv_cache" / "layer_0" / name))
+        save_file({"indexer_k_layer_0": rows}, str(root / "dsa" / "indexer_k_layer_0" / name))
+    (root / "metadata.json").write_text(
+        json.dumps({"token_ids": list(range(total_rows)), "capture_rows": list(capture_rows)})
+    )
+    return root
+
+
+def test_golden_span_defaults_to_prefix(tmp_path):
+    (tmp_path / "metadata.json").write_text(json.dumps({"token_ids": list(range(4096))}))
+    assert load_trace_golden_span(tmp_path) == (0, 4096)
+
+
+def test_golden_span_reads_capture_rows(tmp_path):
+    trace = _write_windowed_trace(tmp_path, capture_rows=(250880, 256000))
+    assert load_trace_golden_span(trace) == (250880, 256000)
+
+
+@pytest.mark.parametrize("load", [_load_golden_kv_post, _load_golden_index_k])
+def test_sharded_offset_read_crosses_shards(tmp_path, load):
+    import torch
+
+    trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
+    g = load(trace, 0, 96, start=100)
+    assert g.shape == (96, 8), g.shape
+    assert torch.equal(g[:, 0], torch.arange(100, 196, dtype=torch.float32))
+
+
+def test_sharded_offset_read_past_the_end_raises(tmp_path, expect_error):
+    trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
+    with expect_error(FileNotFoundError, "no shard covering rows"):
+        _load_golden_kv_post(trace, 0, 32, start=1024)
+
+
+def test_sharded_read_partly_past_the_end_raises(tmp_path, expect_error):
+    trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
+    with expect_error(FileNotFoundError, "cover only 56 of rows"):
+        _load_golden_kv_post(trace, 0, 64, start=200)
+
+
+@pytest.mark.parametrize("position0", [0, 65536])
+def test_index_k_rope_rebase_uses_absolute_position(tmp_path, position0):
+    """A half-split tail golden re-bases to the device's interleaved pairing at its own prompt
+    positions: row r of a window starting at ``position0`` was roped at ``position0 + r``, not r."""
+    import torch
+    from safetensors.torch import save_file
+
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
+
+    hf_config = glm_5_3_hf_config(max_seq=4096)
+    n, d = 64, hf_config.qk_rope_head_dim
+
+    def rope(x, interleave):
+        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=position0 + n)
+        cos, sin = cos[0, 0, position0:].float(), sin[0, 0, position0:].float()
+        pe = x[:, :d]
+        if interleave:
+            y = pe.reshape(n, d // 2, 2)
+            rot = torch.stack([-y[:, :, 1], y[:, :, 0]], dim=-1).reshape(n, d)
+        else:
+            rot = torch.cat([-pe[:, d // 2 :], pe[:, : d // 2]], dim=-1)
+        return torch.cat([pe * cos + rot * sin, x[:, d:]], dim=-1)
+
+    key = torch.randn(n, 2 * d, generator=torch.Generator().manual_seed(0))
+    (tmp_path / "dsa" / "indexer_k_layer_0").mkdir(parents=True)
+    save_file(
+        {"indexer_k_layer_0": rope(key, interleave=False)},
+        str(tmp_path / "dsa" / "indexer_k_layer_0" / f"rows_00000000_{n:08d}.safetensors"),
+    )
+    g = _load_golden_index_k(tmp_path, 0, n, rope_layout="half_split", hf_config=hf_config, position0=position0)
+    torch.testing.assert_close(g, rope(key, interleave=True), rtol=1e-4, atol=1e-4)

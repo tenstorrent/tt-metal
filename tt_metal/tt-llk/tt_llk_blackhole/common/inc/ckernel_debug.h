@@ -113,14 +113,14 @@ inline void dbg_thread_halt()
         // Notify math thread that unpack thread is idle
         mailbox_write(ThreadId::MathThreadId, 1);
         // Wait for math thread to complete debug dump
-        volatile std::uint32_t temp = mailbox_read(ThreadId::MathThreadId);
+        (void)mailbox_read(ThreadId::MathThreadId);
     }
     else if constexpr (thread_id == ThreadId::MathThreadId)
     {
         // Wait for all instructions on the running thread to complete
         tensix_sync();
         // Wait for unpack thread to complete
-        volatile std::uint32_t temp = mailbox_read(ThreadId::UnpackThreadId);
+        (void)mailbox_read(ThreadId::UnpackThreadId);
         // Wait for previous packs to finish
         while (semaphore_read(semaphore::MATH_PACK) > 0)
         {
@@ -244,6 +244,15 @@ inline void dbg_copy_dest_tile(
     }
 }
 
+// SFPLOAD/SFPSTORE mode that moves a dest row through an LReg without conversion: the raw 32-bit mode
+// when the SFPU sees dest as 32-bit, else the raw 16-bit mode. The implied mode converts, and its FP32
+// form flushes denormal bit patterns, which small Int32 values are.
+// Reads the config from the RISC, so queued config writes must have landed first.
+inline InstrModLoadStore dbg_dest_row_save_mode()
+{
+    return (cfg_read(ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+}
+
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
 {
     // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode)
@@ -253,8 +262,13 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         dest_offset = (dest_offset_id == 1) ? DEST_REGISTER_HALF_SIZE : 0;
     }
 
+    // The same mode must save and restore the borrowed row; read it once, after queued config writes land.
+    InstrModLoadStore save_mode = InstrModLoadStore::LO16;
     if (array_id == dbg_array_id::SRCA)
     {
+        tensix_sync();
+        save_mode = dbg_dest_row_save_mode();
+
         // Save dest row
         // When SrcA array is selected we need to copy row from src register into dest to be able to dump data
         // Dump from SrcA array is not supported
@@ -271,12 +285,17 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 0); // Save dest addr 0 (even cols) to LREG_3
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 2); // Save dest addr 0 (odd cols)  to LREG_3
+        TT_SFPLOAD(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Save dest addr 0 (even cols) to LREG_3
+        TT_SFPLOAD(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Save dest addr 0 (odd cols)  to LREG_4
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
-        // Move to the last used bank
+        // Move to the last used bank. NOTE: this hands the bank being left to the unpackers as
+        // well as flipping -- see CLEARDVALID's model -- so across this bracket's two flips BOTH
+        // SrcA banks end up owned by the unpackers and the caller's SrcA validity is not restored.
+        // Flipping without giving the bank away needs SETRWC under CLR_DVALID_SrcA_Disable; the
+        // SETDVALID pairing used by the SrcB branch below is not the answer here, as SETDVALID is
+        // documented as unsupported on Blackhole.
         TTI_CLEARDVALID(0b01, 0);
 
         // Copy single row from SrcA[row_addr] to dest location 0
@@ -362,8 +381,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     // Restore dest row
     if (array_id == dbg_array_id::SRCA)
     {
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 0); // Restore dest addr 0 (even cols) from LREG_3
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 2); // Restore dest addr 0 (odd cols) from LREG_3
+        TT_SFPSTORE(p_sfpu::LREG3, save_mode, 0 /*sfpu_addr_mode*/, 0 /*dest_reg_addr*/); // Restore dest addr 0 (even cols) from LREG_3
+        TT_SFPSTORE(p_sfpu::LREG4, save_mode, 0 /*sfpu_addr_mode*/, 2 /*dest_reg_addr*/); // Restore dest addr 0 (odd cols) from LREG_4
         // Move to the current bank
         TTI_CLEARDVALID(1, 0);
     }

@@ -44,7 +44,7 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const auto output_padded_shape = output_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to slice_write need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to slice_write need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to slice_write need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",
@@ -81,6 +81,19 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         !input_tensor.is_sharded() || input_tensor.padded_shape().rank() == 4,
         "Sharded input tensor should be of rank 4. Got {}",
         input_tensor.padded_shape().rank());
+}
+
+ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto factory = select_program_factory(args, tensor_args);
+    // The interleaved factory derives every outer-dim start offset in its runtime args, which
+    // override_runtime_arguments recomputes on a hit; only the last-dim start is compiled in.
+    // The sharded factories bake the whole start into shared state, so they keep the full key.
+    if (std::holds_alternative<SliceWriteRMInterleavedProgramFactory>(factory)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            factory.index(), args.slice_start[-1], args.step, tensor_args);
+    }
+    return ttsl::hash::hash_objects_with_default_seed(factory.index(), args, tensor_args);
 }
 
 tt::tt_metal::TensorSpec SliceWriteDeviceOperation::compute_output_specs(

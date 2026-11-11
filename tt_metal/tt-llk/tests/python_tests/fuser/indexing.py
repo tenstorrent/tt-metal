@@ -7,7 +7,7 @@ from enum import Enum, auto
 from itertools import product
 from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
-DEST_SLOTS = ("src0", "src1", "dest")
+DEST_SLOTS = ("src0", "src1", "src2", "dest")
 
 BLOCK_X, BLOCK_Y = "block_x", "block_y"
 TILE_X, TILE_Y = "tile_x", "tile_y"
@@ -36,6 +36,7 @@ class KernelInvocation:
     in1: Index = None
     src0: Index = None
     src1: Index = None
+    src2: Index = None
     dest: Index = None
     out: Index = None
     tiles: Tuple["KernelInvocation", ...] = ()

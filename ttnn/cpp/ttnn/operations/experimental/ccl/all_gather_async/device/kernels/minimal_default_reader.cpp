@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -10,6 +11,7 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_worker_split.hpp"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"
@@ -32,13 +34,11 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7))
 constexpr uint32_t gather_dim = get_compile_time_arg_val(8);
 constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(12);
-constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
-constexpr bool fuse_op = get_compile_time_arg_val(16);
-constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
+constexpr uint32_t input_tensor_C = get_compile_time_arg_val(11);
+constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(12);
+constexpr uint32_t output_tensor_C = get_compile_time_arg_val(13);
+constexpr bool fuse_op = get_compile_time_arg_val(14);
+constexpr uint32_t reverse = get_compile_time_arg_val(15) == 1;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -46,17 +46,31 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    address_t input_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::input);
+    address_t output_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::output);
+    // Input rows in tiles is the one runtime length word; the output row count follows from the gather dim.
+    const uint32_t input_tensor_Ht = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::input_Ht);
+    const uint32_t output_tensor_Ht = gather_dim == 2 ? input_tensor_Ht * ring_size : input_tensor_Ht;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
-    const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
-    const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
-    const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::semaphore_0 + direction);
+    const auto global_worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const auto global_worker_count = get_arg_val<uint32_t>(arg_idx++);
+    const auto chunks_per_sync_or_zero = get_arg_val<uint32_t>(arg_idx++);
+    const AllGatherWorkerSplit split = all_gather_worker_split(
+        global_worker_id,
+        global_worker_count,
+        input_tensor_Ht,
+        input_tensor_Wt,
+        output_tensor_Wt,
+        num_tiles_to_write_per_packet,
+        chunks_per_sync_or_zero);
+    const uint32_t input_tile_id_start = split.input_tile_id_start;
+    const uint32_t input_tile_id_end = split.input_tile_id_end;
+    const uint32_t start_pages_read_in_row = split.start_pages_read_in_row;
+    const uint32_t start_row_offset = split.start_row_offset;
+    const uint32_t chunks_per_sync = split.chunks_per_sync;
 
-    constexpr uint32_t ct_idx = 18;
+    constexpr uint32_t ct_idx = 16;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -397,7 +411,11 @@ void kernel_main() {
         }
     }
 
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+    // Subtract only this launch's ready credits instead of resetting. The semaphore is shared by
+    // every launch of the cached op, and a persistent output lets a faster rank send the next
+    // launch's increments before this reader exits; a reset would erase them and the next launch
+    // would wait forever (the host-side startup barrier is skipped for persistent outputs).
+    noc_semaphore_inc(get_noc_addr(out_ready_sem), uint32_t{0} - sem_target);
 
     // Flush any outstanding NOC transactions before the kernel exits. In the fused path
     // OpSignaler issues non-posted atomic semaphore increments over NOC; without waiting for
