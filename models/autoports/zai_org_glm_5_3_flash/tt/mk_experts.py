@@ -46,7 +46,8 @@ MKX_REV = 24  # kernel revision (compile signature: a long-lived process rebuild
 # 17 MKX_XROWS: the activation mover reads only the T decode rows of x (T <= 16; default on, GLM53_MKX_XROWS=0 = off)
 # 18 MKX_XROWS_PRE: in the megakernel composites the x zero fill is the activation mover's program-start prologue
 # 19 MKX_REP: EP replicas, per-batch balanced assignment of the touched replicated experts (xw)
-# 20 MKX_RW_XA: the routing weights' scatter on xa (off the stream-start path; GLM53_MKX_RW_XA=1)
+# 20 MKX_RW_XA: the routing weights' scatter on xa (off the stream-start path; GLM53_MKX_RW_XA=1, default off since
+# 2026-11-10: a multi-layer race, see parts_raw)
 # 21 MKX_XSL: batched expert TP (slice c of every selected expert, the union in groups of 8 = one EP-shaped pass each)
 # 22 fold_y2 (MKX_Y2_INIT): y2 added to the finished routed sum in its own pass (batch invariance; Stage 14)
 # (MKX_XROWS_COAL, opt-in GLM53_MKX_XROWS_COAL=1: xa's T x rows read as one span per face; no revision bump: the knob
@@ -229,10 +230,18 @@ class ReaderExperts:
         if weights is not None:  # the tail's weights in the scores slot (xw.cpp MKX_RW)
             scores = weights
         rep = [("MKX_REP", "1")] if self.replica_home is not None else []
-        # MKX_RW_XA (with the tail's weights; default since 2026-10-20 15:1xZ: watched w_f01..03 bitwise / exact,
-        # routing step at T=32 17.1 -> 11.5 us, c4_01 / c4_02): the weights' scatter runs on xa, xw publishes the list
-        # right after the union; GLM53_MKX_RW_XA=0 = the scatter on xw
-        if weights is not None and os.environ.get("GLM53_MKX_RW_XA", "1") == "1":
+        # MKX_RW_XA (with the tail's weights; GLM53_MKX_RW_XA=1, A/B only): the weights' scatter runs on xa, xw
+        # publishes the list right after the union (2026-10-20: routing step at T=32 17.1 -> 11.5 us, c4_01 / c4_02).
+        # Default OFF since 2026-11-10: in a stack program holding >= 2 MoE layers, xw of layer l + 1 issues its routing
+        # step's pre-hand-off writes into its scratch (the list page's weight-row zero fill, xw.cpp; neither the list
+        # page nor CB_RAW is flow-controlled against xa: xc pops the list right after reading n) while xa of layer l
+        # still scatters / reads those weights in place -- an expert-only reader sits out every dense phase, so its
+        # weight streamer reaches layer l + 1's expert phase as soon as its layer-l stream fits the ring. Device: native
+        # t >= 12 rows differ replay to replay with it on (pinned-input replay hashing B 12 / 14 / 16; one sparse layer
+        # per program is clean); off, the scatter runs on xw BEFORE the list is published, xa's in-place window shrinks
+        # to the routing weight tiles, and B 12 / 14 / 16 hash to one digest; the 45-layer e2e 4 K x 16 is identical
+        # over 3 reps and 36.9 vs 37.5-38.0 ms/step.
+        if weights is not None and os.environ.get("GLM53_MKX_RW_XA", "0") == "1":
             rep = rep + [("MKX_RW_XA", "1")]
         defs = xprog + rep + y2fold + ([("MKX_LOC", "1")] if self.local_experts is not None else []) + (
             [("MKX_RW", "1")] if weights is not None else []) + [
