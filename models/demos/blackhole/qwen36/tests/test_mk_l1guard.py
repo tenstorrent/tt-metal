@@ -53,7 +53,8 @@ def _program(x_in, x_out, core, filler):
     return ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs), cbs
 
 
-def test_mk_l1guard():
+def test_mk_l1guard(monkeypatch):
+    monkeypatch.setenv("QWEN36_R16_MK_L1GUARD_EVERY", "1")  # check every replay on either query path (cost printed)
     torch.manual_seed(0)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=8 << 20)
     try:

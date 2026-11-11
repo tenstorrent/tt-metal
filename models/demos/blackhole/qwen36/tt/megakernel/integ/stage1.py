@@ -226,7 +226,7 @@ class L1Guard:
     capture (a lazily created CCL semaphore, a resume-path buffer, a prefill op's output kept alive) that is live below
     cb_end at a replay would be overwritten by the engine on every replay, silently. ``check()`` runs before every verify
     replay (Stage1Verify.stage_host) and raises instead. It compares the live allocator's lowest occupied L1 address with
-    cb_end: one O(1) host query (no device work). Transient L1 buffers freed before the replay are harmless and not seen.
+    cb_end: one O(1) host query (no device work; on builds without the binding the slower L1 memory view, sampled). Transient L1 buffers freed before the replay are harmless and not seen.
     It also logs every new low of the lowest live L1 address after arming (persistent L1 allocations creeping toward the
     engine region; bounded by the number of distinct lows).
 
@@ -241,6 +241,7 @@ class L1Guard:
         self.checks = 0
         self.low_min = None
         self.reserved = False
+        self.every = 1
 
     def arm(self):
         import time
@@ -252,6 +253,11 @@ class L1Guard:
         for _ in range(20):
             low = self.q()
         us = (time.perf_counter() - t0) / 20 * 1e6
+        # every replay with the O(1) allocator query; the memory-view fallback (builds without the binding) is sampled so
+        # its amortized cost stays <= ~5 us per replay (QWEN36_R16_MK_L1GUARD_EVERY overrides). Sampling only narrows when
+        # a violation is caught, not what is caught: a persistent overlap is still raised at most `every` replays late.
+        _ev = os.environ.get("QWEN36_R16_MK_L1GUARD_EVERY", "")
+        self.every = max(1, int(_ev)) if _ev else (1 if us <= 20 else min(4096, int(us / 5) + 1))
         self._verdict(low)  # raises (mode 1) if a live L1 buffer already sits below cb_end
         if os.environ.get("QWEN36_R16_MK_L1RESERVE", "0") == "1":
             import ttnn
@@ -265,7 +271,7 @@ class L1Guard:
                 self.reserved = True
         self.armed = True
         logger.info(f"[mk-l1guard] armed ({'raise' if self.mode == '1' else 'warn'}): engine CB end {self.cb_end}, lowest live "
-                    f"L1 {low}, margin {None if low is None else low - self.cb_end} B; query {self.kind} {us:.1f} us"
+                    f"L1 {low}, margin {None if low is None else low - self.cb_end} B; query {self.kind} {us:.1f} us, every {self.every} replay(s)"
                     + ("; allocator L1 reserved below the CB end" if self.reserved else ""))
 
     def check(self):
@@ -273,6 +279,8 @@ class L1Guard:
             self.arm()
             return
         self.checks += 1
+        if self.every > 1 and self.checks % self.every:
+            return
         low = self.q()
         if low is not None and (low < self.cb_end or self.low_min is None or low < self.low_min):
             self._verdict(low)
