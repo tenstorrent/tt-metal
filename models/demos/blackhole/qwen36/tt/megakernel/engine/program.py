@@ -2205,7 +2205,7 @@ ENGINE_ENV = dict(
                "MKA_RQNR=1,MKA_RMASK=1,MKA_QSK=1,MK_V12=1,MK_REAL_AR=1,MK_OWNER_RESID=0,MKA_RWO=1,MK_REAL_AAR=1,"
                "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MKA_RQBAL_HOST=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1,MK_GIN_PERCORE=1,MK_GAMMA_CONS=1",
     MK_STREAM_DM_OS="1",  # batch 6b
-    MK_AR_RSTD="1",  # batch 6 (a445c147d35): real rstd producer + gamma at the consumers (the model's gammas: weights_mk 'gamma_cons')
+    MK_AR_RSTD="1", MK_AR_RSTD_RED="gdn",  # 6e: a GDN-role core reduces the Σ partials  # batch 6 (a445c147d35): real rstd producer + gamma at the consumers (the model's gammas: weights_mk 'gamma_cons')
 )
 # the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
 PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups", "rqbal")  # rqbal: host table
