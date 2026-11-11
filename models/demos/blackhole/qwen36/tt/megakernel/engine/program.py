@@ -2264,7 +2264,12 @@ def _setup_context(mesh, env):
     L1 pool (from_torch / allocate_tensor_on_device into L1). All restored after."""
     saved_env = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
-    _ft0, _tt0, _at0 = ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device
+    _ft0, _tt0, _at0, _gs0 = ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device, ttnn.create_global_semaphore
+    # global semaphore pool (QWEN36_R16_MK_SEMPOOL=1; L1P2 rule): device-local sems created in program.py (reset by their
+    # waiter at program end) are shared across builds by (core ranges, initial value, occurrence); sems created from
+    # ar_phase.py / oneshot_ar.py (monotonic AR epochs with a per-build base word) are never pooled
+    sem_pool = _L1POOL.setdefault(("sem", id(mesh)), {}) if os.environ.get("QWEN36_R16_MK_SEMPOOL", "0") == "1" else None
+    sem_seen = {}
     pool = _L1POOL.setdefault(id(mesh), {}) if os.environ.get("QWEN36_R16_MK_L1POOL", "1") == "1" else None
     seen = {}  # key -> occurrences in THIS setup
     stats = dict(reused=0, new=0, bytes_reused=0)
@@ -2308,16 +2313,32 @@ def _setup_context(mesh, env):
             return make()
         return _pooled(_l1_key(list(shape), dtype, layout, memory_config), make)
 
+    def _gs(dev_, crs_, init_, *a, **k):
+        import sys as _sys
+
+        fn = _sys._getframe(1).f_code.co_filename
+        if sem_pool is None or fn.endswith(("ar_phase.py", "oneshot_ar.py")):
+            return _gs0(dev_, crs_, init_, *a, **k)
+        key = (repr(crs_), int(init_), repr(a), repr(sorted(k.items())))
+        n_ = sem_seen[key] = sem_seen.get(key, -1) + 1
+        lst = sem_pool.setdefault(key, [])
+        if n_ < len(lst):
+            stats["sems_reused"] = stats.get("sems_reused", 0) + 1
+            return lst[n_]
+        g_ = _gs0(dev_, crs_, init_, *a, **k)
+        lst.append(g_)
+        return g_
+
     def _tt(t, *a, **k):
         if t.storage_type() == ttnn.StorageType.DEVICE:
             return _tt0(ttnn.get_device_tensors(t)[0], *a, **k)
         return _tt0(t, *a, **k)
 
-    ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device = _ft, _tt, _at
+    ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device, ttnn.create_global_semaphore = _ft, _tt, _at, _gs
     try:
         yield stats
     finally:
-        ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device = _ft0, _tt0, _at0
+        ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device, ttnn.create_global_semaphore = _ft0, _tt0, _at0, _gs0
         for k, v in saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
