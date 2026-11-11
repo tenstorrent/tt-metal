@@ -427,6 +427,29 @@ def setup_bench(dev, MESH, mesh_identity):
             assert e_, "a KV group without a non-STREAM core"
             m_.remove(e_[-1]); m_.append(e_[-1])
     rank = {i: members[grp[i]].index(i) for i in ACT}
+    # MKA_SVAR=1: STREAM kernel variants by phase membership (MKA_SV 0 leaf / 1 rstd producer / 2 SDPA tree parent or root):
+    # each STREAM core runs the binary of its variant, so code a core never runs drops out of its text. Tree parents are
+    # moved off the 8 rstd producers (STREAM (n = k, k)); the owners stay leaves (EXTLEAN). KV block ranges / mask: `members`.
+    SVAR = os.environ.get('MKA_SVAR', '0') == '1'
+    _RSTDP = os.environ.get('MK_AR_RSTD', '0') == '1' and os.environ.get('MK_AR_RSTD_HOST', '0') != '1'
+    def sv_prod(f_): return _RSTDP and fcores[f_].x < GX and fcores[f_].y < GY and fcores[f_].x == fcores[f_].y
+    TMEM = members
+    _SV_RQB = ('MKA_RQBAL', '1') in MKDEF   # MKA_RQBAL: trees are per pass (any STREAM core may parent): variants split by rstd producer only
+    if SVAR and not _SV_RQB:
+        _sx3 = lambda f_: fcores[f_].x < GX and fcores[f_].y < GY
+        TMEM = []
+        for m_ in members:
+            npar_ = (len(m_) + FAN - 1) // FAN
+            ok_ = lambda f_: _sx3(f_) and not sv_prod(f_)
+            orig_ = [m_[r_] for r_ in range(0, len(m_), FAN)]
+            par_ = ([f_ for f_ in orig_ if ok_(f_)] + [f_ for f_ in m_ if ok_(f_) and f_ not in orig_])[:npar_]
+            assert len(par_) == npar_, ("MKA_SVAR: too few non-producer STREAM cores for the tree parents", len(par_), npar_)
+            rest_ = [f_ for f_ in m_ if f_ not in par_]
+            t_ = []
+            for p_ in range(npar_): t_ += [par_[p_]] + rest_[p_ * (FAN - 1):(p_ + 1) * (FAN - 1)]
+            assert sorted(t_) == sorted(m_)
+            TMEM.append(t_)
+        rank = {i: TMEM[grp[i]].index(i) for i in ACT}
     kgrid = crs([fcores[i] for i in ACT]) if RESV else fgrid
     GSEM = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(23)]
     GSA = [ttnn.get_global_semaphore_address(g) for g in GSEM]
@@ -737,7 +760,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 for k_ in range(_nr): rsp_t[k_] = (xb[:, k_ * (H // _nr):(k_ + 1) * (H // _nr)].double() ** 2).sum(-1).float()
             rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, TILE))
             RSTD_RSF = ttnn.create_global_semaphore(dev, kgrid, 0)   # MK_AR_RSF: the producer's flag (+MK_AR_RSF_N per AR), device-local
-            MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(RSTD_RSF))), ('MK_AR_RSF_N', '8')]
+            MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(RSTD_RSF))), ('MK_AR_RSF_N', '1' if RED_GDN else '8')]
             if os.environ.get('MK_AR_RSTD_HOST', '0') == '1': MKDEF = MKDEF + [('MK_AR_RSTD_HOST', '1')]   # A/B without the producer: static host Σ, no waits
             print(f"[rstd] consumer: Σ tile {'final, column 0 (red=gdn)' if RED_GDN else f'rows {_nr} (row form)'}, flag @ {ttnn.get_global_semaphore_address(RSTD_RSF)}{' (host, no wait)' if os.environ.get('MK_AR_RSTD_HOST', '0') == '1' else ''}", flush=True)
         else:
@@ -930,6 +953,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # compute after C-OSUM; the 4 AR-only cores run AR_SEND. x of layer L + 1 lands in the K-rows' v_xk / v_xpk slot with its
     # own flag pair (MK_AR_XF0 / XF1: the stand-in v12_ox keeps feeding the MLP after the attention / GDN AR stall); each
     # STREAM core waits its row's two flags instead of the stall, the Q root waits all 16 deliveries (MK_AR_XCNT) before XRDY.
+    RRED = False   # MK_AR_RSTD_RED=gdn's GDN-core Σ reducer (set in the AR block)
     REAL_AR = ('MK_REAL_AR', '1') in MKDEF
     if REAL_AR:
         assert MESH and V12, "MK_REAL_AR needs MK_MESH=1 and MK_V12=1"
@@ -995,7 +1019,24 @@ def setup_bench(dev, MESH, mesh_identity):
         if AR_RSTD:   # the producer reuses the consumers' flag (RSTD_RSF, MK_AR_RSF / MK_AR_RSF_N defined in the rsp block)
             assert V_R == 32 and RQKV and RSTD, "MK_AR_RSTD: R = 32 with the rsp Σ tile (MKA_RQKV / QSK + V12)"
             MKDEF = MKDEF + [('MK_AR_RSP', str(rsp_sh.buffer_address())), ('MK_AR_CB_SS', '19')]
-            print(f"[ar] rstd producer: Σ tile = rsp tile 0 @ {rsp_sh.buffer_address()}, flag MK_AR_RSF (+8 per K-row delivery)", flush=True)
+            print(f"[ar] rstd producer: Σ tile = rsp tile 0 @ {rsp_sh.buffer_address()}, flag MK_AR_RSF (+{1 if RED_GDN else 8} per K-row delivery)", flush=True)
+        # MK_AR_RSTD_RED=gdn (v1.112 iii'): the 8 producers send their UN-reduced fp32 tile (elementwise Σ_t (x_t^T)^2) to page k of
+        # CB 37 (8 fp32 pages, static, planned) on ONE plain GDN-role core RRED_HC = (1, GY) (not (0, GY): the OSIG aggregator,
+        # not the AR corners) and += 1 its word RRED_SEM. Per delivery (2 per layer, every layer) that core's writer waits 8, pushes
+        # CB 37; its compute sums the 8 tiles, SFPU column-reduces and transposes (column 0 = per-token Σx², the consumers' format)
+        # into CB 39; the writer multicasts the 4 KB tile to the STREAM rects at MK_AR_RSP, then MK_AR_RSF += 1 there.
+        RRED = AR_RSTD and RED_GDN
+        if RRED:
+            assert GDN24, "MK_AR_RSTD_RED=gdn: the Σ reducer runs on a GDN-role core (MKA_GDN24)"
+            RRED_HC = ttnn.CoreCoord(1, GY)
+            _hcr = ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)])
+            assert V12CB, "MK_AR_RSTD_RED=gdn: CB 37's address comes from the V12CB plan (static CBs 37 / 39 on RRED_HC, after GIN's CB 41)"
+            RRED_SEM = ttnn.create_global_semaphore(dev, _hcr, 0)
+            _hp = dev.worker_core_from_logical_core(RRED_HC)
+            MKDEF = MKDEF + [('MK_AR_RRED_X', str(_hp.x)), ('MK_AR_RRED_Y', str(_hp.y)), ('MK_AR_RRED_SEM', str(ttnn.get_global_semaphore_address(RRED_SEM)))]
+            # MK_AR_RRED_IN (CB 37's planned address on RRED_HC) is added after the V12CB plan
+            print(f"[rred] Σ reducer on GDN core {(RRED_HC.x, RRED_HC.y)} (noc {(_hp.x, _hp.y)}): static CB 37 (8 fp32 pages) + CB 39, word @ "
+                  f"{ttnn.get_global_semaphore_address(RRED_SEM)}; STREAM rects {RECTS}; MK_AR_RSF +1 per delivery", flush=True)
         # GDN24 (AR sender hosted in the GDN role on the corner, spec v1.44): the corner cores do NOT span the owners' RS slot
         # CB (CB_RED, 140-160 KB) or the wo output CB 23 (their GDN-role CB stack would be lifted above the owners' whole CB
         # region). Owners publish both addresses at init into 2 words on the 4 corner cores (MK_AR_PUB / MK_AR_PUBA); the
@@ -1775,6 +1816,82 @@ def setup_bench(dev, MESH, mesh_identity):
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
                                              defines=dfs, runtime_args=rt, **base))
         return out
+    # ---- MK_AR_RSTD_RED=gdn (v1.112 iii'): the Σ reducer hosted in the GDN role on RRED_HC (writer + compute variants) ----
+    def _gdn_host_rred(gks):
+        """gks: the GDN role kernels after _gdn_host_ar. RRED_HC leaves the plain writer / compute ranges and gets generated
+        variants whose loop runs over ALL layers of the pass: per layer LL, delivery 2 LL (mixer x) BEFORE the GDN step
+        (GDN-type layers only, layer counter gL), delivery 2 LL + 1 (MLP x) after it. Writer per delivery d: wait the 8
+        producer increments (8 (d + 1)), push CB 37 (8 pages), wait CB 39, multicast the 4 KB final Σ tile to the STREAM rects
+        at MK_AR_RSP, then MK_AR_RSF += 1 there. Compute per delivery: sum the 8 tiles (fp32 DST, CB 37 unpacks to DST in
+        fp32), SFPU column sum + transpose_dest (column 0 = per-token Σx²) -> CB 39. The reader keeps the plain role."""
+        import re as _re
+        hc = (RRED_HC.x, RRED_HC.y)
+        gmask = sum(1 << L_ for L_ in range(NL) if not is_attn_layer(L_))
+        rsp_a, rsf_a = dict(MKDEF)['MK_AR_RSP'], dict(MKDEF)['MK_AR_RSF']
+        rects = [RECTS[i:i + 5] for i in range(0, len(RECTS), 5) if RECTS[i + 4]]
+        _SENT = '  // @@GDN_LAYER_BODY_END@@'
+        out = []
+        for kd in gks:
+            src = str(kd.kernel_source)
+            role = 'w' if src.endswith('g2_writer.cpp') else ('c' if src.endswith('g2_compute.cpp') else None)
+            cores = ttnn.corerange_to_cores(kd.core_ranges)
+            if role is None or hc not in {(c.x, c.y) for c in cores}:
+                out.append(kd); continue
+            rest = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores if (c.x, c.y) != hc])
+            base = dict(compile_time_args=list(kd.compile_time_args), common_runtime_args=list(kd.common_runtime_args))
+            out.append(ttnn.KernelDescriptor(kernel_source=src, core_ranges=rest, defines=list(kd.defines), runtime_args=ttnn.RuntimeArgs(), config=kd.config, **base))
+            txt = open(src).read()
+            lp = r'\n  for \(uint32_t L = 0; L < (\d+); \+\+L\) \{\n'
+            assert txt.count(_SENT) == 1 and len(_re.findall(lp, txt)) == 1, f"_gdn_host_rred: {src}: need one layer loop + one sentinel"
+            loop = _re.search(lp, txt)
+            _s0 = txt.index(_SENT)
+            assert txt[_s0:].split('\n', 1)[1].startswith('  }\n'), f"_gdn_host_rred: {src}: the sentinel must directly precede the loop's '  }}'"
+            end = _s0 + len(txt[_s0:].split('\n', 1)[0]) + 1 + 2
+            assert txt[end] == '}', (src, txt[end - 5:end + 5])
+            body = txt[loop.end():_s0].rstrip(' ')
+            fn = 'rred_w' if role == 'w' else 'rred_c'
+            new_loop = (f'\n  uint32_t gL = 0;\n  for (uint32_t LL = 0; LL < {NL}; ++LL) {{\n   {fn}(2u * LL);   // delivery 2 LL: this layer\'s mixer x\n'
+                        f'   if (({gmask}u >> LL) & 1u) {{\n    const uint32_t L = gL++;\n' + body + '\n   }\n'
+                        f'   {fn}(2u * LL + 1u);   // delivery 2 LL + 1: this layer\'s MLP x\n  }}\n'
+                        + (f'  *(volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u = 0;   // device-local: all {16 * NL} increments awaited\n' if role == 'w' else ''))
+            txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
+            if role == 'w':
+                mc = '\n'.join(f'  noc_async_write_multicast(s_, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsp_a}u), 4096, {r[4]}u, false);' for r in rects)
+                mi = '\n'.join(f'  noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsf_a}u), 1, {r[4]}u);' for r in rects)
+                fdef = (f'__attribute__((noinline)) static void rred_w(uint32_t d) {{   // MK_AR_RSTD_RED=gdn: delivery d\n'
+                        f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u, 8u * (d + 1u));\n'
+                        f'  cb_reserve_back(37, 8);\n  cb_push_back(37, 8);\n  cb_wait_front(39, 1);\n  const uint32_t s_ = get_read_ptr(39);\n'
+                        f'{mc}\n  noc_async_write_barrier();   // the Σ tile has landed before its flag\n{mi}\n  noc_async_atomic_barrier();\n  cb_pop_front(39, 1);\n}}\n')
+                inc = ''
+            else:
+                fdef = ('__attribute__((noinline)) static void rred_c(uint32_t) {   // MK_AR_RSTD_RED=gdn: 8 K-row tiles -> final Σ (column 0)\n'
+                        '  compute_kernel_hw_startup(37, 37, 39);   // compute() re-runs its own startup per layer\n'
+                        '  cb_wait_front(37, 8);\n  cb_reserve_back(39, 1);\n  reconfig_data_format_srca(37);\n  pack_reconfig_data_format(39);\n'
+                        '  copy_init(37);\n  tile_regs_acquire();\n  copy_tile(37, 0, 0);\n'
+                        '  for (uint32_t t = 1; t < 8; ++t) {\n    copy_init(37);\n    copy_tile(37, t, 1);\n    add_binary_tile_init();\n    add_binary_tile(0, 1, 0);\n  }\n'
+                        '  sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();\n  sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);\n'
+                        '  transpose_dest_init<true>();\n  transpose_dest<true>(0);\n'
+                        '  tile_regs_commit();\n  tile_regs_wait();\n  pack_tile(0, 39);\n  tile_regs_release();\n  cb_push_back(39, 1);\n  cb_pop_front(37, 8);\n}\n')
+                inc = ('#include "api/compute/compute_kernel_api.h"\n#include "api/compute/transpose_dest.h"\n#include "api/compute/eltwise_binary_sfpu.h"\n'
+                       '#include "api/compute/tile_move_copy.h"\n#include "api/compute/reconfig_data_format.h"\n#include "api/compute/pack.h"\n')
+            km = txt.index('void kernel_main() {')
+            txt = txt[:km] + fdef + txt[km:]
+            if inc:
+                i_ = txt.index('#include'); i_ = txt.index('\n', i_) + 1   # after the role's first include
+                txt = txt[:i_] + inc + txt[i_:]
+            hsrc = src.replace('.cpp', '_rred.cpp')
+            open(hsrc, 'w').write(txt)
+            cfg = kd.config
+            if role == 'c':
+                cfg = ttnn.ComputeConfigDescriptor(math_fidelity=kd.config.math_fidelity, fp32_dest_acc_en=kd.config.fp32_dest_acc_en,
+                                                   math_approx_mode=kd.config.math_approx_mode, dst_full_sync_en=kd.config.dst_full_sync_en)
+                u_ = list(kd.config.unpack_to_dest_mode); u_ += [ttnn.UnpackToDestMode.Default] * (64 - len(u_))
+                u_[37] = ttnn.UnpackToDestMode.UnpackToDestFp32
+                cfg.unpack_to_dest_mode = u_
+            out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)]),
+                                             defines=list(kd.defines), runtime_args=ttnn.RuntimeArgs(), config=cfg, **base))
+        assert sum(str(k_.kernel_source).endswith('_rred.cpp') for k_ in out) == 2, "_gdn_host_rred: writer + compute variants on RRED_HC"
+        return out
     def _mka_ccfg():   # MKA2 compute config; MK_AR_RSTD: the Σ tile CB 43 (v_rstd) unpacks straight to DST in fp32 (exact rstd sum)
         c_ = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False)
         if ('MK_AR_RSTD', '1') in MKDEF:
@@ -1831,6 +1948,9 @@ def setup_bench(dev, MESH, mesh_identity):
                 cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, rect.merge(O_CRS) if V12CB else O_CRS)]
             if GIN: cbs = cbs + [cbd(15, ttnn.bfloat4_b, 20 * 7, rect)]   # the gdn_in BFP4 slice slot (slot M's turn on GDN layers)
         if GIN: cbs = [cbd(41, ttnn.bfloat16, 4, crs([fcores[i] for i in GDNC]))] + cbs   # GIN staging on the GDN cores, FIRST: CB base there
+        if RRED:   # the Σ reducer's static CBs on RRED_HC, right after GIN's CB 41 (in the V12CB plan prefix: the producers get CB 37's address)
+            _hcr = ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)])
+            cbs = cbs[:1 if GIN else 0] + [cbd(37, ttnn.float32, 8, _hcr), cbd(39, ttnn.float32, 1, _hcr)] + cbs[1 if GIN else 0:]
         if plan_only: return _order(cbs)   # MK_V12_CB: the list prefix that fixes the v12 addresses (AR / GDN-role CBs follow it)
         if KVA:   # owners only (CB 6 / 8 are STREAM-rect-only otherwise): source bf16 tile, BFP8 source + target tiles
             cbs = cbs + [cbd(6, ttnn.bfloat16, 1, KVA_CRS), cbd(8, ttnn.bfloat8_b, 1 + KVA_PPU * KVA_NUT, KVA_CRS)]
@@ -1860,13 +1980,14 @@ def setup_bench(dev, MESH, mesh_identity):
                 cbs = cbs + [_g]
         rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         RS = os.environ.get('MKA_ROLESPLIT', '1') == '1'   # per-role binaries (spec v0.9.17)
-        rta = {k_: (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for k_ in ('s', 'e')}
+        rta = {k_: (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for k_ in ('s', 'e', 's0', 's1', 's2')}
+        SVC = {0: [], 1: [], 2: []}   # MKA_SVAR: STREAM cores per variant
         z10 = [0] * 10
         for fi, c in enumerate(fcores):
             if fi in RESV: continue
-            u, r, n = grp[fi], rank[fi], len(members[grp[fi]])
+            u, r, n = grp[fi], rank[fi], len(TMEM[grp[fi]])
             sb0, sb1 = RNG[fi]
-            m = members[u]
+            m = TMEM[u]
             if r == 0: has_p, par, plvl = 0, 0, 0
             elif r % FAN != 0: has_p, par, plvl = 1, m[r - r % FAN], 0
             else: has_p, par, plvl = 1, m[0], 1
@@ -1917,7 +2038,13 @@ def setup_bench(dev, MESH, mesh_identity):
                 if QSK and RWO: assert HLP.get(fi, (None, 0, 0))[2] == 0 and len(WOT.get(fi, [])) == WO_MAXT_, ("MKA_EXTLEAN wo", fi)
                 if RWO: assert not rd_w
                 if V12: assert vc_[0] == 2 and vr_[0] == 2 and vw_[0] == 2, ("MKA_EXTLEAN vrole", fi, vc_[0], vr_[0], vw_[0])
-            _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
+            _rk = 's' if isS else 'e'
+            if SVAR and isS:
+                _par = (nrecv > 0 or r == 0) and not _SV_RQB
+                assert not (_par and sv_prod(fi)), ("MKA_SVAR: a tree parent / root on an rstd producer", fi)
+                _sv = 2 if _par else (1 if sv_prod(fi) else 0)
+                SVC[_sv].append(fi); _rk = f's{_sv}'
+            _r3 = rta[_rk]; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
             if GDN24 and isS and QSK and RWO and V12 and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_STREAMLEAN: folded STREAM role args
                 _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
                 assert g_ == 0 and r_mk[14] == 255 and r_mk[15] == 0, ("MKA_STREAMLEAN IS_GU / ROOT (reader)", fi, g_, r_mk[14:16])
@@ -1945,7 +2072,7 @@ def setup_bench(dev, MESH, mesh_identity):
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
             _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
             _up = [('MKA_UPAR', '1'), ('MKA_UPAR_PAR', str(UPAR_PAR(coord)))] if UPAR else []   # own users g = 2u + parity
-            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')] + _up, *rta['s'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None)) + _ks(_erng, [('MKA_ROLE_EXT', '1')] + _up, *rta['e'], *_ard, dmopt=_dmo)
+            ks = (sum((_ks(crs([fcores[f_] for f_ in SVC[v_]]), [('MKA_ROLE_STREAM', '1'), ('MKA_SV', str(v_))] + _up, *rta[f's{v_}'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None)) for v_ in (0, 1, 2) if SVC[v_]), []) if SVAR else _ks(_srng, [('MKA_ROLE_STREAM', '1')] + _up, *rta['s'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None))) + _ks(_erng, [('MKA_ROLE_EXT', '1')] + _up, *rta['e'], *_ard, dmopt=_dmo)
             if REAL_AR:
                 for kd_ in arp['sender_kernels']:   # attention ARs read the wo output CB (bit it of MKAR_ATYPE)
                     if REAL_AAR and not any(k_ == 'MKAR_ATYPE' for k_, _ in kd_.defines): kd_.defines = list(kd_.defines) + _aar_d
@@ -1958,6 +2085,10 @@ def setup_bench(dev, MESH, mesh_identity):
         if GDN24:
             _gk = list(GDN_ROLE.get('kernels', []))
             if REAL_AR: _gk = _gdn_host_ar(_gk, AR.sender_parts(arp))
+            if RRED:   # the Σ reducer (CBs 37 / 39 on RRED_HC are in the plan prefix; the GDN role must not use them there)
+                _hid = {f_.buffer_index for c_ in list(GDN_ROLE.get('cbs', [])) for f_ in c_.format_descriptors if c_.core_ranges.contains(RRED_HC)}
+                assert not ({37, 39} & _hid), ("MK_AR_RSTD_RED=gdn: CB 37 / 39 taken by the GDN role on the reducer core", sorted(_hid))
+                _gk = _gdn_host_rred(_gk)
             ks = ks + _gk; cbs = cbs + list(GDN_ROLE.get('cbs', []))
             def _cbsum(lx, ly):
                 n_ = 0
@@ -1998,6 +2129,7 @@ def setup_bench(dev, MESH, mesh_identity):
         a_ = dict(xk=CBP.address_of(p_, 33, (0, 0)), rs=CBP.address_of(p_, 36, (0, 0)), h7=CBP.address_of(p_, 37, (0, 0)), xpk=CBP.address_of(p_, 16, (0, 0)))
         if v_pbuf is None: a_['pbuf'] = CBP.address_of(p_, 3, (GX, 0))
         if GIN: a_['gin'] = CBP.address_of(p_, 41, (fcores[GDNC[0]].x, fcores[GDNC[0]].y))
+        if RRED: a_['rred'] = CBP.address_of(p_, 37, (RRED_HC.x, RRED_HC.y))
         return a_
     # V12 drops the fm11 output CB 16 (re-used as CB_VPK on the owners): keep the unused fm11 output out of L1 (it was the L1 floor)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12 else ws(rect, NDN * TILE))
@@ -2013,6 +2145,7 @@ def setup_bench(dev, MESH, mesh_identity):
             AR_XT['xk'], AR_XT['xpk'] = VADDR['xk'], VADDR['xpk']
             ARP, ar_blk, _ardefs = _ar_parts()
             MKDEF = MKDEF + _ardefs
+        if RRED: MKDEF = MKDEF + [('MK_AR_RRED_IN', str(VADDR['rred']))]   # the producers' target: CB 37 page 0 on RRED_HC
     if REAL_AR:   # per-device programs (fabric connections, owner / gather roles differ by ring position)
         _pcache = {}
         def PROG_PER_DEV(co):
