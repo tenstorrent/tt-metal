@@ -701,8 +701,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         NC = len(cores)
         OGB = OGK + 6   # after the PERCORE words (k, n_fwd, 2 x (x, y))
         # XS: windows (2 jobs) | window-out (one set per job) | reader ctrl page (+ dtb row @+512, nea row @+576) | ... | gate scratch
-        XWO = 2 * B * 2048; XRC = XWO + 2 * B * 1024; XWC = XRC + max(CTRL_B, 640); XDP = XWC + CTRL_B; XSC = XDP + B * 256
-        XS_B = -(-(XSC + 3 * 4096) // 2048) * 2048   # + the gate page landing area (XSC + 8192)
+        # L1 diet: compact 512 B (job, user) window / window-out slots, one HOLD bounce tile, job 1's tap; then the gate scratch
+        XWO = 2 * B * 512; XBN = XWO + 2 * B * 512; XT1 = XBN + 2048; XRC = XT1 + 2048; XWC = XRC + max(CTRL_B, 640)
+        XSC = -(-(XWC + CTRL_B) // 64) * 64
+        XS_B = -(-(XSC + 3 * 4096) // 2048) * 2048   # gate-row scratch (7 x 1 KB in 8 KB) + the gate page landing area (XSC + 8192)
         NPX = 6 + XS_B // 2048   # QPX pages: QIN 0..3, P 4..5, then the raw scratch
         HERE_ = os.path.dirname(os.path.abspath(__file__))
         ri = {t: i for i, t in enumerate(rtens)}
@@ -717,11 +719,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  const auto dt = {racc("dtb", 4096)};\n  const auto ne = {racc("nea", 4096)};\n'
                 f'  gb::reader_layer<{B}, {T}, {K}, {Ct}, {M}, {Nv}, {NC}, {Kt}>(g_ab + {OGB}, g_l, wa, wb, tp, ct, {ctrl_bytes}u, '
                 f'{("get_write_ptr(41)" if gb["gin_addr"] == "cb41" else str(int(gb["gin_addr"])) + "u")}, g_gb_qin, g_gb_xs, g_gb_xs + {XWO}u, g_gb_xs + {XRC}u, {GBC["qpx"]}u, {NPX}u, {GBC["sht"]}u, {GBC["kq"]}u, '
-                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")}, dt, ne);\n}}\n'
+                f'(volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_l")}, dt, ne, g_gb_xs + {XBN}u, g_gb_xs + {XT1}u);\n}}\n'
                 f'void gdn_gb_wait(uint32_t w) {{ (void)w; noc_semaphore_wait_min(g_ab + {OGB}, {1 + Vt + VB}u * (g_l + 1)); }}\n'
                 f'void gdn_gb_knq(uint32_t a) {{ gb::pull_knq<{Kt}>(g_ab + {OGB}, g_l, a); }}\n')
         GB_RINIT = (f'  g_gb_qin = get_write_ptr({GBC["qpx"]}); g_gb_xs = g_gb_qin + 6u * 2048u;\n'
-                    f'  gb::reader_init(g_gb_xs + {XWO}u, {2 * B * 1024}u, g_gb_qin + 4u * 2048u);\n')
+                    f'  gb::reader_init(g_gb_xs + {XWO}u, {2 * B * 512}u, g_gb_qin + 4u * 2048u);\n')
         _q = [dev.worker_core_from_logical_core(c) for c in cores]
         GB_RN = 1 + Vt + VB   # rest arrivals per layer: vc + zs (Vt) + the head's gate rows (VB)
         GB_W = (f'static uint32_t g_gb_xs;\n#include "{HERE_}/gb_dm.hpp"\n'
@@ -923,8 +925,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 buffer_index=idx, data_format=dt, page_size=pg)]))
     if GB:   # G-b CBs (gb_dm.hpp): QIN 4 bf16 pages (fixed slots), SH 2 jobs x (K-1), TAP 2, P 2 (one-hot | L2 mask), CV, OUT 2,
         # XS raw scratch (window sets / window-out / ctrl / decay rows / gate-tile scratch), kc / qc raw k / q (Kt fp32 each)
-        for nm, dt, n, pg in (("qpx", ttnn.bfloat16, NPX, 2048), ("sht", ttnn.bfloat16, 4 * 2, 2048), ("out", ttnn.float32, 8, 4096),
-                              ("kq", ttnn.float32, 2 * Kt, 4096)):
+        for nm, dt, n, pg in (("qpx", ttnn.bfloat16, NPX, 2048), ("sht", ttnn.bfloat16, 4, 2048), ("out", ttnn.float32, 8, 4096),
+                              ("kq", ttnn.float32, Kt, 4096)):
             cbs.append(ttnn.CBDescriptor(total_size=n * pg, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(
                 buffer_index=GBC[nm], data_format=dt, page_size=pg)]))
         print(f"[gb] G-b prefix in the role: CB ids {GBC}, {sum(c_.total_size for c_ in cbs[-4:]) // 1024} KB L1 per GDN core, "
