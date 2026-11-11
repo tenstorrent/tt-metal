@@ -299,6 +299,18 @@ def test_sum_nc_int32_fp32(device, shape, dim, dtype):
         assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=2)
 
 
+# Each N row sums to 330 or -320 over C; a bf8_b intermediate rounds 330 to 332 before the N stage.
+@pytest.mark.parametrize("op, expected", [(ttnn.sum, 10.0), (ttnn.mean, 1.0)])
+def test_reduce_bf8b_nc_cancellation(device, op, expected):
+    torch_input = torch.tensor([[64, 64, 64, 64, 74], [-64] * 5], dtype=torch.float32)[:, :, None, None]
+    torch_input = torch_input.expand(2, 5, 32, 32).contiguous()
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.to_torch(op(input_tensor, dim=[0, 1], keepdim=True))
+
+    assert torch.equal(output_tensor, torch.full((1, 1, 32, 32), expected))
+
+
 @pytest.mark.parametrize("dim", [[0], [3]])
 def test_sum_int32_requires_fp32_dest_acc(device, expect_error, dim):
     x = ttnn.from_torch(

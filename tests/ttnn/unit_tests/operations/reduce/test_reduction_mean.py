@@ -281,6 +281,17 @@ def test_mean_full_tensor_bf16(device, dim, shape, layout):
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
 
 
+# The H stage applies the C share of 1/27; a bf8_b input to it scales by a bf16-rounded factor.
+def test_mean_bf8b_nc_then_h(device):
+    input_tensor = ttnn.from_torch(
+        torch.ones(1, 3, 9, 32), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=[1, 2], keepdim=True))
+
+    assert torch.equal(output_tensor, torch.ones(1, 1, 1, 32))
+
+
 # A mean over several dims counted its elements in an int, which overflows at 2^31 and flipped the mean's sign.
 @pytest.mark.skipif(
     bool(os.environ.get("TT_METAL_SIMULATOR")), reason="a 4 GiB tensor is too slow on the ttsim simulator"
