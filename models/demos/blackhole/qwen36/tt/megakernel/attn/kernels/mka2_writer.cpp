@@ -48,6 +48,9 @@
 #else
 #define MKA_WOT_DIV wo_tiles
 #endif
+#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && !defined(MK_AR_RSTD_HOST)
+#define MK_AR_RSTD_PROD 1   // the STREAM producer (off with the host Σ: no producer defines then)
+#endif
 void kernel_main() {
     constexpr uint32_t XTB = get_compile_time_arg_val(0), NGU = get_compile_time_arg_val(1);
     constexpr uint32_t NDN = get_compile_time_arg_val(2), KT = get_compile_time_arg_val(3);
@@ -827,7 +830,7 @@ void kernel_main() {
 #endif
         cb_push_back(cb, pages);
     };
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+#if defined(MK_AR_RSTD_PROD)
     // rstd producer (STREAM (n = k, k)): the compute's per-row Σx² (CB_SS, REDUCE_ROW column 0) -> row k of the Σ tile (rsp
     // tile 0: face 0 at k*64 B, face 1 at 1024 + k*64 B) on every STREAM core, then MK_AR_RSF += 1 there (8 per delivery). The
     // atomic multicast cannot include its source: the self rect is split around this core, plus a local increment.
@@ -861,8 +864,28 @@ void kernel_main() {
         cb_pop_front(MK_AR_CB_SS, 1);
     };
 #endif
+#if defined(MK_GAMMA_CONS) && defined(MKA_ROLE_STREAM)
+    // γ at the consumers: delivery xv (2L + 1 mixer: input_layernorm; 2L + 2 MLP: post_attention_layernorm) of K-row vk ->
+    // the 20 γ row tiles (row 0 of each tile: 64 B from DRAM, then the face-1 half moved to +512) in CB MK_GC_CB
+    auto gc_issue = [&](uint32_t xv) __attribute__((noinline)) {
+        const InterleavedAddrGen<true> gg = {.bank_base_address = MK_GC_ADDR, .page_size = MK_GC_PAGE};
+        const uint64_t src = get_noc_addr((((xv - 1) >> 1) * 2 + ((xv - 1) & 1)) * 8 + vk, gg);
+        cb_reserve_back(MK_GC_CB, 2 * V_OT);
+        const uint32_t w = get_write_ptr(MK_GC_CB);
+        for (uint32_t t = 0; t < 2 * V_OT; ++t) noc_async_read(src + t * 64, w + t * V_PTB, 64);
+        noc_async_read_barrier();
+        for (uint32_t t = 0; t < 2 * V_OT; ++t) {
+            volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w + t * V_PTB);
+            for (uint32_t i = 0; i < 8; ++i) q[128 + i] = q[8 + i];   // bytes 32..63 (γ cols 16-31) -> face 1 row 0 (byte 512)
+        }
+        cb_push_back(MK_GC_CB, 2 * V_OT);
+    };
+#endif
     // K-row x (two owner chunks, flag >= xv) into CB_XK; unpack when R < 32 (v0.8.2)
     auto v_xk_push = [&](uint32_t xv) {
+#if defined(MK_GAMMA_CONS) && defined(MKA_ROLE_STREAM)
+        gc_issue(xv);   // γ lands while this core waits for the x
+#endif
         { MKZ("W-VX"); noc_semaphore_wait_min(vw(vg[VG_XA]), xv); noc_semaphore_wait_min(vw(vg[VG_XB]), xv); }
         cb_reserve_back(CB_XK, 2 * V_OT);
         if (vR < 32) {
@@ -875,7 +898,7 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         cb_push_back(CB_XK, 2 * V_OT);
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+#if defined(MK_AR_RSTD_PROD)
         if (vn == vk) rstd_send();   // rstd producer (n = k): this K-row's Σx² row -> every STREAM core's Σ tile
 #endif
     };
@@ -1027,7 +1050,16 @@ void kernel_main() {
             v_slot_ready(sm, CB_WM, QSK_SLOT, 10 + (L & 1));
             const bool mrs = att, mown = att;
 #endif
+#if defined(MK_AR_RSTD)
+            if (mown) {   // the mixer's rstd: Σ of this layer's mixer x (K-row delivery 2L + 1) is in the Σ tile
+#if !defined(MK_AR_RSTD_HOST)
+                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 1));
+#endif
+                cb_reserve_back(CB_VRSA, 1); cb_push_back(CB_VRSA, 1);
+            }
+#else
             if (mown) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
+#endif
             if (L + 1 < NL) qsk_start(L + 1);   // blocks until compute popped slot M (partial done)
             if (mrs) {
                 noc_semaphore_wait_min(vw(vg[VG_LA]), 2 * L + 1);
@@ -1492,13 +1524,25 @@ void kernel_main() {
 #else
             v_slot_ready(sv, CB_WV, V_SLOT, V_TRID0 + (L & 1));   // layer L's MLP slice landed
 #endif
+#if !defined(MK_AR_RSTD)
             if (own_h) { cb_reserve_back(CB_VRSA, MKA_NOWN); cb_push_back(CB_VRSA, MKA_NOWN); }
+#endif
 #if defined(MK_V12_X2) || defined(MK_RS_QKV)
             const uint32_t vxv = 2 * L + 2;   // two x deliveries per layer: mixer, MLP
 #else
             const uint32_t vxv = L + 1;
 #endif
             v_xk_push(vxv);
+#if defined(MK_AR_RSTD)
+            // the MLP's rstd: Σ of this layer's MLP x (K-row delivery 2L + 2); after v_xk_push, whose producer step (n = k)
+            // adds this core's own row (waiting before it deadlocks the 8 producer cores)
+            if (own_h) {
+#if !defined(MK_AR_RSTD_HOST)
+                noc_semaphore_wait_min(l1w(MK_AR_RSF), MK_AR_RSF_N * (2 * L + 2));
+#endif
+                cb_reserve_back(CB_VRSA, 1); cb_push_back(CB_VRSA, 1);
+            }
+#endif
             noc_semaphore_wait_min(vw(vg[VG_LA]), V_LV(L));
             v_rs_send(vabase, vk + 1, vnn, vnn, 2, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);   // rows below (NOC0)
             *vw(vg[VG_LB]) = V_LV(L);
@@ -1526,7 +1570,7 @@ void kernel_main() {
         }
 #if defined(MK_REAL_AR)
         {   // the real MLP AR: this K-row's two owners delivered x of layer L + 1 (flags = per-pass delivery count)
-            MKZ("W-ARWAIT");
+            MKZK("W-ARWAIT");
 #if defined(MK_V12_X2) || defined(MK_RS_QKV)   // X2 (QSK): AR(L) delivers layer L + 1's mixer x, flag 2(L + 1) + 1
 #define MK_AR_XWAIT(L) (*vw(vg[VG_XA]) < 2 * (L) + 3 || *vw(vg[VG_XB]) < 2 * (L) + 3)
 #else
@@ -1622,7 +1666,7 @@ void kernel_main() {
     // v12 words: every increment into this core's words for layer NL - 1 preceded its last wait above (STREAM: W-VMD;
     // owner: W-OP), and the reader's LA write preceded the writer's last LA wait
     if (vrole) for (uint32_t i = 0; i < NVG; ++i) *vw(vg[i]) = 0;
-#if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
+#if defined(MK_AR_RSTD_PROD)
     // rstd flag (device-local): 8 producers x 2 K-row deliveries per layer reach every STREAM core; this core drains, then resets
     // (the consumers only wait)
     noc_semaphore_wait_min(l1w(MK_AR_RSF), 8 * 2 * NL);

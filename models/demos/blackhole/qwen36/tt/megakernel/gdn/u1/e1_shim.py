@@ -650,7 +650,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         # E1_GO_RINGEARLY: the next layer's ring right after this layer's gdn_out tail (the compute popped ring L before the
         # scatter, so the reserve never blocks); the handoff then no longer waits behind a 97 KB ring read (12 us at u8)
         (f'    if (L + 1 < {NG}) {{\n' + go_r.replace("(L_)", "(L + 1)") + '    }\n' if GO and GO_RINGEARLY else '') +
-        f'  }}\n'
+        f'  // @@GDN_LAYER_BODY_END@@ (engine _gdn_host_ar splices the AR sender here; exactly once)\n  }}\n'
         # GDN_OUT_RD: the reader's out signals retire here; the aggregator's word resets once its last wait passed
         + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not GO or GO_TAILHOOK) else '') if out_rd else '')
         # HOLD_SKIP: every TRISC read the last layer's mask before this reader's last kmq handoff completed
@@ -674,7 +674,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + ('' if early else f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, L + 1);\n')
         + f'    writer<{Kt}, {Vt}, {Nk}, {Nv}, {T}, 1, 1, {Lw}, {Ct}, {Nv * Vt}, {ctrl_bytes}, {hs}u, {VB}>('
         + ", ".join(f"g_ab[{OW + i}]" for i in range(11)) + ");\n"
-        + (go_w.replace("{OSIG}", osig) if GO else '') + "  }\n"
+        + (go_w.replace("{OSIG}", osig) if GO else '') + "  // @@GDN_LAYER_BODY_END@@ (engine _gdn_host_ar splices the AR sender here; exactly once)\n  }\n"
         f'  noc_async_atomic_barrier();\n'
         f'  // v1.33: the waiter drains and resets its device-local semaphores at program end (every target reached);\n'
         f'  // attn_kv: the engine raises it twice per attention layer (start, SDPA end), {attn_n} attention layers\n'
@@ -697,8 +697,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
            'do { invalidate_l1_cache(); v = *w; } while ((v >> 8) != g_gl + 1); return v & 0xFFu; }\n' if hold_skip else '')
         + f'void kernel_main() {{\n  g_ab = {AB};\n'
         + ('  g_sp_pending = 0;\n' if sp_late else '')
-        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{ ' + ('g_gl = L; ' if hold_skip else '') + f'compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
-        f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '') + '  }\n'
+        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    ' + ('g_gl = L; ' if hold_skip else '') + f'compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '')
+        + '  // @@GDN_LAYER_BODY_END@@ (engine host splices: exactly once)\n  }\n'
         + ('  gdn_sp_drain();\n' if sp_late else '') + '}\n')
     pre_w = Nv * pre_s
     common = [("GDN_RT_BM", "1"), ("GDN_BATCH", "1")]
