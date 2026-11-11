@@ -185,6 +185,16 @@ def l1io(dev, groups, direction):
     ttnn.generic_op(io + io[:1] if len(io) < 2 else io, pd)
 
 
+def _fresh_sem(*a, **k):
+    """A global semaphore the cross-build sem pool (integ program.py _setup_context, QWEN36_R16_MK_SEMPOOL) must NOT share:
+    the AR's flags / counters (epoch-based or AR-owned). The pool shim checks ttnn._mk_sem_fresh."""
+    ttnn._mk_sem_fresh = getattr(ttnn, "_mk_sem_fresh", 0) + 1
+    try:
+        return ttnn.create_global_semaphore(*a, **k)
+    finally:
+        ttnn._mk_sem_fresh -= 1
+
+
 class _L1Ref:
     """Spec §20 phase 2: a static CB at a planned L1 address standing in for the sharded L1 tensor a consumer API expects
     (buffer_address() + memory_config().shard_spec only; the AR's engine_parts). Inside _static_cb_refs(),
@@ -346,6 +356,12 @@ def setup_bench(dev, MESH, mesh_identity):
     # runs replay writer -> seed -> engine -> drain); the bench runs them around every launch with its own residual in DRAM.
     L1P2_SEED = L1P2_T and os.environ.get('MK_L1P2_SEED', '1') == '1'
     RSP_IMG = None   # MK_L1P2_SEED: one STREAM core's rsp image (host), seeded into the planned CB 20 / 43
+    # MK_L1P2_ARBLK (default OFF; spare-margin item): the AR's owner arg table (ar_blk, 64 words = 256 B per owner, read once at
+    # kernel init) lives in the owners' CB 28 page at +1024 (MK_L1P2_EXTCB leaves CB 28 one 2 KB page on the owners, of which the
+    # reader uses only [0, 128) as kvpos scratch; the root-normalize use never runs on an owner), seeded per launch. -1792 B floor.
+    L1P2_ARBLK = os.environ.get('MK_L1P2_ARBLK', '0') == '1'
+    AR_BLK_IMG = None   # (per-device [16 owners, 64] uint32 DRAM image)
+    AR_BLK_ADDR = None   # the table's L1 address (MKAR_ARGS_L1 / MK_AR_BLK)
     x = ttnn.from_torch(x_t.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG if L1P2_T else ws(rect, XSW * TILE))
     xb = ttnn.to_torch(x).float().reshape(M, H)
     gold = (torch.nn.functional.silu(xb @ wgq) * (xb @ wuq)).bfloat16().float() @ wdq
@@ -1237,9 +1253,20 @@ def setup_bench(dev, MESH, mesh_identity):
             else:
                 ARP_ = {c_: AR.engine_parts(ttnn.MeshCoordinate(0, c_), v_xo, ar_buf, ar_out, ar_out, ar_sem) for c_ in range(AR.ring)}
             blk_ = AR.arg_table(ARP_, gamma_addr=ar_gam.buffer_address() if AR_GAMMA else 0)
-            print(f"[ar] arg table at L1 {blk_.buffer_address()} ({AR.BLK_NW} words / owner)", flush=True)
+            nonlocal AR_BLK_IMG, AR_BLK_ADDR
+            if L1P2_ARBLK:   # the table moves to the owners' CB 28 spare (seeded): host copy -> DRAM image, the L1 tensor is freed
+                assert L1P2_EXTCB and L1P2_SEED and AR.BLK_NW * 4 <= 1024, "MK_L1P2_ARBLK: CB 28 one page on the owners (EXTCB) + the seed op"
+                _rows = torch.stack([ttnn.to_torch(t_).reshape(-1).to(torch.int64) for t_ in ttnn.get_device_tensors(blk_)]).reshape(-1, 16, AR.BLK_NW)
+                ttnn.deallocate(blk_)
+                AR_BLK_IMG = ttnn.from_torch(_rows.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                             mesh_mapper=ttnn.ShardTensorToMesh(dev, dim=0))
+                AR_BLK_ADDR = VADDR['oa'] + 1024
+                blk_ = None
+            else:
+                AR_BLK_ADDR = blk_.buffer_address()
+            print(f"[ar] arg table at L1 {AR_BLK_ADDR}{' (owner CB 28 + 1024, seeded)' if L1P2_ARBLK else ''} ({AR.BLK_NW} words / owner)", flush=True)
             print(f"[ar] real MLP AR: ring {AR.ring} rows {AR.rows} PT {AR_PT} buf {VADDR['xo'] if L1P2_QOVXO else ar_buf.buffer_address()} out {VADDR['x0'] if L1P2_SEED else ar_out.buffer_address()} xf {[ttnn.get_global_semaphore_address(g) for g in AR_XF]} xcnt {ttnn.get_global_semaphore_address(AR_XCNT)} xk {AR_XT['xk']} xpk {AR_XT['xpk']}", flush=True)
-            return ARP_, blk_, [('MK_AR_BLK', str(blk_.buffer_address())), ('MK_AR_BLK_COMP', str(AR.BLK_COMP)), ('MK_AR_BLK_RECV', str(AR.BLK_RECV)),
+            return ARP_, blk_, [('MK_AR_BLK', str(AR_BLK_ADDR)), ('MK_AR_BLK_COMP', str(AR.BLK_COMP)), ('MK_AR_BLK_RECV', str(AR.BLK_RECV)),
                                 ('MK_AR_BLK_GAMMA', str(AR.BLK_GAMMA))]
         if not V12CB:
             ARP, ar_blk, _ardefs = _ar_parts()
@@ -2218,7 +2245,7 @@ def setup_bench(dev, MESH, mesh_identity):
         if RS:
             _srng = crs([fcores[i] for i in ACT if i in stream_idx]); _erng = crs([fcores[i] for i in ACT if i not in stream_idx])
             _aar_d = [('MKAR_ATYPE', f'{AR_ATYPE}ull'), ('MKAR_CB_AIN', '23')] if (REAL_AR and REAL_AAR) else []
-            _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon'])), ('MKAR_ARGS_L1', str(ar_blk.buffer_address())), ('MKAR_TRID', '15')] + ([('MKAR_LEANZ', '1')] if ('MKA_LEAN_C', '1') in MKDEF else []) + ([('MKAR_DLV_NONE', '1')] if AR_DLVR else []) + _aar_d, arp['comp_defines']) if REAL_AR else ((), ())
+            _ard = (arp['recv_defines'] + [('MKAR_NCOMMON', str(arp['recv_ncommon'])), ('MKAR_ARGS_L1', str(AR_BLK_ADDR)), ('MKAR_TRID', '15')] + ([('MKAR_LEANZ', '1')] if ('MKA_LEAN_C', '1') in MKDEF else []) + ([('MKAR_DLV_NONE', '1')] if AR_DLVR else []) + _aar_d, arp['comp_defines']) if REAL_AR else ((), ())
             # MK_EXT_DM_OS=1 (spec v1.5a: DM-only Os allowed after a timing check): the EXT (owner) reader / writer at -Os,
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
             _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
@@ -2284,6 +2311,7 @@ def setup_bench(dev, MESH, mesh_identity):
         if L1P2_SEED:   # step B seeded CBs
             a_.update(x0=CBP.address_of(p_, 5, (GX, 0)), id=CBP.address_of(p_, 42, (0, 0)), j=CBP.address_of(p_, 30, (0, 0)))
             if RSP_IMG is not None: a_['rsp'] = CBP.address_of(p_, 43, (0, 0))
+        if L1P2_EXTCB: a_['oa'] = CBP.address_of(p_, 28, (GX, 0))   # the owners' 1-page CB 28 (MK_L1P2_ARBLK spare at +1024)
         if RRED: a_['rred'] = CBP.address_of(p_, 37, (RRED_HC.x, RRED_HC.y))
         return a_
     # MK_L1P2_QOVXO (bench / debug): CB_VXO has no tensor any more; XO_DUMP() copies the 16 owners' CB_VXO (owner j = x tiles 10j..)
@@ -2330,6 +2358,8 @@ def setup_bench(dev, MESH, mesh_identity):
             def RSP_DUMP():   # debug readback (the AR's rstd checker), right after the engine op: the old rsp tensor's layout
                 l1io(dev, [(_rsp_dbg, _rsp_e, None)], 1)   # (one 32-row block per kgrid core in ACT order; the owners' stay 0)
                 return _rsp_dbg
+        if AR_BLK_IMG is not None:   # MK_L1P2_ARBLK: owner j's 256 B row -> CB 28 + 1024
+            _seed_c.append((AR_BLK_IMG, [(c_, AR_BLK_ADDR, j_, 1) for j_, c_ in enumerate(_own_xy)], AR.BLK_NW * 4))
         ENGINE_X0 = ttnn.from_torch(xb.reshape(1, 1, M, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _x0_e = [(c_, VADDR['x0'], 10 * j_, 10) for j_, c_ in enumerate(_own_xy)]
         def ENGINE_SEED(x_in=None):
