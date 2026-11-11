@@ -1328,8 +1328,10 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
             get_num_cores_channels_from_parallel_config(input_parallel_config),
             get_num_cores_channels_from_parallel_config(output_parallel_config));
 
+    // Width sharded shards are not padded to a tile multiple, so round up (the program factory pads the
+    // activation matrix to whole tiles); truncating would let a block that does not divide it be chosen.
     uint32_t nhw_out_padded_ntile_per_core =
-        conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
+        tt::div_up(conv_out_memory_config.shard_spec().value().shape[0], tt::constants::TILE_HEIGHT);
 
     Conv2dBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
         input_parallel_config,

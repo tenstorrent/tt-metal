@@ -309,3 +309,58 @@ def test_prepare_conv_weights_rejects_zero_params(device, override, field, expec
             input_dtype=ttnn.bfloat16,
             **_conv_zero_param_kwargs(device, override),
         )
+
+
+# An explicit shard_layout=WIDTH_SHARDED skips the L1-fit search the auto path runs, and the block
+# config sized act_block_h to the whole per-core activation height, so stride-1 activations of 32x32
+# and larger failed at program build with circular buffers beyond max L1. The conv must now pick an
+# activation block that fits (largest act_block_h divisor whose CBs + tensors fit in L1).
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("input_height, input_width", ((32, 32), (33, 33), (34, 34), (64, 64)))
+def test_conv2d_width_sharded_l1_activation_block_fits(device, torch_tensor_map, input_height, input_width):
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        1,
+        64,
+        32,
+        input_height,
+        input_width,
+        3,
+        3,
+        1,
+        1,
+        1,
+        None,
+        shard_layout=WS,
+        has_bias=True,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_width_sharded_l1_auto_shard_control(device, torch_tensor_map):
+    # Auto sharding picks a scheme whose blocks fit for the same shape; control for the explicit
+    # width-sharded cases above.
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        1,
+        64,
+        32,
+        32,
+        32,
+        3,
+        3,
+        1,
+        1,
+        1,
+        None,
+        auto_shard=True,
+        has_bias=True,
+    )
