@@ -191,11 +191,15 @@ ALWI void compute_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t cb
         conv_place<K>(cb_sht, cb_qpx, j, cb_cv, cb_out);  // conv 0 = the q / k tile on the q / k cores
     }
     uint32_t n = 3 + nconv;
+#if !defined(GB_NOROOT)  // GTEXT: the AR corners / Σ reducer never hold a root (e1_shim places them off; program.py asserts)
     if (root_post) {  // L2 root: the key head's Kt raw k (or q) tiles -> l2norm rows (the op's sequence) -> OUT
         GBZ("GB-CROOT");
         gb_l2_root(cb_kq, cb_out, root_post);
         n += GB_KT;
     }
+#else
+    (void)root_post;
+#endif
     for (; n & 3u; ++n) {  // pad: 4 OUT pages per layer (the gate pair / the root's Kt tiles stay contiguous)
         cb_reserve_back(cb_out, 1);
         cb_push_back(cb_out, 1);
