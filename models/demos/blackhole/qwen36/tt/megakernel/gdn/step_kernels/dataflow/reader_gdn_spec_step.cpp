@@ -128,6 +128,15 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GSTEP_WYORD
 #define GSTEP_WYORD 0  // WYPAIR: user order 0 1 4 5 2 3 6 7 in the kmq stream / c_wy (compute must match)
 #endif
+#ifndef GSTEP_KTSLATE
+#define GSTEP_KTSLATE 0  // WYPAIR + KTLATE: the kts (stash K^T) cuts after the kmq stream instead of before it
+#endif
+#if GSTEP_KTSLATE && !GSTEP_WYPAIR
+#error "GSTEP_KTSLATE needs GSTEP_WYPAIR"
+#endif
+#ifndef GSTEP_CZ
+#define GSTEP_CZ 0  // bench: reader zone rd_kmq
+#endif
 #ifndef GSTEP_CUTST
 #define GSTEP_CUTST 0  // WYPAIR: the kmq cut reads through one stateful local read command (noc_async_read_one_packet_with_state)
 #endif
@@ -821,7 +830,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             knq_w.wait_front(2 * Kt);
         }
 #endif
-        // kts: K_u tile i = s + q*VB for this block's share of the stash K^T pages (kpb per user)
+        // kts: K_u tile i = s + q*VB for this block's share of the stash K^T pages (kpb per user). GSTEP_KTSLATE (with
+        // KTLATE: the compute transposes them in c_D): cut after the kmq stream, so c_wy's first users land earlier
+        auto kts_cuts = [&]() {
         {
             DataflowBuffer kts(dfb::kts);
             constexpr uint32_t kpb = (Kt + VB - 1) / VB;
@@ -841,11 +852,18 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             noc_async_read_barrier();
             kts.push_back(kBatchMax * kpb);
         }
+        };
+#if !GSTEP_KTSLATE
+        kts_cuts();
+#endif
 #if GSTEP_WYPAIR
         // GSTEP_WYPAIR: one masked tile per (j, u, i) holds K_u's T rows at row r = (u T) mod 16 (face row 0) and Q_u's at
         // 16 + r (face row 1): the compute's DST tile (u T >= 16) gets [K S' | Q S'] rows for 4 users, then a DST half swap
         static_assert(kBatchMax * T == 32, "WYPAIR: users fill one 32-row tile");
         {
+#if GSTEP_CZ
+            DeviceZoneScopedN("rd_kmq");  // bench: the paired kmq cut stream
+#endif
             DataflowBuffer kmq(dfb::kmq);
             const uint32_t te = kmq.get_entry_size();
             constexpr uint32_t rb = T * 64;  // one user's rows in one face (fp32)
@@ -917,6 +935,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 }
             }
         }
+#if GSTEP_KTSLATE
+        kts_cuts();
+#endif
         if (false)
 #endif
         // kmq stream in the compute's order: for each output o of [K S' | Q S'] (o < Vs: K rows, else Q rows), for each

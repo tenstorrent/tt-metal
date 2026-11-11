@@ -849,7 +849,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GDN_OUT_RD_KEEP", "1")] if go_rdhook and os.environ.get("E1_GO_LOCAL", "2") == "1" else []) + (
         [("GDN_HOLD_SKIP", "1")] if hold_skip else []) + ([("GDN_OUT_PRE", "1")] if go_ring0h else []) + (
         [("GSTEP_WPRE", "1")] if os.environ.get("E1_WPRE", "0") == "1" else []) + (   # #17 F1: norm-W rows before in_ready
-        [("GSTEP_WYPAIR", "1")] if wypair else []) + ([("GSTEP_WYORD", "1")] if wyord else []) + ([("GSTEP_CUTST", "1")] if wypair and os.environ.get("E1_CUTST", "0") == "1" else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else [])
+        [("GSTEP_WYPAIR", "1")] if wypair else []) + ([("GSTEP_WYORD", "1")] if wyord else []) + ([("GSTEP_CUTST", "1")] if wypair and os.environ.get("E1_CUTST", "0") == "1" else []) + (
+        [("GSTEP_KTSLATE", "1")] if wypair and os.environ.get("E1_KTLATE", "0") == "1" and os.environ.get("E1_KTSLATE", "0") == "1" else []) + (
+        [("GSTEP_CZ", "1")] if os.environ.get("E1_GSZ", "0") == "1" else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
