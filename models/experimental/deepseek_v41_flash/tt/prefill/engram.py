@@ -16,9 +16,10 @@ as a device tensor. The device does the rest of the checkpoint's ``Engram.forwar
     out   = h + gate * value
 
 Decode runs everything after ``kv`` as one ``engram_gate`` op on width-sharded rows built for a few tokens; a
-prefill chunk is thousands of rows, so here ``wkv`` is a plain ``ttnn.linear`` and the gate plain DRAM-interleaved
-``ttnn`` ops, in fp32 as the op is. The streams are stream-major ``[1, hc, T, D]``, so the key's ``hc`` copies are
-column slices of ``kv`` stacked on dim 1 and every operand is dense: no tile padding, no ROW_MAJOR round trips.
+prefill chunk is thousands of rows, so here ``wkv`` is a plain ``ttnn.linear`` and everything after it is one
+``ttnn.experimental.deepseek.engram_gate_prefill`` call on DRAM-interleaved TILE operands -- no slice/concat, no
+fp32 copy of the streams. The streams are stream-major ``[1, hc, T, D]``, so the key's ``hc`` copies are column
+slices of ``kv``, taken by the op itself: no tile padding, no ROW_MAJOR round trips.
 """
 
 from typing import Optional
@@ -67,12 +68,14 @@ class DeepSeekV41PrefillEngram(DeepSeekV4Module):
             dtype=weight_dtype,
             mesh_mapper=replicate,
         )
-        # q_weight and k_weight only ever appear as a product, with the 1/sqrt(D) of ``dot``: [1, hc, 1, D].
-        gate_file = cache.file("gate_weight.prefill_sm")
+        # q_weight and k_weight only ever appear as a product, with the 1/sqrt(D) of ``dot``. The fused gate op takes
+        # one [32, D] page per stream copy, every row holding that copy's vector, so it is a plain tile operand
+        # against a 32-token block: [1, hc, 32, D].
+        gate_file = cache.file("gate_weight.prefill_op")
         gate_weight = _materialize(
-            lambda: (
-                _value(weights["q_weight"]).float() * _value(weights["k_weight"]).float() * self.dim**-0.5
-            ).reshape(1, self.hc, 1, self.dim),
+            lambda: (_value(weights["q_weight"]).float() * _value(weights["k_weight"]).float() * self.dim**-0.5)
+            .repeat(ttnn.TILE_SIZE, 1)
+            .reshape(1, self.hc, ttnn.TILE_SIZE, self.dim),
             gate_file,
             ttnn.float32,
         )
@@ -95,26 +98,8 @@ class DeepSeekV41PrefillEngram(DeepSeekV4Module):
             raise ValueError(f"expected rows [1, 1, {tokens}, {self.kin}], got {tuple(rows.shape)}")
 
         kv = self.wkv(rows)  # [1, 1, T, (hc + 1) * D]
-        copies = [ttnn.slice(kv, [0, 0, 0, j * d], [1, 1, tokens, (j + 1) * d]) for j in range(hc + 1)]
+        streams_out = ttnn.experimental.deepseek.engram_gate_prefill(
+            streams, kv, self.gate_weight, self.eps, clamp_value=_CLAMP
+        )
         ttnn.deallocate(kv)
-        key = ttnn.concat(copies[:hc], dim=1)  # [1, hc, T, D]
-        for copy in copies[:hc]:
-            ttnn.deallocate(copy)
-        h, key, value = (ttnn.typecast(x, ttnn.float32) for x in (streams, key, copies[hc]))
-        ttnn.deallocate(copies[hc])
-
-        def rstd(x: ttnn.Tensor) -> ttnn.Tensor:
-            return ttnn.rsqrt(ttnn.add(ttnn.mean(ttnn.multiply(x, x), dim=-1, keepdim=True), self.eps))
-
-        # The gate weight carries D^-0.5, so this is ``dot`` of the reference. [1, hc, T, 1]
-        dot = ttnn.sum(ttnn.multiply(ttnn.multiply(h, self.gate_weight), key), dim=-1, keepdim=True)
-        dot = ttnn.multiply(ttnn.multiply(dot, rstd(h)), rstd(key))
-        ttnn.deallocate(key)
-        root = ttnn.sqrt(ttnn.clamp(ttnn.abs(dot), min=_CLAMP))
-        gate = ttnn.sigmoid(ttnn.where(ttnn.ge(dot, 0.0), root, ttnn.neg(root)))
-        out = ttnn.add(h, ttnn.multiply(gate, value))  # gate [1, hc, T, 1] x value [1, 1, T, D]
-        for t in (h, value, dot, root, gate):
-            ttnn.deallocate(t)
-        streams_out = ttnn.typecast(out, ttnn.bfloat16)
-        ttnn.deallocate(out)
         return streams_out

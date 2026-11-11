@@ -15,9 +15,11 @@ docstring), on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instea
   embedding, ``lm_head``, sockets and the Engram host lookup) with no CSA position bias to commit. By default it
   is KV-only (``--prefill-kv-only``): layers 0-20 on stages 0-4, which write all of the shared compressed KV, and
   the last 128 prompt tokens are replayed through decode, which fills the sliding windows of every layer and
-  gives the first token. ``--prefill-all-stages`` (opt-in, KV-only) spreads layers 0-20 over all eight stages
-  instead (three on each of stages 0-4, two on each of stages 5-7), loading a second copy of the routed experts of
-  every layer it moves off its decode stage; to leave the DRAM for them, ``--num-users`` then defaults to 40.
+  gives the first token. ``--prefill-all-stages`` (on by default with a KV-only prefill; ``--no-prefill-all-stages``
+  or ``DEEPSEEK_V41_PREFILL_ALL_STAGES=0`` turns it off) spreads layers 0-20 over every stage instead (three on each
+  of stages 0-4, two on each of stages 5-7 at eight stages; three on each of the seven with ``--dspark``), loading a
+  second copy of the routed experts of every layer it moves off its decode stage; to leave the DRAM for them,
+  ``--num-users`` then defaults to 40.
 
 ``GET /models`` and ``GET /v1/models`` return DeepSeek's list-models record (:func:`model_record`).
 
@@ -34,7 +36,7 @@ or ``POST /v1/sessions/<user>/cancel``, and every running turn stops on the live
 
 What V4.1 imposes on the serving side:
 
-* Users. ``--num-users`` sessions (64 by default, 40 with ``--prefill-all-stages``) stay open at once, each with its own ring and window slot and its
+* Users. ``--num-users`` sessions (1 with ``--dspark``; else 40 with ``--prefill-all-stages``, 64 without) stay open at once, each with its own ring and window slot and its
   own rows of the compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
   ``num_users * 204800``). At most ``--max-running`` (8, one per stage) generate at once, the rest parked
   or queued; see "Users & KV cache" in the V4 server's docstring. A step decodes one user, and switching users costs no device work: the step's packet
@@ -43,7 +45,7 @@ What V4.1 imposes on the serving side:
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
   A user decoding alone keeps ``--decode-ahead`` (32) steps posted, as the decode demo does; a reply that stops
   early feeds the steps still posted a rerun of its last one (:meth:`V41ChatEngine.repeat_traced`).
-* Speculative decode (``--dspark``, or ``DEEPSEEK_V41_DSPARK=1``; off by default). The DSpark drafter takes the
+* Speculative decode (``--dspark``, on by default; ``--no-dspark`` or ``DEEPSEEK_V41_DSPARK=0`` turns it off). The DSpark drafter takes the
   mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds of four drafts
   (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~70 tok/s against ~45 a step at a time, for a
   sampled (temperature 1) chat reply in ``tests/decode/test_dspark_spec.py``. Its rounds restore one session's
@@ -115,9 +117,10 @@ With ``DEEPSEEK_V41_RUST_HOST=0`` the decode step's host work runs on Python thr
 By default, or with ``DEEPSEEK_V41_RUST_HOST=1``, it runs on the Rust host runtime (``tt/host_rs.py``), and the
 live console gives way to a web monitor in a process of its own, so watching costs the server nothing but a raw
 snapshot a second (``DEEPSEEK_V41_MONITOR_PERIOD``) and the counters the runtime keeps anyway (see
-``demo/monitor.py``)::
+``demo/monitor.py``). The server starts it on ``--monitor-port`` (8090; 0 starts none) unless one of the user's is
+already running, and leaves it running when it exits; open http://<host>:8090. By hand::
 
-    python models/experimental/deepseek_v41_flash/demo/monitor.py --port 8090    # then open http://<host>:8090
+    python models/experimental/deepseek_v41_flash/demo/monitor.py --port 8090
 """
 
 from __future__ import annotations
@@ -132,6 +135,8 @@ import itertools
 import json
 import os
 import queue
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -1018,10 +1023,7 @@ class V41GenerationServer(GenerationServer):
         if self.monitor_feed is not None:
             self._monitor_sink = logger.add(self.monitor_feed.log_sink, level="DEBUG", format="{message}")
             self.monitor_feed.start()
-            logger.info(
-                f"web monitor feed: {self.monitor_feed.path}; watch it with "
-                f"python models/experimental/deepseek_v41_flash/demo/monitor.py --port 8090"
-            )
+            logger.info(f"web monitor feed: {self.monitor_feed.path}")
 
     def stop(self) -> None:
         if self.monitor_feed is not None:
@@ -1590,6 +1592,42 @@ def _stage_engram_tables(args) -> bool:
     return True
 
 
+def _launch_monitor(port: int) -> None:
+    """Start ``demo/monitor.py`` on ``port``, on this user's feed, unless one of this user's monitors already runs
+    or something else holds the port. In a session of its own, so it outlives the server (and a Ctrl-C of it),
+    and its page and history carry over a restart; its output goes to ``<prefix>.monitor.log``."""
+    script = Path(monitor.__file__).resolve()
+    uid = os.getuid()
+    for pid_dir in Path("/proc").iterdir():
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            if pid_dir.stat().st_uid != uid:
+                continue
+            argv = (pid_dir / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if any(arg.endswith(b"demo/monitor.py") for arg in argv):
+            logger.info(f"web monitor already running (pid {pid_dir.name})")
+            return
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        if s.connect_ex(("127.0.0.1", port)) == 0:
+            logger.warning(f"not starting the web monitor: port {port} is taken (--monitor-port picks another)")
+            return
+    prefix = monitor.default_prefix()
+    log_path = f"{prefix}.monitor.log"
+    with open(log_path, "ab") as log:
+        proc = subprocess.Popen(
+            [sys.executable, str(script), "--port", str(port), "--prefix", prefix],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    logger.info(f"web monitor started (pid {proc.pid}) on http://{socket.gethostname()}:{port}, log {log_path}")
+
+
 def parse_args(argv: list[str] | None = None):
     p, sys_cfg = build_parser(argv, description=__doc__)
     # The V4 parser's sizing defaults come from the machine profile, which is tuned for V4.
@@ -1621,12 +1659,12 @@ def parse_args(argv: list[str] | None = None):
     p.add_argument(
         "--prefill-all-stages",
         action=argparse.BooleanOptionalAction,
-        default=os.environ.get("DEEPSEEK_V41_PREFILL_ALL_STAGES", "0") == "1",
+        default=None,
         help="place the KV-only prefill's layers 0-20 evenly over every stage (3 on each of stages 0-4, 2 on each "
         "of stages 5-7 at the default eight) rather than on their decode stages (0-4), loading a copy of the routed "
         "experts of each layer moved off its decode stage; needs --prefill-kv-only, and --num-users then defaults "
         f"to {_NUM_USERS_ALL_STAGES} (instead of {_NUM_USERS}) to leave them the DRAM "
-        "(default: off; DEEPSEEK_V41_PREFILL_ALL_STAGES=1 turns it on, as in tests/prefill/test_prefill_decode_demo.py)",
+        "(default: on whenever the prefill is KV-only; DEEPSEEK_V41_PREFILL_ALL_STAGES=0 turns it off)",
     )
     p.add_argument(
         "--vision",
@@ -1655,11 +1693,19 @@ def parse_args(argv: list[str] | None = None):
     p.add_argument(
         "--dspark",
         action=argparse.BooleanOptionalAction,
-        default=os.environ.get("DEEPSEEK_V41_DSPARK", "0") == "1",
+        default=os.environ.get("DEEPSEEK_V41_DSPARK", "1") not in ("0", "", "false", "False"),
         help=f"decode every reply by DSpark speculative decode, {_DSPARK_DRAFTS} drafts a round, the drafter on the "
         f"mesh's last row (decode on the first {_DSPARK_STAGES}); one user slot (--num-users 1), host sampling at the "
         "request's temperature / top_p, and no --vision or --device-sampling "
-        "(default: off; DEEPSEEK_V41_DSPARK=1 turns it on)",
+        "(default: on; --no-dspark or DEEPSEEK_V41_DSPARK=0 turns it off)",
+    )
+    p.add_argument(
+        "--monitor-port",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V41_MONITOR_PORT", "8090")),
+        help="port of the web monitor (demo/monitor.py) started beside the server on the Rust host runtime, unless "
+        "one of this user's is already running; it outlives the server, so its page stays up across restarts "
+        "(default: 8090, DEEPSEEK_V41_MONITOR_PORT; 0 starts none)",
     )
     for action in p._actions:
         if action.dest == "temperature":
@@ -1700,6 +1746,12 @@ def parse_args(argv: list[str] | None = None):
         args.l1_small_size = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", _L1_SMALL_SIZE))
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context
+    if args.prefill_all_stages is None:
+        args.prefill_all_stages = (
+            args.prefill
+            and args.prefill_kv_only
+            and os.environ.get("DEEPSEEK_V41_PREFILL_ALL_STAGES", "1") not in ("0", "", "false", "False")
+        )
     if args.prefill_all_stages and not (args.prefill and args.prefill_kv_only):
         p.error("--prefill-all-stages places the KV-only prefill: it needs --prefill and --prefill-kv-only")
     if args.num_users is None:
@@ -1714,6 +1766,8 @@ def main(argv: list[str] | None = None) -> int:
     if not Path(args.model_dir).expanduser().exists():
         print(f"checkpoint not found: {args.model_dir}", file=sys.stderr)
         return 1
+    if host_rs.enabled() and args.monitor_port:
+        _launch_monitor(args.monitor_port)
     if not _stage_engram_tables(args):
         return 1
     return serve(
