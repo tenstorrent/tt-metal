@@ -457,7 +457,20 @@ def setup_bench(dev, MESH, mesh_identity):
         ss = torch.stack([(xb[:, o * (H // NOWN):(o + 1) * (H // NOWN)].double() ** 2).sum(-1) for o in range(NOWN)])   # [NOWN, M]
         rsp_t = torch.zeros(TILE, NOWN * TILE)
         for o in range(NOWN): rsp_t[:, o * TILE] = ss[o].float()
-        rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
+        RSTD = os.environ.get('MK_AR_RSTD', '0') == '1'
+        if RSTD:   # real rstd (spec, producer on STREAM): Σ tile = rsp tile 0, row k = K-row k's per-token partial (row form), rows 8-31 = 0;
+            # host init = row 0 holds Σ of the prologue x. MK_AR_RSTD_ROWS=8 (bench) spreads it over 8 K-chunk partials instead.
+            assert QSK, "MK_AR_RSTD: the QSK qkv consumer"
+            _nr = int(os.environ.get('MK_AR_RSTD_ROWS', '1'))
+            rsp_t = torch.zeros(TILE, TILE)
+            for k_ in range(_nr): rsp_t[k_] = (xb[:, k_ * (H // _nr):(k_ + 1) * (H // _nr)].double() ** 2).sum(-1).float()
+            rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, TILE))
+            RSTD_RSF = ttnn.create_global_semaphore(dev, kgrid, 0)   # MK_AR_RSF: the producer's flag (+MK_AR_RSF_N per AR), device-local
+            MKDEF = MKDEF + [('MK_AR_RSTD', '1'), ('MK_AR_RSF', str(ttnn.get_global_semaphore_address(RSTD_RSF))), ('MK_AR_RSF_N', '8')]
+            if ('MK_REAL_AR', '1') not in MKDEF: MKDEF = MKDEF + [('MK_AR_RSTD_HOST', '1')]   # no producer: the host Σ tile is static
+            print(f"[rstd] consumer: Σ tile rows {_nr} (row form), flag @ {ttnn.get_global_semaphore_address(RSTD_RSF)}{' (host, no wait)' if ('MK_REAL_AR', '1') not in MKDEF else ''}", flush=True)
+        else:
+            rsp = ttnn.from_torch(rsp_t.repeat(len(ACT), 1).reshape(1, 1, len(ACT) * TILE, NOWN * TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(kgrid, NOWN * TILE))
         rstd_g = 1.0 / torch.sqrt(ss.sum(0) / H + EPS)   # [M]
         gold_qkv = [(rstd_g[:, None] * (xb.double() @ wfq[L].double())).float() for L in range(NL)]
         qkv_out = ttnn.from_torch(torch.zeros(1, 1, NL * TILE, QN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)

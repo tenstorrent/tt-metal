@@ -88,6 +88,9 @@ ALWI void v_rs_sum(uint32_t own_cb, uint32_t own_off, uint32_t rs_cb, uint32_t k
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+#if defined(MK_AR_RSTD)
+#include "api/compute/transpose.h"
+#endif
 #endif
 #if defined(MKA_RWO)
 #include "wo_unit_c.hpp"
@@ -488,6 +491,31 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(CB_QA, 1);
         }
+#if defined(MK_AR_RSTD)
+        // real rstd (spec rstd producer): Σ tile S = CB_RSP tile 0, row k = K-row k's per-token partial (row form). ONES @ S
+        // (data on srcA) = Σ_k S[k][c] in every row -> CB_RS (fp32 scratch); its transpose = column form (row c, every
+        // column) for the bcast-cols scale below. fp32 DST, no DEST-reuse adds.
+        cb_wait_front(CB_RSP, 1);
+        cb_wait_front(CB_ONE, 1);   // constant, pushed once, never popped
+        reconfig_data_format(CB_RSP, CB_ONE);
+        matmul_init(CB_ONE, CB_RSP, 0);
+        tile_regs_acquire();
+        matmul_tiles(CB_ONE, CB_RSP, 0, 0, 0);
+        tile_regs_commit();
+        cb_reserve_back(CB_RS, 1);
+        tile_regs_wait();
+        pack_reconfig_data_format(CB_RS);
+        pack_tile(0, CB_RS);
+        tile_regs_release();
+        cb_push_back(CB_RS, 1);
+        cb_pop_front(CB_RSP, 1);
+        cb_wait_front(CB_RS, 1);
+        reconfig_data_format_srca(CB_RS);
+        transpose_init(CB_RS);
+        tile_regs_acquire();
+        transpose_tile(CB_RS, 0, 0);
+        cb_pop_front(CB_RS, 1);
+#else
         // rstd (column 0 of each partial tile holds that owner's per-row Σx²)
         cb_wait_front(CB_RSP, MKA_NOWN);
         tile_regs_acquire();
@@ -501,6 +529,7 @@ void kernel_main() {
         copy_init(CB_RSP);
         copy_tile(CB_RSP, 0, 0);
 #endif
+#endif   // MK_AR_RSTD
         binop_with_scalar_tile_init();
         mul_unary_tile(0, MKA_INVH_BITS);
         add_unary_tile(0, MKA_EPS_BITS);
@@ -513,7 +542,9 @@ void kernel_main() {
         pack_tile(0, CB_RS);
         tile_regs_release();
         cb_push_back(CB_RS, 1);
+#if !defined(MK_AR_RSTD)
         cb_pop_front(CB_RSP, MKA_NOWN);
+#endif
         // scale the output rows at pack
         cb_wait_front(CB_RS, 1);
         cb_wait_front(CB_QA, qnt);
