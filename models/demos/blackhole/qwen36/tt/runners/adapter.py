@@ -147,6 +147,7 @@ class Qwen35PupPrefillAdapter(PrefillModelAdapter):
             chunk_size=cfg.chunk_size,
             max_seq_len=cfg.max_seq_len,
             num_users=cfg.num_users,
+            num_layers=int(self.model_config.NUM_LAYERS),
             use_trace=True,  # the model's own per-bucket traces (not the runner's segmented capture_trace)
             pup=cfg,
         )

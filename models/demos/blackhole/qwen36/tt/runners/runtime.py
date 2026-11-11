@@ -44,6 +44,7 @@ class RuntimeConfig:
     max_seq_len: int
     num_users: int
     first_layer_idx: int = 0
+    num_layers: int = 32
     is_first_rank: bool = True
     is_last_rank: bool = True
     use_trace: bool = True
@@ -117,8 +118,19 @@ class TtQwen35PupPrefillRuntime:
         self._sink = sink
 
     def prefill_chunk(
-        self, input_tensor, kv_cache, *, slot_id, actual_start, actual_end, request_id=0, media_refs=None
+        self,
+        input_tensor,
+        kv_cache,
+        *,
+        slot_id,
+        actual_start,
+        actual_end,
+        request_id=0,
+        media_refs=None,
+        d2h_service=None,
+        metadata_msg=None,
     ):
+        del d2h_service, metadata_msg  # layer acks go through the completion sink; no D2H activation (one rank)
         if actual_start != 0:
             raise NotImplementedError(
                 f"qwen35_9b_pup: chunk [{actual_start}, {actual_end}) of slot {slot_id} resumes a request; this runtime "
