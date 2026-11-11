@@ -877,13 +877,13 @@ void kernel_main() {
             cb_wait_front(CB_Q, QT);
 #if defined(MKA_RQPOS)
             if (!kvp_rd) {   // the reader's per-pass word (mka2_common.hpp), read by all three TRISCs
-                volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_KVP_TAB);
+                volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_KVP_INFO);
                 uint32_t v;
                 do { asm volatile("fence" ::: "memory"); v = *w; } while (!(v >> 31));
                 nblk = v & 0x7FF; kvp_m0 = (v >> 11) & 0x3FF; kvp_m1 = (v >> 21) & 0x3FF;
 #if defined(MKA_RQBAL)
                 {
-                    const uint32_t ws = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_KVP_TAB)[3 + 4];   // MKA_RQ_T = 4
+                    const uint32_t ws = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_KVP_ASGN);
                     u = ws & 0xFF; qoff = u * DH;
 #if !defined(MKA_EXTLEAN)
                     nrecv = (ws >> 8) & 0xFF; is_root = (ws >> 16) & 1;

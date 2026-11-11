@@ -113,17 +113,19 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* l1w(uint32_t addr) { return reinterpre
 // pt_groups) and the model-global 'attn' block (MKA_ATTN_L1: pt_addr, pt_B, pt_nb, n_attn, (k, v) per attention layer,
 // block_size, n_kv_heads). kvpos: int32 [32] RM DRAM (row u*T + j, -1 = HOLD / idle); cos / sin: [1,1,32,64] bf16 TILE
 // DRAM (tile 0 = the 32 frequencies of each row, prod's values). Page table: _vfy_kvpt_users int32 [B, nb] RM DRAM.
-// Per-core table at MKA_KVP_TAB (uniform L1 address): [0] info = bit 31 valid | nv (bits 0-10: valid KV blocks of this
-// core) | m0 (bits 11-20: local index of the user's last valid block, 0x3FF none) | m1 (bits 21-30: the block before it
-// when the user's T rows straddle); [1] b0 (first block; MKA_RQDYN: the static share rescaled to the user's length);
-// [2] pt window base (entry index of word KVP_PT); [3 .. 3+T) per-row causal limits (HOLD rows: the user's max);
-// [KVP_PT ..] this core's page-table window. The reader writes it at pass start (info last) and resets [0] at program
-// end; writer / compute wait [0]. Mask tiles (bf16 0 / -9984, ADDITIVE on S before exp, so stale positions can't
-// overflow exp) are built once per pass by the WRITER into CB_ONE pages 1 (m0) / 2 (m1) (CB_ONE = 3 pages under
-// RQPOS; page 0 = ones). CB_OA must not carry them: on a tree root it flows compute -> reader (normalize), and a CB used
-// in both directions deadlocks (ragged users put the last block on the root).
+// Per-pass state (no persistent L1 tensor): two device-local global semaphores MKA_KVP_INFO (bit 31 valid | nv (bits 0-10:
+// valid KV blocks of this core) | m0 (bits 11-20: local index of the user's last valid block, 0x3FF none) | m1 (bits
+// 21-30: the block before it when the user's T rows straddle)) and MKA_KVP_ASGN (MKA_RQBAL: user | nrecv << 8 | root <<
+// 16), written by the reader at pass start (INFO last) and reset at program end; plus a DM-only table in CB_ONE page 3
+// (role-local CB, 2 KB): [1] b0 (first block), [2] pt window base entry, [3, 3 + T) per-row causal limits (HOLD rows: the
+// user's max), then the 64 B aligned page-table window. Writer / compute wait INFO (persistent word: no stale CB data).
+// Mask tiles (bf16 0 / -9984, ADDITIVE on S before exp, so stale positions can't overflow exp) are built once per pass by
+// the WRITER into CB_ONE pages 1 (m0) / 2 (m1) (CB_ONE = 4 pages under RQPOS; page 0 = ones). CB_OA must not carry them:
+// on a tree root it flows compute -> reader (normalize), and a CB used in both directions deadlocks.
 // Own users (MKA_UPAR): global user g = 2u + MKA_UPAR_PAR (prod kv_split ownership).
-constexpr uint32_t KVP_NONE = 0x3FF, KVP_PT = MKA_KVP_PT;   // host: MKA_KVP_TAB + 4 * KVP_PT is 64 B aligned (DRAM reads)
+constexpr uint32_t KVP_NONE = 0x3FF, KVP_HDR = 3 + MKA_RQ_T;   // table words before the page-table window
+static uint32_t kvp_tab_base;   // DM: CB_ONE page 3, set at kernel start (before the writer's first CB_ONE push)
+FORCE_INLINE uint32_t kvp_pt_addr() { return (kvp_tab_base + 4 * KVP_HDR + 63) & ~63u; }   // 64 B aligned (DRAM reads)
 FORCE_INLINE uint32_t rq_replay(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_REPLAY_L1)[4 + i]; }
 FORCE_INLINE uint32_t rq_attn(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MKA_ATTN_L1)[4 + i]; }
 #if defined(MKA_UPAR)
@@ -132,7 +134,7 @@ FORCE_INLINE uint32_t rq_g(uint32_t u) { return 2 * u + MKA_UPAR_PAR; }
 FORCE_INLINE uint32_t rq_g(uint32_t u) { return u; }
 #endif
 FORCE_INLINE uint32_t kvp_wait() {   // DM side: the reader's word for this pass
-    volatile tt_l1_ptr uint32_t* w = l1w(MKA_KVP_TAB);
+    volatile tt_l1_ptr uint32_t* w = l1w(MKA_KVP_INFO);
     uint32_t v;
     do { invalidate_l1_cache(); v = *w; } while (!(v >> 31));
     return v;
@@ -140,8 +142,7 @@ FORCE_INLINE uint32_t kvp_wait() {   // DM side: the reader's word for this pass
 #if defined(MKA_KVPROD)
 // paged K / V tile page of SDPA block blk (32 positions) through this core's page-table window
 FORCE_INLINE uint32_t kv_page_pt(uint32_t blk) {
-    volatile tt_l1_ptr uint32_t* t = l1w(MKA_KVP_TAB);
-    const uint32_t p = t[KVP_PT + blk / KV_BS32 - t[2]], r = blk % KV_BS32;
+    const uint32_t p = l1w(kvp_pt_addr())[blk / KV_BS32 - l1w(kvp_tab_base)[2]], r = blk % KV_BS32;
     return ((p * KV_NKVH + KV_H) * KV_BS32 + r) * 8;
 }
 #endif

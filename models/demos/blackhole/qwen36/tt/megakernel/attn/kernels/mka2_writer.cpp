@@ -706,6 +706,9 @@ void kernel_main() {
     for (uint32_t g0 = GRP; g0 < NBG; g0 += 2 * GRP) w2_tiles += ((NBG - g0) < GRP ? (NBG - g0) : GRP) * BLK;
 
     {   // ones tile for the softmax denominator (bf16 1.0 = 0x3F80)
+#if defined(MKA_RQPOS)
+        kvp_tab_base = get_write_ptr(CB_ONE) + 3 * 2048;   // the reader's per-pass table: CB_ONE page 3 (before any push)
+#endif
         cb_reserve_back(CB_ONE, 1);
         volatile tt_l1_ptr uint32_t* p = l1w(get_write_ptr(CB_ONE));
         for (uint32_t i = 0; i < 2048 / 4; ++i) p[i] = 0x3F803F80u;
@@ -1334,7 +1337,7 @@ void kernel_main() {
             if (!kvp_rd) {   // the reader's bound, once per pass; then this core's causal mask tiles (if it holds the user's
                 // last blocks) into CB_ONE pages 1 (m0) / 2 (m1): ADDITIVE bf16 0 / -9984, row 4h + j valid cols c <= p_j - 32 blk
                 const uint32_t v_ = kvp_wait();
-                volatile tt_l1_ptr uint32_t* tab = l1w(MKA_KVP_TAB);
+                volatile tt_l1_ptr uint32_t* tab = l1w(kvp_tab_base);
                 vb0 = tab[1]; vb1 = vb0 + (v_ & 0x7FF); kvp_rd = true;
                 const uint32_t m0 = (v_ >> 11) & 0x3FF, m1 = (v_ >> 21) & 0x3FF;
 #if defined(MKA_KVA)

@@ -229,6 +229,7 @@ void kernel_main() {
     }
 #endif
 #if defined(MKA_RQPOS)
+    kvp_tab_base = get_write_ptr(CB_ONE) + 3 * 2048;   // the reader never pushes CB_ONE: its write pointer is the base
     {   // kvpos -> this core's KV bound, mask blocks and page-table window (see mka2_common.hpp)
         const uint32_t scr = get_write_ptr(CB_OA);   // idle until the first masked group / root normalize
         const InterleavedAddrGen<true> kpa{.bank_base_address = rq_replay(0), .page_size = 128};
@@ -241,31 +242,37 @@ void kernel_main() {
         // user takes s_u STREAM + e_u EXT cores (s_u ∝ m_u, >= 1); rank r: STREAM at tree-internal ranks (r % FAN == 0,
         // so owners stay leaves: EXTLEAN) and once the EXT share is used, else EXT. Tree = the static 2-level FAN scheme,
         // + a level 2 for groups > FAN^2. Equal lengths reproduce the static groups / trees (RQDYN) bit for bit.
+#if defined(MKA_RQBAL_HOST)
+        {   // host-staged assignment + tree (engine/program.py rqbal_table, staged before every replay; replay word 7): this
+            // core's 64 B row at page parity * N + me: w0 = u | nrecv << 8 | root << 16 | has_parent << 17 | par_lvl << 18 |
+            // nc0 << 20 | nc1 << 24, w1 = rank | m << 16, then 16-bit coords x | y << 8: parent, level-0 children (FAN - 1
+            // slots), level-1/2 children. Any valid table is correct: the split / masks / bounds come from the device kvpos.
+            constexpr uint32_t N = MKA_RQB_N;
+#if defined(MKA_UPAR)
+            const uint32_t row = MKA_UPAR_PAR * N + b0;
+#else
+            const uint32_t row = b0;
+#endif
+            const InterleavedAddrGen<true> ht{.bank_base_address = rq_replay(7), .page_size = 64};
+            volatile tt_l1_ptr uint32_t* w = l1w(kvp_pt_addr());   // 64 B aligned scratch (the pt window lands here later)
+            noc_async_read(ht.get_noc_addr(row), kvp_pt_addr(), 64);
+            noc_async_read_barrier();
+            const uint32_t w0 = w[0];
+            auto hw = [&](uint32_t k) { return (w[2 + (k >> 1)] >> ((k & 1) * 16)) & 0xFFFF; };
+            user = w0 & 0xFF; b0 = w[1] & 0xFFFF; b1 = w[1] >> 16;   // rank / group size: even split below
+            has_parent = (w0 >> 17) & 1; par_lvl = (w0 >> 18) & 1; par_x = hw(0) & 0xFF; par_y = hw(0) >> 8;
+#if !defined(MKA_EXTLEAN)   // owners are always tree leaves (rq_layout): no children, never the root
+            nc0 = (w0 >> 20) & 0xF; nc1 = (w0 >> 24) & 0xF; is_root = (w0 >> 16) & 1;
+            for (uint32_t i = 0; i < nc0; ++i) { c0x[i] = hw(1 + i) & 0xFF; c0y[i] = hw(1 + i) >> 8; }
+            for (uint32_t i = 0; i < nc1; ++i) { c1x[i] = hw(FANOUT + i) & 0xFF; c1y[i] = hw(FANOUT + i) >> 8; }
+#endif
+            *l1w(MKA_KVP_ASGN) = w0 & 0x1FFFF;   // compute: user, nrecv, root
+        }
+#else
         {
             volatile tt_l1_ptr int32_t* ka = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
             constexpr uint32_t NS = MKA_RQB_NS, N = MKA_RQB_N;   // compile-time: divisions by constants
             const uint32_t me = b0;
-#if defined(MKA_RQBAL_HOST)
-            // host-staged assignment (engine/program.py rqbal_table, staged with kvpos each step): this core's 2 words
-            // [u | rank << 8 | m << 16, s0 | e0 << 8 | sN << 16 | eN << 24] at (parity * N + me) * 8 B of the table page.
-            // Any valid table is correct: the block split, masks and bounds still come from the device kvpos.
-            uint32_t u, r, m, s0, e0, sN, eN;
-            {
-#if defined(MKA_UPAR)
-                const uint32_t off = (MKA_UPAR_PAR * N + me) * 8;
-#else
-                const uint32_t off = me * 8;
-#endif
-                // the table: uint32 [1, 4 N] ROW_MAJOR DRAM (one page, both parities), address = replay block word 7
-                const InterleavedAddrGen<true> ht{.bank_base_address = rq_replay(7), .page_size = 4 * N * 4};
-                const uint32_t dst = MKA_KVP_TAB + KVP_PT * 4;   // 64 B aligned scratch (the pt window lands here later)
-                noc_async_read(ht.get_noc_addr(0) + (off & ~63u), dst, 64);
-                noc_async_read_barrier();
-                const uint32_t w0 = l1w(dst + (off & 63))[0], w1 = l1w(dst + (off & 63))[1];
-                u = w0 & 0xFF; r = (w0 >> 8) & 0xFF; m = (w0 >> 16) & 0xFF;
-                s0 = w1 & 0xFF; e0 = (w1 >> 8) & 0xFF; sN = (w1 >> 16) & 0xFF; eN = w1 >> 24;
-            }
-#else
             uint32_t nb[NUSR], mu[NUSR], su[NUSR], W = 0;
             for (uint32_t u = 0; u < NUSR; ++u) {
                 int32_t pm = -1;
@@ -312,14 +319,11 @@ void kernel_main() {
                 s0 += su[u]; e0 += mu[u] - su[u];
             }
             const uint32_t m = mu[u], sN = su[u], eN = m - sN;
-#endif
             uint8_t lay[MKA_RQB_N];   // rank -> table index
             for (uint32_t r = 0, si = 0, ei = 0; r < m; ++r)
                 lay[r] = (((r % FANOUT == 0 || ei == eN) && si < sN) || ei == eN) ? (uint8_t)(s0 + si++) : (uint8_t)(NS + e0 + ei++);
-#if !defined(MKA_RQBAL_HOST)
             uint32_t r = 0;
             while (lay[r] != me) ++r;
-#endif
             volatile tt_l1_ptr uint32_t* ct = l1w(MKA_RQB_TAB);
             user = u;
             b0 = r; b1 = m;   // even split of this user's blocks over its m cores (below)
@@ -338,8 +342,9 @@ void kernel_main() {
                 }
             nc0 = n0; nc1 = n1; is_root = r == 0;
 #endif
-            l1w(MKA_KVP_TAB)[3 + MKA_RQ_T] = u | ((n0 + n1) << 8) | ((r == 0 ? 1u : 0u) << 16);   // compute: user, nrecv, root
+            *l1w(MKA_KVP_ASGN) = u | ((n0 + n1) << 8) | ((r == 0 ? 1u : 0u) << 16);   // compute: user, nrecv, root
         }
+#endif
 #endif
         volatile tt_l1_ptr int32_t* kp = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr) + rq_g(user) * MKA_RQ_T;
         int32_t pmax = -1, pmin = 0x7FFFFFFF;
@@ -361,17 +366,17 @@ void kernel_main() {
         if (lb >= b0 && lb - b0 < nv) kvp_m0 = lb - b0;
         if (lb0 < lb && lb - 1 >= b0 && lb - 1 - b0 < nv) kvp_m1 = lb - 1 - b0;
         b1 = b0 + nv;
-        volatile tt_l1_ptr uint32_t* tab = l1w(MKA_KVP_TAB);
+        volatile tt_l1_ptr uint32_t* tab = l1w(kvp_tab_base);
         if (nv) {   // page-table window: entries [b0 / BS32, (b1 - 1) / BS32] of row g, read 64 B aligned
             const uint32_t e0 = (b0 / KV_BS32) & ~15u, e1 = (b1 - 1) / KV_BS32 + 1;
             const InterleavedAddrGen<true> pta{.bank_base_address = rq_attn(0), .page_size = rq_attn(2) * 4};
-            noc_async_read(pta.get_noc_addr(rq_g(user)) + e0 * 4, MKA_KVP_TAB + KVP_PT * 4, ((e1 - e0) * 4 + 63) & ~63u);
+            noc_async_read(pta.get_noc_addr(rq_g(user)) + e0 * 4, kvp_pt_addr(), ((e1 - e0) * 4 + 63) & ~63u);
             tab[2] = e0;
             noc_async_read_barrier();
         }
         tab[1] = b0;
         for (uint32_t j = 0; j < MKA_RQ_T; ++j) tab[3 + j] = kvp_p[j];   // per-row causal limits (the writer builds the masks)
-        tab[0] = (1u << 31) | nv | (kvp_m0 << 11) | (kvp_m1 << 21);
+        *l1w(MKA_KVP_INFO) = (1u << 31) | nv | (kvp_m0 << 11) | (kvp_m1 << 21);
     }
 #endif
     bool pq_pending = false;
@@ -1054,7 +1059,7 @@ void kernel_main() {
     noc_semaphore_wait_min(l1w(KVA_GS_DONE), aidx(NL)); *l1w(KVA_GS_DONE) = 0;
 #endif
 #if defined(MKA_RQPOS)
-    *l1w(MKA_KVP_TAB) = 0;   // writer / compute read it at their first SDPA, long done
+    *l1w(MKA_KVP_INFO) = 0;   // writer / compute read it at their first SDPA, long done
 #endif
 #if defined(MKA_RWO)
     if (rw_hlp) *l1w(gs[GS_WOHC]) = 0;
