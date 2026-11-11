@@ -53,65 +53,66 @@ def test_final_piece_and_last_chunk_are_never_extended(monkeypatch):
     assert len(m.steps) == 1
 
 
+def sliver_prefill(self):
+    from models.demos.blackhole.deepseek_v41_flash.tests import test_prefill_row_placement as T
+
+    adm = self._admit()
+    run_ = list(self.partial) + adm
+    if not run_:
+        self.t += 0.1
+        return
+    left, chunks = self.budget, {}
+    for rid in run_:
+        q = self.reqs[rid]
+        piece = min(q.L - q.computed, 4096, left)
+        if piece <= 0:
+            continue
+        if q.computed + piece < q.L and piece >= T.CHUNK:
+            piece = (q.computed + piece) // T.CHUNK * T.CHUNK - q.computed
+        chunks[rid] = piece
+        left -= piece
+    run_ = [r for r in run_ if r in chunks]
+    adm = [r for r in adm if r in chunks]
+    for rid in adm:
+        self.waiting.remove(rid)
+        self.partial.append(rid)
+        self.reqs[rid].state = "prefill"
+    self._set_batch(set(run_), adm + [r for r in run_ if r not in adm and r not in self.batch])
+    row_ids = [r for r in self.batch if r is not None]
+    slots = self._alloc_prefill_state_slots(row_ids)
+    starts = [self.reqs[r].computed for r in row_ids]
+    ends = [self.reqs[r].computed + chunks[r] for r in row_ids]
+    toks = torch.zeros(len(row_ids), max(ends), dtype=torch.int64)
+    for i, r in enumerate(row_ids):
+        toks[i, : ends[i]] = self.reqs[r].tokens[: ends[i]]
+    final = [ends[i] == self.reqs[r].L for i, r in enumerate(row_ids)]
+    totals = [self.reqs[r].L for r in row_ids]
+    c0 = self.m.computed
+    self.gen.prefill_forward(
+        toks,
+        prompt_lens=ends,
+        start_pos=starts,
+        empty_slots=slots,
+        sampling_params=None,
+        prefill_final=final,
+        prefill_total=totals,
+    )
+    self.t += 9.2e-5 * (self.m.computed - c0) + 0.02
+    self.log.append(("prefill", [(r, 0, ends[i], 0, slots[i]) for i, r in enumerate(row_ids)], 0, self.recomp_tokens))
+    for i, r in enumerate(row_ids):
+        q = self.reqs[r]
+        q.computed = ends[i]
+        if final[i]:
+            q.state, q.t_first = "decode", self.t
+            self.partial.remove(r)
+            self.decoders.append(r)
+
+
 def test_sim_with_budget_slivers_has_no_events(monkeypatch):
     """closed-loop replay of the image-2 pattern (B=16 U=Up=4, 32768 budget / 4096 cap, prompt lengths that leave slivers): flag off loses state, on does not"""
     from models.demos.blackhole.deepseek_v41_flash.tests import test_prefill_row_placement as T
 
-    def _prefill(self):
-        adm = self._admit()
-        run_ = list(self.partial) + adm
-        if not run_:
-            self.t += 0.1
-            return
-        left, chunks = self.budget, {}
-        for rid in run_:
-            q = self.reqs[rid]
-            piece = min(q.L - q.computed, 4096, left)
-            if piece <= 0:
-                continue
-            if q.computed + piece < q.L and piece >= T.CHUNK:
-                piece = (q.computed + piece) // T.CHUNK * T.CHUNK - q.computed
-            chunks[rid] = piece
-            left -= piece
-        run_ = [r for r in run_ if r in chunks]
-        adm = [r for r in adm if r in chunks]
-        for rid in adm:
-            self.waiting.remove(rid)
-            self.partial.append(rid)
-            self.reqs[rid].state = "prefill"
-        self._set_batch(set(run_), adm + [r for r in run_ if r not in adm and r not in self.batch])
-        row_ids = [r for r in self.batch if r is not None]
-        slots = self._alloc_prefill_state_slots(row_ids)
-        starts = [self.reqs[r].computed for r in row_ids]
-        ends = [self.reqs[r].computed + chunks[r] for r in row_ids]
-        toks = torch.zeros(len(row_ids), max(ends), dtype=torch.int64)
-        for i, r in enumerate(row_ids):
-            toks[i, : ends[i]] = self.reqs[r].tokens[: ends[i]]
-        final = [ends[i] == self.reqs[r].L for i, r in enumerate(row_ids)]
-        totals = [self.reqs[r].L for r in row_ids]
-        c0 = self.m.computed
-        self.gen.prefill_forward(
-            toks,
-            prompt_lens=ends,
-            start_pos=starts,
-            empty_slots=slots,
-            sampling_params=None,
-            prefill_final=final,
-            prefill_total=totals,
-        )
-        self.t += 9.2e-5 * (self.m.computed - c0) + 0.02
-        self.log.append(
-            ("prefill", [(r, 0, ends[i], 0, slots[i]) for i, r in enumerate(row_ids)], 0, self.recomp_tokens)
-        )
-        for i, r in enumerate(row_ids):
-            q = self.reqs[r]
-            q.computed = ends[i]
-            if final[i]:
-                q.state, q.t_first = "decode", self.t
-                self.partial.remove(r)
-                self.decoders.append(r)
-
-    monkeypatch.setattr(T.PluginSim, "_prefill", _prefill)
+    monkeypatch.setattr(T.PluginSim, "_prefill", sliver_prefill)
     monkeypatch.setenv("DSV41_PIECE_LAG", "1")
     monkeypatch.setenv("DSV41_CONT_FIRST", "1")
     res = {}
