@@ -499,7 +499,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 #
 #   * `residency`: a Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB. t2va keeps its stages loaded across
 #     requests except the video VAE, which is freed before each denoise; ref2va's 61440-token prompt encode fits
-#     beside no other stage, so it evicts each stage before the next loads.
+#     beside no other stage, so it evicts each stage before the next loads. With `park_vae_decoder` each device
+#     keeps 1/SP of the decoder's weights through the denoise and the decode gathers them back over the fabric.
 #   * `dit_fsdp: True`: the DiT weights are sharded across the SP axis too and gathered layer by layer.
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
 #
@@ -511,6 +512,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "num_links": 4,
         "topology": ttnn.Topology.Ring,
         "residency": MiniMaxH3Residency(coresident_tasks=("t2va",), vae_residency_mode="deallocate"),
+        "park_vae_decoder": True,
         "dit_fsdp": True,
         # Dynamic length by default, as on the Blackhole 4x8; the bucket ladder stays as the backup path and the
         # admission cap.
@@ -745,6 +747,10 @@ class MiniMaxH3Pipeline:
         vae_mode = residency.vae_residency_mode if vae_residency_mode is None else vae_residency_mode
         _check_vae_residency_mode(vae_mode)
         self.vae_residency_mode = vae_mode if coresident else "keep"
+        self.park_vae_decoder = (
+            self.vae_residency_mode == "deallocate"
+            and os.environ.get("MINIMAX_H3_PARK_VAE", "1" if preset.get("park_vae_decoder", False) else "0") == "1"
+        )
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -1845,6 +1851,11 @@ class MiniMaxH3Pipeline:
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
         )
+        if self.park_vae_decoder and module is self._vae.decoder:
+            # Park and unpark once at each host load, so the slice and gather programs compile with the load (the
+            # warmup) rather than at the first request's decode.
+            module.park_weights(self.ccl_manager, self.sp_axis)
+            module.unpark_weights()
 
     @property
     def vae(self) -> MiniMaxH3Vae:
@@ -2427,7 +2438,11 @@ class MiniMaxH3Pipeline:
             self._bind_kv_gather_pair(transformer)
         if self.vae_residency_mode == "deallocate":
             for module in self._vae.modules:
-                if module.is_loaded():
+                if not module.is_loaded():
+                    continue
+                if self.park_vae_decoder and module is self._vae.decoder:
+                    module.park_weights(self.ccl_manager, self.sp_axis)
+                else:
                     module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):

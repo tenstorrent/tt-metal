@@ -293,6 +293,55 @@ class Module(ABC):
         for hook in self._eviction_hooks:
             hook()
 
+    def park_weights(self, ccl_manager: Any, mesh_axis: int) -> None:  # noqa: ANN401
+        """Evict to 1/n of the weights: each replicated parameter keeps only this device's 1/n slice (n devices along
+        `mesh_axis`; parameters with no evenly divisible dim stay whole), `unpark_weights` all-gathers them back.
+
+        For a module that has to make room for a while but would otherwise reload from the host: on a Wormhole
+        Galaxy a replicated multi-GB module reloads at PCIe speed (seconds), while the gather runs on the fabric.
+        The module counts as unloaded while parked; the eviction hooks run as for `deallocate_weights`.
+
+        Every slice is cut before any full weight is freed, so the slices pack together instead of each one filling
+        the hole its predecessor's full weight left; `unpark_weights` then frees them as one block, not as holes
+        scattered between the gathered weights.
+        """
+        for parameter in self._all_parameters():
+            parameter.cut_park_slice(ccl_manager, mesh_axis)
+        for parameter in self._all_parameters():
+            parameter.drop_parked_full()
+        self._mark_evicted()
+
+    def _all_parameters(self) -> Iterator[Parameter]:
+        for _, child in self.named_children():
+            yield from child._all_parameters()
+        for _, parameter in self.named_parameters():
+            yield parameter
+
+    def _mark_evicted(self) -> None:
+        for _, child in self.named_children():
+            child._mark_evicted()
+        self._is_loaded = False
+        for hook in self._eviction_hooks:
+            hook()
+
+    def _mark_loaded(self) -> None:
+        for _, child in self.named_children():
+            child._mark_loaded()
+        self._is_loaded = True
+
+    def is_parked(self) -> bool:
+        return any(p.is_parked() for _, p in self.named_parameters()) or any(
+            c.is_parked() for _, c in self.named_children()
+        )
+
+    def unpark_weights(self) -> None:
+        """Gather back what `park_weights` sliced; the module is loaded again (bit-identical weights)."""
+        for parameter in self._all_parameters():
+            parameter.gather_parked()
+        for parameter in self._all_parameters():
+            parameter.free_parked_slice()
+        self._mark_loaded()
+
     def register_eviction_hook(self, hook: Callable[[], None]) -> None:
         """Run `hook` whenever this module's weights are deallocated.
 
@@ -474,6 +523,8 @@ class Parameter:
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
+        # `park`: (this device's slice, its 4D dim, the full shape, CCL manager, mesh axis) while parked.
+        self._parked: tuple | None = None
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
@@ -520,6 +571,63 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
+        if self._parked is not None:
+            ttnn.deallocate(self._parked[0])
+            self._parked = None
+
+    def _park_dim(self, shape4: Sequence[int], n: int) -> int | None:
+        """The 4D dim to slice a replicated tensor along for `park`: an outer dim first, then (tile layout) the last
+        two if each slice stays whole tiles; None if no dim divides evenly."""
+        for d in (0, 1):
+            if shape4[d] % n == 0:
+                return d
+        if self.layout == ttnn.Layout.TILE:
+            for d in (2, 3):
+                if shape4[d] % (n * ttnn.TILE_SIZE) == 0:
+                    return d
+        elif shape4[2] % n == 0:
+            return 2
+        return None
+
+    def cut_park_slice(self, ccl_manager: Any, mesh_axis: int) -> None:  # noqa: ANN401
+        """`Module.park_weights`' first pass: cut this device's slice, keeping the full weight until
+        `drop_parked_full`. Only a replicated device parameter parks; anything else is left as is."""
+        if self._data is None or self.on_host or any(a is not None for a in self.mesh_axes):
+            return
+        n = self.device.shape[mesh_axis]
+        shape = tuple(self._data.shape)
+        shape4 = (1,) * (4 - len(shape)) + shape
+        dim = self._park_dim(shape4, n) if len(shape) <= 4 and n > 1 else None
+        if dim is None:
+            return
+        full = ttnn.reshape(self._data, shape4)
+        shard = ttnn.mesh_partition(full, dim, cluster_axis=mesh_axis, memory_config=self.memory_config)
+        self._parked = (shard, dim, shape, ccl_manager, mesh_axis)
+
+    def drop_parked_full(self) -> None:
+        if self._parked is not None and self._data is not None:
+            ttnn.deallocate(self._data)
+            self._data = None
+
+    def is_parked(self) -> bool:
+        return self._parked is not None
+
+    def gather_parked(self) -> None:
+        """`Module.unpark_weights`' first pass: gather the full weight back, keeping the slice until
+        `free_parked_slice`."""
+        if self._parked is None or self._data is not None:
+            return
+        shard, dim, shape, ccl_manager, mesh_axis = self._parked
+        full = ccl_manager.all_gather(shard, dim=dim, mesh_axis=mesh_axis, use_hyperparams=False)
+        full = ttnn.reshape(full, shape)
+        if full.memory_config() != self.memory_config:
+            full = ttnn.to_memory_config(full, self.memory_config)
+        self.data = full
+
+    def free_parked_slice(self) -> None:
+        if self._parked is not None:
+            ttnn.deallocate(self._parked[0])
+            self._parked = None
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:
