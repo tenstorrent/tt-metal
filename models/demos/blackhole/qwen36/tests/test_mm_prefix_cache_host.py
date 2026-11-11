@@ -445,3 +445,54 @@ def test_prefill_forward_refuses_a_missing_payload_before_the_engine(monkeypatch
             start_pos=torch.tensor([64]),
         )
     assert eng.calls == [] and tower == []
+
+
+def test_segment_replay_at_zero_keeps_the_whole_prompt_mrope(fake_ttnn):
+    """Device crash 11-11 (o2 colours, Tp 427, plan points [128]): the first segment's short-trace replay
+    (chunk_start 0) rebuilt M-RoPE from its own 128 tokens with the full grid list -> get_rope_index size mismatch.
+    The table built over the whole prompt must stay pinned for every segment of an image prompt's plan."""
+    calls, cache = [], _cache()
+    images = [(20, 200)]
+    v, _, toks = _vision(images, ["A"], L=427)
+    model = _fake_model(calls, trace_lengths=(128, 427 - 128))
+    model._prefix_cache = cache
+    model.args = types.SimpleNamespace(hf_config=types.SimpleNamespace(image_token_id=IMG, video_token_id=IMG + 1))
+    model._vision_placeholder_token_id = lambda: Qwen36Model._vision_placeholder_token_id(model)
+    model._vis_row_offset_for = lambda ids, cs: Qwen36Model._vis_row_offset_for(model, ids, cs)
+    model._req_image_grid_thw, model._req_video_grid_thw = v.grids, None
+    built = []
+    model.rope = types.SimpleNamespace(
+        build_request_rope=lambda ids, image_grid_thw=None, video_grid_thw=None: built.append(int(ids.shape[-1]))
+    )
+    model._build_request_rope = lambda ids, vt, **k: Qwen36Model._build_request_rope(model, ids, vt, **k)
+    replay = model._replay_short_trace
+
+    def _replay(tokens, pt, L, strict=True, chunk_start=0, carry_gdn=False, spec_inputs=None, **kw):
+        if chunk_start == 0:  # what the real _replay_short_trace does
+            model._build_request_rope(tokens[:, :L], kw.get("vision_tokens"))
+        return replay(
+            tokens, pt, L, strict=strict, chunk_start=chunk_start, carry_gdn=carry_gdn, spec_inputs=spec_inputs
+        )
+
+    model._replay_short_trace = _replay
+    e = _engine(8, model=model)
+    MTPSpecEngine._prefill_fast(
+        e,
+        3,
+        toks,
+        torch.tensor([toks], dtype=torch.int32),
+        _row(),
+        427,
+        lambda *a: None,
+        [False],
+        plan=(0, None, [128]),
+        mtp_prompt=[toks],
+        vision_tokens="ROWS",
+        mm_key=v.key,
+        mm_rope=True,
+    )
+    assert built == [427]  # built once, over the whole prompt; the segment at 0 did not rebuild it
+    assert not getattr(model, "_mm_rope_pinned", False)  # released after the prefill
+    built.clear()
+    Qwen36Model._build_request_rope(model, torch.tensor([toks[:128]]), "ROWS")  # a later prefill builds normally
+    assert built == [128]

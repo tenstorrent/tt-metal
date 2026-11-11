@@ -640,6 +640,11 @@ class Qwen36Model:
         seams then slice the staged table by sequence position and decode offsets by rope_delta.
         ``mm`` True: multimodal even with no rows to splice (QWEN36_MM_PREFIX_CACHE: a resume past every image still
         needs every image's grid for the positions; the caller staged the full grid list)."""
+        if getattr(self, "_mm_rope_pinned", False):
+            # QWEN36_MM_PREFIX_CACHE: an image prompt split into prefix-plan segments keeps the table its prefill built over
+            # the WHOLE prompt; a segment replay at chunk_start 0 would rebuild it from its own tokens only (and fail the
+            # M-RoPE index against the full grid list).
+            return
         multimodal = vision_tokens is not None or mm
         image_grid = self._req_image_grid_thw if multimodal else None
         video_grid = self._req_video_grid_thw if multimodal else None

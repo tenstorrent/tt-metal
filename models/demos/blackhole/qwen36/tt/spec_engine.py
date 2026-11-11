@@ -3430,6 +3430,8 @@ class MTPSpecEngine:
                     raise RuntimeError("a multimodal prompt with a prefix plan needs its image-keyed GDN key (mm_key)")
                 # one table for the whole prompt: every segment slices it
                 model._build_request_rope(prompt, vision_tokens, **({"mm": True} if mm_rope else {}))
+                if mm_key is not None:
+                    model._mm_rope_pinned = True  # segment replays at chunk_start 0 keep it (reset below)
                 if s0 > 0:
                     src[0].restore(src[1])
                 run, mb_choice = (
@@ -3482,6 +3484,8 @@ class MTPSpecEngine:
                 model._prefix_cache.log(Tp, -1, s0, saved)
         finally:
             self._skip_logits_read = False
+            if getattr(model, "_mm_rope_pinned", False):
+                model._mm_rope_pinned = False
             if mtp_prompt is not None:
                 mtp_prompt[0] = prompt_list
             if prev is not None:
