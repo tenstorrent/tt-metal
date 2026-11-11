@@ -66,6 +66,10 @@ from models.demos.gemma4.tt.sdpa_pair_split import EMPTY_HALF_M, LOGIT_CLAMP, pa
 
 #: "0" keeps the 4-head verify on a GEMMA4_SDPA_PAIR_SPLIT build (default: the pair view where the layers have it)
 VERIFY_PREFIX_LSE_PAIR_ENV = "GEMMA4_SPEC_VERIFY_PREFIX_LSE_PAIR"
+#: the smallest record rung (S_k) at which a prefix that takes more than one call (h_local * P > 32 packed q rows: 8
+#: pair heads at P = 6, the (1,5) / (5,5) records) replaces the masked verify; one-call records always take it
+VERIFY_PREFIX_LSE_SPLIT_MIN_SK_ENV = "GEMMA4_SPEC_VERIFY_PREFIX_LSE_SPLIT_MIN_SK"
+VERIFY_PREFIX_LSE_SPLIT_MIN_SK_DEFAULT = 131072
 #: pins the prefix call's cores per (row, KV head); unset: GEMMA4_SDPA_MAX_CORES_PER_HEAD, else the stock default 16
 VERIFY_PREFIX_LSE_MAX_CORES_ENV = "GEMMA4_SPEC_VERIFY_PREFIX_LSE_MAX_CORES"
 #: the decode SDPA's K chunk knob, which the prefix call follows (attention/decode.py decode_forward)
@@ -107,6 +111,21 @@ def verify_prefix_pair_enabled() -> bool:
     """``GEMMA4_SPEC_VERIFY_PREFIX_LSE_PAIR`` (default on): the verify's global layers take the pair view when the build
     gave them one (``GEMMA4_SDPA_PAIR_SPLIT``); ``0`` keeps the 4-head verify."""
     return os.environ.get(VERIFY_PREFIX_LSE_PAIR_ENV, "1") != "0"
+
+
+def prefix_lse_rung_reason(splits: int, s_k: int, env=None) -> Optional[str]:
+    """None when a record at rung ``s_k`` whose prefix takes ``splits`` calls should take the prefix + fresh verify,
+    else why it keeps the masked one. Served 31B (1,8) boot tables (ms, plain..top of the rung): one call ((5,3), (8,3))
+    is cheaper at every rung ((5,3) 8K 51.9..52.4 -> 50.7..52.2, 32K 57.4..58.5 -> 52.3..55.1); two calls ((1,5), (5,5))
+    cost 1..3 ms more at the 8K / 32K rungs ((1,5) 8K 52.6..53.1 -> 55.6..56.7, which moved its served gain from 1.28x
+    to 1.24x, under the adaptive policy's 1.25 entry, and halved multi-user short-context decode on the datasheet)
+    and pay from the 131K rung ((1,5) 62.4..64.0 -> 58.0..62.8, (5,5) 86.2..93.1 -> 68.4..89.7)."""
+    env = os.environ if env is None else env
+    raw = str(env.get(VERIFY_PREFIX_LSE_SPLIT_MIN_SK_ENV, "") or "").strip()
+    min_sk = int(raw) if raw else VERIFY_PREFIX_LSE_SPLIT_MIN_SK_DEFAULT
+    if int(splits) > 1 and int(s_k) < min_sk:
+        return f"{int(splits)} prefix calls pay only from S_k {min_sk} ({VERIFY_PREFIX_LSE_SPLIT_MIN_SK_ENV})"
+    return None
 
 
 def kv_dtype_name(dtype) -> Optional[str]:

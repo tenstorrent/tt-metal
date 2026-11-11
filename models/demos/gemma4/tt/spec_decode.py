@@ -65,6 +65,7 @@ from models.demos.gemma4.tt.verify_prefix_lse import (
     prefix_effective_block,
     prefix_head_splits,
     prefix_lse_layer_reason,
+    prefix_lse_rung_reason,
     prefix_positions,
     verify_prefix_lse_enabled,
     verify_prefix_pair_enabled,
@@ -3378,6 +3379,10 @@ class SpeculativeDecoder:
         )
         if not plan.fits:
             prefix_log_once(f"shape {shape} S_k={s_k}: every layer keeps the masked packed verify: {plan.describe()}")
+            return None
+        rung_reason = prefix_lse_rung_reason(geometry.splits, s_k)
+        if rung_reason is not None:
+            prefix_log_once(f"shape {shape} S_k={s_k}: keeps the masked packed verify: {rung_reason}")
             return None
         prefix_log_once(f"shape {shape} S_k={s_k}: {plan.describe()}")
         return plan

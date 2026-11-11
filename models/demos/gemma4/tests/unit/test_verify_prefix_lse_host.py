@@ -584,3 +584,15 @@ def test_shared_view_needs_whole_tiles_of_the_effective_block():
     assert vp.prefix_effective_block((9, 3, 64, 100), 512) is None
     with pytest.raises(ValueError, match="not exactly divisible"):  # allow-pytest.raises (the served helper's contract)
         served(SimpleNamespace(padded_shape=(9, 3, 64, 100)), 512, 1)
+
+
+def test_two_call_prefixes_keep_the_masked_verify_below_the_rung_threshold():
+    """One prefix call takes the prefix + fresh verify at every rung; two calls only from S_k 131072 (the env moves it)."""
+    for s_k in (8192, 32768, 131072, 263168):
+        assert vp.prefix_lse_rung_reason(1, s_k, env={}) is None
+    assert vp.prefix_lse_rung_reason(2, 8192, env={}) is not None
+    assert vp.prefix_lse_rung_reason(2, 32768, env={}) is not None
+    assert vp.prefix_lse_rung_reason(2, 131072, env={}) is None
+    assert vp.prefix_lse_rung_reason(2, 263168, env={}) is None
+    env = {vp.VERIFY_PREFIX_LSE_SPLIT_MIN_SK_ENV: "8192"}
+    assert vp.prefix_lse_rung_reason(2, 8192, env=env) is None
