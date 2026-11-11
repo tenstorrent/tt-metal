@@ -198,6 +198,7 @@ def setup_bench(dev, MESH, mesh_identity):
     if ('MK_V12', '1') in MKDEF and not any(k_ == 'MK_V12_CB' for k_, _ in MKDEF):
         MKDEF = MKDEF + [('MK_V12_CB', '1')]
     MKDEF += [('MKA_AMASK', f'{AMASK & 0xFFFFFFFF}u'), ('MKA_S_GDN', str(int(S_GDN_US * 1350)))]
+    if os.environ.get('MKA_EXT_LEANZ', '0') == '1': MKDEF += [('MKA_EXT_LEANZ', '1')]   # profiled runs: EXT DM zones out (mka2_common.hpp MKZ)
     print(f'[mk1] defines {MKDEF}', flush=True)
     def is_attn_layer(L): return (AMASK >> L) & 1
 
@@ -874,6 +875,33 @@ def setup_bench(dev, MESH, mesh_identity):
                     for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
             if RWO: gold_wo[L] = (A_ * sg) @ woq[L]
         print(f"[rmask] causal mask on last-block cores {sorted(MASKC)}", flush=True)
+    def attn_regold(L, gq):   # MK_REAL_AR checker: attention layer L's qkv / k / SDPA / wo golds from the x the AR delivered
+        """gq: the raw qkv gold [M, QN*TILE] = rstd (CB 20 stand-in) * x_L @ Wqkv, x_L = the residual the previous AR delivered."""
+        gold_qkv[L] = gq
+        if not RQNR: return
+        Xq = gq.double()
+        qh = [norm_rope(Xq[:, h_ * 256:(h_ + 1) * 256].float(), h_) for h_ in range(6)]
+        gold_k[L] = norm_rope(Xq[:, 48 * TILE:56 * TILE].float(), 6)
+        g_ = torch.zeros(NU, TILE, DHD)
+        kq_, vq_ = KVQ[L]
+        for u_ in range(NU):
+            Qu = torch.zeros(TILE, DHD)
+            for h_ in range(6):
+                for j_ in range(4): Qu[4 * h_ + j_] = qh[h_][4 * u_ + j_]
+            Qu = Qu.bfloat16().float()
+            p_ = torch.exp(Qu[:NQH * T] @ kq_[u_].T)
+            if RMASK:
+                GOLD_NOMASK.setdefault(L, torch.zeros(NU, TILE, DHD))[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+                p_[:, CTX - TILE:] *= mk[u_, :NQH * T]
+            g_[u_, :NQH * T] = (p_ @ vq_[u_]) / p_.sum(-1, keepdim=True)
+        golds_s[L] = g_
+        if RWO:
+            A_ = torch.zeros(M, 48 * TILE)
+            sg = torch.sigmoid(gq[:, 64 * TILE:112 * TILE])
+            for u_ in range(NU):
+                for h_ in range(6):
+                    for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+            gold_wo[L] = (A_ * sg) @ woq[L]
     def head_args_r(fi):
         if not RQNR: return []
         return [hg_t.buffer_address() if fi in HC else 0, HC.index(fi) * 10 if fi in HC else 0,

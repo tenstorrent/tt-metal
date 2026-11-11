@@ -170,7 +170,7 @@ void kernel_main() {
     auto v12_ox_to = [&](uint32_t wait_addr, uint32_t wait_val, uint32_t flag_val) {
         if (vrole != 2) return;
         noc_semaphore_wait_min(vw(wait_addr), wait_val);
-        DeviceZoneScopedN("R-OX");
+        MKZ("R-OX");
         const uint32_t sp = get_read_ptr(CB_VX0);
         if (vR >= 32) {
             for (uint32_t i = 0; i < 2; ++i)
@@ -333,7 +333,7 @@ void kernel_main() {
             // throttled (MKA_PQCH-page chunks, MKA_PQN in flight); the ring was popped by that core's last qkv
             const uint32_t Ln = next_att(L);
             if (Ln < NL) {
-                DeviceZoneScopedN("R-PQGDN");
+                MKZ("R-PQGDN");
                 const uint32_t run = gdn_run(Ln), j = L - (Ln - run);
 #if defined(MKA_QSK) && !defined(MKA_RWO)
                 const uint32_t pqn = 0;   // unreachable (kPqGdn is false)
@@ -411,7 +411,7 @@ void kernel_main() {
 #endif
 #if defined(MKA_QSK)
         if (att && vrole == 1) {   // spec §18: this core's qkv partial to the column rows above (NOC1); the writer does rows below
-            DeviceZoneScopedN("R-QRS");
+            MKZ("R-QRS");
             cb_wait_front(CB_VA, V_NTM);
             *vw(vg[VG_LA]) = 2 * L + 1;
             v_rs_send(get_read_ptr(CB_VA), 0, vk, qsk_nt(vn), 1, vcy, vcx, vrsbuf, vk, vR, vg[VG_RS]);
@@ -423,7 +423,7 @@ void kernel_main() {
         if (pq_pending) { noc_async_read_barrier_with_trid(TRID_PQ); cb_push_back(CB_PQ, QSL); pq_pending = false; }
 #endif
         if (att) {   // SDPA: K stream
-            DeviceZoneScopedN("R-KV");
+            MKZ("R-KV");
             const auto kv = TensorAccessor(kv_args, kv_addr[L], KVTB);
 #if defined(MKA_KVPROD)
             const auto kvv = TensorAccessor(kv_args, kvv_addr[L], KVTB);
@@ -585,7 +585,7 @@ void kernel_main() {
 #endif
         }
         if (att) {   // SDPA: tree reduce (pull), cumulative global semaphores (over attention layers: A)
-            DeviceZoneScopedN("R-RED");
+            MKZ("R-RED");
             auto pull = [&](uint32_t lvl, uint32_t sem_addr, uint32_t n, const uint32_t* cx, const uint32_t* cy) {
                 if (n == 0) return;
 #if !defined(MKA_TREEFLAG)
@@ -642,7 +642,7 @@ void kernel_main() {
         }
 #if defined(MKA_EXTPOST)
         if (!IS_STREAM && wo_tiles + extra_tiles) {   // STREAM_EXT: projection bytes outside this core's SDPA phase
-            DeviceZoneScopedN("R-EXTW");
+            MKZ("R-EXTW");
             const uint32_t n = wo_tiles + extra_tiles;
             noc_async_read_set_trid(TRID_WO);
             for (uint32_t t = 0; t < n; t += 8)
@@ -654,7 +654,7 @@ void kernel_main() {
         // STREAM_EXT: issue layer L + 1's whole slice once this core's KV + tree work is done (the STREAM cores are then
         // in wo / AR / MLP); it lands during that tail and is pushed at the start of layer L + 1
         if (qrole == QR_EXT && next_att(L) < NL) {
-            DeviceZoneScopedN("R-PQ");
+            MKZ("R-PQ");
             cb_reserve_back(CB_PQ, QSL);
             const uint64_t src = wq.get_noc_addr(pq_page + next_att(L) * pq_layer);
             const uint32_t dst = get_write_ptr(CB_PQ);
@@ -684,7 +684,7 @@ void kernel_main() {
 #endif
 #if !defined(MKA_NOMLP) && !defined(MK_V12)
         if (IS_STREAM && IS_GU && !(kGupre && att)) {   // GDN-type layers (and non-GUPRE builds) stream the even groups here
-            DeviceZoneScopedN("R-GU");
+            MKZ("R-GU");
             const uint64_t base = wgu.get_noc_addr(gu_page + L * pgu_layer);
             for (uint32_t g0 = 0; g0 < NBG; g0 += 2 * GRP) {
                 const uint32_t nb = (NBG - g0) < GRP ? (NBG - g0) : GRP;
@@ -697,7 +697,7 @@ void kernel_main() {
 #endif
 #if !defined(MKA_NOMLP) && !defined(MK_V12)
         if (IS_STREAM && (ROOT == 2 || ROOT == 3)) {
-            DeviceZoneScopedN("R-HROOT");
+            MKZ("R-HROOT");
             root_bcast_layer(ROOT, L, NCORES, HCH, cbh_base + ROOT * HCH * XTB, HCH * XTB, r, self_rect, 1);
         }
 #endif
@@ -721,7 +721,7 @@ void kernel_main() {
             }
             cb_wait_front(CB_VDO2, V_OT);
             {
-                DeviceZoneScopedN("R-VDN");
+                MKZ("R-VDN");
                 v_tile_write(get_read_ptr(CB_VDO2), get_noc_addr(vobx, voby, vpbuf + vn * V_OT * V_PTB), V_OT, vR);
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(vobx, voby, vg[VG_P]), 1);
