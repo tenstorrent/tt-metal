@@ -24,6 +24,7 @@ Limits of this version (the runner refuses what it cannot serve with a clear err
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -90,6 +91,15 @@ class TtQwen35PupPrefillRuntime:
         m.prepare_prefill_trace_chunked(self.mesh_device, full_pt[:, : self.blocks_per_slot], chunk_size=seg)
         if self.config.use_trace:
             m.prepare_prefill_traces_short(self.mesh_device, full_pt[:, : self.blocks_per_slot])
+        # Masked buckets above the short traces (a > 2048-token request runs as one bucket of the next 128 multiple)
+        # compile here, before any capture: a program compiled after a trace is parked clobbers it (#48536). Seen
+        # with 10 references: the 3200-row bucket compiled at request time gave garbage once a short trace had
+        # replayed in between. PUP_PREFILL_WARM_BUCKETS lists them (comma-separated rows).
+        long_buckets = [int(b) for b in os.environ.get("PUP_PREFILL_WARM_BUCKETS", "").split(",") if b.strip()]
+        if long_buckets:
+            t0 = time.perf_counter()
+            m.warmup_prefill_masked_buckets(full_pt[:, : self.blocks_per_slot], buckets=long_buckets)
+            logger.info(f"[qwen35_9b_pup] warmed masked buckets {long_buckets} in {time.perf_counter() - t0:.1f} s")
         self._export(kv_caches, slot=0, actual_start=0, actual_end=128)
         ttnn.synchronize_device(self.mesh_device)
         if self.config.use_trace:
