@@ -3872,8 +3872,11 @@ class Qwen36Model:
                     gate.tables["verify"][b] = mx + 1
             missing = [b for b in _mk1.programs if b not in widths]
             if missing:
-                logger.warning(f"megakernel: no split verify variant for engine widths {missing}: contexts > {mx} have NO "
-                               "op-by-op fallback (QWEN36_ATTN_KV_SPLIT gate off?)")
+                msg = (f"megakernel: no split verify variant for engine widths {missing}: contexts > {mx} would be silently "
+                       "truncated by the engine (no op-by-op fallback; QWEN36_ATTN_KV_SPLIT gate off?)")
+                if os.environ.get("QWEN36_R16_MK_ALLOW_NO_FALLBACK") != "1":
+                    raise RuntimeError(msg + ". Set QWEN36_R16_MK_ALLOW_NO_FALLBACK=1 only for short-context tests.")
+                logger.warning(msg)
             self._vfy_mk_max_ctx = mx
             logger.info(f"megakernel: engine widths {sorted(_mk1.programs)} replay the engine up to context {mx}, the "
                         f"op-by-op split verify variant above it")
