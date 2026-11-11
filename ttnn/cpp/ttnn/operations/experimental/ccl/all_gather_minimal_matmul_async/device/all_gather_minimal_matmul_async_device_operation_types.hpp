@@ -59,6 +59,10 @@ struct AllGatherMinimalMatmulAsyncParams {
     // so a pinned and an unpinned call that resolve alike share one program.
     std::optional<bool> transpose_core_grid;
 
+    int32_t swiglu_chunk = -1;
+
+    bool swiglu_overlap = false;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -85,7 +89,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {},
-        std::optional<bool> transpose_core_grid = std::nullopt) :
+        std::optional<bool> transpose_core_grid = std::nullopt,
+        int32_t swiglu_chunk = -1,
+        bool swiglu_overlap = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -111,7 +117,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology),
         fuse_swiglu(fuse_swiglu),
-        transpose_core_grid(transpose_core_grid) {}
+        transpose_core_grid(transpose_core_grid),
+        swiglu_chunk(swiglu_chunk),
+        swiglu_overlap(swiglu_overlap) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -132,6 +140,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fuse_swiglu",
         "fused_activation",
         "output_dtype",
+        "swiglu_chunk",
+        "swiglu_overlap",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -154,6 +164,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fuse_swiglu,
             this->fused_activation,
             this->output_dtype,
+            this->swiglu_chunk,
+            this->swiglu_overlap,
             this->compute_kernel_config);
     }
 };

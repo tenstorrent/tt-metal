@@ -52,7 +52,12 @@ Conv2dResultWithOptions conv2d(
     const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
     bool return_output_dim = false,
-    bool return_weights_and_bias = false);
+    bool return_weights_and_bias = false,
+    const std::optional<const ttnn::Tensor>& prologue_scale = std::nullopt,
+    const std::optional<const ttnn::Tensor>& prologue_shift = std::nullopt,
+    const std::optional<const ttnn::Tensor>& halo_boundary = std::nullopt,
+    const std::optional<const ttnn::Tensor>& epilogue_stats = std::nullopt,
+    uint32_t epilogue_stats_slice_stride = 0);
 
 }  // namespace ttnn
 
@@ -76,6 +81,10 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     std::optional<std::reference_wrapper<Tensor>> bias_tensor,
     const Conv2dConfig& conv_config_,
     const DeviceComputeKernelConfig& compute_config,
-    MeshDevice* device);
+    MeshDevice* device,
+    const std::optional<const Tensor>& prologue_scale = std::nullopt,
+    const std::optional<const Tensor>& prologue_shift = std::nullopt,
+    const std::optional<const Tensor>& epilogue_stats = std::nullopt,
+    uint32_t epilogue_stats_slice_stride = 0);
 
 }  // namespace ttnn::operations::conv::conv2d

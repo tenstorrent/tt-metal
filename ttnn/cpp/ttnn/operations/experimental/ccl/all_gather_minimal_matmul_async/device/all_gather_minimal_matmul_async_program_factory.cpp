@@ -273,7 +273,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu = false) {
+    bool fuse_swiglu = false,
+    int32_t swiglu_chunk = -1,
+    bool swiglu_overlap = false) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -431,6 +433,46 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             N_tiles,
             N_tiles_per_core,
             N_block_tiles);
+    }
+
+    const bool grouped_n = swiglu_chunk >= 0;
+    uint32_t grp_a_tiles = 0, grp_a_pc = 0, grp_b_pc = 0;
+    if (grouped_n) {
+        TT_FATAL(transpose_core_grid, "swiglu_chunk needs the transposed core grid (M > N or force_transpose)");
+        TT_FATAL(
+            !fuse_swiglu && !use_bias && !use_fused_ternary && !persistent_weight_buffer.has_value() &&
+                !fused_activation.has_value(),
+            "swiglu_chunk does not combine with fuse_swiglu / bias / addcmul / FSDP / activation");
+        TT_FATAL(
+            swiglu_chunk == static_cast<int32_t>(N_chunks) - 1 && chunk_sizes.size() == N_chunks,
+            "swiglu_chunk must be the last chunk, with explicit chunk_sizes");
+        for (uint32_t c = 0; c + 1 < N_chunks; c++) {
+            grp_a_tiles += chunk_sizes[c] / tt::constants::TILE_WIDTH;
+        }
+        const uint32_t grp_b_tiles = chunk_sizes.back() / tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            padded_N_tiles == N_tiles && grp_a_tiles % in1_parallel_axis_cores == 0 &&
+                grp_b_tiles % in1_parallel_axis_cores == 0,
+            "swiglu_chunk: group widths A {} / B {} tiles must split evenly over the {} N cores",
+            grp_a_tiles,
+            grp_b_tiles,
+            in1_parallel_axis_cores);
+        grp_a_pc = grp_a_tiles / in1_parallel_axis_cores;
+        grp_b_pc = grp_b_tiles / in1_parallel_axis_cores;
+        TT_FATAL(
+            N_block_tiles % 2 == 0 && grp_a_pc % N_block_tiles == 0 && grp_b_pc % N_block_tiles == 0 &&
+                N_tiles_per_core == grp_a_pc + grp_b_pc,
+            "swiglu_chunk: N_block {} must be even and divide both per-core group widths A {} / B {}",
+            N_block_tiles,
+            grp_a_pc,
+            grp_b_pc);
+        for (uint32_t c = 0; c + 1 < N_chunks; c++) {
+            TT_FATAL(
+                (chunk_sizes[c] / tt::constants::TILE_WIDTH) % N_block_tiles == 0,
+                "swiglu_chunk: chunk {} width must be a multiple of N_block {}",
+                c,
+                N_block_tiles);
+        }
     }
 
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
@@ -753,6 +795,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
     }
+    if (swiglu_overlap && (fuse_swiglu || swiglu_chunk >= 0)) {
+        defines["SWIGLU_OVERLAP"] = "1";
+    }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
 
@@ -784,6 +829,28 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         defines["CHUNK_TILE_WIDTHS"] = widths_csv;
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
+    }
+
+    if (grouped_n) {
+        defines["GROUPED_N"] = "1";
+        defines["GRP_A_TILES"] = std::to_string(grp_a_tiles);
+        defines["GRP_A_PER_CORE"] = std::to_string(grp_a_pc);
+        defines["GRP_B_PER_CORE"] = std::to_string(grp_b_pc);
+        defines["SWIGLU_CHUNK"] = std::to_string(swiglu_chunk);
+        defines["K_FORWARD_ONLY"] = "1";
+        std::string w_out, o_out = "0";
+        uint32_t run = 0;
+        for (uint32_t c = 0; c < N_chunks; c++) {
+            uint32_t w = chunk_sizes[c] / tt::constants::TILE_WIDTH;
+            if (c + 1 == N_chunks) {
+                w /= 2;
+            }
+            w_out += (c == 0 ? "" : ",") + std::to_string(w);
+            run += w;
+            o_out += "," + std::to_string(run);
+        }
+        defines["CHUNK_TILE_WIDTHS_OUT"] = w_out;
+        defines["CHUNK_TILE_OFFSETS_OUT"] = o_out;
     }
 
     in0_defines = defines;
@@ -1738,7 +1805,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    int32_t swiglu_chunk,
+    bool swiglu_overlap) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1773,7 +1842,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_ring_index,
         fsdp_semaphore,
         fsdp_topology,
-        fuse_swiglu);
+        fuse_swiglu,
+        swiglu_chunk,
+        swiglu_overlap);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -1852,7 +1923,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         fsdp_ring_index,
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
-        attributes.fuse_swiglu);
+        attributes.fuse_swiglu,
+        attributes.swiglu_chunk,
+        attributes.swiglu_overlap);
 }
 
 tt::tt_metal::WorkloadDescriptor AllGatherMinimalMatmulAsyncProgramFactory::create_workload_descriptor(

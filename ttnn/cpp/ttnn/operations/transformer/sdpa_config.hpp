@@ -29,6 +29,8 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    bool streaming_fp32_dest = false;
+    std::optional<uint32_t> ccl_row_sdpa_start_x = std::nullopt;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

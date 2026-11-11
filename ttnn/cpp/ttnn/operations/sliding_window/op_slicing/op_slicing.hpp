@@ -49,6 +49,9 @@ public:
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) = 0;
     virtual std::string name() const = 0;
+    virtual std::pair<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> input_prologue() const {
+        return {std::nullopt, std::nullopt};
+    }
 };
 
 Op2DSliceConfig determine_slice_config(

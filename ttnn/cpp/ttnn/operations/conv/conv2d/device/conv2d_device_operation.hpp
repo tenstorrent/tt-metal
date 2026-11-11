@@ -91,6 +91,9 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader);
+    std::optional<bool> force_split_reader,
+    const std::optional<const Tensor>& epilogue_stats = std::nullopt,
+    uint32_t epilogue_stats_slice = 0,
+    uint32_t epilogue_stats_slice_stride = 0);
 
 }  // namespace ttnn::prim

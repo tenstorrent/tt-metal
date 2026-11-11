@@ -18,6 +18,10 @@ Tensor halo(
     bool remote_read = false,
     bool transpose_mcast = true,
     bool is_out_tiled = true,
-    bool config_tensors_in_dram = false);
+    bool config_tensors_in_dram = false,
+    const std::optional<Tensor>& prologue_scale = std::nullopt,
+    const std::optional<Tensor>& prologue_shift = std::nullopt,
+    const std::optional<Tensor>& halo_boundary = std::nullopt,
+    const operations::sliding_window::ExternalHaloWindow& external_window = {});
 
 }  // namespace ttnn

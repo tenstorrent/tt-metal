@@ -16,7 +16,7 @@ from ....layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_
 from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedLayerNorm
 from ....utils import tensor
-from ....utils.matmul import register_matmul_configs
+from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
 
@@ -66,19 +66,38 @@ STATE_PREFIXES = (
 )
 
 
+register_fused_mmrs_configs(
+    {
+        ttnn.CoreCoord(12, 10): {
+            (m, 3072, 3072): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 8, 8, 2, 2, None, 1) for m in (8192, 8320, 8960)
+        }
+    }
+)
+
+
 register_matmul_configs(
     {
         "12x9": {
             (2560, 3072, 4608): (4, 8, 16, (1, 4)),
             (3072, 3072, 4608): (4, 8, 16, (1, 4)),
+            (4224, 3072, 2304): (4, 8, 8, (1, 4)),
+            (4224, 3072, 4608): (4, 8, 16, (1, 4)),
+            (4352, 3072, 2304): (4, 8, 8, (1, 4)),
+            (4352, 3072, 4608): (4, 8, 16, (1, 4)),
             (4608, 3072, 2304): (4, 8, 8, (1, 4)),
             (4608, 3072, 4608): (4, 8, 16, (1, 4)),
             (8192, 3072, 2304): (11, 8, 8, (1, 4)),
             (8192, 3072, 4608): (6, 8, 16, (1, 4)),
+            (8448, 3072, 2304): (8, 8, 8, (1, 4)),
+            (8448, 3072, 4608): (6, 8, 16, (1, 4)),
             (8704, 3072, 2304): (8, 8, 8, (1, 4)),
             (8704, 3072, 4608): (6, 8, 16, (1, 4)),
             (9216, 3072, 2304): (8, 8, 8, (1, 4)),
             (9216, 3072, 4608): (6, 8, 16, (1, 4)),
+            (10368, 3072, 2304): (8, 8, 8, (1, 4)),
+            (10368, 3072, 4608): (6, 8, 16, (1, 4)),
+            (10496, 3072, 2304): (8, 8, 8, (1, 4)),
+            (10496, 3072, 4608): (6, 8, 16, (1, 4)),
             (10752, 3072, 2304): (8, 8, 8, (1, 4)),
             (10752, 3072, 4608): (6, 8, 16, (1, 4)),
         }
@@ -424,6 +443,14 @@ class Flux3KleinTransformer(Module):
         buffer = self._logical_n[sample][stage]
         ttnn.copy_host_to_device_tensor(self._logical_n_tensor(n, on_host=True), buffer)
         return buffer
+
+    def write_logical_n(self, plan: Flux3KleinPlan, *, sample: int) -> None:
+        """Write ``plan``'s attended lengths into the logical_n buffers it refers to. A plan reused across requests keeps
+        the buffers, not their values: another request with other lengths may have written them since."""
+        layout = plan.layout
+        for mode in plan.early_logical_n:
+            self._write_logical_n(sample, mode, layout.attended(mode))
+        self._write_logical_n(sample, "single", layout.attended())
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in STATE_PREFIXES:

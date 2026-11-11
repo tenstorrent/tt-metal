@@ -221,6 +221,11 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     }
 }
 
+bool uses_streaming_compute(const RingJointSDPAParams& args) {
+    return !get_fp32_dest_acc_en(args.compute_kernel_config) ||
+           (args.program_config.has_value() && args.program_config->streaming_fp32_dest);
+}
+
 void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args, uint32_t kv_stripe_split) {
     TT_FATAL(
         tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
@@ -626,8 +631,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(sink_shape[2] == 1, "Attention sink sequence dimension must be 1, got {}", sink_shape[2]);
         TT_FATAL(sink_shape[3] == 1, "Attention sink hidden dimension must be 1, got {}", sink_shape[3]);
         TT_FATAL(
-            !get_fp32_dest_acc_en(args.compute_kernel_config),
-            "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
+            uses_streaming_compute(args),
+            "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false or "
+            "streaming_fp32_dest=true");
     }
 
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
@@ -875,8 +881,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.circular_kv_cache,
             has_joint_tensors);
         TT_FATAL(
-            !get_fp32_dest_acc_en(args.compute_kernel_config),
-            "Split KV requires streaming compute; set fp32_dest_acc_en=false");
+            uses_streaming_compute(args),
+            "Split KV requires streaming compute; set fp32_dest_acc_en=false or streaming_fp32_dest=true");
     }
 
     TT_FATAL(

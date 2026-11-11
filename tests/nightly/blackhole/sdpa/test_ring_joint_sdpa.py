@@ -1233,6 +1233,8 @@ def run_ring_joint_sdpa_model_configs(
     runtime: RingJointSDPARuntime = None,
     fp32_dest_acc_en: bool = False,
     use_attention_sink: bool = False,
+    streaming_fp32_dest: bool = False,
+    dst_full_sync_en: bool = False,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1275,6 +1277,16 @@ def run_ring_joint_sdpa_model_configs(
     ccl_semaphore_handles = runtime.ccl_semaphore_handles
     compute_kernel_config = runtime.compute_kernel_config
     worker_sub_device_id = runtime.worker_sub_device_id
+    if dst_full_sync_en:
+        assert owns_runtime, "dst_full_sync_en rebuilds the compute kernel config; pass no runtime"
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+            dst_full_sync_en=True,
+        )
 
     try:
         if mesh_config.tp_size > 1 and nhq % mesh_config.tp_size != 0:
@@ -1403,6 +1415,7 @@ def run_ring_joint_sdpa_model_configs(
         persistent_output_buffer_k, persistent_output_buffer_v = create_persistent_buffers()
         model_mismatch_marker = None
         model_mismatch_markers_by_config = []
+        metrics = {}
         for q_chunk_size, k_chunk_size in qk_configs:
             config_id = get_test_case_id(model, q_chunk_size, k_chunk_size)
             logger.info(f"Running ring joint SDPA {config_id}")
@@ -1412,6 +1425,7 @@ def run_ring_joint_sdpa_model_configs(
                 q_chunk_size=q_chunk_size,
                 k_chunk_size=k_chunk_size,
                 exp_approx_mode=False,
+                streaming_fp32_dest=streaming_fp32_dest,
             )
 
             reference_output = None
@@ -1475,7 +1489,9 @@ def run_ring_joint_sdpa_model_configs(
                 elif not use_device_determinism_compare:
                     logger.info(f"Ring joint SDPA {config_id} determinism verified: all {num_iterations} outputs match")
             elif do_check:
-                assert_pcc_rmse(gt_main, tt_out_torch, pcc_threshold, rmse_threshold, f"Main output {config_id}")
+                metrics[config_id] = assert_pcc_rmse(
+                    gt_main, tt_out_torch, pcc_threshold, rmse_threshold, f"Main output {config_id}"
+                )
 
         if num_iterations > 1 and use_device_determinism_compare and model_mismatch_marker is not None:
             if device_mismatch_marker_is_set(model_mismatch_marker):
@@ -1486,6 +1502,7 @@ def run_ring_joint_sdpa_model_configs(
             for config_id, _ in model_mismatch_markers_by_config:
                 logger.info(f"Ring joint SDPA {config_id} determinism verified: all {num_iterations} outputs match")
 
+        return metrics
     finally:
         if owns_runtime:
             close_ring_joint_sdpa_runtime(runtime)
@@ -5587,6 +5604,81 @@ def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
         fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+
+STREAMING_FP32_DEST_MODELS = ["wan2_2_1xGLX"]
+
+
+def _streaming_fp32_dest_qk_configs(model):
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=False)
+    assert qk_configs, f"{model.name}: no q/k configs"
+    return qk_configs
+
+
+@pytest.mark.parametrize("model_name", STREAMING_FP32_DEST_MODELS)
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_accuracy(model_name):
+    """streaming_fp32_dest (fp32 dest and running sums, bf16 score block) at the fp32-dest thresholds, and no worse
+    than the compute_common fp32 path on the configs both can run (same inputs, RMSE vs the torch reference)."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS[model_name]
+    streaming = run_ring_joint_sdpa_model_configs(
+        mesh_config,
+        model,
+        _streaming_fp32_dest_qk_configs(model),
+        pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
+    )
+    common_configs = get_model_qk_configs(model, fp32_dest_acc_en=True)
+    assert common_configs, f"{model.name}: no q/k config fits the compute_common fp32 path"
+    legacy = run_ring_joint_sdpa_model_configs(
+        mesh_config,
+        model,
+        common_configs,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        fp32_dest_acc_en=True,
+    )
+    for config_id, (_, rmse_legacy) in legacy.items():
+        _, rmse_streaming = streaming[config_id]
+        logger.info(f"{config_id}: RMSE streaming {rmse_streaming:.6f} vs compute_common {rmse_legacy:.6f}")
+        assert (
+            rmse_streaming <= rmse_legacy * 1.02
+        ), f"{config_id}: streaming RMSE {rmse_streaming} > compute_common {rmse_legacy}"
+
+
+@pytest.mark.parametrize("model_name", STREAMING_FP32_DEST_MODELS)
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_determinism(model_name):
+    """Two calls on the streaming fp32-dest path give identical bytes."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS[model_name]
+    run_ring_joint_sdpa_model_configs(
+        mesh_config,
+        model,
+        _streaming_fp32_dest_qk_configs(model)[:1],
+        num_iterations=2,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
+    )
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+def test_ring_joint_attention_sdpa_dst_full_sync_accuracy(fp32_dest_acc_en):
+    """dst_full_sync_en reaches the compute kernel (the factory sizes dst_size for it)."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS[STREAMING_FP32_DEST_MODELS[0]]
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=fp32_dest_acc_en)[:1]
+    assert qk_configs, f"{model.name}: no q/k config fits with fp32_dest_acc_en={fp32_dest_acc_en}"
+    run_ring_joint_sdpa_model_configs(
+        mesh_config,
+        model,
+        qk_configs,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        dst_full_sync_en=True,
     )
 
 

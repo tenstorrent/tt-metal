@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <fmt/core.h>
@@ -150,7 +151,35 @@ struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> gather_config0;
     std::vector<std::vector<uint16_t>> gather_config1;
     std::vector<uint16_t> number_of_blocks_per_core;
+    std::vector<std::vector<uint16_t>> external_config;
 };
+
+struct ExternalHaloWindow {
+    uint32_t col_offset = 0;
+    uint32_t boundary_w = 0;
+    uint32_t dev_pad_left = 0;
+    uint32_t dev_pad_right = 0;
+};
+
+struct ExternalHaloSpec {
+    uint32_t batch = 0;
+    uint32_t in_h = 0;
+    uint32_t in_w = 0;
+    uint32_t pad_top = 0;
+    uint32_t pad_bottom = 0;
+    uint32_t pad_left = 0;
+    uint32_t pad_right = 0;
+    uint32_t col_offset = 0;
+    uint32_t boundary_w = 0;
+    uint32_t dev_pad_left = 0;
+    uint32_t dev_pad_right = 0;
+    uint32_t device_w() const { return boundary_w ? boundary_w : in_w; }
+    uint32_t device_pad_left() const { return boundary_w ? dev_pad_left : pad_left; }
+    uint32_t device_pad_right() const { return boundary_w ? dev_pad_right : pad_right; }
+    uint32_t sticks_per_image() const;
+    int64_t boundary_index(uint32_t b, uint32_t r, uint32_t c) const;
+};
+ExternalHaloSpec external_halo_spec(const SlidingWindowConfig& config, const ExternalHaloWindow& window = {});
 
 // Stride of the origin-anchored row walk halo and pool use to address shard i.
 // Bounding-box width for height/width sharding, ranges()[0].end.x + 1 for block sharding.
@@ -173,7 +202,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_in_tiled,
     int block_size,
     const tt::tt_metal::CoreRangeSet& shard_grid,
-    tt::tt_metal::ShardOrientation shard_orientation);
+    tt::tt_metal::ShardOrientation shard_orientation,
+    const std::optional<ExternalHaloSpec>& external = std::nullopt);
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
 

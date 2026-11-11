@@ -486,7 +486,11 @@ void run_sliced_op(
             ttsl::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
             ttsl::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, input_channels},
             ttsl::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
-            sliced_input_tensor_memory_config);
+            sliced_input_tensor_memory_config,
+            std::nullopt,
+            std::nullopt,
+            op_slice_attr->input_prologue().first,
+            op_slice_attr->input_prologue().second);
 
         auto sliced_output_tensors = op_slice_attr->run_L1_op(
             sliced_input_tensor,

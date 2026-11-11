@@ -16,7 +16,33 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
-#ifdef FUSE_SWIGLU
+#if defined(SWIGLU_OVERLAP) && !defined(FUSE_BIAS)
+#define SWOV 1
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#endif
+namespace ckernel {
+ALWI void swov_mul_init_pack() {
+    PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
+}
+ALWI void swov_mul_pack(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_mul,
+        (APPROX, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+}  // namespace ckernel
+#else
+#define SWOV 0
+#endif
+
+#if defined(FUSE_SWIGLU) || defined(GROUPED_N)
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
 // weight was tile-pair interleaved on the host). Each pair emits one output tile = silu(gate)*up,
@@ -69,7 +95,16 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
         cb_push_back(out_cb, out_N_block_tiles);
     }
 }
-#endif  // FUSE_SWIGLU
+#endif
+
+#ifdef GROUPED_N
+inline uint32_t grp_phys_n(uint32_t v) {
+    constexpr uint32_t per_core = GRP_A_PER_CORE + GRP_B_PER_CORE;
+    const uint32_t c = v / per_core;
+    const uint32_t l = v - c * per_core;
+    return l < GRP_A_PER_CORE ? c * GRP_A_PER_CORE + l : GRP_A_TILES + c * GRP_B_PER_CORE + (l - GRP_A_PER_CORE);
+}
+#endif
 
 void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_init(in_cb.get_cb_id());
@@ -339,6 +374,89 @@ void add_bias_and_addcmul_block(
     intermediate_cb.pop_front(out_block_num_tiles);
 }
 
+#if SWOV
+void matmul_blocks_swov(
+    CircularBuffer& in0_cb,
+    CircularBuffer& in1_cb,
+    CircularBuffer& inter_cb,
+    CircularBuffer& out_cb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_w,
+    const bool l1_acc_after) {
+    const uint32_t out_N_full = full_N_block_tiles >> 1;
+    uint32_t in0_index_offset = 0;
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start++) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            tile_regs_acquire();
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+                matmul_block(
+                    in0_cb.get_cb_id(),
+                    in1_cb.get_cb_id(),
+                    in0_index,
+                    in1_index,
+                    0,
+                    false,
+                    subblock_w,
+                    1,
+                    K_block_tiles);
+                in0_index++;
+                in1_index += full_N_block_tiles;
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                pack_tile<true>(w, inter_cb.get_cb_id(), M_start * full_N_block_tiles + N_start + w);
+            }
+            tile_regs_release();
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            copy_init(inter_cb.get_cb_id());
+            reconfig_data_format_srca(inter_cb.get_cb_id());
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                copy_tile(inter_cb.get_cb_id(), M_start * full_N_block_tiles + N_start + w, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            const uint32_t pairs = subblock_w >> 1;
+            silu_tile_init_pack();
+            for (uint32_t q = 0; q < pairs; q++) {
+                silu_tile_pack(2 * q);
+            }
+            swov_mul_init_pack();
+            for (uint32_t q = 0; q < pairs; q++) {
+                swov_mul_pack(2 * q, 2 * q + 1, 2 * q);
+            }
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            pack_reconfig_data_format(out_cb.get_cb_id());
+            for (uint32_t q = 0; q < pairs; q++) {
+                pack_tile<true>(2 * q, out_cb.get_cb_id(), (N_start >> 1) + q);
+            }
+            pack_reconfig_data_format(inter_cb.get_cb_id());
+            if (l1_acc_after) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            tile_regs_release();
+            matmul_block_init(in0_cb.get_cb_id(), in1_cb.get_cb_id(), false, subblock_w, 1, K_block_tiles);
+            reconfig_data_format(in1_cb.get_cb_id(), in0_cb.get_cb_id());
+
+            in1_index_offset += subblock_w;
+        }
+        out_cb.push_back(out_N_full);
+        in0_index_offset += K_block_tiles;
+    }
+}
+#endif
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     CircularBuffer& in0_cb,
@@ -446,6 +564,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
+#if SWOV
+    constexpr bool swov_on = (subblock_h == 1) && (subblock_w % 2 == 0) && (N_block_tiles % subblock_w == 0);
+    if constexpr (swov_on) {
+        PACK((t6_semaphore_init(semaphore::PACK_DONE, 0, 1)));
+    }
+#endif
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -471,7 +595,18 @@ void kernel_main() {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             current_N_block_tiles = n_tile_end - n_tile;
+#ifdef GROUPED_N
+            n_tile = grp_phys_n(n_tile);
+            n_tile_end = n_tile + current_N_block_tiles;
+#endif
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
+#if SWOV
+#ifdef GROUPED_N
+            const bool swov_blk = swov_on && n_tile >= GRP_A_TILES && current_N_block_tiles == N_block_tiles;
+#else
+            const bool swov_blk = swov_on && current_N_block_tiles == N_block_tiles;
+#endif
+#endif
 
             matmul_block_init(
                 in0_cb_id,
@@ -488,16 +623,32 @@ void kernel_main() {
                 in0_cb.wait_front(in0_block_num_tiles);
                 in1_cb.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+#if SWOV
+                if (swov_blk && k_block == K_num_blocks - 1) {
+                    out_cb.reserve_back(out_block_num_tiles >> 1);
+                    matmul_blocks_swov(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        out_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_w,
+                        K_num_blocks > 1);
+                } else
+#endif
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -507,7 +658,7 @@ void kernel_main() {
                      * fixed, so reusing would feed the previous iter's last K-block (=
                      * K_num_blocks-1) when the new iter wants K-block 0. Force fresh read.
                      */
-#ifndef IS_LINEAR
+#if !defined(IS_LINEAR) && !defined(K_FORWARD_ONLY)
                     if (n_block_iter < N_blocks_per_core - 1) {
                         // going to stride on N, so reuse in0
                         reuse_in0_block = true;
@@ -527,6 +678,16 @@ void kernel_main() {
             intermediate_cb.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
+#if SWOV
+            if (swov_blk) {
+                for (uint32_t m = current_M_block_tiles; m < M_block_tiles; m++) {
+                    out_cb.push_back(N_block_tiles >> 1);
+                }
+                intermediate_cb.wait_front(out_block_num_tiles);
+                intermediate_cb.pop_front(out_block_num_tiles);
+                continue;
+            }
+#endif
 #ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.
             out_cb.reserve_back(out_block_num_tiles >> 1);
@@ -540,6 +701,20 @@ void kernel_main() {
             in2_cb.pop_front(N_block_tiles);
 #endif
             intermediate_cb.pop_front(out_block_num_tiles);
+
+#elif defined(GROUPED_N)
+            if (n_tile >= GRP_A_TILES) {
+                out_cb.reserve_back(out_block_num_tiles >> 1);
+                intermediate_cb.wait_front(out_block_num_tiles);
+                swiglu_block(
+                    intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+                intermediate_cb.pop_front(out_block_num_tiles);
+            } else {
+                out_cb.reserve_back(out_block_num_tiles);
+                intermediate_cb.wait_front(out_block_num_tiles);
+                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+                intermediate_cb.pop_front(out_block_num_tiles);
+            }
 
 #elif !defined(FUSE_TERNARY)
             out_cb.reserve_back(out_block_num_tiles);
