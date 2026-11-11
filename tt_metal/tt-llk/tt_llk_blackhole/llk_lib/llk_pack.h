@@ -711,10 +711,10 @@ inline void _llk_pack_block_closed_(
 
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
     // Rewriting an unchanged stride cost the call up to 8 cycles.
-    if (tile_stride != pack_ch1_w_stride)
+    if (tile_stride != pack_ch1_w_stride())
     {
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
-        pack_ch1_w_stride = tile_stride;
+        pack_ch1_w_stride_set(tile_stride);
     }
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
@@ -836,10 +836,10 @@ inline void _llk_pack_block_closed_fast_(
 
     program_packer_destination<false>(address);
 
-    if (tile_stride != pack_ch1_w_stride)
+    if (tile_stride != pack_ch1_w_stride())
     {
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
-        pack_ch1_w_stride = tile_stride;
+        pack_ch1_w_stride_set(tile_stride);
     }
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
@@ -862,7 +862,7 @@ inline void _llk_pack_block_w_init_(const std::uint32_t address, const std::uint
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
     program_packer_destination<false>(address);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
-    pack_ch1_w_stride = tile_stride;
+    pack_ch1_w_stride_set(tile_stride);
 }
 
 // The packer adds the channel-1 W counter times its stride to the output address and wraps at 256 KB (the 16 byte words below).

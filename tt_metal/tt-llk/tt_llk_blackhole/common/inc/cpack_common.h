@@ -327,9 +327,33 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
-// Channel-1 W stride the closed block pack last wrote; set_packer_strides zeroes the register.
-// Internal linkage lets a kernel without a closed block drop the store.
-static std::uint32_t pack_ch1_w_stride = 0;
+// The packer state the block packs read, one word so that set_packer_strides resets it with one store:
+//   byte 0 the output of the last llk_pack_block plus one (0 none since the last init or reconfigure, LLK_PACK_STATE_FU_OPEN a fast untilize left open)
+//   byte 1 1 after a packer reconfigure, until the next block   bytes 2-3 the channel-1 W stride the closed block pack last wrote
+// Written only with plain stores and read only by the block packs, so a kernel without them drops every store.
+[[maybe_unused]] alignas(4) static std::uint8_t pack_state[4] = {0, 0, 0, 0};
+constexpr std::uint8_t LLK_PACK_STATE_FU_OPEN = 0xff;
+inline std::uint32_t llk_pack_state_half()
+{
+    std::uint16_t half;
+    __builtin_memcpy(&half, pack_state, sizeof(half));
+    return half;
+}
+inline void llk_pack_state_set_half(const std::uint16_t half)
+{
+    __builtin_memcpy(pack_state, &half, sizeof(half));
+}
+inline std::uint32_t pack_ch1_w_stride()
+{
+    std::uint16_t stride;
+    __builtin_memcpy(&stride, pack_state + 2, sizeof(stride));
+    return stride;
+}
+inline void pack_ch1_w_stride_set(const std::uint32_t tile_stride)
+{
+    const std::uint16_t stride = tile_stride;
+    __builtin_memcpy(pack_state + 2, &stride, sizeof(stride));
+}
 
 // W offset block packs are the default; LLK_PACK_W_OFFSET_OFF takes llk_pack_block back to programming the output on every call.
 #if !defined(LLK_PACK_W_OFFSET) && !defined(LLK_PACK_W_OFFSET_OFF)
@@ -362,24 +386,14 @@ inline std::uint32_t llk_pack_context()
 [[maybe_unused]] static std::uint32_t pack_w_page       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_next       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
-[[maybe_unused]] static std::uint8_t pack_w_last        = 0xff;
-// Set by a packer reconfigure and cleared by the next llk_pack_block or pack init: the first block after a reconfigure reads another form than the first block after an init.
-[[maybe_unused]] static bool pack_reconfigured          = false;
 // An init forgets the last output instead of invalidating the base: the first block after it packs as before, which programs the destination and invalidates the base, and a pack init before every block never programs the W stride.
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
-#define LLK_PACK_W_FORGET_OUTPUT() (pack_w_last = 0xff, pack_reconfigured = false)
-#define LLK_PACK_W_RECONFIGURED() (pack_reconfigured = true)
-// A fast untilize left open is the last output 0xfe, not a flag of its own: every set_packer_strides forgets it, and only llk_pack_block reads it.
-#define LLK_PACK_FAST_UNTILIZE_MARK_OPEN() (pack_w_last = 0xfe)
-#define LLK_PACK_FAST_UNTILIZE_OPEN() (pack_w_last == 0xfe)
 #else
-[[maybe_unused]] static bool pack_fast_untilize_open = false;
 #define LLK_PACK_W_INVALIDATE() ((void)0)
-#define LLK_PACK_W_FORGET_OUTPUT() (pack_fast_untilize_open = false)
-#define LLK_PACK_W_RECONFIGURED() ((void)0)
-#define LLK_PACK_FAST_UNTILIZE_MARK_OPEN() (pack_fast_untilize_open = true)
-#define LLK_PACK_FAST_UNTILIZE_OPEN() (pack_fast_untilize_open)
 #endif
+// A fast untilize left open is a last output of its own: every set_packer_strides forgets it, and only llk_pack_block reads it.
+#define LLK_PACK_FAST_UNTILIZE_MARK_OPEN() (pack_state[0] = LLK_PACK_STATE_FU_OPEN)
+#define LLK_PACK_FAST_UNTILIZE_OPEN() (pack_state[0] == LLK_PACK_STATE_FU_OPEN)
 
 // Another pack program (tilize, untilize, pack rows, fast tilize) replaced the default MOP the block packs run: llk_pack_block packs per tile, as main, until
 // a default pack init. Only those inits write pack_other_program_seen, so a kernel without one folds the test away; no writer reads a flag, so a
@@ -399,7 +413,8 @@ inline constexpr bool pack_fast_untilize_linked = false;
 [[maybe_unused]] static bool pack_fast_untilize_seen         = false;
 [[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 
-template <PackMode pack_mode = PackMode::Default>
+// reconfigured: the packer reconfigure's call, which marks the state reconfigured in the same store.
+template <PackMode pack_mode = PackMode::Default, bool reconfigured = false>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
@@ -422,8 +437,8 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     // channel-1 (Y) stride, in its own init.
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
-    pack_ch1_w_stride = 0;
-    LLK_PACK_W_FORGET_OUTPUT();
+    const std::uint32_t state = reconfigured ? 0x100 : 0;
+    __builtin_memcpy(pack_state, &state, sizeof(state));
     TTI_NOP;
     TTI_NOP;
 }
@@ -671,8 +686,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
     // Set packer strides
-    set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
-    LLK_PACK_W_RECONFIGURED();
+    set_packer_strides<PackMode::Default, true>(pack_output_src_format, tile_c_dim);
 
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
     // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole

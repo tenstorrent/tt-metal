@@ -278,8 +278,8 @@ constexpr std::uint32_t LLK_PACK_W_MAX_TILES_W =
 // Returns whether this block takes the W offset path (out_tile is its tile offset). The first block of an output after another output packs as before: the base is
 // programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
 inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
-    if (pack_w_last != output_id) {
-        pack_w_last = output_id;
+    if (llk_pack_state_half() != output_id + 1u) {
+        llk_pack_state_set_half(output_id + 1);
         return false;
     }
     const std::uint32_t max_tiles = llk_pack_dst_is_wide(output_id) ? LLK_PACK_W_MAX_TILES_W : LLK_PACK_W_MAX_TILES;
@@ -288,9 +288,9 @@ inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t ad
     if (!cont) {
         program_packer_destination(addr);
         const std::uint32_t stride = page << 4;
-        if (stride != pack_ch1_w_stride) {
+        if (stride != pack_ch1_w_stride()) {
             cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(stride);
-            pack_ch1_w_stride = stride;
+            pack_ch1_w_stride_set(stride);
         }
         pack_w_valid = true;
         pack_w_out   = output_id;
@@ -918,8 +918,7 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     }
     if (forms == 1) {
 #ifdef LLK_PACK_W_OFFSET
-        pack_reconfigured = false;
-        pack_w_last = output_id;
+        llk_pack_state_set_half(output_id + 1);
 #endif
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
         return;
@@ -938,19 +937,21 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     }
 
 #ifdef LLK_PACK_W_OFFSET
-    const bool first_block = pack_w_last != output_id;
+    // The last output and the reconfigure mark in one halfword: a block that continues its output reads exactly output_id + 1.
+    const std::uint32_t state = llk_pack_state_half();
+    const bool first_block = state != output_id + 1u;
+    const bool reconfigured = (state >> 8) != 0;
     // Constant or variable, a block reads the word of each state at a constant index, with the folded path's context: an output or count that
     // becomes constant late still folds its forms, and both paths pick the same form.
     const char form = forms == 2 ? 'B'
-                      : (first_block ? (pack_reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
+                      : (first_block ? (reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
                                                           : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
                                      : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     // A fast untilize left open marks the last output, so only a first block closes it.
     if (!one_form && first_block) {
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
     }
-    pack_reconfigured = false;
-    pack_w_last = output_id;
+    llk_pack_state_set_half(output_id + 1);
 #else
     const char form = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0);
 #endif
