@@ -694,7 +694,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         GB_W = (f'static uint32_t g_gb_xs;\n#include "{HERE_}/gb_dm.hpp"\n'
                 f'void gdn_in_wait() {{\n  {CRD}\n'
                 f'  const auto pre = {wacc("pre_w", 4096)};\n'
-                f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}, {Kt}, {(Nv // Nk) * VB}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u);\n}}\n')
+                f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}, {Kt}, {(Nv // Nk) * VB // int(os.environ.get("E1_GB_RSPLIT", "1"))}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u);\n}}\n')
         GB_WINIT = f'  g_gb_xs = get_write_ptr({GBC["qpx"]}) + 6u * 2048u; g_ab[{OGB} + 145] = get_read_ptr({GBC["out"]});\n'
         GB_WEND = f'  g_ab[{OGB}] = 0; g_ab[{OGB} + 1] = 0; g_ab[{OGB} + 131] = 0; g_ab[{OGB} + 132] = 0; g_ab[{OGB} + 144] = 0;\n'
         GB_C = (f'#include "{HERE_}/gb_compute.hpp"\nstatic uint32_t g_gb_l;\n'
@@ -813,9 +813,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                                     "GDN_SFPU_GATE_FACE", "GDN_VSPLIT", "GDN_VS_TAIL")]
     fphys = dev.worker_core_from_logical_core
     if GB:
-        d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "1"))]) + (
+        d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]) + (
             [("GB_PULL_NOC", os.environ["E1_GB_PULL_NOC"])] if "E1_GB_PULL_NOC" in os.environ else [])
-        d_w = d_w + [("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "1"))]
+        d_w = d_w + [("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]
         d_c = d_c + [("GDN_GB", "1"), ("GB_CB_MASK", str(GBC["qpx"])), ("GB_MASK_TILE", "5"),
                      ("GB_CV_PAGES", str(max(Kt, Vt))), ("GB_KT", str(Kt))]
         gb_blocks, gb_info = _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gb["gin_map"],
@@ -932,9 +932,13 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
     blocks, maxc = [], 0
     # L2 roots (the fallback without the cross-core root in the step: one core per (key head, k | q), the last 2 Nk cores,
     # 1 conv each): Kt raw tiles in, the key head's Kt normalized tiles out to its rf * VB value-head cores' knq
-    roots = {(hk, isq): NC - 2 * Nk + 2 * hk + isq for hk in range(Nk) for isq in (0, 1)}
-    assert all(r >= v0 for r in roots.values()), roots
-    rinfo = {r: (hk, isq) for (hk, isq), r in roots.items()}
+    # E1_GB_RSPLIT (default 2): roots per (key head, k | q), each serving 1 / RS of the key head's consumers (the send is the
+    # long pole: 48 x 4 KB from one core took ~8.6 us); the raw tiles go to all RS roots, each computes the same l2
+    RS = int(os.environ.get("E1_GB_RSPLIT", "1"))
+    nr = 2 * Nk * RS
+    roots = {(hk, isq): [NC - nr + (2 * hk + isq) * RS + k for k in range(RS)] for hk in range(Nk) for isq in (0, 1)}
+    assert all(r >= v0 for rs in roots.values() for r in rs), roots
+    rinfo = {r: (hk, isq, k) for (hk, isq), rs in roots.items() for k, r in enumerate(rs)}
     for i in range(NC):
         h, s = i // VB, i % VB
         conv = []
@@ -942,7 +946,7 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
         dst = lambda cons, cb, slot, cw=0: _gb_rects(fp, cons) + [cbid[cb] | (cw << 8) | (slot << 16)]
         if i < v0:   # raw q / k tile i -> the L2 root of (key head, q | k), KQ slot jj
             hk, jj = divmod(i % (Nk * Kt), Kt)
-            conv.append((q0 + i, dst([roots[(hk, i < Nk * Kt)]], "kq", jj, 2)))
+            conv.append((q0 + i, dst(roots[(hk, i < Nk * Kt)], "kq", jj, 2)))
         conv.append((v0 + i, dst([i], "vc", 0)))
         for j, (t, _) in enumerate(conv):
             ci, sl = gin_map[t]
@@ -968,13 +972,15 @@ def _gb_payloads(dev, cores, g, B, T, Kt, Vt, VB, Nk, Nv, pre_s, layers, gin_map
             blk += list(e)
         blk += [0, 0]   # kKqCnt, kRawCnt
         if i in rinfo:
-            hk, isq = rinfo[i]
+            hk, isq, k_ = rinfo[i]
             grp = [h2 * VB + s2 for h2 in range(hk * rf, hk * rf + rf) for s2 in range(VB)]   # the key head's value-head cores
+            grp = grp[k_ * len(grp) // RS:(k_ + 1) * len(grp) // RS]
             blk += [bits(scale) if isq else bits(1.0)] + _gb_rects(fp, grp) + [cbid["knq"] | (1 << 8) | ((1 << 12) if os.environ.get("E1_GB_RMC", "0") == "1" else 0) | ((Kt if isq else 0) << 16)]
         else:
             blk += [0] * 9
-        hk_ = h // rf
-        blk += [xy(roots[(hk_, 0)]), xy(roots[(hk_, 1)]), 0, 0]   # kRootSrc (k root, q root), kRootDone, kOutBase
+        hk_ = (i // VB) // rf   # (h is the first loop's: stale here)
+        sub = (i - (hk_ * rf * VB)) * RS // (rf * VB)
+        blk += [xy(roots[(hk_, 0)][sub]), xy(roots[(hk_, 1)][sub]), 0, 0]   # kRootSrc (k root, q root), kRootDone, kOutBase
         assert len(blk) == 146, len(blk)
         h = i // VB
         for dt_, ne_ in dn:
