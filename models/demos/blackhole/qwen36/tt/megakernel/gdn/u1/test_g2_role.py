@@ -38,7 +38,9 @@ SA = {k: ttnn.get_global_semaphore_address(v) for k, v in GS.items()}
 qp = dev.worker_core_from_logical_core(QR)
 print(f"[g2] B {B} NG {NG} sems {SA} out target {(qp.x, qp.y)}", flush=True)
 
-role = g2_role.GdnRole(dev, cores, NG, B, SA, (qp.x, qp.y), prod, os.path.join(os.getcwd(), f"g2gen_b{B}"))
+role = g2_role.GdnRole(dev, cores, NG, B, SA, (qp.x, qp.y), prod, os.path.join(os.getcwd(), f"g2gen_b{B}"),
+                       gb_cores=gcrs if os.environ.get("E1_GB", "0") == "1" else None,
+                       ref=os.environ.get("G2_REF", "1") == "1")   # G2_REF=0: no stock-op reference (device-profiler runs)
 print(f"[g2] role: {len(role.role['kernels'])} kernels, {len(role.role['cbs'])} CBs ids {role.role['info']['cb_ids'][0]}.."
       f"{role.role['info']['cb_ids'][-1]} ({role.role['info']['cb_bytes'] // 1024} KB), argblock {role.role['info']['ab_words']} words",
       flush=True)
@@ -66,11 +68,14 @@ stamps = ttnn.from_torch(torch.zeros(1, 2 * NG + 14, dtype=torch.int32).reshape(
 
 def program(gap_us):
     rt = ttnn.RuntimeArgs()
-    rt[QR.x][QR.y] = [NG, int(gap_us * MHZ), SA["in_ready"], SA["out_ready"], 24, stamps.buffer_address()] + RECTS
-    k = ttnn.KernelDescriptor(kernel_source=f"{HERE}/g2_standin.cpp", core_ranges=qcrs, compile_time_args=[],
+    rt[QR.x][QR.y] = [NG, int(gap_us * MHZ), SA["in_ready"], SA["out_ready"], 24, stamps.buffer_address()] + RECTS + role.standin_gin()
+    k = ttnn.KernelDescriptor(kernel_source=f"{HERE}/g2_standin.cpp", core_ranges=qcrs,
+                              compile_time_args=ttnn.TensorAccessorArgs(role.qkv).get_compile_time_args(),
                               runtime_args=rt, config=ttnn.DataMovementConfigDescriptor(
                                   processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
-    return ttnn.ProgramDescriptor(kernels=list(role.role["kernels"]) + [k], semaphores=[], cbs=list(role.role["cbs"]))
+    scr = ttnn.CBDescriptor(total_size=2048, core_ranges=qcrs, format_descriptors=[ttnn.CBFormatDescriptor(
+        buffer_index=0, data_format=ttnn.bfloat16, page_size=2048)])
+    return ttnn.ProgramDescriptor(kernels=list(role.role["kernels"]) + [k], semaphores=[], cbs=list(role.role["cbs"]) + [scr])
 
 
 io = list(role.role["io"]) + [stamps]
@@ -112,5 +117,7 @@ for gap in sorted({0.0, GAP}):
     print(f"[g2] gap {gap:.0f} us: {us:.1f} us per program ({NG} GDN layers), in->out per layer "
           f"{['%.1f' % x for x in e]} us (mean {sum(e) / len(e):.1f})", flush=True)
     ttnn.release_trace(dev, tid)
+if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+    ttnn.ReadDeviceProfiler(dev)
 ttnn.close_device(dev)
 print("[g2] done", flush=True)
