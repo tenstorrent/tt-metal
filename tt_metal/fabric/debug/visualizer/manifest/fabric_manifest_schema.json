@@ -354,9 +354,16 @@
           "minItems": 3,
           "items": false
         },
-        "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" }
+        "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" },
+        "noc_address": {
+          "description": "How a NOC address splits: y << (local_bits + node_id_bits) | x << local_bits | the address on the core (NOC_XY_ADDR).",
+          "type": "object",
+          "properties": { "local_bits": { "$ref": "#/$defs/count" }, "node_id_bits": { "$ref": "#/$defs/count" } },
+          "required": ["local_bits", "node_id_bits"],
+          "additionalProperties": false
+        }
       },
-      "required": ["name", "l1", "l1_areas", "heartbeat_protocol", "core_registers", "fabric_telemetry_version"],
+      "required": ["name", "l1", "l1_areas", "heartbeat_protocol", "core_registers", "fabric_telemetry_version", "noc_address"],
       "additionalProperties": false
     },
 

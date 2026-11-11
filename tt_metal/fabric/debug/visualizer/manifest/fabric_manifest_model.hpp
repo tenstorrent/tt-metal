@@ -515,6 +515,15 @@ struct EthCoreL1 {
     uint32_t size_bytes = 0;
 };
 
+// How a NOC address splits into a core's NOC coordinates and an address on that core (NOC_XY_ADDR): the address is
+// y << (local_bits + node_id_bits) | x << local_bits | the address on the core.
+struct NocAddressLayout {
+    // The bits the address on the core takes (NOC_ADDR_LOCAL_BITS).
+    uint32_t local_bits = 0;
+    // The bits each of x and y takes (NOC_ADDR_NODE_ID_BITS).
+    uint32_t node_id_bits = 0;
+};
+
 // What the manifest describes of the architecture the routers run on.
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
@@ -524,6 +533,7 @@ struct Arch {
     CoreRegisters core_registers;
     // FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.
     uint32_t fabric_telemetry_version = 0;
+    NocAddressLayout noc_address;
 };
 
 // ============ The whole manifest ============

@@ -8,7 +8,7 @@ fabric settings and the architecture. It also describes each mesh's credit trans
 | --- | --- | --- |
 | `describe_run(control_plane, run_id)` | `run` | The run id the writer agreed on, the MPI context, the physical system descriptor, the clock, the build's version header |
 | `describe_fabric(control_plane)` | `fabric` | ControlPlane, FabricContext, the Metal environment |
-| `describe_arch(hal)` | `arch` | The HAL, UMD, and fabric's heartbeat constants |
+| `describe_arch(hal)` | `arch` | The HAL (including its NOC address layout), UMD, and fabric's heartbeat constants |
 | `describe_credit_transport(builder_context, mesh_id)` | A mesh's `credit_transport` | The builder context's credit transport plan for the mesh |
 
 Like the topology pass, describe reads each fact from the object that already knows it, and works out nothing fabric

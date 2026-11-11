@@ -53,7 +53,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
   "run":        { run_id, mpi_rank, world_size, subcontext?: { id, rank, size }, host_name, written_at,
                   build: { git_sha, git_sha_short, version, build_type, git_dirty } },
   "fabric":     { config: { ... }, topology, is_2d_routing, packet_header, ... },
-  "arch":       { name, l1: { address, size_bytes }, l1_areas: { ... }, heartbeat_protocol: { ... }, core_registers: [ ... ] },
+  "arch":       { name, l1: { address, size_bytes }, l1_areas: { ... }, heartbeat_protocol: { ... }, core_registers: [ ... ], fabric_telemetry_version, noc_address: { local_bits, node_id_bits } },
   "vocabulary": { <list name>: [ <name>, ... ] },
   "field_sets": { "F<n>": { erisc<r>: { ... } } },
   "meshes": {
@@ -203,6 +203,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | `heartbeat_protocol` | How the router kernel writes its heartbeat word (`l1_areas.heartbeat`): `{ magic, magic_mask, period_iters }`, the word being `magic \| iteration count`, written every `period_iters` main-loop iterations |
 | `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word. The model's `k_core_registers` holds this order, which the writer and the reader follow |
 | `fabric_telemetry_version` | `FABRIC_TELEMETRY_VERSION`: which layout of `FabricTelemetry` the `fabric_telemetry` area holds |
+| `noc_address` | How a NOC address splits into a core's NOC coordinates and an address on it, the inverse of `NOC_XY_ADDR`: `{ local_bits, node_id_bits }`. `y` is at bit `local_bits + node_id_bits`, `x` at bit `local_bits`, and the address on the core takes the low `local_bits`. Wormhole and Blackhole both have `{ 36, 6 }` |
 
 ## vocabulary
 

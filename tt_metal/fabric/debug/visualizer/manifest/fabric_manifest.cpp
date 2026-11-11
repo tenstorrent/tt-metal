@@ -232,6 +232,10 @@ json make_arch_json(const manifest::Arch& arch) {
     out["heartbeat_protocol"] = make_heartbeat_protocol_json(arch.heartbeat_protocol);
     out["core_registers"] = make_core_registers_json(arch.core_registers);
     out["fabric_telemetry_version"] = arch.fabric_telemetry_version;
+    json noc_address;
+    noc_address["local_bits"] = arch.noc_address.local_bits;
+    noc_address["node_id_bits"] = arch.noc_address.node_id_bits;
+    out["noc_address"] = std::move(noc_address);
     return out;
 }
 
@@ -862,6 +866,12 @@ manifest::Arch read_arch(JsonObjectReader& block) {
     arch.heartbeat_protocol = block.take("heartbeat_protocol").read_object(read_heartbeat_protocol);
     arch.core_registers = read_core_registers(block.take("core_registers"));
     arch.fabric_telemetry_version = block.take<uint32_t>("fabric_telemetry_version");
+    arch.noc_address = block.take("noc_address").read_object([](JsonObjectReader& noc_address) {
+        manifest::NocAddressLayout out;
+        out.local_bits = noc_address.take<uint32_t>("local_bits");
+        out.node_id_bits = noc_address.take<uint32_t>("node_id_bits");
+        return out;
+    });
     return arch;
 }
 

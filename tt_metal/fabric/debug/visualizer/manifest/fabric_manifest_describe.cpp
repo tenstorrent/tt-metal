@@ -287,6 +287,11 @@ Arch describe_arch(const tt::tt_metal::Hal& hal) {
         .heartbeat_protocol = describe_heartbeat_protocol(),
         .core_registers = describe_core_registers(hal),
         .fabric_telemetry_version = FABRIC_TELEMETRY_VERSION,
+        .noc_address =
+            {
+                .local_bits = hal.get_noc_addr_local_bits(),
+                .node_id_bits = hal.get_noc_addr_node_id_bits(),
+            },
     };
 }
 
