@@ -354,7 +354,7 @@ inline void row_times_matrix_acc(
     out_dfb.push_back(Nt);
 }
 
-#if GDN_RAWKQ
+#if GDN_GB
 #ifndef GB_CB_MASK
 #error "GDN_RAWKQ needs GB_CB_MASK / GB_MASK_TILE (the col-0 ones mask in the G-b QPX DFB)"
 #endif
@@ -362,7 +362,7 @@ inline void row_times_matrix_acc(
 // rsqrt, * post, pack scratch, * mask -> inv) and scale_rows, so bit-identical to the op / the u1 L2 roots
 // one out-of-line body, called for k then q (code size: the two inlined / constprop copies cost ~3 KB each on TRISC1)
 template <uint32_t N>
-__attribute__((noinline, noclone)) void gb_l2_rows(uint32_t src, DataflowBuffer& dst_dfb, DataflowBuffer& tmp,
+__attribute__((noinline, noclone)) void gb_l2_rows(uint32_t src, uint32_t dst, DataflowBuffer& dst_dfb, DataflowBuffer& tmp,
                                                    DataflowBuffer& stats, DataflowBuffer& scratch, DataflowBuffer& inv,
                                                    uint32_t post_bits) {
     square_tiles(src, dfb::tmp, tmp, N);
@@ -398,7 +398,7 @@ __attribute__((noinline, noclone)) void gb_l2_rows(uint32_t src, DataflowBuffer&
     scratch.pop_front(1);
     stats.pop_front(1);
     inv.wait_front(1);
-    scale_rows(src, dfb::inv, dfb::knq, dst_dfb, N);
+    scale_rows(src, dfb::inv, dst, dst_dfb, N);
     inv.pop_front(1);
 }
 #endif
@@ -2017,10 +2017,10 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         {
             DataflowBuffer kq_(dfb::kq);  // [k raw 0..Kt) | q raw [Kt, 2Kt)]: k first, popped before q
             kq_.wait_front(Kt);
-            gb_l2_rows<Kt>(dfb::kq, knq, tmp, stats, scratch, inv, kOneBits);
+            gb_l2_rows<Kt>(dfb::kq, dfb::knq, knq, tmp, stats, scratch, inv, kOneBits);
             kq_.pop_front(Kt);
             kq_.wait_front(Kt);
-            gb_l2_rows<Kt>(dfb::kq, knq, tmp, stats, scratch, inv, scale_bits);
+            gb_l2_rows<Kt>(dfb::kq, dfb::knq, knq, tmp, stats, scratch, inv, scale_bits);
             kq_.pop_front(Kt);
         }
 #endif

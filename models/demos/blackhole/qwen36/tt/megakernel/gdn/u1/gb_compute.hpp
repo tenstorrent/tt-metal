@@ -157,26 +157,40 @@ __attribute__((noinline)) void gates_page(uint32_t cb_in, uint32_t page, uint32_
     cb_push_back(cb_out, 2);
 }
 
+// L2 root: Kt raw tiles (KQ) -> l2norm rows (gb_l2_rows: the op's inverse_l2 sequence incl. the col-0 mask) -> OUT
+ALWI void gb_l2_root(uint32_t cb_kq, uint32_t cb_out, uint32_t post) {
+    DataflowBuffer tmp(dfb::tmp), stats(dfb::stats), scratch(dfb::scratch), inv(dfb::inv), out(dfb::gbout), kq(dfb::kq);
+    (void)cb_kq;
+    (void)cb_out;
+    kq.wait_front(2 * GB_KT);
+    gb_l2_rows<GB_KT>(dfb::kq, dfb::gbout, out, tmp, stats, scratch, inv, post);
+    kq.pop_front(2 * GB_KT);
+}
+
 // pb: this core's G-b payload block (gb_dm.hpp offsets)
 template <uint32_t K>
 ALWI void compute_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t cb_qpx, uint32_t npx, uint32_t cb_sht,
-                        uint32_t cb_cv, uint32_t cb_out) {
-    constexpr uint32_t kPerLayer = 132;  // gb_dm.hpp
-    const uint32_t nconv = pb[3], silu = pb[22];
+                        uint32_t cb_cv, uint32_t cb_out, uint32_t cb_kq) {
+    constexpr uint32_t kPerLayer = 146, kRootPost = 133;  // gb_dm.hpp
+    const uint32_t nconv = pb[3], root_post = pb[kRootPost];
     cb_wait_front(cb_qpx, npx);  // QIN 0..3, P 4..5 (resident data; the pointer returns to the base every layer)
-    if (silu) silu_page(cb_qpx, 2, cb_out);  // needs only the pushed z tile (the convs wait the staging)
     {
+        DeviceZoneScopedN("GB-CGATE");  // first: needs only the a|b tile, fills the wait for the conv staging
+        gates_page(cb_qpx, 3, cb_out, pb[kPerLayer + 2 * L], pb[kPerLayer + 2 * L + 1]);
+    }
+    silu_page(cb_qpx, 2, cb_out);
+    for (uint32_t j = 0; j < nconv; ++j) {
         DeviceZoneScopedN("GB-CCONV");
-        conv_place<K>(cb_sht, cb_qpx, 0, cb_cv, cb_out);  // q / k first on the q / k cores (their consumers' l2)
+        conv_place<K>(cb_sht, cb_qpx, j, cb_cv, cb_out);  // conv 0 = the q / k tile on the q / k cores
     }
-    {
-        DeviceZoneScopedN("GB-CGATE");
-        gates_page(cb_qpx, 3, cb_out, pb[kPerLayer + 2 * L], pb[kPerLayer + 2 * L + 1]);  // every core: its head's pair
+    uint32_t n = 3 + nconv;
+    if (root_post) {  // L2 root: the key head's Kt raw k (or q) tiles -> l2norm rows (the op's sequence) -> OUT
+        DeviceZoneScopedN("GB-CROOT");
+        gb_l2_root(cb_kq, cb_out, root_post);
+        n += GB_KT;
     }
-    if (nconv == 2) {
-        DeviceZoneScopedN("GB-CCONV1");
-        conv_place<K>(cb_sht, cb_qpx, 1, cb_cv, cb_out);
-        cb_reserve_back(cb_out, 1);  // pad: per-layer OUT count even (the gate pair stays contiguous)
+    for (; n & 3u; ++n) {  // pad: 4 OUT pages per layer (the gate pair / the root's Kt tiles stay contiguous)
+        cb_reserve_back(cb_out, 1);
         cb_push_back(cb_out, 1);
     }
     cb_pop_front(cb_qpx, npx);
