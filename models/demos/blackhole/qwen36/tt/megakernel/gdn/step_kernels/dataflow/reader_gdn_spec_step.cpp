@@ -53,6 +53,12 @@ void gdn_out_signal();  // the including TU (out_ready +1 / the aggregator, issu
 #if GDN_OUT_RD == 2
 void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);  // engine gdn_out: the out tiles into every GDN core's A (TU)
 #endif
+#ifndef GDN_OUT_PRE
+#define GDN_OUT_PRE 0  // engine gdn_out (E1_GO_RING0=hook): gdn_out_pre() (TU) runs right before rd_owait (L0 ring read)
+#endif
+#if GDN_OUT_PRE
+void gdn_out_pre();
+#endif
 #ifndef GDN_HOLD_SKIP
 #define GDN_HOLD_SKIP 0  // engine GDN role (BATCH, ST_RING 0; RC v1.89): HOLD (idle) users get no state / stash reads and no
                          // masked K_u / Q_u copies; the compute skips their replay, K S' / Q S' terms and K^T transposes
@@ -776,6 +782,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         {
             const auto out_acc = TensorAccessor(tensor::out_r);
             DataflowBuffer out(dfb::out);
+#if GDN_OUT_PRE
+            gdn_out_pre();
+#endif
             {
                 DeviceZoneScopedN("rd_owait");  // the compute's gated output tiles
                 out.wait_front(Vs);
