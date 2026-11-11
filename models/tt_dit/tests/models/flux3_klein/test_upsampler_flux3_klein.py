@@ -50,6 +50,5 @@ def test_pipeline_upsampled(*, mesh_device: ttnn.MeshDevice) -> None:
             first.image.save(filename)
             logger.info(f"{filename}: stages {first.timings}, caption: {first.prompt}")
             assert first.prompt != prompt and first.prompt == second.prompt
-            # the upsampler's chip is shared, the DiT's output stays bit-exact
             assert first.image.tobytes() == second.image.tobytes()
     pipeline.close()

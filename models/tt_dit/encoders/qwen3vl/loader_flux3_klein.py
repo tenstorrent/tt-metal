@@ -45,7 +45,7 @@ def load_flux3_klein_text_state_dict(snapshot: str | os.PathLike) -> dict[str, t
     by_shard: dict[str, list[str]] = {}
     for key, shard in weight_map.items():
         if not key.startswith(_CHECKPOINT_PREFIX):
-            continue  # model.visual.*
+            continue
         match = layer_re.match(key)
         if match is not None and int(match.group(1)) >= NUM_LAYERS:
             continue

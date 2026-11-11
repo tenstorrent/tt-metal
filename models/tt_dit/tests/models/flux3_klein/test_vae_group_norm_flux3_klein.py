@@ -27,10 +27,10 @@ def _norm(grid_x: int, grid_y: int, num_virtual_cols: int) -> SimpleNamespace:
 @pytest.mark.parametrize(
     "grid, nvc, spatial, channels, expected",
     [
-        ((6, 5), 2, 400 * 228, 64, 5),  # 1600x912, 2nd down level: 190 rows per core -> 5 blocks of 38
-        ((8, 8), 2, 256 * 256, 64, -1),  # 1024^2, 2nd down level: 64-row auto blocks, unchanged
-        ((8, 8), 1, 1024 * 1024, 32, -1),  # 1024^2 input level
-        ((8, 8), 1, 2048 * 2048, 32, -1),  # 2048^2 input level
+        ((6, 5), 2, 400 * 228, 64, 5),
+        ((8, 8), 2, 256 * 256, 64, -1),
+        ((8, 8), 1, 1024 * 1024, 32, -1),
+        ((8, 8), 1, 2048 * 2048, 32, -1),
     ],
 )
 def test_group_norm_out_blocks(grid, nvc, spatial, channels, expected):

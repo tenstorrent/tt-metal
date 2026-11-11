@@ -48,7 +48,6 @@ class Flux3KleinPromptEncoder:
         """`[L, 20480]` bf16 text tokens, their RoPE ids and the attended length (see `tokenize`)."""
         input_ids, attention_mask, valid = self.tokenize(prompt, length)
 
-        # HF's positions for right padding; pad rows are real DiT inputs up to the multiple of 80
         positions = (attention_mask.long().cumsum(-1) - 1).masked_fill(attention_mask == 0, 1).reshape(-1)
         inv_freq = 1.0 / (
             self._rope_theta ** (torch.arange(0, self._head_dim, 2, dtype=torch.int64).float() / self._head_dim)

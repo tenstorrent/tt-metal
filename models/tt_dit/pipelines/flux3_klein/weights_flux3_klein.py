@@ -16,7 +16,6 @@ REPO_IDS = {
     "distilled": "black-forest-labs/flux-3-image-klein",
     "base": "black-forest-labs/flux-3-image-klein-base",
 }
-# the BFL checkpoint (model.safetensors) and the diffusers text_encoder / vae are used; the diffusers transformer is not
 IGNORE_PATTERNS = ["transformer/*", "variants/*", "assets/*", "*.jpg"]
 
 

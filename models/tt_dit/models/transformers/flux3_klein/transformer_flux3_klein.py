@@ -24,24 +24,19 @@ if TYPE_CHECKING:
     from ....parallel.config import DiTParallelConfig
     from ....parallel.manager import CCLManager
 
-# Sequence order of the single stage; every mode has its own early stack.
 MODES = ("image", "image_cond", "text")
 IN_CHANNELS = {"image": 128, "image_cond": 128, "text": 20480}
 PAD_MODE_ID = 3
 EARLY_DEPTH = 5
 SINGLE_DEPTH = 28
 TILE = 32
-# samples per request: the conditional and, with guidance, the unconditional one
 MAX_SAMPLES = 2
-# the early stacks whose attended length changes per request (prompt length; reference size within its bucket)
 VARIABLE_MODES = ("image_cond", "text")
 
 ROPE_THETA = 10000
 ROPE_AXES_DIM = (32, 32, 32, 32)
 
 TIME_CHANNELS = 256
-# The 7 modulation heads of the checkpoint are merged into one linear of 20 chunks:
-# early (image, image_cond, text) x (shift, scale, gate), single (same), final (shift, scale).
 MOD_SOURCES = (
     ("early_stream_modulations.image.lin", 3),
     ("early_stream_modulations.image_cond.lin", 3),
@@ -54,8 +49,6 @@ MOD_SOURCES = (
 MOD_CHUNKS = 20
 MOD_SCALE_CHUNKS = (1, 4, 7, 10, 13, 16, 19)
 MOD_FINAL_SHIFT_CHUNK, MOD_FINAL_SCALE_CHUNK = 18, 19
-# The modulation input has 3 rows: the image timestep embedding, the conditioning timestep (zero) and a zero row
-# that gives pad rows the identity modulation (0, 1, 0).
 MOD_VEC_ROWS = 3
 VEC_ROW_OF_MODE_ID = (0, 1, 1, 2)
 
@@ -73,9 +66,6 @@ STATE_PREFIXES = (
 )
 
 
-# SP8 x TP4 MLP shapes (M, 3072, N) whose heuristic blocking overflows L1 on the 12x9 worker grid of a Galaxy. M is the
-# single stage's rows per device: (image + reference bucket + 4096 text rows) / 8, e.g. 4608 = 2048 output + a 4 MP
-# reference bucket, 10752 = 4096 output + a 4 MP reference bucket; the blockings follow the neighbouring shapes
 register_matmul_configs(
     {
         "12x9": {
@@ -115,7 +105,7 @@ class Flux3KleinSequenceLayout:
     sp_factor: int
     lengths: dict[str, int]
     text_valid: int
-    cond_valid: int | None = None  # None: every image_cond row is real
+    cond_valid: int | None = None
     padded: dict[str, int] = field(init=False)
     rows: dict[str, int] = field(init=False)
 
@@ -161,7 +151,6 @@ class Flux3KleinSequenceLayout:
     def assembly_indices(self) -> torch.Tensor:
         indices = [self._source_row(m, i) for m, i in self.single_rows()]
         if self.total_padded > self.total:
-            # pad rows copy an alignment row of the early stacks, which is exactly zero
             m = next(m for m in self.modes if self.padded[m] > self.lengths[m])
             indices += [self._source_row(m, self.lengths[m])] * (self.total_padded - self.total)
         return torch.tensor(indices, dtype=torch.int64)
@@ -202,7 +191,6 @@ def modulation_indices(mode_ids: torch.Tensor, stage: str) -> tuple[torch.Tensor
     vec_row = torch.tensor(VEC_ROW_OF_MODE_ID)[mode_ids]
     out = []
     for param in range(3):
-        # pad rows (mode id 3) read the image chunks at the zero vec row
         chunk_of_mode = torch.tensor([stage_offset + 3 * m + param for m in (0, 1, 2, 0)])
         out.append(MOD_VEC_ROWS * chunk_of_mode[mode_ids] + vec_row)
     return tuple(out)
@@ -240,7 +228,6 @@ class Flux3KleinModulation(Module):
             TIME_CHANNELS, HIDDEN, act_fn="silu", dtype=ttnn.float32, bias=False, mesh_device=device
         )
         self.time_in = embedding()
-        # the distilled flow map also embeds the target timestep
         self.ref_time_in = embedding() if flow_map else None
         self.lin = ColParallelLinear(
             HIDDEN,
@@ -267,14 +254,12 @@ class Flux3KleinModulation(Module):
         weights = [state.pop(f"{prefix}.weight", None) for prefix, _ in MOD_SOURCES]
         if all(w is not None for w in weights):
             state["lin.weight"] = torch.cat(weights, dim=0)
-            # the reference applies (1 + scale); fold the 1 into a bias on the scale chunks
             state["lin.bias"] = torch.cat(
                 [torch.full([HIDDEN], 1.0 if i in MOD_SCALE_CHUNKS else 0.0) for i in range(MOD_CHUNKS)]
             )
         prepare_chunked_linear_output(state, prefix="lin", device_count=self.tp_factor, chunks=MOD_CHUNKS)
 
     def _sinusoid(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        # the reference embeds the timestep in bf16
         return ttnn.typecast(ttnn.typecast(self.time_proj(t), ttnn.bfloat16), ttnn.float32)
 
     def forward(
@@ -334,7 +319,6 @@ class Flux3KleinEarlyStacks(Module):
         for block in getattr(self, mode):
             x = block(x, **kwargs)
         if self._ring:
-            # the fused addcmul output aliases a persistent buffer the next stack reuses
             x = ttnn.clone(x)
         return x
 
@@ -350,8 +334,6 @@ class Flux3KleinPlan:
     single_mod: tuple[ttnn.Tensor, ...]
     assembly: ttnn.Tensor
     image_out: ttnn.Tensor
-    # ring-SDPA logical_n of the text and reference stacks and of the single stage: the transformer's persistent
-    # buffers (or ints without sequence parallelism), not freed with the plan
     early_logical_n: dict[str, int | ttnn.Tensor]
     single_logical_n: int | ttnn.Tensor
 
@@ -418,10 +400,6 @@ class Flux3KleinTransformer(Module):
         )
         self.proj_out = Linear(HIDDEN, IN_CHANNELS["image"], bias=False, mesh_device=device)
 
-        # The attended lengths of the text stack, the reference stack and the single stage change with the request
-        # (the prompt's length, the reference's size within its bucket). Ring SDPA reads them from these device
-        # tensors, written by every request, so every request runs its bucket's programs. Allocated once here, before
-        # any request: one set per sample of a request.
         self._logical_n = None
         if self.sp_factor > 1:
             self._logical_n = [
@@ -474,7 +452,6 @@ class Flux3KleinTransformer(Module):
             )
 
         modes = layout.modes
-        # a reference bucket's pad rows (masked keys) get zero ids
         ids = {m: ids[m][: layout.lengths[m]].float() for m in modes}
         ids = {m: torch.nn.functional.pad(t, (0, 0, 0, layout.lengths[m] - t.shape[0])) for m, t in ids.items()}
         single_ids = torch.stack([ids[m][i] for m, i in layout.single_rows()])
@@ -517,7 +494,6 @@ class Flux3KleinTransformer(Module):
             x["image_cond"] = image_cond_embedded
         for mode in layout.modes:
             mod = tuple(gather_rows(table, idx) for idx in plan.early_mod[mode])
-            # the image stack's length is fixed per size; the text and reference stacks' follow the request
             logical_length = plan.early_logical_n.get(mode, layout.attended(mode))
             x[mode] = self.early(mode, x[mode], rope=plan.early_rope[mode], mod=mod, logical_length=logical_length)
 

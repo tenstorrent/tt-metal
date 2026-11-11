@@ -466,8 +466,6 @@ class VaeAttention(Module):
         }
     )
     default_sdpa_chunk_size: tuple[int, int] = (128, 128)
-    # Attend only for this chip's query rows instead of the full sequence replicated on every chip; per-row
-    # results are identical (full K/V, one head, no mask). Supports H sharding and TP, not W sharding.
     local_queries: bool = False
 
     def __init__(

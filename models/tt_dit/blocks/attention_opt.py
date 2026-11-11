@@ -610,8 +610,6 @@ class Attention(Module):
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
 
         if self.parallel_config.sequence_parallel.factor > 1:
-            # A device-tensor length is read by the kernels on every dispatch, so one program serves every length;
-            # its program config and core grid are those of the padded (longest) sequence.
             config_length = (
                 sequence_1.shape[1] * self.parallel_config.sequence_parallel.factor
                 if isinstance(sequence_1_length, ttnn.Tensor)

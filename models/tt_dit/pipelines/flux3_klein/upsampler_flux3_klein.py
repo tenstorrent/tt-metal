@@ -34,13 +34,9 @@ I2I_SCAFFOLD = (
 REFERENCE_MULTIPLE = 32
 REFERENCE_MAX_PIXELS = 1024 * 1024
 JPEG_QUALITY = 92
-# qwen36's prefill and decode run from captured traces on two command queues, and its GDN conv uses L1_SMALL. A mesh
-# the upsampler shares with the DiT needs SHARED_MESH_PARAMS on top of the DiT's own.
 SHARED_MESH_PARAMS = {"num_command_queues": 2, "trace_region_size": 256 * 1024 * 1024}
 DEVICE_PARAMS = {"l1_small_size": 24576, **SHARED_MESH_PARAMS}
 
-# What the upsampler allocates per bank on its chip (measured, with margin), held on the DiT's mesh when the two
-# share chips: DRAM bottom-up (weights, KV cache), DRAM top-down (kernel binaries), L1 top-down.
 SHARED_DRAM_BOTTOM = 1938 << 20
 SHARED_DRAM_TOP = 256 << 20
 SHARED_L1_TOP = 34 << 10
@@ -66,7 +62,6 @@ def reference_size(width: int, height: int) -> tuple[int, int]:
     if w * h > REFERENCE_MAX_PIXELS:
         beta = math.sqrt(width * height / REFERENCE_MAX_PIXELS)
         w, h = floor(width / beta), floor(height / beta)
-    # the 32-pixel minimum can push a very thin image back over the limit
     if w * h > REFERENCE_MAX_PIXELS:
         if w > h:
             w = REFERENCE_MAX_PIXELS // h // REFERENCE_MULTIPLE * REFERENCE_MULTIPLE
@@ -122,8 +117,6 @@ class Flux3KleinUpsampler:
         )
         self.generator = Generator([self.model], [self.args], mesh_device)
 
-        # compile the vision tower and capture the prefill trace before any request: a program compiled while a
-        # trace is parked can overwrite its buffers
         self.model.init_vision_model()
         warm = self._inputs("", Image.new("RGB", (1024, 1024)))
         ttnn.deallocate(self.model.get_image_features(warm[1], warm[2]))
@@ -201,7 +194,6 @@ class Flux3KleinUpsampler:
     def close(self) -> None:
         self.generator.release_persistent_capture()
         self.model.free_kv_caches()
-        # the model's weights and persistent buffers are freed with it
         self.generator = self.model = None
 
 
@@ -228,7 +220,6 @@ def reserve_upsampler_ranges(mesh_device: ttnn.MeshDevice) -> list[ttnn.Tensor]:
         holds.append(_hold(mesh_device, ttnn.BufferType.DRAM, banks, page, n))
         pages -= n
 
-    # kernel binaries are allocated top-down: fill the highest free range bottom-up up to the hold, then free the fill
     _, blocks = _allocated(mesh_device, ttnn.BufferType.DRAM)
     _, size = max(((a, s) for a, s, used in blocks if not used and s > 2 * SHARED_DRAM_TOP), key=lambda b: b[0])
     fill_pages = (size - SHARED_DRAM_TOP) // page
@@ -267,7 +258,6 @@ class Flux3KleinSharedUpsampler:
         self._to_mesh()
 
     def _hold_dit_l1(self) -> None:
-        # the DiT allocates semaphores the first time it runs a shape, so the hold grows with them
         _, dit = _allocated(self._mesh, ttnn.BufferType.L1)
         lowest_dit = min(a for a, _, used in dit if used)
         if self._dit_l1_lowest is not None and lowest_dit >= self._dit_l1_lowest:

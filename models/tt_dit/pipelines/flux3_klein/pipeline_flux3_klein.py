@@ -39,15 +39,12 @@ from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_
 from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
 
-# The first release serves fixed square sizes, all warmed up at startup, and at most one reference image, sized as
-# BFL's single reference (prepare_reference): any aspect, at most 4 MP. Its tokens are padded to the smallest bucket
-# that holds them, so every request runs a warmed-up program; the bucket's pad rows are masked attention keys.
 SIZES = (1024, 2048, 4096)
 DEFAULT_SIZE = 2048
 MAX_REFERENCES = 1
-MATCH_MAX_PIXELS = 4 * 1024 * 1024  # the reference canvas, padding included
+MATCH_MAX_PIXELS = 4 * 1024 * 1024
 MIN_SIDE, MAX_SIDE = 64, 4096
-REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)  # up to 1 MP and up to 4 MP
+REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)
 WARMUP_PROMPT = "warmup"
 
 
@@ -108,7 +105,6 @@ def prepare_reference(image: Image.Image) -> Image.Image:
         return image
     left, top = (w - image.width) // 2, (h - image.height) // 2
     padding = ((top, h - image.height - top), (left, w - image.width - left), (0, 0))
-    # reflect needs a pad shorter than the side
     mode = "reflect" if min(image.size) > DOWNSAMPLING_RATIO else "symmetric"
     return Image.fromarray(np.pad(np.asarray(image), padding, mode=mode))
 
@@ -117,8 +113,6 @@ def reference_bucket(tokens: int) -> int:
     return next(b for b in REFERENCE_TOKEN_BUCKETS if tokens <= b)
 
 
-# The guidance and Euler arithmetic round to bf16 where the reference does; every op runs in fp32 with explicit
-# typecasts so the update matches the reference bit for bit given the same velocity.
 def combine_cfg(conditional: ttnn.Tensor, unconditional: ttnn.Tensor, guidance: ttnn.Tensor) -> ttnn.Tensor:
     c32 = ttnn.typecast(conditional, ttnn.float32)
     u32 = ttnn.typecast(unconditional, ttnn.float32)
@@ -136,7 +130,6 @@ def euler_update(x: ttnn.Tensor, velocity: ttnn.Tensor, dt: ttnn.Tensor, mask: t
     v32 = ttnn.typecast(velocity, ttnn.float32)
     p = ttnn.typecast(ttnn.typecast(ttnn.multiply(v32, dt), ttnn.bfloat16), ttnn.float32)
     ttnn.deallocate(v32)
-    # the mask keeps the alignment rows at zero
     delta = ttnn.multiply(p, mask)
     ttnn.deallocate(p)
     x_new = ttnn.add(x, delta)
@@ -220,7 +213,6 @@ class Flux3KleinPipeline:
             dit_sp_axis=sp_axis,
             sizes=SIZES,
         )
-        # the base model's unconditional sample keeps the reference's own text length
         self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 

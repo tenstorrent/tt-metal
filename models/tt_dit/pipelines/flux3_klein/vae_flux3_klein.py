@@ -35,14 +35,12 @@ LATENT_CHANNELS = 128
 BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
 Z_CHANNELS = 32
 
-# decoder DRAM slice counts per resolution level, keyed by (in_channels, out_channels), capped at width / 32
 CONV_SLICES_PER_LEVEL = (
     {(3, 128): 16, (128, 128): 16, (128, 3): 8, (256, 128): 16, (256, 256): 16},
     {(128, 256): 8, (256, 256): 4, (512, 256): 16, (512, 512): 16},
     {(256, 512): 8, (512, 512): 8},
     {(512, 512): 4, (512, 64): 4, (32, 512): 1},
 )
-# the convs of the H-partitioned decoder per level; ttnn picks their slice count
 PARTITIONED_DECODER_CONVS_PER_LEVEL = (
     ((256, 256), (256, 128), (128, 128), (128, 3)),
     ((512, 512), (512, 256), (256, 256)),
@@ -60,7 +58,6 @@ def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int]
             for (cin, cout), slices in level.items():
                 table.setdefault((h, w, cin, cout), min(slices, max(1, -(-w // 32))))
             if h_factor > 1:
-                # per-device input rows: the H shard plus one halo row on each side
                 for cin, cout in partitioned:
                     table.setdefault((h // h_factor + 2, w, cin, cout), 0)
             h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
@@ -76,10 +73,6 @@ def _auto_conv_slicing(module, mesh_shape: tuple[int, ...]) -> None:
         _auto_conv_slicing(child, mesh_shape)
 
 
-# Tile rows per ttnn.group_norm output block on a core. The op's auto heuristic keeps a whole per-core block when the
-# input is small for its grid (1600x912 references at the second down level: 95 rows on 60 cores, ~1.3 MB of static
-# CBs), which collides with the pipeline's resident L1 allocations. Larger blocks are split; smaller ones keep the auto
-# choice, so the common shapes run exactly as before.
 GROUP_NORM_MAX_BLOCK_ROWS = 64
 
 
@@ -90,7 +83,6 @@ def group_norm_out_blocks(norm: GroupNorm, batch: int, spatial: int, channels: i
     grid = norm._op_core_grid(batch, spatial)
     virtual_rows = (grid.x // norm.num_virtual_cols) * grid.y
     block_h = batch * math.ceil(spatial / ttnn.TILE_SIZE) // virtual_rows
-    # groupnorm_heuristic_num_out_blocks (groupnorm_program_utils.cpp): a power of two >= volume / (256^2 * cores)
     target = max(
         1, spatial * channels // (256 * 256 * (grid.x // norm.num_virtual_cols) * norm.num_virtual_cols * grid.y)
     )
@@ -189,7 +181,6 @@ class Flux3KleinVae:
         _bounded_group_norm_blocks(self._encoder)
         load(self._encoder, encoder_parallel, "vae_encoder_main")
 
-        # the latent BatchNorm main's encoder leaves to its caller (as pipeline_flux2.py does)
         state = state_dict()
         self._bn_mean = state["bn.running_mean"].float()
         self._bn_std = torch.sqrt(state["bn.running_var"].float() + torch_vae.config.batch_norm_eps)
@@ -229,7 +220,7 @@ class Flux3KleinVae:
         )
         out = self._encoder.forward(x)
         ttnn.deallocate(x)
-        mean = tensor.to_torch(out).float()  # [1, H / 8, W / 8, 32]
+        mean = tensor.to_torch(out).float()
         ttnn.deallocate(out)
         b, h, w, c = mean.shape
         tokens = (

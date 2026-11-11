@@ -41,8 +41,6 @@ class Flux3KleinDBCache:
         return functools.partial(self.run, branch=branch)
 
     def _content_mask(self, layout, sp_axis: int) -> ttnn.Tensor:
-        # the diff is measured on the image and reference rows only, as cache-dit's hook on the image stream does (the
-        # single stage leads with them; a reference bucket's pad rows sit in the masked tail)
         content = layout.attended("image") + layout.attended("image_cond")
         key = (layout.total_padded, content, sp_axis)
         if key not in self._masks:

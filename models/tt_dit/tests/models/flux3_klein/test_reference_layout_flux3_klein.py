@@ -24,7 +24,6 @@ from ....pipelines.flux3_klein.pipeline_flux3_klein import (
     reference_canvas,
 )
 
-# (input size) -> (fitted size, canvas), from BFL's reference_canvas
 BFL_CANVAS = {
     (1024, 1024): ((1024, 1024), (1024, 1024)),
     (4000, 3000): ((2341, 1756), (2352, 1760)),
@@ -56,7 +55,6 @@ def test_prepare_reference(size):
     tokens = (canvas[0] // 16) * (canvas[1] // 16)
     assert tokens <= REFERENCE_TOKEN_BUCKETS[-1]
     if fit == size and canvas != size:
-        # no resize: the original pixels sit centred in the reflect-padded canvas
         left, top = (canvas[0] - size[0]) // 2, (canvas[1] - size[1]) // 2
         inner = torch.from_numpy(np.asarray(out))[top : top + size[1], left : left + size[0]]
         assert torch.equal(inner, torch.from_numpy(pixels))
@@ -82,12 +80,10 @@ def test_masked_rows_after_attended(cond_valid, cond_rows):
     assert len(rows) == layout.total
     attended = layout.attended()
     assert attended == 4096 + cond_valid + 300
-    # the attended prefix holds exactly the image rows, the valid reference rows and the valid text rows
     head = rows[:attended]
     assert sum(m == "image" for m, _ in head) == 4096
     assert sorted(i for m, i in head if m == "image_cond") == list(range(cond_valid))
     assert sorted(i for m, i in head if m == "text") == list(range(300))
-    # mode ids follow the same order; pad rows only after the real rows
     ids = layout.mode_ids()
     assert len(ids) == layout.total_padded
     assert ids[: layout.total].tolist() == [MODES.index(m) for m, _ in rows]

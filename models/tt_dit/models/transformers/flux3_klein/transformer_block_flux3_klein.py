@@ -66,7 +66,6 @@ class Flux3KleinTransformerBlock(Module):
             fp32_dest_acc_en=True,
         )
         self.attn.ring_sdpa_exp_approx = True
-        # fp32 accumulation needs the smaller q chunks to fit L1
         self.attn.ring_sdpa_chunk_size_map = {
             key: {length: (min(q, SDPA_Q_CHUNK_MAX), k) for length, (q, k) in table.items()}
             for key, table in Attention.ring_sdpa_chunk_size_map.items()
@@ -122,7 +121,6 @@ class Flux3KleinTransformerBlock(Module):
                 state[dst] = state.pop(src)
         if "mlp_in.weight" in state:
             w = state.pop("mlp_in.weight")
-            # the reference packs [gate | up], the fused SwiGLU expects [up | gate]
             state["proj_mlp.weight"] = torch.roll(w, shifts=w.shape[0] // 2, dims=0)
         if "attn_out.weight" in state and "mlp_out.weight" in state:
             state["proj_out.weight"] = prepare_weight_for_concatenated_input(

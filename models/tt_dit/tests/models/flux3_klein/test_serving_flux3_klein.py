@@ -73,9 +73,7 @@ _FILLER = [
     "distant",
     "hills,",
 ]
-# attended text rows the test prompts reach at least (multiples of 80; the last is the whole sequence)
 TEXT_ROW_TARGETS = (160, 2000, MAX_TEXT_LENGTH)
-# square references: each bucket filled (as warmup does) and each only partly filled
 REFERENCE_SIDES = (1024, 2048, 768, 1536)
 
 
@@ -114,7 +112,6 @@ def test_serving(*, mesh_device: ttnn.MeshDevice, model: str) -> None:
     attended = {name: attended_rows(prompt) for name, prompt in prompts.items()}
     warmup_rows = attended_rows(WARMUP_PROMPT)
     logger.info(f"SERVE attended text rows {attended}, warmup {warmup_rows}")
-    # every test prompt runs a text length warmup never ran, and no two share one
     assert warmup_rows not in attended.values(), (warmup_rows, attended)
     assert len(set(attended.values())) == len(attended), attended
     assert attended[f"text{MAX_TEXT_LENGTH}"] == MAX_TEXT_LENGTH
@@ -130,7 +127,6 @@ def test_serving(*, mesh_device: ttnn.MeshDevice, model: str) -> None:
     failures = []
     for side, reference in references.items():
         if reference is not None:
-            # a new reference shape compiles the VAE encoder only: do it outside the measured requests
             pipeline._vae.encode(prepare_reference(reference))
             logger.info(f"SERVE reference {side}: {tokens[side]} tokens in bucket {reference_bucket(tokens[side])}")
         for size in sizes:
