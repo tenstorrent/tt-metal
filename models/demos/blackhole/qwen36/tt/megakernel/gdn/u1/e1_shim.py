@@ -682,8 +682,14 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         else:
             sig_n = " ".join(f'noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, '
                              f'{S["out_ready"]}), {NC_}, {r[4]}u);' for r in (out_target[i:i + 5] for i in range(0, len(out_target), 5)) if r[4])
-        osig = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1); '
-                f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {NC_}u * (g_gdn_l + 1)); {sig_n} noc_async_atomic_barrier(); }}')
+        # #17 (GSTEP) E1_OSIG_VC=2|3 (default 0 = VC 1): the 24 increments to the aggregator on a static unicast VC;
+        # E1_GSZ (bench): zones GO-AGW (the aggregator's wait) / GO-AGS (its engine signal + atomic barrier)
+        ovc = int(os.environ.get("E1_OSIG_VC", "0"))
+        assert ovc in (0, 2, 3), ("E1_OSIG_VC", ovc)
+        gsz = os.environ.get("E1_GSZ", "0") == "1"
+        zw, zs_ = ('{ DeviceZoneScopedN("GO-AGW"); ', '{ DeviceZoneScopedN("GO-AGS"); ') if gsz else ('{ ', '{ ')
+        osig = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1' + (f', noc_index, {ovc}' if ovc else '') + '); '
+                f'if (g_ab[{OAG_ME}]) {{ {zw}noc_semaphore_wait_min(g_ab + {OAG}, {NC_}u * (g_gdn_l + 1)); }} {zs_}{sig_n} noc_async_atomic_barrier(); }} }}')
     # the out_ready signal issued from the reader (NOC1): loop variable g_l, multicast corners swapped for NOC1
     osig_rd = re.sub(r"get_noc_multicast_addr\((\w+), (\w+), (\w+), (\w+), ", r"get_noc_multicast_addr(\3, \4, \1, \2, ",
                      osig.replace("g_gdn_l", "g_l"))
@@ -696,8 +702,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                                 f'{S["out_ready"]}), {v}, {r[4]}u);' for r in (tgt_r[i:i + 5] for i in range(0, len(tgt_r), 5)) if r[4])
         osig_r = mc(len(cores)) if agg else mc(1)
         if agg:
-            osig_r = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1); '
-                      f'if (g_ab[{OAG_ME}]) {{ noc_semaphore_wait_min(g_ab + {OAG}, {len(cores)}u * (g_l + 1)); {osig_r} noc_async_atomic_barrier(); }}')
+            ovc = int(os.environ.get("E1_OSIG_VC", "0"))
+            zw, zs_ = ('{ DeviceZoneScopedN("GO-AGW"); ', '{ DeviceZoneScopedN("GO-AGS"); ') if os.environ.get("E1_GSZ", "0") == "1" else ('{ ', '{ ')
+            osig_r = (f'noc_semaphore_inc(get_noc_addr({AGX}u, {AGY}u, (uint32_t)(g_ab + {OAG})), 1' + (f', noc_index, {ovc}' if ovc else '') + '); '
+                      f'if (g_ab[{OAG_ME}]) {{ {zw}noc_semaphore_wait_min(g_ab + {OAG}, {len(cores)}u * (g_l + 1)); }} {zs_}{osig_r} noc_async_atomic_barrier(); }} }}')
     else:
         osig_r = osig.replace("g_gdn_l", "g_l")
     GB_R = GB_RINIT = GB_W = GB_WINIT = GB_WEND = GB_C = ""
