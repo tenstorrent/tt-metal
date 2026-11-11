@@ -52,8 +52,9 @@ MKX_REV = 24  # kernel revision (compile signature: a long-lived process rebuild
 # 22 fold_y2 (MKX_Y2_INIT): y2 added to the finished routed sum in its own pass (batch invariance; Stage 14)
 # (MKX_XROWS_COAL, opt-in GLM53_MKX_XROWS_COAL=1: xa's T x rows read as one span per face; no revision bump: the knob
 # is its own define on xa alone, so a knob-off build keeps every kernel's defines and binaries)
-# (MKX_RAW_SYNC, opt-in GLM53_MKX_RAW_SYNC=1: xa hands xw's scratch back to the next stacked layer; no revision bump:
-# its own define on xw / xa, inert outside stack programs, so a knob-off build keeps every kernel's defines and binaries)
+# (MKX_RAW_SYNC, default on since 2026-11-11, GLM53_MKX_RAW_SYNC=0 = off: xa hands xw's scratch back to the next
+# stacked layer; no revision bump: its own define on xw / xa, inert outside stack programs, so =0 keeps every kernel's
+# defines and binaries)
 TPT = 8  # tiles per NoC read transaction (8 x 576 B)
 
 
@@ -67,10 +68,11 @@ def xcoal(xdefs: list) -> bool:
 
 
 def raw_sync() -> bool:
-    """GLM53_MKX_RAW_SYNC=1 (opt-in): xw / xa get MKX_RAW_SYNC -- in a stack program (MK_LAYERS > 1) xa clears
-    MKX_SEM_LIST after its last access to xw's scratch and the list page, and the next layer's xw waits for that before
-    its first write into either (the multi-layer race of parts_raw's MKX_RW_XA note); xc keeps its define list"""
-    return os.environ.get("GLM53_MKX_RAW_SYNC", "0") == "1"
+    """GLM53_MKX_RAW_SYNC (default on; =0 = the knob-off binaries): xw / xa get MKX_RAW_SYNC -- in a stack program
+    (MK_LAYERS > 1) xa clears MKX_SEM_LIST after its last access to xw's scratch and the list page, and the next layer's
+    xw waits for that before its first write into either (the multi-layer race of parts_raw's MKX_RW_XA note); xc keeps
+    its define list"""
+    return os.environ.get("GLM53_MKX_RAW_SYNC", "1") == "1"
 
 
 class ReaderExperts:
@@ -264,11 +266,15 @@ class ReaderExperts:
         # ~75 us of every MoE layer's expert phase at B = 16); the same bytes at the same L1 offsets (bitwise)
         if xcoal(xprog):
             adefs.append(("MKX_XROWS_COAL", "1"))
-        # GLM53_MKX_RAW_SYNC=1 (opt-in, raw_sync): the scratch hand-back between stacked layers, whatever MKX_RW_XA says
-        # (off, xa still reads the list page's weight rows in place: the race window shrinks, it does not close). Costs
-        # no L1 and no semaphore (MKX_SEM_LIST's existing 1 / 0 states); xw's one poll per layer is free on a reader
-        # whose streamer is gated by its dense phases, and on an expert-only reader it only delays pre-hand-off work
-        # that then waits for the router tail anyway
+        # GLM53_MKX_RAW_SYNC (raw_sync; default on since 2026-11-11, =0 = the knob-off binaries): the scratch hand-back
+        # between stacked layers, whatever MKX_RW_XA says (off, xa still reads the list page's weight rows in place: the
+        # race window shrinks, it does not close). Device (chain_mk184, 21 replays each, pinned inputs): replay hashing
+        # with MKX_RW_XA=1 at B 16 layers 0-2 + 4-6 and at B 14 layers 4-6 = 1 digest (B 14 layers 4-6 without the
+        # hand-back: 21 distinct), with MKX_RW_XA=0 at B 16 = 1 digest; the 45-layer e2e 4 K x 16 over 3 in-process
+        # reps (MKX_RW_XA=0) identical to MKX_RW_XA=0 alone, 36.8 / 36.8 / 36.9 vs 36.9 ms/step. Costs no L1 and no
+        # semaphore (MKX_SEM_LIST's existing 1 / 0 states); xw's one poll per layer is free on a reader whose streamer
+        # is gated by its dense phases, and on an expert-only reader it only delays pre-hand-off work that then waits
+        # for the router tail anyway
         if raw_sync():
             wdefs.append(("MKX_RAW_SYNC", "1"))
             adefs.append(("MKX_RAW_SYNC", "1"))
