@@ -122,7 +122,7 @@ constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 #define MKA_AMASK 0xFFFFFFFFu
 #endif
 
-#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
+#if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
 void kernel_main() {
