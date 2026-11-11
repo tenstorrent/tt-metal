@@ -718,7 +718,12 @@ void kernel_main() {
                 {   // O rows (4h + j, head h, candidate j) -> A rows 4u + j, cols h * 256 + t * 32 (tile h * 8 + t): 128 B blocks
                     noc_semaphore_wait_min(l1w(gs[GS_AADDR]), 1);
                     const uint32_t a_base = *l1w(gs[GS_AADDR]);
-                    const uint32_t drow = (4 * user) % 16, dface = user < 4 ? 0 : 2;
+#if defined(MKA_UPAR)
+                    const uint32_t ug = 2 * user + MKA_UPAR_PAR;   // own user -> global user (prod kv_split): A rows 4g + j
+#else
+                    const uint32_t ug = user;
+#endif
+                    const uint32_t drow = (4 * ug) % 16, dface = ug < 4 ? 0 : 2;
                     for (uint32_t h = 0; h < 6; ++h)
                         for (uint32_t t = 0; t < DH; ++t)
                             for (uint32_t c = 0; c < 2; ++c) {

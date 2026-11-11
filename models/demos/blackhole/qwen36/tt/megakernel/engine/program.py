@@ -886,6 +886,13 @@ def setup_bench(dev, MESH, mesh_identity):
         return [ro, wq_all.buffer_address(), (q_slot.get(fi, 0) * banks + q_bank.get(fi, 0)) if ro else 0, PQL] + gin_cargs(fi)[:1] + wo_rargs(fi) + head_args_r(fi)
     RWO = ('MKA_RWO', '1') in MKDEF
     if os.environ.get('MKA_SCLAMP', '1') == '1' and ('MKA_SCLAMP', '1') not in MKDEF: MKDEF = MKDEF + [('MKA_SCLAMP', '1')]   # S <= 60 before exp (RC guard)
+    # MKA_UPAR=1 (mesh correctness, matches prod kv_split): device d owns users g = 2u + (d % 2), u < NU; its attention
+    # output rows go to A rows 4g + j (non-own rows stay 0), so the attention AR sums one device per KV-head pair per user.
+    # Parity: the device's ring coordinate on the mesh, MKA_UPAR_PAR on a single chip.
+    UPAR = os.environ.get('MKA_UPAR', '0') == '1'
+    def UPAR_PAR(coord=None): return (coord[1] if coord is not None else int(os.environ.get('MKA_UPAR_PAR', '0'))) % 2
+    def ug(u_): return 2 * u_ + UPAR_PAR() if UPAR else u_   # host golds: the bench device's (single chip / coord 0) A rows
+    if UPAR: assert NU == 4, "MKA_UPAR: u8 (NU 4 own users of 8)"
     assert not (('MKA_WORING', '1') in MKDEF and ('MKA_TREEFLAG', '1') in MKDEF), 'CB 31: WORING xor TREEFLAG'
     # GDN24 bring-up: real wo on the 16 owners (10 tiles each, ring 480 pages); the 36-core split (owners + GDN cores) comes
     # with the GDN role's include of the wo unit (spec v1.5)
@@ -942,7 +949,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 for u_ in range(NU):
                     for h_ in range(6):
                         for j_ in range(4):
-                            A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = golds_s[L][u_, 4 * h_ + j_, :]
+                            A_[4 * ug(u_) + j_, h_ * 256:(h_ + 1) * 256] = golds_s[L][u_, 4 * h_ + j_, :]
                 g = (A_ * sg) @ woq[L]
             gold_wo.append(g)
         print(f"[rwo] wo split-N on {len(wo_cores)} ext cores ({min(len(v) for v in WOT.values())}-{max(len(v) for v in WOT.values())} tiles), concat {WCC}, rot {_wl().rot_order()}, rects {RECTS_E}", flush=True)
@@ -998,7 +1005,7 @@ def setup_bench(dev, MESH, mesh_identity):
             for u_ in range(NU):
                 for h_ in range(6):
                     for j_ in range(4):
-                        A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+                        A_[4 * ug(u_) + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
             if RWO: gold_wo[L] = (A_ * sg) @ woq[L]
         print(f"[rqnr] head cores {HC} (q 0-5, k 6), Q from the real qkv; SDPA golden recomputed", flush=True)
     def head_args_w(fi):
@@ -1036,7 +1043,7 @@ def setup_bench(dev, MESH, mesh_identity):
             sg = torch.sigmoid(gold_qkv[L][:, 64 * TILE:112 * TILE])
             for u_ in range(NU):
                 for h_ in range(6):
-                    for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+                    for j_ in range(4): A_[4 * ug(u_) + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
             if RWO: gold_wo[L] = (A_ * sg) @ woq[L]
         print(f"[rmask] causal mask on last-block cores {sorted(MASKC)}", flush=True)
     def attn_regold(L, gq):   # MK_REAL_AR checker: attention layer L's qkv / k / SDPA / wo golds from the x the AR delivered
@@ -1064,7 +1071,7 @@ def setup_bench(dev, MESH, mesh_identity):
             sg = torch.sigmoid(gq[:, 64 * TILE:112 * TILE])
             for u_ in range(NU):
                 for h_ in range(6):
-                    for j_ in range(4): A_[4 * u_ + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
+                    for j_ in range(4): A_[4 * ug(u_) + j_, h_ * 256:(h_ + 1) * 256] = g_[u_, 4 * h_ + j_, :]
             gold_wo[L] = (A_ * sg) @ woq[L]
     KVA_ROLE = {}
     if KVA:
@@ -1503,7 +1510,8 @@ def setup_bench(dev, MESH, mesh_identity):
             # MK_EXT_DM_OS=1 (spec v1.5a: DM-only Os allowed after a timing check): the EXT (owner) reader / writer at -Os,
             # the text-sizing group once QSK + MK_REAL_AR land (compute stays O2)
             _dmo = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_EXT_DM_OS', '0') == '1' else None
-            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')], *rta['s'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None)) + _ks(_erng, [('MKA_ROLE_EXT', '1')], *rta['e'], *_ard, dmopt=_dmo)
+            _up = [('MKA_UPAR', '1'), ('MKA_UPAR_PAR', str(UPAR_PAR(coord)))] if UPAR else []   # own users g = 2u + parity
+            ks = _ks(_srng, [('MKA_ROLE_STREAM', '1')] + _up, *rta['s'], dmopt=(ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel.Os if os.environ.get('MK_STREAM_DM_OS', '0') == '1' else None)) + _ks(_erng, [('MKA_ROLE_EXT', '1')] + _up, *rta['e'], *_ard, dmopt=_dmo)
             if REAL_AR:
                 for kd_ in arp['sender_kernels']:   # attention ARs read the wo output CB (bit it of MKAR_ATYPE)
                     if REAL_AAR and not any(k_ == 'MKAR_ATYPE' for k_, _ in kd_.defines): kd_.defines = list(kd_.defines) + _aar_d
