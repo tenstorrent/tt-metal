@@ -1361,6 +1361,8 @@ def setup_bench(dev, MESH, mesh_identity):
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
             # the AR phase headers right after the first include (the role's DM_OPT pragma, if any, stays first)
             inc = f'#include "{os.path.join(MKDIR_AR, hdr)}"\n'
+            if os.environ.get('MK_AR_CORNER_NOZ', '0') == '1':   # profiled runs: the corner (GDN + hosted AR sender) kernels without zones
+                inc = '#include "api/debug/kernel_profiler.hpp"\n#undef DeviceZoneScopedN\n#define DeviceZoneScopedN(name)\n' + inc
             i_ = txt.index('#include')
             txt = txt[:i_] + inc + txt[i_:]
             hsrc = src.replace('.cpp', '_ar.cpp')
