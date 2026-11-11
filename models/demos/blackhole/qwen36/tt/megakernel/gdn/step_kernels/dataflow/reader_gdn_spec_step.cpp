@@ -59,6 +59,15 @@ void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);  // engine gdn_out
 #if GDN_OUT_PRE
 void gdn_out_pre();
 #endif
+#if defined(GSTEP_NO_ATTHOLD) && defined(GSTEP_ATTHOLD)
+#undef GSTEP_ATTHOLD  // AR-sender corners / the Sigma reducer (engine program.py): never hold (their post-body work feeds the attention layer)
+#endif
+#ifndef GSTEP_ATTHOLD
+#define GSTEP_ATTHOLD 0  // engine GDN role (E1_ATTHOLD): gdn_att_hold() (the including TU) before rd_sp
+#endif
+#if GSTEP_ATTHOLD
+void gdn_att_hold();
+#endif
 #ifndef GDN_PRE_SP_HOOK
 #define GDN_PRE_SP_HOOK 0  // engine AR-sender corner cores (MK_CGAR_EARLY): gdn_pre_sp_hook() (TU) after the out / gdn_out tail,
                            // before the S' write-back -- the hosted GDN-AR sender iteration runs there instead of after the body
@@ -121,6 +130,30 @@ constexpr uint32_t kBatchMax = 8;
 #endif
 #ifndef GDN_ST_RING
 #define GDN_ST_RING 0  // BATCH: state / stash DFBs hold GDN_ST_RING users (streamed per user; 0 = all kBatchMax at once)
+#endif
+#ifndef GSTEP_WYPAIR
+#define GSTEP_WYPAIR 0  // engine GDN role (BATCH, T*kBatchMax == 32): kmq tiles carry K_u AND Q_u (Q rows in the other face row)
+#endif
+#ifndef GSTEP_WYORD
+#define GSTEP_WYORD 0  // WYPAIR: user order 0 1 4 5 2 3 6 7 in the kmq stream / c_wy (compute must match)
+#endif
+#ifndef GSTEP_KTSLATE
+#define GSTEP_KTSLATE 0  // WYPAIR + KTLATE: the kts (stash K^T) cuts after the kmq stream instead of before it
+#endif
+#if GSTEP_KTSLATE && !GSTEP_WYPAIR
+#error "GSTEP_KTSLATE needs GSTEP_WYPAIR"
+#endif
+#ifndef GSTEP_CZ
+#define GSTEP_CZ 0  // bench: reader zone rd_kmq
+#endif
+#ifndef GSTEP_CUTST
+#define GSTEP_CUTST 0  // WYPAIR: the kmq cut reads through one stateful local read command (noc_async_read_one_packet_with_state)
+#endif
+#ifndef GSTEP_CUTNZ
+#define GSTEP_CUTNZ 0  // BENCH ONLY (wrong numerics): WYPAIR cuts skip the previous occupant's zeroing (reader-bound probe)
+#endif
+#ifndef GSTEP_WPRE
+#define GSTEP_WPRE 0  // engine GDN role (GDN_STATE_FIRST + GDN_PREFIXED): w_in (norm weight rows) read before gdn_in_wait
 #endif
 #ifndef GDN_IN_WAIT
 #define GDN_IN_WAIT 0  // engine GDN role: gdn_in_wait() (the including TU) gates the reads of `pre`
@@ -673,6 +706,18 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     }
 #endif
 #endif
+#if GSTEP_WPRE
+    // GSTEP_WPRE: the gated-norm weight rows (static per layer) go out before the in_ready wait, off the rd_pre path
+    {
+        w_in.reserve_back(Vt);
+        zero_reserved(w_in, noc, Vt);
+        for (uint32_t t = 0; t < Vt; ++t) {
+            read_row0_at(w_acc, w_in, noc, t, t);
+        }
+        noc.async_read_barrier();
+        w_in.push_back(Vt);
+    }
+#endif
 #if GDN_IN_WAIT
     // engine GDN role: this layer's prefix output (pre) is complete once in_ready reaches the layer's target
     gdn_in_wait();
@@ -716,11 +761,13 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if !GDN_GB_DIRECT
         read_tiles_at(pre_acc, vc, noc, base + 2 * Kt + s * Vs, Vs, 0);
 #endif
+#if !GSTEP_WPRE
         w_in.reserve_back(Vt);
         zero_reserved(w_in, noc, Vt);
         for (uint32_t t = 0; t < Vt; ++t) {
             read_row0_at(w_acc, w_in, noc, t, t);
         }
+#endif
         noc.async_read_barrier();
 #if GDN_GB_DIRECT
         gdn_gb_wait(1);  // vc / zs / the head's gate rows have landed
@@ -734,7 +781,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         knq.push_back(2 * Kt);
 #endif
         vc.push_back(Vs);
+#if !GSTEP_WPRE
         w_in.push_back(Vt);
+#endif
     }
 #endif  // GDN_PREFIXED
 
@@ -790,7 +839,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             knq_w.wait_front(2 * Kt);
         }
 #endif
-        // kts: K_u tile i = s + q*VB for this block's share of the stash K^T pages (kpb per user)
+        // kts: K_u tile i = s + q*VB for this block's share of the stash K^T pages (kpb per user). GSTEP_KTSLATE (with
+        // KTLATE: the compute transposes them in c_D): cut after the kmq stream, so c_wy's first users land earlier
+        auto kts_cuts = [&]() {
         {
             DataflowBuffer kts(dfb::kts);
             constexpr uint32_t kpb = (Kt + VB - 1) / VB;
@@ -810,6 +861,96 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             noc_async_read_barrier();
             kts.push_back(kBatchMax * kpb);
         }
+        };
+#if !GSTEP_KTSLATE
+        kts_cuts();
+#endif
+#if GSTEP_WYPAIR
+        // GSTEP_WYPAIR: one masked tile per (j, u, i) holds K_u's T rows at row r = (u T) mod 16 (face row 0) and Q_u's at
+        // 16 + r (face row 1): the compute's DST tile (u T >= 16) gets [K S' | Q S'] rows for 4 users, then a DST half swap
+        static_assert(kBatchMax * T == 32, "WYPAIR: users fill one 32-row tile");
+        {
+#if GSTEP_CZ
+            DeviceZoneScopedN("rd_kmq");  // bench: the paired kmq cut stream
+#endif
+            DataflowBuffer kmq(dfb::kmq);
+            const uint32_t te = kmq.get_entry_size();
+            constexpr uint32_t rb = T * 64;  // one user's rows in one face (fp32)
+            auto cut_rd = [&](uint32_t src, uint32_t dst) {
+#if GSTEP_CUTST
+                noc_async_read_one_packet_with_state(src, dst);
+#else
+                noc_async_read(get_noc_addr(src), dst, rb);
+#endif
+            };
+            auto cut_pair = [&](uint32_t dst_tile, uint32_t src_k, uint32_t src_q, uint32_t r0u) {
+                const uint32_t rr = r0u & 15, soff = (r0u >> 4) * 2048 + rr * 64, top = rr * 64, bot = 2048 + rr * 64;
+#if GDN_CUT_FAST
+                uint32_t e = 0;
+                while (e < g_cut_n && g_cut_addr[e] != dst_tile) {
+                    ++e;
+                }
+                if (e == g_cut_n) {
+                    for (uint32_t o = 0; o < te; o += MEM_ZEROS_SIZE) {
+                        noc_async_read(z, dst_tile + o, MEM_ZEROS_SIZE);
+                    }
+                    noc_async_read_barrier();
+                    g_cut_addr[g_cut_n++] = dst_tile;
+#if GSTEP_CUTST
+                    noc_async_read_one_packet_set_state(z, rb);  // the plain reads above reprogrammed the read cmd buffer
+#endif
+                } else if (!GSTEP_CUTNZ && g_cut_r0[e] != rr) {  // the previous occupant's K and Q rows (disjoint)
+                    const uint32_t pt = g_cut_r0[e] * 64;
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + pt);
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + pt + 1024);
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + 2048 + pt);
+                    cut_rd(MEM_ZEROS_BASE, dst_tile + 2048 + pt + 1024);
+                }
+                g_cut_r0[e] = rr;
+#else
+                for (uint32_t o = 0; o < te; o += MEM_ZEROS_SIZE) {
+                    noc_async_read(z, dst_tile + o, MEM_ZEROS_SIZE);
+                }
+                noc_async_read_barrier();
+#if GSTEP_CUTST
+                noc_async_read_one_packet_set_state(z, rb);
+#endif
+#endif
+                cut_rd(src_k + soff, dst_tile + top);
+                cut_rd(src_k + soff + 1024, dst_tile + top + 1024);
+                cut_rd(src_q + soff, dst_tile + bot);
+                cut_rd(src_q + soff + 1024, dst_tile + bot + 1024);
+            };
+#if GSTEP_CUTST
+            // GSTEP_CUTST: every cut read is local (this core's L1 -> L1, rb bytes): one stateful read command, only the two
+            // local addresses change per read (same reads, same bytes)
+            noc_async_read_one_packet_set_state(z, rb);
+#endif
+#pragma GCC unroll 1
+            for (uint32_t j = 0; j < Vs; ++j) {
+#pragma GCC unroll 1
+                for (uint32_t k_ = 0; k_ < kBatchMax; ++k_) {
+                    // GSTEP_WYORD: users 0 1 4 5 2 3 6 7 -> each kmq ring slot sees row offsets 0 0 8 8 / 4 4 12 12 (fewer
+                    // zeroings); DST 0 / 1 still accumulate 0..3 / 4..7 in order (the compute uses the same order)
+                    const uint32_t ub_ = GSTEP_WYORD ? ((k_ & 1u) + ((k_ >> 1) & 1u) * 4u + (k_ >> 2) * 2u) : k_;
+                    if (ub_ >= nb || (GDN_HOLD_SKIP && hold_b[ub_])) {
+                        continue;
+                    }
+                    kmq.reserve_back(Kt);
+                    const uint32_t kb = kmq.get_write_ptr();
+#pragma GCC unroll 1
+                    for (uint32_t i = 0; i < Kt; ++i) {
+                        cut_pair(kb + i * te, knq_l1 + i * te, knq_l1 + (Kt + i) * te, ub_ * T);
+                    }
+                    noc_async_read_barrier();
+                    kmq.push_back(Kt);
+                }
+            }
+        }
+#if GSTEP_KTSLATE
+        kts_cuts();
+#endif
+#else
         // kmq stream in the compute's order: for each output o of [K S' | Q S'] (o < Vs: K rows, else Q rows), for each
         // user u, the Kt masked tiles of K_u / Q_u (a 4-chunk ring)
         {
@@ -831,6 +972,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 }
             }
         }
+#endif  // GSTEP_WYPAIR
 #if GDN_OUT_RD
         // ---- the gated out tiles (all 32 rows live: whole tiles, as the writer's GDN_OUT_TILE) + the out signal, on NOC1
         //      ahead of any S' write (the barrier must not wait for those)
@@ -871,6 +1013,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #endif
 #if GDN_PRE_SP_HOOK
         gdn_pre_sp_hook();
+#endif
+#if GSTEP_ATTHOLD
+        gdn_att_hold();  // E1_ATTHOLD: a pre-attention GDN layer's S' write-back waits for the attention layer's SDPA end
 #endif
 #if GDN_SP_RD
         // ---- S'_u -> ring slot 0 block (u, h) (this block's columns) from the compute's sp (waited on, never popped

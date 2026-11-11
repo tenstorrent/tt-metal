@@ -80,6 +80,7 @@ def program(gap_us):
 
 io = list(role.role["io"]) + [stamps]
 prog0 = program(0.0)
+progS = program(GAP) if os.environ.get("G2_STEP_GAP", "0") == "1" and GAP else prog0   # bench: profile the steps at G2_GAP_US
 ok_all = True
 for step in range(STEPS):
     hold = HOLD if step == 1 else []
@@ -87,7 +88,7 @@ for step in range(STEPS):
         sets = os.environ["G2_HOLD_SETS"].split("/")
         hold = [int(x) for x in sets[step % len(sets)].split(",") if x.isdigit() and int(x) < B]
     role.prepare(hold)
-    ttnn.generic_op(io, prog0)
+    ttnn.generic_op(io, progS)
     ttnn.synchronize_device(dev)
     ok_all = role.check(f"g2 step {step}") and ok_all
 print(f"[g2] BIT-IDENTICAL B={B} over {STEPS} steps x {NG} GDN layers in one engine-style program "

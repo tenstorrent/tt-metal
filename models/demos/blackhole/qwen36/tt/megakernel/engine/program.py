@@ -2132,7 +2132,7 @@ def setup_bench(dev, MESH, mesh_identity):
             rt = ttnn.RuntimeArgs()
             for c in corner:
                 rt[c.x][c.y] = (sp['rd_args'] if role == 'r' else sp['wr_args'])[(c.x, c.y)]
-            dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines']) + ([('GDN_PRE_SP_HOOK', '1')] if cgar else [])
+            dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines']) + ([('GDN_PRE_SP_HOOK', '1')] if cgar else []) + [('GSTEP_NO_ATTHOLD', '1')]   # #17 E1_ATTHOLD: the AR senders never hold
             dfs = dfs + [('MKAR_S_PUB', dict(AR_PUB_D)['MK_AR_PUB']), ('MKAR_S_PUBA', dict(AR_PUB_D)['MK_AR_PUBA'])]
             if os.environ.get('MKAR_SZONE', '0') == '1': dfs = dfs + [('MKAR_SZONE', '1')]   # hosted sender iteration zones (S-RIT / S-WIT)
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
@@ -2224,7 +2224,8 @@ def setup_bench(dev, MESH, mesh_identity):
                 cfg.unpack_to_dest_mode = u_
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)]),
                                              defines=list(kd.defines) + ([('GDN_PRE_IN_HOOK', '1')] if RRED_LATE else [])
-                                             + ([('GB_NOROOT', '1')] if GTEXT and role == 'c' else []),   # GTEXT: holds no L2 root
+                                             + ([('GB_NOROOT', '1')] if GTEXT and role == 'c' else [])   # GTEXT: holds no L2 root
+                                             + [('GSTEP_NO_ATTHOLD', '1')],   # #17 E1_ATTHOLD: the reducer's deliveries never wait
                                              runtime_args=ttnn.RuntimeArgs(), config=cfg, **base))
         assert sum(str(k_.kernel_source).endswith('_rred.cpp') for k_ in out) == 2, "_gdn_host_rred: writer + compute variants on RRED_HC"
         return out
@@ -2487,13 +2488,28 @@ def setup_bench(dev, MESH, mesh_identity):
             # 1473728). L1 tensors reserve their range on every core, so every core's static CB region end must stay <= the
             # model floor. MK_MODEL_L1_FLOOR = the in-model floor ("[gdn24] ... lowest ar_blk @" in G's E-series logs);
             # MK_MODEL_L1_CHK=1 raises on an overlap instead of only printing. PASS needs >= 4096 B margin.
-            _fl = int(os.environ.get('MK_MODEL_L1_FLOOR', '1473728'))
+            # NL-aware floor (NL64, spec owner 11-11): the in-model floor moves with the GDN role's arg block (HEIGHT_SHARDED L1 over the
+            # GDN cores, [magic, kind, n, version] + payload in 4-word rows, 64 B allocation), the only engine L1 tensor that grows with NL.
+            # Anchors (G, in-model "[gdn24] ... lowest ar_blk @"): NL8 1473728 with a 356-word block (E-series), NL64 1470016 with 1280
+            # words (E22a, -3712 B). MK_MODEL_L1_FLOOR still overrides.
+            _abw = None
+            try:
+                _abw = int(GDN_ROLE['role'].role['info']['ab_words']) if GDN24 and GDN_ROLE.get('role') is not None else None
+            except Exception:
+                _abw = None
+            _abb = lambda w_: -(-(4 * (-(-(4 + w_) // 4) * 4)) // 64) * 64   # per-core L1 bytes of a w_-word arg block
+            if os.environ.get('MK_MODEL_L1_FLOOR'):
+                _fl, _fsrc = int(os.environ['MK_MODEL_L1_FLOOR']), 'MK_MODEL_L1_FLOOR'
+            elif _abw is not None:
+                _fl, _fsrc = 1473728 + _abb(356) - _abb(_abw), f'GDN arg block {_abw} words'
+            else:
+                _fl, _fsrc = 1473728, 'NL8 anchor'
             _wc = max(_e, key=_e.get) if _e else None
             _mg = (_fl - _e[_wc]) if _wc is not None else None
             _ov = sorted({(c_[1], v_) for c_, v_ in _e.items() if v_ > _fl})
             print(f"[cbmodel] model L1 floor {_fl}; max CB end {_e.get(_wc)} @ {_wc}; margin {_mg} B; "
                   f"{'PASS' if _mg is not None and _mg >= 4096 else ('TIGHT' if _mg is not None and _mg >= 0 else 'FAIL')}"
-                  + (f"; over (row, end) {_ov[:8]}" if _ov else ''), flush=True)
+                  + (f"; over (row, end) {_ov[:8]}" if _ov else '') + f"; floor from {_fsrc}", flush=True)
             if os.environ.get('MK_MODEL_L1_CHK') == '1' and _mg is not None and _mg < 0:
                 raise RuntimeError(f"[cbmodel] static CB end {_e[_wc]} on core {_wc} exceeds the model L1 floor {_fl} by {-_mg} B")
         if os.environ.get('MKA_CBDUMP') == '1':
