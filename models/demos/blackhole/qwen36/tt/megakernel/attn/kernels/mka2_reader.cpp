@@ -528,7 +528,12 @@ void kernel_main() {
 #endif
 #if V_NB_ON
     const uint32_t nb_tot = 3 * V_KTR * vnn * WTB, nb_n0 = v_nb_n0(nb_tot);
+#if defined(MKA_ROLE_STREAM) && !defined(MKA_NO_STEXT)
+    VNb vnb;   // STEXT: member stores, not an aggregate init (that pulled in a 220 B memset); dst / src are set before use
+    vnb.seq = 0; vnb.rem = 0; vnb.dst0 = get_write_ptr(CB_WV) + nb_n0; vnb.len = nb_tot - nb_n0; vnb.vg = vg;
+#else
     VNb vnb = {0, 0, 0, get_write_ptr(CB_WV) + nb_n0, nb_tot - nb_n0, vg, 0};
+#endif
 #define V_NB_WAIT_VA() v_nb_wait(vnb, CB_VA, V_NTM)
 #else
 #define V_NB_WAIT_VA() do {} while (0)
