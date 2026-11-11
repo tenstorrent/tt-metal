@@ -414,8 +414,9 @@ inline constexpr bool pack_fast_untilize_linked = false;
 [[maybe_unused]] static bool pack_fast_untilize_seen         = false;
 [[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 
-// reconfigured: the packer reconfigure's call, which marks the state reconfigured in the same store.
-template <PackMode pack_mode = PackMode::Default, bool reconfigured = false>
+// reconfigured: the packer reconfigure's state, stored by the caller of the noinline reconfigure (store_state false there), so that call
+// writes no memory and the caller keeps what it holds in registers across it.
+template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
@@ -438,8 +439,11 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     // channel-1 (Y) stride, in its own init.
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
-    const std::uint32_t state = reconfigured ? 0x100 : 0;
-    __builtin_memcpy(pack_state, &state, sizeof(state));
+    if constexpr (store_state)
+    {
+        const std::uint32_t state = reconfigured ? 0x100 : 0;
+        __builtin_memcpy(pack_state, &state, sizeof(state));
+    }
     TTI_NOP;
     TTI_NOP;
 }
@@ -687,12 +691,27 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
     // Set packer strides
-    set_packer_strides<PackMode::Default, true>(pack_output_src_format, tile_c_dim);
+    set_packer_strides<PackMode::Default, true, false>(pack_output_src_format, tile_c_dim);
 
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
     // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
     // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+}
+
+// The packer reconfigure with its pack state store, which set_packer_strides makes in every other call.
+template <bool is_fp32_dest_acc_en>
+inline void reconfig_packer_data_format_and_state(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces,
+    const bool partial_face)
+{
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    const std::uint32_t state = 0x100;
+    __builtin_memcpy(pack_state, &state, sizeof(state));
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
