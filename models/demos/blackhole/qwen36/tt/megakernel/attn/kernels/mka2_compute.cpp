@@ -185,6 +185,13 @@ void kernel_main() {
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
 #endif
 #endif
+#if defined(MK_GDN_INPROJ) && defined(MKA_ROLE_EXT)
+    constexpr uint32_t gnt = 0, gq = 0; a += 2;
+    constexpr uint32_t CB_WMG = 15, GIN_SLOT = 20 * 7;
+#elif defined(MK_GDN_INPROJ)
+    const uint32_t gnt = get_arg_val<uint32_t>(a++), gq = get_arg_val<uint32_t>(a++);   // column gdn_in tiles, owned (0/1)
+    constexpr uint32_t CB_WMG = 15, GIN_SLOT = 20 * 7;
+#endif
 #if defined(MKA_RQNR)
 #if defined(MKA_STREAMLEAN)
     constexpr uint32_t is_head = 0, has_hg = 0; a += 2;   // head-norm cores are owners
@@ -499,22 +506,30 @@ void kernel_main() {
     // first tile qn0, stride 8). GDN-type layers: QSK_GK K tiles, result discarded (in-proj stand-in).
     auto qsk_mix = [&](bool att_layer) {
         CZONE("C-QSK");
-        const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK;
+#if defined(MK_GDN_INPROJ)   // GDN-type layer = the real in-proj: 20 K tiles x gnt from the BFP4 slot, RS, x rstd
+        const bool mrs = true;
+        const uint32_t nt = att_layer ? qk0 : gnt, nk = V_KTR, cbw = att_layer ? CB_WM : CB_WMG, cbs = att_layer ? QSK_SLOT : GIN_SLOT;
+        const uint32_t nown = att_layer ? qnt : gq;
+#else
+        const bool mrs = att_layer;
+        const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK, cbw = CB_WM, cbs = QSK_SLOT, nown = qnt;
+#endif
         MK_RSTD_PART();
-        MK_HWS(CB_XK, CB_WM, CB_VA);
+        MK_HWS(CB_XK, cbw, CB_VA);
         cb_wait_front(CB_XK, V_KTR);
-        cb_wait_front(CB_WM, QSK_SLOT);
-        if (att_layer) { cb_reserve_back(CB_VA, V_NTM); cb_reserve_back(CB_VOWN, 2); }
-        reconfig_data_format(CB_WM, CB_XK);
+        cb_wait_front(cbw, cbs);
+        if (mrs) cb_reserve_back(CB_VA, V_NTM);
+        if (mrs && nown) cb_reserve_back(CB_VOWN, 2);
+        reconfig_data_format(cbw, CB_XK);
         pack_reconfig_data_format(CB_VA);
         for (uint32_t j0 = 0; j0 < nt; j0 += QSK_PASS) {
             const uint32_t nw = (nt - j0) < QSK_PASS ? (nt - j0) : QSK_PASS;
-            matmul_block_init(CB_XK, CB_WM, 0, nw, 1, V_KTR);
+            matmul_block_init(CB_XK, cbw, 0, nw, 1, V_KTR);
             tile_regs_acquire();
-            for (uint32_t kl = 0; kl < nk; ++kl) matmul_block(CB_XK, CB_WM, kl, kl * nt + j0, 0, 0, nw, 1, V_KTR);
+            for (uint32_t kl = 0; kl < nk; ++kl) matmul_block(CB_XK, cbw, kl, kl * nt + j0, 0, 0, nw, 1, V_KTR);
             tile_regs_commit();
             tile_regs_wait();
-            if (att_layer)
+            if (mrs)
                 for (uint32_t jj = 0; jj < nw; ++jj) {
                     const uint32_t j = j0 + jj;
                     pack_tile<true>(jj, CB_VA, j);
@@ -522,25 +537,27 @@ void kernel_main() {
                 }
             tile_regs_release();
         }
-        cb_pop_front(CB_WM, QSK_SLOT);
+        cb_pop_front(cbw, cbs);
         cb_pop_front(CB_XK, V_KTR);
-        if (!att_layer) return;
+        if (!mrs) return;
         cb_push_back(CB_VA, V_NTM);
+        if (!nown) return;   // (GDN: K-rows 6-7 of a 6-tile column own no in-proj tile)
         cb_push_back(CB_VOWN, 2);
         v_rstd();
         cb_wait_front(CB_VRT, 1);
         cb_wait_front(CB_VOWN, 2);
         cb_wait_front(CB_VRS, 16);
-        cb_reserve_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
+        const uint32_t qos = QO_SLOT ? QO_SLOT : qnt;   // same count on both layer types: the CB_QO fifo stays slot-aligned
+        cb_reserve_back(CB_QO, qos);
         tile_regs_acquire();
-        for (uint32_t m = 0; m < qnt; ++m) v_rs_sum(CB_VOWN, m, CB_VRS, vk, m, 1, m);
+        for (uint32_t m = 0; m < nown; ++m) v_rs_sum(CB_VOWN, m, CB_VRS, vk, m, 1, m);
         reconfig_data_format(CB_VJ, CB_VRT);
         matmul_block_init(CB_VRT, CB_VJ, 0, 1, 1, 1);
         matmul_block(CB_VRT, CB_VJ, 0, 0, 2, 0, 1, 1, 1);
         mul_binary_tile_init();
-        for (uint32_t m = 0; m < qnt; ++m) mul_binary_tile(m, 2, m);
-        for (uint32_t m = 0; m < qnt; ++m) {   // gate tiles: sig = 1 / (1 + exp(-x))
-            if (qn0 + 8 * m < 64) continue;
+        for (uint32_t m = 0; m < nown; ++m) mul_binary_tile(m, 2, m);
+        for (uint32_t m = 0; m < nown; ++m) {   // gate tiles: sig = 1 / (1 + exp(-x))
+            if (!att_layer || qn0 + 8 * m < 64) continue;
             binop_with_scalar_tile_init();
             mul_unary_tile(m, 0xBF800000u);
             exp_tile_init();
@@ -553,9 +570,9 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(CB_QO);
-        for (uint32_t m = 0; m < qnt; ++m) pack_tile(m, CB_QO);
+        for (uint32_t m = 0; m < nown; ++m) pack_tile(m, CB_QO);
         tile_regs_release();
-        cb_push_back(CB_QO, QO_SLOT ? QO_SLOT : qnt);
+        cb_push_back(CB_QO, qos);
         cb_pop_front(CB_VRS, 16);
         cb_pop_front(CB_VOWN, 2);
         cb_pop_front(CB_VRT, 1);
