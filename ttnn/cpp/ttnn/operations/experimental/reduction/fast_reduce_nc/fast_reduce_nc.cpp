@@ -20,7 +20,8 @@ ttnn::Tensor fast_reduce_nc(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool fp32_intermediate_stages,
-    bool fp32_sfpu_accumulate) {
+    bool fast_and_approximate_mode,
+    float post_mul_scaler) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE,
         "Input tensor storage type must be DEVICE but got {}",
@@ -28,8 +29,9 @@ ttnn::Tensor fast_reduce_nc(
 
     TT_FATAL(!dims.empty(), "fast_reduce_nc dims should not be empty");
 
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input.device()->arch(),
+    const auto arch = input.device()->arch();
+    const auto kernel_config_val = init_device_compute_kernel_config(
+        arch,
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -42,6 +44,11 @@ ttnn::Tensor fast_reduce_nc(
     const std::optional<tt::tt_metal::DataType> intermediate_dtype =
         fp32_intermediate_stages ? std::optional<tt::tt_metal::DataType>{tt::tt_metal::DataType::FLOAT32}
                                  : std::nullopt;
+    // Accurate fp32 sums on the SFPU (the FPU truncates fp32 to tf32); falls back to the FPU like reduce_op.
+    const auto use_sfpu_reduce = [&](const Tensor& stage_input) {
+        return !fast_and_approximate_mode && stage_input.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+               arch != tt::ARCH::QUASAR && kernel_config_val.fp32_dest_acc_en;
+    };
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
         auto temp_output = ttnn::prim::fast_reduce_nc(
@@ -52,7 +59,7 @@ ttnn::Tensor fast_reduce_nc(
             kernel_config_val,
             sub_core_grids,
             intermediate_dtype,
-            fp32_sfpu_accumulate);
+            use_sfpu_reduce(temp_input));
         temp_input = temp_output;
     }
     return ttnn::prim::fast_reduce_nc(
@@ -63,7 +70,8 @@ ttnn::Tensor fast_reduce_nc(
         kernel_config_val,
         sub_core_grids,
         output_dtype,
-        fp32_sfpu_accumulate);
+        use_sfpu_reduce(temp_input),
+        post_mul_scaler);
 }
 
 std::tuple<Tensor, Tensor> fast_reduce_nc_split(

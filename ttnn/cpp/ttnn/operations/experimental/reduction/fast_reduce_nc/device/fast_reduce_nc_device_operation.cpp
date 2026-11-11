@@ -66,14 +66,14 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     }
 
     const bool is_int32 = input.dtype() == DataType::INT32;
-    if (is_int32 || args.fp32_sfpu_accumulate) {
+    if (is_int32 || args.use_sfpu_reduce) {
         const auto arch = input.device()->arch();
         TT_FATAL(
-            !args.fp32_sfpu_accumulate || input.dtype() == DataType::FLOAT32,
-            "FastReduceNC fp32_sfpu_accumulate requires FLOAT32 input, got {}",
+            !args.use_sfpu_reduce || input.dtype() == DataType::FLOAT32,
+            "FastReduceNC use_sfpu_reduce requires FLOAT32 input, got {}",
             input.dtype());
         TT_FATAL(
-            !args.fp32_sfpu_accumulate || arch != tt::ARCH::QUASAR,
+            !args.use_sfpu_reduce || arch != tt::ARCH::QUASAR,
             "FastReduceNC accurate FLOAT32 accumulation is not supported on Quasar");
         TT_FATAL(
             std::get<2>(ttnn::get_compute_kernel_config_args(arch, args.compute_kernel_config)),
@@ -86,6 +86,10 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
                                                                   : args.output_dtype.value_or(DataType::INT32);
         TT_FATAL(
             output_dtype == DataType::INT32, "FastReduceNC INT32 input requires an INT32 output, got {}", output_dtype);
+        TT_FATAL(
+            args.post_mul_scaler == 1.0f,
+            "FastReduceNC INT32 input does not support post_mul_scaler, got {}",
+            args.post_mul_scaler);
     }
 
     CMAKE_UNIQUE_NAMESPACE::validate_split_output(args, tensor_args);
@@ -131,6 +135,26 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     if (preallocated_output.has_value()) {
         ttnn::prim::validate_reduce_op_tensor(preallocated_output.value(), "FastReduceNC", "preallocated_output");
     }
+}
+
+ttsl::hash::hash_t FastReduceNCDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a FastReduceNCParams field must be a deliberate choice — hash it below, or
+    // exclude it like post_mul_scaler, which the compute kernels read as a runtime arg.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 8,
+        "FastReduceNCParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<FastReduceNCDeviceOperation>,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.output_dtype,
+        operation_attributes.split_output_width,
+        operation_attributes.use_sfpu_reduce,
+        tensor_args);
 }
 
 FastReduceNCDeviceOperation::spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
@@ -184,7 +208,8 @@ Tensor fast_reduce_nc(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<DataType>& output_dtype,
-    bool fp32_sfpu_accumulate) {
+    bool use_sfpu_reduce,
+    float post_mul_scaler) {
     using OperationType = ttnn::experimental::prim::FastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -193,7 +218,8 @@ Tensor fast_reduce_nc(
         .compute_kernel_config = compute_kernel_config,
         .sub_core_grids = sub_core_grids,
         .output_dtype = output_dtype,
-        .fp32_sfpu_accumulate = fp32_sfpu_accumulate};
+        .use_sfpu_reduce = use_sfpu_reduce,
+        .post_mul_scaler = post_mul_scaler};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).front();
