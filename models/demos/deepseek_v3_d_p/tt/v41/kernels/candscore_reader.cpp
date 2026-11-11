@@ -12,14 +12,16 @@
 // page per block of 8 rows: whole-block reads, as random 256-byte row reads are DRAM-request bound at ~4x the
 // bandwidth time). Block id c is page block_base + c: the pages of one user's slot in a pool of block pages (the
 // decode pool, tt/v41/pool.py index_k_blocks) or 0 for a cache of one sequence. A sentinel id (>= nblocks) reads
-// the slot's block 0 instead (finite values; the writer masks it to -inf). With DYN (the one-live-row capture) block_base is word 1 of a per-step uint32 page (the live user's slot; a capture must not bake
-// in the slot) read from base_addr instead of the runtime argument. With QSPLIT > 0 (the live rows of a decode tile
-// scored in one launch) the ids hold QSPLIT rows per live row (row i is live row i / QSPLIT, a
-// QSPLIT-th of its candidate blocks), and a live row's query and head weights are read from its own tile row and
-// its blocks from its own user's slot: the pairs (tile row, block base) of the live rows follow the fixed runtime
-// arguments.
+// the slot's block 0 instead (finite values; the writer masks it to -inf), or with SKIP reads nothing (the block's
+// scores are then whatever the buffer held, masked the same: every core of a chip of idle rows reading the one page
+// K times is slower than real ids). With DYN (the one-live-row capture) block_base is word 1 of a per-step uint32 page
+// (the live user's slot; a capture must not bake in the slot) read from base_addr instead of the runtime argument. With
+// QSPLIT > 0 (the live rows of a decode tile scored in one launch) the ids hold QSPLIT rows per live row (row i is live
+// row i / QSPLIT, a QSPLIT-th of its candidate blocks), and a live row's query and head weights are read from its own
+// tile row and its blocks from its own user's slot: the pairs (tile row, block base) of the live rows follow the fixed
+// runtime arguments.
 //
-// compile_time_args = [cb_qrm, cb_wrm, cb_krm, cb_ids, K, ROWS_PER_READ, DYN, QSPLIT, TensorAccessorArgs(q)...,
+// compile_time_args = [cb_qrm, cb_wrm, cb_krm, cb_ids, K, ROWS_PER_READ, DYN, QSPLIT, SKIP, TensorAccessorArgs(q)...,
 //                      TensorAccessorArgs(w)..., TensorAccessorArgs(ids)..., TensorAccessorArgs(k_blocks)...,
 //                      TensorAccessorArgs(base)... (DYN only)]
 // runtime args = [q_addr, w_addr, ids_addr, k_addr, row_start, row_count, nblocks, block_base, base_addr (DYN,
@@ -48,8 +50,9 @@ void kernel_main() {
     constexpr uint32_t ROWS_PER_READ = get_compile_time_arg_val(5);  // tile-rows of K gathered per read barrier
     constexpr uint32_t DYN = get_compile_time_arg_val(6);            // 1: block_base is word 1 of the base page
     constexpr uint32_t QSPLIT = get_compile_time_arg_val(7);         // > 0: id rows per live row (a power of two)
+    constexpr uint32_t SKIP = get_compile_time_arg_val(8);           // 1: no read for a sentinel block id
     constexpr uint32_t LIVE_ARGS = 9;                                // the first live row's (tile row, block base)
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr auto q_args = TensorAccessorArgs<9>();
     constexpr auto w_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto ids_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
@@ -114,9 +117,10 @@ void kernel_main() {
             krm.reserve_back(PAGES * ROWS_PER_READ);
             uint32_t l1 = krm.get_write_ptr();
             for (uint32_t b = c0 * 4; b < (c0 + ROWS_PER_READ) * 4; ++b) {
-                uint32_t c = id[b];
-                c = block_base + (c < nblocks ? c : 0);
-                noc_async_read(k.get_noc_addr(c, 0), l1, BLOCK_BYTES);
+                const uint32_t c = id[b];
+                if (!SKIP || c < nblocks) {
+                    noc_async_read(k.get_noc_addr(block_base + (c < nblocks ? c : 0), 0), l1, BLOCK_BYTES);
+                }
                 l1 += BLOCK_BYTES;
             }
             noc_async_read_barrier();

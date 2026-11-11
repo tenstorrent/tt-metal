@@ -218,6 +218,11 @@ def gather_runs(x, ids, run: int, pin=None, pin_base: int = 0):
 
 
 CANDSCORE_BLOCK = 8  # rows per candidate block (CANDIDATE_BLOCK_SIZE)
+# V41_CANDSCORE_SENTINEL=skip: candidate_scores's reader issues no read for a sentinel block id (the writer sets the
+# block's scores to -inf whatever was scored). ``read``, the default, reads the slot's block 0 for it: on a chip whose
+# rows are all idle (the padding ranks of a one-slot step, every sentinel) each core then reads that one page K
+# times, 86.6 us a launch against 20 for real ids.
+CANDSCORE_SKIP_SENTINEL = os.environ.get("V41_CANDSCORE_SENTINEL", "read") == "skip"
 
 
 def _largest_divisor(n: int, options=(8, 4, 2, 1)) -> int:
@@ -331,7 +336,7 @@ def candidate_scores(
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/candscore_reader.cpp",
             core_ranges=cores,
-            compile_time_args=[0, 1, 2, 3, nk, per_read, int(dyn), qsplit]
+            compile_time_args=[0, 1, 2, 3, nk, per_read, int(dyn), qsplit, int(CANDSCORE_SKIP_SENTINEL)]
             + ttnn.TensorAccessorArgs(q).get_compile_time_args()
             + ttnn.TensorAccessorArgs(w).get_compile_time_args()
             + ttnn.TensorAccessorArgs(ids).get_compile_time_args()

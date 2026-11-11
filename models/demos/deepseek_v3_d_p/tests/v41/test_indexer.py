@@ -1139,6 +1139,50 @@ def test_v41_select_rows_in_blocks(mesh_device, device_params, layout):
             print(f"{what} ({layout}, {n_live} live rows): {ms:.3f} ms a call (with host)")
 
 
+@pytest.mark.parametrize("layout", ["c1", "c32"])
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
+def test_v41_candidate_scores_skip_sentinel(mesh_device, device_params, layout, monkeypatch):
+    """``V41_CANDSCORE_SENTINEL=skip`` (no read for a sentinel block id) against the default
+    (the slot's block 0 read for it): the merged selection and every row's own bit-equal between the two, on rows
+    with sentinel tails and idle rows of all sentinels; then a launch over idle rows alone (the padding chips of a
+    one-slot step) is timed both ways."""
+    from models.demos.deepseek_v3_d_p.tt.v41 import indexer_kernels
+
+    with phase("inputs", what="FP4-like query / index-K block pages, head weights, pins, published blocks"):
+        case = _blocks_case(mesh_device, layout)
+    n_live = len(case["live_rows"])
+    results = {}
+    for mode in (False, True):
+        monkeypatch.setattr(indexer_kernels, "CANDSCORE_SKIP_SENTINEL", mode)
+        with phase(f"skip{int(mode)}", what="the merged selection and the rows' own"):
+            merged = [ttnn.to_torch(d)[0, 0] for d in ttnn.get_device_tensors(_blocks_merged(case))]
+            for i, other in enumerate(merged[1:], 1):
+                assert torch.equal(other, merged[0]), f"skip {mode}: chip {i} differs from chip 0"
+            results[mode] = (merged[0], [_chip0(_blocks_row(case, l))[0] for l in range(n_live)])
+    assert torch.equal(results[True][0], results[False][0]), "the merged selection differs with the sentinels skipped"
+    for l in range(n_live):
+        assert torch.equal(results[True][1][l], results[False][1][l]), f"row {l} differs with the sentinels skipped"
+        assert torch.equal(results[True][0][l], results[True][1][l]), f"row {l}: merged against its own, skipped"
+    print(f"candidate_scores {layout}: {n_live} live rows bit-equal with the sentinel reads skipped")
+    # idle rows alone: every id the sentinel, every pin the sentinel
+    kb = C.CANDIDATE_TOPK_BLOCKS
+    idle_ids = _replicated(mesh_device, torch.full((1, 1, n_live, kb), -1, dtype=torch.int32), ttnn.uint32)
+    idle_pin = _replicated(mesh_device, torch.full((1, 1, 1, 32), -1, dtype=torch.int32), ttnn.uint32)
+    idle = dict(case, dev_ids=idle_ids, pin=idle_pin)
+    with phase("timing", what="the merged selection over idle rows, both ways (with the host's dispatch)"):
+        for mode in (False, True):
+            monkeypatch.setattr(indexer_kernels, "CANDSCORE_SKIP_SENTINEL", mode)
+            picks = _chip0(_blocks_merged(idle))
+            assert bool((picks.long() == SENTINEL).all()), "an idle row picked a key"
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(20):
+                _blocks_merged(idle)
+            ttnn.synchronize_device(mesh_device)
+            ms = (time.perf_counter() - t0) / 20 * 1e3
+            print(f"select_rows_in_blocks over {n_live} idle rows, skip {mode}: {ms:.3f} ms a call (with host)")
+
+
 @pytest.mark.parametrize("split", [1, 32], ids=lambda r: f"rows{r}")
 @pytest.mark.parametrize("layout", ["c1", "c32"])
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
