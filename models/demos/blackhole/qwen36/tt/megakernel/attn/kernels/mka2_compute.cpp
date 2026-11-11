@@ -122,8 +122,20 @@ constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 #define MKA_AMASK 0xFFFFFFFFu
 #endif
 
+#if defined(MKA_ROLE_STREAM) && defined(MKA_GDN24) && defined(MKA_QSK) && defined(MKA_RWO) && defined(MK_V12) && !defined(MKA_OWNPAR)
+#define MKA_STREAMLEAN 1   // the EXTLEAN pattern on STREAM (RC config): role args every STREAM core shares are constants (program.py asserts them)
+#endif
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
+#endif
+#if defined(MKA_STREAMLEAN)
+// one out-of-line copy of the full HW (re)init per TRISC binary instead of one inlined copy per call site (STREAM text)
+__attribute__((noinline, noclone)) static void mk_hw_startup(uint32_t a, uint32_t b, uint32_t o) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o);
+}
+#define MK_HWS(a, b, o) mk_hw_startup(a, b, o)
+#else
+#define MK_HWS(a, b, o) compute_kernel_hw_startup<SrcOrder::Reverse>(a, b, o)
 #endif
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1);
@@ -138,8 +150,8 @@ void kernel_main() {
 #else
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
 #endif
-#if defined(MKA_EXTLEAN)
-    constexpr uint32_t IS_GU = 0; a++;
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
+    constexpr uint32_t IS_GU = 0; a++;   // STREAM under V12: the fm11 gate|up roles are off
 #else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
 #endif
@@ -153,6 +165,12 @@ void kernel_main() {
 #if defined(MKA_RQKV)
 #if defined(MKA_EXTLEAN) && defined(MKA_QSK)
     constexpr uint32_t qrole = 3, qk0 = 0, qnk = 0, qnt = 0, gdn_on = 0; a += 5;   // QR_EXT with no qkv tiles under QSK
+#elif defined(MKA_STREAMLEAN)
+    constexpr uint32_t qrole = 1; a++;   // every STREAM core is a QSK K-row partial producer (QR_OWNER)
+    const uint32_t qk0 = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t qnk = QSK_GK; a++;
+    const uint32_t qnt = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t gdn_on = 1; a++;
 #else
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
@@ -160,12 +178,20 @@ void kernel_main() {
 #if defined(MKA_RWO) || defined(MKA_QSK)
 #if defined(MKA_EXTLEAN) && defined(MKA_QSK) && defined(MKA_RWO)
     constexpr uint32_t qn0 = 0, wo_nt = WO_MAXT; a += 2;
+#elif defined(MKA_STREAMLEAN)
+    const uint32_t qn0 = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t wo_nt = 0; a++;   // wo runs on the owners
 #else
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
 #endif
 #endif
 #if defined(MKA_RQNR)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t is_head = 0, has_hg = 0; a += 2;   // head-norm cores are owners
 #if defined(MKA_KVA)
+    constexpr uint32_t kva_c = 0;
+#endif
+#elif defined(MKA_KVA)
     const uint32_t is_head_kva = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
 #if defined(MKA_ROLE_STREAM)
     const uint32_t is_head = is_head_kva & 0xFF;
@@ -177,7 +203,11 @@ void kernel_main() {
     const uint32_t is_head = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
 #endif
 #if defined(MKA_RMASK)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t mask_blk = 0xFFFFFFFFu; a++;   // the mask core is never STREAM (RMASK)
+#else
     const uint32_t mask_blk = get_arg_val<uint32_t>(a++);   // local block index of the user's last block, or ~0
+#endif
 #endif
     // q/k head: y = gamma (.) x * rsqrt(mean(x^2) + eps) over the head's 256 columns; RoPE on dims 0-63 (tiles 0, 1)
     auto head_norm_rope = [&]() {
@@ -471,7 +501,7 @@ void kernel_main() {
         CZONE("C-QSK");
         const uint32_t nt = qk0, nk = att_layer ? V_KTR : QSK_GK;
         MK_RSTD_PART();
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WM, CB_VA);
+        MK_HWS(CB_XK, CB_WM, CB_VA);
         cb_wait_front(CB_XK, V_KTR);
         cb_wait_front(CB_WM, QSK_SLOT);
         if (att_layer) { cb_reserve_back(CB_VA, V_NTM); cb_reserve_back(CB_VOWN, 2); }
@@ -535,7 +565,7 @@ void kernel_main() {
     auto qkv_proj = [&](bool att_layer) {
         CZONE("C-QKV");
         const uint32_t cbw = qrole == 3 ? CB_PQ : CB_WM;
-        compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, cbw, CB_QA);
+        MK_HWS(CB_X, cbw, CB_QA);
         reconfig_data_format(cbw, CB_X);
         matmul_block_init(CB_X, cbw, 0, qnt, 1, KB);
         cb_wait_front(cbw, qnk * qnt);
@@ -650,8 +680,8 @@ void kernel_main() {
 #ifndef V12_OSUM
 #define V12_OSUM(L) do {} while (0)
 #endif
-    if (IS_STREAM) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
-    else compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
+    if (IS_STREAM) MK_HWS(CB_X, CB_W, CB_HL);
+    else MK_HWS(CB_Q, CB_K, CB_P);
     cb_wait_front(CB_ONE, 1);
     for (uint32_t L = 0; L < NL; ++L) {
         const bool att = ((uint32_t)(MKA_AMASK) >> L) & 1u;
@@ -705,7 +735,7 @@ void kernel_main() {
             cb_wait_front(CB_X, KT);
             CZONE("C-MIX");
 #if !defined(MKA_NO_REINIT)
-            if (L > 0) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_X, CB_W, CB_HL);
+            if (L > 0) MK_HWS(CB_X, CB_W, CB_HL);
 #endif
             reconfig_data_format(CB_WM, CB_X);
             matmul_block_init(CB_X, CB_WM, 0, MIXN, 1, KB);
@@ -728,12 +758,12 @@ void kernel_main() {
             // unpacker / math state that a short matmul_init does not undo: re-run the full HW init per SDPA phase
 #if defined(MKA_RQKV)
 #if defined(MKA_KVA)
-            if (L > 0 || qrole || kva_c) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul / KV pack
+            if (L > 0 || qrole || kva_c) MK_HWS(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul / KV pack
 #else
-            if (L > 0 || qrole) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
+            if (L > 0 || qrole) MK_HWS(CB_Q, CB_K, CB_P);   // after the qkv bcast-mul
 #endif
 #else
-            if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) compute_kernel_hw_startup<SrcOrder::Reverse>(CB_Q, CB_K, CB_P);
+            if (L > 0 && (IS_STREAM || ((uint32_t)(MKA_AMASK) & ((1u << L) - 1u)))) MK_HWS(CB_Q, CB_K, CB_P);
 #endif
 #endif
             cb_wait_front(CB_Q, QT);
@@ -877,7 +907,7 @@ void kernel_main() {
             const bool own_h = vk < vnn;
             if (L == 0) { cb_wait_front(CB_VI, 1); cb_wait_front(CB_VJ, 1); }
             MK_RSTD_PART();
-            compute_kernel_hw_startup<SrcOrder::Reverse>(CB_XK, CB_WV, CB_VA);
+            MK_HWS(CB_XK, CB_WV, CB_VA);
             cb_wait_front(CB_WV, V_SLOT);
             cb_wait_front(CB_XK, V_KTR);
             cb_reserve_back(CB_VA, V_NTM);

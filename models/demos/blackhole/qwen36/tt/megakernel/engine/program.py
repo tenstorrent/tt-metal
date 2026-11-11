@@ -1370,7 +1370,14 @@ def setup_bench(dev, MESH, mesh_identity):
                 if RWO: assert not rd_w
                 if V12: assert vc_[0] == 2 and vr_[0] == 2 and vw_[0] == 2, ("MKA_EXTLEAN vrole", fi, vc_[0], vr_[0], vw_[0])
             _r3 = rta['s' if isS else 'e']; _r3[0][c.x][c.y] = _ra; _r3[1][c.x][c.y] = _wa; _r3[2][c.x][c.y] = _ca
-            if os.environ.get('MKA_ARGDUMP') == '1' and not isS: print(f"[argdump] fi {fi} xy ({c.x},{c.y}) R {list(_ra)} W {list(_wa)} C {list(_ca)}", flush=True)
+            if GDN24 and isS and QSK and RWO and V12 and ('MKA_OWNPAR', '1') not in MKDEF:   # MKA_STREAMLEAN: folded STREAM role args
+                _qr = QROLE.get(fi, (0, 0, 0, 0, 0, fi))
+                assert g_ == 0 and r_mk[14] == 255 and r_mk[15] == 0, ("MKA_STREAMLEAN IS_GU / ROOT (reader)", fi, g_, r_mk[14:16])
+                assert _qr[0] == 1 and _qr[4] == QSK_GK and gdn_on(fi) == 1, ("MKA_STREAMLEAN qkv role", fi, _qr, gdn_on(fi))
+                assert len(WOT.get(fi, [])) == 0 and not rd_w and HLP.get(fi, (None, 0, 0))[2] == 0 and fi != WCC, ("MKA_STREAMLEAN wo", fi)
+                if RQNR: assert fi not in HC and fi not in MASKC and _ca[13] == 0 and _ca[14] == 0, ("MKA_STREAMLEAN head / mask", fi)
+                if RMASK: assert _ca[15] == 0xFFFFFFFF, ("MKA_STREAMLEAN mask_blk", fi, _ca[15])
+            if os.environ.get('MKA_ARGDUMP') == ('2' if isS else '1'): print(f"[argdump] fi {fi} xy ({c.x},{c.y}) R {list(_ra)} W {list(_wa)} C {list(_ca)}", flush=True)
         acc_kv = ttnn.TensorAccessorArgs(kvs[0]).get_compile_time_args(); acc_o = ttnn.TensorAccessorArgs(outs).get_compile_time_args()
         acc_q = ttnn.TensorAccessorArgs(qten).get_compile_time_args(); acc_wo = ttnn.TensorAccessorArgs(wo_dummy).get_compile_time_args()
         acc_wq = ttnn.TensorAccessorArgs(wq_all).get_compile_time_args() if RQKV else []; acc_qo = ttnn.TensorAccessorArgs(qkv_out).get_compile_time_args() if RQKV else []

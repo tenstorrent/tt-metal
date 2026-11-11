@@ -37,10 +37,13 @@
 #include "../../kernels/mk_ar_recv.hpp"   // AR_RECV on the owners (AR_INTERFACE.md; MKAR_* defines from ar_phase.py)
 #endif
 
+#if defined(MKA_ROLE_STREAM) && defined(MKA_GDN24) && defined(MKA_QSK) && defined(MKA_RWO) && defined(MK_V12) && !defined(MKA_OWNPAR)
+#define MKA_STREAMLEAN 1   // the EXTLEAN pattern on STREAM (RC config): role args every STREAM core shares are constants (program.py asserts them)
+#endif
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
 #define MKA_WOT_DIV (wo_tiles ? wo_tiles : 1u)   // folded 0: dead code, but -Werror=div-by-zero
 #else
 #define MKA_WOT_DIV wo_tiles
@@ -102,12 +105,12 @@ void kernel_main() {
     const uint32_t cbh_base = get_arg_val<uint32_t>(a++);
     const uint32_t wd_addr = get_arg_val<uint32_t>(a++), dn_page = get_arg_val<uint32_t>(a++);
     const uint32_t wgu_addr = get_arg_val<uint32_t>(a++), gu_page = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
     constexpr uint32_t ROOT = 0xFF; a++;
 #else
     const uint32_t ROOT = get_arg_val<uint32_t>(a++);
 #endif
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
     constexpr uint32_t IS_GU = 0; a++;
 #else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
@@ -146,7 +149,10 @@ void kernel_main() {
     const bool wr_k = kv_mode == 1 || kv_mode == 3, wr_v = kv_mode == 0 || kv_mode == 3;
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
-#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t qrole = 1; a++;
+    const uint32_t qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
+#elif defined(MKA_EXTLEAN) && defined(MKA_QSK)
     constexpr uint32_t qrole = 3; a++;
     const uint32_t qn = get_arg_val<uint32_t>(a++);
     constexpr uint32_t qnt = 0; a++;
@@ -154,7 +160,9 @@ void kernel_main() {
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qn = get_arg_val<uint32_t>(a++), qnt = get_arg_val<uint32_t>(a++);
 #endif
     const uint32_t q_ox = get_arg_val<uint32_t>(a++), q_oy = get_arg_val<uint32_t>(a++), qo_addr = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t gdn_on = 1; a++;
+#elif defined(MKA_EXTLEAN)
     constexpr uint32_t gdn_on = 0; a++;
 #else
     const uint32_t gdn_on = get_arg_val<uint32_t>(a++);   // this core runs the GDN in-proj stand-in in GDN-type layers
@@ -164,7 +172,12 @@ void kernel_main() {
     const uint32_t wo_nt = get_arg_val<uint32_t>(a++);
     uint32_t wo_tile[WO_MAXT];
     for (uint32_t i = 0; i < WO_MAXT; ++i) wo_tile[i] = get_arg_val<uint32_t>(a++);
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t is_concat = 0; a++;
+    const uint32_t own_chunk = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t is_concat = get_arg_val<uint32_t>(a++), own_chunk = get_arg_val<uint32_t>(a++);
+#endif
     uint32_t re[3][5];
     for (uint32_t i = 0; i < 3; ++i) for (uint32_t k = 0; k < 5; ++k) re[i][k] = get_arg_val<uint32_t>(a++);
     const uint32_t self_re = get_arg_val<uint32_t>(a++);
@@ -190,7 +203,12 @@ void kernel_main() {
     }
 #endif
 #if defined(MKA_RQNR)   // q/k head-norm cores (independent of MKA_RWO since the GDN24 decouple)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t head_id = 255; a++;   // head cores are owners
 #if defined(MKA_KVA)
+    constexpr uint32_t kva = 0;
+#endif
+#elif defined(MKA_KVA)
     const uint32_t head_kva = get_arg_val<uint32_t>(a++);
 #if defined(MKA_ROLE_STREAM)
     const uint32_t head_id = head_kva & 0xFF;

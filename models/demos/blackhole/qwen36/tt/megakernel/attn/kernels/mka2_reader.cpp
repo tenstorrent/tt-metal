@@ -25,10 +25,13 @@
 #include "wo_unit_dm.hpp"
 #endif
 
+#if defined(MKA_ROLE_STREAM) && defined(MKA_GDN24) && defined(MKA_QSK) && defined(MKA_RWO) && defined(MK_V12) && !defined(MKA_OWNPAR)
+#define MKA_STREAMLEAN 1   // the EXTLEAN pattern on STREAM (RC config): role args every STREAM core shares are constants (program.py asserts them)
+#endif
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR) && MKA_NU >= 4   // u1: one SDPA group spans all 96 cores (owners can be tree receivers)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
 #define MKA_WOT_DIV (wo_tiles ? wo_tiles : 1u)   // folded 0: dead code, but -Werror=div-by-zero
 #else
 #define MKA_WOT_DIV wo_tiles
@@ -68,12 +71,12 @@ void kernel_main() {
     }
     const uint32_t self_rect = get_arg_val<uint32_t>(a++);
     const uint32_t cbh_base = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
     constexpr uint32_t ROOT = 0xFF; a++;
 #else
     const uint32_t ROOT = get_arg_val<uint32_t>(a++);   // 2/3: NOC1 root; else 0xFF
 #endif
-#if defined(MKA_EXTLEAN)
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
     constexpr uint32_t IS_GU = 0; a++;
 #else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
@@ -113,7 +116,7 @@ void kernel_main() {
 #endif
     const uint32_t qr_x = get_arg_val<uint32_t>(a++), qr_y = get_arg_val<uint32_t>(a++);
     // STREAM: layer L's wo slice + the next layer's uncovered qkv bytes stream on NOC1 here (scratch), balancing the NoCs
-#if defined(MKA_EXTLEAN) && defined(MKA_RWO)
+#if (defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)) && defined(MKA_RWO)
     const uint32_t wo_addr = get_arg_val<uint32_t>(a++), wo_page = get_arg_val<uint32_t>(a++);
     constexpr uint32_t wo_tiles = 0, extra_tiles = 0; a += 2;   // RWO: no wo stand-in bytes
 #else
@@ -136,7 +139,10 @@ void kernel_main() {
 #endif
     uint32_t kv_groups = 0;
 #if defined(MKA_RQKV)
-#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t qrole = 1; a++;
+    const uint32_t wq_addr = get_arg_val<uint32_t>(a++);
+#elif defined(MKA_EXTLEAN) && defined(MKA_QSK)
     constexpr uint32_t qrole = 3; a++;
     const uint32_t wq_addr = get_arg_val<uint32_t>(a++);
 #else
@@ -145,13 +151,18 @@ void kernel_main() {
     const uint32_t pq_page = get_arg_val<uint32_t>(a++), pq_layer = get_arg_val<uint32_t>(a++);
     const auto wq = TensorAccessor(wq_args, wq_addr, MWTB);
 #if defined(MKA_RWO)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t rw_nt = 0; a++;   // no wo slice on STREAM
+    const uint32_t rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
+#else
     const uint32_t rw_nt = get_arg_val<uint32_t>(a++), rw_page = get_arg_val<uint32_t>(a++), rw_pl = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t wo_addr2 = get_arg_val<uint32_t>(a++), cc_x = get_arg_val<uint32_t>(a++), cc_y = get_arg_val<uint32_t>(a++);
     // MKA_WOHELP: ext cores read only rw_own pages of their Wo slice; STREAM helpers read the rest into their scratch
     // and forward it into the ext ring (spreads the 8.4 MB DRAM issue over 116 readers, like the stand-in's reads)
     const uint32_t rw_own = get_arg_val<uint32_t>(a++), rw_hlp = get_arg_val<uint32_t>(a++);
     const uint32_t h_x = get_arg_val<uint32_t>(a++), h_y = get_arg_val<uint32_t>(a++), h_page = get_arg_val<uint32_t>(a++);
-#if defined(MKA_EXTLEAN) && defined(MKA_QSK)
+#if (defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)) && defined(MKA_QSK)
     constexpr uint32_t h_np = 0; a++;   // no STREAM helpers under QSK
     const uint32_t h_off = get_arg_val<uint32_t>(a++);
 #else
