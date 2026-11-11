@@ -2167,10 +2167,10 @@ def setup_bench(dev, MESH, mesh_identity):
                         _u[id(t_)] = ttnn.from_torch(torch.zeros(list(t_.shape)).bfloat16(), dtype=t_.dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                     _KV_DECOY.append(_u[id(t_)])
                 print(f"[kva] K / V runtime args -> {len(_u)} decoy caches (MKA_KV_ARGS_DECOY)", flush=True)
-            if LPER: return [_KV_DECOY[L_].buffer_address() for L_ in ATTN_L] + [_KV_DECOY[NL + L_].buffer_address() for L_ in ATTN_L]
+            if LPER: return [_KV_DECOY[L_].buffer_address() for L_ in ATTN_L] + ([_KV_DECOY[NL + L_].buffer_address() for L_ in ATTN_L] if kvvs else [])
             return [t_.buffer_address() for t_ in _KV_DECOY]
         if LPER:   # NL64: by attention ordinal (the kernels index kv_addr[aidx(L)]; GDN-type layers never read KV)
-            return [kvs[L_].buffer_address() for L_ in ATTN_L] + [kvvs[L_].buffer_address() for L_ in ATTN_L]
+            return [kvs[L_].buffer_address() for L_ in ATTN_L] + ([kvvs[L_].buffer_address() for L_ in ATTN_L] if kvvs else [])   # kvvs: MKA_KVPROD only
         return [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs]
     def build(out, coord=None, plan_only=False):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf) if xbuf is not None else cbd(0, ttnn.bfloat16, 1, rect), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
