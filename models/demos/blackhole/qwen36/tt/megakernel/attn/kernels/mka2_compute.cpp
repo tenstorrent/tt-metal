@@ -180,7 +180,7 @@ void kernel_main() {
 #else
     const uint32_t u = get_arg_val<uint32_t>(a++), nblk = get_arg_val<uint32_t>(a++);
 #endif
-#if defined(MKA_EXTLEAN)
+#if (defined(MKA_EXTLEAN) || (defined(MKA_SV) && MKA_SV != 2 && !defined(MKA_RQBAL)))   // MKA_SV 0 / 1: tree leaf (RQBAL: per-pass trees, no fold)
     constexpr uint32_t nrecv = 0, is_root = 0; a += 2;
 #elif defined(MKA_RQBAL)
     uint32_t nrecv = get_arg_val<uint32_t>(a++), is_root = get_arg_val<uint32_t>(a++);
@@ -362,13 +362,20 @@ void kernel_main() {
 #if defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && defined(MK_AR_RSTD_HOST)
     a++;   // the producer's arg (vn) is still passed with the host Σ
 #define MK_RSTD_PART() do {} while (0)
+#elif defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM) && defined(MKA_SV) && MKA_SV != 1
+    a++;   // MKA_SV leaf / parent: not an rstd producer (program.py asserts the variant membership)
+#define MK_RSTD_PART() do {} while (0)
 #elif defined(MK_AR_RSTD) && defined(MKA_ROLE_STREAM)
     // rstd producer (DESIGN v1.7x, STREAM-side): core (n = k, k) turns every K-row x delivery (CB_XK, 20 bf16 tiles) into its
     // per-row Σx² in fp32: transposed copy (X^T, exact to fp32 DST) + SFPU square + SFPU add over the 20 tiles, then SFPU
     // REDUCE_COL (row 0 = Σ_c x[r, c]^2 at column r: already the Σ tile's row format; same reduce instantiation as the consumers)
     // CB_SS -> the writer, which multicasts row 0 as row k of the Σ tile. Runs before the site's hw startup (which re-inits after it).
     const uint32_t vn_c = get_arg_val<uint32_t>(a++);
+#if defined(MKA_SV)
+    constexpr bool rprod = true; (void)vn_c;   // MKA_SV 1: every core of this variant is a producer
+#else
     const bool rprod = vn_c == vk;
+#endif
     auto rstd_part = [&]() __attribute__((noinline)) {
         CZONE("C-RSS");
         cb_wait_front(CB_XK, V_KTR);
