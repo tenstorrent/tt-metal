@@ -35,6 +35,10 @@ def _parts():
     a = s.index("constexpr char llk_pack_init_form[")
     t = s.rindex("constexpr std::uint64_t llk_pack_mm_")
     tables = s[a : s.index("\n};\n", t) + 4]
+    cells_end = "constexpr llk_pack_form_cells_at_t llk_pack_form_cells_at{};\n"
+    if "constexpr std::uint32_t llk_pack_form_cells[]" in s:
+        # the cells decided per fidelity, K and unpack to DEST (pk-limit5 C3) follow the masks
+        tables = s[a : s.index(cells_end) + len(cells_end)]
     cls = _func(s, "constexpr std::uint8_t llk_pack_class_of(")
     cls = _sub(cls, "constexpr std::uint8_t llk_pack_class_of(const std::uint32_t i)", "constexpr std::uint32_t llk_pack_block_class_k(const std::uint32_t rows, const std::uint32_t faces, const std::uint32_t fmt)", 1)
     cls = _sub(cls, "    const std::uint32_t rows = pack_tile_face_r_dim[i];\n", "", 1)
@@ -62,7 +66,11 @@ def _parts():
         form = _sub(form, "llk_pack_dst_is_int8(output_id)", "int8", 1)
     form = _sub(form, "DST_SYNC_MODE == DstSync::SyncFull", "sync_full", 1)
     form = _sub(form, "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;", "const std::uint32_t family = (is_fp32_dest_acc_en && src32) ? 1 : 0;", 1)
-    assert "output_id" not in form and "[i]" not in cls and "llk_pack_matmul_seen" not in form
+    if "llk_pack_form_cells" in form:
+        # family is a plain value here, and the caller's table says whether a CB unpacks to DEST (llk_pack_form_table)
+        form = _sub(form, "constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);",
+                    "const std::uint32_t fam_bit = family == 0 ? 1 : (table == llk_pack_init_form || table == llk_pack_reconf_form || table == llk_pack_next_form ? 4 : 2);", 1)
+    assert "output_id" not in form and "[i]" not in cls and "llk_pack_matmul_seen" not in form and "llk_pack_unpack_to_dest" not in form
     for name in sorted(set(re.findall(r"\bllk_pack_mm_\w+", form))):
         if f"constexpr std::uint64_t {name}[" not in tables:
             raise SystemExit(f"generator out of date: {name} is not among the copied tables")

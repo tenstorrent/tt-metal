@@ -170,11 +170,19 @@ __attribute__((always_inline)) inline void block(
     constexpr bool int8     = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
     constexpr bool src32    = fp32 && key_src32;
     constexpr bool tables32 = src32 && unpack_to_dest; // llk_pack_form_table: the 32 bit input tables only when a CB unpacks to DEST
-    // llk_pack_block: with a constant tile count the forms of the three states fold at compile time, and a block that is T from all of them
-    // is main's loop (no close, no guards)
+    // a count passed as a function argument (pack_block(dst, cb, n)) is main's llk_matmul_pack loop: per tile, its packs invalidate the W base
+    if (!__builtin_constant_p(num_tiles))
+    {
+        state.valid = 0;
+        for (std::uint32_t i = 0; i < num_tiles; i++)
+        {
+            _llk_pack_<sync, fp32, ckernel::PackMode::Default>(tile_index + i, tile_address(tile_addr, address, page, i));
+        }
+        return;
+    }
+    // pack_block<ntiles>: the forms of the three states fold at compile time; a block that is T from all of them is main's loop (no close, no guards)
     const std::uint32_t forms = folded_forms<sync, fp32, out_format>(num_tiles);
-    // a count known only at run time packs per tile, as main
-    if (forms == 1 || !__builtin_constant_p(num_tiles))
+    if (forms == 1)
     {
         state.last = 1;
         for (std::uint32_t i = 0; i < num_tiles; i++)

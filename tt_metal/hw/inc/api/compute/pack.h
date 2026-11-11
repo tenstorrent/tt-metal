@@ -117,10 +117,11 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
- * NOTE: On Blackhole the block is one packer program run where the layout allows. After a tilize, untilize or pack rows
- * init, while the packer accumulates in L1 under half sync, and for a tile count known only at run time, it packs tile by tile, as before.
+ * NOTE: On Blackhole pack_block<ntiles>(ifrom_dst, icb), with the count as a template argument, packs the block as one packer program run
+ * where the layout allows; after a tilize, untilize or pack rows init, and while the packer accumulates in L1 under half sync, it packs
+ * tile by tile. With the count as a function argument pack_block packs tile by tile, as before.
  *
- * NOTE: On Blackhole a matmul kernel passes the K tiles of its output block as the second template argument (pack_block<DST_ACCUM_MODE, K>), which picks the forms behind matmul math for that K.
+ * NOTE: On Blackhole a matmul kernel passes the K tiles of its output block as the third template argument (pack_block<ntiles, DST_ACCUM_MODE, K>), which picks the forms behind matmul math for that K.
  * Pass it only where the block packs right behind the matmul math. Without it the forms behind matmul math apply while the last FPU op init was
  * a matmul init (an SFPU init does not count), for any K; after a pack-thread SFPU init, the forms that also read no slower behind that SFPU tail.
  *
@@ -136,8 +137,19 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
 ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
+#if defined(ARCH_QUASAR)
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#endif
+}
+
+// pack_block with the tile count as a template argument (pack_block<ntiles>(ifrom_dst, icb)): the same effect, and on Blackhole the block forms.
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb) {
+    LLK_SAN_FUNCTION();
 #if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_block<is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb, ntiles)));
+    PACK((llk_pack_block<ntiles, is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb)));
 #elif defined(ARCH_QUASAR)
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #else
@@ -146,26 +158,35 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
 }
 
 /**
- * Full sync only: issues the destination words of the next block pack ahead of `tile_regs_wait`; same arguments as `pack_block`.
- * Call it after the output reserve, then `pack_block_prepared` with the same arguments and no other pack in between.
+ * Full sync only: issues the destination words of the next block pack ahead of `tile_regs_wait`; same arguments as `pack_block<ntiles>`.
+ * Call it after the output reserve, then `pack_block_prepared<ntiles>` with the same arguments and no other pack in between.
  */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
-ALWI void pack_block_prepare(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_prepare(std::uint32_t ifrom_dst, std::uint32_t icb) {
 #if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_block_prepare<is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb, ntiles)));
+    PACK((llk_pack_block_prepare<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb)));
 #endif
 }
 
 /**
- * `pack_block` after `pack_block_prepare` of the same block.
+ * `pack_block<ntiles>` after `pack_block_prepare<ntiles>` of the same block.
  */
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_prepared(std::uint32_t ifrom_dst, std::uint32_t icb) {
+#if defined(ARCH_BLACKHOLE)
+    PACK((llk_pack_block_prepared<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb)));
+#else
+    pack_block<ntiles, is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb);
+#endif
+}
+
+// With the count as a function argument, as pack_block: nothing to issue early, and the pack is main's loop.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_prepare(std::uint32_t, std::uint32_t, std::uint32_t) {}
+
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
 ALWI void pack_block_prepared(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
-#if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_block_prepared<is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb, ntiles)));
-#else
     pack_block<is_fp32_dest_acc_en, matmul_kt>(ifrom_dst, icb, ntiles);
-#endif
 }
 
 // clang-format off
@@ -184,12 +205,23 @@ ALWI void pack_block_prepared(std::uint32_t ifrom_dst, std::uint32_t icb, std::u
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
 ALWI void pack_block_mop(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
+#if defined(ARCH_QUASAR)
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#endif
+}
+
+// pack_block_mop with the tile count as a template argument; on Blackhole the block forms.
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t matmul_kt = 0>
+ALWI void pack_block_mop(std::uint32_t ifrom_dst, std::uint32_t icb) {
+    LLK_SAN_FUNCTION();
 #if defined(ARCH_BLACKHOLE)
     // A single tile reads slower through the block path than through pack_tile.
-    if (ntiles == 1) {
+    if constexpr (ntiles == 1) {
         PACK((llk_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, 0)));
     } else {
-        PACK((llk_pack_block<is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb, ntiles)));
+        PACK((llk_pack_block<ntiles, is_fp32_dest_acc_en, false, matmul_kt>(ifrom_dst, icb)));
     }
 #elif defined(ARCH_QUASAR)
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));

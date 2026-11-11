@@ -19,7 +19,7 @@ constexpr char llk_pack_init_form[12][4][17] = {
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 4x32
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 1x32
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp8_b, Bfp8
-    {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
+    {"TTBBBBBBBBBBBBBB", "TTBTBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"},  // Bfp4_b, Bfp2_b
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TTBTBTTTTTTTTTTT"},  // Bfp4, Bfp2
     {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other 4 byte datums
     {"TBBBBBBBBBBBBBBB", "TBBTTTTTTTTTTTTT", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // other plain formats
@@ -47,7 +47,7 @@ constexpr char llk_pack_next_form[12][4][17] = {
     {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBBBBBBBBBB"},  // tile 4x32
     {"TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWBBBWWBBBBBBBB", "TWWBBBBWWWWWWWWW"},  // tile 1x32
     {"TWBBBBWWWWWWWWWW", "TBWTTTTTTTTTTTTT", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp8_b, Bfp8
-    {"TWBBWWWWWWWWWWWW", "TBBBBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TBWWWWWWWWWWWWWW"},  // Bfp4_b, Bfp2_b
+    {"TWBBWWWWWWWWWWWW", "TBBTBBBBBBBBBBBB", "TWWWWWWWWWWWWWWW", "TBWWWWWWWWWWWWWW"},  // Bfp4_b, Bfp2_b
     {"TWBBWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW", "TWWWWWWWWWWWWWWW"},  // Bfp4, Bfp2
     {"BWWWBBBBBBBBBBBB", "TBWBBBBBBBBBBBBB", "BWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other 4 byte datums
     {"BBBWWWWWWWWWWWWW", "TBWWWWWWWWWWWWWW", "BBBWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // other plain formats
@@ -122,7 +122,7 @@ constexpr std::uint64_t llk_pack_mm_no_block[2][6][3][12] = {
         {  // HiFi
             {0x00020002000E00FE, 0x00020002000A00AA, 0x00020002000A00EA, 0x00020002000E00CE, 0x00020002000E00EE, 0x001E000E000E00FE, 0x000E000600060066, 0x00160006000E0066, 0x00000003000000E5, 0x0003000100070081, 0x0003000100070087, 0x00000003000000E5},  // init
             {0x00020002000E00FE, 0x00020002000A00EA, 0x00020002000A00EA, 0x00020002000E00CE, 0x00020002000E00EE, 0x00060002000E00FE, 0x00020002000E00FE, 0x000200020002007E, 0x000000000000007F, 0x00010000000F00F1, 0x00010000000F00FF, 0x000000000000007F},  // reconfigure
-            {0x00000000000E00FE, 0x00000000000E00AE, 0x00000000000A00EA, 0x00000000000E00DE, 0x00000000000E00FE, 0x00020002000A007A, 0x00020002000E002E, 0x00020002000E002E, 0x00000001000000FF, 0x0001000100070073, 0x0001000100070077, 0x00000001000000FF},  // next
+            {0x00000000000E00FE, 0x00000000000E00BE, 0x00000000000A00FA, 0x00000000000E00DE, 0x00000000000E00FE, 0x00020002000A007A, 0x00020002000E002E, 0x00020002000E002E, 0x00000001000000FF, 0x0001000100070073, 0x0001000100070077, 0x00000001000000FF},  // next
         },
         {  // LoFi, no matmul init
             {0x0002000200020002, 0x0002000200020002, 0x0002000200020002, 0x0002000200020002, 0x0002000200020002, 0x00020002000A00AA, 0x0002000200020002, 0x0016000200060002, 0x0000000100000081, 0x00010001000100A1, 0x00010001000100A1, 0x0000000100000081},  // init
@@ -188,7 +188,7 @@ constexpr std::uint64_t llk_pack_mm_no_w[2][6][3][12] = {
         {  // HiFi
             {0x00020002000E00EE, 0x00020002000E00AE, 0x00020002000A00EA, 0x00020002000E00CE, 0x00020002000E00AE, 0x001E000E000E00FE, 0x000E000600060066, 0x00160006000E0066, 0x00000003000000E5, 0x0003000100030083, 0x0003000100030087, 0x00000003000000E5},  // init
             {0x00020002000E00EE, 0x00020002000E00EE, 0x00020002000A00EA, 0x00020002000E00CE, 0x00020002000E00AE, 0x00060002000A00EA, 0x00020002000200E6, 0x0002000200020066, 0x000000000000007D, 0x00010000000300F3, 0x00010000000300F7, 0x000000000000007D},  // reconfigure
-            {0x00060002000E00EE, 0x00040000000E00AE, 0x00060042000E00EE, 0x00060006000E00DE, 0x00060006000E00BE, 0x00020002000E00FE, 0x00020002000E002E, 0x00000002000E002E, 0x00000001000000FF, 0x00010001000F000F, 0x00010001000F001F, 0x00000001000000FF},  // next
+            {0x00060002000E00EE, 0x00040000000E00AE, 0x00060042000E00FE, 0x00060006000E00DE, 0x00060006000E00BE, 0x00020002000E00FE, 0x00020002000E002E, 0x00000002000E002E, 0x00000001000000FF, 0x00010001000F000F, 0x00010001000F001F, 0x00000001000000FF},  // next
         },
         {  // LoFi, no matmul init
             {0x0002000200020002, 0x0002000200020002, 0x0002000200020002, 0x0002000200020002, 0x0002000200020002, 0x00020002000A00AA, 0x0002000200020002, 0x0016000200060002, 0x0000000100000001, 0x00010001000100A1, 0x00010001000100A1, 0x0000000100000081},  // init
@@ -409,6 +409,36 @@ constexpr std::uint64_t llk_pack_mm_tail_no_w[2][4][3][12] = {
     },
 };
 
+// Cells decided finer than the mask groups: per fidelity, per matmul K, and, for a 32 bit input CB with a 32 bit DEST, per whether a CB unpacks to
+// DEST. One word per cell, the last matching word wins: bits 0-2 the family (datacopy, 32 bit input to SrcA, 32 bit input to DEST), 3-6 the fidelity
+// (LoFi, HiFi2, HiFi3, HiFi4), 7-12 the K (not given, 1, 2, 4, 8, other), 13-15 the context, as masks; 16-17 the state, 18-21 the row, 22-23 the column,
+// 24-27 the tile count - 1, 28-29 the form (0 per tile, 1 block, 2 W offset). Sorted by state and row; read at compile time only, like the masks.
+constexpr std::uint32_t llk_pack_form_cells[] = {
+    0x070020F9, 0x01C420FA, 0x070420F9, 0x07082089, 0x070C20F9, 0x071020F9, 0x035C2089, 0x13DC20FC, 0x15DC20FC, 0x032820F1, 0x032C2089, 0x010120F9,
+    0x014120F9, 0x010520F9, 0x014520FF, 0x010920F9, 0x014920FB, 0x010D20F9, 0x014D20FF, 0x11CD208A, 0x011120F9, 0x015120FF, 0x11D120C2, 0x00E120FC,
+    0x00A520F9, 0x00A920F1, 0x032920F1, 0x00AD20F9, 0x00ED20FE, 0x00EDC0FC, 0x032D2089, 0x010220F9, 0x014220FB, 0x030220F9, 0x034220FB, 0x12426411,
+    0x128220F9, 0x134220FC, 0x010620F9, 0x014620FB, 0x028620B9, 0x030620F9, 0x034620FB, 0x11C6660A, 0x124620FC, 0x128620C1, 0x170620C1, 0x010A20F9,
+    0x014A20FB, 0x020A20C1, 0x024A20C1, 0x028A2089, 0x030A20F9, 0x034A20FB, 0x124A6812, 0x010E20F9, 0x014E20FB, 0x030E20F9, 0x034E20FB, 0x114E6422,
+    0x124E6812, 0x134E20FC, 0x134E6E42, 0x150E20C1, 0x160E20C1, 0x011220F9, 0x015220FB, 0x031220F9, 0x035220FB, 0x135220FC, 0x035620F1, 0x031A2089,
+    0x035A2089, 0x11DA20FC, 0x125A20F4, 0x135A20FC, 0x031E2089, 0x115E20FC, 0x11DE20FC, 0x125E208A, 0x016A208A, 0x032A20F9, 0x036A20F9, 0x032E2089,
+    0x116E20B2
+};
+// First word of each state and row in llk_pack_form_cells (state * 12 + row), so a form looks at its own cells only.
+struct llk_pack_form_cells_at_t {
+    std::uint16_t at[3 * 12 + 1];
+    constexpr llk_pack_form_cells_at_t() : at() {
+        constexpr std::uint32_t n = sizeof(llk_pack_form_cells) / sizeof(llk_pack_form_cells[0]);
+        std::uint32_t i = 0;
+        for (std::uint32_t b = 0; b <= 3 * 12; b++) {
+            while (i < n && llk_pack_form_cells[i] != 0 && ((llk_pack_form_cells[i] >> 16) & 3) * 12 + ((llk_pack_form_cells[i] >> 18) & 15) < b) {
+                i++;
+            }
+            at[b] = static_cast<std::uint16_t>(i);
+        }
+    }
+};
+constexpr llk_pack_form_cells_at_t llk_pack_form_cells_at{};
+
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const std::uint32_t state, const bool sync_full, const bool src32, const bool int8, const std::uint32_t ctx) {
     if (!is_fp32_dest_acc_en && int8) {
@@ -441,6 +471,16 @@ constexpr char llk_pack_block_form_k(const std::uint32_t row, const std::uint32_
         }
         if (state == 2 && out == 'T' && (((llk_pack_mm_take_b[family][group - 1][row] & ~tail_b) >> bit) & 1) != 0) {
             out = 'B';
+        }
+    }
+    const std::uint32_t fam_bit = family == 0 ? 1 : (table == llk_pack_init_form || table == llk_pack_reconf_form || table == llk_pack_next_form ? 4 : 2);
+    constexpr std::uint32_t fid_bit = MATH_FIDELITY == MathFidelity::LoFi ? 1 : (MATH_FIDELITY == MathFidelity::HiFi2 ? 2 : (MATH_FIDELITY == MathFidelity::HiFi3 ? 4 : 8));
+    constexpr std::uint32_t k_bit = matmul_kt == 0 ? 1 : (matmul_kt == 1 ? 2 : (matmul_kt == 2 ? 4 : (matmul_kt == 4 ? 8 : (matmul_kt == 8 ? 16 : 32))));
+    const std::uint32_t cell = (state << 16) | (row << 18) | (column << 22) | (count << 24);
+    for (std::uint32_t i = llk_pack_form_cells_at.at[state * 12 + row]; i < llk_pack_form_cells_at.at[state * 12 + row + 1]; i++) {
+        const std::uint32_t e = llk_pack_form_cells[i];
+        if ((e & fam_bit) != 0 && ((e >> 3) & fid_bit) != 0 && ((e >> 7) & k_bit) != 0 && ((e >> 13) & (1u << ctx)) != 0 && (e & 0x0FFF0000u) == cell) {
+            out = "TBW"[(e >> 28) & 3];
         }
     }
     return out;
