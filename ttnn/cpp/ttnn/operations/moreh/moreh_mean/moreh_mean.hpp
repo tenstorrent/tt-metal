@@ -13,7 +13,7 @@
 
 namespace ttnn {
 
-// Deprecated: use ttnn::mean. Note that with keepdim=false, moreh_mean keeps reduced H/W axes as size 1.
+[[deprecated("moreh_mean is deprecated and will be removed after 2026-12-11. Use ttnn::mean instead.")]]
 Tensor moreh_mean(
     const Tensor& input,
     const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim = std::nullopt,
