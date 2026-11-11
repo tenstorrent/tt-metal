@@ -605,8 +605,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'static volatile tt_l1_ptr uint32_t* g_ab;\nuint32_t gdn_rt_B() {{ return g_ab[{OC + 3}]; }}\n'
         f'void kernel_main() {{\n  g_ab = {AB};\n'
         + ('  g_sp_pending = 0;\n' if sp_late else '')
-        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{ compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
-        f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '') + '  }\n'
+        + f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    compute<{Kt}, {Vt}, {T}, {K}, 0, {bits(scale)}u, {bits(1.0 / (Vt * 32))}u, {VB}>('
+        f'g_ab[{OC}], g_ab[{OC + 1}], g_ab[{OC + 2}]);\n' + (go_c if GO else '')
+        + '  // @@GDN_LAYER_BODY_END@@ (engine host splices: exactly once)\n  }\n'
         + ('  gdn_sp_drain();\n' if sp_late else '') + '}\n')
     pre_w = Nv * pre_s
     common = [("GDN_RT_BM", "1"), ("GDN_BATCH", "1")]
