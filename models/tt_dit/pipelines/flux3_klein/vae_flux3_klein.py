@@ -8,6 +8,7 @@ serves every shape (a Conv2d keeps its prepared weights per input shape); their 
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import torch
 import ttnn
 
 from ...layers.conv2d import Conv2d, configure_conv2d
+from ...layers.normalization import GroupNorm
 from ...models.vae.vae import VaeAttention
 from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import Flux2VaeParallelConfig
@@ -72,6 +74,48 @@ def _auto_conv_slicing(module, mesh_shape: tuple[int, ...]) -> None:
         module.slice_params = {**Conv2d.slice_params, mesh_shape: {}}
     for _, child in module.named_children():
         _auto_conv_slicing(child, mesh_shape)
+
+
+# Tile rows per ttnn.group_norm output block on a core. The op's auto heuristic keeps a whole per-core block when the
+# input is small for its grid (1600x912 references at the second down level: 95 rows on 60 cores, ~1.3 MB of static
+# CBs), which collides with the pipeline's resident L1 allocations. Larger blocks are split; smaller ones keep the auto
+# choice, so the common shapes run exactly as before.
+GROUP_NORM_MAX_BLOCK_ROWS = 64
+
+
+def group_norm_out_blocks(norm: GroupNorm, batch: int, spatial: int, channels: int) -> int:
+    """num_out_blocks for ``norm`` on a [batch, spatial, channels] input: -1 (the op's auto choice) unless that leaves
+    more than GROUP_NORM_MAX_BLOCK_ROWS tile rows per block, else the smallest divisor of the per-core block height
+    that does not."""
+    grid = norm._op_core_grid(batch, spatial)
+    virtual_rows = (grid.x // norm.num_virtual_cols) * grid.y
+    block_h = batch * math.ceil(spatial / ttnn.TILE_SIZE) // virtual_rows
+    # groupnorm_heuristic_num_out_blocks (groupnorm_program_utils.cpp): a power of two >= volume / (256^2 * cores)
+    target = max(
+        1, spatial * channels // (256 * 256 * (grid.x // norm.num_virtual_cols) * norm.num_virtual_cols * grid.y)
+    )
+    auto = 1
+    while auto < target and auto < 256:
+        auto <<= 1
+    if block_h <= GROUP_NORM_MAX_BLOCK_ROWS * auto:
+        return -1
+    low = max(auto, -(-block_h // GROUP_NORM_MAX_BLOCK_ROWS))
+    return next(d for d in range(low, block_h + 1) if block_h % d == 0)
+
+
+def _bounded_group_norm_blocks(module) -> None:
+    if isinstance(module, GroupNorm):
+        forward = module.forward
+
+        def bounded(x, num_out_blocks=-1, compute_kernel_config=None, _forward=forward, _norm=module):
+            if num_out_blocks == -1:
+                batch, height, width, channels = x.shape
+                num_out_blocks = group_norm_out_blocks(_norm, batch, height * width, channels)
+            return _forward(x, num_out_blocks=num_out_blocks, compute_kernel_config=compute_kernel_config)
+
+        module.forward = bounded
+    for _, child in module.named_children():
+        _bounded_group_norm_blocks(child)
 
 
 def _local_query_attention(module) -> None:
@@ -142,6 +186,7 @@ class Flux3KleinVae:
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
         self._encoder = Flux2VaeEncoder(parallel_config=encoder_parallel, **common)
         _auto_conv_slicing(self._encoder, mesh_shape)
+        _bounded_group_norm_blocks(self._encoder)
         load(self._encoder, encoder_parallel, "vae_encoder_main")
 
         # the latent BatchNorm main's encoder leaves to its caller (as pipeline_flux2.py does)
