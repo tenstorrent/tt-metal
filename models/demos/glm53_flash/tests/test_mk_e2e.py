@@ -149,25 +149,22 @@ def test_mk_e2e(mesh_device, monkeypatch):
         sp = SamplingParams(temperature=temp, top_k=top_k or None, top_p=float(os.environ.get("GLM53_MK_TOP_P", "0.95")),
                             seed=int(os.environ.get("GLM53_MK_SEED", "1234")))  # fmt: skip
         sampling, stop = [sp] * live, False
-    # TTFT: prefill of every user + the first token (the generator's prefill chunks + one sampler step)
-    t0 = time.perf_counter()
-    first = gen.generate_batch(prompts, 1, sampling=sampling, stop_on_eos=stop, enable_trace=True)
-    ttnn.synchronize_device(mesh_device)
-    ttft_s = time.perf_counter() - t0
-    gen.reset()
-    t0 = time.perf_counter()
+    # one call: TTFT = prefill of every user + its first token, decode = the rest (the generator splits its wall at the
+    # first predictions: last_batch_timing). A separate TTFT call and decode = (second call - TTFT) / (OSL - 1) put the
+    # difference of two prefills into every step: at 1 M context ~0.05 % of a 46 min prefill is ~20 ms per step
     outs = gen.generate_batch(prompts, OSL, sampling=sampling, stop_on_eos=stop, enable_trace=True)
     ttnn.synchronize_device(mesh_device)
-    total_s = time.perf_counter() - t0
+    timing = gen.last_batch_timing
     n_gen = max(len(o) for o in outs)
-    step_ms = (total_s - ttft_s) / max(1, n_gen - 1) * 1e3
+    ttft_s = timing["prefill_s"]
+    step_ms = timing["decode_s"] / max(1, timing["decode_steps"]) * 1e3
     same = all(o == outs[0] for o in outs)
     text = tok.decode([t for t in outs[0] if 0 <= t < tok.vocab_size])
     logger.info(
         f"MK_E2E: mesh {MESH} {len(layers)} layers B {B} live {live} spec_k {os.environ.get('GLM53_SPEC_K', '0')} "
         f"ISL {len(ids)} OSL {OSL}: TTFT {ttft_s * 1e3:.0f} ms "
         f"(all {live} users), decode {step_ms:.1f} ms/step = {1e3 / step_ms:.1f} tok/s/u, generated {n_gen}, "
-        f"users agree {same}, first {first[0][:1]} ids {outs[0][:24]}"
+        f"users agree {same}, first {outs[0][:1]} ids {outs[0][:24]}"
     )
     logger.info(f"MK_E2E_TEXT: {text!r}")
     logger.info(f"MK_E2E counters: {gen.counters_report()}")

@@ -2377,6 +2377,12 @@ class Glm53Generator(_ReadinessGenerator):
         b = self._own_binding()
         if not (b.prepared_prefill and b.prepared_decode) or (enable_trace and not b.decode_traces):
             self.warmup(capture=enable_trace)
+        # last_batch_timing: host wall of this call split at the first predictions (every prompt prefilled and its
+        # first token read back) -> prefill_s = time to the first token of every user, decode_s / decode_steps = the
+        # decode step, both from one call (no second prefill to subtract: at 1 M context a 0.05 % difference between
+        # two prefills is ~20 ms per step)
+        t_start = _time.perf_counter()
+        self.last_batch_timing = None
         slots = list(slots) if slots is not None else list(range(n))
         if len(slots) != n or len(set(slots)) != n or any(not 0 <= s < b.max_batch for s in slots):
             raise ValueError(f"need {n} distinct slots in [0, {b.max_batch})")
@@ -2419,6 +2425,7 @@ class Glm53Generator(_ReadinessGenerator):
                 else:
                     p0 = self._prefill_user(b, s, ids, sample=params[i])
                 self._emit(b, s, outputs[i], p0, next_input, user_of, feed)
+            t_first = _time.perf_counter()
             # ---- decode loop: replay decode + sampler; refresh only scheduler changes and forced tokens.
             # Look-ahead (device sampling, no teacher forcing): step i + 1 is enqueued BEFORE step i's tokens are
             # collected, so the device never waits for the host read-back / loop between steps (every row keeps
@@ -2480,6 +2487,8 @@ class Glm53Generator(_ReadinessGenerator):
                     self._emit(b, s, outputs[user_of[s]], int(sampled[s]), next_input, user_of, feed)
             if inflight is not None:
                 collect(settled=True)  # the last step ahead (its rows stopped meanwhile: nothing emitted)
+            self.last_batch_timing = {"prefill_s": t_first - t_start, "decode_s": _time.perf_counter() - t_first,
+                                      "decode_steps": max(len(o) for o in outputs) - 1}  # fmt: skip
         finally:
             for s in slots:
                 b.slots[s].active = False
