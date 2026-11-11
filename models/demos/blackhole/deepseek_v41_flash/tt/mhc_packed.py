@@ -14,6 +14,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_glue
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import _acc, _cb, _hash, _kernel
 
 f32, bf16 = ttnn.float32, ttnn.bfloat16
@@ -130,12 +131,16 @@ def pk_comb(x, cta, ctb, y=None, y2=None, nout=4, out_dtype=f32, max_cores=None)
         crt[cx][cy] = [cs]
     CB_I, CB_CT, CB_X, CB_Y, CB_Y2, CB_D, CB_O = range(7)
     NC = NCA + NCB
+    YT = (
+        2048 if (y is not None and y.dtype == bf16) else TILE
+    )  # bf16 y / y2 operands (T19 DSV41_PF_GLUE_TC) are read as bf16 tiles
+    Y2T = 2048 if (y2 is not None and y2.dtype == bf16) else TILE
     cbs = [
         _cb(core_set, CB_I, 1, TILE, f32),
         _cb(core_set, CB_CT, NC, TILE, f32),
         _cb(core_set, CB_X, 8 * BLK, TILE, f32),
-        _cb(core_set, CB_Y, 2 * BLK, TILE, f32),
-        _cb(core_set, CB_Y2, 2 * BLK, TILE, f32),
+        _cb(core_set, CB_Y, 2 * BLK, YT, y.dtype if y is not None else f32),
+        _cb(core_set, CB_Y2, 2 * BLK, Y2T, y2.dtype if y2 is not None else f32),
         _cb(core_set, CB_D, NC, TILE, f32),
         _cb(core_set, CB_O, 2 * max(nout, 1), otile, out_dtype),
     ]
@@ -150,7 +155,8 @@ def pk_comb(x, cta, ctb, y=None, y2=None, nout=4, out_dtype=f32, max_cores=None)
         + _acc(cta)
         + _acc(btt)
         + _acc(yt)
-        + _acc(y2t),
+        + _acc(y2t)
+        + [YT, Y2T],
         rt,
         None,
         ttnn.ReaderConfigDescriptor(),
@@ -198,6 +204,9 @@ def pk_comb(x, cta, ctb, y=None, y2=None, nout=4, out_dtype=f32, max_cores=None)
         tuple(_acc(yt)),
         tuple(_acc(y2t)),
         tuple(_acc(out)),
+        YT,
+        Y2T,
+        2,  # kernel revision (T19: matmul operand order of the SrcA reconfig)
     )
     ttnn.generic_op([x, cta, btt, yt, y2t, out], prog)
     return out
@@ -252,12 +261,16 @@ class PackedMHC:
         N = int(x.shape[-2])
         part = pk_proj(x, self.wt, self.ncol)
         R = N // 32
-        mu = ttnn.sum(part, dim=1, keepdim=False)  # [R,32,32]
-        mu = ttnn.reshape(mu, [1, 1, N, 32])
-        ss = ttnn.matmul(mu, self.sel_ss, compute_kernel_config=self.ckc)  # every column = sum of squares
-        rs = ttnn.rsqrt(ttnn.add(ttnn.multiply(ss, 1.0 / (self.n * self.C)), self.w.norm_eps))
-        mixes = ttnn.multiply(mu, rs)
-        ttnn.deallocate(ss), ttnn.deallocate(rs), ttnn.deallocate(mu), ttnn.deallocate(part)
+        if pf_glue.on("DSV41_PF_GLUE_MIX"):  # T19: the whole chain below in one program (tt/pf_glue.py pk_mix)
+            mixes = pf_glue.pk_mix(part, self.ncol, 1.0 / (self.n * self.C), self.w.norm_eps)
+            ttnn.deallocate(part)
+        else:
+            mu = ttnn.sum(part, dim=1, keepdim=False)  # [R,32,32]
+            mu = ttnn.reshape(mu, [1, 1, N, 32])
+            ss = ttnn.matmul(mu, self.sel_ss, compute_kernel_config=self.ckc)  # every column = sum of squares
+            rs = ttnn.rsqrt(ttnn.add(ttnn.multiply(ss, 1.0 / (self.n * self.C)), self.w.norm_eps))
+            mixes = ttnn.multiply(mu, rs)
+            ttnn.deallocate(ss), ttnn.deallocate(rs), ttnn.deallocate(mu), ttnn.deallocate(part)
         pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
             mixes, self.w.consts, self.n, self.w.iters, self.w.eps
         )
@@ -283,6 +296,15 @@ class PackedMHC:
 
     def collapse_norm(self, x, pre, w, eps):
         """bf16 [1,1,N,C] = rms_norm(bf16(collapse), weight=w) (w: [1,1,1,C] fp32 tile row)."""
+        if pf_glue.on(
+            "DSV41_PF_GLUE_NORM"
+        ):  # T19: collapse + per-core sum of squares, then one multi-core norm program
+            ct = self.coefs_pre(pre)
+            h, part, _ = pf_glue.pk_collapse_sq(x, ct)
+            ttnn.deallocate(ct)
+            o = pf_glue.pk_norm(h, part, w, eps)
+            ttnn.deallocate(h), ttnn.deallocate(part)
+            return o
         h = self.collapse(x, pre)
         o = ttnn.rms_norm(h, epsilon=eps, weight=w, compute_kernel_config=self.norm_ckc)
         ttnn.deallocate(h)

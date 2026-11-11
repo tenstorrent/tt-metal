@@ -64,18 +64,19 @@ void kernel_main() {
         for (uint32_t ci = 0; ci < BLK; ++ci) {
             for (uint32_t j = 0; j < NOUT; ++j) {
                 tile_regs_acquire();
-                reconfig_data_format(cb_d, cb_x);
+                reconfig_data_format(
+                    cb_x, cb_d);  // matmul: in1 (x / y / y2) is the SrcA operand (T19: y / y2 may be bf16)
                 matmul_init(cb_d, cb_x);
                 for (uint32_t i = 0; i < 4; ++i) {
                     matmul_tiles(cb_d, cb_x, (NOUT == 4) ? (i * 4 + j) : i, ci * 4 + i, 0);
                 }
                 if constexpr (HAS_Y) {
-                    reconfig_data_format(cb_d, cb_y);
+                    reconfig_data_format(cb_y, cb_d);
                     matmul_init(cb_d, cb_y);
                     matmul_tiles(cb_d, cb_y, NCA + j, ci, 0);
                 }
                 if constexpr (HAS_Y2) {
-                    reconfig_data_format(cb_d, cb_y2);
+                    reconfig_data_format(cb_y2, cb_d);
                     matmul_init(cb_d, cb_y2);
                     matmul_tiles(cb_d, cb_y2, NCA + j, ci, 0);
                 }

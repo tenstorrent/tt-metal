@@ -27,6 +27,10 @@ void kernel_main() {
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto y_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     constexpr auto y2_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
+    constexpr uint32_t YT = get_compile_time_arg_val(
+        y2_args.next_compile_time_args_offset());  // bytes of a y tile (4096 fp32; 2048 bf16: DSV41_PF_GLUE_TC)
+    constexpr uint32_t Y2T =
+        get_compile_time_arg_val(y2_args.next_compile_time_args_offset() + 1);  // bytes of a y2 tile
     constexpr uint32_t TILE = 4096;
     constexpr uint32_t XT = 4 * CT;
 
@@ -43,8 +47,8 @@ void kernel_main() {
     const auto x_acc = TensorAccessor(x_args, x_addr, TILE);
     const auto a_acc = TensorAccessor(a_args, a_addr, TILE);
     const auto b_acc = TensorAccessor(b_args, b_addr, TILE);
-    const auto y_acc = TensorAccessor(y_args, y_addr, TILE);
-    const auto y2_acc = TensorAccessor(y2_args, y2_addr, TILE);
+    const auto y_acc = TensorAccessor(y_args, y_addr, YT);
+    const auto y2_acc = TensorAccessor(y2_args, y2_addr, Y2T);
     experimental::CB cbi(cb_i), cbct(cb_ct), cbx(cb_x), cby(cb_y), cby2(cb_y2);
 
     // identity tile: diagonal entry (k,k) lives in face (k>=16 ? 3 : 0)
@@ -90,12 +94,11 @@ void kernel_main() {
                     {.offset_bytes = (ci * 4 + i) * TILE});
             }
             if constexpr (HAS_Y) {
-                noc.async_read(
-                    y_acc, cby, TILE, {.page_id = r * CT + c, .offset_bytes = 0}, {.offset_bytes = ci * TILE});
+                noc.async_read(y_acc, cby, YT, {.page_id = r * CT + c, .offset_bytes = 0}, {.offset_bytes = ci * YT});
             }
             if constexpr (HAS_Y2) {
                 noc.async_read(
-                    y2_acc, cby2, TILE, {.page_id = r * CT + c, .offset_bytes = 0}, {.offset_bytes = ci * TILE});
+                    y2_acc, cby2, Y2T, {.page_id = r * CT + c, .offset_bytes = 0}, {.offset_bytes = ci * Y2T});
             }
         }
         noc.async_read_barrier();

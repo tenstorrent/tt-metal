@@ -18,7 +18,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import fuse_attn as FA
-from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_glue, pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
     HEAD_DIM,
     LOCAL_HEADS,
@@ -558,6 +558,21 @@ class DSV41PrefillAttention:
         the columns (the owner of 32-token chunk i of the row is column i % 8)."""
         a, R = self.a, part.shape[2]
         cc = a.ccl
+        if pf_glue.on("DSV41_PF_GLUE_RS") and R > 256 and R % 256 == 0:
+            # T19: ONE reduce_scatter over the batch of 256-row pieces ([R/256,1,256,D], scatter over dim 2) instead of R/256 slice + reduce_scatter pairs and a concat
+            nb = R // 256
+            out = ttnn.experimental.reduce_scatter_minimal_async(
+                ttnn.reshape(part, [nb, 1, 256, part.shape[3]]),
+                dim=2,
+                multi_device_global_semaphore=cc.get_rs_ping_pong_semaphore(),
+                num_links=cc.num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=cc.topology,
+                cluster_axis=1,
+                barrier_semaphore=cc.get_barrier_semaphore(),
+            )
+            ttnn.deallocate(part)
+            return ttnn.reshape(out, [1, 1, R // 8, out.shape[3]])
         outs = []
         for i in range(0, R, 256):
             piece = ttnn.slice(part, [0, 0, i, 0], [1, 1, i + 256, part.shape[3]])
