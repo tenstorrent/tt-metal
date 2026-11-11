@@ -10,6 +10,9 @@
 // (tile layout, R = 32 only; never popped here). Runtime (from rbase): [has_work, num_blocks (= ring), block_tiles (chunk tiles / pseudo-tiles)].
 // The engine runs this in the middle of other phases, so iter() sets its own unpack / pack formats on entry.
 #pragma once
+#ifndef MKAR_NOUNROLL
+#define MKAR_NOUNROLL   // OTEXT: the owner EXT binary defines it as GCC unroll 1 (text); other includers unchanged
+#endif
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -65,13 +68,16 @@ struct Reduce {
                 tile_regs_acquire();
                 // own slot elided (v0.9.19, engine at R = 32): num_blocks = ring - 1 remote slots, pairs (0,1)..(4,5),
                 // then (last remote slot, this device's own partial, read in place from the producer CB MKAR_CB_OWN)
+                MKAR_NOUNROLL
                 for (uint32_t block = 0; block + 1 < num_blocks; block += 2) {
+                    MKAR_NOUNROLL
                     for (uint32_t i = 0; i < n; ++i) {
                         add_tiles(cb_in0, cb_in1, block * block_tiles + p * max_dst_tiles + i,
                                   (block + 1) * block_tiles + p * max_dst_tiles + i, i);
                     }
                 }
                 add_init(cb_in0, own_cb, true);
+                MKAR_NOUNROLL
                 for (uint32_t i = 0; i < n; ++i) {
                     add_tiles(cb_in0, own_cb, (num_blocks - 1) * block_tiles + p * max_dst_tiles + i, p * max_dst_tiles + i, i);
                 }
@@ -82,8 +88,10 @@ struct Reduce {
                     }
                 }
                 tile_regs_acquire();
+                MKAR_NOUNROLL
                 for (uint32_t block = 0; block < num_blocks; block += 2) {
                     if (!(copy_first_block && block == 0)) {
+                        MKAR_NOUNROLL
                         for (uint32_t i = 0; i < n; ++i) {
                             add_tiles(cb_in0, cb_in1, block * block_tiles + p * max_dst_tiles + i,
                                       (block + 1) * block_tiles + p * max_dst_tiles + i, i);
@@ -93,12 +101,14 @@ struct Reduce {
 #endif
                 if constexpr (MKAR_FUSE_RES) {
                     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(MKAR_CB_RES);
+                    MKAR_NOUNROLL
                     for (uint32_t i = 0; i < n; ++i) {
                         add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(MKAR_CB_RES, p * max_dst_tiles + i, i);
                     }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+                MKAR_NOUNROLL
                 for (uint32_t i = 0; i < n; ++i) {
                     pack_tile(i, cb_out0, p * max_dst_tiles + i);
                 }
