@@ -371,6 +371,10 @@
           "additionalProperties": false
         },
         "express_routing": { "type": "boolean" },
+        "express_axis": {
+          "description": "The axis the express links run along. Null when express_routing is false.",
+          "enum": ["y", "x", null]
+        },
         "credit_transport": {
           "description": "Only for meshes on this host.",
           "type": "object",
@@ -390,7 +394,7 @@
           "additionalProperties": { "$ref": "#/$defs/chip" }
         }
       },
-      "required": ["shape", "express_routing", "chips"],
+      "required": ["shape", "express_routing", "express_axis", "chips"],
       "additionalProperties": false
     },
 

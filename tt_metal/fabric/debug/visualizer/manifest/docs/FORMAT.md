@@ -58,7 +58,7 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
   "field_sets": { "F<n>": { erisc<r>: { ... } } },
   "meshes": {
     "M<mesh>": {
-      shape, torus, express_routing, credit_transport,
+      shape, torus, express_routing, express_axis, credit_transport,
       "chips": {
         "C<chip>": {
           mesh_coord, host_rank, physical_chip_id, asic_id, is_local, z_port_role, local_sync,
@@ -252,6 +252,7 @@ these ids, and every block here is named by at least one. To read a router's, ch
 | `shape` | The mesh's extent in each dimension |
 | `torus` | 2D meshes only: `{ y, x }`, whether each axis wraps |
 | `express_routing` | Whether the mesh has express routing |
+| `express_axis` | The axis the express links run along, `"y"` or `"x"`: the router's `FABRIC_EXPRESS_AXIS`. `null` when `express_routing` is false |
 | `credit_transport` | Meshes on this host only: for each VC some router has senders on, `vc<v>: { backing }`. `backing` is `stream_register` or `l1_counter` |
 | `chips` | Every chip in the mesh, by chip id |
 

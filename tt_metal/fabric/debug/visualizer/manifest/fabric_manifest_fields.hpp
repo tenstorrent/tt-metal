@@ -1002,7 +1002,7 @@ inline constexpr auto k_unrecorded_defines = std::to_array<Unrecorded>({
     {"FABRIC_1D_PKT_HDR_EXTENSION_WORDS", k_fabric_wide_define},
     {"FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE", k_fabric_wide_define},
     {"FABRIC_EXPRESS_ENABLED", k_fabric_wide_define},
-    {"FABRIC_EXPRESS_AXIS", k_fabric_wide_define},
+    {"FABRIC_EXPRESS_AXIS", "The mesh records it as express_axis."},
     {"FORCE_WATCHER_OFF", "CreateEthernetKernel adds it when watcher is disabled on Ethernet cores."},
 });
 

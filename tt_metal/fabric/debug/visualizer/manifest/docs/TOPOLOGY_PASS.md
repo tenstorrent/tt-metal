@@ -37,6 +37,7 @@ doesn't work out again something fabric has already decided, so it can't drift f
 | A mesh's `shape` | `mesh_graph.get_mesh_shape()` |
 | A mesh's `torus` (2D only) | `mesh_graph.get_intra_mesh_connectivity()`: the mesh graph connects each mesh from its own fabric type, and gives the corner chip (0, 0) an N edge only when the mesh wraps rows and a W edge only when it wraps columns |
 | A mesh's `express_routing` | `control_plane.express_routing_enabled()` |
+| A mesh's `express_axis` | `control_plane.ring_for_direction(mesh_id, RoutingDirection::Z)->axis_dim`, where 0 is Y and 1 is X, on a mesh with express routing: the same read `FabricContext` makes for `FABRIC_EXPRESS_AXIS` |
 | A mesh's `credit_transport` | The builder context's credit transport plan, for the meshes on this host (`get_local_mesh_id_bindings()`) ([DESCRIBE.md](DESCRIBE.md)) |
 | A mesh's chips, in order | `mesh_graph.get_chip_ids()` |
 | A chip's `mesh_coord` | `mesh_graph.chip_to_coordinate()` |

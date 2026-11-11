@@ -605,6 +605,7 @@ json make_mesh_json(const manifest::Mesh& mesh, FieldsWriter& fields_writer) {
         out["torus"] = std::move(torus);
     }
     out["express_routing"] = mesh.express_routing;
+    out["express_axis"] = mesh.express_axis.has_value() ? json(lower_enum_name(*mesh.express_axis)) : json(nullptr);
     if (mesh.credit_transport.has_value()) {
         out["credit_transport"] = make_credit_transport_json(*mesh.credit_transport);
     }
@@ -1280,6 +1281,13 @@ manifest::Mesh read_mesh(const JsonValueReader& value, MeshId mesh_id, const Fie
             });
         }
         mesh.express_routing = mesh_json.take<bool>("express_routing");
+        const JsonValueReader express_axis = mesh_json.take("express_axis");
+        if (!express_axis.is_null()) {
+            mesh.express_axis = read_enum<Fabric2DAxis>(express_axis);
+        }
+        if (mesh.express_routing != mesh.express_axis.has_value()) {
+            express_axis.fail("must be null exactly when express_routing is false");
+        }
         if (const auto credit_transport = mesh_json.take_optional("credit_transport")) {
             auto& transport = mesh.credit_transport.emplace();
             read_by_vc(*credit_transport, [&transport](uint32_t vc, const JsonValueReader& entry) {

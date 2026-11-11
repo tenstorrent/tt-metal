@@ -430,6 +430,8 @@ struct Mesh {
     // 2D meshes only.
     std::optional<MeshTorus> torus;
     bool express_routing = false;
+    // The axis the express links run along (the router's FABRIC_EXPRESS_AXIS define). Null when express routing is off.
+    std::optional<Fabric2DAxis> express_axis;
     // Each VC's credit transport, for meshes on this host only. VCs no router has senders on are left out.
     std::optional<std::vector<VcCreditTransport>> credit_transport;
     std::vector<Chip> chips;

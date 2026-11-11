@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
@@ -299,6 +300,15 @@ manifest::Chip describe_chip(
     return chip;
 }
 
+// The axis `mesh_id`'s express links run along, or null for a mesh without express routing.
+std::optional<Fabric2DAxis> describe_express_axis(const ControlPlane& control_plane, MeshId mesh_id) {
+    if (!control_plane.express_routing_enabled(mesh_id)) {
+        return std::nullopt;
+    }
+    const AxisRouteTopology* express_rings = control_plane.ring_for_direction(mesh_id, RoutingDirection::Z);
+    return static_cast<Fabric2DAxis>(express_rings->axis_dim);
+}
+
 manifest::Mesh describe_mesh(
     const ControlPlane& control_plane,
     const tt::Cluster& cluster,
@@ -313,6 +323,7 @@ manifest::Mesh describe_mesh(
     }
 
     mesh.torus = describe_mesh_torus(mesh_graph, mesh_id);
+    mesh.express_axis = describe_express_axis(control_plane, mesh_id);
 
     // The builder context plans credits only for the meshes on this host
     const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
