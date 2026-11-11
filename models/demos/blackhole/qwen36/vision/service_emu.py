@@ -72,12 +72,14 @@ class MooncakeWriter:
     says): no segment of its own, a registered pool the encode writes into, one soft-pinned copy per value on the
     requesting prefill host's segment."""
 
-    def __init__(self, master: str, metadata: str, hostname: str, pool_bytes: int, protocol: str = "tcp"):
+    def __init__(
+        self, master: str, metadata: str, hostname: str, pool_bytes: int, protocol: str = "tcp", device: str = ""
+    ):
         from mooncake.store import MooncakeDistributedStore, ReplicateConfig, SoftPinAction
 
         self._ReplicateConfig, self._SoftPinAction = ReplicateConfig, SoftPinAction
         self.client = MooncakeDistributedStore()
-        rc = self.client.setup(hostname, metadata, 0, 16 << 20, protocol, "", master)
+        rc = self.client.setup(hostname, metadata, 0, 16 << 20, protocol, device, master)
         if rc != 0:
             raise RuntimeError(f"Mooncake writer setup failed ({rc}) at {master}")
         self.pool = np.empty(pool_bytes, dtype=np.uint8)
@@ -229,7 +231,8 @@ def worker_main(args):
         warm = [[tuple(int(v) for v in g.split("x"))] for g in args.warm.split(",") if g]
         media.load(mesh, weights, "image", {"trace": True, "warm_grids": warm, "stub_embeddings": args.stub})
         if args.master:
-            store = MooncakeWriter(args.master, args.metadata, f"127.0.0.1:{args.port}", args.pool_mb << 20)
+            store = MooncakeWriter(args.master, args.metadata, f"127.0.0.1:{args.port}", args.pool_mb << 20,
+                                   args.protocol, args.rdma_device)
             pool = store.pool
         else:
             store, pool = DictStore(), None
@@ -367,7 +370,8 @@ def serve_main(args):
                "--index", str(i), "--address", worker_addr, "--weights", args.weights, "--warm", args.warm,
                "--port", str(args.port_base + i), "--pool-mb", str(args.pool_mb)]
         if args.master:
-            cmd += ["--master", args.master, "--metadata", args.metadata]
+            cmd += ["--master", args.master, "--metadata", args.metadata, "--protocol", args.protocol,
+                    "--rdma-device", args.rdma_device]
         if args.stub:
             cmd += ["--stub"]
         log = open(f"{args.log_prefix}w{i}.log", "w")
@@ -440,6 +444,8 @@ def main(argv=None):
     ap.add_argument("--ring-mgd", default=os.environ.get("Q_RING4_MGD", ""))
     ap.add_argument("--log-prefix", default="/tmp/media_svc_")
     ap.add_argument("--batch", action="store_true")
+    ap.add_argument("--protocol", default="tcp")  # MooncakeWriter transport: tcp | rdma
+    ap.add_argument("--rdma-device", default="")  # RDMA device(s) for --protocol rdma ("" = Mooncake picks)
     ap.add_argument("--stub", action="store_true")
     args = ap.parse_args(argv)
     (serve_main if args.role == "serve" else worker_main)(args)
