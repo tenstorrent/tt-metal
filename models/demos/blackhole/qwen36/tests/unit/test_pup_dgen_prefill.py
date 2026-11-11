@@ -57,6 +57,35 @@ def test_config_serving_and_validation():
         PupPrefillConfig(chunk_size=8192, max_seq_len=4096)
     with pytest.raises(ValueError):
         PupPrefillConfig(mlp_fidelity="hifi9")
+    assert DEFAULT_CONFIG.fast and DEFAULT_CONFIG.with_serving(fast=False).fast is False
+    with pytest.raises(ValueError):
+        PupPrefillConfig(fast_buckets=(100,))
+
+
+def test_fast_runtime_system_turn_boundary():
+    """The snapshot boundary: the system turn (through the first <|im_end|>) floored to 128; no snapshot when the
+    turn is shorter than 128 or longer than prefix_max, an image token sits before it, or the tail is < 3 tokens."""
+    from models.demos.blackhole.qwen36.tt.runners.fast_runtime import TtQwen35PupFastPrefillRuntime
+
+    rt = object.__new__(TtQwen35PupFastPrefillRuntime)
+    rt.prefix_end_token, rt.prefix_align, rt.prefix_max, rt.image_token = 7, 128, 1024, 9
+    ids = torch.zeros(1, 900, dtype=torch.int32)
+    ids[0, 600] = 7  # system turn = [0, 601)
+    assert rt._prefix_len(ids) == 512
+    ids2 = ids.clone()
+    ids2[0, 700] = 7  # only the first <|im_end|> counts
+    assert rt._prefix_len(ids2) == 512
+    ids3 = ids.clone()
+    ids3[0, 100] = 9  # an image inside the system turn: no snapshot
+    assert rt._prefix_len(ids3) == 0
+    tail = torch.zeros(1, 513, dtype=torch.int32)
+    tail[0, 511] = 7  # P = 512 leaves a 1-token tail
+    assert rt._prefix_len(tail) == 0
+    short = torch.zeros(1, 300, dtype=torch.int32)
+    short[0, 100] = 7
+    assert rt._prefix_len(short) == 0  # < 128
+    rt.prefix_end_token = None
+    assert rt._prefix_len(ids) == 0
 
 
 @pytest.mark.parametrize(

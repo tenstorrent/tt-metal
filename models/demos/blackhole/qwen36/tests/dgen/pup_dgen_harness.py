@@ -132,12 +132,14 @@ def working_state(rt, slot, L):
             per = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(c)]
             kv.append(torch.stack([x[b0 : b0 + nb, 0].reshape(-1, x.shape[-1])[:L] for x in per]).to(torch.bfloat16))
         out[li] = {"keys": kv[0], "values": kv[1]}
+    scr = m._batched_gdn_scratch.get(1) if hasattr(rt, "dn_list") else None  # fast runtime: the group scratch
     for li in rt.gdn_layer_ids:
         dn = m.layers[li].attention
-        rec = torch.cat([ttnn.to_torch(x)[0] for x in ttnn.get_device_tensors(dn.rec_state)], 0).float()
+        rec_t, conv_t = (scr[id(dn)].rec, scr[id(dn)].conv) if scr is not None else (dn.rec_state, dn.conv_states)
+        rec = torch.cat([ttnn.to_torch(x)[0] for x in ttnn.get_device_tensors(rec_t)], 0).float()
         cols = []
         for mi in range(dn.K):
-            per = [ttnn.to_torch(x).reshape(-1) for x in ttnn.get_device_tensors(dn.conv_states[mi])]
+            per = [ttnn.to_torch(x).reshape(-1) for x in ttnn.get_device_tensors(conv_t[mi])]
             kd = dn.Nk * dn.Dk
             cols.append(torch.cat([torch.cat([p[a:b] for p in per]) for a, b in ((0, kd), (kd, 2 * kd), (2 * kd, per[0].shape[0]))]))
         conv = torch.stack(cols, 1).to(torch.bfloat16)
@@ -311,8 +313,8 @@ def main():
                 rt.prefill_chunk(inp, kv, slot_id=slot, actual_start=0, actual_end=L, request_id=rep, media_refs=refs)
                 ttnn.synchronize_device(mesh)
                 walls.append((time.perf_counter() - w0) * 1e3)
-            first = int(rt.last_logits.reshape(-1).argmax())
-            med = {k: float(np.median([t[k] for t in timings])) for k in ("media_ms", "prefill_ms", "export_ms", "total_ms")}
+            first = int(rt.last_logits.reshape(-1).argmax()) if getattr(rt, "last_logits", None) is not None else -1
+            med = {k: float(np.median([t[k] for t in timings])) for k in timings[0] if isinstance(timings[0][k], float)}
             med["wall_ms"] = float(np.median(walls))
             logger.info(f"TIME {name} L={L} images={len(refs)} slot={slot}: {med}")
             pub = published_state(rt, kv, slot, L)

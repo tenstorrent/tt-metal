@@ -92,8 +92,13 @@ class Qwen35PupPrefillAdapter(PrefillModelAdapter):
 
     # --- caches + runtime --------------------------------------------------------------------------------------
     def _serving_config(self, params: PrefillRunParams) -> PupPrefillConfig:
+        # PUP_PREFILL_FAST=0: the generic B=1 runtime (A/B against the fast one); unset = the config's choice
+        fast = os.environ.get("PUP_PREFILL_FAST")
         return self.pup_config.with_serving(
-            num_users=params.num_users, max_seq_len=params.max_seq_len, chunk_size=params.chunk_size
+            num_users=params.num_users,
+            max_seq_len=params.max_seq_len,
+            chunk_size=params.chunk_size,
+            fast=None if fast is None else fast != "0",
         )
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
@@ -162,4 +167,16 @@ class Qwen35PupPrefillAdapter(PrefillModelAdapter):
                 from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
 
                 reader = self.media_reader = MooncakeEmbeddingReader.open(store)
+        if cfg.fast:
+            from transformers import AutoTokenizer
+
+            from models.demos.blackhole.qwen36.tt.runners.fast_runtime import TtQwen35PupFastPrefillRuntime
+
+            # the system turn ends at the first <|im_end|> (Qwen chat template): the snapshot boundary
+            end_tok = AutoTokenizer.from_pretrained(_model_path()).convert_tokens_to_ids("<|im_end|>")
+            if os.environ.get("PUP_PREFILL_PREFIX", "1") == "0":  # A/B: no system-turn snapshot (every request from 0)
+                end_tok = None
+            return TtQwen35PupFastPrefillRuntime(
+                mesh_device=mesh_device, model=model, config=rc, media_reader=reader, prefix_end_token=end_tok
+            )
         return TtQwen35PupPrefillRuntime(mesh_device=mesh_device, model=model, config=rc, media_reader=reader)

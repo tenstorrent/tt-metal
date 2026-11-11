@@ -52,6 +52,22 @@ class PupPrefillConfig:
     res_l1_max_rows: int = 3072
     """Token-parallel residual stream in L1 up to this many rows; the 3200 bucket keeps it in DRAM."""
 
+    # --- fast runtime (fast_runtime.py): system-turn snapshot + traced buckets + per-layer-group publish ---
+    fast: bool = True
+    """The grouped (session-5) prefill with a system-turn snapshot; False = the generic B=1 path (runtime.py)."""
+    fast_buckets: tuple = (128, 256, 384, 512, 640, 768, 1024, 1280, 1536, 2048, 2560, 3072, 3584)
+    """Traced tail buckets (rows; multiples of 128). A tail runs in the smallest bucket >= its length."""
+    publish_segments: int = 4
+    """Traces per bucket = layer groups published (and reported to the engine) as each finishes."""
+    prefix_max: int = 1024
+    """Longest system turn kept as a snapshot (rows; the snapshot's K / V buffers are this long)."""
+    prefix_align: int = 128
+    """Snapshot boundary: the system turn floored to this (the GDN sub-chunk)."""
+    prefix_slots: int = 4
+    """Snapshots kept (LRU): one per distinct system turn (PUP: t2i, i2i)."""
+    tokpar_min_rows: int = 1536
+    """Token-parallel residual stream from this many rows (session 5: costs more than it saves below)."""
+
     # --- media ---
     media_source: str = "spliced"
     """Image embeddings come from the encoder service's embedding store; prefill runs no vision tower."""
@@ -65,6 +81,8 @@ class PupPrefillConfig:
             raise ValueError(f"segment_tokens {self.segment_tokens}: a multiple of 128, <= max_seq_len")
         if self.chunk_size > self.max_seq_len:
             raise ValueError(f"chunk_size {self.chunk_size} > max_seq_len {self.max_seq_len}")
+        if any(b % 128 for b in self.fast_buckets) or self.prefix_max % self.block_size or self.prefix_align % 128:
+            raise ValueError("fast buckets / prefix_align: multiples of 128; prefix_max: whole blocks")
         if self.media_source not in ("spliced",):
             raise ValueError("the d-gen prefill takes images only from the embedding store")
 
@@ -72,11 +90,20 @@ class PupPrefillConfig:
     def blocks_per_slot(self) -> int:
         return self.max_seq_len // self.block_size
 
-    def with_serving(self, *, num_users: int | None = None, max_seq_len: int | None = None, chunk_size: int | None = None):
+    def with_serving(
+        self,
+        *,
+        num_users: int | None = None,
+        max_seq_len: int | None = None,
+        chunk_size: int | None = None,
+        fast: bool | None = None,
+    ):
         """The same model settings at a deployment's slot count / sequence length (from the runner's params)."""
         from dataclasses import replace
 
         kw = {}
+        if fast is not None:
+            kw["fast"] = bool(fast)
         if num_users is not None:
             kw["num_users"] = int(num_users)
         if max_seq_len is not None:
