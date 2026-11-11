@@ -36,6 +36,122 @@ def _wl():
     return WL
 
 
+import functools as _functools
+
+RQBAL_ROW_WORDS = 16   # MKA_RQBAL_HOST row = one 64 B DRAM page per (parity, core)
+
+
+def rqbal_table(kvpos, xy, n_stream, n_own=4, T=4, fan=6, upar=True):
+    """MKA_RQBAL_HOST: the per-step SDPA core assignment + tree, computed on the host (kernel twin: the device MKA_RQBAL
+    block in mka2_reader.cpp; same integer arithmetic). kvpos: int32 [8 * T] (row g * T + j, -1 = HOLD / idle), the
+    host's view of this verify's positions (under the spec chain an UPPER BOUND: a pure balance hint; any table this
+    returns is correct for ANY actual device kvpos, since the kernels split / mask / bound blocks from the device kvpos
+    and a shorter user's extra cores push empty partials). xy: the MKA_RQB_TAB order's physical coords x | y << 8 (STREAM
+    pool, then EXT pool: setup_bench's RQB_XY); n_stream = len(RQ_S). Returns np.uint32 [2 N * 16]: row p * N + i (one
+    64 B page) = parity p (MKA_UPAR: own users g = 2u + p; else parity 1 = a copy of parity 0), core i:
+    w0 = u | nrecv << 8 | root << 16 | has_parent << 17 | par_lvl << 18 | nc0 << 20 | nc1 << 24, w1 = rank | m << 16,
+    w2.. = 16-bit coords (two per word, low half first): parent, level-0 children (fan - 1 slots), level-1/2 children
+    (2 (fan - 1) slots). Cached on the users' block counts (they change only when a user crosses a 32-position block)."""
+    import numpy as np
+    kp = [int(x) for x in (kvpos.tolist() if hasattr(kvpos, 'tolist') else kvpos)]
+    nbs = tuple(max(max(kp[g * T:(g + 1) * T]), 0) // 32 + 1 for g in range(len(kp) // T))
+    return np.frombuffer(_rqbal_words(nbs, tuple(xy), n_stream, n_own, fan, upar), dtype=np.uint32)
+
+
+def _rqbal_parity(nb, N, NS, fan):
+    """One parity's allocation for own-user block counts nb: (m_u, s_u) (the kernel's integer arithmetic)."""
+    NU = len(nb)
+    W = sum(nb)
+    mu = [max(1, min(nb[u], N * nb[u] // W)) for u in range(NU)]
+    tot = sum(mu)
+    while tot > N:
+        k = 0
+        for u in range(1, NU):
+            if mu[u] > mu[k]: k = u
+        mu[k] -= 1; tot -= 1
+    cap = True
+    while tot < N:
+        k = NU
+        for u in range(NU):
+            if (not cap or mu[u] < nb[u]) and (k == NU or nb[u] * mu[k] > nb[k] * mu[u]): k = u
+        if k == NU: cap = False; continue
+        mu[k] += 1; tot += 1
+    su = [min(mu[u], max(1, NS * mu[u] // N)) for u in range(NU)]
+    tot = sum(su)
+    while tot > NS:
+        k = 0
+        for u in range(1, NU):
+            if su[u] > su[k]: k = u
+        su[k] -= 1; tot -= 1
+    while tot < NS:
+        k = NU
+        for u in range(NU):
+            if su[u] < mu[u] and (k == NU or mu[u] - su[u] > mu[k] - su[k]): k = u
+        su[k] += 1; tot += 1
+    return mu, su
+
+
+@_functools.lru_cache(maxsize=512)
+def _rqbal_tmpl(m, sN, fan):
+    """A user's group of m cores (sN STREAM): per rank, rel = pool offset (STREAM: index into the user's STREAM slice;
+    EXT: -1 - index into its EXT slice), w0 / w1 without the user id, and hw = the 16 coord slots as ranks (-1 = none):
+    [parent, level-0 children (fan - 1), level-1 then level-2 children (2 (fan - 1))]."""
+    import numpy as np
+    eN, si, ei, rel = m - sN, 0, 0, []
+    for r in range(m):
+        if ((r % fan == 0 or ei == eN) and si < sN) or ei == eN: rel.append(si); si += 1
+        else: rel.append(-1 - ei); ei += 1
+    F1 = fan - 1
+    hw = np.full((m, 1 + 3 * F1), -1, dtype=np.int64)
+    w0 = np.zeros(m, dtype=np.int64)
+    for r in range(m):
+        h, f = (3, fan) if r == 0 else (0, fan)
+        if r:
+            while r % f == 0: h += 1; f *= fan
+        else: f = fan ** 4
+        c0, c1, st = [], [], 1
+        for l in range(h):
+            for j in range(1, fan):
+                if r + j * st < m: (c0 if l == 0 else c1).append(r + j * st)
+            st *= fan
+        if r: hw[r, 0] = r - r % f
+        hw[r, 1:1 + len(c0)] = c0
+        hw[r, 1 + F1:1 + F1 + len(c1)] = c1
+        w0[r] = ((len(c0) + len(c1)) << 8) | ((1 if r == 0 else 0) << 16) | ((1 if r else 0) << 17) | ((1 if (r and h) else 0) << 18) | (len(c0) << 20) | (len(c1) << 24)
+    return np.array(rel, dtype=np.int64), w0, np.arange(m, dtype=np.int64) | (m << 16), hw
+
+
+def _rqbal_rows_parity(nb, xy_np, NS, fan):
+    """One parity's [N, 16] rows (vectorized over cores; templates cached per group shape)."""
+    import numpy as np
+    N = len(xy_np)
+    mu, su = _rqbal_parity(nb, N, NS, fan)
+    parts = [_rqbal_tmpl(mu[u], su[u], fan) for u in range(len(mu))]
+    s0 = np.cumsum([0] + su[:-1]); e0 = np.cumsum([0] + [mu[u] - su[u] for u in range(len(mu) - 1)])
+    lay = np.concatenate([np.where(t[0] >= 0, s0[u] + t[0], NS + e0[u] - 1 - t[0]) for u, t in enumerate(parts)])   # rank -> core
+    st = np.cumsum([0] + mu[:-1])
+    uu = np.repeat(np.arange(len(mu)), mu)
+    hw = np.concatenate([t[3] for t in parts])
+    xyl = np.where(hw >= 0, xy_np[lay[np.clip(hw, 0, None) + st[uu][:, None]]], 0)
+    rows = np.zeros((N, RQBAL_ROW_WORDS), dtype=np.uint32)
+    rows[lay, 0] = np.concatenate([t[1] for t in parts]) | uu
+    rows[lay, 1] = np.concatenate([t[2] for t in parts])
+    rows[lay, 2:2 + xyl.shape[1] // 2] = xyl[:, 0::2] | (xyl[:, 1::2] << 16)
+    return rows
+
+
+def _rqbal_words(nbs, xy, NS, n_own, fan, upar):
+    """Both parities' rows; each parity cached on its own users' block counts (a block crossing recomputes one parity)."""
+    par = [_rqbal_parity_bytes(tuple(nbs[2 * u + p] if upar else nbs[u] for u in range(n_own)), xy, NS, fan) for p in ((0, 1) if upar else (0,))]
+    return par[0] + par[-1]
+
+
+@_functools.lru_cache(maxsize=512)
+def _rqbal_parity_bytes(nb, xy, NS, fan):
+    import numpy as np
+    return _rqbal_rows_parity(list(nb), np.array(xy, dtype=np.int64), NS, fan).tobytes()
+
+
 def setup_bench(dev, MESH, mesh_identity):
     try:   # engine/ is on sys.path in the bench (the pushed tree's own module first)
         import cbplan as CBP
@@ -281,6 +397,7 @@ def setup_bench(dev, MESH, mesh_identity):
     if os.environ.get('MKA_MREV') == '1': members = [m_[::-1] for m_ in members]   # rank 0 / first KV blocks at the far end of each user's rows
     RQ_S = [i for i in ACT if fcores[i].x < GX and fcores[i].y < GY]   # MKA_RQPOS / RQBAL pools: STREAM, then EXT
     RQ_E = [i for i in ACT if i not in RQ_S]
+    RQB_XY = [fphys[f_].x | (fphys[f_].y << 8) for f_ in RQ_S + RQ_E]   # MKA_RQBAL(_HOST) core coords, table order
     def rq_layout(mu):
         """MKA_RQPOS member layout (kernel twin: mka2_reader.cpp MKA_RQBAL block): users take contiguous slices of the
         STREAM and EXT pools, s_u ∝ m_u (1 <= s_u <= m_u, sum = len(RQ_S)); rank r takes STREAM at the tree-internal
@@ -1135,7 +1252,14 @@ def setup_bench(dev, MESH, mesh_identity):
             if os.environ.get('MKA_REPLAY_L1'):   # engine (G): the model's blocks / qkg table
                 RQ_REPLAY, RQ_ATTN = int(os.environ['MKA_REPLAY_L1']), int(os.environ['MKA_ATTN_L1'])
             else:
-                _rb = _l1_tab([_blk(5, [rq_kvpos.buffer_address(), 0, rq_cos.buffer_address(), rq_sin.buffer_address(), 0, rq_pt.buffer_address(), 0])] * _ncore, kgrid)
+                _rqh = 0
+                if ('MKA_RQBAL_HOST', '1') in MKDEF:   # host-staged RQBAL table (rqbal_table), replay word 7
+                    _sh = int(os.environ.get('MKA_RQBAL_HINT_SHIFT', '0'))   # test: table from upper-bound positions (chain)
+                    _ht = rqbal_table([p_ + _sh if p_ >= 0 else p_ for p_ in kvpos_l], RQB_XY, len(RQ_S), NU, T, FAN, UPAR)
+                    rq_ht = _dram(torch.tensor(_ht.astype('int64'), dtype=torch.int64).to(torch.int32).reshape(-1, RQBAL_ROW_WORDS), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+                    RQ_TENS.append(rq_ht); _rqh = rq_ht.buffer_address()
+                    print(f"[rqpos] RQBAL host table: {len(_ht)} words", flush=True)
+                _rb = _l1_tab([_blk(5, [rq_kvpos.buffer_address(), 0, rq_cos.buffer_address(), rq_sin.buffer_address(), 0, rq_pt.buffer_address(), 0, _rqh])] * _ncore, kgrid)
                 _ab = _l1_tab([_blk(4, [rq_pt.buffer_address(), 8, RQ_NB, ATT0 + NATT_] + [0, 0] * ATT0 +
                                     sum(([kvs[L_].buffer_address(), kvvs[L_].buffer_address()] for L_ in _att_l), []) + [KVBS, NKVH])] * _ncore, kgrid)
                 RQ_REPLAY, RQ_ATTN = _rb.buffer_address(), _ab.buffer_address()
@@ -1147,14 +1271,18 @@ def setup_bench(dev, MESH, mesh_identity):
             _smax = max(RNG[fi_][1] - RNG[fi_][0] for fi_ in ACT)
             if RQBAL: _smax = max(_smax, -(-NU * NBK // len(ACT)) + 4)   # proportional membership: ~ total blocks / cores
             KVP_PTW = (_smax + BS32 - 1) // BS32 + 1 + 16
-            kvp_t = _l1_tab([[0] * (-(-(4 + T + 15 + KVP_PTW) // 16) * 16)] * _ncore, kgrid)   # + up to 15 words of alignment pad
-            KVP_PT = 4 + T + (-(kvp_t.buffer_address() + 4 * (4 + T)) % 64) // 4   # word KVP_PT is 64 B aligned (DRAM -> L1 reads)
-            assert (kvp_t.buffer_address() + 4 * KVP_PT) % 64 == 0, ('KVP table alignment', kvp_t.buffer_address(), KVP_PT)
-            RQ_TENS += [rq_kvpos, rq_cos, rq_sin, rq_pt, kvp_t]
+            # no persistent L1 table (engine L1 budget): two device-local global semaphores (INFO, ASGN) + CB_ONE page 3 (2 KB:
+            # header 3 + T words, <= 15 words of 64 B alignment pad, the page-table window)
+            assert 3 + T + 15 + KVP_PTW <= 2048 // 4, ('MKA_RQPOS page-table window does not fit CB_ONE page 3', KVP_PTW)
+            KVP_GS = [ttnn.create_global_semaphore(dev, kgrid, 0) for _ in range(2)]
+            RQ_TENS += [rq_kvpos, rq_cos, rq_sin, rq_pt]
             RQB_L = RQ_S + RQ_E   # MKA_RQBAL table: STREAM pool, then EXT pool (rq_layout)
             RQB_IDX = {f_: i_ for i_, f_ in enumerate(RQB_L)}
             if RQBAL:
                 assert sorted(RQB_L) == sorted(ACT) and len(RQB_L) <= 255
+            if RQBAL and ('MKA_RQBAL_HOST', '1') in MKDEF:   # host rows carry the coords: no L1 coords table
+                MKDEF = MKDEF + [('MKA_RQB_N', str(len(RQB_L))), ('MKA_RQB_NS', str(len(RQ_S)))]
+            if RQBAL and ('MKA_RQBAL_HOST', '1') not in MKDEF:   # device-computed assignment: the coords table (host: in the rows)
                 _w = [fphys[f_].x | (fphys[f_].y << 8) for f_ in RQB_L]
                 rqb_t = _l1_tab([_w + [0] * (-len(_w) % 4)] * _ncore, kgrid)
                 RQ_TENS.append(rqb_t)
@@ -1168,11 +1296,11 @@ def setup_bench(dev, MESH, mesh_identity):
                     for t_ in range(8): qkg[a_, k_, t_] = qk_g[a_, k_, t_ * 32:(t_ + 1) * 32][None, :].repeat(TILE, 1)
             hg_t = _dram(qkg.reshape(1, 1, -1, TILE).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             HG_ADDR = int(os.environ['MKA_QKG_ADDR']) if os.environ.get('MKA_QKG_ADDR') else hg_t.buffer_address()
-            MKDEF = MKDEF + [('MKA_KVP_TAB', f"{kvp_t.buffer_address()}u"), ('MKA_KVP_PT', str(KVP_PT)), ('MKA_RQ_T', str(T)),
+            MKDEF = MKDEF + [('MKA_KVP_INFO', f"{ttnn.get_global_semaphore_address(KVP_GS[0])}u"), ('MKA_KVP_ASGN', f"{ttnn.get_global_semaphore_address(KVP_GS[1])}u"), ('MKA_RQ_T', str(T)),
                              ('MKA_REPLAY_L1', f"{RQ_REPLAY}u"), ('MKA_ATTN_L1', f"{RQ_ATTN}u"), ('MKA_ATT0', str(ATT0)),
                              ('MKA_NATT', str(NATT_)), ('MKA_QSCALE_BITS', f"{f2u(1.0 / 16)}u")]
             print(f"[rqpos] kvpos {kvpos_l} rope rows {rrow_l} (deltas {RQ_DELTA}), live users {_k}, page table perm "
-                  f"{'on' if not torch.equal(KV_PERM, torch.arange(NU * BPU)) else 'off'}, KVP table @{kvp_t.buffer_address()} pt@{KVP_PT} "
+                  f"{'on' if not torch.equal(KV_PERM, torch.arange(NU * BPU)) else 'off'}, KVP state: 2 gsem + CB_ONE page 3 "
                   f"window {KVP_PTW} words, {'RQDYN' if ('MKA_RQDYN', '1') in MKDEF else 'static split'}, UPAR {UPAR}", flush=True)
         else:
             hg_t = ttnn.from_torch(hg.reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1659,7 +1787,7 @@ def setup_bench(dev, MESH, mesh_identity):
                ttnn.cb_descriptor_from_sharded_tensor(7, ymix), cbd(8, ttnn.bfloat16, 1, rect),
                # ATTN working set (spec CBs 9-12 + scratch 24-29), full grid
                cbd(9, ttnn.bfloat16, QT_ if RQNR else 32, kgrid), cbd(10, KVDT, 8 * 2 * NBB, kgrid), cbd(11, KVDT, 8 * 2 * NBB, kgrid), cbd(12, ttnn.float32, 9, kgrid),
-               cbd(24, ttnn.bfloat16, 3 if ('MKA_RQPOS', '1') in MKDEF else 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
+               cbd(24, ttnn.bfloat16, 4 if ('MKA_RQPOS', '1') in MKDEF else 1, kgrid), cbd(25, ttnn.bfloat16, 2 * NBB, kgrid), *([cbd(26, ttnn.float32, 18, crs([fcores[i] for i in ACT if i in stream_idx])), cbd(26, ttnn.float32, 9, ext_crs)] if RWO else [cbd(26, ttnn.float32, 18, kgrid)]), cbd(27, ttnn.float32, 1, kgrid),
                cbd(28, ttnn.bfloat16, 8, kgrid), cbd(29, ttnn.bfloat8_b, 8, kgrid)]
         if RQKV:   # STREAM_EXT weight ring FIRST (lowest CB addresses on the ext cores), then the full-grid qkv CBs
             cbs = ([] if (QSK and not RWO) else [cbd(19, ttnn.bfloat8_b, RING_P_ if RWO else 2 * KT, ext_crs)]) + cbs + [cbd(13, ttnn.float32, 1, kgrid), cbd(14, ttnn.float32, 2, kgrid),
