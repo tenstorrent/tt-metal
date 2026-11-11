@@ -130,3 +130,23 @@ def test_kv_chunk_matches_k31_decode_page():
     dram_alignment = 64
     aligned_row = -(-656 // dram_alignment) * dram_alignment
     assert 32 * aligned_row == 22528  # GLM_SCALED_KV_PAGE_BYTES on the decode side
+
+
+@pytest.mark.parametrize(
+    "has_indexer, owns_mla, cache, raises",
+    [
+        (True, True, object(), False),
+        (True, True, None, True),
+        (True, False, None, False),  # a KDA-only rank (e.g. a 1-layer run of layer 0): no index cache allocated
+        (False, True, None, False),
+        (False, True, object(), True),
+    ],
+)
+def test_index_cache_required_only_on_ranks_with_mla_layers(has_indexer, owns_mla, cache, raises):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import check_index_kv_cache
+
+    if raises:
+        with pytest.raises(ValueError):
+            check_index_kv_cache(has_indexer, owns_mla, cache)
+    else:
+        check_index_kv_cache(has_indexer, owns_mla, cache)

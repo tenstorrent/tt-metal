@@ -42,6 +42,15 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
 
+def check_index_kv_cache(has_indexer: bool, owns_mla_layers: bool, index_kv_cache) -> None:
+    """Kimi-K3.1's indexer writes a key cache on its MLA layers, so a rank that owns MLA layers needs one.
+    The allocator gives a rank with no MLA layers none (`index=None`), and Kimi-K3 has no indexer at all."""
+    if has_indexer and owns_mla_layers and index_kv_cache is None:
+        raise ValueError("Kimi-K3.1's indexer needs index_kv_cache on a rank that owns MLA layers")
+    if not has_indexer and index_kv_cache is not None:
+        raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+
+
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
 
@@ -438,13 +447,12 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
-        has_indexer = getattr(self, "has_indexer", False)
-        if (index_kv_cache is not None) != has_indexer:
-            raise ValueError(
-                "Kimi-K3.1's indexer needs index_kv_cache"
-                if has_indexer
-                else "Kimi-K3 has no DSA indexer; index_kv_cache must be None"
-            )
+        schedule = getattr(self, "schedule", None)
+        check_index_kv_cache(
+            getattr(self, "has_indexer", False),
+            schedule is None or schedule.num_mla_layers > 0,
+            index_kv_cache,
+        )
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
         if (

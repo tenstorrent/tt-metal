@@ -49,3 +49,9 @@ def test_identical_chunks_across_differently_split_hosts_pass(tmp_path):
 def test_a_differing_or_missing_chunk_fails(tmp_path, dst):
     src = [{"00/3/0": "a", "00/3/32": "b", "01/3/0": "c"}]
     assert _compare(tmp_path, src, dst) == 1
+
+
+def test_two_captures_of_one_chunk_that_disagree_are_an_error(tmp_path):
+    src = [{"00/3/0": "CORRUPT"}, {"00/3/0": "a"}]
+    with pytest.raises(SystemExit, match="00/3/0"):
+        _compare(tmp_path, src, [{"00/3/0": "a"}])
