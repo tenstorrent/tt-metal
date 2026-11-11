@@ -681,26 +681,59 @@ class TestImportReportRankCompleteness:
 
 class TestGraphReportFixtureMultiRankTeardown:
     """Teardown of the graph report pytest fixture on a two-rank run, with ttnn's capture and distributed calls
-    replaced by recorders. Every rank must reach both barriers, even when rank 0's import raises."""
+    replaced by recorders. Every rank writes into rank 0's report directory, and every rank must reach every
+    collective, even when a write or rank 0's import raises."""
 
-    @staticmethod
-    def _stub_ttnn(monkeypatch, tmp_path, rank, world_size, distributed=True):
+    RANK_0_DIR = "report"
+
+    @classmethod
+    def _stub_ttnn(
+        cls,
+        monkeypatch,
+        tmp_path,
+        rank,
+        world_size,
+        distributed=True,
+        local_dir=None,
+        write_fails=False,
+        peer_wrote=True,
+    ):
+        """local_dir: this rank's own stamped report directory, when it differs from rank 0's.
+        write_fails: this rank's end_graph_capture_to_file raises. peer_wrote: whether the other rank wrote its capture.
+        """
         calls = []
         capture_active = [False]
+        rank_0_dir = str(tmp_path / cls.RANK_0_DIR)
+        allgathers = [0]
 
         def begin_graph_capture(run_mode):
             capture_active[0] = True
 
         def end_graph_capture_to_file(path):
             capture_active[0] = False
-            calls.append(("end", Path(path).name))
+            calls.append(("end", str(Path(path).relative_to(tmp_path))))
+            if write_fails:
+                raise OSError("No space left on device")
             Path(path).write_text("{}")
+
+        def allgather_int(value):
+            allgathers[0] += 1
+            if allgathers[0] == 1:
+                calls.append("share_path")
+                return [len(rank_0_dir.encode()), 0]
+            calls.append(("allgather", value))
+            peer = 1 if peer_wrote else 0
+            return [value, peer] if rank == 0 else [peer, value]
+
+        def recv_bytes(length, source, tag):
+            assert (length, source, tag) == (len(rank_0_dir.encode()), 0, graph_report._REPORT_PATH_MESSAGE_TAG)
+            return rank_0_dir.encode()
 
         config = SimpleNamespace(
             enable_graph_report=True,
             enable_comparison_mode=False,
             enable_detailed_buffer_report=True,
-            report_path=str(tmp_path / "report"),
+            report_path=str(tmp_path / (local_dir or cls.RANK_0_DIR)),
         )
         monkeypatch.setattr(ttnn, "CONFIG", config)
         monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: capture_active[0])
@@ -712,7 +745,16 @@ class TestGraphReportFixtureMultiRankTeardown:
         monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
         monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: world_size)
         monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
-        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: calls.append(("config", Path(path).name)))
+        monkeypatch.setattr(ttnn, "distributed_context_allgather_int", allgather_int)
+        monkeypatch.setattr(
+            ttnn, "distributed_context_send_bytes", lambda data, dest, tag: calls.append(("send", data.decode(), dest))
+        )
+        monkeypatch.setattr(ttnn, "distributed_context_recv_bytes", recv_bytes)
+        monkeypatch.setattr(
+            ttnn,
+            "save_config_to_json_file",
+            lambda path: calls.append(("config", str(Path(path).relative_to(tmp_path)))),
+        )
         return calls
 
     @staticmethod
@@ -735,17 +777,19 @@ class TestGraphReportFixtureMultiRankTeardown:
             self._run_fixture()
         assert calls == [
             "enable_tracing",
-            ("end", "graph_capture_1_of_2.json"),
-            "barrier",
+            "share_path",
+            ("send", str(tmp_path / "report"), 1),
+            ("end", "report/graph_capture_1_of_2.json"),
+            ("allgather", 1),
             "import",
             "barrier",
             "disable_tracing",
-            ("config", "config_1_of_2.json"),
+            ("config", "report/config_1_of_2.json"),
         ]
         # Left for diagnosing the failed import.
         assert (tmp_path / "report" / "graph_capture_1_of_2.json").exists()
 
-    def test_rank_0_imports_then_removes_the_captures(self, monkeypatch, tmp_path):
+    def test_rank_0_sends_its_report_dir_then_imports_and_removes_the_captures(self, monkeypatch, tmp_path):
         calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
         (tmp_path / "report").mkdir()
         (tmp_path / "report" / "graph_capture_2_of_2.json").write_text("{}")
@@ -753,16 +797,18 @@ class TestGraphReportFixtureMultiRankTeardown:
         self._run_fixture()
         assert calls == [
             "enable_tracing",
-            ("end", "graph_capture_1_of_2.json"),
-            "barrier",
+            "share_path",
+            ("send", str(tmp_path / "report"), 1),
+            ("end", "report/graph_capture_1_of_2.json"),
+            ("allgather", 1),
             "import",
             "barrier",
             "disable_tracing",
-            ("config", "config_1_of_2.json"),
+            ("config", "report/config_1_of_2.json"),
         ]
         assert not list((tmp_path / "report").glob("graph_capture_*_of_*.json"))
 
-    def test_single_process_needs_no_barriers(self, monkeypatch, tmp_path, expect_error):
+    def test_single_process_needs_no_collectives(self, monkeypatch, tmp_path, expect_error):
         calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=1, distributed=False)
 
         def failing_import_report(report_path, output_dir):
@@ -774,23 +820,68 @@ class TestGraphReportFixtureMultiRankTeardown:
             self._run_fixture()
         assert calls == [
             "enable_tracing",
-            ("end", "graph_capture.json"),
+            ("end", "report/graph_capture.json"),
             "import",
             "disable_tracing",
-            ("config", "config.json"),
+            ("config", "report/config.json"),
         ]
 
-    def test_other_ranks_skip_the_import_and_reach_both_barriers(self, monkeypatch, tmp_path):
-        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, world_size=2)
+    def test_single_process_write_failure_is_raised(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=1, distributed=False, write_fails=True)
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        with expect_error(OSError, "No space left on device"):
+            self._run_fixture()
+        assert "import" not in calls
+        assert calls[-1] == ("config", "report/config.json")
+
+    def test_other_rank_writes_into_rank_0_report_dir(self, monkeypatch, tmp_path):
+        # This rank started in a later minute, so its own stamped directory differs from rank 0's.
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, world_size=2, local_dir="report_one_minute_later")
         monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
         self._run_fixture()
         assert calls == [
             "enable_tracing",
-            ("end", "graph_capture_2_of_2.json"),
-            "barrier",
+            "share_path",
+            ("end", "report/graph_capture_2_of_2.json"),
+            ("allgather", 1),
             "barrier",
             "disable_tracing",
-            ("config", "config_2_of_2.json"),
+            ("config", "report/config_2_of_2.json"),
+        ]
+        assert (tmp_path / "report" / "graph_capture_2_of_2.json").exists()
+        assert not (tmp_path / "report_one_minute_later").exists()
+
+    def test_other_rank_write_failure_is_reported_by_rank_0_without_hanging(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2, peer_wrote=False)
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        with expect_error(RuntimeError, r"failed to write on rank\(s\) \[1\] \(graph_capture_2_of_2\.json\)"):
+            self._run_fixture()
+        assert "import" not in calls
+        assert calls[-3:] == ["barrier", "disable_tracing", ("config", "report/config_1_of_2.json")]
+
+    def test_rank_0_own_write_failure_names_its_file(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2, write_fails=True)
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        with expect_error(RuntimeError, r"rank\(s\) \[0\] \(graph_capture_1_of_2\.json\)") as error:
+            self._run_fixture()
+        assert isinstance(error.value.__cause__, OSError)
+        assert ("allgather", 0) in calls
+        assert "import" not in calls
+        assert calls[-3:] == ["barrier", "disable_tracing", ("config", "report/config_1_of_2.json")]
+
+    def test_own_write_failure_is_raised_after_the_barrier(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, world_size=2, write_fails=True)
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        with expect_error(OSError, "No space left on device"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            "share_path",
+            ("end", "report/graph_capture_2_of_2.json"),
+            ("allgather", 0),
+            "barrier",
+            "disable_tracing",
+            ("config", "report/config_2_of_2.json"),
         ]
 
 
@@ -7453,10 +7544,9 @@ def test_multihost_graph_report(request):
     with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
         "enable_logging", True
     ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config("report_name", None):
-        # The report directory is stamped with the current minute, so start every rank together.
-        ttnn.distributed_context_barrier()
         with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
-            report_path = Path(ttnn.CONFIG.report_path)
+            # This rank's own stamped directory; the fixture writes every rank's files to rank 0's.
+            local_report_path = Path(ttnn.CONFIG.report_path)
             # Build on host and then move to device: from_torch(device=...) would touch the other ranks' chips.
             x = ttnn.from_torch(
                 torch.rand((32, 32), dtype=torch.bfloat16),
@@ -7470,6 +7560,7 @@ def test_multihost_graph_report(request):
             ttnn.multiply(y, x)
             ttnn.synchronize_device(mesh_device)
 
+    report_path = graph_report._rank_0_report_path(local_report_path, rank)
     config_path = report_path / f"config_{rank + 1}_of_{world_size}.json"
     assert config_path.exists(), f"rank {rank} wrote no {config_path.name} under {report_path}"
     if rank != 0:
