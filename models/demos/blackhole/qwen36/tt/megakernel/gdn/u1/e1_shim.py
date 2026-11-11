@@ -521,11 +521,15 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  else noc_async_write_multicast(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);'
                 for r in (gr_[0:5], gr_[5:10]) if r[4])
             inc1h = _loop(f'noc_semaphore_inc(get_noc_addr(go_gx[gi_], go_gy[gi_], {GO["gdna"]}u), 1);')
+            # E1_GO_VC (out-ready skew, default 0 = off; unicast A + flags): the A all-gather's unicasts + per-source flags on static
+            # unicast VC E1_GO_VC instead of VC 1: the last core's handoff took 5-15 us behind the NOC1 DRAM traffic at L4
+            go_vc = int(os.environ.get("E1_GO_VC", "0"))
+            assert go_vc in (0, 2, 3), ("E1_GO_VC", go_vc)
             if os.environ.get("E1_GO_MCAST", "0") == "0":   # unicast all-gather (default; the 2 rect multicasts were 15-35 us): n tiles to each of the 24 GDN cores (incl. self)
-                mc1h = '  ' + _loop('noc_async_write(src, get_noc_addr(go_gx[gi_], go_gy[gi_], dst), n * 2048u);')
+                mc1h = '  ' + _loop('noc_async_write(src, get_noc_addr(go_gx[gi_], go_gy[gi_], dst), n * 2048u' + (f', noc_index, {go_vc}' if go_vc else '') + ');')
             GO_FLAGS = os.environ.get("E1_GO_FLAGS", "1") == "1"
             if GO_FLAGS:   # per-source ready flags (arg block words GFL + t, L + 1) written after the tiles landed: no atomics
-                inc1h = _loop('noc_inline_dw_write(get_noc_addr(go_gx[gi_], go_gy[gi_], (uint32_t)(g_ab + {GFL} + t0)), g_l + 1);')
+                inc1h = _loop('noc_inline_dw_write(get_noc_addr(go_gx[gi_], go_gy[gi_], (uint32_t)(g_ab + {GFL} + t0)), g_l + 1' + (f', 0xF, noc_index, {go_vc}' if go_vc else '') + ');')
             go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
                            f'  DeviceZoneScopedN("GO-RDH");\n'
                            f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc1h}\n'
