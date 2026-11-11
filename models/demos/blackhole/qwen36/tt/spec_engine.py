@@ -1281,7 +1281,7 @@ class MTPSpecEngine:
                 if self._ksp_gate() is not None:  # the split choice follows the new width
                     if kw.pop("kv_split", None):
                         self.kv_split_steps["verify"] -= 1
-                    self._ksp_kw(kw)
+                    self._ksp_kw(kw, recount=True)
         if prev_bucket is not None and prev_bucket != self._vb:
             self.bucket_free_switch += 1
 
@@ -1557,7 +1557,7 @@ class MTPSpecEngine:
             return b in (getattr(self.model, "_vfy_bk_ksp", None) or {})
         return ("ksp", b) in (self._dr_traces or {})
 
-    def _ksp_kw(self, kw):
+    def _ksp_kw(self, kw, recount=False):
         """Put the step's verify split choice into the verify kwargs (only when it is True: no gate leaves kw as it was).
         QWEN36_R16_MEGAKERNEL: also counts the step as engine / long-context fallback (``mk_steps``) at an engine width."""
         split = self._ksp_on("verify")
@@ -1570,8 +1570,11 @@ class MTPSpecEngine:
         _mk1 = getattr(self.model, "_vfy_mk1", None)
         if _mk1 is not None and _mk1.ready:
             c = self.__dict__.setdefault("mk_steps", {"engine": 0, "fallback": 0, "op": 0})
+            if recount and getattr(self, "_mk_last", None) in c:  # the same step re-decided (free bucket switch)
+                c[self._mk_last] -= 1
             w = self._ksp_width()
-            c["fallback" if (split and w in _mk1.programs) else ("engine" if w in _mk1.programs else "op")] += 1
+            self._mk_last = "fallback" if (split and w in _mk1.programs) else ("engine" if w in _mk1.programs else "op")
+            c[self._mk_last] += 1
             if sum(c.values()) % 1000 == 0:
                 logger.info(f"[spec_engine] megakernel step coverage {c}")
         return kw
