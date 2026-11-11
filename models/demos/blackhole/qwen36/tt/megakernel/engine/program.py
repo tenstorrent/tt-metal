@@ -1875,7 +1875,7 @@ ENGINE_ENV = dict(
                "MK_REAL_GAR=1,MKA_RQPOS=1,MKA_RQBAL=1,MK_V12_NOCBAL=60,MK_V12_NOCBAL_ATT=1,MK_GDN_INPROJ=1",
 )
 # the 'replay' arg block payload (written per launch inside the trace): the in-trace tensor addresses, in this order
-PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups")
+PER_REPLAY_ARGS = ("kvpos", "ctrl", "cos", "sin", "pt_rows", "pt_users", "pt_groups", "rqbal")  # rqbal: host table
 
 
 def engine_env(n_users, n_layers, layer_types=None):
@@ -2142,14 +2142,34 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
         """Inside the trace: (1) the 'replay' block := this replay's in-trace tensor addresses (one-core writer op),
         (2) -> the engine's io list (+ the arg-block tensors) and mesh program. The engine kernels read the arg blocks
         through the common-arg slots once they adopt them (info['common_args']); today's stand-ins ignore them."""
-        blocks.write_op("replay", [(per_replay.get(n).buffer_address() if per_replay.get(n) is not None else 0)
-                                   for n in PER_REPLAY_ARGS])
+        pr = dict(per_replay, rqbal=rq_t)
+        blocks.write_op("replay", [(pr.get(n).buffer_address() if pr.get(n) is not None else 0) for n in PER_REPLAY_ARGS])
         mp = ttnn.MeshProgramDescriptor()
         for (r, c_), d in descs.items():
             co = ttnn.MeshCoordinate(r, c_)
             mp[ttnn.MeshCoordinateRange(co, co)] = d
         return io0 + blocks.tensors(), mp
 
+    # MKA_RQBAL_HOST (attnpos): the per-pass SDPA core assignment table, staged by the host before every replay into ONE
+    # persistent uint32 [1, 4N] replicated DRAM tensor (address = replay-block word 7). rqbal_table is a pure, cached
+    # function of the (upper-bound) row positions; any table is correct for any device kvpos (a balance hint).
+    import torch
+
+    rq_t, rq_fn = None, globals().get("rqbal_table")
+    if "MKA_RQBAL_HOST=1" in env.get("MK_DEFINES", "").split(",") and rq_fn is not None:
+        _ns, _ne = len(S.get("RQ_S") or ()), len(S.get("RQ_E") or ())
+        _w = rq_fn([S.get("CTX", 32) - 4] * 32, _ns, _ne)
+        rq_t = ttnn.from_torch(torch.as_tensor(_w.astype("int64")).reshape(1, -1).to(torch.int32), dtype=ttnn.uint32,
+                               layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                               mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+
+        def stage(rows):
+            w = rq_fn(rows, _ns, _ne)
+            h = ttnn.from_torch(torch.as_tensor(w.astype("int64")).reshape(1, -1).to(torch.int32), dtype=ttnn.uint32,
+                                layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+            ttnn.copy_host_to_device_tensor(h, rq_t)
+
+        program.stage = stage
     program.info = info
     program.setup = S
     program.xio = make_xio(mesh, S) if os.environ.get("QWEN36_R16_MK_XIO", "1") == "1" else None

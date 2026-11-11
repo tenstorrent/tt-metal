@@ -253,6 +253,19 @@ class Stage1Verify:
                 "kind": type(next(iter(self.programs.values()))).__name__, "out_of_scope": sorted(self.skipped),
                 "info": {b: getattr(p, "info", None) for b, p in self.programs.items()}}
 
+    def stage_host(self, row_positions, inactive, T):
+        """Before each verify replay (model.verify_stage_and_enqueue): every engine program's host-staged tables from the
+        step's row positions (r = u*T + j; -1 for inactive users). No-op for programs without host tables."""
+        rows = [int(p) for p in row_positions]
+        if inactive is not None:
+            for u, off in enumerate(inactive):
+                if off:
+                    rows[u * T:(u + 1) * T] = [-1] * T
+        for prog in self.programs.values():
+            st = getattr(getattr(prog, "program", None), "stage", None)
+            if st is not None:
+                st(rows)
+
     def forward(self, x, n_users, T, in_body):
         """Inside the traced verify body, on the replicated RES40 residual ``x`` [1,1,rows,5120] (consumed). Runs the
         engine (x_in = DRAM copy of x) into the persistent x_out and returns a FRESH tensor in x's memory config (never

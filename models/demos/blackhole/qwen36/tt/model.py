@@ -4212,6 +4212,11 @@ class Qwen36Model:
         # Absolute cache slot for each row: positions[u] + j. This doubles as the decode SDPA's
         # per-row cur_pos, which is what makes the hybrid verify causal.
         pos = self._vfy_row_positions(positions)
+        # QWEN36_R16_MEGAKERNEL: host-staged per-replay engine tables (MKA_RQBAL_HOST: the SDPA core assignment) from the
+        # same row positions (upper bounds on a chained step: the tables are balance hints, correct for any device kvpos)
+        _mk1 = getattr(self, "_vfy_mk1", None)
+        if _mk1 is not None and _mk1.ready:
+            _mk1.stage_host(pos, inactive, T)
         _hostset = bool(getattr(self, "_vfy_hostset", False))
         if not _hostset:
             _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
