@@ -278,9 +278,11 @@ class GdnRole:
             wA = _host([cA.win_a, cA.win_b][1 - cA.par]).float()
             wE = _host([cE.win_a, cE.win_b][1 - cE.par]).float()
             e_out, e_ring, e_win = torch.equal(iv(outA), iv(outB)), torch.equal(ringbits(rA), ringbits(rE)), torch.equal(iv(wA), iv(wE))
+            if self.out_unwritten:   # gdn_out E1_GO_LOCAL=2: the out tensor is never written -> out not compared (ring / win are)
+                e_out = "NOT CHECKED (gdn_out E1_GO_LOCAL=2; =1 checks)"
             print(f"[{tag}] GDN layer {l} hold={self.hold}: out {e_out} (max|d| {(outA - outB).abs().max().item():.3e}) | "
                   f"ring {e_ring} | win {e_win}", flush=True)
-            if not e_out:  # where: shape, # differing elements, first indices (row = user*T + t)
+            if e_out is False:  # where: shape, # differing elements, first indices (row = user*T + t)
                 d = (iv(outA) != iv(outB)).reshape(outB.shape)
                 nz = d.nonzero()
                 print(f"[{tag}]   out diff: shape {tuple(outB.shape)} n {nz.shape[0]} first {nz[:12].tolist()}", flush=True)
@@ -292,10 +294,7 @@ class GdnRole:
                 print(f"[{tag}]   pairs (row, col, ref, got): {[(r, c, float(oa[r, c]), float(ob[r, c])) for r, c in idx]}", flush=True)
                 n2 = int(((iv(outA) != iv(outB)).reshape(-1, outB.shape[-1]).sum(0) > 0).reshape(-1, 32).any(1).sum())
                 print(f"[{tag}]   blocks with diffs: {n2}", flush=True)
-            if self.out_unwritten:
-                if l == 0: print(f"[{tag}]   out not compared: gdn_out E1_GO_LOCAL=2 never writes the out tensor (E1_GO_LOCAL=1 = full check)", flush=True)
-                e_out = True
-            ok_all = ok_all and e_out and e_ring and e_win
+            ok_all = ok_all and (e_out is not False) and e_ring and e_win
             ttnn.deallocate(oAs[l])
             cA.par, cE.par = 1 - cA.par, 1 - cE.par
         self.mi_ctrl = [int(x) for x in torch.randint(0, T, (B,), generator=self.gen)]

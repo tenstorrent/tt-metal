@@ -403,7 +403,13 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         CR_, CA_, CO_ = GO.get("cb", (42, 43, 44))   # ring, A, out slot (ids the role's table leaves free)
         _used = {ids[n][0] for n in ids}
         assert not ({CR_, CA_, CO_} & _used), ("gdn_out CB ids clash with the GDN role's", sorted({CR_, CA_, CO_} & _used))
-        go_inc = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])
+        # the 24 GDN cores' NoC-0 coordinates as one constexpr table + loops (the unrolled per-core code cost ~9 KB of reader
+        # text); GXY_DECL goes in each kernel TU that uses it
+        _gx = ", ".join(f"{x}u" for x, _ in GO["gdn_xy"]); _gy = ", ".join(f"{y}u" for _, y in GO["gdn_xy"])
+        NGC = len(GO["gdn_xy"])
+        GXY_DECL = f'static constexpr uint8_t go_gx[{NGC}] = {{{_gx}}}, go_gy[{NGC}] = {{{_gy}}};\n'
+        _loop = lambda body: f'for (uint32_t gi_ = 0; gi_ < {NGC}u; ++gi_) {{ {body} }}'
+        go_inc = _loop(f'noc_semaphore_inc(get_noc_addr(go_gx[gi_], go_gy[gi_], {GO["gdna"]}u), 1);')
         GO_LOCAL = int(os.environ.get("E1_GO_LOCAL", "2"))   # 0: A from the DRAM out; 1: local A (+ DRAM out); 2: local A only
         go_local = ""
         if GO_LOCAL:   # every core multicasts its out tile(s) into all 24 GDN cores' A CB (uniform address), then gdna += 1
@@ -431,7 +437,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);\n'
                 f'    else noc_async_write_multicast(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);'
                 for r in (gr_[0:5], gr_[5:10]) if r[4])
-            inc1 = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])
+            inc1 = _loop(f'noc_semaphore_inc(get_noc_addr(go_gx[gi_], go_gy[gi_], {GO["gdna"]}u), 1);')
             go_local = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
                         f'  DeviceZoneScopedN("GO-LOCW");\n'
                         f'  g_ab[{XB} + 0] = src; g_ab[{XB} + 1] = t0; g_ab[{XB} + 2] = n; g_ab[{XB} + 3] = g_gdn_l + 1;\n'
@@ -487,12 +493,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);\n'
                 f'  else noc_async_write_multicast(src, get_noc_multicast_addr({r[2]}u, {r[3]}u, {r[0]}u, {r[1]}u, dst), n * 2048u, {r[4]}u, false);'
                 for r in (gr_[0:5], gr_[5:10]) if r[4])
-            inc1h = " ".join(f'noc_semaphore_inc(get_noc_addr({x}u, {y}u, {GO["gdna"]}u), 1);' for x, y in GO["gdn_xy"])
+            inc1h = _loop(f'noc_semaphore_inc(get_noc_addr(go_gx[gi_], go_gy[gi_], {GO["gdna"]}u), 1);')
             if os.environ.get("E1_GO_MCAST", "0") == "0":   # unicast all-gather (default; the 2 rect multicasts were 15-35 us): n tiles to each of the 24 GDN cores (incl. self)
-                mc1h = "\n".join(f'  noc_async_write(src, get_noc_addr({x}u, {y}u, dst), n * 2048u);' for x, y in GO["gdn_xy"])
+                mc1h = '  ' + _loop('noc_async_write(src, get_noc_addr(go_gx[gi_], go_gy[gi_], dst), n * 2048u);')
             GO_FLAGS = os.environ.get("E1_GO_FLAGS", "1") == "1"
             if GO_FLAGS:   # per-source ready flags (arg block words GFL + t, L + 1) written after the tiles landed: no atomics
-                inc1h = " ".join(f'noc_inline_dw_write(get_noc_addr({x}u, {y}u, (uint32_t)(g_ab + {{GFL}} + t0)), g_l + 1);' for x, y in GO["gdn_xy"])
+                inc1h = _loop('noc_inline_dw_write(get_noc_addr(go_gx[gi_], go_gy[gi_], (uint32_t)(g_ab + {GFL} + t0)), g_l + 1);')
             go_local_rd = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
                            f'  DeviceZoneScopedN("GO-RDH");\n'
                            f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc1h}\n'
@@ -618,6 +624,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         f'#include "{kd}/dataflow/reader_gdn_spec_step.cpp"\n'
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '') +
         f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_l + 1); }}\n'
+        + (GXY_DECL if GO else '')
         + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '')
         + ((go_local_rd[:go_local_rd.rindex("}")] + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n'
@@ -648,6 +655,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'#include "{WOU}/wo_unit_dm.hpp"\n' if GO else '') +
         f'uint32_t gdn_loop_k() {{ return g_gdn_l + 1; }}\n'
         f'uint32_t gdn_xsem_addr(uint32_t i) {{ return i ? {S["vb1"]} : {S["vb0"]}; }}\n'
+        + (GXY_DECL if GO else '') +
         f'void gdn_out_signal() {{ {go_inc if GO else osig} }}\n'
         + (go_local if GO and not go_rdhook else '')
         + (f'void gdn_in_wait() {{ noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){S["in_ready"]}, g_gdn_l + 1); }}\n' if early else '')

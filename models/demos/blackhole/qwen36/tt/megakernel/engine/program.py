@@ -1426,28 +1426,28 @@ def setup_bench(dev, MESH, mesh_identity):
         GDN_SA = {k_: ttnn.get_global_semaphore_address(v_) for k_, v_ in GDN_SEMS.items()}
         GO = None
         if GDNOUT:
-            WKG, WNG = 24, 160   # A = the 24 `out` column tiles (6 heads x 128); N = the hidden (16 owner chunks of 10)
-            g_layers = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; NGo = len(g_layers)
-            gcs = list(GDNC)
+            GO_WK, GO_WN = 24, 160   # A = the 24 `out` column tiles (6 heads x 128); N = the hidden (16 owner chunks of 10)
+            go_layers = [L_ for L_ in range(NL) if not is_attn_layer(L_)]; GO_NG = len(go_layers)
+            go_cores = list(GDNC)
             # engine/weight_layouts.py gdn_out_layout (the shared packer, = this branch's layout): rot-order owner chunks,
             # core c -> tiles flat[c::24], bank-local k-major slices; per-layer stride = pages_per_layer (GDN ordinal g)
-            GLAY = _WEIGHTS['gdn_out']['layout'] if 'gdn_out' in _WEIGHTS else _wl().gdn_out_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], BANK_LOC, banks)
-            assert GLAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in gcs], "injected gdn_out layout built for other cores"
-            GT = {fi: GLAY.tiles[c_] for c_, fi in enumerate(gcs)}; GB = {fi: GLAY.bank[c_] for c_, fi in enumerate(gcs)}
-            GP = {fi: GLAY.row[c_] for c_, fi in enumerate(gcs)}
-            GMAXT = max(len(v_) for v_ in GT.values())
-            GPL = GLAY.pages_per_layer   # pages per GDN layer (the layer stride)
-            if 'gdn_out' in _WEIGHTS: wg_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
+            GO_LAY = _WEIGHTS['gdn_out']['layout'] if 'gdn_out' in _WEIGHTS else _wl().gdn_out_layout([(fi, fcores[fi].x, fcores[fi].y) for fi in go_cores], BANK_LOC, banks)
+            assert GO_LAY.cores == [(fi, fcores[fi].x, fcores[fi].y) for fi in go_cores], "injected gdn_out layout built for other cores"
+            GO_T = {fi: GO_LAY.tiles[c_] for c_, fi in enumerate(go_cores)}; GO_B = {fi: GO_LAY.bank[c_] for c_, fi in enumerate(go_cores)}
+            GO_P = {fi: GO_LAY.row[c_] for c_, fi in enumerate(go_cores)}
+            GO_MAXT = max(len(v_) for v_ in GO_T.values())
+            GO_PL = GO_LAY.pages_per_layer   # pages per GDN layer (the layer stride)
+            if 'gdn_out' in _WEIGHTS: go_w_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
             else:
                 torch.manual_seed(17)
-                wg_all = _wl().pack_gdn_out([torch.randn(WKG * TILE, WNG * TILE) / math.sqrt(WKG * TILE) for _ in range(NGo)], GLAY, dev=dev)
-            wgq = GLAY.unpack(ttnn.to_torch(wg_all).float().reshape(NGo, GPL, TILE, TILE))
-            gdbg = ttnn.from_torch(torch.zeros(1, 1, TILE, NGo * WNG * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                go_w_all = _wl().pack_gdn_out([torch.randn(GO_WK * TILE, GO_WN * TILE) / math.sqrt(GO_WK * TILE) for _ in range(GO_NG)], GO_LAY, dev=dev)
+            go_wq = GO_LAY.unpack(ttnn.to_torch(go_w_all).float().reshape(GO_NG, GO_PL, TILE, TILE))
+            go_dbg = ttnn.from_torch(torch.zeros(1, 1, TILE, GO_NG * GO_WN * TILE).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             GO = dict(wou_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'attn', 'kernels'),
-                      wk=WKG, maxt=GMAXT, w=wg_all, w_addr=wg_all.buffer_address(), w_stride=GPL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
-                      gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in gcs], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
-                      cnt=GSA[13], nt=[len(GT[fi]) for fi in gcs], page=[GP[fi] * banks + GB[fi] for fi in gcs], tiles=[GT[fi] for fi in gcs],
-                      dbg=gdbg, dbg_addr=gdbg.buffer_address(),
+                      wk=GO_WK, maxt=GO_MAXT, w=go_w_all, w_addr=go_w_all.buffer_address(), w_stride=GO_PL, gdna=GDN_SA['gdna'], xow=GDN_SA['xow'],
+                      gdn_xy=[(fphys[fi].x, fphys[fi].y) for fi in go_cores], owners=[(fphys[f_].x, fphys[f_].y) for f_ in owner_fi],
+                      cnt=GSA[13], nt=[len(GO_T[fi]) for fi in go_cores], page=[GO_P[fi] * banks + GO_B[fi] for fi in go_cores], tiles=[GO_T[fi] for fi in go_cores],
+                      dbg=go_dbg, dbg_addr=go_dbg.buffer_address(),
                       # CB ids (ring, A, out) on the GDN cores: 42/43/44 reserved for gdn_out (lean GDN table 0..41, -mk-int 80b43723a3f); before
                       # them; MKA_GDNOUT_CB=34,35,37 borrows the AR-sender ids for bring-up WITHOUT MK_REAL_AR
                       cb=tuple(int(v_) for v_ in os.environ.get('MKA_GDNOUT_CB', '42,43,44').split(',')),
@@ -1456,8 +1456,8 @@ def setup_bench(dev, MESH, mesh_identity):
             assert not (set(GO['cb']) & {34, 35, 37, 39} and ('MK_REAL_AR', '1') in MKDEF), "MKA_GDNOUT_CB: 34/35/37/39 are the AR senders' ids"
             assert ('MK_GAR_ZERO', '1') not in MKDEF, "MKA_GDNOUT writes CB_XO: drop the MK_GAR_ZERO stand-in"
             MKDEF = MKDEF + [('MKA_GDNOUT', '1'), ('MKA_GDN_XOW', f"{GDN_SA['xow']}u"), ('MK_GDN_OUT_REAL', '1')]   # G-d reads CB_XO at WOCNT
-            print(f"[gdnout] GDN out_proj via the wo unit: {NGo} GDN layers, {len(gcs)} cores x {min(GO['nt'])}-{GMAXT} tiles, K {WKG}, BFP4 ring "
-                  f"{WKG * GMAXT} pages, banks {sorted(set(GB.values()))}", flush=True)
+            print(f"[gdnout] GDN out_proj via the wo unit: {GO_NG} GDN layers, {len(go_cores)} cores x {min(GO['nt'])}-{GO_MAXT} tiles, K {GO_WK}, BFP4 ring "
+                  f"{GO_WK * GO_MAXT} pages, banks {sorted(set(GO_B.values()))}", flush=True)
         def _gpr(lx0, lx1):
             a_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx0, GY)); b_ = dev.worker_core_from_logical_core(ttnn.CoreCoord(lx1, GYF - 1))
             return [a_.x, a_.y, b_.x, b_.y, (lx1 - lx0 + 1) * (GYF - GY)]
@@ -1492,14 +1492,22 @@ def setup_bench(dev, MESH, mesh_identity):
             if GO:
                 def _gdnout_check(it):   # out_proj golden from the engine's own `out` (A) of each GDN layer x the dequantized slices
                     role_ = GDN_ROLE['role']
-                    dv_ = ttnn.to_torch(gdbg).float().reshape(TILE, NGo, WNG * TILE)
+                    dv_ = ttnn.to_torch(go_dbg).float().reshape(TILE, GO_NG, GO_WN * TILE)
                     R_ = role_.B * role_.T
-                    for g_ in range(NGo):
-                        A_ = ttnn.to_torch(role_.LY[g_]['outE']).float().reshape(TILE, WKG * TILE)
-                        gg_ = A_ @ wgq[g_]
+                    if os.environ.get('E1_GO_LOCAL', '2') == '2':
+                        # the step's out tiles go straight into gdn_out's A (never to the out tensor): no gold. Sanity only;
+                        # run E1_GO_LOCAL=1 (GDN_OUT_RD_KEEP writes the out rows too) for the real PCC
+                        for g_ in range(GO_NG):
+                            v_ = dv_[:R_, g_]
+                            print(f"[gdnout] iter {it} GDN layer {go_layers[g_]} gdn_out PCC NOT CHECKED (E1_GO_LOCAL=2: no gold; E1_GO_LOCAL=1 checks) "
+                                  f"sanity: finite {bool(torch.isfinite(v_).all())} |out|max {v_.abs().max().item():.3f} zero frac {(v_ == 0).float().mean().item():.3f}", flush=True)
+                        return
+                    for g_ in range(GO_NG):
+                        A_ = ttnn.to_torch(role_.LY[g_]['outE']).float().reshape(TILE, GO_WK * TILE)
+                        gg_ = A_ @ go_wq[g_]
                         v_ = dv_[:, g_]
                         pc_ = torch.corrcoef(torch.stack([v_[:R_].flatten(), gg_[:R_].flatten()]))[0, 1].item()
-                        print(f"[gdnout] iter {it} GDN layer {g_layers[g_]} rows {R_} gdn_out pcc {pc_:.5f} max|err| {(v_[:R_] - gg_[:R_]).abs().max().item():.4f} "
+                        print(f"[gdnout] iter {it} GDN layer {go_layers[g_]} rows {R_} gdn_out pcc {pc_:.5f} max|err| {(v_[:R_] - gg_[:R_]).abs().max().item():.4f} "
                               f"|gold|max {gg_[:R_].abs().max().item():.3f}", flush=True)
                 GDN_ROLE['gdnout_check'] = _gdnout_check
             if GDN_WAIT:
