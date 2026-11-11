@@ -30,6 +30,9 @@ from models.demos.gemma4.tt.ccl import ccl_allgather, oneshot_matmul_kwargs
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
 from models.demos.gemma4.tt.sdpa_pair_split import LOGIT_CLAMP, STATS_L_COL, STATS_M_COL, log_once, pair_split_enabled
+from models.demos.gemma4.tt.verify_prefix_lse import TILE as PREFIX_TILE
+from models.demos.gemma4.tt.verify_prefix_lse import log_once as prefix_log_once
+from models.demos.gemma4.tt.verify_prefix_lse import prefix_lse_layer_reason
 
 from .operations import (
     _paged_fill_cache,
@@ -1156,6 +1159,345 @@ def _packed_verify_sdpa(
     return out
 
 
+def _free_source(src, out):
+    """Free ``src`` once ``out`` was made from it, unless ttnn handed back the same buffer (a no-op layout change, pad
+    or slice, or a reshape view)."""
+    if out is not src and int(out.buffer_address()) != int(src.buffer_address()):
+        ttnn.deallocate(src)
+
+
+def _packed_verify_out(tt_sdpa, weights, config, mesh_config, ccl_manager):
+    """The packed verify's tail from the attention rows ``[1, B*P, H_local, head_dim]`` ROW_MAJOR (L1): concat heads,
+    o_proj and the row all-reduce. Returns ``[1, 1, B*P, hidden_size]``."""
+    l1 = ttnn.L1_MEMORY_CONFIG
+    tt_sdpa = ttnn.to_layout(tt_sdpa, ttnn.TILE_LAYOUT, memory_config=l1)
+
+    # Decode-layout concat: transpose batch/heads then nlp_concat_heads.
+    tt_sdpa = ttnn.transpose(tt_sdpa, 1, 2)
+    tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tt_sdpa)
+    # one-shot all-reduce (slot "o") when the B*P packed rows fit one row tile; above it the o_proj runs its
+    # prefill config and the interleaved output takes the composite all-reduce (see the single-token path)
+    rows = int(tt_out.shape[-2])
+    tt_out = apply_output_projection(tt_out, weights, **oneshot_matmul_kwargs(mesh_config, ccl_manager))
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size, slot="o", rows=rows)
+    return tt_out
+
+
+# ── GEMMA4_SPEC_VERIFY_PREFIX_LSE: a global layer's verify as a causal prefix decode + the candidates' own keys ──────
+# tt/verify_prefix_lse.py holds the knob, the gate, the planner and torch emulations of the ops below; tt/spec_decode.py
+# plans the record, builds the constant fresh mask and uploads the prefix positions and biases per replay.
+
+
+def prefix_lse_verify_reason(prefix_lse, config, weights, kv_cache, kv_modulo, B, P, tp, is_kv_shared=False):
+    """None when this packed verify call runs the prefix + fresh split with ``prefix_lse`` (``{"plan", "cur_pos",
+    "bias", "fresh_mask"}``), else why not: the layer's static check (``prefix_lse_layer_reason``) and the record's
+    plan matching the call (rows, candidates, heads, head dim, the cache's effective block: a buffer shared with the
+    sliding layers is read through the geometry override, as ``pair_split_sdpa`` reads it) and, for a pair plan, the
+    layer's pair view (``weights.pair``, a GEMMA4_SDPA_PAIR_SPLIT build). Static values only (trace-safe)."""
+    plan = prefix_lse["plan"]
+    h_local = config.num_attention_heads // (tp // 2 if plan.pair else tp)
+    reason = prefix_lse_layer_reason(
+        is_sliding=config.is_sliding,
+        cache_position_modulo=config.cache_position_modulo,
+        kv_modulo=kv_modulo,
+        nkv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+        head_dim=config.head_dim,
+        cache_shape=tuple(kv_cache[0].padded_shape),
+        is_kv_shared=is_kv_shared,
+    )
+    if reason is None and not plan.fits:
+        reason = plan.describe()
+    if reason is None and plan.pair and getattr(weights, "pair", None) is None:
+        reason = "the record plans the pair split but the layer has no pair view (GEMMA4_SDPA_PAIR_SPLIT build)"
+    if reason is None:
+        block = effective_block_size(kv_cache[0], config.head_dim, 1)
+        if block != plan.geometry.block_size or tuple(kv_cache[1].padded_shape) != tuple(kv_cache[0].padded_shape):
+            reason = (
+                f"the record's plan reads blocks of {plan.geometry.block_size}; the layer's K / V caches "
+                f"{tuple(kv_cache[0].padded_shape)} / {tuple(kv_cache[1].padded_shape)} give {block}"
+            )
+    if reason is None and (plan.batch, plan.packed_p, plan.h_local, plan.head_dim) != (
+        B,
+        P,
+        h_local,
+        int(config.head_dim),
+    ):
+        reason = (
+            f"the record's plan is for {plan.batch} rows x {plan.packed_p} candidates, {plan.h_local} heads of "
+            f"{plan.head_dim}; the call has {B} x {P}, {h_local} of {config.head_dim}"
+        )
+    return reason
+
+
+def _fresh_kv_rows(t, B, P, head_dim, cache_dtype):
+    """The candidates' K or V per record row for the fresh part: ``t [1, 1, B*P (tile-padded), D]`` (the prefill-style
+    split after its norm, and RoPE for K; NOT consumed, the KV write takes it next) -> ROW_MAJOR, logical rows ->
+    ``[1, B, P, D]`` -> zero rows ``P..31`` -> ``[1, B, 32, D]`` bf16 TILE in DRAM
+    (``verify_prefix_lse.fresh_kv_rows``). Over a bfloat8_b cache the rows go through that format and back, so the fresh
+    keys are the bytes the cache now holds (the masked verify and the plain decode read the candidates from the
+    cache): bfloat8_b shares an exponent over 16 consecutive elements of one tile row, here and in the cache one
+    position's 16 head-dim entries, and a cache shared with the sliding layers (read through the geometry override)
+    only moves the whole tile a position lands in."""
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+    if int(rm.buffer_address()) == int(t.buffer_address()):  # never free the caller's K / V
+        rm = ttnn.clone(rm, memory_config=dram)
+    if rm.shape[2] != B * P:
+        rows = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, B * P, head_dim])
+        _free_source(rm, rows)
+        rm = rows
+    per_row = ttnn.reshape(rm, (1, B, P, head_dim))
+    padded = ttnn.pad(per_row, [(0, 0), (0, 0), (0, PREFIX_TILE - P), (0, 0)], value=0.0)
+    _free_source(per_row, padded)
+    out = ttnn.to_layout(padded, ttnn.TILE_LAYOUT, memory_config=dram)
+    _free_source(padded, out)
+    if out.dtype != ttnn.bfloat16:
+        out_bf16 = ttnn.typecast(out, ttnn.bfloat16)
+        ttnn.deallocate(out)
+        out = out_bf16
+    if cache_dtype is not None and cache_dtype != ttnn.bfloat16:
+        rounded = ttnn.typecast(out, cache_dtype)
+        ttnn.deallocate(out)
+        out = ttnn.typecast(rounded, ttnn.bfloat16)
+        ttnn.deallocate(rounded)
+    return out
+
+
+def _prefix_two_way_weights(lse1, lse2, l2):
+    """``(w1, c2)`` of the prefix and the fresh part (``verify_prefix_lse.merge_prefix_fresh_torch``): ``d =
+    clamp(lse1 - lse2)``, ``w1 = sigmoid(d)``, ``c2 = sigmoid(-d) / l2`` (the fresh weight over its own normaliser).
+    ``lse1 / lse2 / l2 [1, B, R, 1]`` fp32; consumes ``lse1`` and ``lse2``."""
+    diff = ttnn.subtract(lse1, lse2)
+    ttnn.deallocate(lse1)
+    ttnn.deallocate(lse2)
+    clamped = ttnn.clamp(diff, min=-LOGIT_CLAMP, max=LOGIT_CLAMP)
+    ttnn.deallocate(diff)
+    w1 = ttnn.sigmoid(clamped)
+    negated = ttnn.multiply(clamped, -1.0)
+    ttnn.deallocate(clamped)
+    w2 = ttnn.sigmoid(negated)
+    ttnn.deallocate(negated)
+    c2 = ttnn.div(w2, l2)
+    ttnn.deallocate(w2)
+    return w1, c2
+
+
+def _prefix_pair_weights(lse_s, lse_f, l2, selector, mesh_config, ccl_manager):
+    """``(w_self, c_fresh)`` of the pair split's three-way merge (``verify_prefix_lse.pair_prefix_merge_torch``): this
+    chip's half ``lse_s`` (bias included), the partner's (the row all-gather as in ``pair_merge``, times
+    ``relu(-selector) = e_{c^1}`` and summed over the device dim: the partner's value exactly, so an empty half's
+    sentinel never costs the other two terms precision), and the fresh ``lse_f``: ``top`` their max, ``a_i =
+    exp(lse_i - top)``, ``S = (a_self + a_partner) + a_fresh``, ``w_self = a_self / S``, ``c_fresh = 0.5 * a_fresh /
+    (S * l2)`` (both chips of the pair add half of the identical fresh term). ``[1, B, R, 1]`` fp32; consumes ``lse_s``
+    and ``lse_f``."""
+    B, R = int(lse_s.shape[1]), int(lse_s.shape[2])
+    rows = ttnn.reshape(lse_s, (1, 1, B * R, 1))
+    if int(rows.buffer_address()) == int(lse_s.buffer_address()):
+        rows = ttnn.clone(rows)  # the gather frees its input and lse_s is read below
+    gathered = ccl_allgather(rows, mesh_config, ccl_manager, dim=1)  # [1, tp, B*R, 1]; consumes rows
+    negated = ttnn.multiply(selector, -1.0)
+    partner = ttnn.relu(negated)  # e_{c^1}: the selector row is e_c - e_{c^1}
+    ttnn.deallocate(negated)
+    picked = ttnn.multiply(gathered, partner)
+    ttnn.deallocate(gathered)
+    ttnn.deallocate(partner)
+    lse_p_rows = ttnn.sum(picked, dim=1, keepdim=True)  # [1, 1, B*R, 1]: one non-zero term, the partner's lse
+    ttnn.deallocate(picked)
+    lse_p = ttnn.reshape(lse_p_rows, (1, B, R, 1))
+    _free_source(lse_p_rows, lse_p)
+    top_sp = ttnn.maximum(lse_s, lse_p)
+    top = ttnn.maximum(top_sp, lse_f)
+    ttnn.deallocate(top_sp)
+    exps = []
+    for lse in (lse_s, lse_p, lse_f):
+        shifted = ttnn.subtract(lse, top)
+        ttnn.deallocate(lse)
+        exps.append(ttnn.exp(shifted, fast_and_approximate_mode=False))
+        ttnn.deallocate(shifted)
+    ttnn.deallocate(top)
+    a_s, a_p, a_f = exps
+    sum_sp = ttnn.add(a_s, a_p)
+    ttnn.deallocate(a_p)
+    total = ttnn.add(sum_sp, a_f)
+    ttnn.deallocate(sum_sp)
+    w_s = ttnn.div(a_s, total)
+    ttnn.deallocate(a_s)
+    norm = ttnn.multiply(total, l2)
+    ttnn.deallocate(total)
+    c_f_full = ttnn.div(a_f, norm)
+    ttnn.deallocate(a_f)
+    ttnn.deallocate(norm)
+    c_f = ttnn.multiply(c_f_full, 0.5)
+    ttnn.deallocate(c_f_full)
+    return w_s, c_f
+
+
+def _prefix_fresh_merge(q, out1, stats, k_fresh, v_fresh, fresh_mask, bias, compute_kernel_config, pair=None):
+    """One prefix call's rows merged with the fresh part (``verify_prefix_lse.fresh_attention_torch`` and
+    ``merge_prefix_fresh_torch`` op for op). ``q [1, B, R, D]`` bf16 TILE (not consumed), ``out1 [1, B, R, D]`` and
+    ``stats [1, B, PNH, 64]`` the prefix call's outputs (consumed), ``k_fresh / v_fresh [1, B, 32, D]`` bf16 (keys
+    ``P..31`` zero), ``fresh_mask [1, B, R, 32]`` and ``bias [1, B, R, 1]`` fp32. The fresh scores, softmax
+    statistics and the whole merge stay fp32; the scale is 1.0 (Gemma's), as the packed verify's. ``pair``:
+    ``(selector, mesh_config, ccl_manager)`` when the prefix call ran pair-split (``_prefix_pair_weights``). Returns
+    ``[1, B, R, D]`` bf16 TILE."""
+    f32 = ttnn.float32
+    B, R = int(q.shape[1]), int(q.shape[2])
+    # fresh part: scores against the candidates' own keys, the constant causal mask, its own (m, l), unnormalised P @ V
+    scores = ttnn.matmul(q, k_fresh, transpose_b=True, dtype=f32, compute_kernel_config=compute_kernel_config)
+    masked = ttnn.add(scores, fresh_mask)
+    ttnn.deallocate(scores)
+    m2 = ttnn.max(masked, dim=-1, keepdim=True)  # [1, B, R, 1]
+    shifted = ttnn.subtract(masked, m2)
+    ttnn.deallocate(masked)
+    e = ttnn.exp(shifted, fast_and_approximate_mode=False)
+    ttnn.deallocate(shifted)
+    l2 = ttnn.sum(e, dim=-1, keepdim=True)  # [1, B, R, 1]
+    o2 = ttnn.matmul(e, v_fresh, dtype=f32, compute_kernel_config=compute_kernel_config)  # [1, B, R, D]
+    ttnn.deallocate(e)
+    ln_l2 = ttnn.log(l2)
+    lse2 = ttnn.add(m2, ln_l2)
+    ttnn.deallocate(m2)
+    ttnn.deallocate(ln_l2)
+    # prefix statistics: m (raw max) at column 0, l at column 32, bf16 -> fp32 before the log (see pair_merge)
+    stats32 = ttnn.typecast(stats, f32)
+    ttnn.deallocate(stats)
+    m1 = ttnn.slice(stats32, [0, 0, 0, STATS_M_COL], [1, B, R, STATS_M_COL + 1])
+    l1 = ttnn.slice(stats32, [0, 0, 0, STATS_L_COL], [1, B, R, STATS_L_COL + 1])
+    ttnn.deallocate(stats32)
+    ln_l1 = ttnn.log(l1)
+    lse1 = ttnn.add(m1, ln_l1)
+    for t in (m1, l1, ln_l1):
+        ttnn.deallocate(t)
+    lse1_b = ttnn.add(lse1, bias)  # EMPTY_PREFIX_LSE on a row without prefix
+    ttnn.deallocate(lse1)
+    if pair is None:
+        w1, c2 = _prefix_two_way_weights(lse1_b, lse2, l2)
+    else:
+        w1, c2 = _prefix_pair_weights(lse1_b, lse2, l2, *pair)
+    ttnn.deallocate(l2)
+    o1 = ttnn.typecast(out1, f32)
+    ttnn.deallocate(out1)
+    part1 = ttnn.multiply(o1, w1)
+    ttnn.deallocate(o1)
+    ttnn.deallocate(w1)
+    part2 = ttnn.multiply(o2, c2)
+    ttnn.deallocate(o2)
+    ttnn.deallocate(c2)
+    merged = ttnn.add(part1, part2)
+    ttnn.deallocate(part1)
+    ttnn.deallocate(part2)
+    out = ttnn.typecast(merged, ttnn.bfloat16)
+    ttnn.deallocate(merged)
+    return out
+
+
+def _prefix_lse_verify_rows(
+    tt_q, k_fresh, v_fresh, k_cache, v_cache, page_table, prefix_lse, B, P, H_local, head_dim, mesh_device, pair=None
+):
+    """The global layer's packed verify attention as the prefix + fresh split (tt/verify_prefix_lse.py).
+
+    ``tt_q [1, H_local, B*P (tile-padded), D]`` (after RoPE; consumed) -> ROW_MAJOR, logical rows -> head-major
+    ``[1, B, H_local*P, D]`` (row ``h*P + p``, the masked verify's pack) -> per prefix call ``s`` (``plan.splits``
+    calls of ``R = (H_local / splits) * P`` rows, whole heads) a TILE DRAM bf16 slice ->
+    ``SdpaDecodeLse`` causal at ``prefix_lse["cur_pos"]`` (``[B]`` int32, ``max(c_b - 1, 0)``) over the layer's verify
+    table, then ``_prefix_fresh_merge`` with the fresh K / V -> concat over the calls -> ``[1, B*P, H_local, D]``
+    ROW_MAJOR in L1, the rows the o_proj tail takes (``verify_prefix_lse.prefix_q_rows`` / ``prefix_out_rows``).
+    ``pair`` (``(selector, mesh_config, ccl_manager)``, the pair view): each prefix call runs ``pair_split=True`` and
+    merges three ways with the partner's half."""
+    from models.demos.gemma4.custom_ops.sdpa_decode_lse import SdpaDecodeLse
+
+    plan = prefix_lse["plan"]
+    splits = int(plan.splits)
+    rows = (H_local // splits) * P
+    dram, l1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
+    q = ttnn.to_layout(tt_q, ttnn.ROW_MAJOR_LAYOUT)
+    _free_source(tt_q, q)
+    if q.shape[2] != B * P:
+        q_rows = ttnn.slice(q, [0, 0, 0, 0], [1, H_local, B * P, head_dim])
+        _free_source(q, q_rows)
+        q = q_rows
+    q5 = ttnn.reshape(q, (1, H_local, B, P, head_dim))
+    q_perm = ttnn.permute(q5, (0, 2, 1, 3, 4))  # [1, B, H_local, P, D]
+    _free_source(q5, q_perm)
+    q_rm = ttnn.reshape(q_perm, (1, B, H_local * P, head_dim))
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(int(plan.grid[0]), int(plan.grid[1])),
+        q_chunk_size=32,
+        k_chunk_size=int(plan.k_chunk),
+        exp_approx_mode=False,
+        max_cores_per_head_batch=int(plan.max_cores_per_head),
+    )
+    fresh_cc = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    kwargs = dict(
+        scale=1.0,
+        num_kv_heads=1,
+        block_size=effective_block_size(k_cache, head_dim, 1),
+        cache_position_modulo=None,
+        program_config=program_config,
+        compute_kernel_config=None,  # the stock call's default (HiFi2, fp32 dest off), as the plain decode's
+        pair_split=pair is not None,
+    )
+    parts = []
+    for s in range(splits):
+        q_s = q_rm if splits == 1 else ttnn.slice(q_rm, [0, 0, s * rows, 0], [1, B, (s + 1) * rows, head_dim])
+        q_t = ttnn.to_layout(q_s, ttnn.TILE_LAYOUT, memory_config=dram)
+        if q_s is not q_rm:
+            _free_source(q_s, q_t)
+        if q_t.dtype != ttnn.bfloat16:  # the op takes a bf16 Q
+            q_bf16 = ttnn.typecast(q_t, ttnn.bfloat16)
+            ttnn.deallocate(q_t)
+            q_t = q_bf16
+        reason = SdpaDecodeLse.unsupported_reason(
+            q_t, k_cache, v_cache, prefix_lse["cur_pos"], page_table, memory_config=dram, **kwargs
+        )
+        if reason is not None:
+            raise ValueError(f"packed verify: sdpa_decode_lse refuses the prefix call ({plan.describe()}): {reason}")
+        out1, stats = SdpaDecodeLse.op(
+            q_t,
+            k_cache,
+            v_cache,
+            prefix_lse["cur_pos"],
+            page_table,
+            memory_config=dram,
+            stats_memory_config=dram,
+            **kwargs,
+        )
+        parts.append(
+            _prefix_fresh_merge(
+                q_t, out1, stats, k_fresh, v_fresh, prefix_lse["fresh_mask"], prefix_lse["bias"], fresh_cc, pair=pair
+            )
+        )
+        ttnn.deallocate(q_t)
+    ttnn.deallocate(q_rm)
+    if splits == 1:
+        merged = ttnn.to_layout(parts[0], ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)
+        _free_source(parts[0], merged)
+    else:
+        rm_parts = []
+        for part in parts:
+            part_rm = ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+            _free_source(part, part_rm)
+            rm_parts.append(part_rm)
+        merged = ttnn.concat(rm_parts, dim=2, memory_config=l1)  # [1, B, H_local*P, D], head-major again
+        for part_rm in rm_parts:
+            ttnn.deallocate(part_rm)
+    if merged.shape[2] != H_local * P:
+        merged_rows = ttnn.slice(merged, [0, 0, 0, 0], [1, B, H_local * P, head_dim])
+        _free_source(merged, merged_rows)
+        merged = merged_rows
+    out5 = ttnn.reshape(merged, (1, B, H_local, P, head_dim))
+    out_perm = ttnn.permute(out5, (0, 1, 3, 2, 4))  # [1, B, P, H_local, D]
+    _free_source(out5, out_perm)
+    return ttnn.reshape(out_perm, (1, B * P, H_local, head_dim))
+
+
 def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
     """Loop-free packed KV-cache write via PERSISTENT STAGING and a
     transpose-free ``ttnn.embedding`` row-gather merge — replaces the
@@ -1240,6 +1582,7 @@ def packed_decode_forward(
     embed_idx=None,
     hot_pt=None,
     kv_modulo=None,
+    prefix_lse=None,
 ):
     """Packed multi-token decode attention — P query positions/slot in one pass.
 
@@ -1258,6 +1601,7 @@ def packed_decode_forward(
         attn_mask: [B, 1, H_local*P, S_k] head-major additive mask baking in
             the per-position causal upper bound and (sliding layers) the
             window lower bound. S_k must be a multiple of k_chunk (64).
+            None on a global layer the prefix + fresh split serves.
         packed_p: P, the number of packed positions per slot.
         rope_packed: optional pre-gathered (cos_bp, sin_bp) for this layer
             type — identical for all layers of a type, so the caller gathers
@@ -1270,6 +1614,13 @@ def packed_decode_forward(
             ``page_table`` is a ring over an unbounded pool (the serving
             records' sliding span ring); None = the layer's own
             ``config.cache_position_modulo``.
+        prefix_lse: GEMMA4_SPEC_VERIFY_PREFIX_LSE (global layers of the
+            serving records): ``{"plan": PrefixLsePlan, "cur_pos": [B] int32,
+            "bias": [1, B, R, 1] fp32, "fresh_mask": [1, B, R, 32] fp32}``;
+            the attention runs a causal decode over each row's prefix plus the
+            candidates' own K / V, merged through their LSEs
+            (``_prefix_lse_verify_rows``), when ``prefix_lse_verify_reason``
+            allows, else the masked SDPA below.
 
     Returns:
         [1, 1, B*P, hidden_size] — attention output for every packed position.
@@ -1288,6 +1639,29 @@ def packed_decode_forward(
     # needs cache_position_modulo.
     if kv_cache is None:
         raise ValueError("packed_decode_forward requires a KV cache (it attends through the paged cache)")
+    # GEMMA4_SPEC_VERIFY_PREFIX_LSE: decided on static values only, before anything runs (the fresh part needs the K / V
+    # this call computes, taken before the KV write)
+    prefix_on = False
+    if prefix_lse is not None:
+        prefix_reason = prefix_lse_verify_reason(
+            prefix_lse, config, weights, kv_cache, kv_modulo, B, P, tp, is_kv_shared=is_kv_shared
+        )
+        prefix_on = prefix_reason is None
+        if not prefix_on:
+            if attn_mask is None:
+                raise ValueError(
+                    f"packed verify: no mask was built and the prefix + fresh split refuses: {prefix_reason}"
+                )
+            prefix_log_once(f"a global layer keeps the masked packed verify: {prefix_reason}")
+    # the pair view (GEMMA4_SDPA_PAIR_SPLIT build): the QKV of the chip's whole KV group -- the same Q, K and V on both
+    # chips of a pair, K / V those of the 4-head layout, so the KV write below is unchanged -- and the group's o_proj
+    prefix_pair = None
+    head_tp = tp
+    if prefix_on and prefix_lse["plan"].pair:
+        weights = weights.pair
+        prefix_pair = (weights.pair_selector, mesh_config, ccl_manager)
+        head_tp = tp // 2
+        H_local = config.num_attention_heads // head_tp
     write_modulo = kv_modulo if kv_modulo is not None else config.cache_position_modulo
     l1 = ttnn.L1_MEMORY_CONFIG
 
@@ -1298,7 +1672,7 @@ def packed_decode_forward(
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
     # ``paged_update_cache`` needs the layout ``nlp_create_qkv_heads_decode``
     # emits; the spec depends only on shape constants, so probe once and cache.
-    cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
+    cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, head_tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
     # The loop-free custom op (GEMMA4_PACKED_KV_WRITE_OP=1) needs no sharded layout: the probe runs only when the
     # loop serves the write.
@@ -1314,7 +1688,7 @@ def packed_decode_forward(
     ):
         probe = ttnn.slice(xqkv, [0, 0, 0, 0], [1, 1, B, qkv_dim])
         q_probe, k_probe, v_probe = split_qkv_heads_decode(
-            probe, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+            probe, config, weights.is_global, tp=head_tp, kv_replicated=weights.kv_replicated
         )
         q_sharded_mem = q_probe.memory_config()
         _Q_SHARDED_MEM_CACHE[cache_key] = q_sharded_mem
@@ -1323,7 +1697,7 @@ def packed_decode_forward(
 
     # ── ②b Prefill-style split → L1 Q/K/V on B*P ────────────────────────────
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated, memory_config=l1
+        xqkv, config, weights.is_global, tp=head_tp, kv_replicated=weights.kv_replicated, memory_config=l1
     )
     # Q: [1, H_local, B*P, head_dim], K/V: [1, nkv_local, B*P, head_dim]
     ttnn.deallocate(xqkv)
@@ -1352,6 +1726,13 @@ def packed_decode_forward(
     if is_kv_shared:
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
+
+    # ── ④' GEMMA4_SPEC_VERIFY_PREFIX_LSE: the candidates' own K / V per record row for the fresh part, taken here
+    # because the KV write below consumes tt_k / tt_v ──────────────────────────────────────────────────────────────
+    k_fresh = v_fresh = None
+    if prefix_on:
+        k_fresh = _fresh_kv_rows(tt_k, B, P, head_dim, kv_cache[0].dtype)
+        v_fresh = _fresh_kv_rows(tt_v, B, P, head_dim, kv_cache[1].dtype)
 
     # ── ⑤ KV write — loop-free persistent staging (primary) ────────────────
     if not is_kv_shared and kv_staging is not None and embed_idx is not None:
@@ -1415,6 +1796,28 @@ def packed_decode_forward(
             )
 
     k_cache_use, v_cache_use = kv_cache
+
+    # ── ⑥' GEMMA4_SPEC_VERIFY_PREFIX_LSE: the keys [0, c_b - 1] as one causal decode per record row (read only up to
+    # the row) + the candidates' own keys from k_fresh / v_fresh, merged through their LSEs ────────────────────────────
+    if prefix_on:
+        tt_sdpa = _prefix_lse_verify_rows(
+            tt_q,
+            k_fresh,
+            v_fresh,
+            k_cache_use,
+            v_cache_use,
+            page_table,
+            prefix_lse,
+            B,
+            P,
+            H_local,
+            head_dim,
+            mesh_device,
+            pair=prefix_pair,
+        )
+        ttnn.deallocate(k_fresh)
+        ttnn.deallocate(v_fresh)
+        return _packed_verify_out(tt_sdpa, weights, config, mesh_config, ccl_manager)
 
     # ── ⑥ Head-major pack Q → [1, B, H_local*P, head_dim] → SDPA ────────────
     # ROW_MAJOR on purpose: P (< 32) never lands on a tile axis, so the
@@ -1513,15 +1916,4 @@ def packed_decode_forward(
     tt_sdpa = ttnn.reshape(tt_sdpa, (1, B, H_local, P, head_dim))
     tt_sdpa = ttnn.permute(tt_sdpa, (0, 1, 3, 2, 4))  # [1, B, P, H_local, head_dim]
     tt_sdpa = ttnn.reshape(tt_sdpa, (1, B * P, H_local, head_dim))
-    tt_sdpa = ttnn.to_layout(tt_sdpa, ttnn.TILE_LAYOUT, memory_config=l1)
-
-    # Decode-layout concat: transpose batch/heads then nlp_concat_heads.
-    tt_sdpa = ttnn.transpose(tt_sdpa, 1, 2)
-    tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(tt_sdpa)
-    # one-shot all-reduce (slot "o") when the B*P packed rows fit one row tile; above it the o_proj runs its
-    # prefill config and the interleaved output takes the composite all-reduce (see the single-token path)
-    rows = int(tt_out.shape[-2])
-    tt_out = apply_output_projection(tt_out, weights, **oneshot_matmul_kwargs(mesh_config, ccl_manager))
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size, slot="o", rows=rows)
-    return tt_out
+    return _packed_verify_out(tt_sdpa, weights, config, mesh_config, ccl_manager)

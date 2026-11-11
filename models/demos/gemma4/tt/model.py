@@ -1429,6 +1429,8 @@ class Gemma4Model:
                 _hot = packed.get("hot_pt_sliding") if sliding else packed.get("hot_pt_full")
                 if _hot is None:
                     _hot = packed.get("hot_pt")
+                # GEMMA4_SPEC_VERIFY_PREFIX_LSE: a global layer's prefix positions, row biases and fresh mask
+                _pl = packed.get("verify_prefix_lse")
                 layer_packed = {
                     "packed_p": packed["packed_p"],
                     "position_idx": packed["position_idx"],
@@ -1438,6 +1440,7 @@ class Gemma4Model:
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": _hot,
                     "kv_modulo": packed.get("kv_modulo_sliding") if sliding else None,
+                    "prefix_lse": _pl if _pl is not None and not sliding else None,
                 }
 
             hidden_states = layer(
@@ -1845,6 +1848,7 @@ class Gemma4Model:
         page_tables_per_layer=None,
         keep_logits_sharded=False,
         kv_modulo_sliding=None,
+        verify_prefix_lse=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1878,6 +1882,13 @@ class Gemma4Model:
                 sharded verify argmax, GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX: no
                 vocab all-gather in the record). Default False gathers the
                 full vocab as before.
+            verify_prefix_lse: GEMMA4_SPEC_VERIFY_PREFIX_LSE (the serving
+                records): ``{"plan", "cur_pos", "bias", "fresh_mask"}`` -- the
+                record's PrefixLsePlan, the [B] int32 prefix positions, the
+                [1, B, R, 1] fp32 row biases and the constant [1, B, R, 32]
+                fresh mask; the global layers then attend each row's prefix
+                causally plus the candidates' own K / V and ``attn_mask_full``
+                may be None (tt/verify_prefix_lse.py).
 
         Returns:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
@@ -1912,6 +1923,7 @@ class Gemma4Model:
             "hot_pt_full": hot_pt_full,
             "hot_pt_sliding": hot_pt_sliding,
             "kv_modulo_sliding": kv_modulo_sliding,
+            "verify_prefix_lse": verify_prefix_lse,
         }
 
         # Same per-layer page-table contract as ttnn_verify_forward: bounded

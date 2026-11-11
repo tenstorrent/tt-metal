@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 
-from ...tests.test_factory import parametrize_mesh_with_fabric
+from ...tests.test_factory import GEMMA4_TEST_L1_SMALL_SIZE, parametrize_mesh_with_fabric
 
 ASSISTANT_PATH = os.getenv("GEMMA4_ASSISTANT_MODEL")
 _needs_assistant = pytest.mark.skipif(not ASSISTANT_PATH, reason="set GEMMA4_ASSISTANT_MODEL to run")
@@ -3327,6 +3327,15 @@ def test_spec_decode_batched(mesh_device, device_params, reset_seeds):
 # ── serving records: (B_v, K_v) shapes through prepare / capture / reseed / step ─────────────────
 # Written for the (1,4) mesh with a trace region; NOT run in the device-free pass that added them.
 _SERVING_SHAPES = [(1, 5), (5, 5), (8, 3), (16, 1)]
+# The serving tests capture the records' traces and then run eager plain references (and reseeds): a collective
+# first compiled after a capture puts its global semaphores in worker L1 unless the mesh has an L1_SMALL region, and
+# the records' replays overwrite them there (the eager reference then drifts or garbles from the second pass on:
+# test_ccl_semaphores.py, tt/ccl.py ccl_semaphores_in_l1_small). Open the mesh with the region, as the test factory does.
+_SERVING_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "trace_region_size": 400_000_000,
+    "l1_small_size": GEMMA4_TEST_L1_SMALL_SIZE,
+}
 _SERVING_MAX_ROWS = 16
 _SERVING_PROMPTS = [
     "The capital of France is",
@@ -3349,9 +3358,40 @@ def _serving_page_tables(rows, blocks_per_user):
     return pt
 
 
+def _shared_kv_view(target, tt_kv_cache):
+    """GEMMA4_SPEC_TEST_SHARED_KV_VIEW=1: the global layers' K / V caches replaced, before anything reads them, by
+    zeroed caches in the sliding layers' shape as vLLM's hybrid kv-cache groups allocate them ([blocks, 2, 64, 256]
+    for a 512-wide single-KV-head layer, the same elements per block), so every read and write of a global layer goes
+    through the geometry override as in a served boot."""
+    layers_kv = tt_kv_cache if hasattr(tt_kv_cache[0][0], "padded_shape") else tt_kv_cache[0]  # one list per DP model
+    mesh = target.mesh_device
+    mapper = ttnn.ReplicateTensorToMesh(mesh) if mesh.get_num_devices() > 1 else None
+    for i, layer_type in enumerate(target.hf_config.layer_types[: len(target.layers)]):
+        if layer_type == "sliding_attention":
+            continue
+        n, heads, block, dim = (int(s) for s in layers_kv[i][0].padded_shape)
+        if heads != 1 or dim % 2:
+            pytest.skip(f"layer {i}: a [{n}, {heads}, {block}, {dim}] cache has no two-head shared view")
+        shared = [
+            ttnn.from_torch(
+                torch.zeros(n, 2, block, dim // 2, dtype=torch.bfloat16),
+                device=mesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=t.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            for t in layers_kv[i]
+        ]
+        layers_kv[i] = shared
+        target.layers[i].self_attn.kv_cache = shared
+    logger.info("[serving] global layers on vLLM's shared hybrid-group cache view (GEMMA4_SPEC_TEST_SHARED_KV_VIEW=1)")
+
+
 def _serving_build(mesh_device, max_seq_len, draft_len):
     """Target + assistant at 16 rows, the KV pool for 16 users of ``max_seq_len`` plus the null block, and the
-    SpeculativeDecoder over the 16-row page table."""
+    SpeculativeDecoder over the 16-row page table (GEMMA4_SPEC_TEST_SHARED_KV_VIEW=1: the global layers' caches in
+    vLLM's shared hybrid-group view, ``_shared_kv_view``)."""
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
@@ -3375,6 +3415,8 @@ def _serving_build(mesh_device, max_seq_len, draft_len):
         bounded_sliding_kv_cache=False,
     )
     target = generator.model[0]
+    if os.environ.get("GEMMA4_SPEC_TEST_SHARED_KV_VIEW", "0") == "1":
+        _shared_kv_view(target, tt_kv_cache)
     _, assistant = create_assistant_model(
         mesh_device=mesh_device,
         target_model=target,
@@ -3532,7 +3574,7 @@ def _serving_run(spec, shape, rows, anchors, positions, page_tables, n_new, rese
 @pytest.mark.parametrize("shape", _SERVING_SHAPES, ids=lambda s: f"B{s[0]}K{s[1]}")
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    [pytest.param((1, 4), _SERVING_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_serving_record_matches_plain_greedy(mesh_device, device_params, reset_seeds, shape):
@@ -3622,7 +3664,7 @@ def test_serving_record_matches_plain_greedy(mesh_device, device_params, reset_s
 @_needs_assistant
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    [pytest.param((1, 4), _SERVING_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_serving_all_shapes_capture_and_switch(mesh_device, device_params, reset_seeds):
@@ -3735,7 +3777,7 @@ def _serving_upload(spec, host, dev, dtype, layout):
 @pytest.mark.parametrize("shape", _SERVING_SHAPES, ids=lambda s: f"B{s[0]}K{s[1]}")
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    [pytest.param((1, 4), _SERVING_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, shape):
@@ -3871,7 +3913,7 @@ def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, s
 @_needs_assistant
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    [pytest.param((1, 4), _SERVING_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 @pytest.mark.parametrize("sharded", [True, False], ids=["sharded", "gathered"])

@@ -71,10 +71,15 @@ def _assert_merged_vs_torch(cfg, pcc_merged, pcc_full):
 
 
 def _positions(B, pos):
-    """Row 0 at ``pos``; with B=4 a half-length row, a row just short of ``pos`` and a skipped (-1) row."""
+    """Row 0 at ``pos``; with B >= 4 a half-length row, a row just short of ``pos`` and a skipped (-1) row, and past
+    four rows (the packed verify's record rows) rows spread below ``pos``, the last mirroring row 0 (a padding row)."""
     if B == 1:
         return torch.tensor([pos])
-    return torch.tensor([pos, pos // 2, max(pos - 33, 0), -1])
+    head = [pos, pos // 2, max(pos - 33, 0), -1]
+    if B == 4:
+        return torch.tensor(head)
+    rest = [max(pos - 97 * (i + 1), 0) for i in range(B - 5)] + [pos]
+    return torch.tensor(head + rest)
 
 
 def _program_config(mesh_device):
@@ -138,6 +143,9 @@ class _Case:
         g = torch.Generator().manual_seed(seed + 1)
         self.table = torch.randperm(self.num_blocks, generator=g).reshape(B, self.width).to(torch.int32)
         self.q = (torch.randn(1, B, Hq, D) * Q_STD).to(torch.bfloat16)
+        if B > 4:  # the last row is a padding row of the packed verify: row 0's table and q (_positions: its position)
+            self.table[B - 1] = self.table[0]
+            self.q[:, B - 1] = self.q[:, 0]
         self.tt_q = ttnn.from_torch(self.q, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, **rep)
 
     def host(self, t):
@@ -224,6 +232,10 @@ def _cases():
     # 32 heads: full 32x32 tiles everywhere (the half-tile path is <= 16 heads)
     out.append(pytest.param(1, 32, 4095, "stock", id="B1-Hq32-pos4095-stock"))
     out.append(pytest.param(4, 32, 4095, "fp32_dest", id="B4-Hq32-pos4095-fp32_dest"))
+    # the packed verify's prefix call (GEMMA4_SPEC_VERIFY_PREFIX_LSE): H * P q rows of several record rows, a half
+    # tile at 16 rows, a partial full tile at 24
+    for B, Hq in ((5, 16), (5, 24), (16, 16)):
+        out.append(pytest.param(B, Hq, 4095, "stock", id=f"B{B}-Hq{Hq}-pos4095-stock"))
     return out
 
 
@@ -339,6 +351,88 @@ def test_sdpa_decode_lse_refuses_out_of_contract(mesh_device, device_params, res
         max_cores_per_head_batch=128,
     )
     assert "rounds" in SdpaDecodeLse.unsupported_reason(*args, program_config=big) or grid.x * grid.y < 65
+
+
+def _shared_view(global_view, heads=2, dim=256):
+    """vLLM's hybrid kv-cache-group buffer for a global layer: ``global_view [blocks, block, D]`` (one KV head of D) as
+    the tensor the sliding layers allocate, ``[blocks, heads, block * D / (heads * dim), dim]``, with every 32x32 tile at
+    the position the geometry override reads it from: a block's tiles in row-major order of the layer's own view
+    (row tile r, column tile c -> tile r * (D / 32) + c), laid out in the row-major tile order of the shared shape."""
+    blocks, block, d = (int(v) for v in global_view.shape)
+    tiles = global_view.reshape(blocks, block // 32, 32, d // 32, 32).permute(0, 1, 3, 2, 4)  # [n, rt, ct, 32, 32]
+    tiles = tiles.reshape(blocks, -1, 32, 32)  # the block's tiles in the global view's order
+    rows = block * d // (heads * dim)
+    shared = tiles.reshape(blocks, heads, rows // 32, dim // 32, 32, 32).permute(0, 1, 2, 4, 3, 5)
+    return shared.reshape(blocks, heads, rows, dim)
+
+
+@gated
+@pytest.mark.parametrize("kv_dtype", ["bfloat16", "bfloat8_b"])
+@pytest.mark.parametrize("B, Hq", [(5, 16), (5, 24), (8, 32)], ids=lambda v: str(v))
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_sdpa_decode_lse_shared_view_matches_stock(mesh_device, device_params, reset_seeds, B, Hq, kv_dtype):
+    """The 31B's global layers under vLLM's hybrid kv-cache groups: their K / V live in the sliding layers' view
+    [blocks, 2, 64, 256] and are read as one 512-wide KV head of block 64 through the geometry override
+    (GEMMA4_SPEC_VERIFY_PREFIX_LSE passes num_kv_heads=1, block_size=64, as pair_split_sdpa does). O equals the stock
+    op's with the same override bit for bit, and O and the LSE match torch over the layer's own view of the keys."""
+    torch.manual_seed(11)
+    block, width = 64, 64  # 4096 keys per row
+    blocks = B * width + 1
+    dtype = getattr(ttnn, kv_dtype)
+    k_glob = torch.randn(blocks, block, D, dtype=torch.bfloat16)
+    v_glob = torch.randn(blocks, block, D, dtype=torch.bfloat16)
+    k_cache = ttnn.from_torch(_shared_view(k_glob), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    v_cache = ttnn.from_torch(_shared_view(v_glob), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    assert tuple(k_cache.shape) == (blocks, 2, block, 256)
+    # the device's (rounded) values in the layer's own view: undo the view on the host copy
+    k_ref = ttnn.to_torch(k_cache).float()
+    v_ref = ttnn.to_torch(v_cache).float()
+    inv = torch.arange(blocks * block * D, dtype=torch.float64).reshape(blocks, block, D)  # exact past 2**24
+    order = _shared_view(inv).reshape(-1).long()  # shared-view element e holds global element order[e]
+    k_flat, v_flat = torch.empty(blocks * block * D), torch.empty(blocks * block * D)
+    k_flat[order], v_flat[order] = k_ref.reshape(-1), v_ref.reshape(-1)
+    k_own, v_own = k_flat.reshape(blocks, 1, block, D), v_flat.reshape(blocks, 1, block, D)
+    table = (torch.randperm(blocks - 1) + 1)[: B * width].reshape(B, width).to(torch.int32)
+    table[B - 1] = table[0]  # a padding row of the packed verify mirrors row 0
+    cur_pos = torch.tensor([4095 - 61 * b for b in range(B - 1)] + [4095], dtype=torch.int32)
+    q = (torch.randn(1, B, Hq, D) * Q_STD).to(torch.bfloat16)
+    q[:, B - 1] = q[:, 0]
+    tt_q = ttnn.from_torch(q, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_pos = ttnn.from_torch(cur_pos, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    tt_tab = ttnn.from_torch(table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    pc = _program_config(mesh_device)
+    view = dict(num_kv_heads=1, block_size=block)
+    args = (tt_q, k_cache, v_cache, tt_pos, tt_tab)
+    assert SdpaDecodeLse.unsupported_reason(*args, scale=SCALE, program_config=pc, **view) is None
+    out, stats = SdpaDecodeLse.op(*args, scale=SCALE, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **view)
+    stock = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        tt_q,
+        k_cache,
+        v_cache,
+        cur_pos_tensor=tt_pos,
+        page_table_tensor=tt_tab,
+        scale=SCALE,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=pc,
+        paged_cache_geometry=ttnn.PagedCacheGeometryOverride(block_size=block, num_kv_heads=1),
+    )
+    o = ttnn.to_torch(out)[0, :, :Hq].float()
+    o_stock = ttnn.to_torch(stock)[0, :, :Hq].float()
+    lse = SdpaDecodeLse.lse_from_stats(ttnn.to_torch(stats), Hq, SCALE)[0]
+    ref_out, ref_lse = SdpaDecodeLse.golden(q, k_own, v_own, table, cur_pos, scale=SCALE)
+    pcc = _pcc(o, ref_out[0])
+    err = (lse - ref_lse[0]).abs()
+    logger.info(
+        f"shared view B={B} Hq={Hq} {kv_dtype}: max |O - stock| {(o - o_stock).abs().max().item():.3e}, "
+        f"pcc(O, torch) {pcc:.6f}, max |lse - torch| {err.max().item():.4f}"
+    )
+    assert torch.equal(o, o_stock), "O differs from the stock op reading the same view"
+    # a wrong view would read other keys (pcc ~0); the stock bf16-dest op itself measures ~0.998 against fp32 torch
+    assert pcc > 0.99, f"pcc(O, torch over the own view) {pcc:.5f}"
+    assert torch.all(err <= 0.05 + 0.01 * ref_lse[0].abs()), f"lse off by {err.max().item():.4f}"
+    assert torch.equal(o[B - 1], o[0]), "the padding row differs from row 0"
+    for t in (out, stats, stock, tt_q, tt_pos, tt_tab, k_cache, v_cache):
+        t.deallocate(True)
 
 
 def _pair_positions(B, pos):
