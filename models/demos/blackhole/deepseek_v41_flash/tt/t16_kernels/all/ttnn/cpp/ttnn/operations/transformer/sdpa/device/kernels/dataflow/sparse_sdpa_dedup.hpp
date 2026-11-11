@@ -28,6 +28,7 @@ constexpr uint32_t TOMB = 0xFFFFFFFEu;   // deleted hash bucket
 constexpr uint32_t HASH_BITS = 11;       // 2048 buckets, <= 1024 ids
 constexpr uint32_t HASH_BUCKETS = 1u << HASH_BITS;
 constexpr uint32_t HASH_MASK = HASH_BUCKETS - 1;
+constexpr uint32_t REBUILD_MISSES = 160;  // above this many misses a token rebuilds the hash from the slot table (~13 us) instead of erase + insert per miss
 constexpr uint32_t LIST_MARK = 0xFFFFFFFEu;  // gather_request::RUN value: list mode (BASE = L1 address of the miss
                                              // list, SPLIT = entries for the writer)
 
@@ -127,7 +128,8 @@ FORCE_INLINE uint32_t plan(Scratch<NK>& sc, volatile tt_l1_ptr uint32_t* idx, bo
         for (uint32_t i = 0; i < (NK + 31) / 32; ++i) {
             nused += __builtin_popcount(sc.used[i]);
         }
-        // 2. free slots (not used) take the missing rows
+        // 2. free slots (not used) take the missing rows. Many misses (low overlap): rebuilding the whole hash once is cheaper than an erase + insert per miss.
+        const bool rebuild_all = nm > REBUILD_MISSES;
         uint32_t m = 0;
         for (uint32_t w = 0; w < (NK + 31) / 32 && m < nm && nused == NK - nm; ++w) {
             uint32_t f = ~sc.used[w];
@@ -139,20 +141,22 @@ FORCE_INLINE uint32_t plan(Scratch<NK>& sc, volatile tt_l1_ptr uint32_t* idx, bo
                 f &= f - 1;
                 const uint32_t slot = (w << 5) + b;
                 const uint32_t j = sc.miss[m];
-                const uint32_t old = sc.S[slot];
-                if (old != EMPTY) {
-                    hash_erase(sc, old);
-                }
                 const uint32_t id = idx[j];
+                if (!rebuild_all) {
+                    const uint32_t old = sc.S[slot];
+                    if (old != EMPTY) {
+                        hash_erase(sc, old);
+                    }
+                    hash_insert(sc, id, slot);
+                }
                 sc.S[slot] = id;
-                hash_insert(sc, id, slot);
                 sc.miss[m] = (j << 16) | slot;
                 ++m;
             }
         }
         if (m != nm || nused != NK - nm) {
             cold = true;  // duplicate ids in the row (fewer distinct rows than slots): rebuild
-        } else if (sc.ntomb > 700) {
+        } else if (rebuild_all || sc.ntomb > 700) {
             hash_rebuild(sc);
         }
     }

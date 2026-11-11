@@ -15,10 +15,13 @@ mkdir -p $T/state2/$U/dataflow
 cp $S/weight_runs_state2.hpp $T/state2/$U/weight_runs.hpp
 cp $S/adaptive_chunk.hpp $T/state2/$U/adaptive_chunk.hpp
 cp $S/unified_routed_expert_ffn_reader.cpp $S/unified_routed_expert_ffn_writer.cpp $T/state2/$U/dataflow/
+F=ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels
+mkdir -p $T/fused/$F; cp $R/models/demos/blackhole/deepseek_v41_flash/tools/t16/src_fused/*.hpp $R/models/demos/blackhole/deepseek_v41_flash/tools/t16/src_fused/*.cpp $T/fused/$F/
 stamp() { # stamp <overlay dir>: append the header sha comment to every .cpp
   d=$1; sha=$(cat $(find $d -name '*.hpp' | sort) | sha256sum | cut -c1-16)
   for f in $(find $d -name '*.cpp'); do sed -i '/^\/\/ T16-HDR-SHA/d' $f; echo "// T16-HDR-SHA $sha" >> $f; done
 }
-stamp $T/state2; stamp $T/sdpa
-rm -rf $T/all; mkdir -p $T/all; cp -a $T/sdpa/. $T/all/; cp -a $T/state2/. $T/all/
+cp $S/sparse_sdpa_gather.hpp $S/block_cyclic_remap.hpp $T/sdpa/$SD/   # headers found relative to the overlay .cpp (unchanged copies)
+stamp $T/state2; stamp $T/sdpa; stamp $T/fused
+rm -rf $T/all; mkdir -p $T/all; cp -a $T/sdpa/. $T/all/; cp -a $T/state2/. $T/all/; cp -a $T/fused/. $T/all/
 find $T -type f | sort | xargs sha256sum

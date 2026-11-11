@@ -50,6 +50,11 @@ NE = 384
 D = HIDDEN
 
 
+def FUSED_ACT():
+    """activation passed to moe_fused_swiglu: MF_FUSED_ACT=situ -> SituGlu, which the T16 'fused' kernel overlay (TT_METAL_KERNEL_PATH) turns into the DeepSeek-V4 clamped SiLU-GLU (limit 10); default Silu"""
+    return ttnn.RoutedExpertActivation.SituGlu if os.environ.get("MF_FUSED_ACT") == "situ" else ttnn.RoutedExpertActivation.Silu
+
+
 def rec(d):
     os.makedirs(OUT, exist_ok=True)
     d = dict(d, lever=LEVER)
@@ -282,7 +287,7 @@ def test_moe_fuse_bench(mesh_device):
         sh = get_shared(md, N)
         T = ROWS * N
         g = torch.Generator().manual_seed(N)
-        x = torch.randn(T, D, generator=g).to(torch.bfloat16)
+        x = (torch.randn(T, D, generator=g) * float(os.environ.get("MF_XSCALE", "1"))).to(torch.bfloat16)  # MF_XSCALE>1: activations large enough for the clamp (10) of ClampedSiluGlu to fire
         xr = shard(md, x.view(ROWS, N, D), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (0, None))
         for kind in KINDS:
             ids = make_ids(kind, T, g, pool)
@@ -386,7 +391,7 @@ def test_moe_fuse_bench(mesh_device):
                         input_m_tiles=sh.max_per_expert // ttnn.TILE_SIZE,
                         core_grid=ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID,
                         compute_kernel_config=ckc_f,
-                        activation=ttnn.RoutedExpertActivation.Silu,
+                        activation=FUSED_ACT(),
                         output=o_,
                         expert_region_offsets=roff,
                         read_x_at_offset=True,
@@ -418,7 +423,7 @@ def test_moe_fuse_bench(mesh_device):
                         input_m_tiles=sh.max_per_expert // ttnn.TILE_SIZE,
                         core_grid=ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID,
                         compute_kernel_config=ckc_f,
-                        activation=ttnn.RoutedExpertActivation.Silu,
+                        activation=FUSED_ACT(),
                         output=o_,
                         expert_region_offsets=roff,
                         read_x_at_offset=True,
@@ -437,7 +442,7 @@ def test_moe_fuse_bench(mesh_device):
                         sh.max_per_expert,
                         hybrid_token_threshold=THR,
                         compute_kernel_config=ckc_f,
-                        activation=ttnn.RoutedExpertActivation.Silu,
+                        activation=FUSED_ACT(),
                     )
                 raise ValueError(kind)
 
@@ -503,6 +508,49 @@ def test_moe_fuse_bench(mesh_device):
                                     float(pcc(A_[int(r_[g_]) : int(r_[g_]) + n_], B_[int(r_[g_]) : int(r_[g_]) + n_])),
                                 )
                     row["pcc_op_vs_unified"] = round(worst, 6)
+                    if os.environ.get("MF_CLAMPTEST") == "1":
+                        # T16 clamp acceptance: per-expert torch ClampedSiluGlu (limit 10) from the DEVICE weights (the dequantised bfp4 copy: identical weights) on the dispatched rows of
+                        # up to 2 small (<= THR, fused half) and 2 large (unified half) experts per sampled chip; PCC of the unified op and of the op under test vs torch, bit comparison of the
+                        # two ops, and the fraction of gate / up values the clamp touches.
+                        stats = dict(pcc_unified_vs_torch=[], pcc_op_vs_torch=[], bit_equal=[], clamped_gate=[], clamped_up=[], tokens=[], small=[])
+                        for dev_i in (0, 9, 18, 27):
+                            c_ = ttnn.to_torch(ttnn.get_device_tensors(counts)[dev_i]).reshape(-1).long()
+                            r_ = ttnn.to_torch(ttnn.get_device_tensors(roff)[dev_i]).reshape(-1).long()
+                            Xd = ttnn.to_torch(ttnn.get_device_tensors(disp2)[dev_i]).float().reshape(-1, D)
+                            A_ = ttnn.to_torch(ttnn.get_device_tensors(oa)[dev_i]).float().reshape(-1, D)
+                            B_ = ttnn.to_torch(ttnn.get_device_tensors(ob)[dev_i]).float().reshape(-1, D)
+                            rr, cc_ = divmod(dev_i, COLS)
+                            cand = [(int(c_[global_expert(rr, cc_, l)]), l) for l in range(EPC) if int(c_[global_expert(rr, cc_, l)]) > 0]
+                            small = sorted([c for c in cand if c[0] <= THR])[-2:]
+                            large = sorted([c for c in cand if c[0] > THR])[-2:]
+                            for n_, l in small + large:
+                                g_ = global_expert(rr, cc_, l)
+                                o0 = int(r_[g_])
+                                nn = min(n_, 96)
+                                xw = Xd[o0 : o0 + nn]
+                                Wg = ttnn.to_torch(ttnn.get_device_tensors(gp[l])[dev_i]).float().reshape(D, -1)
+                                Wu = ttnn.to_torch(ttnn.get_device_tensors(up_[l])[dev_i]).float().reshape(D, -1)
+                                Wd = ttnn.to_torch(ttnn.get_device_tensors(dp[l])[dev_i]).float().reshape(-1, D)
+                                gg, uu = xw @ Wg, xw @ Wu
+                                stats["clamped_gate"].append(float((gg > 10).float().mean()))
+                                stats["clamped_up"].append(float((uu.abs() > 10).float().mean()))
+                                ref = (torch.nn.functional.silu(gg.clamp(max=10.0)) * uu.clamp(-10.0, 10.0)) @ Wd
+                                stats["pcc_unified_vs_torch"].append(float(pcc(A_[o0 : o0 + nn], ref)))
+                                stats["pcc_op_vs_torch"].append(float(pcc(B_[o0 : o0 + nn], ref)))
+                                stats["bit_equal"].append(bool(torch.equal(A_[o0 : o0 + n_], B_[o0 : o0 + n_])))
+                                stats["tokens"].append(n_)
+                                stats["small"].append(n_ <= THR)
+                        row["clamptest"] = dict(
+                            n_experts=len(stats["tokens"]),
+                            min_pcc_unified_vs_torch=round(min(stats["pcc_unified_vs_torch"]), 6),
+                            min_pcc_op_vs_torch=round(min(stats["pcc_op_vs_torch"]), 6),
+                            frac_gate_clamped_mean=round(sum(stats["clamped_gate"]) / len(stats["clamped_gate"]), 4),
+                            frac_up_clamped_mean=round(sum(stats["clamped_up"]) / len(stats["clamped_up"]), 4),
+                            bit_equal_small=sum(b for b, sm in zip(stats["bit_equal"], stats["small"]) if sm),
+                            bit_equal_large=sum(b for b, sm in zip(stats["bit_equal"], stats["small"]) if not sm),
+                            n_small=sum(stats["small"]),
+                            per_expert=[(t, round(a, 5), round(b, 5)) for t, a, b in zip(stats["tokens"], stats["pcc_unified_vs_torch"], stats["pcc_op_vs_torch"])],
+                        )
                 free([oa, ob])
             rec(row)
             if SYN and kind == KINDS[0] and os.environ.get("MF_NOTIME") != "1":

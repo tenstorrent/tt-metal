@@ -114,6 +114,21 @@ def test_t16_sdpa(device):
             ttnn.deallocate(o)
         ttnn.synchronize_device(dev)
         ts.append((time.perf_counter() - t) / REPS * 1e6)
+    gold_msg = ""
+    if os.environ.get("T16_GOLD") == "1":  # float64 golden of the first rows (8 real heads): which variant is closer to the truth?
+        kvf = ttnn.to_torch(pool).reshape(R, 512).float().double()
+        qf = ttnn.to_torch(q).reshape(32, S, 512)[:8].double()
+        sk = ttnn.to_torch(sink).reshape(32)[:8].double()
+        errs = []
+        for t_ in range(0, min(S, 16)):
+            row = idx[t_]
+            rows = row[(row != 0xFFFFFFFF)].long()
+            Kt = kvf[rows]
+            sc = (qf[:, t_] @ Kt.T) * 0.044
+            lg = torch.cat([sc, (sk * 0.044).view(-1, 1)], dim=1)
+            pr = torch.softmax(lg, dim=1)[:, :-1]
+            errs.append(((pr @ Kt) - out[0, :8, t_].double()).norm() / (pr @ Kt).norm())
+        gold_msg = f" | rel err vs float64 golden (16 rows): mean {torch.stack(errs).mean().item():.3e} max {torch.stack(errs).max().item():.3e}"
     msg = f"T16SDPA S={S} real={bool(ids_f)} us/call {['%.1f' % x for x in ts]} min {min(ts):.1f}"
     ref = os.environ.get("T16_REF")
     if ref and os.path.exists(ref):
@@ -127,4 +142,59 @@ def test_t16_sdpa(device):
     sv = os.environ.get("T16_SAVE")
     if sv:
         torch.save(out, sv)
-    print(msg, flush=True)
+    print(msg + gold_msg, flush=True)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("S", [1, 7, 100, 121, 513])
+@pytest.mark.parametrize("mode", ["full", "mixed", "dups"])
+def test_t16_sdpa_edge(device, S, mode):
+    """T16 K-row-cache kernel vs the same op at k_chunk 128 on ragged shapes (fewer tokens than cores, cores with 0 / 1 tokens), rows with a sentinel tail (nv < 640, the first windows of a prompt),
+    and rows with duplicated ids. Compares the 8 real heads (PCC >= 0.9995); a hang or a TT_FATAL fails the test."""
+    dev = device
+    g = torch.Generator().manual_seed(11 + S)
+    R = 20000
+    pool = ttnn.from_torch(
+        torch.randn(1, 1, R, 512, generator=g).float(),
+        device=dev, dtype=ttnn.fp8_e4m3, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    q = ttnn.from_torch(
+        torch.cat([torch.randn(1, 8, S, 512, generator=g), torch.zeros(1, 24, S, 512)], dim=1).to(torch.bfloat16),
+        device=dev, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    i = torch.arange(S).view(-1, 1)
+    win = 15000 + i + torch.arange(W).view(1, -1)
+    base = torch.randint(0, 12000, (1, TOPK), generator=g)
+    top = (base + torch.randint(-300, 300, (S, TOPK), generator=g)).clamp(0, 14000)  # neighbours select overlapping rows
+    if mode == "dups":
+        top[:, 5:15] = top[:, 0:10].clone()
+    idx = torch.cat([win, top], dim=1)
+    if mode == "mixed":
+        nv = torch.where(torch.rand(S, generator=g) < 0.5, torch.full((S,), W + TOPK), torch.randint(1, W + TOPK, (S,), generator=g))
+        col = torch.arange(W + TOPK).view(1, -1)
+        idx = torch.where(col < nv.view(-1, 1), idx, torch.full_like(idx, 0xFFFFFFFF))
+    tidx = ttnn.from_torch(
+        idx.to(torch.int64).to(torch.int32).reshape(1, 1, S, W + TOPK),
+        device=dev, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ckc = ttnn.init_device_compute_kernel_config(
+        dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    sink = ttnn.from_torch(
+        (torch.randn(1, 1, 1, 32, generator=g) * 0.1).to(torch.bfloat16),
+        device=dev, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    outs = []
+    for kc in (128, 640):
+        o = ttnn.transformer.sparse_sdpa(
+            q, pool, tidx, 512, kv_format=ttnn.transformer.SparseKVFormat.FP8_E4M3, scale=0.044,
+            k_chunk_size=kc, compute_kernel_config=ckc, attention_sink=sink,
+        )
+        ttnn.synchronize_device(dev)
+        outs.append(ttnn.to_torch(o).float()[:, :8].contiguous())
+        ttnn.deallocate(o)
+    a, b = outs[0].flatten(), outs[1].flatten()
+    ok = torch.isfinite(b).all().item()
+    pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item() if S * 8 > 1 else 1.0
+    print(f"T16EDGE S={S} {mode}: finite {ok} pcc(k128, k640) {pcc:.6f} maxdiff {(a - b).abs().max().item():.5f}", flush=True)
+    assert ok and pcc >= 0.9995, (S, mode, pcc)
