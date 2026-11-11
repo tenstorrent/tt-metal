@@ -119,6 +119,9 @@ constexpr uint32_t DH = 8, NO = DH + 1, QT = 8 * MKA_NU;
 #define MKA_AMASK 0xFFFFFFFFu
 #endif
 
+#if defined(MKA_ROLE_STREAM) && defined(MKA_GDN24) && defined(MKA_QSK) && defined(MKA_RWO) && defined(MK_V12) && !defined(MKA_OWNPAR)
+#define MKA_STREAMLEAN 1   // the EXTLEAN pattern on STREAM (RC config): role args every STREAM core shares are constants (program.py asserts them)
+#endif
 #if defined(MKA_ROLE_EXT) && defined(MKA_GDN24) && !defined(MKA_OWNPAR)
 #define MKA_EXTLEAN 1   // spec v1.38 (2): the EXT binary runs only on the 16 owners; their role args are constants (program.py asserts them)
 #endif
@@ -135,8 +138,8 @@ void kernel_main() {
 #else
     const uint32_t IS_STREAM = get_arg_val<uint32_t>(a++);
 #endif
-#if defined(MKA_EXTLEAN)
-    constexpr uint32_t IS_GU = 0; a++;
+#if defined(MKA_EXTLEAN) || defined(MKA_STREAMLEAN)
+    constexpr uint32_t IS_GU = 0; a++;   // STREAM under V12: the fm11 gate|up roles are off
 #else
     const uint32_t IS_GU = get_arg_val<uint32_t>(a++);
 #endif
@@ -150,6 +153,12 @@ void kernel_main() {
 #if defined(MKA_RQKV)
 #if defined(MKA_EXTLEAN) && defined(MKA_QSK)
     constexpr uint32_t qrole = 3, qk0 = 0, qnk = 0, qnt = 0, gdn_on = 0; a += 5;   // QR_EXT with no qkv tiles under QSK
+#elif defined(MKA_STREAMLEAN)
+    constexpr uint32_t qrole = 1; a++;   // every STREAM core is a QSK K-row partial producer (QR_OWNER)
+    const uint32_t qk0 = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t qnk = QSK_GK; a++;
+    const uint32_t qnt = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t gdn_on = 1; a++;
 #else
     const uint32_t qrole = get_arg_val<uint32_t>(a++), qk0 = get_arg_val<uint32_t>(a++), qnk = get_arg_val<uint32_t>(a++);
     const uint32_t qnt = get_arg_val<uint32_t>(a++), gdn_on = get_arg_val<uint32_t>(a++);
@@ -157,14 +166,25 @@ void kernel_main() {
 #if defined(MKA_RWO) || defined(MKA_QSK)
 #if defined(MKA_EXTLEAN) && defined(MKA_QSK) && defined(MKA_RWO)
     constexpr uint32_t qn0 = 0, wo_nt = WO_MAXT; a += 2;
+#elif defined(MKA_STREAMLEAN)
+    const uint32_t qn0 = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t wo_nt = 0; a++;   // wo runs on the owners
 #else
     const uint32_t qn0 = get_arg_val<uint32_t>(a++), wo_nt = get_arg_val<uint32_t>(a++);   // first qkv tile, wo tiles (0 = no wo)
 #endif
 #endif
 #if defined(MKA_RQNR)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t is_head = 0, has_hg = 0; a += 2;   // head-norm cores are owners
+#else
     const uint32_t is_head = get_arg_val<uint32_t>(a++), has_hg = get_arg_val<uint32_t>(a++);
+#endif
 #if defined(MKA_RMASK)
+#if defined(MKA_STREAMLEAN)
+    constexpr uint32_t mask_blk = 0xFFFFFFFFu; a++;   // the mask core is never STREAM (RMASK)
+#else
     const uint32_t mask_blk = get_arg_val<uint32_t>(a++);   // local block index of the user's last block, or ~0
+#endif
 #endif
     // q/k head: y = gamma (.) x * rsqrt(mean(x^2) + eps) over the head's 256 columns; RoPE on dims 0-63 (tiles 0, 1)
     auto head_norm_rope = [&]() {
