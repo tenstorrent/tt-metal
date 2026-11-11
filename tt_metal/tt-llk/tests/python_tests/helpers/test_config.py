@@ -1071,6 +1071,9 @@ class TestConfig:
             templates = templates + runtimes
             runtimes = []
             compile_time_formats = True
+        # LLK_MATMUL_PACK_CTFMT=1: compile-time formats, as a ttnn kernel reconfigures the packer to constant CB formats
+        if os.environ.get("LLK_MATMUL_PACK_CTFMT") == "1":
+            compile_time_formats = True
 
         # Artefact directory is always relative to ARTEFACTS_DIR. An absolute
         # test_name is the C++ driver path; keep a sources/<basename> artefact
