@@ -2265,9 +2265,9 @@ def _setup_context(mesh, env):
     saved_env = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     _ft0, _tt0, _at0, _gs0 = ttnn.from_torch, ttnn.to_torch, ttnn.allocate_tensor_on_device, ttnn.create_global_semaphore
-    # global semaphore pool (QWEN36_R16_MK_SEMPOOL=1; L1P2 rule): device-local sems created in program.py (reset by their
-    # waiter at program end) are shared across builds by (core ranges, initial value, occurrence); sems created from
-    # ar_phase.py / oneshot_ar.py (monotonic AR epochs with a per-build base word) are never pooled
+    # global semaphore pool (QWEN36_R16_MK_SEMPOOL=1; L1P2 review): device-local sems created in program.py (reset by their
+    # waiter at program end) are shared across builds by (core ranges, initial value, occurrence); AR-owned sems
+    # (program._fresh_sem) and every sem created outside program.py are never pooled
     sem_pool = _L1POOL.setdefault(("sem", id(mesh)), {}) if os.environ.get("QWEN36_R16_MK_SEMPOOL", "0") == "1" else None
     sem_seen = {}
     pool = _L1POOL.setdefault(id(mesh), {}) if os.environ.get("QWEN36_R16_MK_L1POOL", "1") == "1" else None
@@ -2317,7 +2317,9 @@ def _setup_context(mesh, env):
         import sys as _sys
 
         fn = _sys._getframe(1).f_code.co_filename
-        if sem_pool is None or fn.endswith(("ar_phase.py", "oneshot_ar.py")):
+        # pooled ONLY when created directly in program.py and not inside program._fresh_sem (ttnn._mk_sem_fresh > 0: the AR
+        # epoch / flag sems); everything else (ar_phase / oneshot_ar / the GDN role's g2_role / e1_shim) stays fresh
+        if sem_pool is None or not fn.endswith("program.py") or getattr(ttnn, "_mk_sem_fresh", 0) > 0:
             return _gs0(dev_, crs_, init_, *a, **k)
         key = (repr(crs_), int(init_), repr(a), repr(sorted(k.items())))
         n_ = sem_seen[key] = sem_seen.get(key, -1) + 1
