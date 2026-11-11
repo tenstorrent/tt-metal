@@ -171,6 +171,12 @@ struct GdnXSem {
     void wait(uint32_t v) const { noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a), v); }
 };
 #endif
+#ifndef GDN_OUT_LOCAL
+#define GDN_OUT_LOCAL 0  // engine gdn_out: 1 = hand this core's out tiles to gdn_out_local() (the including TU) before the
+#endif               // DRAM out rows; 2 = and skip the DRAM out rows (the out tensor is then not written)
+#if GDN_OUT_LOCAL
+void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);
+#endif
 #if GDN_OUT_SIGNAL
 void gdn_out_signal();
 #endif
@@ -1564,12 +1570,25 @@ TT_KERNEL void writer(
 
     // ---- the user's T output rows of the head's Vt output tiles
     DeviceZoneScopedN("wr_out");
+#if GDN_OUT_LOCAL
+    out.wait_front(Vs);
+    gdn_out_local(out.get_read_ptr(), h * Vt + v0, Vs);  // engine gdn_out: full out tiles to every GDN core's A, local
+#endif
+#if GDN_BATCH && GDN_OUT_LOCAL == 2
+    if (true) {
+        out.pop_front(Vs);
+    } else
+#endif
 #if GDN_BATCH
 #ifndef GDN_OUT_TILE
 #define GDN_OUT_TILE 0  // engine GDN role: all 32 rows live (nb * T == 32) -> one whole-tile write per out tile, not 4 face-row spans
 #endif
     if (GDN_OUT_TILE && nb * T == 32) {
-        out.wait_front(Vs);
+        {
+            DeviceZoneScopedN("wr_owait");  // the compute's gated output tiles
+            out.wait_front(Vs);
+        }
+        DeviceZoneScopedN("wr_owr");  // the out tile write + its barrier
         const uint32_t entry = out.get_entry_size();
         for (uint32_t t = 0; t < Vs; ++t) {
             noc.async_write(out, out_acc, entry, {.offset_bytes = t * entry}, {.page_id = tr * out_w_tiles + h * Vt + v0 + t});

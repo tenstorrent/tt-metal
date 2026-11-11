@@ -30,7 +30,8 @@ CTRL_B = 256
 # frees 3 CB ids on the GDN cores for gdn_out). ctrl_w / gnew -> gprev: writer-local, never pushed across a gprev use
 # (ctrl_w's reserve/push/pop runs at the writer's layer start, before wr_rcoef stages into gprev; gnew is dead code
 # under GDN_BATCH); eps_l2 -> eps_norm: never generated / waited under GDN_NO_EPS_L2 (PREFIXED: the prefix did the l2)
-LEAN_ALIAS = {"ctrl_w": "gprev", "gnew": "gprev", "eps_l2": "eps_norm"}
+LEAN_ALIAS = {"ctrl_w": "gprev", "gnew": "gprev", "eps_l2": "eps_norm",
+              "linv": "inv"}  # linv lives in WY (reserve..pop), inv in c_D: disjoint, compute-local, same fp32 tile
 
 
 def dfb_table(Kt, Vt, T, VB, out_b16=True, batch=False, st_ring=0, lean=False, kmq_users=4):
