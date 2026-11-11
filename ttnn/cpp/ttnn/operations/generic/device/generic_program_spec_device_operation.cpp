@@ -233,7 +233,8 @@ void check_kernel_run_args(
 void check_tensor_args(
     const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args, const std::vector<Tensor>& io_tensors) {
     std::vector<bool> claimed(io_tensors.size(), false);
-    // A parameter declared twice claims one entry, and Metal's checks, which run after these, name the duplicate.
+    // A parameter declared twice is checked once, against its first declaration. When its tensor matches that one,
+    // Metal's checks, which run after these, name the duplicate.
     std::unordered_set<m2::TensorParamName> parameters_seen;
     for (const auto& parameter : spec.tensor_parameters) {
         if (!parameters_seen.insert(parameter.unique_id).second) {
@@ -330,7 +331,8 @@ void check_program(
     const m2::ProgramRunArgs& run_args,
     const std::vector<Tensor>& io_tensors,
     bool check_nodes) {
-    // Kept by name, so a spec that declares a kernel twice gets past these checks to Metal's, which names it.
+    // Kept by name. A kernel declared twice is checked against its first declaration, so when its run args fit that
+    // one, the call gets past these checks to Metal's, which names the duplicate.
     std::unordered_set<m2::KernelSpecName> kernels_with_run_args;
     for (const auto& kernel_run_args : run_args.kernel_run_args) {
         const auto kernel = std::ranges::find(spec.kernels, kernel_run_args.kernel, &m2::KernelSpec::unique_id);
@@ -356,9 +358,18 @@ void check_program(
 }
 
 // Only the first call needs this: the ranges are part of the cache key.
-void check_mesh_ranges(const SpecAttributes& attributes) {
+void check_mesh_ranges(const SpecAttributes& attributes, const tensor_args_t& tensor_args) {
     const auto& programs = attributes.programs;
+    // When every tensor is on every device, check_tensors_on_program_devices does not look at the ranges, so this
+    // checks that they stay inside the mesh.
+    const auto& mesh_shape = tensor_args.output_tensor.device()->shape();
+    const ttnn::MeshCoordinateRange mesh(mesh_shape);
     for (std::size_t i = 0; i < programs.size(); ++i) {
+        TT_FATAL(
+            mesh.contains(programs[i].range),
+            "generic_op: mesh range {} reaches outside the MeshDevice, whose shape is {}",
+            programs[i].range,
+            mesh_shape);
         for (std::size_t j = i + 1; j < programs.size(); ++j) {
             TT_FATAL(
                 !programs[i].range.intersects(programs[j].range),
@@ -480,7 +491,7 @@ GenericProgramSpecDeviceOperation::tensor_return_value_t GenericProgramSpecDevic
 
 void GenericProgramSpecDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    check_mesh_ranges(operation_attributes);
+    check_mesh_ranges(operation_attributes, tensor_args);
     check_tensors_on_program_devices(operation_attributes, tensor_args);
     // SetProgramRunArgs checks the nodes too, but only after the kernels compile.
     for (const auto& program : operation_attributes.programs) {

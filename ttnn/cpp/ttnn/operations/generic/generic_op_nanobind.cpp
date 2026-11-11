@@ -245,7 +245,7 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         The first call with a given program compiles its kernels; later calls with the same program write only the
         new argument values. Every call checks the run args against the spec: each kernel gets exactly its declared
         arguments, each array with its declared length, each tensor parameter gets a tensor from io_tensors that
-        matches its spec, and each DFB size override names a DFB of the spec.
+        matches its spec, and each DFB size override names a DFB of the spec, at most once and with no size of 0.
         Whether every core got its per-core values is checked on later calls only when
         ttnn.CONFIG.validate_program_args is on; with it off, a core that a later call leaves out keeps the values it
         was given before.
@@ -268,11 +268,11 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
                 DFB at fault; if a tensor is on another MeshDevice or misses a device the program runs on; if the
-                MeshProgramSpec has no programs, its ranges overlap or the run args' ranges differ from the spec's;
-                if io_tensors is empty or holds a tensor that is not allocated on a device, or one allocated per
-                core; if Metal rejects the run args, such as a DFB size it cannot take; or, on a first call, if Metal
-                rejects the spec, a kernel does not compile or the program does not fit the kernel-configuration
-                buffer.
+                MeshProgramSpec has no programs, its ranges overlap or reach outside the mesh, or the run args' ranges
+                differ from the spec's; if io_tensors is empty or holds a tensor that is not allocated on a device, or
+                one allocated per core; if Metal rejects the run args, such as a DFB size it cannot take; or, on a
+                first call, if Metal rejects the spec, a kernel does not compile or the program does not fit the
+                kernel-configuration buffer.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for usage examples
