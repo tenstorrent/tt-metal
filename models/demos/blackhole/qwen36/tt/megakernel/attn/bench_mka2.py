@@ -303,6 +303,45 @@ for it in range(ITERS):
             return max((d_ - ds[0]).abs().max().item() for d_ in ds)
         _mif = mesh_identity if V_R == 32 else (lambda t_: _mid_r(t_) if t_ is not outs else mesh_identity(t_))
         print(f"[mesh] iter {it} devices {dev.get_num_devices()}: max |dev d - dev 0|{'' if V_R == 32 else f' (rows < {V_R})'} " + ' '.join(f"{n_} {_mif(t_):.3e}" for n_, t_ in _mi), flush=True)
+def _prof_decollide():
+    """The device profiler keys zones by a 16-bit hash of 'name,__FILE__,line'. __FILE__ holds the per-run pod dir, so with
+    ~300 zone sites a run collides with probability ~0.5 and the host readout throws ("Source location hashes are colliding",
+    rc 134, no CSV). Before the readout keep ONE location per colliding hash in the zone logs (the layer-timing zones win);
+    the dropped zone's markers are then reported under the kept name. Prints what it dropped."""
+    d = os.environ.get('TT_METAL_PROFILER_DIR')
+    if not d: return
+    keep_pref = ("W-ARSTALL", "W-ARWAIT", "W-MIX", "C-MIX", "W-SDPA", "C-SDPA", "R-KV", "R-RED", "W-WOAR", "C-GU", "C-DN", "W-HWAIT",
+                 "W-VX", "W-VMD", "W-OREL", "C-OSUM", "W-AR", "C-AR", "R-ARDLVW", "R-ARDLV", "C-ARG", "W-ARG")
+    def h16(s_):
+        h_ = 2166136261
+        for c_ in s_.encode():
+            h_ = ((h_ ^ c_) * 16777619) & 0xFFFFFFFF
+        return ((h_ & 0xFFFF) ^ (h_ >> 16)) & 0xFFFF
+    dl = "'#pragma message: "
+    files = [os.path.join(d, '.logs', f_) for f_ in ('zone_src_locations.log', 'new_zone_src_locations.log')]
+    locs = {}
+    for f_ in files:
+        if not os.path.exists(f_): continue
+        for ln in open(f_):
+            i_ = ln.find(dl)
+            if i_ < 0: continue
+            loc = ln[i_ + len(dl):].rstrip('\n')[:-1]
+            locs.setdefault(h16(loc), []).append(loc)
+    drop = set()
+    for h_, ls in locs.items():
+        u_ = list(dict.fromkeys(ls))
+        if len(u_) < 2: continue
+        u_.sort(key=lambda l_: 0 if l_.split(',')[0] in keep_pref else 1)
+        drop.update(u_[1:])
+        print(f"[prof] zone hash {h_:#06x} collision: keep {u_[0].split(',')[0]}@{u_[0].split(',')[2]}, drop {[l_.split(',')[0] + '@' + l_.split(',')[2] for l_ in u_[1:]]}", flush=True)
+    if not drop: return
+    for f_ in files:
+        if not os.path.exists(f_): continue
+        lines = open(f_).readlines()
+        open(f_, 'w').writelines(l_ for l_ in lines if not (l_.find(dl) >= 0 and l_[l_.find(dl) + len(dl):].rstrip('\n')[:-1] in drop))
+
+
+_prof_decollide()
 ttnn.ReadDeviceProfiler(dev)
 print('[fm11] profiler read', flush=True)
 ttnn.close_device(dev)
