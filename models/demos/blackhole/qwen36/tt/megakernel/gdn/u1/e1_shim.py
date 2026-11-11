@@ -399,17 +399,17 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'  else noc_async_write_multicast(src, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, dst), n * 2048u, {r[4]}u, false);'
                 for r in (gr_[0:5], gr_[5:10]) if r[4])
             go_local = (f'void gdn_out_local(uint32_t src, uint32_t t0, uint32_t n) {{\n'
-                        f'  DeviceZoneScopedN("go_loc");\n'
+                        f'  DeviceZoneScopedN("GO-LOC");\n'
                         f'  const uint32_t dst = get_write_ptr({CA_}) + t0 * 2048u;\n{mc_}\n'
                         f'  noc_async_write_barrier();\n  {go_inc}\n}}\n')
             go_inc = ""   # gdn_out_signal() no longer raises gdna
-        go_r = (f'  {{ DeviceZoneScopedN("go_ring"); cb_reserve_back({CR_}, {RP}); const auto gw = TensorAccessor(TensorAccessorArgs<{{GW_OFF}}>(), {GO["w_addr"]}u, '
+        go_r = (f'  {{ DeviceZoneScopedN("GO-RING"); cb_reserve_back({CR_}, {RP}); const auto gw = TensorAccessor(TensorAccessorArgs<{{GW_OFF}}>(), {GO["w_addr"]}u, '
                 f'get_tile_size({CR_}));\n'
                 f'    wou::ring_fill({CR_}, gw.get_noc_addr(g_ab[{{OGO}} + 1] + (L_) * {GO["w_stride"]}u), 0, {GO["wk"]}u * g_ab[{{OGO}}], 16, 2, 13, []() {{}});\n'
                 f'    cb_push_back({CR_}, {RP}); }}\n')
         owx = ", ".join(f"{x}u" for x, _ in GO["owners"]); owy = ", ".join(f"{y}u" for _, y in GO["owners"])
         go_w = (f'  {{   // gdn_out of GDN layer L\n'
-                f'    {{ DeviceZoneScopedN("go_a");\n'
+                f'    {{ DeviceZoneScopedN("GO-A");\n'
                 f'    noc_async_atomic_barrier();\n'
                 f'    noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){GO["gdna"]}u, {len(cores)}u * (L + 1));\n'
                 f'    cb_reserve_back({CA_}, {GO["wk"]});\n'
@@ -424,15 +424,15 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'    uint32_t tl[{MAXT}];\n'
                 f'    for (uint32_t j = 0; j < {MAXT}u; ++j) tl[j] = g_ab[{{OGO}} + 2 + j];\n'
                 f'    const uint32_t nt = g_ab[{{OGO}}];\n'
-                f'    {{ DeviceZoneScopedN("go_mm"); cb_wait_front({CO_}, {MAXT}); }}\n'
-                f'    DeviceZoneScopedN("go_sc");\n'
+                f'    {{ DeviceZoneScopedN("GO-MM"); cb_wait_front({CO_}, {MAXT}); }}\n'
+                f'    DeviceZoneScopedN("GO-SC");\n'
                 f'    const auto dg = TensorAccessor(TensorAccessorArgs<{{DBG_OFF}}>(), {GO["dbg_addr"]}u, 2048);\n'
                 f'    for (uint32_t j = 0; j < nt; ++j) noc_async_write(get_read_ptr({CO_}) + j * 2048, dg.get_noc_addr(L * 160 + tl[j]), 2048);\n'
                 f'    wou::scatter({CO_}, {MAXT}, nt, tl, owx, owy, xo, {GO["cnt"]}u);   // also retires the debug writes\n'
                 f'    {{OSIG}}\n'
-                + ('    { DeviceZoneScopedN("go_osig"); noc_async_atomic_barrier(); }\n' if os.environ.get("E1_GO_OSIGB", "0") == "1" else '') +
+                + ('    { DeviceZoneScopedN("GO-OSIGB"); noc_async_atomic_barrier(); }\n' if os.environ.get("E1_GO_OSIGB", "0") == "1" else '') +
                 f'  }}\n')
-        go_c = f'    {{ DeviceZoneScopedN("c_gomm"); wou::matmul_nt<{"true" if GO.get("lofi", True) else "false"}>({CA_}, {CR_}, {RP}, {CO_}, {MAXT}, {GO["wk"]}, g_ab[{{OGO}}], 4); }}   // short inits only; half-sync fp32 DST: 4 tiles / pass\n'
+        go_c = f'    {{ DeviceZoneScopedN("C-GOMM"); wou::matmul_nt<{"true" if GO.get("lofi", True) else "false"}>({CA_}, {CR_}, {RP}, {CO_}, {MAXT}, {GO["wk"]}, g_ab[{{OGO}}], 4); }}   // short inits only; half-sync fp32 DST: 4 tiles / pass\n'
     rct, roff = ctas([rmap[t] for t in READER_TENSORS])
     wct, woff = ctas([wmap[t] for t in WRITER_TENSORS])
     if GO:   # gdn_out accessors appended after the step's (reader: the weight slices; writer: the debug output copy)
