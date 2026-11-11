@@ -835,24 +835,22 @@ def setup_bench(dev, MESH, mesh_identity):
             MKDEF = MKDEF + [('MK_AR_RSP', str(rsp_sh.buffer_address())), ('MK_AR_CB_SS', '19')]
             print(f"[ar] rstd producer: Σ tile = rsp tile 0 @ {rsp_sh.buffer_address()}, flag MK_AR_RSF (+{1 if RED_GDN else 8} per K-row delivery)", flush=True)
         # MK_AR_RSTD_RED=gdn (v1.112 iii'): the 8 producers send their UN-reduced fp32 tile (elementwise Σ_t (x_t^T)^2) to page k of
-        # CB 37 (8 fp32 pages, tensor-backed rred_in) on ONE plain GDN-role core RRED_HC = (1, GY) (not (0, GY): the OSIG aggregator,
+        # CB 37 (8 fp32 pages, static, planned) on ONE plain GDN-role core RRED_HC = (1, GY) (not (0, GY): the OSIG aggregator,
         # not the AR corners) and += 1 its word RRED_SEM. Per delivery (2 per layer, every layer) that core's writer waits 8, pushes
         # CB 37; its compute sums the 8 tiles, SFPU column-reduces and transposes (column 0 = per-token Σx², the consumers' format)
-        # into CB 39 (rred_out); the writer multicasts the 4 KB tile to the STREAM rects at MK_AR_RSP, then MK_AR_RSF += 1 there.
+        # into CB 39; the writer multicasts the 4 KB tile to the STREAM rects at MK_AR_RSP, then MK_AR_RSF += 1 there.
         RRED = AR_RSTD and RED_GDN
         if RRED:
             assert GDN24, "MK_AR_RSTD_RED=gdn: the Σ reducer runs on a GDN-role core (MKA_GDN24)"
             RRED_HC = ttnn.CoreCoord(1, GY)
             _hcr = ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)])
-            rred_in = ttnn.from_torch(torch.zeros(1, 1, 8 * TILE, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(_hcr, (8 * TILE, TILE), ttnn.ShardOrientation.ROW_MAJOR)))
-            rred_out = ttnn.from_torch(torch.zeros(1, 1, TILE, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=hs(_hcr, TILE))
+            assert V12CB, "MK_AR_RSTD_RED=gdn: CB 37's address comes from the V12CB plan (static CBs 37 / 39 on RRED_HC, after GIN's CB 41)"
             RRED_SEM = ttnn.create_global_semaphore(dev, _hcr, 0)
             _hp = dev.worker_core_from_logical_core(RRED_HC)
-            MKDEF = MKDEF + [('MK_AR_RRED_X', str(_hp.x)), ('MK_AR_RRED_Y', str(_hp.y)), ('MK_AR_RRED_IN', str(rred_in.buffer_address())),
-                             ('MK_AR_RRED_SEM', str(ttnn.get_global_semaphore_address(RRED_SEM)))]
-            print(f"[rred] Σ reducer on GDN core {(RRED_HC.x, RRED_HC.y)} (noc {(_hp.x, _hp.y)}): in CB 37 @ {rred_in.buffer_address()} (8 fp32 pages), "
-                  f"out CB 39 @ {rred_out.buffer_address()}, word @ {ttnn.get_global_semaphore_address(RRED_SEM)}; STREAM rects {RECTS}; MK_AR_RSF +1 per delivery", flush=True)
+            MKDEF = MKDEF + [('MK_AR_RRED_X', str(_hp.x)), ('MK_AR_RRED_Y', str(_hp.y)), ('MK_AR_RRED_SEM', str(ttnn.get_global_semaphore_address(RRED_SEM)))]
+            # MK_AR_RRED_IN (CB 37's planned address on RRED_HC) is added after the V12CB plan
+            print(f"[rred] Σ reducer on GDN core {(RRED_HC.x, RRED_HC.y)} (noc {(_hp.x, _hp.y)}): static CB 37 (8 fp32 pages) + CB 39, word @ "
+                  f"{ttnn.get_global_semaphore_address(RRED_SEM)}; STREAM rects {RECTS}; MK_AR_RSF +1 per delivery", flush=True)
         # GDN24 (AR sender hosted in the GDN role on the corner, spec v1.44): the corner cores do NOT span the owners' RS slot
         # CB (CB_RED, 140-160 KB) or the wo output CB 23 (their GDN-role CB stack would be lifted above the owners' whole CB
         # region). Owners publish both addresses at init into 2 words on the 4 corner cores (MK_AR_PUB / MK_AR_PUBA); the
@@ -1497,7 +1495,6 @@ def setup_bench(dev, MESH, mesh_identity):
                                        free_cb_ids=list(range(45)), gdnout=GO)
             GDN_ROLE = dict(_gdn_hook(b_, [fcores[i] for i in GDNC]))
             GDN_ROLE.setdefault('io', [])
-            if RRED: GDN_ROLE['io'] = list(GDN_ROLE['io']) + [rred_in, rred_out]   # the Σ reducer's tensor-backed CBs 37 / 39
             print(f"[gdn24] hook: {len(GDN_ROLE.get('kernels', []))} kernels, {len(GDN_ROLE.get('cbs', []))} CBs, {len(GDN_ROLE['io'])} io tensors", flush=True)
             if GO:
                 def _gdnout_check(it):   # out_proj golden from the engine's own `out` (A) of each GDN layer x the dequantized slices
@@ -1716,6 +1713,9 @@ def setup_bench(dev, MESH, mesh_identity):
                 cbd(16, ttnn.bfloat16, 10 if V_R < 32 else 1, rect.merge(O_CRS) if V12CB else O_CRS)]
             if GIN: cbs = cbs + [cbd(15, ttnn.bfloat4_b, 20 * 7, rect)]   # the gdn_in BFP4 slice slot (slot M's turn on GDN layers)
         if GIN: cbs = [cbd(41, ttnn.bfloat16, 4, crs([fcores[i] for i in GDNC]))] + cbs   # GIN staging on the GDN cores, FIRST: CB base there
+        if RRED:   # the Σ reducer's static CBs on RRED_HC, right after GIN's CB 41 (in the V12CB plan prefix: the producers get CB 37's address)
+            _hcr = ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)])
+            cbs = cbs[:1 if GIN else 0] + [cbd(37, ttnn.float32, 8, _hcr), cbd(39, ttnn.float32, 1, _hcr)] + cbs[1 if GIN else 0:]
         if plan_only: return _order(cbs)   # MK_V12_CB: the list prefix that fixes the v12 addresses (AR / GDN-role CBs follow it)
         if KVA:   # owners only (CB 6 / 8 are STREAM-rect-only otherwise): source bf16 tile, BFP8 source + target tiles
             cbs = cbs + [cbd(6, ttnn.bfloat16, 1, KVA_CRS), cbd(8, ttnn.bfloat8_b, 1 + KVA_PPU * KVA_NUT, KVA_CRS)]
@@ -1841,11 +1841,10 @@ def setup_bench(dev, MESH, mesh_identity):
         if GDN24:
             _gk = list(GDN_ROLE.get('kernels', []))
             if REAL_AR: _gk = _gdn_host_ar(_gk, AR.sender_parts(arp))
-            if RRED:   # the Σ reducer's CBs on RRED_HC: 37 = the 8 producer tiles (rred_in), 39 = the final Σ (rred_out)
-                _hid = {f_.buffer_index for c_ in list(GDN_ROLE.get('cbs', [])) + cbs for f_ in c_.format_descriptors if c_.core_ranges.contains(RRED_HC)}
-                assert not ({37, 39} & _hid), ("MK_AR_RSTD_RED=gdn: CB 37 / 39 taken on the reducer core", sorted(_hid))
+            if RRED:   # the Σ reducer (CBs 37 / 39 on RRED_HC are in the plan prefix; the GDN role must not use them there)
+                _hid = {f_.buffer_index for c_ in list(GDN_ROLE.get('cbs', [])) for f_ in c_.format_descriptors if c_.core_ranges.contains(RRED_HC)}
+                assert not ({37, 39} & _hid), ("MK_AR_RSTD_RED=gdn: CB 37 / 39 taken by the GDN role on the reducer core", sorted(_hid))
                 _gk = _gdn_host_rred(_gk)
-                cbs = cbs + [ttnn.cb_descriptor_from_sharded_tensor(37, rred_in), ttnn.cb_descriptor_from_sharded_tensor(39, rred_out)]
             ks = ks + _gk; cbs = cbs + list(GDN_ROLE.get('cbs', []))
             def _cbsum(lx, ly):
                 n_ = 0
@@ -1886,6 +1885,7 @@ def setup_bench(dev, MESH, mesh_identity):
         a_ = dict(xk=CBP.address_of(p_, 33, (0, 0)), rs=CBP.address_of(p_, 36, (0, 0)), h7=CBP.address_of(p_, 37, (0, 0)), xpk=CBP.address_of(p_, 16, (0, 0)))
         if v_pbuf is None: a_['pbuf'] = CBP.address_of(p_, 3, (GX, 0))
         if GIN: a_['gin'] = CBP.address_of(p_, 41, (fcores[GDNC[0]].x, fcores[GDNC[0]].y))
+        if RRED: a_['rred'] = CBP.address_of(p_, 37, (RRED_HC.x, RRED_HC.y))
         return a_
     # V12 drops the fm11 output CB 16 (re-used as CB_VPK on the owners): keep the unused fm11 output out of L1 (it was the L1 floor)
     out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, M, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG if V12 else ws(rect, NDN * TILE))
@@ -1901,6 +1901,7 @@ def setup_bench(dev, MESH, mesh_identity):
             AR_XT['xk'], AR_XT['xpk'] = VADDR['xk'], VADDR['xpk']
             ARP, ar_blk, _ardefs = _ar_parts()
             MKDEF = MKDEF + _ardefs
+        if RRED: MKDEF = MKDEF + [('MK_AR_RRED_IN', str(VADDR['rred']))]   # the producers' target: CB 37 page 0 on RRED_HC
     if REAL_AR:   # per-device programs (fabric connections, owner / gather roles differ by ring position)
         _pcache = {}
         def PROG_PER_DEV(co):

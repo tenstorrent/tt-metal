@@ -218,14 +218,12 @@ for it in range(ITERS):
             S_ = _rs[ci_, :, :TILE].double()
             _worst = max(_worst, ((S_[:8] - _gk).abs() / _gk.abs().clamp_min(1e-30)).max().item())
         if globals().get('RRED'):   # MK_AR_RSTD_RED=gdn: rsp tile 0 = the FINAL Σ in column 0 (every STREAM core); the K-row partials
-            # are the 8 un-reduced tiles the producers left on the reducer core (CB 37 = rred_in: tile k = Σ_t (x_t^T)^2, column = token)
-            _ri = ttnn.to_torch(rred_in).float().reshape(8, TILE, TILE).double()
-            _worst = ((_ri.sum(1) - _gk).abs() / _gk.abs().clamp_min(1e-30)).max().item()
+            # (the 8 un-reduced K-row tiles sit in the reducer's static CB 37: not read back)
             _sc = torch.stack([_rs[ci_, :, 0].double() for ci_ in (0, 9, 37, 79)])
             _rel = ((_sc - _gs[None]).abs() / _gs[None]).max().item()
             _off = max(_rs[ci_, :, 1:TILE].abs().max().item() for ci_ in (0, 9, 37, 79))
             _rt = (1 / torch.sqrt(_sc / H + EPS)) / (1 / torch.sqrt(_gs[None] / H + EPS)) - 1
-            print(f"[ar] iter {it} rstd Σ (red=gdn): columns 1-31 max|.| {_off:.3e}; K-row tile partial max rel err {_worst:.3e}; "
+            print(f"[ar] iter {it} rstd Σ (red=gdn): columns 1-31 max|.| {_off:.3e}; "
                   f"Σ max rel err {_rel:.3e} (4 cores); rstd max rel err {_rt.abs().max().item():.3e}", flush=True)
         else:
             S0 = _rs[0, :, :TILE].double()
