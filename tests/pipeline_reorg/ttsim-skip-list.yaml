@@ -31,7 +31,7 @@ wormhole_b0:
   # takes over 40 minutes on the simulator).
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
 
-  # Model-width norm rows (up to 16640 x 5120) are too big for the simulator's time budget.
+  # Model-width norm rows (up to 16640 x 8192) are too big for the simulator's time budget.
   - tests/ttnn/unit_tests/operations/fused/test_norm_model_widths.py
 
 blackhole:
@@ -55,7 +55,7 @@ blackhole:
   # takes over 40 minutes on the simulator).
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
 
-  # Model-width norm rows (up to 16640 x 5120) are too big for the simulator's time budget.
+  # Model-width norm rows (up to 16640 x 8192) are too big for the simulator's time budget.
   - tests/ttnn/unit_tests/operations/fused/test_norm_model_widths.py
 
   # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
