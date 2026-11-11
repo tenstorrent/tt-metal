@@ -6,6 +6,7 @@
 #include "moreh_helper_functions.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <algorithm>
 #include <numeric>
 #include <utility>
 
@@ -14,6 +15,9 @@
 #include <tt-metalium/math.hpp>
 
 #include "tt-metalium/hal.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations {
 
@@ -468,6 +472,36 @@ ttsl::SmallVector<int64_t> get_dim(
         }
     }
     return dims;
+}
+
+Tensor sum_with_moreh_shape(
+    const Tensor& input,
+    const ttsl::SmallVector<int64_t>& dims,
+    bool keepdim,
+    const std::optional<Tensor>& output,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const auto& input_shape = input.logical_shape();
+    const int rank = static_cast<int>(input_shape.rank());
+    ttsl::SmallVector<int> sum_dims;
+    for (const auto d : dims) {
+        sum_dims.push_back(static_cast<int>(d < 0 ? d + rank : d));
+    }
+    const auto reduced = ttnn::sum(input, sum_dims, /*keepdim=*/true, memory_config, compute_kernel_config);
+
+    if (output.has_value()) {
+        ttnn::assign(ttnn::reshape(reduced, output->logical_shape()), *output);
+        return *output;
+    }
+    ttsl::SmallVector<uint32_t> shape;
+    for (int i = 0; i < rank; ++i) {
+        const bool is_reduced = std::find(sum_dims.begin(), sum_dims.end(), i) != sum_dims.end();
+        if (is_reduced && !keepdim && i < rank - 2) {
+            continue;
+        }
+        shape.push_back(is_reduced ? 1 : input_shape[i]);
+    }
+    return ttnn::reshape(reduced, ttnn::Shape(std::move(shape)));
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape& shape) {

@@ -181,6 +181,27 @@ def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, ttn
     run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device)
 
 
+@pytest.mark.parametrize("shape", [[5, 10], [5, 6, 8, 9]])
+@pytest.mark.parametrize("reduction", ["mean", "sum"])
+def test_moreh_nll_loss_without_output(shape, reduction, device):
+    torch.manual_seed(0)
+    torch_input, torch_target, _, torch_divisor, torch_output = get_torch_tensors(shape, torch.float32)
+    torch_loss = torch.nn.NLLLoss(reduction=reduction)(torch_input, torch_target)
+    tt_input, tt_target, _, tt_divisor, _ = get_tt_tensors(
+        torch_input, torch_target, None, torch_divisor, torch_output, device, ttnn.bfloat16
+    )
+
+    tt_loss = ttnn.operations.moreh.nll_loss(
+        tt_input, tt_target, reduction, divisor_tensor=tt_divisor if reduction == "mean" else None
+    )
+
+    assert tuple(tt_loss.shape) == (1, 1)
+    passing, out = comp_allclose_and_pcc(
+        torch_loss.reshape(1), to_torch(tt_loss, shape=[1]), pcc=0.999, rtol=0.05, atol=0.05
+    )
+    assert passing, out
+
+
 @pytest.mark.parametrize(
     "shape",
     [
