@@ -41,8 +41,9 @@ class Flux3KleinDBCache:
         return functools.partial(self.run, branch=branch)
 
     def _content_mask(self, layout, sp_axis: int) -> ttnn.Tensor:
-        # the diff is measured on the image and reference rows only, as cache-dit's hook on the image stream does
-        content = layout.lengths["image"] + layout.lengths["image_cond"]
+        # the diff is measured on the image and reference rows only, as cache-dit's hook on the image stream does (the
+        # single stage leads with them; a reference bucket's pad rows sit in the masked tail)
+        content = layout.attended("image") + layout.attended("image_cond")
         key = (layout.total_padded, content, sp_axis)
         if key not in self._masks:
             mask = torch.zeros(1, layout.total_padded, 1)
@@ -80,7 +81,7 @@ class Flux3KleinDBCache:
         for block in blocks[:fn]:
             h = run_block(block, h)
         fn_residual = ttnn.subtract(h, h_in)
-        if layout.lengths["image"] + layout.lengths["image_cond"] < layout.total_padded:
+        if layout.attended("image") + layout.attended("image_cond") < layout.total_padded:
             masked = ttnn.multiply(fn_residual, self._content_mask(layout, sp_axis))
             ttnn.deallocate(fn_residual)
             fn_residual = masked

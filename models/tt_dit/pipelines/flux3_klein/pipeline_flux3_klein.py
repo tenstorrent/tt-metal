@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 from loguru import logger
 from PIL import Image, ImageOps
@@ -30,19 +32,22 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.dbcache import DBCacheConfig
 from .dbcache_flux3_klein import Flux3KleinDBCache
-from .packing import MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
+from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_ranges
 from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
 
-# The first release serves fixed square sizes, all warmed up at startup, and at most one reference image,
-# center-cropped and resized to 1 MP as in BFL's multi-reference sizing.
+# The first release serves fixed square sizes, all warmed up at startup, and at most one reference image, sized as
+# BFL's single reference (prepare_reference): any aspect, at most 4 MP. Its tokens are padded to the smallest bucket
+# that holds them, so every request runs a warmed-up program; the bucket's pad rows are masked attention keys.
 SIZES = (1024, 2048, 4096)
 DEFAULT_SIZE = 2048
 MAX_REFERENCES = 1
-REFERENCE_SIZE = 1024
+MATCH_MAX_PIXELS = 4 * 1024 * 1024  # the reference canvas, padding included
+MIN_SIDE, MAX_SIDE = 64, 4096
+REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)  # up to 1 MP and up to 4 MP
 
 
 @dataclass(frozen=True)
@@ -79,12 +84,36 @@ def caption_seed(caption: str) -> int:
     return int(hashlib.sha256(caption.encode()).hexdigest(), 16) % 2**32
 
 
-def prepare_reference(image: Image.Image, size: int) -> Image.Image:
+def reference_canvas(width: int, height: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    """(fitted size, canvas) of a single reference as BFL's pipeline.reference_canvas: scaled down to fit 4 MP and a
+    4096 side, the canvas the fitted size rounded up to 16 (sides 64-4096) and at most 4 MP."""
+    scale = min(1.0, math.sqrt(MATCH_MAX_PIXELS / (width * height)), MAX_SIDE / max(width, height))
+    while True:
+        fit = (max(1, round(width * scale)), max(1, round(height * scale)))
+        canvas = tuple(min(MAX_SIDE, max(MIN_SIDE, -(-v // DOWNSAMPLING_RATIO) * DOWNSAMPLING_RATIO)) for v in fit)
+        if canvas[0] * canvas[1] <= MATCH_MAX_PIXELS:
+            return fit, canvas
+        scale *= 0.995
+
+
+def prepare_reference(image: Image.Image) -> Image.Image:
+    """BFL's single reference (pipeline.prepare_reference): RGB, fitted by reference_canvas, reflect-padded to its
+    canvas, centred. The output size is the request's own, so the padding box is not needed."""
     image = ImageOps.exif_transpose(image).convert("RGB")
-    side = min(image.size)
-    left, top = (image.width - side) // 2, (image.height - side) // 2
-    image = image.crop((left, top, left + side, top + side))
-    return image if side == size else image.resize((size, size), Image.Resampling.LANCZOS)
+    fit, (w, h) = reference_canvas(image.width, image.height)
+    if fit != image.size:
+        image = image.resize(fit, Image.Resampling.LANCZOS)
+    if (w, h) == image.size:
+        return image
+    left, top = (w - image.width) // 2, (h - image.height) // 2
+    padding = ((top, h - image.height - top), (left, w - image.width - left), (0, 0))
+    # reflect needs a pad shorter than the side
+    mode = "reflect" if min(image.size) > DOWNSAMPLING_RATIO else "symmetric"
+    return Image.fromarray(np.pad(np.asarray(image), padding, mode=mode))
+
+
+def reference_bucket(tokens: int) -> int:
+    return next(b for b in REFERENCE_TOKEN_BUCKETS if tokens <= b)
 
 
 # The guidance and Euler arithmetic round to bf16 where the reference does; every op runs in fp32 with explicit
@@ -199,15 +228,18 @@ class Flux3KleinPipeline:
         return cls(mesh_device, snapshots={model: resolve_weights_dir(model) for model in models}, **kwargs)
 
     def warmup(self, sizes: tuple[int, ...] = SIZES) -> None:
-        """Compile every program of the served shapes: each size with and without a reference."""
+        """Compile every program of the served shapes: each size without a reference and with one per reference token
+        bucket (a square reference that fills the bucket). A reference of another shape reuses its bucket's DiT
+        programs; only the VAE encoder compiles for a new reference shape."""
         for model in self._transformers:
             for size in sizes:
-                for references in range(MAX_REFERENCES + 1):
-                    image = Image.new("RGB", (REFERENCE_SIZE, REFERENCE_SIZE))
+                for bucket in (None, *REFERENCE_TOKEN_BUCKETS):
+                    images = ()
+                    if bucket is not None:
+                        side = math.isqrt(bucket) * DOWNSAMPLING_RATIO
+                        images = (Image.new("RGB", (side, side)),)
                     self.generate(
-                        Flux3KleinRequest(
-                            "warmup", model=model, width=size, height=size, seed=0, images=(image,) * references
-                        )
+                        Flux3KleinRequest("warmup", model=model, width=size, height=size, seed=0, images=images)
                     )
 
     def generate(self, request: Flux3KleinRequest) -> Flux3KleinResult:
@@ -228,7 +260,6 @@ class Flux3KleinPipeline:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
-            reference = prepare_reference(reference, REFERENCE_SIZE)
         timings = {}
 
         t0 = time.time()
@@ -243,8 +274,9 @@ class Flux3KleinPipeline:
         t0 = time.time()
         image_cond = None
         if reference is not None:
-            h, w = latent_shape(*reference.size)
-            image_cond = (self._vae.encode(reference), reference_ids(h, w, 0))
+            canvas = prepare_reference(reference)
+            h, w = latent_shape(canvas.height, canvas.width)
+            image_cond = (self._vae.encode(canvas), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0
 
         t0 = time.time()
@@ -302,16 +334,17 @@ class Flux3KleinPipeline:
     ) -> tuple[ttnn.Tensor, int]:
         transformer = self._transformers[model]
         sp = transformer.sp_factor
-        cond_rows = 0 if image_cond is None else image_cond[0].shape[0]
+        cond_valid = 0 if image_cond is None else image_cond[0].shape[0]
+        cond_rows = 0 if image_cond is None else reference_bucket(cond_valid)
         cond_embedded = None
         if image_cond is not None:
-            tokens = self._upload_rows(image_cond[0], sp)
+            tokens = self._upload_rows(pad_rows(image_cond[0], cond_rows), sp)
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
         def sample(text_rows: torch.Tensor, text_ids: torch.Tensor, text_valid: int):
             lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[0]}
-            layout = Flux3KleinSequenceLayout(sp, lengths, text_valid)
+            layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
             sample_ids = {"image": ids, "text": text_ids}
             if image_cond is not None:
                 sample_ids["image_cond"] = image_cond[1]

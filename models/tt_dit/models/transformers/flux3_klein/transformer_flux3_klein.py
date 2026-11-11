@@ -96,17 +96,23 @@ class Flux3KleinSequenceLayout:
     """Row layout of one sample on the SP axis.
 
     Each mode is a separate SP-sharded tensor of padded_length(L_m) rows. The single stage is
-    [image | image_cond | text | pad] with all alignment rows at the end, reached with one all-gather of the per-device
-    concat [img_d | cond_d | txt_d] and a row gather. Text rows past text_valid are masked as attention keys.
+    [image | image_cond valid | text | image_cond pad | pad] with all alignment rows at the end, reached with one
+    all-gather of the per-device concat [img_d | cond_d | txt_d] and a row gather. Text rows past text_valid and
+    reference rows past cond_valid (a reference bucket's padding) are masked as attention keys: every masked row sits
+    after every attended one.
     """
 
     sp_factor: int
     lengths: dict[str, int]
     text_valid: int
+    cond_valid: int | None = None  # None: every image_cond row is real
     padded: dict[str, int] = field(init=False)
     rows: dict[str, int] = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.cond_valid is None:
+            object.__setattr__(self, "cond_valid", self.lengths["image_cond"])
+        assert 0 <= self.cond_valid <= self.lengths["image_cond"]
         padded = {m: padded_length(self.lengths[m], self.sp_factor) for m in MODES}
         object.__setattr__(self, "padded", padded)
         object.__setattr__(self, "rows", {m: padded[m] // self.sp_factor for m in MODES})
@@ -124,10 +130,18 @@ class Flux3KleinSequenceLayout:
         return sum(self.rows.values()) * self.sp_factor
 
     def attended(self, mode: str | None = None) -> int:
-        masked_text = self.lengths["text"] - self.text_valid
+        masked = {
+            "text": self.lengths["text"] - self.text_valid,
+            "image_cond": self.lengths["image_cond"] - self.cond_valid,
+        }
         if mode is None:
-            return self.total - masked_text
-        return self.lengths[mode] - (masked_text if mode == "text" else 0)
+            return self.total - sum(masked.values())
+        return self.lengths[mode] - masked.get(mode, 0)
+
+    def single_rows(self) -> list[tuple[str, int]]:
+        """(mode, row) of each real single-stage row in order: the attended rows first, then the masked ones."""
+        rows = [(m, i) for m in self.modes for i in range(self.cond_valid if m == "image_cond" else self.lengths[m])]
+        return rows + [("image_cond", i) for i in range(self.cond_valid, self.lengths["image_cond"])]
 
     def _source_row(self, mode: str, i: int) -> int:
         device, local = divmod(i, self.rows[mode])
@@ -135,7 +149,7 @@ class Flux3KleinSequenceLayout:
         return device * sum(self.rows.values()) + offset + local
 
     def assembly_indices(self) -> torch.Tensor:
-        indices = [self._source_row(m, i) for m in self.modes for i in range(self.lengths[m])]
+        indices = [self._source_row(m, i) for m, i in self.single_rows()]
         if self.total_padded > self.total:
             # pad rows copy an alignment row of the early stacks, which is exactly zero
             m = next(m for m in self.modes if self.padded[m] > self.lengths[m])
@@ -148,7 +162,7 @@ class Flux3KleinSequenceLayout:
 
     def mode_ids(self, mode: str | None = None) -> torch.Tensor:
         if mode is None:
-            ids = [MODES.index(m) for m in self.modes for _ in range(self.lengths[m])]
+            ids = [MODES.index(m) for m, _ in self.single_rows()]
             return torch.tensor(ids + [PAD_MODE_ID] * (self.total_padded - self.total), dtype=torch.int64)
         pad = self.padded[mode] - self.lengths[mode]
         return torch.tensor([MODES.index(mode)] * self.lengths[mode] + [PAD_MODE_ID] * pad, dtype=torch.int64)
@@ -413,11 +427,15 @@ class Flux3KleinTransformer(Module):
             )
 
         modes = layout.modes
+        # a reference bucket's pad rows (masked keys) get zero ids
+        ids = {m: ids[m][: layout.lengths[m]].float() for m in modes}
+        ids = {m: torch.nn.functional.pad(t, (0, 0, 0, layout.lengths[m] - t.shape[0])) for m, t in ids.items()}
+        single_ids = torch.stack([ids[m][i] for m, i in layout.single_rows()])
         return Flux3KleinPlan(
             layout=layout,
-            early_rope={m: rope(ids[m][: layout.lengths[m]], layout.padded[m]) for m in modes},
+            early_rope={m: rope(ids[m], layout.padded[m]) for m in modes},
             early_mod={m: tuple(indices(i) for i in modulation_indices(layout.mode_ids(m), "early")) for m in modes},
-            single_rope=rope(torch.cat([ids[m][: layout.lengths[m]].float() for m in modes]), layout.total_padded),
+            single_rope=rope(single_ids, layout.total_padded),
             single_mod=tuple(indices(i) for i in modulation_indices(layout.mode_ids(), "single")),
             assembly=indices(layout.assembly_indices()),
             image_out=indices(layout.image_out_indices()),
