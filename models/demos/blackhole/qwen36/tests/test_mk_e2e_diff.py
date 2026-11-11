@@ -92,8 +92,11 @@ def _layer_hooks(model, rec):
     return saved
 
 
-def _mlp_ar_index(layer_types, aar=True):
-    """AR program order (AR contract): per layer [attention AR if attention-type and MK_REAL_AAR], then the MLP-AR."""
+def _mlp_ar_index(layer_types, aar=True, gar=False):
+    """AR program order (AR contract): per layer [attention AR if attention-type and MK_REAL_AAR], then the MLP-AR. Under
+    MK_REAL_GAR every layer has a mixer AR, so layer L's MLP-AR is 2L + 1."""
+    if gar:
+        return [2 * L + 1 for L in range(len(layer_types))]
     idx, k = [], 0
     for t in layer_types:
         k += 1 if (t == "attention" and aar) else 0
@@ -109,7 +112,8 @@ def _diff_case(model, live, tag):
     assert "ar_dbgt" in S and S["ar_dbgt"] is not None, "engine built without MK_AR_DBG=1 (no per-AR residual dump)"
     nl = int(prog.info["nl"])
     lt = mk1.layer_types[:nl]
-    aar = "MK_REAL_AAR=1" in prog.info["env"].get("MK_DEFINES", "").split(",")
+    _defs = prog.info["env"].get("MK_DEFINES", "").split(",")
+    aar, gar = "MK_REAL_AAR=1" in _defs, "MK_REAL_GAR=1" in _defs
     ts = _mutable(model)
     snap = _snapshot(ts)
     # reference: op-by-op
@@ -135,7 +139,7 @@ def _diff_case(model, live, tag):
     dbg_all_equal = all(torch.equal(ttnn.to_torch(d).float().reshape(32, -1)[:, res_cols], dbg[:, res_cols])
                         for d in ttnn.get_device_tensors(S["ar_dbgt"])[1:])
     _restore(ts, snap)
-    ari = _mlp_ar_index(lt, aar)
+    ari = _mlp_ar_index(lt, aar, gar)
     pcc, mx, bad = {}, {}, []
     for u in live:
         pcc[u], mx[u] = {}, {}

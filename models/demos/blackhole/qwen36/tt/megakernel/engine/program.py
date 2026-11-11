@@ -1485,10 +1485,9 @@ def weight_layouts(mesh):
         "gdn_out": (WL.gdn_out_layout(C["gdn_out"], bank_loc, banks) if C["gdn_out"]
                     else wm.TileOrderLayout("gdn_out", "bfloat4_b")),
     }
-    # The repack stores the attention layers by attention ORDINAL (layer a at a * ppl); setup_bench's synthetic wq_all /
-    # wo_all are indexed by ENGINE layer L (all NL layers). Until the kernels take an ordinal base (asked of the attention
-    # helper), the track packs are opt-in (QWEN36_R16_MK_W_ATTN=1) and the default keeps tile-order placeholders (unbound).
-    if os.environ.get("QWEN36_R16_MK_W_ATTN", "0") != "1":
+    # The repack stores the attention layers by attention ORDINAL (layer a at a * ppl): bound with MKA_W_ORD=1 (kernels read
+    # qkv / wo at aidx(L), C+D 2db038ec26a; gdn_out by GDN ordinal). QWEN36_R16_MK_W_ATTN=0: tile-order placeholders (unbound).
+    if os.environ.get("QWEN36_R16_MK_W_ATTN", "1") != "1":
         lays.update(qkv=wm.TileOrderLayout("qkv", "bfloat8_b"), wo=wm.TileOrderLayout("wo", "bfloat8_b"))
     return lays
 
@@ -1544,6 +1543,8 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     _WEIGHTS.update({k: v for k, v in (weights or {}).items() if v and not type(v.get("layout")).__name__ == "TileOrderLayout"})
     # KV injection (QWEN36_R16_MK_KV_INJECT=1; e2e-diff, and the default once the SDPA reads the real page table): the
     # engine reads the model's paged caches in the prod layout instead of CTX-sized synthetic ones
+    if "qkv" in _WEIGHTS or "wo" in _WEIGHTS:  # repack order = attention ordinal (weight_layouts)
+        env["MKA_W_ORD"] = "1"
     if os.environ.get("QWEN36_R16_MK_KV_INJECT", "0") == "1" and kv_desc and all(d.get("paged") for d in kv_desc):
         _WEIGHTS["_kv_inject"] = [(d["k"], d["v"]) for d in kv_desc]
         kv0 = kv_desc[0]
@@ -1602,8 +1603,8 @@ def make_xio(mesh, S):
     """The engine residual I/O (AR track contract, R = 32): (seed(x_in), drain(x_out)) as one-kernel generic_ops on the 16
     owners, or None when the engine has no owner residual (no MK_REAL_AR). seed: x_in [1,1,32,5120] bf16 TILE DRAM ->
     every owner's v_x0 shard (tiles 10 j .. 10 j + 9); drain: v_x0 -> x_out (same layout). Both trace-capturable.
-    Still missing on the engine side: the layer-0 K-row x delivery from v_x0 (a prologue delivery; today the stand-in
-    delivery is built from the bench's own x at setup), and the MK_AR_RSTD Σx² seed."""
+    Under MK_REAL_AR + QSK layer 0's mixer and MLP x come from v_x0 (v12_ox_mix(0)), so the seed feeds layer 0; under
+    MK_AR_RSTD the STREAM rstd producer computes Σx² from that delivery (no seed needed)."""
     import torch
 
     vx0 = S.get("v_x0")
