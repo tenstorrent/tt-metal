@@ -349,6 +349,12 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     zs_late = early and os.environ.get("E1_ZS_LATE", "1") == "1"
     # GDN_CUT_FAST (default on): kts / kmq slots re-zero only the previous occupant's rows (one barrier per chunk)
     cut_fast = os.environ.get("E1_CUT_FAST", "1") == "1"
+    # E1_STNARROW (REPLAY, default 0): the K4 replay's stash reads narrow (K^T: the user's 2 faces; U: its T rows), slots zeroed
+    # once per program; the ring layout is unchanged (bit-identical: the pages are +0 outside the user's rows / columns)
+    stnarrow = os.environ.get("E1_STNARROW", "0") == "1" and B > 1 and st_ring == 0
+    # E1_KTDD (REPLAY, needs E1_STNARROW): K^T stash dedupe over the head's VB value blocks (block s reads tiles i = s mod VB and
+    # writes them into its peers' ktp_in slots; 2 argblock counters OKT, OKT + 1, reset at program end)
+    ktdd = stnarrow and os.environ.get("E1_KTDD", "0") == "1" and VB > 1 and Kt % VB == 0
     # GDN_OUT_TILE (default on): at B * T == 32 the out tiles go out as whole tiles (1 write each, same bytes)
     out_tile = os.environ.get("E1_OUT_TILE", "1") == "1"
     # GDN_OUT_RD (E1_OUT_RD, B * T == 32 only): the reader (NOC1) writes the out tiles + raises the out signal instead of
@@ -692,7 +698,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
     # NOC1, eastward). Payload words OGK: k, n_fwd, (x, y) x 2 (NoC of the cores this one bumps). G-b: gdn_gin_wait() is
     # the per-core wait for its prefix stage; gdn_in_wait() (the step's) calls it until G-b retargets it.
     percore = gin_k is not None
-    OGK = OHM + 2
+    OKT = OHM + 2   # E1_KTDD counter words (only when on: flag-off argblock / text unchanged)
+    OGK = OKT + (2 if ktdd else 0)
     gk_k, gk_f = [1] * len(cores), [[] for _ in cores]
     if percore:
         lxy = [(c_.x, c_.y) for c_ in cores]
@@ -808,9 +815,11 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + (f'void gdn_out_signal() {{ {"" if GO else osig_r} }}\n' if out_rd else '')
         + ((go_local_rd[:go_local_rd.rindex("}")] + (go_r0s_done if go_ring0s else '') + go_th.replace("{OSIG}", osig_rd) + "}\n" if GO_TAILHOOK else go_local_rd) if GO and go_rdhook else '')
         + (f'void gdn_hold_publish(uint32_t m) {{ g_ab[{OHM} + (g_l & 1)] = ((g_l + 1) << 8) | m; }}\n' if hold_skip else '')
+        + (f'uint32_t gdn_ktdd_peer(uint32_t p) {{ return (g_ab[{OW + 3} + 2 * p] << 16) | g_ab[{OW + 4} + 2 * p]; }}\n'
+           f'volatile tt_l1_ptr uint32_t* gdn_ktdd_sem() {{ return g_ab + {OKT}; }}\n' if ktdd else '')
         + ('void gdn_out_pre() {\n  if (g_l == 0) {\n' + (go_r0s if go_ring0s else go_r.replace("(L_)", "0u")) + '  }\n}\n' if go_ring0h else '') +
         f'void kernel_main() {{\n  g_ab = {AB};\n  {CR}\n' + GB_RINIT
-        + ('  gdn_cut_reset();\n' if cut_fast else '') +
+        + ('  gdn_cut_reset();\n' if cut_fast else '') + ('  gdn_stn_reset();\n' if stnarrow else '') +
         (go_r.replace("(L_)", "0u") if GO and (GO_RINGEARLY or GO_RING2) and not go_ring0h else '') +
         f'  for (uint32_t L = 0; L < {NG}; ++L) {{\n    g_l = L;\n'
         f'    for (uint32_t t = 0; t < {nR}; ++t) crta[{CRTA0} + t] = g_ab[{OLR} + L * {nR} + t];\n'
@@ -830,6 +839,7 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         + ('  noc_async_atomic_barrier();\n' + (f'  if (g_ab[{OAG_ME}]) g_ab[{OAG}] = 0;\n' if agg and (not GO or GO_TAILHOOK) else '') if out_rd else '')
         # HOLD_SKIP: every TRISC read the last layer's mask before this reader's last kmq handoff completed
         + (f'  g_ab[{OHM}] = 0; g_ab[{OHM} + 1] = 0;\n' if hold_skip else '')
+        + (f'  noc_async_atomic_barrier();\n  g_ab[{OKT}] = 0; g_ab[{OKT} + 1] = 0;\n' if ktdd else '')   # every peer increment was awaited in-program
         + ('  noc_async_atomic_barrier();\n' if percore else '')   # the forwarders' corner bumps retired
         + '}\n')
     tw = os.path.join(gen_dir, "g2_writer.cpp")
@@ -903,7 +913,9 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         [("GSTEP_WPRE", "1")] if os.environ.get("E1_WPRE", "0") == "1" else []) + ([("GSTEP_ATTHOLD", "1")] if atthold else []) + (   # #17 F1: norm-W rows before in_ready
         [("GSTEP_WYPAIR", "1")] if wypair else []) + ([("GSTEP_WYORD", "1")] if wyord else []) + ([("GSTEP_CUTST", "1")] if wypair and os.environ.get("E1_CUTST", "0") == "1" else []) + (
         [("GSTEP_KTSLATE", "1")] if wypair and os.environ.get("E1_KTLATE", "0") == "1" and os.environ.get("E1_KTSLATE", "0") == "1" else []) + (
-        [("GSTEP_CZ", "1")] if os.environ.get("E1_GSZ", "0") == "1" else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else [])
+        [("GSTEP_CZ", "1")] if os.environ.get("E1_GSZ", "0") == "1" else []) + ([("GSTEP_CUTNZ", "1")] if os.environ.get("E1_CUTNZ", "0") == "1" else []) + (
+        [("GDN_RPX", os.environ["E1_RPX"])] if os.environ.get("E1_RPX", "0") != "0" else []) + (   # REPLAY bench-only diagnostics
+        [("GDN_STNARROW", "1")] if stnarrow else []) + ([("GDN_KTDD", "1")] if ktdd else [])
     d_w = [("GDN_LAZY", "1"), ("GDN_SFPU_GATE", "1"), ("GDN_GATE_SCALARS", "1"), ("GDN_AB_PAGE", str(ab_page)),
            ("GDN_W_TILES", str(W)), ("GDN_DTB_FP32", "1"), ("GDN_NEA_FP32", "1"), ("GDN_NARROW_GR", "1"),
            ("GDN_VSPLIT", "1"), ("GDN_PREFIXED", "1"), ("GDN_PREFIXED_GATES", "1"), ("GDN_PRE_W", str(pre_w)),
@@ -967,6 +979,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
             pl += [0] * len(cores) + [0]   # GFL: per-source A tile ready flags (E1_GO_FLAGS), L + 1; GRDY (E1_GO_GATHER); writer resets
         assert len(pl) == OHM, (len(pl), OHM)
         pl += [0, 0]   # OHM x 2 (HOLD_SKIP live mask by layer parity; always present)
+        if ktdd:
+            pl += [0, 0]   # OKT: E1_KTDD slot-ready / landed counters
         assert len(pl) == OGK, (len(pl), OGK)
         pl += [gk_k[i], len(gk_f[i])] + [v_ for xy_ in (gk_f[i] + [(0, 0)] * 2)[:2] for v_ in xy_]   # OGK: MK_GIN_PERCORE k_c, forwards
         if GB:
