@@ -122,6 +122,9 @@ constexpr uint32_t kBatchMax = 8;
 #ifndef GDN_ST_RING
 #define GDN_ST_RING 0  // BATCH: state / stash DFBs hold GDN_ST_RING users (streamed per user; 0 = all kBatchMax at once)
 #endif
+#ifndef GSTEP_WPRE
+#define GSTEP_WPRE 0  // engine GDN role (GDN_STATE_FIRST + GDN_PREFIXED): w_in (norm weight rows) read before gdn_in_wait
+#endif
 #ifndef GDN_IN_WAIT
 #define GDN_IN_WAIT 0  // engine GDN role: gdn_in_wait() (the including TU) gates the reads of `pre`
 #endif
@@ -673,6 +676,18 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     }
 #endif
 #endif
+#if GSTEP_WPRE
+    // GSTEP_WPRE: the gated-norm weight rows (static per layer) go out before the in_ready wait, off the rd_pre path
+    {
+        w_in.reserve_back(Vt);
+        zero_reserved(w_in, noc, Vt);
+        for (uint32_t t = 0; t < Vt; ++t) {
+            read_row0_at(w_acc, w_in, noc, t, t);
+        }
+        noc.async_read_barrier();
+        w_in.push_back(Vt);
+    }
+#endif
 #if GDN_IN_WAIT
     // engine GDN role: this layer's prefix output (pre) is complete once in_ready reaches the layer's target
     gdn_in_wait();
@@ -716,11 +731,13 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if !GDN_GB_DIRECT
         read_tiles_at(pre_acc, vc, noc, base + 2 * Kt + s * Vs, Vs, 0);
 #endif
+#if !GSTEP_WPRE
         w_in.reserve_back(Vt);
         zero_reserved(w_in, noc, Vt);
         for (uint32_t t = 0; t < Vt; ++t) {
             read_row0_at(w_acc, w_in, noc, t, t);
         }
+#endif
         noc.async_read_barrier();
 #if GDN_GB_DIRECT
         gdn_gb_wait(1);  // vc / zs / the head's gate rows have landed
@@ -734,7 +751,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         knq.push_back(2 * Kt);
 #endif
         vc.push_back(Vs);
+#if !GSTEP_WPRE
         w_in.push_back(Vt);
+#endif
     }
 #endif  // GDN_PREFIXED
 
