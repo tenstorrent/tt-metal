@@ -190,13 +190,14 @@ at B 16 (~-2.6 ms per 45-layer step), ~-110 us at B 8, ~-55 us at B 4.
 
 ## 10. The shard tail knobs and the 8x4 defaults (2026-11-10, MLA_REV 68)
 
-Each knob is its own kernel define / stream argument, so any subset composes: `GLM53_DSA_SHARD_COMB` the roots'
-combine (att_c / att_dsa_shard_dm1), `GLM53_DSA_SHARD_RS1_EARLY` the roots' RS1 signals + the RS1 lane's gate
-(fs_read.cpp FS_WAIT2), `GLM53_DSA_SHARD_AGK` the AG1 lane's pack (fs_read / fs_send FS_KEYPACK) + the y_ag readers
-(merge helpers, ix_dm1). AGK and RS1_EARLY both edit fs_read.cpp but different streams: FS_KEYPACK builds the AG1 lane
-(plain FS_WAIT gate), FS_WAIT2 the RS1 scatter lane; one build never takes both (FS_KEYPACK `#error`s under
-FS_SCATTER). With every knob off the shard kernels are instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to
-the compiler's two stack-slot variants). `tt/galaxy_defaults.py` turns on AGK, AGB and RS1_EARLY (2026-11-11).
+Each knob is its own kernel define / stream argument, so any subset composes: `GLM53_DSA_SHARD_COMB` the roots' combine
+(att_c / att_dsa_shard_dm1), `GLM53_DSA_SHARD_RS1_EARLY` the roots' RS1 signals + the RS1 lane's gate (fs_read.cpp
+FS_WAIT2), `GLM53_DSA_SHARD_AGK` the AG1 lane's pack (fs_read / fs_send FS_KEYPACK) + the y_ag readers (merge helpers,
+ix_dm1), `GLM53_DSA_SHARD_RSB` the two scatters' chunk geometry (stream arguments only, below). AGK and RS1_EARLY both
+edit fs_read.cpp but different streams: FS_KEYPACK builds the AG1 lane (plain FS_WAIT gate), FS_WAIT2 the RS1 scatter
+lane; one build never takes both (FS_KEYPACK `#error`s under FS_SCATTER). With every knob off the shard kernels are
+instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's two stack-slot variants).
+`tt/galaxy_defaults.py` turns on AGK, AGB and RS1_EARLY (2026-11-11).
 
 | knob | probe: B 16, pos 4095, layers 0-3 (one DSA layer) | e2e (45 layers, greedy) | ids | 8x4 default |
 |---|---|---|---|---|
@@ -206,12 +207,48 @@ the compiler's two stack-slot variants). `tt/galaxy_defaults.py` turns on AGK, A
 | COMB | 3906.8 us (rev 65 build) | 4 K x 16 41.2 ms | moves at a near-tie (strict gate fails) | off |
 | COMB + RS1_EARLY | 3807.9 us | 4 K x 16 40.0 ms, 32 K x 4 22.1 ms | as COMB | off |
 | AGB (on AGK) | - | 4 K x 16 36.8 -> 35.7 ms; with RS1_EARLY 34.3 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical with RS1_EARLY | on |
+| RSB | pending device run | pending device run | pending device run (expected bit-identical: same bytes, page ids, landing order) | off |
 
 The rows ran on the single-knob trees (wt_mrg e7f7dc8443f, wt_rsc ab4bd43c343 / 4d61833e021, wt_rs1 4e59a2c95c0),
 whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the two-field gates are sound for every
 lane skew: shard_plan.rs1_early_gates); rev 67 alone at 4 K x 16 distinct had left the KPH run's user 0 at decode id 9,
 which was the routed-expert scratch race (section 12): on the fixed stack RS1_EARLY and AGB give the knob-off digest in
 every one of 3 in-process runs at 4 K x 16.
+
+### RSB: the reduce-scatters in block chunks (2026-11-11, opt-in, pending device run)
+
+Today both scatters signal per token. RS1 (FabricStreamScatter axis 0, one lane) ships per destination t chunks of
+10 pages (one 8-row slice, 9 pages + a pad page) as 10-page batches of 5 two-page packets; the chunk's last packet is a
+fused write + atomic inc with flush of the receiver's ARR counter (fs_send.cpp `col + 2 == PPC`), so the receiving
+router drains its NoC writes before every inc (fabric_edm_packet_transmission.hpp, CHUNK_ENCODING_SEMINC_FLUSH). That
+is 7 t signals per source per launch (112 at t 16), and RS2 (axis 1, 4-page chunks of one 2-row slice) adds 3 t (48).
+Nothing pipelines on them: only the receiver's waiter (the lane BRISC) reads ARR, it waits for all t chunks of every
+source, then raises the roots' SEM_RSC once (FS_CONS); the roots wait SEM_RSC >= 1 / >= 2.
+
+`GLM53_DSA_SHARD_RSB=1` (8x4 only, independent of the other knobs): x_rs1 / y_rs1 / x_rs2b / y_rs2b as [n x 32, W t]
+(shard_plan.rs_stream_args): one 32-row chunk per destination block holding its t slices at the knob-off page ids,
+so the roots' writes and landing reads do not change, and the chunk-end packet goes out once per destination. No
+kernel change: the scatter's x and y chunks coincide, so fs_send's `col + 2 == PPC` with PPC = 10 t / 4 t is the
+block's last pair (AGB needed FS_KP_XPER only because AGK's x chunk is not its y chunk). The waiters wait for 1 per
+source. Staging CBs keep their bytes (RS1 4 x 10 pages = 80 KB, RS2 2 x 8 pages = 32 KB), no new CBs, no new
+semaphores. Host: shard_plan.fs_scatter_sends / rs_stream_counts / audit_rs_blocks, tests/test_shard_plan_8x4.py.
+Offline compile of fs_send / fs_read (t 4 / 8 / 16, RS1_EARLY on / off, probe on / off, AGK + AGB): knob off equals
+3b0ee5b0342's objdump, knob on compiles.
+
+| per source per launch | t 4 | t 8 | t 16 |
+|---|---|---|---|
+| RS1 chunk-end signals | 28 -> 7 | 56 -> 7 | 112 -> 7 |
+| RS2 chunk-end signals | 12 -> 3 | 24 -> 3 | 48 -> 3 |
+| RS2 staging batches | 12 -> 6 | 24 -> 12 | 48 -> 24 |
+| RS1 batches / packets (RS1 + RS2) | 28 / 164 | 56 / 328 | 112 / 656 (unchanged) |
+
+Expected: AGB removed 135 signals + 96 batches per source at t 16 for ~100 us per DSA layer (36.8 -> 35.7 ms over
+11 layers), at most ~0.7 us per signal. At that rate RSB is worth up to ~100 us per DSA layer at B 16 (~1.1 ms per
+4 K x 16 step), ~50 us at B 8, ~20 us at B 4: probe owner_dm1 marks 5 -> 6 (pass 1 done -> RS1 landed: 324 us at B 16)
+and 7 -> 8 (row scatter shipped -> RS2 landed); 6 -> 7 and 8 -> 9 are root-local and must not move. The bound: RS1's
+cross-half traffic is 16 t x 20 KB per direction on the column's middle link (5.1 MB at t 16; 324 us is ~16 GB/s),
+so if RS1 is link-bound its share shrinks to the signals' router stalls only -- the rs1 lane's opened -> sent span
+(probe row 238) tells which. RS2 (512 KB on the row's middle link at t 16) is not byte-bound.
 
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 

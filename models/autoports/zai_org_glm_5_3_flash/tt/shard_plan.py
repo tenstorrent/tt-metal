@@ -197,11 +197,15 @@ class Geometry:
         """pages per x_rs2 / y_rs2 chunk: 8-row slices (2x4) RS2_PPC; 2-row slices (8x4) RS2B_PPC"""
         return RS2_PPC if self.rs2_rows == 8 else RS2B_PPC
 
-    def streams(self, t: int, agk: bool = False, agb: bool = False) -> dict:
+    def streams(self, t: int, agk: bool = False, agb: bool = False, rsb: bool = False) -> dict:
         """name -> dict(axis, kind, chunks (per block), width, link, blocks_in_y, src_blocks_in_x); the 8x4's AG under
         GLM53_DSA_SHARD_AGK / _AGB (agk / agb): the chunks / width of ag_stream_args (AGB: ONE y chunk per block, so
-        AG1's dst = blk, AG2's bundle = P chunks -- the fabric streams' row_base accounting)"""
+        AG1's dst = blk, AG2's bundle = P chunks -- the fabric streams' row_base accounting); the 8x4's scatters: the
+        chunks / width of rs_stream_args (GLM53_DSA_SHARD_RSB, rsb: ONE chunk per destination block, so RS1's / RS2's
+        dst = p and destination q's source base = q)"""
+        assert not rsb or self.P > 2, ("RSB: the 8x4 scatters", self.P)
         ag1c, ag2c, agw = self.ag_chunks(t), self.P * self.ag_chunks(t), self.ag_width()
+        rsa = rs_stream_args(t, rsb=rsb, P=self.P) if self.P > 2 else None
         if agk or agb:
             assert self.P > 2 and (agk or not agb), ("AGK / AGB: the 8x4; AGB on AGK", self.P, agk, agb)
             a = ag_stream_args(t, agk=agk, agb=agb, P=self.P)
@@ -212,8 +216,8 @@ class Geometry:
             out["rs1"] = dict(axis=self.pair_axis, kind="rs2", chunks=t * RS_CHUNKS, width=32 * RS_PPC, link=1,
                               y_blocks=1, x_blocks=2)  # fmt: skip
         else:  # 8x4: the column reduce-scatter of 8-row slices (per-destination unicasts, as the 2x4 round 2)
-            out["rs1"] = dict(axis=self.pair_axis, kind="scatter", chunks=t, width=32 * self.rs1_ppc, link=1,
-                              y_blocks=self.P, x_blocks=self.P)  # fmt: skip
+            out["rs1"] = dict(axis=self.pair_axis, kind="scatter", chunks=rsa["rs1"]["rows"] // 32,
+                              width=rsa["rs1"]["width"], link=1, y_blocks=self.P, x_blocks=self.P)  # fmt: skip
         if self.L > 1:
             out["ag2"] = dict(
                 axis=self.line_axis,
@@ -224,18 +228,20 @@ class Geometry:
                 y_blocks=self.L,
                 x_blocks=self.L,
             )  # (bundles: x = y = y_ag; the bundle = the column's P blocks)  # fmt: skip
-            out["rs2"] = dict(axis=self.line_axis, kind="scatter", chunks=t, width=32 * self.rs2_ppc, link=1,
+            rs2c, rs2w = (rsa["rs2"]["rows"] // 32, rsa["rs2"]["width"]) if rsa else (t, 32 * self.rs2_ppc)
+            out["rs2"] = dict(axis=self.line_axis, kind="scatter", chunks=rs2c, width=rs2w, link=1,
                               y_blocks=self.L, x_blocks=self.L)  # fmt: skip
         return out
 
     def block(self, name: str, t: int, r: int, c: int, rs1_early: bool = False, agk: bool = False,
-              agb: bool = False) -> dict:  # fmt: skip
+              agb: bool = False, rsb: bool = False) -> dict:  # fmt: skip
         """chip (r, c)'s block of stream `name`: src chunk base in x, dst chunk base in y (on the receivers: the same
         address on every chip), local copy, up / down multicast ranges (the scatter: the chips above / below), and the
         scatter's destinations [(position q, src chunk base, direction 0 up / 1 down, hops)]; rev 65 rs1_early (the
-        8x4 column scatter): the other half's destinations first (rs1_early_first), then the own half's"""
+        8x4 column scatter): the other half's destinations first (rs1_early_first), then the own half's; rsb (the 8x4
+        scatters in block chunks): the chunk bases count destination blocks (1 chunk each)"""
         assert not rs1_early or self.P > 2, "RS1 early: the 8x4 column scatter"
-        sp = self.streams(t, agk=agk, agb=agb)[name]
+        sp = self.streams(t, agk=agk, agb=agb, rsb=rsb)[name]
         p, line = self.axis_pos(r, c, sp["axis"])
         n = self.axis_len(sp["axis"])
         ch = sp["chunks"]
@@ -1530,6 +1536,125 @@ def audit_ag_blocks(geo, t: int, agk: bool = False, agb: bool = False, plan_knob
                 p_, line = geo.axis_pos(r, c, axis)
                 src, dst, local, up, dn = fs_ag_block(p_, line, geo.axis_len(axis), a[name]["rows"] // 32, bundle)
                 got = dict(p=p_, src=src, dst=dst, local=bool(local), up=up, dn=dn, dsts=[])
+                want = geo.block(name, t, r, c, **pk)
+                if got != {k: want[k] for k in got}:
+                    raise ValueError(f"chip {(r, c)} stream {name}: blocks {got} differ from the plan {want}")
+
+
+# ------------------------------------------------------------------ the scatters in block chunks (GLM53_DSA_SHARD_RSB)
+FS_NB, FS_SLOTS = 16, 4  # tt/fabric_stream.py _FabricStream's default nb= / slots= (checked on its text: fs_stage)
+
+
+def shard_rsb(pair: int) -> bool:
+    """GLM53_DSA_SHARD_RSB (default 0): the 8x4 reduce-scatters in BLOCK CHUNKS -- RS1 (the column scatter of 8-row
+    slices) and RS2 (the row scatter of 2-row slices) view each destination block (t tokens x RS2_PPC / RS2B_PPC pages,
+    the same page ids) as ONE 32-row chunk, so fs_send.cpp's chunk-end packet (a fused write + a FLUSHED atomic inc of
+    the receiver's ARR counter: the receiving router drains its NoC writes before the inc) goes out once per
+    destination instead of once per token, and the waiter waits for one per source (tt/tp_dsa_shard.py,
+    rs_stream_args). No kernel change: the scatter's x and y chunks coincide, so fs_send.cpp's `col + 2 == PPC` is the
+    block's last pair once PPC = t RS2_PPC. The 8x4 only (the pair / the 2x4 keep their streams)"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_RSB")
+
+
+def rs_stream_args(t: int, rsb: bool = False, P: int = 8) -> dict:
+    """the 8x4 shard's RS1 / RS2 FabricStreamScatter arguments (tt/tp_dsa_shard.py builds both scatters and their x
+    tensors from these, the plan Geometry.streams(t, rsb=) / block from the same numbers): rows (rows_local: 32 per
+    chunk), width (hidden) and the extras (nb=, slots=). Knob off: t chunks of RS2_PPC / RS2B_PPC pages (one per
+    token), the default batches (nb = min(16, PPC) = one chunk) in 4 slots -- exactly the pre-RSB constructor calls.
+    RSB: one chunk of t PPC pages per destination block; RS1 keeps its 10-page batches in 4 slots (80 KB: the knob-off
+    CB), RS2 ships 8-page batches in 2 slots (32 KB: the knob-off CB) when 4 t pages split into them, else the knob-off
+    4-page batches in 4 slots"""
+    assert P > 2, ("the 8x4 scatters", P)
+    if not rsb:
+        return dict(rs1=dict(rows=t * 32, width=32 * RS2_PPC, extra={}),
+                    rs2=dict(rows=t * 32, width=32 * RS2B_PPC, extra={}))  # fmt: skip
+    nb2 = 8 if (RS2B_PPC * t) % 8 == 0 else RS2B_PPC
+    slots2 = FS_SLOTS * RS2B_PPC // nb2  # the knob-off bytes: 4 slots x 4 pages
+    return dict(rs1=dict(rows=32, width=32 * RS2_PPC * t, extra=dict(nb=RS2_PPC, slots=FS_SLOTS)),
+                rs2=dict(rows=32, width=32 * RS2B_PPC * t, extra=dict(nb=nb2, slots=slots2)))  # fmt: skip
+
+
+def fs_stage(rows: int, width: int, extra: dict) -> dict:
+    """tt/fabric_stream.py _FabricStream (no keypack) from (rows_local, hidden, extras), checked on its text: chunks per
+    block, pages per chunk, the effective batch (nb = min(nb, ppc)), slots, the staging CB bytes (slots x nb pages)"""
+    with open(os.path.join(os.path.dirname(KDIR), "fabric_stream.py")) as f:
+        src = f.read()
+    for line_ in (f"lanes=None, nb: int = {FS_NB}, slots: int = {FS_SLOTS},", "nb = min(nb, self.ppc)",
+                  "total_size=self.slots * xnb * TB,"):  # fmt: skip
+        assert line_ in src, ("fabric_stream.py _FabricStream", line_)
+    ppc = width // 32
+    nb = min(int(extra.get("nb", FS_NB)), ppc)
+    slots = int(extra.get("slots", FS_SLOTS))
+    assert width % 32 == 0 and ppc % nb == 0 and nb % 2 == 0, (width, nb)
+    return dict(chunks=rows // 32, ppc=ppc, nb=nb, slots=slots, cb_bytes=slots * nb * TB)
+
+
+def fs_scatter_block(p: int, n: int, chunks: int, first: list | None = None) -> tuple:
+    """tt/fabric_stream.py FabricStreamScatter._block / _dsts (checked on their text): (dst chunk base = row_base, local
+    write, up range, down range, destinations [(q, source chunk base of block q, direction 0 up / 1 down, hops)]) of the
+    chip at position p of a line of n, chunks = rows_local / 32; first= (RS1 early): those destinations first"""
+    with open(os.path.join(os.path.dirname(KDIR), "fabric_stream.py")) as f:
+        src = f.read()
+    for line_ in ("return 0, p * self.chunks, False, self.n - 1 - p, p",
+                  "out = [(q, q * self.chunks, 0 if q > p else 1, abs(q - p)) for q in range(self.n) if q != p]",
+                  "out = [d for d in out if d[0] in early] + [d for d in out if d[0] not in early]",
+                  "super().__init__(mesh, rows_local // 32, hidden, n * rows_local, **kw)"):  # fmt: skip
+        assert line_ in src, ("fabric_stream.py FabricStreamScatter", line_)
+    dsts = [(q, q * chunks, 0 if q > p else 1, abs(q - p)) for q in range(n) if q != p]
+    if first is not None:
+        early = set(first)
+        dsts = [d for d in dsts if d[0] in early] + [d for d in dsts if d[0] not in early]
+    return p * chunks, False, n - 1 - p, p, dsts
+
+
+def fs_scatter_sends(rows: int, width: int, extra: dict, p: int, dsts: list) -> list:
+    """fs_read.cpp + fs_send.cpp FS_SCATTER on the scatter's one lane (c_lo = 0, c_n = the block's chunks) of the chip
+    at position p: per destination in `dsts` order ([(q, source chunk base, direction, hops)]) every page pair in send
+    order -> (q, x page, y page, signal): x page = fs_read.cpp's (base + c_lo) PPC + b NB + i (the staged pair), y page
+    = fs_send.cpp's g0 = (row_base + chunk) PPC + col with row_base = p chunks (the pair lands at g0, g0 + 1 of q's y),
+    signal = the chunk-end packet (`col + 2 == PPC`: the fused write + flushed atomic inc of q's ARR counter)"""
+    st = fs_stage(rows, width, extra)
+    chunks, ppc, nb = st["chunks"], st["ppc"], st["nb"]
+    row_base, c_lo, c_n = p * chunks, 0, chunks
+    out = []
+    for q, base, _, _ in dsts:
+        for b in range(c_n * ppc // nb):
+            for i in range(0, nb, 2):
+                idx = b * nb + i
+                chunk, col = c_lo + idx // ppc, idx % ppc
+                out.append((q, (base + c_lo) * ppc + b * nb + i, (row_base + chunk) * ppc + col, col + 2 == ppc))
+    return out
+
+
+def rs_stream_counts(t: int, rsb: bool = False, P: int = 8, L: int = 4) -> dict:
+    """per source chip and launch, the 8x4 scatters' staging batches (one DRAM read barrier + one send flush each),
+    fabric packets (2 pages each), chunk-end signals (flushed atomic incs at the receivers) and the waiter's count per
+    source lane (fs_send.cpp n_lane_ch: chunks per lane), plus each lane's staging CB bytes"""
+    a = rs_stream_args(t, rsb=rsb, P=P)
+    out = {}
+    for name, n_dst in (("rs1", P - 1), ("rs2", L - 1)):
+        st = fs_stage(a[name]["rows"], a[name]["width"], a[name]["extra"])
+        pages = n_dst * st["chunks"] * st["ppc"]
+        out[name] = dict(batches=pages // st["nb"], packets=pages // 2, signals=n_dst * st["chunks"],
+                         wait_per_source=st["chunks"], cb_bytes=st["cb_bytes"])  # fmt: skip
+    return out
+
+
+def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, plan_knobs: dict | None = None) -> None:
+    """tt/tp_dsa_shard.py TPMlaShard._audits' block check for the 8x4 scatters, host-only: every chip's RS1 / RS2 block
+    as FabricStreamScatter computes it from rs_stream_args (fs_scatter_block) == the plan's Geometry.block; raises the
+    audit's ValueError. plan_knobs: the (rsb, rs1_early) the plan is asked with (default: the streams'), to reproduce a
+    stream / plan mismatch"""
+    assert geo.P > 2, ("the 8x4 scatters", geo.P)
+    a = rs_stream_args(t, rsb=rsb, P=geo.P)
+    pk = dict(rsb=rsb, rs1_early=rs1_early) if plan_knobs is None else plan_knobs
+    for r in range(geo.R):
+        for c in range(geo.C):
+            for name, axis in (("rs1", geo.pair_axis), ("rs2", geo.line_axis)):
+                p_, _ = geo.axis_pos(r, c, axis)
+                first = rs1_early_first(p_, geo.P) if (rs1_early and name == "rs1") else None
+                dst, local, up, dn, dsts = fs_scatter_block(p_, geo.axis_len(axis), a[name]["rows"] // 32, first)
+                got = dict(p=p_, src=None, dst=dst, local=bool(local), up=up, dn=dn, dsts=dsts)
                 want = geo.block(name, t, r, c, **pk)
                 if got != {k: want[k] for k in got}:
                     raise ValueError(f"chip {(r, c)} stream {name}: blocks {got} differ from the plan {want}")
