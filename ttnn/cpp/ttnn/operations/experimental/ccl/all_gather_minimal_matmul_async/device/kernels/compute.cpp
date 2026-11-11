@@ -396,7 +396,14 @@ void matmul_blocks_swov(
             uint32_t in1_index = in1_index_offset;
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
                 matmul_block(
-                    in0_cb.get_cb_id(), in1_cb.get_cb_id(), in0_index, in1_index, 0, false, subblock_w, 1,
+                    in0_cb.get_cb_id(),
+                    in1_cb.get_cb_id(),
+                    in0_index,
+                    in1_index,
+                    0,
+                    false,
+                    subblock_w,
+                    1,
                     K_block_tiles);
                 in0_index++;
                 in1_index += full_N_block_tiles;

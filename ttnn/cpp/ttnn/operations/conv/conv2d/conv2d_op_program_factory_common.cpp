@@ -809,8 +809,7 @@ void post_conv2d_op_memory_checks_descriptor(
     const conv_op_l1_usage l1_usage =
         predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
 
-    const uint32_t predicted_cb_size =
-        l1_usage.CB_allocation_size + epilogue_stats_cb_bytes(operation_attributes);
+    const uint32_t predicted_cb_size = l1_usage.CB_allocation_size + epilogue_stats_cb_bytes(operation_attributes);
     TT_FATAL(
         actual_cb_size == predicted_cb_size,
         "Calculated CB size {} does not match with the actual CB size {}",
@@ -844,8 +843,7 @@ void post_conv2d_op_memory_checks(
     const conv_op_l1_usage l1_usage =
         predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
 
-    const uint32_t predicted_cb_size =
-        l1_usage.CB_allocation_size + epilogue_stats_cb_bytes(operation_attributes);
+    const uint32_t predicted_cb_size = l1_usage.CB_allocation_size + epilogue_stats_cb_bytes(operation_attributes);
     TT_FATAL(
         actual_cb_size == predicted_cb_size,
         "Calculated CB size {} does not match with the actual CB size {}",
