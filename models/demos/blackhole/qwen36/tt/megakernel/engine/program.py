@@ -605,6 +605,23 @@ def setup_bench(dev, MESH, mesh_identity):
     # bench only: in the model (_WEIGHTS / KV injected) the 'original' would be the model's own tensor -> never zero it
     assert not (_DECOY and _WEIGHTS), ('MK_DECOY is a bench-only check; unset it for in-model (injected) builds', sorted(_DECOY))
     def _dec(cls_): return 'all' in _DECOY or cls_ in _DECOY
+    # gate 9 (GBREAL): IN-MODEL (build_program sets _WEIGHTS['_inmodel']) every weight / gamma / state input the engine
+    # consumes must be the model's. A bench default standing in for model data hid gdn_in (random G-a weights) for days.
+    # _need_model(kind) is called on every bench-fallback branch: raises in-model unless the kind is explicitly allowed
+    # (QWEN36_R16_MK_ALLOW_STANDIN=<comma kinds>|all, diagnostics only). Kinds: qkv gdn_in mlp gamma_cons gamma wo gdn_out qkg
+    # kv gdn_state.
+    _INMODEL = bool(_WEIGHTS.get('_inmodel'))
+    _ALLOW_SI = {a_.strip() for a_ in os.environ.get('QWEN36_R16_MK_ALLOW_STANDIN', '').split(',') if a_.strip()}
+    STANDINS = []
+    def _need_model(kind_, why_=''):
+        if not _INMODEL:
+            return
+        if 'all' in _ALLOW_SI or kind_ in _ALLOW_SI:
+            STANDINS.append(kind_)
+            print(f"[standin] IN-MODEL engine uses the BENCH stand-in for '{kind_}' (allowed by QWEN36_R16_MK_ALLOW_STANDIN) {why_}", flush=True)
+            return
+        raise AssertionError(f"in-model engine build would use a bench stand-in for '{kind_}' instead of the model's data {why_} "
+                             f"(weight_layouts / integ must inject it; QWEN36_R16_MK_ALLOW_STANDIN={kind_} allows it for diagnostics)")
     def _dswap(cls_, t_):
         if t_ is None or not _dec(cls_): return t_
         try: c_ = ttnn.clone(t_, memory_config=t_.memory_config())
@@ -719,6 +736,8 @@ def setup_bench(dev, MESH, mesh_identity):
     # (prod layout = KVPROD) replace the synthetic caches: no CTX-sized device / host stand-in KV, no host SDPA golds
     # (KVQ[L] = None: the gold blocks below skip those layers).
     KVINJ = list(_WEIGHTS.get("_kv_inject") or [])
+    if not KVINJ and any(is_attn_layer(L_) for L_ in range(NL)):
+        _need_model('kv', '(attention layers read synthetic KV caches: QWEN36_R16_MK_KV_INJECT)')
     if KVINJ:
         assert KVPROD, "KV injection needs MKA_KVPROD=1 (the vLLM paged layout)"
     _ai = 0
@@ -880,7 +899,9 @@ def setup_bench(dev, MESH, mesh_identity):
             return pg
         _QINJ = QSK and 'qkv' in _WEIGHTS
         if _QINJ: wq_all = _WEIGHTS['qkv']['tensor']   # real weights (golds skipped)
-        else: wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in WLS]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            if WLS: _need_model('qkv')
+            wq_all = ttnn.from_torch(torch.cat([q_pages(2.0 ** (L % 2)) for L in WLS]).reshape(1, 1, -1, TILE).bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         wq_all = _dswap('qkv', wq_all)
         wfq = torch.zeros(NL, H, QN * TILE)   # dequantized folded weights as the device sees them, per layer
         if not _QINJ: wqq = ttnn.to_torch(wq_all).float().reshape(len(WLS), PQL, TILE, TILE)
@@ -936,6 +957,7 @@ def setup_bench(dev, MESH, mesh_identity):
             if 'gdn_in' in _WEIGHTS:
                 gin_w_all = _WEIGHTS['gdn_in']['tensor']; _gws = None
             else:
+                _need_model('gdn_in', '(MK_GDN_INPROJ; MK_GIN_W files are host copies, not the bound model tensor)')
                 if _gw_path:
                     _gw = torch.load(_gw_path); _gk = sorted(_gw)
                     _gws = [_wl().gdn_in_dense(_gw[_gk[g_ % len(_gk)]]) for g_ in range(NGL)]
@@ -1034,6 +1056,7 @@ def setup_bench(dev, MESH, mesh_identity):
             wv_all = _WEIGHTS["mlp"]["tensor"]
             assert _WEIGHTS["mlp"]["pages_per_layer"] == PVL, (_WEIGHTS["mlp"]["pages_per_layer"], PVL)
         else:
+            _need_model('mlp')
             wv_all = ttnn.from_torch(torch.cat([LM.pack_layer(*vlayer(L), v_bank, v_rank, v_nsb, banks) for L in range(NL)]).reshape(1, 1, -1, TILE),
                                      dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             wv_all = _dswap('mlp', wv_all)   # (decoy: bench buffers only; never zero an injected model tensor)
@@ -1203,6 +1226,7 @@ def setup_bench(dev, MESH, mesh_identity):
             if 'gamma_cons' in _WEIGHTS:   # integ: the model's (1+w) × QWEN36_R16_MK_NORM_FIX (weights_mk.gamma_cons_rows, same layout; default 1.0)
                 gam_c = _WEIGHTS['gamma_cons']['tensor']
             else:
+                _need_model('gamma_cons')
                 gam_c = ttnn.from_torch(AR_GTAB.reshape(NL * 2 * 8, 640).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 gam_c = _dswap('gamma', gam_c)
             MKDEF = MKDEF + [('MK_GC_ADDR', str(gam_c.buffer_address())), ('MK_GC_PAGE', '1280'), ('MK_GC_CB', '22'), ('MK_GC_XKA', '21')]
@@ -1292,6 +1316,7 @@ def setup_bench(dev, MESH, mesh_identity):
         # post_attn_ln) x 16 chunks x 10 tiles] bf16, γ in row 0, page (L*2+n)*160 + chunk*10 + t (√1.25 host-folded)
         AR_GAMMA = ('MK_AR_GAMMA', '1') in MKDEF
         if AR_GAMMA:
+            _need_model('gamma', '(MK_AR_GAMMA builds its table from the bench AR_GTAB; the model path is MK_GAMMA_CONS)')
             assert AR_DLVR, "MK_AR_GAMMA delivers from the owner reader (MK_AR_DLVR=1)"
             _gg = torch.Generator().manual_seed(19)
             AR_GTAB = (0.5 + torch.rand(NL, 2, H, generator=_gg)) * NORM_FIX   # γ_model × MK_NORM_FIX (1.0: true RMSNorm)
@@ -1405,6 +1430,7 @@ def setup_bench(dev, MESH, mesh_identity):
         woq = torch.zeros(NL, WK_ * TILE, WN_ * TILE)
         if 'wo' in _WEIGHTS: wo_all = _WEIGHTS['wo']['tensor']   # real weights (golds skipped)
         else:
+            _need_model('wo')
             torch.manual_seed(11)
             wo_t = torch.randn(WK_ * TILE, WN_ * TILE) / math.sqrt(WK_ * TILE)
             wo_all = _wl().pack_wo_unit([wo_t] * len(WLS), WLAY, scales=[2.0 ** -(L % 2) for L in WLS], dev=dev)
@@ -1565,6 +1591,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 for k_ in range(2):
                     for t_ in range(8): qkg[a_, k_, t_] = qk_g[a_, k_, t_ * 32:(t_ + 1) * 32][None, :].repeat(TILE, 1)
             hg_t = _dswap('qkg', _dram(qkg.reshape(1, 1, -1, TILE).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT))
+            if not os.environ.get('MKA_QKG_ADDR'): _need_model('qkg', '(attention q/k-norm gamma table: weights_mk qkg via MKA_QKG_ADDR)')
             HG_ADDR = int(os.environ['MKA_QKG_ADDR']) if os.environ.get('MKA_QKG_ADDR') else hg_t.buffer_address()
             MKDEF = MKDEF + [('MKA_KVP_INFO', f"{ttnn.get_global_semaphore_address(KVP_GS[0])}u"), ('MKA_KVP_ASGN', f"{ttnn.get_global_semaphore_address(KVP_GS[1])}u"), ('MKA_RQ_T', str(T)),
                              ('MKA_REPLAY_L1', f"{RQ_REPLAY}u"), ('MKA_ATTN_L1', f"{RQ_ATTN}u"), ('MKA_ATT0', str(ATT0)),
@@ -1904,6 +1931,7 @@ def setup_bench(dev, MESH, mesh_identity):
             GO_PL = GO_LAY.pages_per_layer   # pages per GDN layer (the layer stride)
             if 'gdn_out' in _WEIGHTS: go_w_all = _WEIGHTS['gdn_out']['tensor']   # real weights (the PCC gold below is then meaningless)
             else:
+                _need_model('gdn_out')
                 torch.manual_seed(17)
                 go_w_all = _wl().pack_gdn_out([torch.randn(GO_WK * TILE, GO_WN * TILE) / math.sqrt(GO_WK * TILE) for _ in range(GO_NG)], GO_LAY, dev=dev)
                 go_w_all = _dswap('gdn_out', go_w_all)   # (decoy: bench buffers only; never zero an injected model tensor)
@@ -1965,7 +1993,9 @@ def setup_bench(dev, MESH, mesh_identity):
                                        free_cb_ids=list(range(45)), gdnout=GO,
                                        # G-b (d): the model's real GDN state (integ gdn_descriptors, this pass's GDN layers) +
                                        # the persistent ctrl page integ copies the replay's ctrl into (None: synthetic state)
-                                       gdn_desc=_WEIGHTS.get("_gdn_desc"), gdn_ctrl=_WEIGHTS.get("_gdn_ctrl"),
+                                       gdn_desc=(_WEIGHTS.get("_gdn_desc") if _WEIGHTS.get("_gdn_desc") or not any(not is_attn_layer(L_) for L_ in range(NL))
+                                                 else _need_model('gdn_state', '(E1_GB=1 + QWEN36_R16_MK_GDN_REAL=1 bind the model GDN state)')),
+                                       gdn_ctrl=_WEIGHTS.get("_gdn_ctrl"),
                                        # MK_GIN_PERCORE: G-a tiles per GDN layer landing on each GDN core (logical xy); column c's
                                        # K-row r tile goes to (c, GY + r % 2), r < nt_c (gin_wargs). None = the Q-root contract
                                        gin_k=({(c_, GY + p_): sum(1 for r_ in range(nt_) if r_ % 2 == p_)
@@ -2892,6 +2922,10 @@ def build_program(mesh, n_users, T, layer_types, weights, kv_desc, gdn_desc):
     _CBP._reg().clear()
     _WEIGHTS.clear()
     _WEIGHTS.update({k: v for k, v in (weights or {}).items() if v and not type(v.get("layout")).__name__ == "TileOrderLayout"})
+    _WEIGHTS["_inmodel"] = True   # setup_bench: _need_model() refuses bench stand-ins (gate 9, GBREAL)
+    _dropped = sorted(k for k, v in (weights or {}).items() if v and type(v.get("layout")).__name__ == "TileOrderLayout")
+    if _dropped:
+        print(f"[weights] TileOrderLayout placeholders NOT bound (the engine must not consume them): {_dropped}", flush=True)
     # KV injection (QWEN36_R16_MK_KV_INJECT=1; e2e-diff, and the default once the SDPA reads the real page table): the
     # engine reads the model's paged caches in the prod layout instead of CTX-sized synthetic ones
     if "qkv" in _WEIGHTS or "wo" in _WEIGHTS:  # repack order = attention ordinal (weight_layouts)
