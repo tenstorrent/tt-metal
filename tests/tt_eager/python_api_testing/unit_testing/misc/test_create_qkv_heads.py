@@ -328,3 +328,48 @@ def test_nlp_create_q_and_kv_heads_separate_test(
     run_create_q_and_kv_heads_test(
         batch, q_seq_len, kv_seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device, transpose_k
     )
+
+
+@pytest.mark.parametrize(
+    "q_grid, kv_grid, kv_origin",
+    (
+        ((4, 2), (4, 2), (4, 0)),
+        ((8, 2), (4, 2), (0, 0)),
+        ((2, 2), (4, 2), (0, 0)),
+    ),
+    ids=["kv_on_other_cores", "kv_grid_narrower_than_q", "kv_grid_wider_than_q"],
+)
+def test_create_q_and_kv_heads_separate_rejects_mismatched_grids(q_grid, kv_grid, kv_origin, device, expect_error):
+    # The op runs on Q's shard grid and reads each KV shard from the core's own L1, so a KV tensor
+    # sharded over other cores must be rejected instead of returning K and V read from the wrong L1.
+    batch, q_seq_len, kv_seq_len, num_heads, head_dim = 2, 64, 96, 8, 64
+    q = torch.randn([batch, 1, q_seq_len, num_heads * head_dim], dtype=torch.bfloat16)
+    kv = torch.randn([batch, 1, kv_seq_len, 2 * num_heads * head_dim], dtype=torch.bfloat16)
+
+    def block_sharded(t, grid, origin, shard_h):
+        spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(origin[0], origin[1]),
+                        ttnn.CoreCoord(origin[0] + grid[0] - 1, origin[1] + grid[1] - 1),
+                    )
+                }
+            ),
+            [shard_h, t.shape[-1] // grid[0]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+        return ttnn.Tensor(t, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+
+    q_t = block_sharded(q, q_grid, (0, 0), q_seq_len)
+    kv_t = block_sharded(kv, kv_grid, kv_origin, kv_seq_len)
+    with expect_error(RuntimeError, "same core grid"):
+        ttnn.experimental.create_qkv_heads_from_separate_tensors(
+            q_t,
+            kv_t,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1),
+        )
