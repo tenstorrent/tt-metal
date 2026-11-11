@@ -45,7 +45,7 @@ def _host(t):
 
 class GdnRole:
     def __init__(self, dev, cores, NG, B, sems, out_target, prod_cores, gen_dir, kdir=None, opt=4094, seed=901,
-                 hold_users=(), ref=True, attn_n=0, gdnout=None, gin_k=None):
+                 hold_users=(), ref=True, attn_n=0, gdnout=None, gin_k=None, gb_cores=None, gb=None):
         """ref=False: no stock-op reference (no priming step, check() skipped) -- the stock op's program does not fit
         the kernel config buffer with device-profiler zones compiled in; the checked step is then FRESH."""
         self.ref = ref
@@ -112,9 +112,22 @@ class GdnRole:
         self.tl = [dict(qkv=self.qkv, win_a=ly["cE"].win_a, win_b=ly["cE"].win_b, ring=ly["cE"].ring, ctrl=ly["ctrl"],
                         taps=ly["cE"].taps_d, dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d,
                         pre=ly["pre"], out=ly["outE"]) for ly in self.LY]
+        # G-b (E1_GB): the prefix runs inside the role from G-a's staging tiles; no producers. Harness (gb_cores = the GDN
+        # cores' CoreRangeSet): a staging tensor at one L1 address on every GDN core (4 tiles), filled by the stand-in per
+        # layer with the qkv row tiles (G-a's tile -> core / slot map). Engine: gb = dict(gin_addr = CB 41, gin_map).
+        self.gb = gb
+        self.gin_stage = None
+        if gb_cores is not None and gb is None:
+            self.gin_stage = ttnn.from_torch(torch.zeros(len(self.cores), 2048, dtype=torch.int32), dtype=ttnn.uint32,
+                                             layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.MemoryConfig(
+                                                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                                                 ttnn.ShardSpec(gb_cores, [1, 2048], ttnn.ShardOrientation.ROW_MAJOR)))
+            self.gb = dict(gin_addr=self.gin_stage.buffer_address(), gin_map=e1_shim.gin_map_engine())
         self.role = e1_shim.build_engine(dev, self.cores, g, B, T, self.Kt, self.Vt, 4, self.tl, m.SCALE, m.L2_EPS,
                                          m.NORM_EPS, gen_dir, self.S, sems, out_target, kdir=kdir,
-                                         attn_n=attn_n, gdnout=gdnout, gin_k=gin_k)
+                                         attn_n=attn_n, gdnout=gdnout, gin_k=gin_k, gb=self.gb)
+        if self.gin_stage is not None:
+            self.role["io"].append(self.gin_stage)
         # the window parity is a per-step input of the producers: the role's window tensors stay fixed (win_a / win_b),
         # the kernels pick by ctrl parity
 
@@ -236,10 +249,37 @@ class GdnRole:
             self.B, g.QKVZ, conv_kernel=self.K, scale=m.SCALE, hnew_depth=2, memory_config=ttnn.L1_MEMORY_CONFIG,
             output_dtype=c.out_dtype, fast_mode=True, fp32_state=True, value_blocks=4, kernel_opts=self.opt)
 
+    def standin_gin(self):
+        """g2_standin's G-a stand-in args: [n, qkv addr, staging addr, (xy, slot) per tile] (n = 0 without G-b staging)."""
+        if self.gin_stage is None:
+            return [0, 0, 0]
+        fp = [self.dev.worker_core_from_logical_core(c) for c in self.cores]
+        tab = []
+        for ci, sl in self.gb["gin_map"]:
+            tab += [fp[ci].x | (fp[ci].y << 16), sl]
+        return [len(self.gb["gin_map"]), self.qkv.buffer_address(), self.gb["gin_addr"]] + tab
+
     def prepare(self, hold=()):
-        """This step's rows / ctrl, then the producers for every GDN layer (before the engine pass)."""
+        """This step's rows / ctrl, then the producers for every GDN layer (before the engine pass). G-b: no producers."""
         self.hold = list(hold)
         self._rows()
+        if self.gb is not None:
+            cmp_ = os.environ.get("G2_GB_CMP", "0") == "1"
+            mi_win = [0 if mm >= self.T else mm for mm in self.mi_ctrl]
+            for ly in self.LY:
+                assert ly["cA"].par == ly["cE"].par
+                self._write_ctrl(ly, self.hold)
+                if cmp_:   # debug: the u1 producers' conv / silu / gate tiles (no L2 roots: q / k stay raw) into pre_ref
+                    cA, cE = ly["cA"], ly["cE"]
+                    if "pre_ref" not in ly:
+                        ly["pre_ref"] = ttnn.from_torch(torch.zeros(1, 1, 32, self.Nv * self.S * 32), dtype=f32, layout=ttnn.TILE_LAYOUT,
+                                                        device=self.dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    pr = ly["pre_ref"]
+                    winE, winEn = [cE.win_a, cE.win_b][cE.par], [cE.win_a, cE.win_b][1 - cE.par]
+                    ttnn.generic_op([winE, self.qkv, cA.taps_d, winEn, pr], self._build_A(cA, pr, winE, winEn, mi_win, self.hold))
+                    ttnn.generic_op([self.qkv, cE.ring, pr], self._build_G(cA, pr, cE.ring, cE.par, self.hold))
+            ttnn.synchronize_device(self.dev)
+            return
         mi_win = [0 if mm >= self.T else mm for mm in self.mi_ctrl]
         for ly in self.LY:
             cA, cE, pre = ly["cA"], ly["cE"], ly["pre"]
@@ -266,6 +306,18 @@ class GdnRole:
             r0, c0 = (p // Vt) * 32, (p % Vt) * 32
             b[1:3, :, :, r0:r0 + 32, c0 + 1:c0 + 32] = 0
             return b
+        if self.gb is not None and os.environ.get("G2_GB_CMP", "0") == "1":
+            S, names = self.S, ["kn"] * Kt + ["qn"] * Kt + ["vc"] * Vt + ["zs"] * Vt + ["gate"] * 16
+            for l, ly in enumerate(self.LY):
+                a = _host(ly["pre"]).float().reshape(32, self.Nv * S, 32).transpose(0, 1).contiguous().view(torch.int32)
+                b = _host(ly["pre_ref"]).float().reshape(32, self.Nv * S, 32).transpose(0, 1).contiguous().view(torch.int32)
+                bad = [(h, j, names[j], int((a[h * S + j] != b[h * S + j]).sum()),
+                        float((a[h * S + j].view(torch.float32) - b[h * S + j].view(torch.float32)).abs().max()))
+                       for h in range(self.Nv) for j in range(S) if not torch.equal(a[h * S + j], b[h * S + j])]
+                import collections
+                cnt = collections.Counter((b_[2], b_[1]) for b_ in bad)
+                print(f"[{tag}] pre vs producers layer {l}: {len(bad)} tiles differ; (slot, j): n heads {sorted(cnt.items())}; "
+                      f"max|d| {max([b_[4] for b_ in bad] or [0]):.3e}", flush=True)
         oAs = [self._plain(ly["cA"], ly["ctrl"]) for ly in self.LY]
         ttnn.synchronize_device(self.dev)
         ok_all = True

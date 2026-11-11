@@ -121,6 +121,12 @@ constexpr uint32_t kBatchMax = 8;
 #if GDN_IN_WAIT
 void gdn_in_wait();
 #endif
+#ifndef GDN_GB_DIRECT
+#define GDN_GB_DIRECT 0  // G-b: the prefix writes zs / kc / qc / vc straight into this core's DFB slots (no `pre` reads)
+#endif
+#ifndef GDN_RAWKQ
+#define GDN_RAWKQ 0  // G-b (E1_GB): `pre` holds raw conv'd k / q; the compute's l2norm (L2-root fallback)
+#endif
 #ifndef GDN_PREFIXED
 #define GDN_PREFIXED 0  // kernel_opts bit 21 (K4): knq / vc / zs from the u1 prefix's output tensor
 #endif
@@ -669,14 +675,29 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         constexpr uint32_t S = GDN_PRE_S;  // 2*Kt + 2*Vt (+ 9 gate tiles with PREFIXED_GATES)
         const uint32_t base = tr * GDN_PRE_W + h * S;
         zs.reserve_back(Vt);
+#if !GDN_GB_DIRECT  // G-b direct: zs / kc / qc / vc were written into these DFBs' slots by the prefix (done barrier passed)
         read_tiles_at(pre_acc, zs, noc, base + 2 * Kt + Vt, Vt, 0);
+#endif
+#if GDN_RAWKQ
+        // G-b L2-root fallback: [k | q] arrive raw (conv + SiLU) -> kc / qc; the compute normalizes them into knq
+        // (its own producer), knq_l1 = knq's base (2 Kt entries = the whole DFB: every layer lands at the base)
+        DataflowBuffer kq(dfb::kq);  // [k | q] raw, Kt tiles each
+        knq_l1 = knq.get_write_ptr();
+        kq.reserve_back(2 * Kt);
+#if !GDN_GB_DIRECT
+        read_tiles_at(pre_acc, kq, noc, base, 2 * Kt, 0);
+#endif
+#else
         knq.reserve_back(2 * Kt);
 #if GDN_BATCH
         knq_l1 = knq.get_write_ptr();
 #endif
         read_tiles_at(pre_acc, knq, noc, base, 2 * Kt, 0);
+#endif
         vc.reserve_back(Vs);
+#if !GDN_GB_DIRECT
         read_tiles_at(pre_acc, vc, noc, base + 2 * Kt + s * Vs, Vs, 0);
+#endif
         w_in.reserve_back(Vt);
         zero_reserved(w_in, noc, Vt);
         for (uint32_t t = 0; t < Vt; ++t) {
@@ -684,7 +705,11 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         }
         noc.async_read_barrier();
         zs.push_back(Vt);
+#if GDN_RAWKQ
+        kq.push_back(2 * Kt);
+#else
         knq.push_back(2 * Kt);
+#endif
         vc.push_back(Vs);
         w_in.push_back(Vt);
     }
@@ -735,6 +760,13 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             noc_async_read(get_noc_addr(src_tile + off), dst_tile + off, T * 64);
             noc_async_read(get_noc_addr(src_tile + off + 1024), dst_tile + off + 1024, T * 64);
         };
+#if GDN_RAWKQ
+        {   // the normalized [kn | qn] are the compute's (read in place below; the compute pops them at its layer end)
+            DeviceZoneScopedN("rd_knq_wait");
+            DataflowBuffer knq_w(dfb::knq);
+            knq_w.wait_front(2 * Kt);
+        }
+#endif
         // kts: K_u tile i = s + q*VB for this block's share of the stash K^T pages (kpb per user)
         {
             DataflowBuffer kts(dfb::kts);
