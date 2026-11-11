@@ -288,6 +288,8 @@ class GdnRole:
                 fin = bool(torch.isfinite(outB.reshape(-1, W_)[~lv]).all())
                 e_out = torch.equal(oa[lv], ob[lv]) and fin
                 outA = outA.reshape(-1, W_)[lv]; outB = outB.reshape(-1, W_)[lv]
+                if outA.numel() == 0:   # every user HOLD: nothing live to compare
+                    outA = outB = torch.zeros(1)
                 print(f"[{tag}]   HOLD_SKIP: live rows {int(lv.sum())} compared, HOLD rows finite {fin}", flush=True)
             print(f"[{tag}] GDN layer {l} hold={self.hold}: out {e_out} (max|d| {(outA - outB).abs().max().item():.3e}) | "
                   f"ring {e_ring} | win {e_win}", flush=True)
