@@ -2082,6 +2082,21 @@ def setup_bench(dev, MESH, mesh_identity):
         if ('MK_AR_RSTD', '1') in MKDEF:
             u_ = [ttnn.UnpackToDestMode.Default] * 64; u_[43] = ttnn.UnpackToDestMode.UnpackToDestFp32   # CB_VRSA (= rsp) under QSK + V12; c_.unpack_to_dest_mode = u_
         return c_
+    # MKA_KV_ARGS_DECOY=1 (MKA_RQPOS test): the per-layer K / V runtime args point at zero decoy caches of the same shape, as in
+    # the model (where they are not the vLLM caches): under RQPOS every SDPA read and the KV append must use G's attn block,
+    # so the cache check / SDPA PCC stay clean only if nothing touches the args
+    _KV_DECOY = []
+    def _kv_arg_addrs():
+        if os.environ.get('MKA_KV_ARGS_DECOY', '0') == '1' and ('MKA_RQPOS', '1') in MKDEF:
+            if not _KV_DECOY:
+                _u = {}
+                for t_ in kvs + kvvs:
+                    if id(t_) not in _u:
+                        _u[id(t_)] = ttnn.from_torch(torch.zeros(list(t_.shape)).bfloat16(), dtype=t_.dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    _KV_DECOY.append(_u[id(t_)])
+                print(f"[kva] K / V runtime args -> {len(_u)} decoy caches (MKA_KV_ARGS_DECOY)", flush=True)
+            return [t_.buffer_address() for t_ in _KV_DECOY]
+        return [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs]
     def build(out, coord=None, plan_only=False):
         cbs = [ttnn.cb_descriptor_from_sharded_tensor(0, xbuf) if xbuf is not None else cbd(0, ttnn.bfloat16, 1, rect), cbd(1, ttnn.bfloat4_b, (EVEN_T if GUPRE else 2 * GRP * KB * 2), rect), cbd(2, HDT, 1, rect),
                (cbd(3, HDT, 1, rect) if V12CB else ttnn.cb_descriptor_from_sharded_tensor(3, hbuf)), cbd(4, ttnn.bfloat4_b, 2 * HT * NDN, rect), cbd(5, ttnn.bfloat4_b, 2 * w2_tiles, rect),
@@ -2206,7 +2221,7 @@ def setup_bench(dev, MESH, mesh_identity):
             pp = fphys[par]
             if ('MKA_RQBAL', '1') in MKDEF: sb0, sb1 = RQB_IDX[fi], len(RQB_L)   # reader: global index / list length
             elif ('MKA_RQDYN', '1') in MKDEF: sb0, sb1 = r, n                    # reader: rank / group size (even split)
-            sdpa_r = [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, has_p, pp.x, pp.y, plvl, len(ch0)] + xy(ch0) + [len(ch1)] + xy(ch1) + [1 if r == 0 else 0, outs.buffer_address(), QRP.x, QRP.y]
+            sdpa_r = _kv_arg_addrs() + [u, sb0, sb1, NBK, has_p, pp.x, pp.y, plvl, len(ch0)] + xy(ch0) + [len(ch1)] + xy(ch1) + [1 if r == 0 else 0, outs.buffer_address(), QRP.x, QRP.y]
             isS = fi in stream_idx
             WO_NOC0 = ('MKA_WO_NOC0', '1') in MKDEF
             if isS:
@@ -2230,7 +2245,7 @@ def setup_bench(dev, MESH, mesh_identity):
             wob = (fi % 8) if os.environ.get('MKA_WOBANK', '1') == '1' else 0
             _ra = rrt[c.x][c.y] = [1 if isS else 0] + r_mk + GSA + sdpa_r + [wo_dummy.buffer_address(), ((fi * WO_T120) if EXT else (i_s * WO_T)) + wob, (WO_T120 if isS else WO_TX) if rd_w else 0, (EXTRA_T if isS else EXTRA_TX) if rd_w else 0, SWAP(fi)] + ([tfk(fi)] if TREEFLAG else []) + q_rargs(fi)
             _wa = wrt[c.x][c.y] = [1 if isS else 0] + w_mk + GSA + [1 if fi == QROOT else 0, qten.buffer_address()] + RECTS_F + [selff] + RECTS + \
-                [kv.buffer_address() for kv in kvs] + [kv.buffer_address() for kv in kvvs] + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
+                _kv_arg_addrs() + [u, sb0, sb1, NBK, wo_dummy.buffer_address(), (i * WO_T) if isS else 0, WO_T if isS else 0, BUDGET, QDONE_N, QRP.x, QRP.y, EXTRA_T if isS else 0, SWAP(fi)] + q_wargs(fi)
             nrecv = len(ch0) + len(ch1)
             _ca = crt[c.x][c.y] = [1 if isS else 0, g_, u, sb1 - sb0, nrecv, 1 if r == 0 else 0] + (list(QROLE.get(fi, (0, 0, 0, 0, 0, 0))[i_] for i_ in (0, 3, 4, 2)) + [gdn_on(fi)] + ([QROLE.get(fi, (0, 0))[1], len(WOT.get(fi, []))] if (RWO or QSK) else []) + gin_cargs(fi) + ([((2 if HC.index(fi) == 6 else 1) if fi in HC else 0) | (KVA_ROLE.get(fi, 0) << 8), 1 if (fi in HC or fi in MASKC) else 0] + ([(RNG[fi][1] - RNG[fi][0] - 1) if fi in MASKC else 0xFFFFFFFF] if RMASK else []) if RQNR else []) if RQKV else [])
             if V12:   # v12 arg tails (appended after every other arg)
