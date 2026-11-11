@@ -330,7 +330,7 @@ def test_decorated_serial_fallback_retains_actual_hooks(tmp_path):
         if operation.python_fully_qualified_name == "ttnn.to_torch":
             calls.append(threading.get_ident())
 
-    with ttnn.decorators.register_pre_operation_hook(hook):
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.decorators.register_pre_operation_hook(hook):
         assert cache.verify_saved_model(model(tensor), tmp_path, workers=4, stats=stats)
     assert stats["parallel_pairs"] == 0 and stats["serial_pairs"] == 1
     assert calls == [caller, caller]
