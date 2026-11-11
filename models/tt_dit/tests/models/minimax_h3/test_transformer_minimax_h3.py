@@ -1071,10 +1071,6 @@ def test_minimax_h3_transformer_block_dynamic_length(
     MIN_PCC = 0.9995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
-    if not is_blackhole():
-        # The Wormhole grid has no pinned ff2 MM+RS program, so the block falls back to the row-parallel linear
-        # whose reduce-scatter keys its program on the row count: a second length always adds a program there.
-        pytest.skip("dynamic_length zero-miss gate is Blackhole-only: the Wormhole ff2 fallback keys on rows")
     big = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 512, 3072)
     small = _block_setup(
         mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280, torch_model=big.torch_model
