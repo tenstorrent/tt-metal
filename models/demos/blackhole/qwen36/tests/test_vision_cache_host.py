@@ -122,3 +122,22 @@ def test_off_calls_encode_unchanged(monkeypatch):
     seen = []
     out = Qwen36ForCausalLM._vision_cached(g, _model(), "image", _req([1]), lambda pv, grid: seen.append(1) or "ROWS")
     assert out == "ROWS" and seen == [1]
+
+
+def test_upload_waits_for_the_write_before_releasing_the_host_rows(monkeypatch):
+    """rc1e d30u20 11-11: an in-flight host->device write read freed host memory (last image wrong). upload_rows must
+    record an event after the write and block on it before returning (the host sources die on return)."""
+    import ttnn
+
+    from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransformer
+
+    order = []
+    monkeypatch.setattr(ttnn, "from_torch", lambda rows, **k: order.append(("host", tuple(rows.shape))) or "HOST")
+    monkeypatch.setattr(ttnn, "ShardTensorToMesh", lambda mesh, dim: ("shard", dim))
+    monkeypatch.setattr(ttnn, "to_device", lambda h, mesh, memory_config=None: order.append(("write", h)) or "DEV")
+    monkeypatch.setattr(ttnn, "record_event", lambda mesh, *a, **k: order.append(("record", mesh)) or "EV")
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda ev: order.append(("wait", ev)))
+    me = types.SimpleNamespace(model_args=types.SimpleNamespace(mesh_device="MESH"))
+    out = DropInVisionTransformer.upload_rows(me, torch.zeros(1024, H, dtype=torch.bfloat16))
+    assert out == "DEV"
+    assert order == [("host", (1024, H)), ("write", "HOST"), ("record", "MESH"), ("wait", "EV")]

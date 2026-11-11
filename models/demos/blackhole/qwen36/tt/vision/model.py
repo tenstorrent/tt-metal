@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import collections
+import time
 
 import torch
 from loguru import logger
@@ -220,12 +220,24 @@ class DropInVisionTransformer(torch.nn.Module):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=1),
         )
+        t0 = time.perf_counter()
         dev = ttnn.to_device(host_rows, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Keep the host source of the last few uploads alive: the host->device write may still be in flight when this
-        # returns, and freed host memory reused before it lands would corrupt the tail of the rows (rc1e d30u20 11-11:
-        # the LAST image of a request read back as another image's / garbage colours).
-        keep = self.__dict__.setdefault("_upload_keepalive", collections.deque(maxlen=8))
-        keep.append((rows, host_rows))
+        # The host->device write may still be in flight when to_device returns; its host source (rows / host_rows) must
+        # not be freed before it lands (rc1e d30u20 11-11: freed host memory reused under an in-flight write corrupted
+        # the tail of the rows -> the LAST image read back as another image's / garbage colours). Record an event on the
+        # same (default) command queue right after the write and wait for it: then the write is complete and the sources
+        # may go. Not a new device program; the splice's next step (_set_vision_merge) reads these rows back to host on
+        # the same queue anyway, so it would have waited for the same work.
+        ttnn.event_synchronize(ttnn.record_event(mesh))
+        st = self.__dict__.setdefault("_upload_stats", [0, 0, 0.0])
+        st[0] += 1
+        st[1] += int(rows.shape[0])
+        st[2] += time.perf_counter() - t0
+        if st[0] in (1, 10, 100) or st[0] % 1000 == 0:
+            logger.info(
+                f"vision upload: {st[0]} uploads, {st[1]} rows, write+sync {1e3 * st[2] / st[0]:.2f} ms/upload avg, "
+                f"{1e6 * st[2] / max(st[1], 1) * 1024:.0f} us per 1024 rows (1 MP image)"
+            )
         return dev
 
     def forward(
