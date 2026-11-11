@@ -221,7 +221,6 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     }
 }
 
-// The streaming compute path: no fp32 dest accumulation, or fp32 dest opted in through streaming_fp32_dest.
 bool uses_streaming_compute(const RingJointSDPAParams& args) {
     return !get_fp32_dest_acc_en(args.compute_kernel_config) ||
            (args.program_config.has_value() && args.program_config->streaming_fp32_dest);

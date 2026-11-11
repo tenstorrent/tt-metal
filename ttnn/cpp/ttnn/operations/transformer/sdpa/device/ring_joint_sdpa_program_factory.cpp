@@ -2526,7 +2526,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // the running softmax denominator doesn't lose precision with K-iter rounding.
     tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
-    // the streaming kernel's reconfigs assume a bf16 score block
     tt::DataFormat qk_im_df =
         (fp32_dest_acc_en && !use_streaming_compute) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
@@ -3399,7 +3398,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
-    // dst_size comes from get_dest_reg_count, which doubles with dst_full_sync_en: build the kernel in the same mode
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
