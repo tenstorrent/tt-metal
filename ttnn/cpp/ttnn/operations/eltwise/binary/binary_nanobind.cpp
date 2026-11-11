@@ -81,7 +81,7 @@ constexpr auto kMixedFloatFamilyFootnote =
 constexpr auto kSubtractDtypeFootnote =
     R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
 
-            UINT8 and INT8 results are returned in the input dtype and wrap modulo 256 on overflow, as in torch (for example, UINT8 ``3 - 5`` is ``254``). A scalar operand must be an integer within the dtype's range.)doc";
+            UINT8 and INT8 results are returned in the input dtype and wrap modulo 256 on overflow. A scalar operand must be an integer within the dtype's range.)doc";
 constexpr auto kSameDtypeRequiredFootnote = R"doc(Operands must have the same dtype.)doc";
 constexpr auto kInt32FloatScalarPromotionNote =
     R"doc(An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before computation, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32. Use an integer scalar (for example, `2` instead of `2.0`) to retain integer-scalar semantics.)doc";
