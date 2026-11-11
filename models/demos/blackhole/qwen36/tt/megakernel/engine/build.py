@@ -127,6 +127,13 @@ class MkEngine(EngineProgram):
         import ttnn
 
         io, desc = self.program(x_in, x_out, per_replay)
+        # G-b (d) in-model self-check (gate 9, test-only): armed by setting program.setup["_gbchk"] = True before an
+        # EAGER launch (never inside a trace capture). Snapshot after the ctrl copy (in program()), one launch, check.
+        S_ = getattr(self.program, "setup", None) or {}
+        gbchk = bool(S_.get("_gbchk")) and isinstance(S_.get("GDN_ROLE"), dict) and "role" in S_["GDN_ROLE"]
+        if gbchk:
+            S_["_gbchk"] = False
+            S_["GDN_ROLE"]["role"].snapshot()
         # residual I/O: the engine's own seed / drain ops when it provides them (§20 phase 2: DRAM images -> planned CB
         # addresses, residual CB -> x_out), else integ's xio (x_in -> owners' v_x0 -> x_out)
         seed, drain = getattr(self.program, "seed", None), getattr(self.program, "drain", None)
@@ -139,6 +146,9 @@ class MkEngine(EngineProgram):
         ttnn.generic_op(io, desc)
         if drain is not None:
             drain(x_out)
+        if gbchk:
+            ttnn.synchronize_device(x_in.device())
+            S_["_gbchk_result"] = S_["GDN_ROLE"]["check"]()
 
 
 def weight_layouts(mesh):

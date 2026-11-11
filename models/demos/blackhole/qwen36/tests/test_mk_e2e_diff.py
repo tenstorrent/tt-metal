@@ -41,6 +41,7 @@ TF_NL = int(os.environ.get("E2E_TF_NL", str(NL)))
 TF_BLOCK = int(os.environ.get("E2E_TF_BLOCK", "4"))  # teacher-forced block (both layer types per engine pass)
 DBG = os.environ.get("E2E_DBG", "1") == "1"  # MK_AR_DBG per-AR residual dumps (more engine text); 0 = final x_out only
 MID = os.environ.get("E2E_MID", "0") == "1"  # (default off: the hooks perturb the op-by-op reference)
+GBCHK = os.environ.get("E2E_GBCHK", "0") == "1"  # G-b (d) in-model self-check (needs the -mk-gdnb-chk role)
 MLPCHK = os.environ.get("E2E_MLPCHK", "1") == "1"  # DBG + GAR: L0 MLP host check on the engine's own post-mixer h  # with DBG + MK_REAL_GAR: also the post-mixer residual per layer (mixer AR)
 REF_MID = {}
 _CUR = [0]
@@ -216,6 +217,8 @@ def _diff_case(model, live, tag):
     kv_ref = _kv_rows(model, L_attn, live)
     _restore(ts, snap)
     # engine
+    if GBCHK and tag == "k8":   # G-b (d) self-check on this (eager) engine launch
+        S["_gbchk"] = True
     model._forward_verify_bucket_tp(B, None, None)
     ttnn.synchronize_device(model.mesh_device)
     kv_eng = _kv_rows(model, L_attn, live)
