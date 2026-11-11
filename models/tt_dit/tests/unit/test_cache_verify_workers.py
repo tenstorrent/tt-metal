@@ -255,3 +255,82 @@ def test_worker_environment_is_bounded(fake, tmp_path, monkeypatch, setting, wor
     stats = {}
     assert cache.verify_saved_model(fake.model([fake.Tensor()]), tmp_path, stats=stats)
     assert stats["workers"] == workers
+
+
+def test_interrupt_while_waiting_keeps_removed_future_alive(fake, tmp_path, monkeypatch):
+    import threading
+
+    release, done = threading.Event(), threading.Event()
+    original_worker = cache._verification_worker
+    original_pool = cache.ThreadPoolExecutor
+    original_deallocate = cache.ttnn.deallocate
+
+    def worker(a, b):
+        assert release.wait(5)
+        # Keep the removed future in flight long enough to expose premature freeing.
+        threading.Event().wait(0.05)
+        try:
+            return original_worker(a, b)
+        finally:
+            done.set()
+
+    def pool(*args, **kwargs):
+        executor = original_pool(*args, **kwargs)
+        submit = executor.submit
+
+        def interrupting_submit(*args):
+            future = submit(*args)
+            original_result = future.result
+
+            def result(*args, **kwargs):
+                future.result = original_result
+                release.set()
+                raise KeyboardInterrupt("caller interrupted while waiting")
+
+            future.result = result
+            return future
+
+        executor.submit = interrupting_submit
+        return executor
+
+    def deallocate(tensor):
+        assert done.is_set(), "temporary freed while removed future still running"
+        original_deallocate(tensor)
+
+    monkeypatch.setattr(cache, "_verification_worker", worker)
+    monkeypatch.setattr(cache, "ThreadPoolExecutor", pool)
+    monkeypatch.setattr(cache.ttnn, "deallocate", deallocate)
+    with pytest.raises(KeyboardInterrupt):  # allow-pytest.raises: CPU-only interrupt control
+        cache.verify_saved_model(fake.model([fake.Tensor()]), tmp_path, workers=2)
+    assert done.is_set() and fake.frees == 1
+
+
+def test_padding_only_change_and_unsupported_native_dtype(tmp_path):
+    ttnn = cache.ttnn
+    values = torch.ones(35, 67)
+    for dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32):
+        a = ttnn.from_torch(values, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0.0)
+        b = ttnn.from_torch(values, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=7.0)
+        ttnn.dump_tensor(tmp_path / "weight.tensorbin", b)
+        stats = {}
+        assert cache.verify_saved_model(model(a), tmp_path, workers=2, stats=stats)
+        assert stats["parallel_pairs"] == (0 if dtype == ttnn.float32 else 1)
+
+
+def test_decorated_serial_fallback_retains_actual_hooks(tmp_path):
+    import threading
+
+    ttnn = cache.ttnn
+    tensor = ttnn.from_torch(torch.ones(32, 32), dtype=ttnn.bfloat16)
+    ttnn.dump_tensor(tmp_path / "weight.tensorbin", tensor)
+    calls, stats = [], {}
+    caller = threading.get_ident()
+
+    def hook(operation, *args):
+        if operation.python_fully_qualified_name == "ttnn.to_torch":
+            calls.append(threading.get_ident())
+
+    with ttnn.decorators.register_pre_operation_hook(hook):
+        assert cache.verify_saved_model(model(tensor), tmp_path, workers=4, stats=stats)
+    assert stats["parallel_pairs"] == 0 and stats["serial_pairs"] == 1
+    assert calls == [caller, caller]
