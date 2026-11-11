@@ -623,8 +623,9 @@ def setup_bench(dev, MESH, mesh_identity):
             MKDEF = MKDEF + [('MK_AR_ADLV', str(ttnn.get_global_semaphore_address(AR_ADLV))), ('MK_AR_ASRC', str(ttnn.get_global_semaphore_address(AR_ASRC))),
                              ('MK_AR_CB_AIN', '23')]
             print(f"[ar] attention AR on: {AR_NAR} ARs / pass, attention mask {AR_ATYPE:#x}", flush=True)
-        # MK_AR_DBG=1 (validation, R = 32): per-AR input / residual chunks -> DRAM (see mka2_writer.cpp ar_dbg)
-        AR_DBG = os.environ.get('MK_AR_DBG', '0') == '1' and V_R == 32
+        # MK_AR_DBG=1 (validation): per-AR input / residual chunks -> DRAM (see mka2_writer.cpp ar_dbg); R < 32: the input in tile
+        # layout (rows < R), the residual packed (MK_AR_OUT), both unpacked by the bench
+        AR_DBG = os.environ.get('MK_AR_DBG', '0') == '1'
         if AR_DBG:
             ar_dbgt = ttnn.from_torch(torch.zeros(1, 1, TILE, AR_NAR * 2 * H).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             MKDEF = MKDEF + [('MK_AR_DBGADDR', str(ar_dbgt.buffer_address()))]
@@ -660,7 +661,17 @@ def setup_bench(dev, MESH, mesh_identity):
         # residual stream (AR output = next AR's residual, in place). R = 32: it IS v_x0 (owner j: x tiles 10j.., unused by the
         # owner sum with MK_OWNER_RESID=0), so the stand-in x delivery feeds each MLP the real residual stream and no extra
         # lockstep L1 is spent (the owners' CB region is ~50 KB short otherwise); R < 32: a packed residual of its own
-        ar_out = v_x0 if AR_PT == 10 else ttnn.from_torch(torch.zeros(TILE, 16 * AR_PT * TILE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_arw(AR_PT))
+        def _pack_res(x_):   # [M, H] -> [TILE, 16 * AR_PT * TILE] whose tile bytes are the packed residual stream (rows < R)
+            raw = torch.zeros(16, AR_PT * 1024)
+            xr = x_[:V_R].reshape(V_R, 16, 10, 2, 16).permute(1, 2, 3, 0, 4)   # [chunk, t, f, r, c]: tile t face f at (2t + f) R 32 B
+            raw[:, :10 * 2 * V_R * 16] = xr.reshape(16, -1)
+            raw = raw.reshape(16 * AR_PT, 4, 16, 16)                             # [tile, face, row, col] (faces 0-3 row-major)
+            t_ = torch.zeros(16 * AR_PT, TILE, TILE)
+            t_[:, :16, :16], t_[:, :16, 16:], t_[:, 16:, :16], t_[:, 16:, 16:] = raw[:, 0], raw[:, 1], raw[:, 2], raw[:, 3]
+            return t_.permute(1, 0, 2).reshape(TILE, -1)
+        # R < 32: the residual stream starts as the packed x (the R = 32 residual v_x0 holds x already); before 2026-11-11 it
+        # started at 0 (every u1 MK_REAL_AR run: the residual was the MLP sum without x; the AR arithmetic itself was exact)
+        ar_out = v_x0 if AR_PT == 10 else ttnn.from_torch(_pack_res(xb.bfloat16().float()), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=_arw(AR_PT))
         if AR_DLVR and AR_PT != 10: MKDEF = MKDEF + [('MK_AR_OUT', str(ar_out.buffer_address()))]   # reader's packed source
         # MK_AR_GAMMA=1 (spec §19): x_deliver = residual ⊙ γ_next on every owner; γ table in DRAM [NL x 2 (input_ln,
         # post_attn_ln) x 16 chunks x 10 tiles] bf16, γ in row 0, page (L*2+n)*160 + chunk*10 + t (√1.25 host-folded)
