@@ -27,6 +27,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fake_v41 as F  # noqa: E402 -- installs the fake ttnn before anything imports it
 import pytest  # noqa: E402
+import torch  # noqa: E402
 
 from models.demos.deepseek_v3_d_p.tt.v41 import kv_export as KX  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.v41 import prefix_reuse as PR  # noqa: E402
@@ -327,6 +328,61 @@ def test_failed_chunk_invalidates_the_slot():
         assert s.rt._prefix.ret[0].length == 0
         assert s.prompt(A2) == ["C"] * 6
         assert_cold(s, layout, A2, what="A2 after a failed chunk")
+
+
+def _empty_chunk(s, *, slot=0, marks=True, tensor=False):
+    """tt-d-gen prefill_wait_for_arm_us: a request declined before compute sends ONE empty chunk [0, 0) (marked last when
+    mark_last_chunk is on). Returns (the device calls it issued, its acks, its input)."""
+    word = slot | ((MARKED | LAST) if marks else 0)
+    inp = F.FakeT(torch.ones(8, 1, C // 8, dtype=torch.int64), "u32", "RM", F.MESH) if tensor else [1] * C
+    n0, a0 = len(F.SYS.trace), len(s.acks)
+    s.rt.prefill_chunk(inp, s.kv, slot_id=word, actual_start=0, actual_end=0, request_id=s.request)
+    s.request += 1
+    return [op[0] for op in F.SYS.trace[n0:]], len(s.acks) - a0, inp
+
+
+@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize("marks", [False, True])
+def test_empty_chunk_then_a_prompt_equals_cold(flag, marks):
+    """The declined request's empty chunk computes and exports nothing, acks every layer, and the next prompt is
+    exactly that prompt cold (also as the very first chunk after startup)."""
+    layout = "cp2"
+    with _env(**_base_env(layout, flag=flag)):
+        s = System(flag=flag)
+        ops, acks, _ = _empty_chunk(s, marks=marks)  # first thing after startup
+        assert ops == [] and acks == CFG.n_layers, (ops, acks)
+        assert s.prompt(A, marks=marks) == ["C"] * 4
+        assert_cold(s, layout, A, what="A after an empty chunk at startup")
+        s.prompt(X, marks=marks)
+        ops, acks, _ = _empty_chunk(s, marks=marks)
+        assert ops == [] and acks == CFG.n_layers, (ops, acks)
+        s.prompt(B, marks=marks)
+        assert_cold(s, layout, B, what="B after X and an empty chunk")
+
+
+def test_empty_chunk_keeps_the_retained_prefix():
+    """With prefix reuse, empty chunks between (and around) prompts leave the retained prefix and checkpoints usable."""
+    layout = "cp2"
+    with _env(**_base_env(layout, flag=True)):
+        s = System(flag=True)
+        s.prompt(A)
+        before = (s.rt._prefix.ret[0].length, sorted(s.rt._prefix.ret[0].pool.by_pos))
+        for _ in range(3):
+            assert _empty_chunk(s)[:2] == ([], CFG.n_layers)
+        assert (s.rt._prefix.ret[0].length, sorted(s.rt._prefix.ret[0].pool.by_pos)) == before
+        assert s.prompt(A2) == ["S", "S", "S", "C", "C", "C"]
+        assert_cold(s, layout, A2, what="A2 after empty chunks")
+        _empty_chunk(s, marks=False)
+        assert s.prompt(A2) == ["S"] * 6
+        assert_cold(s, layout, A2, what="A2 again after an unmarked empty chunk")
+        assert F.SYS.late_allocs == []
+
+
+def test_empty_chunk_frees_its_h2d_tensor_without_reading_it():
+    with _env(**_base_env("cp2", flag=True)):
+        s = System(flag=True)
+        ops, acks, inp = _empty_chunk(s, tensor=True)
+        assert ops == ["deallocate"] and acks == CFG.n_layers and inp.dead, ops
 
 
 def test_marked_words_with_the_flag_off_behave_as_plain_words():

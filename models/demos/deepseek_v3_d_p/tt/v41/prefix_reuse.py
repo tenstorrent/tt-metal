@@ -250,6 +250,11 @@ class V41PrefixReuse:
     def invalidate(self, slot: int, why: str) -> None:
         self.ret[slot].invalidate(why)
 
+    def note_empty(self, slot: int) -> None:
+        """An EMPTY chunk (tt-d-gen prefill_wait_for_arm_us: a request declined before compute) ended a request: nothing on
+        the device changed, so the retained prefix and checkpoints stay; only the in-flight prompt's match ends."""
+        self.ret[slot].note_empty()
+
     # ---- PrefixRetention callbacks (all act on the slot the runtime selected with use_slot) ----------------------------
     def _save(self, slot: int, k: int) -> None:
         for st, dst in zip(carry_states(self.pf, slot), self.ckpt[slot][k]):

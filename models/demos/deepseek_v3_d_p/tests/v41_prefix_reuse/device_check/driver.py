@@ -4,7 +4,8 @@
 Drives the runner the way tt-d-gen's prefill worker does: a prompt's chunks go into the H2D service back to back (12-byte
 header: slot word, start, end; ``device.prefill.mark_last_chunk``: bit 29 of the slot word on every chunk, bit 30 on the
 prompt's last), the next prompt only after EVERY layer ack (40 per chunk). After a prompt whose arm asks for a digest, one
-EMPTY chunk at 0 makes the harness digest the export [0, S) + the model's rows (``[prefix-check] digest`` line).
+EMPTY chunk at 0 makes the harness digest the export [0, S) + the model's rows (``[prefix-check] digest`` line); the
+runtime then answers it as tt-d-gen's prefill_wait_for_arm_us empty chunk, so each next prompt follows a declined request.
 
 Prompts (C = PREFILL_CHUNK_SIZE; ids from fixed seeds; every length a multiple of 128, as the engine's floor128(S - 2541)):
     X    2C unrelated tokens (dirties the caches before every cold reference)

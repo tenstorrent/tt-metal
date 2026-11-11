@@ -8,11 +8,12 @@ patches, so one model build measures every arm on the same programs. Started by 
     off    prefix reuse bypassed (today's runner) and its retention emptied
     cold   retention emptied before the prompt: every chunk computed (checkpoints still saved)
     reuse  retention as served
-An EMPTY chunk at 0 is a FLUSH (the V4.1 runtime itself refuses empty chunks; the harness answers it): if the previous
-prompt's arm asked for ``digest``, the harness writes a ``[prefix-check] digest`` line -- crc32 of every export tensor of
-slot 0 (the 7 tensors whole, rows past the prompt included: what the KV Manager could read; chip 0, window rings also on the
-last chip) and of the model's own rows [0, S / ratio) of every KV source and layer 20 (entries + index keys) -- then
-acknowledges every layer so the driver's wait completes. SIGUSR1 dumps every Python thread's stack.
+An EMPTY chunk at 0 is a FLUSH: if the previous prompt's arm asked for ``digest``, the harness writes a
+``[prefix-check] digest`` line -- crc32 of every export tensor of slot 0 (the 7 tensors whole, rows past the prompt
+included: what the KV Manager could read; chip 0, window rings also on the last chip) and of the model's own rows
+[0, S / ratio) of every KV source and layer 20 (entries + index keys) -- then hands the chunk to the runtime, whose EMPTY-chunk
+path (tt-d-gen prefill_wait_for_arm_us) acknowledges every layer and computes nothing: every prompt after a flush is also a
+"declined request, then a prompt" check. SIGUSR1 dumps every Python thread's stack.
 """
 
 from __future__ import annotations
@@ -95,29 +96,24 @@ _prefill_chunk = R.V41PrefillRuntime.prefill_chunk
 def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kw):
     st = self.__dict__.setdefault("_chk", {"pending": None, "tag": "-", "digest": False})
     start, end, request_id = int(kw["actual_start"]), int(kw["actual_end"]), int(kw.get("request_id", 0))
-    if end <= start:  # a flush: digest the previous prompt, acknowledge every layer
-        try:
-            if st["pending"] is not None:
-                tag, S = st["pending"]
-                st["pending"] = None
-                try:
-                    d = _digest(self, kv_caches, S)
-                    if d["notes"]:
-                        logger.warning(f"[prefix-check] digest {tag} notes: {d['notes']}")
-                    logger.info(
-                        f"[prefix-check] digest {tag} S={S} export={d['export']:08x} rows={d['rows']:08x} "
-                        f"({d['digest_s']} s) tensors=" + ";".join(f"{k}:{v:08x}" for k, v in d["tensors"].items())
-                    )
-                except Exception as e:  # noqa: BLE001 -- a failed digest must not take the runner down
-                    logger.exception(f"[prefix-check] digest {tag} FAILED: {e}")
-            self._request_id = request_id
-            if self._ack is not None:
-                for L in range(self.num_layers):
-                    self._ack(L)
-        finally:
-            if metadata_msg is not None and self.config.is_last_rank:
-                ttnn.deallocate(metadata_msg)
-        return None
+    # a flush: digest the previous prompt, then the runtime's own EMPTY-chunk path (acks, nothing else)
+    if end <= start:
+        if st["pending"] is not None:
+            tag, S = st["pending"]
+            st["pending"] = None
+            try:
+                d = _digest(self, kv_caches, S)
+                if d["notes"]:
+                    logger.warning(f"[prefix-check] digest {tag} notes: {d['notes']}")
+                logger.info(
+                    f"[prefix-check] digest {tag} S={S} export={d['export']:08x} rows={d['rows']:08x} "
+                    f"({d['digest_s']} s) tensors=" + ";".join(f"{k}:{v:08x}" for k, v in d["tensors"].items())
+                )
+            except Exception as e:  # noqa: BLE001 -- a failed digest must not take the runner down
+                logger.exception(f"[prefix-check] digest {tag} FAILED: {e}")
+        # every flush is also the tt-d-gen prefill_wait_for_arm_us EMPTY chunk: each next prompt checks the runtime left the
+        # slot as a cold prompt (or, with reuse, a retained prefix) expects
+        return _prefill_chunk(self, input_tensor, kv_caches, metadata_msg=metadata_msg, **kw)
     if start == 0:
         words = _ctl()
         mode, tag = words[0], (words[1] if len(words) > 1 else "-")

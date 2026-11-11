@@ -212,6 +212,8 @@ class V41PrefillRuntime:
         # a burst's last one. Split always (a plain slot word passes through unchanged); only prefix reuse reads `last`.
         slot_id, last = split_slot_word(slot_id)
         assert 0 <= slot_id < self.num_users, (slot_id, self.num_users)
+        if int(actual_end) <= int(actual_start):
+            return self._empty_chunk(input_tensor, int(slot_id), int(actual_start), int(request_id), warmup)
         self.pf.use_slot(int(slot_id))
         ids = input_tensor if isinstance(input_tensor, list) else self._token_ids_from_device(input_tensor)
         real = int(actual_end) - int(actual_start)
@@ -285,6 +287,25 @@ class V41PrefillRuntime:
             f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
             + (" (warm-up)" if warmup else "")
         )
+        return None
+
+    def _empty_chunk(self, input_tensor, slot_id: int, start: int, request_id: int, warmup: bool = False) -> None:
+        """tt-d-gen ``prefill_wait_for_arm_us`` (2b8e93558): a request the decode side declines before its first chunk sends
+        ONE EMPTY chunk (actual_end == actual_start) only to retire its burst and release its slot. Nothing is computed or
+        exported and no state is touched -- the next prompt's chunk 0 resets the slot's states and zeroes its export as
+        always, and prefix reuse keeps its retained prefix and checkpoints (the device still holds them) -- and every contract
+        layer is acknowledged, as for any chunk (GLM-5.3's runner does the same). Before this, ``0 < real`` killed the
+        runner."""
+        if not isinstance(input_tensor, list):
+            # the chunk's H2D ids: a fresh tensor per chunk (the runner frees the sentinels' too)
+            ttnn.deallocate(input_tensor)
+        if self._prefix is not None:
+            self._prefix.note_empty(slot_id)
+        self._request_id = int(request_id)
+        if self._ack is not None and not warmup:
+            for L in range(self.num_layers):
+                self._ack(L)
+        logger.info(f"[v41 runtime] chunk [{start}, {start}) slot {slot_id} EMPTY (declined before compute): acks only")
         return None
 
     def _skip_chunk(self, slot_id: int, start: int, end: int, request_id: int, t0: float) -> None:
