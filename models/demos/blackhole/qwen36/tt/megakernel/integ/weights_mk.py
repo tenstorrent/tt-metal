@@ -27,6 +27,11 @@ TILE = 32
 H = 5120
 QN = 112  # qkv(g) output tiles per chip (layout_attn.QN)
 NORM_FIX = 1.25 ** 0.5  # spec §19: stored pre-multiplied in the gamma table (fp32 product, one bf16 rounding)
+# QWEN36_R16_MK_NORM_FIX: the factor the gamma tables actually carry (default NORM_FIX). Gate 9 E20t: in-model the engine's
+# MLP matched the host MLP on x * NORM_FIX (ratio 0.967; 1.22 without), i.e. the in-model rstd path already uses the
+# true mean and the extra NORM_FIX over-scales every norm by 1.118. Set 1.0 to test / until the AR contract is fixed.
+def norm_fix():
+    return float(os.environ.get("QWEN36_R16_MK_NORM_FIX", str(NORM_FIX)))
 
 
 # ---------------------------------------------------------------------------------------------------------------- #
@@ -208,7 +213,7 @@ mul (reads row 0) applies gamma and NORM_FIX at once."""
             continue
         for norm in (l.attention_norm.norm, l.ffn_norm.norm):
             r = torch.zeros(TILE, H)
-            r[0] = norm_gamma(norm).float() * NORM_FIX  # fp32 here; the one bf16 rounding is at assembly
+            r[0] = norm_gamma(norm).float() * norm_fix()  # fp32 here; the one bf16 rounding is at assembly
             rows.append(r)
     return torch.cat(rows).reshape(1, 1, -1, H)
 
@@ -224,7 +229,7 @@ def gamma_cons_rows(model, layers=None):
         if layers is not None and i not in layers:
             continue
         for norm in (l.attention_norm.norm, l.ffn_norm.norm):
-            rows.append((norm_gamma(norm).float() * NORM_FIX).reshape(8, H // 8))
+            rows.append((norm_gamma(norm).float() * norm_fix()).reshape(8, H // 8))
     return torch.cat(rows)
 
 
