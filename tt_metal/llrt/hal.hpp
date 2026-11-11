@@ -449,6 +449,7 @@ private:
     uint64_t pcie_addr_lower_bound_{};
     uint64_t pcie_addr_upper_bound_{};
     uint32_t num_nocs_{};
+    uint32_t noc_addr_local_bits_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
     uint32_t noc_node_id_mask_ = 0;
@@ -572,6 +573,7 @@ public:
     uint32_t get_num_nocs() const { return num_nocs_; }
     uint32_t get_noc_node_id() const { return noc_node_id_; }
     uint32_t get_noc_node_id_mask() const { return noc_node_id_mask_; }
+    uint32_t get_noc_addr_local_bits() const { return noc_addr_local_bits_; }
     uint32_t get_noc_addr_node_id_bits() const { return noc_addr_node_id_bits_; }
     uint32_t get_noc_coord_reg_offset() const { return noc_coord_reg_offset_; }
     uint32_t get_noc_encoding_reg() const { return noc_encoding_reg_; }
