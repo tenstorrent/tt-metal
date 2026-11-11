@@ -141,6 +141,20 @@ for it in range(ITERS):
             _pL = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
             _xres = (_xres + AR.ring * _pL).bfloat16().float()
         v_gold = _pL
+    if V12 and REAL_AR and AR_DBG:   # per-layer v12 MLP vs a gold from the residual the AR delivered to that MLP (AR program order:
+        # [mixer AR under AAR (attention, and GDN with MK_REAL_GAR)], MLP AR): xn = rstd(xr) * (xr [.] γ_post_L); MLP = silu(xn g) * (xn u) @ d
+        _k, _mp = 0, []
+        for L_ in range(NL):
+            if REAL_AAR and (is_attn_layer(L_) or ('MK_REAL_GAR', '1') in MKDEF): _k += 1
+            _xr = _db[:, 2 * (_k - 1) + 1] if _k > 0 else _x0_pass
+            _xg = (_xr * AR_GTAB[L_, 1][None, :]).bfloat16().float() if (GAMMA_CONS or AR_GAMMA) else _xr
+            _g, _u, _d = vlayer(L_)
+            _xn = (_rstd_of(_xr)[:V_R, None] * _xg.double()).float()
+            _gm = (torch.nn.functional.silu(_xn @ _g) * (_xn @ _u)).bfloat16().float() @ _d
+            _dm = _db[:, 2 * _k]   # this device's MLP output = the MLP AR's input
+            _mp.append(round(torch.corrcoef(torch.stack([_dm.flatten(), _gm.flatten()]))[0, 1].item(), 5))
+            _k += 1
+        print(f"[v12] iter {it} per-layer MLP vs AR-delivered-x gold pcc min {min(_mp)} all {_mp}", flush=True)
     if V12 and not (REAL_AR and AR_GAMMA):   # (MK_AR_GAMMA: v_xo ends the pass holding x_deliver, not the partial)
         _v = ttnn.to_torch(v_xo).float().reshape(TILE, H)[:V_R]; _g2 = v_gold[:V_R]
         if os.environ.get('V12_SAVE') and it == 0: torch.save(ttnn.to_torch(v_xo), os.environ['V12_SAVE'])
