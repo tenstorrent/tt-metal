@@ -38,6 +38,7 @@ BAR = float(os.environ.get("E2E_BAR", "0.999"))
 OUT = os.environ.get("E2E_OUT", "")
 TF = os.environ.get("E2E_TF", "1") == "1"  # teacher-forced per-layer mode (spec owner 11-11)
 TF_NL = int(os.environ.get("E2E_TF_NL", str(NL)))
+TF_BLOCK = int(os.environ.get("E2E_TF_BLOCK", "4"))  # teacher-forced block (both layer types per engine pass)
 DBG = os.environ.get("E2E_DBG", "1") == "1"  # MK_AR_DBG per-AR residual dumps (more engine text); 0 = final x_out only
 B, T = 8, tc.K + 1
 DIM = 5120
@@ -235,34 +236,57 @@ def _teacher_forced(model, live, ref, ref_in, ts, snap):
     orig = mk1.forward
 
     def tf_forward(x, n_users, T_, in_body):
+        """Blocks of TF_BLOCK layers (default 4 = 3 GDN + 1 attention: every engine pass holds both layer types, which
+        the engine build assumes): each block's engine is seeded with the op-by-op residual entering the block, built
+        with MK_AR_DBG=1, and every layer of the block is compared through the post-AR residual dump."""
         pr = S1.per_replay_inputs(model, in_body)
-        for L in range(min(TF_NL, len(model.layers))):
-            lt = ["attention" if model.layers[L].is_full_attention else "gdn"]
-            try:
-                w = WM.repack(model, layouts=EP.weight_layouts(mesh), only_layers=[L])
-                eng = EB.MkEngine(mesh, B, T_, "mk", lt, w, [d for d in kv_all if d["layer"] == L],
-                                  [d for d in gdn_all if d["layer"] == L])
-                for t in _layer_tensors(model, L):
-                    if id(t) in idx:
-                        ttnn.copy_host_to_device_tensor(snap[idx[id(t)]], t)
-                xi = ttnn.from_torch(ref_in[L].reshape(1, 1, -1, DIM).bfloat16(), dtype=ttnn.bfloat16,
-                                     layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
-                xo = eng.alloc_x_out()
-                eng.launch(xi, xo, pr)
-                ttnn.synchronize_device(mesh)
-                e_all = _rows(xo)
-                for u in live:
-                    out[u][L] = round(_pcc(e_all[u * T:(u + 1) * T], ref[L][u * T:(u + 1) * T]), 6)
-                ttnn.deallocate(xi)
-                ttnn.deallocate(xo)
-                del eng, w
-            except Exception as e:  # noqa: BLE001 -- report per layer (e.g. a build overflow), keep going
-                import traceback
+        nl_tf = min(TF_NL, len(model.layers))
+        saved_env = os.environ.get("QWEN36_R16_MK_ENV")
+        os.environ["QWEN36_R16_MK_ENV"] = ((saved_env or "") + " MK_AR_DBG=1").strip()
+        try:
+            for L0 in range(0, nl_tf, TF_BLOCK):
+                blk = list(range(L0, min(L0 + TF_BLOCK, nl_tf)))
+                lt = ["attention" if model.layers[L].is_full_attention else "gdn" for L in blk]
+                try:
+                    w = WM.repack(model, layouts=EP.weight_layouts(mesh), only_layers=blk)
+                    eng = EB.MkEngine(mesh, B, T_, "mk", lt, w, [d for d in kv_all if d["layer"] in blk],
+                                      [d for d in gdn_all if d["layer"] in blk])
+                    for L in blk:
+                        for t in _layer_tensors(model, L):
+                            if id(t) in idx:
+                                ttnn.copy_host_to_device_tensor(snap[idx[id(t)]], t)
+                    xi = ttnn.from_torch(ref_in[L0].reshape(1, 1, -1, DIM).bfloat16(), dtype=ttnn.bfloat16,
+                                         layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+                    xo = eng.alloc_x_out()
+                    eng.launch(xi, xo, pr)
+                    ttnn.synchronize_device(mesh)
+                    S = eng.program.setup
+                    _defs = eng.info["env"].get("MK_DEFINES", "").split(",")
+                    ari = _mlp_ar_index(lt, "MK_REAL_AAR=1" in _defs, "MK_REAL_GAR=1" in _defs)
+                    if S.get("ar_dbgt") is not None:
+                        dbg = ttnn.to_torch(ttnn.get_device_tensors(S["ar_dbgt"])[0]).float().reshape(32, -1)
+                        cols = {L: dbg[:, (2 * ari[i] + 1) * DIM:(2 * ari[i] + 2) * DIM] for i, L in enumerate(blk)}
+                    else:   # no dump: the block's last layer from x_out only
+                        cols = {blk[-1]: _rows(xo)}
+                    for L, e_all in cols.items():
+                        for u in live:
+                            out[u][L] = round(_pcc(e_all[u * T:(u + 1) * T], ref[L][u * T:(u + 1) * T]), 6)
+                    ttnn.deallocate(xi)
+                    ttnn.deallocate(xo)
+                    del eng, w
+                except Exception as e:  # noqa: BLE001 -- report per block (e.g. a build overflow), keep going
+                    import traceback
 
-                err[L] = f"{type(e).__name__}: {str(e)[:200]}"
-                logger.warning(f"[e2ediff] teacher-forced layer {L} ({lt[0]}): {err[L]}\n" +
-                               "".join(traceback.format_exc().splitlines(True)[-12:]))
+                    for L in blk:
+                        err[L] = f"{type(e).__name__}: {str(e)[:200]}"
+                    logger.warning(f"[e2ediff] teacher-forced block {blk} ({lt}): {err[blk[0]]}\n" +
+                                   "".join(traceback.format_exc().splitlines(True)[-12:]))
+        finally:
+            if saved_env is None:
+                os.environ.pop("QWEN36_R16_MK_ENV", None)
+            else:
+                os.environ["QWEN36_R16_MK_ENV"] = saved_env
         return x
 
     mk1.forward = tf_forward
