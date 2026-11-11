@@ -32,6 +32,13 @@ def _gb(b, coords):
     return dict(gin_addr=gg["gin_addr"], gin_map=[(ix[(x, y)], sl) for _, x, y, sl in tl], dbg=gg["dbg"])
 
 
+def _state(b):
+    d = getattr(b, "gdn_desc", None)
+    if not d:
+        return None
+    return [dict(dd["tensors"]) for dd in d]
+
+
 def gdn_role(b, coords):
     import ttnn
     import g2_role
@@ -58,7 +65,10 @@ def gdn_role(b, coords):
     role = g2_role.GdnRole(dev, coords, NG, B, b.sems, tgt, prod, gen, kdir=KDIR, ref=ref, attn_n=attn_n,
                            gdnout=getattr(b, "gdnout", None),   # MKA_GDNOUT: the GDN out_proj via the wo unit
                            gin_k=getattr(b, "gin_k", None),     # MK_GIN_PERCORE: per-core in_ready targets
-                           gb=_gb(b, coords))   # E1_GB: the type-10 prefix in the role, from G-a's staging tiles
+                           gb=_gb(b, coords),   # E1_GB: the type-10 prefix in the role, from G-a's staging tiles
+                           # (d): the model's real GDN state / constants (G passes b.gdn_desc = integ stage1.gdn_descriptors(model),
+                           # GDN layers in order, and b.gdn_ctrl = the per-replay ctrl page); None = the role's synthetic state
+                           state=_state(b), ctrl=getattr(b, "gdn_ctrl", None))
     # MKA_GDN_HOLD (bench): HOLD users of every step, e.g. "0,1,3,4,6" = 3 live users (2, 5, 7) -- the padded-row shape
     hold = [int(x) for x in os.environ.get("MKA_GDN_HOLD", "").split(",") if x.isdigit() and int(x) < B]
     role.prepare(hold)

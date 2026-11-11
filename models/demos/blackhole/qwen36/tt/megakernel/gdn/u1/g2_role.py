@@ -45,7 +45,7 @@ def _host(t):
 
 class GdnRole:
     def __init__(self, dev, cores, NG, B, sems, out_target, prod_cores, gen_dir, kdir=None, opt=4094, seed=901,
-                 hold_users=(), ref=True, attn_n=0, gdnout=None, gin_k=None, gb_cores=None, gb=None):
+                 hold_users=(), ref=True, attn_n=0, gdnout=None, gin_k=None, gb_cores=None, gb=None, state=None, ctrl=None):
         """ref=False: no stock-op reference (no priming step, check() skipped) -- the stock op's program does not fit
         the kernel config buffer with device-profiler zones compiled in; the checked step is then FRESH."""
         self.ref = ref
@@ -79,9 +79,30 @@ class GdnRole:
         mc = lambda k: ttnn.L1_MEMORY_CONFIG if k in l1 else ttnn.DRAM_MEMORY_CONFIG
         mkc = lambda: ttnn.from_torch(ctrl0, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev,
                                       memory_config=mc("ctrl"))
-        self.LY = [dict(cA=m.LazyCase(dev, g, B, T, seed=seed + 7 * l), cE=m.LazyCase(dev, g, B, T, seed=seed + 7 * l),
+        # (d) state=: the model's real per-layer GDN state / constants (integ stage1.gdn_descriptors: win_a / win_b / ring / taps /
+        # dtb / nea / weight, the tensors prod's gdn_spec_step gets) instead of the role's synthetic LazyCase copies; ctrl= the
+        # model's ONE ctrl page (staged per replay, every layer). Needs G-b (no producers: the prefix runs in the role from G-a's
+        # real in-proj). No stock-op reference here: the model-level e2e-diff (gate 9) is the check.
+        self.state = state
+        if state is not None:
+            assert gb is not None, "state= (the model's GDN state) needs G-b (E1_GB): the producers' static `pre` would be stale"
+            assert len(state) == NG, (len(state), NG)
+            ref = False
+            self.ref = False
+            probe = m.LazyCase(dev, g, B, T, seed=0)   # the op's layouts: the model's tensors must match them exactly
+            for l, st in enumerate(state):
+                for k, pk in (("win_a", "win_a"), ("win_b", "win_b"), ("ring", "ring"), ("taps", "taps_d"), ("dtb", "dtb_d"),
+                              ("nea", "nea_d"), ("weight", "w_d")):
+                    a_, b_ = st[k], getattr(probe, pk)
+                    assert a_ is not None, (l, k)
+                    assert (tuple(a_.shape), a_.dtype, a_.layout) == (tuple(b_.shape), b_.dtype, b_.layout), \
+                        (l, k, tuple(a_.shape), a_.dtype, a_.layout, tuple(b_.shape), b_.dtype, b_.layout)
+            for t_ in (probe.win_a, probe.win_b, probe.ring, probe.taps_d, probe.dtb_d, probe.nea_d, probe.w_d):
+                ttnn.deallocate(t_)
+        self.LY = [dict(cA=None if state is not None else m.LazyCase(dev, g, B, T, seed=seed + 7 * l),
+                        cE=None if state is not None else m.LazyCase(dev, g, B, T, seed=seed + 7 * l),
                         pre=mkz((1, 1, 32, Nv * self.S * 32), f32, mc("pre")), outE=mkz((1, 32, Nv * m.Dv), b16, mc("out")),
-                        ctrl=mkc())
+                        ctrl=ctrl if (state is not None and ctrl is not None) else mkc())
                    for l in range(NG)]
         if l1:
             lo = min(ly[k].buffer_address() for ly in self.LY for k, kk in (("pre", "pre"), ("outE", "out"), ("ctrl", "ctrl"))
@@ -109,9 +130,14 @@ class GdnRole:
                     c.par = 1 - c.par
             ttnn.synchronize_device(dev)
             self.mi_ctrl = [int(x) for x in torch.randint(0, T, (B,), generator=self.gen)]
-        self.tl = [dict(qkv=self.qkv, win_a=ly["cE"].win_a, win_b=ly["cE"].win_b, ring=ly["cE"].ring, ctrl=ly["ctrl"],
-                        taps=ly["cE"].taps_d, dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d,
-                        pre=ly["pre"], out=ly["outE"]) for ly in self.LY]
+        if state is not None:
+            self.tl = [dict(qkv=self.qkv, win_a=st["win_a"], win_b=st["win_b"], ring=st["ring"], ctrl=ly["ctrl"], taps=st["taps"],
+                            dtb=st["dtb"], nea=st["nea"], weight=st["weight"], pre=ly["pre"], out=ly["outE"])
+                       for st, ly in zip(state, self.LY)]
+        else:
+            self.tl = [dict(qkv=self.qkv, win_a=ly["cE"].win_a, win_b=ly["cE"].win_b, ring=ly["cE"].ring, ctrl=ly["ctrl"],
+                            taps=ly["cE"].taps_d, dtb=ly["cE"].dtb_d, nea=ly["cE"].nea_d, weight=ly["cE"].w_d,
+                            pre=ly["pre"], out=ly["outE"]) for ly in self.LY]
         # G-b (E1_GB): the prefix runs inside the role from G-a's staging tiles; no producers. Harness (gb_cores = the GDN
         # cores' CoreRangeSet): a staging tensor at one L1 address on every GDN core (4 tiles), filled by the stand-in per
         # layer with the qkv row tiles (G-a's tile -> core / slot map). Engine: gb = dict(gin_addr = CB 41, gin_map).
@@ -263,6 +289,8 @@ class GdnRole:
         """This step's rows / ctrl, then the producers for every GDN layer (before the engine pass). G-b: no producers."""
         self.hold = list(hold)
         self._rows()
+        if self.state is not None:   # (d): the model stages ctrl (one page, per replay) and owns the state
+            return
         if self.gb is not None:
             cmp_ = os.environ.get("G2_GB_CMP", "0") == "1"
             mi_win = [0 if mm >= self.T else mm for mm in self.mi_ctrl]
