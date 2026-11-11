@@ -52,7 +52,7 @@ def _block_sharded_config(shard_shape, core_grid):
     )
 
 
-# PCC thresholds. We NEVER weaken these below what the descriptor path achieves for the same config.
+# PCC thresholds. Never weaken these.
 _PCC = {ttnn.bfloat16: 0.9997}
 
 

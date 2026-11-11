@@ -5,12 +5,18 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <vector>
+
+#include <tt-metalium/mesh_device.hpp>
 
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
@@ -226,6 +232,83 @@ TEST(ThreadPoolTest, ParallelForWithEnqueue) {
     EXPECT_EQ(enqueued_runs.load(), 1000u);
 }
 
+// Several threads fanning out on one pool at once: every call of every fan-out still runs exactly once.
+TEST(ThreadPoolTest, ParallelForConcurrentCallers) {
+    auto thread_pool = create_pool_per_device();
+    auto device_ids = one_call_per_device(2);
+    constexpr uint32_t NUM_CALLERS = 4;
+    constexpr uint32_t NUM_FAN_OUTS = 2000;
+    std::vector<std::vector<std::atomic<uint32_t>>> runs;
+    runs.reserve(NUM_CALLERS);
+    for (uint32_t caller = 0; caller < NUM_CALLERS; caller++) {
+        runs.emplace_back(device_ids.size());
+    }
+    std::vector<std::thread> callers;
+    callers.reserve(NUM_CALLERS);
+    for (uint32_t caller = 0; caller < NUM_CALLERS; caller++) {
+        callers.emplace_back([&, caller] {
+            for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
+                thread_pool->parallel_for(device_ids, [&runs, caller](size_t call) { runs[caller][call]++; });
+            }
+        });
+    }
+    for (auto& caller : callers) {
+        caller.join();
+    }
+    for (const auto& caller_runs : runs) {
+        for (const auto& count : caller_runs) {
+            EXPECT_EQ(count.load(), NUM_FAN_OUTS);
+        }
+    }
+}
+
+// Back-to-back fan-outs over different device lists of the same length each follow their own list: calls for one
+// device never overlap and run in index order.
+TEST(ThreadPoolTest, ParallelForChangingDevices) {
+    auto thread_pool = create_pool_per_device();
+    const auto forward = one_call_per_device(2);
+    const std::vector<uint32_t> backward(forward.rbegin(), forward.rend());
+    const std::vector<uint32_t> first_device(forward.size(), 0);
+    const std::array<const std::vector<uint32_t>*, 3> device_lists = {&forward, &backward, &first_device};
+    uint32_t num_devices = forward.size() / 2;
+    std::vector<std::atomic<bool>> busy(num_devices);
+    std::atomic<uint32_t> violations = 0;
+    std::atomic<uint32_t> runs = 0;
+    constexpr uint32_t NUM_FAN_OUTS = 3000;
+    for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
+        const auto& device_ids = *device_lists[iter % device_lists.size()];
+        std::vector<int64_t> last_call(num_devices, -1);
+        thread_pool->parallel_for(device_ids, [&](size_t call) {
+            uint32_t device = device_ids[call];
+            if (busy[device].exchange(true) || last_call[device] >= static_cast<int64_t>(call)) {
+                violations++;
+            }
+            last_call[device] = static_cast<int64_t>(call);
+            runs++;
+            busy[device] = false;
+        });
+    }
+    EXPECT_EQ(violations.load(), 0u);
+    EXPECT_EQ(runs.load(), NUM_FAN_OUTS * forward.size());
+}
+
+// parallel_for nested in its own callbacks, deeper than the pool keeps jobs for, still runs every call.
+TEST(ThreadPoolTest, ParallelForNested) {
+    auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
+    const std::vector<uint32_t> device_ids = {0, 1};
+    constexpr uint32_t DEPTH = 8;
+    std::atomic<uint32_t> leaves = 0;
+    std::function<void(uint32_t)> nest = [&](uint32_t depth) {
+        if (depth == 0) {
+            leaves++;
+            return;
+        }
+        thread_pool->parallel_for(device_ids, [&nest, depth](size_t) { nest(depth - 1); });
+    };
+    nest(DEPTH);
+    EXPECT_EQ(leaves.load(), 1u << DEPTH);
+}
+
 // Destroying the pool right after a fan-out, while workers may still hold the job, is safe.
 TEST(ThreadPoolTest, ParallelForThenDestroy) {
     auto device_ids = one_call_per_device(1);
@@ -254,6 +337,63 @@ TEST(ThreadPoolTest, ParallelForPassThrough) {
             }),
         std::exception);
     EXPECT_EQ(calls, (std::vector<size_t>{0, 1, 2}));
+}
+
+// Owned by a job's capture; counts its own destruction so a test can check the job was destroyed exactly once.
+class DestructionCounter {
+public:
+    explicit DestructionCounter(std::atomic<uint32_t>& destroyed) : destroyed_(destroyed) {}
+    DestructionCounter(const DestructionCounter&) = delete;
+    DestructionCounter& operator=(const DestructionCounter&) = delete;
+    DestructionCounter(DestructionCounter&&) = delete;
+    DestructionCounter& operator=(DestructionCounter&&) = delete;
+    ~DestructionCounter() { destroyed_++; }
+
+private:
+    std::atomic<uint32_t>& destroyed_;
+};
+
+struct MoveOnlyJob {
+    std::unique_ptr<int> owned;
+    void operator()() {}
+};
+static_assert(!std::is_copy_constructible_v<MoveOnlyJob>);
+
+// Compiles only if MeshDevice's forwarder takes move-only jobs; it needs a device to run, so it is never called.
+[[maybe_unused]] void enqueue_move_only_job(MeshDevice& mesh_device) {
+    mesh_device.enqueue_to_thread_pool(MoveOnlyJob{});
+}
+
+// Jobs are run once and never copied, so both pools take move-only jobs, and destroy each one once.
+TEST(ThreadPoolTest, EnqueueMoveOnlyJobs) {
+    constexpr uint32_t num_jobs = 64;
+    std::vector<std::shared_ptr<ThreadPool>> pools = {
+        create_pool_per_device(), create_passthrough_thread_pool(DEFAULT_CONTEXT_ID)};
+    for (auto& thread_pool : pools) {
+        std::atomic<uint32_t> runs = 0;
+        std::atomic<uint32_t> destroyed = 0;
+        for (uint32_t job = 0; job < num_jobs; job++) {
+            thread_pool->enqueue([&runs, owned = std::make_unique<DestructionCounter>(destroyed)]() { runs++; });
+        }
+        thread_pool->wait();
+        EXPECT_EQ(runs.load(), num_jobs);
+        // A worker destroys a job before reporting it done.
+        EXPECT_EQ(destroyed.load(), num_jobs);
+    }
+}
+
+TEST(ThreadPoolTest, ParallelForMoveOnlyFunction) {
+    auto device_ids = one_call_per_device(2);
+    std::vector<std::shared_ptr<ThreadPool>> pools = {
+        create_pool_per_device(), create_passthrough_thread_pool(DEFAULT_CONTEXT_ID)};
+    for (auto& thread_pool : pools) {
+        std::atomic<uint32_t> runs = 0;
+        std::atomic<uint32_t> destroyed = 0;
+        thread_pool->parallel_for(
+            device_ids, [&runs, owned = std::make_unique<DestructionCounter>(destroyed)](size_t) { runs++; });
+        EXPECT_EQ(runs.load(), device_ids.size());
+        EXPECT_EQ(destroyed.load(), 1u);
+    }
 }
 
 }  // namespace

@@ -15,13 +15,14 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <internal/mesh_device.hpp>
 
 using namespace tt::constants;
 
@@ -58,7 +59,7 @@ tt::tt_metal::Program create_send_async_program(
     tt::tt_fabric::FabricNodeId upstream_fabric_node_id = recv_socket.get_fabric_node_id(
         tt::tt_metal::distributed::SocketEndpoint::SENDER, recv_conn.sender_core.device_coord);
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     // Use mesh_device allocator - in practice all devices in a mesh share the same allocator configuration
     auto max_alignment = std::max(
@@ -154,6 +155,7 @@ tt::tt_metal::Program create_send_async_program(
 
     for (uint32_t i = 0; i < num_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
+            *mesh_device,
             sender_fabric_node_id,
             receiver_fabric_node_id,
             link_indices[i],
@@ -165,6 +167,7 @@ tt::tt_metal::Program create_send_async_program(
     auto bwd_link_indices =
         tt::tt_fabric::get_forwarding_link_indices(*mesh_device, sender_fabric_node_id, upstream_fabric_node_id);
     tt::tt_fabric::append_fabric_connection_rt_args(
+        *mesh_device,
         sender_fabric_node_id,
         upstream_fabric_node_id,
         bwd_link_indices[0],
@@ -193,7 +196,7 @@ void send_async(
 
     const auto& device_coord = socket_connections[0].sender_core.device_coord;
     TT_FATAL(
-        mesh_device->get_device(device_coord) != nullptr,
+        internal::get_device(*mesh_device, device_coord) != nullptr,
         "Sender device for socket connection is not local to this mesh device");
 
     distributed::MeshWorkload workload;

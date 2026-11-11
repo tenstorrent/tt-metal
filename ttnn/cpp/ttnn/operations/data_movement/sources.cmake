@@ -23,6 +23,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     concat/device/concat_s2s_multi_program_factory.cpp
     concat/device/concat_block_sharded_program_factory.cpp
     concat/device/concat_s2i_program_factory.cpp
+    concat/codegen/concat_codegen_device_operation.cpp
+    concat/codegen/concat_codegen_program_factory.cpp
+    concat/codegen/concat_codegen_supported.cpp
     copy/copy.cpp
     copy/device/copy_device_operation.cpp
     copy/device/copy_same_memory_config_program_factory.cpp

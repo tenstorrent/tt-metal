@@ -704,6 +704,7 @@ def test_chosen_layout_shares_no_links(grid, bh):
         ((11, 10), 11, 4, 4, 1, "not a multiple of the leftover width"),  # 88 cores fit; 3 leftover columns
         ((11, 10), 16, 2, 79, 2, r"R\+P = "),  # pool: 32 + 79 = 111 cores > 110
         ((11, 10), 16, 2, 15, 2, "no row-local layout with a home producer per head"),  # pool smaller than BH
+        ((11, 10), 16, 0, 2, 0, r"nv=0 must be in \[1, grid width"),  # the grid width is divided by nv
     ],
 )
 def test_infeasible_placement_raises(expect_error, grid, bh, nv, np_, placement, message):

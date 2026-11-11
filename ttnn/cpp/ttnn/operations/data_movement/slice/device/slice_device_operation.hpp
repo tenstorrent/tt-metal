@@ -28,6 +28,11 @@ uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shap
 // output tile from the two input tiles the rows straddle. Needs 32x32 tiles of a fixed-size element type and
 // interleaved input and output; anything else is sliced through ROW_MAJOR.
 bool tile_slice_supports_row_shift(const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
+// The data format to declare on a slice DFB that holds elements of `dtype` on a device of `arch`. On
+// Quasar it declares UInt16 and UInt32 elements as RawUInt16 and RawUInt32, raw formats of the same
+// element size. Use it only for a DFB that no compute kernel handles in a way that depends on the element
+// type: compute kernels see the raw formats as Float16 and Float32, not as integers.
+tt::DataFormat get_slice_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch);
 
 }  // namespace ttnn::operations::data_movement
 

@@ -23,7 +23,8 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     Noc& noc, DFB& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
-    for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
+    const uint32_t num_words = (num_bytes_risc + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; ++i) {
         ptr[i] = val;
     }
     // The seed above is baby-RISCV stores and the loop-back noc.async_read below uses it as its source.
@@ -37,7 +38,9 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     // those stores before the loop-back read. Same as tt_memmove in data_movement/common/kernels/common.hpp.
     __asm__ __volatile__("fence" ::: "memory");
 #else
-    (void)ckernel::load_blocking(ptr + (num_bytes_risc / 2) - 1);
+    if (num_words > 0) {
+        (void)ckernel::load_blocking(ptr + num_words - 1);
+    }
 #endif
 
     uint32_t pad_val_addr = dfb.get_write_ptr();
