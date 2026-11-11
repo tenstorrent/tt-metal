@@ -939,14 +939,12 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
 
 #ifdef LLK_PACK_W_OFFSET
     const bool first_block = pack_w_last != output_id;
-    // A constant block selects among its folded forms; a variable one reads the word of its state with the math context byte alone, behind matmul
-    // math the forms of context 2, which also read no slower behind a pack-thread SFPU.
+    // Constant or variable, a block reads the word of each state at a constant index, with the folded path's context: an output or count that
+    // becomes constant late still folds its forms, and both paths pick the same form.
     const char form = forms == 2 ? 'B'
-                      : forms != 0
-                          ? (first_block ? (pack_reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
-                                                              : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
-                                         : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2))
-                          : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, first_block ? (pack_reconfigured ? 1 : 0) : 2, pack_ctx[0] != 0 ? 2 : 0);
+                      : (first_block ? (pack_reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
+                                                          : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
+                                     : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     // A fast untilize left open marks the last output, so only a first block closes it.
     if (!one_form && first_block) {
         _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
