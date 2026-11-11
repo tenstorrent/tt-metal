@@ -516,11 +516,14 @@ SNAPSHOT_PATH = (
 
 
 @pytest.fixture(autouse=True)
-def _no_precision_env(monkeypatch):
+def _no_precision_env():
     """The precision tests read the shipped table: no GEMMA4_PRECISION_* / GEMMA4_BFP8_MAX_CONTEXT from the shell (a run
-    with GEMMA4_PRECISION_LM_HEAD=bfp8 exported resolved the unknown model to {lm_head: bfp8})."""
-    for name in [k for k in os.environ if k.startswith("GEMMA4_PRECISION_")] + ["GEMMA4_BFP8_MAX_CONTEXT"]:
-        monkeypatch.delenv(name, raising=False)
+    with GEMMA4_PRECISION_LM_HEAD=bfp8 exported resolved the unknown model to {lm_head: bfp8}). Its own MonkeyPatch, so a
+    test's ``monkeypatch.undo()`` does not bring the shell's values back."""
+    with pytest.MonkeyPatch.context() as mp:
+        for name in [k for k in os.environ if k.startswith("GEMMA4_PRECISION_")] + ["GEMMA4_BFP8_MAX_CONTEXT"]:
+            mp.delenv(name, raising=False)
+        yield
 
 
 def test_repo_id_resolves_overrides():
