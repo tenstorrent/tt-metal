@@ -11,9 +11,29 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
+#if defined(GDN_GTEXT2) && GDN_GTEXT2 && !defined(MKAR_GT2_SP_INLINE)
+// GTEXT2 (GDN-hosted sender, AR corner writer only): this binary's only memcpy calls are the init-time fabric connection
+// copies (FabricConnectionManager::build_from_args + the `fab =` assignment, once per program); a byte loop instead of
+// libc's 300 B memcpy (same bytes copied; no loop -> memcpy pattern rewrite)
+extern "C" __attribute__((used, optimize("no-tree-loop-distribute-patterns"))) void* memcpy(void* d, const void* s, size_t n) {
+    uint8_t* dp = static_cast<uint8_t*>(d);
+    const uint8_t* sp = static_cast<const uint8_t*>(s);
+    while (n--) {
+        *dp++ = *sp++;
+    }
+    return d;
+}
+#endif
 namespace mkar {
 
-FORCE_INLINE void send_pkt(tt::tt_fabric::WorkerToFabricEdmSender& connection, volatile PACKET_HEADER_TYPE* pkt_hdr,
+#if defined(GDN_GTEXT2) && GDN_GTEXT2 && !defined(MKAR_GT2_SP_INLINE)
+// GTEXT2 (GDN-hosted sender on the AR corners only): one out-of-line copy of the packet send (it was inlined at every RS / AG
+// fwd / bwd site, ~1.5 KB of BRISC text); same header writes, same payload send, same order
+__attribute__((noinline)) void send_pkt(tt::tt_fabric::WorkerToFabricEdmSender& connection,
+#else
+FORCE_INLINE void send_pkt(tt::tt_fabric::WorkerToFabricEdmSender& connection,
+#endif
+                           volatile PACKET_HEADER_TYPE* pkt_hdr,
                            uint32_t l1_read_addr, uint64_t dest_noc_addr, uint64_t sem_noc_addr, uint32_t payload_bytes,
                            bool last) {
     if (last) {
@@ -77,7 +97,11 @@ struct SendWriter {
         }
     }
 
+#if defined(GDN_GTEXT2) && GDN_GTEXT2 && !defined(MKAR_GT2_SP_INLINE)
+    __attribute__((noinline)) void send_ag(uint32_t j, uint32_t l1_read_addr) {  // GTEXT2: 2 call sites in iter()
+#else
     FORCE_INLINE void send_ag(uint32_t j, uint32_t l1_read_addr) {
+#endif
         if (fwd_range > 0) {
             hf->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(fwd_range)});
         }

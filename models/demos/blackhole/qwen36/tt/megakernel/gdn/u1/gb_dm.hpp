@@ -30,6 +30,9 @@
 #ifndef GB_MCAST
 #define GB_MCAST 0
 #endif
+#ifndef GB_NOROOT
+#define GB_NOROOT 0  // GTEXT2 (program.py, AR corners / Σ reducer DM): this core never holds an L2 root (asserted at the hook)
+#endif
 #ifndef GB_GEARLY
 #define GB_GEARLY 0  // GBCOST (E1_GBC_GEARLY): the writer builds the gate rows as soon as the gate pair lands (conv0 / root ready serviced between rows)
 #endif
@@ -218,7 +221,7 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
 #endif
     }
     GBTS(6);
-    if (pb[kRootPost]) {  // L2 root: its Kt raw tiles (from the q / k conv cores) -> the compute's l2
+    if (!GB_NOROOT && pb[kRootPost]) {  // L2 root: its Kt raw tiles (from the q / k conv cores) -> the compute's l2
         GBZ("GB-RAWW");
         pb[kDbgR] = (L << 8) | 3;
         noc_semaphore_wait_min(pb + kRawCnt, KT_ * (L + 1));
@@ -463,7 +466,7 @@ __attribute__((noinline)) void svc_early() {
         GBTS(18);
         g_svc_st |= 1u;
     }
-    if ((g_svc_st & 3u) == 1u && cb_pages_available_at_front(g_svc_cb, 4 + KT_)) {
+    if (!GB_NOROOT && (g_svc_st & 3u) == 1u && cb_pages_available_at_front(g_svc_cb, 4 + KT_)) {
         GBTS(19);
         inc_all(const_cast<const uint32_t*>(pb + kRootDst), kKqCnt, 1);
         GBTS(20);
@@ -479,7 +482,7 @@ template <uint32_t B, uint32_t T, uint32_t NV, uint32_t VB, uint32_t RN, uint32_
 inline void writer_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const PAcc& pre, uint32_t cb_out, uint32_t sc_l1) {
     // OUT order (the compute's): gate pair, silu, conv 0, conv 1, [L2 root: Kt normalized k / q], pad to 4 per layer
     const uint32_t nconv = pb[kNconv];
-    const bool root = pb[kRootPost] != 0;
+    const bool root = !GB_NOROOT && pb[kRootPost] != 0;
     g_gb_pb = reinterpret_cast<uint32_t>(pb);
     auto out1 = [&](const uint32_t* d) {
         cb_wait_front(cb_out, 1);

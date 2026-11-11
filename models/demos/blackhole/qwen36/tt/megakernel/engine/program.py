@@ -1167,6 +1167,7 @@ def setup_bench(dev, MESH, mesh_identity):
     # GTEXT (DESIGN v1.156): GDN-role code-size trims for the corner / reducer variants under E1_GB (E1_GTEXT=0 = the old binaries)
     # (explicit E1_GTEXT=1 also without E1_GB: the cgar_iter md5 A/B vs E1_GTEXT unset / 0 = 9f97ada55bb's corner reader)
     GTEXT = os.environ.get('E1_GTEXT', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'
+    GTEXT2 = os.environ.get('E1_GTEXT2', '1' if os.environ.get('E1_GB', '0') == '1' else '0') == '1'   # GTEXT2 (e1_shim: GDN_GTEXT2)
     DNORM_SPLIT, RRED_ARR = False, 8   # MK_DNORM_SPLIT (DNORM ii; set in the AR block)
     REAL_AR = ('MK_REAL_AR', '1') in MKDEF
     if REAL_AR:
@@ -2133,6 +2134,7 @@ def setup_bench(dev, MESH, mesh_identity):
             for c in corner:
                 rt[c.x][c.y] = (sp['rd_args'] if role == 'r' else sp['wr_args'])[(c.x, c.y)]
             dfs = list(kd.defines) + list(sp['rd_defines'] if role == 'r' else sp['wr_defines']) + ([('GDN_PRE_SP_HOOK', '1')] if cgar else []) + [('GSTEP_NO_ATTHOLD', '1')]   # #17 E1_ATTHOLD: the AR senders never hold
+            if GTEXT2: dfs = dfs + [('GB_NOROOT', '1')]   # GTEXT2: the corners hold no L2 root (asserted at the hook): G-b DM root code out
             dfs = dfs + [('MKAR_S_PUB', dict(AR_PUB_D)['MK_AR_PUB']), ('MKAR_S_PUBA', dict(AR_PUB_D)['MK_AR_PUBA'])]
             if os.environ.get('MKAR_SZONE', '0') == '1': dfs = dfs + [('MKAR_SZONE', '1')]   # hosted sender iteration zones (S-RIT / S-WIT)
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in corner]),
@@ -2182,25 +2184,36 @@ def setup_bench(dev, MESH, mesh_identity):
             if DNORM_SPLIT and role == 'w':   # rows 10-31 of CB 37's 8 pages = 0 once (never written; rows 0-9 rewritten every delivery)
                 head = ('\n  {   // MK_DNORM_SPLIT\n'
                         f'    volatile tt_l1_ptr uint32_t* z_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>({VADDR["rred"]}u);\n'
-                        '    for (uint32_t p = 0; p < 8; ++p) {\n      for (uint32_t i = 160; i < 256; ++i) { z_[p * 1024 + i] = 0; z_[p * 1024 + 256 + i] = 0; }\n'
-                        '      for (uint32_t i = 512; i < 1024; ++i) z_[p * 1024 + i] = 0;\n    }\n  }') + head
+                        + ('    for (uint32_t p = 0; p < 8; ++p) {\n      for (uint32_t i = 160; i < 256; ++i) z_[p * 1024 + i] = 0;\n'
+                           '      for (uint32_t i = 416; i < 1024; ++i) z_[p * 1024 + i] = 0;\n    }\n  }' if GTEXT2 else
+                           '    for (uint32_t p = 0; p < 8; ++p) {\n      for (uint32_t i = 160; i < 256; ++i) { z_[p * 1024 + i] = 0; z_[p * 1024 + 256 + i] = 0; }\n'
+                           '      for (uint32_t i = 512; i < 1024; ++i) z_[p * 1024 + i] = 0;\n    }\n  }')) + head
             new_loop = (head + f'   {fn}(2u * LL + 1u);   // delivery 2 LL + 1: this layer\'s MLP x\n  }}\n'
                         + (f'  *(volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u = 0;   // device-local: all {16 * NL} increments awaited\n' if role == 'w' else ''))
             txt = txt[:loop.start()] + new_loop + txt[end + 1:].lstrip('\n')
             if role == 'w':
                 mc = '\n'.join(f'  noc_async_write_multicast(s_, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsp_a}u), 4096, {r[4]}u, false);' for r in rects)
                 mi = '\n'.join(f'  noc_semaphore_inc_multicast(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsf_a}u), 1, {r[4]}u);' for r in rects)
-                fdef = (f'__attribute__((noinline)) static void rred_w(uint32_t d) {{   // MK_AR_RSTD_RED=gdn: delivery d\n'
+                if GTEXT2:   # one copy of each multicast sequence (2 STREAM rects), constant addresses, same order
+                    mc = '\n'.join(f'  rred_mcw(s_, get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsp_a}u), {r[4]}u);' for r in rects)
+                    mi = '\n'.join(f'  rred_mci(get_noc_multicast_addr({r[0]}u, {r[1]}u, {r[2]}u, {r[3]}u, {rsf_a}u), {r[4]}u);' for r in rects)
+                fdef = (('__attribute__((noinline)) static void rred_mcw(uint32_t s, uint64_t a, uint32_t n) { noc_async_write_multicast(s, a, 4096, n, false); }\n'
+                         '__attribute__((noinline)) static void rred_mci(uint64_t a, uint32_t n) { noc_semaphore_inc_multicast(a, 1, n); }\n' if GTEXT2 else '') +
+                        f'__attribute__((noinline)) static void rred_w(uint32_t d) {{   // MK_AR_RSTD_RED=gdn: delivery d\n'
                         f'  noc_semaphore_wait_min((volatile tt_l1_ptr uint32_t*){dict(MKDEF)["MK_AR_RRED_SEM"]}u, {RRED_ARR}u * (d + 1u));\n'
                         f'  cb_reserve_back(37, 8);\n  cb_push_back(37, 8);\n  cb_wait_front(39, 1);\n  const uint32_t s_ = get_read_ptr(39);\n'
                         f'{mc}\n  noc_async_write_barrier();   // the Σ tile has landed before its flag\n{mi}\n  noc_async_atomic_barrier();\n  cb_pop_front(39, 1);\n}}\n')
                 inc = ''
             else:
                 fdef = ('__attribute__((noinline)) static void rred_c(uint32_t) {   // MK_AR_RSTD_RED=gdn: 8 K-row tiles -> final Σ (column 0)\n'
-                        '  compute_kernel_hw_startup(37, 37, 39);   // compute() re-runs its own startup per layer\n'
+                        + ('  GDN_HWS(37, 37, 39);   // compute() re-runs its own startup per layer (GTEXT2: one out-of-line copy)\n' if GTEXT2 else
+                           '  compute_kernel_hw_startup(37, 37, 39);   // compute() re-runs its own startup per layer\n') +
                         '  cb_wait_front(37, 8);\n  cb_reserve_back(39, 1);\n  reconfig_data_format_srca(37);\n  pack_reconfig_data_format(39);\n'
-                        '  copy_init(37);\n  tile_regs_acquire();\n  copy_tile(37, 0, 0);\n'
-                        '  for (uint32_t t = 1; t < 8; ++t) {\n    copy_init(37);\n    copy_tile(37, t, 1);\n    add_binary_tile_init();\n    add_binary_tile(0, 1, 0);\n  }\n'
+                        + ('  for (uint32_t t = 0; t < 8; ++t) {   // GTEXT2: tile 0 folded in (same call sequence)\n    copy_init(37);\n'
+                           '    if (t == 0) {\n      tile_regs_acquire();\n    }\n    copy_tile(37, t, t ? 1u : 0u);\n'
+                           '    if (t) {\n      add_binary_tile_init();\n      add_binary_tile(0, 1, 0);\n    }\n  }\n' if GTEXT2 else
+                           '  copy_init(37);\n  tile_regs_acquire();\n  copy_tile(37, 0, 0);\n'
+                           '  for (uint32_t t = 1; t < 8; ++t) {\n    copy_init(37);\n    copy_tile(37, t, 1);\n    add_binary_tile_init();\n    add_binary_tile(0, 1, 0);\n  }\n') +
                         '  sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();\n  sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);\n'
                         '  transpose_dest_init<true>();\n  transpose_dest<true>(0);\n'
                         '  tile_regs_commit();\n  tile_regs_wait();\n  pack_tile(0, 39);\n  tile_regs_release();\n  cb_push_back(39, 1);\n  cb_pop_front(37, 8);\n}\n')
@@ -2224,7 +2237,7 @@ def setup_bench(dev, MESH, mesh_identity):
                 cfg.unpack_to_dest_mode = u_
             out.append(ttnn.KernelDescriptor(kernel_source=hsrc, core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(RRED_HC, RRED_HC)]),
                                              defines=list(kd.defines) + ([('GDN_PRE_IN_HOOK', '1')] if RRED_LATE else [])
-                                             + ([('GB_NOROOT', '1')] if GTEXT and role == 'c' else [])   # GTEXT: holds no L2 root
+                                             + ([('GB_NOROOT', '1')] if (GTEXT and role == 'c') or (GTEXT2 and role == 'w') else [])   # GTEXT / GTEXT2: holds no L2 root
                                              + [('GSTEP_NO_ATTHOLD', '1')],   # #17 E1_ATTHOLD: the reducer's deliveries never wait
                                              runtime_args=ttnn.RuntimeArgs(), config=cfg, **base))
         assert sum(str(k_.kernel_source).endswith('_rred.cpp') for k_ in out) == 2, "_gdn_host_rred: writer + compute variants on RRED_HC"

@@ -168,6 +168,29 @@ inline uint32_t gdn_bits(float f) {
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#ifndef GDN_GTEXT2
+#define GDN_GTEXT2 0  // GTEXT2 (E1_GTEXT2, default on under E1_GB): GDN-role code-size trims (0 = the old binaries)
+#endif
+#ifndef GDN_LK_DEFINED
+#define GDN_LK_DEFINED
+#if GDN_GTEXT2
+// GTEXT2: on WH/BH a DFB scoped lock only records NoC-debug events (lock_acquire_impl / lock_release_impl) and hands out the
+// fifo pointer; copying its release lambda pulled memcpy (300 B) + an out-of-line lock clone into the GDN DM binaries.
+// GdnLk = the same pointer, no events (the debug-only lock tracking is lost; values / order unchanged).
+struct GdnLk {
+    uint32_t p;
+    template <typename T = uint32_t>
+    CoreLocalMem<T> get_ptr() const {
+        return CoreLocalMem<T>(p);
+    }
+};
+#define GDN_WLK(d, n) (GdnLk{(d).get_write_ptr()})
+#define GDN_RLK(d, n) (GdnLk{(d).get_read_ptr()})
+#else
+#define GDN_WLK(d, n) (d).scoped_write_lock(n)
+#define GDN_RLK(d, n) (d).scoped_read_lock(n)
+#endif
+#endif
 #ifndef GDN_EXT_SEM
 #define GDN_EXT_SEM 0  // engine GDN role: ready / valid are device-local global semaphores at gdn_xsem_addr(0 / 1)
 #endif
@@ -473,7 +496,7 @@ TT_KERNEL void writer(
     uint32_t mi_raw;
 #endif
     {
-        auto lock = ctrl_w.scoped_write_lock(1);
+        auto lock = GDN_WLK(ctrl_w, 1);
         auto p = lock.template get_ptr<volatile uint32_t>();
         par = p[0] & 1u;
 #if GDN_LAZY
@@ -725,7 +748,7 @@ TT_KERNEL void writer(
         DataflowBuffer gprev(dfb::gprev);
 #endif
         {
-            auto gp_lock = gprev.scoped_write_lock(1);
+            auto gp_lock = GDN_WLK(gprev, 1);
             auto gp = gp_lock.template get_ptr<volatile uint32_t>();
             for (uint32_t t = 0; t < T; ++t) {
                 dec_all[t] = gp[tile_elem_index(r0 + t, 0)];
@@ -735,7 +758,7 @@ TT_KERNEL void writer(
         if (s == 0) {
             gnew.reserve_back(1);
             {
-                auto gn_lock = gnew.scoped_write_lock(1);
+                auto gn_lock = GDN_WLK(gnew, 1);
                 auto gn = gn_lock.template get_ptr<volatile uint32_t>();
                 for (uint32_t r = 0; r < 32; ++r) {
                     gn[tile_elem_index(r, 0)] = 0;
@@ -839,7 +862,7 @@ TT_KERNEL void writer(
         }
         uint32_t dtb_bits, nea_bits;
         {
-            auto lock = dtb_ws.scoped_write_lock(1);
+            auto lock = GDN_WLK(dtb_ws, 1);
             if constexpr (GDN_DTB_FP32 != 0) {
                 dtb_bits = lock.template get_ptr<volatile uint32_t>()[tile_elem_index(0, h)];
             } else {
@@ -848,7 +871,7 @@ TT_KERNEL void writer(
             }
         }
         {
-            auto lock = nea_ws.scoped_write_lock(1);
+            auto lock = GDN_WLK(nea_ws, 1);
             if constexpr (GDN_NEA_FP32 != 0) {
                 nea_bits = lock.template get_ptr<volatile uint32_t>()[tile_elem_index(0, h)];
             } else {
@@ -860,7 +883,7 @@ TT_KERNEL void writer(
         // the replay's decay c = prod dec_prev[0..r) and weights w[i] = prod dec_prev[i+1..r) first (gprev landed with
         // the gate reads): c goes to the compute in gsc word 2 with the head scalars, ahead of the SFPU gates
         if (r_rep > 0) {
-            auto gp_lock = gprev.scoped_write_lock(1);
+            auto gp_lock = GDN_WLK(gprev, 1);
             auto gp = gp_lock.template get_ptr<volatile uint32_t>();
             float acc = 1.0f;
             for (uint32_t i = r_rep; i-- > 0;) {
@@ -871,7 +894,7 @@ TT_KERNEL void writer(
         }
         gsc.reserve_back(1);
         {
-            auto g_lock = gsc.scoped_write_lock(1);
+            auto g_lock = GDN_WLK(gsc, 1);
             auto g32 = g_lock.template get_ptr<volatile uint32_t>();
             g32[0] = dtb_bits;
             g32[1] = nea_bits;
@@ -882,9 +905,9 @@ TT_KERNEL void writer(
 #else
         gsc.reserve_back(1);
         {
-            auto ab_lock = ab_w.scoped_write_lock(1 + AB2);
+            auto ab_lock = GDN_WLK(ab_w, 1 + AB2);
             auto p16 = ab_lock.template get_ptr<volatile uint16_t>();
-            auto g_lock = gsc.scoped_write_lock(1);
+            auto g_lock = GDN_WLK(gsc, 1);
             auto g32 = g_lock.template get_ptr<volatile uint32_t>();
             for (uint32_t t = t0; t < t1; ++t) {
                 const uint32_t a_bits = static_cast<uint32_t>(p16[tile_elem_index(r0 + t, h & 31u)]) << 16;
@@ -941,7 +964,7 @@ TT_KERNEL void writer(
 #if GDN_LAZY
             {
                 invalidate_l1_cache();  // the peers' slots arrived over the NoC: no stale RISC cache line
-                auto gx_lock = gsc_x.scoped_write_lock(1);
+                auto gx_lock = GDN_WLK(gsc_x, 1);
                 auto gx = gx_lock.template get_ptr<volatile uint32_t>();
                 for (uint32_t t = 0; t < T; ++t) {
                     beta_all[t] = gx[16 * t];
@@ -967,7 +990,7 @@ TT_KERNEL void writer(
             float wrep[T];
             float crep = 1.0f;
             if (r_rep > 0) {
-                auto gp_lock = gprev.scoped_write_lock(1);
+                auto gp_lock = GDN_WLK(gprev, 1);
                 auto gp = gp_lock.template get_ptr<volatile uint32_t>();
                 float acc = 1.0f;
                 for (uint32_t i = r_rep; i-- > 0;) {
@@ -983,7 +1006,7 @@ TT_KERNEL void writer(
             coef.reserve_back(8);
             zero_reserved(coef, noc, GDN_SFPU_GATE ? 7 : 8);  // SFPU_GATE: C (tile 7) is filled by the compute
             {
-                auto c_lock = coef.scoped_write_lock(8);
+                auto c_lock = GDN_WLK(coef, 8);
                 auto c32 = c_lock.template get_ptr<volatile uint32_t>();
                 constexpr uint32_t kNGB = 0, kG = 1024, kE = 2048, kBeta = 3072, kNBE = 4096, kEye = 5120, kW = 6144,
                                    kC = 7168;
@@ -1026,7 +1049,7 @@ TT_KERNEL void writer(
             if (s == 0) {
                 gnew.reserve_back(1);
                 {
-                    auto gn_lock = gnew.scoped_write_lock(1);
+                    auto gn_lock = GDN_WLK(gnew, 1);
                     auto gn = gn_lock.template get_ptr<volatile uint32_t>();
                     // only column 0 is ever read (the next verify's writer and the host park replay take rows r0 ..
                     // r0 + r - 1 of it): zero that column, not the page (a 1024-store fill sat on block 0's
@@ -1059,7 +1082,7 @@ TT_KERNEL void writer(
             gt.wait_front(2);
             invalidate_l1_cache();  // packed by the compute: no stale RISC cache line
             {
-                auto gt_lock = gt.scoped_read_lock(2);
+                auto gt_lock = GDN_RLK(gt, 2);
                 auto q32 = gt_lock.template get_ptr<volatile uint32_t>();
                 for (uint32_t t = 0; t < T; ++t) {
                     dec_all[t] = q32[tile_elem_index(r0 + t, h & 31u)];
@@ -1082,7 +1105,7 @@ TT_KERNEL void writer(
             float wrep[T];
             float crep = 1.0f;
             if (r_rep > 0) {
-                auto gp_lock = gprev.scoped_write_lock(1);
+                auto gp_lock = GDN_WLK(gprev, 1);
                 auto gp = gp_lock.template get_ptr<volatile uint32_t>();
                 float acc = 1.0f;
                 for (uint32_t i = r_rep; i-- > 0;) {
@@ -1098,7 +1121,7 @@ TT_KERNEL void writer(
             coef.reserve_back(8);
             zero_reserved(coef, noc, GDN_SFPU_GATE ? 7 : 8);  // SFPU_GATE: C (tile 7) is filled by the compute
             {
-                auto c_lock = coef.scoped_write_lock(8);
+                auto c_lock = GDN_WLK(coef, 8);
                 auto c32 = c_lock.template get_ptr<volatile uint32_t>();
                 constexpr uint32_t kNGB = 0, kG = 1024, kE = 2048, kBeta = 3072, kNBE = 4096, kEye = 5120, kW = 6144,
                                    kC = 7168;
@@ -1141,7 +1164,7 @@ TT_KERNEL void writer(
             if (s == 0) {
                 gnew.reserve_back(1);
                 {
-                    auto gn_lock = gnew.scoped_write_lock(1);
+                    auto gn_lock = GDN_WLK(gnew, 1);
                     auto gn = gn_lock.template get_ptr<volatile uint32_t>();
                     // only column 0 is ever read (the next verify's writer and the host park replay take rows r0 ..
                     // r0 + r - 1 of it): zero that column, not the page (a 1024-store fill sat on block 0's
@@ -1278,7 +1301,7 @@ TT_KERNEL void writer(
             gt.wait_front(2);
             invalidate_l1_cache();  // packed by the compute: no stale RISC cache line
             {
-                auto gt_lock = gt.scoped_read_lock(2);
+                auto gt_lock = GDN_RLK(gt, 2);
                 auto q32 = gt_lock.template get_ptr<volatile uint32_t>();
                 for (uint32_t t = 0; t < T; ++t) {
                     dec_all[t] = q32[tile_elem_index(r0 + t, h & 31u)];
@@ -1301,7 +1324,7 @@ TT_KERNEL void writer(
             float wrep[T];
             float crep = 1.0f;
             if (r_rep > 0) {
-                auto gp_lock = gprev.scoped_write_lock(1);
+                auto gp_lock = GDN_WLK(gprev, 1);
                 auto gp = gp_lock.template get_ptr<volatile uint32_t>();
                 float acc = 1.0f;
                 for (uint32_t i = r_rep; i-- > 0;) {
@@ -1317,7 +1340,7 @@ TT_KERNEL void writer(
             coef.reserve_back(8);
             zero_reserved(coef, noc, GDN_SFPU_GATE ? 7 : 8);  // SFPU_GATE: C (tile 7) is filled by the compute
             {
-                auto c_lock = coef.scoped_write_lock(8);
+                auto c_lock = GDN_WLK(coef, 8);
                 auto c32 = c_lock.template get_ptr<volatile uint32_t>();
                 constexpr uint32_t kNGB = 0, kG = 1024, kE = 2048, kBeta = 3072, kNBE = 4096, kEye = 5120, kW = 6144,
                                    kC = 7168;
@@ -1360,7 +1383,7 @@ TT_KERNEL void writer(
             if (s == 0) {
                 gnew.reserve_back(1);
                 {
-                    auto gn_lock = gnew.scoped_write_lock(1);
+                    auto gn_lock = GDN_WLK(gnew, 1);
                     auto gn = gn_lock.template get_ptr<volatile uint32_t>();
                     // only column 0 is ever read (the next verify's writer and the host park replay take rows r0 ..
                     // r0 + r - 1 of it): zero that column, not the page (a 1024-store fill sat on block 0's
@@ -1447,7 +1470,7 @@ TT_KERNEL void writer(
         }
         invalidate_l1_cache();
         {
-            auto gp_lock = gprev.scoped_write_lock(1);
+            auto gp_lock = GDN_WLK(gprev, 1);
             auto gp = gp_lock.template get_ptr<volatile uint32_t>();
             for (uint32_t ub_ = 0; ub_ < nb; ++ub_) {
                 const uint32_t r0u = ub_ * T;
