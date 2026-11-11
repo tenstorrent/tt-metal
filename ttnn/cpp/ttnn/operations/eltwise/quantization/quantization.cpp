@@ -189,6 +189,28 @@ ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     return ttnn::dequantize(input, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::FLOAT32, std::nullopt, std::nullopt);
 }
 
+// Whether requantize can keep its intermediate in the integer domain. (q - z_in) for an 8-bit input is
+// always within [-255, 255], and bfloat16 represents every integer up to 256 exactly, so such an
+// intermediate is lossless at half the width of f32. Dequantizing first instead stores s_in * (q - z_in),
+// a real that needs more than bfloat16's 8 mantissa bits. Anything wider than 8 bits blows past 256 and
+// has to pay for an f32 intermediate.
+bool has_exact_integer_intermediate(const ttnn::DataType input_dtype) {
+    return input_dtype == ttnn::DataType::INT8 || input_dtype == ttnn::DataType::UINT8;
+}
+
+// Forming s_out / s_in costs a kernel launch, and so does the reciprocal quantize takes of a tensor
+// scale, which a scalar scale would not have needed. That is a fixed ~5us the f32 intermediate does
+// not pay, against a saving that grows with the tensor. Measured on N150 against the f32
+// intermediate: +15% at 64 tiles, -2% at 256, -17% at 1024, -28% at 16384. Both paths are
+// numerically identical, so this only picks the cheaper one.
+constexpr uint64_t k_exact_integer_min_tiles = 256;
+
+bool is_worth_exact_integer_intermediate(const ttnn::Tensor& input) {
+    constexpr uint64_t tile_hw = tt::constants::TILE_HW;
+    return has_exact_integer_intermediate(input.dtype()) &&
+           input.logical_volume() >= k_exact_integer_min_tiles * tile_hw;
+}
+
 // Narrow composite's fp result to the output dtype. int8 goes through quantize instead of typecast for
 // saturation since the QUANT kernel clamps to [-128, 127] while typecast wraps modulo 256 (callers here
 // pass unbounded floats).
@@ -508,12 +530,93 @@ Tensor requantize(
                 // Pass axis only to operations that have tensor parameters.
                 constexpr bool has_tensor_in_scale = std::is_same_v<std::decay_t<decltype(in_scale)>, Tensor>;
                 constexpr bool has_tensor_out_scale = std::is_same_v<std::decay_t<decltype(out_scale)>, Tensor>;
+                constexpr bool has_scalar_zero_points =
+                    std::is_same_v<std::decay_t<decltype(in_zero_point)>, int32_t> &&
+                    std::is_same_v<std::decay_t<decltype(out_zero_point)>, int32_t>;
 
                 const std::optional<int> dequant_axis = has_tensor_in_scale ? axis : std::nullopt;
                 const std::optional<int> quant_axis = has_tensor_out_scale ? axis : std::nullopt;
 
+                // Shift into the integer domain and leave the scaling to the quantize step, so the tensor
+                // that round-trips through memory holds exact integers instead of a rounded real. Scaling
+                // by 1.0 keeps the fused dequantize kernel, which reads the 8-bit input directly, and
+                // quantize divides by its scale, so s_out / s_in reproduces (q - z_in) * s_in / s_out with
+                // all of the rounding left to the SFPU's f32. Only scalar zero-points qualify: shifting by
+                // a per-channel zero-point needs a scale tensor to ride alongside it, which a scale-1
+                // dequantize has not got.
+                if constexpr (has_scalar_zero_points && (has_tensor_in_scale || has_tensor_out_scale)) {
+                    if (is_worth_exact_integer_intermediate(input_tensor)) {
+                        const Tensor shifted = dequantize(
+                            input_tensor,
+                            1.0f,
+                            in_zero_point,
+                            std::nullopt,
+                            DataType::BFLOAT16,
+                            std::nullopt,
+                            std::nullopt);
+
+                        const auto as_f32 = [](const Tensor& t) {
+                            return t.dtype() == DataType::FLOAT32 ? t : ttnn::typecast(t, DataType::FLOAT32);
+                        };
+                        const Tensor out_over_in = [&] {
+                            if constexpr (has_tensor_in_scale && has_tensor_out_scale) {
+                                return ttnn::divide(
+                                    as_f32(out_scale),
+                                    as_f32(in_scale),
+                                    std::nullopt,
+                                    std::nullopt,
+                                    std::nullopt,
+                                    none,
+                                    none,
+                                    none);
+                            } else if constexpr (has_tensor_in_scale) {
+                                // rdiv rather than reciprocal-then-multiply: the ratio is a handful of
+                                // elements, so what it costs is a kernel launch, not the arithmetic.
+                                return ttnn::rdiv(as_f32(in_scale), out_scale);
+                            } else {
+                                return ttnn::multiply(
+                                    as_f32(out_scale),
+                                    1.0f / in_scale,
+                                    std::nullopt,
+                                    std::nullopt,
+                                    std::nullopt,
+                                    none,
+                                    none,
+                                    none);
+                            }
+                        }();
+
+                        // The ratio is per-channel only if one of the scales it came from was.
+                        const bool ratio_is_per_channel = [&] {
+                            if constexpr (has_tensor_in_scale) {
+                                if (in_scale.logical_volume() != 1u) {
+                                    return true;
+                                }
+                            }
+                            if constexpr (has_tensor_out_scale) {
+                                if (out_scale.logical_volume() != 1u) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }();
+
+                        return quantize(
+                            shifted,
+                            out_over_in,
+                            out_zero_point,
+                            ratio_is_per_channel ? axis : std::nullopt,
+                            c_dtype,
+                            memory_config,
+                            optional_output_tensor);
+                    }
+                }
+
+                // Either the input is too wide to hold its difference exactly in bfloat16, or the tensor
+                // is too small to earn back the reorder's extra launches. Pay for an f32 intermediate
+                // rather than lose a LSB to the bfloat16 one dequantize would pick by default.
                 const Tensor dequantized = dequantize(
-                    input_tensor, in_scale, in_zero_point, dequant_axis, std::nullopt, std::nullopt, std::nullopt);
+                    input_tensor, in_scale, in_zero_point, dequant_axis, DataType::FLOAT32, std::nullopt, std::nullopt);
                 return quantize(
                     dequantized, out_scale, out_zero_point, quant_axis, c_dtype, memory_config, optional_output_tensor);
             }},

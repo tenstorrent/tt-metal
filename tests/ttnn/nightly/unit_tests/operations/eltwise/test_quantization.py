@@ -1246,6 +1246,47 @@ def test_quantize_per_channel_scalar_zero_point_saturation(device):
     assert comp_tr.abs().max().item() > 127
 
 
+@pytest.mark.parametrize("input_dtype,q_lo,q_hi", [(ttnn.int8, -90, 91), (ttnn.uint8, 0, 101)])
+@pytest.mark.parametrize("in_zero_point", [0, 7])
+@pytest.mark.parametrize("per_channel", [False, True])
+# (64, 96) sits below the tile count at which requantize switches to the exact-integer
+# intermediate, (512, 512) sits on it. Both must give the same exact answer.
+@pytest.mark.parametrize("shape", [(64, 96), (512, 512)])
+def test_requantize_narrow_input_is_exact(device, input_dtype, q_lo, q_hi, in_zero_point, per_channel, shape):
+    """Requantize of an 8-bit input is bit-exact, whichever intermediate the size threshold picks.
+
+    (q - z_in) is an integer within [-255, 255] for an 8-bit input, and bfloat16 holds every integer
+    up to 256, so the composite fallback can keep its intermediate in the integer domain and fold
+    s_in / s_out into the quantize step. That is lossless, unlike storing the dequantized real, which
+    needs more mantissa than bfloat16 has. Scales are kept near 1 and inputs bounded so the result
+    cannot reach the saturation point and hide a rounding error.
+    """
+    torch.manual_seed(0)
+    out_zero_point = 3
+    axis = -1 if per_channel else None
+    axis_size = shape[-1]
+
+    q_tr = torch.randint(q_lo, q_hi, shape, dtype=torch.int32)
+    q_tt = ttnn.from_torch(q_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Ratio held within [0.9, 1.1] so the bounded input cannot requantize past the saturation point.
+    n = axis_size if per_channel else 1
+    out_scale = 0.02
+    in_scale_vec = torch.rand(n, dtype=torch.float32) * 0.004 + 0.018
+    in_scale_tt = ttnn.from_torch(in_scale_vec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    bshape = [1] * len(shape)
+    bshape[-1] = n
+    ratio = (in_scale_vec / out_scale).reshape(bshape)
+    golden = torch.round((q_tr.to(torch.float32) - in_zero_point) * ratio) + out_zero_point
+    assert golden.abs().max() <= 127, "test inputs must stay clear of the saturation point"
+
+    out = ttnn.to_torch(
+        ttnn.requantize(q_tt, in_scale_tt, in_zero_point, out_scale, out_zero_point, axis=axis, dtype=ttnn.int32)
+    ).to(torch.float32)
+    assert torch.equal(out, golden)
+
+
 NARROW_INPUT_DTYPES = [(ttnn.uint8, torch.uint8, 0, 256), (ttnn.int8, torch.int8, -128, 128)]
 
 
