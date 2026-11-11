@@ -871,6 +871,22 @@ def test_run_args_must_match_the_kernels(device, cache_hit, expect_error):
         run_with(add_common_arg)
 
 
+@pytest.mark.parametrize("duplicate", ["kernel", "tensor_parameter"])
+def test_a_name_declared_twice_gets_metals_error(device, duplicate, expect_error):
+    """generic_op's checks go by name, so a spec that declares a kernel or a tensor parameter twice gets past them to
+    Metal's check, which names the duplicate."""
+    _, a, b, out = inputs(device)
+    spec, run_args = mul_program(a, b, out)
+    if duplicate == "kernel":
+        spec.kernels = spec.kernels + [spec.kernels[0]]
+        message = "Duplicate KernelSpec name 'reader'"
+    else:
+        spec.tensor_parameters = spec.tensor_parameters + [spec.tensor_parameters[0]]
+        message = "Duplicate TensorParameter name 'a'"
+    with expect_error(RuntimeError, message):
+        E.generic_op([a, b, out], spec, run_args)
+
+
 @pytest.mark.parametrize("cache_hit", [False, True], ids=["first_call", "later_call"])
 def test_arrays_are_checked_on_every_call(device, cache_hit, expect_error):
     _, a, b, out = inputs(device)
@@ -965,6 +981,10 @@ def mesh_range(device):
     return ttnn.MeshCoordinateRange(device.shape)
 
 
+def one_device(column):
+    return ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, column), ttnn.MeshCoordinate(0, column))
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_a_range_over_a_device_without_a_tensor_is_rejected(mesh_device, expect_error):
     """A program runs on every device of its mesh range, so each of them must hold every tensor."""
@@ -990,6 +1010,76 @@ def test_a_range_over_a_device_without_a_tensor_is_rejected(mesh_device, expect_
             E.MeshProgramSpec(programs=[(whole_mesh, spec)]),
             E.MeshProgramRunArgs(programs=[(whole_mesh, run_args)]),
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_mesh_form_runs_a_program_of_its_own_on_each_device(mesh_device):
+    """Each range runs its own program with its own run args, on a cache hit too, and the ranges are part of the key."""
+    first, second = one_device(0), one_device(1)
+    _, a, b, out = inputs(mesh_device, seed=21)
+    torch_a, torch_b = (ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]) for tensor in (a, b))
+    mul_spec, mul_args = mul_program(a, b, out)
+    add_spec, add_args = mul_program(a, b, out)
+    kernels = add_spec.kernels
+    kernels[1].compiler_options = E.KernelSpec.CompilerOptions(defines={"BINARY_ADD": "1"})
+    add_spec.kernels = kernels
+
+    def run(programs, run_args, output):
+        result = E.generic_op(
+            [a, b, output], E.MeshProgramSpec(programs=programs), E.MeshProgramRunArgs(programs=run_args)
+        )
+        return [tile_order(ttnn.to_torch(shard)) for shard in ttnn.get_device_tensors(result)]
+
+    mul, add = tile_order(torch_a * torch_b), tile_order(torch_a + torch_b)
+    on_first, on_second = run([(first, mul_spec), (second, add_spec)], [(first, mul_args), (second, add_args)], out)
+    assert_close(mul, on_first)
+    assert_close(add, on_second)
+
+    # A cache hit, with the run args listed in the other order and only 3 tiles for the second device's program.
+    initial = torch.full((1, 1, 64, 64), 7.0, dtype=torch.bfloat16)
+    out2 = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    _, mul_args2 = mul_program(a, b, out2)
+    _, add_args2 = mul_program(a, b, out2, tile_limit=3)
+    entries = mesh_device.num_program_cache_entries()
+    on_first, on_second = run([(first, mul_spec), (second, add_spec)], [(second, add_args2), (first, mul_args2)], out2)
+    assert mesh_device.num_program_cache_entries() == entries
+    assert_close(mul, on_first)
+    assert_close(add[: 3 * 1024], on_second[: 3 * 1024])
+    assert torch.equal(on_second[3 * 1024 :], tile_order(initial)[3 * 1024 :])
+
+    # The same programs on swapped devices key a new entry, since each program's range is part of the key.
+    on_first, on_second = run([(second, mul_spec), (first, add_spec)], [(second, mul_args), (first, add_args)], out)
+    assert mesh_device.num_program_cache_entries() == entries + 1
+    assert_close(add, on_first)
+    assert_close(mul, on_second)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_the_program_spec_form_runs_on_the_devices_of_its_tensors(mesh_device, expect_error):
+    """With its tensors on one device of the mesh, the program runs on that device only, and a later call with the
+    same key but a tensor on another device is rejected."""
+    expected, a, b, _ = inputs(mesh_device, seed=22)
+    initial = torch.full((1, 1, 64, 64), 7.0, dtype=torch.bfloat16)
+    out = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    (_, a1), (_, b1), (out0, out1) = (ttnn.get_device_tensors(tensor) for tensor in (a, b, out))
+    spec, run_args = mul_program(a1, b1, out1)
+    entries = mesh_device.num_program_cache_entries()
+    assert_close(expected, ttnn.to_torch(E.generic_op([a1, b1, out1], spec, run_args)))
+    assert torch.equal(ttnn.to_torch(out0), initial)
+
+    # The MeshProgramSpec form over the tensors' device keys the same entry.
+    E.generic_op(
+        [a1, b1, out1],
+        E.MeshProgramSpec(programs=[(one_device(1), spec)]),
+        E.MeshProgramRunArgs(programs=[(one_device(1), run_args)]),
+    )
+    assert mesh_device.num_program_cache_entries() == entries + 1
+
+    # a1 decides the devices, so this call keys the same entry, but its output is on the other device.
+    _, run_args0 = mul_program(a1, b1, out0)
+    with expect_error(RuntimeError, r"a program runs on device .*, which does not hold io_tensors\[2\]"):
+        E.generic_op([a1, b1, out0], spec, run_args0)
+    assert mesh_device.num_program_cache_entries() == entries + 1
 
 
 def test_mesh_form(device):
@@ -1084,7 +1174,7 @@ def test_mesh_form_checks_its_ranges(device, expect_error):
             E.MeshProgramSpec(programs=[(whole_mesh, spec), (whole_mesh, spec)]),
             E.MeshProgramRunArgs(programs=[(whole_mesh, run_args), (whole_mesh, run_args)]),
         )
-    with expect_error(RuntimeError, "has 1 programs, but the MeshProgramRunArgs has run args for 2"):
+    with expect_error(RuntimeError, r"have different numbers of programs \(1 and 2\)"):
         E.generic_op(
             [a, b, out],
             E.MeshProgramSpec(programs=[(whole_mesh, spec)]),

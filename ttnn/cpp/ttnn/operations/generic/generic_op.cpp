@@ -59,7 +59,7 @@ ProgramSpecAttributes make_program_spec_attributes(
     TT_FATAL(!programs.empty(), "generic_op: the MeshProgramSpec has no programs");
     TT_FATAL(
         mesh_run_args.programs.size() == programs.size(),
-        "generic_op: the MeshProgramSpec has {} programs, but the MeshProgramRunArgs has run args for {}",
+        "generic_op: the MeshProgramSpec and the MeshProgramRunArgs have different numbers of programs ({} and {})",
         programs.size(),
         mesh_run_args.programs.size());
     ProgramSpecAttributes attributes;
