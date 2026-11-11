@@ -87,6 +87,19 @@ def interpolate(table, position):
     return table[-1][1]
 
 
+# The second-trial rule (lead's ruling (iii) on the M2 item-3 follow-up, 2026-11-11). A request's first trial is
+# judged on one verify from an uninformed prior, and a request that failed it was never offered another within its
+# length: V4's code request, whose first verify accepts 0 and nearly every later one is high, declined its other
+# 254 steps (bench/resident/m2_delta/DEVICE_VALIDATION.md, V4). Now a trial that exits before any hold decision has
+# judged the request's own acceptance re-primes the request (a fresh spec_policy, its bucket full) RETRY_AFTER plain
+# proposals later, at most RETRY_LIMIT times, each gap RETRY_GROWTH times the last. Counted in the request's own
+# proposals, so it stays request-intrinsic and deterministic. Chosen by replay over 13 per-verify traces:
+# bench/resident/m2/second_trial_replay.py.
+RETRY_AFTER = 16
+RETRY_LIMIT = 1
+RETRY_GROWTH = 4
+
+
 def policy_mode():
     """GEMMA4_RESIDENT_SPEC_POLICY: adaptive (spec_policy, the default), force (draft on every speculable step: the
     gates' "policy forced on"), or never (no entry ever: the regression's F2 run, the speculative adapter loaded but
@@ -109,7 +122,8 @@ class ResidentSpecPolicy:
     differ at a near-tie), are then a function of its own tokens and its own acceptance. Before, the bucket was 0 at
     server start and never reset, so the first request after start declined every step for "budget" (e1e).
     The costs are the fixed priors above (PRIOR_PLAIN_MS, PRIOR_VERIFY_MS, PRIOR_DRAFT_MS 7.67, PRIOR_SEED_MS 11.5,
-    SERVED_HOST_MS 0.87). Calibration is deliberately left unfed: no wall-clock measurement reaches a decision."""
+    SERVED_HOST_MS 0.87). Calibration is deliberately left unfed: no wall-clock measurement reaches a decision.
+    A failed uninformed trial schedules a retry trial from a fresh policy (RETRY_AFTER, the second-trial rule)."""
 
     k: int
     mode: str = field(default_factory=policy_mode)
@@ -117,13 +131,21 @@ class ResidentSpecPolicy:
     def __post_init__(self):
         self.force = self.mode == "force"
         self.config = SpecPolicyConfig.from_env()
+        self.retry_after, self.retry_limit, self.retry_growth = RETRY_AFTER, RETRY_LIMIT, RETRY_GROWTH
         self.new_request()
 
     def new_request(self):
+        self._fresh()
+        self.steps = 0
+        self.retries = 0
+        self.retry_in = None  # plain proposals until the scheduled retry trial, or None
+
+    def _fresh(self):
+        """A fresh spec_policy: the request's start, and a retry's re-prime."""
         self.policy = SpecPolicy(self.config, self.k)
         self.row = self.policy.new_row()
-        self.steps = 0
         self.primed = False
+        self.informed = False  # a hold decision has judged this policy's run on the request's own acceptance
 
     def decide(self, position, entering):
         """Whether this proposal drafts. In hold a False is the exit; in the plain regime a True is an entry
@@ -131,6 +153,12 @@ class ResidentSpecPolicy:
         self.steps += 1
         if self.mode != "adaptive":
             return self.mode == "force"
+        if entering and self.retry_in is not None:
+            self.retry_in -= 1
+            if self.retry_in == 0:
+                self.retry_in = None
+                self.retries += 1
+                self._fresh()
         plain = interpolate(PRIOR_PLAIN_MS, position)
         cost = interpolate(PRIOR_VERIFY_MS, position) + PRIOR_DRAFT_MS
         shape = (1, self.k)
@@ -146,7 +174,15 @@ class ResidentSpecPolicy:
         candidate = RecordCandidate(shape, VERIFY_ROWS, cost, PRIOR_SEED_MS if entering else 0.0,
                                     tokens_per_row=measured)
         fresh = int(getattr(self.row, "spec_steps", 0)) == 0
-        return self.policy.decide([candidate], [self.row], plain, self.k, None, fresh=fresh) is not None
+        speculate = self.policy.decide([candidate], [self.row], plain, self.k, None, fresh=fresh) is not None
+        if entering:
+            if speculate:
+                self.retry_in = None  # entered by spec_policy's own rules: no retry is pending
+        elif speculate:
+            self.informed = self.informed or self.policy.last_reason not in ("trial", "retry")
+        elif not self.informed and self.retries < self.retry_limit:
+            self.retry_in = self.retry_after * self.retry_growth ** self.retries  # a failed uninformed trial
+        return speculate
 
     def observe(self, accepted, verified):
         self.policy.observe(self.row, int(accepted), int(verified))

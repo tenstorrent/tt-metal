@@ -21,6 +21,8 @@ import ttnn
 from models.demos.gemma4_31b_qb2.tt import resident_taps as rt
 from models.demos.gemma4_31b_qb2.tt.generator_resident_spec_vllm import (
     PLACEHOLDER_TOKEN_ID,
+    RETRY_AFTER,
+    RETRY_LIMIT,
     policy_mode,
     Gemma4ResidentSpecForCausalLM,
     ResidentSpecPolicy,
@@ -732,13 +734,16 @@ def test_policy_first_proposal_trials():
 
 def test_policy_zero_acceptance_exits_after_trial():
     """A request whose drafts are never accepted holds its trial for trial_limit steps, then exits; the plain
-    stretch after the exit is governed by the retry rules (no re-entry within the next 32 proposals)."""
+    stretch after the exit declines until the second-trial rule's one retry, RETRY_AFTER proposals later, a fresh
+    trial that fails the same way; then no re-entry for the rest of the request (RETRY_LIMIT 1)."""
     policy = ResidentSpecPolicy(K_DRAFT, mode="adaptive")
     out = drive(policy, "zero")
     limit = policy.config.trial_steps
     held = next(i for i, (_, regime, _, _) in enumerate(out) if regime == "plain")
     assert 1 <= held <= limit + 1, (held, limit, out[: limit + 3])
-    assert not any(ok for _, _, ok, _ in out[held: held + 32])
+    assert not any(ok for _, _, ok, _ in out[held: held + RETRY_AFTER])
+    assert out[held + RETRY_AFTER][2:] == (True, "trial")
+    assert RETRY_LIMIT == 1 and not any(ok for _, _, ok, _ in out[held + RETRY_AFTER + 1:])
 
 
 def test_policy_decisions_never_read_time(monkeypatch):
@@ -764,6 +769,87 @@ def test_policy_decisions_never_read_time(monkeypatch):
         return out
 
     assert run(0.011, 0.0) == run(0.025, 0.4)
+
+
+V5_FORCE_CHUNKS = {  # V5 (policy force), bench/resident/m2_delta/session_e2_force/accept_stream.json: the prefill's
+    # token, the first plain step, then one chunk per verify (accepted + 1)
+    "code": [1, 1, 1, 8, 6, 8, 8, 8, 8, 8, 8, 7, 4, 8, 3, 2, 8, 1, 1, 4, 1, 2, 8, 6, 1, 1, 1, 2, 1, 8, 7, 1, 3, 7, 2, 4,
+             1, 1, 8, 1, 3, 4, 1, 1, 1, 8, 2, 8, 3, 5, 2, 1, 7, 1, 1, 1, 4, 6, 1, 1, 1, 1, 5, 1, 8, 8, 2],
+    "prose": [1, 1, 8, 8, 3, 8, 8, 2, 3, 3, 1, 1, 2, 8, 1, 2, 3, 1, 1, 3, 3, 1, 8, 2, 1, 2, 1, 1, 1, 8, 2, 2, 3, 3, 1,
+              1, 4, 3, 8, 1, 1, 2, 3, 1, 2, 3, 1, 2, 5, 6, 1, 1, 1, 1, 2, 8, 4, 5, 3, 8, 2, 2, 4, 2, 4, 7, 2, 3, 1, 2,
+              2, 8, 4, 3, 6, 1, 3, 1, 2, 8, 5],
+    "math": [1, 1, 5, 2, 5, 3, 8, 8, 8, 8, 8, 8, 8, 8, 8, 2, 8, 3, 2, 3, 2, 8, 7, 8, 3, 1, 8, 8, 8, 4, 8, 8, 8, 8, 3, 2,
+             3, 8, 8, 8, 8, 8, 6, 6],
+}
+
+
+def drive_trace(policy, chunks, prompt, total=256):
+    """A request through the adapter's decision path with position-true acceptance: a verify anchored after t
+    committed tokens commits what is left of the trace's chunk that contains t, at least 1 (no trace: nothing is
+    ever accepted). As bench/resident/m2/second_trial_replay.py. Returns (tokens committed at each entry, drafts
+    accepted)."""
+    spans, t = [], 0
+    for i, c in enumerate(chunks or []):
+        spans.append((t, t + c, i >= 2))
+        t += c
+
+    def commit(t):
+        return next((max(1, e - t) if verify else 1 for a, e, verify in spans if a <= t < e), 1)
+
+    policy.new_request()
+    regime, offer, t, entries, accepted = "plain", False, 1, [], 0
+    while t < total:
+        c = min(commit(t), total - t) if offer else 1
+        if offer:
+            policy.observe(c - 1, K_DRAFT)
+            accepted += c - 1
+        t += c
+        if t >= total:
+            break
+        if regime == "hold":
+            offer = policy.decide(prompt + t, entering=False)
+            if not offer:
+                regime = "plain"
+                policy.plain()
+        else:
+            offer = policy.decide(prompt + t, entering=True)
+            if offer:
+                regime = "hold"
+                entries.append(t)
+    policy.new_request()
+    return entries, accepted
+
+
+def without_retries():
+    policy = ResidentSpecPolicy(K_DRAFT, mode="adaptive")
+    policy.retry_limit = 0
+    return policy
+
+
+def test_failed_first_trial_retries_after_retry_after_proposals():
+    """The second-trial rule, replayed on V5's real code trace. Code's first verify accepts 0 and nearly every later
+    one is high: without the rule the request enters once and accepts nothing (V4's 1 seed, 0 accepted, 254
+    declines); with it, the retry trial RETRY_AFTER proposals after the exit enters and the request speculates on."""
+    assert (RETRY_AFTER, RETRY_LIMIT) == (16, 1)
+    assert drive_trace(without_retries(), V5_FORCE_CHUNKS["code"], 43) == ([2], 0)
+    rule = ResidentSpecPolicy(K_DRAFT, mode="adaptive")
+    assert drive_trace(rule, V5_FORCE_CHUNKS["code"], 43) == ([2, 3 + RETRY_AFTER], 175)
+
+
+def test_second_trial_rule_leaves_passing_and_short_requests_alone():
+    """Prose and math (V5) pass their first trial, so the rule never fires: the same entries and acceptance with and
+    without it. A 16-token request that accepts nothing ends before its retry would land (one trial, as before); a
+    256-token one gets exactly one retry (RETRY_LIMIT). A retry still pending when a request ends does not reach the
+    next request."""
+    for name, prompt in (("prose", 39), ("math", 73)):
+        rule = ResidentSpecPolicy(K_DRAFT, mode="adaptive")
+        trace = V5_FORCE_CHUNKS[name]
+        assert drive_trace(rule, trace, prompt) == drive_trace(without_retries(), trace, prompt)
+    policy = ResidentSpecPolicy(K_DRAFT, mode="adaptive")
+    assert drive_trace(policy, None, 128, total=16) == ([2], 0)
+    assert policy.retry_in is None and policy.retries == 0  # released with its retry pending: reset
+    assert drive_trace(policy, None, 128, total=256) == ([2, 3 + RETRY_AFTER], 0)
+    assert drive_trace(policy, V5_FORCE_CHUNKS["code"], 43) == ([2, 3 + RETRY_AFTER], 175)
 
 
 @pytest.mark.parametrize("mode, expected", [("force", True), ("never", False)])
