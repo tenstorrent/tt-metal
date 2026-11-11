@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string>
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include <algorithm>
@@ -1129,13 +1131,19 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     };
 
     // KERNEL CREATION
+    // (experiment RING_AG_SWAP_NOC=1: the sender reader - DRAM reads - on NOC0 and the sender writer on NOC1, instead of
+    // the reader on NOC1 next to the fabric routers' NOC1 DRAM writes; BH DRAM reads + writes on one NoC endpoint)
+    const bool ag_swap_noc = std::getenv("RING_AG_SWAP_NOC") != nullptr && std::string(std::getenv("RING_AG_SWAP_NOC")) == "1";
+    using AgCfg = decltype(KernelDescriptor{}.config);
+    const AgCfg ag_reader_cfg = ag_swap_noc ? AgCfg{ReaderConfigDescriptor{}} : AgCfg{WriterConfigDescriptor{}};
+    const AgCfg ag_writer_cfg = ag_swap_noc ? AgCfg{WriterConfigDescriptor{}} : AgCfg{ReaderConfigDescriptor{}};
     // Forward Direction
     // Reader
     KernelDescriptor sender_reader_forward_kernel{};
     sender_reader_forward_kernel.kernel_source = exchange_reader_kernel_source;
     sender_reader_forward_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     sender_reader_forward_kernel.core_ranges = sender_forward_core_ranges;
-    sender_reader_forward_kernel.config = WriterConfigDescriptor{};
+    sender_reader_forward_kernel.config = ag_reader_cfg;
     sender_reader_forward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_forward_cb_index, kForwardDirection);
 
@@ -1144,7 +1152,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_forward_kernel.kernel_source = exchange_writer_kernel_source;
     sender_writer_forward_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     sender_writer_forward_kernel.core_ranges = sender_forward_core_ranges;
-    sender_writer_forward_kernel.config = ReaderConfigDescriptor{};
+    sender_writer_forward_kernel.config = ag_writer_cfg;
     sender_writer_forward_kernel.compile_time_args = make_writer_compile_time_args(
         sender_forward_cb_index,
         reserved_packet_header_forward_CB_index,
@@ -1157,7 +1165,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_reader_backward_kernel.kernel_source = exchange_reader_kernel_source;
     sender_reader_backward_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     sender_reader_backward_kernel.core_ranges = sender_backward_core_ranges;
-    sender_reader_backward_kernel.config = WriterConfigDescriptor{};
+    sender_reader_backward_kernel.config = ag_reader_cfg;
     sender_reader_backward_kernel.compile_time_args =
         make_reader_compile_time_args(sender_backward_cb_index, kBackwardDirection);
 
@@ -1166,7 +1174,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     sender_writer_backward_kernel.kernel_source = exchange_writer_kernel_source;
     sender_writer_backward_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     sender_writer_backward_kernel.core_ranges = sender_backward_core_ranges;
-    sender_writer_backward_kernel.config = ReaderConfigDescriptor{};
+    sender_writer_backward_kernel.config = ag_writer_cfg;
     sender_writer_backward_kernel.compile_time_args = make_writer_compile_time_args(
         sender_backward_cb_index,
         reserved_packet_header_backward_CB_index,
