@@ -47,6 +47,9 @@ static uint32_t g_rd_sp_lay = 0;  // GDN layers done by this reader (sp ring off
 #if GDN_OUT_RD
 void gdn_out_signal();  // the including TU (out_ready +1 / the aggregator, issued on this kernel's NOC)
 #endif
+#if GDN_OUT_RD == 2
+void gdn_out_local(uint32_t src_l1, uint32_t t0, uint32_t n);  // engine gdn_out: the out tiles into every GDN core's A (TU)
+#endif
 #ifndef GDN_CUT_FAST
 #define GDN_CUT_FAST 0  // engine GDN role (BATCH): masked K_u / Q_u slots (kts, kmq) keep their zeros across uses: only the
                         // previous occupant's T rows are re-zeroed (no full-tile zero fill + barrier per tile)
@@ -751,10 +754,17 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             DeviceZoneScopedN("rd_owr");  // the out tile write + its barrier + the out signal
             const uint32_t entry = out.get_entry_size();
             const uint32_t page0 = tr * (Nv * Vt) + h * Vt + s * Vs;
+#if GDN_OUT_RD == 2
+            // engine gdn_out (MKA_GDNOUT): the out tiles go to every GDN core's A (multicast + barrier + gdna), not `out`
+            (void)out_acc;
+            (void)entry;
+            gdn_out_local(out.get_read_ptr(), page0 - tr * (Nv * Vt), Vs);
+#else
             for (uint32_t t = 0; t < Vs; ++t) {
                 noc.async_write(out, out_acc, entry, {.offset_bytes = t * entry}, {.page_id = page0 + t});
             }
             noc.async_write_barrier();
+#endif
             out.pop_front(Vs);
             gdn_out_signal();
         }
