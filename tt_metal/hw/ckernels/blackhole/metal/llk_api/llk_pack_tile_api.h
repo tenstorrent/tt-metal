@@ -877,41 +877,12 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
     }
 }
 
-// The tile counts at which every output the kernel configures packs per tile from every state and context: bit n - 1, counts above 16
-// take the bit of 16. Built at compile time, so a block of such a constant count looks nothing up, whatever its output.
-template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
-struct llk_pack_per_tile_counts_t {
-    std::uint32_t counts;
-    constexpr llk_pack_per_tile_counts_t() : counts(0) {
-        const auto& words = llk_pack_form_words<is_fp32_dest_acc_en, matmul_kt>.w;
-        const auto& words_mm = llk_pack_form_words_mm<is_fp32_dest_acc_en, matmul_kt>.w;
-        std::uint32_t any = 0;
-        for (std::uint32_t i = 0; i < sizeof(pack_dst_format); i++) {
-            const std::uint32_t fmt = pack_dst_format[i];
-            const bool int8 = fmt == static_cast<std::uint32_t>(DataFormat::Int8) || fmt == static_cast<std::uint32_t>(DataFormat::UInt8);
-            if (fmt == static_cast<std::uint32_t>(DataFormat::Invalid) || (!is_fp32_dest_acc_en && int8)) {
-                continue;
-            }
-            const std::uint32_t row = llk_pack_class_tab.row[i];
-            for (std::uint32_t state = 0; state < 3; state++) {
-                any |= words[0][state][row] | words[1][state][row] | words_mm[0][state][row];
-            }
-        }
-        for (std::uint32_t bit = 0; bit < 16; bit++) {
-            if (((any >> (2 * bit)) & 3) == 0) {
-                counts |= 1u << bit;
-            }
-        }
-    }
-};
-template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
-inline constexpr llk_pack_per_tile_counts_t<is_fp32_dest_acc_en, matmul_kt> llk_pack_per_tile_counts{};
-
 // guard_dest_straddle: two block-float tiles at DEST tiles 3 and 4 read 6 cycles slower closed than per tile, so a caller with a variable start tile takes the per-tile path.
 // Off by default, the check costs instructions in the callers that pass 0.
 // matmul_kt: the K tiles per output block of the matmul that filled DEST, where the caller knows it at compile time; 0 takes the forms no K reads slower than per tile.
-template <bool is_fp32_dest_acc_en, bool guard_dest_straddle = false, std::uint32_t matmul_kt = 0>
-__attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, bool guard_dest_straddle = false, std::uint32_t matmul_kt = 0>
+__attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output) {
+    static_assert(ntiles > 0, "pack_block packs at least one tile");
     std::uint8_t output_id = get_output_id(output);
 #ifndef LLK_PACK_W_OFFSET
     _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
@@ -932,22 +903,17 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    // With a constant output and tile count the forms of every state fold at compile time (0 otherwise): a block of one form reads no
-    // state, and a kernel whose blocks never take W keeps no W state, so its per-tile packs are main's. A constant count that every
-    // output of the kernel packs per tile folds the same way when the output is known only later.
+    // With a constant output the forms of every state fold at compile time (0 otherwise): a block of one form reads no state, and a
+    // kernel whose blocks never take W keeps no W state, so its per-tile packs are main's.
     std::uint32_t forms = 0;
-    if (__builtin_constant_p(ntiles) &&
-        ((llk_pack_per_tile_counts<is_fp32_dest_acc_en, matmul_kt>.counts >> ((ntiles < 16 ? ntiles : 16) - 1)) & 1) != 0) {
-        forms = 1;
-    } else if (__builtin_constant_p(output_id) && __builtin_constant_p(ntiles)) {
+    if (__builtin_constant_p(output_id)) {
         const std::uint32_t ctx = llk_pack_context();
         forms = ctx == 0 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0)
                          : (ctx == 1 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
                                      : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     }
-    // A count known only at run time packs per tile, as main. The last output is still marked: these packs move the
-    // packer's output base without invalidating the W offset of another output.
-    if (forms == 1 || !__builtin_constant_p(ntiles)) {
+    // The last output is still marked: these packs move the packer's output base without invalidating the W offset of another output.
+    if (forms == 1) {
 #ifdef LLK_PACK_W_OFFSET
         llk_pack_state_set_half(output_id + 1);
 #endif

@@ -138,7 +138,7 @@ def output_class(dst_format, num_faces=4, face_r_dim=16):
 
 
 def pack_block_form(ntiles, dst_format, state, fp32_dest=False, full_sync=False, hifi=False, num_faces=4, face_r_dim=16, matmul_kt=0, src32=False, after_matmul=True, u2d=True, pack_sfpu=False):
-    """Form of one llk_pack_block call with a compile-time tile count (a count known only at run time packs per tile, as main); state is init (first block after a pack init or another output), reconf (first block after a packer reconfigure) or next (the block continues the output).
+    """Form of one pack_block<ntiles> call (pack_block with the count as a function argument packs per tile, as main); state is init (first block after a pack init or another output), reconf (first block after a packer reconfigure) or next (the block continues the output).
     src32: a Float32, Int32 or UInt32 CB sits in the kernel's CB list (the output's own CB counts, for its unpack source format is its format).
     u2d: a CB of the kernel unpacks to DEST (LLK_UNPACK_TO_DEST_ANY); the form tables of the 32 bit input family need it, the masks do not.
     after_matmul: the math context byte of pack_ctx is matmul (the last FPU op init on the pack thread was a matmul init); without it and without the K the masks of the other contexts apply (groups 4, 5).
@@ -297,7 +297,7 @@ def test_header_logic_matches_mirror():
     src = " ".join(API.read_text().split())
     assert "const std::uint32_t column = (DST_SYNC_MODE == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);" in src
     assert "const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;" in src
-    assert "if (forms == 1 || !__builtin_constant_p(ntiles)) {" in src
+    assert "if (forms == 1) {" in src
     assert "if (!is_fp32_dest_acc_en && llk_pack_dst_is_int8(output_id)) { return 'T'; }" in src
     assert "const std::uint32_t bit = column * 16 + count;" in src
     assert "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;" in src
