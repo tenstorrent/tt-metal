@@ -107,11 +107,13 @@ FORCE_INLINE uint64_t dma_addr(uint64_t noc_addr) { return routed_addr(lookup(no
 // The iDMA address of @p flat, a flat address in this CCE's SRAM, either view. Needs risc_init()'s my_x / my_y.
 FORCE_INLINE uint64_t local_dma_addr(uint32_t flat) { return dma_addr(NOC_XY_ADDR(my_x[0], my_y[0], flat)); }
 
-// The address a CPU load or store uses for @p noc_addr: on this CCE its local part as given (either view), on another
-// tile the system address.
+// The address a CPU load or store uses for @p noc_addr: on this CCE the uncached view of its local part, on another
+// tile the system address. Either way the access reaches SRAM, where this CCE's other harts and the iDMA see it, as a
+// NOC write would; a store through the cached view can stay in this hart's data cache.
 FORCE_INLINE uintptr_t cpu_addr(uint64_t noc_addr) {
     const Target target = lookup(noc_addr);
-    return target.kind == CceNocRouteKind::THIS_CCE ? target.local : routed_addr(target);
+    return target.kind == CceNocRouteKind::THIS_CCE ? MEM_IERISC_UNCACHED_BASE + sram_offset(target.local)
+                                                    : routed_addr(target);
 }
 
 // Issues one iDMA copy of @p len bytes between two iDMA addresses, programming the whole command buffer as chippy's
