@@ -490,6 +490,7 @@ def setup_bench(dev, MESH, mesh_identity):
     KVA = os.environ.get('MKA_KVA', '0') == '1'
     KVA_T, KVA_NUT, KVA_STEPS, KVA_EXT, KVA_PTT = 4, 0, [], {}, None
     KVA_RQ, KVA_OWNG = False, list(range(NU))
+    KVA_OWNALL = None   # mesh + UPAR: {user row g -> local KV user} for both parities
     if KVA:
         assert KVPROD, 'MKA_KVA (bench) needs MKA_KVPROD=1'   # MESH: replicated kvpos / page table (mesh path untested)
         KVA_NUT = int(os.environ.get('MKA_KVA_NU', str(2 * NU if NU == 4 else NU)))
@@ -520,6 +521,9 @@ def setup_bench(dev, MESH, mesh_identity):
             KVA_NUT = 8
             _upar, _par = os.environ.get('MKA_UPAR', '0') == '1', int(os.environ.get('MKA_UPAR_PAR', '0')) % 2
             KVA_OWNG = [2 * u + _par if _upar else u for u in range(NU)]
+            # mesh + UPAR: devices of BOTH parities attend, so every user row g is real (own user g // 2 of its parity's
+            # devices, same local KV data u = g // 2 on every device); the append's special rows (other users) only on 1 chip
+            if _upar and MESH: KVA_OWNALL = {g_: g_ // 2 for g_ in range(2 * NU)}
             _p0e = os.environ.get('MKA_RQPOS_P0', '')
             if _p0e: _p0 = [int(x_) for x_ in _p0e.split(',')]
             elif os.environ.get('MKA_RQPOS_RAG', '0') == '1': _p0 = [CTX - 4 - 226, CTX - 4, 997, CTX - 201, 5000, CTX - 4, CTX - 61, 77]
@@ -527,7 +531,7 @@ def setup_bench(dev, MESH, mesh_identity):
             _k = int(os.environ.get('MKA_RQPOS_K', '8'))
             _kp = [(_p0[g_] + j_ if (_p0[g_] >= 0 and g_ < _k) else -1) for g_ in range(8) for j_ in range(KVA_T)]
             if os.environ.get('MKA_RQPOS_RAG', '0') == '1': _kp[3 * KVA_T + 1] = _kp[3 * KVA_T + 3] = -1   # partial HOLD
-            for i_, g_ in enumerate([g_ for g_ in range(8) if g_ not in KVA_OWNG]):
+            for i_, g_ in enumerate([g_ for g_ in range(8) if g_ not in (KVA_OWNALL or KVA_OWNG)]):
                 c_ = [[(2500 + 37 * i_) * KVBS + KVBS - 2 + j for j in range(4)], [KVA_PTW * KVBS - 4 + j for j in range(4)],
                       [KVA_PTW * KVBS + j for j in range(4)], [-1] * 4][i_ % 4]
                 _kp[g_ * KVA_T:(g_ + 1) * KVA_T] = c_
@@ -540,8 +544,9 @@ def setup_bench(dev, MESH, mesh_identity):
             assert all(p_ < CTX for s_ in KVA_STEPS for p_ in s_[KVA_OWNG[u] * 4:(KVA_OWNG[u] + 1) * 4]), 'own rows past MKA_CTX'
         _pt = torch.zeros(KVA_NUT, KVA_PTW, dtype=torch.int32)
         for u in range(NU): _pt[KVA_OWNG[u], :BPU] = torch.arange(u * BPU, (u + 1) * BPU, dtype=torch.int32)
+        for g_, u_ in (KVA_OWNALL or {}).items(): _pt[g_, :BPU] = torch.arange(u_ * BPU, (u_ + 1) * BPU, dtype=torch.int32)
         _nx = NU * BPU
-        for u in [g_ for g_ in range(KVA_NUT) if g_ not in KVA_OWNG]:
+        for u in [g_ for g_ in range(KVA_NUT) if g_ not in (KVA_OWNALL or KVA_OWNG)]:
             for s_ in KVA_STEPS:
                 for p_ in s_[u * 4:(u + 1) * 4]:
                     vb_ = p_ // KVBS
@@ -1505,8 +1510,9 @@ def setup_bench(dev, MESH, mesh_identity):
         def _kva_regold(L):   # SDPA (and wo) golden over the cache as the engine left it
             kq_, vq_ = KVQ[L]
             if KVA_RQ:   # ragged: refresh each own user's blocks that hold its new rows, then the RQPOS golds
-                for u_ in range(NU):
-                    for vb_ in sorted({p_ // KVBS for p_ in KVA_STEPS[0][KVA_OWNG[u_] * 4:(KVA_OWNG[u_] + 1) * 4] if p_ >= 0}):
+                for u_ in range(NU):   # (mesh + UPAR: both parities' rows land in local user u's blocks)
+                    _gs = [g_ for g_, v_ in KVA_OWNALL.items() if v_ == u_] if KVA_OWNALL else [KVA_OWNG[u_]]
+                    for vb_ in sorted({p_ // KVBS for g_ in _gs for p_ in KVA_STEPS[0][g_ * 4:(g_ + 1) * 4] if p_ >= 0}):
                         kq_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvs[L], u_ * BPU + vb_)
                         vq_[u_, vb_ * KVBS:(vb_ + 1) * KVBS] = _kva_blk(kvvs[L], u_ * BPU + vb_)
                 rq_gold(L, gold_qkv[L])
