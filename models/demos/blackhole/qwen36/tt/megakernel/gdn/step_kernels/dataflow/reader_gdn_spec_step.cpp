@@ -947,8 +947,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #if GSTEP_KTSLATE
         kts_cuts();
 #endif
-        if (false)
-#endif
+#else
         // kmq stream in the compute's order: for each output o of [K S' | Q S'] (o < Vs: K rows, else Q rows), for each
         // user u, the Kt masked tiles of K_u / Q_u (a 4-chunk ring)
         {
@@ -970,6 +969,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
                 }
             }
         }
+#endif  // GSTEP_WYPAIR
 #if GDN_OUT_RD
         // ---- the gated out tiles (all 32 rows live: whole tiles, as the writer's GDN_OUT_TILE) + the out signal, on NOC1
         //      ahead of any S' write (the barrier must not wait for those)
