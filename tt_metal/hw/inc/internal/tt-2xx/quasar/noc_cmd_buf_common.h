@@ -528,7 +528,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_t noc) {
 #ifdef KERAUNOS_CCE
-    // Posted writes are unsupported on a CCE, so none is in flight.
+    // A posted write on a CCE awaits its copy (ncrisc_noc_fast_write), so none is in flight.
     return true;
 #else
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent() == 0;

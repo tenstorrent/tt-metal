@@ -55,8 +55,7 @@ FORCE_INLINE volatile CceNocRoutes& routes() {
     }
 }
 
-// A NOC call a CCE does not serve: multicast, posted writes, stateful command buffers, NOC atomics other than an
-// increment. @p line identifies the caller.
+// A NOC call a CCE does not serve: multicast, stateful command buffers, NOC atomics other than an increment. @p line identifies the caller.
 [[noreturn, gnu::cold, gnu::noinline]] inline void unsupported(uint32_t line) { halt(Fault::Unsupported, line); }
 
 struct Target {

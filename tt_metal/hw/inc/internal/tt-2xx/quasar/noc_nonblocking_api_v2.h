@@ -80,13 +80,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t trid = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 #ifdef KERAUNOS_CCE
-    if (mcast || posted) {
+    if (mcast) {
         internal_::cce_noc::unsupported(__LINE__);
     }
     internal_::cce_noc::copy(
         internal_::cce_noc::local_dma_addr(src_addr), internal_::cce_noc::dma_addr(dest_addr), len_bytes);
-    if constexpr (use_trid) {
-        // Awaited here, so a flush or barrier on the transaction id finds nothing outstanding.
+    if (use_trid || posted) {
+        // Awaited here, so a flush or barrier on the transaction id, or on posted writes, finds nothing outstanding.
         while (!internal_::cce_noc::copies_done()) {
         }
     }
