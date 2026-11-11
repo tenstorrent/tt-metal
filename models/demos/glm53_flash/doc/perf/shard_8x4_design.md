@@ -208,6 +208,7 @@ instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's 
 | COMB + RS1_EARLY | 3807.9 us | 4 K x 16 40.0 ms, 32 K x 4 22.1 ms | as COMB | off |
 | AGB (on AGK) | - | 4 K x 16 36.8 -> 35.7 ms; with RS1_EARLY 34.3 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical with RS1_EARLY | on |
 | RSB | 2977.0 -> 2925.4 us (layers 0-3 with UG16; RS1 wait 325 -> 287, RS2 58 -> 45) | 4 K x 16 33.3 -> 32.7 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical | on |
+| R8 (8-bit radix digits) | pending device run | pending device run | expected bit-identical (host: the same T / T_g, k_rem, quotas, tie order) | off |
 
 The rows ran on the single-knob trees (wt_mrg e7f7dc8443f, wt_rsc ab4bd43c343 / 4d61833e021, wt_rs1 4e59a2c95c0),
 whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the two-field gates are sound for every
@@ -249,6 +250,49 @@ and 7 -> 8 (row scatter shipped -> RS2 landed); 6 -> 7 and 8 -> 9 are root-local
 cross-half traffic is 16 t x 20 KB per direction on the column's middle link (5.1 MB at t 16; 324 us is ~16 GB/s),
 so if RS1 is link-bound its share shrinks to the signals' router stalls only -- the rs1 lane's opened -> sent span
 (probe row 238) tells which. RS2 (512 KB on the row's middle link at t 16) is not byte-bound.
+
+### R8: 8-bit radix digits in the local select and the merge (2026-11-11, MLA_REV 70, opt-in)
+
+Today (dsa_common.hpp 4-bit digits) a sparse token's local select is 8 radix rounds + the tie round on the lane's
+coordinator (ix_dm0), one report / broadcast handshake each: every chunk core histograms its compacted keys into its
+16-word slot of the coordinator's histogram tensor and raises H_SEM, the coordinator sums the C slots (sum_hist), picks
+the digit, writes (prefix, k_rem) into every owner's mailbox and raises SEL_SEM, the cores compact. The global merge
+runs the same rounds on the NHELP helpers: 12 sequential steps per token (start, 8 rounds, tie, quotas, the rank
+helper's per-core quotas), ~5 us each at B 16 (section 9's 119-us merge = 2 tokens x 12). fp32 keys hardly filter in the
+first 4-bit rounds (sign + 3 exponent bits, then 4 more), so at long context the cores also scan nearly all their keys
+about three times.
+
+`GLM53_DSA_SHARD_R8=1` (kernel define MLA_DSA_R8; 8x4 only, composes with every other knob): ROUNDS = 32 / 8 = 4. Round r
+is the 4-bit rounds 2 r and 2 r + 1 composed with the same integers, in one handshake. Each core counts its matching
+keys in 256 uint16 fine bins (the 8-bit digit) in its OWN mailbox past the messages (dsa_shard.hpp `r8_hist`,
+`R8_FINE_OFF` = MBOX_SHARD_BYTES) and reports the 16 coarse sums (the digit's high nibble) in the unchanged 64-B slot.
+The coordinator sums the coarse reports and picks the coarse digit exactly as round 2 r does, reads the chosen bucket's
+16 fine counts from every core (one 32-B NoC read each, one barrier: ix_dm0 `r8_fine`) into the cores' slots, sums them
+and picks the fine digit as round 2 r + 1 does (k_rem; in the local select also each core's keys above both digits).
+The broadcast carries the 8-bit prefix; the tie round, the (quota, offset) pairs, the per-chip / per-core quotas and the
+tie order are unchanged. Per token: local select 9 -> 5 handshakes (+ 4 pulls), merge 12 -> 8 steps (+ 4 pulls), and
+the cores' near-full key scans ~3 -> ~2 (round 0 already covers 7 exponent bits).
+
+Why the pull: a plain 256-bin report would put C x 1 KB of slots on each lane's index core (64 KB at t 1) and a 256-word
+sum per core per round on the coordinator (~1.3 us per core at rev 52's ~5 ns per word: ~80 us a round at C 64); the
+pull keeps the slots and the sums at today's 16 words per core per level. L1: none -- the histogram tensor and CB_AKEY
+are unchanged, the mailbox drops 4 select + 4 merge message slots per lane token (128 B x TL) and gains the 512-B fine
+area: 4800 B at TL 4 (unchanged), 9600 -> 9088 B at TL 8. No new semaphores or CBs. The uint16 counts need <= 65535 keys
+per core (static_assert on MLA_DSA_KEYS; a merge helper holds <= KPH x 512).
+
+Host: tt/shard_plan.py `local_select` / `helper_merge` / `agk_merge` with digit_bits=8 run the kernels' two levels step by
+step (`r8_hist` with the packed coarse sum, `radix_round`); tests/test_shard_plan_8x4.py checks R8 == 4-bit bitwise (T /
+T_g, k_rem, the cores' counts above, (quota, offset) pairs, records, per-chip / per-core quotas, done; each level's sums
+= the 4-bit rounds' sums) == the sorted top-k, over list lengths 0 .. 512, ties, duplicates on the digit edges, keys
+sharing 24 bits, 513 candidates, KPH 1 / 2 / 4, 1-8 lanes and the AGK launch. Offline compile (`_r8_kc/cmp_r8.sh`): knob
+off, ix_dm0 / att_dsa_shard_dm1 / ix_dm1 at t 1 / 4 / 8 / 16 (+ probe, TL 8, rev 64, dense window + COMB, 2x4) equal
+0687018fd13's objdump; knob on compiles (text: ix_dm0 +0.7-1.2 KB, att_dsa_shard_dm1 +0.1-0.4 KB), ix_dm1 unchanged.
+
+Expected at B 16, 4 K: 2 tokens per lane x (4 + 4) handshakes x ~5 us minus 16 pulls at ~1 us: ~-65 us per DSA layer
+(~-0.7 ms per 45-layer step); about half at B 4 (1 token per lane); at 1 M also one of the ~3 near-full key scans of each
+select and merge pass. Probe (test_mk_backend_probe, MLA_PROBE=1): owner_dm1_max 0 -> 1 (the local select) and 1 -> 2
+(AG + merge), ix_dm0 4 -> 5 (the merge alone: ~121 us at B 16 today) must drop; the AG window and everything after mark 2
+must not move.
 
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 

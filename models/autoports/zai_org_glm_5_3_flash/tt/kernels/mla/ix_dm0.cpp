@@ -211,6 +211,42 @@ void kernel_main() {
         }
         noc_async_atomic_barrier();
     };
+#if defined(MLA_DSA_R8)
+    // R8 (dsa_shard.hpp R8_*): the fine level of a round -- coarse bucket dc's 16 fine counts of each of the n cores
+    // (owner list entries k < n: the chunk cores / the merge helpers) read from its mailbox into its histogram slot
+    // (the cores wait for this round's message: their counts and the slots are still), summed, the fine digit picked
+    // as the coarse one (the 4-bit round 2 r + 1's integers: k_rem; with above_ each core's counts above it) -> the
+    // round's 8-bit digit
+    auto r8_fine = [&](uint32_t n, uint32_t dc, uint32_t& k_rem_, uint32_t* above_) -> uint32_t {
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint32_t x = get_arg_val<uint32_t>(OWN0 + 2 * k), yy = get_arg_val<uint32_t>(OWN0 + 2 * k + 1);
+            noc_async_read(
+                get_noc_addr(x, yy, mbox + mlashard::R8_FINE_OFF + dc * mlashard::R8_SLICE_BYTES),
+                hist_addr + k * mladsa::HIST_SLOT_BYTES,
+                mlashard::R8_SLICE_BYTES);
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        uint32_t h[mladsa::BINS];
+        mlashard::r8_sum_fine(hist, n, h);
+        uint32_t e = mladsa::BINS - 1, ab = 0;
+        while (e > 0 && ab + h[e] < k_rem_) {
+            ab += h[e];
+            --e;
+        }
+        k_rem_ -= ab;
+        if (above_ != nullptr) {
+            for (uint32_t c = 0; c < n; ++c) {
+                volatile tt_l1_ptr uint16_t* p =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(hist + c * (mladsa::HIST_SLOT_BYTES / 4));
+                for (uint32_t b = e + 1; b < mladsa::BINS; ++b) {
+                    above_[c] += p[b];
+                }
+            }
+        }
+        return (dc << mladsa::DIGIT_BITS) | e;
+    };
+#endif
 #if defined(MLA_DSA_SHARD_LINE)
     // TP8: the index core's NCRISC assembles the q tiles (ix_dm1.cpp) and counts the tokens done on this semaphore
     const uint32_t qasm_sem = get_arg_val<uint32_t>(SH0 + 8);
@@ -246,7 +282,7 @@ void kernel_main() {
                 above[c] = 0;
             }
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
-                const uint32_t shift = 32 - mladsa::DIGIT_BITS * (r + 1);
+                const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
                 mk::wait_handoff(H_SEM, C);
                 invalidate_l1_cache();
                 uint32_t h[mladsa::BINS];
@@ -257,12 +293,22 @@ void kernel_main() {
                     --d;
                 }
                 k_rem -= ab;
+#if defined(MLA_DSA_R8)
+                for (uint32_t c = 0; c < C; ++c) {  // the coarse level's keys above its digit, per core
+                    for (uint32_t b = d + 1; b < mladsa::BINS; ++b) {
+                        above[c] += hist[c * (mladsa::HIST_SLOT_BYTES / 4) + b];
+                    }
+                }
+                d = r8_fine(C, d, k_rem, above);  // + the fine level's (the slots now hold the pulled buckets)
+                prefix |= d << shift;
+#else
                 prefix |= d << shift;
                 for (uint32_t c = 0; c < C; ++c) {  // this round's keys above the chosen digit, per core
                     for (uint32_t b = d + 1; b < mladsa::BINS; ++b) {
                         above[c] += hist[c * (mladsa::HIST_SLOT_BYTES / 4) + b];
                     }
                 }
+#endif
                 msg[0] = prefix;
                 msg[1] = k_rem;
                 broadcast(scr + MSG_OFF, (j * mladsa::MSGS + r) * mladsa::MSG_BYTES, mladsa::MSG_BYTES);
@@ -316,7 +362,7 @@ void kernel_main() {
             uint32_t prefix = 0, k_rem = mladsa::TOPK;
             bool done = false;
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
-                const uint32_t shift = 32 - mladsa::DIGIT_BITS * (r + 1);
+                const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
                 mk::wait_handoff(H_SEM, mlashard::NHELP);
                 invalidate_l1_cache();
                 uint32_t h[mladsa::BINS];
@@ -340,6 +386,9 @@ void kernel_main() {
                     --d;
                 }
                 k_rem -= ab;
+#if defined(MLA_DSA_R8)
+                d = r8_fine(mlashard::NHELP, d, k_rem, nullptr);  // the helpers' fine counts of bucket d
+#endif
                 prefix |= d << shift;
                 msg[0] = prefix;
                 msg[1] = k_rem;

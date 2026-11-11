@@ -245,6 +245,98 @@ constexpr uint32_t KPH = 1;
 static_assert(KPH == 1 || PAIR == 8, "shard: KPH > 1 on the 8x4 only (the pair / the 2x4 keep one chip per helper)");
 static_assert(KPH >= 1 && KPH <= 16 && NCHIPS % KPH == 0, "shard: KPH divides NCHIPS; its tie counts fit one slot");
 constexpr uint32_t NHELP = NCHIPS / KPH;  // merge helpers per token lane
+// R8 (MLA_DSA_R8, tt/mk_mla.py GLM53_DSA_SHARD_R8; dsa_common.hpp RADIX_BITS = 8; the 8x4 only, unset: every build
+// unchanged): the local select and the global merge in 4 rounds of 8-bit digits. A core's round histogram is 256 fine
+// counts (uint16, digit (k >> shift) & 255) in its own mailbox past the messages (R8_FINE_OFF: the shard mailbox has
+// MSGS = 5 and MERGE_MSGS = 1 + 4 + QUOTA_SLOTS slots per lane token, so the fine area fits in the bytes the 4-bit
+// layout's rounds took: the host allocates MBOX_SHARD_BYTES + R8_FINE_BYTES, tt/shard_plan.py mbox_bytes); its report
+// to the coordinator stays the 64-B slot of 16 coarse counts (bucket b = fine bins 16 b .. 16 b + 15). The coordinator
+// picks the coarse digit from the summed reports (= the 4-bit round 2 r), reads bucket b's R8_SLICE_BYTES (16 counts)
+// from every core's fine area into the core's slot (one NoC read each, one barrier) and picks the fine digit from their
+// sum (= the 4-bit round 2 r + 1): the same integers, one handshake instead of two. No new L1, no new semaphores
+#if defined(MLA_DSA_R8)
+static_assert(PAIR == 8 && LINE == 4, "R8: the 8x4 shard");
+static_assert(mladsa::RADIX_BITS == 2 * mladsa::DIGIT_BITS && mladsa::BINS == 16, "R8: two 16-bin levels per round");
+constexpr uint32_t R8_FINE_OFF = MBOX_SHARD_BYTES;  // a core's fine counts in its mailbox
+constexpr uint32_t R8_FINE_BYTES = 512;             // 256 uint16 counts (tt/shard_plan.py R8_FINE_BYTES)
+constexpr uint32_t R8_SLICE_BYTES = 32;             // one coarse bucket's 16 fine counts (the coordinator's pull)
+static_assert(R8_FINE_BYTES == 256 * 2 && R8_SLICE_BYTES == mladsa::BINS * 2, "R8: uint16 counts");
+static_assert(R8_FINE_OFF % 16 == 0 && R8_SLICE_BYTES % 16 == 0, "R8: the pull's NoC read alignment");
+static_assert(R8_SLICE_BYTES <= mladsa::HIST_SLOT_BYTES, "R8: a pulled bucket lands in the core's histogram slot");
+static_assert(KPH * CAND_MAX <= 65535, "R8: a merge helper's counts fit uint16");
+// a core's round: the fine counts of its keys src[0, n) that match (mask, prefix) at fine_addr, the 16 coarse counts in
+// hist[0, 16) (the report). n <= 65535 keys: every count fits its uint16, and a bucket's 8 words (2 counts each) sum
+// without a carry between the halves
+inline void r8_hist(
+    uint32_t fine_addr,
+    volatile tt_l1_ptr uint32_t* hist,
+    volatile tt_l1_ptr uint32_t* src,
+    uint32_t n,
+    uint32_t mask,
+    uint32_t prefix,
+    uint32_t shift) {
+    volatile tt_l1_ptr uint32_t* f32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fine_addr);
+    volatile tt_l1_ptr uint16_t* f16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fine_addr);
+    for (uint32_t w = 0; w < R8_FINE_BYTES / 4; ++w) {
+        f32[w] = 0;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t k = src[i];
+        if ((k & mask) == prefix) {
+            f16[(k >> shift) & 255] += 1;
+        }
+    }
+    for (uint32_t b = 0; b < mladsa::BINS; ++b) {
+        uint32_t s = 0;
+        for (uint32_t w = 0; w < R8_SLICE_BYTES / 4; ++w) {
+            s += f32[b * (R8_SLICE_BYTES / 4) + w];
+        }
+        hist[b] = (s & 0xFFFFu) + (s >> 16);
+    }
+}
+// the coordinator: the pulled buckets' 16 fine counts (uint16 words 0 .. 15 of each of the n slots) summed, the
+// accumulators in registers (dsa_common.hpp sum_hist's form)
+inline __attribute__((always_inline)) void r8_sum_fine(volatile tt_l1_ptr uint32_t* hist, uint32_t n, uint32_t* out) {
+    uint32_t a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0;
+    uint32_t a8 = 0, a9 = 0, a10 = 0, a11 = 0, a12 = 0, a13 = 0, a14 = 0, a15 = 0;
+    for (uint32_t c = 0; c < n; ++c) {
+        volatile tt_l1_ptr uint16_t* p =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(hist + c * (mladsa::HIST_SLOT_BYTES / 4));
+        a0 += p[0];
+        a1 += p[1];
+        a2 += p[2];
+        a3 += p[3];
+        a4 += p[4];
+        a5 += p[5];
+        a6 += p[6];
+        a7 += p[7];
+        a8 += p[8];
+        a9 += p[9];
+        a10 += p[10];
+        a11 += p[11];
+        a12 += p[12];
+        a13 += p[13];
+        a14 += p[14];
+        a15 += p[15];
+    }
+    out[0] = a0;
+    out[1] = a1;
+    out[2] = a2;
+    out[3] = a3;
+    out[4] = a4;
+    out[5] = a5;
+    out[6] = a6;
+    out[7] = a7;
+    out[8] = a8;
+    out[9] = a9;
+    out[10] = a10;
+    out[11] = a11;
+    out[12] = a12;
+    out[13] = a13;
+    out[14] = a14;
+    out[15] = a15;
+}
+#endif
 // rev 59: the merge helpers' scratch in CB_AKEY: their chip's candidate pages, its keys, the compacted candidates, the
 // per-core tie quotas (helper `rank` only). Rev 60 (review 2 item 1): it overlays the phase-A keys / candidates
 // (dead once every lane token's local select is done; the merge runs after the all-gather), so CB_AKEY holds

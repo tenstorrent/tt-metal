@@ -56,18 +56,24 @@ SEL_HDR = 3  # dsa_common.hpp SEL_HDR (CB_ASEL words before the pool ids)
 MAX_CHUNKS = 64  # dsa_common.hpp MAX_CHUNKS
 CAND_MAX = 512  # dsa_shard.hpp CAND_MAX = mladsa::TOPK (not a plain literal there)
 CAND_PAGES = -(-(REC_HDR + CAND_MAX * REC_BYTES) // TB)
+R8_FINE_BYTES, R8_SLICE_BYTES = HDR["R8_FINE_BYTES"], HDR["R8_SLICE_BYTES"]  # dsa_shard.hpp R8 (GLM53_DSA_SHARD_R8)
 assert AG8_QPAGES + CAND_PAGES <= AG8_PPC and AG8_PPC % 2 == 0 and RS2_PPC % 2 == 0 and RS_PPC % 2 == 0
 assert RS_CHUNKS * RS_PPC == 36  # rev 59: the RS round-1 message = 16 fp32 O tiles + 2 stats tiles = 36 pages exactly
 
 
-def merge_msgs(nchips: int = 8) -> int:
+def radix_rounds(r8: bool = False) -> int:
+    """dsa_common.hpp ROUNDS = 32 / RADIX_BITS: 8 rounds of 4-bit digits, 4 of 8-bit digits under R8 (MLA_DSA_R8)"""
+    return 4 if r8 else 8
+
+
+def merge_msgs(nchips: int = 8, r8: bool = False) -> int:
     """dsa_shard.hpp MERGE_MSGS = 1 + ROUNDS + QUOTA_SLOTS (start, the radix rounds, the tie-quota slots: one 16-B slot
-    per 4 merge helpers -- 2 at NCHIPS = 8, 8 at 32), checked on the text"""
+    per 4 merge helpers -- 2 at NCHIPS = 8, 8 at 32), checked on the text; r8: 4 rounds (MLA_DSA_R8)"""
     with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
         src = f.read()
     assert "constexpr uint32_t QUOTA_SLOTS = NCHIPS * 4 / mladsa::MSG_BYTES;" in src
     assert "constexpr uint32_t MERGE_MSGS = 1 + mladsa::ROUNDS + QUOTA_SLOTS;" in src
-    return 1 + 8 + nchips * 4 // 16
+    return 1 + radix_rounds(r8) + nchips * 4 // 16
 
 
 def merge_scr_bytes(kph: int = 1) -> int:
@@ -925,6 +931,34 @@ def shard_rs1_early(pair: int) -> bool:
     return pair > 2 and _flag("GLM53_DSA_SHARD_RS1_EARLY")
 
 
+def shard_r8(pair: int) -> bool:
+    """GLM53_DSA_SHARD_R8 (default 0 = 4-bit digits, 8 rounds + the tie): the 8x4 shard's local select and global merge
+    in 8-bit radix digits, 4 rounds + the tie (dsa_common.hpp RADIX_BITS, dsa_shard.hpp R8_*: the kernels' MLA_DSA_R8
+    define, emulated by local_select / helper_merge digit_bits=8: the same T, k_rem, per-core counts and quotas); the
+    pair / the 2x4 never take it"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_R8")
+
+
+def r8_header_check() -> None:
+    """the R8 host mirrors vs the kernels' text (tt/mk_mla.py _shard_header_check): RADIX_BITS / ROUNDS / MSGS in
+    dsa_common.hpp, the fine area / pull slice in dsa_shard.hpp"""
+    with open(os.path.join(KDIR, "mla", "dsa_common.hpp")) as f:
+        common = f.read()
+    for line in (
+        "constexpr uint32_t DIGIT_BITS = 4, BINS = 1u << DIGIT_BITS;",
+        "constexpr uint32_t RADIX_BITS = 2 * DIGIT_BITS;",
+        "constexpr uint32_t RADIX_MASK = (1u << RADIX_BITS) - 1, ROUNDS = 32 / RADIX_BITS;",
+        "constexpr uint32_t MSGS = ROUNDS + 1;",
+    ):
+        assert line in common, ("dsa_common.hpp R8", line)
+    with open(os.path.join(KDIR, "mla", "dsa_shard.hpp")) as f:
+        src = f.read()
+    assert "constexpr uint32_t R8_FINE_OFF = MBOX_SHARD_BYTES;" in src, "dsa_shard.hpp R8_FINE_OFF"
+    assert (R8_FINE_BYTES, R8_SLICE_BYTES) == (256 * 2, 16 * 2), (R8_FINE_BYTES, R8_SLICE_BYTES)
+    for tl in (TL_SMALL, TL_MAX):
+        assert r8_fine_off(tl, 32) % 16 == 0 and mbox_bytes(tl, 32, r8=True) <= mbox_bytes(tl, 32), tl
+
+
 RS1_PASS1_INC = HDR["RS1_PASS1_INC"]  # rev 67: dsa_shard.hpp -- a pass-1 signal's weight (fs_read.cpp FS_WAIT2 field)
 assert RS1_PASS1_INC == 1 << 16
 
@@ -1008,15 +1042,26 @@ def asel_page_bytes(keys: int) -> int:
     return (SEL_HDR + min(CAND_MAX, keys)) * 4 + 52
 
 
-def mbox_bytes(tl: int, nchips: int) -> int:
+def mbox_bytes(tl: int, nchips: int, r8: bool = False) -> int:
     """the owners' shard mailbox (dsa_shard.hpp MBOX_SHARD_BYTES at mladsa::T_MAX = tl): the select rounds + tie
-    (quota, offset) pairs, the global message + quotas, the merge messages (merge_msgs(nchips) slots) per lane token"""
-    return tl * 9 * 16 + tl * MAX_CHUNKS * 4 * 2 + tl * 16 + tl * MAX_CHUNKS * 4 + tl * merge_msgs(nchips) * 16
+    (quota, offset) pairs, the global message + quotas, the merge messages (merge_msgs(nchips) slots) per lane token;
+    r8 (GLM53_DSA_SHARD_R8): MSGS = 5 / MERGE_MSGS = 1 + 4 + .. slots, then the core's fine counts (R8_FINE_OFF =
+    MBOX_SHARD_BYTES, R8_FINE_BYTES) -- never more than the 4-bit mailbox (the fine area takes the 4 rounds' slots)"""
+    msgs = radix_rounds(r8) + 1  # dsa_common.hpp MSGS (+ the tie round)
+    layout = tl * msgs * 16 + tl * MAX_CHUNKS * 4 * 2 + tl * 16 + tl * MAX_CHUNKS * 4 + tl * merge_msgs(nchips, r8) * 16
+    return layout + (R8_FINE_BYTES if r8 else 0)
 
 
-def owner_l1(tp_tiles: int, t: int, lanes: int, kph: int = 1, chunks: int = 64, nchips: int = 32) -> dict:
+def r8_fine_off(tl: int, nchips: int) -> int:
+    """dsa_shard.hpp R8_FINE_OFF = MBOX_SHARD_BYTES of an R8 build: the byte offset of a core's fine counts in its
+    mailbox (the coordinator reads bucket b's R8_SLICE_BYTES at + b R8_SLICE_BYTES)"""
+    return mbox_bytes(tl, nchips, r8=True) - R8_FINE_BYTES
+
+
+def owner_l1(tp_tiles: int, t: int, lanes: int, kph: int = 1, chunks: int = 64, nchips: int = 32,
+             r8: bool = False) -> dict:  # fmt: skip
     """the split-K phase's per-owner L1 of a t-row build on `lanes` lanes: CB_AKEY, CB_ASEL (ceil(t / lanes) pages),
-    the mailbox; + the keys, TL and the lane tokens"""
+    the mailbox (r8: GLM53_DSA_SHARD_R8's, with the fine counts); + the keys, TL and the lane tokens"""
     keys = owner_keys(tp_tiles, chunks, lanes)
     st = -(-t // lanes)
     tl = shard_tl(t, lanes, kph)
@@ -1026,7 +1071,7 @@ def owner_l1(tp_tiles: int, t: int, lanes: int, kph: int = 1, chunks: int = 64, 
         tl=tl,
         akey=akey_bytes(keys, st, tl, kph),
         asel=max(1, st) * asel_page_bytes(keys),
-        mbox=mbox_bytes(tl, nchips),
+        mbox=mbox_bytes(tl, nchips, r8),
     )
 
 
@@ -1083,10 +1128,29 @@ def lane_records(keys_local, lq, chunks: int, lanes: int, k: int = 512) -> list:
     return [(int(keys_local[i]), int(core[i])) for i in sel.tolist()]
 
 
-def emulate_lane_merge(keys_global, C: int, chunks: int, lanes: int, k: int = 512, kph: int = 1) -> dict:
+def lane_core_keys(keys_local, lq, chunks: int, lanes: int) -> list:
+    """one chip's keys per lane chunk core in the kernel's local order (att_dsa_shard_dm1.cpp phase A: core c's local
+    index i = pooled-key tile (c + (i / 32) C) column i % 32): [core c: [keys]] (the local_select input)"""
+    import torch
+
+    cl = chunks // lanes
+    core = (lq // POOL_PAGE) % cl
+    local = (lq // POOL_PAGE // cl) * POOL_PAGE + lq % POOL_PAGE
+    out = []
+    for c in range(cl):
+        mine = torch.nonzero(core == c).reshape(-1)
+        mine = mine[torch.sort(local[mine]).indices]
+        assert torch.equal(local[mine], torch.arange(int(mine.numel()))), "a core's local indices are 0 .. n - 1"
+        out.append([int(x) for x in keys_local[mine].tolist()])
+    return out
+
+
+def emulate_lane_merge(keys_global, C: int, chunks: int, lanes: int, k: int = 512, kph: int = 1,
+                       digit_bits: int | None = None) -> dict:  # fmt: skip
     """one token of a t > 4 launch on `lanes` lanes: every chip's local top-k over its lane's chunk cores, the
     helpers' global merge (helper_merge, the replicas' T_g / helper quotas; rev 64: kph chips per helper) -> dict(T_g,
-    per-chip core quotas, lists).
+    per-chip core quotas, lists). digit_bits 4 / 8: the lists from the kernels' local select (local_select over
+    lane_core_keys) and the merge in those digits (8: GLM53_DSA_SHARD_R8); None: the sorted reference (lane_records).
     keys_global: int64 order keys of the token's closed pools (global pool ids 0 .. n - 1; pool g on chip (g // 32) % C,
     local id (g // 32 // C) 32 + g % 32: tt/dsa_shard.py ShardMap)"""
     import torch
@@ -1097,8 +1161,11 @@ def emulate_lane_merge(keys_global, C: int, chunks: int, lanes: int, k: int = 51
     for r in range(C):
         mine = torch.nonzero(owner == r).reshape(-1)
         lq = (mine // POOL_PAGE // C) * POOL_PAGE + mine % POOL_PAGE
-        lists.append(lane_records(keys_global[mine], lq, chunks, lanes, k))
-    res = [helper_merge(lists, r, k, kph=kph) for r in range(C)]
+        if digit_bits is None:
+            lists.append(lane_records(keys_global[mine], lq, chunks, lanes, k))
+        else:
+            lists.append(local_select(lane_core_keys(keys_global[mine], lq, chunks, lanes), k, digit_bits)["records"])
+    res = [helper_merge(lists, r, k, digit_bits=digit_bits or 4, kph=kph) for r in range(C)]
     assert len({(x["T_g"], tuple(x["helper_quota"])) for x in res}) == 1, "the replicas disagree"
     return dict(T_g=res[0]["T_g"], core_quota=[x["core_quota"] for x in res], lists=lists,
                 helper_quota=res[0]["helper_quota"])  # fmt: skip
@@ -1171,6 +1238,115 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
     return out
 
 
+# ------------------------------------------------------------------ the radix select's digit picks (emulation)
+def pick_digit(h: list, k_rem: int) -> tuple:
+    """ix_dm0.cpp's pick over one 16-bin level: the largest digit d with (keys of digit > d) < k_rem <= (keys of digit
+    >= d), 0 when none -> (d, the keys of digit > d)"""
+    d, ab = len(h) - 1, 0
+    while d > 0 and ab + h[d] < k_rem:
+        ab += h[d]
+        d -= 1
+    return d, ab
+
+
+def r8_hist(keys: list, mask: int, prefix: int, shift: int) -> tuple:
+    """dsa_shard.hpp r8_hist (GLM53_DSA_SHARD_R8) on one core: the 256 fine counts (uint16) of its keys that match
+    (mask, prefix) by digit (k >> shift) & 255, and the 16 coarse counts as the kernel sums them (a bucket's 8 uint32
+    words of 2 counts each, the halves added: no carry while the core holds <= 65535 keys) -> (fine, coarse)"""
+    assert len(keys) <= 0xFFFF, len(keys)
+    fine = [0] * 256
+    for kk in keys:
+        if (kk & mask) == prefix:
+            fine[(kk >> shift) & 255] += 1
+    words = [fine[2 * w] | (fine[2 * w + 1] << 16) for w in range(128)]  # little-endian uint16 pairs
+    coarse = []
+    for b in range(16):
+        sw = sum(words[8 * b : 8 * b + 8]) & 0xFFFFFFFF
+        coarse.append((sw & 0xFFFF) + (sw >> 16))
+    assert coarse == [sum(fine[16 * b : 16 * b + 16]) for b in range(16)], "r8_hist: a carry between the halves"
+    return fine, coarse
+
+
+def radix_round(r: int, digit_bits: int, cores: list, mask: int, prefix: int, k_rem: int, sums: list,
+                above: list | None = None, stop=None):  # fmt: skip
+    """one radix round of the coordinator (ix_dm0.cpp) over the cores' compacted keys cores[c]: digit_bits 4 -- the
+    16-bin reports summed in core order (sum_hist), the digit picked; 8 (R8) -- the coarse reports (r8_hist) summed and
+    picked, then the pulled bucket's fine counts (r8_fine) summed and picked: the 4-bit rounds 2 r and 2 r + 1. Each
+    level's sums are appended to `sums`; above[c] += core c's keys above the picked digit(s); stop(sum of the first
+    level) -> True ends the round before the pick (the merge's done check). -> (prefix, mask, k_rem) or None (stopped)
+    """
+    shift = 32 - digit_bits * (r + 1)
+    if digit_bits == 4:
+        hist = [[0] * 16 for _ in cores]
+        for c, keys in enumerate(cores):
+            for kk in keys:
+                if (kk & mask) == prefix:
+                    hist[c][(kk >> shift) & 15] += 1
+        fine = None
+    else:
+        fine, hist = zip(*(r8_hist(keys, mask, prefix, shift) for keys in cores)) if cores else ((), ())
+    hs = [sum(h[b] for h in hist) for b in range(16)]
+    sums.append(hs)
+    if stop is not None and stop(sum(hs)):
+        return None
+    d, ab = pick_digit(hs, k_rem)
+    k_rem -= ab
+    if above is not None:
+        for c, h in enumerate(hist):
+            above[c] += sum(h[d + 1 :])
+    if fine is not None:  # R8: the coordinator reads bucket d's 16 fine counts of every core (its slot), the same pick
+        pulled = [f[16 * d : 16 * d + 16] for f in fine]
+        hf = [sum(pl[b] for pl in pulled) for b in range(16)]
+        sums.append(hf)
+        e, ab = pick_digit(hf, k_rem)
+        k_rem -= ab
+        if above is not None:
+            for c, pl in enumerate(pulled):
+                above[c] += sum(pl[e + 1 :])
+        d = (d << 4) | e
+    return prefix | (d << shift), mask | (((1 << digit_bits) - 1) << shift), k_rem
+
+
+def local_select(core_keys: list, k: int = 512, digit_bits: int = 4) -> dict:
+    """the shard local select of one sparse token on one chip's token lane, step by step: ix_dm0.cpp (the coordinator)
+    + att_dsa_shard_dm1.cpp phase A (chunk core c holds core_keys[c], its order keys in local order). Per round
+    (radix_round: 16-bin reports, or R8's coarse report + the pulled bucket) the digit, the cores' keys above it
+    (above[c]) and the compaction; the tie round's counts of keys == T -> (quota, record offset) per core in core order;
+    each core keeps its keys > T and its first quota keys == T (local order) and writes them as records (key, c) at its
+    offset. -> dict(T, k_rem, above, qpair, n_rec, kept {c: [(key, local index)]}, records, hists, messages)"""
+    if digit_bits not in (4, 8):
+        raise ValueError(f"digit_bits {digit_bits}: 4 or 8")
+    C = len(core_keys)
+    prefix, mask, k_rem, above, sums, msgs = 0, 0, k, [0] * C, [], 0
+    src = [list(v) for v in core_keys]
+    for r in range(32 // digit_bits):
+        prefix, mask, k_rem = radix_round(r, digit_bits, src, mask, prefix, k_rem, sums, above)
+        msgs += 1
+        src = [[kk for kk in v if (kk & mask) == prefix] for v in src]  # the cores' compaction (cand)
+    rem, off, qpair = k_rem, 0, []
+    for v, ab in zip(src, above):  # the tie round: (quota, record offset) per core
+        q = min(sum(1 for kk in v if kk == prefix), rem)
+        qpair.append((q, off))
+        off += ab + q
+        rem -= q
+    msgs += 1
+    kept, records = {}, []
+    for c, keys in enumerate(core_keys):
+        quota, kc = qpair[c][0], []
+        for i, kk in enumerate(keys):
+            take = kk > prefix
+            if not take and kk == prefix and quota > 0:
+                quota -= 1
+                take = True
+            if take:
+                kc.append((kk, i))
+        assert len(kc) == above[c] + qpair[c][0] and len(records) == qpair[c][1], c  # its records at its offset
+        kept[c] = kc
+        records += [(kk, c) for kk, _ in kc]
+    return dict(T=prefix, k_rem=k_rem, above=above, qpair=qpair, n_rec=off, kept=kept, records=records, hists=sums,
+                messages=msgs)  # fmt: skip
+
+
 # ------------------------------------------------------------------ the rev-59 global merge on helpers (emulation)
 def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph: int = 1, own=None) -> dict:
     """ix_dm0.cpp (the coordinator) + att_dsa_shard_dm1.cpp merge_help (helper q holds chip q's list), step by step:
@@ -1187,33 +1363,26 @@ def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph:
     rank's records for the per-core quotas.
     Rev 66, own= (the key-packed y_ag, agk_merge): lists hold keys only ((key, None): the key pages) and the per-core
     quotas come from this chip's own x_ag records -- kph > 1 re-reads them (key and core), kph 1 compares its y_ag keys
-    (mkeys) and takes the core ids from the x_ag records (rq) at the same index."""
-    bins, rounds = 1 << digit_bits, 32 // digit_bits
+    (mkeys) and takes the core ids from the x_ag records (rq) at the same index.
+    digit_bits=8 (R8, GLM53_DSA_SHARD_R8): 4 rounds of radix_round's two levels -- each helper's coarse report
+    (r8_hist), the coordinator's coarse pick, the pulled bucket's fine counts and the fine pick; `hists` holds both
+    levels' sums per round (= the 4-bit run's rounds 2 r, 2 r + 1) and `messages` 4 rounds fewer."""
+    if digit_bits not in (4, 8):
+        raise ValueError(f"digit_bits {digit_bits}: 4 or 8")
     assert kph >= 1 and len(lists) % kph == 0, (kph, len(lists))
     nh = len(lists) // kph
     mk = [[kk for i in range(kph) for kk, _ in lists[h * kph + i]] for h in range(nh)]  # the helpers' mkeys
     ln = [[len(lists[h * kph + i]) for i in range(kph)] for h in range(nh)]  # their len[i]
     prefix, mask, k_rem, msgs, sums = 0, 0, k, 1, []  # (the start message)
-    for r in range(rounds):
-        shift = 32 - digit_bits * (r + 1)
-        hist = [[0] * bins for _ in range(nh)]
-        for h in range(nh):  # one histogram over the helper's union (its whole compacted array)
-            for kk in mk[h]:
-                if (kk & mask) == prefix:
-                    hist[h][(kk >> shift) & (bins - 1)] += 1
-        hs = [sum(hq[b] for hq in hist) for b in range(bins)]  # sum_hist over the nh slots, helper order
-        sums.append(hs)
+    for r in range(32 // digit_bits):
+        # one histogram over each helper's union (its whole compacted array), summed in helper order (sum_hist); round
+        # 0's total m <= k -> done (before the pick: no pull)
+        step = radix_round(r, digit_bits, mk, mask, prefix, k_rem, sums, stop=(lambda m: m <= k) if r == 0 else None)
         msgs += 1
-        if r == 0 and sum(hs) <= k:
+        if step is None:
             return dict(T_g=0, k_rem=0, done=True, helper_quota=[0] * len(lists), core_quota={}, messages=msgs,
                         hists=sums)  # fmt: skip
-        d, ab = bins - 1, 0
-        while d > 0 and ab + hs[d] < k_rem:
-            ab += hs[d]
-            d -= 1
-        k_rem -= ab
-        prefix |= d << shift
-        mask |= (bins - 1) << shift
+        prefix, mask, k_rem = step
         for h in range(nh):  # in-place compaction, list by list: the write index never passes the read index
             v, m, b0 = mk[h], 0, 0
             for i in range(kph):
@@ -1376,23 +1545,25 @@ def agk_records(chunk: list) -> list:
     ]
 
 
-def agk_merge(key_pages: list, counts: list, own_chunk: list, rank: int, k: int = 512, kph: int = 1) -> dict:
+def agk_merge(key_pages: list, counts: list, own_chunk: list, rank: int, k: int = 512, kph: int = 1,
+              digit_bits: int = 4) -> dict:  # fmt: skip
     """the global merge of one token on chip `rank` under AGK (att_dsa_shard_dm1.cpp merge_help + ix_dm0.cpp, rev 68):
     every chip's keys from its key page with the position's count, this chip's per-core tie order from its own x_ag
-    chunk -> helper_merge's dict (to equal rev 65's helper_merge over the record lists, bitwise)"""
+    chunk -> helper_merge's dict (to equal rev 65's helper_merge over the record lists, bitwise; digit_bits 8: R8)"""
     lists = [[(kk, None) for kk in agk_keys(pg, n)] for pg, n in zip(key_pages, counts)]
-    return helper_merge(lists, rank, k, kph=kph, own=agk_records(own_chunk))
+    return helper_merge(lists, rank, k, digit_bits=digit_bits, kph=kph, own=agk_records(own_chunk))
 
 
 def emulate_agk_launch(keys_by_token: list, pos_by_token: list, lanes: int, kph: int, *, ranks=(0,), chunks: int = 64,
-                       seed: int = 0) -> list:  # fmt: skip
+                       seed: int = 0, r8: bool = False) -> list:  # fmt: skip
     """one t-row launch on the 8x4 under AGK, host-side, against rev 65: per token t (lane t % lanes) its 32 chips'
     local top-512 records over the lane's chunk cores (lane_records), every chip's x_ag (AG32 chunks, stale words past
     the records), AG1 with the key pack + AG2 = y_ag (identical on every chip: block ag_blk(q), token t = the first
     AGK_PPC pages of keypack_chunk(chip q's chunk t); every page written once), then on each chip of `ranks` the q-piece
     placement and the AGK merge vs helper_merge over the records (and the serial merge) -> [per token dict(p, lane,
-    counts, ref {rank: dict}, got {rank: dict}, serial {rank: dict})]. keys_by_token[t]: int64 order keys of token t's
-    (p + 1) // 4 closed pools (global pool ids)"""
+    counts, ref {rank: dict}, got {rank: dict}, serial {rank: dict} [, r8 {rank: dict}: the AGK merge in 8-bit digits
+    (GLM53_DSA_SHARD_R8)])]. keys_by_token[t]: int64 order keys of token t's (p + 1) // 4 closed pools (global pool
+    ids)"""
     import random
 
     import torch
@@ -1443,6 +1614,9 @@ def emulate_agk_launch(keys_by_token: list, pos_by_token: list, lanes: int, kph:
             res["ref"][rank] = helper_merge(lists[t], rank, CAND_MAX, kph=kph)
             res["got"][rank] = agk_merge(pages, counts, x_ag[rank][t], rank, CAND_MAX, kph=kph)
             res["serial"][rank] = serial_merge(lists[t], rank, CAND_MAX)
+            if r8:
+                res.setdefault("r8", {})[rank] = agk_merge(pages, counts, x_ag[rank][t], rank, CAND_MAX, kph=kph,
+                                                           digit_bits=8)  # fmt: skip
         out.append(res)
     return out
 

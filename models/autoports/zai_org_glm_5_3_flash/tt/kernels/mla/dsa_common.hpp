@@ -23,7 +23,22 @@ namespace mladsa {
 constexpr uint32_t DENSE_MAX = 2051;
 constexpr uint32_t TOPK = 512;
 constexpr uint32_t KPOOL = 4;
-constexpr uint32_t DIGIT_BITS = 4, BINS = 1u << DIGIT_BITS, ROUNDS = 32 / DIGIT_BITS;
+constexpr uint32_t DIGIT_BITS = 4, BINS = 1u << DIGIT_BITS;  // one histogram level: 16 bins of a 4-bit digit
+// R8 (MLA_DSA_R8, tt/mk_mla.py GLM53_DSA_SHARD_R8; the 8x4 shard only, unset: every build unchanged): the radix rounds
+// take 8-bit digits -- 4 rounds + the tie instead of 8 + the tie. Round r is the 4-bit rounds 2 r and 2 r + 1 composed
+// with the same integers: the cores report the 16 coarse counts (the digit's high nibble; = the 4-bit round 2 r
+// histogram), the coordinator picks the coarse digit as before, PULLS the chosen bucket's 16 fine counts (= the 4-bit
+// round 2 r + 1 histogram) from each core's mailbox and picks the fine digit the same way (kernels/mla/dsa_shard.hpp
+// R8_*): one report / broadcast handshake per 8 bits, the same prefixes, k_rem, per-core counts and tie quotas
+#if defined(MLA_DSA_R8)
+#if !defined(MLA_DSA_SHARD)
+#error "MLA_DSA_R8: the sequence-sharded select only (kernels/mla/dsa_shard.hpp)"
+#endif
+constexpr uint32_t RADIX_BITS = 2 * DIGIT_BITS;
+#else
+constexpr uint32_t RADIX_BITS = DIGIT_BITS;
+#endif
+constexpr uint32_t RADIX_MASK = (1u << RADIX_BITS) - 1, ROUNDS = 32 / RADIX_BITS;
 constexpr uint32_t MSGS = ROUNDS + 1;  // + the tie round
 constexpr uint32_t MSG_BYTES = 16;     // mailbox slot: prefix, k_rem / quota
 constexpr uint32_t HIST_BYTES = 64;    // per-core histogram slot on the coordinator (16 x uint32)

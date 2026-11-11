@@ -198,6 +198,9 @@ void kernel_main() {
     // slots
     static_assert(C * mladsa::HIST_SLOT_BYTES >= mladsa::MAX_CHUNKS * 4, "the quota report inside the histogram slots");
     static_assert(mlashard::NHELP <= C, "the merge helpers (NCHIPS / KPH) among the lane's chunk cores");
+#if defined(MLA_DSA_R8)
+    static_assert(MLA_DSA_KEYS <= 65535, "R8: a core's fine counts fit uint16 (dsa_shard.hpp r8_hist)");
+#endif
     uint32_t n_kept[mlashard::TL];
     volatile tt_l1_ptr uint32_t* sel_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEL_SEM));
     const uint64_t hist_dst = get_noc_addr(cx, cy, hist_addr + c * mladsa::HIST_SLOT_BYTES);
@@ -263,8 +266,11 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* src = keys;
             uint32_t nsrc = nvalid;
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
-                const uint32_t shift = 32 - mladsa::DIGIT_BITS * (r + 1);
+                const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
                 if (g == 0) {
+#if defined(MLA_DSA_R8)  // dsa_shard.hpp R8: the fine counts in this core's mailbox, the coarse ones reported
+                    mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, mask, prefix, shift);
+#else
                     for (uint32_t b = 0; b < mladsa::BINS; ++b) {
                         hist[b] = 0;
                     }
@@ -274,13 +280,14 @@ void kernel_main() {
                             hist[(k >> shift) & (mladsa::BINS - 1)] += 1;
                         }
                     }
+#endif
                     report();
                 }
                 noc_semaphore_wait_min(sel_sem, ++msgs);
                 invalidate_l1_cache();
                 prefix = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     mbox + (j * mladsa::MSGS + r) * mladsa::MSG_BYTES)[0];
-                mask |= (mladsa::BINS - 1) << shift;
+                mask |= mladsa::RADIX_MASK << shift;
                 if (g == 0) {
                     uint32_t m = 0;
                     for (uint32_t i = 0; i < nsrc; ++i) {
@@ -402,7 +409,10 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* src = mkeys;
         uint32_t nsrc = n;
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
-            const uint32_t shift = 32 - mladsa::DIGIT_BITS * (r + 1);
+            const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
+#if defined(MLA_DSA_R8)
+            mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, mask, prefix, shift);
+#else
             for (uint32_t b = 0; b < mladsa::BINS; ++b) {
                 hist[b] = 0;
             }
@@ -412,6 +422,7 @@ void kernel_main() {
                     hist[(k >> shift) & (mladsa::BINS - 1)] += 1;
                 }
             }
+#endif
             report();  // slot c of the coordinator's histogram tensor
             noc_semaphore_wait_min(sel_sem, ++msgs);
             invalidate_l1_cache();
@@ -421,7 +432,7 @@ void kernel_main() {
                 return;  // done: fewer candidates than k (T_g = 0, every one selected; no tie round)
             }
             prefix = mm[0];
-            mask |= (mladsa::BINS - 1) << shift;
+            mask |= mladsa::RADIX_MASK << shift;
             uint32_t m = 0;
             for (uint32_t i = 0; i < nsrc; ++i) {
                 const uint32_t k = src[i];
@@ -580,7 +591,10 @@ void kernel_main() {
         uint32_t prefix = 0, mask = 0;
         uint32_t nsrc = ntot;
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
-            const uint32_t shift = 32 - mladsa::DIGIT_BITS * (r + 1);
+            const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
+#if defined(MLA_DSA_R8)
+            mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, mkeys, nsrc, mask, prefix, shift);
+#else
             for (uint32_t b = 0; b < mladsa::BINS; ++b) {
                 hist[b] = 0;
             }
@@ -590,6 +604,7 @@ void kernel_main() {
                     hist[(k >> shift) & (mladsa::BINS - 1)] += 1;
                 }
             }
+#endif
             report();  // slot c of the coordinator's histogram tensor: the union of the KPH lists
             noc_semaphore_wait_min(sel_sem, ++msgs);
             invalidate_l1_cache();
@@ -599,7 +614,7 @@ void kernel_main() {
                 return;  // done: fewer candidates than k (T_g = 0, every one selected; no tie round)
             }
             prefix = mm[0];
-            mask |= (mladsa::BINS - 1) << shift;
+            mask |= mladsa::RADIX_MASK << shift;
             // compaction in place, list by list (stable: list i's survivors stay contiguous after list i - 1's; the
             // write index never passes the read index)
             uint32_t m = 0, b0 = 0;

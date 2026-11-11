@@ -105,6 +105,9 @@ def test_exchange_matches_direct(R, C):
 
 @pytest.mark.parametrize("C,lanes", [(8, 1), (32, 1), (32, 2)])
 def test_lane_merge_32_lists(C, lanes):
+    """the helpers' merge over the chips' sorted local top-512 lists == the serial merge; the kernels' local select
+    (shard_plan.local_select over each chip's lane chunk cores) gives those lists bitwise in 4-bit digits and in R8's
+    8-bit digits (GLM53_DSA_SHARD_R8), and the merge in 8-bit digits the same T_g / quotas"""
     gen = torch.Generator().manual_seed(7)
     n_pools = 32 * C * 6  # ~6 pool pages per chip
     keys = torch.randint(1, 1 << 31, (n_pools,), generator=gen, dtype=torch.int64)
@@ -112,6 +115,9 @@ def test_lane_merge_32_lists(C, lanes):
     ref = SP.serial_merge(res["lists"], 0, k=512)
     assert res["T_g"] == ref["T_g"], (res["T_g"], ref["T_g"])
     assert res["core_quota"][0] == ref["core_quota"]
+    for bits in (4, 8):
+        got = SP.emulate_lane_merge(keys, C, chunks=64, lanes=lanes, k=512, digit_bits=bits)
+        assert got == res, (C, lanes, bits)
     assert SP.lanes_reasons(16, 2, 64, 4, 1, nchips=C) == []
     assert SP.lanes_reasons(32, 4, 64, 4, 1, nchips=32) == ["32 merge helpers among 16 lane chunk cores"]
 
@@ -171,11 +177,28 @@ def _lists(gen, case: str, n: int = 32) -> list:
             m = 512
         elif case == "all_empty":
             m = 0
+        elif case == "lengths":  # R8 fuzz: every list length 0 .. 512
+            m = int(torch.randint(0, 513, (1,), generator=gen))
+        elif case in ("dups", "adversarial"):
+            m = int(torch.randint(0, 513, (1,), generator=gen)) if q % 3 else 512
+        elif case == "boundary":  # 513 candidates in the union: round 0 is not done, T_g = the smallest but one
+            m = 32 if q < 16 else (1 if q == 16 else 0)
         else:
             raise ValueError(case)
         cores = torch.sort(torch.randint(0, 32, (m,), generator=gen)).values
         if case == "ties":
             keys = torch.randint(1, 40, (m,), generator=gen)
+        elif case == "lengths":  # the full key range (positive and negative scores)
+            keys = torch.randint(1, 1 << 32, (m,), generator=gen, dtype=torch.int64)
+        elif case == "dups":  # 7 values on the 8-bit digits' edges: every level ties
+            vals = torch.tensor([1, 0xFF, 0x100, 0x7FFFFFFF, 0x80000000, 0x800000FF, 0xFFFFFFFF])
+            keys = vals[torch.randint(0, len(vals), (m,), generator=gen)]
+        elif case == "adversarial":  # one shared top 24 bits (the coarse / fine picks of rounds 0-2 see one bin), the
+            # low byte random or 0x00 / 0xFF / 0x0F / 0xF0 (the nibble edges of round 3)
+            low = torch.randint(0, 256, (m,), generator=gen)
+            edge = torch.tensor([0x00, 0xFF, 0x0F, 0xF0])[torch.randint(0, 4, (m,), generator=gen)]
+            low = torch.where(torch.randint(0, 2, (m,), generator=gen) == 1, low, edge)
+            keys = 0xBF8A5C00 + low + (low == 0).to(torch.int64) * (q % 2)
         elif case == "one_chip":  # chip 7 holds every winner
             keys = (
                 torch.randint(1 << 30, 1 << 31, (m,), generator=gen)
@@ -188,11 +211,24 @@ def _lists(gen, case: str, n: int = 32) -> list:
     return out
 
 
-@pytest.mark.parametrize("case", ["random", "ties", "few", "empty", "one_chip", "all_empty"])
+def _topk_records(cores: list, k: int) -> list:
+    """the reference local select: the k largest keys of the cores' lists, ties in (core, local) order, as records
+    [(key, core)] in (core, local) order"""
+    allk = [(kk, c, i) for c, v in enumerate(cores) for i, kk in enumerate(v)]
+    sel = allk if len(allk) <= k else sorted(allk, key=lambda x: -x[0])[:k]
+    return [(kk, c) for kk, c, _ in sorted(sel, key=lambda x: (x[1], x[2]))]
+
+
+@pytest.mark.parametrize(
+    "case", ["random", "ties", "few", "empty", "one_chip", "all_empty", "lengths", "dups", "adversarial", "boundary"]
+)
 def test_helper_merge_kph(case):
     """the KPH merge (helper h holds chips h kph .. : one histogram over the union, in-place compaction per list,
     per-list tie counts) == the serial merge, and == kph 1 bitwise: the coordinator's round sums, T_g, the per-chip
-    quotas, every chip's per-core quotas"""
+    quotas, every chip's per-core quotas. GLM53_DSA_SHARD_R8 (8-bit digits: each round's coarse report + the pulled
+    bucket) == the 4-bit merge bitwise at every kph -- its per-level sums are the 4-bit rounds' sums, 4 messages fewer;
+    the local select (the 32 lists as one lane's 32 chunk cores, k 512 / 37) the same in 4 / 8-bit digits and == the
+    sorted top-k"""
     gen = torch.Generator().manual_seed(64 + len(case))
     lists = _lists(gen, case)
     for rank in (0, 5, 7, 18, 31):
@@ -203,12 +239,27 @@ def test_helper_merge_kph(case):
             assert (got["T_g"], got["core_quota"]) == (ref["T_g"], ref["core_quota"]), (case, rank, kph)
             for key in ("T_g", "k_rem", "done", "helper_quota", "core_quota", "messages", "hists"):
                 assert got[key] == base[key], (case, rank, kph, key)
+            r8 = SP.helper_merge(lists, rank, kph=kph, digit_bits=8)
+            assert {k: v for k, v in r8.items() if k != "messages"} == {
+                k: v for k, v in base.items() if k != "messages"
+            }
+            assert r8["messages"] == base["messages"] - (0 if base["done"] else 4), (case, rank, kph)
+    cores = [[kk for kk, _ in lst] for lst in lists]
+    for k in (512, 37):
+        sel = {bits: SP.local_select(cores, k, bits) for bits in (4, 8)}
+        assert {key: v for key, v in sel[4].items() if key != "messages"} == {
+            key: v for key, v in sel[8].items() if key != "messages"
+        }, (case, k)
+        assert (sel[4]["messages"], sel[8]["messages"]) == (9, 5)
+        assert sel[4]["records"] == _topk_records(cores, k) and sel[4]["n_rec"] == min(k, sum(map(len, cores)))
     if case in ("few", "all_empty"):
         assert base["done"] and base["T_g"] == 0
     if case == "ties":
         assert not base["done"] and sum(base["helper_quota"]) == base["k_rem"] > 0  # a real tie round
     if case == "one_chip":
         assert sum(base["helper_quota"][q] for q in range(32) if q != 7) == 0
+    if case in ("dups", "adversarial", "boundary"):
+        assert not base["done"] and base["k_rem"] > 0 and len(base["hists"]) == 8  # every round + a real tie round
 
 
 @pytest.mark.parametrize("distinct", [True, False])
@@ -236,6 +287,12 @@ def test_lane_merge_kph_lanes(distinct):
         for r in range(32):
             ref = SP.serial_merge(res["lists"], r, k=512)
             assert res["T_g"] == ref["T_g"] and res["core_quota"][r] == ref["core_quota"], (lanes, r)
+        r8 = SP.helper_merge(res["lists"], 0, k=512, kph=kph, digit_bits=8)  # GLM53_DSA_SHARD_R8
+        assert (r8["T_g"], r8["helper_quota"], r8["core_quota"]) == (
+            res["T_g"],
+            res["helper_quota"],
+            res["core_quota"][0],
+        )
         if distinct:  # keys > T_g + the one key == T_g (quota 1): the selected keys = their pools
             sel = {kk for lst in res["lists"] for kk, _ in lst if kk >= res["T_g"]}
             assert len(sel) == 512
@@ -305,6 +362,11 @@ def test_owner_l1_kph():
                 assert new[k] <= ref[k], (seq, t, k, new, ref)
             if t <= 2:
                 assert new == ref  # KPH 1, the same lanes: the same bytes
+        for t, lanes in lanes_new.items():  # GLM53_DSA_SHARD_R8: the fine counts in the dropped rounds' mailbox bytes
+            kph = SP.shard_kph(32, 64, lanes, 8, "auto")
+            off, on = SP.owner_l1(tp, t, lanes, kph), SP.owner_l1(tp, t, lanes, kph, r8=True)
+            assert {k: v for k, v in on.items() if k != "mbox"} == {k: v for k, v in off.items() if k != "mbox"}
+            assert on["mbox"] == off["mbox"] - (0 if on["tl"] == 4 else 512), (seq, t, on, off)
 
 
 def test_kph_stays_1_on_the_2x4():
@@ -638,11 +700,26 @@ def test_rs1_early_gates_sound_random():
 
 
 def test_rev65_knobs(monkeypatch):
-    """GLM53_DSA_SHARD_COMB / GLM53_DSA_SHARD_RS1_EARLY / GLM53_DSA_SHARD_RSB: default off, the 8x4 only, 0 / 1 only
-    (RSB needs no other knob); the fold's message size is the header's"""
-    for k in ("GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RSB"):
+    """GLM53_DSA_SHARD_COMB / GLM53_DSA_SHARD_RS1_EARLY / GLM53_DSA_SHARD_RSB / GLM53_DSA_SHARD_R8: default off, the 8x4
+    only, 0 / 1 only (RSB / R8 need no other knob); the fold's message size is the header's; R8's rounds, mailbox layout
+    (the fine counts after the 4-round messages: 16-B aligned, never more bytes than the 4-bit mailbox) and the merge
+    message count are the kernels'"""
+    for k in ("GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_R8"):
         monkeypatch.delenv(k, raising=False)
-    assert not SP.shard_comb(8) and not SP.shard_rs1_early(8) and not SP.shard_rsb(8)
+    assert not SP.shard_comb(8) and not SP.shard_rs1_early(8) and not SP.shard_rsb(8) and not SP.shard_r8(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_R8", "1")
+    assert SP.shard_r8(8) and not SP.shard_r8(2)  # on its own (the select / merge kernels and the mailbox only)
+    assert not (SP.shard_comb(8) or SP.shard_rs1_early(8) or SP.shard_rsb(8) or SP.shard_agk(8))
+    SP.r8_header_check()
+    assert (SP.radix_rounds(), SP.radix_rounds(True), SP.merge_msgs(32), SP.merge_msgs(32, r8=True)) == (8, 4, 17, 13)
+    assert [(SP.mbox_bytes(tl, 32), SP.mbox_bytes(tl, 32, r8=True), SP.r8_fine_off(tl, 32)) for tl in (4, 8)] == [
+        (4800, 4800, 4288),
+        (9600, 9088, 8576),
+    ]
+    monkeypatch.setenv("GLM53_DSA_SHARD_R8", "yes")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_R8=yes: 0 or 1"):
+        SP.shard_r8(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_R8")
     monkeypatch.setenv("GLM53_DSA_SHARD_RSB", "1")
     assert SP.shard_rsb(8) and not SP.shard_rsb(2)  # on its own (the scatters only)
     monkeypatch.setenv("GLM53_DSA_SHARD_COMB", "1")
@@ -689,6 +766,10 @@ def test_keypack_merge_matches_records(case):
             base = SP.helper_merge(lists, rank, kph=kph)
             got = SP.agk_merge(pages, counts, chunks[rank], rank, kph=kph)
             assert got == base, (case, rank, kph)
+            r8 = SP.agk_merge(pages, counts, chunks[rank], rank, kph=kph, digit_bits=8)  # GLM53_DSA_SHARD_R8
+            assert {k: v for k, v in r8.items() if k != "messages"} == {
+                k: v for k, v in base.items() if k != "messages"
+            }
             assert (got["T_g"], got["core_quota"]) == (ref["T_g"], ref["core_quota"]), (case, rank, kph)
     # a wrong count is caught by the helpers' checks (the kernel's watcher ASSERTs)
     if case == "random":
@@ -722,18 +803,21 @@ def test_agk_launch_matches_rev65(lanes, tl, case):
     """one launch of t = lanes x TL tokens under AGK (auto KPH 1 / 1 / 2 / 4): every chip's local top-512 records ->
     x_ag (stale words past them) -> the key pack + both AG rounds -> y_ag (32 blocks x t x 2 pages, each written once)
     -> ix_dm1's q pieces where x_ag had them, and on chips 0 / 13 / 31 the AGK merge == rev 65's helper merge over the
-    records bitwise (T_g, per-chip / per-core quotas, the tie order) == the serial merge, per token; the count derived
-    from the position = the local select's record count on every chip"""
+    records bitwise (T_g, per-chip / per-core quotas, the tie order) == the serial merge, per token, in 4-bit and in
+    R8's 8-bit digits; the count derived from the position = the local select's record count on every chip"""
     t = lanes * tl
     kph = SP.shard_kph(32, 64, lanes, 8, "auto")
     gen = torch.Generator().manual_seed(1000 * lanes + 10 * tl + len(case))
     pos, keys = _launch(gen, case, t)
     ranks = (0, 13, 31) if t <= 8 else (0, 31)
-    res = SP.emulate_agk_launch(keys, pos, lanes, kph, ranks=ranks, seed=t)
+    res = SP.emulate_agk_launch(keys, pos, lanes, kph, ranks=ranks, seed=t, r8=True)
     assert [r["lane"] for r in res] == [i % lanes for i in range(t)]
     for i, r in enumerate(res):
         for rank in ranks:
             assert r["got"][rank] == r["ref"][rank], (lanes, tl, case, i, rank)
+            g8, g4 = r["r8"][rank], r["got"][rank]  # GLM53_DSA_SHARD_R8: the same merge in 8-bit digits
+            assert {k: v for k, v in g8.items() if k != "messages"} == {k: v for k, v in g4.items() if k != "messages"}
+            assert g8["messages"] == g4["messages"] - (0 if g4["done"] else 4)
             ser = r["serial"][rank]
             assert (r["got"][rank]["T_g"], r["got"][rank]["core_quota"]) == (ser["T_g"], ser["core_quota"])
         assert sum(r["got"][0]["helper_quota"]) == r["got"][0]["k_rem"]  # the tie quotas cover k_rem exactly
