@@ -1293,7 +1293,7 @@ def setup_bench(dev, MESH, mesh_identity):
             RQBAL = ('MKA_RQBAL', '1') in MKDEF
             assert not RQBAL or ('MKA_RQDYN', '1') not in MKDEF, 'MKA_RQBAL includes the dynamic split (no MKA_RQDYN)'
             _smax = max(RNG[fi_][1] - RNG[fi_][0] for fi_ in ACT)
-            if RQBAL: _smax = max(_smax, -(-NU * NBK // len(ACT)) + 4)   # proportional membership: ~ total blocks / cores
+            if RQBAL: _smax = max(_smax, -(-2 * NU * NBK // len(ACT)) + 4)   # proportional membership: a 1-core user holds < 2 W / N blocks
             KVP_PTW = (_smax + BS32 - 1) // BS32 + 1 + 16
             # no persistent L1 table (engine L1 budget): two device-local global semaphores (INFO, ASGN) + CB_ONE page 3 (2 KB:
             # header 3 + T words, <= 15 words of 64 B alignment pad, the page-table window)
