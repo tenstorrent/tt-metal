@@ -30,6 +30,10 @@
 #ifndef PACK_API_SHIM_OUT2_FORMAT
 #define PACK_API_SHIM_OUT2_FORMAT PACK_OUT
 #endif
+// Output B's packer input: the JIT's per-CB pack_src_format, which follows B's format (fp32 DEST); the tests pass it.
+#ifndef PACK_API_SHIM_OUT2_SRC
+#define PACK_API_SHIM_OUT2_SRC PACK_IN
+#endif
 #ifndef PACK_API_SHIM_NUM_FACES
 #define PACK_API_SHIM_NUM_FACES 4
 #endif
@@ -59,7 +63,7 @@
         f(44), f(45), f(46), f(47), f(48), f(49), f(50), f(51), f(52), f(53), f(54), f(55), f(56), f(57), f(58), f(59), f(60), f(61), f(62), f(63)
 #define PACK_API_SHIM_OUT_OR(i, out, other) ((i) == PACK_API_SHIM_OUT || (i) == PACK_API_SHIM_OUT2 ? (out) : (other))
 #define PACK_API_SHIM_OUT_FMT(i)            ((i) == PACK_API_SHIM_OUT2 ? PACK_API_SHIM_OUT2_FORMAT : PACK_OUT)
-#define PACK_API_SHIM_SRC(i)                PACK_API_SHIM_OUT_OR(i, PACK_IN, 255)
+#define PACK_API_SHIM_SRC(i)                ((i) == PACK_API_SHIM_OUT2 ? PACK_API_SHIM_OUT2_SRC : PACK_API_SHIM_OUT_OR(i, PACK_IN, 255))
 #define PACK_API_SHIM_DST(i)                PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_OUT_FMT(i), 255)
 #define PACK_API_SHIM_UNPACK(i)             ((i) == 0 ? UNPACK_A_IN : ((i) == 1 ? UNPACK_B_IN : PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_OUT_FMT(i), 255)))
 #define PACK_API_SHIM_FACES(i)              PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_NUM_FACES, 4)

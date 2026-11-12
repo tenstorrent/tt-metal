@@ -33,7 +33,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
-from helpers.pack_sweep import SHIM_CONFIG, sweep_templates
+from helpers.pack_sweep import SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.tile_constants import get_tile_params
 from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
@@ -294,7 +294,7 @@ def _kwargs(case, arm, loop_factor):
         "unpack_to_dest": False,
         **SHIM_CONFIG,
     }
-    return kwargs, (pa, pb, block_tiles, arm[0] & 3)
+    return bind_pack_src_b(kwargs), (pa, pb, block_tiles, arm[0] & 3)
 
 
 @pytest.mark.perf

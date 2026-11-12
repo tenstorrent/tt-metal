@@ -14,7 +14,7 @@ from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.pack_sweep import SHIM_CONFIG, sweep_templates
+from helpers.pack_sweep import SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
@@ -139,5 +139,5 @@ def test_perf_pack_block_sweep(
         "unpack_to_dest": False,
     }
     create_test_or_perf_config(
-        is_perf=True, run_types=run_types, test_config_kwargs=kwargs
+        is_perf=True, run_types=run_types, test_config_kwargs=bind_pack_src_b(kwargs)
     ).run(perf_report)

@@ -10,7 +10,9 @@ blocks (or one), so llk_pack_w_take continues or programs the base by itself. fo
 5 the tables for both.
 """
 
+from .data_format_inference import data_formats, infer_pack_in
 from .format_config import DataFormat
+from .test_config import TestConfig
 from .test_variant_parameters import PACK_API_SWEEP
 
 SHIM_CONFIG = {
@@ -79,3 +81,35 @@ def sweep_templates(
             fidelity,
         )
     ]
+
+
+def bind_pack_src_b(kwargs):
+    """Output B's packer input in a state 2 arm, as the JIT's pack_src_format of a second output CB: A's DEST format packed to
+    B's format with the test's inference (with a 32 bit DEST that is B's format, not A's). Returns kwargs.
+    """
+    templates = kwargs["templates"]
+    from_output = any(getattr(t, "pack_src_from_output", False) for t in templates)
+    for t in templates:
+        if isinstance(t, PACK_API_SWEEP) and t.state == 2:
+            f, acc = kwargs["formats"], kwargs["dest_acc"]
+            to_dest = kwargs.get("unpack_to_dest", False)
+            a = data_formats(
+                input_format=f.input_format,
+                output_format=f.output_format,
+                is_fp32_dest_acc_en=acc,
+                num_iterations=1,
+                unpacking_to_dest=to_dest,
+                chip_arch=TestConfig.CHIP_ARCH,
+                input_format_B=getattr(f, "input_format_B", None),
+                pack_src_from_output=from_output,
+            )[0]
+            t.pack_src_b = infer_pack_in(
+                f.input_format,
+                t.format_b,
+                a.math,
+                acc,
+                to_dest,
+                TestConfig.CHIP_ARCH,
+                pack_src_from_output=from_output,
+            )
+    return kwargs

@@ -29,7 +29,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
-from helpers.pack_sweep import NEW_ARMS, SHIM_CONFIG, sweep_templates
+from helpers.pack_sweep import NEW_ARMS, SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.tile_constants import get_tile_params
 
 F = DataFormat
@@ -211,5 +211,5 @@ def test_perf_pack_block_sweep8(
         "unpack_to_dest": fin.is_32_bit() and dest_acc == DestAccumulation.Yes,
     }
     create_test_or_perf_config(
-        is_perf=True, run_types=run_types, test_config_kwargs=kwargs
+        is_perf=True, run_types=run_types, test_config_kwargs=bind_pack_src_b(kwargs)
     ).run(perf_report)

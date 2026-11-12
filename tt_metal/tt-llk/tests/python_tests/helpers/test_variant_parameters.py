@@ -1095,6 +1095,7 @@ class PACK_API_SWEEP(TemplateParameter):
             self.face_r,
             self.fidelity,
         ) = (state, arm_b, cbd, format_b, faces, face_r, fidelity)
+        self.pack_src_b = None  # B's packer input, set by pack_sweep.bind_pack_src_b
 
     def convert_to_cpp(self) -> str:
         arm_b = "0" if self.arm_b == "0" else f"'{self.arm_b}'"
@@ -1112,6 +1113,10 @@ class PACK_API_SWEEP(TemplateParameter):
                 "#define PACK_API_SHIM_OUT2 17",
                 f"#define PACK_API_SHIM_OUT2_FORMAT ckernel::to_underlying(DataFormat::{self.format_b.name})",
             ]
+            if self.pack_src_b is not None:
+                lines.append(
+                    f"#define PACK_API_SHIM_OUT2_SRC ckernel::to_underlying(DataFormat::{self.pack_src_b.name})"
+                )
         if self.fidelity is not None:
             lines.append(
                 f"constexpr ckernel::MathFidelity MATH_FIDELITY = ckernel::MathFidelity::{self.fidelity};"
