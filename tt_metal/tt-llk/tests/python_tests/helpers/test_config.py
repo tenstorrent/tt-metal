@@ -1077,6 +1077,9 @@ class TestConfig:
         # LLK_MATMUL_PACK_CTFMT=1: compile-time formats, as a ttnn kernel reconfigures the packer to constant CB formats
         if os.environ.get("LLK_MATMUL_PACK_CTFMT") == "1":
             compile_time_formats = True
+        # the matmul tests' pack thread runs production's pack_block (pack_api_shim.h) with compile-time formats: production's LTO
+        if compile_time_formats and os.path.basename(str(test_name)) in ("matmul_test.cpp", "math_matmul_test.cpp", "matmul_dyn_test.cpp"):
+            self.kernel_flags += [f for f in ("-flto=1", "-flto-partition=one") if f not in self.kernel_flags]
 
         # Artefact directory is always relative to ARTEFACTS_DIR. An absolute
         # test_name is the C++ driver path; keep a sources/<basename> artefact
