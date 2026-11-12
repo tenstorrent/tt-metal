@@ -30,6 +30,7 @@ inline void llk_pack_untilize_init_impl(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim,
     const std::uint32_t num_faces) {
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces);
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format, pack_dst_format));
 
     if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
@@ -50,7 +51,7 @@ inline void llk_pack_untilize_init_impl(
         StateDiscard<bool>(dense)));
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
-        pack_src_format, pack_dst_format, face_r_dim, num_faces);
+        pack_src_format, pack_dst_format, tensor_shape);
 }
 
 template <
@@ -70,6 +71,7 @@ inline void llk_pack_untilize_impl(
     const std::uint32_t num_faces,
     const std::uint32_t block_c_index,
     const std::uint32_t tile_dst_rt_offset) {
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces);
     std::uint32_t pack_tile_addr =
         base_addr + SCALE_DATUM_SIZE(
                         pack_dst_format,
@@ -100,7 +102,7 @@ inline void llk_pack_untilize_impl(
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
-            pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr, tensor_shape, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += page_stride;
     }
@@ -115,7 +117,7 @@ inline void llk_pack_untilize_uninit_impl(const std::uint32_t pack_src_format) {
 /**
  * Initialize the packer for an untilize operation on the given output operand.
  *
- * Face geometry (face_r_dim, num_faces) is derived from the output CB metadata. In
+ * Tile geometry is derived from the output CB metadata. In
  * debug builds, validates that the packers are configured correctly for the resolved
  * face row dimension before programming the untilize init sequence.
  *
@@ -137,11 +139,13 @@ template <
 inline void llk_pack_untilize_init(std::uint32_t output) {
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        tensor_shape.face_r_dim,
+        tensor_shape.total_num_faces());
 }
 
 /**
@@ -159,7 +163,7 @@ inline void llk_pack_untilize_uninit(std::uint32_t output) {
  * Pack an untilized block of tiles from the destination register into the output CB.
  *
  * Iterates over block_rt_dim tile rows, computing the packer write address from the
- * output CB fifo state for each row. Face geometry (face_r_dim, num_faces) is derived
+ * output CB fifo state for each row. Tile geometry is derived
  * from the output CB metadata.
  *
  * @tparam block_ct_dim       Width of a single block in tiles.
@@ -189,8 +193,7 @@ inline void llk_pack_untilize(
     const std::uint32_t tile_dst_rt_offset = 0) {
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     llk_pack_untilize_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim,
@@ -198,8 +201,8 @@ inline void llk_pack_untilize(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        num_faces,
+        tensor_shape.face_r_dim,
+        tensor_shape.total_num_faces(),
         block_c_index,
         tile_dst_rt_offset);
 }
