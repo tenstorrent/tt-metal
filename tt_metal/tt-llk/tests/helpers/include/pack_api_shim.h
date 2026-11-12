@@ -189,7 +189,7 @@ inline void cb_push_back(const std::uint32_t cb, const std::uint32_t num_tiles)
     asm volatile("" ::: "memory");
 }
 
-// Main's pack_block: llk_matmul_pack's per-tile loop. On the PR's LLK the per-tile pack keeps main's destination write.
+// Main's pack_block: llk_matmul_pack's per-tile loop, with main's destination write on the PR's LLK too.
 template <bool is_fp32_dest_acc_en>
 inline void main_pack_block(const std::uint32_t start_tile_index, const std::uint32_t output, const std::uint32_t ntiles)
 {

@@ -197,20 +197,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
 #define PACK_RMW_TAIL
 #endif
-// Per tile, a Float32 output from a 16 bit DEST keeps main's write (llk_pack_tile_of_output) unless PACK_RMW_DEST.
+// Per tile, the byte-wise write except at half sync with fp32 DEST and an unpack to DEST (llk_pack_impl) unless PACK_RMW_DEST.
 #if defined(ARCH_BLACKHOLE) && !defined(PACK_RMW_DEST)
-#define PACK_TILE_CALL(tile, addr)                                                                                \
-    do                                                                                                            \
-    {                                                                                                             \
-        if (!is_fp32_dest_acc_en && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Float32))          \
-        {                                                                                                         \
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, false>((tile), (addr)); \
-        }                                                                                                         \
-        else                                                                                                      \
-        {                                                                                                         \
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>((tile), (addr));               \
-        }                                                                                                         \
-    } while (0)
+#define PACK_TILE_CALL(tile, addr)                                                                                                                             \
+    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, dest_sync == DstSync::SyncFull || !(is_fp32_dest_acc_en && unpack_to_dest)>( \
+        (tile), (addr))
 #else
 #define PACK_TILE_CALL(tile, addr) _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default PACK_RMW_TAIL>((tile), (addr))
 #endif

@@ -200,20 +200,14 @@ static inline std::uint32_t alt_page_bytes(const std::uint32_t fmt)
     return fmt == static_cast<std::uint32_t>(DataFormat::Float32) ? 4096 : (fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ? 1088 : 2048);
 }
 
-// llk_pack_block writes the destination by bytes under full sync (llk_pack_rmw_tile)
+// llk_pack_block's block forms write the destination by bytes under full sync (llk_pack_rmw_tile), its per-tile packs
+// except at half sync with fp32 DEST and an unpack to DEST (llk_pack_rmw_per_tile)
 constexpr bool alt_rmw = dest_sync == DstSync::SyncFull;
 
 template <bool fp32>
-inline void alt_pack_tile(const std::uint32_t fmt, const std::uint32_t tile, const std::uint32_t addr)
+inline void alt_pack_tile([[maybe_unused]] const std::uint32_t fmt, const std::uint32_t tile, const std::uint32_t addr)
 {
-    if (!fp32 && fmt == static_cast<std::uint32_t>(DataFormat::Float32))
-    {
-        _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default, false, false>(tile, addr);
-    }
-    else
-    {
-        _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default, false, alt_rmw>(tile, addr);
-    }
+    _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default, false, alt_rmw || !(fp32 && unpack_to_dest)>(tile, addr);
 }
 
 // llk_pack_block's form for the first block after a reconfigure: llk_pack_reconf_form's rows for the pair formats
