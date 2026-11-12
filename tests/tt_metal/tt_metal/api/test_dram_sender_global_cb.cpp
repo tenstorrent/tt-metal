@@ -23,6 +23,7 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/dram_sender_state_block.hpp"
+#include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 
@@ -656,9 +657,7 @@ TEST_F(DramSenderGCBFixture, TensorPrefetcherGateKeepsBlackholeResultAndRejectsQ
     }
     EXPECT_THAT(
         [this] {
-            experimental::StartTensorPrefetcher(
-                *mesh_device_,
-                experimental::TensorPrefetcherConfig{.quasar = experimental::QuasarTensorPrefetcherConfig{}});
+            distributed::start_tensor_prefetcher(*mesh_device_, {}, distributed::QuasarTensorPrefetcherConfig{});
         },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Quasar tensor prefetcher configuration cannot be used on architecture")));

@@ -13,14 +13,9 @@ namespace tt::tt_metal::distributed {
 // Tensor prefetcher internals that only tests use, kept out of TensorPrefetcherManager's API.
 class TensorPrefetcherManagerTestAccess {
 public:
-    // What StartTensorPrefetcher requires of `mesh_device`. IsTensorPrefetcherSupported is this. On Quasar
-    // it accepts a sender CCE whose GO_MSG holds RUN_MSG_GO, so it holds while receiver Programs and
-    // prefetcher sessions run.
+    // What StartTensorPrefetcher requires of `mesh_device`. IsTensorPrefetcherSupported is this. It accepts a
+    // sender core that is running a Program, so it holds while receiver Programs and prefetcher sessions run.
     static TensorPrefetcherPreconditions preconditions(const MeshDevice& mesh_device);
-
-    // TL1 offset of every Quasar CCE sender's control block (tensor_prefetcher_cce_abi.hpp). It depends only on
-    // the mesh's DRISC L1 arena, so it holds before Start and after Stop.
-    static uint32_t cce_sender_control_base(const MeshDevice& mesh_device);
 
     // Records `gcb` on its senders for Stop's DRAIN, as queueing a request to it would, without sending a
     // request. For tests that drain a live GlobalCircularBuffer without the PREFETCH path.

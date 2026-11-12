@@ -63,25 +63,9 @@ struct BlackholeTensorPrefetcherConfig {
     // this config and the resolved policy is logged.
 };
 
-struct QuasarTensorPrefetcherConfig {
-    // DRAM banks whose CCE runs a prefetch sender; empty provisions every bank. A CCE runs one
-    // launch at a time, so receiver Programs need CCEs outside this set.
-    std::vector<uint32_t> dram_sender_banks;
-
-    // Cycles a sender waits on credits, a drain or a command-queue signal before it writes a
-    // timeout status and exits. 0 waits forever.
-    uint64_t wait_budget_cycles = 0;
-
-    // Caps the sender's TL1 staging ring. A multiple of 384 B keeps each third of the ring on
-    // whole 64 B lines. The default's third holds one K-row of a UINT32 tensor one tile wide per
-    // receiver (4 KiB).
-    uint32_t stage_ring_bytes = 12288;
-};
-
 // Architectures apply their default config when arch specific configs are unset.
 struct TensorPrefetcherConfig {
     std::optional<BlackholeTensorPrefetcherConfig> blackhole = std::nullopt;
-    std::optional<QuasarTensorPrefetcherConfig> quasar = std::nullopt;
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`. On every architecture both must hold:

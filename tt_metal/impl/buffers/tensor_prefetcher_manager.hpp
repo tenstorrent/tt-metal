@@ -44,6 +44,21 @@ class PrefetcherSenderBackend;
 class RequestTransport;
 class TensorPrefetcherManagerTestAccess;
 
+struct QuasarTensorPrefetcherConfig {
+    // DRAM banks whose CCE runs a prefetch sender; empty provisions every bank. A CCE runs one
+    // launch at a time, so receiver Programs need CCEs outside this set.
+    std::vector<uint32_t> dram_sender_banks;
+
+    // Cycles a sender waits on credits, a drain or a command-queue signal before it writes a
+    // timeout status and exits. 0 waits forever.
+    uint64_t wait_budget_cycles = 0;
+
+    // Caps the sender's TL1 staging ring. A multiple of 384 B keeps each third of the ring on
+    // whole 64 B lines. The default's third holds one K-row of a UINT32 tensor one tile wide per
+    // receiver (4 KiB).
+    uint32_t stage_ring_bytes = 12288;
+};
+
 struct TensorPrefetcherPreconditions {
     bool ok = false;
     // Empty when ok; otherwise the first precondition that failed.
@@ -51,9 +66,8 @@ struct TensorPrefetcherPreconditions {
 };
 
 // Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
-// per-device Programs, the request transport (an H2D socket per (device, sender) on
-// Blackhole, a TL1 request ring per CCE sender on Quasar), and the host worker
-// thread that drains the request queue. It does NOT own or hold the queued tensors
+// per-device Programs, the request transport that delivers request pages to the
+// senders, and the host worker thread that drains the request queue. It does NOT own or hold the queued tensors
 // or GCBs alive — queue() serializes each request into request pages and keeps only
 // those bytes, so the caller must keep the tensors and GCB alive until stop() (see
 // the public tensor_prefetcher.hpp note).
@@ -97,7 +111,9 @@ public:
     // of 128 B is a 16 KiB DRISC L1 FIFO that holds many small one-matmul requests in flight.
     static constexpr uint32_t kSocketFifoPages = 128;
 
-    void start(const experimental::TensorPrefetcherConfig& config);
+    void start(
+        const experimental::TensorPrefetcherConfig& config,
+        const std::optional<QuasarTensorPrefetcherConfig>& quasar_config);
 
     // Capture-vs-send contract, and the `trace_capture_cq` precondition: see
     // QueueTensorPrefetcherRequest. Captured pages live in trace_requests_ keyed by the
@@ -138,13 +154,9 @@ public:
     void enqueue_cq_signal_and_wait(
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
 
-    // Stops the senders and releases this session. If waiting for the senders throws, it logs their
-    // statuses, releases everything but the DRISC L1 ranges a DRAIN was reading and the DRAM receiver
-    // zones their senders write, and rethrows. If the worker gave up on a sender whose request ring took
-    // no page, it logs the statuses, keeps those ranges too, and throws once everything else is released.
-    // If a Quasar CCE sender ended Failed, or its status cannot be read, it logs the statuses and throws
-    // once everything is released, naming each such sender with the request pages left unread in its ring,
-    // and how many more the worker dropped after it exited.
+    // Stops the senders and releases this session. If waiting for the senders throws, or the transport gave up
+    // on a sender, it logs their statuses and keeps the ranges the senders write that stop must hold. It rethrows
+    // a failed wait; otherwise it throws the transport's failure summary, if any, once the rest is released.
     void stop();
 
     // stop() for the destructor and device close: a failure is logged, not thrown, and the worker thread is
@@ -185,8 +197,8 @@ private:
         // The DRISC L1 range each of those addresses lies in, in mapping order. Weak, like the rest of
         // this struct: it only tells stop whether that range still belongs to the target.
         std::vector<std::weak_ptr<DriscL1Allocation>> state_alloc_per_sender;
-        // The DRAM receivers' receiver-zone range the senders store data and credits into, held with the state
-        // ranges once stop drains them. Empty for worker receivers and pipes.
+        // A range besides the state ranges that the senders write data and credits into, which stop must hold with
+        // them while it drains them. Empty for worker receivers and pipes.
         std::weak_ptr<DriscL1Allocation> receiver_alloc;
         // Bank-local slab index of each sender's first receiver, in mapping order: local receiver
         // r of sender s reads slab recv_index_base_per_sender[s] + r. Stamped into every layout
@@ -257,7 +269,7 @@ private:
     // A target stop must drain on one sender: its DRAIN word (state address | kDrainTargetPipeBit for a
     // pipe) and the DRISC L1 range that address lies in. The range expiring means the target is gone
     // and its memory may already hold something else, so stop skips it rather than read that memory
-    // as counters. `receivers` is the target's DRAM receiver zone, if it has one.
+    // as counters. `receivers` is the target's RequestTarget::receiver_alloc, if it has one.
     struct DrainTarget {
         uint32_t word = 0;
         std::weak_ptr<DriscL1Allocation> state;
@@ -265,11 +277,12 @@ private:
     };
     // drain_targets_per_sender_[s]: every target sender slot s has been queued for since start.
     std::vector<std::vector<DrainTarget>> drain_targets_per_sender_;
-    // The ranges stop is draining, and the DRAM receiver zones their senders write, held until the kernels have
-    // exited so none can be reused while a DRAIN reads it or a sender writes it.
+    // The ranges stop is draining, and the other ranges their senders write that stop must hold, held until the
+    // kernels have exited so none can be reused while a DRAIN reads it or a sender writes it.
     std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_;
-    // drain_holds_ of every Stop whose senders did not finish: a sender or receiver may still write those
-    // ranges, so they are never released while this manager lives.
+    // drain_holds_ of every Stop whose senders may still run, because the wait for them failed or the transport
+    // gave up on one: a sender or receiver may still write those ranges, so they are never released while this
+    // manager lives.
     std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_after_failed_stop_;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
@@ -297,7 +310,8 @@ private:
     // worker_loop fan-out is O(targets) instead of O(targets * devices).
     std::unordered_map<MeshCoordinate, uint32_t> device_index_by_coord_;
 
-    // Request pages the worker dropped because their sender had exited, so stop() can report them.
+    // Request pages the worker dropped because the transport said their sender had exited, for the transport's
+    // failure summary at stop().
     std::atomic<uint32_t> dropped_request_pages_{0};
 
     // Host worker thread + queue
@@ -316,6 +330,11 @@ private:
     // destroyed immediately after shutdown/drain so setup and cleanup are excluded.
     std::optional<tt::ScopedTimer<std::chrono::microseconds>> active_lifetime_timer_;
 };
+
+void start_tensor_prefetcher(
+    MeshDevice& mesh_device,
+    const experimental::TensorPrefetcherConfig& config,
+    const std::optional<QuasarTensorPrefetcherConfig>& quasar_config);
 
 }  // namespace distributed
 }  // namespace tt::tt_metal

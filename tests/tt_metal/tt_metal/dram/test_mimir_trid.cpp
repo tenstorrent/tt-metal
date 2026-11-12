@@ -1520,11 +1520,11 @@ MeshTensor write_prefetch_tensor(distributed::MeshDevice& mesh, uint32_t bank) {
 class ConcurrentPrefetcherSession {
 public:
     ConcurrentPrefetcherSession(distributed::MeshDevice& mesh, uint32_t sender_bank) : mesh_(mesh) {
-        experimental::StartTensorPrefetcher(
+        distributed::start_tensor_prefetcher(
             mesh_,
-            experimental::TensorPrefetcherConfig{
-                .quasar = experimental::QuasarTensorPrefetcherConfig{
-                    .dram_sender_banks = {sender_bank}, .wait_budget_cycles = kConcurrentBudgetCycles}});
+            {},
+            distributed::QuasarTensorPrefetcherConfig{
+                .dram_sender_banks = {sender_bank}, .wait_budget_cycles = kConcurrentBudgetCycles});
         active_ = true;
     }
     ConcurrentPrefetcherSession(const ConcurrentPrefetcherSession&) = delete;
