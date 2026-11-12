@@ -69,8 +69,8 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
         mesh_device->shape());
     if (mesh_device->impl().metal_env().get_hal().has_cce_dram_cores()) {
         TT_THROW(
-            "DRAM sender mappings for worker receivers are not supported with Quasar CCE senders: each DRAM view "
-            "has one CCE sender and there are no worker receivers");
+            "DRAM sender mappings for worker receivers are not supported on CCE DRAM cores: each DRAM view has one "
+            "CCE sender and there are no worker receivers");
     }
     const IDevice* reference_device = devices.front();
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;

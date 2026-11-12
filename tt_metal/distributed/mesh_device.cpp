@@ -2005,7 +2005,7 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
     }
     if (metal_env().get_hal().has_cce_dram_cores()) {
         TT_THROW(
-            "Quasar DRAM views have no unused subchannel: each view's CCE is its sender, (bank_id, 0). Use "
+            "CCE DRAM views have no unused subchannel: each view's CCE is its sender, (bank_id, 0). Use "
             "dram_sender_logical_cores instead.");
     }
     return tt::tt_metal::pick_unused_dram_logical_core(

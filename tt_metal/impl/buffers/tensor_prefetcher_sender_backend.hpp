@@ -81,7 +81,7 @@ QuasarTensorPrefetcherConfig resolve_quasar_config(
     const experimental::TensorPrefetcherConfig& config,
     const std::optional<QuasarTensorPrefetcherConfig>& quasar_config);
 
-// What differs between the Blackhole DRISC senders and the Quasar CCE senders, the two kinds of sender that run on
+// What differs between the Blackhole DRISC senders and the CCE senders, the two kinds of sender that run on
 // their own DRAM cores: config resolution, the carve, the sender Programs and the transport that feeds them, and the
 // checks on targets and requests. start(), worker_loop_request_ring() and stop() reach the sender kind only through
 // this and that transport. Senders on the dispatch engine have none: fast dispatch runs their kernels, and the
