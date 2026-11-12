@@ -219,7 +219,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
 {
 #if MATMUL_PACK_FORM != 0
-    // The fast forms need four faces of 16 rows. At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
+    // The fast forms need four faces of 16 rows. At half sync denser DEST reads only add contention behind math or
+    // unpack: the closed form stays off, the plain one needs a 16-bit DEST.
     constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
     constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
     if (MATMUL_PACK_FORM == 1 && fast_plain)

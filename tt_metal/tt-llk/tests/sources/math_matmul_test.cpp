@@ -231,7 +231,8 @@ inline void matmul_pack_out(
     [[maybe_unused]] bool fast = false)
 {
 #if MATMUL_PACK_FORM != 0
-    // At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
+    // At half sync the pack hides behind math or unpack, where denser DEST reads only add contention: closed stays off,
+    // and the plain form needs a 16-bit DEST.
     constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
     constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
     if (fast && MATMUL_PACK_FORM == 1 && fast_plain)

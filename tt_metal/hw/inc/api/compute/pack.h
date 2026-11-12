@@ -117,8 +117,8 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
- * NOTE: On Blackhole pack_block<ntiles>(ifrom_dst, icb) packs the block in one packer run where the layout allows; right
- * behind matmul math, pack_block<ntiles, DST_ACCUM_MODE, K> picks the forms for that K. A runtime count packs per tile.
+ * NOTE: On Blackhole pack_block<ntiles>(ifrom_dst, icb) packs the block in one packer run where the layout allows;
+ * right behind matmul math, pack_block<ntiles, DST_ACCUM_MODE, K> picks the forms for K. A runtime count packs per tile.
  *
  * Return value: None
  *

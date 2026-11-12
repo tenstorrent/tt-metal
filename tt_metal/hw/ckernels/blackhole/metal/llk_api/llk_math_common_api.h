@@ -67,8 +67,7 @@ inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDD");
 }
 
-// Ends a run of math-cleared sections: once the pack has released the last one, all of DEST is clear again, as the
-// default acquire expects.
+// Ends a run of math-cleared sections: DEST is all clear again once the pack released the last one.
 inline void llk_math_dest_clear_region_end() {
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0) {

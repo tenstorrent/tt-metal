@@ -327,11 +327,8 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
-// The packer state the block packs read, one word so that set_packer_strides resets it with one store:
-//   byte 0 the output of the last llk_pack_block plus one (0 none since the last init or reconfigure, LLK_PACK_STATE_FU_OPEN a fast untilize left open),
-//          with LLK_PACK_STATE_W when that block took the W offset, so the packer's output base is still its W base
-//   byte 1 1 after a packer reconfigure, until the next block   bytes 2-3 the channel-1 W stride the closed block pack last wrote
-// Written only with plain stores and read only by the block packs, so a kernel without them drops every store.
+// The block packs' state in one word, so set_packer_strides resets it with one store: byte 0 last output + 1 (with
+// LLK_PACK_STATE_W if it took W), byte 1 reconfigured, bytes 2-3 the channel-1 W stride; unread, its stores drop.
 [[maybe_unused]] alignas(4) static std::uint8_t pack_state[4] = {0, 0, 0, 0};
 constexpr std::uint8_t LLK_PACK_STATE_FU_OPEN = 0xff;
 constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
@@ -357,8 +354,8 @@ inline void pack_ch1_w_stride_set(const std::uint32_t tile_stride)
     __builtin_memcpy(pack_state + 2, &stride, sizeof(stride));
 }
 
-// The context of the masks llk_pack_block applies, one halfword of its own, so a kernel that stores no context folds the select away:
-//   byte 0 the math context: 1 matmul, 0 other (llk_pack_math_context)   byte 1 a pack-thread SFPU init ran (1, sticky; llk_pack_sfpu_context)
+// The mask context in a halfword of its own, so a kernel that stores none folds the select: byte 0 matmul (1) or
+// other, byte 1 a pack-thread SFPU init ran (sticky).
 [[maybe_unused]] alignas(2) static std::uint8_t pack_ctx[2] = {0, 0};
 inline void llk_pack_math_context(const std::uint8_t context)
 {
@@ -376,38 +373,35 @@ inline std::uint32_t llk_pack_context()
     return (half & 0xff) == 0 ? 0 : 1 + ((half >> 8) != 0);
 }
 
-// W offset block packs of llk_pack_block: the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
-// Anything that writes L1_Dest_addr or the channel-1 W stride makes the state stale (LLK_PACK_W_INVALIDATE), the next block call programs the base again.
+// W offset state: base and stride last programmed, and the tile the next block starts at; anything that writes
+// L1_Dest_addr or the channel-1 W stride makes it stale (LLK_PACK_W_INVALIDATE).
 [[maybe_unused]] static bool pack_w_valid               = false;
 [[maybe_unused]] static std::uint32_t pack_w_page       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_next       = 0;
 [[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
-// An init forgets the last output instead of invalidating the base: the first block after it packs as before, which programs the destination and invalidates the base, and a pack init before every block never programs the W stride.
+// An init forgets the last output, not the base: a pack init before every block then never programs the W stride.
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
-// A fast untilize left open is a last output of its own: every set_packer_strides forgets it, and only llk_pack_block reads it.
+// A fast untilize left open is a last output of its own, forgotten by every set_packer_strides.
 #define LLK_PACK_FAST_UNTILIZE_MARK_OPEN() (pack_state[0] = LLK_PACK_STATE_FU_OPEN)
 #define LLK_PACK_FAST_UNTILIZE_OPEN() (pack_state[0] == LLK_PACK_STATE_FU_OPEN)
 
-// Another pack program (tilize, untilize, pack rows, fast tilize) replaced the default MOP the block packs run: llk_pack_block packs per tile, as main, until
-// a default pack init. Only those inits write pack_other_program_seen, so a kernel without one folds the test away; no writer reads a flag, so a
-// kernel without llk_pack_block keeps none of them.
+// Another pack program replaced the default MOP: llk_pack_block packs per tile until a default pack init. Only those
+// inits write pack_other_program_seen, so kernels without one fold the test, and without llk_pack_block keep no flag.
 [[maybe_unused]] static bool pack_other_program_seen = false;
 [[maybe_unused]] static bool pack_other_program      = false;
 #define LLK_PACK_OTHER_PROGRAM_SET() (pack_other_program_seen = true, pack_other_program = true)
 #define LLK_PACK_OTHER_PROGRAM_CLEAR() (pack_other_program = false)
 #define LLK_PACK_OTHER_PROGRAM_ACTIVE() (pack_other_program_seen && pack_other_program)
 
-// Set by _llk_pack_fast_untilize_init_ (with the DEST format of its strides), forgotten by set_packer_strides: the fast untilize leaves the pack program, the
-// packer strides and the DEST offset registers set for itself. The block packs of llk_pack_block close it first (_llk_pack_close_fast_untilize_), so a
-// pack_block that follows without the uninit still writes where it should. Only llk_pack_fast_untilize.h sets pack_fast_untilize_linked, so a kernel
-// without it compiles no close, and only the fast untilize init writes pack_fast_untilize_seen, so one that never calls the init folds it away.
+// Set by the fast untilize init, forgotten by set_packer_strides; the block packs close an open one first. Only
+// llk_pack_fast_untilize.h sets pack_fast_untilize_linked, so other kernels compile no close.
 template <DstSync>
 inline constexpr bool pack_fast_untilize_linked = false;
 [[maybe_unused]] static bool pack_fast_untilize_seen         = false;
 [[maybe_unused]] static std::uint32_t pack_fast_untilize_src = 0;
 
-// reconfigured: the packer reconfigure's state, stored by the caller of the noinline reconfigure (store_state false there), so that call
-// writes no memory and the caller keeps what it holds in registers across it.
+// reconfigured: the reconfigure's state, stored by the caller of the noinline reconfigure (store_state false there),
+// so that call writes no memory and the caller keeps its registers across it.
 template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
@@ -832,7 +826,7 @@ inline void select_packer_dest_registers()
 
 // Program packer destination addresses from GPRs
 // keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from.
-// w_invalidate: false for llk_pack_block's own packs, which mark the state instead (only a W offset block leaves LLK_PACK_STATE_W).
+// w_invalidate: false for llk_pack_block's own packs, which mark the state instead.
 template <bool keep_output_addr = true, bool w_invalidate = true>
 inline void program_packer_destination(std::uint32_t addr)
 {

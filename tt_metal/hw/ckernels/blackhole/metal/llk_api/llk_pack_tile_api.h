@@ -65,9 +65,8 @@ inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_tile<pack_mode>, w_invalidate>(tile_index, pack_tile_addr);
 }
 
-// A Float32 output from a 16 bit DEST keeps main's destination write under full sync: the packer is long enough that
-// the stall the byte-wise write saves hides nothing, and its two extra config stores cost 0.1 cycle per tile. The
-// output is a compile-time constant in the kernels, so the test folds away.
+// Float32 from a 16 bit DEST keeps main's write under full sync: the long pack hides the stall the byte-wise write
+// saves, so its two extra config stores (0.1 cycle per tile) only cost.
 template <bool is_fp32_dest_acc_en, PackMode pack_mode, bool w_invalidate = true>
 inline void llk_pack_tile_of_output(
     std::uint32_t tile_index, std::uint32_t pack_tile_addr, const std::uint8_t output_id) {
@@ -212,9 +211,8 @@ inline bool llk_pack_dst_is_wide(const std::uint32_t output_id) {
     return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
 }
 
-// The largest page of a block pack, in 16 byte words: a 32x32 tile of 4 or 2 byte datums. Block floats and small tiles
-// are smaller. Then 64 wide or 127 narrow tiles stay inside the 256 KB reach of the channel-1 W offset
-// (_llk_pack_block_w_reach_), and a block of at most 16 tiles inside it too.
+// Largest block-pack page in 16 byte words (a 32x32 tile of 4 or 2 byte datums): 64 wide or 127 narrow tiles, and any
+// 16-tile block, stay inside the 256 KB reach of the channel-1 W offset.
 constexpr std::uint32_t LLK_PACK_PAGE_WORDS_WIDE = 256;
 constexpr std::uint32_t LLK_PACK_PAGE_WORDS_NARROW = 128;
 static_assert(16 * LLK_PACK_PAGE_WORDS_WIDE <= PACK_W_REACH_WORDS);
@@ -226,17 +224,14 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
            (llk_pack_dst_is_wide(output_id) ? LLK_PACK_PAGE_WORDS_WIDE : LLK_PACK_PAGE_WORDS_NARROW);
 }
 
-// W offset block packs: program the output base and the tile stride once per output and move the output of each block
-// call with the packer W counter of channel 1. The base is programmed again unless the last llk_pack_block call was a W
-// offset block of the same output (LLK_PACK_STATE_W in the state; its other packs program the output without invalidating),
-// no pack outside it wrote L1_Dest_addr or the channel-1 W stride since (LLK_PACK_W_INVALIDATE), the CB write pointer
-// continues that block, and the offset stays within LLK_PACK_W_MAX_TILES and the 256 KB reach of the W offset.
+// W offset blocks program the output base and stride once and move each block with the channel-1 W counter. The base
+// is programmed again unless the output's last block took W, nothing since wrote it or the stride, and the CB goes on.
 constexpr std::uint32_t LLK_PACK_W_MAX_TILES = 127;
 static_assert(LLK_PACK_W_MAX_TILES * LLK_PACK_PAGE_WORDS_NARROW <= PACK_W_REACH_WORDS);
 constexpr std::uint32_t LLK_PACK_W_MAX_TILES_W =
     LLK_PACK_W_MAX_TILES < LLK_PACK_W_MAX_TILES_WIDE ? LLK_PACK_W_MAX_TILES : LLK_PACK_W_MAX_TILES_WIDE;
-// A W offset block in the next state, before the block stores the state; out_tile is its tile offset. A CB write pointer that comes back to
-// pack_w_next after a full CB turn of other packs of the output does not continue: the state then lacks LLK_PACK_STATE_W.
+// out_tile: the block's tile offset. A CB pointer back at pack_w_next after a full CB turn of other packs does not
+// continue: the state then lacks LLK_PACK_STATE_W.
 inline void llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
     const std::uint32_t max_tiles = llk_pack_dst_is_wide(output_id) ? LLK_PACK_W_MAX_TILES_W : LLK_PACK_W_MAX_TILES;
     const bool cont = llk_pack_state_half() == ((output_id + 1u) | LLK_PACK_STATE_W) && pack_w_valid && pack_w_page == page &&
@@ -259,8 +254,7 @@ inline void llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t ad
     pack_w_next += page * ntiles;
 }
 
-// Row of the form tables per output: tiles of 16x16, 16x32, 8x32, 4x32 and 1x32 (a face of 16, 8, 4 or fewer rows), Bfp8_b and Bfp8, Bfp4_b and Bfp2_b,
-// Bfp4 and Bfp2, the other 4 byte datums, the other plain formats, Float16_b, Float32. A constant table, so the class of a call is one load.
+// Row of the form tables per output, the classes the table rows name; a constant table, so a call's class is one load.
 constexpr std::uint8_t llk_pack_class_of(const std::uint32_t i) {
     const std::uint32_t rows = pack_tile_face_r_dim[i];
     const std::uint32_t fmt = pack_dst_format[i];
@@ -295,7 +289,7 @@ struct llk_pack_class_tab_t {
 constexpr llk_pack_class_tab_t llk_pack_class_tab{};
 inline std::uint32_t llk_pack_block_class(const std::uint32_t output_id) { return llk_pack_class_tab.row[output_id]; }
 
-// Which outputs pack Int8 or UInt8: two constant masks. From a 16 bit DEST the per-tile pack writes two faces of them and the block forms four, so they stay per tile there.
+// From a 16 bit DEST the per-tile pack writes two faces of Int8 and UInt8, the block forms four: those stay per tile.
 constexpr std::uint32_t llk_pack_dst_int8_mask(const std::uint32_t first) {
     std::uint32_t mask = 0;
     for (std::uint32_t i = 0; i < 32; i++) {
@@ -312,7 +306,7 @@ inline bool llk_pack_dst_is_int8(const std::uint32_t output_id) {
     return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
 }
 
-// Which outputs, as inputs, are 32 bit (Float32, Int32, UInt32; the output CBs too, for their unpack_src_format is the output's): two constant masks.
+// 32 bit CBs (Float32, Int32, UInt32); an output CB counts too, its unpack_src_format is the output's.
 constexpr std::uint32_t llk_pack_src32_mask(const std::uint32_t first) {
     std::uint32_t mask = 0;
     for (std::uint32_t i = 0; i < 32; i++) {
@@ -324,18 +318,19 @@ constexpr std::uint32_t llk_pack_src32_mask(const std::uint32_t first) {
     }
     return mask;
 }
-// A 32 bit CB next to a 32 bit DEST may unpack to DEST, where the unpacker bounds the loop and a block pack steals its L1 reads: those kernels take the forms no sweep read slower, the others the datacopy tables.
+// A 32 bit CB with a 32 bit DEST may unpack to DEST, where the unpacker bounds the loop and a block pack steals its L1
+// reads: those kernels take the forms no sweep read slower, the others the datacopy tables.
 template <bool is_fp32_dest_acc_en>
 inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);
-// Whether a CB of the kernel unpacks to DEST (the JIT defines LLK_UNPACK_TO_DEST_ANY); without it one may. A kernel that unpacks to SrcA only takes the datacopy tables.
+// Without the JIT's LLK_UNPACK_TO_DEST_ANY a CB may unpack to DEST; SrcA-only kernels take the datacopy tables.
 #if defined(LLK_UNPACK_TO_DEST_ANY)
 inline constexpr bool llk_pack_unpack_to_dest = LLK_UNPACK_TO_DEST_ANY != 0;
 #else
 inline constexpr bool llk_pack_unpack_to_dest = true;
 #endif
 
-// Form of a block per tile count (above 16: the entry of 16): T per-tile packs, B the block that programs the output, W the block with the W offset, where no cell of the row read slower in the tt-llk sweeps.
-// Columns: half sync 16 and 32 bit DEST, full sync 16 and 32 bit DEST; the first block of an output takes the init or the reconfigure table, the blocks that continue it the next table. The _dc tables hold the rows of the datacopy family.
+// Form per tile count (from 16 on, the 16 entry) where no cell of the row read slower in the tt-llk sweeps: T per tile,
+// B block, W W offset block. Columns: half sync 16 and 32 bit DEST, then full sync; _dc: the datacopy family.
 constexpr char llk_pack_init_form[12][4][17] = {
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x16
     {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"},  // tile 16x32
@@ -421,11 +416,8 @@ constexpr char llk_pack_next_form_dc[12][4][17] = {
     {"WWWWBBBBBBBBBBBB", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // Float32
 };
 
-// Behind matmul math (the last FPU op init was a matmul init, or the K is given) a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the W offset (no_w: the block instead), then the block (no_block) at n tiles,
-// or, with the K given, takes the W offset (take_w) or the block (take_b). Rows: LoFi K not given, K 1, K above 1, HiFi2 to HiFi4 together, then LoFi and HiFi after another FPU
-// op init (the other unpack and math contexts). LoFi without the K and HiFi count those contexts too, except the drop masks below.
-// no_block and no_w per state (init, reconfigure, next): a form slower behind one state stays in the others. take_w and take_b only with the K and in the next state
-// (without the first group or the last two); one entry per row of the form tables.
+// Behind matmul math bit column * 16 + n - 1 forbids W (no_w), then the block (no_block); with the K, take_w and take_b
+// pick them in the next state. Rows: LoFi without K, K 1, K above 1, HiFi; then LoFi and HiFi after another FPU init.
 constexpr std::uint64_t llk_pack_mm_no_block[2][6][3][12] = {
     {  // datacopy family
         {  // LoFi, K not given
@@ -583,8 +575,7 @@ constexpr std::uint64_t llk_pack_mm_take_b[2][3][12] = {
     },
 };
 
-// Bits of the matmul masks cleared behind matmul math (contexts 1 and 2), per state: cells only the other contexts read slower, which pure matmul
-// and math-thread SFPU tails read no slower.
+// Mask bits cleared behind matmul math (contexts 1 and 2): cells only the other contexts read slower.
 constexpr std::uint64_t llk_pack_mm_drop_no_block[2][2][3][12] = {
     {  // datacopy family
         {  // LoFi, K not given
@@ -638,8 +629,8 @@ constexpr std::uint64_t llk_pack_mm_drop_no_w[2][2][3][12] = {
     },
 };
 
-// Cells a block reads slower than per tile behind matmul math with a pack-thread SFPU tail (context 2) at most of their points, per
-// state (init, reconfigure, next): ORed into the masks of its group, and the take masks yield to them.
+// Context 2 (a pack-thread SFPU tail behind matmul math): cells a block reads slower than per tile at most points, ORed
+// into the masks of their group; the take masks yield to them.
 constexpr std::uint64_t llk_pack_mm_tail_no_block[2][4][3][12] = {
     {  // datacopy family
         {  // LoFi, K not given
@@ -733,10 +724,8 @@ constexpr std::uint64_t llk_pack_mm_tail_no_w[2][4][3][12] = {
     },
 };
 
-// Cells decided finer than the mask groups: per fidelity, per matmul K, and, for a 32 bit input CB with a 32 bit DEST, per whether a CB unpacks to
-// DEST. One word per cell, the last matching word wins: bits 0-2 the family (datacopy, 32 bit input to SrcA, 32 bit input to DEST), 3-6 the fidelity
-// (LoFi, HiFi2, HiFi3, HiFi4), 7-12 the K (not given, 1, 2, 4, 8, other), 13-15 the context, as masks; 16-17 the state, 18-21 the row, 22-23 the column,
-// 24-27 the tile count - 1, 28-29 the form (0 per tile, 1 block, 2 W offset). Sorted by state and row; read at compile time only, like the masks.
+// Cells finer than the mask groups, last match wins. Masks: bits 0-2 family, 3-6 fidelity, 7-12 K, 13-15 context;
+// fields: 16-17 state, 18-21 row, 22-23 column, 24-27 n - 1, 28-29 form (T, B, W). Sorted by state and row.
 constexpr std::uint32_t llk_pack_form_cells[] = {
     0x070020F9, 0x01C420FA, 0x070420F9, 0x07082089, 0x070C20F9, 0x071020F9, 0x035C2089, 0x13DC20FC, 0x15DC20FC, 0x032820F1, 0x032C2089, 0x010120F9,
     0x014120F9, 0x010520F9, 0x014520FF, 0x010920F9, 0x014920FB, 0x010D20F9, 0x014D20FF, 0x11CD208A, 0x011120F9, 0x015120FF, 0x11D120C2, 0x00E120FC,
@@ -762,7 +751,7 @@ struct llk_pack_form_cells_at_t {
     }
 };
 constexpr llk_pack_form_cells_at_t llk_pack_form_cells_at{};
-// Form of a block of a row of the form tables, the Int8 rule aside: evaluated at compile time only, into llk_pack_form_words.
+// One table cell's form, the Int8 rule aside; compile time only, into llk_pack_form_words.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 constexpr char llk_pack_block_form_of(
     const std::uint32_t row, const std::uint32_t ntiles, const char (*table)[4][17], const std::uint32_t state, const std::uint32_t ctx) {
@@ -813,8 +802,7 @@ constexpr const char (*llk_pack_form_table(const char (*u)[4][17], const char (*
     return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;
 }
 
-// The form of every row and tile count from the init, reconfigure and next states (0, 1, 2) in nctx contexts from ctx0, step apart, two bits per
-// tile count (T 0, B 1, W 2). Built at compile time: a lookup reads one word.
+// Every row's forms per count, three states, nctx contexts, two bits each (T 0, B 1, W 2): a lookup reads one word.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt, std::uint32_t ctx0, std::uint32_t nctx, std::uint32_t step>
 struct llk_pack_form_words_t {
     std::uint32_t w[nctx][3][12];
@@ -841,7 +829,7 @@ inline constexpr llk_pack_form_words_t<is_fp32_dest_acc_en, matmul_kt, 0, 2, 2> 
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 inline constexpr llk_pack_form_words_t<is_fp32_dest_acc_en, matmul_kt, 1, 1, 1> llk_pack_form_words_mm{};
 
-// Form of a block of ntiles of an output from a state (0 init, 1 reconfigure, 2 next): T per-tile packs, B the block, W the block with the W offset.
+// state: 0 init, 1 reconfigure, 2 next.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 __attribute__((always_inline)) inline char llk_pack_block_form(
     const std::uint32_t output_id, const std::uint32_t ntiles, const std::uint32_t state, const std::uint32_t ctx = llk_pack_context()) {
@@ -856,7 +844,7 @@ __attribute__((always_inline)) inline char llk_pack_block_form(
     return code == 0 ? 'T' : (code == 1 ? 'B' : 'W');
 }
 
-// The forms a block of ntiles takes from the init, reconfigure and next states, as a mask: 1 per tile, 2 block, 4 W offset.
+// The forms of the three states as a mask: 1 per tile, 2 block, 4 W offset.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 __attribute__((always_inline)) inline std::uint32_t llk_pack_block_forms(const std::uint32_t output_id, const std::uint32_t ntiles, const std::uint32_t ctx) {
     const char init = llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0, ctx);
@@ -866,7 +854,7 @@ __attribute__((always_inline)) inline std::uint32_t llk_pack_block_forms(const s
            (init == 'W' || reconf == 'W' || next == 'W' ? 4 : 0);
 }
 
-// The per-tile packs of a block that takes none of the block forms: main's loop, so a kernel whose blocks all pack per tile reads no pack flag.
+// The per-tile packs of a block that takes none of the block forms: main's loop, which reads no pack flag.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles) {
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
@@ -875,8 +863,8 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
     }
 }
 
-// The tile counts at which every output the kernel configures packs per tile from every state and context: bit n - 1, counts above 16
-// take the bit of 16. Built at compile time, so a block of such a count looks nothing up, whatever its output.
+// Counts every output packs per tile from every state and context (bit n - 1, above 16 the bit of 16): a block of such
+// a count looks nothing up, whatever its output.
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 struct llk_pack_per_tile_counts_t {
     std::uint32_t counts;
@@ -905,9 +893,8 @@ struct llk_pack_per_tile_counts_t {
 template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 inline constexpr llk_pack_per_tile_counts_t<is_fp32_dest_acc_en, matmul_kt> llk_pack_per_tile_counts{};
 
-// guard_dest_straddle: two block-float tiles at DEST tiles 3 and 4 read 6 cycles slower closed than per tile, so a caller with a variable start tile takes the per-tile path.
-// Off by default, the check costs instructions in the callers that pass 0.
-// matmul_kt: the K tiles per output block of the matmul that filled DEST, where the caller knows it at compile time; 0 takes the forms no K reads slower than per tile.
+// guard_dest_straddle: block-float tiles at DEST 3 and 4 read 6 cycles slower closed: a variable start packs per tile.
+// matmul_kt: K tiles per output block of the matmul that filled DEST, if known; 0 takes the forms no K reads slower.
 template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, bool guard_dest_straddle = false, std::uint32_t matmul_kt = 0>
 __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output) {
     static_assert(ntiles > 0, "pack_block packs at least one tile");
@@ -928,8 +915,8 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    // With a constant output, or a count every output packs per tile, the forms of every state fold at compile time (0 otherwise): a block
-    // of one form reads no state, and a kernel whose blocks never take W keeps no W state, so its per-tile packs are main's.
+    // A constant output, or a count every output packs per tile, folds all states' forms (0 otherwise): a block of one
+    // form reads no state, and a kernel whose blocks never take W keeps no W state.
     std::uint32_t forms = 0;
     if constexpr (((llk_pack_per_tile_counts<is_fp32_dest_acc_en, matmul_kt>.counts >> ((ntiles < 16 ? ntiles : 16) - 1)) & 1) != 0) {
         forms = 1;
@@ -939,7 +926,7 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
                          : (ctx == 1 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
                                      : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     }
-    // The last output is still marked: these packs move the packer's output base without invalidating the W offset of another output.
+    // Still marks the last output: these packs move the output base without invalidating another output's W offset.
     if (forms == 1) {
         llk_pack_state_set_half(output_id + 1);
         llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
@@ -948,8 +935,8 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     // A block of one folded form packs as main: it reads no state, so it closes no fast untilize either.
     const bool one_form = forms != 0 && (forms & (forms - 1)) == 0;
 
-    // The block forms run the default pack program: after a tilize, untilize or pack rows init, main's per-tile packs. So too while the packer
-    // accumulates in L1 under half sync, where a block behind matmul math reads up to 64 cycles slower (full sync: faster).
+    // The block forms run the default pack program, so after a tilize, untilize or pack rows init they pack per tile;
+    // so too under half-sync L1 accumulation, where a block behind matmul math reads up to 64 cycles slower.
     if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE())) {
         if (!one_form) {
             _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
@@ -959,12 +946,12 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         return;
     }
 
-    // The last output and the reconfigure mark in one halfword: a block that continues its output reads output_id + 1, with or without LLK_PACK_STATE_W.
+    // Last output and reconfigure mark in one halfword: a continuing block reads output_id + 1, W bit or not.
     const std::uint32_t state = llk_pack_state_half();
     const bool first_block = (state & ~static_cast<std::uint32_t>(LLK_PACK_STATE_W)) != output_id + 1u;
     const bool reconfigured = (state >> 8) != 0;
-    // Constant or variable, a block reads the word of each state at a constant index, with the folded path's context: an output or count that
-    // becomes constant late still folds its forms, and both paths pick the same form.
+    // Constant or variable, a block reads each state's word at a constant index in the folded path's context, so a late
+    // constant still folds and both paths pick the same form.
     const char form = forms == 2 ? 'B'
                       : (first_block ? (reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
                                                           : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))

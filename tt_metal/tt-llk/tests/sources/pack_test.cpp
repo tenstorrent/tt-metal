@@ -191,7 +191,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
-// Opt-in byte-wise destination write of the default packs (PACK_RMW_DEST, see _llk_pack_rmw_dest_init_); off, the calls are main's
+// PACK_RMW_DEST: the byte-wise destination write in every default pack (_llk_pack_rmw_dest_init_); off, main's calls.
 #if defined(ARCH_BLACKHOLE) && defined(PACK_RMW_DEST)
 #define PACK_RMW_TAIL , false, true
 #define PACK_RMW_INIT _llk_pack_rmw_dest_init_();
@@ -199,8 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #define PACK_RMW_TAIL
 #define PACK_RMW_INIT
 #endif
-// The per-tile pack: on Blackhole a Float32 output from a 16 bit DEST keeps main's destination write (llk_pack, llk_pack_tile_api.h), unless PACK_RMW_DEST
-// forces it on
+// Per tile, a Float32 output from a 16 bit DEST keeps main's write (llk_pack_tile_of_output) unless PACK_RMW_DEST.
 #if defined(ARCH_BLACKHOLE) && !defined(PACK_RMW_DEST)
 #define PACK_TILE_CALL(tile, addr)                                                                                \
     do                                                                                                            \
@@ -220,13 +219,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #line 201
 
 #if defined(ARCH_BLACKHOLE)
-// The W base and its tile index (pack_block 6): llk_pack_w_take programs the base again where the next block would pass the reach of the W offset.
+// W base and its tile (pack_block 6): llk_pack_w_take programs the base again before a block passes the W reach.
 static std::uint32_t w_page_words = 0;
 static std::uint32_t w_base_tile  = 0;
 #line 203
-// The block pack of one block. Default (pack_block 1 and 2): the calls llk_pack_block makes with the W offset on (the plain block with the W offset, the closed
-// block with the W offset for block-float outputs), the output programmed once by _llk_pack_block_w_init_. pack_block_w (3) and pack_block_fast (4) are library
-// forms on purpose: the W offset forms behind _llk_pack_block_fast_init_, and the fast forms of the matmul harness.
+
+// One block. pack_block 1 and 2: llk_pack_block's calls with the W offset, the output programmed once; 3 and 4 are
+// library forms on purpose (the W offset forms behind the fast init, the matmul harness's fast forms).
 template <DstSync sync, bool fp32>
 inline void pack_block_call(
     std::uint32_t dst_index,

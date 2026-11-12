@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Test: Pack tiny tiles from sparse DEST (Tile32x32 slots) to dense L1
-// using _llk_pack_block_contiguous_ (tiny_pack_mode 0), _llk_pack_block_closed_ (1), _llk_pack_ per tile (2), the closed block of llk_pack_block with the W
-// offset (4).
+// using _llk_pack_block_contiguous_ (tiny_pack_mode 0), _llk_pack_block_closed_ (1), _llk_pack_ per tile (2) or the
+// closed W offset block of llk_pack_block (4).
 //
 // Math uses standard datacopy (Tile32x32 DEST addressing — sparse).
 // Pack uses the new block-contiguous MOP that reads from sparse DEST
 // slots via W counter and writes dense L1 via auto-increment.
 //
-// With a perf run type (perf_pack_tiny.py) the TILE_LOOP is timed for PACK_ISOLATE and L1_TO_L1 and repeated LOOP_FACTOR times.
+// Perf run types (perf_pack_tiny.py) time the TILE_LOOP, repeated LOOP_FACTOR times, for PACK_ISOLATE and L1_TO_L1.
 
 #include <cstdint>
 

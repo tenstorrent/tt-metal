@@ -39,29 +39,19 @@ ALWI void tile_regs_release_math_clear() {
     PACK((_llk_pack_dest_section_done_<DST_SYNC_MODE, DST_ACCUM_MODE, false /* clear_dest */>()));
 }
 
-/**
- * Acquire a DST section on MATH and clear it there, for a kernel whose DST writer is the math thread alone: a 32-bit
- * unpack source anywhere in the kernel fails to compile. The pack release then skips its clear, which takes it off a
- * pack-bound loop. Release with tile_regs_release_math_only(); call tile_regs_math_only_end() after the last such
- * section if the kernel then acquires DST the default way (the next kernel starts with DST clear).
- */
+// Math clears the section it acquires, so the pack release skips its clear; only for kernels whose one DEST writer is
+// math (a 32-bit unpack source fails to compile). End with tile_regs_math_only_end() before default acquires.
 template <bool math_clears_dest = true>
 ALWI void tile_regs_acquire_math_only() {
     MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
 }
 
-/**
- * Release a section acquired with tile_regs_acquire_math_only() without clearing it.
- */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release_math_only() {
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, true>()));
 }
 
-/**
- * tile_regs_release() without the DMANOP pair after the offset write, the half's words fixed by one branch.
- * fp32 DEST accumulation keeps the regular release, which the lean form reads slower there.
- */
+// tile_regs_release() without the DMANOP pair after the offset write; fp32 DEST keeps the regular one, faster there.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release_lean() {
     if constexpr (is_fp32_dest_acc_en) {
@@ -71,10 +61,7 @@ ALWI void tile_regs_release_lean() {
     }
 }
 
-/**
- * After the last tile_regs_release_math_only(): MATH clears all of DST once the pack has released it, so sections
- * acquired the default way find their halves clear.
- */
+// Math clears all of DEST once the pack released the last math-cleared section, as the default acquire expects.
 ALWI void tile_regs_math_only_end() { MATH((llk_math_dest_clear_region_end())); }
 
 }  // namespace ckernel
