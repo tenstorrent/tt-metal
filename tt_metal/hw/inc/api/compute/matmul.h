@@ -127,7 +127,7 @@ ALWI void matmul_init(
  * matmul_init overrides an MxFp4 operand's unpacker OUT_DATA_FORMAT to the 2x-packed MxFp4_2x_B,
  * diverging from the op-agnostic unpack_dst_format[] table. That override PERSISTS: the non-matmul
  * unpack inits never reprogram OUT_DATA_FORMAT, and reconfig_data_format is silently skipped for a
- * same-format operand. The ALU src formats need no undo: every math init programs its own.
+ * same-format operand. The ALU src formats need no undo: every FPU math init programs its own.
  * So a kernel that feeds the SAME MxFp4 buffer to matmul and then
  * to a non-matmul op (datacopy/SFPU/eltwise) MUST call mm_uninit(in0, in1) after the matmuls and
  * before the next op, or that op will keep unpacking the buffer as MxFp4_2x_B and produce garbage.

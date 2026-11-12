@@ -98,33 +98,32 @@ constexpr DataFormat _fpu_dest_write_format_(const DataFormat srcA_format, const
 }
 
 /**
- * @brief Derives an @ref AluCfgState into ALU_FORMAT_SPEC words 0..2. Does not program them, @ref _configure_alu_cfg_ does.
+ * @brief Derives ALU_FORMAT_SPEC words 0..2 for a config type and SrcA/SrcB formats. Does not program them, @ref _configure_alu_cfg_ does.
  *
  * The one place the bit layout and the per-type quirks live, so equal states build equal words.
  *
+ * @tparam TYPE: Which ALU format config type to derive
  * @tparam EN_32BIT_DEST: Set to true to use Dest register in 32bit mode (Float32/Int32)
- * @param state: The config type and the SrcA/SrcB formats to derive from
+ * @param srca: Input srcA format to derive from
+ * @param srcb: Input srcB format to derive from
  * @param words: Receives the target words
  */
-template <bool EN_32BIT_DEST>
-inline void _build_alu_words_(const AluCfgState& state, alu_config_u& words)
+template <AluCfgType TYPE, bool EN_32BIT_DEST>
+inline void _build_alu_words_(const DataFormat srca, const DataFormat srcb, alu_config_u& words)
 {
-    const bool mov_ops = (state.type == AluCfgType::MOV_OPS_EXPLICIT_FORMAT);
+    constexpr bool mov_ops = (TYPE == AluCfgType::MOV_OPS_EXPLICIT_FORMAT);
 
     // MOV ops, 32bit dest: unpacking Int32 or Fp32 to dest decodes the src registers as Tf32.
-    const DataFormat srca_fmt = (mov_ops && EN_32BIT_DEST) ? DataFormat::Tf32 : state.srca_format;
-    const DataFormat srcb_fmt = (mov_ops && EN_32BIT_DEST) ? DataFormat::Tf32 : state.srcb_format;
+    const DataFormat srca_fmt = (mov_ops && EN_32BIT_DEST) ? DataFormat::Tf32 : srca;
+    const DataFormat srcb_fmt = (mov_ops && EN_32BIT_DEST) ? DataFormat::Tf32 : srcb;
 
     // ALU_ACC_CTRL_INT8_math_enabled does not work with MOVD2A/B, so the MOV path never asserts it.
-    const bool int8_math =
-        !mov_ops && EN_32BIT_DEST && _is_src_fmt_int32_dest_compatible_(state.srca_format) && _is_src_fmt_int32_dest_compatible_(state.srcb_format);
+    const bool int8_math = !mov_ops && EN_32BIT_DEST && _is_src_fmt_int32_dest_compatible_(srca) && _is_src_fmt_int32_dest_compatible_(srcb);
 
     const std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srca_fmt));
     const std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcb_fmt));
 
-    words.val[0] = 0;
-    words.val[1] = 0;
-    words.val[2] = 0;
+    words = {};
 
     words.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
     words.f.ALU_FORMAT_SPEC_REG_SrcA_override = 1;
@@ -139,10 +138,10 @@ inline void _build_alu_words_(const AluCfgState& state, alu_config_u& words)
 
     // Dest keeps its implied (saved per-bank) format; only the 32-bit MOV path pins it, because
     // MOVD2B/MOVB2D would otherwise pick the hi16 datum mux from a stale saved format.
-    if (mov_ops && EN_32BIT_DEST)
+    if constexpr (mov_ops && EN_32BIT_DEST)
     {
-        // Takes srca_format, not the Tf32 substitution above
-        const DataFormat dstacc_fmt             = _fpu_dest_write_format_<EN_32BIT_DEST>(state.srca_format, int8_math);
+        // Takes srca, not the Tf32 substitution above
+        const DataFormat dstacc_fmt             = _fpu_dest_write_format_<EN_32BIT_DEST>(srca, int8_math);
         const std::uint8_t DSTACC_FORMAT_MASKED = masked_data_format(to_underlying(dstacc_fmt));
 
         words.f.ALU_FORMAT_SPEC_REG_Dstacc_val      = DSTACC_FORMAT_MASKED;
@@ -155,9 +154,10 @@ inline void _build_alu_words_(const AluCfgState& state, alu_config_u& words)
  * @brief Brings the ALU format registers to the requested state. The entry point for all format config.
  *
  * Returns immediately when the requested state is already programmed; otherwise builds the target words
- * and writes only the ones that differ from what hardware holds.
+ * and writes only the ones that differ from the cached words.
  *
- * Whole words are written rather via MMIO stores to shadowed registers.
+ * Whole words are written, not per-field RMW: the registers are never read back, so the cached words are the only
+ * known state and each word is stored in full via MMIO.
  *
  * @tparam TYPE: Which ALU format config type to program
  * @tparam EN_32BIT_DEST: Set to true to use math dest in 32bit mode (Float32/Int32)
@@ -180,7 +180,7 @@ inline void _configure_alu_cfg_(const DataFormat srca, const DataFormat srcb)
     const bool words_known = (alu_cfg.programmed.type != AluCfgType::UNCONFIGURED);
 
     alu_config_u target;
-    _build_alu_words_<EN_32BIT_DEST>(wanted, target);
+    _build_alu_words_<TYPE, EN_32BIT_DEST>(srca, srcb, target);
 
     for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {

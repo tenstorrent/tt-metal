@@ -160,7 +160,7 @@ typedef union
 // _build_alu_words_.
 enum class AluCfgType : std::uint8_t
 {
-    // Nothing known about the ALU registers: never compares equal, cached words unusable.
+    // Nothing known about the ALU registers: never requested, so no request matches it; cached words unusable.
     // Must stay 0, it is the zero-init value.
     UNCONFIGURED            = 0,
     DEFAULT                 = 1,

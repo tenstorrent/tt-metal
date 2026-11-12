@@ -125,7 +125,8 @@ inline void llk_math_matmul_no_mop(
 /**
  * @brief Restores the no-mop matmul math state.
  *
- * Reprograms the matmul addrmods and re-records the replay buffer. Unlike Wormhole/Blackhole where the
+ * Re-checks the ALU data formats (free when already programmed), reprograms the matmul addrmods and
+ * re-records the replay buffer. Unlike Wormhole/Blackhole where the
  * math thread owns a dedicated replay-buffer offset and a reinit only has to restore addrmods every
  * Quasar LLK records at replay buffer slot 0, so an interleaved op overwrites this matmul's image and it
  * must be re-recorded here.
