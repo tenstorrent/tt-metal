@@ -74,6 +74,8 @@ def test_ttrun_hang_timeout():
     )
     ended(r)
     nonzero(r)
+    assert r.exit == 241, f"expected PRRTE's timeout code 241, got {r.exit} — the wall clock was not what ended it: {r}"
+    assert 20 <= r.wall_s < 40, f"the job did not end at the ~20 s --timeout but at {r.wall_s:.0f} s: {r}"
     clean(r)
 
 
