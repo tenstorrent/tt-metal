@@ -9,7 +9,7 @@ seeded random weights (tests/conftest.py); test_vision_accuracy.py runs all 32 w
 test_vision_tower_l1_vs_dram runs a 3-layer tower with its activations in L1, with and without the MLP's hidden
 activations in block shards, and in DRAM. The outputs must be equal bit for bit.
 M3_VISION_ALL_GRIDS=1 adds the other grids of VISION_GRIDS, and of L1_VS_DRAM_ALL_GRIDS for the L1 test. It also adds
-test_vision_tower_l1_clash_falls_back_to_dram, which forces a circular-buffer clash in L1 on the chip.
+test_vision_tower_l1_clash_falls_back_to_dram, which forces a buffer clash in L1 on the chip.
 """
 from __future__ import annotations
 
@@ -43,8 +43,10 @@ from .vision_helpers import (
 )
 
 NUM_LAYERS = 2  # of the checkpoint's 32
-# Bytes per L1 bank of the tensor that the clash test keeps at the top of L1. With it, an op of the L1 placement at
-# 2304 patches lacks over 100 KB for its circular buffers on every grid of L1_GRIDS, and the DRAM placement still fits.
+# Bytes per L1 bank that the clash test puts at the top of L1. With them, an op of the L1 placement at 2304 patches
+# lacks over 100 KB for its buffers on every grid of L1_GRIDS. The DRAM placement need not fit beside all of them (on
+# 12x10 the QKV matmul's buffers reach past them), so the test frees all but PROOF_L1_FOREIGN_BYTES, the most that the
+# L1 check allows in use, when the L1 forward fails.
 CLASH_FOREIGN_BYTES = 384 * 1024
 
 
@@ -178,10 +180,13 @@ if os.getenv("M3_VISION_ALL_GRIDS") == "1":
     @torch.no_grad()
     @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
     def test_vision_tower_l1_clash_falls_back_to_dram(mesh_device, device_params, monkeypatch, vision_reference):
-        """When an L1 forward hits tt-metal's circular-buffer clash on the chip, the image runs again in DRAM.
+        """When an L1 forward hits tt-metal's buffer clash on the chip, the image runs again in DRAM.
 
-        A tensor at the top of L1, which the L1 check is told to allow, forces the clash at 2304 patches. The "l1"
-        forward must log it, leave L1 as it found it and match the "dram" forward bit for bit.
+        After a "dram" forward, tensors at the top of L1, which the L1 check is told to allow, force the clash at 2304
+        patches. When the L1 attempt fails, the test frees all of them but PROOF_L1_FOREIGN_BYTES, the most that the L1
+        check allows in use. In use the rerun gets its room when the failed run's own L1 tensors are freed, so the
+        rerun must start with only the kept tensor in L1. The "l1" forward must log the clash, leave L1 as it found it
+        and match the "dram" forward bit for bit.
         """
         grid = mesh_device.compute_with_storage_grid_size()
         reference = vision_reference()
@@ -195,37 +200,65 @@ if os.getenv("M3_VISION_ALL_GRIDS") == "1":
         image_grid = torch.tensor([grid_thw])
         x_tt = model.push_pixel_values(pixel_values, image_grid)
         name = f"h48w48 layers={len(model.blocks)} on {grid.x}x{grid.y}"
-        # Banks x tiles_per_bank tiles of 2 KB, dealt round-robin over the banks: CLASH_FOREIGN_BYTES in each.
-        tiles_per_bank = CLASH_FOREIGN_BYTES // (32 * 32 * 2)
-        foreign = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, 32 * grid.x * grid.y, 32 * tiles_per_bank]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            mesh_device,
-            ttnn.L1_MEMORY_CONFIG,
-        )
-        warnings, outputs = [], {}
-        sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+        empty = _l1_state(mesh_device)
+        model.activations = "dram"
+        assert model.placement(x_tt) is DRAM_PLACEMENT, name
+        out = model.forward_device(x_tt, image_grid)
+        assert _l1_state(mesh_device) == empty, f"{name}: the dram forward left L1 at {_l1_state(mesh_device)}"
+        want = to_host(out, mesh_device, (rows, hidden))
+        ttnn.deallocate(out)
+
+        def l1_tensor(bytes_per_bank):
+            # Banks x tiles tiles of 2 KB, dealt round-robin over the banks: bytes_per_bank in each.
+            tiles = bytes_per_bank // (32 * 32 * 2)
+            shape = ttnn.Shape([1, 1, 32 * grid.x * grid.y, 32 * tiles])
+            return ttnn.allocate_tensor_on_device(
+                shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.L1_MEMORY_CONFIG
+            )
+
+        allowed = common.PROOF_L1_FOREIGN_BYTES
+        kept = l1_tensor(allowed)  # allocated first, so at the very top of L1
         try:
-            monkeypatch.setattr(common, "PROOF_L1_FOREIGN_BYTES", 2 * CLASH_FOREIGN_BYTES)
-            assert l1_free_for_activations(mesh_device) == (True, ""), name
-            l1_placement = block_placement(model.blocks[0], x_tt.padded_shape[-2], "l1")
-            assert l1_placement is not DRAM_PLACEMENT, name
-            for activations, placement in (("dram", DRAM_PLACEMENT), ("l1", l1_placement)):
-                model.activations = activations
-                assert model.placement(x_tt) is placement, f"{name}: activations {activations}"
-                before = _l1_state(mesh_device)
+            before = _l1_state(mesh_device)
+            foreign = [l1_tensor(CLASH_FOREIGN_BYTES - allowed)]
+            run_tower, entries = M3VLVisionModel._run_tower, []
+
+            def run_tower_freeing_foreign(self, x, grid_thw, placement):
+                entries.append(_l1_state(mesh_device))
+                try:
+                    return run_tower(self, x, grid_thw, placement)
+                except RuntimeError:
+                    if foreign:
+                        ttnn.deallocate(foreign.pop())
+                    raise
+
+            monkeypatch.setattr(M3VLVisionModel, "_run_tower", run_tower_freeing_foreign)
+            warnings = []
+            sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+            try:
+                monkeypatch.setattr(common, "PROOF_L1_FOREIGN_BYTES", 2 * CLASH_FOREIGN_BYTES)
+                assert l1_free_for_activations(mesh_device) == (True, ""), name
+                l1_placement = block_placement(model.blocks[0], x_tt.padded_shape[-2], "l1")
+                assert l1_placement is not DRAM_PLACEMENT, name
+                model.activations = "l1"
+                assert model.placement(x_tt) is l1_placement, name
                 out = model.forward_device(x_tt, image_grid)
-                after = _l1_state(mesh_device)
-                assert after == before, f"{name}: activations {activations} left L1 at {after}, from {before}"
-                outputs[activations] = to_host(out, mesh_device, (rows, hidden))
-                ttnn.deallocate(out)
+                assert not foreign, f"{name}: the l1 forward did not clash, warnings {warnings}"
+            finally:
+                logger.remove(sink)
+                if foreign:
+                    ttnn.deallocate(foreign.pop())
+            assert len(entries) == 2, f"{name}: {len(entries)} tower runs"
+            assert entries[1] == before, f"{name}: the rerun started with L1 at {entries[1]}, not {before}"
+            after = _l1_state(mesh_device)
+            assert after == before, f"{name}: the l1 forward left L1 at {after}, from {before}"
+            got = to_host(out, mesh_device, (rows, hidden))
+            ttnn.deallocate(out)
         finally:
-            logger.remove(sink)
-            ttnn.deallocate(foreign)
+            ttnn.deallocate(kept)
         clashes = [line for line in warnings if "clash with L1 buffers" in line]
         assert len(clashes) == 1, f"{name}: warnings {warnings}"
         assert f"placement {l1_placement.name} at {rows} rows failed" in clashes[0], clashes[0]
         logger.info(f"tower {name}: {clashes[0]}")
-        num_diff = int((outputs["l1"].view(torch.int32) != outputs["dram"].view(torch.int32)).sum())
-        assert not num_diff, f"{name}: {num_diff} of {outputs['l1'].numel()} output values differ from dram"
+        num_diff = int((got.view(torch.int32) != want.view(torch.int32)).sum())
+        assert not num_diff, f"{name}: {num_diff} of {got.numel()} output values differ from dram"

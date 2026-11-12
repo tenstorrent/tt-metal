@@ -203,6 +203,13 @@ CLASH_MESSAGE = (
     " program 7 clash with L1 buffers on core range [(x=0,y=0) - (x=11,y=9)]. L1 buffer allocated at 1220608 and"
     " static circular buffer region ends at 1236992\nbacktrace:\n --- tt::tt_metal::detail::ProgramImpl::validate"
 )
+# The same clash as tt-metal raises it for an op built from program specs, such as the matmul (seen on a P150).
+DATAFLOW_CLASH_MESSAGE = (
+    "TT_THROW @ tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3066: tt::exception\ninfo:\nStatically allocated"
+    " dataflow buffers in program 7 clash with L1 buffers on core range [0-0 - 11-9]. L1 buffer allocated at 893824"
+    " and static dataflow buffer region ends at 1040320\nbacktrace:\n --- tt::tt_metal::detail::ProgramImpl::"
+    "validate_dataflow_buffer_region"
+)
 
 
 def _ranges(values, step=4):
@@ -914,9 +921,16 @@ def _clash_model(monkeypatch):
     return recorder, model, x_tt, grid_thw, want
 
 
+@pytest.mark.parametrize(
+    "buffers, message",
+    [("circular", CLASH_MESSAGE), ("dataflow", DATAFLOW_CLASH_MESSAGE)],
+    ids=["circular", "dataflow"],
+)
 @pytest.mark.parametrize("activations", ["l1", "l1_interleaved"])
-def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations):
-    """A circular-buffer clash at any op of an L1 forward makes the forward run the image again in DRAM.
+def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations, buffers, message):
+    """A buffer clash at any op of an L1 forward makes the forward run the image again in DRAM.
+
+    tt-metal words the clash with "circular buffers" or "dataflow buffers"; both must count.
 
     The clash is raised once, at each op in turn. The output must hold what the DRAM forward's holds, and the log must
     name the clash: a warning the first time, then debug lines for the same reason. The failed run's tensors must be
@@ -932,7 +946,7 @@ def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations):
             recorder.events.clear()
             made = len(recorder.made)
             # tt-metal gives each program a new id, so each clash names another program.
-            recorder.raise_at = {failing: RuntimeError(CLASH_MESSAGE.replace("program 7", f"program {7 + failing}"))}
+            recorder.raise_at = {failing: RuntimeError(message.replace("program 7", f"program {7 + failing}"))}
             out = model.forward_device(x_tt, grid_thw)
             assert out.value == want and not _in_l1(out.memory_config()), case
             ops = [event[1] for event in recorder.events if event[0] == "call"]
@@ -947,7 +961,7 @@ def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations):
             assert [ref() for ref in recorder.made[made:] if ref() is not None] == [out], case
             [(level, line)] = logs[failing:]
             assert level == ("WARNING" if failing == 0 else "DEBUG"), case
-            reason = f"placement {placement.name} at 2304 rows failed: Statically allocated circular buffers"
+            reason = f"placement {placement.name} at 2304 rows failed: Statically allocated {buffers} buffers"
             assert f"(fallback {failing + 1}): {reason}" in line, case
             assert "clash with L1 buffers on core range" in line and "program" not in line, case
 
@@ -964,6 +978,12 @@ def test_vision_l1_clash_other_errors_raise(monkeypatch, expect_error):
         ("l1", {fc1: ValueError(CLASH_MESSAGE)}, "clash with L1 buffers"),
         ("dram", {fc1: RuntimeError(CLASH_MESSAGE)}, "clash with L1 buffers"),
         ("l1", {fc1: RuntimeError(CLASH_MESSAGE), 2 * fc1: RuntimeError(CLASH_MESSAGE)}, "clash with L1 buffers"),
+        ("dram", {fc1: RuntimeError(DATAFLOW_CLASH_MESSAGE)}, "clash with L1 buffers"),
+        (
+            "l1",
+            {fc1: RuntimeError(DATAFLOW_CLASH_MESSAGE), 2 * fc1: RuntimeError(DATAFLOW_CLASH_MESSAGE)},
+            "clash with L1 buffers",
+        ),
     )
     for activations, raise_at, message in cases:
         model.activations = activations

@@ -50,10 +50,13 @@ from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
 # How many recent image grids keep their RoPE tables in DRAM, at least 1. Not tuned, as the tables are small.
 ROPE_CACHE_GRIDS = 16
-# tt-metal's error for an op whose circular buffers would overlap a tensor in L1 (ProgramImpl's check of the circular
-# buffer region). It reaches Python as a RuntimeError with this line in its message. The groups leave out the program
-# id, which is new for each program, so a clash that lasts gives the same reason for every image.
-L1_CLASH = re.compile(r"(Statically allocated circular buffers) in program \d+ (clash with L1 buffers[^\n]*)")
+# tt-metal's error for an op whose buffers would overlap a tensor in L1. Its check of the circular-buffer region says
+# "circular buffers"; its check of the dataflow-buffer region, for ops built from program specs such as the matmul,
+# says "dataflow buffers". It reaches Python as a RuntimeError with this line in its message. The groups leave out the
+# program id, which is new for each program, so a clash that lasts gives the same reason for every image.
+L1_CLASH = re.compile(
+    r"(Statically allocated (?:circular|dataflow) buffers) in program \d+ (clash with L1 buffers[^\n]*)"
+)
 # Every DRAM_FALLBACK_WARN_EVERY-th fallback to DRAM_PLACEMENT is a warning, even with the last warning's reason.
 DRAM_FALLBACK_WARN_EVERY = 100
 
@@ -331,8 +334,8 @@ class M3VLVisionModel(LightweightModule):
     def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
         """Run forward_tower's device ops on pixel values from push_pixel_values, leaving x_tt allocated.
 
-        The blocks get placement(x_tt). The last block writes the tower's output to DRAM. If an op's circular buffers
-        clash with the blocks' L1 tensors, the image runs again with DRAM_PLACEMENT, once.
+        The blocks get placement(x_tt). The last block writes the tower's output to DRAM. If an op's buffers clash
+        with the blocks' L1 tensors, the image runs again with DRAM_PLACEMENT, once.
         """
         placement = self.placement(x_tt)
         if placement is DRAM_PLACEMENT:
