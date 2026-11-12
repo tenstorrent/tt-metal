@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """GLM-5.3-Flash on the persistent-stack port (models/autoports/zai_org_glm_5_3_flash/tt: ``StackBackend`` under
 ``Glm53Generator``) for the TT vLLM plugin -- the FIRST adapter: text only, greedy on device (the head's top-1 inside
-the one full-width decode trace), host-sampled rows through full logits, no prefix cache, no multimodal, no speculative
-decode, synchronous scheduling (every decode reloads its inputs). GLM53_STACK_PREFIX=1 (opt-in) adds vLLM's automatic
+the one full-width decode trace), host-sampled rows through full logits, no prefix cache, no multimodal, synchronous
+scheduling (every decode reloads its inputs). GLM53_STACK_PREFIX=1 (opt-in) adds vLLM's automatic
 prefix caching from the stack's device snapshot pool (``StackPrefixCache``). Image input:
 ``GLM53StackForConditionalGeneration`` at the bottom of this module (the same adapter + vLLM's ``SupportsMultiModal``
-and the upstream GLM-5.3-Flash processor).
+and the upstream GLM-5.3-Flash processor). Speculative decode (opt-in GLM53_STACK_VLLM_SPEC=1 with GLM53_SPEC_K,
+--no-async-scheduling): the backend's MTP step for the lone live greedy request (section "Stage 17: speculation").
 
 Selected with ``TT_MODEL_CLASS_OVERRIDES="Glm5NextForCausalLM=<ADAPTER_TARGET>,Glm5NextForConditionalGeneration=
 <ADAPTER_TARGET>"``. The plugin opens the mesh BEFORE ``initialize_vllm_model`` (worker.py:274-281) with
@@ -103,6 +104,52 @@ ASYNC_DECODE = DEVICE_TOP_K > 1 and os.environ.get("GLM53_STACK_ASYNC_DECODE", "
 # scheduler trims vLLM's block-hash hit to a position the device holds a snapshot of). Read at import: the plugin
 # reads the capabilities from the class.
 PREFIX_CACHE = os.environ.get("GLM53_STACK_PREFIX", "0") == "1"
+SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
+SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
+
+
+def spec_enabled(env=os.environ) -> bool:
+    """Stage 17 single-user speculation through the plugin's contract (SPEC_DECODE_CONTRACT.md, method custom_class
+    with the model-owned drafter): GLM53_STACK_VLLM_SPEC=1 (default off) with GLM53_SPEC_K = K > 0 (the backend builds
+    the MTP speculative step: tt/spec_mtp.py; GLM53_SPEC_ON_SHARD=1 on the 8x4 shard)."""
+    return env.get(SPEC_ENV, "0") == "1" and int(env.get("GLM53_SPEC_K", "0") or 0) > 0
+
+
+SPEC = spec_enabled()
+
+
+def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.environ):
+    """The plugin's ``SpecPlan`` / ``SpecReject`` for one launch point (``GLM53StackForCausalLM.spec_plan``; pure): the
+    backend's step drafts exactly K = GLM53_SPEC_K (num_speculative_tokens must be >= K; effective_k = K) for ONE live
+    user in generator slot 0 of a B in [K + 1, 4] build; ``k_by_rows`` ((1, K), (max_num_seqs, 1)) and
+    ``DraftOutput.num_valid`` = 0 whenever more than one row is live keep every other step an ordinary decode;
+    ``argmax_ids`` only (greedy: sampled rows decode plainly through ``supports_narrow_decode``), the drafter's state
+    on device (no hidden feed: the step reads the head's h itself)."""
+    if not spec_enabled(env):
+        return types["SpecReject"](reason=f"{SPEC_ENV}=1 with GLM53_SPEC_K > 0 enables the stack's speculative step")
+    K = int(env.get("GLM53_SPEC_K"))
+    B, req = int(max_num_seqs), int(requested_k)
+    if req < K:
+        return types["SpecReject"](
+            reason=f"the stack's speculative step drafts exactly K = {K} (GLM53_SPEC_K); num_speculative_tokens {req}",
+            supported_k=(K,),
+        )
+    if not K + 1 <= B <= SPEC_MAX_ROWS:
+        ok = tuple(k for k in (1, 2, 3) if k + 1 <= B) if B <= SPEC_MAX_ROWS else ()
+        return types["SpecReject"](
+            reason=f"max_num_seqs {B}: the speculative step verifies K + 1 = {K + 1} rows on a B <= {SPEC_MAX_ROWS} build",
+            supported_k=ok,
+        )
+    return types["SpecPlan"](
+        effective_k=K,
+        lanes_per_request=1,
+        extra_bytes_per_seq=0,
+        extra_bytes_per_token=0,
+        accept_modes=("argmax_ids",),
+        drafter_state="internal",
+        supports_narrow_decode=True,
+        k_by_rows=((1, K), (B, 1)) if B > 1 else (),
+    )
 
 
 def _fabric_capability() -> dict | None:
@@ -430,8 +477,11 @@ class GLM53StackForCausalLM:
         "supports_selective_host_readback": False,
         # MODEL_CAPABILITIES.md:126 device setup: worker.py:274-281 reads the class attribute before it opens the mesh
         "fabric_config": _fabric_capability(),
-        # SPEC_DECODE_CONTRACT.md: the stack's speculative step serves one live user in slot 0 only -- off
-        "supports_spec_decode": False,
+        # SPEC_DECODE_CONTRACT.md: the stack's speculative step serves one live user in generator slot 0 (GLM53_STACK_VLLM_SPEC,
+        # default off): the model-owned drafter (custom_class) proposes on device; its state stays on device (no hidden
+        # feed); synchronous scheduling only (supports_async_spec_decode False: --no-async-scheduling)
+        "supports_spec_decode": SPEC,
+        "spec_requirements": ["device_propose"] if SPEC else [],
     }
 
     # model_runner.py:2301-2320: the one captured decode width (fixed user slots, no smaller bucket); set by
@@ -440,7 +490,8 @@ class GLM53StackForCausalLM:
     _HYBRID_KV_CACHE_GROUPS_ENABLED = False  # worker.py:799-807: one logical KV group
     supports_multimodal = False  # vLLM's ``SupportsMultiModal`` flag: text only
 
-    def __init__(self, generator, max_batch_size: int, max_seq_len: int, *, source=None, **vllm_kwargs):
+    def __init__(self, generator, max_batch_size: int, max_seq_len: int, *, source=None, spec: bool | None = None,
+                 **vllm_kwargs):  # fmt: skip
         # ``**vllm_kwargs`` (``vllm_config`` / ``prefix``) is never used: the plugin constructs the adapter through
         # ``initialize_vllm_model``; vLLM >= 0.30's ``is_vllm_model`` wants the keyword accepted (see the shims below)
         self.gen = generator
@@ -452,6 +503,12 @@ class GLM53StackForCausalLM:
         self._alias = list(range(self.max_batch))  # plugin slot -> generator slot (identity until the first gather)
         self._chain = []  # generator slots of the last reload step's decode rows: the resident chain's batch
         self.prefix = None  # GLM53_STACK_PREFIX: the StackPrefixCache of the allocated cache
+        # Stage 17 (SPEC): the speculative step of the lone live greedy request in generator slot 0 behind the plugin's
+        # verify / propose calls; the greedy flag of every generator slot (the last params the plugin sent for it)
+        self.spec = SPEC if spec is None else bool(spec)
+        self._greedy: dict = {}
+        self._spec_n = None  # the last fused verify's accepted drafts (its proposal must continue exactly that)
+        self.spec_stats = dict(fused=0, fallback=0, committed=0, enters=0, proposals=0, declines=0, seeds=0)
 
     # ================================================================================= construction
     @classmethod
@@ -516,6 +573,13 @@ class GLM53StackForCausalLM:
         logger.info(f"GLM53 stack vLLM: StackBackend built in {time.perf_counter() - t0:.0f} s ({len(layers)} layers)")
         gen = Glm53Generator(backend, tokenizer=load_tokenizer(snapshot), max_batch=B, max_seq_len=seq)
         return cls(gen, B, seq, source=source)
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs: int, requested_k: int):
+        """SPEC_DECODE_CONTRACT.md section 2 (config time, before any instance; never raises): ``spec_plan_for``"""
+        from models.demos.glm53_flash.tt.vllm_spec import contract_types
+
+        return spec_plan_for(int(max_num_seqs), int(requested_k), contract_types())
 
     # ================================================================================= KV cache
     @classmethod
@@ -669,6 +733,8 @@ class GLM53StackForCausalLM:
                     f"prefill rows {bad} are sampled (temperature > 0 without top_k 1): the stack samples greedily on "
                     "device only; the plugin routes such rows to host sampling under max_device_top_k=1"
                 )
+        if self.spec:  # Stage 17: another slot's prefill would overwrite the step's candidate KDA rows -> leave first
+            self._spec_stop(kv)
         gslots = self._admit(kv, slots, starts)  # (a re-run continuation keeps its slot: admitted at its own start)
         extra = {"mm_rows": plan["rows"]} if plan is not None and plan["rows"] else {}
         if self.prefix is not None:  # GLM53_STACK_PREFIX: attach confirmed hits, snapshot the on-grid chunk ends
@@ -696,6 +762,11 @@ class GLM53StackForCausalLM:
             raise
         if self.prefix is not None:
             self.prefix.commit()
+        if self.spec:
+            for i, g in enumerate(gslots):
+                self._greedy[g] = params is not None and params[i].is_greedy
+            if params is not None:
+                self._spec_seed(kv)
         if plan is not None and plan["failed"]:
             return self._mm_failed_rows(out, plan["failed"], [gslots[i] for i in plan["failed"]], params is not None)
         if params is not None:
@@ -735,9 +806,22 @@ class GLM53StackForCausalLM:
         if "reset_batch" in kwargs:
             raise TypeError("legacy reset_batch keyword: this adapter declares decode_input_update_contract = 1")
         if kwargs.get("spec_mode") is not None or kwargs.get("num_valid_drafts") is not None:
-            raise NotImplementedError(
-                "speculative decode is not declared by the stack adapter (supports_spec_decode False)"
-            )
+            if not self.spec:
+                raise NotImplementedError(
+                    f"speculative decode is not enabled on the stack adapter ({SPEC_ENV}=1 with GLM53_SPEC_K)"
+                )
+            if not reload_inputs:
+                raise ValueError(
+                    "a verify reloads its inputs (synchronous scheduling: supports_async_spec_decode False)"
+                )
+            return self._verify(
+                tokens, start_pos, num_valid_drafts=kwargs.get("num_valid_drafts"), spec_mode=kwargs.get("spec_mode"),
+                page_table=page_table, kv_cache=kv_cache, enable_trace=enable_trace, sampling_params=sampling_params,
+                slot_remap=slot_remap, reload_page_table=reload_page_table,
+                reload_sampling_params=reload_sampling_params, reset_sampling_state=reset_sampling_state,
+            )  # fmt: skip
+        if self.spec:  # an ordinary decode continues every row from its committed state: no speculation under it
+            self._spec_stop(self._kv(kv_cache))
         if not reload_inputs:
             if not ASYNC_DECODE:
                 raise ValueError(
@@ -756,7 +840,14 @@ class GLM53StackForCausalLM:
                 enable_trace,
                 read_from_device,
             )
-        kv = self._kv(kv_cache)
+        return self._reload_decode(
+            self._kv(kv_cache), tokens, start_pos, page_table, enable_trace, read_from_device, sampling_params,
+            slot_remap, reload_page_table, reload_sampling_params, reset_sampling_state,
+        )  # fmt: skip
+
+    def _reload_decode(self, kv, tokens, start_pos, page_table, enable_trace, read_from_device, sampling_params,
+                       slot_remap, reload_page_table, reload_sampling_params, reset_sampling_state):  # fmt: skip
+        """decode_forward's reload step (every input restaged from the host): see decode_forward"""
         tokens = torch.as_tensor(tokens).reshape(-1).to(torch.int64)
         positions = torch.as_tensor(start_pos).reshape(-1).to(torch.int64)
         B = int(tokens.numel())
@@ -800,6 +891,10 @@ class GLM53StackForCausalLM:
         )
         self._alias = alias
         self._chain = [alias[i] for i in range(B) if int(positions[i]) >= 0]
+        if self.spec:
+            for i in range(B):
+                if int(positions[i]) >= 0:
+                    self._greedy[alias[i]] = params[i].is_greedy
         if isinstance(out, DecodeOutput):
             return out
         return self.gen.process_decode_output_host(out, is_tokens=True).to(torch.int32)
@@ -846,6 +941,164 @@ class GLM53StackForCausalLM:
         by_slot = dict(zip(live, torch.as_tensor(out).reshape(-1).tolist()))
         ids = torch.tensor([by_slot.get(s, 0) for s in order], dtype=torch.int32)
         return ids.reshape(B, 1)
+
+    # ================================================================================= Stage 17: speculation
+    # SPEC_DECODE_CONTRACT.md with the model-owned drafter: the backend's speculative step (tt/spec_mtp.py: the verify
+    # of [b, d1..dK], the accept on device, the MTP drafts of the next step -- ONE trace replay) serves the lone live
+    # greedy request in generator slot 0. propose_draft_tokens enters it (the bootstrap drafts) or hands out the drafts
+    # the last fused step made; a verify of exactly those drafts runs the step (its K + 1 argmax ids: the plugin's walk
+    # accepts what the device accepted); any other verify (more live rows, a truncated / foreign block) leaves the
+    # speculation and answers column 0 with an ordinary decode (a one-column argmax: one token per row committed).
+    def _spec_stop(self, kv) -> None:
+        """leave the speculation (plain decode inputs restored from the device's committed state), if any"""
+        if getattr(self.gen._binding(kv), "spec", None) is not None:
+            self.gen.spec_leave(kv)
+        self._spec_n = None
+
+    def _spec_lone(self, kv) -> bool:
+        """generator slot 0 holds the only live request, a greedy one, and the next step fits the context"""
+        b = self.gen._binding(kv)
+        live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
+        return live == [0] and bool(self._greedy.get(0, False)) and self.gen.spec_room(kv)
+
+    def _spec_seed(self, kv) -> None:
+        """right after a lone greedy request's prefill (its first token sampled, the head's h = the last prompt row's):
+        one bootstrap fills the MTP cache's row L - 1 (the first token after the prompt: the prefill's in-trace fill
+        stops at L - 2) and is left again (GLM53_STACK_VLLM_SPEC_SEED=0: off) -- the plugin's first decode is an
+        ordinary one, after which the speculation enters at L"""
+        if os.environ.get("GLM53_STACK_VLLM_SPEC_SEED", "1") != "1" or not self._spec_lone(kv):
+            return
+        try:
+            self.gen.spec_enter(kv)
+        except ValueError as e:  # (page coverage / context: no seed; the speculation simply starts without it)
+            logger.warning(f"GLM53 stack spec: no MTP seed ({e})")
+            return
+        self.gen.spec_leave(kv)
+        self.spec_stats["seeds"] += 1
+
+    def _verify(self, tokens, start_pos, *, num_valid_drafts, spec_mode, page_table, kv_cache, enable_trace,
+                sampling_params, slot_remap, reload_page_table, reload_sampling_params, reset_sampling_state):  # fmt: skip
+        """SPEC_DECODE_CONTRACT.md 4a: ``tokens`` / ``start_pos`` ``[B, 1+K]`` (column 0 the committed token, 1..K the
+        drafts), ``num_valid_drafts [B]`` -> ``VerifyOutput(argmax_ids)``: the fused step's ``[B, 1+K]`` (return
+        column j = the model's choice after column j; the lone row's K + 1 verify argmax ids, padding rows 0) when the
+        block is exactly the speculating request's (its bonus at its cache length, the K drafts the device made, no
+        other live row); else ``[B, 1]`` from an ordinary decode of column 0 (the plugin commits one token per row:
+        model_runner trims the drafts to the answered width)."""
+        from models.demos.glm53_flash.tt.vllm_spec import contract_types
+
+        if spec_mode != "argmax_ids":
+            raise NotImplementedError(f"spec_mode {spec_mode!r}: the stack adapter verifies in argmax_ids only")
+        kv = self._kv(kv_cache)
+        tok = torch.as_tensor(tokens).to(torch.int64)
+        pos = torch.as_tensor(start_pos).to(torch.int64)
+        if tok.dim() != 2 or tuple(pos.shape) != tuple(tok.shape):
+            raise ValueError(
+                f"a verify block is [B, 1+K] tokens and positions, got {tuple(tok.shape)} / {tuple(pos.shape)}"
+            )
+        B, W = (int(v) for v in tok.shape)
+        nv = torch.as_tensor(num_valid_drafts).reshape(-1).to(torch.int64)
+        if int(nv.numel()) != B:
+            raise ValueError(f"num_valid_drafts {int(nv.numel())} rows vs the block's {B}")
+        VerifyOutput = contract_types()["VerifyOutput"]
+        alias = self._permuted(slot_remap)
+        r = self._fused_row(kv, alias, tok, pos, nv)
+        if r is not None:
+            rows = trim_page_rows(page_table)[:B] if page_table is not None else None
+            rec = self.gen.spec_step(kv, page_row=None if rows is None else rows[r])
+            ids = torch.zeros(B, W, dtype=torch.int32)
+            ids[r] = torch.tensor([int(v) for v in rec["a"][:W]], dtype=torch.int32)
+            self._alias, self._chain, self._spec_n = alias, [], int(rec["n"])
+            self.spec_stats["fused"] += 1
+            self.spec_stats["committed"] += int(rec["n"]) + 1
+            if self.spec_stats["fused"] % 256 == 0:
+                st = self.spec_stats
+                logger.info(f"GLM53 stack spec: {st} (tau {st['committed'] / max(1, st['fused']):.2f})")
+            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids)
+        # not the speculating request's block: the ordinary decode of column 0, one committed token per row
+        self._spec_stop(kv)
+        self.spec_stats["fallback"] += 1
+        out = self._reload_decode(kv, tok[:, 0], pos[:, 0], page_table, enable_trace, True, sampling_params, slot_remap,
+                                  reload_page_table, reload_sampling_params, reset_sampling_state)  # fmt: skip
+        if isinstance(out, tuple):  # host route: (logits [B, 1, V], None) -> the greedy rows' argmax
+            ids = out[0][:, 0, : self.vocab_size].argmax(dim=-1).to(torch.int32)
+        else:
+            ids = torch.as_tensor(out).to(torch.int32)
+        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids.reshape(B, 1))
+
+    def _fused_row(self, kv, alias, tok, pos, nv):
+        """the plugin row of the speculating request when the verify block is exactly its next step (else None): one
+        live row, in generator slot 0, column 0 = the step's bonus at the slot's cache length, the K consecutive
+        positions after it, and all K of the drafts the device made"""
+        b = self.gen._binding(kv)
+        sp = getattr(b, "spec", None)
+        K = self.gen.spec_k()
+        B, W = (int(v) for v in tok.shape)
+        live = [i for i in range(B) if int(pos[i, 0]) >= 0]
+        if sp is None or len(live) != 1 or W != K + 1:
+            return None
+        r = live[0]
+        p0 = int(pos[r, 0])
+        if alias[r] != 0 or int(nv[r]) != K or p0 != int(b.slots[0].seq_len) or int(tok[r, 0]) != int(sp["bonus"]):
+            return None
+        if [int(v) for v in tok[r, 1:].tolist()] != [int(v) for v in sp["drafts"]]:
+            return None
+        if [int(v) for v in pos[r].tolist()] != list(range(p0, p0 + W)):
+            return None
+        return r
+
+    def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
+        """SPEC_DECODE_CONTRACT.md 4b (after every commit): ``DraftOutput([B, K] ids, num_valid [B])`` -- K drafts for
+        the lone live greedy request in generator slot 0 (the bootstrap's when it is not speculating yet, else the ones
+        the last fused step made, which continue exactly its committed block), 0 for every row otherwise (declining
+        leaves the speculation: the next step is an ordinary decode, or the plugin's one verify that resolves a
+        multi-token commit, answered by column 0)"""
+        from models.demos.glm53_flash.tt.vllm_spec import PLACEHOLDER_TOKEN_ID, contract_types
+
+        DraftOutput = contract_types()["DraftOutput"]
+        K = int(num_drafts)
+        ct = torch.as_tensor(committed_tokens).to(torch.int64)
+        cp = torch.as_tensor(committed_positions).to(torch.int64)
+        ac = torch.as_tensor(accepted_counts).reshape(-1).to(torch.int64)
+        B = int(ct.shape[0])
+        drafts = torch.full((B, K), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        nvalid = torch.zeros(B, dtype=torch.int32)
+        if not self.spec or self.kv_cache is None:
+            return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
+        kv = self.kv_cache
+        b = self.gen._binding(kv)
+        live = [i for i in range(B) if int(cp[i, 0]) >= 0]
+        r = live[0] if len(live) == 1 else None
+        ok = r is not None and self._alias[r] == 0 and K == self.gen.spec_k() and self._spec_lone(kv)
+        if ok:
+            last = int(ac[r]) - 1
+            # the block's last committed token sits at the slot's cache length (the next input: model_runner
+            # _committed_positions -- column j at the verify input's position + 1 + j)
+            ok = int(cp[r, last]) == int(b.slots[0].seq_len)
+        sp = getattr(b, "spec", None)
+        if ok and sp is not None:
+            if self._spec_n is None or last != self._spec_n or int(ct[r, last]) != int(sp["bonus"]):
+                raise RuntimeError(
+                    f"proposal after a fused verify: the plugin committed {last + 1} tokens ending {int(ct[r, last])}, "
+                    f"the device {self._spec_n + 1 if self._spec_n is not None else None} ending {sp['bonus']}"
+                )
+            d = list(sp["drafts"])
+        elif ok:
+            try:
+                d = self.gen.spec_enter(kv)
+            except ValueError as e:  # (a refusal of the generator's: page coverage / context -> decline this step)
+                logger.warning(f"GLM53 stack spec: no bootstrap ({e})")
+                ok = False
+            else:
+                self._spec_n = None
+                self.spec_stats["enters"] += 1
+        if not ok:
+            self._spec_stop(kv)
+            self.spec_stats["declines"] += 1
+            return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
+        drafts[r] = torch.tensor([int(v) for v in d[:K]], dtype=torch.int32)
+        nvalid[r] = K
+        self.spec_stats["proposals"] += 1
+        return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
 
     # ================================================================================= slot aliasing
     def _permuted(self, slot_remap) -> list:
@@ -942,6 +1195,10 @@ class GLM53StackForCausalLM:
         if not 0 <= int(slot) < self.max_batch:
             raise ValueError(f"release_request({slot}) outside the {self.max_batch} slots")
         g = self._alias[int(slot)]
+        if self.spec and g == 0 and getattr(self.gen._binding(self.kv_cache), "spec", None) is not None:
+            self.gen.spec_abort(self.kv_cache)  # the speculating request ended: its candidate rows are dead state
+            self._spec_n = None
+        self._greedy.pop(g, None)
         self.gen.release_slot(self.kv_cache, g)
         if self.prefix is not None:  # its prefix-cache entry loses a reader
             self.prefix.release(g)

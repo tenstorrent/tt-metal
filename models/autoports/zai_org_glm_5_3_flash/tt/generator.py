@@ -2341,7 +2341,10 @@ class Glm53Generator(_ReadinessGenerator):
         """the speculating request ended (released): forget the speculation (its candidate rows are dead state)"""
         b = self._binding(kv_cache)
         b.spec = None
-        if getattr(self.backend, "spec", None) is not None:
+        sp = getattr(self.backend, "spec", None)
+        if sp is not None and callable(getattr(sp, "abort", None)):  # (SpecMTP.abort: the selector page back to row 0)
+            sp.abort()
+        elif sp is not None:
             from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import write_rows
 
             write_rows(self.backend.mesh, self.backend.spec.sel, torch.zeros(1, 32, dtype=torch.int32))

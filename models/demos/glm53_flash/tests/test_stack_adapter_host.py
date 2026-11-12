@@ -62,9 +62,11 @@ from models.demos.glm53_flash.tt.generator_vllm_stack import (
     cache_defaults,
     declare_multimodal_class,
     row_params,
+    spec_plan_for,
     trim_page_rows,
 )
 from models.demos.glm53_flash.tt.mm_inputs import IMAGE_TOKEN_ID, MMItem
+from models.demos.glm53_flash.tt.vllm_spec import PLACEHOLDER_TOKEN_ID, accept_greedy_walk, contract_types
 
 VOCAB = 64
 B = 4  # max_num_seqs = the backend's slots
@@ -1779,6 +1781,9 @@ class _MockSpec:
     def read(self) -> dict:
         return dict(self._rec)
 
+    def abort(self) -> None:
+        self.counters["aborts"] = self.counters.get("aborts", 0) + 1
+
     def leave(self) -> dict:
         rec = self.read()
         pos = self.be.io.cur_pos.t.clone()
@@ -1970,3 +1975,144 @@ def test_spec_refusals():
     with expect_error(ValueError, "the backend's speculative step with K = 3"):
         plain_gen.generate_batch([_prompt(10, 1)], 4, spec_k=3)
     assert "ttnn" not in sys.modules
+
+
+# ------------------------------------------------------------------- Stage 17: the served single-user speculation
+def test_spec_plan_for_the_lone_user():
+    """spec_plan: off unless GLM53_STACK_VLLM_SPEC=1 with GLM53_SPEC_K; effective_k = K (num_speculative_tokens >= K),
+    B in [K + 1, 4]; argmax_ids, narrow decode kept, k_by_rows reaching max_num_seqs (multi-row steps decline through
+    DraftOutput.num_valid anyway)"""
+    T = contract_types()
+    env = {"GLM53_STACK_VLLM_SPEC": "1", "GLM53_SPEC_K": "3"}
+    p = spec_plan_for(4, 3, T, env)
+    assert isinstance(p, T["SpecPlan"]) and p.effective_k == 3 and p.accept_modes == ("argmax_ids",)
+    assert p.supports_narrow_decode and p.k_by_rows == ((1, 3), (4, 1)) and p.drafter_state == "internal"
+    assert isinstance(spec_plan_for(4, 5, T, env), T["SpecPlan"])  # more asked: K served
+    r = spec_plan_for(4, 2, T, env)
+    assert isinstance(r, T["SpecReject"]) and r.supported_k == (3,)
+    r = spec_plan_for(3, 3, T, env)
+    assert isinstance(r, T["SpecReject"]) and r.supported_k == (1, 2)
+    assert isinstance(spec_plan_for(8, 3, T, env), T["SpecReject"])
+    assert isinstance(spec_plan_for(4, 3, T, {"GLM53_SPEC_K": "3"}), T["SpecReject"])
+
+
+def _spec_adapter(K: int = 3, good=lambda step: 3):
+    backend = _MockSpecBackend(B, K, good)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ, spec=True)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    return ad, backend, gen, kv
+
+
+def _verify(ad, kv, K, rows: dict, table):
+    """the plugin's verify block (rows: plugin row -> (committed token, its position, drafts)) -> the walk's
+    (committed [B, 1+K], counts [B]) as the runner computes them (model_runner trims the drafts to the answer's width)
+    """
+    tok = torch.zeros(B, 1 + K, dtype=torch.int32)
+    pos = torch.full((B, 1 + K), -1, dtype=torch.int32)
+    nv = torch.zeros(B, dtype=torch.int32)
+    dr = torch.full((B, K), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+    for i, (t, p, d) in rows.items():
+        tok[i, 0], pos[i, 0] = t, p
+        for j, x in enumerate(d):
+            tok[i, 1 + j], pos[i, 1 + j], dr[i, j] = x, p + 1 + j, x
+        nv[i] = len(d)
+    out = ad.decode_forward(tok, pos, page_table=table, kv_cache=kv, sampling_params=_greedy(B), num_valid_drafts=nv,
+                            accepted_counts=torch.ones(B, dtype=torch.int32), spec_mode="argmax_ids")  # fmt: skip
+    ids = out.argmax_ids
+    return ids, accept_greedy_walk(ids, dr[:, : int(ids.shape[1]) - 1], nv)
+
+
+def _block(rows: dict, K: int):
+    """the plugin's committed block for propose_draft_tokens (rows: plugin row -> (committed outputs, position of the
+    first)): the walk's committed tokens, column j at its position (model_runner._committed_positions), padding -1"""
+    ct = torch.full((B, 1 + K), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+    cp = torch.full((B, 1 + K), -1, dtype=torch.int32)
+    ac = torch.ones(B, dtype=torch.int32)
+    for i, (toks, p) in rows.items():
+        ct[i, : len(toks)] = torch.tensor(toks, dtype=torch.int32)
+        cp[i, :] = torch.arange(p, p + 1 + K)
+        ac[i] = len(toks)
+    return ct, cp, ac
+
+
+def test_served_spec_lone_user_flow():
+    """the plugin's calls for one greedy request (SPEC_DECODE_CONTRACT.md section 5): prefill (+ the MTP seed: enter /
+    leave), an ordinary decode, propose (the bootstrap: K drafts), verify (the fused step: K + 1 argmax ids, the walk
+    accepts what the device accepted), propose (the step's drafts) ... -- the committed stream equals plain greedy, the
+    slot state ledger stays consistent (the mock asserts it); then a second request arrives: the speculation is left
+    before its prefill, the outstanding drafts' verify is answered by an ordinary decode (one column: one token per row),
+    the proposals decline (two live rows); after it is released, the lone request speculates again"""
+    K = 3
+    ad, backend, gen, kv = _spec_adapter(K)
+    prompt = _prompt(100, 7)
+    table = _table([_blocks(0, 400)], B)
+    out, _ = ad.prefill_forward(_history([prompt]), page_table=table, kv_cache=kv, prompt_lens=[100], start_pos=[0],
+                                empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
+    stream, pos = [int(out[0, 0])], 100  # pos: where the last committed token sits (the next input's position)
+    assert ad.spec_stats["seeds"] == 1 and backend.spec.counters["enters"] == backend.spec.counters["leaves"] == 1
+    ids = ad.decode_forward(torch.tensor([[stream[-1]], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]),
+                            page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+    stream.append(int(ids[0, 0]))
+    pos += 1
+    ct, cp, ac = _block({0: ([stream[-1]], pos)}, K)
+    for _ in range(6):
+        do = ad.propose_draft_tokens(K, ct, cp, ac)
+        assert do.num_valid.tolist() == [K, 0, 0, 0]
+        drafts = [int(v) for v in do.draft_token_ids[0].tolist()]
+        ids, (committed, counts) = _verify(ad, kv, K, {0: (stream[-1], pos, drafts)}, table)
+        assert tuple(ids.shape) == (B, 1 + K)
+        new = [int(v) for v in committed[0, : int(counts[0])].tolist()]
+        ct, cp, ac = _block({0: (new, pos + 1)}, K)
+        stream += new
+        pos += len(new)
+    assert ad.spec_stats["fused"] == 6 and ad.spec_stats["enters"] == 1 and ad.spec_stats["committed"] == 6 * (K + 1)
+    assert stream == [(prompt[-1] + 1 + i) % VOCAB for i in range(len(stream))]  # = plain greedy (next = t + 1)
+    do = ad.propose_draft_tokens(K, ct, cp, ac)  # the drafts the last step made, outstanding
+    drafts = [int(v) for v in do.draft_token_ids[0].tolist()]
+    # a second request arrives: the speculation is left before its prefill (its slot's state rows are not touched)
+    p2 = _prompt(80, 30)
+    table2 = _table([_blocks(0, 400), _blocks(1, 300)], B)
+    out2, _ = ad.prefill_forward(_history([p2]), page_table=table2[1:2], kv_cache=kv, prompt_lens=[80], start_pos=[0],
+                                 empty_slots=[1], sampling_params=_greedy(1))  # fmt: skip
+    assert getattr(gen._binding(kv), "spec", None) is None and backend.spec.counters["leaves"] == 2
+    # the plugin still verifies the first request's outstanding drafts beside the new row: an ordinary decode answers
+    tok2 = int(out2[0, 0])
+    ids, (committed, counts) = _verify(ad, kv, K, {0: (stream[-1], pos, drafts), 1: (tok2, 80, [])}, table2)
+    assert tuple(ids.shape) == (B, 1) and counts.tolist() == [1, 1, 1, 1] and ad.spec_stats["fallback"] == 1
+    assert int(ids[0, 0]) == (stream[-1] + 1) % VOCAB and int(ids[1, 0]) == (tok2 + 1) % VOCAB
+    stream.append(int(ids[0, 0]))
+    pos += 1
+    ct, cp, ac = _block({0: ([stream[-1]], pos), 1: ([int(ids[1, 0])], 81)}, K)
+    do = ad.propose_draft_tokens(K, ct, cp, ac)
+    assert do.num_valid.tolist() == [0, 0, 0, 0] and ad.spec_stats["declines"] >= 1  # two live rows: no drafts
+    ad.release_request(1)  # the second request ends: the first one is alone again
+    ids = ad.decode_forward(torch.tensor([[stream[-1]], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]),
+                            page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+    stream.append(int(ids[0, 0]))
+    pos += 1
+    do = ad.propose_draft_tokens(K, *_block({0: ([stream[-1]], pos)}, K))
+    assert do.num_valid.tolist() == [K, 0, 0, 0] and ad.spec_stats["enters"] == 2
+    ids, (committed, counts) = _verify(ad, kv, K, {0: (stream[-1], pos, [int(v) for v in do.draft_token_ids[0]])},
+                                       table)  # fmt: skip
+    assert int(counts[0]) == K + 1 and ad.spec_stats["fused"] == 7
+    stream += [int(v) for v in committed[0].tolist()]
+    assert stream == [(prompt[-1] + 1 + i) % VOCAB for i in range(len(stream))]
+    ad.release_request(0)  # released while speculating: abort, no leave
+    assert backend.spec.counters.get("aborts") == 1 and getattr(gen._binding(kv), "spec", None) is None
+    assert "ttnn" not in sys.modules
+
+
+def test_served_spec_declines_sampled_rows():
+    """a lone sampled request is never speculated (argmax_ids certifies greedy rows only): proposals decline"""
+    K = 3
+    ad, backend, gen, kv = _spec_adapter(K)
+    table = _table([_blocks(0, 300)], B)
+    sampled = SimpleNamespace(temperature=[1.0] * B, top_k=[0] * B, top_p=[0.95] * B, seed=[None] * B)
+    out, _ = ad.prefill_forward(_history([_prompt(60, 2)]), page_table=table, kv_cache=kv, prompt_lens=[60],
+                                start_pos=[0], empty_slots=[0], sampling_params=sampled)  # fmt: skip
+    assert ad.spec_stats["seeds"] == 0
+    do = ad.propose_draft_tokens(K, *_block({0: ([int(out[0, 0])], 60)}, K))
+    assert do.num_valid.tolist() == [0, 0, 0, 0] and backend.spec.counters["enters"] == 0

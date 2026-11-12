@@ -555,8 +555,11 @@ class SpecMTP:
         self.df2 = None
         # the positions the speculative step may touch (None: the backend's max_seq_len); the dflash2 drafter's own
         # cache capacity GLM53_DF2_CACHE_CAP (the 1M line: 131,072, coordinator 2026-10-23 10:14:52Z) bounds it --
-        # past it the request decodes plainly (generator spec_enter declines, the adapter leaves before the step)
-        self.pos_cap = None
+        # past it the request decodes plainly (generator spec_enter declines, the adapter leaves before the step).
+        # GLM53_SPEC_MAX_CTX (the MTP drafter): the context bound past which speculation stops paying -- the MTP layer's
+        # attention is dense over every position (+~2.4 ms per step per 32 K positions on the 8x4, chain_mk201), so a
+        # long-context profile speculates below the bound and decodes plainly above it
+        self.pos_cap = int(os.environ.get("GLM53_SPEC_MAX_CTX", "0") or 0) or None
         self._build_verify_stacks()
         l1_debug("after verify stacks", self.mesh)
         if drafter == "dflash2":
@@ -1120,6 +1123,11 @@ class SpecMTP:
         return dict(n=n, c=int(r[1]) - (1 << 32) * (int(r[1]) >= (1 << 31)), a=[int(v) for v in r[2 : 3 + K]],
                     committed=[int(v) for v in r[2 : 3 + n]], drafts=[int(v) for v in r[16 : 16 + K]],
                     steps=int(r[31]))  # fmt: skip
+
+    def abort(self) -> None:
+        """the speculating request ended without a leave (released): the selector back to row 0 (its candidate rows are
+        dead state; the next request's prefill rewrites the slot)"""
+        write_rows(self.mesh, self.sel, torch.zeros(1, 32, dtype=torch.int32))
 
     def leave(self) -> dict:
         """stop speculating: the committed KDA state / conv history of row sel -> row 0 (SlotOps, the stack's existing
