@@ -247,7 +247,12 @@ class MATMUL_ROW_MOP(TemplateParameter):
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form.
         """
-        from helpers.matmul_prod_keys import m2_row_mop, main_form_cell, row_mop_form
+        from helpers.matmul_prod_keys import (
+            m2_row_mop,
+            main_form_cell,
+            row_mop_form,
+            row_mop_off,
+        )
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (
             dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi
@@ -259,6 +264,20 @@ class MATMUL_ROW_MOP(TemplateParameter):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
+        # matmul_row_mop_off of llk_matmul_forms.h
+        if row_mop_off(
+            math_fidelity,
+            dest_sync == DestSync.Half,
+            fp32_dest,
+            formats.input_format,
+            formats.input_format_B,
+            out_format,
+            rt_dim,
+            ct_dim,
+            kt_dim,
+            throttle,
+        ):
+            return []
         # Float16_b against Bfp8_b at LoFi, full sync and a 32-bit DEST: the row MOP reads slower than the tile MOP on the 7 tile row at K 32 (+188 cycles)
         if (
             math_fidelity == MathFidelity.LoFi
@@ -2251,7 +2270,10 @@ class PACK_API_GEOMETRY(TemplateParameter):
     partial_face: bool = False
 
     def convert_to_cpp(self) -> str:
-        lines = [f"#define PACK_API_SHIM_NUM_FACES {self.num_faces}", f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r_dim}"]
+        lines = [
+            f"#define PACK_API_SHIM_NUM_FACES {self.num_faces}",
+            f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r_dim}",
+        ]
         if self.partial_face:
             lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
         return "\n".join(lines)
@@ -2372,7 +2394,10 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
         # LLK_MATMUL_PACK_PROD=1: every block goes through the block pack without the K, as main's ttnn matmul kernels call pack_block
         if os.environ.get("LLK_MATMUL_PACK_PROD") == "1":
             out += "\n#define MATMUL_PACK_PROD 1"
-        if os.environ.get("LLK_MATMUL_PACK_NOK") == "1" or os.environ.get("LLK_MATMUL_PACK_PROD") == "1":
+        if (
+            os.environ.get("LLK_MATMUL_PACK_NOK") == "1"
+            or os.environ.get("LLK_MATMUL_PACK_PROD") == "1"
+        ):
             out += "\n#define MATMUL_PACK_NOK 1"
         # LLK_MATMUL_PACK_CONST=1: the pack thread takes the tile count as a compile-time constant, as ttnn's matmul kernels call pack_block
         if os.environ.get("LLK_MATMUL_PACK_CONST") == "1":

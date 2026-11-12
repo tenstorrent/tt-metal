@@ -2787,6 +2787,75 @@ constexpr DataFormat matmul_forced_form_key(const char form)
     return form == 'R' ? DataFormat::Bfp2 : (form == 'h' ? DataFormat::Bfp2_b : (form == 'r' ? DataFormat::Bfp4 : DataFormat::Invalid));
 }
 
+// LoFi half sync rows of 8 tiles, one K tile, a narrow in1 into Bfp8 or Float16_b: the row MOP stretches the SrcA unpack, 1.7 to 2.7 cycles per block
+constexpr bool matmul_lofi_row8_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    const bool narrow_in1 = in1 == DataFormat::Bfp8 || in1 == DataFormat::Bfp8_b || in1 == DataFormat::Bfp4_b;
+    const bool out_8_16   = out == DataFormat::Bfp8 || out == DataFormat::Bfp8_b || out == DataFormat::Float16_b;
+    return fidelity == MathFidelity::LoFi && half_sync && !fp32_dest && throttle == 0 && kt == 1 && rt == 1 && ct == 8 && narrow_in1 && out_8_16;
+}
+
+// HiFi2 half sync 32-bit DEST blocks of one K tile into Float32 where the row MOP reads 0.6 to 2.3 cycles per block behind the tile MOP
+struct matmul_row_mop_off_cell
+{
+    MathFidelity fidelity;
+    bool half_sync;
+    bool fp32_dest;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t rt, ct;
+};
+
+inline constexpr matmul_row_mop_off_cell matmul_row_mop_off_cells[] = {
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float32, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float32, 1, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Float32, 1, 4},
+};
+
+// The blocks that keep the tile MOP of their keyed form though the caller opts into the row MOP
+constexpr bool matmul_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    if (matmul_lofi_row8_row_mop_off(fidelity, half_sync, fp32_dest, in1, out, rt, ct, kt, throttle))
+    {
+        return true;
+    }
+    if (throttle != 0 || kt != 1)
+    {
+        return false;
+    }
+    for (const matmul_row_mop_off_cell& c : matmul_row_mop_off_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_dest == fp32_dest && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt &&
+            c.ct == ct)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The forced form that replaces the row MOP a caller opts into (the row_mop argument of the math calls), as the harness runs it: 0 where the row MOP stays. At half sync every
 // forced cell takes the place of the row MOP, at full sync the hoisted forms ('R', 'h'). h, w and kt_dim are the caller's block keys (rt, ct and k steps of the block).
 template <MathFidelity math_fidelity, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, int sync, std::uint32_t h, std::uint32_t w, std::uint32_t kt_dim, std::uint32_t kt_per_section = 0>

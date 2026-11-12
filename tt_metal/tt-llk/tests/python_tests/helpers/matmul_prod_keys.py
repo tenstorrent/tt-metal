@@ -339,6 +339,94 @@ def forced_form(
     return ""
 
 
+def lofi_row8_row_mop_off(
+    fidelity, half_sync, fp32_dest, in1, out, rt, ct, kb, throttle=0
+) -> bool:
+    """llk_matmul_forms.h matmul_lofi_row8_row_mop_off."""
+    return (
+        fidelity.name == "LoFi"
+        and half_sync
+        and not fp32_dest
+        and throttle == 0
+        and kb == 1
+        and rt == 1
+        and ct == 8
+        and in1 in (DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+        and out in (DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Float16_b)
+    )
+
+
+# matmul_row_mop_off_cells of llk_matmul_forms.h: (fidelity, half sync, 32-bit DEST, in1, in0, output, rt, ct)
+_ROW_MOP_OFF_CELLS = {
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Bfp2_b,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        4,
+        1,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp8_b,
+        DataFormat.Float32,
+        1,
+        2,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Bfp4_b,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        1,
+        4,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Float16,
+        DataFormat.Bfp8,
+        DataFormat.Float32,
+        1,
+        4,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        1,
+        4,
+    ),
+}
+
+
+def row_mop_off(
+    fidelity, half_sync, fp32_dest, in1, in0, out, rt, ct, kb, throttle=0
+) -> bool:
+    """llk_matmul_forms.h matmul_row_mop_off."""
+    if lofi_row8_row_mop_off(
+        fidelity, half_sync, fp32_dest, in1, out, rt, ct, kb, throttle
+    ):
+        return True
+    return (
+        throttle == 0
+        and kb == 1
+        and (fidelity.name, bool(half_sync), bool(fp32_dest), in1, in0, out, rt, ct)
+        in _ROW_MOP_OFF_CELLS
+    )
+
+
 def row_mop_form(
     fidelity,
     kb,

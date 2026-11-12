@@ -105,6 +105,33 @@ constexpr bool llk_matmul_main_cell() {
     return false;
 }
 
+// A block that keeps its tile MOP though the caller opts into the row MOP (llk_matmul_forms.h matmul_row_mop_off).
+template <
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt,
+    DataFormat in0,
+    DataFormat in1,
+    DataFormat out_format>
+constexpr bool llk_matmul_row_mop_off() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (block_rt != 0 && block_ct != 0 && block_kt != 0 && in1 != DataFormat::Invalid) {
+        return matmul_row_mop_off(
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncHalf,
+            DST_ACCUM_MODE,
+            in1,
+            in0,
+            out_format,
+            block_rt,
+            block_ct,
+            block_kt,
+            MM_THROTTLE);
+    }
+#endif
+    return false;
+}
+
 // The unpack_auto_ttsync the unpack calls run: the caller's, except on a block (keys given) that is a main form cell or
 // where the ttsync unpack measured slower than the default unpack (matmul_unpack_ttsync_cell). Decided at compile time,
 // so the unpack code of every other block is unchanged.
@@ -697,7 +724,8 @@ ALWI void matmul_block_init(
         keyed ? llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
     constexpr bool row_mop_on =
         keyed && row_mop && row_mop_form == 0 &&
-        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() &&
+        !llk_matmul_row_mop_off<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
     constexpr std::uint32_t unpack_ttsync =
         keyed ? llk_matmul_unpack_ttsync<unpack_auto_ttsync, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
     constexpr std::uint32_t stream_z_on = keyed ? stream_z : 0;
@@ -801,7 +829,8 @@ ALWI void matmul_block(
         keyed ? llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
     constexpr bool row_mop_on =
         keyed && row_mop && row_mop_form == 0 &&
-        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() &&
+        !llk_matmul_row_mop_off<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
     constexpr std::uint32_t unpack_ttsync =
         keyed ? llk_matmul_unpack_ttsync<unpack_auto_ttsync, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
     constexpr std::uint32_t stream_z_on = keyed ? stream_z : 0;
@@ -871,7 +900,8 @@ ALWI void matmul_block_k(
     constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
     constexpr bool row_mop_on =
         row_mop && row_mop_form == 0 &&
-        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() &&
+        !llk_matmul_row_mop_off<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
     constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
