@@ -53,6 +53,7 @@ Tensor dit_fused_distributed_groupnorm(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& persistent_output_buffer,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation);
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    std::optional<uint32_t> second_cluster_axis = std::nullopt);
 
 }  // namespace ttnn::prim
