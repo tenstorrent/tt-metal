@@ -3537,6 +3537,119 @@ tasks:
       served_bytes_differ: == 0
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.52
+  title: 'MoE expert replicas rebased onto model_bringup: P.45 counts, P.46 extra slot + routing, P.47 runtime chip-to-chip fill, all default off'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.51
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12. This is the EXPERIMENTAL replica branch, forked from dnijemcevic/model_bringup (P.44, P.50 COMBINE_SPLIT=on, P.49 PREFILL_END=cap, FIX.25 determinism in every gate, FIX.26, FIX.27, P.51); model_bringup itself stays free of replica work. The MoE expert-replica work was done on a branch that predates the determinism fix; rebuild it here. Port, from branch dnijemcevic/moe_replication (4c79ce65ece), the accepted replica work and nothing else: P.45 MOE_COUNTS (per-chunk, per-layer expert token counts on the device; commit 1884f5ec92d), P.46 MOE_REPLICAS (one extra expert slot per chip, the router's slot map, tokens split between an expert and its copies; ffe570b0b4f), P.47 the runtime fill (MOE_REPLICAS off | runtime, the expert_slot_copy op, the slot left empty at load; 1e4b42b2d98) - read those commits and their tests; NOT the R.* measurement tasks, NOT P.48 (branch exp/p48_replica_policy stays as it is), NOT FIX.23's bisect probes. Conflicts with this branch's changes (moe_block_main_adapter.py, settings.py, the combine fork with COMBINE_SPLIT, the fused head) are resolved keeping this branch's behaviour; the replica switches stay default off. Their tests must pass, including bit-identity of outputs with copies vs without (P.46's check) - now under the deterministic combine.
+      VERIFY with the A/B below: MOE_REPLICAS off vs runtime with no copies made must be the same accuracy and device time (P.47 measured 185.64 vs 185.77 ms); determinism is checked in every gate. Report: what was ported (files, from which commits), the conflicts and how resolved, test results, A/B. Agent rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  ab:
+    env:
+      MOE_REPLICAS: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      MOE_REPLICAS: runtime
+      ENGRAM_TABLE: resident
+    keep_default: true
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_expert_slot_copy.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_replicas.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_counts.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+- id: P.53
+  title: 'MoE replica fill hidden in the combine: the combine''s fabric port cores carry the expert copy as extra packets (MOE_FILL=piggyback), microbenchmark first'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.52
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12, EXPERIMENTAL (this branch only), challenging: do your best. The replica fill (P.47's expert_slot_copy: 0.71-0.78 ms a 19 MiB copy alone, 2.79 ms when all 32 chips copy at once) run in program order is serial with the model; chunked prefill has no idle time. A copy for layer L may run any time between layer L's expert round of chunk n and of chunk n+1, in pieces, in any order. Code reading (report: /private/tmp is not on this node - the findings): (a) the experts and the combine are ONE program per chip (routed_experts_combine); its 8 port cores (one per direction x link) hold the fabric connections from near the start (combine_port_writer.cpp:190) to the end (:534), the whole ~1.4 ms a layer, so every router's single local-worker sender channel (fabric_erisc_router.cpp:362-387, edm_fabric/; open_start overwrites the one registration) is taken and no other program can send concurrently; (b) the links carry ~10% of 25 GB/s during it (~9.8 MB a chip a layer); (c) a port kernel that holds the connection can send any extra packet, including writes into a peer chip's DRAM, if the port faces the first hop toward that chip; (d) TT_METAL_ENABLE_FABRIC_VC2 adds a second worker channel but is untested on this mesh - do not use it.
+      DESIGN TO BUILD, behind MOE_FILL = serial (P.47, default) | piggyback: the copy rides on the combine's port cores: an idle core of the program (an expert core with no work, or a spare core inside the program's grid; the 110-core cap holds) reads the replica's run-table pieces from the source chip's DRAM into L1 and hands them to the port facing the first hop to the destination; the port sends a piece only when no output row is waiting, with a cap on copy packets in flight; progress persists across programs (layer to layer, chunk to chunk); a copy for layer L is carried only by OTHER layers' combines (never L's own: it reads L's replica slot); the last piece ends with a flushed ready increment; the slot map of layer L flips only after its copy completed (a token never routes to an unfilled slot). The port's exit must never wait on copy progress (no hang path).
+      STEP 1, MICROBENCHMARK before any model integration: the forked port writer on a real layer's combine: combine device time alone vs with copies, on one chip, all 32 chips with neighbour placement, all 32 with random placement; bytes of every copied slot bit-exact against the source; 100 back-to-back runs without a hang; the combine's outputs bit-identical with and without copies. Pass: < 5 % added device time. If it fails, say why with numbers and stop there (a data-backed 'not possible this way' is a valid result). STEP 2, model integration with P.47's set_replicas API; STEP 3, per-chunk device time with the fill included, MOE_FILL serial vs piggyback, at the quick rung and 51,200.
+      Report: the design as built, the microbenchmark table, the integration results, what limits it. Agent rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  ab:
+    env:
+      MOE_REPLICAS: runtime
+      MOE_FILL: serial
+      ENGRAM_TABLE: resident
+    change:
+      MOE_REPLICAS: runtime
+      MOE_FILL: piggyback
+      ENGRAM_TABLE: resident
+    keep_default: true
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_expert_slot_copy.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_fill_piggyback.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+- id: P.54
+  title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.53
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12, EXPERIMENTAL (this branch only): the decisive measurement. Bring back from branch exp/p48_replica_policy (ec4dc50fafb) the back-to-back harness (testing/b2b.py, tests/test_b2b_prefill.py, tt/b2b.py), the in-memory policy (tt/moe_policy.py, tt/moe_policy_core.py: running mean of past chunks' counts + hysteresis 0.005, at most 32 copies a layer, never on the home chip, least-used replica replaced, a cap on copies a chunk) and the fused head's counts_out (counts straight into a per-layer buffer, an async readback, no sync in the timed region); port them onto this branch, using the best fill P.53 left (MOE_FILL=piggyback if it passed, else serial). Measure, novel and code prompts, 11 chunks of 5,120 back to back, repeated (median and spread): per chunk and in total, DEVICE TIME (the owner's main number; P.48 recorded no device time) and wall, host enqueue time, copies and bytes a chunk, the fill's own device time and how much of it is hidden, busiest / mean experts; variants: replicas off; frozen (one table after chunk 0, then no copies); online. P.48 found the back-to-back chunks host-bound (~230-250 ms a chunk vs ~175 ms device; single-chunk clean runs 184 ms) and no wall gain: find with measurements whether that is the harness (per-chunk host work a server would not do: syncs, readbacks, Python, the policy process's CPU) or the model, fix harness overhead at its cause, and say what the replicas save on the device and on the wall. Every replica variant's outputs must equal off bit for bit (determinism holds since P.50 / FIX.25). A data-backed 'no gain' is a valid result. Save the full report in the BREADCRUMBS and a short summary in the agent report.
+      Agent rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_policy.py
+      && WL=novel BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_b2b_prefill.py
+      && WL=code BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_b2b_prefill.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      b2b_wall_ms_off: '> 0'
+      b2b_device_ms_off: '> 0'
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
