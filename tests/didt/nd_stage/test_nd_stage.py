@@ -38,8 +38,11 @@ Not separable with kernels alone: DEST storage from its read ports, the multipli
 unpacker and packer internal stages, the TRISC front ends, and clock or power delivery. L1 ECC counters
 are not usable either: the scrubber also walks unpopulated rows and the firmware clears the counts.
 
-Wall time is ~ (number of arms) x ND_PROBE_SECONDS plus compile and calibration: on a Galaxy, 33 arms
-x 20 s ~ 11 min, ~ 14 min in all. ND_PROBE_SECONDS=15 trims it to ~ 11 min.
+The target is a Blackhole Galaxy: every probe runs on all 32 chips at once, on the 11x10 worker grid of each
+(nd.MAX_GRID; the device reports 12x10, and column x=11 stays idle to hold 110 co-active cores).
+
+Wall time is ~ (number of arms) x ND_PROBE_SECONDS plus compile and calibration: 33 arms x 20 s ~ 11 min,
+~ 14 min in all. ND_PROBE_SECONDS=15 trims it to ~ 11 min.
 
 Env:
   ND_PROBE_SECONDS  seconds per arm (default 20)
@@ -65,12 +68,6 @@ from loguru import logger
 
 from models.common.utility_functions import skip_for_wormhole_b0
 from tests.didt.nd_stage import nd_stage_lib as nd
-
-MESH_DEVICE_PARAMS = [
-    pytest.param((1, 1), id="p150"),
-    pytest.param((1, 2), id="p300"),
-    pytest.param((8, 4), id="galaxy"),
-]
 
 
 def _calibrate(runner, seconds, needed):
@@ -104,7 +101,7 @@ def _fmt_core(v):
 
 
 @skip_for_wormhole_b0("The probes target the Blackhole matmul di/dt fault")
-@pytest.mark.parametrize("mesh_device", MESH_DEVICE_PARAMS, indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="galaxy")], indirect=["mesh_device"])
 def test_nd_stage(mesh_device):
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = min(grid.x, nd.MAX_GRID[0]), min(grid.y, nd.MAX_GRID[1])
