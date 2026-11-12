@@ -215,9 +215,9 @@ class WormholeArch(ArchGolden):
     ``Fp8_e4m3`` is absent, because Wormhole's only fp8 is Lf8 (e5m2), which has no
     ``DataFormat`` in the harness and so no codec.
 
-    The unpacker's pair table and the FPU's mantissa split are both left empty:
-    unmodelled at that level of detail, not a claim that everything is legal.
-    A multiply here is the exact product and warns.
+    The unpacker's pair table is left empty: unmodelled at that level of detail,
+    not a claim that everything is legal. The FPU's mantissa split *is* set, so
+    a multiply here decomposes into fidelity phases and does not warn.
     """
 
     l1 = _WORMHOLE_L1
