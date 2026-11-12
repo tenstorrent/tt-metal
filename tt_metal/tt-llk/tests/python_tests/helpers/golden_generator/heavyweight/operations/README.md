@@ -12,9 +12,9 @@ Writing a test never touches the data-transfer blocks. Pick the golden for your
 architecture and hand it tensors:
 
 ```python
-from helpers.golden_generator.heavyweight.operations import QuasarDataCopyGolden
+from helpers.golden_generator.heavyweight.operations import get_quasar_data_copy_golden
 
-result = QuasarDataCopyGolden().run(stimuli, in_format, out_format)
+result = get_quasar_data_copy_golden().run(stimuli, in_format, out_format)
 ```
 
 ## Contents
@@ -42,7 +42,7 @@ golden.py     Golden · OpConfig            blocks → steps   ──self.blocks
                      ↓                                                               ↓
 pipelines/    DataCopyGolden · MatmulGolden · …             QuasarArch · WormholeArch · BlackholeArch
                      ↓
-arch.py       QuasarEltwiseBinaryGolden · …  the op bound to an ArchProfile
+arch.py       get_quasar_eltwise_binary_golden · …  the op bound to an ArchProfile
 ```
 
 ---
@@ -547,7 +547,7 @@ every operation takes one as an argument:
 ```python
 QUASAR = ArchProfile(name="Quasar", blocks=QuasarDataTransferBlocks)
 
-QuasarEltwiseBinaryGolden = _factory(EltwiseBinaryGolden, QUASAR)
+get_quasar_eltwise_binary_golden = _factory(EltwiseBinaryGolden, QUASAR)
 ```
 
 Before this each fact was restated per operation — `blocks` in five files, the
@@ -559,13 +559,13 @@ for information that is `ops + architectures`.
 | Quasar | MX — `MxFp8R`, `MxFp8P`, `MxFp4`, `MxInt8`, `MxInt4`, `MxInt2` | **No block float.** No `MxFp4_2x_A/B` — those are src-register formats, never L1 formats. |
 | Wormhole · Blackhole | Block float — `Bfp8`, `Bfp8_b`, `Bfp4_b`, `Bfp2_b` | **No MX.** |
 
-Available today: `QuasarDataCopyGolden`, `QuasarMatmulGolden`,
-`QuasarEltwiseBinaryGolden`, `QuasarEltwiseBinaryReuseDestGolden`, plus
+Available today: `get_quasar_data_copy_golden`, `get_quasar_matmul_golden`,
+`get_quasar_eltwise_binary_golden`, `get_quasar_eltwise_binary_reuse_dest_golden`, plus
 datacopy / eltwise / matmul for Wormhole and Blackhole.
 
-## What the prefix means
+## What the names mean
 
-`QuasarDataCopyGolden` is the caller's handle for "the datacopy golden on
+`get_quasar_data_copy_golden` is the caller's handle for "the datacopy golden on
 Quasar". It says nothing about *why* it is Quasar's, and that is deliberate. The
 caller does not care whether the pipeline is the shared one or Quasar's own, and
 the name should not have to change the day that answer changes.
@@ -574,14 +574,24 @@ The factory table answers the implementation question one line over, in the
 first argument:
 
 ```python
-QuasarDataCopyGolden = _factory(DataCopyGolden, QUASAR)   # the shared pipeline
-QuasarDataCopyGolden = _factory(QuasarDataCopy, QUASAR)   # Quasar's own chain
+get_quasar_data_copy_golden = _factory(DataCopyGolden, QUASAR)        # the shared pipeline
+get_quasar_data_copy_golden = _factory(QuasarDataCopyGolden, QUASAR)  # Quasar's own chain
 ```
 
 So "does this architecture run a different chain" is read off the table rather
-than guessed from the name. The prefix carries its weight for a second reason
-too: a test that cross-validates imports both goldens into one namespace, and
-`MatmulGolden` is already taken by the lightweight one.
+than guessed from the name.
+
+**The factories are named as functions and the pipelines as classes,** which is
+what keeps those two lines apart. A pipeline specialised for one architecture
+can take the obvious name, `QuasarDataCopyGolden`, without colliding with the
+factory that returns it, and both can be exported from the same module. The
+shape of the name tells you which one you are looking at: `get_..._golden` makes
+a golden, `...Golden` is a pipeline class.
+
+It also settles a smaller problem. A test that cross-validates imports both
+goldens into one namespace, and the lightweight golden already exports
+`MatmulGolden` and `DataCopyGolden`. Nothing the heavyweight package exports as
+a factory can clash with those.
 
 ## When an architecture differs
 

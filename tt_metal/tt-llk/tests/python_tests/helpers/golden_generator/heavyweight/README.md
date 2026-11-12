@@ -92,9 +92,9 @@ only tells you the tolerance is wide enough.
 Pick the golden for your architecture and hand it tensors. There is no setup.
 
 ```python
-from helpers.golden_generator.heavyweight.operations import QuasarEltwiseBinaryGolden
+from helpers.golden_generator.heavyweight.operations import get_quasar_eltwise_binary_golden
 
-golden = QuasarEltwiseBinaryGolden(MathOperation.Elwmul, MathFidelity.HiFi4)
+golden = get_quasar_eltwise_binary_golden(MathOperation.Elwmul, MathFidelity.HiFi4)
 expected = golden.run(
     [src_A, src_B],            # the same tensors the harness packed into L1
     formats.input_format,
@@ -110,16 +110,16 @@ against `res_from_L1`.
 
 ### The four goldens available today
 
-| Class | Constructor takes |
+| Factory | Constructor takes |
 |---|---|
-| `QuasarDataCopyGolden` | — |
-| `QuasarEltwiseBinaryGolden` | `operation`, `math_fidelity` |
-| `QuasarMatmulGolden` | `math_fidelity` |
-| `QuasarEltwiseBinaryReuseDestGolden` | `operation`, `math_fidelity`, `reuse_type` |
+| `get_quasar_data_copy_golden` | — |
+| `get_quasar_eltwise_binary_golden` | `operation`, `math_fidelity` |
+| `get_quasar_matmul_golden` | `math_fidelity` |
+| `get_quasar_eltwise_binary_reuse_dest_golden` | `operation`, `math_fidelity`, `reuse_type` |
 
 Wormhole and Blackhole have datacopy / eltwise / matmul equivalents —
-`WormholeMatmulGolden`, `BlackholeEltwiseBinaryGolden` and so on. All of them
-come from the same place: `heavyweight.operations`.
+`get_wormhole_matmul_golden`, `get_blackhole_eltwise_binary_golden` and so on.
+All of them come from the same place, `heavyweight.operations`.
 
 They are **factories, not classes**. Each is the generic op bound to an
 `ArchProfile` in [`operations/arch.py`](operations/arch.py), which names the
