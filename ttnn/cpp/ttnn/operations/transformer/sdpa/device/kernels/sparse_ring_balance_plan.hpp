@@ -95,6 +95,14 @@ inline uint32_t take_within(const uint32_t* prefix, uint32_t pos, uint32_t t_min
     return a;
 }
 
+// The re-cut's required gain: the largest core cost must drop by at least 1/kRecutMargin (see RangePlanner::plan).
+constexpr uint32_t kRecutMargin = 16;
+// Keep the static split: the cut's largest core cost is not at least 1/kRecutMargin below the static one's. A core's
+// cost is below two heads' (< 2^23), so the products fit 32 bits.
+inline bool static_cut_kept(uint32_t static_max, uint32_t planned_max) {
+    return kRecutMargin * planned_max > (kRecutMargin - 1) * static_max;
+}
+
 // Every core's unit range for unit costs >= 1, prefix[f] = the cost of flat units [0, f) (units + 1 words): each core
 // keeps its static heads (so head groups, chains and head boundaries stay as built) and takes a contiguous run of
 // them; the ranges tile the units in core order. A core holding one head takes between `passes` (one unit per pass:
@@ -134,8 +142,12 @@ public:
         for (uint32_t i = active; i <= sp_.cores; ++i) {
             starts[i] = sp_.units;
         }
-        // The greedy is not always optimal (a core's lower bound can push a heavy unit past a boundary core that would
-        // have taken it), so the static split stays when it is no worse.
+        // The static split stays unless the cut lowers the largest core cost by at least 1/kRecutMargin of it. The
+        // cost model leaves out what a cut changes beyond unit counts (head segments per pass, 4-member step and
+        // pooled-step groups, group lockstep), so a smaller modeled gain is noise: a random mask's cut gains 0.3-1.1 %
+        // while moving most cuts. Masks worth balancing gain far more (dense prefix 50-70 %, heavy rows ~25 %,
+        // causal 8-25 %). The greedy is also not always optimal (a core's lower bound can push a heavy unit past a
+        // boundary core that would have taken it).
         uint32_t planned_max = 0;
         uint32_t static_max = 0;
         for (uint32_t i = 0; i < active; ++i) {
@@ -144,7 +156,7 @@ public:
             planned_max = p > planned_max ? p : planned_max;
             static_max = s > static_max ? s : static_max;
         }
-        if (static_max <= planned_max) {
+        if (static_cut_kept(static_max, planned_max)) {
             for (uint32_t i = 0; i < active; ++i) {
                 starts[i] = sp_.start(i);
             }

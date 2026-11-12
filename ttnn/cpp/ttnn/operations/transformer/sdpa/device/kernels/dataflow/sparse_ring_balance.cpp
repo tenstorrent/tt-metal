@@ -121,7 +121,7 @@ void kernel_main() {
     noc.async_read_barrier();
     invalidate_l1_cache();
     // Cost of device r's flat unit f (r = 0 is this device without cross-device balancing).
-    const auto cost = [&](uint32_t r, uint32_t f) -> uint32_t {
+    [[maybe_unused]] const auto cost = [&](uint32_t r, uint32_t f) -> uint32_t {
         const uint32_t c = sp.core_of(f);
         return tables[r * page_words + c * upc + (f - sp.start(c))];
     };
@@ -129,16 +129,28 @@ void kernel_main() {
     if constexpr (remote) {
         uint32_t* const rc = base + lay.rc;
         uint32_t* const load = base + lay.load;
+        // Row-block costs in one sequential walk per page: the static split holds flat units in core order, core c's
+        // at its slice (R x units words; a per-unit core lookup here was ~0.3 ms at 15 s, on every core's start).
         for (uint32_t r = 0; r < R; ++r) {
-            load[r] = 0;
+            uint32_t* const row = rc + r * nqc;
             for (uint32_t b = 0; b < nqc; ++b) {
-                uint32_t c = 0;
-                for (uint32_t h = 0; h < heads; ++h) {
-                    c += cost(r, h * nqc + b);
-                }
-                rc[r * nqc + b] = c;
-                load[r] += c;
+                row[b] = 0;
             }
+            const uint32_t* const pg = tables + r * page_words;
+            uint32_t b = 0;  // flat unit % nqc
+            for (uint32_t c = 0; c < cores; ++c) {
+                const uint32_t* const slice = pg + c * upc;
+                const uint32_t n = sp.count(c);
+                for (uint32_t j = 0; j < n; ++j) {
+                    row[b] += slice[j];
+                    b = b + 1 == nqc ? 0 : b + 1;
+                }
+            }
+            uint32_t l = 0;
+            for (uint32_t b2 = 0; b2 < nqc; ++b2) {
+                l += row[b2];
+            }
+            load[r] = l;
         }
         sparse_balance::place_swaps(
             R,
@@ -169,15 +181,26 @@ void kernel_main() {
 
     // 3. Ranges on the costs of the units the slots hold now.
     prefix[0] = 0;
-    for (uint32_t f = 0; f < units; ++f) {
-        uint32_t c = cost(mine, f);
-        if constexpr (remote) {
-            const uint32_t p = partner[me * nqc + f % nqc];
-            if (p != sparse_balance::kHome) {
-                c = cost(p >> 16, (f / nqc) * nqc + (p & 0xFFFFu));
+    {
+        // The same sequential walk over this device's page; a swapped slot takes its partner unit's cost.
+        const uint32_t* const pg = tables + mine * page_words;
+        uint32_t f = 0;
+        uint32_t b = 0;  // f % nqc
+        for (uint32_t c = 0; c < cores; ++c) {
+            const uint32_t* const slice = pg + c * upc;
+            const uint32_t n = sp.count(c);
+            for (uint32_t j = 0; j < n; ++j, ++f) {
+                uint32_t u = slice[j];
+                if constexpr (remote) {
+                    const uint32_t p = partner[me * nqc + b];
+                    if (p != sparse_balance::kHome) {
+                        u = cost(p >> 16, f - b + (p & 0xFFFFu));
+                    }
+                }
+                prefix[f + 1] = prefix[f] + u;
+                b = b + 1 == nqc ? 0 : b + 1;
             }
         }
-        prefix[f + 1] = prefix[f] + c;
     }
     sparse_balance::RangePlanner(sp, passes, cap, prefix).plan(starts);
     // The imported-units word first (barriered), then the range word each core waits on.
