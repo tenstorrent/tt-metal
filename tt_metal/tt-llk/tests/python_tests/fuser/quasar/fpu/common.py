@@ -37,7 +37,7 @@ def configure_math(
     old_math: DataFormat,
     new_math: DataFormat,
 ) -> str:
-    # Quasar matches tt-metal: each FPU op init programs the ALU itself via math_alu_cfg_init,
+    # Quasar matches tt-metal: each FPU op init programs the ALU itself via configure_alu_cfg,
     # so the sentinel only tracks the format here and emits nothing.
     return ""
 

@@ -48,7 +48,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
 /**
  * @brief Math-side reduce uninit. Empty, as on WH/BH where _llk_math_reduce_uninit_ is also empty.
  *
- * Nothing to undo: every math init programs its own SrcA/SrcB formats, so the MxFp4 -> MxFp4_2x_B
+ * Nothing to undo: every FPU math init programs its own SrcA/SrcB formats, so the MxFp4 -> MxFp4_2x_B
  * deviation @ref llk_math_reduce_init applies cannot be observed by the next op.
  *
  * @note The unpacker half is not a no-op -- see @ref llk_unpack_AB_reduce_uninit. The packer edge

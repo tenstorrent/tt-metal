@@ -130,9 +130,9 @@ using namespace ckernel;
 
 // Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
 #if defined(UCK_CHLKC_MATH)
+thread_local ckernel::math::AluCfgTracker alu_cfg __attribute__((used)) = {};
 // Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
 thread_local bool unpack_math_seeded __attribute__((used)) = false;
-thread_local ckernel::math::AluCfgTracker alu_cfg __attribute__((used)) = {};
 #endif
 
 // Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
