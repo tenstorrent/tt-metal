@@ -237,11 +237,13 @@ class TtPrefillRuntime:
             f"chunk_size={self.config.chunk_size}, num_users={self.config.num_users}"
         )
         model_cfg = self.config.model_cfg
+        rebuilding_cache = False
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
             if self.config.build_missing_cache and not state_dict:
                 state_dict = self._partial_state_dict_for_missing_cache(experts_per_chip)
+                rebuilding_cache = bool(state_dict)
             elif self.MODEL_CLS.check_cache_complete(
                 self.config.weight_cache_path,
                 self.config.num_layers,
@@ -284,6 +286,7 @@ class TtPrefillRuntime:
             if self.config.is_last_rank:
                 self._build_mtp_predictor()
 
+        build_start = time.perf_counter()
         self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
@@ -317,6 +320,11 @@ class TtPrefillRuntime:
             tp_shard_kv=self.config.tp_shard_kv,
         )
         self.model_built = True
+        if rebuilding_cache:
+            logger.warning(
+                f"Weight-cache rebuild complete at {self.config.weight_cache_path} "
+                f"({time.perf_counter() - build_start:.0f}s to convert and build this rank's layers)"
+            )
 
         if self.config.dflash_enabled:
             self._build_dflash_drafter()
