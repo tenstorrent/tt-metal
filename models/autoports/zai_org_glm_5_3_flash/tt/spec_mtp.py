@@ -482,6 +482,11 @@ class SpecMTP:
         # from the physical row by set_page_table); the MTP layer keeps its replicated dense cache over the PHYSICAL
         # global block ids (pt_m, C x nb_local blocks; v0 scope: the dense MTP cap -- design section 4 at long context)
         self.shard = kv.extra.get("dsa_shard")
+        # the MTP layer's latent cache PRIVATE to the speculating slot (GLM53_SPEC_MTP_CACHE=private, the default):
+        # position p in block p // 64 of a cache sized by the context speculation runs at (GLM53_SPEC_MAX_CTX, else the
+        # cache length) -- pt_m a constant identity row; "pool" = M0's cache over the request pool's PHYSICAL block ids
+        # (C x nb_local blocks: 4 GiB per chip at 1 M x 4; pt_m = the slot's physical row)
+        self.mtp_private = os.environ.get("GLM53_SPEC_MTP_CACHE", "private") != "pool"
         if self.shard is not None:
             # the one-slot verify on the shard keeps the plain width's token lanes (mk_mla rev 62, the lane baton; only
             # one-slot builds read it: the plain programs are unchanged) -- MkMla refuses the t <= 4 verify on the
@@ -494,6 +499,8 @@ class SpecMTP:
         else:
             self.pt_v = dram_rows(mesh, torch.zeros(32, kv.blocks_per_seq, dtype=torch.int32), ttnn.int32)
             self.pt_m = self.pt_v
+            if self.mtp_private:
+                self.pt_m = dram_rows(mesh, torch.zeros(32, kv.blocks_per_seq, dtype=torch.int32), ttnn.int32)
         self._pt_rows = None
         lb = float(be._kda0().lower_bound)
         m = torch.ones(1, 1, wv, 1)
@@ -542,10 +549,19 @@ class SpecMTP:
             l1_debug("after MtpLayer", self.mesh)
             # (+ scratch pages past the request blocks: the TP prefill's in-trace MTP fill writes an unarmed chunk's
             # rows there -- TPPrefill._mtp_write; one bucket's worth of the largest GLM53_PREFILL_BUCKETS bucket)
-            nb = kv.num_blocks if self.shard is None else self.shard[0] * self.shard[1]
+            blk = int(self.mtp.attn.block_size)
+            if self.mtp_private:
+                cap = min(
+                    int(kv.max_seq_len), int(os.environ.get("GLM53_SPEC_MAX_CTX", "0") or 0) or int(kv.max_seq_len)
+                )
+                nb = -(-cap // blk)
+            else:
+                nb = kv.num_blocks if self.shard is None else self.shard[0] * self.shard[1]
             bmax = max(int(v) for v in os.environ.get("GLM53_PREFILL_BUCKETS", "256,512,2048").split(",") if v.strip())
-            self.pf_scratch = (int(nb), max(1, -(-bmax // int(self.mtp.attn.block_size))))
+            self.pf_scratch = (int(nb), max(1, -(-bmax // blk)))
             self.mtp_cache = self.mtp.attn.allocate_cache(nb + self.pf_scratch[1])
+            if self.mtp_private:  # (the constant row: positions past the cache's blocks -> a scratch page, never read)
+                write_rows(mesh, self.pt_m, self.mtp_row(None).reshape(1, -1).repeat(32, 1), ttnn.int32)
             self.eh = MkEh(mesh, self.source, cfg, self.ocfg)
             for t in sorted({cu, ch}):
                 self.eh.buffers(t)
@@ -931,6 +947,15 @@ class SpecMTP:
         else:
             ttnn.execute_trace(self.mesh, trace, cq_id=0, blocking=False)
 
+    def mtp_row(self, phys_row) -> torch.Tensor:
+        """the MTP cache's page row of the speculating slot: the private identity row (blocks 0 .. nb - 1, a scratch
+        page past them) or, with GLM53_SPEC_MTP_CACHE=pool, the slot's PHYSICAL row"""
+        if not self.mtp_private:
+            return torch.as_tensor(phys_row).reshape(-1).to(torch.int64)
+        nb, scr = self.pf_scratch
+        j = torch.arange(int(self.kv.blocks_per_seq), dtype=torch.int64)
+        return torch.where(j < nb, j, torch.full_like(j, nb))
+
     def pf_scratch_pages(self, n: int) -> torch.Tensor:
         """n MTP cache pages no request holds (the in-trace MTP fill of an unarmed chunk)"""
         assert 0 < int(n) <= self.pf_scratch[1], ("MTP fill: a bucket past the scratch pages (GLM53_PREFILL_BUCKETS)",
@@ -1099,7 +1124,8 @@ class SpecMTP:
                 torch.cat([lt.reshape(1, -1).repeat(32, 1) for lt in local]).to(torch.int32).contiguous(),
                 dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
                 self.pt_v)  # fmt: skip
-            write_rows(self.mesh, self.pt_m, host, ttnn.int32)
+            if not self.mtp_private:  # (the private MTP cache's row is constant)
+                write_rows(self.mesh, self.pt_m, host, ttnn.int32)
         self._pt_rows = row.clone()
 
     def enter(self, page_row: torch.Tensor):

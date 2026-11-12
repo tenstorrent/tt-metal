@@ -3311,9 +3311,10 @@ class TPPrefill:
 
     def _mtp_write(self, c: int, slot: int, chunk_start: int, n_valid: int) -> None:
         """the MTP-fill inputs of this replay: the armed request (mtp_req, its slot): row i (position chunk_start + i <
-        L - 1) takes the prompt token at chunk_start + i + 1, its pages are the slot's PHYSICAL pages holding the chunk's
-        valid rows (the row past them -- the last prompt position, the padding -- is rewritten by the speculative step
-        before any read); every other replay writes the scratch pages (an unarmed chunk never touches a request's)"""
+        L - 1) takes the prompt token at chunk_start + i + 1, its pages are the slot's MTP cache pages holding the
+        chunk's valid rows (SpecMTP.mtp_row: the private cache's, or the slot's PHYSICAL pages; the row past them -- the
+        last prompt position, the padding -- is rewritten by the speculative step before any read); every other replay
+        writes the scratch pages (an unarmed chunk never touches a request's)"""
         ins = self.mtp_inputs(c)
         req = self.mtp_req
         armed = req is not None and int(req["slot"]) == int(slot)
@@ -3324,7 +3325,8 @@ class TPPrefill:
         scratch = self.b.spec.pf_scratch_pages(c // BLOCK)
         tok, pages = torch.zeros(c, dtype=torch.int64), scratch
         if armed:
-            tok, pages, n = mtp_fill_inputs(chunk_start, n_valid, c, BLOCK, req["ids"], self.page_row(slot), scratch)
+            row = self.b.spec.mtp_row(self.page_row(slot))  # (the MTP cache's row of the slot: private or physical)
+            tok, pages, n = mtp_fill_inputs(chunk_start, n_valid, c, BLOCK, req["ids"], row, scratch)
             req["rows"] += n
         sp = self.mode(c) == "sp"
         put = lambda v, dt, dst, mp: ttnn.copy_host_to_device_tensor(  # noqa: E731
