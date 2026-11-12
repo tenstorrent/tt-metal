@@ -327,6 +327,15 @@ class WhisperGenerator:
         # Host/device staging for token IDs (enlarged decode trace and non-traced decode steps).
         self.token_id_host = defaultdict(lambda: None)
         self.token_id_device = defaultdict(lambda: None)
+        self.logprob_device = defaultdict(lambda: None)
+        self.logprob_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+        self._traced_logprob = None
+        self._pending_logprob_host = None
 
         # Pre-allocated encoder_hidden_states tensor
         # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
@@ -380,23 +389,43 @@ class WhisperGenerator:
             )
             self.token_id_device[batch_size] = host_tensor.to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
             self.token_id_host[batch_size] = host_tensor
-
-        # Pre-computed suppress tokens mask for on-device argmax (greedy decode)
-        # Sets suppressed token logits to -inf so argmax skips them
-        self.tt_suppress_mask = None
-        if hasattr(config, "suppress_tokens") and config.suppress_tokens:
-            vocab_size = config.vocab_size
-            suppress_mask = torch.zeros(1, 1, vocab_size, dtype=torch.bfloat16)
-            for token_id in config.suppress_tokens:
-                if 0 <= token_id < vocab_size:
-                    suppress_mask[0, 0, token_id] = float("-inf")
-            self.tt_suppress_mask = ttnn.from_torch(
-                suppress_mask,
-                dtype=ttnn.bfloat16,
+            # Log-probability of the token the decode trace's on-device argmax picks, written by the
+            # trace next to the token so the traced steps contribute to avg_logprob. Allocated here,
+            # outside any trace capture, so the buffer is stable across replays.
+            self.logprob_device[batch_size] = ttnn.from_torch(
+                torch.zeros((global_batch, 1, 1), dtype=torch.float32),
+                dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=input_mesh_mapper,
             )
+
+        # Vocabulary padding for the traced decode step. The LM head weight is zero-padded to a multiple of
+        # 1024 columns and the mask below is -inf there, so the logits row can be viewed as a dense
+        # [batch, 32, vocab_padded / 32] block. The log-probability reduction then runs on that dense
+        # block instead of on a single-row tile layout, where every reduction is serial on one core.
+        vocab_width = self.ttnn_linear_weight.shape[-1]
+        self.logits_padded_width = ((vocab_width + 1023) // 1024) * 1024
+        self.ttnn_linear_weight_padded = ttnn.pad(
+            self.ttnn_linear_weight, [(0, 0), (0, self.logits_padded_width - vocab_width)], value=0.0
+        )
+
+        # Pre-computed logits mask for on-device argmax (greedy decode): suppressed tokens and the
+        # padding columns are set to -inf so neither argmax nor the log-probability sum sees them
+        vocab_size = config.vocab_size if hasattr(config, "vocab_size") else vocab_width
+        suppress_mask = torch.zeros(1, 1, self.logits_padded_width, dtype=torch.bfloat16)
+        suppress_mask[0, 0, vocab_width:] = float("-inf")
+        for token_id in getattr(config, "suppress_tokens", None) or []:
+            if 0 <= token_id < vocab_size:
+                suppress_mask[0, 0, token_id] = float("-inf")
+        self.tt_suppress_mask = ttnn.from_torch(
+            suppress_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=input_mesh_mapper,
+        )
 
     def _get_batch_size_per_device(self, unpadded_batch_size):
         if unpadded_batch_size % self.mesh_device.get_num_devices() != 0:
@@ -479,6 +508,7 @@ class WhisperGenerator:
                 logger.debug(f"Released decode trace for batch size per device {trace_key}")
         self.token_id_host.clear()
         self.token_id_device.clear()
+        self.logprob_device.clear()
         self.decode_pos_embed.clear()
 
     def _capture_decode_trace(self, trace_key, decode_pos, batch_size):
@@ -531,11 +561,10 @@ class WhisperGenerator:
 
             # LM head projection
             decoder_output = ttnn.squeeze(decoder_output, 1)
-            logits = decoder_output @ self.ttnn_linear_weight
+            logits = decoder_output @ self.ttnn_linear_weight_padded
 
-            # Apply suppress tokens mask (sets suppressed logits to -inf)
-            if self.tt_suppress_mask is not None:
-                logits = logits + self.tt_suppress_mask
+            # Apply the mask (suppressed tokens and vocabulary padding become -inf)
+            logits = logits + self.tt_suppress_mask
 
             # Convert to ROW_MAJOR for argmax
             logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
@@ -543,6 +572,24 @@ class WhisperGenerator:
             # Argmax -> separate tensor, then copy to feedback buffer
             argmax_result = ttnn.argmax(logits_rm, dim=-1)
             ttnn.copy(argmax_result, self.token_id_device[trace_key])
+
+            # Log-probability of the argmax token = -log(sum(exp(logits - max))), the same value the
+            # host path gathers from log_softmax, so traced steps count in avg_logprob too. The padded
+            # logits row is viewed as a dense [batch, 32, width / 32] block (one tile row, the reduction
+            # is spread over tiles instead of one single-row tile per vocabulary chunk). The device
+            # stores log(sum); the host negates it.
+            dense = ttnn.to_layout(
+                ttnn.reshape(logits_rm, (logits_rm.shape[0], 32, self.logits_padded_width // 32)),
+                ttnn.TILE_LAYOUT,
+            )
+            dense_max = ttnn.max(dense, dim=(-2, -1), keepdim=True)
+            dense_exp = ttnn.subtract(dense, dense_max, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP)])
+            dense_sum = ttnn.sum(
+                dense_exp, dim=(-2, -1), keepdim=True, compute_kernel_config=self.logprob_compute_kernel_config
+            )
+            log_sum = ttnn.typecast(ttnn.log(dense_sum), ttnn.float32)
+            log_sum = ttnn.reshape(log_sum, self.logprob_device[trace_key].shape)
+            ttnn.copy(log_sum, self.logprob_device[trace_key])
 
             # Increment both position tensors for next iteration
             ttnn.plus_one(self.current_decode_pos_per_size[trace_key])
@@ -589,17 +636,19 @@ class WhisperGenerator:
         if self.trace_id_decode[trace_key] is None:
             raise RuntimeError("Decode trace not captured. Call _capture_decode_trace first.")
 
-        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=blocking)
-
         if not blocking:
+            ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=False)
             self._op_event = ttnn.record_event(self.mesh_device, 0)
             return None
 
-        # Read back the tiny token tensor
-        sampled_token = ttnn.to_torch(
-            self.token_id_device[trace_key],
-            mesh_composer=self.output_mesh_composer,
-        )
+        # Enqueue the trace and both tiny read-backs (token and its log-probability) behind it, then
+        # wait once for the pair instead of once per tensor
+        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=False)
+        token_host = ttnn.from_device(self.token_id_device[trace_key], blocking=False, cq_id=0)
+        logprob_host = ttnn.from_device(self.logprob_device[trace_key], blocking=False, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        sampled_token = ttnn.to_torch(token_host, mesh_composer=self.output_mesh_composer)
+        self._traced_logprob = -ttnn.to_torch(logprob_host, mesh_composer=self.output_mesh_composer).reshape(-1)
 
         return sampled_token
 
@@ -610,6 +659,7 @@ class WhisperGenerator:
         and is therefore automatically ordered after the trace's argmax write.
         """
         token_host = ttnn.from_device(self.token_id_device[trace_key], blocking=False, cq_id=0)
+        self._pending_logprob_host = ttnn.from_device(self.logprob_device[trace_key], blocking=False, cq_id=0)
         self._read_event = ttnn.record_event(self.mesh_device, 0)
         return token_host, self._read_event
 
@@ -680,7 +730,11 @@ class WhisperGenerator:
         assert self._pending_token_host is not None, "No pending decode token to consume"
         ttnn.event_synchronize(self._read_event)
         sampled = ttnn.to_torch(self._pending_token_host, mesh_composer=self.output_mesh_composer)
+        self._traced_logprob = -ttnn.to_torch(
+            self._pending_logprob_host, mesh_composer=self.output_mesh_composer
+        ).reshape(-1)
         self._pending_token_host = None
+        self._pending_logprob_host = None
         return sampled.reshape(-1).long()
 
     @staticmethod
@@ -873,6 +927,7 @@ class WhisperGenerator:
 
         # Non-streaming mode: Try generation with different temperatures
         best_output = None
+        best_silent_items = []
         best_quality_score = float("inf")
 
         for temperature in temps_to_try:
@@ -901,6 +956,7 @@ class WhisperGenerator:
 
                 # Check quality for each result
                 all_good = True
+                silent_items = []
                 for idx, data in enumerate(result_data):
                     wants_timestamps = (
                         return_timestamps[idx] if isinstance(return_timestamps, list) else return_timestamps
@@ -931,10 +987,13 @@ class WhisperGenerator:
                     if not is_good:
                         logger.info(f"Quality check failed with temperature {temperature}: {reason}")
                         all_good = False
-                        break
+                        continue
+                    if reason == "silence_detected":
+                        silent_items.append(idx)
 
                 if all_good:
                     logger.info(f"Generation successful with temperature {temperature}")
+                    self._blank_silent_items(result_data, silent_items, return_timestamps)
                     if return_perf_metrics:
                         return (result_data, avg_logprobs, no_speech_probs, attempt_perf)
                     else:
@@ -951,6 +1010,7 @@ class WhisperGenerator:
                 ) / len(result_data)
                 if avg_compression < best_quality_score:
                     best_quality_score = avg_compression
+                    best_silent_items = silent_items
                     if return_perf_metrics:
                         best_output = (result_data, avg_logprobs, no_speech_probs, attempt_perf)
                     else:
@@ -963,6 +1023,7 @@ class WhisperGenerator:
         # If all temperatures failed, return best attempt
         logger.warning("All temperature attempts failed quality checks, returning best attempt")
         if best_output is not None:
+            self._blank_silent_items(best_output[0], best_silent_items, return_timestamps)
             return best_output
         else:
             if any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps:
@@ -990,6 +1051,13 @@ class WhisperGenerator:
                         torch.zeros(unpadded_batch_size),
                         torch.zeros(unpadded_batch_size),
                     )
+
+    @staticmethod
+    def _blank_silent_items(result_data, silent_items, return_timestamps):
+        """Replace the text of items judged silent with an empty result (no text, no segments)."""
+        for idx in silent_items:
+            wants_timestamps = return_timestamps[idx] if isinstance(return_timestamps, list) else return_timestamps
+            result_data[idx] = [] if wants_timestamps else ""
 
     def _generate_with_temperature(
         self,
@@ -1022,6 +1090,7 @@ class WhisperGenerator:
         ):
             ttnn.synchronize_device(self.mesh_device)
             self._pending_token_host = None
+            self._pending_logprob_host = None
             self._pending_forced_tokens = None
             self._read_event = None
             self._write_event = None
@@ -1241,6 +1310,7 @@ class WhisperGenerator:
 
         for i in tqdm(range(generation_start, MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
             start_iter = time.time()
+            traced_logprob = None
 
             if (
                 self.kv_cache_per_batch_size[trace_key]
@@ -1277,7 +1347,9 @@ class WhisperGenerator:
 
                 # Note: decode_pos already incremented inside trace (plus_one)
                 input_ids = next_tokens[:, None]
-                next_token_logits = None  # Not available on traced path
+                next_token_logits = None  # Logits stay on device; the trace returns the chosen token's log-prob
+                if i not in forced_tokens_dict:
+                    traced_logprob = self._traced_logprob[:unpadded_batch_size].float()
 
             else:
                 (
@@ -1379,13 +1451,15 @@ class WhisperGenerator:
                     else:
                         logger.info(f"Skipping trace capture for temp={temperature} (host-side sampling)")
 
-            # Track log probabilities (only available on un-traced path)
+            # Track log probabilities (traced steps read them from the trace output)
             if i >= transcription_start_pos:
                 if next_token_logits is not None:
                     with torch.no_grad():
                         log_probs.append(
                             torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
                         )
+                elif traced_logprob is not None:
+                    log_probs.append(traced_logprob)
 
                 if collect_output_ids:
                     output_ids.append(next_tokens)
@@ -1618,17 +1692,31 @@ class WhisperGenerator:
         no_speech_threshold: Optional[float],
     ) -> Tuple[bool, str]:
         """
-        Check if generation passes quality thresholds.
+        Check if generation passes quality thresholds, following openai/whisper
+        (transcribe.py decode_with_fallback) and HF WhisperGenerationMixin._need_fallback.
+
+        A segment needs a hotter retry when its compression ratio is above the threshold or its
+        average log-probability is below the threshold. Silence overrides that: when the
+        no-speech probability is above its threshold and the average log-probability is below
+        the log-probability threshold, the attempt is accepted (no retry) with reason
+        "silence_detected"; the caller then returns no text for that item, as the reference
+        implementations skip the segment.
         """
-        # Check for silence
-        if no_speech_threshold is not None and logprob_threshold is not None:
-            if no_speech_prob > no_speech_threshold and avg_logprob < logprob_threshold:
-                return False, "silence_detected"
+        if (
+            no_speech_threshold is not None
+            and logprob_threshold is not None
+            and no_speech_prob > no_speech_threshold
+            and avg_logprob < logprob_threshold
+        ):
+            return True, "silence_detected"
 
         # Check compression ratio (high ratio indicates repetitive text)
         if compression_ratio_threshold is not None:
             if compression_ratio > compression_ratio_threshold:
                 return False, "high_compression_ratio"
+
+        if logprob_threshold is not None and avg_logprob < logprob_threshold:
+            return False, "low_avg_logprob"
 
         return True, "quality_good"
 
