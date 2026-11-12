@@ -58,6 +58,16 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t l1_end = 0,
     const std::optional<ttnn::Tensor>& x_row_index = std::nullopt,
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max(),
-    bool weights_tile_transposed = false);
+    bool weights_tile_transposed = false,
+    const std::optional<ttnn::Tensor>& weight_pages = std::nullopt,
+    const std::optional<ttnn::Tensor>& gate_up_weight_source = std::nullopt,
+    const std::optional<ttnn::Tensor>& down_weight_source = std::nullopt,
+    uint32_t gate_up_k_stride = 0,
+    uint32_t down_k_stride = 0,
+    uint32_t weights_n_gate_up = 0,
+    uint32_t weights_n_down = 0,
+    uint32_t weights_k_gate_up = 0,
+    uint32_t weights_k_down = 0,
+    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT8_B);
 
 }  // namespace ttnn::prim
