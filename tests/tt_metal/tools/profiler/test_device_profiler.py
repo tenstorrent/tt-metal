@@ -363,6 +363,32 @@ def test_full_buffer():
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+def test_wall_clock_wrap():
+    """Zones emitted across a wrap of the wall clock's low word (every 2^32 cycles) keep their timestamps. A torn
+    high/low read put a marker 2^32 cycles early and the host TT_FATALed on the orphan or mismatched ZONE_END."""
+    if os.getenv("ARCH_NAME") not in ("wormhole_b0", "blackhole"):
+        pytest.skip("Quasar reads the wall clock through a different path")
+    PROGRAM_COUNT = 3  # as in test_wall_clock_wrap.cpp
+    ZONE_COUNT = 96  # per RISC per program
+    WRAP = 1 << 32
+
+    run_device_profiler_test(testName="build/test/tt_metal/tools/profiler/test_wall_clock_wrap", noPostProcess=True)
+
+    df = pd.read_csv(PROFILER_LOGS_DIR / "profile_log_device.csv", skiprows=1, header=0, na_filter=False)
+    # Columns: chip_id, core_x, core_y, risc, timer_id, time_data, ..., zone_name (10), type (11)
+    df = df[df.iloc[:, 10].astype(str).str.strip() == "WALL-CLOCK-WRAP"]
+    assert len(df) > 0, "No WALL-CLOCK-WRAP markers in the device log"
+    for key, markers in df.groupby([df.columns[i] for i in (0, 1, 2, 3)]):
+        types = markers.iloc[:, 11].astype(str).str.strip().tolist()
+        times = markers.iloc[:, 5].astype(np.int64).to_numpy()
+        assert types == ["ZONE_START", "ZONE_END"] * (PROGRAM_COUNT * ZONE_COUNT), f"{key}: unexpected marker sequence"
+        durations = times[1::2] - times[0::2]
+        torn = (durations <= 0) | (durations >= WRAP // 2)
+        assert not torn.any(), f"{key}: torn zone durations {durations[torn].tolist()}"
+        for program_times in times.reshape(PROGRAM_COUNT, 2 * ZONE_COUNT):
+            assert program_times.max() // WRAP > program_times.min() // WRAP, f"{key}: zones did not span a wrap"
+
+
 def wildcard_match(pattern, words):
     if not pattern.endswith("*"):
         return [word for word in words if pattern == word]
