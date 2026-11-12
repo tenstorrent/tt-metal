@@ -133,7 +133,8 @@ Known counts:
   (`llk_unpack_unary_operand.h`).
 - Binary SFPU stand-ins post per tile, and SrcB only when Dest is 32-bit:
   `<true, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT)`. Wormhole and
-  Blackhole differ (budabackend `#1230`, see `wormhole-blackhole.md`).
+  Blackhole post a zeroed SrcB every face instead (see
+  `wormhole-blackhole.md`).
 - A block kernel commonly needs `LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM`.
 
 ## Coverage commands

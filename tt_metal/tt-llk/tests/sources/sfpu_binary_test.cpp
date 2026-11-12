@@ -72,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
                 {
-                    // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (tenstorrent/budabackend#1230).
+                    // SrcA plus a zeroed SrcB every face, including dest_acc=No: math's ELWADD datacopy branch reads SrcB.
                     _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(tile_iters * num_faces /*iterations*/);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)

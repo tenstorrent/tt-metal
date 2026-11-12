@@ -118,7 +118,7 @@ gh workflow run "LLK perf" --ref <branch> -f architecture=all -f speed-of-light=
   constrains it;
 - apply a Yes/No `approx_mode` product to kernels that ignore it.
 
-Stand-in and accounting facts that affect cross-architecture numbers (`#1230`,
-`tile_cnt` counting both operand tiles) are in
+Stand-in and accounting facts that affect cross-architecture numbers (zeroed
+SrcB stand-ins, `tile_cnt` counting both operand tiles) are in
 `perf-test/references/wormhole-blackhole.md`, `quasar.md`, and
 `perf-facts.md`.

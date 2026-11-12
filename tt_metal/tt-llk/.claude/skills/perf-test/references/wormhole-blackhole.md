@@ -30,12 +30,11 @@ unpack and math for unary unpack paths. Multiply it by `LOOP_FACTOR`.
   per face on Wormhole (`_llk_unpack_tilize_num_dvalids_wrapper_`, which
   `_perf_src_handshake_iters_` calls; call the shared helper rather than the
   wrapper).
-- `#1230` is `tenstorrent/budabackend#1230`: a hardware workaround that posts
-  a SrcB dvalid next to SrcA. The Wormhole tilize MOP and the binary SFPU
-  `NONE` path both do it, every face, including `dest_acc=No`. Keep the
-  `#1230` reference on stand-in calls that reproduce it.
-- Both tilize MOPs post SrcB, so a standalone tilize kernel's stand-ins are
-  `<true, true>`. Datacopy-style unary kernels: unpack sets SrcB for
+- Some unpack paths post a zeroed SrcB with every SrcA dvalid, because math's
+  `ELWADD` datacopy branch reads SrcB: `unpack_A` with `BroadcastType::NONE`
+  (no `acc_to_dest`, not unpack-to-dest), every face, and both tilize MOPs.
+  They do it whatever `dest_acc` is, `No` included. Stand-ins for these paths
+  are `<true, true>`. Datacopy-style unary kernels: unpack sets SrcB for
   `tilize_en || is_fp32_dest_acc_en`, and math clears `<true, true>`.
 - Unpack-to-dest posts no source dvalids. Unpack writes Dest and hands it to
   math through a semaphore, so in `UNPACK_ISOLATE` math keeps its real

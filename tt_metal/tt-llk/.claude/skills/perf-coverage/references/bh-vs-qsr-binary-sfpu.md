@@ -38,4 +38,4 @@ Further float mathop greening would be splitting QSR `div`/`atan2` into wrappers
 - Int ADD/compares/MUL pass `false` for approximation. Perf pins No. Functional QSR DIV Yes is a real kernel path (`_init_reciprocal_`), not packaging.
 - The new two-operand kernel's `tile_cnt` counts both operand tiles, so per-tile MATH_ISOLATE is about half a result tile versus the old one-operand perf kernel, and the schema went from v3 to v5. Neither is a speedup; see `perf-test/references/perf-facts.md`, "Accounting".
 - Datacopy and SFPU init are hoisted out of the per-block loop on purpose. Production still reconfigures per tile.
-- The NONE stand-ins differ by architecture: per face with a SrcB zerosrc on Wormhole and Blackhole (`#1230`), per tile on Quasar. See `perf-test/references/wormhole-blackhole.md` and `quasar.md`.
+- The NONE stand-ins differ by architecture: per face with a zeroed SrcB on Wormhole and Blackhole, per tile on Quasar. See `perf-test/references/wormhole-blackhole.md` and `quasar.md`.
