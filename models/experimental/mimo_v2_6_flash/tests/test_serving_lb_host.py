@@ -679,9 +679,10 @@ PNG = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 10  # 2.5 KB, below the 4096-by
 
 
 def media_host(hits=None):
-    """A local media server: an image, a file without a media Content-Type, 404, a slow answer, two files above the
-    size limit (one declaring its length, one streamed), and redirects (to the image, to another loopback address,
-    to cloud metadata, to a file: URL, and to itself). ``hits`` collects (path, Host header) of every request."""
+    """A local media server: an image, a file without a media Content-Type, a web page, 404, a slow answer, two files
+    above the size limit (one declaring its length, one streamed), and redirects (to the image, to the page, to
+    YouTube, to another loopback address, to cloud metadata, to a file: URL, and to itself). ``hits`` collects (path, Host header) of every request.
+    """
     hits = [] if hits is None else hits
 
     def logged(handler):
@@ -712,6 +713,9 @@ def media_host(hits=None):
         await resp.write_eof()
         return resp
 
+    async def page(_):
+        return web.Response(text="<html><body>watch</body></html>", content_type="text/html", charset="utf-8")
+
     def redirect(location):
         async def handler(request):
             port = request.url.port
@@ -726,7 +730,10 @@ def media_host(hits=None):
         ("/slow.png", slow),
         ("/big.mp4", big),
         ("/streamed.mp4", streamed),
+        ("/watch", page),
         ("/hop", redirect("/cat.png")),
+        ("/to-page", redirect("/watch")),
+        ("/to-youtube", redirect("https://www.youtube.com/watch?v=abc")),
         ("/to-other-loopback", redirect("http://127.0.0.2:{port}/cat.png")),
         ("/to-metadata", redirect("http://169.254.169.254/latest/meta-data/")),
         ("/to-file", redirect("file:///etc/passwd")),
@@ -734,6 +741,65 @@ def media_host(hits=None):
     ):
         app.router.add_get(path, logged(handler))
     return app
+
+
+@pytest.mark.parametrize(
+    "host,want",
+    [
+        ("www.youtube.com", "youtube.com"),
+        ("youtube.com", "youtube.com"),
+        ("M.YouTube.com.", "youtube.com"),
+        ("music.youtube.com", "youtube.com"),
+        ("youtu.be", "youtu.be"),
+        ("www.youtube-nocookie.com", "youtube-nocookie.com"),
+        ("notyoutube.com", None),
+        ("youtube.com.example.org", None),
+        ("example.org", None),
+        (None, None),
+    ],
+)
+def test_page_host(host, want):
+    assert lb.page_host(host) == want
+
+
+def test_fetch_refuses_page_links_and_page_answers():
+    """OpenRouter's input-youtube-url request: a YouTube link is refused by name before anything is resolved or
+    downloaded, and a URL that answers a web page is refused instead of being handed to the engine's video decoder
+    (which says "Could not open video stream")."""
+    hits = []
+
+    async def run():
+        host = TestServer(media_host(hits), host="127.0.0.1")
+        await host.start_server()
+        base = f"http://127.0.0.1:{host.port}"
+        out = {}
+        try:
+            for name, url in (
+                ("youtube", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+                ("short", "https://youtu.be/dQw4w9WgXcQ"),
+                ("page", base + "/watch"),
+                ("to-page", base + "/to-page"),
+                ("to-youtube", base + "/to-youtube"),
+            ):
+                try:
+                    # The default policy for the YouTube links: refused before their host is resolved.
+                    policy = only_127_0_0_1 if url.startswith(base) else None
+                    await lb.fetch_media([url], 2.0, 4096, address_policy=policy)
+                except lb.ShimError as exc:
+                    out[name] = str(exc)
+        finally:
+            await host.close()
+        return out
+
+    out = asyncio.run(run())
+    for name in ("youtube", "to-youtube"):
+        assert "youtube.com links are not supported" in out[name], out[name]
+    assert "youtu.be links are not supported" in out["short"]
+    assert "dQw4w9WgXcQ" in out["youtube"]  # the message names the URL
+    for name in ("page", "to-page"):
+        assert "answered a web page (text/html), not a media file" in out[name], out[name]
+    assert all(msg.startswith("Failed to fetch media from URL: ") for msg in out.values())
+    assert [path for path, _ in hits] == ["/watch", "/to-page", "/watch", "/to-youtube"]
 
 
 def only_127_0_0_1(ip):
@@ -1068,7 +1134,6 @@ def test_proxy_resends_once_after_an_unanswered_disconnect(close_first, want_sta
     assert snap["prefix"]["stale_retried"] == 1
 
 
-
 @pytest.mark.parametrize(
     "fmt",
     [
@@ -1088,7 +1153,11 @@ def test_map_structured_outputs_schema_less_json_schema_is_json_mode(fmt):
     [
         {"model": "m", "messages": []},
         {"model": "m", "messages": [], "response_format": {"type": "json_object"}},
-        {"model": "m", "messages": [], "response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}}},
+        {
+            "model": "m",
+            "messages": [],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": {}}},
+        },
         {"model": "m", "messages": [], "structured_outputs": {"choice": ["a", "b"]}},
     ],
 )
