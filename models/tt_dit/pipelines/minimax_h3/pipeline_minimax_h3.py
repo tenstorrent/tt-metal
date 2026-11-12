@@ -762,6 +762,10 @@ class MiniMaxH3Pipeline:
 
             with safe_open(str(self.transformer_file), framework="pt") as f:
                 self._adaln_t_table = f.get_tensor(comfy_h3.CURVE_TABLE_KEY).float()
+        # PDD students (FastH3-Omni grafts such as 10Eros-Max beta7 fix1) carry 32 output heads; see
+        # convert_comfy_minimax_h3's PDD section. None for every single-head file.
+        self._pdd = self._read_pdd_heads() if self.transformer_file is not None else None
+        self._pdd_active = None
         self.tp_axis, self.sp_axis = tp_axis, sp_axis
         shape = tuple(mesh_device.shape)
         if tp_axis == sp_axis:
@@ -1047,6 +1051,49 @@ class MiniMaxH3Pipeline:
         stat = self.transformer_file.stat()
         return f"{self.transformer_layout}_{self.transformer_file.stem}_{stat.st_size}"
 
+    def _read_pdd_heads(self) -> dict | None:
+        from safetensors import safe_open
+
+        with safe_open(str(self.transformer_file), framework="pt") as f:
+            contract = comfy_h3.pdd_contract(f.metadata())
+            if contract is None:
+                return None
+            grid = int(contract["pdd_steps"])
+            heads = {
+                modality: comfy_h3.pdd_full_heads(
+                    f.get_tensor(src + "weight"), f.get_tensor(src + "bias"), grid, contract["heads_offset_from_head0"]
+                )
+                for modality, (src, _dst) in comfy_h3.PDD_HEADS.items()
+            }
+        shifts = {
+            "video": float(contract.get("video_scheduler_shift", self.video_shift)),
+            "audio": float(contract.get("audio_scheduler_shift", self.audio_shift)),
+        }
+        self._host_log(
+            f"PDD heads: {grid}-interval grid, trained steps {contract['pdd_step_indices']}, shifts {shifts}, "
+            f"offset-stored={contract['heads_offset_from_head0']}"
+        )
+        return {"contract": contract, "heads": heads, "shifts": shifts, "device": {}}
+
+    def _pdd_device_heads(self, transformer, indices: list[int], weights: dict[str, torch.Tensor]) -> list[dict]:
+        """Per-step fused `(weight, bias)` device tensors for both output heads, built once per partition."""
+        key = (id(transformer), tuple(indices))
+        steps = self._pdd["device"].get(key)
+        if steps is not None and all(t.is_allocated() for s in steps for pair in s.values() for t in pair):
+            return steps
+        steps = []
+        for i in range(len(indices) - 1):
+            entry = {}
+            for modality, (_src, dst) in comfy_h3.PDD_HEADS.items():
+                linear = getattr(transformer, dst)
+                w, b = comfy_h3.pdd_fuse(*self._pdd["heads"][modality], weights[modality], indices[i], indices[i + 1])
+                linear.weight.load_torch_tensor(w.transpose(0, 1).contiguous())
+                linear.bias.load_torch_tensor(b.reshape(1, -1))
+                entry[dst] = (linear.weight.data, linear.bias.data)
+            steps.append(entry)
+        self._pdd["device"][key] = steps
+        return steps
+
     def _read_transformer_state(self) -> dict[str, torch.Tensor]:
         if self.transformer_file is None:
             return self._read_safetensors(self.transformer_subfolder)
@@ -1054,6 +1101,12 @@ class MiniMaxH3Pipeline:
 
         logger.info(f"reading {self.transformer_layout} transformer weights from {self.transformer_file}")
         state = comfy_h3.convert_comfy_state_dict(load_file(str(self.transformer_file)))
+        if self._pdd is not None:
+            # Load head 0 so the shapes match; every denoise step swaps in its fused block head.
+            for modality, (_src, dst) in comfy_h3.PDD_HEADS.items():
+                w, b = self._pdd["heads"][modality]
+                state[f"{dst}.weight"] = w[0].clone()
+                state[f"{dst}.bias"] = b[0].clone()
         if self.transformer_layout == "comfy_pruned":
             state.pop(comfy_h3.CURVE_TABLE_KEY)
             for key in list(state):
@@ -2371,6 +2424,16 @@ class MiniMaxH3Pipeline:
         """The video and audio schedules for one request."""
         scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
         audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
+        if self._pdd is not None:
+            # PDD: the node sigmas of the fine grid (top at grid_max_t, not 1), per modality shift.
+            contract = self._pdd["contract"]
+            indices = comfy_h3.pdd_step_indices(contract, num_inference_steps - 1)
+            weights = {}
+            for modality, sched in (("video", scheduler), ("audio", audio_scheduler)):
+                nodes, weights[modality] = comfy_h3.pdd_plan(contract, indices, self._pdd["shifts"][modality])
+                sched.set_timesteps(sigmas=nodes.to(torch.float32))
+            self._pdd_active = (indices, weights)
+            return scheduler, audio_scheduler
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
         return scheduler, audio_scheduler
@@ -3222,6 +3285,11 @@ class MiniMaxH3Pipeline:
                 )
 
         upload_levels(step_levels(0))
+        pdd_steps = None
+        if self._pdd is not None and self._pdd_active is not None:
+            pdd_steps = self._pdd_device_heads(transformer, *self._pdd_active)
+            if len(pdd_steps) != len(timesteps):
+                raise RuntimeError(f"PDD plan has {len(pdd_steps)} steps but the schedule has {len(timesteps)}")
         if _is_host_rank():
             _tqdm_spacer()
         # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
@@ -3242,6 +3310,10 @@ class MiniMaxH3Pipeline:
                 )
             ):
                 t_step = time.time()
+                if pdd_steps is not None:
+                    for dst, (weight, bias) in pdd_steps[i].items():
+                        linear = getattr(transformer, dst)
+                        linear.weight.data, linear.bias.data = weight, bias
                 try:
                     video_velocity, audio_velocity = transformer(
                         video_1BVC=self._tt_video.value,

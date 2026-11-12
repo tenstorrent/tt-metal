@@ -132,3 +132,92 @@ def pad_curve(tensor: torch.Tensor, dim: int = -1, size: int = CURVE_PAD) -> tor
     shape = list(tensor.shape)
     shape[dim] = extra
     return torch.cat([tensor, tensor.new_zeros(shape)], dim=dim)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Parallel Decoding Distillation (PDD) heads
+#
+# FastH3-Omni-style students, and fine-tunes grafted onto them (10Eros-Max h3 8stepTURBO beta7 fix1),
+# widen `final_layer.video_out` / `audio_out` to `pdd_steps` heads, one per interval of a fixed fine
+# time grid on [0, grid_max_t]. A sampler step over the block [start, end) of that grid applies the
+# integration-weighted mean of the block's heads, and the block's total weight is the node-sigma
+# difference, so a plain Euler step over the node sigmas with the fused head is exact. Layout is
+# FastVideo's "channel_major": head j is rows [j*O, (j+1)*O) (fastvideo/layers/pdd.py). Some merges
+# store heads 1.. as offsets from head 0 (metadata `pdd_head_storage: head0-full;heads1-31-offset-...`).
+# The contract (step indices, grid size, grid_max_t, shifts) is in the file's metadata
+# `source_inference_contract`.
+
+PDD_HEADS = {"video": ("final_layer.video_out.", "proj_out"), "audio": ("final_layer.audio_out.", "audio_proj_out")}
+
+
+def pdd_contract(metadata: dict | None) -> dict | None:
+    """The PDD sampling contract a file carries in its safetensors metadata; None for a plain file."""
+    import json
+
+    metadata = metadata or {}
+    raw = metadata.get("source_inference_contract")
+    if not raw:
+        return None
+    try:
+        contract = dict(json.loads(raw))
+    except ValueError:
+        return None
+    if "pdd_step_indices" not in contract:
+        return None
+    contract.setdefault("pdd_steps", int(contract["pdd_step_indices"][-1]))
+    contract["heads_offset_from_head0"] = "offset-from-head0" in metadata.get("pdd_head_storage", "")
+    return contract
+
+
+def pdd_full_heads(
+    weight: torch.Tensor, bias: torch.Tensor, grid: int, offsets: bool
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """`[grid, O, I]` weights and `[grid, O]` biases in fp32, with offset-stored heads made absolute."""
+    w = weight.float().reshape(grid, -1, weight.shape[-1]).clone()
+    b = bias.float().reshape(grid, -1).clone()
+    if offsets:
+        w[1:] += w[0]
+        b[1:] += b[0]
+    return w, b
+
+
+def _shifted(u: torch.Tensor, shift: float, max_t: float) -> torch.Tensor:
+    """Rational shift `s*u*M / (u*(s-1) + M)` on [0, M] (FastVideo `shifted_noise_amount`)."""
+    if shift == 1.0:
+        return u
+    return shift * u * max_t / (u * (shift - 1.0) + max_t)
+
+
+def pdd_step_indices(contract: dict, num_steps: int) -> list[int]:
+    """Fine-grid node indices for `num_steps` model evaluations: the trained partition when the count
+    matches it, else FastVideo's balanced subset `arange(n + 1) * N // n`."""
+    grid = int(contract["pdd_steps"])
+    configured = [int(i) for i in contract["pdd_step_indices"]]
+    if num_steps == len(configured) - 1:
+        return configured
+    if not 1 <= num_steps <= grid:
+        raise ValueError(f"a {grid}-interval PDD grid cannot run {num_steps} steps")
+    return [k * grid // num_steps for k in range(num_steps + 1)]
+
+
+def pdd_plan(contract: dict, indices: list[int], shift: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """`(node_sigmas, interval_weights)` for one modality: descending node sigmas ending at 0, and
+    `sigma(u_{j+1}) - sigma(u_j)` for every fine-grid interval (float64)."""
+    max_t = float(contract.get("grid_max_t", 0.999))
+    grid = int(contract["pdd_steps"])
+    u = torch.linspace(max_t, 0.0, grid + 1, dtype=torch.float64).clamp(max=max_t)
+    sigma = _shifted(u, float(shift), max_t)
+    sigma[-1] = 0.0
+    return sigma[torch.tensor(indices)], sigma[1:] - sigma[:-1]
+
+
+def pdd_fuse(
+    w_heads: torch.Tensor, b_heads: torch.Tensor, weights: torch.Tensor, start: int, end: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The `[O, I]` weight and `[O]` bias of fine-grid block `[start, end)`: the weighted mean of its heads."""
+    block = weights[start:end]
+    normalized = (block / block.sum()).to(torch.float32)
+    return (
+        torch.einsum("n,noi->oi", normalized, w_heads[start:end]),
+        torch.einsum("n,no->o", normalized, b_heads[start:end]),
+    )
