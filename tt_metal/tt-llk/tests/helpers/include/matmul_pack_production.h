@@ -66,15 +66,25 @@ constexpr std::uint32_t key_c1 = 32;
 constexpr bool key_src32       = false;
 #endif
 
-// llk_pack_block_forms: the forms a block takes from the init, reconfigure and next states, as a mask (1 per tile, 2 block, 4 W offset)
+// llk_pack_block_forms of one context: the forms a block takes from the init, reconfigure and next states, as a mask (1 per tile, 2 block, 4 W offset)
+template <bool fp32, std::uint32_t kt>
+constexpr std::uint32_t forms_ctx(const std::uint32_t row, const std::uint32_t nt, const bool t32, const bool full, const bool src32, const bool int8, const std::uint32_t ctx)
+{
+    using namespace matmul_pack_tables;
+    const char a = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, ctx);
+    const char b = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, ctx);
+    const char c = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, ctx);
+    return (a == 'T' || b == 'T' || c == 'T' ? 1 : 0) | (a == 'B' || b == 'B' || c == 'B' ? 2 : 0) | (a == 'W' || b == 'W' || c == 'W' ? 4 : 0);
+}
+
+// llk_pack_block's fold over the contexts a production matmul kernel reaches: 0 (forms without the K), 1, and 2 (the bmm kernels include the
+// pack-thread SFPU headers); a block per tile in one is per tile in all
 template <bool fp32, std::uint32_t kt>
 constexpr std::uint32_t forms_k(const std::uint32_t row, const std::uint32_t nt, const bool t32, const bool full, const bool src32, const bool int8)
 {
-    using namespace matmul_pack_tables;
-    const char a = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, 1u);
-    const char b = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, 1u);
-    const char c = llk_pack_block_form_k<fp32, kt>(row, nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, 1u);
-    return (a == 'T' || b == 'T' || c == 'T' ? 1 : 0) | (a == 'B' || b == 'B' || c == 'B' ? 2 : 0) | (a == 'W' || b == 'W' || c == 'W' ? 4 : 0);
+    const std::uint32_t any = forms_ctx<fp32, 0>(row, nt, t32, full, src32, int8, 0u) | forms_ctx<fp32, kt>(row, nt, t32, full, src32, int8, 1u) |
+                              forms_ctx<fp32, kt>(row, nt, t32, full, src32, int8, 2u);
+    return (any & 1) != 0 ? 1 : any;
 }
 
 // forms_k of tile counts 1 to 16 at compile time: a constant count reads a constant before the IPA passes, as llk_pack_form_words
@@ -286,21 +296,13 @@ constexpr bool always_per_tile()
     }
     else
     {
-        using namespace matmul_pack_tables;
         constexpr std::uint32_t face_rows = key_r0 < 16 ? key_r0 : 16;
         constexpr std::uint32_t faces     = (key_r0 > 16 ? 2 : 1) * (key_c1 > 16 ? 2 : 1);
-        constexpr std::uint32_t row       = llk_pack_block_class_k(face_rows, faces, static_cast<std::uint32_t>(out_format));
+        constexpr std::uint32_t row       = matmul_pack_tables::llk_pack_block_class_k(face_rows, faces, static_cast<std::uint32_t>(out_format));
         constexpr bool int8  = out_format == DataFormat::Int8 || out_format == DataFormat::UInt8;
         constexpr bool src32 = fp32 && key_src32;
         constexpr bool t32   = src32 && unpack_to_dest;
-        constexpr bool full  = sync == DstSync::SyncFull;
-        // per tile in both matmul contexts (1 pure matmul, 2 with a pack-thread SFPU)
-        return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, 1u) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, 1u) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, 1u) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, 2u) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, 2u) == 'T' &&
-               llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, 2u) == 'T';
+        return forms_k<fp32, key_kt>(row, key_nt, t32, sync == DstSync::SyncFull, src32, int8) == 1;
     }
 }
 

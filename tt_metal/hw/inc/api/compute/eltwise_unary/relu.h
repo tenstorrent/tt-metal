@@ -10,6 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
+PACK_SFPU_API(6)
 namespace ckernel {
 
 ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }

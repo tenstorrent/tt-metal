@@ -22,8 +22,10 @@ def test_block_selection_matches_api():
     """block() in matmul_pack_production.h hand-mirrors how llk_pack_block picks the form table, the input family and the W offset run; these are the API lines it mirrors."""
     src = re.sub(r"\s+", " ", API.read_text())
     for line in (
-        "} else if (__builtin_constant_p(output_id)) { const std::uint32_t ctx = llk_pack_context(); forms = ctx == 0 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0) : (ctx == 1 ? llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1) : llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2)); }",
-        "if constexpr (((llk_pack_per_tile_counts<is_fp32_dest_acc_en, matmul_kt>.counts >> ((ntiles < 16 ? ntiles : 16) - 1)) & 1) != 0) { forms = 1;",
+        "if (__builtin_constant_p(output_id)) { std::uint32_t any = 0; if constexpr (llk_pack_context_reach<matmul_kt>(0)) { any |= llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0); } if constexpr (llk_pack_context_reach<matmul_kt>(1)) { any |= llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1); } if constexpr (llk_pack_context_reach<matmul_kt>(2)) { any |= llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2); } forms = (any & 1) != 0 ? 1 : any;",
+        "} else if constexpr ( ((llk_pack_per_tile_counts<is_fp32_dest_acc_en, matmul_kt>.counts >> ((ntiles < 16 ? ntiles : 16) - 1)) & 1) != 0) { forms = 1;",
+        "constexpr bool llk_pack_context_reach(const std::uint32_t ctx) { constexpr bool matmul = llk_pack_matmul_kernel<matmul_kt>(); return ctx == 0 || (ctx == 1 ? matmul : matmul && llk_pack_sfpu_kernel<matmul_kt>()); }",
+        "((ctx == 0 ? words_0[0][state][row] : (ctx == 2 ? words[1][state][row] : words_mm[0][state][row])) >> (2 * count)) & 3;",
         "if (forms == 1) { llk_pack_state_set_half(output_id + 1); llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles); return; }",
         "const bool one_form = forms != 0 && (forms & (forms - 1)) == 0;",
         "if (LLK_PACK_OTHER_PROGRAM_ACTIVE() || (DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE())) { if (!one_form) { _llk_pack_close_fast_untilize_<DST_SYNC_MODE>(); } LLK_PACK_W_INVALIDATE(); llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles); return; }",
