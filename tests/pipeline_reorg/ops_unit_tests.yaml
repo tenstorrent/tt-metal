@@ -632,10 +632,21 @@
     # Galaxy). The folded chains put both of that chip's routes in one direction, where the two services
     # must still get different fabric routers.
     ./build/test/ttnn/unit_tests_ttnn_tensor --gtest_filter='D2DStreamServiceTest.*:StreamPipelineTest.*' || exit_code=$?
+    # Sparse MLA on SP2xTP4 (Galaxy's TP=4 head split): K3.1 accuracy vs the CPU reference with random weights and
+    # determinism at production shapes (10 eager runs and 10 replays, identical, compared on device), then
+    # the host-time perf check (warm/long, untraced and traced) for K3.1 and GLM-5.3 (full and shared layer), one
+    # process per model as on Galaxy. Both modes are gated two-sided, and a traced/untraced mismatch fails. GLM-5.3
+    # accuracy on 2x4 is in blackhole_e2e_tests.yaml.
+    # Stop at the first failure: a failed run can leave the devices unreset (tt-metal#57706).
+    # DS_PREFILL_REUSE_MODEL=1 keeps one mesh open across cases (not for the perf gate: its targets were taken without).
+    DS_PREFILL_REUSE_MODEL=1 pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -vvv --tb=short -k "kimi_k3_1 and 2x4" || exit $?
+    DS_PREFILL_REUSE_MODEL=1 pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -vvv --tb=short -k kimi_k3_1 || exit $?
+    LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short || exit $?
+    LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 30
+      timeout: 45
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
   budget_type: e2e

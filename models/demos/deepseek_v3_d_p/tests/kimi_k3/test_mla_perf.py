@@ -3,8 +3,7 @@
 
 """Cold, warm, and long-context performance for one Kimi-K3 MLA layer.
 
-This is the dense-MLA counterpart of ``sparse_mla/test_sparse_mla_perf.py``.  The scenario
-contract is intentionally identical:
+Scenarios:
 
 * ``warm`` profiles one chunk with a 50K-token Galaxy prefix;
 * ``cold`` profiles every chunk from an empty cache through that same warm step; and
@@ -17,13 +16,13 @@ prefixes, so they match Galaxy's attention arithmetic per chip, while each ring 
 as many KV rows. Cold fills the cache contiguously over the same number of chunks as Galaxy, so its
 prefix also scales with SP/8 (25.6K on LoudBox, 12.8K on QuietBox) and it does SP/8 of Galaxy's work.
 
-K3 is deliberately not another variant in the sparse harness.  It has no DSA indexer, uses the dense
+K3 is deliberately not a sparse-MLA variant.  It has no DSA indexer, uses the dense
 tiled BFP8 KV cache, has NoPE, and adds the output ``g_proj`` gate.  Keeping those facts structural
 avoids fake sparse-cache/indexer axes and makes an accidentally broadened K3 sweep impossible.
 
 The measured unit is a traced forward.  Each forward is compiled, captured, replay-warmed once, and
 then replayed under the realtime profiler.  Host E2E includes replay through device synchronization;
-device program durations collapse chips by MAX, matching the sparse-MLA realtime convention.
+device program durations collapse chips by MAX.
 
 Run all three cases on a supported Blackhole box::
 
