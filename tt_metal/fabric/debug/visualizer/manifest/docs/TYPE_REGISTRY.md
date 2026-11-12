@@ -70,6 +70,7 @@ using RegisteredTypes = typename detail::concat_type_lists<
 | `are_trivially_copyable` | A registered type can't be copied from bytes | "Decode rebuilds a registered type from its bytes, so every registered type must be trivially copyable" |
 | `registers_every_packet_header` | A packet header type fabric can pick isn't in `PacketHeaderTypes` | "A packet header type fabric can pick isn't in PacketHeaderTypes" |
 | `register_stream_field<T>` | `T` doesn't fit in a stream register's word | "A stream register holds one word, so its value fits in a uint32_t" |
+| `register_stream_field<T>` | `T` is an enum with a value outside the bits its role's read mask keeps | "A stream register's enum has a value outside the bits its role's read mask keeps" |
 
 All of these fail at compile time, so a type the manifest can't name never reaches a run.
 
@@ -92,17 +93,20 @@ with `fabric_manifest_fields.hpp`'s functions, which return a table field the ro
 template <typename T>
 constexpr L1Field register_l1_field(uint32_t num_elements = 1, uint32_t element_size = sizeof(T));
 
-// A stream register holding a T. Every stream has the same set of registers, and `reg` picks one of them (such as
-// BUF_SPACE_AVAILABLE). The stream id isn't known yet, so neither is the address: the router pass reads the stream id
-// from the kernel's arguments and works out the address with describe_stream_register.
+// A stream register holding a T. `role` says what the register is to the router: a StreamRole (an increment-on-write
+// count, in the stream's space-available register) or a ScratchRole (a scratch register, in its remote-source
+// register). The stream id isn't known yet, so neither is the address: the router pass reads the stream id from the
+// kernel's arguments, checks it against the stream assignment, and works out the address with
+// describe_stream_register.
 template <typename T>
-constexpr StreamRegField register_stream_field(StreamRegister reg);
+constexpr StreamRegField register_stream_field(StreamRegisterRole role);
 ```
 
 Registering a region does two things, and nothing else:
 
 1. **It returns the region**, with `T`'s registered name as its `type`.
-2. **It checks `T`** at compile time: `T` must be registered, and a stream register's `T` must fit in a word.
+2. **It checks `T`** at compile time: `T` must be registered, and a stream register's `T` must fit in a word, with an
+   enum's every value under its role's read mask.
 
 Nothing is recorded anywhere. "Registering" means the region holds a registered type, so decode can read it.
 
@@ -156,22 +160,25 @@ For each router, the router pass reads the argument `source` names, and `make_fi
 A per-channel or per-edge entry names its argument with a `{}`, filled with the channel's index. For VC0 sender
 channel 1, `conn_info`'s source `LOCAL_SENDER_CH_{}_CONN_INFO_ADDR` becomes `LOCAL_SENDER_CH_1_CONN_INFO_ADDR`.
 
-A stream register's argument is a stream id, not an address, so `describe_stream_register` works out the address from
-the HAL: the stream's block, plus the register's offset in it, and how many of its low bits hold the value.
+A stream register's argument is a stream id, not an address. The router pass first checks it is the id the stream
+assignment gives the entry's role (or, for a scratch role, the id it pins), then `describe_stream_register` works out
+the address from the HAL (the stream's block, plus the role's register's offset in it), the role's read mask, and
+whether the register is active.
 
 ```cpp
 RouterField{
     .key = "erisc_sync",
     .source = "MULTI_RISC_TEARDOWN_SYNC_STREAM_ID",
     .category = LIFECYCLE,
-    .content = register_stream_field<uint32_t>(StreamRegister::REMOTE_SRC),
+    .content = register_stream_field<uint32_t>(ScratchRole::MULTI_RISC_TEARDOWN_SYNC),
     ...
 },
 ```
 
 ```json
 "erisc_sync": { "category": "lifecycle", "kind": "stream_reg", "stream_id": 31, "address": 4290113536,
-                "value_bits": 24, "type": "unsigned int" }
+                "role": "multi_risc_teardown_sync", "read_mask": 8191, "type": "unsigned int",
+                "multi_sampled": null, "active": true }
 ```
 
 An argument of 0, or the unused stream id, means the builder didn't allocate the buffer or register, and the field is
@@ -275,8 +282,8 @@ visit_registered_type(region.type, [&]<typename T>(std::type_identity<T>) {
 });
 ```
 
-A stream register is one word at `address`. Decode keeps the word's low `value_bits` bits, since the bits above can hold
-other state, and reads that value as the register's type.
+A stream register is one word at `address`. Decode keeps the word under `read_mask`, the bits the router reads, since
+the bits outside it can hold other state, and reads that value as the register's type.
 
 How decode then shows a type's members to a person is decode's own concern. The registry only gets it the type.
 

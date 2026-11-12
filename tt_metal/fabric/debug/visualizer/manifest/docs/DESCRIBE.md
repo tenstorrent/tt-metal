@@ -114,8 +114,8 @@ table (the host), and the base firmware words. So an arch area is always `active
 isn't. A region only some routers write is described on the router instead, where `active` can say so
 ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
-`arch` doesn't describe stream registers. Each stream register the manifest names carries its own address and value
-width, worked out from the HAL where it's read ([ROUTER_PASS.md](ROUTER_PASS.md)).
+`arch` doesn't describe stream registers. Each stream register the manifest names carries its own address, from the
+HAL, and read mask, from its role ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
 **Core registers** (`arch.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a `uint32_t` at
 its HAL address, written with its name, address and type. The array keeps the read order: reading the low word latches

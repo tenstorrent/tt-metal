@@ -143,10 +143,82 @@ std::optional<manifest::content::L1> collect_leftover_l1(const ManifestRouterInp
     return leftover;
 }
 
-// The described stream register `stream_reg` on stream `stream_id`: where it is, from the HAL, and how many of its low
-// bits hold its value.
+using manifest::FieldIndex;
+
+// The role a stream field's register has for the channel or edge at `index`: the field's own, except a VC2 sender
+// channel's free slots, which ride VC2's pinned register.
+manifest::StreamRegisterRole resolve_stream_register_role(
+    const manifest::StreamRegField& stream_reg, const FieldIndex& index) {
+    if (stream_reg.role == manifest::StreamRegisterRole(StreamRole::SENDER_FREE_SLOTS) && index.vc == 2) {
+        return StreamRole::VC2_SENDER_FREE_SLOTS;
+    }
+    return stream_reg.role;
+}
+
+// The stream id the stream assignment gives `role` for the channel or edge at `index`, or k_unused_stream_id when it
+// gives none. Each role's index means what StreamRole says: the sender channel within its VC, the receiver channel,
+// or the downstream edge's compact index.
+uint32_t get_assigned_stream_id(
+    const StreamAssignment& assignment, const manifest::StreamRegisterRole& role, const FieldIndex& index) {
+    const auto get_assigned_id = [&](StreamRole stream_role, uint32_t vc, uint32_t position) {
+        return assignment.has(stream_role, vc, position) ? assignment.id(stream_role, vc, position)
+                                                         : k_unused_stream_id;
+    };
+    return std::visit(
+        ttsl::overloaded{
+            [&](StreamRole stream_role) -> uint32_t {
+                switch (stream_role) {
+                    case StreamRole::SENDER_FREE_SLOTS: return get_assigned_id(stream_role, index.vc, index.channel);
+                    // The VC2 sender's register is pinned, and assigned whenever VC2 has a sender channel.
+                    case StreamRole::VC2_SENDER_FREE_SLOTS:
+                        return StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+                    // Keyed by the receiver channel, with no index within it.
+                    case StreamRole::RECEIVER_PKTS_SENT: return get_assigned_id(stream_role, index.compact, 0);
+                    case StreamRole::DOWNSTREAM_FREE_SLOTS:
+                        return get_assigned_id(stream_role, index.vc, index.edge - 1);
+                    case StreamRole::SENDER_PKTS_ACKED:
+                    case StreamRole::SENDER_PKTS_COMPLETED:
+                    case StreamRole::VC2_RECEIVER_FREE_SLOTS:
+                    case StreamRole::TENSIX_RELAY_FREE_SLOTS: break;
+                }
+                TT_THROW(
+                    "Fabric manifest: no field table describes a {} stream register",
+                    manifest::lower_enum_name(stream_role));
+            },
+            [](manifest::ScratchRole scratch_role) { return manifest::get_scratch_stream_id(scratch_role); },
+        },
+        role);
+}
+
+// Whether the router writes a stream register with `role` in this run. Every count it places is written. The ERISC
+// sync is written only between two ERISCs, and the context switch only where an ERISC context switches: the master
+// sets it, and the other ERISC acks it.
+bool is_stream_register_written(const ManifestRouterInputs& inputs, const manifest::StreamRegisterRole& role) {
+    if (std::holds_alternative<StreamRole>(role)) {
+        return true;
+    }
+    const RouterArgs& args = inputs.args;
+    switch (std::get<manifest::ScratchRole>(role)) {
+        case manifest::ScratchRole::MULTI_RISC_TEARDOWN_SYNC: return args.read_router_arg("NUM_ACTIVE_ERISCS") > 1;
+        case manifest::ScratchRole::ETH_RETRAIN_LINK_SYNC:
+            for (uint32_t erisc = 0; erisc < args.num_eriscs(); ++erisc) {
+                if (args.read_erisc_arg(erisc, "ENABLE_CONTEXT_SWITCH") != 0) {
+                    return true;
+                }
+            }
+            return false;
+    }
+    TT_THROW("Fabric manifest: unknown scratch role {}", static_cast<int>(std::get<manifest::ScratchRole>(role)));
+}
+
+// The described stream register with `role` on stream `stream_id`: where it is, from the HAL, and the bits of it the
+// router reads.
 manifest::content::StreamReg describe_stream_register(
-    const tt::tt_metal::Hal& hal, uint32_t stream_id, const manifest::StreamRegField& stream_reg) {
+    const ManifestRouterInputs& inputs,
+    uint32_t stream_id,
+    const manifest::StreamRegisterRole& role,
+    const manifest::StreamRegField& stream_reg) {
+    const tt::tt_metal::Hal& hal = inputs.hal;
     TT_FATAL(
         hal.has_stream_registers(),
         "Fabric manifest: the HAL gives no stream register addresses on {}",
@@ -156,29 +228,21 @@ manifest::content::StreamReg describe_stream_register(
         "Fabric manifest: stream id {} is not one of the {} stream registers",
         stream_id,
         StreamRegAssignments::num_eth_stream_registers);
-    // The register's index within its stream's block, and how many of its low bits hold its value.
-    const auto [reg_index, value_bits] = [&]() -> std::pair<uint32_t, uint32_t> {
-        switch (stream_reg.reg) {
-            case manifest::StreamRegister::BUF_SPACE_AVAILABLE:
-                return {
-                    hal.get_noc_stream_remote_dest_buf_space_available_reg_index(),
-                    hal.get_noc_stream_remote_dest_words_free_width()};
-            case manifest::StreamRegister::REMOTE_SRC:
-                // The fabric's scratch register: four 6-bit fields on Wormhole and Blackhole (fabric_stream_regs.hpp).
-                return {hal.get_noc_stream_remote_src_reg_index(), 24};
-        }
-        TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(stream_reg.reg));
-    }();
+    // A count is the stream's increment-on-write space-available register; a scratch register is its remote-source
+    // register, which the router reads and writes as plain storage.
+    const uint32_t reg_index = std::holds_alternative<StreamRole>(role)
+                                   ? hal.get_noc_stream_remote_dest_buf_space_available_reg_index()
+                                   : hal.get_noc_stream_remote_src_reg_index();
     return {
         .stream_id = stream_id,
         .address = hal.get_noc_overlay_start_addr() + (stream_id * hal.get_noc_stream_reg_space_size()) +
                    static_cast<uint32_t>(reg_index * sizeof(uint32_t)),
-        .value_bits = value_bits,
+        .role = role,
+        .read_mask = manifest::get_stream_register_read_mask(role),
         .type = std::string(stream_reg.type),
+        .active = is_stream_register_written(inputs, role),
     };
 }
-
-using manifest::FieldIndex;
 
 // `arg`'s name, with the channel's or edge's index in its {}.
 std::string get_arg_name(const manifest::NamedArg& arg, const FieldIndex& index) {
@@ -192,13 +256,30 @@ std::string get_arg_name(const manifest::NamedArg& arg, const FieldIndex& index)
     TT_THROW("Fabric manifest: unknown argument index {}", static_cast<int>(arg.index));
 }
 
-// `field`, with its content's address, stream register or value filled in from `arg`, the value of its source. An L1
-// address of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled),
-// and k_unused_stream_id a stream register it did not allocate. `written` is whether the kernel writes an L1 field's
-// region (is_written).
+// `field`, for the channel or edge at `index`, with its content's address, stream register or value filled in from
+// `arg`, the value of its source. An L1 address of 0 is a buffer the builder did not allocate
+// (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled), and k_unused_stream_id a stream register it did not
+// allocate. A stream register's id must be the one the stream assignment gives its role. `written` is whether the
+// kernel writes an L1 field's region (is_written).
 manifest::Field make_field(
-    const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg, bool written) {
+    const ManifestRouterInputs& inputs,
+    const manifest::RouterField& field,
+    const FieldIndex& index,
+    uint32_t arg,
+    bool written) {
     const std::string key(field.key.value);
+    std::optional<manifest::StreamRegisterRole> stream_role;
+    if (const auto* stream = std::get_if<manifest::StreamRegField>(&field.content.value)) {
+        stream_role = resolve_stream_register_role(*stream, index);
+        const uint32_t assigned = get_assigned_stream_id(inputs.stream_assignment, *stream_role, index);
+        TT_FATAL(
+            arg == assigned,
+            "Fabric manifest: field {} is fed stream id {}, but the stream assignment gives its role {} stream id {}",
+            key,
+            arg,
+            std::visit([](auto role) { return manifest::lower_enum_name(role); }, *stream_role),
+            assigned);
+    }
     const bool unallocated =
         (std::holds_alternative<manifest::L1Field>(field.content.value) && arg == 0) ||
         (std::holds_alternative<manifest::StreamRegField>(field.content.value) && arg == k_unused_stream_id);
@@ -216,7 +297,7 @@ manifest::Field make_field(
                     .active = written};
             },
             [&](const manifest::StreamRegField& stream) -> manifest::Content {
-                return describe_stream_register(inputs.hal, arg, stream);
+                return describe_stream_register(inputs, arg, *stream_role, stream);
             },
             [&](manifest::content::Number number) -> manifest::Content {
                 number.value = arg;
@@ -325,7 +406,7 @@ std::vector<manifest::Field> collect_fields(
     for (size_t position = 0; position < table.size(); ++position) {
         if (values[position].has_value()) {
             const auto& field = table[position];
-            fields.push_back(make_field(inputs, field, *values[position], is_written(table, values, field)));
+            fields.push_back(make_field(inputs, field, index, *values[position], is_written(table, values, field)));
         }
     }
     return fields;
@@ -480,7 +561,9 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         ctx.channel_buffer_size);
     sender.credits_by_erisc = collect_sender_credits(ctx, index);
     sender.fields_by_erisc = collect_fields_by_erisc(
-        inputs, manifest::k_sender_channel_fields, {.compact = c, .fabric_position = index.fabric_position});
+        inputs,
+        manifest::k_sender_channel_fields,
+        {.compact = c, .fabric_position = index.fabric_position, .vc = index.vc, .channel = index.channel});
     return sender;
 }
 

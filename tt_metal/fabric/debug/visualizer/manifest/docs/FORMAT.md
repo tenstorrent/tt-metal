@@ -93,12 +93,24 @@ zeroes part of a region before launch is `fabric.host_clears`.
   "active": true }
 ```
 
-**Stream register**: `{ stream_id, address, value_bits, type, multi_sampled }`. One word at `address`, in stream
-`stream_id`'s registers. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold other
-state.
+**Stream register**: `{ stream_id, address, role, read_mask, type, multi_sampled, active }`. One word at `address`,
+in stream `stream_id`'s registers.
+
+- `role` is what the register is to the router: a `stream_role` name for an increment-on-write count the builder's
+  stream assignment placed (`sender_free_slots`, `receiver_pkts_sent`, `downstream_free_slots`, ...), or a
+  `scratch_role` name for a scratch register it pins (`multi_risc_teardown_sync`, `eth_retrain_link_sync`). Both lists
+  are in `vocabulary`. A count is the stream's space-available register; a scratch register is its remote-source
+  register.
+- `read_mask` is the bits of the word the router reads. The value is the word under the mask, read as `type`; bits
+  outside it can hold other state the router doesn't read. A count's mask is `stream_count_mask` (2047), the ERISC
+  sync's `k_erisc_sync_mask` (8191), and the context switch's the whole word (`fabric_common.h`).
+- `active` is false when nothing writes the register in this run: the ERISC sync on a router with one ERISC, and the
+  context switch on a router where no ERISC context switches. Its word is then whatever the register held. A
+  multi-sampled register is always active.
 
 ```json
-{ "stream_id": 7, "address": 4290016420, "value_bits": 17, "type": "unsigned int", "multi_sampled": null }
+{ "stream_id": 7, "address": 4290016420, "role": "sender_free_slots", "read_mask": 2047, "type": "unsigned int",
+  "multi_sampled": null, "active": true }
 ```
 
 **Multi-sampled**: a region's or stream register's `multi_sampled`. Capture reads every region once, in its full read.
@@ -393,7 +405,8 @@ And two of the blocks it names, from the same manifest's `field_sets`:
 ```json
 "F2": {
   "erisc0": { "free_slots": { "category": "flow_control", "kind": "stream_reg", "stream_id": 7,
-                              "address": 4290016420, "value_bits": 17, "type": "unsigned int" }, ... },
+                              "address": 4290016420, "role": "sender_free_slots", "read_mask": 2047,
+                              "type": "unsigned int", "multi_sampled": null, "active": true }, ... },
   "erisc1": { ... }
 },
 "F3": {

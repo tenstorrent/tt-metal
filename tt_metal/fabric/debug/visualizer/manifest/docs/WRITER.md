@@ -88,7 +88,7 @@ writer has nothing to look up or check. It writes the name as a string, next to 
 | What | Written by | Keys |
 | --- | --- | --- |
 | An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type`, `multi_sampled`, `active` |
-| A stream register | `make_stream_reg_json` | `stream_id`, `address`, `value_bits`, `type`, `multi_sampled` |
+| A stream register | `make_stream_reg_json` | `stream_id`, `address`, `role`, `read_mask`, `type`, `multi_sampled`, `active` |
 | A core register | `make_core_registers_json` | `name`, `address`, `type` |
 | The run's packet header | `make_fabric_json` | `fabric.packet_header`, the header type's name |
 
@@ -102,7 +102,8 @@ every name each can hold, so a reader knows them all without the C++ enums.
 
 The lists are `k_vocabulary_lists` in `fabric_manifest_model.hpp`. Each entry names the list and the type whose names it
 holds. For an enum, the list is every enumerator in lower case. For the field kinds, it's every alternative of the
-`Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream_reg`).
+`Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream_reg`). A stream
+register's `role` is a name from either `stream_role` or `scratch_role`, which share no names.
 
 An enum field isn't a label key: it writes its enumerator's name next to its value (`value_name`), so its enum has no
 list here.

@@ -50,8 +50,8 @@ std::string content_kind(const manifest::FieldContent& content) {
         content);
 }
 
-// The type an entry's value is read as: an L1 region's or stream register's registered type, or a configuration
-// enum's name.
+// The type an entry's value is read as: an L1 region's registered type, a stream register's with its role, or a
+// configuration enum's name.
 std::string content_type(const manifest::FieldContent& content) {
     return std::visit(
         ttsl::overloaded{
@@ -60,7 +60,10 @@ std::string content_type(const manifest::FieldContent& content) {
                                             : fmt::format("`{}` × {}", l1.type, l1.num_elements);
             },
             [](const manifest::StreamRegField& stream) {
-                return fmt::format("`{}` in `{}`", stream.type, manifest::lower_enum_name(stream.reg));
+                return fmt::format(
+                    "`{}` as `{}`",
+                    stream.type,
+                    std::visit([](auto role) { return manifest::lower_enum_name(role); }, stream.role));
             },
             [](const manifest::content::Number&) { return std::string(); },
             [](const manifest::content::Flag&) { return std::string(); },

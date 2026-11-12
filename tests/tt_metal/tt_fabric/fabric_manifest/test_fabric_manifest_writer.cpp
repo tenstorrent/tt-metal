@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <optional>
@@ -73,8 +74,10 @@ ManifestFacts make_facts() {
                     content::StreamReg{
                         .stream_id = 30,
                         .address = 0xffb5e000,
-                        .value_bits = 24,
-                        .type = std::string(get_manifest_type_name<CoordinatedEriscContextSwitchState>())}},
+                        .role = ScratchRole::ETH_RETRAIN_LINK_SYNC,
+                        .read_mask = 0xFFFFFFFF,
+                        .type = std::string(get_manifest_type_name<CoordinatedEriscContextSwitchState>()),
+                        .active = false}},
             Field{
                 .key = "my_direction",
                 .category = FieldCategory::KERNEL_PARAMS,
@@ -234,9 +237,11 @@ TEST(ManifestWriter, ContentsNameTheirType) {
              {"kind", "stream_reg"},
              {"stream_id", 30},
              {"address", 0xffb5e000},
-             {"value_bits", 24},
+             {"role", "eth_retrain_link_sync"},
+             {"read_mask", 0xFFFFFFFF},
              {"type", "CoordinatedEriscContextSwitchState"},
-             {"multi_sampled", nullptr}}));
+             {"multi_sampled", nullptr},
+             {"active", false}}));
     // The enum's own name isn't written: it stays in the model, for FIELDS.md and errors.
     EXPECT_EQ(
         fields.at("my_direction"),
@@ -267,8 +272,8 @@ TEST(ManifestWriter, MultiSampledRegionsNameTheirRole) {
     EXPECT_EQ(manifest.at("vocabulary").at("multi_sample_role"), json({"loop_heartbeat", "fabric_telemetry"}));
 }
 
-// Every L1 region says whether anything writes it: leftover L1 doesn't, and the rest here do. A stream register has no
-// active: the kernel or the hardware always holds its value.
+// Every L1 region and stream register says whether anything writes it: leftover L1 and the retrain sync register
+// here don't, and the rest do.
 TEST(ManifestWriter, ActiveSaysWhetherAnythingWritesTheRegion) {
     auto facts = make_facts();
     auto& leftover = facts.meshes.at(0).chips.at(0).routers.at(0).leftover_l1;
@@ -280,7 +285,7 @@ TEST(ManifestWriter, ActiveSaysWhetherAnythingWritesTheRegion) {
     EXPECT_EQ(router.at("fields").at("erisc0").at("edm_status").at("active"), true);
     EXPECT_EQ(router.at("credit_counters").at("to_sender_ack").at("active"), true);
     EXPECT_EQ(manifest.at("arch").at("l1_areas").at("heartbeat").at("active"), true);
-    EXPECT_FALSE(router.at("fields").at("erisc0").at("retrain_sync").contains("active"));
+    EXPECT_EQ(router.at("fields").at("erisc0").at("retrain_sync").at("active"), false);
 }
 
 // Each ERISC's values are written under its own key, as the builder gave them, even where two ERISCs differ.
@@ -367,12 +372,28 @@ ManifestFacts make_facts_with_every_part() {
         .content = content::StreamReg{
             .stream_id = 31,
             .address = 0xffb5f000,
-            .value_bits = 24,
+            .role = StreamRole::RECEIVER_PKTS_SENT,
+            .read_mask = stream_count_mask,
             .type = std::string(get_manifest_type_name<uint32_t>()),
             .multi_sampled = MultiSampleRole::LOOP_HEARTBEAT}});
     router.leftover_l1 = register_l1_region<std::byte>(0x8000, 0x100, 1);
     router.leftover_l1->active = false;
     return facts;
+}
+
+// A stream register names its role, a stream_role or a scratch_role, and the bits of its word the router reads; the
+// vocabulary lists both roles' names.
+TEST(ManifestWriter, StreamRegistersNameTheirRoleAndReadMask) {
+    const auto manifest = make_manifest_json(make_facts_with_every_part(), FieldsLayout::PER_ROUTER);
+    const auto& fields = router_e0(manifest).at("fields").at("erisc0");
+    EXPECT_EQ(fields.at("retrain_sync").at("role"), "eth_retrain_link_sync");
+    EXPECT_EQ(fields.at("retrain_sync").at("read_mask"), 0xFFFFFFFFu);
+    EXPECT_EQ(fields.at("sampled_stream").at("role"), "receiver_pkts_sent");
+    EXPECT_EQ(fields.at("sampled_stream").at("read_mask"), stream_count_mask);
+    EXPECT_EQ(
+        manifest.at("vocabulary").at("scratch_role"), json({"multi_risc_teardown_sync", "eth_retrain_link_sync"}));
+    const auto& stream_roles = manifest.at("vocabulary").at("stream_role");
+    EXPECT_NE(std::ranges::find(stream_roles, json("sender_free_slots")), stream_roles.end());
 }
 
 // What reading `manifest` fails with, or empty when it doesn't fail.
@@ -479,6 +500,34 @@ TEST(ManifestReader, FailsOnAnInactiveMultiSampledRegion) {
         manifest,
         "Fabric manifest: /meshes/M0/chips/C0/routers/E0/credit_counters/to_sender_ack/active is false, but the region "
         "is multi_sampled, and nothing writes it");
+}
+
+// A stream register's role names a stream or scratch role, and its read mask is the one the router reads that role
+// under.
+TEST(ManifestReader, FailsOnAStreamRegisterRoleOrReadMaskItCannotRead) {
+    json unknown = make_manifest_json(make_facts(), FieldsLayout::PER_ROUTER);
+    router_e0(unknown).at("fields").at("erisc0").at("retrain_sync").at("role") = "spare";
+    expect_parse_fails_with(
+        unknown,
+        R"(Fabric manifest: /meshes/M0/chips/C0/routers/E0/fields/erisc0/retrain_sync/role is "spare", which names no )"
+        "stream or scratch role");
+
+    json wrong_mask = make_manifest_json(make_facts(), FieldsLayout::PER_ROUTER);
+    router_e0(wrong_mask).at("fields").at("erisc0").at("retrain_sync").at("read_mask") = 0x7FF;
+    expect_parse_fails_with(
+        wrong_mask,
+        "Fabric manifest: /meshes/M0/chips/C0/routers/E0/fields/erisc0/retrain_sync/read_mask is 0x7ff, but the router "
+        "reads its role under 0xffffffff");
+}
+
+// Sampling a register nothing writes says nothing, so an inactive multi-sampled stream register fails.
+TEST(ManifestReader, FailsOnAnInactiveMultiSampledStreamRegister) {
+    json manifest = make_manifest_json(make_facts_with_every_part(), FieldsLayout::PER_ROUTER);
+    router_e0(manifest).at("fields").at("erisc0").at("sampled_stream").at("active") = false;
+    expect_parse_fails_with(
+        manifest,
+        "Fabric manifest: /meshes/M0/chips/C0/routers/E0/fields/erisc0/sampled_stream/active is false, but the "
+        "register is multi_sampled, and nothing writes it");
 }
 
 // A fields id names a block in field_sets, and in the PER_ROUTER layout there are no ids.

@@ -21,8 +21,9 @@ written once, in the manifest's `field_sets`, and a router, channel or edge name
                                      "element_size": 4, "type": "EDMStatus", "multi_sampled": null,
                                      "active": true },
 "erisc_sync":                      { "category": "lifecycle", "kind": "stream_reg", "stream_id": 31,
-                                     "address": 4290113536, "value_bits": 24, "type": "unsigned int",
-                                     "multi_sampled": null },
+                                     "address": 4290113536, "role": "multi_risc_teardown_sync",
+                                     "read_mask": 8191, "type": "unsigned int", "multi_sampled": null,
+                                     "active": true },
 "handshake_sender":                { "category": "lifecycle", "kind": "flag", "value": true },
 "producer_credit_return_noc":      { "category": "flow_control", "kind": "number", "value": 0 },
 "producer_credit_return_cmd_buf":  { "category": "flow_control", "kind": "enum", "value": 3,
@@ -123,7 +124,7 @@ The field's kind, in the JSON's `kind`:
 | Content | `kind` | The argument is | Notes |
 | --- | --- | --- | --- |
 | `register_l1_field<T>()` | `l1` | An L1 address holding a `T` | `null` when the address is 0. The router pass adds the address |
-| `register_stream_field<T>(register)` | `stream_reg` | A stream id. The entry says which of the stream's registers holds a `T` | `null` for the unused stream id. The router pass adds the register's address and how many of its bits hold the value, from the HAL |
+| `register_stream_field<T>(role)` | `stream_reg` | A stream id. The entry names the register's role, a `StreamRole` or a `ScratchRole`, and the register holds a `T` | `null` for the unused stream id. The router pass checks the id against the stream assignment for the role, and adds the register's address (from the HAL), its read mask and whether it's active |
 | `content::Number{}` | `number` | A plain value | |
 | `content::Flag{}` | `flag` | 0 or 1 | Any other value fails |
 | `enum_of<E>()` | `enum` | A value of enum `E` | Written with its enumerator's name. A value that isn't one of `E`'s enumerators fails |
@@ -149,7 +150,7 @@ per ERISC. For each entry:
 | Content | What the value becomes |
 | --- | --- |
 | L1 region | The region's address. An address of 0 makes the field `null` |
-| Stream register | The stream id. `describe_stream_register` works out the register's address and value width from the HAL. The unused stream id makes the field `null` |
+| Stream register | The stream id, checked against the stream assignment for the entry's role. `describe_stream_register` works out the register's address from the HAL, its read mask from its role, and whether it's active. The unused stream id makes the field `null` |
 | Number | The value as it is |
 | Flag | `true` or `false`. Anything other than 0 or 1 fails |
 | Enum | The value and its enumerator's name. A value that isn't one of the enum's enumerators fails |

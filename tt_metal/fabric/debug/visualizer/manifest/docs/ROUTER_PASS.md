@@ -15,6 +15,7 @@ Its input is the router's `ManifestRouterInputs`, which the router builder fills
 | `chip_facts` | The chip's routing facts, such as each direction's edge capability |
 | `args` | A `RouterArgs` over what `create_kernel` built each RISC's kernel with: its named compile-time arguments, defines, processor, NoC and opt level |
 | `packet_header` | The run's `PacketHeaderConfig` (`FabricContext::get_packet_header_config()`), which picks the header type each ring buffer slot starts with |
+| `stream_assignment` | The router's mesh's `StreamAssignment` (`FabricBuilderContext::get_stream_assignment`), which each stream register field's stream id is checked against |
 | `hal` | The HAL, for stream register addresses and physical ERISCs |
 
 Plain values are read through the field tables ([FIELD_TABLES.md](FIELD_TABLES.md)). This doc covers the rest: the
@@ -82,6 +83,22 @@ clears it.
 region follows its `written_when` gate (FIELD_TABLES.md's "Reading a table"). Of the router pass's own regions, the
 ring buffers are always active, the credit counter arrays are active when the kernel uses them (below), and leftover L1
 never is.
+
+**Stream registers.** Each stream register field names its role (FIELD_TABLES.md). The router pass resolves it for the
+channel or edge, checks the stream id it's fed, and describes the register (`describe_stream_register`):
+
+| Role | The id must be | Active when |
+| --- | --- | --- |
+| `sender_free_slots` | `StreamAssignment::id(role, vc, channel)`, the channel within its VC, or the unused id exactly when `has` is false | Always |
+| `vc2_sender_free_slots` (a VC2 sender channel's `free_slots`) | VC2's pinned id (`StreamRegAssignments::IncrementOnWrite`) | Always |
+| `receiver_pkts_sent` | `id(role, receiver channel, 0)`, keyed by the receiver channel's compact index | Always |
+| `downstream_free_slots` | `id(role, vc, edge - 1)`, the edge's compact index | Always |
+| `multi_risc_teardown_sync` | Its pinned id (`StreamRegAssignments::Scratch`) | `NUM_ACTIVE_ERISCS` > 1: `sync_erisc` writes it only between two ERISCs |
+| `eth_retrain_link_sync` | Its pinned id | Any ERISC has `ENABLE_CONTEXT_SWITCH`: the master sets it, and the other ERISC acks it. A `written_when` gate reads only the same ERISC, so the router pass decides this one |
+
+A mismatch fails the router pass. The register's address is the stream's space-available register for a count and
+its remote-source register for a scratch role, from the HAL, and its `read_mask` is the role's
+(`get_stream_register_read_mask`, from `fabric_common.h`'s masks).
 
 ## The router
 
@@ -230,7 +247,6 @@ channel no ERISC runs, for none of the reasons below, fails the router pass.
 | An edge's slot: the sibling's direction's compact index among this router's other directions | `get_receiver_channel_compact_index`, which the adapter's `add_downstream_connection` uses too |
 | An edge's teardown semaphore: its rank among the router's edges, VC1's after VC0's (offset by `NUM_DOWNSTREAM_SENDERS_VC0`) | `RuntimeArgs::vc1()` (`router_init.hpp`), whose teardown semaphores start at `NUM_DOWNSTREAM_SENDERS_VC0`, each edge indexing them by its dense index (`router_downstream.hpp`) |
 | The four credit counter arrays are back to back and the same size, so each is as big as the gap between the first two bases | `num_words_consumed_per_counter` in `FabricEriscDatamoverConfig`'s constructor (`erisc_datamover_builder.cpp`), which nothing exposes |
-| The REMOTE_SRC stream register's value is 24 bits: four 6-bit fields | `fabric_stream_regs.hpp` |
 
 ## Adding a computed fact
 

@@ -1064,6 +1064,7 @@ manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRou
         .connections = connections,
         .args = args,
         .packet_header = packet_header,
+        .stream_assignment = fabric_context_.get_builder_context().get_stream_assignment(local_node_.mesh_id),
         .hal = fabric_context_.get_hal(),
     };
     return tt::tt_fabric::collect_manifest_router(inputs);

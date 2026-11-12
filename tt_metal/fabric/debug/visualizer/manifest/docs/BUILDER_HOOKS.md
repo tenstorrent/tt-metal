@@ -69,6 +69,7 @@ way.
 | `chip_facts` | The chip's `ChipRoutingFacts`, passed in by `FabricBuilder` | The edge capability of the direction the router faces, which becomes its link's `edge_capability` |
 | `connections` | The chip's `ConnectionRegistry`, the records whose source is this router | The router's downstream edges |
 | `packet_header` | `FabricContext::get_packet_header_config()` | The header type each ring buffer slot starts with |
+| `stream_assignment` | `FabricBuilderContext::get_stream_assignment`, for the router's mesh | The stream id each stream register field must be fed, by its role |
 | `args` | A `RouterArgs` over the `KernelInputs` recorded in `create_kernel` | Every value an argument carries: the shape's counts, credits and stream ids, every field per ERISC, which ERISCs run each channel, the defines; and the check that every argument and define is accounted for |
 | `hal` | `FabricContext`'s HAL | The physical ERISC each RISC runs on, and stream register addresses |
 

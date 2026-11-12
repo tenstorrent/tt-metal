@@ -37,6 +37,9 @@ struct ManifestRouterInputs {
     const manifest::RouterArgs& args;
     // The run's packet header (FabricContext::get_packet_header_config()), which starts every ring buffer slot.
     const PacketHeaderConfig& packet_header;
+    // The router's mesh's stream assignment (FabricBuilderContext::get_stream_assignment), which each stream register
+    // field's stream id is checked against.
+    const StreamAssignment& stream_assignment;
     const tt::tt_metal::Hal& hal;
 };
 

@@ -995,14 +995,14 @@ void check_arch(const json& manifest) {
         }));
 }
 
-// Every stream register under `node`, as (address, path).
+// Every stream register under `node`, with its path.
 void collect_stream_registers(
-    const json& node, const std::string& path, std::vector<std::pair<uint32_t, std::string>>& streams) {
+    const json& node, const std::string& path, std::vector<std::pair<const json*, std::string>>& streams) {
     if (!node.is_object()) {
         return;
     }
     if (node.contains("stream_id")) {
-        streams.emplace_back(node.at("address").get<uint32_t>(), path);
+        streams.emplace_back(&node, path);
         return;
     }
     for (const auto& [key, child] : node.items()) {
@@ -1010,16 +1010,47 @@ void collect_stream_registers(
     }
 }
 
-// Every stream register a router names is in the HAL's register space.
+// The read mask the router reads a stream register with role name `role` under.
+uint32_t get_read_mask_of_role_name(const std::string& role) {
+    if (const auto stream_role = manifest::parse_lower_enum_name<StreamRole>(role)) {
+        return manifest::get_stream_register_read_mask(*stream_role);
+    }
+    const auto scratch_role = manifest::parse_lower_enum_name<manifest::ScratchRole>(role);
+    EXPECT_TRUE(scratch_role.has_value()) << role << " names no stream or scratch role";
+    return scratch_role.has_value() ? manifest::get_stream_register_read_mask(*scratch_role) : 0;
+}
+
+// Every stream register a router names is in the HAL's register space, under the read mask of its role. Every count
+// is active; the ERISC sync is active exactly on a router running two ERISCs, and the context switch exactly where one
+// of its ERISCs context switches.
 void check_router_stream_registers(const std::vector<RouterEntry>& routers) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
-        std::vector<std::pair<uint32_t, std::string>> streams;
-        collect_stream_registers(*entry.router, "", streams);
+        const auto& router = *entry.router;
+        std::vector<std::pair<const json*, std::string>> streams;
+        collect_stream_registers(router, "", streams);
         EXPECT_FALSE(streams.empty());
-        for (const auto& [address, path] : streams) {
+        for (const auto& [stream, path] : streams) {
+            const auto address = stream->at("address").get<uint32_t>();
             EXPECT_TRUE(hal.valid_reg_addr(address)) << path << " at " << address;
+            const auto role = stream->at("role").get<std::string>();
+            EXPECT_EQ(stream->at("read_mask").get<uint32_t>(), get_read_mask_of_role_name(role)) << path;
+            if (manifest::parse_lower_enum_name<StreamRole>(role).has_value()) {
+                EXPECT_TRUE(stream->at("active").get<bool>()) << path;
+            }
+        }
+        const bool two_eriscs = router.at("shape").at("num_active_eriscs").get<uint32_t>() > 1;
+        bool context_switches = false;
+        for (const auto& [risc_key, fields] : router.at("fields").items()) {
+            context_switches = context_switches || fields.at("context_switch_enabled").at("value").get<bool>();
+        }
+        for (const auto& [risc_key, fields] : router.at("fields").items()) {
+            SCOPED_TRACE(risc_key);
+            EXPECT_EQ(fields.at("erisc_sync").at("role"), "multi_risc_teardown_sync");
+            EXPECT_EQ(fields.at("erisc_sync").at("active").get<bool>(), two_eriscs);
+            EXPECT_EQ(fields.at("retrain_sync").at("role"), "eth_retrain_link_sync");
+            EXPECT_EQ(fields.at("retrain_sync").at("active").get<bool>(), context_switches);
         }
     }
 }

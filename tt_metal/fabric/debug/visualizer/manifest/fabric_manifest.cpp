@@ -87,9 +87,11 @@ json make_stream_reg_json(const manifest::content::StreamReg& stream) {
     json out;
     out["stream_id"] = stream.stream_id;
     out["address"] = stream.address;
-    out["value_bits"] = stream.value_bits;
+    out["role"] = std::visit([](auto role) { return lower_enum_name(role); }, stream.role);
+    out["read_mask"] = stream.read_mask;
     out["type"] = stream.type;
     out["multi_sampled"] = make_multi_sampled_json(stream.multi_sampled);
+    out["active"] = stream.active;
     return out;
 }
 
@@ -710,14 +712,40 @@ std::optional<manifest::content::L1> read_optional_arch_area(const JsonValueRead
     return check_arch_area_active(read_l1(value), value);
 }
 
-// The keys make_stream_reg_json writes, out of an object that may hold others.
+// A stream register's role: a StreamRole's name or a ScratchRole's. The two enums share no names.
+manifest::StreamRegisterRole read_stream_register_role(const JsonValueReader& value) {
+    const std::string name = value.read<std::string>();
+    if (const auto stream_role = manifest::parse_lower_enum_name<StreamRole>(name)) {
+        return *stream_role;
+    }
+    if (const auto scratch_role = manifest::parse_lower_enum_name<manifest::ScratchRole>(name)) {
+        return *scratch_role;
+    }
+    value.fail("is \"{}\", which names no stream or scratch role", name);
+}
+
+// The keys make_stream_reg_json writes, out of an object that may hold others. Its read mask is the one its role
+// says, and a register nothing writes can't be multi-sampled.
 manifest::content::StreamReg take_stream_reg_keys(JsonObjectReader& object) {
     manifest::content::StreamReg stream;
     stream.stream_id = object.take<uint32_t>("stream_id");
     stream.address = object.take<uint32_t>("address");
-    stream.value_bits = object.take<uint32_t>("value_bits");
+    stream.role = read_stream_register_role(object.take("role"));
+    const JsonValueReader read_mask = object.take("read_mask");
+    stream.read_mask = read_mask.read<uint32_t>();
+    if (stream.read_mask != manifest::get_stream_register_read_mask(stream.role)) {
+        read_mask.fail(
+            "is {:#x}, but the router reads its role under {:#x}",
+            stream.read_mask,
+            manifest::get_stream_register_read_mask(stream.role));
+    }
     stream.type = take_type_name(object, "type");
     stream.multi_sampled = take_multi_sampled(object);
+    const JsonValueReader active = object.take("active");
+    stream.active = active.read<bool>();
+    if (!stream.active && stream.multi_sampled.has_value()) {
+        active.fail("is false, but the register is multi_sampled, and nothing writes it");
+    }
     return stream;
 }
 

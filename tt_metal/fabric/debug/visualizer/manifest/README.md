@@ -62,7 +62,8 @@ and its ring buffer is fourteen slots, each starting with the run's packet heade
 "ring_buffer": { "address": 100256, "num_elements": 14, "element_size": 4448, "type": "HybridMeshPacketHeaderT<36>" }
 ```
 
-A **stream register** is a word at `address`, whose low `value_bits` bits hold a `type`:
+A **stream register** is a word at `address`, with a `role` saying what it is to the router. Its value is the word
+under `read_mask`, the bits the router reads, and holds a `type`:
 
 ```json
 "free_slots": {
@@ -70,8 +71,11 @@ A **stream register** is a word at `address`, whose low `value_bits` bits hold a
   "kind": "stream_reg",
   "stream_id": 15,
   "address": 4290048256,
-  "value_bits": 17,
-  "type": "unsigned int"
+  "role": "sender_free_slots",
+  "read_mask": 2047,
+  "type": "unsigned int",
+  "multi_sampled": null,
+  "active": true
 }
 ```
 
@@ -206,7 +210,10 @@ is.
 - **Every type the manifest names is one decode can read.** Regions and stream registers are made only for registered
 types, so naming any other type fails the build. The registry also checks at compile time that every name is
 distinct, that each type can be rebuilt from its bytes, that every packet header type fabric can pick is registered,
-and that a stream register's type fits in its word.
+and that a stream register's type fits in its word, with an enum's every value under its role's read mask.
+- **Every stream register is where the stream assignment put it.** The router pass checks each stream register field's
+stream id against the builder's `StreamAssignment` for the field's role, so a register the kernel reads elsewhere fails
+fabric init.
 - **A chip publishes every router its builder initialized**, so a manifest never silently misses a router.
 - **The writer and reader agree on every key.** Each manifest fixture reads the manifest back and writes it again, in
 both fields layouts, and the two must match. The reader is strict, so a key either side has that the other doesn't
@@ -226,10 +233,11 @@ fails, naming what to update:
 | Removed argument | `RouterArgs`: "... reads ..., but ERISC<n> wasn't given it" | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
 | Router pass code reads a new argument | `RouterArgs`: "... reads ..., which no field table reads and k_router_pass_args does not list" | Add it to `k_router_pass_args` |
 | A new type in L1 or a stream register | The build: "The manifest names only registered types" | Add it to `RegisteredTypes` in `fabric_manifest_type_registry.hpp` |
+| A stream register moved to another role's stream, or a new role in a field table | The router pass: "field ... is fed stream id ..., but the stream assignment gives its role ... stream id ...", or "no field table describes a ... stream register" | The field's role in `fabric_manifest_fields.hpp`, or `get_assigned_stream_id` in the router pass |
 | A new packet header template | The build: "A packet header type fabric can pick isn't in PacketHeaderTypes" | `PacketHeaderTypes` in `fabric_manifest_type_registry.hpp` |
 | A registered template whose argument equals its default | The build: "A registered type's name lost a template argument that equals its default" | A `manifest_type_name` specialization next to the existing two |
 | Two registered types with one name in different namespaces | The build: "Two registered types have the same name without their namespaces" | A `manifest_type_name` specialization for one of them |
-| New field category, field kind, Z port role or channel status | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` |
+| New field category, field kind, Z port role, channel status or scratch role | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` |
 | New label key (a key whose value is one of a fixed set of names) | Nothing | A list in `k_vocabulary_lists` (`fabric_manifest_model.hpp`), and the same name in the schema's `vocabulary` |
 | New computed fact | `WriterParserRoundTrip`, once the writer writes it: "... has keys this reader doesn't read" | The model, the router pass or topology pass, the writer, the reader, the tests, the schema, and that pass's doc |
 | A change to the JSON's shape | The schema check, and `WriterParserRoundTrip` | `fabric_manifest_schema.json`, `parse_manifest_json` and [docs/FORMAT.md](docs/FORMAT.md) |

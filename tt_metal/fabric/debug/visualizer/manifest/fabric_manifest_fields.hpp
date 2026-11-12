@@ -49,6 +49,8 @@ struct FieldIndex {
     uint32_t compact = 0;
     uint32_t fabric_position = 0;
     uint32_t vc = 0;
+    // A sender channel's index within its VC.
+    uint32_t channel = 0;
     uint32_t edge = 0;
     // The edge's rank among the router's edges, VC0's before VC1's, which its teardown semaphore is indexed by.
     uint32_t teardown = 0;
@@ -98,26 +100,28 @@ constexpr L1Field register_l1_field(uint32_t num_elements = 1, uint32_t element_
     return {.num_elements = num_elements, .element_size = element_size, .type = get_manifest_type_name<T>()};
 }
 
-// Which register of its stream a stream field reads. The router pass turns the stream id the kernel is fed and the
-// register into the register's address.
-enum class StreamRegister : uint8_t {
-    // The increment-on-write credit or slot count.
-    BUF_SPACE_AVAILABLE,
-    // A plain read-write register.
-    REMOTE_SRC,
-};
-
-// A stream register before the router pass knows its stream id.
+// A stream register before the router pass knows its stream id. The router pass checks the id against the stream
+// assignment for `role`, and turns it and the role's register into the register's address.
 struct StreamRegField {
-    StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
+    // For a sender channel's free slots, the role on VC0 and VC1; the router pass resolves VC2's pinned role.
+    StreamRegisterRole role;
     std::string_view type;
 };
 
-// Registers a stream register `reg` whose value is a T.
+// Registers a stream register whose value, under its role's read mask, is a T. An enum's every value must fit under
+// the mask, or the router could never read it.
 template <typename T>
-constexpr StreamRegField register_stream_field(StreamRegister reg) {
+constexpr StreamRegField register_stream_field(StreamRegisterRole role) {
     static_assert(sizeof(T) <= sizeof(uint32_t), "A stream register holds one word, so its value fits in a uint32_t");
-    return {.reg = reg, .type = get_manifest_type_name<T>()};
+    if constexpr (std::is_enum_v<T>) {
+        const uint32_t read_mask = get_stream_register_read_mask(role);
+        for (const T value : enchantum::values<T>) {
+            if ((static_cast<uint32_t>(value) & ~read_mask) != 0) {
+                throw "A stream register's enum has a value outside the bits its role's read mask keeps";
+            }
+        }
+    }
+    return {.role = role, .type = get_manifest_type_name<T>()};
 }
 
 // A configuration enum's value before the router pass reads it. The router pass names the value with `name_value` and
@@ -227,7 +231,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "erisc_sync",
             .source = "MULTI_RISC_TEARDOWN_SYNC_STREAM_ID",
             .category = LIFECYCLE,
-            .content = register_stream_field<uint32_t>(StreamRegister::REMOTE_SRC),
+            .content = register_stream_field<uint32_t>(ScratchRole::MULTI_RISC_TEARDOWN_SYNC),
             .description = "The register the router's ERISCs sync through at startup and teardown, led by ERISC0. "
                            "Unused when the router runs one ERISC.",
         },
@@ -235,7 +239,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "retrain_sync",
             .source = "ETH_RETRAIN_LINK_SYNC_STREAM_ID",
             .category = LIFECYCLE,
-            .content = register_stream_field<CoordinatedEriscContextSwitchState>(StreamRegister::REMOTE_SRC),
+            .content = register_stream_field<CoordinatedEriscContextSwitchState>(ScratchRole::ETH_RETRAIN_LINK_SYNC),
             .description = "The register the router's ERISCs sync through to retrain the link, led by the ERISC that "
                            "context switches.",
         },
@@ -558,7 +562,7 @@ inline constexpr auto k_sender_channel_fields = [] {
             .key = "free_slots",
             .source = NamedArg{"SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", ArgIndex::FABRIC_POSITION},
             .category = FLOW_CONTROL,
-            .content = register_stream_field<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .content = register_stream_field<uint32_t>(StreamRole::SENDER_FREE_SLOTS),
             .description = "The channel's slots not holding a packet waiting to be sent: the producer takes one per "
                            "packet it writes, and the router returns it as soon as it sends the packet over Ethernet. "
                            "The producer gets its credit back later: at the peer receiver's first-level ack, or when "
@@ -641,8 +645,7 @@ inline constexpr auto k_receiver_channel_fields = [] {
             .source = NamedArg{"DISABLE_RX_CH{}_FORWARDING", ArgIndex::VC},
             .category = KERNEL_PARAMS,
             .content = content::Flag{},
-            .description = "Whether the receiver forwards nothing to sibling routers: it only delivers to this chip. "
-        },
+            .description = "Whether the receiver forwards nothing to sibling routers: it only delivers to this chip. "},
         RouterField{
             .key = "intermesh_ingress",
             .source = NamedArg{"IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", ArgIndex::COMPACT, Emitted::FABRIC_2D},
@@ -692,7 +695,7 @@ inline constexpr auto k_receiver_channel_fields = [] {
             .key = "pkts_sent",
             .source = NamedArg{"TO_RECEIVER_{}_PKTS_SENT_ID", ArgIndex::COMPACT},
             .category = FLOW_CONTROL,
-            .content = register_stream_field<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .content = register_stream_field<uint32_t>(StreamRole::RECEIVER_PKTS_SENT),
             .description = "The packets the peer's sender has sent the channel that the receiver has not taken yet: "
                            "the peer adds one per packet it sends over Ethernet, and the receiver takes one when it "
                            "acks the packet with first-level ack, or else once it has issued the packet's forward or "
@@ -735,7 +738,7 @@ inline constexpr auto k_downstream_edge_fields = [] {
             .key = "free_slots",
             .source = NamedArg{"VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", ArgIndex::VC_AND_EDGE},
             .category = FLOW_CONTROL,
-            .content = register_stream_field<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .content = register_stream_field<uint32_t>(StreamRole::DOWNSTREAM_FREE_SLOTS),
             .description = "The router's view of the free slots in the sender channel the edge lands on: the router "
                            "takes one per packet it forwards, and the sibling returns it once its peer receiver acks "
                            "the packet with first-level ack, or else once the packet's completion group there "

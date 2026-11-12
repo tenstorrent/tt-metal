@@ -45,6 +45,43 @@ enum class MultiSampleRole : uint8_t {
     FABRIC_TELEMETRY,
 };
 
+// The scratch stream registers the router keeps its ERISC syncs in. Each is pinned to one stream
+// (StreamRegAssignments::Scratch), and the router writes it as a whole value.
+enum class ScratchRole : uint8_t {
+    // The ERISC sync at each init and teardown phase (EriscSyncPhase).
+    MULTI_RISC_TEARDOWN_SYNC,
+    // The context switch's state (CoordinatedEriscContextSwitchState).
+    ETH_RETRAIN_LINK_SYNC,
+};
+
+// The stream a scratch role is pinned to.
+constexpr uint32_t get_scratch_stream_id(ScratchRole role) {
+    switch (role) {
+        case ScratchRole::MULTI_RISC_TEARDOWN_SYNC:
+            return StreamRegAssignments::Scratch::multi_risc_teardown_sync_stream_id;
+        case ScratchRole::ETH_RETRAIN_LINK_SYNC: return StreamRegAssignments::Scratch::eth_retrain_link_sync_stream_id;
+    }
+    return k_unused_stream_id;
+}
+
+// What a stream register is to the router: an increment-on-write count the stream assignment placed (StreamRole), read
+// from the stream's space-available register, or a scratch register it pins (ScratchRole), read from the stream's
+// remote-source register.
+using StreamRegisterRole = std::variant<StreamRole, ScratchRole>;
+
+// The bits of a stream register's word the router reads for `role`: a count's under stream_count_mask, the ERISC
+// sync's under k_erisc_sync_mask, and the context switch's whole word.
+constexpr uint32_t get_stream_register_read_mask(const StreamRegisterRole& role) {
+    if (std::holds_alternative<StreamRole>(role)) {
+        return stream_count_mask;
+    }
+    switch (std::get<ScratchRole>(role)) {
+        case ScratchRole::MULTI_RISC_TEARDOWN_SYNC: return k_erisc_sync_mask;
+        case ScratchRole::ETH_RETRAIN_LINK_SYNC: return 0xFFFFFFFF;  // reads all bits
+    }
+    return 0;
+}
+
 // What a field or a typed member holds.
 namespace content {
 
@@ -65,18 +102,21 @@ struct L1 {
     bool active = true;
 };
 
-// A stream register's word. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold
-// other state.
+// A stream register's word. Its value is the word under `read_mask`, read as `type`; bits outside the mask can hold
+// other state the router doesn't read.
 struct StreamReg {
     uint32_t stream_id = 0;
     uint32_t address = 0;
-    // The number of bits the word's value takes up (useful if the desired value in a stream register is only a certain
-    // number of bits).
-    uint32_t value_bits = 0;
+    // What the register is to the router.
+    StreamRegisterRole role = StreamRole::SENDER_FREE_SLOTS;
+    // The bits of the word the router reads (get_stream_register_read_mask).
+    uint32_t read_mask = 0;
     // The type's registered name (fabric_manifest_type_registry.hpp).
     std::string type;
     // Null: capture reads the register once, in its full read. Otherwise it reads it in every round too.
     std::optional<MultiSampleRole> multi_sampled;
+    // False when nothing writes the register in this run: its word is whatever the register held.
+    bool active = true;
 };
 
 struct Number {
@@ -668,6 +708,8 @@ inline constexpr std::tuple k_vocabulary_lists{
     VocabularyList<tt::tt_metal::KernelBuildOptLevel>{"kernel_opt_level"},
     VocabularyList<IntermeshVCMode>{"intermesh_vc_mode"},
     VocabularyList<MultiSampleRole>{"multi_sample_role"},
+    VocabularyList<StreamRole>{"stream_role"},
+    VocabularyList<ScratchRole>{"scratch_role"},
 };
 
 }  // namespace tt::tt_fabric::manifest

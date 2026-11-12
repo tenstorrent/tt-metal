@@ -42,6 +42,7 @@
     "field_kind": { "enum": ["l1", "stream_reg", "number", "flag", "enum"] },
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
     "multi_sample_role": { "enum": ["loop_heartbeat", "fabric_telemetry"] },
+    "scratch_role": { "enum": ["multi_risc_teardown_sync", "eth_retrain_link_sync"] },
     "multi_sampled": {
       "description": "Null when capture reads the region once, in its full read. Otherwise the role of a region capture also reads in every round, which says what its change across the rounds means.",
       "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/multi_sample_role" }]
@@ -215,13 +216,15 @@
         "erisc_processor": { "$ref": "#/$defs/name_list" },
         "kernel_opt_level": { "$ref": "#/$defs/name_list" },
         "intermesh_vc_mode": { "$ref": "#/$defs/name_list" },
-        "multi_sample_role": { "type": "array", "items": { "$ref": "#/$defs/multi_sample_role" }, "uniqueItems": true }
+        "multi_sample_role": { "type": "array", "items": { "$ref": "#/$defs/multi_sample_role" }, "uniqueItems": true },
+        "stream_role": { "$ref": "#/$defs/name_list" },
+        "scratch_role": { "type": "array", "items": { "$ref": "#/$defs/scratch_role" }, "uniqueItems": true }
       },
       "required": [
         "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
         "fabric_topology", "credit_backing", "z_port_role", "edge_capability", "credit_counter_indexed_by",
         "field_category", "field_kind", "channel_status", "erisc_processor", "kernel_opt_level",
-        "intermesh_vc_mode", "multi_sample_role"
+        "intermesh_vc_mode", "multi_sample_role", "stream_role", "scratch_role"
       ],
       "additionalProperties": false
     },
@@ -253,16 +256,31 @@
     },
     "optional_arch_area": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/arch_area" }] },
     "stream_reg_keys": {
-      "description": "A stream register's word at address. Its value is the word's low value_bits bits, read as type; the bits above can hold other state.",
+      "description": "A stream register's word at address. Its value is the word under read_mask, read as type; bits outside the mask can hold other state the router doesn't read.",
       "type": "object",
       "properties": {
         "stream_id": { "$ref": "#/$defs/count" },
         "address": { "$ref": "#/$defs/count" },
-        "value_bits": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "role": {
+          "description": "What the register is to the router: a stream_role (an increment-on-write count the stream assignment placed) or a scratch_role (a scratch register it pins).",
+          "$ref": "#/$defs/name"
+        },
+        "read_mask": {
+          "description": "The bits of the word the router reads.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
         "type": { "$ref": "#/$defs/type_name" },
-        "multi_sampled": { "$ref": "#/$defs/multi_sampled" }
+        "multi_sampled": { "$ref": "#/$defs/multi_sampled" },
+        "active": {
+          "description": "False when nothing writes the register in this run: its word is whatever the register held. A multi-sampled register is always active.",
+          "type": "boolean"
+        }
       },
-      "required": ["stream_id", "address", "value_bits", "type", "multi_sampled"]
+      "required": ["stream_id", "address", "role", "read_mask", "type", "multi_sampled", "active"],
+      "if": { "properties": { "multi_sampled": { "type": "string" } } },
+      "then": { "properties": { "active": { "const": true } } }
     },
     "stream_reg": { "$ref": "#/$defs/stream_reg_keys", "unevaluatedProperties": false },
     "core_register_keys": {
