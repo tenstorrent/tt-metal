@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Semaphores on Keraunos Ethernet cores (CCE), on the two-chip test descriptors in this directory.
+// Semaphores and tile counters on Keraunos Ethernet cores (CCE), on the two-chip test descriptors in this directory.
 // Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock these tests check what the host computes and skip
 // before launch: UMD MockChip reads and writes are no-ops.
 
@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <iterator>
 #include <cstdint>
@@ -36,13 +37,14 @@
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "fabric_fixture.hpp"
+#include "tt_metal/hw/inc/hostdev/cce_spa_routes.h"
 
 namespace tt::tt_metal {
 namespace {
 
 // HSIO 0's global window is 0x1204000000 and CCE SRAM begins 0x02800000 above it
 // (KERAUNOS-HW-FINDINGS Q1, E100 Table 14). Same constant as test_mimir_emu.cpp.
-constexpr uint64_t kHsioGlobalSramBase = 0x1206800000ULL;
+constexpr uint64_t kHsioGlobalSramBase = KERAUNOS_HSIO0_SYSTEM_BASE + 0x02800000ULL;
 
 constexpr uint32_t kCounterSem = 0;
 constexpr uint32_t kStageSem = 1;
@@ -332,6 +334,173 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<uint32_t>& info) {
         return std::string(info.param == 0 ? "LoadAddStore" : "NocSemaphoreInc");
     });
+
+// One LLK tile counter of chip 1's first Keraunos core (the owner, hart 0) takes adds from every other Keraunos core of
+// both chips, by system address, and from hart 1 of the owner's CCE, by its local register address; all start together. The
+// owner's occupancy must equal the sum, with the error flag clear at a capacity of exactly that sum; one more add sets
+// it. RESET then clears the occupancy and the flag. Chip 0 and chip 1 are one Keraunos, so every core is on its own
+// HSIO tile and system addresses reach across the chips.
+TEST(KeraunosTileCounter, CrossTileAdds) {
+    constexpr uint32_t kCounter = 15;  // not the fabric's local-handshake counter (0)
+    constexpr uint32_t kAddsPerAdder = 2000;
+    constexpr uint32_t kOwnerStageSem = 0, kAdderStageSem = 1, kGoSem = 2, kFinishSem = 3, kFirstReadingSem = 4;
+    constexpr uint32_t kNumReadings = 10;
+    constexpr uint32_t kStageArmed = 0x7C000001;
+    constexpr uint32_t kStageDone = 0x7C00000F;
+    constexpr auto kTimeout = std::chrono::minutes(20);
+
+    auto meshes = distributed::MeshDevice::create_unit_meshes({0, 1});
+    ASSERT_EQ(meshes.size(), 2u);
+    std::vector<IDevice*> devices;
+    for (auto& [id, mesh] : meshes) {
+        devices.push_back(&slow_dispatch::physical_device_from_unit_mesh(*mesh));
+        ASSERT_EQ(devices.back()->arch(), tt::ARCH::QUASAR);
+    }
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& chiplet = cluster.get_soc_desc(devices[1]->id()).get_arch_descriptor().get_keraunos();
+    ASSERT_TRUE(chiplet.tile_stride.has_value()) << "Descriptor has no keraunos.tile_stride.";
+
+    enum class Role : uint32_t { Own = 0, AddBySystemAddress = 1, AddToOwnCce = 2 };  // tile_counter_add.cpp arg 0
+    struct Hart {
+        size_t chip;
+        EthCore core;
+        DataMovementProcessor processor;
+        Role role;
+    };
+    std::vector<std::vector<EthCore>> cores = {keraunos_eth_cores(devices[0]), keraunos_eth_cores(devices[1])};
+    ASSERT_FALSE(cores[1].empty()) << "Chip 1's descriptor lists no Keraunos cores.";
+    const EthCore owner = cores[1][0];
+    std::vector<Hart> harts = {
+        {1, owner, DataMovementProcessor::RISCV_0, Role::Own},
+        {1, owner, DataMovementProcessor::RISCV_1, Role::AddToOwnCce}};
+    for (size_t chip = 0; chip < 2; chip++) {
+        for (const auto& core : cores[chip]) {
+            if (core.hsio != owner.hsio) {
+                harts.push_back({chip, core, DataMovementProcessor::RISCV_0, Role::AddBySystemAddress});
+            }
+        }
+    }
+    const uint32_t num_adders = harts.size() - 1;
+    ASSERT_GE(num_adders, 3u) << "Needs adders on at least two tiles other than the owner's.";
+    const uint32_t expected = num_adders * kAddsPerAdder;
+    ASSERT_LT(expected, 1u << 16) << "The occupancy is 16 bits.";
+    const uint64_t posted = cce_tile_counter_posted_system_addr(owner.hsio, *chiplet.tile_stride, owner.cce, kCounter);
+
+    std::array<Program, 2> programs = {CreateProgram(), CreateProgram()};
+    for (const auto& hart : harts) {
+        const auto kernel = CreateKernel(
+            programs[hart.chip],
+            "tests/tt_metal/tt_fabric/keraunos/kernels/tile_counter_add.cpp",
+            hart.core.logical,
+            EthernetConfig{
+                .eth_mode = eth_mode_of(hart.core.type),
+                .noc = hart.processor == DataMovementProcessor::RISCV_1 ? NOC::NOC_1 : NOC::NOC_0,
+                .processor = hart.processor});
+        const std::vector<uint32_t> args = {
+            static_cast<uint32_t>(hart.role),
+            hart.role == Role::AddBySystemAddress ? static_cast<uint32_t>(posted) : kCounter,
+            hart.role == Role::AddBySystemAddress ? static_cast<uint32_t>(posted >> 32) : 0,
+            hart.role == Role::Own ? expected : kAddsPerAdder};
+        SetRuntimeArgs(programs[hart.chip], kernel, hart.core.logical, args);
+        log_info(
+            tt::LogTest,
+            "Tile counter {}: chip {} hsio {} DM{} role {} args {:#x}",
+            kCounter,
+            hart.chip,
+            hart.core.hsio,
+            hart.processor == DataMovementProcessor::RISCV_0 ? 0 : 1,
+            static_cast<uint32_t>(hart.role),
+            fmt::join(args, " "));
+    }
+    for (size_t chip = 0; chip < 2; chip++) {
+        std::vector<CoreCoord> logical;
+        for (const auto& core : cores[chip]) {
+            logical.push_back(core.logical);
+        }
+        const CoreRangeSet all(logical);
+        for (uint32_t id = 0; id < kFirstReadingSem + kNumReadings; id++) {
+            ASSERT_EQ(CreateSemaphore(programs[chip], all, 0, CoreType::ETH), id);
+        }
+        programs[chip].impl().compile(devices[chip]);
+        programs[chip].impl().finalize_offsets(devices[chip]);
+    }
+    const auto sem = [&](const Hart& hart, uint32_t id) {
+        return semaphore_address(devices[hart.chip], programs[hart.chip], hart.core, id);
+    };
+    const auto mesh_of = [&](const Hart& hart) -> distributed::MeshDevice& {
+        return *meshes.at(static_cast<int>(devices[hart.chip]->id()));
+    };
+    if (is_mock()) {
+        GTEST_SKIP() << "Mock: kernels and arguments built. MockChip reads and writes are no-ops, so nothing launches.";
+    }
+    for (size_t chip = 0; chip < 2; chip++) {
+        slow_dispatch::LaunchProgramAsync(*devices[chip], programs[chip], /*force_slow_dispatch=*/false);
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    // Polls semaphore `stage_sem` of each hart in `which` each second until it reads `want`, logging the values read;
+    // a hart that has reached `want` is not read again. False on the deadline.
+    const auto wait_stages = [&](std::vector<Hart> which, uint32_t stage_sem, uint32_t want) {
+        while (true) {
+            std::vector<uint32_t> stages;
+            std::erase_if(which, [&](const Hart& hart) {
+                stages.push_back(read_word(mesh_of(hart), hart.core, sem(hart, stage_sem)));
+                return stages.back() == want;
+            });
+            log_info(tt::LogTest, "Stages: {:#x}", fmt::join(stages, " "));
+            if (which.empty()) {
+                return true;
+            }
+            if (std::chrono::steady_clock::now() > deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    };
+    const Hart& owner_hart = harts[0];
+    const std::vector<Hart> adders(harts.begin() + 1, harts.end());
+    ASSERT_TRUE(wait_stages({owner_hart}, kOwnerStageSem, kStageArmed)) << "The owner never reset its counter.";
+    std::vector<uint32_t> one{1};
+    for (const auto& hart : adders) {
+        slow_dispatch::WriteToL1(mesh_of(hart), hart.core.logical, sem(hart, kGoSem), one, CoreType::ETH);
+    }
+    ASSERT_TRUE(wait_stages(adders, kAdderStageSem, kStageDone)) << "An adder did not finish.";
+    slow_dispatch::WriteToL1(mesh_of(owner_hart), owner.logical, sem(owner_hart, kFinishSem), one, CoreType::ETH);
+    ASSERT_TRUE(wait_stages({owner_hart}, kOwnerStageSem, kStageDone)) << "The owner did not finish.";
+    for (size_t chip = 0; chip < 2; chip++) {
+        slow_dispatch::WaitProgramDone(*devices[chip], programs[chip]);
+    }
+
+    // The readings are consecutive semaphores, one L1 alignment apart: one read.
+    const uint32_t stride_words = MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t);
+    std::vector<uint32_t> block;
+    slow_dispatch::ReadFromL1(
+        mesh_of(owner_hart),
+        owner.logical,
+        sem(owner_hart, kFirstReadingSem),
+        kNumReadings * stride_words * sizeof(uint32_t),
+        block,
+        CoreType::ETH);
+    ASSERT_EQ(block.size(), kNumReadings * stride_words);
+    std::vector<uint32_t> r;
+    for (uint32_t i = 0; i < kNumReadings; i++) {
+        r.push_back(block[i * stride_words]);
+    }
+    log_info(
+        tt::LogTest,
+        "Owner chip 1 hsio {}: occupancy {} (expected {}, {} polls), READ_POSTED {}, error {}, capacity {}; after one "
+        "more add occupancy {} error {}; after RESET occupancy {} error {} capacity {}",
+        owner.hsio, r[0], expected, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]);
+    EXPECT_EQ(r[0], expected) << "occupancy";
+    EXPECT_EQ(r[2], expected) << "READ_POSTED";
+    EXPECT_EQ(r[3], 0u) << "error flag at capacity";
+    EXPECT_EQ(r[4], expected) << "capacity";
+    EXPECT_EQ(r[5], expected + 1) << "occupancy after one more add";
+    EXPECT_NE(r[6], 0u) << "error flag past capacity";
+    EXPECT_EQ(r[7], 0u) << "occupancy after RESET";
+    EXPECT_EQ(r[8], 0u) << "error flag after RESET";
+    EXPECT_EQ(r[9], expected) << "capacity after RESET";
+}
 
 // Opens both chips with FABRIC_1D, checks each master router reached READY_FOR_TRAFFIC, closes them
 // (the teardown writes IMMEDIATELY_TERMINATE) and waits for TERMINATED; twice, so the second open
