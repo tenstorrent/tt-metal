@@ -235,8 +235,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     // x86 toolchain, and neither is the fast-iteration target. Default-off until proven safe on main;
     // the kernel_prewarm tool is invoked explicitly to compile outside the device reservation.
     if (!device_ids.empty() && !cluster_.is_mock_or_emulated()) {
-        const ContextId ctx_id = descriptor_->metal_context().get_context_id();
-        const auto& device_build_env = BuildEnvManager::get_instance(ctx_id).get_device_build_env(*device_ids.begin());
+        const auto& device_build_env = descriptor_->metal_context().build_env_manager().get_device_build_env(*device_ids.begin());
         kernel_prewarm::maybe_launch_prewarm(
             device_build_env.build_env.get_out_kernel_root_path(),
             device_build_env.build_env.get_firmware_binary_root(),
