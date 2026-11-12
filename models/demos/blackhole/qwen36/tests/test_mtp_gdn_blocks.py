@@ -21,6 +21,7 @@ EOS or length cut (a count below the matched drafts) occur. The block ids follow
 
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -36,8 +37,8 @@ from models.demos.blackhole.qwen36.tests.test_gdn_block_state import (
     N_LAYERS,
     _build,
     _decode_flags,
-    _gdn_layers,
     _device_tensors,
+    _gdn_layers,
     _parametrize,
     _prompts,
 )
@@ -50,7 +51,9 @@ class Pair:
     """Qwen36MTPContractForCausalLM (K drafts) and Qwen36ForCausalLM on two copies of the truncated model, with one
     block layout, the same attention block ids per row and state blocks from the plugin's rule."""
 
-    def __init__(self, mesh_device, monkeypatch, K, mode, pool_rows=BMAX, n_layers=N_LAYERS, bmax=BMAX):
+    def __init__(
+        self, mesh_device, monkeypatch, K, mode, pool_rows=BMAX, n_layers=N_LAYERS, bmax=BMAX, spec_sample=False
+    ):
         stub_vllm_if_missing(monkeypatch)
         from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, Qwen36MTPContractForCausalLM
 
@@ -86,7 +89,8 @@ class Pair:
         warm = []
         for cls, kv in ((self.ref, self.kv_ref), (self.spec, self.kv_spec)):
             prefill_kw = dict(kv_cache=kv, can_sample_on_device=False)
-            decode_kw = dict(kv_cache=kv, max_batch_size=self.bmax, num_blocks=self.bpu, can_sample_on_device=False)
+            sample = spec_sample and cls is self.spec  # the MTP class's verify sampler (decode_only device sampling)
+            decode_kw = dict(kv_cache=kv, max_batch_size=self.bmax, num_blocks=self.bpu, can_sample_on_device=sample)
             warm.append((cls, prefill_kw, decode_kw))
         for enable_trace in (False, True):
             for cls, prefill_kw, decode_kw in warm:
@@ -170,10 +174,12 @@ class Pair:
         req["xs"], req["ref_logits"], req["c"] = xs, logits, 0
         return xs
 
-    def verify(self, plan):
+    def verify(self, plan, spec_mode="logits", sampling=None):
         """One verify of every row in ``plan``: row -> (valid drafts v, committed count a). Drafts are the ordinary
         greedy tokens, with draft a (if a <= v) replaced by a wrong token, so the verify's argmax rejects there; the
-        test commits a tokens either way (a below the matched drafts stands for an EOS or length cut)."""
+        test commits a tokens either way (a below the matched drafts stands for an EOS or length cut). With ``sampling``
+        (spec_mode "argmax_ids", a device-sampled step), a sampled row's ids are the device sampler's draws: every
+        draw whose input column follows the ordinary tokens is within the row's top-k of the ordinary logits there."""
         T = self.K + 1
         tokens = torch.zeros(self.bmax, T, dtype=torch.int32)
         pos = torch.full((self.bmax, T), -1, dtype=torch.int32)
@@ -200,14 +206,17 @@ class Pair:
             read_from_device=False,
             num_valid_drafts=nv,
             accepted_counts=acc,
-            spec_mode="logits",
+            spec_mode=spec_mode,
             mamba_state=self.spec_blocks.state(sel, self.bmax),
+            **({} if sampling is None else {"sampling_params": sampling}),
             **_decode_flags(),
         )
+        if sampling is not None:
+            self.check_draws(plan, res, sampling)
         for r, (v, a) in plan.items():
             req = self.rows[r]
             c, n = req["c"], req["n"]
-            for t in range(a):
+            for t in range(a if spec_mode == "logits" else 0):
                 got, want = res.logits[r, t, : self.vocab].float(), req["ref_logits"][c + t]
                 pcc = compute_pcc(got, want)
                 assert pcc > LOGIT_PCC, f"row {r} position {n + t}: verify logits PCC {pcc:.5f} against ordinary decode"
@@ -217,14 +226,31 @@ class Pair:
             want = req["ref_state"][n + a]
             self.check_state(got, want, f"row {r} after {n + a} tokens")
             req["c"], req["n"], req["acc"] = c + a, n + a, a
-            logger.info(f"row {r}: {v} valid drafts, committed {a} at position {n}: logits and GDN state match")
+            checked = "logits" if spec_mode == "logits" else "ids"
+            logger.info(f"row {r}: {v} valid drafts, committed {a} at position {n}: {checked} and GDN state match")
+
+    def check_draws(self, plan, res, sampling):
+        """A sampled row's ids at the columns whose input tokens are the ordinary tokens (before its wrong draft) are
+        within its top-k of the ordinary logits there; a greedy row's are the ordinary argmax (or a near-tie)."""
+        for r, (v, a) in plan.items():
+            req, k = self.rows[r], int(sampling.top_k[r])
+            for t in range(min(a, v + 1)):
+                want, got = req["ref_logits"][req["c"] + t], int(res.argmax_ids[r, t])
+                if float(sampling.temperature[r]) > 0 and k > 1:
+                    top = set(torch.topk(want, k).indices.tolist())
+                    assert got in top or self._near_tie(want), f"row {r} column {t}: draw {got} outside the top-{k}"
+                else:
+                    assert got == int(want.argmax()) or self._near_tie(want), f"row {r} column {t}: id {got}"
 
     def check_state(self, got, want, label):
         """Recurrent state and history of every GDN layer against ordinary decode, PCC per device."""
         u = self.used
         for i in _gdn_layers(self.spec_model):
             for d, ((rec_g, hist_g), (rec_w, hist_w)) in enumerate(zip(got[i], want[i])):
-                for what, a, b in (("recurrent state", rec_g, rec_w), ("history", hist_g[:, 1:, :u], hist_w[:, 1:, :u])):
+                for what, a, b in (
+                    ("recurrent state", rec_g, rec_w),
+                    ("history", hist_g[:, 1:, :u], hist_w[:, 1:, :u]),
+                ):
                     pcc = compute_pcc(a.float(), b.float())
                     self.worst_state_pcc = min(self.worst_state_pcc, pcc)
                     assert pcc >= self.state_pcc, f"{label}: layer {i} {what} PCC {pcc} on device {d}"
@@ -377,7 +403,10 @@ def test_long_prompt_with_narrow_steps(mesh_device, monkeypatch, reset_seeds, en
     K = 3
     pair = Pair(mesh_device, monkeypatch, K, "none", n_layers=int(os.environ.get("QWEN36_PAIR_LAYERS", N_LAYERS)))
     prompts = _prompts(2, 4300, seed=31)
-    first = {0: int(pair.prefill(0, prompts[0].tolist()).argmax()), 2: int(pair.prefill(2, prompts[1][:130].tolist()).argmax())}
+    first = {
+        0: int(pair.prefill(0, prompts[0].tolist()).argmax()),
+        2: int(pair.prefill(2, prompts[1][:130].tolist()).argmax()),
+    }
     for r in (0, 2):
         pair.reference(r, first[r], 40)
     for step in ["n", (K, K + 1), (K, 1), "n", (K, 2), (2, 1), "n", "n", (K, 3), (0, 1), "n"]:
@@ -494,3 +523,24 @@ def test_narrow_step_cost(mesh_device, monkeypatch, reset_seeds, ensure_gc):
         f"Qwen36ForCausalLM {med['ordinary']:.2f} ms per [B, 1] step (median of {steps - 4})"
     )
     assert min(pccs) > 0.95, "a [B, 1] step of the MTP class is far from the ordinary decode step"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize
+@pytest.mark.parametrize("K", [3])
+def test_device_sampled_verify_draws_from_the_target(mesh_device, K, monkeypatch, reset_seeds, ensure_gc):
+    """A device-sampled step (``sampling_params``, spec_ids_are_sampled): row 1 samples (temperature 1, top-k 20,
+    top-p 0.95), row 3 is greedy. Through the whole schedule the sampled row's ids are draws within its top-k of the
+    ordinary logits, the greedy row's ids stay the argmax, and the GDN state of every committed count matches."""
+    pair = Pair(mesh_device, monkeypatch, K, "none", spec_sample=True)
+    steps = _schedule(K)
+    total = sum(a for _, a in steps) + K + 2
+    for r, prompt in zip((1, 3), _prompts(2, 1200, seed=K)):
+        first = int(pair.prefill(r, prompt.tolist()).argmax())
+        pair.reference(r, first, total)
+    sampling = SimpleNamespace(
+        temperature=[0.0, 1.0, 0.0, 0.0], top_k=[1, 20, 1, 1], top_p=[1.0, 0.95, 1.0, 1.0], seed=[None] * 4
+    )
+    for v, a in steps:
+        pair.verify({1: (v, a), 3: (v, a)}, "argmax_ids", sampling)

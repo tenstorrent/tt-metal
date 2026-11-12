@@ -578,6 +578,10 @@ def test_capabilities():
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
     assert issubclass(CLS, Qwen36ForCausalLM)
+    # device sampling: the verify sampler (spec_sample) draws one token per verify column, without penalties or masks
+    assert caps["supports_sample_on_device"] is True and caps["spec_ids_are_sampled"] is True
+    assert caps["max_device_top_k"] == 32 and caps["supports_device_penalties"] is False
+    assert caps["supports_device_grammar"] is False
     for key in Qwen36ForCausalLM.model_capabilities:
         assert key in caps
 
@@ -756,6 +760,44 @@ def test_decode_forward_narrow(gen_eng, tok_shape):
     assert t.tolist() == [[7, -1, -1, -1]] and sp.tolist() == [[10, -1, -1, -1]]
     assert kw["spec_mode"] == "logits" and kw["num_valid_drafts"].tolist() == [0]
     assert kw["accepted_counts"].tolist() == [1] and kw["mamba_state"] is MAMBA_STATE
+
+
+def test_device_sampled_steps_hand_the_sampling_to_the_engine(gen_eng):
+    """A device-sampled step (``sampling_params``) gives the engine the step's sampling. Its verify answers in
+    argmax_ids (the engine puts a sampled row's draws there); its narrow step returns column 0's token [B, 1] int32,
+    and with logprobs asked also the sampled tokens' raw logprobs and ranks, from the step's logits."""
+    gen, eng = gen_eng
+    sp = SimpleNamespace(temperature=[1.0], top_k=[20], top_p=[0.9], seed=[None], enable_log_probs=[False])
+    common = dict(
+        page_table=torch.arange(1, 9, dtype=torch.int32).reshape(1, 8), accepted_counts=torch.ones(1, dtype=torch.int32),
+        mamba_state=MAMBA_STATE, reset_batch=False,
+    )  # fmt: skip
+    out = gen.decode_forward(
+        tokens=torch.tensor([[1, 2, 3, 4]], dtype=torch.int32), start_pos=torch.tensor([[10, 11, 12, 13]]),
+        num_valid_drafts=torch.tensor([3], dtype=torch.int32), spec_mode="argmax_ids", sampling_params=sp, **common,
+    )  # fmt: skip
+    assert out.argmax_ids.tolist() == [[0, 1, 2, 3]] and _last(eng, "decode_forward")[3]["sampling"] is sp
+    narrow = dict(
+        tokens=torch.tensor([7], dtype=torch.int32), start_pos=torch.tensor([10], dtype=torch.int32), **common
+    )
+    out = gen.decode_forward(**narrow, sampling_params=sp)
+    kw = _last(eng, "decode_forward")[3]
+    assert out.tolist() == [[0]] and out.dtype == torch.int32
+    assert kw["spec_mode"] == "argmax_ids" and kw["sampling"] is sp, "no logits are read for a narrow sampled step"
+    sp_lp = SimpleNamespace(**{**vars(sp), "enable_log_probs": [True]})
+    tokens, lp = gen.decode_forward(**narrow, sampling_params=sp_lp)
+    assert _last(eng, "decode_forward")[3]["spec_mode"] == "logits"
+    assert tokens.tolist() == [[0]] and lp.selected_token_ranks.tolist() == [eng.V]
+    assert torch.allclose(lp.sampled_logprobs, torch.tensor([-math.log(eng.V)]))
+
+
+def test_warmup_prepares_the_verify_sampler_on_a_device_sampling_launch(monkeypatch):
+    calls = []
+    eng = SimpleNamespace(prepared=False, captured=False, prepare_decode=lambda: calls.append("prepare"))
+    gen = object.__new__(CLS)
+    monkeypatch.setattr(gen, "_engine", lambda: eng, raising=False)
+    gen.warmup_model_decode(kv_cache=None, enable_trace=False, can_sample_on_device=True)
+    assert eng.sample_on_device is True and calls == ["prepare"]
 
 
 def test_decode_forward_needs_mamba_state(gen_eng, expect_error):

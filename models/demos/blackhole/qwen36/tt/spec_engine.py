@@ -25,6 +25,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.spec_sample import sampling_plan
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -402,6 +403,8 @@ def _device_bytes(t):
 
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
+
+    sample_on_device = False  # the verify sampler is prepared (MTPBlockEngine, a device-sampling launch)
 
     def __init__(self, model, batch_size, draft_len):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
@@ -1154,9 +1157,12 @@ class MTPSpecEngine:
         spec_mode="argmax_ids",
         slot_remap=None,
         mamba_state=None,
+        sampling=None,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
-        validation. ``mamba_state``: the GDN state blocks of the step (MTPBlockEngine only). Returns VerifyResult."""
+        validation. ``mamba_state``: the GDN state blocks of the step (MTPBlockEngine only). ``sampling``: the step's
+        device sampling parameters (the plugin's ``sampling_params``, one entry per row) or None; a row they sample
+        returns the device sampler's draws in place of its argmax ids (spec_sample). Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
@@ -1164,6 +1170,15 @@ class MTPSpecEngine:
             raise ValueError(f"block has {clean.shape[0]} rows, engine has B={self.B}")
         if not bool(active.any()):
             raise ValueError("no active row in the verify block")
+        plan = None
+        if sampling is not None:
+            plan = sampling_plan(sampling, torch.where(active, start0, -1).tolist(), self.T)
+            plan = plan if plan.any_sampled else None
+        if plan is not None and not self.sample_on_device:
+            raise ValueError(
+                "a verify of a device-sampled step needs the verify sampler, which the engine prepares only after "
+                "warmup_model_decode(can_sample_on_device=True)"
+            )
         if slot_remap is not None:
             self.remap_slots(slot_remap)
         self._no_draft = note_withheld_drafts(
@@ -1183,6 +1198,7 @@ class MTPSpecEngine:
             active=active,
             num_valid_drafts=num_valid_drafts,
             **({} if mamba_state is None else {"mamba_state": mamba_state}),
+            **({} if plan is None else {"sample_plan": plan}),
         )
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 
@@ -1673,7 +1689,9 @@ class MTPBlockEngine(MTPSpecEngine):
         self.prefill_recorded = True
 
     def _prepare_verify(self):
-        self.model.prepare_verify_trace(self._prep_pt, self.T, warm_positions=[0] * self.B)
+        self.model.prepare_verify_trace(
+            self._prep_pt, self.T, warm_positions=[0] * self.B, sample=self.sample_on_device
+        )
 
     def capture_decode(self):
         """The base capture, then zero the null block 0: the warm passes wrote GDN state there (every row of a warm
@@ -1734,10 +1752,13 @@ class MTPBlockEngine(MTPSpecEngine):
         active=None,
         num_valid_drafts=None,
         mamba_state=None,
+        sample_plan=None,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
         ``mamba_state``. A row's first verify after its prompt first writes the drafter KV of the prompt's last
-        position. ``accepted_counts`` selects no state. Returns (ids int32 [B, T], logits [B, T, vocab] or None)."""
+        position. ``accepted_counts`` selects no state. Returns (ids int32 [B, T], logits [B, T, vocab] or None).
+        ``sample_plan`` (spec_sample.sampling_plan): each row it samples returns the device sampler's draws instead of
+        its argmax ids."""
         assert self.captured, "verify before capture"
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
@@ -1780,6 +1801,8 @@ class MTPBlockEngine(MTPSpecEngine):
             inactive=(~active).tolist(),
             rope_deltas=list(self._rope_deltas),
         )
+        if sample_plan is not None:
+            kw["sample_plan"] = sample_plan
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
