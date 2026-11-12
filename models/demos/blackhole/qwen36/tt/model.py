@@ -20,6 +20,7 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, with_draws
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -1409,6 +1410,9 @@ class Qwen36Model:
         if getattr(self, "_vfy_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_trace_id)
             self._vfy_trace_id = None
+        if getattr(self, "_vfy_sample_trace_id", None) is not None:
+            ttnn.release_trace(self.mesh_device, self._vfy_sample_trace_id)
+            self._vfy_sample_trace_id = None
 
     @staticmethod
     def _fit_spec_page_table(pt, nb):
@@ -1432,7 +1436,7 @@ class Qwen36Model:
         self.prepare_verify_trace(page_tables, T, warm_positions)
         self.record_verify_trace()
 
-    def prepare_verify_trace(self, page_tables, T, warm_positions):
+    def prepare_verify_trace(self, page_tables, T, warm_positions, sample=False):
         """Allocate and compile everything the verify trace needs without capturing (warmup phase 1);
         record_verify_trace captures it (phase 2); verify_traced replays it.
         Bucket is a fixed B x T (T = len([pending] + drafts) per user, B = max_batch_size users).
@@ -1443,7 +1447,9 @@ class Qwen36Model:
         ``warm_positions``: B absolute positions the two throwaway warmup/capture passes write KV at.
         Capture happens after prompt prefill (so those programs cannot clobber the parked trace), so
         point the writes past each user's prompt frontier; the first real verify overwrites them.
-        Idempotent for the same (B, T, nb); a different key releases any live trace first.
+        ``sample``: also compile the device sampler over the verify's logits (spec_sample.VerifySampler), which
+        record_verify_trace captures as a trace of its own and verify_traced(sample_plan=...) replays.
+        Idempotent for the same (B, T, nb, sample); a different key releases any live trace first.
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
@@ -1474,7 +1480,7 @@ class Qwen36Model:
         # through decode flash as pseudo-users: write all K/V, then one SDPA-decode with per-row
         # cur_pos so row u*T+j attends [0, p_u+j]. Causality is free and the KV scan spreads over
         # the full grid.
-        key = (B, T, nb)
+        key = (B, T, nb, bool(sample))
         if getattr(self, "_vfy_prepared_key", None) == key and getattr(self, "_vfy_token_buf", None) is not None:
             return
         dev = self.device
@@ -1495,6 +1501,7 @@ class Qwen36Model:
             device=dev,
             mesh_mapper=rep,
         )
+        self._vfy_sampler = VerifySampler(dev, B, T, self.vocab_size) if sample else None
         # Positions are staged per replay; they are only allocated here, at the captured width, and
         # re-staged per replay by verify_traced (same convention as the prefill traces).
         # KV is written position-exact (paged_update_cache at absolute slots), not block-aligned.
@@ -1541,8 +1548,7 @@ class Qwen36Model:
             ), f"the GDN verify tables are bound for T = {self.gdn_blocks.verify_tokens}, the verify trace has T = {T}"
             self._vfy_state_idx = self._vfy_conv_sel = None
             self.gdn_blocks.clear_verify_blocks()
-            for t in self._forward_verify_bucket_tp(n_users=B):
-                ttnn.deallocate(t)
+            self._warm_verify_body(B)
             ttnn.synchronize_device(dev)
             self._vfy_att0 = _att0
             self._vfy_prepared_key = key
@@ -1588,14 +1594,23 @@ class Qwen36Model:
         # the capture pass runs in record_verify_trace. Both passes overwrite the ring and the conv window;
         # the spec loop calls dn.seed_spec_state() after capture, which re-initialises token-slot 0 from
         # the live decode state, and the first replay then runs at mi = 0.
-        for t in self._forward_verify_bucket_tp(n_users=B):
-            ttnn.deallocate(t)
+        self._warm_verify_body(B)
         ttnn.synchronize_device(dev)
         self._vfy_att0 = _att0
         self._vfy_prepared_key = key
 
+    def _warm_verify_body(self, B):
+        """One eager pass of the verify body, and of the device sampler over its logits, only to compile their
+        programs before any capture; the outputs are dropped."""
+        outs = self._forward_verify_bucket_tp(n_users=B)
+        if self._vfy_sampler is not None:
+            self._vfy_sampler.body(outs[0])  # writes the sampler's own persistent draws buffer
+        for t in outs:
+            ttnn.deallocate(t)
+
     def record_verify_trace(self):
         """Capture the verify trace over the buffers prepare_verify_trace allocated (warmup phase 2).
+        With ``sample`` prepared, also the sampler trace, which reads the verify trace's logits.
         Idempotent: a live trace is kept."""
         assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
         if getattr(self, "_vfy_trace_id", None) is not None:
@@ -1615,6 +1630,11 @@ class Qwen36Model:
             self._vfy_logits_rm_out,
         ) = self._forward_verify_bucket_tp(n_users=B)
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
+        if self._vfy_sampler is not None:
+            # A trace of its own, replayed only by a verify of a device-sampled step with a sampled row.
+            self._vfy_sample_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._vfy_sampler.body(self._vfy_logits_out)
+            ttnn.end_trace_capture(dev, self._vfy_sample_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
         # L1-fitting split (7, 11, ...) stays legacy.
@@ -1634,7 +1654,9 @@ class Qwen36Model:
             f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
         )
 
-    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None):
+    def verify_traced(
+        self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None, sample_plan=None
+    ):
         """Replay the captured verify trace for B users x T candidates.
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
@@ -1648,6 +1670,9 @@ class Qwen36Model:
         sampler; greedy needs only the in-trace argmax ids). It reads the trace's ROW_MAJOR copy
         (_vfy_logits_rm_out) with no cast, which avoids a host untilize; the sampler converts to
         float32 lazily per row.
+
+        ``sample_plan`` (spec_sample.sampling_plan; the trace must be prepared with ``sample``): each row the plan
+        samples returns the device sampler's draw in place of its argmax id.
 
         ``page_tables``: int32 [B, num_blocks] block tables (array-like; 1-D only for B == 1), one
         row per user. When given, every persistent page-table buffer is re-staged for this replay,
@@ -1667,6 +1692,8 @@ class Qwen36Model:
         """
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
+        if sample_plan is not None and self._vfy_sampler is None:
+            raise ValueError("verify_traced(sample_plan=...) needs a verify trace prepared with sample=True")
         rows = B * T
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
         assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
@@ -1714,13 +1741,19 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
         if self.gdn_blocks is None:
             self._stage_verify_selectors(mi_prev, B, rep)
+        if sample_plan is not None:
+            self._vfy_sampler.stage(sample_plan)
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        if sample_plan is not None:
+            ttnn.execute_trace(dev, self._vfy_sample_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
 
         # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
         # and it is B*T uint32 instead of B*T x vocab floats.
         ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
+        if sample_plan is not None:
+            ids = with_draws(ids[:rows].reshape(B, T), self._vfy_sampler.read(), sample_plan).reshape(-1)
         ids = [int(v) for v in ids[:rows]]
         lt = None
         if read_logits:
