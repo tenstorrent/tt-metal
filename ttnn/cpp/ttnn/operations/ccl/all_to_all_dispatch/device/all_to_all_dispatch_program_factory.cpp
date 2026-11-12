@@ -25,11 +25,13 @@ namespace ttnn::operations::ccl {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -444,11 +446,11 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
         // 0..4 swapped to Buffer*'s for BufferBinding.  Semaphore addresses remain plain
         // uint32_t (stable across cache hits).
         std::vector<uint32_t> writer_runtime_args = {
-            input_tensor.buffer()->address(),     // placeholder
-            indices_tensor.buffer()->address(),   // placeholder
-            mapping_tensor.buffer()->address(),   // placeholder
-            output_tensor.buffer()->address(),    // placeholder
-            metadata_tensor.buffer()->address(),  // placeholder
+            input_tensor.mesh_buffer().address(),     // placeholder
+            indices_tensor.mesh_buffer().address(),   // placeholder
+            mapping_tensor.mesh_buffer().address(),   // placeholder
+            output_tensor.mesh_buffer().address(),    // placeholder
+            metadata_tensor.mesh_buffer().address(),  // placeholder
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             token_range_start,

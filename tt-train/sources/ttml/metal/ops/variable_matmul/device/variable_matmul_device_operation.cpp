@@ -176,7 +176,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         offsets_volume);
     // The dataflow kernels read exactly ONE page of the offsets tensor and index within it, so
     // the {start, end} pair must fall inside page 0. Enforce the documented limitation here.
-    const uint32_t offsets_page_bytes = off.buffer()->page_size();
+    const uint32_t offsets_page_bytes = off.mesh_buffer().page_size();
     TT_FATAL(
         (operation_attributes.offsets_start_index + 2U) * sizeof(uint32_t) <= offsets_page_bytes,
         "variable_matmul: offsets_start_index ({}) + 2 spills past offsets_tensor page 0 ({} bytes); "

@@ -392,7 +392,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingTemperatureScalesLogitsNotNoise) {
 TEST_F(GumbelSampleOpTest, TestSamplingBroadcastPaddingMask) {
     // The padding mask every real caller builds is [1, 1, 1, V] -- ONE row, because which vocab
     // columns are padding does not depend on the token position (see _sample_logits_mask in
-    // generate.py and _build_logits_mask in llama_completer.py). It must apply to every token row.
+    // generate.py). It must apply to every token row.
     //
     // The mask is independent of the BATCH for the same reason one level up: every sequence is
     // decoded by the same lm_head, so the same columns are padding for all of them. kBatch > 1 makes
@@ -450,9 +450,9 @@ TEST_F(GumbelSampleOpTest, TestSamplingBroadcastPaddingMask) {
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingConvertsMismatchedMaskDtype) {
-    // Every in-tree mask builder (build_logits_mask in utils.py, _build_logits_mask in
-    // llama_completer.py, _sample_logits_mask in generate.py) emits a BFLOAT16 mask whatever the
-    // logits dtype, and the composite sample() this op replaced accepted that: ttnn::subtract
+    // Every in-tree mask builder (build_logits_mask in utils.py, _sample_logits_mask in
+    // generate.py) emits a BFLOAT16 mask whatever the logits dtype, and the composite
+    // sample() this op replaced accepted that: ttnn::subtract
     // converted on the fly. The fused op requires matching dtypes, so ttml::metal::gumbel_sample
     // must typecast a mismatched mask before dispatch rather than reject it. Cover both directions
     // and both kernel variants (greedy and sampled): a decoy column that wins unmasked must lose
@@ -1450,7 +1450,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingPreallocatedOutput) {
         ttnn::Shape({kBatch, 1U, kTokens, 1U}),
         device,
         ttnn::Layout::ROW_MAJOR);
-    const auto preallocated_address = preallocated.buffer()->address();
+    const auto preallocated_address = preallocated.mesh_buffer().address();
 
     auto out = ttnn::prim::ttml_gumbel_sample(
         tensor_a,
@@ -1463,7 +1463,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingPreallocatedOutput) {
 
     // Greedy is exact: assert the returned tensor aliases the caller's buffer AND that reading the
     // preallocated tensor itself (not just the returned handle) sees the results.
-    EXPECT_EQ(out.buffer()->address(), preallocated_address) << "output must reuse the preallocated buffer";
+    EXPECT_EQ(out.mesh_buffer().address(), preallocated_address) << "output must reuse the preallocated buffer";
     EXPECT_EQ(ttml::core::to_vector<uint32_t>(out), expected);
     EXPECT_EQ(ttml::core::to_vector<uint32_t>(preallocated), expected) << "samples must land in the caller's tensor";
 }
