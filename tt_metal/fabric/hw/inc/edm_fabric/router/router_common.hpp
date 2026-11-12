@@ -66,6 +66,9 @@ constexpr bool has_vc2 = ACTUAL_VC2_SENDER_CHANNELS > 0;
 // UDM, which is its own mode.
 constexpr bool tensix_mux_mode = fabric_tensix_extension_mux_mode && !udm_mode;
 
+// Every count the router reads under stream_count_mask (fabric_common.h) must fit in the hardware's count.
+static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
+
 // The Ethernet firmware's heartbeat word. While the router runs instead of the base firmware, each loop keeps it moving
 // every HEARTBEAT_INTERVAL rounds, the count in the lower half and UMD's fabric signature in the upper half (the host's
 // contract: hostdevcommon/fabric_common.h).

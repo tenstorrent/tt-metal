@@ -38,14 +38,15 @@ constexpr bool is_teardown_master = MY_ERISC_ID == 0 || NUM_ACTIVE_ERISCS == 1; 
 // waiting for a value that never comes.
 __attribute__((noinline)) void sync_erisc(EriscSyncPhase phase) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
-        const uint32_t start = make_erisc_sync_start(phase);
-        const uint32_t answer = make_erisc_sync_answer(phase);
+        const uint32_t start = make_erisc_sync_value(EriscSyncStep::START, phase);
+        const uint32_t answer = make_erisc_sync_value(EriscSyncStep::ANSWER, phase);
         if constexpr (is_teardown_master) {
             write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(start);
             while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & k_erisc_sync_mask) != answer) {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             }
-            write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
+            write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(
+                static_cast<uint32_t>(EriscSyncStep::IDLE));
         } else {
             while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & k_erisc_sync_mask) != start) {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();

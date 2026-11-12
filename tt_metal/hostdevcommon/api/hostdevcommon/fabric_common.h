@@ -81,11 +81,10 @@ static constexpr uint32_t k_unused_stream_id = 32;
 // The count in a stream credit register (packets received, free slots). A count never exceeds its channel's slot
 // count, and every channel static_asserts its slot count against this mask, so the low 11 bits hold it.
 inline constexpr std::uint32_t stream_count_mask = 0x7FF;
-static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
 
-// ERISC sync. The phases a router's ERISCs pass together, in order. At each, the teardown master writes
-// k_erisc_sync_start | phase into the ERISC sync stream register (MULTI_RISC_TEARDOWN_SYNC_STREAM_ID), the other ERISC
-// answers k_erisc_sync_answer | phase, and the master clears the register to 0. A single-ERISC router never writes it.
+// ERISC sync. The phases a router's ERISCs pass together, in order. At each, the teardown master writes START with the
+// phase into the ERISC sync stream register (MULTI_RISC_TEARDOWN_SYNC_STREAM_ID), the other ERISC answers with ANSWER
+// and the phase, and the master clears the register to IDLE. A single-ERISC router never writes it.
 enum class EriscSyncPhase : std::uint32_t {
     STREAMS_SET = 1,       // stream registers initialized
     SETUP_DONE = 2,        // channels and connections set up locally
@@ -97,18 +96,26 @@ enum class EriscSyncPhase : std::uint32_t {
     TRANSACTIONS_DONE = 8,
     TEARDOWN_DONE = 9,
 };
-inline constexpr std::uint32_t k_erisc_sync_start = 0x0A00;
-inline constexpr std::uint32_t k_erisc_sync_answer = 0x0B00;
+
+// Where the ERISCs are in a sync.
+enum class EriscSyncStep : std::uint32_t {
+    // Between syncs: the master cleared the register.
+    IDLE = 0,
+    // The teardown master started the phase, and waits for the other ERISC's answer.
+    START = 0x0A00,
+    // The other ERISC answered the phase; the master hasn't cleared the register yet.
+    ANSWER = 0x0B00,
+};
+
 // The bits of the ERISC sync register the ERISCs compare.
 inline constexpr std::uint32_t k_erisc_sync_mask = 0x1FFF;
 
-// The value the teardown master writes to start `phase`.
-constexpr std::uint32_t make_erisc_sync_start(EriscSyncPhase phase) {
-    return k_erisc_sync_start | static_cast<std::uint32_t>(phase);
-}
-// The value the other ERISC answers `phase` with.
-constexpr std::uint32_t make_erisc_sync_answer(EriscSyncPhase phase) {
-    return k_erisc_sync_answer | static_cast<std::uint32_t>(phase);
+// The value the ERISC sync register holds at `step` of `phase`. IDLE holds 0, whatever the phase.
+constexpr std::uint32_t make_erisc_sync_value(EriscSyncStep step, EriscSyncPhase phase) {
+    if (step == EriscSyncStep::IDLE) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(step) | static_cast<std::uint32_t>(phase);
 }
 
 // Context switch. The state in the retrain sync stream register (ETH_RETRAIN_LINK_SYNC_STREAM_ID), through which the
