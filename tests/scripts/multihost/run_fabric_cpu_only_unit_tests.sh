@@ -386,7 +386,7 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Physi
 run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
-run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestGenerate*ClusterDescriptorFromFSD"
+run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestGenerate*ClusterDescriptorFromFSD:Cluster.TestNodeTypeArchitectureAndBoardRevision"
 
 fi # unit
 

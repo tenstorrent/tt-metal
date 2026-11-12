@@ -19,6 +19,14 @@ enum class Topology {
     XY_TORUS,  // Both X and Y torus
 };
 
+// Galaxy board revision named by a node type
+enum class BoardRevision {
+    UNSPECIFIED,  // Not a Galaxy, or BH_GALAXY* (revision resolved from the system)
+    WH_GALAXY,
+    BH_GALAXY_REV_AB,
+    BH_GALAXY_REV_C,
+};
+
 // Forward declarations
 // Base class for all node types - allows polymorphic access to node properties
 class NodeBase {
@@ -40,6 +48,10 @@ NodeType get_bh_glx_rev_from_system();
 Topology get_node_type_topology(NodeType node_type);
 
 bool is_torus(NodeType node_type);
+
+// Unlike get_node_type_topology, these never probe the system, so they are safe to use offline.
+Architecture get_node_type_architecture(NodeType node_type);
+BoardRevision get_node_type_board_revision(NodeType node_type);
 
 // Create a node instance (returns base class pointer for polymorphism)
 std::unique_ptr<NodeBase> create_node_instance(NodeType node_type);
