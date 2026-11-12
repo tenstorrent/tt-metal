@@ -136,19 +136,23 @@ def test_load_needs_the_callers_chip(tmp_path, expect_error):
 
 
 def test_encode_writes_every_item_of_a_call():
-    """One encode call with two images of different sizes writes each image's own rows into its slot, all of them, as
-    a call with that image alone does."""
+    """One encode call with two images of different sizes writes each image's header and its own rows into its slot,
+    all of them, as a call with that image alone does."""
     from models.demos.minimax_m3.vision.media import _stub_rows
 
     media = MiniMaxM3Media(CONFIG)
     media.load(None, "", "image", {"stub_embeddings": True})
+    header = memoryview(bytearray(media_format.stored_nbytes(0, 64)))
+    media_format.Header("image").write(header)
     items = [media.prepare("image", rgb(100, 60)), media.prepare("image", rgb(60, 150, seed=1))]
-    together = [memoryview(bytearray(media.stored_nbytes(item))) for item in items]
+    together = [memoryview(bytearray(b"\xff" * media.stored_nbytes(item))) for item in items]
     media.encode(items, together)
     for item, value in zip(items, together):
-        alone = memoryview(bytearray(media.stored_nbytes(item)))
+        alone = memoryview(bytearray(b"\xff" * media.stored_nbytes(item)))
         media.encode([item], [alone])
         assert bytes(value) == bytes(alone)
+        assert media_format.Header.read(value) == media_format.Header("image")
+        assert bytes(value[: len(header)]) == bytes(header)
         assert np.array_equal(media_format.embeddings(value, 64), _stub_rows(item, 64))
 
 
@@ -161,7 +165,7 @@ def test_encode_checks_its_slots_and_state_first(expect_error):
     with expect_error(RuntimeError, "encode before load"):
         media.encode([item], [good])
     media.load(None, "", "image", {"stub_embeddings": True})
-    row = media_format.stored_nbytes(1, 64)
+    row = media_format.stored_nbytes(2, 64) - media_format.stored_nbytes(1, 64)
     for size in (media.stored_nbytes(item) + row, media.stored_nbytes(item) - row):  # one row more, one row less
         with expect_error(ValueError, "needs"):
             media.encode([item, item], [good, memoryview(bytearray(size))])

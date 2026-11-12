@@ -152,9 +152,9 @@ def test_vision_media_load_and_encode(mesh_device, device_params, vision_referen
     """The media module runs the encoder as the service calls it, on a chip opened with the media module's
     device_params as the service opens it: load() from a checkpoint directory (on that chip, which close() leaves
     open) with a 224x224 warm-up, which compiles programs; prepare() of an RGB image that resizes to 224x224 (h16w16);
-    encode() into a stored value, which compiles none. The value holds the image's n_tokens rows, bit for bit the
-    encoder's own forward of the prepared pixels with the weights load_vision_state_dict reads, at PCC >= 0.9998
-    against the reference."""
+    encode() into a stored value, which compiles none. The value holds the image's header and then its n_tokens
+    rows, bit for bit the encoder's own forward of the prepared pixels with the weights load_vision_state_dict
+    reads, at PCC >= 0.9998 against the reference."""
     from transformers import MiniMaxM3VLConfig
 
     reference = vision_reference(NUM_LAYERS)
@@ -169,12 +169,13 @@ def test_vision_media_load_and_encode(mesh_device, device_params, vision_referen
         assert cache_entries > 0, "load's warm-up compiled no program"
         item = media.prepare("image", _noise_pixels(230, 230))
         assert item.pixels.shape == (224, 224, 3), item.pixels.shape
-        value = memoryview(bytearray(media.stored_nbytes(item)))
+        value = memoryview(bytearray(b"\xff" * media.stored_nbytes(item)))
         media.encode([item], [value])
         assert mesh_device.num_program_cache_entries() == cache_entries, "encode compiled a program the warm-up had not"
     finally:
         media.close()
 
+    assert media_format.Header.read(value) == media_format.Header("image"), "encode wrote no image header"
     rows = media_format.embeddings(value, HIDDEN)
     assert rows.shape == (item.n_tokens, HIDDEN), rows.shape
     stored = torch.from_numpy(rows.copy()).view(torch.bfloat16)

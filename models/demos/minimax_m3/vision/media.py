@@ -4,9 +4,9 @@
 """MiniMax-M3 media module for the encoder service: image checks, resize, token expansion and stored values.
 
 load builds the TT vision encoder (encoder.py) on the chip that the service gives it, and encode writes each image's
-vision tokens into its stored value. With the encoder config's model_options.stub_embeddings, encode writes
-deterministic stub embeddings instead and no chip is used. Only load imports ttnn, so a process that only prepares
-media runs without it.
+stored value: the media kind header, then the image's vision tokens. With the encoder config's
+model_options.stub_embeddings, encode writes deterministic stub embeddings instead and no chip is used. Only load
+imports ttnn, so a process that only prepares media runs without it.
 """
 
 import gc
@@ -181,7 +181,8 @@ class MiniMaxM3Media:
             self._encoder = encoder
 
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
-        """Write each item's stored value into its slot in out: the item's vision tokens, bf16 [n_tokens, hidden].
+        """Write each item's stored value into its slot in out: format.Header("image"), then the item's vision tokens,
+        bf16 [n_tokens, hidden].
 
         Raises ValueError for a slot that is not stored_nbytes(item) bytes before it writes into any slot. The slots of
         a call that raises hold no defined value: the caller must not use them. If the chip work fails, encode frees
@@ -196,7 +197,6 @@ class MiniMaxM3Media:
         with self._lock:
             if not (self._stub or self._encoder is not None):
                 raise RuntimeError("encode before load, or after close")
-            # TODO: replace the stub embeddings with the vision encoder.
             for item, buf in zip(items, out):
                 media_format.Header("image").write(buf)
                 rows = media_format.embeddings(buf, self.hidden)
