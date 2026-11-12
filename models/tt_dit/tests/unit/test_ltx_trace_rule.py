@@ -6,9 +6,15 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+from loguru import logger
+
+import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...pipelines.ltx import pipeline_ltx
 from ...pipelines.ltx.pipeline_ltx import LTXPipeline
 from ...pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from ...pipelines.ltx.pipeline_ltx_one_stage import LTXOneStagePipeline
@@ -78,3 +84,55 @@ def test_encoder_pair_traces_only_with_a_traced_resident_pipeline(
         register_exclusions=lambda module, *others: None,
     )
     assert pair._encoder_trace is encoder_trace
+
+
+def _create(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> tuple[dict, list[str]]:
+    monkeypatch.setattr(ttnn.device, "is_blackhole", lambda: True)
+    monkeypatch.setattr(pipeline_ltx, "CCLManager", lambda *args, **kwargs: None)
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        built = LTXPipeline.create_pipeline(
+            SimpleNamespace(shape=(4, 8)), pipeline_class=lambda **constructor_kwargs: constructor_kwargs, **kwargs
+        )
+    finally:
+        logger.remove(sink)
+    return built, messages
+
+
+def test_create_pipeline_takes_the_deprecated_keyword_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    built, messages = _create(monkeypatch, dynamic_load=False, traced=True)
+    assert (built["offload_weights"], built["trace"]) == (False, True)
+    assert "dynamic_load" not in built
+    assert "traced" not in built
+    assert [("`dynamic_load` is deprecated" in m, "`traced` is deprecated" in m) for m in messages] == [
+        (True, False),
+        (False, True),
+    ]
+
+
+def test_a_deprecated_dynamic_load_overrides_the_mesh_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    built, _ = _create(monkeypatch, dynamic_load=True)
+    assert (built["offload_weights"], built["trace"]) == (True, False)
+
+
+def test_create_pipeline_defaults_and_new_names_log_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    built, messages = _create(monkeypatch)
+    assert (built["offload_weights"], built["trace"]) == (False, False)
+    built, more = _create(monkeypatch, offload_weights=False, trace=True)
+    assert (built["offload_weights"], built["trace"]) == (False, True)
+    assert messages == more == []
+
+
+@pytest.mark.parametrize("kwargs", [{"traced": True, "trace": False}, {"dynamic_load": True, "offload_weights": False}])
+def test_a_deprecated_name_that_contradicts_the_new_one_raises(monkeypatch: pytest.MonkeyPatch, kwargs: dict) -> None:
+    with pytest.raises(TypeError, match="pass only"):
+        _create(monkeypatch, **kwargs)
+
+
+def test_deprecated_names_still_meet_the_trace_rule() -> None:
+    kwargs = {"dynamic_load": True, "traced": True}
+    offload_weights = pipeline_ltx._renamed_keyword(kwargs, "dynamic_load", "offload_weights", None)  # noqa: SLF001
+    trace = pipeline_ltx._renamed_keyword(kwargs, "traced", "trace", None)  # noqa: SLF001
+    with pytest.raises(ValueError, match=_RULE):
+        LTXPipeline(None, None, None, offload_weights=offload_weights, trace=trace)
