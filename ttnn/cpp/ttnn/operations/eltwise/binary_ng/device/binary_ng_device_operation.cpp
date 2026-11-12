@@ -384,6 +384,17 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             dtype_b);
     }
 
+    if (attributes.binary_op_type == BinaryOpType::SUB &&
+        (input_tensor_a.dtype() == DataType::UINT8 || input_tensor_a.dtype() == DataType::INT8)) {
+        const auto output_dtype =
+            output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
+        TT_FATAL(
+            output_dtype == input_tensor_a.dtype(),
+            "Output dtype {} must match the input dtype {} for 8-bit subtract",
+            output_dtype,
+            input_tensor_a.dtype());
+    }
+
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {

@@ -94,6 +94,7 @@ def _to_device(torch_tensor, device, layout=ttnn.TILE_LAYOUT):
     )
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
@@ -107,7 +108,7 @@ def _to_device(torch_tensor, device, layout=ttnn.TILE_LAYOUT):
         (torch.Size([5]), torch.Size([1])),
     ],
 )
-def test_binary_sub_uint8(device, a_shape, b_shape):
+def test_binary_sub_uint8(device, a_shape, b_shape, layout):
     if a_shape == b_shape == torch.Size([256, 256]):
         values = torch.arange(0, 256, dtype=torch.int32)
         torch_input_tensor_a = values.reshape(256, 1).expand(256, 256).to(torch.uint8).contiguous()
@@ -119,7 +120,9 @@ def test_binary_sub_uint8(device, a_shape, b_shape):
     expected = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
     assert expected.dtype == torch.uint8
 
-    result = ttnn.subtract(_to_device(torch_input_tensor_a, device), _to_device(torch_input_tensor_b, device))
+    result = ttnn.subtract(
+        _to_device(torch_input_tensor_a, device, layout), _to_device(torch_input_tensor_b, device, layout)
+    )
     assert result.dtype == ttnn.uint8
     assert torch.equal(ttnn.to_torch(result), expected)
 
@@ -146,6 +149,23 @@ def test_binary_sub_uint8_overflow_scalar(device, expect_error, scalar):
     a = _to_device(torch.zeros((1, 1, 32, 32), dtype=torch.uint8), device)
     with expect_error(RuntimeError, r"cannot represent the scalar"):
         ttnn.subtract(a, scalar)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint16, ttnn.bfloat16])
+def test_binary_sub_uint8_wider_out_dtype(device, expect_error, output_dtype):
+    a = _to_device(torch.zeros((1, 1, 32, 32), dtype=torch.uint8), device)
+    b = _to_device(torch.zeros((1, 1, 32, 32), dtype=torch.uint8), device)
+    with expect_error(RuntimeError, r"must match the input dtype"):
+        ttnn.subtract(a, b, dtype=output_dtype)
+
+
+def test_binary_sub_uint8_inplace(device):
+    torch.manual_seed(1)
+    torch_input_tensor_a = torch.randint(0, 256, (1, 1, 64, 64), dtype=torch.int32).to(torch.uint8)
+    torch_input_tensor_b = torch.randint(0, 256, (1, 1, 64, 64), dtype=torch.int32).to(torch.uint8)
+    a = _to_device(torch_input_tensor_a, device)
+    ttnn.subtract_(a, _to_device(torch_input_tensor_b, device))
+    assert torch.equal(ttnn.to_torch(a), torch.sub(torch_input_tensor_a, torch_input_tensor_b))
 
 
 BCAST_SHAPES = [

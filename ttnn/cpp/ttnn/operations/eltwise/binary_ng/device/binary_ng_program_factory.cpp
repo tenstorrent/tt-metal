@@ -674,6 +674,12 @@ void for_each_core_runtime_args(
             operation_attributes.scalar.value(), int_fill ? value_dtype : DataType::FLOAT32, false);
     }
     // Scalar operand (no b): goes to the writer (tile path) or reader (row-major path); 0 when b is a tensor.
+    // An 8-bit sub packs its scalar as INT32 and reads the 8-bit tensor as a zero-extended byte since the
+    // result is masked with & 0xFF. For example, int8 -5 - (-5):
+    //   1. The scalar -5 is packed as 0xFFFFFFFB.
+    //   2. The tensor value -5 is read as the byte 0xFB, which is 251.
+    //   3. The sub computes 251 - (-5) = 256.
+    //   4. The mask & 0xFF turns 256 into 0.
     const uint32_t packed_scalar =
         b.has_value()
             ? 0u
