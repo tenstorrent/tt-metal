@@ -113,6 +113,13 @@ struct MinimalMatmulStridedReduceScatterAsyncInputs {
 
     /* Fused concatenation: the second in0 source (suffix K-tiles). */
     const std::optional<const Tensor> mm_optional_input_tensor = std::nullopt;
+
+    /* Gate tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW), optional. When set, addcmul_input_tensor2 is a small
+       expanded table [R, N/ring_size] (R a multiple of 32) and the gate of output tile row r is table tile row
+       map[r]: the RS reader reads gate tile (map[r], c) instead of (r, c). ROW_MAJOR uint32 / int32 [1, 1, 1, T],
+       one page, T >= M / 32 (the fused norm's affine_tile_row_map). Bit-identical to a full per-token gate built
+       from the same table rows. */
+    const std::optional<const Tensor> addcmul_tile_row_map = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

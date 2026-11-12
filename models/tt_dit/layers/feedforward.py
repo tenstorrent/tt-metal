@@ -169,6 +169,7 @@ class ParallelFeedForward(Module):
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
         mmrs_config=None,
+        addcmul_b_tile_row_map: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -179,7 +180,9 @@ class ParallelFeedForward(Module):
         `default_block_size`, `force_transpose` and the frozen ff1 config go to ff1 only, as in `forward`;
         `ff2_compute_kernel_config` (default: `compute_kernel_config`) goes to ff2 only, and `mmrs_config` is
         ff2's frozen fused MM+RS blocking.
+        `addcmul_b_tile_row_map`: see `RowParallelLinear.forward_fused_addcmul` (forwarded only when given).
         """
+        map_kwargs = {} if addcmul_b_tile_row_map is None else {"addcmul_b_tile_row_map": addcmul_b_tile_row_map}
         ff1_out = self.ff1(
             x,
             compute_kernel_config=compute_kernel_config,
@@ -201,4 +204,5 @@ class ParallelFeedForward(Module):
             compute_kernel_config=ff2_config,
             use_persistent_buffer=use_persistent_buffer,
             mmrs_config=mmrs_config,
+            **map_kwargs,
         )

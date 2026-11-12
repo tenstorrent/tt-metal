@@ -88,7 +88,10 @@ build_ring_strided_reduce_scatter_async_program_artifacts(
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,  // residual a [M, D/tp]
     const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,  // gate b [1, D/tp]
     // Caller-owned scratch for the per-MM-core progress counters (fused MM->RS signaling only): uint32
-    const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
+    // Optional tile-row map for the addcmul gate (b): gate tile (r, c) is read from tile (map[r], c) of a small
+    // expanded table instead of a full per-token [M, D/tp] gate. ROW_MAJOR uint32 / int32, one page, >= M/32 entries.
+    const std::optional<const Tensor>& addcmul_b_tile_row_map = std::nullopt);
 
 // Cache-hit refresh (ring): rewrites the three kernels' common runtime args, nothing per core.
 // slice_Ht is the reduce-scattered height in tiles (the activations', not the windowed MM output's).
@@ -103,6 +106,8 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     const Tensor& output,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_a = std::nullopt,
-    const std::optional<const Tensor>& addcmul_b = std::nullopt);
+    const std::optional<const Tensor>& addcmul_b = std::nullopt,
+    // Written to the reader common arg addcmul_b_map when given.
+    const std::optional<const Tensor>& addcmul_b_tile_row_map = std::nullopt);
 
 }  // namespace ttnn

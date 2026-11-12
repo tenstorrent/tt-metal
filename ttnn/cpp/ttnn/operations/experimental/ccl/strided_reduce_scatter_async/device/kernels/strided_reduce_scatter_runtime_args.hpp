@@ -18,7 +18,8 @@ struct Reader {
     static constexpr uint32_t semaphore_1 = 4;  // out-ready semaphore, forward direction
     static constexpr uint32_t addcmul_a = 5;
     static constexpr uint32_t addcmul_b = 6;
-    static constexpr uint32_t count = 7;
+    static constexpr uint32_t addcmul_b_map = 7;  // gate tile-row map (ADDCMUL_B_TILE_ROW_MAP); 0 without it
+    static constexpr uint32_t count = 8;
 };
 
 struct Writer {

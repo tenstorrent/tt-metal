@@ -48,6 +48,17 @@ def onehot_identity(rows: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     return bf16_tensor(F.pad(torch.eye(rows), (0, width - rows)), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
+_GATE_MAP_LOGGED: set[tuple[bool, bool]] = set()
+
+
+def _log_gate_map_once(*, to_out: bool, ff2: bool) -> None:
+    """One line per distinct (to_out, ff2) gate-map outcome, only when the switch is on."""
+    if os.environ.get("MINIMAX_H3_MK_S4_GATE_TILEROW", "0") != "1" or (to_out, ff2) in _GATE_MAP_LOGGED:
+        return
+    _GATE_MAP_LOGGED.add((to_out, ff2))
+    print(f"[MINIMAX_H3_MK_S4] gates via the tile-row map: to_out={to_out} ff2={ff2}", flush=True)
+
+
 class MiniMaxH3TransformerBlock(Module):
     """One MiniMax-H3 block: pre-norm self-attention and SwiGLU feed-forward, each modulated by
     AdaLN parameters selected *per row* of the packed sequence.
@@ -171,6 +182,11 @@ class MiniMaxH3TransformerBlock(Module):
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
+        # MINIMAX_H3_MK_S4_GATE_TILEROW=1 (gate tile-row map, default off): when the forward has a tile-row map,
+        # the two gates are built like the norms' scale / shift -- `selector @ table`, a few tile rows -- instead
+        # of the per-token `onehot @ table` [S_local, hidden_local], and the fused to_out / ff2 MM + RS read gate
+        # tile (map[r], c) of that table. Bit-identical (the same bf16 table rows).
+        self._s4_gate_tilerow = os.environ.get("MINIMAX_H3_MK_S4_GATE_TILEROW", "0") == "1"
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
         # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
@@ -374,6 +390,14 @@ class MiniMaxH3TransformerBlock(Module):
         def norm_modulation(param: int) -> ttnn.Tensor:
             return modulation(param) if tilerow is None else self._gather_rows(tables[param], tilerow[1])
 
+        # Gate tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW): a gate goes through the tile-row map only where the
+        # fused MM + RS reads it (it is a table of tile rows there, not a per-token tensor); every other path keeps
+        # the per-token gate.
+        gate_map_on = self._s4_gate_tilerow and tilerow is not None
+        attn_gate_map = (
+            tile_map if gate_map_on and self.attn.row_parallel_gate_fusable(spatial_1BND.padded_shape[-2]) else None
+        )
+
         # 1. Modulated self-attention. The (1 + scale) and shift are handed to the norm as a per-token
         # dynamic weight and bias, so the fused norm op applies the modulation itself rather than the
         # block following it with a separate multiply and add. The gated residual is one addcmul
@@ -394,7 +418,8 @@ class MiniMaxH3TransformerBlock(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             addcmul_residual=residual,
-            addcmul_gate=modulation(_GATE_MSA),
+            addcmul_gate=modulation(_GATE_MSA) if attn_gate_map is None else norm_modulation(_GATE_MSA),
+            **({} if attn_gate_map is None else {"addcmul_gate_tile_row_map": attn_gate_map}),
         )
 
         # 2. Modulated feed-forward.
@@ -437,10 +462,11 @@ class MiniMaxH3TransformerBlock(Module):
                 # registered at the point of use rather than at construction. Idempotent and cheap.
                 register_mmrs_config(*ff2_shape, core_grid)
         if fused:
+            _log_gate_map_once(to_out=attn_gate_map is not None, ff2=gate_map_on)
             return self.ff.forward_fused_addcmul(
                 normed,
                 residual,
-                modulation(_GATE_MLP),
+                norm_modulation(_GATE_MLP) if gate_map_on else modulation(_GATE_MLP),
                 compute_kernel_config=lofi.compute_config("ff1", self.mm_compute_kernel_config),
                 ff2_compute_kernel_config=lofi.compute_config("ff2", self.mm_compute_kernel_config),
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
@@ -448,7 +474,9 @@ class MiniMaxH3TransformerBlock(Module):
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
                 mmrs_config=self._mmrs_pin,
                 **self._ff1_kwargs(normed),
+                **({"addcmul_b_tile_row_map": tile_map} if gate_map_on else {}),
             )
+        _log_gate_map_once(to_out=attn_gate_map is not None, ff2=False)
         ff_out = self.ff(
             normed,
             compute_kernel_config=lofi.compute_config("ff1", self.mm_compute_kernel_config),

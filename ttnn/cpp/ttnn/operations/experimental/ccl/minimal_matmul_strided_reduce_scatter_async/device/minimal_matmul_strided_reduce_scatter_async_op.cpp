@@ -35,7 +35,8 @@ ttsl::hash::hash_t spec_without_rows(const OptionalTensor& tensor) {
 
 // Shared by the miss and hit validators so a call that built the program is never refused on a
 // later hit. Folded tile rows: rows past M are never read, so a and a full b may be taller.
-void validate_addcmul_rows(uint32_t M, const Tensor& a, const Tensor& b) {
+void validate_addcmul_rows(
+    uint32_t M, const Tensor& a, const Tensor& b, const std::optional<const Tensor>& b_tile_row_map) {
     const uint32_t a_rows = operations::common::folded_rows(a);
     const uint32_t b_rows = operations::common::folded_rows(b);
     TT_FATAL(
@@ -44,7 +45,18 @@ void validate_addcmul_rows(uint32_t M, const Tensor& a, const Tensor& b) {
         M,
         a_rows,
         a.logical_shape());
-    if (b.logical_shape()[-2] <= 1) {
+    if (b_tile_row_map.has_value()) {
+        // Gate tile-row map: b is a small table indexed per output tile row; the map needs one entry per tile row.
+        TT_FATAL(
+            b_tile_row_map->padded_shape()[-1] >= M / tt::constants::TILE_HEIGHT,
+            "addcmul_tile_row_map has {} entries, the output has {} tile rows",
+            b_tile_row_map->padded_shape()[-1],
+            M / tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            a.physical_volume() == a.padded_shape()[-2] * a.padded_shape()[-1],
+            "addcmul_tile_row_map supports a single batch of rows, got addcmul_input_tensor1 {}",
+            a.padded_shape());
+    } else if (b.logical_shape()[-2] <= 1) {
         // A [..., 1, N] gate is broadcast from tile row 0 (ADDCMUL_B_BROADCAST), so it cannot carry one per batch.
         TT_FATAL(
             b_rows == tt::constants::TILE_HEIGHT,
@@ -80,6 +92,7 @@ void validate_operands_on_device(const MinimalMatmulStridedReduceScatterAsyncInp
     check_optional(tensor_args.mm_optional_input_tensor, "mm_optional_input_tensor");
     check_optional(tensor_args.addcmul_input_tensor1, "addcmul_input_tensor1");
     check_optional(tensor_args.addcmul_input_tensor2, "addcmul_input_tensor2");
+    check_optional(tensor_args.addcmul_tile_row_map, "addcmul_tile_row_map");
     check_optional(tensor_args.optional_rs_intermediate_tensor, "optional_rs_intermediate_tensor");
     check_optional(tensor_args.optional_rs_output_tensor, "optional_rs_output_tensor");
     check_optional(tensor_args.mm_progress_counters, "mm_progress_counters");
@@ -118,7 +131,10 @@ ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
         spec_without_rows(tensor_args.optional_rs_output_tensor),
         spec_without_rows(tensor_args.bias),
         spec_without_rows(tensor_args.addcmul_input_tensor1),
-        spec_without_rows(tensor_args.addcmul_input_tensor2),
+        // With a gate tile-row map the reader compiles the table's tile-row count in, so b keeps its rows.
+        tensor_args.addcmul_tile_row_map.has_value() ? full_spec(tensor_args.addcmul_input_tensor2)
+                                                     : spec_without_rows(tensor_args.addcmul_input_tensor2),
+        full_spec(tensor_args.addcmul_tile_row_map),
         b_broadcast,
         attributes.fused_ternary_scalar.has_value(),
         spec_without_rows(tensor_args.mm_optional_input_tensor),
@@ -163,7 +179,11 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_hit(
             M);
     }
     if (attributes.fused_ternary_scalar.has_value()) {
-        validate_addcmul_rows(M, tensor_args.addcmul_input_tensor1.value(), tensor_args.addcmul_input_tensor2.value());
+        validate_addcmul_rows(
+            M,
+            tensor_args.addcmul_input_tensor1.value(),
+            tensor_args.addcmul_input_tensor2.value(),
+            tensor_args.addcmul_tile_row_map);
     }
 }
 
@@ -240,7 +260,35 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             "addcmul_input_tensor2 width ({}) must match the RS output width N/ring_size ({})",
             tb.logical_shape()[-1],
             N_rs);
-        validate_addcmul_rows(M, ta, tb);
+        validate_addcmul_rows(M, ta, tb, tensor_args.addcmul_tile_row_map);
+        if (tensor_args.addcmul_tile_row_map.has_value()) {
+            // Gate tile-row map: gate tile (r, c) is read from tile (map[r], c) of a small expanded table b.
+            const auto& map = tensor_args.addcmul_tile_row_map.value();
+            TT_FATAL(
+                map.dtype() == DataType::UINT32 || map.dtype() == DataType::INT32,
+                "addcmul_tile_row_map must be UINT32 or INT32, got {}",
+                map.dtype());
+            TT_FATAL(map.layout() == Layout::ROW_MAJOR, "addcmul_tile_row_map must be ROW_MAJOR, got {}", map.layout());
+            TT_FATAL(
+                map.physical_volume() == map.padded_shape()[-1],
+                "addcmul_tile_row_map must be a single row [1, 1, 1, T], got {}",
+                map.padded_shape());
+            TT_FATAL(
+                map.buffer()->num_pages() == 1u,
+                "addcmul_tile_row_map must occupy one buffer page (the reader loads a single page), got {}",
+                map.buffer()->num_pages());
+            TT_FATAL(
+                tb.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
+                    tb.physical_volume() == tb.padded_shape()[-2] * tb.padded_shape()[-1],
+                "with addcmul_tile_row_map, addcmul_input_tensor2 must be a single-batch table [R (multiple of {}), "
+                "N/ring_size], got {}",
+                tt::constants::TILE_HEIGHT,
+                tb.padded_shape());
+        }
+    } else {
+        TT_FATAL(
+            !tensor_args.addcmul_tile_row_map.has_value(),
+            "addcmul_tile_row_map needs the addcmul inputs (it maps the gate's rows)");
     }
 
     // Caller-owned RS buffers: same width/dtype/layout as the op would allocate, at least M rows
@@ -585,7 +633,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& mm_progress_counters,
     std::optional<uint32_t> mm_window_blocks,
     const std::optional<const Tensor>& mm_credit_counters,
-    const std::optional<const Tensor>& mm_optional_input_tensor) {
+    const std::optional<const Tensor>& mm_optional_input_tensor,
+    const std::optional<const Tensor>& addcmul_tile_row_map) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -634,7 +683,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         addcmul_input_tensor2,
         mm_progress_counters,
         mm_credit_counters,
-        mm_optional_input_tensor};
+        mm_optional_input_tensor,
+        addcmul_tile_row_map};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

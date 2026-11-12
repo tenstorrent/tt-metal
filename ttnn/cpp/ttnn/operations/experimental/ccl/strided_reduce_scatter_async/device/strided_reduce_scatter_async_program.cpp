@@ -256,7 +256,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
-    const std::optional<const Tensor>& mm_progress_counters) {
+    const std::optional<const Tensor>& mm_progress_counters,
+    const std::optional<const Tensor>& addcmul_b_tile_row_map) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -454,6 +455,20 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             df,
             l1_scratch_cb_page_size_bytes);
     }
+    // Gate through a tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW): the reader loads the map's single page
+    // once and reads gate tile (map[row], col) from a small expanded table. Without a map nothing here changes.
+    const bool addcmul_b_mapped = fuse_rs_addcmul && addcmul_b_tile_row_map.has_value();
+    const uint32_t addcmul_b_map_cb_index = tt::CB::c_in7;
+    if (addcmul_b_mapped) {
+        const uint32_t map_page_bytes = addcmul_b_tile_row_map->buffer()->aligned_page_size();
+        push_scratch_cb(
+            program,
+            sender_worker_core_range_set,
+            addcmul_b_map_cb_index,
+            map_page_bytes,
+            tt::DataFormat::UInt32,
+            map_page_bytes);
+    }
 
     [[maybe_unused]] bool input_is_sharded = input_tensor.is_sharded();  // input always via TensorAccessorArgs
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
@@ -477,7 +492,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         // Non-broadcast gate: b has full rows (per-token), element-wise multiply.
         // Broadcast gate: b has 1 row per tile, broadcast across acc's rows.
         auto b_logical_shape = addcmul_input_tensor2->logical_shape();
-        if (b_logical_shape[-2] <= 1) {
+        if (addcmul_b_mapped) {
+            // Reader-only: the gate tiles land in the b CB exactly as before, so compute is unchanged.
+            reader_compute_defines["ADDCMUL_B_TILE_ROW_MAP"] = "1";
+        } else if (b_logical_shape[-2] <= 1) {
             reader_compute_defines["ADDCMUL_B_BROADCAST"] = "1";
             reduce_compute_defines["ADDCMUL_B_BROADCAST"] = "1";
         }
@@ -707,6 +725,12 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         sender_reader_compile_args.push_back(addcmul_b_cb_index);
         tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor1->buffer()).append_to(sender_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor2->buffer()).append_to(sender_reader_compile_args);
+        if (addcmul_b_mapped) {
+            sender_reader_compile_args.push_back(addcmul_b_map_cb_index);
+            sender_reader_compile_args.push_back(
+                addcmul_input_tensor2->padded_shape()[-2] / tt::constants::TILE_HEIGHT);
+            tt::tt_metal::TensorAccessorArgs(addcmul_b_tile_row_map->buffer()).append_to(sender_reader_compile_args);
+        }
     }
 
     std::string sender_reader_kernel_path =
@@ -728,7 +752,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     static_assert(
         ReaderCrta::slice_Ht == 0 && ReaderCrta::input == 1 && ReaderCrta::intermediate == 2 &&
         ReaderCrta::semaphore_0 == 3 && ReaderCrta::semaphore_1 == 4 && ReaderCrta::addcmul_a == 5 &&
-        ReaderCrta::addcmul_b == 6 && ReaderCrta::count == 7);
+        ReaderCrta::addcmul_b == 6 && ReaderCrta::addcmul_b_map == 7 && ReaderCrta::count == 8);
     KernelDescriptor::RTArgList reader_common_args;
     reader_common_args.reserve(ReaderCrta::count);
     reader_common_args.push_back(slice_Ht);  // smuggled-rta-ok: runtime row count, re-applied on cache hit
@@ -742,6 +766,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                                       // re-applied on cache hit
     push_optional_buffer(reader_common_args, fuse_rs_addcmul ? addcmul_input_tensor1->buffer() : nullptr);
     push_optional_buffer(reader_common_args, fuse_rs_addcmul ? addcmul_input_tensor2->buffer() : nullptr);
+    push_optional_buffer(reader_common_args, addcmul_b_mapped ? addcmul_b_tile_row_map->buffer() : nullptr);
     program.kernels[reader_kernel_id].emplace_common_runtime_args(reader_common_args);
 
     // Writer
@@ -1006,7 +1031,8 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     const Tensor& output,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_a,
-    const std::optional<const Tensor>& addcmul_b) {
+    const std::optional<const Tensor>& addcmul_b,
+    const std::optional<const Tensor>& addcmul_b_tile_row_map) {
     using ReaderCrta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Reader;
     using WriterCrta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Writer;
     using ReduceCrta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Reduce;
@@ -1020,6 +1046,9 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     if (addcmul_a.has_value() && addcmul_b.has_value()) {
         reader_args[ReaderCrta::addcmul_a] = addcmul_a->mesh_buffer().address();
         reader_args[ReaderCrta::addcmul_b] = addcmul_b->mesh_buffer().address();
+        if (addcmul_b_tile_row_map.has_value()) {
+            reader_args[ReaderCrta::addcmul_b_map] = addcmul_b_tile_row_map->mesh_buffer().address();
+        }
     }
 
     auto& writer_args = GetCommonRuntimeArgs(program, artifacts.writer_kernel_id);

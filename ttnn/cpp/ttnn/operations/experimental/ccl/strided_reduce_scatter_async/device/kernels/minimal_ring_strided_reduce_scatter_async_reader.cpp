@@ -168,6 +168,9 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_RS_ADDCMUL
+#ifdef ADDCMUL_B_TILE_ROW_MAP
+    const address_t addcmul_b_map_address = get_common_arg_val<address_t>(Crta::Reader::addcmul_b_map);
+#endif
     const address_t addcmul_a_address = get_common_arg_val<address_t>(Crta::Reader::addcmul_a);
     const address_t addcmul_b_address = get_common_arg_val<address_t>(Crta::Reader::addcmul_b);
 
@@ -189,6 +192,27 @@ void kernel_main() {
     auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address);
     CircularBuffer cb_addcmul_a(addcmul_a_cb);
     CircularBuffer cb_addcmul_b(addcmul_b_cb);
+#ifdef ADDCMUL_B_TILE_ROW_MAP
+    // Gate through a tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW): b is a small expanded table [b_table_Ht tiles,
+    // slice_Wt] and gate tile (row, col) is its tile (map[row], col): bit-identical to reading a full per-token gate
+    // whose tile row `row` equals table tile row map[row] (the fused norm's AFFINE_TILE_ROW_MAP contract).
+    constexpr uint32_t ct_offset_b = addcmul_b_tensor_args.num_compile_time_args();
+    constexpr uint32_t ct_idx_b_map = ct_idx_addcmul_base + 2 + ct_offset_a + ct_offset_b;
+    constexpr uint32_t addcmul_b_map_cb = get_compile_time_arg_val(ct_idx_b_map);
+    constexpr uint32_t addcmul_b_table_Ht = get_compile_time_arg_val(ct_idx_b_map + 1);
+    constexpr auto addcmul_b_map_args = TensorAccessorArgs<ct_idx_b_map + 2>();
+    const auto addcmul_b_map_addrgen = TensorAccessor(addcmul_b_map_args, addcmul_b_map_address);
+    CircularBuffer cb_addcmul_b_map(addcmul_b_map_cb);
+    noc_obj.async_read(
+        addcmul_b_map_addrgen,
+        CoreLocalMem<uint8_t>(cb_addcmul_b_map.get_write_ptr()),
+        addcmul_b_map_addrgen.get_aligned_page_size(),
+        {.page_id = 0},
+        {});
+    noc_obj.async_read_barrier();
+    volatile tt_l1_ptr uint32_t* addcmul_b_tile_row_map =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addcmul_b_map.get_write_ptr());
+#endif
     // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
     // b tile index (broadcast):     batch * slice_Wt + col_in_slice  (b has 1 row per batch)
     // b tile index (non-broadcast): same as a  (b has full N rows per batch)
@@ -378,7 +402,11 @@ void kernel_main() {
                                     if (is_final_ring_step) {
                                         const uint32_t a_tile_idx =
                                             b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
-#ifdef ADDCMUL_B_BROADCAST
+#if defined(ADDCMUL_B_TILE_ROW_MAP)
+                                        const uint32_t b_gate_idx =
+                                            b * (addcmul_b_table_Ht * slice_Wt) +
+                                            addcmul_b_tile_row_map[slice_row] * slice_Wt + col_in_slice;
+#elif defined(ADDCMUL_B_BROADCAST)
                                         const uint32_t b_gate_idx = b * slice_Wt + col_in_slice;
 #else
                                         const uint32_t b_gate_idx =

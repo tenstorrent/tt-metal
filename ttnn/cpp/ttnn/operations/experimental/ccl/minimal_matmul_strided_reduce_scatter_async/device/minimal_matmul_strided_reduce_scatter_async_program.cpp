@@ -80,7 +80,8 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
         output_tensor.at(2),
         operation_attributes.fused_ternary_scalar,
         tensor_args.addcmul_input_tensor1,
-        tensor_args.addcmul_input_tensor2);
+        tensor_args.addcmul_input_tensor2,
+        tensor_args.addcmul_tile_row_map);
 
     // Matmul kernels (addcmul is fused in the RS, not here).
     MinimalMatmulProgramFactory::shared_variables_t mm_kernels{
@@ -228,7 +229,9 @@ FusedProgram minimal_matmul_strided_reduce_scatter_async_program(
     /* Caller-owned per-MM-core progress counter scratch shared across MMRS programs. */
     const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
     /* Fused concat (concat-free): second in0 source (suffix half of K; input_tensor is the prefix). */
-    const std::optional<const Tensor>& mm_optional_input_tensor = std::nullopt) {
+    const std::optional<const Tensor>& mm_optional_input_tensor = std::nullopt,
+    /* Gate tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW) for the addcmul gate (RS reader only). */
+    const std::optional<const Tensor>& addcmul_tile_row_map = std::nullopt) {
     tt::tt_metal::ProgramDescriptor program{};
 
     // Derive matmul geometry parameters for the RS factory.
@@ -295,7 +298,8 @@ FusedProgram minimal_matmul_strided_reduce_scatter_async_program(
         fused_ternary_scalar,
         addcmul_input_tensor1,
         addcmul_input_tensor2,
-        mm_progress_counters);
+        mm_progress_counters,
+        addcmul_tile_row_map);
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND
@@ -402,7 +406,9 @@ tt::tt_metal::WorkloadDescriptor MinimalMatmulStridedReduceScatterAsyncProgramFa
             /* Shared MM->RS progress counter scratch */
             tensor_args.mm_progress_counters,
             /* Fused concat: second in0 source */
-            tensor_args.mm_optional_input_tensor);
+            tensor_args.mm_optional_input_tensor,
+            /* Gate tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW) */
+            tensor_args.addcmul_tile_row_map);
 
         auto park = [&](const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& mesh_buffer) {
             if (!mesh_buffer) {

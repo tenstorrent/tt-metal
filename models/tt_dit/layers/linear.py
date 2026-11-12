@@ -717,6 +717,7 @@ class RowParallelLinear(Module):
         dtype=None,
         use_persistent_buffer: bool = True,
         mmrs_config=None,
+        addcmul_b_tile_row_map: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
@@ -730,7 +731,11 @@ class RowParallelLinear(Module):
         extra CCL ops entirely.
 
         ``mmrs_config`` is a frozen ``FusedMMRSConfig`` that bypasses the shape-keyed table and rules.
+        ``addcmul_b_tile_row_map`` (optional): a tile-row map (the fused norm's adaLN map); ``addcmul_b`` is then the
+        small expanded table and output tile row r takes its gate from table tile row map[r] (bit-identical).
         """
+        # Only forward the map when given, so the default call is unchanged.
+        map_kwargs = {} if addcmul_b_tile_row_map is None else {"addcmul_tile_row_map": addcmul_b_tile_row_map}
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
@@ -798,6 +803,7 @@ class RowParallelLinear(Module):
             dtype=dtype,
             mm_progress_counters=self.ccl_manager.get_mm_progress_counters_buffer(),
             mm_credit_counters=self.ccl_manager.get_mm_credit_counters_buffer() if use_l1_handoff else None,
+            **map_kwargs,
         )
         if needs_reshape:
             output = ttnn.squeeze(output, 0)

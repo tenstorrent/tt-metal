@@ -1099,7 +1099,18 @@ class MiniMaxH3Attention(Module):
             out = out_bf16
         return out
 
-    def _to_out_row_parallel(self, spatial_1BND, addcmul_residual, addcmul_gate) -> ttnn.Tensor:
+    def row_parallel_gate_fusable(self, rows: int) -> bool:
+        """Whether to_out will run the fused row-parallel MM + RS + addcmul for `rows` padded rows, i.e. whether a
+        tile-row-mapped gate (MINIMAX_H3_MK_S4_GATE_TILEROW) can be used: only that op reads the gate through a map."""
+        if not self.to_out_row_parallel:
+            return False
+        k = self.inner_dim // self.parallel_config.tensor_parallel.factor
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        return has_row_parallel_mmrs_config(rows, k, self.hidden_size, core_grid)
+
+    def _to_out_row_parallel(
+        self, spatial_1BND, addcmul_residual, addcmul_gate, addcmul_gate_tile_row_map=None
+    ) -> ttnn.Tensor:
         """Local heads [1, 1, N, inner / tp] @ row shard [inner / tp, hidden] -> TP reduce-scatter on hidden.
 
         With the gated residual and a resolved blocking (mmrs_config) it is one fused op computing
@@ -1112,6 +1123,9 @@ class MiniMaxH3Attention(Module):
             m, k = x.padded_shape[-2], x.padded_shape[-1]
             core_grid = self.mesh_device.compute_with_storage_grid_size()
             if has_row_parallel_mmrs_config(m, k, self.hidden_size, core_grid):
+                map_kwargs = (
+                    {} if addcmul_gate_tile_row_map is None else {"addcmul_b_tile_row_map": addcmul_gate_tile_row_map}
+                )
                 return self.to_out.forward_fused_addcmul(
                     x,
                     addcmul_residual,
@@ -1119,7 +1133,11 @@ class MiniMaxH3Attention(Module):
                     compute_kernel_config=lofi.compute_config("to_out", self.mm_compute_kernel_config),
                     dtype=ttnn.bfloat16,
                     use_persistent_buffer=self.use_persistent_ccl_buffers,
+                    **map_kwargs,
                 )
+        if addcmul_gate_tile_row_map is not None:
+            # The gate is a tile-row table here, not a per-token tensor: only the fused op can read it.
+            raise ValueError("a tile-row-mapped gate needs the fused row-parallel to_out (row_parallel_gate_fusable)")
         out = self.to_out(
             x,
             compute_kernel_config=lofi.compute_config("to_out", self.mm_compute_kernel_config),
@@ -1141,6 +1159,7 @@ class MiniMaxH3Attention(Module):
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
         cu_window_seqlens: ttnn.Tensor | None = None,
+        addcmul_gate_tile_row_map: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
@@ -1154,10 +1173,14 @@ class MiniMaxH3Attention(Module):
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
         cu_window_seqlens: cumulative block-diagonal window boundaries `[0, ..., N]` (1-D int device
             tensor), plain-SDPA (non-ring) path only.
+        addcmul_gate_tile_row_map: gate tile-row map (`MINIMAX_H3_MK_S4_GATE_TILEROW`): `addcmul_gate` is the small
+            expanded gate table and this is the adaLN tile-row map; only the fused row-parallel to_out takes it
+            (`row_parallel_gate_fusable`).
 
         Returns the attention output with the same distribution as the input.
         """
         assert (addcmul_residual is None) == (addcmul_gate is None), "addcmul residual/gate come as a pair"
+        assert addcmul_gate_tile_row_map is None or addcmul_gate is not None, "a gate map needs the gate table"
         assert (
             cu_window_seqlens is None or not self.use_ring
         ), "cu_window_seqlens is only for the plain-SDPA (non-ring) path"
@@ -1303,7 +1326,11 @@ class MiniMaxH3Attention(Module):
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
         if self.to_out_row_parallel:
-            return self._to_out_row_parallel(spatial_1BND, addcmul_residual, addcmul_gate)
+            return self._to_out_row_parallel(
+                spatial_1BND, addcmul_residual, addcmul_gate, addcmul_gate_tile_row_map=addcmul_gate_tile_row_map
+            )
+        if addcmul_gate_tile_row_map is not None:
+            raise ValueError("a tile-row-mapped gate needs the fused row-parallel to_out (row_parallel_gate_fusable)")
 
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP
         # rebuilds the full inner_dim in canonical order for to_out -- fused into the matmul when
