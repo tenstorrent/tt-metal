@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Python mirror of the form llk_pack_block takes per cell (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h), checked against the header.
+Python mirror of the form llk_pack_block takes per cell (tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_block.h), checked against the header.
 
 A block takes the per-tile pack (main's code, T), the plain or closed block that programs the output (B) or the block with the W offset (W). The form tables hold one row per output
 class (tiles of 16x16, 16x32, 8x32, 4x32 and 1x32, Bfp8_b and Bfp8, Bfp4_b and Bfp2_b, Bfp4 and Bfp2, 4 byte datums, the other plain formats) and one column per DEST width and sync, from the tt-llk crossover sweeps.
@@ -16,6 +16,10 @@ import re
 API = (
     pathlib.Path(__file__).resolve().parents[4]
     / "hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h"
+)
+BLOCK = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / "tt_llk_blackhole/llk_lib/llk_pack_block.h"
 )
 ALT = pathlib.Path(__file__).resolve().parents[2] / "sources/pack_block_alt_test.cpp"
 CLASSES = (
@@ -348,7 +352,7 @@ def _masks(src, name):
 
 
 def test_header_tables_match_mirror():
-    src = API.read_text()
+    src = BLOCK.read_text()
     assert _table(src, "llk_pack_init_form") == INIT_FORM
     assert _table(src, "llk_pack_reconf_form") == RECONF_FORM
     assert _table(src, "llk_pack_next_form") == NEXT_FORM
@@ -441,7 +445,7 @@ def test_pack_thread_sfpu_inits_set_the_pack_sfpu_context():
 
 
 def test_header_logic_matches_mirror():
-    src = " ".join(API.read_text().split())
+    src = " ".join(BLOCK.read_text().split())
     assert (
         "const std::uint32_t column = (DST_SYNC_MODE == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);"
         in src
