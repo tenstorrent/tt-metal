@@ -255,11 +255,13 @@ def _yuv_planar_d2h(
         out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
         out_row = out_hw + 2 * out_uv
 
-        if out is None:
-            out = np.empty((T, out_row), dtype=np.uint8)
-        elif out.shape != (T, out_row) or out.dtype != np.uint8 or not out.flags.c_contiguous:
-            raise ValueError(f"out must be C-contiguous uint8 of shape {(T, out_row)}, got {out.shape} {out.dtype}")
-        out_t = torch.from_numpy(out)
+        # A new name: assigning `out` here would make it local to the whole closure, hiding the caller's buffer.
+        frame = out
+        if frame is None:
+            frame = np.empty((T, out_row), dtype=np.uint8)
+        elif frame.shape != (T, out_row) or frame.dtype != np.uint8 or not frame.flags.c_contiguous:
+            raise ValueError(f"out must be C-contiguous uint8 of shape {(T, out_row)}, got {frame.shape} {frame.dtype}")
+        out_t = torch.from_numpy(frame)
         y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
         u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
         v_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw + out_uv)
@@ -288,7 +290,7 @@ def _yuv_planar_d2h(
         for f in futures:
             f.result()
 
-        return out
+        return frame
 
     if defer:
         return _host_half
