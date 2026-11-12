@@ -653,7 +653,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 "other CBs ({} bytes). Use a smaller blocking (T_out_block={}, H_out_block={}, W_out_block={}, "
                 "C_in_block={}, C_out_block={}).",
                 shard_bytes,
-                l1_prefetch_max_bytes,
+                plan.l1_prefetch_max_bytes,
                 config.T_out_block,
                 config.H_out_block,
                 config.W_out_block,

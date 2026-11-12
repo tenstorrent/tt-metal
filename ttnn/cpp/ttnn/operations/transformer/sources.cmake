@@ -17,9 +17,6 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sdpa_device_operation.cpp
     sdpa/device/sdpa_perf_model.cpp
     sdpa/device/sdpa_program_factory.cpp
-    sdpa/device/neighborhood_plan.cpp
-    sdpa/device/neighborhood_sdpa_device_operation.cpp
-    sdpa/device/neighborhood_sdpa_program_factory.cpp
     sdpa/sdpa.cpp
     sdpa/device/sparse_sdpa_device_operation.cpp
     sdpa/device/sparse_sdpa_program_factory.cpp
@@ -43,6 +40,9 @@ set(TTNN_OP_TRANSFORMER_SRCS
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_device_operation.cpp
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_program_factory.cpp
     fused_recurrent_gated_delta_rule/fused_recurrent_gated_delta_rule.cpp
+    sdpa/device/neighborhood_plan.cpp
+    sdpa/device/neighborhood_sdpa_device_operation.cpp
+    sdpa/device/neighborhood_sdpa_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

@@ -106,6 +106,7 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
         /*sub_device_id=*/std::nullopt,
         kernel_config_val,
         norm_type,
+        /*preserve_rope_rounding=*/false,
         row_capacity);
 
     const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor);
