@@ -517,8 +517,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // matmul_pack_tile_rt).
 #if defined(ARCH_BLACKHOLE) && !defined(RUNTIME_FORMATS)
 #if __has_include("llk_pack_block.h")
-// the kernel's matmul API trait (the PR's pack context; main has none)
+// the API traits of a ttnn matmul kernel (the PR's pack contexts; main has none): a matmul header, and compute_kernel_api.h's pack-thread SFPU init
 #define PACK_API_SHIM_MATMUL
+#define PACK_API_SHIM_SFPU
 #endif
 #include "pack_api_shim.h"
 #define MATMUL_PACK_SHIM 1
