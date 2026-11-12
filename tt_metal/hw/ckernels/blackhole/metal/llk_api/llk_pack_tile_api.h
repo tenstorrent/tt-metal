@@ -841,9 +841,14 @@ __attribute__((always_inline)) inline char llk_pack_block_form(
     }
     const std::uint32_t row = llk_pack_block_class(output_id);
     const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;
+    // Context 0 is not behind matmul math, whatever the K says.
+    const auto& words_0 = llk_pack_form_words<is_fp32_dest_acc_en, 0>.w;
     const auto& words = llk_pack_form_words<is_fp32_dest_acc_en, matmul_kt>.w;
     const auto& words_mm = llk_pack_form_words_mm<is_fp32_dest_acc_en, matmul_kt>.w;
-    const std::uint32_t code = ((ctx == 0 ? words[0][state][row] : (ctx == 2 ? words[1][state][row] : words_mm[0][state][row])) >> (2 * count)) & 3;
+    const std::uint32_t code =
+        ((ctx == 0 ? words_0[0][state][row] : (ctx == 2 ? words[1][state][row] : words_mm[0][state][row])) >>
+         (2 * count)) &
+        3;
     return code == 0 ? 'T' : (code == 1 ? 'B' : 'W');
 }
 
@@ -866,12 +871,12 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
     }
 }
 
-// The contexts a block can pack in: 0 without the K, 1 and 2 only in a kernel with a matmul API, 2 only with a
-// pack-thread SFPU header too.
+// The contexts a block can pack in: 0 always, 1 and 2 only in a kernel with a matmul API, 2 only with a pack-thread
+// SFPU header too.
 template <std::uint32_t matmul_kt>
 constexpr bool llk_pack_context_reach(const std::uint32_t ctx) {
     constexpr bool matmul = llk_pack_matmul_kernel<matmul_kt>();
-    return ctx == 0 ? !matmul || matmul_kt == 0 : (ctx == 1 ? matmul : matmul && llk_pack_sfpu_kernel<matmul_kt>());
+    return ctx == 0 || (ctx == 1 ? matmul : matmul && llk_pack_sfpu_kernel<matmul_kt>());
 }
 
 // Counts at which some output of the kernel packs per tile in some state or reachable context (bit n - 1, above 16 the
@@ -881,6 +886,7 @@ template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>
 struct llk_pack_per_tile_counts_t {
     std::uint32_t counts;
     constexpr llk_pack_per_tile_counts_t() : counts(0) {
+        const auto& words_0 = llk_pack_form_words<is_fp32_dest_acc_en, 0>.w;
         const auto& words = llk_pack_form_words<is_fp32_dest_acc_en, matmul_kt>.w;
         const auto& words_mm = llk_pack_form_words_mm<is_fp32_dest_acc_en, matmul_kt>.w;
         for (std::uint32_t i = 0; i < sizeof(pack_dst_format); i++) {
@@ -895,7 +901,7 @@ struct llk_pack_per_tile_counts_t {
             }
             const std::uint32_t row = llk_pack_class_tab.row[i];
             for (std::uint32_t state = 0; state < 3; state++) {
-                const std::uint32_t w[3] = {words[0][state][row], words_mm[0][state][row], words[1][state][row]};
+                const std::uint32_t w[3] = {words_0[0][state][row], words_mm[0][state][row], words[1][state][row]};
                 for (std::uint32_t c = 0; c < 3; c++) {
                     for (std::uint32_t bit = 0; bit < 16 && llk_pack_context_reach<matmul_kt>(c); bit++) {
                         if (((w[c] >> (2 * bit)) & 3) == 0) {

@@ -721,11 +721,10 @@ inline void _llk_pack_block_closed_(
 }
 
 // Byte-wise destination write (rmw_dest): three RMWCIB instead of SETDMAREG, STALLWAIT, WRCFG, SETDMAREG, DMANOP.
-// Call after _llk_pack_init_ and any program that replaces the MOP: it sets bit 31 once and leaves Z to the PACRs.
+// Sets bit 31 once; no Z reset, every pack leaves Z at 0 (per tile and closed by SETADCZW, the plain block by its ADDR_MOD).
 template <bool bit31_set = false>
 inline void _llk_pack_rmw_dest_init_()
 {
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
     // bit31_set: the full-sync _llk_pack_dest_init_ already set bit 31 and no pack program clears it.
     if constexpr (!bit31_set)
     {
