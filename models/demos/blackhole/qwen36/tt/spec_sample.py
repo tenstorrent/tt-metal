@@ -134,11 +134,12 @@ def sampling_plan(sampling_params, positions, T, fresh_seed=_fresh_seed):
 
 
 def with_draws(ids, draws, plan):
-    """``ids`` [B, T] with each sampled row's draw in place of its argmax id."""
-    ids = torch.as_tensor(ids).clone()
+    """``ids`` [B, T] with each sampled row's draw in place of its argmax id, as int64."""
+    # The verify's argmax reads back as torch.uint32, which has no index_put.
+    ids = torch.as_tensor(ids).to(torch.int64, copy=True)
     B, T = ids.shape
     flat = ids.reshape(-1)
-    draws = torch.as_tensor(draws).reshape(-1).to(ids.dtype)
+    draws = torch.as_tensor(draws).reshape(-1).to(torch.int64)
     rows = torch.tensor(plan.sampled[: B * T], dtype=torch.bool)
     flat[rows] = draws[: B * T][rows]
     return flat.reshape(B, T)

@@ -130,8 +130,10 @@ def test_the_plan_refuses_what_the_sampler_cannot_draw(expect_error):
 
 def test_draws_replace_the_sampled_rows_ids_only():
     plan = sampling_plan(_params(temperature=[1.0, 0.0], top_k=[5, 1]), [10, 20], 2)
-    ids = torch.tensor([[1, 2], [3, 4]])
-    assert with_draws(ids, torch.arange(100, 132), plan).tolist() == [[100, 101], [3, 4]]
+    ids = torch.tensor([[1, 2], [3, 4]], dtype=torch.uint32)  # the dtype of the device argmax readback
+    out = with_draws(ids, torch.arange(100, 132), plan)
+    assert out.dtype == torch.int64 and out.tolist() == [[100, 101], [3, 4]]
+    assert ids.tolist() == [[1, 2], [3, 4]], "the caller's ids are not written"
 
 
 def test_sampled_logprobs_are_raw_log_softmax_and_rank():
