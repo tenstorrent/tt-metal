@@ -222,8 +222,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         spec carries the geometry and the gathered layouts rather than only this rank's tensors.
         """
         from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout
-        from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-        from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import (
             KdaTableSpec,
             build_and_serialize_kv_chunk_table,
@@ -260,12 +259,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         kda = None
         if sum(stage["count"] for stage in recurrent_layout) > 0:
             slabs = getattr(kv_caches, "kda_states", None)
-            geometry = KdaContractGeometry.from_kda_config(
-                kimi_k3_kda_config(),
-                mesh_shape=tuple(self.config.mesh_shape),
-                sp_axis=self.config.sp_axis,
-                tp_axis=self.config.tp_axis,
-            )
+            # The one K3 geometry builder, shared with the slab allocation, so the published layout is the
+            # one the slabs were allocated with.
+            geometry = kimi_k3_kda_geometry(self.config.mesh_shape, self.config.sp_axis, self.config.tp_axis)
             if slabs is not None and slabs.geometry != geometry:
                 raise RuntimeError(f"KDA slab geometry {slabs.geometry} != runtime geometry {geometry}")
             kda = KdaTableSpec(

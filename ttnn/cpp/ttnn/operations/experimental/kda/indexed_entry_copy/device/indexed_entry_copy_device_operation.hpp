@@ -30,6 +30,8 @@ Tensor indexed_entry_copy(
     const Tensor& index,
     uint32_t index_scale,
     uint32_t index_offset,
-    const std::optional<Tensor>& zero_fill_at_zero);
+    const std::optional<Tensor>& zero_fill_at_zero,
+    const std::optional<Tensor>& source_part,
+    uint32_t source_part_groups);
 
 }  // namespace ttnn::experimental::prim

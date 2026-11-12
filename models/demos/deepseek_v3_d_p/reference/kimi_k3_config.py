@@ -46,9 +46,16 @@ class KimiK3Config:
     # the top of L1, so each byte of it lowers the L1 buffers toward MLA's static circular buffers:
     # 24576 (this package's usual value) starves chunked attention as soon as there is a second
     # chunk to attend over, and 4096 left ring_mla 1,408 B short (chunked L24) once the fused
-    # matmul + reduce-scatter kept 2,176 B/bank of L1. The K3 L24 tests use 960 B/bank of the pool;
-    # AttnRes uses none since #54834 (tests/attn_res/model/test_l1_small_footprint.py).
-    L1_SMALL_SIZE = 1536
+    # matmul + reduce-scatter kept 2,176 B/bank of L1. AttnRes uses none since #54834
+    # (tests/attn_res/model/test_l1_small_footprint.py). On Blackhole every L1_SMALL allocation
+    # rounds up to 64 B/bank (the pool's allocator uses the 64 B DRAM alignment: bank_manager.cpp,
+    # blackhole core_config.h), so each CCL semaphore takes 64 B/bank and each all_gather program
+    # (two semaphores, created once per program-cache entry, not per call or layer) 128 B/bank.
+    # The KDA layer's two SP all-gathers of its sharded carry take 256 B/bank (measured on Galaxy SP8xTP4):
+    # the depth-2 model holds 1344 B/bank (21 slots) without them and needs 1600 (25) with them,
+    # measured exactly full at depth 2 and 24. 1600 leaves 0 B: whoever adds a CCL program to K3
+    # (128 B/bank each) must raise this and re-validate chunked L24 (ring_mla's L1, above).
+    L1_SMALL_SIZE = 1600
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 

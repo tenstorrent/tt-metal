@@ -441,3 +441,168 @@ def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
         f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
         f"(reference {case.expected_duration_ns} ns, margin +/- {case.margin * 100:.0f}%)"
     )
+
+
+# --- source_part: a single-entry source holding P parts of a destination entry along dim 1 ---
+# (dtype, layout, destination entry shape past dim 0, source_part_groups, ND shard of the destination table or None):
+# the KDA export's two stores at Galaxy SP8 (P = 8) and smaller forms. The recurrent carry's heads are contiguous (one
+# group); the convolution tail is branch-major, so each of its 3 branch groups holds every part's rows.
+_PARTS = 8
+PART_FORMS = [
+    pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (3, 64, 64), 1, None, id="fp32-tile"),
+    pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (3, 128, 128), 1, [1, 1, 128, 32], id="fp32-tile-k3-nd"),
+    pytest.param(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (18, 192), 3, None, id="bf16-row-major-k3-groups"),
+    pytest.param(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (6, 192), 1, None, id="bf16-row-major"),
+]
+
+
+def _source_shape(entry_shape, parts=_PARTS):
+    return (1, entry_shape[0] * parts, *entry_shape[1:])
+
+
+def _part_of(source_host, part, groups, parts=_PARTS):
+    """Part ``part`` of every dim-1 group, by hand: the expected destination entry, ``[1, *entry_shape]``."""
+    _, rows, *rest = source_host.shape
+    per_part = rows // (groups * parts)
+    return source_host.reshape(groups, parts, per_part, *rest)[:, part].reshape(1, groups * per_part, *rest)
+
+
+# (source_part word, index[0]) -> the part copied into table entry index[0], or None when nothing is written.
+PART_ROWS = [(part, 1 + part % 3, part) for part in range(_PARTS)] + [
+    (_PARTS, 2, None),  # one past the last part
+    (0xFFFFFFFF, 0, None),
+    (0, _TABLE_ENTRIES, None),  # an in-range part with an out-of-range entry
+]
+
+
+@pytest.mark.parametrize("dtype, layout, entry_shape, groups, nd_shard", PART_FORMS)
+def test_source_part_selects_the_part(device, dtype, layout, entry_shape, groups, nd_shard):
+    """Each PART_ROWS row stores part source_part[0] of every group into the indexed entry, or writes nothing."""
+    source_host = _random(_source_shape(entry_shape), dtype, 21)
+    source = _to_device(source_host, device, dtype, layout)
+    table_host = _random((_TABLE_ENTRIES, *entry_shape), dtype, 22)
+    table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
+    for part, value, expected in PART_ROWS:
+        index, source_part = _index(device, value), _index(device, part)
+        ttnn.experimental.kda.indexed_entry_copy(
+            source,
+            table,
+            index,
+            index_scale=1,
+            index_offset=0,
+            source_part=source_part,
+            source_part_groups=groups,
+        )
+        if expected is not None:
+            table_host[value : value + 1] = _part_of(source_host, expected, groups)
+        assert torch.equal(ttnn.to_torch(table), table_host), f"source_part {part:#x} index {value}"
+        ttnn.deallocate(index)
+        ttnn.deallocate(source_part)
+
+
+@pytest.mark.parametrize("dtype, layout, entry_shape, groups, nd_shard", [PART_FORMS[0], PART_FORMS[2]])
+def test_source_part_into_a_single_entry_and_zero_fill(device, dtype, layout, entry_shape, groups, nd_shard):
+    """One entry on both sides takes the part at entry 0; a zero_fill_at_zero word of 0 still writes zeros."""
+    source_host = _random(_source_shape(entry_shape), dtype, 23)
+    source = _to_device(source_host, device, dtype, layout)
+    destination = _to_device(_random((1, *entry_shape), dtype, 24), device, dtype, layout)
+    source_part = _index(device, 5)
+
+    def copy(zero_fill_at_zero=None):
+        ttnn.experimental.kda.indexed_entry_copy(
+            source,
+            destination,
+            _index(device, 0),
+            index_scale=1,
+            index_offset=0,
+            zero_fill_at_zero=zero_fill_at_zero,
+            source_part=source_part,
+            source_part_groups=groups,
+        )
+
+    copy()
+    assert torch.equal(ttnn.to_torch(destination), _part_of(source_host, 5, groups))
+    copy(zero_fill_at_zero=_index(device, 0))
+    assert all_zero_bits(ttnn.to_torch(destination))
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+@pytest.mark.parametrize("dtype, layout, entry_shape, groups, nd_shard", PART_FORMS)
+def test_one_trace_follows_the_source_part(device, dtype, layout, entry_shape, groups, nd_shard):
+    """A captured store reads the part and the index on device: each replay lands the part written before it."""
+    entries, scale, offset = 6, 2, 1
+    source_host = _random(_source_shape(entry_shape), dtype, 25)
+    source = _to_device(source_host, device, dtype, layout)
+    table_host = _random((entries, *entry_shape), dtype, 26)
+    table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
+    index, source_part = _index(device, 0), _index(device, 0)
+
+    def step():
+        ttnn.experimental.kda.indexed_entry_copy(
+            source,
+            table,
+            index,
+            index_scale=scale,
+            index_offset=offset,
+            source_part=source_part,
+            source_part_groups=groups,
+        )
+
+    step()  # compile before capture: part 0 into entry `offset`
+    table_host[offset : offset + 1] = _part_of(source_host, 0, groups)
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    step()
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        for part, value in ((7, 2), (3, 0), (_PARTS, 1), (0, 1)):
+            _overwrite(index, torch.tensor([value], dtype=torch.int64))
+            _overwrite(source_part, torch.tensor([part], dtype=torch.int64))
+            ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+            if part < _PARTS:
+                entry = value * scale + offset
+                table_host[entry : entry + 1] = _part_of(source_host, part, groups)
+            assert torch.equal(ttnn.to_torch(table), table_host), f"replay source_part {part} index {value}"
+    finally:
+        ttnn.release_trace(device, trace)
+
+
+@pytest.mark.parametrize(
+    "dtype, layout, source_shape, destination_shape, groups, with_part, message",
+    [
+        # the destination holds one entry, so only source_part's own single-entry rule rejects the source
+        (ttnn.float32, ttnn.TILE_LAYOUT, (2, 24, 32, 32), (1, 3, 32, 32), 1, True, "single-entry source"),
+        (ttnn.float32, ttnn.TILE_LAYOUT, (1, 25, 32, 32), (4, 3, 32, 32), 1, True, "whole number of parts"),
+        (ttnn.float32, ttnn.TILE_LAYOUT, (1, 24, 32, 64), (4, 3, 32, 32), 1, True, "differ past dim 0"),
+        (ttnn.float32, ttnn.TILE_LAYOUT, (1, 256, 32), (4, 32, 32), 1, True, "rank at least 4 for TILE"),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (1, 144, 192), (4, 18, 192), 4, True, "equal groups"),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (1, 18, 192), (4, 18, 192), 3, False, "1 without source_part"),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (1, 144, 192), (4, 18, 192), 0, True, "at least 1"),
+        # an empty destination dim 1 would leave no part size to divide by
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (1, 0, 192), (4, 0, 192), 1, True, "non-empty destination dim 1"),
+    ],
+    ids=[
+        "multi-entry-source",
+        "fractional-parts",
+        "other-dim",
+        "rank-3-tile",
+        "groups-split",
+        "groups-alone",
+        "zero",
+        "empty-dim-1",
+    ],
+)
+def test_source_part_rejects(
+    device, expect_error, dtype, layout, source_shape, destination_shape, groups, with_part, message
+):
+    source = _to_device(torch.zeros(source_shape), device, dtype, layout)
+    destination = _to_device(torch.zeros(destination_shape), device, dtype, layout)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.kda.indexed_entry_copy(
+            source,
+            destination,
+            _index(device, 0),
+            index_scale=1,
+            index_offset=0,
+            source_part=_index(device, 0) if with_part else None,
+            source_part_groups=groups,
+        )

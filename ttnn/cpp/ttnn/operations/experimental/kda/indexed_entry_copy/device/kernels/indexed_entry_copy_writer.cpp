@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Drains the staging DFB into this core's page range of one entry in the destination, a batch per pop.
+// Drains the staging DFB into this core's page range of one entry in the destination, a batch per pop. It reads the
+// `source_part` word only to skip the copy with the reader when the part is out of range.
 
 #include <stdint.h>
 
@@ -20,8 +21,9 @@ void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
 
     const Noc noc;
+    const volatile uint32_t* part_word = issue_source_part_read(noc);
     uint32_t entry_base;
-    if (!resolve_entry_base(noc, first_page, entry_base)) {
+    if (!resolve_entry_base(noc, first_page, entry_base) || !source_part_in_range(part_word)) {
         return;
     }
     const uint32_t destination_base = indexed_is_source ? first_page : entry_base;
