@@ -496,7 +496,7 @@ MLA_MATMUL_CONFIG = {
             "out_dtype": ttnn.bfloat8_b,
         },
     },
-    # GLM DSA indexer: Q is TP-sequence-sharded before projection (160 rows at SP8/TP4, chunk5120).
+    # GLM DSA indexer: Q is TP-sequence-sharded before projection (chunk / (SP * TP) rows per chip, 160 at the tuned chunk).
     # The 640-row entries remain useful for larger chunks / smaller TP and the unchanged K stem (k_hadamard).
     "indexer.wq_b": {
         160: [
