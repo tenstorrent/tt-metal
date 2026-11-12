@@ -523,10 +523,10 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
                 .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
+                .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
             });
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -545,8 +545,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
-            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
+            .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
         });
     } else if (this->target_type_ == TargetDevice::Emule) {
 #ifdef TT_METAL_USE_EMULE
@@ -555,8 +555,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::SWEMULE,
-            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
+            .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
         });
 #else
         TT_FATAL(false, "TargetDevice::Emule requires building with TT_METAL_USE_EMULE=ON");
