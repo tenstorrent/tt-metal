@@ -138,7 +138,7 @@ SNAP_PIECE_MIB = 16  # device-side slice size of a snapshot read (see snapshot_u
 PIECE = 2048  # rows per ``paged_scatter_rows`` call: the row count is a COMPILE-time argument (one program per distinct count, ~0.4 s at first use), so every write is split into pieces of the same size (the last one padded with SKIP ids)
 
 
-def scatter_rows_mesh(model, t, per_row, base=0, sync_every=1, stats=None):
+def scatter_rows_mesh(model, t, per_row, base=0, sync_every=1, stats=None, reuse=False):
     """In place: ``t[ids + base] = data`` on the mesh rows of ``per_row`` {mesh row: (ids [n] torch, data [n, D] torch)} only (the other mesh rows get SKIP ids), t a bf16 (or, for the pool, fp8: the
     kernel converts) row-major tensor whose rows are D wide; fixed-size pieces."""
     md, rows, cols = model.md, model.rows, model.cols
@@ -150,8 +150,18 @@ def scatter_rows_mesh(model, t, per_row, base=0, sync_every=1, stats=None):
     for a in range(0, n, PIECE):
         _t0 = time.perf_counter()
         m = min(PIECE, n - a)
-        ids = torch.full((rows, 1, PIECE), SKIP, dtype=torch.int64)
-        src = torch.zeros(rows, 1, PIECE, D, dtype=torch.bfloat16)
+        if (
+            reuse and bufs
+        ):  # (DSV41_XROW_BATCH: the host buffers are allocated once; only the rows of the target mesh rows are refilled, the padding of a short last piece re-initialised)
+            ids, src = bufs
+            if m < PIECE:
+                ids.fill_(SKIP)
+                src.zero_()
+        else:
+            ids = torch.full((rows, 1, PIECE), SKIP, dtype=torch.int64)
+            src = torch.zeros(rows, 1, PIECE, D, dtype=torch.bfloat16)
+            if reuse:
+                bufs.extend((ids, src))
         for r, (ids_r, data_r) in per_row.items():
             ids[r, 0, :m] = ids_r[a : a + m].long() + base
             src[r, 0, :m] = data_r[a : a + m]

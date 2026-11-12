@@ -649,6 +649,7 @@ class PagedApc:
                     {dst: (m.pool.phys_rows(b, s_, torch.arange(n_)).long(), l_)},
                     sync_every=int(os.environ.get("DSV41_XROW_SYNC_EVERY", "1")),
                     stats=prof,
+                    reuse=os.environ.get("DSV41_XROW_BATCH", "0") == "1",
                 )
             tp.append(time.perf_counter())
             # 3. one copy chunk per donor block: key store slot (+ the tip's halo slots) in this row, filled by the save kernels from staging tensors
@@ -678,6 +679,9 @@ class PagedApc:
                 # one save launch per group) instead of one block per call: 1/U of the host staging / launches of the store phase (the device wait was 0.001 s of 0.89 s: host-bound).
                 # (Up == U is required by XROW: the lanes of the row are its users.)
                 with_key = [(i, cp) for i, cp in cps if cp.key_slot >= 0]
+                hosts = (
+                    {}
+                )  # one host staging buffer per layer, reused for every group (only the lanes of the receiving row are written / cleared)
                 for lanes_ in xrow_key_groups(len(with_key), U):
                     grp = [with_key[k] for _, k in lanes_]
                     vals = [None] * (rows * U)
@@ -687,7 +691,10 @@ class PagedApc:
                     stage = {}
                     for lid in self.ks.store:
                         R = self.ks.geom[lid].nrb * 32
-                        host = torch.zeros(rows * U, cols, R, APS.IDIM, dtype=torch.bfloat16)
+                        host = hosts.get(lid)
+                        if host is None:
+                            host = hosts[lid] = torch.zeros(rows * U, cols, R, APS.IDIM, dtype=torch.bfloat16)
+                        host[dst * U : dst * U + U] = 0  # (lanes of a short last group stay zero)
                         for j, (i, _) in enumerate(grp):
                             for c in range(cols):
                                 host[dst * U + j, c] = keys[(lid, i)][c]
