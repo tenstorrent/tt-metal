@@ -4196,6 +4196,47 @@
   "units": null,
   "waiting": null
  },
+ "P.49": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "6effc559166a5f585020d694aabe04f985d789aa",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "7b73ee08-1c64-48f5-89e4-af448b594c76"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-11-12T17:25:29"
+   }
+  ],
+  "last_run": "2026-11-12T17:25:29",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.49.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": null,
+  "started": "2026-11-12T17:25:29",
+  "status": "PASS",
+  "units": null,
+  "waiting": null
+ },
  "P.5": {
   "agent": {
    "defs": {
@@ -4279,6 +4320,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,

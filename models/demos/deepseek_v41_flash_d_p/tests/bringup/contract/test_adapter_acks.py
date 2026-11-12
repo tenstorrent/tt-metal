@@ -33,13 +33,19 @@ through the table over UMD, as the KV Manager does. Pass:
     validation.py:55-61); every chip of a record's device group holds the same bytes
   - WINDOW_KV_KEEP=snapshot128 (P.42, owner-authorized contract change 2026-11-07): 0_window_kv is the 128-row
     snapshot. At every ack and at the end its 4 records hold the golden window KV of positions [cap - 128, cap) at row
-    p % 128, cap = (end - 1) // 64 x 64 of the chunk's end (caches.snapshot_failures: the golden rows in position
+    p % 128, cap = end // 64 x 64 of the chunk's end (P.49) (caches.snapshot_failures: the golden rows in position
     order through golden_failures, the same limits as before; rows of no position < cap zero). Ends not multiples of
     64: 2536, 6072 and the chunk ends; then one more request shorter than 128 (slot 1, [0, 100): cap 64, rows 64..127
     zero), its acks and snapshot checked the same way. The snapshot is rewritten every chunk by design, so the reused-
     prefix byte check and the last-block check apply to the per-position caches only. REINDEX_SERVE=alias (P.42): a
     re-index layer's records are read through its own table entries, which alias layer 20's records (byte-equal by
     construction; table_rules checks the entries)
+  - PREFILL_END=cap (P.49, owner-authorized contract change 2026-11-12; DS41-219): the runtime computes and writes a
+    chunk only below decode's cap of its actual_end (caches.served_end: actual_end // 64 x 64; the engine's
+    actual_end is prompt_len - 1 under PD). Every per-position check above then covers [lo, cap) and [0, cap); rows
+    in [cap, actual_end) are decode's replay and are not compared; the snapshot's cap is the same in both modes.
+    The slot-0 last-block check covers [prefix, cap(t1)), empty in this plan (prefix 2496 = cap(2536)): printed, not
+    run. PREFILL_END=end keeps every range as before.
 """
 
 import pytest
@@ -94,20 +100,23 @@ def test_adapter_acks(mesh_device, tmp_path):
                 )
                 continue
             shipped.setdefault((s, cur["turn"]), {}).setdefault(cfg["name"], {}).update(recs)
-            got, pad = C.valid_and_pad(recs, cfg, layer_idx, lo, hi)
-            cur["fails"] += C.golden_failures(kvc, gk, cfg, got, layer_idx, lo, hi, thr, f"ack slot {s} [{lo}, {hi})")
+            hs = C.served_end(hi)  # (P.49: PREFILL_END=cap computes and writes [lo, cap(hi)) only)
+            if hs <= lo:
+                continue
+            got, pad = C.valid_and_pad(recs, cfg, layer_idx, lo, hs)
+            cur["fails"] += C.golden_failures(kvc, gk, cfg, got, layer_idx, lo, hs, thr, f"ack slot {s} [{lo}, {hs})")
             if pad.size and not (pad == 0).all():
-                cur["fails"].append(f"ack slot {s} {cfg['name']} layer {layer_idx}: pad rows after {hi} not zero")
+                cur["fails"].append(f"ack slot {s} {cfg['name']} layer {layer_idx}: pad rows after {hs} not zero")
             if cfg.get("fp8"):  # P.39: Blaze's 192-byte rows; a re-index layer's are its key source's, byte for byte
-                rb, pb = C.valid_and_pad(recs, cfg, layer_idx, lo, hi, raw_rows=True)
-                cur["fails"] += C.fp8_row_failures(rb, pb, cfg, layer_idx, f"ack slot {s} [{lo}, {hi})")
+                rb, pb = C.valid_and_pad(recs, cfg, layer_idx, lo, hs, raw_rows=True)
+                cur["fails"] += C.fp8_row_failures(rb, pb, cfg, layer_idx, f"ack slot {s} [{lo}, {hs})")
                 src = cfg["of"].get(layer_idx)
                 if src is not None:
                     mine = {(src, p): b for (_, p), b in recs.items()}
                     theirs = reader.records(cfg["name"], s, [src], lo, hi)
                     cur["fails"] += [
-                        f"ack slot {s} [{lo}, {hi}): re-index layer {layer_idx} vs its source: {x}"
-                        for x in C.bytes_equal(mine, theirs, cfg, [src], lo, hi)
+                        f"ack slot {s} [{lo}, {hs}): re-index layer {layer_idx} vs its source: {x}"
+                        for x in C.bytes_equal(mine, theirs, cfg, [src], lo, hs)
                     ]
 
     class Sink(LayerCompletionSink):
@@ -166,25 +175,36 @@ def test_adapter_acks(mesh_device, tmp_path):
                         kvc, gk, cfg, mine, layer, C.snapshot_cap(e), thr, f"final slot {s} [0, {e})"
                     )
                 continue
+            es = C.served_end(e)  # (P.49: decode's cap under PREFILL_END=cap)
             for layer in cfg["layers"]:
-                got, _ = C.valid_and_pad(recs, cfg, layer, 0, e)
-                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, e, thr, f"final slot {s} [0, {e})")
+                if es <= 0:
+                    continue
+                got, _ = C.valid_and_pad(recs, cfg, layer, 0, es)
+                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, es, thr, f"final slot {s} [0, {es})")
                 if cfg.get("fp8"):  # P.39: the served bytes' format over the whole request
-                    rb, pb = C.valid_and_pad(recs, cfg, layer, 0, e, raw_rows=True)
-                    fails += C.fp8_row_failures(rb, pb, cfg, layer, f"final slot {s} [0, {e})")
+                    rb, pb = C.valid_and_pad(recs, cfg, layer, 0, es, raw_rows=True)
+                    fails += C.fp8_row_failures(rb, pb, cfg, layer, f"final slot {s} [0, {es})")
     t1, t2 = R.ACK_TURNS[0]
     prefix = R.follow_up_resident(t1, t2)
+    # P.49: under PREFILL_END=cap turn 1 computes [0, cap(t1)); its last block [prefix, cap(t1)) is then empty when
+    # prefix == cap(t1) (this plan: 2496 = cap(2536)): nothing turn 1 shipped there to compare (reported, never hidden)
+    t1_end = C.served_end(t1)
+    if t1_end <= prefix:
+        print(
+            f"[adapter acks] last-block check [{prefix}, {t1}) not run: turn 1 computed [0, {t1_end}) (PREFILL_END=cap)"
+        )
     for cfg in cfgs:
         if cfg.get("snapshot"):  # (P.42: rewritten every chunk by design; checked at every ack and at the end above)
             continue
         final = reader.records(cfg["name"], 0, cfg["layers"], 0, t1)
         first = shipped[(0, 0)][cfg["name"]]
         fails += [f"slot 0 reused prefix: {x}" for x in C.bytes_equal(first, final, cfg, cfg["layers"], 0, prefix)]
-        for layer in cfg["layers"]:
-            a, _ = C.valid_and_pad(first, cfg, layer, prefix, t1)
-            b, _ = C.valid_and_pad(final, cfg, layer, prefix, t1)
-            fails += C.pcc_failures(kvc, cfg, b, a, layer, R.LAST_BLOCK_PCC, f"slot 0 last block [{prefix}, {t1})")
-            gk.note_err("lastblock", cfg, layer, b, a, f"slot 0 last block [{prefix}, {t1})")  # P.26, never gated
+        for layer in [] if t1_end <= prefix else cfg["layers"]:
+            a, _ = C.valid_and_pad(first, cfg, layer, prefix, t1_end)
+            b, _ = C.valid_and_pad(final, cfg, layer, prefix, t1_end)
+            what = f"slot 0 last block [{prefix}, {t1_end})"
+            fails += C.pcc_failures(kvc, cfg, b, a, layer, R.LAST_BLOCK_PCC, what)
+            gk.note_err("lastblock", cfg, layer, b, a, what)  # P.26, never gated
     if any(c.get("snapshot") for c in cfgs):  # P.42: a request shorter than 128 (cap 64) on slot 1, cold
         short = R.Push(slot=1, chunk_idx=0, start=0, end=100, is_last=True, turn=len(R.ACK_TURNS[1]))
         cur.update(slot=1, start=0, end=100, turn=short.turn, fails=[], reads={})

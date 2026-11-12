@@ -1036,8 +1036,8 @@ TABLE = {
         "snapshot128 = P.42 (OWNER 2026-11-07, decode's review; the default): the model keeps ring's 192 rows a slot "
         "and layer for its own attention (every position up to the prompt's end attends normally), and serves a "
         "128-row snapshot per slot and layer (all layers) as 0_window_kv, tensor_type snapshot: position p at row "
-        "p % 128, written only for p < cap = (end - 1) // KV_BLOCK_SIZE x KV_BLOCK_SIZE (decode receives [0, cap) of "
-        "the history caches and replays [cap, prompt_len)); rows of no position < cap (a prompt shorter than 128 + 64) "
+        "p % 128, written only for p < cap = actual_end // KV_BLOCK_SIZE x KV_BLOCK_SIZE (P.49, DS41-219: decode's cap; "
+        "decode receives [0, cap) of the history caches and replays [cap, prompt_len)); rows of no position < cap (a prompt shorter than 128 + 64) "
         "are zero. bf16 ROW_MAJOR 512 wide, 32-row records in one DRAM bank (4 records of 32 KiB a layer), the same bytes "
         "on every chip (one device group). Rewritten from the ring after the layer's window write on every chunk the "
         "caller does not mark not-last (begin_chunk last=False skips it; tt-d-gen's chunk header has no last flag, so "
@@ -1050,8 +1050,8 @@ TABLE = {
         "cap",
         ("cap", "end"),
         "P.43 (OWNER 2026-11-07): where a request's last chunk may start under DECODER_SKIP=exact / replay128, and where "
-        "replay128's decoder tail starts, so that decode's window snapshot [cap - 128, cap) (cap = (end - 1) // "
-        "KV_BLOCK_SIZE x KV_BLOCK_SIZE, WINDOW_KV_KEEP=snapshot128) is computed for every layer. cap (the default) = "
+        "replay128's decoder tail starts, so that decode's window snapshot [cap - 128, cap) (cap = end // "
+        "KV_BLOCK_SIZE x KV_BLOCK_SIZE, P.49, WINDOW_KV_KEEP=snapshot128) is computed for every layer. cap (the default) = "
         "relative to cap: replay128's tail starts at min(end - 128, cap - 128) (so it holds [cap - 128, end), 129 to "
         "192 rows) and the last chunk must start at or before it; exact's last chunk starts at or before "
         "min(end - 2688, cap - 2668) (the decoder is exact from start + 20 x 127, so rows >= cap - 128 are); both "
@@ -1067,7 +1067,25 @@ TABLE = {
         "P.42: the serving engine's kv_block_size (tt-d-gen worker config dynamo.disagg.prefill.json kv_block_size; "
         "64 in every shipped config, 32 legal). The decode handoff's cap = (prompt_len - 1) // kv_block_size x "
         "kv_block_size (prefix_indexer.hpp reusable_prefix_cap): WINDOW_KV_KEEP=snapshot128 serves the window rows "
-        "below it. Set it to the deployed worker's value",
+        "below it. P.49 (DS41-219): under PD_DISAGG tt-d-gen hands prefill actual_end = prompt_compute_end = "
+        "prompt_len - 1 (types.hpp:101-110, prefill_writer.cpp:125-131), so the model computes decode's cap as "
+        "actual_end // kv_block_size x kv_block_size (tt/attention.snapshot_cap); a one-token prompt (actual_end 1) "
+        "gives 0 both ways. Set it to the deployed worker's value",
+    ),
+    "PREFILL_END": Setting(
+        "cap",
+        ("cap", "end"),
+        "P.49 (OWNER 2026-11-12, contract change authorized from decode's review: Brian Liu 2026-11-06, Kartik "
+        "2026-11-11). Where the serving runtime (tt/runners/adapter.py prefill_chunk) stops computing a chunk. cap (the "
+        "default) = at decode's cap of the chunk's actual_end (snapshot_cap: actual_end // KV_BLOCK_SIZE x "
+        "KV_BLOCK_SIZE): positions >= cap are pad (masked, not attended, never written: not the window ring, the "
+        "snapshot, the compressed KV, the index keys or the engram id history); the chunk still runs at its fixed "
+        "padded size and acks every layer with the engine's (actual_start, actual_end). A chunk whose cap is at or "
+        "below its start computes nothing and only rewrites each layer's snapshot at cap before its ack. A non-last "
+        "chunk ends on a kv block (starts are block-aligned and the chunk size a multiple of the block), so only the "
+        "request's last chunk is shortened; decode replays [cap, prompt_len) itself. end = P.42's path: compute and "
+        "write every position up to actual_end (only what is served is clamped at cap). Only the serving runtime reads "
+        "it; the model's own layer calls take the end they are given",
     ),
     "REINDEX_SERVE": Setting(
         "alias",

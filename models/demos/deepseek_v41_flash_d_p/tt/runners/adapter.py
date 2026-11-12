@@ -16,7 +16,11 @@ with gaps (a partial bring-up's representative layers) starts every run after a 
 (testing/contract.gap_feed, F102: the golden block input of the run's first layer, as the ladder does); None for a
 contiguous range (the served model).
 
-Per chunk (prefill_chunk):
+Per chunk (prefill_chunk). PREFILL_END=cap (P.49, the default): the chunk is computed over [actual_start, cap),
+cap = decode's cap of actual_end (attention.snapshot_cap: actual_end // KV_BLOCK_SIZE x KV_BLOCK_SIZE, DS41-219);
+"actual_end" in steps 1-3 then reads cap (positions >= cap are pad), except the acks, which name the engine's range.
+A chunk with cap <= actual_start computes nothing: each layer's snapshot at cap, then its ack (_acks_only).
+PREFILL_END=end: P.42's path, everything up to actual_end.
   1. the engine input (uint32 ROW_MAJOR [sp, 1, chunk / sp], sharded over axis 0, replicated over axis 1, the server's
      order for a chunk at actual_start, PAD_ID 0xFFFFFFFF past actual_end) is read back once: the token ids are the
      engram step's host input (components.yaml engram_rows, CPU: hash + memory-mapped lookup), and the model's rows are
@@ -222,8 +226,16 @@ class DS41PrefillRuntime:
             from .kv_contract import SNAPSHOT_ENDS
 
             SNAPSHOT_ENDS[int(slot)] = int(end)
-        ids = self._host_ids(inp, start, end)
-        st.note_tokens(ids, start, end)
+        from ..attention import prefill_end
+
+        # PREFILL_END=cap (P.49): compute only [start, cap), cap = decode's cap of the engine's actual_end
+        # (snapshot_cap); positions >= cap are pad (the model's ``end``). The acks still name the engine's range.
+        run_end = prefill_end(end)
+        if run_end <= start:  # nothing below cap in this chunk: only every layer's snapshot at cap, then the acks
+            self._acks_only(st, slot, start, end, run_end, sink, d2h, metadata_msg)
+            return
+        ids = self._host_ids(inp, start, run_end)
+        st.note_tokens(ids, start, run_end)
         model.begin_chunk(ids, start, last=last)  # (P.30 / P.31: False skips the decoder; None = not told, every layer)
         h = None
         for k, i in enumerate(self.layer_ids):
@@ -231,7 +243,7 @@ class DS41PrefillRuntime:
                 if h is not None:
                     model.free(h)
                 h = model.embed(ids, start) if i == 0 else model.from_host(self.gap_feed.rows(i, start), start)
-            h2 = model.layer(i, h, start, st, end=end)  # writes the layer's records, the last one's pad rows zero
+            h2 = model.layer(i, h, start, st, end=run_end)  # writes the layer's records, the last one's pad rows zero
             model.free(h)
             h = h2
             if d2h is not None:
@@ -243,6 +255,24 @@ class DS41PrefillRuntime:
                 g = self.config.first_layer_idx + k
                 sink.layers_completed(g, g + 1, slot, start, end)
         model.free(h)
+
+    def _acks_only(self, st, slot, start, end, cap, sink, d2h, metadata_msg) -> None:
+        """PREFILL_END=cap (P.49), a chunk with no position below cap (the request's last chunk, its whole range in
+        [cap, actual_end): cap <= start). Nothing is computed or written but each layer's served snapshot, rewritten at
+        cap from the layer's ring (window rows the earlier chunks wrote; the same bytes when the previous chunk ended
+        at cap; cap 0: zeros), then the layer's ack, as on a computed chunk (the engine still counts layers_per_chunk acks).
+        """
+        ttnn = self._ttnn
+        for k, i in enumerate(self.layer_ids):
+            c = st.window[i]
+            if c.snap is not None:  # (cap 0, a prompt shorter than a block: all 128 rows zero)
+                c.write_snapshot(cap)
+            if d2h is not None:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata_msg)
+            elif sink is not None:
+                ttnn.synchronize_device(self.mesh_device)
+                g = self.config.first_layer_idx + k
+                sink.layers_completed(g, g + 1, slot, start, end)
 
     def compile(self, kv_cache: DS41KvCaches) -> None:
         """Warm the programs once in slot 0 (junk KV there; a request reads only rows it wrote itself): one cold full
@@ -274,7 +304,7 @@ class DS41PrefillRuntime:
         False gets the decoder skipped (layers 20-39 write no window rows for the chunk); under replay128 (P.31) True
         runs the decoder on the chunk's tail only (the tail model's own caches: not the served decoder rows). The
         caller starts the request's last chunk at or before model.last_start(actual_end) (SKIP_TAIL_START, P.43:
-        cap: exact min(end - 2688, cap - 2668), replay128 min(end - 128, cap - 128), cap = (end - 1) // 64 x 64; the
+        cap: exact min(end - 2688, cap - 2668), replay128 min(end - 128, cap - 128), cap = end // 64 x 64 (P.49); the
         chunk before it ending there); the model refuses a later start (ValueError), it never pulls back. Under
         WINDOW_KV_KEEP=snapshot128 every layer's snapshot is then written on the last chunk."""
         c, m = self.config.chunk_size, self.config.max_seq_len

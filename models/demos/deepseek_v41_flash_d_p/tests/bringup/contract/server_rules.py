@@ -95,6 +95,20 @@ def reusable_prefix_cap(kv_block_size: int, prompt_len: int) -> int:
     return (prompt_len - 1) // kv_block_size * kv_block_size
 
 
+def prompt_compute_end(prompt_len: int) -> int:
+    """tt-d-gen 48b79127fb1 engine/include/engine/runtime/types.hpp:101-110 (PD_DISAGG, role PREFILL): prefill
+    computes [0, prompt_len - 1) (decode forwards the last prompt token itself), at least one token;
+    prefill_writer.cpp:125-131 ends the request's last chunk there (actual_end)."""
+    return max(prompt_len - 1, 1)
+
+
+def decode_cap(actual_end: int, kv_block_size: int = KV_BLOCK) -> int:
+    """P.49 (DS41-219): decode's cap for the prefill whose last chunk the engine ends at ``actual_end``: decode's
+    reusable_prefix_cap(prompt_len) with prompt_len = actual_end + 1 (prompt_compute_end inverted; the one-token
+    prompt, actual_end 1, gives 0 both ways) = actual_end // kv_block_size x kv_block_size."""
+    return reusable_prefix_cap(kv_block_size, actual_end + 1)
+
+
 def follow_up_resident(prev_end: int, prompt_len: int, kv_block_size: int = KV_BLOCK) -> int:
     """Where a follow-up turn starts on the prefill node when the idle slot holding the earlier turn is remounted.
 
@@ -272,6 +286,13 @@ def scenario_plan(name: str) -> list[tuple[int, list[tuple]]]:
 def self_check() -> None:
     """The ports against the server's own test rule (engine/tests/test_ring_sdpa_reshuffle.cpp expected_by_ownership)
     and the scenario shapes the tests rely on."""
+    # P.49 (DS41-219): the cap the model computes from the actual_end the engine passes is decode's, every length
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import snapshot_cap
+
+    for b in (32, 64):
+        for n in range(1, 4 * b + 3):
+            e = prompt_compute_end(n)
+            assert decode_cap(e, b) == reusable_prefix_cap(b, n) == snapshot_cap(e, b), (b, n, e)
     for sp_, w_ in ((1, 4), (2, 4), (4, 8), (SP, W)):
         for start in (0, 1, 3, 7, w_, w_ + 5, 2 * w_ * sp_ + 3, 960, 1312, 2048):
             nat = np.arange(sp_ * w_, dtype=np.uint32)
