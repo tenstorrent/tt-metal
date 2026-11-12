@@ -66,6 +66,10 @@ struct InactiveSenderPipe {
     FORCE_INLINE void send(uint32_t, uint32_t, uint32_t) {}
     template <SourceL1Guard = SourceL1Guard::Guard>
     FORCE_INLINE void send_signal(uint32_t = VALID) {}
+    FORCE_INLINE void wait_receivers_ready() {}
+    FORCE_INLINE void send_piece(uint32_t, uint32_t) {}
+    FORCE_INLINE void publish_pieces(uint32_t) {}
+    FORCE_INLINE void end_pieces() {}
 };
 
 struct InactiveReceiverPipe {
@@ -73,6 +77,9 @@ struct InactiveReceiverPipe {
     template <SourceL1Guard = SourceL1Guard::Guard>
     FORCE_INLINE void receive_and_forward(uint32_t, uint32_t, uint32_t = 0) {}
     FORCE_INLINE uint32_t receive_signal(uint32_t = 0) { return 0; }
+    FORCE_INLINE void signal_ready() {}
+    FORCE_INLINE void wait_pieces(uint32_t) {}
+    FORCE_INLINE void finish_pieces() {}
 };
 
 // Decode the compact axis ranges once into the pipe's own storage.

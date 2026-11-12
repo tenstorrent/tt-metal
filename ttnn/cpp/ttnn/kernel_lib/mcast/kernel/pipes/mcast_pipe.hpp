@@ -99,6 +99,19 @@ public:
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     FORCE_INLINE void send_signal(uint32_t value = VALID);
 
+    // ===== PIECEWISE DATA round (one readiness handshake, the payload published in pieces) =====
+    // Fixed Flag senders with one rectangle, data in place (same L1 address on every core). A round is:
+    //   wait_receivers_ready();                       // once (no-op without PRE_HANDSHAKE)
+    //   for piece p = 1..n:
+    //       send_piece(l1, size);  ...                // any number of runs, no signal, no other write on this NoC
+    //       publish_pieces(p);                        // receivers' flag := p, behind the piece's runs
+    //   end_pieces();                                 // source protection, as send() gives
+    // Receivers pair it with ReceiverPipe::signal_ready() / wait_pieces(p) / finish_pieces().
+    FORCE_INLINE void wait_receivers_ready();
+    FORCE_INLINE void send_piece(uint32_t l1, uint32_t size);
+    FORCE_INLINE void publish_pieces(uint32_t count);
+    FORCE_INLINE void end_pieces();
+
 private:
     template <SenderMcastMode RECTANGLE_MCAST_MODE>
     FORCE_INLINE void send_rectangle_(
@@ -172,6 +185,13 @@ public:
     // Handle receiver readiness when enabled, then wait for a control signal.
     // Returns the Flag value or round + 1 for Counter. Pairs with SenderPipe::send_signal().
     FORCE_INLINE uint32_t receive_signal(uint32_t round = 0);
+
+    // ===== PIECEWISE DATA round (pairs with SenderPipe's piecewise round; fixed Flag senders only) =====
+    // signal_ready() acks the round once (no-op without PRE_HANDSHAKE); wait_pieces(p) returns once the
+    // sender has published its first p pieces; finish_pieces() clears the flag before the next round's ack.
+    FORCE_INLINE void signal_ready();
+    FORCE_INLINE void wait_pieces(uint32_t count);
+    FORCE_INLINE void finish_pieces();
 
 private:
     Noc noc_;

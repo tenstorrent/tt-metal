@@ -361,6 +361,111 @@ FORCE_INLINE void SenderPipeImpl<
         typename noc_traits_t<UnicastEndpoint>::dst_args_type{mx, my, dst_l1});
 }
 
+// ----- Piecewise data round -----
+
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    SenderMcastMode SENDER_MCAST_MODE,
+    uint32_t MAX_RECTS>
+FORCE_INLINE void SenderPipeImpl<
+    NOC_ID,
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    SENDER_MCAST_MODE,
+    MAX_RECTS>::wait_receivers_ready() {
+    static_assert(
+        DATA_READY_SIGNAL == DataReadySignal::Flag && !ROTATING_SENDER && MAX_RECTS == 1,
+        "A piecewise round publishes a running count in the data-ready flag: fixed Flag senders, one rectangle");
+    if constexpr (PRE_HANDSHAKE) {
+        consumer_ready_.wait(args_.ack_count);
+        consumer_ready_.set(0);
+    }
+}
+
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    SenderMcastMode SENDER_MCAST_MODE,
+    uint32_t MAX_RECTS>
+FORCE_INLINE void SenderPipeImpl<
+    NOC_ID,
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    SENDER_MCAST_MODE,
+    MAX_RECTS>::send_piece(uint32_t l1, uint32_t size) {
+    // publish_pieces() rewrites this core's flag cell, the source of the previous piece's count multicast:
+    // that multicast (and the runs ahead of it) must have read L1 first.
+    wait_write_sources_read(noc_);
+    // In place: the receivers' copy lands at the sender's own address, so no local write; a single-core rectangle
+    // (LocalCopy) sends nothing.
+    const auto& rectangle = args_.rectangles[0];
+    if (rectangle.remote_count > 0) {
+        send_data_(rectangle, false, l1, l1, size, rectangle.remote_count);
+    }
+}
+
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    SenderMcastMode SENDER_MCAST_MODE,
+    uint32_t MAX_RECTS>
+FORCE_INLINE void SenderPipeImpl<
+    NOC_ID,
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    SENDER_MCAST_MODE,
+    MAX_RECTS>::publish_pieces(uint32_t count) {
+    ASSERT(count >= VALID);
+    const auto& rectangle = args_.rectangles[0];
+    if (rectangle.remote_count > 0) {
+        // Same NoC and VC as the piece's data, so the count lands behind it.
+        signal_ready_(rectangle, false, rectangle.remote_count, count);
+    }
+}
+
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    SenderMcastMode SENDER_MCAST_MODE,
+    uint32_t MAX_RECTS>
+FORCE_INLINE void SenderPipeImpl<
+    NOC_ID,
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    SENDER_MCAST_MODE,
+    MAX_RECTS>::end_pieces() {
+    fence_<SourceL1Guard::Guard>(false);  // as send() for in-place data: no local destination was written
+}
+
 // =============================================================================
 // ReceiverPipe
 // =============================================================================
@@ -466,6 +571,64 @@ FORCE_INLINE uint32_t ReceiverPipeImpl<
         data_ready_.set(INVALID);
         return value;
     }
+}
+
+// ----- Piecewise data round -----
+
+template <
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS,
+    typename SenderCoordinates>
+FORCE_INLINE void ReceiverPipeImpl<
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    NUM_SENDERS,
+    SenderCoordinates>::signal_ready() {
+    static_assert(
+        DATA_READY_SIGNAL == DataReadySignal::Flag && NUM_SENDERS == 1,
+        "A piecewise round publishes a running count in the data-ready flag: fixed Flag senders only");
+    if constexpr (PRE_HANDSHAKE) {
+        consumer_ready_.up(noc_, fixed_sender_x_, fixed_sender_y_, 1);
+    }
+}
+
+template <
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS,
+    typename SenderCoordinates>
+FORCE_INLINE void ReceiverPipeImpl<
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    NUM_SENDERS,
+    SenderCoordinates>::wait_pieces(uint32_t count) {
+    data_ready_.wait_min(count);
+}
+
+template <
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS,
+    typename SenderCoordinates>
+FORCE_INLINE void ReceiverPipeImpl<
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    NUM_SENDERS,
+    SenderCoordinates>::finish_pieces() {
+    data_ready_.set(INVALID);  // the next round's ack follows, so no count of this round can land after it
 }
 
 }  // namespace detail
