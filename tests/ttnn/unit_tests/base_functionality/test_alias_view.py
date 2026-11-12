@@ -9,6 +9,7 @@ paged_fill_cache, the op a model uses to write one block. A valid view must cove
 writes its block b.
 """
 
+import gc
 import math
 
 import pytest
@@ -143,6 +144,44 @@ def test_alias_view_fp32_block_mapping(device, block_size, expect_error):
     assert torch.equal(after_view[TARGET], state[0]), "a write and read through the view must round-trip"
     assert torch.equal(after_view[others], before[others]), "the write changed another block of the view"
     assert torch.equal(ttnn.to_torch(k)[others], host[others]), "the write changed another block of the input"
+
+
+def test_alias_view_keeps_the_input_allocation_alive(device):
+    """The view shares the input's storage, so dropping the input tensor does not free the bytes the view reads."""
+    block_size = _valid_block_size(device)
+    host, k = _owner(device, block_size)
+    view = ttnn.experimental.alias_view(k, ttnn.Shape(list(k.shape)), ttnn.bfloat16)
+    address = k.buffer_address()
+    del k
+    gc.collect()
+
+    # A freed range would be handed to the next allocation of the same size and overwritten.
+    _, other = _owner(device, block_size)
+    assert other.buffer_address() != address
+    assert torch.equal(ttnn.to_torch(view), host)
+
+
+def test_alias_view_program_cache_follows_the_allocation(device):
+    """A program cached for a view of one allocation writes the right bytes through a view of another allocation."""
+    block_size = _valid_block_size(device)
+    heads = 2 * block_size // 128
+    others = [i for i in range(NUM_BLOCKS) if i != TARGET]
+    owners = []
+    cache_entries = []
+    for _ in range(2):
+        host, k = _owner(device, block_size)
+        owners.append(k)  # both stay allocated, so the second view sits at another address
+        view = ttnn.experimental.alias_view(k, ttnn.Shape([NUM_BLOCKS, heads, 128, 128]), ttnn.bfloat16)
+        state = torch.randn(1, heads, 128, 128).bfloat16()
+        _fill_block(view, state, TARGET, device)
+
+        got = ttnn.to_torch(k)
+        assert torch.equal(_tiles(got[TARGET]), _tiles(state[0]))
+        assert torch.equal(got[others], host[others])
+        cache_entries.append(device.num_program_cache_entries())
+
+    assert owners[0].buffer_address() != owners[1].buffer_address()
+    assert cache_entries[1] == cache_entries[0], "the second view must reuse the cached paged_fill_cache program"
 
 
 def test_alias_view_pool_pages_follow_blocks(device):
