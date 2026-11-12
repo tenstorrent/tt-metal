@@ -22,13 +22,13 @@ records read as "unread", how a both-ends-blind pair is collapsed — this file
 mirrors the query and says so at the point it matters.
 
 Output is the shape `tools/scaleout/kmd_triage/triage_json.sh` emits and
-`diag_runner.py` already ingests:
+the health check already ingests (external.py):
 
     {"tool": ..., "version": N,
      "checks": [{"name", "status", "details", "ip", "data"}]}
 
 One shape for every externally-produced finding, so the rollup to a single
-verdict stays computed in one place (diag_runner's Phase) rather than here.
+verdict stays computed in one place (the health check's Phase) rather than here.
 Statuses are advisory: the ingesting phase holds FAIL at WARN unless it was
 asked to let this tool gate the run.
 
@@ -36,7 +36,7 @@ Runnable on its own against a stored dump, with the same
 ``--json <path> -o <path>`` interface the triage scripts take, which is what
 makes a dump collected on a sick machine reviewable on a desk:
 
-    python3 qsfp_ingest.py qsfp_dump_host.jsonl --json out.json
+    python3 diag/qsfp_ingest.py qsfp_dump_host.jsonl --json out.json
 """
 
 from __future__ import annotations
@@ -256,7 +256,7 @@ def check(
     data: dict | None = None,
     console_visible: bool = True,
 ) -> dict:
-    """One check in the shape diag_runner ingests.
+    """One check in the shape the health check ingests.
 
     ``console_visible`` is honoured by the ingesting phase and defaults to true,
     so the triage scripts — which never set it — are unaffected. It is what
