@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 TILE_SIZE_UNPACK_A,
                 TILE_SIZE_UNPACK_B);
         }
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape, scaler_shape); ([LLK] Pass TensorShape to unpack hardware setup and reconfig (WH/BH))
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape, scaler_shape);
         PROFILER_SYNC();
     }
     {
