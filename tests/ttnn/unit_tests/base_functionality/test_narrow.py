@@ -294,6 +294,27 @@ def test_narrow_mesh(input_shape, dim, start, length, memory_config, layout, mes
 
 
 @pytest.mark.parametrize(
+    "input_shape, dim, start, length",
+    [
+        ((1, 1, 40, 64), 2, 32, 32),
+        ((1, 1, 40, 64), 2, 0, 64),
+        ((1, 1, 32, 40), 3, 32, 32),
+        ((1, 1, 32, 40), 3, 0, 64),
+    ],
+    ids=["height_ends_in_pad", "height_full_padded", "width_ends_in_pad", "width_full_padded"],
+)
+def test_narrow_rejects_window_into_tile_padding(input_shape, dim, start, length, device, expect_error):
+    # Regression for #55310: bounds are checked against the logical shape, not the tile-padded shape.
+    # torch.narrow rejects all of these windows too, since start + length exceeds the logical size.
+    torch_input_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    with expect_error(RuntimeError, "out of bounds"):
+        ttnn.narrow(input_tensor, dim, start, length)
+
+
+@pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b],
 )
