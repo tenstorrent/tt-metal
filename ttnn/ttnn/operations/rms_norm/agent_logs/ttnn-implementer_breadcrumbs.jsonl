@@ -1,2 +1,3 @@
 {"event":"hypothesis","detail":"RM fails only when K>1 (W=4096 c=64 K=2); K=1 at c=64 passes. Suspect amortized tilize InitOnly/UninitOnly across back-to-back calls, or chunked stick offset","ts":"2026-11-12T10:29:00+00:00"}
 {"event":"fix_applied","detail":"tilize: reconfig only on the first (InitOnly) call of a block run; NoReconfigure on Neither/UninitOnly. L1 budget from allocator largest_contiguous_bytes_free_per_bank","ts":"2026-11-12T10:29:50+00:00"}
+{"event":"test_run","detail":"acceptance 106/106 dev+prod; golden test_op 420 passed 6000 xfailed; profile bf16+gamma HiFi4 fp32dest: 8192x1024 TILE 88.0us RM 94.1us (120 cores); 8192x4096 TILE 341us RM 396us; 32x4096 TILE 33.9us RM 46.7us on 1 core (R1 occupancy limit, R3 deferred)","ts":"2026-11-12T10:43:45+00:00"}
