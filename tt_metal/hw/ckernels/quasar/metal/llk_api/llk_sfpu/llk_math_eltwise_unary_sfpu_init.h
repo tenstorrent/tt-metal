@@ -9,6 +9,7 @@
 namespace ckernel {
 
 namespace sfpu {
+void isinf_isnan_init();
 void softcap_init();
 }  // namespace sfpu
 
@@ -19,6 +20,11 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
     if constexpr (sfpu_op == SfpuType::softcap) {
         sfpu::softcap_init();
+    } else if constexpr (
+        sfpu_op == SfpuType::isinf || sfpu_op == SfpuType::isposinf || sfpu_op == SfpuType::isneginf ||
+        sfpu_op == SfpuType::isnan || sfpu_op == SfpuType::isfinite) {
+        // ADDR_MOD_6 for the store-side Dest increment of _calculate_sfpu_isinf_isnan_.
+        sfpu::isinf_isnan_init();
     }
 }
 
