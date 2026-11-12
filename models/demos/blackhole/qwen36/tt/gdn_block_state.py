@@ -22,6 +22,7 @@ alive at a replay can be overwritten by the replay.
 from types import SimpleNamespace
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -160,6 +161,15 @@ class GdnBlockState:
         unbound = [i for i, layer in enumerate(model.layers) if not layer.is_full_attention and i not in self.layers]
         if unbound:
             raise ValueError(f"GDN layers {unbound} have no MambaSpec entry in allocate_kv_cache_per_layer")
+        lay = self.layout
+        block_bytes = 2 * lay.tiles * lay.kv_tile_bytes
+        state_bytes = self.dims.nv * (self.dims.head_pages * 4096 + HIST_SLOTS * 2048)
+        logger.info(
+            f"GDN state in vLLM KV cache blocks: {self.num_blocks} blocks of {block_size} tokens, {block_bytes} B of K and "
+            f"V per block and layer slot, {len(kv_caches)} layer slots ({block_bytes * len(kv_caches) * self.num_blocks / 2**30:.2f} "
+            f"GiB per device); one GDN state uses {state_bytes} B of a block ({lay.heads_k} value heads in K, "
+            f"{lay.heads_v} in V); {len(self.layers)} GDN layers"
+        )
 
         self._pack_table = ttnn.from_torch(
             pack_history_rows(self.dims).reshape(1, -1).to(torch.int32),
