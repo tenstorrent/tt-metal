@@ -365,12 +365,35 @@ inline void llk_pack_sfpu_context()
 {
     pack_ctx[1] = 1;
 }
-// 0 other, 1 matmul, 2 matmul with a pack-thread SFPU.
+
+// Specialized by the matmul API headers (1 matmul.h, 2 experimental/2_0/matmul.h, 3 experimental/matmul_custom.h).
+template <int api>
+struct llk_pack_matmul_api
+{
+    static constexpr bool value = false;
+};
+
+// Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
+template <std::uint32_t dep>
+constexpr bool llk_pack_matmul_kernel()
+{
+    return llk_pack_matmul_api<dep * 0 + 1>::value || llk_pack_matmul_api<dep * 0 + 2>::value || llk_pack_matmul_api<dep * 0 + 3>::value;
+}
+
+// 0 other, 1 matmul, 2 matmul with a pack-thread SFPU; 0 at compile time in a kernel without a matmul API.
+template <std::uint32_t dep>
 inline std::uint32_t llk_pack_context()
 {
-    std::uint16_t half;
-    __builtin_memcpy(&half, pack_ctx, sizeof(half));
-    return (half & 0xff) == 0 ? 0 : 1 + ((half >> 8) != 0);
+    if constexpr (!llk_pack_matmul_kernel<dep>())
+    {
+        return 0;
+    }
+    else
+    {
+        std::uint16_t half;
+        __builtin_memcpy(&half, pack_ctx, sizeof(half));
+        return (half & 0xff) == 0 ? 0 : 1 + ((half >> 8) != 0);
+    }
 }
 
 // W offset state: base and stride last programmed, and the tile the next block starts at; anything that writes

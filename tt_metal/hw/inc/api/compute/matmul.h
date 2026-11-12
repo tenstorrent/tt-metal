@@ -16,6 +16,7 @@
 #include "llk_unpack_AB_matmul_api.h"
 #include "llk_unpack_common_api.h"
 #endif
+PACK_MATMUL_API(1)
 // defines the default throttle level for matmul kernels (default 0)
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0

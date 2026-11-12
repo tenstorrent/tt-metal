@@ -470,7 +470,7 @@ def test_header_logic_matches_mirror():
         in src
     )
     assert (
-        "const std::uint32_t state, const std::uint32_t ctx = llk_pack_context()) {"
+        "const std::uint32_t state, const std::uint32_t ctx = llk_pack_context<matmul_kt>()) {"
         in src
     )
     assert (
