@@ -26,6 +26,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.spec_sample import SAMPLER_TOP_K, enables_logprobs, sampled_token_logprobs
 from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
@@ -482,6 +483,9 @@ def _mesh_tp(default=4):
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Qwen36ForCausalLM with speculative decoding over the MTP drafter head (tt/spec_engine.py MTPBlockEngine), for the
     plugin's spec-decode contract (B * (K+1) <= 32), synchronous scheduling and host acceptance.
+    On a step the plugin samples on the device (sample_on_device_mode), a sampled row's ids are the device sampler's
+    draws, one per verify column (spec_ids_are_sampled, spec_sample.VerifySampler), which the host id walk accepts as
+    exact rejection sampling.
 
     vLLM owns the GDN state as for Qwen36ForCausalLM; its MambaSpec groups declare num_speculative_blocks = K, so a
     verify row gets 1 + K state blocks per group (mamba_state.windows). Every decode step is a verify: it reads each
@@ -497,8 +501,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
     decode_input_update_contract = 0
 
-    # verify answers argmax_ids (greedy) or logits ([B, 1+K, V] for host acceptance);
-    # the first token after prefill is host-sampled
+    # verify answers argmax_ids (greedy, or the device sampler's draws on a device-sampled step) or logits
+    # ([B, 1+K, V] for host acceptance)
     model_capabilities = {
         **Qwen36ForCausalLM.model_capabilities,
         "supports_spec_decode": True,
@@ -507,8 +511,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_async_decode": False,
         "supports_async_spec_decode": False,
         "output_tokens_per_step": 1,
-        "supports_sample_on_device": False,
-        # Device grammar masks the device sampler, which the spec path does not use.
+        "supports_sample_on_device": True,
+        "spec_ids_are_sampled": True,
+        "max_device_top_k": SAMPLER_TOP_K,
+        # The verify sampler applies no penalties and no grammar mask: such a step is sampled on the host.
+        "supports_device_penalties": False,
         "supports_device_grammar": False,
     }
 
@@ -644,6 +651,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             if not eng.captured:
                 eng.capture_decode()
         elif not eng.prepared:
+            # A device-sampling launch also prepares the verify sampler (spec_sample.VerifySampler).
+            eng.sample_on_device = bool(kwargs.get("can_sample_on_device", False))
             eng.prepare_decode()
 
     def _ensure_ready(self, kv_cache=None):
@@ -722,6 +731,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             spec_mode=spec_mode,
             slot_remap=remap,
             mamba_state=mamba_state,
+            sampling=kwargs.get("sampling_params"),
         )
         logits = res.logits if spec_mode == "logits" else None
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
@@ -730,8 +740,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         """Ordinary [B, 1] decode step (no drafts) run as a verify whose drafts are all padding: column 0's state goes
         to windows[:, 0], as the plugin expects of an ordinary decode, and the drafter gets the verify's feed rows.
         ``accepted_counts`` (a previous multi-token commit) is checked; the start state is start_blocks.
-        Returns host float logits [B, 1, V]: the runner host-samples ``tt_out[rows, -1, :]``
-        (model_runner.py:3276; async_decode.py:103 accepts a torch tensor as host output)."""
+        Host-sampled step: returns host float logits [B, 1, V], and the runner samples ``tt_out[rows, -1, :]``.
+        Device-sampled step (``sampling_params``): returns the tokens [B, 1] int32, column 0's device draw for a
+        sampled row and its argmax otherwise; with logprobs enabled, also the sampled tokens' raw logprobs and ranks
+        from the step's logits (``sampled_token_logprobs``)."""
         nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):
@@ -746,6 +758,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         tok[:, 0] = torch.as_tensor(tokens).reshape(B).to(torch.int32)
         pos = torch.full((B, K + 1), -1, dtype=torch.int32)
         pos[:, 0] = torch.as_tensor(start_pos).reshape(B).to(torch.int32)
+        sampling = kwargs.get("sampling_params")
+        logprobs = sampling is not None and enables_logprobs(sampling)
         eng = self._ensure_ready()
         res = eng.decode_forward(
             tok,
@@ -753,11 +767,17 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             num_valid_drafts=torch.zeros(B, dtype=torch.int32),
             accepted_counts=acc,
             page_table=self._table(page_table),
-            spec_mode="logits",
+            spec_mode="logits" if sampling is None or logprobs else "argmax_ids",
             slot_remap=remap,
             mamba_state=mamba_state,
+            sampling=sampling,
         )
-        return res.logits[:, :1].float()
+        if sampling is None:
+            return res.logits[:, :1].float()
+        tokens = res.argmax_ids[:, :1].to(torch.int32)
+        if not logprobs:
+            return tokens
+        return tokens, sampled_token_logprobs(res.logits[:, 0], tokens[:, 0])
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
