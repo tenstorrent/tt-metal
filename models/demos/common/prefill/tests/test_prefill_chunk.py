@@ -276,7 +276,7 @@ KEY = bytes(range(32))
 def test_media_refs_example_bytes():
     ref = MediaRef(0, 100, 676, KEY)
     expected = struct.pack("<3I", 3, 0, C) + struct.pack("<I", 1) + struct.pack("<3I", 0, 100, 676) + KEY + bytes(44)
-    raw = pack_forward_metadata([PrefillChunk(3, 0, C)], 1, [ref], max_refs=2)
+    raw = pack_forward_metadata([PrefillChunk(3, 0, C)], 1, [ref], max_media_refs=2)
     assert raw == expected
     assert len(raw) == metadata_size_bytes(1, max_refs=2) == 104
     assert decode_forward_metadata(as_int32_words(raw), 1) == [PrefillChunk(3, 0, C)]
@@ -293,14 +293,14 @@ def test_max_media_refs_fill_the_socket_page():
 def test_media_refs_off_keeps_the_bytes():
     chunks = [PrefillChunk(0, 0, C), PrefillChunk(1, C, 2 * C)]
     assert metadata_size_bytes(2, max_refs=0) == metadata_size_bytes(2)
-    assert pack_forward_metadata(chunks, 2, max_refs=0) == pack_forward_metadata(chunks, 2)
+    assert pack_forward_metadata(chunks, 2, max_media_refs=0) == pack_forward_metadata(chunks, 2)
     assert decode_media_refs(pack_forward_metadata(chunks, 2), 2, 0) == []
 
 
 def test_media_refs_in_a_packed_forward():
     chunks = [PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, 500), EMPTY]
     refs = [MediaRef(0, 900, 1200, KEY), MediaRef(1, 10, 60, KEY), MediaRef(1, 100, 150, KEY)]
-    raw = pack_forward_metadata(chunks, 3, refs, max_refs=4)
+    raw = pack_forward_metadata(chunks, 3, refs, max_media_refs=4)
     assert decode_forward_metadata(as_int32_words(raw), 3) == chunks
     assert decode_media_refs(raw, 3, 4) == refs
     validate_media_refs(refs, chunks)
@@ -308,7 +308,9 @@ def test_media_refs_in_a_packed_forward():
 
 def test_media_refs_sentinel_fills_every_word():
     raw = sentinel_metadata(SHUTDOWN_WORD, 2, max_refs=3)
-    assert raw == pack_forward_metadata([PrefillChunk(SHUTDOWN_WORD, SHUTDOWN_WORD, SHUTDOWN_WORD)], 2, max_refs=3)
+    assert raw == pack_forward_metadata(
+        [PrefillChunk(SHUTDOWN_WORD, SHUTDOWN_WORD, SHUTDOWN_WORD)], 2, max_media_refs=3
+    )
     assert as_int32_words(raw) == [SHUTDOWN_WORD] * (metadata_size_bytes(2, max_refs=3) // 4)
 
 
@@ -319,8 +321,8 @@ def test_media_refs_reject_bad_metadata(expect_error):
             [PrefillChunk(SHUTDOWN_WORD, SHUTDOWN_WORD, SHUTDOWN_WORD)], 2, [MediaRef(0, C, C + 1, KEY)], 1
         )
     with expect_error(ValueError, "2 media refs, the metadata holds 1"):
-        pack_forward_metadata(chunks, 2, [MediaRef(0, C, C + 1, KEY)] * 2, max_refs=1)
-    raw = bytearray(pack_forward_metadata(chunks, 2, max_refs=1))
+        pack_forward_metadata(chunks, 2, [MediaRef(0, C, C + 1, KEY)] * 2, max_media_refs=1)
+    raw = bytearray(pack_forward_metadata(chunks, 2, max_media_refs=1))
     raw[metadata_size_bytes(2)] = 2
     with expect_error(ValueError, "n_refs=2"):
         decode_media_refs(bytes(raw), 2, 1)

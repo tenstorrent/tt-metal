@@ -281,6 +281,9 @@ def test_media_config_needs_max_refs(monkeypatch, expect_error):
     monkeypatch.delenv("PREFILL_MEDIA_MAX_REFS", raising=False)
     with expect_error(AssertionError, "PREFILL_MEDIA_MAX_REFS"):
         producer._load_env_config(check_budget=False)
+    monkeypatch.setenv("PREFILL_MEDIA_MAX_REFS", "-1")
+    with expect_error(AssertionError, "must be >= 0"):
+        producer._load_env_config(check_budget=False)
 
 
 @pytest.mark.parametrize("interleave", ["round_robin", "random"])
