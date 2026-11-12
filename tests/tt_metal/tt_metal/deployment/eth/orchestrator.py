@@ -289,10 +289,10 @@ def main() -> int:
 
     test_pass = True
     if opts.t in [t.value for t in TestCase]:
-        test_pass = test_pass and test_single(db, [TestCase.LINK_UP], hs, links)
+        test_pass = test_pass and test_single(db, [TestCase(opts.t)], hs, links)
 
     if opts.t in [t.value for t in DistTestCase]:
-        test_pass = test_pass and test_dist(db, [DistTestCase.BANDWIDTH_BIDIR], hs, links)
+        test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links)
 
     return 0 if test_pass else 1
 
