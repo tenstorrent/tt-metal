@@ -43,27 +43,40 @@ def _run(device, shape, dtype, layout, gamma_layout, memory_config, gamma_dtype=
     td = _TORCH_DTYPE[dtype]
     W = shape[-1]
     x = torch.randn(shape, dtype=torch.float32).to(td)
-    with oom_guard("input shard"):  # infeasible shard geometry -> skip (same rule as the golden harness)
-        tt_x = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
-    g = tt_g = None
-    if gamma_layout is not None:
-        gd = gamma_dtype or dtype
-        g = torch.randn(W, dtype=torch.float32).to(_TORCH_DTYPE[gd])
-        tt_g = ttnn.from_torch(
-            g.reshape(1, 1, 1, W), dtype=gd, layout=gamma_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    tt_x = tt_g = out = g = None
+    try:
+        with oom_guard("input shard"):  # infeasible shard geometry -> skip (same rule as the golden harness)
+            tt_x = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+        if gamma_layout is not None:
+            gd = gamma_dtype or dtype
+            g = torch.randn(W, dtype=torch.float32).to(_TORCH_DTYPE[gd])
+            tt_g = ttnn.from_torch(
+                g.reshape(1, 1, 1, W),
+                dtype=gd,
+                layout=gamma_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if poison is not None:
+            if layout == ttnn.TILE_LAYOUT:
+                tt_x = ttnn.fill_implicit_tile_padding(tt_x, poison)
+            if tt_g is not None and gamma_layout == ttnn.TILE_LAYOUT:
+                tt_g = ttnn.fill_implicit_tile_padding(tt_g, poison)
+        kwargs = {}
+        if memory_config.memory_layout == HS:
+            kwargs["memory_config"] = tt_x.memory_config()
+        with oom_guard("op"):
+            out = rms_norm(tt_x, gamma=tt_g, compute_kernel_config=_cfg(), **kwargs)
+        assert out.memory_config().memory_layout == memory_config.memory_layout
+        check_output(
+            out, _ref(x, g), shape=list(shape), dtype=dtype, expected_layout=layout, tolerance=TOLERANCES[dtype]
         )
-    if poison is not None:
-        if layout == ttnn.TILE_LAYOUT:
-            tt_x = ttnn.fill_implicit_tile_padding(tt_x, poison)
-        if tt_g is not None and gamma_layout == ttnn.TILE_LAYOUT:
-            tt_g = ttnn.fill_implicit_tile_padding(tt_g, poison)
-    kwargs = {}
-    if memory_config.memory_layout == HS:
-        kwargs["memory_config"] = tt_x.memory_config()
-    with oom_guard("op"):
-        out = rms_norm(tt_x, gamma=tt_g, compute_kernel_config=_cfg(), **kwargs)
-    assert out.memory_config().memory_layout == memory_config.memory_layout
-    check_output(out, _ref(x, g), shape=list(shape), dtype=dtype, expected_layout=layout, tolerance=TOLERANCES[dtype])
+    finally:
+        # An oom_guard skip / failure keeps this frame (and its tensors) alive in the pytest report;
+        # free the device buffers explicitly so a leaked L1 shard cannot shrink later tests' CB space.
+        for t in (tt_x, tt_g, out):
+            if t is not None:
+                ttnn.deallocate(t)
 
 
 @pytest.mark.parametrize(

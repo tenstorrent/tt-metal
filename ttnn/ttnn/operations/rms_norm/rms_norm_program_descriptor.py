@@ -185,6 +185,22 @@ def _select_resident_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budg
     raise NotImplementedError("rms_norm: row too wide for single-core residency; needs W-split regime R3")
 
 
+def _cb_budget(device) -> int:
+    """Per-core L1 bytes available to this program's CBs, minus a safety margin.
+
+    The static CB region grows up from the allocator base and must end below the LOWEST allocated
+    L1 buffer (tensors allocate top-down; the freshly allocated output is already among them).
+    The largest free block is the wrong bound: a free hole above a low buffer is unusable by CBs.
+    block_table addresses are relative to the allocator base.
+    """
+    l1_view = ttnn.device.get_memory_view(device, ttnn.BufferType.L1)
+    lowest = l1_view.total_bytes_per_bank
+    for blk in l1_view.block_table:
+        if blk["allocated"] == "yes":
+            lowest = min(lowest, int(blk["address"]))
+    return lowest - L1_SAFETY_MARGIN
+
+
 def _cb(index, num_pages, page_size, data_format, core_ranges):
     return ttnn.CBDescriptor(
         total_size=num_pages * page_size,
@@ -236,10 +252,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     # ---------------- block selection ----------------
     core_w_tiles = g.tensor_w_tiles  # R1: each core owns the whole row
     w_tile_start = 0
-    # Per-core L1 left for CBs: the allocator's largest free contiguous L1 region (already net of
-    # every L1-resident tensor, including the freshly allocated output), minus a safety margin.
-    l1_view = ttnn.device.get_memory_view(device, ttnn.BufferType.L1)
-    budget = l1_view.largest_contiguous_bytes_free_per_bank - L1_SAFETY_MARGIN
+    budget = _cb_budget(device)
     if g.rm_in_place and _footprint(g, core_w_tiles, 1, 1) > budget:
         # Whole-row in-place tilize does not fit: restride the resident sticks instead (W chunks allowed).
         g.rm_in_place = g.x_resident = False

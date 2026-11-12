@@ -84,6 +84,22 @@ to `SUPPORTED["memory_layout"]`, both natively in the reader/writer:
 
 **Done when**: every golden cell with `gamma_layout=TILE` and/or `memory_layout=HEIGHT_SHARDED` whose other axes are in SUPPORTED passes (except the `(1,1,32,32768)` loose case named above), verifier loud categories at 0, acceptance + precision baseline still green.
 
+
+
+### [x] Refinement 1b — TILE-layout gamma + HEIGHT_SHARDED placement (dataflow-boundary refinement) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 2 FAIL: acceptance/refinement tests failing:
+  - tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded_tile_gamma.py::test_height_sharded_auto[nog-fp32-rm-(128, 8192)] - NotImplementedError: rms_norm: row too wide for single-core residency; needs W-split regime R3
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+**Outcome**: root cause was an L1 leak + a wrong CB budget bound, not the kernel. (1) The refinement test's `oom_guard` skips (infeasible fp32 (128,8192) TILE shards) left the sharded input alive in the pytest traceback, so later cases in the module saw a low leaked L1 buffer; `_run` now deallocates in `finally`. (2) `_cb_budget` now bounds CBs by the lowest allocated L1 address (CB region grows up from the allocator base) instead of `largest_contiguous_bytes_free_per_bank`, which turned a leaked/low buffer into a TT_THROW CB clash. Unit dir 229 passed / 0 failed; full golden 1297 passed, 1 failed (the excepted `(1,1,32,32768)` loose case, R3/Refinement 4), 0 hangs.
+
 ### [ ] Refinement 2 — Numerical configurability: `fp32_dest_acc_en=False`, bfloat8_b input and gamma
 
 **Goal**: add `False` to `SUPPORTED["fp32_dest_acc_en"]` (bf16 / bf8b input; `{float32, False}` stays the
