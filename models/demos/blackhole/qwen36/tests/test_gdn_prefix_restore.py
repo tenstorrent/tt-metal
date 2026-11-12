@@ -159,8 +159,9 @@ def test_checkpoint_and_prefix_restore_match_cold_prefill(mesh_device, kv_bf8, m
 @_parametrize
 def test_chunked_prefill_matches_unchunked(mesh_device, kv_bf8, monkeypatch, reset_seeds, ensure_gc):
     """Chunked equivalents of a 2500-token prefill, each chunk resuming from the block the previous chunk wrote:
-    2048 + 452 is the same computation as one prefill (exact); 1024 + 1024 + 452 splits the first 2048-token prefill
-    chunk, so it is compared by PCC. A chunk never changes its start blocks."""
+    2048 + 452 is the same computation as one prefill (exact); a chunk end on every KV block boundary (512, 1024 or
+    2048 tokens) splits the first 2048-token prefill chunk unless the block is 2048 tokens, so it is compared by PCC
+    then. A chunk never changes its start blocks."""
     run = Run(mesh_device, monkeypatch, kv_bf8)
     bs = run.bs
     prompt = _prompts(1, 2500, seed=21)
@@ -170,7 +171,7 @@ def test_chunked_prefill_matches_unchunked(mesh_device, kv_bf8, monkeypatch, res
     logits_whole = run.prefill([_row(prompt, 0, 2500, run.blocks(cols), whole)])
     state_whole = run.state(whole)
 
-    for ends, exact in (([2048, 2500], True), ([1024, 2048, 2500], False)):
+    for ends, exact in (([2048, 2500], True), ([*range(bs, 2500, bs), 2500], bs >= 2048)):
         pages = run.blocks(cols)
         start, prev = 0, None
         for end in ends:
