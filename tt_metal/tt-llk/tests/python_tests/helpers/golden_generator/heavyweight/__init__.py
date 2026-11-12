@@ -24,8 +24,8 @@ Writing a test touches only the first. Pick the golden for your architecture and
 hand it tensors::
 
     from helpers.golden_generator.heavyweight.operations import (
-        QuasarDataCopyGolden,
+        get_quasar_data_copy_golden,
     )
 
-    result = QuasarDataCopyGolden().run(stimuli, in_format, out_format)
+    result = get_quasar_data_copy_golden().run(stimuli, in_format, out_format)
 """

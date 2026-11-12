@@ -6,8 +6,8 @@
 The operations live in :mod:`.pipelines`. Everything here is the machinery
 that builds and runs them.
 
-Use an architecture's golden, such as ``QuasarMatmulGolden``,
-``WormholeEltwiseBinaryGolden`` and so on, all exported from here. Each is the
+Use an architecture's golden, such as ``get_quasar_matmul_golden``,
+``get_wormhole_eltwise_binary_golden`` and so on, all exported from here. Each is the
 architecture-independent pipeline bound to an ``ArchProfile`` from
 :mod:`.arch`. The classes themselves take the architecture as an argument.
 """
@@ -17,16 +17,16 @@ from .arch import (
     QUASAR,
     WORMHOLE,
     ArchProfile,
-    BlackholeDataCopyGolden,
-    BlackholeEltwiseBinaryGolden,
-    BlackholeMatmulGolden,
-    QuasarDataCopyGolden,
-    QuasarEltwiseBinaryGolden,
-    QuasarEltwiseBinaryReuseDestGolden,
-    QuasarMatmulGolden,
-    WormholeDataCopyGolden,
-    WormholeEltwiseBinaryGolden,
-    WormholeMatmulGolden,
+    get_blackhole_data_copy_golden,
+    get_blackhole_eltwise_binary_golden,
+    get_blackhole_matmul_golden,
+    get_quasar_data_copy_golden,
+    get_quasar_eltwise_binary_golden,
+    get_quasar_eltwise_binary_reuse_dest_golden,
+    get_quasar_matmul_golden,
+    get_wormhole_data_copy_golden,
+    get_wormhole_eltwise_binary_golden,
+    get_wormhole_matmul_golden,
 )
 from .chain import Chain, Registers, StageRecord, Step
 from .golden import Golden, OpConfig
@@ -40,16 +40,16 @@ __all__ = [
     "QUASAR",
     "WORMHOLE",
     "ArchProfile",
-    "BlackholeDataCopyGolden",
-    "BlackholeEltwiseBinaryGolden",
-    "BlackholeMatmulGolden",
-    "QuasarDataCopyGolden",
-    "QuasarEltwiseBinaryGolden",
-    "QuasarEltwiseBinaryReuseDestGolden",
-    "QuasarMatmulGolden",
-    "WormholeDataCopyGolden",
-    "WormholeEltwiseBinaryGolden",
-    "WormholeMatmulGolden",
+    "get_blackhole_data_copy_golden",
+    "get_blackhole_eltwise_binary_golden",
+    "get_blackhole_matmul_golden",
+    "get_quasar_data_copy_golden",
+    "get_quasar_eltwise_binary_golden",
+    "get_quasar_eltwise_binary_reuse_dest_golden",
+    "get_quasar_matmul_golden",
+    "get_wormhole_data_copy_golden",
+    "get_wormhole_eltwise_binary_golden",
+    "get_wormhole_matmul_golden",
     "Chain",
     "DataCopyGolden",
     "EltwiseBinaryGolden",

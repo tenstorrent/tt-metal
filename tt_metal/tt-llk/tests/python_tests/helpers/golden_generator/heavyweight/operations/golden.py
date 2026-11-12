@@ -15,7 +15,7 @@ and a chain deliberately knows nothing about hardware.
 Writing a test never involves the data-transfer blocks: pick the golden for the
 architecture and call it with tensors.
 
-    golden = QuasarDataCopyGolden()
+    golden = get_quasar_data_copy_golden()
     result = golden.run(stimuli, in_format, out_format)
 """
 
@@ -126,7 +126,7 @@ class Golden:
         if arch is None and blocks is None:
             raise TypeError(
                 f"{type(self).__name__} has no architecture. Use an "
-                f"architecture's factory (e.g. QuasarDataCopyGolden) or pass "
+                f"architecture's factory (e.g. get_quasar_data_copy_golden) or pass "
                 f"arch= / blocks= explicitly."
             )
         self.arch = arch
