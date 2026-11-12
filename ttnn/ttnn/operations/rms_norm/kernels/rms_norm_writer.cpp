@@ -110,11 +110,16 @@ void kernel_main() {
             }
             cb_wait_front(cb_partial, rows_this_block);
             const uint32_t src = get_read_ptr(cb_partial);
+            // A partial is column-0-valid, and column 0 lives only in faces 0 and 2: only those two faces
+            // cross the NoC (half the root's incast — G-1 contributors converge on one core's L1). Faces 1/3
+            // of the gathered tiles are never read: the combine's sums there stay in faces 1/3, the rstd
+            // post-op is scoped to faces 0/2 and the normalize multiply broadcasts column 0.
+            constexpr uint32_t face_bytes = partial_bytes / 4;
             for (uint32_t i = 0; i < rows_this_block; ++i) {
-                noc_async_write(
-                    src + i * partial_bytes,
-                    get_noc_addr(root_x, root_y, gather_base + (i * group_size + slot) * partial_bytes),
-                    partial_bytes);
+                const uint32_t s = src + i * partial_bytes;
+                const uint64_t d = get_noc_addr(root_x, root_y, gather_base + (i * group_size + slot) * partial_bytes);
+                noc_async_write(s, d, face_bytes);
+                noc_async_write(s + 2 * face_bytes, d + 2 * face_bytes, face_bytes);
             }
             noc_async_write_barrier();
             cb_pop_front(cb_partial, rows_this_block);

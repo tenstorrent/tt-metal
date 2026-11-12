@@ -68,6 +68,9 @@ constexpr uint32_t group_size = get_compile_time_arg_val(19);
 constexpr uint32_t cb_partial = get_compile_time_arg_val(20);
 constexpr uint32_t cb_gather = get_compile_time_arg_val(21);
 constexpr uint32_t cb_rstd_root = get_compile_time_arg_val(22);
+// Stall shadow (R3, TILE + gamma): x·γ is computed into a block-wide cb_normed while the cross-core combine is
+// in flight, so only the ·rstd multiply remains after rstd arrives.
+constexpr bool gamma_shadow = get_compile_time_arg_val(23) != 0;
 
 constexpr uint32_t row_stride_tiles = num_w_chunks * w_chunk_tiles;
 constexpr bool has_partial = w_partial_elems != 0;
@@ -122,6 +125,25 @@ using MulGammaRow = BinaryFpu<
     BinaryFpuOp::Mul,
     input(cb_normed),
     input(cb_gamma, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Row)>;
+// ---- stall-shadow element types: x·γ(row) -> cb_normed (whole block, chunk-major) before rstd; then
+//      cb_normed·rstd(col) -> cb_out ----
+using MulGammaRowX = BinaryFpu<
+    BinaryFpuOp::Mul,
+    input(
+        cb_x,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided),
+    input(cb_gamma, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Row)>;
+using PackShadowed = PackTile<output(cb_normed, ReservePolicy::PerOuter, PushPolicy::PerOuter)>;
+using MulRstdColShadowed = BinaryFpu<
+    BinaryFpuOp::Mul,
+    input(cb_normed),
+    input(cb_rstd, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col)>;
+using PackShadowNormalized = PackTile<output(cb_out, ReservePolicy::PerOuter, PushPolicy::PerOuter)>;
+
 // TILE: scaled chunk -> writer, one c-tile window per row. RM: in place on cb_normed, per-tile credit
 // (the input tile is popped before the output slot is reserved, so a full cb_normed never deadlocks).
 using PackScaled = std::conditional_t<
@@ -144,13 +166,34 @@ ALWI void tilize_row_chunk(InDFB& in, OutDFB& out) {
         in, out, 1);
 }
 
+// SFPU scope of the rstd post-op: the reduced tile is column-0-valid and only column 0 is ever read (the
+// normalize multiply broadcasts it by column), so the SFPU walks faces 0 and 2 (16 of 32 vector ops) instead of
+// the whole tile (catalog `sfpu_tile_scope`). On the R3 root this post-op sits on the combine's critical path.
+constexpr ckernel::VectorMode rstd_sfpu_scope = ckernel::VectorMode::C;
+
 // rsqrt(Σx²/W + eps) on the reduced tile in DEST — the reduce helper's post_reduce_op callback.
 ALWI void rstd_post_op(uint32_t dst_idx) {
     binop_with_scalar_tile_init();
-    mul_unary_tile(dst_idx, inv_w_bits);
-    add_unary_tile(dst_idx, eps_bits);
+    mul_unary_tile(dst_idx, inv_w_bits, rstd_sfpu_scope);
+    add_unary_tile(dst_idx, eps_bits, rstd_sfpu_scope);
     rsqrt_tile_init();
-    rsqrt_tile(dst_idx);
+    rsqrt_tile(dst_idx, rstd_sfpu_scope);
+}
+
+// Stall shadow: x·γ(row) for the whole block into cb_normed (chunk-major, the order normalize consumes it), then
+// release cb_x — only the ·rstd multiply is left for after rstd arrives. No-op unless gamma_shadow.
+template <class XDFB, class GammaDFB, class NormedDFB>
+ALWI void shadow_block(XDFB& x, GammaDFB& gamma, NormedDFB& normed, uint32_t rows) {
+    if constexpr (gamma_shadow) {
+        x.wait_front(rows * row_stride_tiles);
+        for (uint32_t k = 0; k < num_w_chunks; ++k) {
+            eltwise_chain(
+                IterationShape::grid(rows, w_chunk_tiles),
+                MulGammaRowX{x, gamma, StridedTileRange{k * w_chunk_tiles, row_stride_tiles}},
+                PackShadowed{normed});
+        }
+        x.pop_front(rows * row_stride_tiles);
+    }
 }
 
 }  // namespace
@@ -255,6 +298,9 @@ void kernel_main() {
                 NoAccumulation{},
                 NoOp{},
                 partial);
+            if (!is_root) {
+                shadow_block(x, gamma, normed, rows_this_block);  // during the gather / combine / multicast
+            }
             if (is_root) {
                 // combine_block: the G gathered partials of each row are column-0-valid -> sum the tiles,
                 // skip the within-tile collapse, then the rstd post-op.
@@ -276,6 +322,8 @@ void kernel_main() {
                     ReduceInputMemoryLayout::contiguous(),
                     NoAccumulation{},
                     [](uint32_t dst_idx) { rstd_post_op(dst_idx); });
+                // The root's shadow follows its combine (which everyone waits on), overlapping the multicast.
+                shadow_block(x, gamma, normed, rows_this_block);
             }
         } else {
             compute_kernel_lib::reduce<
@@ -300,6 +348,18 @@ void kernel_main() {
         }
 
         // ---- normalize / scale / untilize, chunk by chunk ----
+        if constexpr (gamma_shadow) {
+            // (x·γ)·rstd: the shadowed product streams out of cb_normed in the order it was packed.
+            rstd.wait_front(rows_this_block);
+            for (uint32_t k = 0; k < num_w_chunks; ++k) {
+                eltwise_chain(
+                    IterationShape::grid(rows_this_block, w_chunk_tiles),
+                    MulRstdColShadowed{normed, rstd},
+                    PackShadowNormalized{out});
+            }
+            rstd.pop_front(rows_this_block);
+            continue;
+        }
         x.wait_front(rows_this_block * row_stride_tiles);
         rstd.wait_front(rows_this_block);
         for (uint32_t k = 0; k < num_w_chunks; ++k) {

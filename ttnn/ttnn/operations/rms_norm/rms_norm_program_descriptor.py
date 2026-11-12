@@ -75,10 +75,25 @@ W_CHUNK_FLOOR_TILES = 8
 GAMMA_ROW_READ_ALIGN = 64
 # Slack kept free of CBs in the per-core L1 budget.
 L1_SAFETY_MARGIN = 32 * 1024
-# R3 on interleaved input (logical W-split): the W-group spans one grid row (G = grid.x cores, fewer if the
-# row has fewer tiles); row-groups stack down the grid's y axis.
-# Regime predicate (pinned): interleaved input takes R3 iff R1 cannot hold one whole row on a core, i.e.
-# F(1, K_floor) > B — never on grid size or row count (Refinement 5 owns the occupancy predicate).
+# R3 on interleaved input (logical W-split): each row-group is a gx x gy core rectangle (see _r3_group_rect),
+# row-groups stack down the grid's y axis.
+# Minimum W tiles per core's slice: bounds G = Wt / this (more cores = shorter DRAM phases, but a longer
+# gather incast + combine). Measured (32-row decode, Blackhole 12x10): 5 is best over {2, 4, 5, 6, 8, 12}:
+# 32x7168 G=44 6.8 us (G=110 8.8, G=18 7.1), 32x1024 G=6 4.1 us.
+R3_MIN_SLICE_TILES = 5
+# Cap on G (cores per row-group = the root's combine fan-in). 0 = no cap beyond R3_MIN_SLICE_TILES and the grid.
+R3_MAX_GROUP_CORES = 0
+# Regime predicate: interleaved input takes R3 iff R1 cannot hold one whole row on a core, or the W-split puts
+# >= R3_OCCUPANCY_RATIO x R1's cores to work (R1 runs min(Rt, grid) cores). Pinned from measurement: R3 wins
+# at 1.2x (3200x2048: 73.5 -> 70.7 us; 3200x7168: 252 -> 226 us) and above (640x7168: 61 -> 47 us), loses at
+# 0.64x (1504x544: 11.6 vs 19.3 us). Prefill (Rt >= grid cores) never flips: R3 cannot exceed the grid.
+R3_OCCUPANCY_RATIO = 1.2
+# W chunk cap for R3 slices (0 = whole slice per chunk). Live knob, parked: finer chunks pipeline read/compute/
+# write but measured slower on decode (32x7168: c=8 8.17 us, c=4 8.34, c=2 8.87) — per-chunk overhead outweighs
+# the overlap at 4-8 tile slices.
+R3_STREAM_CHUNK_TILES = 0
+# Stall shadow (R3, TILE + gamma): x·γ while the combine is in flight; only ·rstd remains after rstd arrives.
+R3_GAMMA_SHADOW = True
 # FORCE_W_SPLIT is a test hook (regime-pinned tests flip it to exercise R3 on shapes R1 can hold).
 FORCE_W_SPLIT = False
 
@@ -171,6 +186,9 @@ class _Geometry:
         # R3 sets these (W-split): G cores per row-group.
         self.w_split = False
         self.group_size = 1
+        # R3 stall shadow (TILE + gamma): x·γ is computed into a block-wide cb_normed while the combine is in
+        # flight. Set by create_program_descriptor once the regime is known (falls back if it does not fit).
+        self.gamma_shadow = False
         # Does any core's slice end in a partial tile (-> masked tail sumsq tile, cb_reduce_mask)? R1/R6: the
         # tensor's last tile; R3: set by the planner from the per-core slices.
         self.sq_partial = self.w_partial_elems != 0
@@ -200,7 +218,7 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int, x_depth: int = 1
     f += r * g.s_f  # cb_rstd
     f += r * _n_sq(g, core_w_tiles) * g.s_sq  # cb_sumsq
     if g.has_gamma or g.is_rm:
-        f += r * c * g.s_f  # cb_normed
+        f += r * (row_stride if g.gamma_shadow else c) * g.s_f  # cb_normed (block-wide under the stall shadow)
     if g.has_gamma:
         f += STREAM_DEPTH * c * g.s_g  # cb_gamma
     if not g.x_resident:
@@ -241,6 +259,8 @@ def _select_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budget: int):
         if _footprint(g, core_w_tiles, r, cand, depth) <= budget:
             K = cand
             break
+    if g.w_split and R3_STREAM_CHUNK_TILES > 0:
+        K = max(K, math.ceil(core_w_tiles / R3_STREAM_CHUNK_TILES))
     c = math.ceil(core_w_tiles / K)
     K = math.ceil(core_w_tiles / c)  # drop chunks that would be all padding
     return r, c, K, depth
@@ -396,23 +416,47 @@ def _r1_fits(g: _Geometry, budget: int) -> bool:
     return _footprint(g, g.tensor_w_tiles, 1, math.ceil(g.tensor_w_tiles / c_floor)) <= budget
 
 
+def _r3_group_rect(g: _Geometry, grid, n_groups: int):
+    """R3 interleaved W-group shape (gx, gy): the core rectangle one row-group spans.
+
+    Row-groups stack down the grid's y axis, so a group may take up to grid.y // n_groups grid rows. The
+    group size G = gx*gy is the largest product within the caps — every core keeps >= R3_MIN_SLICE_TILES
+    W tiles and the root's combine fan-in stays <= R3_MAX_GROUP_CORES — preferring fewer grid rows on ties
+    (a 1-row group multicasts along a single NoC row).
+    """
+    gy_max = max(1, grid.y // n_groups)
+    g_cap = max(1, g.tensor_w_tiles // R3_MIN_SLICE_TILES)
+    if R3_MAX_GROUP_CORES > 0:
+        g_cap = min(g_cap, R3_MAX_GROUP_CORES)
+    best = (1, 1)
+    for gy in range(1, gy_max + 1):
+        gx = min(grid.x, g_cap // gy)
+        if gx >= 1 and gx * gy > best[0] * best[1]:
+            best = (gx, gy)
+    return best
+
+
 def _plan_r3_interleaved(g: _Geometry, grid):
-    """R3 logical W-split on an interleaved tensor: W-groups of G cores along a grid row (each core reads
-    its tile-aligned W slice from DRAM), row-groups down the grid's y axis (tile-rows split evenly)."""
-    slice_tiles = math.ceil(g.tensor_w_tiles / grid.x)
-    G = math.ceil(g.tensor_w_tiles / slice_tiles)
+    """R3 logical W-split on an interleaved tensor. Row-group i is a gx x gy core rectangle at grid rows
+    [i*gy, (i+1)*gy); its G = gx*gy cores (row-major slot order = the rstd mcast group order) each read a
+    contiguous tile-aligned W slice from DRAM (an even split: the first Wt % G slices get one extra tile).
+    Tile-rows are split evenly over min(grid.y, Rt) row-groups."""
     num_groups = min(grid.y, g.tensor_rows_tiles)
+    gx, gy = _r3_group_rect(g, grid, num_groups)
+    G = gx * gy
+    w_base, w_rem = divmod(g.tensor_w_tiles, G)
     base, rem = divmod(g.tensor_rows_tiles, num_groups)
     work, cores = [], []
     start = 0
     for i in range(num_groups):
         n = base + (1 if i < rem else 0)
-        root = ttnn.CoreCoord(0, i)
+        root = ttnn.CoreCoord(0, i * gy)
         for j in range(G):
-            core = ttnn.CoreCoord(j, i)
-            ts = j * slice_tiles
+            core = ttnn.CoreCoord(j % gx, i * gy + j // gx)
+            ts = j * w_base + min(j, w_rem)
+            nt = w_base + (1 if j < w_rem else 0)
             e0 = ts * TILE
-            e1 = min(g.W, (ts + min(slice_tiles, g.tensor_w_tiles - ts)) * TILE)
+            e1 = min(g.W, (ts + nt) * TILE)
             work.append(_CoreWork(core, start, n, start * TILE, g.num_valid_sticks, e0, e1, group=i, slot=j, root=root))
             cores.append(core)
         start += n
@@ -421,6 +465,17 @@ def _plan_r3_interleaved(g: _Geometry, grid):
     g.group_size = G
     g.sq_partial = any(w.w_partial for w in work)
     return work, _cores_to_range_set(cores)
+
+
+def _take_r3_interleaved(g: _Geometry, grid, budget: int) -> bool:
+    """Interleaved regime predicate: R3 when R1 cannot hold one whole row on a core, or when the W-split
+    occupies at least R3_OCCUPANCY_RATIO x the cores R1 would (the decode / few-row profile: R1 runs Rt cores)."""
+    if FORCE_W_SPLIT or not _r1_fits(g, budget):
+        return True
+    r1_cores = min(g.tensor_rows_tiles, grid.x * grid.y)
+    n_groups = min(grid.y, g.tensor_rows_tiles)
+    gx, gy = _r3_group_rect(g, grid, n_groups)
+    return gx * gy > 1 and n_groups * gx * gy >= R3_OCCUPANCY_RATIO * r1_cores
 
 
 def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.ProgramDescriptor:
@@ -435,10 +490,10 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
         work, all_cores = _plan_sharded(g)
     else:
         grid = device.compute_with_storage_grid_size()
-        if not FORCE_W_SPLIT and _r1_fits(g, budget):
-            work, all_cores = _plan_r1(g, grid)
-        else:
+        if _take_r3_interleaved(g, grid, budget):
             work, all_cores = _plan_r3_interleaved(g, grid)
+        else:
+            work, all_cores = _plan_r1(g, grid)
     rows_cap = max(1, max(w.n for w in work))
 
     # ---------------- block selection ----------------
@@ -449,7 +504,20 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     if g.rm_in_place and _footprint(g, core_w_tiles, 1, 1) > budget:
         # Whole-row in-place tilize does not fit: restride the resident sticks instead (W chunks allowed).
         g.rm_in_place = g.x_resident = False
-    block_rows, w_chunk_tiles, num_w_chunks, x_block_depth = _select_blocks(g, core_w_tiles, rows_cap, budget)
+    g.gamma_shadow = R3_GAMMA_SHADOW and g.w_split and g.has_gamma and not g.is_rm
+    try:
+        block_rows, w_chunk_tiles, num_w_chunks, x_block_depth = _select_blocks(g, core_w_tiles, rows_cap, budget)
+    except NotImplementedError:
+        if not g.gamma_shadow:
+            raise
+        g.gamma_shadow = False  # the block-wide cb_normed does not fit: normalize then scale after rstd
+        block_rows, w_chunk_tiles, num_w_chunks, x_block_depth = _select_blocks(g, core_w_tiles, rows_cap, budget)
+    if g.gamma_shadow and g.x_resident and block_rows > 1:
+        # Resident multi-row shards (BLOCK grids): gamma is the only DRAM traffic and every core of a grid column
+        # re-reads the same slice — measured 8 us on 640x7168 [64,1024]x(7,10), longer than sumsq + combine. The
+        # shadow would pull that read onto the critical path; scaling after rstd keeps it hidden. Dropping the
+        # shadow only shrinks cb_normed, so the selected blocking still fits.
+        g.gamma_shadow = False
     row_stride_tiles = num_w_chunks * w_chunk_tiles
 
     # ---------------- circular buffers ----------------
@@ -486,7 +554,8 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     if g.has_gamma:
         cbs.append(_cb(CB_GAMMA, STREAM_DEPTH * w_chunk_tiles, g.s_g, gamma.dtype, all_cores))
     if g.has_gamma or g.is_rm:
-        cbs.append(_cb(CB_NORMED, block_rows * w_chunk_tiles, g.s_f, interm, all_cores))
+        normed_tiles = row_stride_tiles if g.gamma_shadow else w_chunk_tiles
+        cbs.append(_cb(CB_NORMED, block_rows * normed_tiles, g.s_f, interm, all_cores))
     if g.w_split:
         # Partials leave DEST once (no L1 accumulation), so their pages follow the DEST width like cb_rstd: a
         # Float32 page under 16-bit DEST stores nothing extra and doubles cb_gather (G tiles per row).
@@ -571,7 +640,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             CB_IDS
             + blocking_ct
             + [group_partial, int(g.has_gamma), int(g.is_rm), _f32_bits(1.0 / g.W), _f32_bits(epsilon)]
-            + [int(g.w_split), g.group_size, CB_PARTIAL, CB_GATHER, CB_RSTD_ROOT]
+            + [int(g.w_split), g.group_size, CB_PARTIAL, CB_GATHER, CB_RSTD_ROOT, int(g.gamma_shadow)]
         )
 
         readers.append(
