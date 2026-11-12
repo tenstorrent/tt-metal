@@ -4,10 +4,14 @@
 
 #pragma once
 
+#include <cstddef>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include <tt-metalium/experimental/command_list.hpp>
 
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/common/guard.hpp"
 #include "ttnn/common/queue_id.hpp"
 
@@ -57,9 +61,27 @@ public:
     // the device.
     void record(QueueId binary_upload_cq_id, tt::tt_metal::distributed::MeshWorkload& workload);
 
+    // The TTNN command-list parameter binds of the op calls in progress while recording, for push_cmd_list_binds and
+    // pop_cmd_list_binds. Scopes nest; pop_binds(true) throws if a bind of the popped scope reached no recorded
+    // program.
+    void push_binds(std::string op_name, std::vector<CmdListBind> binds);
+    void pop_binds(bool validate);
+
 private:
+    struct ActiveBind {
+        CmdListBind bind;
+        bool claimed = false;
+    };
+
+    struct BindScope {
+        std::string op_name;
+        std::size_t start;  // index into binds_ where the scope starts
+    };
+
     tt::tt_metal::experimental::CommandListBuilder metal_builder_;
     bool recording_ = false;
+    std::vector<BindScope> bind_scopes_;
+    std::vector<ActiveBind> binds_;  // innermost scope last
 };
 
 // A replayable command list in device DRAM, bound to the command queue it was built for.
