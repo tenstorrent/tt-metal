@@ -3,8 +3,8 @@
 """Shared by the teardown sanity rows: paths, the census, the launch, the deadline, the assertions.
 
 Two launchers: tt-run with tt-metal ranks (``legacy_cmd``, ``solve_cmd``, the Python probe) and plain mpirun with
-the C probe (``mpi_cmd``, ``sanity_mpi_probe.c``). The MPI install is ``TT_SANITY_MPI_PREFIX`` when set (its
-bin/mpirun and bin/mpicc, the probe recompiled against it, so another OpenMPI version or build can be tried),
+the probe (``mpi_cmd``, ``sanity_mpi_probe.cpp``). The MPI install is ``TT_SANITY_MPI_PREFIX`` when set (its
+bin/mpirun and bin/mpicxx, the probe recompiled against it, so another OpenMPI version or build can be tried),
 else the mpirun on PATH and the probe binary the build made (``build/test/tt_metal/distributed/teardown_mpi_probe``).
 """
 
@@ -179,7 +179,7 @@ def solve_cmd(mpi_extra: str = "", mgd: Path = MGD) -> list:
 
 
 MPI_PREFIX = os.environ.get("TT_SANITY_MPI_PREFIX", "")
-MPI_PROBE_SRC = HERE / "sanity_mpi_probe.c"
+MPI_PROBE_SRC = HERE / "sanity_mpi_probe.cpp"
 MPI_PROBE_BUILT = ROOT / "build/test/tt_metal/distributed/teardown_mpi_probe"
 _MPI_PROBE_CACHE: dict = {}
 
@@ -191,21 +191,21 @@ def mpirun_path() -> str:
 
 
 def mpi_probe_path() -> str:
-    """The C probe: the build's binary, or one compiled now with the chosen install's mpicc; skips if neither."""
+    """The probe: the build's binary, or one compiled now with the chosen install's mpicxx; skips if neither."""
     if "path" in _MPI_PROBE_CACHE:
         return _MPI_PROBE_CACHE["path"]
     if not MPI_PREFIX and MPI_PROBE_BUILT.exists():
         _MPI_PROBE_CACHE["path"] = str(MPI_PROBE_BUILT)
         return _MPI_PROBE_CACHE["path"]
-    mpicc = os.environ.get("TT_SANITY_MPICC") or (
-        str(Path(MPI_PREFIX) / "bin" / "mpicc") if MPI_PREFIX else shutil.which("mpicc")
+    mpicxx = os.environ.get("TT_SANITY_MPICXX") or (
+        str(Path(MPI_PREFIX) / "bin" / "mpicxx") if MPI_PREFIX else shutil.which("mpicxx")
     )
-    if not mpicc or not Path(mpicc).exists():
+    if not mpicxx or not Path(mpicxx).exists():
         pytest.skip(
-            "no teardown_mpi_probe binary in the build and no mpicc to compile sanity_mpi_probe.c (set TT_SANITY_MPI_PREFIX or TT_SANITY_MPICC)"
+            "no teardown_mpi_probe binary in the build and no mpicxx to compile sanity_mpi_probe.cpp (set TT_SANITY_MPI_PREFIX or TT_SANITY_MPICXX)"
         )
     out = Path(tempfile.mkdtemp(prefix="sanity_mpi_")) / "teardown_mpi_probe"
-    subprocess.run([mpicc, "-O2", "-o", str(out), str(MPI_PROBE_SRC)], check=True)
+    subprocess.run([mpicxx, "-O2", "-o", str(out), str(MPI_PROBE_SRC)], check=True)
     _MPI_PROBE_CACHE["path"] = str(out)
     return _MPI_PROBE_CACHE["path"]
 
@@ -228,7 +228,7 @@ MPI_BINDING = HERE / "sanity_mpi_binding.yaml"
 
 
 def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3) -> list:
-    """Launch the raw C probe THROUGH tt-run (legacy mode, np local ranks), so the row tests tt-run's own teardown:
+    """Launch the raw C++ probe THROUGH tt-run (legacy mode, np local ranks), so the row tests tt-run's own teardown:
     its exit code, signal handling and cleanup. tt-run picks the plain launcher and adds --mca btl self,tcp; extra
     group-E settings (a transport, a component, an interface) go through --mpi-args."""
     return [

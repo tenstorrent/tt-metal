@@ -3,13 +3,13 @@
 #
 # One question: when a fault lands on a REMOTE host, does tt-run / PRRTE tear the whole job down correctly across
 # every host? The single-host sanity lane cannot see this, so these cases need more than one host and run on SC4.
-# Each case launches the raw C probe (sanity_mpi_probe.c) across the hosts, one rank per host, on the production
+# Each case launches the raw C++ probe (sanity_mpi_probe.cpp) across the hosts, one rank per host, on the production
 # transport line (--mca btl self,tcp), then asserts the teardown shape: the right exit code AND no rank left alive
 # on any host.
 #
 # Run it yourself:
 #   ./run_teardown_multihost_tests.sh --hosts host1,host2[,host3,...]
-# Needs: at least two hosts, passwordless ssh between them, and mpirun + mpicc on PATH. The probe source is found
+# Needs: at least two hosts, passwordless ssh between them, and mpirun + mpicxx on PATH. The probe source is found
 # under $TT_METAL_HOME (falls back to the current directory).
 set -uo pipefail
 
@@ -36,8 +36,8 @@ victim_rank=$((num_hosts - 1))               # one rank per host, so the last ra
 # build the probe and put it on every host (exabox shares home over NFS, so the copy is just a fallback)
 # --------------------------------------------------------------------------------------------------------------
 probe="$(mktemp -d)/teardown_mpi_probe"
-probe_src="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_mpi_probe.c"
-mpicc -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
+probe_src="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_mpi_probe.cpp"
+mpicxx -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
 for host in $(host_names); do scp -q "$probe" "$host:$probe" 2>/dev/null || true; done
 
 launcher="$(command -v 'mpirun-ulfm' || command -v 'mpirun')"
