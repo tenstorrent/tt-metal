@@ -421,13 +421,15 @@ def test_post_all_gather_chunks_leave_room_for_many_fp32_stats(device, is_rmsnor
     shape = (1, 1, 32, 32768)
     inp = torch.randn(shape).bfloat16().float()
 
+    # inp is one contributor's slice of the row. Every contributor holding the same values keeps the
+    # row's statistics equal to the slice's own.
     tiles_per_contributor = 1 if is_rmsnorm else 2
     stats = torch.zeros(shape[:-1] + (contributors * tiles_per_contributor * 32,))
-    for k, part in enumerate(inp.chunk(contributors, dim=-1)):
+    for k in range(contributors):
         base = k * tiles_per_contributor * 32
-        stats[..., base : base + 1] = part.pow(2).sum(-1, keepdim=True)
+        stats[..., base : base + 1] = inp.pow(2).sum(-1, keepdim=True)
         if not is_rmsnorm:
-            stats[..., base + 32 : base + 33] = part.sum(-1, keepdim=True)
+            stats[..., base + 32 : base + 33] = inp.sum(-1, keepdim=True)
 
     tt_inp = ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_stats = ttnn.from_torch(stats, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
