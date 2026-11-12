@@ -57,6 +57,13 @@ class DraftResult:
 # --------------------------------------------------------------------------------------------- #
 # Pure host helpers (no device needed)
 # --------------------------------------------------------------------------------------------- #
+def free_tensors(*tensors):
+    """Deallocate every tensor given, skipping None: a KV-maintenance drafter forward returns no hidden under TP."""
+    for t in tensors:
+        if t is not None:
+            ttnn.deallocate(t)
+
+
 def anchor_selector(m, B, T):
     """One-hot [1,1,B,B*T] bf16 with a single 1.0 at (u, u*T + m[u]): ``sel @ feed`` gathers each
     user's accepted-prefix row of the verify feed."""
@@ -1401,7 +1408,7 @@ class MTPSpecEngine:
             alias_kv_write=True,
             spec_n_users=B,
         )
-        ttnn.deallocate(hn)
+        free_tensors(hn)
         h, tok, outs = self._hp_buf, self._dr_tok0, []
         for k in range(self.K):
             logits, hn = mtp.forward_decode(h, tok, self._dr_pos[k], self._dr_cos[k], self._dr_sin[k], self._mtp_pt)
@@ -1477,7 +1484,7 @@ class MTPSpecEngine:
         _, h_next = self.model.ttnn_mtp_decode_forward(
             last_hidden, int(first_tok), slot, page_table_tt, need_logits=False
         )
-        ttnn.deallocate(h_next)
+        free_tensors(h_next)
 
     def _reseed_mtp(self, committed_tokens, committed_positions, m):
         """Per-slot reseed (B == 1 past EAGER_RESEED_PROMPT_LEN): one 1-row drafter decode per committed slot."""
@@ -1490,7 +1497,7 @@ class MTPSpecEngine:
                     row, tok_row[i], pos_row[i] - 1, self._mtp_pt_rows[u], need_logits=False
                 )
                 ttnn.deallocate(row)
-                ttnn.deallocate(h_next)
+                free_tensors(h_next)
                 self.mtp_extra_steps += 1
 
     def _eager_row(self, feed, r):
@@ -1544,8 +1551,7 @@ class MTPSpecEngine:
         _, h_next = self.mtp.forward_decode(
             feed, tok_tt, pos_tt, cos, sin, pt_tt, need_logits=False, alias_kv_write=True, spec_n_users=B
         )
-        for t in (tok_tt, pos_tt, pt_tt, cos, sin, h_next):
-            ttnn.deallocate(t)
+        free_tensors(tok_tt, pos_tt, pt_tt, cos, sin, h_next)
         self.mtp_extra_steps += 1
 
     def _reseed_warmup(self, rows, dim_frac, dtype):

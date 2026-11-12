@@ -441,7 +441,9 @@ class Qwen36MTP:
         those rows carry (rows are user-major, u*T + i); the batched reseed passes B, so the write
         goes out as T calls of B rows. 1 keeps the per-row loop. Returns (logits, next_hidden), both fractured
         [1,1,B,dim/tp]. need_logits=True: next_hidden is mtp.norm's output re-fractured to dim/tp
-        (chain value). need_logits=False skips the head norm and returns RAW block output — KV maintenance only (reseed / catch-up); callers discard it, so it is not a valid chain value.
+        (chain value). need_logits=False is KV maintenance only (reseed / catch-up): under TP with a page table the
+        layer stops after its paged KV write and this returns (None, None); otherwise it skips the head norm and
+        returns the RAW block output, which callers discard (not a valid chain value).
         """
         mode = Mode.DECODE
         tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
@@ -449,6 +451,7 @@ class Qwen36MTP:
         fused = self._fuse(tok_emb, hidden_states, mode)
         ttnn.deallocate(tok_emb)
 
+        kv_only = not need_logits and self.num_devices > 1 and page_table is not None
         next_hidden = self.decoder.forward(
             fused,
             cos=cos,
@@ -458,8 +461,11 @@ class Qwen36MTP:
             page_table=page_table,
             alias_kv_write=alias_kv_write,
             n_users=spec_n_users,
+            kv_only=kv_only,
         )
         ttnn.deallocate(fused)
+        if kv_only:
+            return None, None
 
         if not need_logits:
             # KV-maintenance step (reseed / catch-up): the caller only needs the drafter's KV written
