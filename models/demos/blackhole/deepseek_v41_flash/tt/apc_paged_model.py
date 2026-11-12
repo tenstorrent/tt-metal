@@ -582,6 +582,9 @@ class PagedApc:
             nb = len(src)
             tok = np.ascontiguousarray(torch.as_tensor(tokens).long().reshape(-1).numpy())
             tp = [time.perf_counter()]
+            prof = (
+                {} if os.environ.get("DSV41_XROW_PROFILE", "0") == "1" else None
+            )  # (E-A: host enqueue vs device wait per phase)
             # 1. read the donor blocks (row sri)
             pt = torch.tensor([p for _, pages, *_ in src for p in pages], dtype=torch.long)
             lat = {}
@@ -616,7 +619,11 @@ class PagedApc:
                         self.hs.store[pn], [slot * NL, 0, 0, 0], [(slot + 1) * NL, 1, APS.WINDOW, APS.HEAD_DIM]
                     )
                     hpend[pn] = (ttnn.from_device(ttnn.get_device_tensors(sl)[sri * cols], blocking=False), sl)
+            _ts = time.perf_counter()
             ttnn.synchronize_device(md)
+            if prof is not None:
+                prof["read_enq_s"] = _ts - tp[0]  # gathers (they block on to_torch) + slice / from_device enqueues
+                prof["read_sync_s"] = time.perf_counter() - _ts
             keys = {}
             for lid, i, hs_, part in pend:
                 keys[(lid, i)] = [ttnn.to_torch(h).reshape(-1, APS.IDIM).clone() for h in hs_]
@@ -631,7 +638,13 @@ class PagedApc:
             m.pool.sync_page_table()
             for s_, l_ in lat.items():
                 n_ = l_.shape[0]
-                PC.scatter_rows_mesh(m, m.pool.pool, {dst: (m.pool.phys_rows(b, s_, torch.arange(n_)).long(), l_)})
+                PC.scatter_rows_mesh(
+                    m,
+                    m.pool.pool,
+                    {dst: (m.pool.phys_rows(b, s_, torch.arange(n_)).long(), l_)},
+                    sync_every=int(os.environ.get("DSV41_XROW_SYNC_EVERY", "1")),
+                    stats=prof,
+                )
             tp.append(time.perf_counter())
             # 3. one copy chunk per donor block: key store slot (+ the tip's halo slots) in this row, filled by the save kernels from staging tensors
             cps = []
@@ -686,7 +699,12 @@ class PagedApc:
                         self.hs.save(pn, st_)
                         keep += list(st_.values())
                 # (the save kernels read their tables and staging tensors when they RUN: the table of the next block is only written after this launch is enqueued, h2d is ordered on the queue)
+            _ts = time.perf_counter()
             ttnn.synchronize_device(md)
+            if prof is not None:
+                prof["store_enq_s"] = _ts - tp[-1]  # per-block from_torch staging + table uploads + save launches
+                prof["store_sync_s"] = time.perf_counter() - _ts
+                self.log("APC paged: xrow profile (s): " + ", ".join(f"{k} {v:.3f}" for k, v in sorted(prof.items())))
             for x in keep:
                 ttnn.deallocate(x)
             for _, cp in cps:
