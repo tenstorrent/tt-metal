@@ -111,6 +111,15 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
                 logger.info(f"MK_BACKEND_MLA_MARKS: layer {layers[i]}: {marks}")
             except Exception as ex:  # noqa: BLE001
                 logger.info(f"MK_BACKEND_MLA_MARKS: layer {layers[i]}: unreadable ({ex})")
+            # every chip's shard phase marks (tp_dsa_shard.shard_probe; the chip's own clock, us after its root's
+            # attention start): the first DSA layer only -- the AG window's skew vs fabric split needs all 32 chips
+            if hasattr(e.get("mla"), "shard_probe") and not getattr(backend, "_shard_probe_done", False):
+                backend._shard_probe_done = True
+                try:
+                    for rc, m in e["mla"].shard_probe().items():
+                        logger.info(f"MK_BACKEND_SHARD_PROBE: layer {layers[i]} chip {rc}: {m}")
+                except Exception as ex:  # noqa: BLE001
+                    logger.info(f"MK_BACKEND_SHARD_PROBE: layer {layers[i]}: unreadable ({ex})")
     if os.environ.get("GLM53_STACK_PROBE") == "1":  # the stacks' per-phase probe marks (chip 0) after the eager step
         for r, stk in kv.stacks[0]:
             if stk is None or not hasattr(stk, "probe_marks") or getattr(stk, "probe", None) is None:
@@ -138,6 +147,18 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         f"{step_us:.1f} us = {step_us / len(layers):.1f} us per layer"
     )
     assert step_us > 0
+    # every chip's shard marks of the LAST traced replay (the eager step's marks carry the host's per-device dispatch
+    # skew, up to ~650 us over 32 chips): the first DSA layer
+    if os.environ.get("GLM53_MLA_PROBE") == "1":
+        for i, e in enumerate(backend.seq):
+            if not hasattr(e.get("mla"), "shard_probe"):
+                continue
+            try:
+                for rc, m in e["mla"].shard_probe().items():
+                    logger.info(f"MK_BACKEND_SHARD_PROBE_TRACED: layer {layers[i]} chip {rc}: {m}")
+            except Exception as ex:  # noqa: BLE001
+                logger.info(f"MK_BACKEND_SHARD_PROBE_TRACED: layer {layers[i]}: unreadable ({ex})")
+            break
     prompt = os.environ.get(
         "GLM53_MK_PROMPT", ""
     )  # the text, or @path of a file holding it (launchers split on spaces)

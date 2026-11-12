@@ -371,4 +371,40 @@ inline uint32_t agk_count(uint32_t p, uint32_t q, uint32_t C) {
     return n < CAND_MAX ? n : CAND_MAX;
 }
 #endif
+// rev 72, LOCAL_ALL (MLA_DSA_SHARD_LOCAL_ALL, tt/mk_mla.py GLM53_DSA_SHARD_LOCAL_ALL; the 8x4 only, unset: every build
+// of rev 71 unchanged). A sparse token whose chip holds n_closed_local <= TOPK closed pools keeps every one of them in
+// its local top-512 -- the radix rounds and the tie round only re-derive that (T = 0 on the order keys, the quotas the
+// core counts). The coordinator (ix_dm0.cpp) and every owner (att_dsa_shard_dm1.cpp phase A, all groups) skip those
+// MSGS messages for that token (the SEL_SEM counts stay equal on both sides: the merge reuses the counter); each owner
+// keeps all its valid keys in local order and the group-0 owners write their records at the analytic offset below:
+// the same records, offsets and header count as the rounds give (tt/shard_plan.py local_select_all, test_shard_plan_8x4
+// test_local_all_matches_the_rounds). Below 64 K tokens on 32 chips every chip takes it.
+#if defined(MLA_DSA_SHARD_LOCAL_ALL)
+static_assert(PAIR == 8 && LINE == 4, "LOCAL_ALL: the 8x4 shard");
+// valid pools of chunk core c of C at n_closed (the phase-A key loop: pool tiles c, c + C, .. < ceil(n_closed / 32),
+// each min(32, n_closed - its first pool) columns)
+inline uint32_t local_all_pools(uint32_t n_closed, uint32_t c, uint32_t C) {
+    const uint32_t npt = mladsa::pool_tiles(n_closed, c, C);
+    if (npt == 0) {
+        return 0;
+    }
+    const uint32_t tail = n_closed - (c + (npt - 1) * C) * POOL_PAGE;
+    return (npt - 1) * POOL_PAGE + (tail < POOL_PAGE ? tail : POOL_PAGE);
+}
+// core c's record offset in its token's candidate chunk: the valid pools of the cores before it
+inline uint32_t local_all_offset(uint32_t n_closed, uint32_t c, uint32_t C) {
+    uint32_t off = 0;
+    for (uint32_t k = 0; k < c; ++k) {
+        off += local_all_pools(n_closed, k, C);
+    }
+    return off;
+}
+#endif
+// rev 72, ROUND_MARKS (MLA_DSA_ROUND_MARKS, GLM53_DSA_SHARD_ROUND_MARKS; the 8x4 + R8 only, probe builds): the shard
+// coordinator marks its local select's rounds for the lane's first token -- per round "histograms in" and "digits
+// broadcast", then the tie round's two: 10 marks between y_in and local_coord (ix_dm0's row: 16 marks in all;
+// tt/shard_plan.py decode_probe ROUND_MARKS)
+#if defined(MLA_DSA_ROUND_MARKS)
+static_assert(PAIR == 8 && LINE == 4 && mladsa::ROUNDS == 4, "ROUND_MARKS: the 8x4 shard with R8 (16 probe marks)");
+#endif
 }  // namespace mlashard

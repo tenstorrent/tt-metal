@@ -939,6 +939,57 @@ def shard_r8(pair: int) -> bool:
     return pair > 2 and _flag("GLM53_DSA_SHARD_R8")
 
 
+def shard_local_all(pair: int) -> bool:
+    """rev 72 GLM53_DSA_SHARD_LOCAL_ALL (default 0): a sparse token whose chip holds <= 512 closed local pools skips the
+    local select's radix rounds and tie round on the coordinator and every owner (dsa_shard.hpp LOCAL_ALL, the
+    kernels' MLA_DSA_SHARD_LOCAL_ALL; emulated by local_select_all: the records, offsets and header count of
+    local_select); the pair / the 2x4 never take it"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_LOCAL_ALL")
+
+
+def shard_round_marks(pair: int, r8: bool = True) -> bool:
+    """rev 72 GLM53_DSA_SHARD_ROUND_MARKS (default 0; probe builds): the shard coordinator's 10 local-select round marks
+    (dsa_shard.hpp ROUND_MARKS, decode_probe "rounds"); needs R8 (4 rounds + the tie fit the 16 probe marks)"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_ROUND_MARKS")
+    if on and not r8:
+        raise ValueError(
+            "GLM53_DSA_SHARD_ROUND_MARKS=1 needs GLM53_DSA_SHARD_R8=1 (16 probe marks: 4 rounds + the tie)"
+        )
+    return on
+
+
+def local_all_pools(n_closed: int, c: int, C: int) -> int:
+    """dsa_shard.hpp local_all_pools: the valid pools of chunk core c of C at n_closed closed local pools (pool tiles
+    c, c + C, .. < ceil(n_closed / 32), each min(32, n_closed - its first pool) columns)"""
+    nt = (n_closed + POOL_PAGE - 1) // POOL_PAGE
+    npt = (nt - c + C - 1) // C if c < nt else 0
+    if npt == 0:
+        return 0
+    tail = n_closed - (c + (npt - 1) * C) * POOL_PAGE
+    return (npt - 1) * POOL_PAGE + min(tail, POOL_PAGE)
+
+
+def local_all_offset(n_closed: int, c: int, C: int) -> int:
+    """dsa_shard.hpp local_all_offset: core c's record offset = the valid pools of the cores before it"""
+    return sum(local_all_pools(n_closed, k, C) for k in range(c))
+
+
+def local_select_all(core_keys: list, k: int = 512) -> dict:
+    """rev 72 LOCAL_ALL (ix_dm0.cpp + att_dsa_shard_dm1.cpp phase A, <= k keys on the chip's lane): no rounds, no tie
+    message -- every core keeps all its keys in local order, its records at the analytic offset (the cores before it),
+    the header count = every key. -> dict(n_rec, kept, records, offsets, messages) in local_select's terms"""
+    total = sum(len(v) for v in core_keys)
+    if total > k:
+        raise ValueError(f"local_select_all: {total} keys > k = {k} (the rounds are needed)")
+    kept, records, offsets, off = {}, [], [], 0
+    for c, keys in enumerate(core_keys):
+        offsets.append(off)
+        kept[c] = [(kk, i) for i, kk in enumerate(keys)]
+        records += [(kk, c) for kk in keys]
+        off += len(keys)
+    return dict(n_rec=off, kept=kept, records=records, offsets=offsets, messages=0)
+
+
 def r8_header_check() -> None:
     """the R8 host mirrors vs the kernels' text (tt/mk_mla.py _shard_header_check): RADIX_BITS / ROUNDS / MSGS in
     dsa_common.hpp, the fine area / pull slice in dsa_shard.hpp"""
@@ -1177,6 +1228,9 @@ PROBE_ROOT_NC, PROBE_ROOT_BR, PROBE_IX0, PROBE_IX1, PROBE_LAT1 = 132, 0, 220, 22
 ATT_NC_MARKS = ("att_start", "local_select", "merge", "pass0", "rs1_landed", "pass1", "rs2_landed", "finalize", "end")
 ATT_BR_MARKS = ("att_start", "presweep", "pass0_pushed", "end")
 IX0_MARKS = ("start", "i1_in", "y_in", "local_coord", "ag_landed", "merge_done")
+ROUND_MARKS_N = (
+    10  # rev 72 (GLM53_DSA_SHARD_ROUND_MARKS): 4 R8 rounds + the tie, 2 marks each, between y_in and local_coord
+)
 LANE_MARKS = ("start", "opened", "sent", "closed", "landed")
 
 
@@ -1206,8 +1260,14 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
     if len(br) >= len(ATT_BR_MARKS):
         out["root_br"] = {k: us(v) for k, v in zip(ATT_BR_MARKS, br[-len(ATT_BR_MARKS) :])}
     ix0 = _marks(rows[PROBE_IX0])
+    rounds = None
+    if len(ix0) == len(IX0_MARKS) + ROUND_MARKS_N:  # rev 72 ROUND_MARKS: 10 marks after y_in (dsa_shard.hpp)
+        rounds = ix0[3 : 3 + ROUND_MARKS_N]
+        ix0 = ix0[:3] + ix0[3 + ROUND_MARKS_N :]
     if len(ix0) >= len(IX0_MARKS):
         out["ix0"] = {k: us(v) for k, v in zip(IX0_MARKS, ix0[-len(IX0_MARKS) :])}
+    if rounds is not None:  # per round (4 R8 rounds, then the tie): histograms in, the broadcast done
+        out["rounds"] = [dict(hist_in=us(rounds[2 * r]), out=us(rounds[2 * r + 1])) for r in range(ROUND_MARKS_N // 2)]
     ix1 = _marks(rows[PROBE_IX1])
     if line > 1 and len(ix1) >= 2:
         out["qasm"] = dict(ag_landed=us(ix1[-2]), assembled=us(ix1[-1]))
@@ -1227,6 +1287,15 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
     if "ix0" in out:
         i = out["ix0"]
         span.update(ag_total=i["ag_landed"] - i["local_coord"], merge=i["merge_done"] - i["ag_landed"])
+        if "rounds" in out:  # rev 72 ROUND_MARKS: owners = histograms in after the previous broadcast (round 0: the
+            # I4 scoring after y_in), coord = the sums + digits + broadcast; records = the records / header after the tie
+            prev = i["y_in"]
+            for r, x in enumerate(out["rounds"]):
+                nm = f"r{r}" if r < ROUND_MARKS_N // 2 - 1 else "tie"
+                span[f"{nm}_owners"] = x["hist_in"] - prev
+                span[f"{nm}_coord"] = x["out"] - x["hist_in"]
+                prev = x["out"]
+            span["records"] = i["local_coord"] - prev
     for name, l_ in lanes.items():
         span[f"{name}_open_to_landed"] = l_["landed"] - l_["opened"]
         span[f"{name}_send"] = l_["sent"] - l_["opened"]

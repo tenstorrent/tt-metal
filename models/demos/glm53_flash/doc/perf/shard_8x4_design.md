@@ -380,6 +380,25 @@ the RSB default's digest (e2f3c86090b7), 32.7 -> 32.2 ms; probe B 16 layers 0-3 
 287.5 -> 246.9 us (-40.6 us, more than the bytes alone: 10 % fewer packets and 25 % fewer RS1 batches too), RS2 landed
 45.2 -> 35.2 us, the root-local marks flat. `tt/galaxy_defaults.py` turns it on.
 
+### LOCAL_ALL: no radix rounds under 512 local pools (2026-11-12, MLA_REV 72, opt-in)
+
+Traced-replay marks of every chip (test_mk_backend_probe MK_BACKEND_SHARD_PROBE_TRACED, B 1, POS 4095, layer 3; the
+eager marks carried ~650 us of host per-device dispatch skew, the traced chips start within 6.6 us): index projections +
+local select ~246 us (I1 ~72, the select ~174), AG 34, merge 47, attention 305 per DSA layer. At POS 4095 a chip holds
+32 closed pools, yet the select runs R8's 4 rounds + the tie round: 5 report / broadcast handshakes of the lane's 64
+owners with the index core, which only re-derive "every pool is kept". `GLM53_DSA_SHARD_LOCAL_ALL=1` (dsa_shard.hpp
+LOCAL_ALL, the kernels' MLA_DSA_SHARD_LOCAL_ALL): a sparse token whose chip has `n_closed_local <= 512` skips those
+MSGS messages on the coordinator (ix_dm0.cpp: header count = n_closed_local) and on every owner (att_dsa_shard_dm1.cpp
+phase A, every group: all valid keys kept in local order, the group-0 records at `local_all_offset` = the valid pools of
+the cores before). The SEL_SEM counts stay equal on both sides (the merge reuses the counter). Exact: the records,
+offsets, header and the merge inputs equal the rounds' (shard_plan.local_select_all vs local_select in 4-bit and R8
+digits, random keys and heavy ties, 0 .. 600 pools on 64 / 16 / 8 lane cores; a 32-chip merge at p = 66000 where chips
+0..3 hold 532-544 pools and take the rounds: test_local_all_matches_the_rounds). Every chip takes it below 64 K tokens
+(p = 65535: 512 on every chip). Expected: ~-140 us per DSA layer at B 1 (~-1.5 ms per 45-layer step at <= 64 K). Above
+512 local pools the rounds stay; `GLM53_DSA_SHARD_ROUND_MARKS=1` (probe builds, R8 only) marks the coordinator's
+rounds (decode_probe "rounds": per round the owners' share -- round 0 includes the I4 scoring -- and the coordinator's
+sums + digits + broadcast) for the next cut.
+
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 
 | users at 1 M each | 1 | 2 | 4 | 8 | 16 |

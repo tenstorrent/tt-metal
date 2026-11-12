@@ -275,7 +275,19 @@ void kernel_main() {
         const int32_t pos = pos_l1[t];
         const uint32_t j = mlashard::lane_tok(t);  // the lane-local token: its mailbox slots
         uint32_t n_rec = 0;
-        if (mladsa::sparse(pos < 0 ? 0u : static_cast<uint32_t>(pos))) {
+#if defined(MLA_DSA_SHARD_LOCAL_ALL)
+        // (dsa_shard.hpp LOCAL_ALL) <= TOPK closed local pools: all of them are this chip's local top-512 -- no radix
+        // rounds, no tie message (the owners skip the same messages); the records are every local pool
+        const bool sparse_t = mladsa::sparse(pos < 0 ? 0u : static_cast<uint32_t>(pos));
+        const uint32_t n_cl = sparse_t ? mlashard::n_closed_local(static_cast<uint32_t>(pos), rank, nchips) : 0;
+        const bool local_all = sparse_t && n_cl <= mladsa::TOPK;
+        if (local_all) {
+            n_rec = n_cl;
+        }
+#else
+        constexpr bool local_all = false;
+#endif
+        if (!local_all && mladsa::sparse(pos < 0 ? 0u : static_cast<uint32_t>(pos))) {
             uint32_t prefix = 0, k_rem = mladsa::TOPK;
             uint32_t above[mladsa::MAX_CHUNKS];
             for (uint32_t c = 0; c < C; ++c) {
@@ -284,6 +296,11 @@ void kernel_main() {
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
                 const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
                 mk::wait_handoff(H_SEM, C);
+#if defined(MLA_DSA_ROUND_MARKS)
+                if (t == t0) {
+                    MK_MARK();  // probe (rev 72): round r's histograms all in
+                }
+#endif
                 invalidate_l1_cache();
                 uint32_t h[mladsa::BINS];
                 mladsa::sum_hist(hist, C, h);
@@ -312,8 +329,18 @@ void kernel_main() {
                 msg[0] = prefix;
                 msg[1] = k_rem;
                 broadcast(scr + MSG_OFF, (j * mladsa::MSGS + r) * mladsa::MSG_BYTES, mladsa::MSG_BYTES);
+#if defined(MLA_DSA_ROUND_MARKS)
+                if (t == t0) {
+                    MK_MARK();  // probe (rev 72): round r's sums + digits + broadcast done
+                }
+#endif
             }
             mk::wait_handoff(H_SEM, C);
+#if defined(MLA_DSA_ROUND_MARKS)
+            if (t == t0) {
+                MK_MARK();  // probe (rev 72): the tie counts in
+            }
+#endif
             invalidate_l1_cache();
             uint32_t rem = k_rem, off = 0;
             for (uint32_t c = 0; c < C; ++c) {
@@ -329,6 +356,11 @@ void kernel_main() {
                 shs + 64,
                 mladsa::QUOTA_OFF + j * mladsa::MAX_CHUNKS * 4 * mladsa::QUOTA_W,
                 (C * 4 * mladsa::QUOTA_W + 15) & ~15u);
+#if defined(MLA_DSA_ROUND_MARKS)
+            if (t == t0) {
+                MK_MARK();  // probe (rev 72): the (quota, offset) message broadcast
+            }
+#endif
         }
         // this chip's record count -> the header of token t's candidate chunk (x_ag), then the lane may send
         hdr[0] = n_rec;

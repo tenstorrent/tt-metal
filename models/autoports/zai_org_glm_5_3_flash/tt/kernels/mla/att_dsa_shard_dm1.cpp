@@ -261,6 +261,23 @@ void kernel_main() {
                 cb_wait_front(CB_ASC, mladsa::SB - npt % mladsa::SB);
                 cb_pop_front(CB_ASC, mladsa::SB - npt % mladsa::SB);
             }
+            // (LOCAL_ALL: the else block opens / closes inside #if -- clang-format off keeps the rounds below as they
+            // are)
+            // clang-format off
+#if defined(MLA_DSA_SHARD_LOCAL_ALL)
+            if (n_closed <= mladsa::TOPK) {
+                // (dsa_shard.hpp LOCAL_ALL) every local pool is in the local top-512: no rounds / tie messages (ix_dm0
+                // skips the same ones), every valid key kept in local order, the records at the analytic offset
+                volatile tt_l1_ptr uint32_t* kp = kept + j * 2 * KW;
+                ASSERT(nvalid == mlashard::local_all_pools(n_closed, c, C) && nvalid <= KW);
+                for (uint32_t i = 0; i < nvalid; ++i) {
+                    kp[2 * i] = keys[i];
+                    kp[2 * i + 1] = mladsa::pool_of(i, c, C);
+                }
+                n_kept[j] = nvalid;
+                off = mlashard::local_all_offset(n_closed, c, C);
+            } else {
+#endif
             // ---- I5: radix rounds on the compacted candidates (att_dsa_dm1.cpp rev 36)
             uint32_t prefix = 0, mask = 0;
             volatile tt_l1_ptr uint32_t* src = keys;
@@ -332,6 +349,10 @@ void kernel_main() {
             }
             ASSERT(n <= KW);  // (a core's kept pools of a token: <= its keys, <= the local top-512)
             n_kept[j] = n;
+#if defined(MLA_DSA_SHARD_LOCAL_ALL)
+            }
+#endif
+            // clang-format on
         }
         if (g == 0) {  // the records (key, core, 0, 0) at this core's offset of token t's candidate chunk of x_ag
             const uint32_t n = n_kept[j];

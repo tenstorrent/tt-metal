@@ -122,6 +122,117 @@ def test_lane_merge_32_lists(C, lanes):
     assert SP.lanes_reasons(32, 4, 64, 4, 1, nchips=32) == ["32 merge helpers among 16 lane chunk cores"]
 
 
+@pytest.mark.parametrize("lanes", [1, 4, 8])
+def test_local_all_matches_the_rounds(lanes):
+    """rev 72 GLM53_DSA_SHARD_LOCAL_ALL: on a chip lane with <= 512 closed local pools the skip (local_select_all: no
+    rounds, no tie message, every key kept, the analytic offsets of dsa_shard.hpp local_all_offset) gives the radix
+    select's kept pairs, records, record offsets and header count bitwise, in 4-bit and R8 digits, for random keys and
+    for heavy ties (key 0 included); and the global merge over 32 chips around the 64 K boundary (some chips over 512
+    local pools: the rounds, the others the skip) is the all-rounds merge"""
+    gen = torch.Generator().manual_seed(72 + lanes)
+    rnd = random.Random(72 + lanes)
+    cl = 64 // lanes
+    sizes = list(range(0, 40)) + list(range(480, 513)) + rnd.sample(range(40, 480), 24)
+    for n in sizes:
+        lq = torch.arange(n)
+        for heavy in (False, True):
+            hi = 4 if heavy else 1 << 32
+            keys = torch.randint(0, hi, (n,), generator=gen, dtype=torch.int64)
+            core_keys = SP.lane_core_keys(keys, lq, 64, lanes)
+            assert [len(v) for v in core_keys] == [SP.local_all_pools(n, c, cl) for c in range(cl)], (n, lanes)
+            got = SP.local_select_all(core_keys, 512)
+            assert got["offsets"] == [SP.local_all_offset(n, c, cl) for c in range(cl)]
+            assert got["messages"] == 0 and got["n_rec"] == n
+            for bits in (4, 8):
+                want = SP.local_select(core_keys, 512, bits)
+                assert got["kept"] == want["kept"] and got["records"] == want["records"], (n, lanes, bits, heavy)
+                assert got["n_rec"] == want["n_rec"] and got["offsets"] == [o for _, o in want["qpair"]], (n, bits)
+                assert SP.x_ag_chunk(got["records"], n_rec=got["n_rec"]) == SP.x_ag_chunk(
+                    want["records"], n_rec=want["n_rec"]
+                )
+    with expect_error(ValueError, "513 keys > k = 512"):
+        SP.local_select_all([[1] * 513], 512)
+    # the boundary: p = 65535 -> every chip at 512 (the skip everywhere); 66000 -> chips 0..3 over 512 (the rounds)
+    assert {SP.n_closed_local(65535, r, 32) for r in range(32)} == {512}
+    over = [r for r in range(32) if SP.n_closed_local(66000, r, 32) > 512]
+    assert over == [0, 1, 2, 3], over
+    for p in (65535, 66000):
+        n_pools = (p + 1) // 4
+        keys = torch.randint(1, 1 << 31, (n_pools,), generator=gen, dtype=torch.int64)
+        g = torch.arange(n_pools)
+        owner = (g // SP.POOL_PAGE) % 32
+        rounds, mixed = [], []
+        for r in range(32):
+            mine = torch.nonzero(owner == r).reshape(-1)
+            lq = (mine // SP.POOL_PAGE // 32) * SP.POOL_PAGE + mine % SP.POOL_PAGE
+            ck = SP.lane_core_keys(keys[mine], lq, 64, lanes)
+            sel = SP.local_select(ck, 512, 8)["records"]
+            rounds.append(sel)
+            n = SP.n_closed_local(p, r, 32)
+            mixed.append(SP.local_select_all(ck, 512)["records"] if n <= 512 else sel)
+            assert len(mixed[-1]) == SP.agk_count(p, r, 32)
+        assert mixed == rounds
+        for rank in (0, 5, 31):
+            assert SP.helper_merge(mixed, rank, 512, digit_bits=8, kph=4) == SP.helper_merge(
+                rounds, rank, 512, digit_bits=8, kph=4
+            )
+
+
+def test_local_all_knobs(monkeypatch):
+    """GLM53_DSA_SHARD_LOCAL_ALL / GLM53_DSA_SHARD_ROUND_MARKS: default off, the 8x4 only, 0 / 1 only; ROUND_MARKS needs
+    R8; the kernels and mk_mla.py carry the same define names (a renamed define would silently build knob-off)"""
+    for k in ("GLM53_DSA_SHARD_LOCAL_ALL", "GLM53_DSA_SHARD_ROUND_MARKS"):
+        monkeypatch.delenv(k, raising=False)
+    assert not SP.shard_local_all(8) and not SP.shard_round_marks(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_LOCAL_ALL", "1")
+    assert SP.shard_local_all(8) and not SP.shard_local_all(2)
+    monkeypatch.setenv("GLM53_DSA_SHARD_ROUND_MARKS", "1")
+    assert SP.shard_round_marks(8, r8=True) and not SP.shard_round_marks(2, r8=False)
+    with expect_error(ValueError, "needs GLM53_DSA_SHARD_R8=1"):
+        SP.shard_round_marks(8, r8=False)
+    monkeypatch.setenv("GLM53_DSA_SHARD_LOCAL_ALL", "yes")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_LOCAL_ALL=yes: 0 or 1"):
+        SP.shard_local_all(8)
+    import os
+
+    kd = os.path.join(SP.KDIR, "mla")
+    for f, names in (
+        ("ix_dm0.cpp", ("MLA_DSA_SHARD_LOCAL_ALL", "MLA_DSA_ROUND_MARKS")),
+        ("att_dsa_shard_dm1.cpp", ("MLA_DSA_SHARD_LOCAL_ALL",)),
+        ("dsa_shard.hpp", ("MLA_DSA_SHARD_LOCAL_ALL", "MLA_DSA_ROUND_MARKS", "local_all_offset")),
+    ):
+        with open(os.path.join(kd, f)) as fh:
+            src = fh.read()
+        assert all(nm in src for nm in names), (f, names)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_mla.py")) as fh:
+        src = fh.read()
+    assert '("MLA_DSA_SHARD_LOCAL_ALL", "1")' in src and '("MLA_DSA_ROUND_MARKS", "1")' in src
+
+
+def test_decode_probe_round_marks():
+    """rev 72 ROUND_MARKS: ix_dm0's row with 16 marks (start, i1_in, y_in, 4 R8 rounds + the tie x (histograms in,
+    broadcast), local_coord, ag_landed, merge_done) decodes to the 6 IX0 marks + the rounds and their spans; 6 marks
+    (the knob off, or the lane's first token took LOCAL_ALL) decode as before"""
+    p = torch.zeros(SP.PROBE_LANE_ROW["rs2"] + 1, 16, dtype=torch.int64)
+    nc = [1000 + 1350 * k for k in range(9)]  # the root's 9 attention marks: att_start = 1000 cycles
+    p[SP.PROBE_ROOT_NC, : len(nc)] = torch.tensor(nc)
+    ix = [100 + 135 * k for k in range(16)]
+    p[SP.PROBE_IX0, :16] = torch.tensor(ix)
+    out = SP.decode_probe(p, line=4)
+    us = lambda v: round((v - 1000) / 1350.0, 2)  # noqa: E731
+    assert list(out["ix0"].values()) == [us(v) for v in ix[:3] + ix[13:]]
+    assert [(x["hist_in"], x["out"]) for x in out["rounds"]] == [
+        (us(ix[3 + 2 * r]), us(ix[4 + 2 * r])) for r in range(5)
+    ]
+    sp = out["span"]
+    assert sp["r0_owners"] == round(us(ix[3]) - us(ix[2]), 2) and sp["tie_coord"] == round(us(ix[12]) - us(ix[11]), 2)
+    assert sp["records"] == round(us(ix[13]) - us(ix[12]), 2)
+    p[SP.PROBE_IX0] = 0
+    p[SP.PROBE_IX0, :6] = torch.tensor(ix[:6])
+    out = SP.decode_probe(p, line=4)
+    assert "rounds" not in out and list(out["ix0"].values()) == [us(v) for v in ix[:6]]
+
+
 def test_8x4_byte_formats_round_trip():
     """The 8x4 compact formats mirrored from kernels/mla/dsa_shard.hpp: the 2-row q piece (lat_dm1.cpp's write ->
     ix_dm1.cpp's 16-piece assembly = the whole tile, one page of 16 x 128 B), the round-1 8-row and round-2 2-row slice
