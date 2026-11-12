@@ -111,23 +111,19 @@ class Flux3KleinTransformerBlock(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in (("q_proj", "attn.to_q"), ("k_proj", "attn.to_k"), ("v_proj", "attn.to_v")):
-            if f"{src}.weight" in state:
-                state[f"{dst}.weight"] = state.pop(f"{src}.weight")
+            state[f"{dst}.weight"] = state.pop(f"{src}.weight")
         for src, dst in (
             ("norm.query_norm.scale", "attn.norm_q.weight"),
             ("norm.key_norm.scale", "attn.norm_k.weight"),
         ):
-            if src in state:
-                state[dst] = state.pop(src)
-        if "mlp_in.weight" in state:
-            w = state.pop("mlp_in.weight")
-            state["proj_mlp.weight"] = torch.roll(w, shifts=w.shape[0] // 2, dims=0)
-        if "attn_out.weight" in state and "mlp_out.weight" in state:
-            state["proj_out.weight"] = prepare_weight_for_concatenated_input(
-                torch.cat([state.pop("attn_out.weight"), state.pop("mlp_out.weight")], dim=1),
-                [HIDDEN, self._mlp_hidden_dim],
-                device_count=self._tp_factor,
-            )
+            state[dst] = state.pop(src)
+        w = state.pop("mlp_in.weight")
+        state["proj_mlp.weight"] = torch.roll(w, shifts=w.shape[0] // 2, dims=0)
+        state["proj_out.weight"] = prepare_weight_for_concatenated_input(
+            torch.cat([state.pop("attn_out.weight"), state.pop("mlp_out.weight")], dim=1),
+            [HIDDEN, self._mlp_hidden_dim],
+            device_count=self._tp_factor,
+        )
 
     def forward(
         self,

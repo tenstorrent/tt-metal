@@ -22,11 +22,12 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     EARLY_DEPTH,
     IN_CHANNELS,
     SINGLE_DEPTH,
+    TILE,
     Flux3KleinSequenceLayout,
     Flux3KleinTransformer,
-    padded_length,
     timestep_inputs,
 )
+from ...models.vae.vae_flux3_klein import Flux3KleinVae
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
@@ -36,7 +37,6 @@ from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shap
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_ranges
-from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
 
 SIZES = (1024, 2048, 4096)
@@ -235,18 +235,21 @@ class Flux3KleinPipeline:
                         Flux3KleinRequest(WARMUP_PROMPT, model=model, width=size, height=size, seed=0, images=images)
                     )
 
-    def generate(self, request: Flux3KleinRequest) -> Flux3KleinResult:
+    def validate_request(self, request: Flux3KleinRequest) -> None:
         if request.model not in self._transformers:
             raise ValueError(f"model {request.model!r} is not loaded ({tuple(self._transformers)})")
-        size = request.width
-        if request.height != size or size not in SIZES:
+        if request.height != request.width or request.width not in SIZES:
             raise ValueError(f"{request.width}x{request.height} is not one of the served sizes {SIZES} (square)")
         if len(request.images) > MAX_REFERENCES:
             raise ValueError(f"at most {MAX_REFERENCES} reference image")
+        if request.model == "distilled" and request.guidance not in (None, 1.0):
+            raise ValueError("the distilled model takes no guidance")
+
+    def generate(self, request: Flux3KleinRequest) -> Flux3KleinResult:
+        self.validate_request(request)
+        size = request.width
         steps = request.steps or STEPS[request.model]
         guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
-        if request.model == "distilled" and guidance not in (None, 1.0):
-            raise ValueError("the distilled model takes no guidance")
         guidance = None if request.model == "distilled" else guidance
         reference = None
         if request.images:
@@ -306,7 +309,7 @@ class Flux3KleinPipeline:
         )
 
     def _upload_rows(self, rows: torch.Tensor, sp_factor: int) -> ttnn.Tensor:
-        rows = pad_rows(rows.to(torch.bfloat16), padded_length(rows.shape[0], sp_factor))
+        rows = pad_rows(rows.to(torch.bfloat16), ttnn.core.roundup(rows.shape[0], sp_factor * TILE))
         return tensor.from_torch(
             rows[None], device=self._device, dtype=ttnn.bfloat16, mesh_axes=[None, self._sp_axis, None]
         )
@@ -350,7 +353,7 @@ class Flux3KleinPipeline:
         if guidance is not None:
             samples.append(sample(1, *self._null_text))
         image_axes = [None, self._sp_axis, None]
-        rows, rows_padded = noise.shape[0], padded_length(noise.shape[0], sp)
+        rows, rows_padded = noise.shape[0], ttnn.core.roundup(noise.shape[0], sp * TILE)
         x = tensor.from_torch(
             pad_rows(noise, rows_padded)[None], device=self._device, dtype=ttnn.float32, mesh_axes=image_axes
         )

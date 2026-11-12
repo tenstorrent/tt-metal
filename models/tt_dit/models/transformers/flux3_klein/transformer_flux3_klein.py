@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 import torch
 
@@ -15,14 +14,12 @@ from ....layers.embeddings import TimestepEmbedding, Timesteps
 from ....layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_output
 from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedLayerNorm
+from ....parallel.config import DiTParallelConfig
+from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.matmul import register_matmul_configs
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
-
-if TYPE_CHECKING:
-    from ....parallel.config import DiTParallelConfig
-    from ....parallel.manager import CCLManager
 
 MODES = ("image", "image_cond", "text")
 IN_CHANNELS = {"image": 128, "image_cond": 128, "text": 20480}
@@ -86,16 +83,11 @@ register_matmul_configs(
 )
 
 
-def padded_length(length: int, sp_factor: int) -> int:
-    alignment = sp_factor * TILE
-    return -(-length // alignment) * alignment
-
-
 @dataclass(frozen=True)
 class Flux3KleinSequenceLayout:
     """Row layout of one sample on the SP axis.
 
-    Each mode is a separate SP-sharded tensor of padded_length(L_m) rows. The single stage is
+    Each mode is a separate SP-sharded tensor of L_m rows rounded up to sp_factor * TILE. The single stage is
     [image | image_cond valid | text | image_cond pad | pad] with all alignment rows at the end, reached with one
     all-gather of the per-device concat [img_d | cond_d | txt_d] and a row gather. Text rows past text_valid and
     reference rows past cond_valid (a reference bucket's padding) are masked as attention keys: every masked row sits
@@ -113,7 +105,7 @@ class Flux3KleinSequenceLayout:
         if self.cond_valid is None:
             object.__setattr__(self, "cond_valid", self.lengths["image_cond"])
         assert 0 <= self.cond_valid <= self.lengths["image_cond"]
-        padded = {m: padded_length(self.lengths[m], self.sp_factor) for m in MODES}
+        padded = {m: ttnn.core.roundup(self.lengths[m], self.sp_factor * TILE) for m in MODES}
         object.__setattr__(self, "padded", padded)
         object.__setattr__(self, "rows", {m: padded[m] // self.sp_factor for m in MODES})
 

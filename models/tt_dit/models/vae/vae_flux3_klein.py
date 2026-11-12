@@ -19,13 +19,13 @@ import ttnn
 
 from ...layers.conv2d import Conv2d, configure_conv2d
 from ...layers.normalization import GroupNorm
-from ...models.vae.vae import VaeAttention
-from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
+from ...pipelines.flux3_klein.packing import latent_shape
+from ...pipelines.flux3_klein.weights_flux3_klein import checkpoint_id
 from ...utils import cache, tensor
-from .packing import latent_shape
-from .weights_flux3_klein import checkpoint_id
+from .vae import VaeAttention
+from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 
 SUBFOLDER = "vae"
 VAE_WEIGHTS = "diffusion_pytorch_model.safetensors"

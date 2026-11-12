@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ....pipelines.flux3_klein.vae_flux3_klein import GROUP_NORM_MAX_BLOCK_ROWS, group_norm_out_blocks
+from ....models.vae.vae_flux3_klein import GROUP_NORM_MAX_BLOCK_ROWS, group_norm_out_blocks
 
 
 def _norm(grid_x: int, grid_y: int, num_virtual_cols: int) -> SimpleNamespace:
