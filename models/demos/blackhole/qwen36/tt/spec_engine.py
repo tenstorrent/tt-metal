@@ -292,6 +292,7 @@ def spec_memory_costs(
     max_seq_len=None,
     num_layers=None,
     mask_buckets=None,
+    gdn_state_in_blocks=False,
 ):
     """PER-DEVICE bytes of the MTP spec-decode state beyond plain decode. Pure: HF text config + tp only.
 
@@ -302,6 +303,9 @@ def spec_memory_costs(
     the engine's per-user _last_hidden, the verify trace's persistent inputs/outputs, the MTP cache's extra
     scratch block, the engine's anchor/selector buffers. NOT counted: rec_state, conv_states, base KV, the MTP
     KV blocks themselves (per_token x tokens), weights, trace-internal intermediates.
+    ``gdn_state_in_blocks`` (MTPBlockEngine): the GDN state is in vLLM's KV cache blocks, so there is no ring and no
+    per-user window; ``fixed`` counts instead the verify's per-group ctrl and index tables (gdn_verify), and verify_io
+    drops the ring selectors.
     Dims follow the model: TILE tensors pad their last two dims to 32; ROW_MAJOR are exact.
     ``fixed`` scales with B only through page tables / selectors / feed rows (all small). Page-table width nb =
     ``nb`` or ceil(max_seq_len / block_size); with neither, page tables count 0. ``num_layers`` overrides
@@ -334,6 +338,8 @@ def spec_memory_costs(
     ring = n_gdn * B * _tile_bytes([T * nv_tp, dk, dv], f32)  # [T*B*Nv, Dk, Dv]
     win_rows = [kconv - 1 + T, kconv] + ([T - 1] if T > 1 else [])  # _verify_win_buf, _conv_win_buf, _spec_win_pad
     windows = n_gdn * B * sum(_tile_bytes([r, C], bf) for r in win_rows)
+    if gdn_state_in_blocks:
+        ring = windows = 0
     hidden = B * _tile_bytes([1, 1, 1, dim_frac], bf)
     per_seq = {"gdn_ring": ring, "gdn_conv_windows": windows, "drafter_hidden": hidden}
 
@@ -347,8 +353,8 @@ def spec_memory_costs(
         + _rm_bytes([B, nb], i32)
         + _rm_bytes([groups, nb], i32)  # page tables
         + 2 * _tile_bytes([1, rows, 1, rope_dim], bf)  # cos, sin
-        + _rm_bytes([B * nv_tp], i32)  # state_idx
-        + _tile_bytes([B, kconv - 1 + T, kconv - 1 + 2 * T], bf)  # conv_sel
+        + (0 if gdn_state_in_blocks else _rm_bytes([B * nv_tp], i32))  # state_idx
+        + (0 if gdn_state_in_blocks else _tile_bytes([B, kconv - 1 + T, kconv - 1 + 2 * T], bf))  # conv_sel
         + _tile_bytes([1, 1, rows, logits_w], bf)
         + _rm_bytes([1, 1, rows, logits_w], bf)  # logits TILE + RM copy
         + _tile_bytes([1, 1, rows, dim_frac], bf)  # rows_out (drafter feed)
@@ -366,6 +372,10 @@ def spec_memory_costs(
         + (_tile_bytes([1, 1, rows, B], bf) + _tile_bytes([1, 1, rows, rows], bf) if B > 1 else 0)  # _join_take/keep
     )
     fixed = {"verify_io": verify_io, "mtp_scratch_block": block_bytes, "engine_buffers": engine}
+    if gdn_state_in_blocks:
+        groups = -(-n_gdn // max(1, L - n_gdn))  # MambaSpec groups: one GDN layer per attention layer slot each
+        ctrl_words = -(-(1 + B + 2 * B * nv_tp) // 16) * 16
+        fixed["gdn_verify"] = groups * (_rm_bytes([ctrl_words], i32) + _rm_bytes([B, 2 * T * nv_tp], i32))
     per_token = {"mtp_kv": 2 * n_local_kv * head_dim * int(kv_dtype_bytes)}
     for d in (per_seq, fixed, per_token):
         d["total"] = sum(d.values())
@@ -411,8 +421,9 @@ class MTPSpecEngine:
             f"B={self.B} users x T={self.T} rows = {self.B * self.T} > {MAX_SPEC_ROWS}: the verify is one "
             f"decode tile. Lower K or the batch."
         )
-        # Verify runs the fused GDN op; plain decode must use the same math or greedy near-ties flip.
-        assert model.gdn_fused_decode, (
+        # Verify runs the fused GDN op; plain decode must use the same math or greedy near-ties flip. With the GDN
+        # state in vLLM KV cache blocks no model-owned decode exists.
+        assert model.gdn_blocks is not None or model.gdn_fused_decode, (
             "MTPSpecEngine needs model.set_gdn_fused_decode(True) before construction: verify runs the "
             "fused GDN op, and decode must use the same math"
         )
@@ -549,35 +560,7 @@ class MTPSpecEngine:
         # The B=1 GDN prefill scratch's first bind can free spec buffers, so it must come first.
         if B > 1:
             model.warmup_gdn_slot_ops()
-
-        self.nb = width  # must stay <= the cache block count (verify / drafter paged_update_cache)
-        self.nb_prefill = spec_round_up(width)  # the recorded chunk program needs a multiple of 32
-        pt = self._fit(pt0)
-        self._prep_pt = pt
-        self.block_size = int(self.mtp.attention.paged_k.shape[-2])
-        self._scratch_block = int(self.mtp.attention.paged_k.shape[0]) - 1
-        self._check_scratch(pt)
-        self._last_hidden = [
-            ttnn.zeros(
-                [1, 1, 1, self._dim_frac],
-                device=self.mesh,
-                dtype=self._feed_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            for _ in range(B)
-        ]
-        self._last_sel = {
-            b: self._alloc_host_replicated(
-                torch.zeros(1, 1, 1, b, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
-            )
-            for b in model._PREFILL_MASK_BUCKETS
-        }
-        self._mtp_pt = self._alloc_host_replicated(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._mtp_pt_rows = [
-            self._alloc_host_replicated(pt[u : u + 1].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) for u in range(B)
-        ]
-        self._anchor_warmup(self._dim_frac, self._feed_dtype)
+        pt = self._alloc_engine_buffers(pt0)
 
         cap = width * self.block_size
         # Compile every masked + no-mask bucket program and KV fill width (B=1 scratch bound for B>1).
@@ -605,6 +588,39 @@ class MTPSpecEngine:
             f"warm_prompts={warm_lens} in {time.perf_counter() - t0:.1f}s"
         )
 
+    def _alloc_engine_buffers(self, pt0):
+        """Allocate the persistent engine buffers for the caller's table width; returns the fitted table."""
+        B = self.B
+        self.nb = int(pt0.shape[-1])  # must stay <= the cache block count (verify / drafter paged_update_cache)
+        self.nb_prefill = spec_round_up(self.nb)  # the recorded chunk program needs a multiple of 32
+        pt = self._fit(pt0)
+        self._prep_pt = pt
+        self.block_size = int(self.mtp.attention.paged_k.shape[-2])
+        self._scratch_block = int(self.mtp.attention.paged_k.shape[0]) - 1
+        self._check_scratch(pt)
+        self._last_hidden = [
+            ttnn.zeros(
+                [1, 1, 1, self._dim_frac],
+                device=self.mesh,
+                dtype=self._feed_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for _ in range(B)
+        ]
+        self._last_sel = {
+            b: self._alloc_host_replicated(
+                torch.zeros(1, 1, 1, b, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
+            )
+            for b in self.model._PREFILL_MASK_BUCKETS
+        }
+        self._mtp_pt = self._alloc_host_replicated(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._mtp_pt_rows = [
+            self._alloc_host_replicated(pt[u : u + 1].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) for u in range(B)
+        ]
+        self._anchor_warmup(self._dim_frac, self._feed_dtype)
+        return pt
+
     def record_prefill(self):
         """Record the 2048-token chunk prefill trace (B == 1; B > 1 prefill stays eager). Idempotent."""
         assert self.prefill_prepared, "record_prefill before prepare_prefill"
@@ -624,38 +640,7 @@ class MTPSpecEngine:
         # a B == 1 prefill trace replay may overwrite buffers allocated after it was recorded
         assert not (B == 1 and self.prefill_recorded), "prepare_decode after record_prefill"
         t0 = time.perf_counter()
-        # Compile the seed's programs (T = 1 forward, feed-row scatter and copy) before any capture.
-        _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)
-        r0, r1 = self._seed_rows(f), self._seed_rows(f)
-        ttnn.copy(r0, r1)
-        for t in (r0, r1):
-            ttnn.deallocate(t)
-        model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
-        if B > 1:  # compile the join programs (per-user seed, feed merge)
-            self._join_take = self._alloc_host_replicated(
-                torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
-            )
-            self._join_keep = self._alloc_host_replicated(
-                torch.zeros(1, 1, B * T, B * T, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
-            )
-            for dn in self._gdn:
-                dn.seed_spec_rows(range(0, B, 2))
-                dn.seed_spec_rows(range(1, B, 2))
-                dn.remap_spec_slots(list(range(B))[::-1])  # a full reversal slices every row offset once
-            z = ttnn.zeros(
-                [1, 1, B * T, self._dim_frac],
-                device=self.mesh,
-                dtype=self._feed_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            rows_w = model.spec_feed_rows(z)
-            if rows_w is not z:
-                ttnn.deallocate(z)
-            self._merge_seed_rows(f, [0], rows_w)
-            ttnn.deallocate(rows_w)
-            ttnn.synchronize_device(self.mesh)
-        ttnn.deallocate(f)
+        self._prepare_verify()
 
         # Drafter programs.
         zrow = ttnn.zeros(
@@ -692,6 +677,42 @@ class MTPSpecEngine:
         ttnn.synchronize_device(self.mesh)
         self.prepared = True
         logger.info(f"[spec_engine] decode prepared in {time.perf_counter() - t0:.1f}s")
+
+    def _prepare_verify(self):
+        """Compile the seed's programs, prepare the verify trace and compile the join programs."""
+        model, B, T = self.model, self.B, self.T
+        # Compile the seed's programs (T = 1 forward, feed-row scatter and copy) before any capture.
+        _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)
+        r0, r1 = self._seed_rows(f), self._seed_rows(f)
+        ttnn.copy(r0, r1)
+        for t in (r0, r1):
+            ttnn.deallocate(t)
+        model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
+        if B > 1:  # compile the join programs (per-user seed, feed merge)
+            self._join_take = self._alloc_host_replicated(
+                torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
+            )
+            self._join_keep = self._alloc_host_replicated(
+                torch.zeros(1, 1, B * T, B * T, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
+            )
+            for dn in self._gdn:
+                dn.seed_spec_rows(range(0, B, 2))
+                dn.seed_spec_rows(range(1, B, 2))
+                dn.remap_spec_slots(list(range(B))[::-1])  # a full reversal slices every row offset once
+            z = ttnn.zeros(
+                [1, 1, B * T, self._dim_frac],
+                device=self.mesh,
+                dtype=self._feed_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            rows_w = model.spec_feed_rows(z)
+            if rows_w is not z:
+                ttnn.deallocate(z)
+            self._merge_seed_rows(f, [0], rows_w)
+            ttnn.deallocate(rows_w)
+            ttnn.synchronize_device(self.mesh)
+        ttnn.deallocate(f)
 
     def capture_decode(self):
         """Record the verify trace, then the drafter trace. Idempotent; requires prepare_decode."""
@@ -839,8 +860,7 @@ class MTPSpecEngine:
             raise ValueError(f"slot_remap {idx} is not a permutation of range({self.B})")
         if idx == list(range(self.B)):
             return
-        for dn in self._gdn:
-            dn.remap_spec_slots(idx)
+        self._remap_gdn(idx)
         new_of = {old: new for new, old in enumerate(idx)}
         self._last_hidden = [self._last_hidden[j] for j in idx]
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
@@ -852,6 +872,10 @@ class MTPSpecEngine:
         self._offered = {new_of[u] for u in self._offered}
         self._no_draft = {new_of[u] for u in self._no_draft}
         self._speculated = {new_of[u] for u in self._speculated}
+
+    def _remap_gdn(self, idx):
+        for dn in self._gdn:
+            dn.remap_spec_slots(idx)
 
     # --------------------------------------------------------------------- #
     # Prefill
@@ -1122,9 +1146,10 @@ class MTPSpecEngine:
         page_table,
         spec_mode="argmax_ids",
         slot_remap=None,
+        mamba_state=None,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
-        validation. Returns VerifyResult."""
+        validation. ``mamba_state``: the GDN state blocks of the step (MTPBlockEngine only). Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
@@ -1150,6 +1175,7 @@ class MTPSpecEngine:
             read_logits=spec_mode == "logits",
             active=active,
             num_valid_drafts=num_valid_drafts,
+            **({} if mamba_state is None else {"mamba_state": mamba_state}),
         )
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 
@@ -1572,15 +1598,177 @@ class MTPSpecEngine:
         ttnn.deallocate(Hp)
 
 
-def get_spec_engine(model, batch_size, draft_len):
-    """The engine cached on ``model._spec_engine``, keyed (B, K); a different key shuts the old one
-    down first."""
+class MTPBlockEngine(MTPSpecEngine):
+    """MTPSpecEngine for a model whose GDN state is in vLLM KV cache blocks (``model.gdn_blocks`` with verify tables
+    for T = K + 1 tokens): Qwen36MTPContractForCausalLM.
+
+    The engine keeps no GDN state. The model's prefill (Qwen36ForCausalLM.prefill_forward) writes each row's end state
+    into its destination block and calls ``prefill_hook`` per prompt chunk. A verify reads every row's start state from
+    mamba_state.start_blocks and writes the state after each query token into mamba_state.windows
+    (GdnBlockState.set_verify_blocks), so a row that moves, leaves a step or resumes needs nothing here, and the
+    accepted count selects nothing: the runner points the next step's start_blocks at the accepted position's block.
+    What remains per state slot is the drafter's: the feed row of a prompt's last token (``_last_hidden``), kept from
+    the final prefill chunk to the row's first verify, which writes that position's drafter KV with the first
+    generated token."""
+
+    def __init__(self, model, batch_size, draft_len):
+        super().__init__(model, batch_size, draft_len)
+        blocks = model.gdn_blocks
+        assert blocks is not None and blocks.verify_tokens == self.T, (
+            f"MTPBlockEngine needs the GDN verify tables for T = {self.T} (GdnBlockState(verify_tokens=K + 1)), "
+            f"got {None if blocks is None else blocks.verify_tokens}"
+        )
+
+    def prepare_prefill(self, page_table):
+        """Allocate the engine buffers and compile the drafter's prompt programs (the drafter KV warm and the last-row
+        capture of every masked bucket and of a full 2048-token chunk) on the eager prefill path of the batch-1 GDN
+        workspace. The model's own prefill programs and chunk trace are prepared by the caller. Idempotent per table
+        width."""
+        model, T = self.model, self.T
+        pt0 = torch.as_tensor(page_table)
+        width = int(pt0.shape[-1])
+        if self.prefill_prepared:
+            assert width == self.nb, f"engine prepared for nb={self.nb}, got a table of width {width}"
+            return
+        t0 = time.perf_counter()
+        assert not self.captured and getattr(model, "_vfy_trace_id", None) is None, "prepare after capture"
+        pt = self._alloc_engine_buffers(pt0)
+        cap = width * self.block_size
+        warm_lens = [L for L in _WARM_PROMPT_LENS if L + T + 1 <= cap]
+        for L in warm_lens:
+            prompt = torch.ones(1, L, dtype=torch.int32)
+            logits = model._prefill_for_spec_b1(prompt, pt[0:1], L, self.prefill_hook(0, prompt[0], pt[0:1], True))
+            if not isinstance(logits, torch.Tensor):
+                ttnn.deallocate(logits)
+        self.release(0)
+        self.prefill_prepared = True
+        logger.info(
+            f"[spec_engine] prefill prepared (GDN state in KV cache blocks) B={self.B} K={self.K} nb={self.nb} "
+            f"block={self.block_size} warm_prompts={warm_lens} in {time.perf_counter() - t0:.1f}s"
+        )
+
+    def record_prefill(self):
+        """The chunk trace belongs to the model's prefill, which records it."""
+        assert self.prefill_prepared, "record_prefill before prepare_prefill"
+        self.prefill_recorded = True
+
+    def _prepare_verify(self):
+        self.model.prepare_verify_trace(self._prep_pt, self.T, warm_positions=[0] * self.B)
+
+    def capture_decode(self):
+        """The base capture, then zero the null block 0: the warm passes wrote GDN state there (every row of a warm
+        verify points at it). Serving never writes GDN state into it (verify_tables holds padding rows), and a verify's
+        padded columns past a row's last real block read and write block 0, where attention must find finite values."""
+        captured = self.captured
+        super().capture_decode()
+        if not captured:
+            self.model.gdn_blocks.zero_blocks([0])
+
+    def _remap_gdn(self, idx):
+        """The GDN state follows mamba_state, which already names each row's blocks after the move."""
+
+    def prefill_hook(self, slot, row_tokens, page_table_row, final):
+        """on_chunk of Qwen36Model.prefill_traced_chunked for a prefill row of state slot ``slot`` whose tokens
+        [0, end) are ``row_tokens``. Writes the drafter KV of the chunk's positions: position i pairs the hidden at i
+        with token i + 1, so position end - 1 stays for the next chunk's first token or, after the prompt's last chunk
+        (``final``), for the first generated token at the row's first verify, from the feed row kept here. A next chunk
+        does not rewrite position end - 1 (its hidden is not kept), nor does a prefix-cache hit at end; the drafter
+        then attends to whatever that position's drafter KV holds, which lowers acceptance and never changes the
+        verified tokens."""
+        model = self.model
+        pt_row = model._fit_spec_page_table(page_table_row, self.nb)
+        self._check_scratch(pt_row)
+        prompt = [int(t) for t in torch.as_tensor(row_tokens).reshape(-1)]
+        end = len(prompt)
+
+        def on_chunk(hidden, chunk_start, valid_len):
+            # Never frees `hidden` (the caller does, or it is the trace's persistent output).
+            feed = model.spec_feed_rows(hidden)
+            self._warm_mtp_chunk(feed, chunk_start, valid_len, prompt, pt_row)
+            if final and chunk_start + valid_len >= end:
+                self._capture_last_row(feed, end - 1 - chunk_start, slot)
+            if feed is not hidden:
+                ttnn.deallocate(feed)
+
+        return on_chunk
+
+    def finish_prefill(self, slot, end, final):
+        """Prefill row of state slot ``slot`` wrote its state after ``end`` tokens. Only a row that ends its prompt
+        (``final``) decodes next."""
+        reset_draft_skip(self, slot)
+        self._fresh.pop(slot, None)
+        self._active.discard(slot)
+        if final:
+            self._fresh[slot] = int(end)
+            self._active.add(slot)
+
+    def verify(
+        self,
+        tokens,
+        start_pos,
+        accepted_counts,
+        page_table,
+        read_logits=False,
+        active=None,
+        num_valid_drafts=None,
+        mamba_state=None,
+    ):
+        """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
+        ``mamba_state``. A row's first verify after its prompt first writes the drafter KV of the prompt's last
+        position. ``accepted_counts`` selects no state. Returns (ids int32 [B, T], logits [B, T, vocab] or None)."""
+        assert self.captured, "verify before capture"
+        if mamba_state is None:
+            raise ValueError("a verify on GDN state blocks needs mamba_state")
+        B, T = self.B, self.T
+        tokens = self._ints(tokens, (B, T))
+        start_pos = self._ints(start_pos, (B,))
+        self._last_cap_blocks = int(torch.as_tensor(page_table).shape[-1])
+        pt = self._fit(page_table)
+        active = (
+            torch.ones(B, dtype=torch.bool) if active is None else torch.as_tensor(active, dtype=torch.bool).reshape(B)
+        )
+        unknown = [u for u in range(B) if active[u] and u not in self._active]
+        if unknown:
+            raise ValueError(f"rows {unknown} carry a request whose prompt was never prefilled into that slot")
+        if not bool(active.all()):
+            pt = pt.clone()
+            pt[~active] = 0  # vLLM null block
+        self._row_active = active.clone()
+        self._last_pt = pt
+        # padded columns may sit past the runner's KV reservation (max_model_len, ngram)
+        vpt = pt if num_valid_drafts is None else verify_write_table(pt, start_pos, num_valid_drafts, self.block_size)
+        assert int(start_pos.max()) + T <= table_capacity(
+            self._last_cap_blocks, self.block_size
+        ), "verify window past the paged KV capacity"
+        fresh = {u: n for u, n in self._fresh.items() if active[u]}
+        if fresh:
+            self._stage_mtp_tables(pt)
+            for u, n in sorted(fresh.items()):
+                if int(start_pos[u]) != n:
+                    raise ValueError(f"slot {u}: first verify at {int(start_pos[u])}, its prompt has {n} tokens")
+                self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), n - 1, self._mtp_pt_rows[u])
+                del self._fresh[u]
+        self.model.gdn_blocks.set_verify_blocks(mamba_state)
+        args = (tokens.tolist(), start_pos.tolist(), [0] * B)
+        kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~active).tolist())
+        if self._timing:
+            ids, vfeed, lt = self._verify_split(*args, **kw)
+        else:
+            ids, vfeed, lt = self.model.verify_traced(*args, **kw)
+        self._vfeed = vfeed
+        ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
+        return ids, (None if lt is None else lt.reshape(B, T, -1))
+
+
+def get_spec_engine(model, batch_size, draft_len, engine_cls=MTPSpecEngine):
+    """The engine cached on ``model._spec_engine``, keyed (class, B, K); a different key shuts the old one down
+    first."""
     key = (int(batch_size), int(draft_len))
     eng = getattr(model, "_spec_engine", None)
-    if eng is not None and (eng.B, eng.K) == key:
+    if eng is not None and type(eng) is engine_cls and (eng.B, eng.K) == key:
         return eng
     if eng is not None:
         eng.shutdown()
-    eng = MTPSpecEngine(model, *key)
+    eng = engine_cls(model, *key)
     model._spec_engine = eng
     return eng

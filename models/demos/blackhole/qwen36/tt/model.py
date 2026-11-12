@@ -1530,12 +1530,28 @@ class Qwen36Model:
             sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
         )
 
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        assert gdn, "the hybrid verify needs GDN layers"
+        if self.gdn_blocks is not None:
+            # The GDN state is in vLLM KV cache blocks: each GDN layer's verify reads its start state from, and
+            # writes every token's state to, the blocks of the verify tables (GdnBlockState.set_verify_blocks), which
+            # point at the null block until the first verify. No ring, window or selector exists.
+            assert (
+                self.gdn_blocks.verify_tokens == T
+            ), f"the GDN verify tables are bound for T = {self.gdn_blocks.verify_tokens}, the verify trace has T = {T}"
+            self._vfy_state_idx = self._vfy_conv_sel = None
+            self.gdn_blocks.clear_verify_blocks()
+            for t in self._forward_verify_bucket_tp(n_users=B):
+                ttnn.deallocate(t)
+            ttnn.synchronize_device(dev)
+            self._vfy_att0 = _att0
+            self._vfy_prepared_key = key
+            return
+
         # The deferred commit's two selectors, shared by all GDN layers (pure index / one-hot data, so one
         # pair of buffers is staged per iteration instead of one per layer). state_blk_idx picks each
         # (user, v-head)'s starting block in the per-token state ring; conv_sel picks each user's conv
         # window rows out of [E_prev | new qkv]. Both start at mi = 0 for every user, as the seed leaves them.
-        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
-        assert gdn, "the hybrid verify needs GDN layers"
         Nv, Kc = gdn[0].Nv, gdn[0].K
         self._vfy_Nv, self._vfy_Kc = Nv, Kc
         _mi0 = [0] * B
@@ -1645,9 +1661,10 @@ class Qwen36Model:
         ``feed_rows`` is the trace's own output buffer: do not deallocate it, and finish with it
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
         the iteration).
-        """
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 
+        With the GDN state in vLLM KV cache blocks (gdn_blocks), ``mi_prev`` is not used: the caller writes the verify
+        tables (GdnBlockState.set_verify_blocks) before the replay.
+        """
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
@@ -1695,8 +1712,28 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
         _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
-        # The deferred commit (see prepare_verify_trace): where each user's recurrence and conv
-        # window resume. Two small host-built tensors, shared by every GDN layer.
+        if self.gdn_blocks is None:
+            self._stage_verify_selectors(mi_prev, B, rep)
+
+        ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(dev)
+
+        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
+        # and it is B*T uint32 instead of B*T x vocab floats.
+        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
+        ids = [int(v) for v in ids[:rows]]
+        lt = None
+        if read_logits:
+            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
+            lt = lt.reshape(-1, self.vocab_size)[:rows]
+        return ids, self._vfy_rows_out, lt
+
+    def _stage_verify_selectors(self, mi_prev, B, rep):
+        """The deferred commit (see prepare_verify_trace): where each user's recurrence and conv window resume in the
+        model-owned ring. Two small host-built tensors, shared by every GDN layer."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
+
+        T = self._vfy_T
         _h = ttnn.from_torch(
             spec_state_blk_idx(mi_prev, B, self._vfy_Nv),
             dtype=ttnn.uint32,
@@ -1713,19 +1750,6 @@ class Qwen36Model:
             mesh_mapper=rep,
         )
         ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
-
-        ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(dev)
-
-        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
-        # and it is B*T uint32 instead of B*T x vocab floats.
-        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
-        ids = [int(v) for v in ids[:rows]]
-        lt = None
-        if read_logits:
-            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
-            lt = lt.reshape(-1, self.vocab_size)[:rows]
-        return ids, self._vfy_rows_out, lt
 
     def _forward_seed_bucket_tp(self, token_buf, kvpos, kvpt, cos, sin, n_users):
         """``_forward_verify_bucket_tp`` at T = 1: the seed's device body, one row per user.
@@ -3237,7 +3261,7 @@ class Qwen36Model:
         block_size = get_block_size(self._paged_kv_caches)
         if start_pos:
             assert self.num_devices > 1, "a prefill continues at start_pos > 0 only on the TP path"
-            assert vision_tokens is None and on_chunk is None, "a prefill continues at start_pos > 0 for text only"
+            assert vision_tokens is None, "a prefill continues at start_pos > 0 for text only"
             assert start_pos % block_size == 0, f"start_pos {start_pos} is not on a {block_size}-token KV block"
         blocks_per_chunk = chunk_size // block_size
         num_full = (actual_len - start_pos) // chunk_size
@@ -3280,14 +3304,14 @@ class Qwen36Model:
                     page_table = page_table[:, :buf_blocks]
             if on_chunk is not None:
                 logits, hidden = self.prefill_masked_bucket(
-                    token_ids[:, :actual_len],
+                    token_ids[:, start_pos:actual_len],
                     page_table,
-                    actual_len=actual_len,
-                    chunk_start=0,
+                    actual_len=tail_real,
+                    chunk_start=start_pos,
                     vision_tokens=vision_tokens,
                     return_hidden=True,
                 )
-                on_chunk(hidden, 0, actual_len)
+                on_chunk(hidden, start_pos, tail_real)
                 ttnn.deallocate(hidden)
                 return logits
             return self.prefill_masked_bucket(

@@ -336,7 +336,8 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
 def _decode_step_weights(mesh, sd, P, taps, dims, tp):
     """The constants gdn_decode_step reads (GDN decode on state in KV cache blocks): dt_bias and -exp(A_log) in
     float32 (tw["dt_bias"] / tw["neg_exp_A"] are bfloat16), the norm weight as a [Dv] bfloat16 tensor, and each
-    device's conv taps packed into [Nv, 4, 32, 32] head tiles. Small, so they skip the weight cache."""
+    device's conv taps packed into [Nv, 4, 32, 32] head tiles; gdn_spec_step reads the same taps as [1, 4, C] rows.
+    Small, so they skip the weight cache."""
 
     def fp32_sharded(t):
         return ttnn.from_torch(
@@ -369,6 +370,16 @@ def _decode_step_weights(mesh, sd, P, taps, dims, tp):
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             mesh_mapper=tpc.tp_shard_mapper(mesh, 0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        "conv_taps_rows": ttnn.from_torch(
+            torch.stack([t.reshape(-1) for t in taps])
+            .unsqueeze(0)
+            .to(torch.bfloat16),  # [1, 4, tp * C], tap j in row j
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         ),
     }
@@ -1852,6 +1863,65 @@ class TPGatedDeltaNet:
         e_parts = {u: up(e, self._verify_win_buf.dtype) for u, (_, e) in states.items()}
         self._write_spec_rows(ring_parts, e_parts)
 
+    def _forward_verify_blocks(self, x, valid_len, n_users):
+        """Speculative verify of n_users rows x T = valid_len / n_users tokens on the state in vLLM KV cache blocks:
+        ONE gdn_spec_step reads each row's full state (recurrent state and packed history) from its start block and
+        writes the full state after every token into the block that the verify tables name (state_blocks.verify,
+        written by GdnBlockState.set_verify_blocks), so nothing is committed or kept here. Arithmetic of
+        gdn_decode_step on the same blocks, token by token. Then the out-projection and all-reduce of decode."""
+        tw, sb = self.tw, self.state_blocks
+        vb = getattr(sb, "verify", None)
+        assert vb is not None and valid_len == n_users * vb.T, (
+            f"the verify tables are bound for T = {getattr(vb, 'T', None)} tokens per row; got {valid_len} rows for "
+            f"{n_users} users"
+        )
+        if len(x.shape) == 4:
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+        qkvzab = tpc.matmul_1d_decode(
+            x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        qkvzab = ttnn.reshape(qkvzab, (1, valid_len, qkvzab.shape[-1]))  # [q | k | v | z | a | b] rows u * T + t
+        gated = ttnn.experimental.kda.gdn_spec_step(
+            qkvzab,
+            None,  # no window pair: the history is in the blocks (conv_hist)
+            None,
+            sb.rec_k,
+            vb.ctrl,
+            tw["conv_taps_rows"],
+            tw["dt_bias_fp32"],
+            tw["neg_exp_A_fp32"],
+            tw["norm_w_1d"],
+            self.Nv,
+            self.Nk,
+            self.Dk,
+            self.Dv,
+            vb.T,
+            n_users,
+            self.qkvz_dim_tp,
+            conv_kernel=self.K,
+            scale=self.scale,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+            fast_mode=True,
+            fp32_state=True,
+            ring_page_idx=vb.idx,
+            conv_hist=sb.hist,
+            **({} if sb.rec_v is None else {"ring_pool2": sb.rec_v}),
+        )  # [1, n_users * T, Nv * Dv]
+        ttnn.deallocate(qkvzab)
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, valid_len, partial.shape[-1]))
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
@@ -1872,7 +1942,13 @@ class TPGatedDeltaNet:
         Side effects: the ring is updated in place (every candidate's state, for every user) and
         _verify_win_buf becomes the new E_prev. rec_state and conv_states are untouched; the host
         commits later by index.
+
+        With the state in vLLM KV cache blocks (state_blocks bound) the verify reads and writes the blocks instead
+        (_forward_verify_blocks); state_blk_idx and conv_sel are not used.
         """
+        if self.state_blocks is not None:
+            assert pre_gathered, "the verify on KV cache blocks takes the decode-config (full-dim) norm output"
+            return self._forward_verify_blocks(x, valid_len, n_users)
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"

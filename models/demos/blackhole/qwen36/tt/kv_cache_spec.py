@@ -35,6 +35,8 @@ DRAM_BANKS = 8
 BLOCK_SIZES = (64, 128, 256, 512, 1024, 2048)
 # gdn_decode_step handles at most this many batch rows.
 MAX_DECODE_ROWS = 32
+# gdn_spec_step's ctrl word that holds a head: no state or history write, the result is discarded (int32 of 0xFFFFFFFF).
+SPEC_STEP_HOLD = -1
 
 
 class GdnLayoutError(ValueError):
@@ -184,6 +186,37 @@ class GdnBlockLayout:
         )
         hist = b * self.hist_tiles + self.hist_first + HIST_SLOTS * h
         return torch.cat([rec, hist]).to(torch.int32)
+
+    def verify_tables(self, start_blocks, windows, num_blocks, rows):
+        """gdn_spec_step ``ctrl`` page and ``ring_page_idx`` (with ``conv_hist``) of a verify of T = windows.shape[1]
+        tokens per row: row r reads its full state from block ``start_blocks[r]`` and writes the full state after its
+        query token t into block ``windows[r, t]``. ``rows``: the op's batch; rows past ``len(start_blocks)`` are
+        padding rows. Returns int32 (ctrl [1, N], idx [rows, 2 * T * Nv]): ctrl word 1 + rows + r * Nv + h is the first
+        float32 page of head h's start state, word 1 + rows + rows * Nv + r * Nv + h its first history page (the
+        window parity and the mi words are 0); idx entry (r, t * Nv + h) is the first float32 page of the state after
+        token t, entry (r, T * Nv + t * Nv + h) its first history page. The start block can be one of the row's own
+        windows: the op reads it before it writes any state. A padding row (window block 0) is held
+        (SPEC_STEP_HOLD): it writes nothing, so the null block 0 never takes GDN state, whose float32 bytes attention
+        would read as bfloat16 (NaN or Inf at positions it masks) when a verify's padded columns point at block 0."""
+        nv = self.dims.nv
+        windows = torch.as_tensor(windows, dtype=torch.int64)
+        starts = torch.as_tensor(start_blocks, dtype=torch.int64).reshape(-1)
+        n, T = int(windows.shape[0]), int(windows.shape[1])
+        if starts.numel() != n or n > rows:
+            raise ValueError(f"{starts.numel()} start blocks and {n} window rows for a verify of {rows} rows")
+        starts = torch.cat([starts, torch.zeros(rows - n, dtype=torch.int64)])
+        windows = torch.cat([windows, torch.zeros(rows - n, T, dtype=torch.int64)])
+        start_pages = self.index_host(starts, num_blocks).to(torch.int64)  # [2 * Nv, rows]
+        ctrl = torch.zeros(1, -(-(1 + rows + 2 * rows * nv) // 16) * 16, dtype=torch.int64)
+        held = (windows[:, 0] == 0).reshape(rows, 1)
+        ctrl[0, 1 + rows : 1 + rows + rows * nv] = start_pages[:nv].T.masked_fill(held, SPEC_STEP_HOLD).reshape(-1)
+        ctrl[0, 1 + rows + rows * nv : 1 + rows + 2 * rows * nv] = (
+            start_pages[nv:].T.masked_fill(held, SPEC_STEP_HOLD).reshape(-1)
+        )
+        dest_pages = self.index_host(windows.reshape(-1), num_blocks).to(torch.int64)  # [2 * Nv, rows * T]
+        rec = dest_pages[:nv].T.reshape(rows, T * nv)
+        hist = dest_pages[nv:].T.reshape(rows, T * nv)
+        return ctrl.to(torch.int32), torch.cat([rec, hist], dim=1).to(torch.int32)
 
     def state_writes(self, block):
         """(pool, first half-head slice, first source half-head, end source half-head) of the recurrent state of
@@ -409,7 +442,15 @@ def mesh_tp_degree(mesh_device=None, visible_devices=None):
 
 
 def qwen36_kv_cache_spec(
-    text_config, tp, *, kv_bf8, mamba_block_size, mamba_cache_mode="none", min_block_size=None, banks=DRAM_BANKS
+    text_config,
+    tp,
+    *,
+    kv_bf8,
+    mamba_block_size,
+    mamba_cache_mode="none",
+    min_block_size=None,
+    num_speculative_blocks=0,
+    banks=DRAM_BANKS,
 ):
     """dict[layer name, KVCacheSpec] for vLLM's hybrid KV cache manager, sizes per device at ``tp`` devices.
 
@@ -417,7 +458,9 @@ def qwen36_kv_cache_spec(
     (choose_block_size), and one MambaSpec per GDN layer, padded to the attention page so that vLLM keeps the
     attention block size. ``mamba_block_size``: tokens per state block in mamba_cache_mode "none" (max_model_len, so a
     request keeps one state block per group). In mode "align" the state blocks have the attention block size, and the
-    MambaSpec asks for prefill checkpoints on block boundaries, where Qwen36ForCausalLM splits a prefill. Raises
+    MambaSpec asks for prefill checkpoints on block boundaries, where Qwen36ForCausalLM splits a prefill.
+    ``num_speculative_blocks``: K of a speculative launch, so that vLLM gives a verify one state block per query token
+    and row (1 + K per group). Raises
     ValueError for a TP degree or a geometry gdn_decode_step does not serve."""
     from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
@@ -468,6 +511,7 @@ def qwen36_kv_cache_spec(
         page_size_padded=attn.page_size_bytes,
         mamba_type=MambaAttentionBackendEnum.GDN_ATTN,
         mamba_cache_mode=mamba_cache_mode,
+        num_speculative_blocks=int(num_speculative_blocks),
         **mamba_kw,
     )
     attn_names, gdn_names = qwen36_layer_names(text_config)

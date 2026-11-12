@@ -28,6 +28,11 @@ persistent ``state_page_idx`` tensor, which names the pages of the block of each
   one.
 * zero_blocks clears blocks that vLLM gives to the attention group: float32 state bytes read as bfloat16 can be NaN
   or Inf at positions that attention masks.
+* A speculative verify (Qwen36MTPContractForCausalLM) runs gdn_spec_step with conv_hist on the blocks: row r reads its
+  full state from start_blocks[r] and writes the full state after query token t, history included, into windows[r, t]
+  (kv_cache_spec.GdnBlockLayout.verify_tables). So every block holds a complete state after every step, and no model
+  state outlives a step. set_verify_blocks writes the step's tables into one ctrl and one index tensor per MambaSpec
+  group, which every GDN layer of the group reads.
 
 Persistent tensors are allocated in the constructor, before any trace capture: a buffer allocated after a capture and
 alive at a replay can be overwritten by the replay.
@@ -127,9 +132,10 @@ def _dram_banks(mesh):
 
 
 class GdnBlockState:
-    """The GDN layers of a Qwen36Model bound to the GDN state in vLLM KV cache blocks."""
+    """The GDN layers of a Qwen36Model bound to the GDN state in vLLM KV cache blocks. ``verify_tokens``: T = 1 + K of a
+    speculative model's verify (0: no verify)."""
 
-    def __init__(self, model, per_layer_specs, kv_caches):
+    def __init__(self, model, per_layer_specs, kv_caches, verify_tokens=0):
         args = model.args
         self.mesh = model.mesh_device
         self.kv_caches = kv_caches
@@ -269,6 +275,88 @@ class GdnBlockState:
         self._decode_blocks = {}  # group -> blocks of the decode rows that the index tensors hold
         self._index_refs = {}
         self._warmed = False
+        self.verify_tokens = int(verify_tokens)
+        if self.verify_tokens:
+            self._bind_verify(per_layer_specs)
+
+    def _bind_verify(self, per_layer_specs):
+        """Persistent gdn_spec_step inputs of the verify, before any trace capture: one ctrl page and one page index
+        per MambaSpec group. vLLM's MambaSpec group k holds the k-th GDN layer of every layer slot (its groups hold one
+        layer per slot, filled in layer order); set_verify_blocks checks that against mamba_state."""
+        T, rows = self.verify_tokens, self.bmax
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        seen = {}
+        self._verify_group = {}  # GDN layer index -> group whose tables it reads
+        for i, entry in enumerate(per_layer_specs):
+            if is_mamba_entry(entry):
+                self._verify_group[i] = seen.get(entry[2], 0)
+                seen[entry[2]] = self._verify_group[i] + 1
+        ctrl0, idx0 = self.layout.verify_tables([], torch.zeros(0, T), self.num_blocks, rows)
+
+        def table(host):
+            return ttnn.from_torch(
+                host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, mesh_mapper=rep
+            )
+
+        groups = max(self._verify_group.values()) + 1
+        self._verify_ctrl = [table(ctrl0) for _ in range(groups)]
+        self._verify_idx = [table(idx0) for _ in range(groups)]
+        for i, dn in self.layers.items():
+            k = self._verify_group[i]
+            dn.state_blocks.verify = SimpleNamespace(T=T, ctrl=self._verify_ctrl[k], idx=self._verify_idx[k])
+        self._verify_refs = []
+        self._verify_order = None  # (mamba_state group names, [table group of each mamba_state group])
+
+    def set_verify_blocks(self, mamba_state):
+        """Point the verify of every GDN layer at the blocks of ``mamba_state``: row r of group g reads its start state
+        from start_blocks[r] and writes the state after query token t into windows[r, t] (verify_tables). Rows past the
+        windows, and padding rows (block 0), use vLLM's null block. The tables are rewritten before every verify; the
+        caller's previous verify has finished reading them (verify_traced synchronizes)."""
+        T = self.verify_tokens
+        groups = self.groups(mamba_state)
+        if self._verify_order is None or self._verify_order[0] != self._group_names:
+            order = []
+            for g, (layers, _) in enumerate(groups):
+                ks = {self._verify_group[layer_index(name)] for name in mamba_state.groups[g].layer_names}
+                members = {i for i, k in self._verify_group.items() if k in ks}
+                if len(ks) != 1 or members != {layer_index(name) for name in mamba_state.groups[g].layer_names}:
+                    raise ValueError(
+                        f"MambaSpec group {g} holds layers {sorted(members)}, not the k-th GDN layer of every layer "
+                        "slot; the verify tables are bound per such group at allocation"
+                    )
+                order.append(ks.pop())
+            self._verify_order = (self._group_names, order)
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        refs = []
+        for g, (_, windows) in enumerate(groups):
+            if windows.shape[1] < T:
+                raise ValueError(
+                    f"a verify of {T} tokens per row needs {T} state blocks per row, got {windows.shape[1]}"
+                )
+            starts = getattr(mamba_state.groups[g], "start_blocks", None)
+            if starts is None:
+                raise ValueError("a verify needs mamba_state start_blocks")
+            n = min(self.bmax, int(windows.shape[0]))
+            ctrl, idx = self.layout.verify_tables(starts[:n], windows[:n, :T], self.num_blocks, self.bmax)
+            k = self._verify_order[1][g]
+            for host, dev in ((ctrl, self._verify_ctrl[k]), (idx, self._verify_idx[k])):
+                h = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+                ttnn.copy_host_to_device_tensor(h, dev)
+                refs.append(h)
+        # The copies may read the host tensors after they return; hold them until the next verify's tables.
+        self._verify_refs = refs
+
+    def clear_verify_blocks(self):
+        """Point every verify row at the null block 0 (warmup and trace capture)."""
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        ctrl, idx = self.layout.verify_tables([], torch.zeros(0, self.verify_tokens), self.num_blocks, self.bmax)
+        refs = []
+        for dev_ctrl, dev_idx in zip(self._verify_ctrl, self._verify_idx):
+            for host, dev in ((ctrl, dev_ctrl), (idx, dev_idx)):
+                h = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+                ttnn.copy_host_to_device_tensor(h, dev)
+                refs.append(h)
+        self._verify_refs = refs
 
     def _views(self, k, v):
         lay, n = self.layout, self.num_blocks
