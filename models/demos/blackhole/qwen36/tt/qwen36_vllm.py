@@ -31,6 +31,10 @@ from models.tt_transformers.tt.generator import Generator
 _PREFILL_WARMUP_CHUNK = 2048
 # Compute cores gdn_spec_step uses for B rows of Nv value heads (one per row and head) on a Blackhole P150 / P300.
 _SPEC_STEP_CORES = 110
+# tt/vision/model.py pads a request's vision patches to (n // _VISION_BUCKET + 1) * _VISION_BUCKET.
+_VISION_BUCKET = 2048
+# Patches the vision warmup covers when vLLM's --mm-processor-kwargs sets no max_pixels: about a 2 MP image.
+_VISION_WARMUP_PATCHES = 8191
 
 
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
@@ -148,7 +152,9 @@ class _Qwen36Generator(Generator, SupportsMultiModal):
         # No-op cost for text-only requests; get_image_features / get_video_features are only invoked
         # when a request actually carries pixel_values / pixel_values_videos.
         model.init_vision_model()
-        return cls([model], [args], mesh_device)
+        inst = cls([model], [args], mesh_device)
+        inst._vision_warmup_patches = _vision_warmup_patches(model)
+        return inst
 
     @staticmethod
     def _row_items(kwargs, key, row):
@@ -184,12 +190,61 @@ class _Qwen36Generator(Generator, SupportsMultiModal):
     def _row_vision_rows(self, model, kwargs, row, row_tokens):
         """Host vision rows of prefill row ``row`` whose tokens from position 0 are ``row_tokens``
         (Qwen36Model.vision_rows over the row's images and videos), or None for a text row. The model keeps one
-        request's grids, so this runs right before the row's prefill."""
+        request's grids, so this runs right before the row's prefill. Raises ValueError for an item above the warmed
+        vision buckets (_check_vision_bucket)."""
         image = self._row_visual(kwargs, "pixel_values", "image_grid_thw", row)
         video = self._row_visual(kwargs, "pixel_values_videos", "video_grid_thw", row)
         if image is None and video is None:
             return None
+        for items in (image, video):
+            if items is not None:
+                self._check_vision_bucket(items[1])
         return model.vision_rows(row_tokens, image=image, video=video)
+
+    def warmup_vision(self):
+        """Run the vision tower once per patch bucket up to _vision_warmup_patches, before any trace is captured.
+
+        Every device op of the vision tower depends only on the padded patch bucket (get_*_features trim the valid
+        rows on the host), so one image per bucket creates every program a request in that bucket runs. A program
+        first created after the traces were captured can allocate device buffers that a later trace replay
+        overwrites: at TP=8 the composite all_gather and reduce_scatter of the vision tower own L1 global
+        semaphores, and the next vision call of that shape hangs in the CCL. An image of 32 x w patches lands in
+        bucket 32 * w + 1024."""
+        model = self.model[0]
+        top = getattr(self, "_vision_warmup_patches", None)
+        if getattr(model, "vision_model", None) is None or not top:
+            return
+        vc = model.vision_args.hf_config.vision_config
+        patch_dim = vc.in_channels * vc.temporal_patch_size * vc.patch_size**2
+        buckets = range(_VISION_BUCKET, (top // _VISION_BUCKET + 1) * _VISION_BUCKET + 1, _VISION_BUCKET)
+        for bucket in buckets:
+            w = bucket // 32 - 32
+            pixels = torch.zeros(32 * w, patch_dim, dtype=torch.float32)
+            ttnn.deallocate(model.get_image_features(pixels, torch.tensor([[1, 32, w]], dtype=torch.int32)))
+        model._req_image_grid_thw = None
+        model._req_video_grid_thw = None
+        ttnn.synchronize_device(self.mesh_device)
+        self._vision_warmed_bucket = buckets[-1]
+        logger.info(f"Vision tower warmed for patch buckets {list(buckets)}")
+
+    def _check_vision_bucket(self, grid_thw):
+        """Refuse a visual input whose patch bucket warmup_vision did not compile.
+
+        Running it would create vision programs after trace capture, and a later request of the same size would hang
+        the device until a reset. Raising fails this request at once, with the cause in the log. No check when
+        warmup_vision did not run (tests, demos)."""
+        warmed = getattr(self, "_vision_warmed_bucket", None)
+        if not warmed:
+            return
+        n = int(torch.as_tensor(grid_thw).reshape(-1, 3).prod(dim=1).max())
+        bucket = (n // _VISION_BUCKET + 1) * _VISION_BUCKET
+        if bucket > warmed:
+            raise ValueError(
+                f"Vision input of {n} patches needs vision bucket {bucket}, above the largest bucket warmed before "
+                f"trace capture ({warmed} patches); running it would compile the vision tower after capture and can "
+                "hang the device. Launch vLLM with --mm-processor-kwargs '{\"max_pixels\": N}' (for example 1048576) "
+                "so that every accepted input fits a warmed bucket."
+            )
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -438,6 +493,11 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         # paged/chunked SDPA needs the page-table stick % 32 == 0.
         num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        # A visual request runs at max_batch_size 1, or at any max_batch_size on a class with per-row M-RoPE deltas
+        # (prefill_forward refuses it otherwise), so only those launches compile the vision tower before trace capture.
+        # The tower runs one prefill row at a time, so the buckets do not depend on max_batch_size.
+        if not enable_trace and (model.args.max_batch_size == 1 or self._PER_ROW_ROPE_DELTA):
+            self.warmup_vision()
         logger.info(
             f"Qwen prefill warmup ({'record' if enable_trace else 'prepare'}): chunk={_PREFILL_WARMUP_CHUNK}, "
             f"page_table_blocks={num_blocks}"
@@ -453,6 +513,27 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         kwargs.pop("non_greedy_decoding_on_device", None)
         self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
+
+
+def _vision_warmup_patches(model):
+    """The most vision patches an accepted image can have, or None when the launch accepts no image or video.
+
+    Read from the current vLLM config, as vLLM's processor resizes images to at most
+    --mm-processor-kwargs max_pixels; _VISION_WARMUP_PATCHES without it. Video is not bounded."""
+    try:
+        from vllm.config import get_current_vllm_config
+
+        mc = get_current_vllm_config().model_config
+        if not mc.supports_multimodal_inputs:
+            return None
+        kw = getattr(getattr(mc, "multimodal_config", None), "mm_processor_kwargs", None) or {}
+        max_pixels = kw.get("max_pixels")
+    except Exception:
+        max_pixels = None
+    if max_pixels is None:
+        return _VISION_WARMUP_PATCHES
+    patch = model.vision_args.hf_config.vision_config.patch_size
+    return -(-int(max_pixels) // patch**2)
 
 
 def _mesh_tp(default=4):

@@ -310,13 +310,10 @@ class Qwen36Model:
         # Clear any stale video grid so the modality (and thus the placeholder token id) is image.
         self._req_image_grid_thw = image_grid_thw
         self._req_video_grid_thw = None
-        image_features = self.vision_model.forward(pixel_values, grid_thw=image_grid_thw)
-        # The vision tower returns [1, B, S, H]; flatten the leading (batch/seq) dims to the
-        # packed [num_image_tokens, H] rows the text-model splice (_scatter_vision_tokens /
-        # _set_vision_merge) expects. The hidden dim is unchanged so the mesh hidden-fracture
-        # is preserved. B == 1 for now.
-        hidden = image_features.shape[-1]
-        return ttnn.reshape(image_features, (-1, hidden))
+        # host_trim: every device op of the tower depends only on the padded patch bucket, and the packed
+        # [num_image_tokens, H] rows (hidden-fractured) are trimmed on the host, so a new image size creates no
+        # program after the serving traces are captured.
+        return self.vision_model.forward(pixel_values, grid_thw=image_grid_thw, host_trim=True)
 
     def get_video_features(self, pixel_values_videos, video_grid_thw):
         """Run the vision tower over a single user's video frames.
@@ -332,9 +329,7 @@ class Qwen36Model:
         # placeholder token id) is video.
         self._req_video_grid_thw = video_grid_thw
         self._req_image_grid_thw = None
-        video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw)
-        hidden = video_features.shape[-1]
-        return ttnn.reshape(video_features, (-1, hidden))
+        return self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw, host_trim=True)
 
     def _vision_placeholder_mask(self, token_ids):
         """True at the tokens that the current request's vision rows splice into: ``image_token_id`` when an image
