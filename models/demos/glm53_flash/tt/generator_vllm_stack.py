@@ -105,6 +105,11 @@ ASYNC_DECODE = DEVICE_TOP_K > 1 and os.environ.get("GLM53_STACK_ASYNC_DECODE", "
 # scheduler trims vLLM's block-hash hit to a position the device holds a snapshot of). Read at import: the plugin
 # reads the capabilities from the class.
 PREFIX_CACHE = os.environ.get("GLM53_STACK_PREFIX", "0") == "1"
+# GLM53_STACK_PREFIX_HEAD (tokens, default 16,384 = two 8,192 chunks): snapshots at or below it are kept (a shared system /
+# tool prompt serves every conversation); above it each request keeps only its LATEST snapshot -- its previous one is
+# evicted when the next commits -- so one long prompt holds head + 1 pool entries instead of one per chunk (AgentX
+# 2026-11-12: a 400 K prompt rotated all 32 entries and every next turn re-prefilled from 0, hit rate 0.7 %)
+PREFIX_HEAD = int(os.environ.get("GLM53_STACK_PREFIX_HEAD", "16384"))
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
 
@@ -296,7 +301,9 @@ class StackPrefixCache:
                 vLLM cuts long prompts there, ``prefill_chunk_alignment``) also writes the slot's state into a reserved
                 pool entry inside its prefill trace (``snapshot_after``), registered under the chained hash of tokens
                 [0, end) once the call returned; a prefix registered already is not snapshotted again; the store
-                reuses its least recently used unpinned entry when the pool is full;
+                reuses its least recently used unpinned entry when the pool is full; above ``PREFIX_HEAD`` tokens a
+                request keeps only its latest snapshot (the next turn of a conversation extends its whole prompt):
+                its previous one is evicted when the next commits, unless a slot reads or a hit pins it;
       confirm   (the plugin's scheduler, before it commits vLLM's hit) the longest registered position <= vLLM's
                 proposal whose pages are still resident, else 0; that entry is pinned (never reused) until the
                 request's prefill attaches it;
@@ -326,11 +333,13 @@ class StackPrefixCache:
         self.lock = threading.Lock()
         self.pins: OrderedDict = OrderedDict()  # prompt fingerprint -> the key of the entry its confirmed hit reads
         self.pin_cap = 4 * int(max_batch)  # hits confirmed but never scheduled (aborted while waiting) expire
-        self._pending: list = []  # the current prefill call's reserved snapshots: (key, n_tokens, pages, entry)
+        self._pending: list = []  # the current prefill call's reserved snapshots: (key, n_tokens, pages, entry, slot)
+        self.head = PREFIX_HEAD  # snapshots at or below it are kept; above it one (the latest) per request
+        self.tail: dict = {}  # generator slot -> the key of its request's latest snapshot above the head
         self.stats = {
             k: 0
             for k in ("confirmed", "confirmed_tokens", "not_resident", "attaches", "fallbacks", "snapshots",
-                      "snapshots_skipped", "mm_excluded")  # fmt: skip
+                      "snapshots_skipped", "mm_excluded", "tail_superseded")  # fmt: skip
         }
 
     @property
@@ -442,7 +451,7 @@ class StackPrefixCache:
                     continue
                 planned.add(key)
                 snap[i] = int(ent)
-                self._pending.append((key, end, rows[i, : -(-end // BLOCK_SIZE)].tolist(), int(ent)))
+                self._pending.append((key, end, rows[i, : -(-end // BLOCK_SIZE)].tolist(), int(ent), int(gslots[i])))
         extra = {}
         if attach:
             extra["prefix_attach"] = attach
@@ -453,9 +462,16 @@ class StackPrefixCache:
     def commit(self) -> None:
         """the prefill call returned: its snapshots exist on the device"""
         with self.lock:
-            for key, n, pages, ent in self._pending:
+            for key, n, pages, ent, g in self._pending:
                 self.store.register(key, n_tokens=n, pages=pages, kind="P", device_entry=ent)
                 self.stats["snapshots"] += 1
+                if n > self.head:  # the request's previous tail snapshot is superseded (free unless read / pinned)
+                    prev = self.tail.get(g)
+                    old = self.store.entries.get(prev) if prev is not None and prev != key else None
+                    if old is not None and old.readers == 0 and old.n_tokens > self.head:
+                        self.store.evict(prev)
+                        self.stats["tail_superseded"] += 1
+                    self.tail[g] = key
                 logger.info(
                     f"GLM53 stack prefix: snapshot of tokens [0, {n}) in entry {ent} "
                     f"({len(self.store.entries)} of {self.store.device_entries} entries registered)"
@@ -465,13 +481,14 @@ class StackPrefixCache:
     def abort(self) -> None:
         """the prefill call raised: its reserved entries were never written"""
         with self.lock:
-            for *_, ent in self._pending:
+            for _key, _n, _pages, ent, _g in self._pending:
                 self.store.unreserve(ent)
             self._pending = []
 
     def release(self, gslot: int) -> None:
         with self.lock:
             self.store.release_slot(int(gslot))
+            self.tail.pop(int(gslot), None)  # a later request in the slot starts its own chain
 
     def report(self) -> dict:
         with self.lock:

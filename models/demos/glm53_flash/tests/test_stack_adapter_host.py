@@ -1113,6 +1113,20 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
                              start_pos=[192], empty_slots=[3], sampling_params=_greedy(1))  # fmt: skip
     assert backend.state_io[n][1:3] == (0, None) and kv.state[ad._alias[3]] == b and pc.stats["fallbacks"] == 2
+    ad.release_request(3)
+    # ---- above the head (GLM53_STACK_PREFIX_HEAD; 128 here) a request keeps only its latest snapshot: D's 256 is
+    #      evicted when its 384 commits, the 384 when its 512 does; the 128 (head) stays; the next turn of D (E)
+    #      attaches at 512
+    pc.head = 128
+    d = _prompt(512, 61) + _prompt(12, 70)
+    row_d = _blocks(3, len(d))
+    _prefill_steps(ad, kv, d, row_d, slot=3, ends=[128, 256, 384, 512, len(d)])
+    assert pc.store.key(d, 256) not in pc.store.entries and pc.store.key(d, 384) not in pc.store.entries
+    assert pc.store.key(d, 512) in pc.store.entries and pc.stats["tail_superseded"] == 2
+    ad.release_request(3)
+    assert not pc.tail  # the slot released: its chain ends
+    e = d + _prompt(20, 80)
+    assert ad.confirm_prefix_cache_hit(e, [], 512) == 512
 
 
 # ------------------------------------------------------------------------------- image input (GLM53_STACK_MM)
