@@ -1061,6 +1061,10 @@
 # one does not stop the other. Pro runs as three sections in one leg: layers 0-9 graded per layer, then
 # the end-to-end tail graded at the last layer; each section after the first reads the streams the one
 # before it writes to generated/v4_depth_handoff.
+# Weight cache: each leg exports its variant's TT_DSV4_*_PREFILL_TTNN_CACHE (weka scratch). The first run writes the
+# norms' and the MoE's ttnn tensors under <root>/<name>_bh_32dev/<checkpoint>/8x4 and later runs load them instead of
+# converting from the checkpoint. The first run also pays for the writes, which the leg timeouts below were not
+# measured with (Flash ~156 GB, Pro ~870 GB of routed experts at bf4), so raise them for that run if needed.
 - name: "(DeepSeek-V4-Flash) transformer full-depth chunked accuracy 55k@5k vs vLLM golden"
   fabric_profile: torus_xy
   cmd: |
@@ -1097,6 +1101,7 @@
     (
       timeout -k 2m 67m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
+        export TT_DSV4_FLASH_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-V4-Flash-Cache/DeepSeek-V4-Flash-Cache-prefill
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_flash_transformer_depth -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
@@ -1155,6 +1160,7 @@
     (
       timeout -k 2m 66m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
+        export TT_DSV4_PRO_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-V4-Pro-Cache/DeepSeek-V4-Pro-Cache-prefill
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_head -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
@@ -1164,6 +1170,7 @@
     (
       timeout -k 2m 117m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
+        export TT_DSV4_PRO_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-V4-Pro-Cache/DeepSeek-V4-Pro-Cache-prefill
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers10to35" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
@@ -1173,6 +1180,7 @@
     (
       timeout -k 2m 106m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
+        export TT_DSV4_PRO_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-V4-Pro-Cache/DeepSeek-V4-Pro-Cache-prefill
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers36to60" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
