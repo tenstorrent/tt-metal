@@ -60,6 +60,9 @@ inline std::string get_soc_description_file(
             return sim_soc_desc;
         }
     }
+    if (target_device == tt::TargetDevice::Emule && !rtoptions.get_emule_soc_desc_path().empty()) {
+        return rtoptions.get_emule_soc_desc_path();
+    }
     std::string path = rtoptions.get_root_dir();
     if (path.back() != '/') {
         path.push_back('/');
