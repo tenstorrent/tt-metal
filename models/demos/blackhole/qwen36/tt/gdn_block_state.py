@@ -11,11 +11,13 @@ unchanged. GdnBlockState binds every GDN layer to float32 and bfloat16 alias_vie
 persistent ``state_page_idx`` tensor, which names the pages of the block of each decode row.
 
 * Prefill runs on the layer's batch-1 workspace (``rec_state``, ``conv_carry``). A prefill at start_pos 0 starts from
-  zero state; a later one first loads its start block into the workspace (restore). A prefill checkpoint is the
-  workspace written into its block (write_state) between two parts of the prefill; the end state goes into the
-  destination block. The start block is only read. Writes use paged_fill_cache: the views have one page or one half
-  value head per dim-0 slice, so a persistent page table names the destination; the block id never reaches a program
-  hash, and no request compiles a program.
+  zero state; a later one first loads its start block into the workspace (restore). The end state goes into the
+  destination block. A prefill checkpoint inside the prefill's last chunk is computed by that chunk's forward next to
+  the workspace (TPGatedDeltaNet.prefill_checkpoint) and written into its block by write_checkpoint; a checkpoint on
+  a chunk boundary, or in an earlier chunk, is the workspace written into its block (write_state) between two parts
+  of the prefill (prefill_segments). The start block is only read. Writes use paged_fill_cache: the views have one
+  page or one half value head per dim-0 slice, so a persistent page table names the destination; the block id never
+  reaches a program hash, and no request compiles a program.
 * Decode runs gdn_decode_step on the blocks directly. The adapter rewrites the page index whenever vLLM moves a row
   or gives a row another request (set_decode_blocks), so moving a row moves no state. The index tensors keep their
   addresses, so a captured decode trace reads the new index on its next replay. A row whose start block differs from
@@ -102,22 +104,32 @@ def row_blocks(mamba_state, row):
     )
 
 
-def prefill_segments(start, end, checkpoint_pos, block_size):
-    """[(a, b), ...]: the token ranges, in order, that a prefill of tokens [start, end) runs one after the other on the
-    GDN workspace, so that the workspace holds the state after ``checkpoint_pos`` tokens (0: none) at the end of the
-    first range. Each range starts on a KV block boundary, where Qwen36Model.prefill_traced_chunked can continue."""
+def prefill_segments(start, end, checkpoint_pos, block_size, chunk_size):
+    """[(a, b, c), ...]: the token ranges [a, b), in order, that a prefill of tokens [start, end) runs one after the
+    other on the GDN workspace with Qwen36Model.prefill_traced_chunked (start_pos a, checkpoint_pos c), so that the
+    state after ``checkpoint_pos`` tokens (0: none) becomes available. Each range starts on a KV block boundary.
+
+    The prefill replays its full ``chunk_size``-token chunks from a trace and runs its partial last chunk eagerly. A
+    checkpoint inside the last chunk is computed by that chunk's eager forward (one range, c = checkpoint_pos), so the
+    prefill runs no extra forward; a full last chunk then runs eagerly instead of from the trace. Otherwise the
+    prefill stops at the checkpoint (two ranges, c = 0), where the workspace holds its state; on a chunk boundary that
+    also adds no forward. vLLM puts the checkpoint on the last block boundary before ``end``, which is one of these
+    two cases when ``chunk_size`` is a multiple of ``block_size``."""
     if not 0 <= start < end:
         raise ValueError(f"prefill of tokens [{start}, {end}) is empty")
     if start % block_size:
         raise ValueError(f"prefill resumes at {start}, inside a {block_size}-token KV block")
     if not checkpoint_pos:
-        return [(start, end)]
+        return [(start, end, 0)]
     if not start < checkpoint_pos < end or checkpoint_pos % block_size:
         raise ValueError(
             f"prefill checkpoint after {checkpoint_pos} tokens is not on a {block_size}-token block boundary inside "
             f"[{start}, {end})"
         )
-    return [(start, checkpoint_pos), (checkpoint_pos, end)]
+    last_chunk = start + (end - start - 1) // chunk_size * chunk_size
+    if (checkpoint_pos - start) % chunk_size and checkpoint_pos > last_chunk:
+        return [(start, end, checkpoint_pos)]
+    return [(start, checkpoint_pos, 0), (checkpoint_pos, end, 0)]
 
 
 def _free_copy(view, source):
@@ -431,6 +443,15 @@ class GdnBlockState:
     def write_state(self, mamba_state, blocks):
         """Copy the batch-1 workspace of every GDN layer of MambaSpec group g of ``mamba_state`` into block
         ``blocks[g]``: a prefill's end state or one of its checkpoints."""
+        self._write_groups(mamba_state, blocks, checkpoint=False)
+
+    def write_checkpoint(self, mamba_state, blocks):
+        """Copy the state that every GDN layer of MambaSpec group g of ``mamba_state`` computed at the prefill
+        checkpoint of its last prefill forward (TPGatedDeltaNet.take_prefill_checkpoint) into block ``blocks[g]``,
+        and free it."""
+        self._write_groups(mamba_state, blocks, checkpoint=True)
+
+    def _write_groups(self, mamba_state, blocks, checkpoint):
         # paged_fill_cache may read the host page tables after it returns; hold them until the device is idle.
         if self._write_refs:
             ttnn.synchronize_device(self.mesh)
@@ -440,7 +461,10 @@ class GdnBlockState:
                 raise ValueError(f"a prefill row has the null block {block} as its GDN state block")
             self._set_write_tables(block)
             for dn in layers:
-                self._write_state(dn)
+                if checkpoint:
+                    self._write_checkpoint(dn)
+                else:
+                    self._write_state(dn)
 
     def restore(self, mamba_state, blocks):
         """Load the full state that block ``blocks[g]`` holds into the batch-1 workspace of every GDN layer of
@@ -506,20 +530,29 @@ class GdnBlockState:
             ttnn.copy_host_to_device_tensor(host, table)
             self._write_refs.append(host)
 
-    def _write_state(self, dn):
-        """Write ``dn``'s batch-1 workspace into the block that the write tables name."""
+    def _write_checkpoint(self, dn):
+        rec_state, conv_carry = dn.take_prefill_checkpoint()
+        self._write_state(dn, rec_state, conv_carry)
+        ttnn.deallocate(rec_state)
+        ttnn.deallocate(conv_carry)
+
+    def _write_state(self, dn, rec_state=None, conv_carry=None):
+        """Write a GDN state of ``dn`` into the block that the write tables name: ``rec_state`` [1, Nv, Dk, Dv] float32
+        and ``conv_carry`` [1, K - 1, C] bfloat16, by default its batch-1 workspace."""
         lay, nv, dk, dv = self.layout, self.dims.nv, self.dims.dk, self.dims.dv
         sb = dn.state_blocks
+        rec_state = dn.rec_state if rec_state is None else rec_state
+        conv_carry = dn.conv_carry if conv_carry is None else conv_carry
         # [1, Nv, Dk, Dv] as rows of half heads; the tiles keep their order.
-        rec = ttnn.reshape(dn.rec_state, (1, 1, nv * dk, dv))
+        rec = ttnn.reshape(rec_state, (1, 1, nv * dk, dv))
         for (pool, _, lo, hi), table in zip(lay.state_writes(0), self._write_tables):
             whole = lo == 0 and hi == 2 * nv
             src = rec if whole else ttnn.slice(rec, (0, 0, lo * dk // 2, 0), (1, 1, hi * dk // 2, dv))
             ttnn.experimental.paged_fill_cache(sb.rec_k if pool == 0 else sb.rec_v, src, table, batch_idx=0)
             if not whole:
                 ttnn.deallocate(src)
-        _free_copy(rec, dn.rec_state)
-        carry = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT)  # [1, K - 1, C]
+        _free_copy(rec, rec_state)
+        carry = ttnn.to_layout(conv_carry, ttnn.ROW_MAJOR_LAYOUT)  # [1, K - 1, C]
         rows = ttnn.reshape(carry, ((self.dims.kconv - 1) * self.dims.conv_dim // 32, 32))
         packed = ttnn.embedding(
             self._pack_table, rows, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -561,13 +594,16 @@ class GdnBlockState:
         self.layers = {}
 
     def warmup(self):
-        """Compile the block write, read, copy and zero programs on the null block 0, before any trace is captured.
+        """Compile the block write, read, copy and zero programs on the null block 0, before any trace is captured,
+        and the write of a prefill checkpoint when the GDN layers hold one (Qwen36Model._warmup_prefill_checkpoints).
         The reads leave the null block's bytes in the batch-1 workspace, which every prefill zeroes or restores."""
         if self._warmed:
             return
         self._set_write_tables(0)
         for dn in self.layers.values():
             self._write_state(dn)
+            if dn.prefill_checkpoint is not None:
+                self._write_checkpoint(dn)
             self._read_state(dn, 0)
             self._copy_state(dn, 0, 0)
         self.zero_blocks([0])

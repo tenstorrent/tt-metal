@@ -297,3 +297,79 @@ def test_block_operations_compile_nothing_after_warmup(mesh_device, kv_bf8, monk
         mesh_device.set_program_cache_misses_allowed(True)
     after = mesh_device.num_program_cache_entries()
     assert after == before, f"{after - before} program(s) compiled after GdnBlockState.warmup"
+
+
+@torch.no_grad()
+@_parametrize
+def test_checkpoint_inside_the_last_chunk(mesh_device, kv_bf8, monkeypatch, reset_seeds, ensure_gc):
+    """A prefill whose checkpoint (vLLM's: the last KV block boundary before its end) lies inside its last prefill chunk
+    computes the checkpoint in that chunk's forward (gdn_block_state.prefill_segments), for a partial (2000 tokens)
+    and a whole (2048 tokens) last chunk. (1) Logits and end state equal the same prefill without a checkpoint
+    exactly: the extra chunk_gated_delta_rule call does not touch the forward. (2) The checkpoint matches a cold
+    prefill of the checkpoint's tokens, which is what a prefill that stops at the checkpoint writes there; the two
+    forwards run different buckets, so by PCC. (3) A prefix hit on the checkpoint matches a cold prefill of its tokens
+    (PCC and argmax) and leaves the checkpoint blocks unchanged."""
+    run = Run(mesh_device, monkeypatch, kv_bf8)
+    bs = run.bs
+    if bs >= run.model.prefill_chunk_size:
+        pytest.skip(f"{bs}-token KV blocks put every checkpoint on a prefill chunk boundary")
+    n_cols = lambda T: -(-T // bs)
+    for T in (2000, 2048):
+        run.next_block = 1  # each length writes every block it reads first
+        p = (T - 1) // bs * bs
+        prompt = _prompts(1, T, seed=51 + T)
+        ckpt, dest, pages = run.blocks(3, parity=1), run.blocks(3, parity=0), run.blocks(n_cols(T))
+        logits = run.prefill([_row(prompt, 0, T, pages, dest, checkpoint=(p, ckpt))])
+        state_ckpt = run.state(ckpt)
+
+        cold = run.blocks(3)
+        cold_logits = run.prefill([_row(prompt, 0, T, run.blocks(n_cols(T)), cold)])
+        assert torch.equal(logits, cold_logits), f"T={T}: the checkpoint changed the prefill's logits"
+        run.assert_same_state(run.state(dest), run.state(cold), f"T={T}: end state with vs without a checkpoint")
+
+        cold_p = run.blocks(3)
+        run.prefill([_row(prompt, 0, p, run.blocks(n_cols(p)), cold_p)])
+        run.assert_same_state(state_ckpt, run.state(cold_p), f"T={T}: checkpoint vs cold {p}-token prefill", False)
+
+        other = torch.cat([prompt[:, :p], _prompts(1, 700, seed=61 + T)], dim=1)
+        end = p + 700
+        hit_pages = pages[: p // bs] + run.blocks(n_cols(end) - p // bs)
+        hit = run.blocks(3, parity=0)
+        hit_logits = run.prefill([_row(other, p, end, hit_pages, hit, start_blocks=ckpt)])
+        cold_hit = run.blocks(3)
+        cold_hit_logits = run.prefill([_row(other, 0, end, run.blocks(n_cols(end)), cold_hit)])
+        pcc = compute_pcc(hit_logits, cold_hit_logits)
+        logger.info(f"T={T}: prefix hit on the checkpoint after {p}: logits PCC {pcc:.6f} vs cold prefill")
+        assert pcc >= 0.99 and torch.equal(hit_logits.argmax(-1), cold_hit_logits.argmax(-1)), f"T={T}: PCC {pcc}"
+        run.assert_same_state(run.state(hit), run.state(cold_hit), f"T={T}: prefix hit end state vs cold", False)
+        run.assert_same_state(run.state(ckpt), state_ckpt, f"T={T}: the checkpoint blocks changed")
+
+
+@torch.no_grad()
+@_parametrize
+def test_checkpoint_inside_the_last_chunk_compiles_nothing_after_warmup(
+    mesh_device, kv_bf8, monkeypatch, reset_seeds, ensure_gc
+):
+    """After the masked-bucket warmup (which runs one checkpointed forward per bucket) and GdnBlockState.warmup (which
+    writes that checkpoint into the null block), prefills with a checkpoint inside their last chunk, at other
+    checkpoint positions and into blocks of both parities, add no program cache entry."""
+    run = Run(mesh_device, monkeypatch, kv_bf8)
+    bs = run.bs
+    if bs >= run.model.prefill_chunk_size:
+        pytest.skip(f"{bs}-token KV blocks put every checkpoint on a prefill chunk boundary")
+    run.model.warmup_prefill_masked_buckets(torch.arange(PAGE_COLUMNS, dtype=torch.int32).reshape(1, -1))
+    run.model.gdn_blocks.warmup()
+    ttnn.synchronize_device(mesh_device)
+    before = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        for T, parity in ((2000, 0), (1500, 1), (2048, 1)):
+            p = (T - 1) // bs * bs
+            prompt = _prompts(1, T, seed=71 + T)
+            row = _row(prompt, 0, T, run.blocks(-(-T // bs)), run.blocks(3, parity), checkpoint=(p, run.blocks(3)))
+            run.prefill([row])
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    after = mesh_device.num_program_cache_entries()
+    assert after == before, f"{after - before} program(s) compiled after warmup"

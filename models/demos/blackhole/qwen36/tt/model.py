@@ -2909,7 +2909,15 @@ class Qwen36Model:
         return ((length + 127) // 128) * 128
 
     def _forward_prefill_chunk_masked(
-        self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True, vision_tokens=None
+        self,
+        token_buf,
+        valid_len,
+        chunk_start,
+        page_table,
+        bucket,
+        flex_sdpa=True,
+        vision_tokens=None,
+        checkpoint_len=None,
     ):
         """Single masked fixed-bucket prefill forward over `bucket` positions.
 
@@ -2917,8 +2925,17 @@ class Qwen36Model:
         Returns hidden [1,bucket,hidden] or [1,1,bucket,hidden] (TP)."""
         if self.num_devices > 1:
             return self._forward_prefill_chunk_masked_tp(
-                token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
+                token_buf,
+                valid_len,
+                chunk_start,
+                page_table,
+                bucket,
+                flex_sdpa=flex_sdpa,
+                vision_tokens=vision_tokens,
+                checkpoint_len=checkpoint_len,
             )
+        if checkpoint_len:
+            raise ValueError("a prefill checkpoint inside a masked-bucket forward needs a TP mesh")
         block_size = get_block_size(self._paged_kv_caches)
         tok = ttnn.from_torch(
             token_buf.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
@@ -2975,11 +2992,14 @@ class Qwen36Model:
         flex_sdpa=True,
         vision_tokens=None,
         full_chunk=False,
+        checkpoint_len=None,
     ):
         """TP (num_devices>1) masked fixed-bucket single-chunk prefill forward.
 
         flex_sdpa=True: flexible chunked SDPA (serving). flex_sdpa=False: host-int path (debug).
-        Fills K/V for real blocks only. Returns hidden [1,1,bucket,dim]."""
+        Fills K/V for real blocks only. Returns hidden [1,1,bucket,dim].
+        checkpoint_len: every GDN layer also computes its state after the first checkpoint_len tokens
+        (TPGatedDeltaNet.prefill_checkpoint)."""
         block_size = get_block_size(self._paged_kv_caches)
         tok = ttnn.from_torch(
             token_buf.to(torch.int32),
@@ -3027,6 +3047,11 @@ class Qwen36Model:
             if flex_sdpa
             else None
         )
+        checkpoint = None
+        if checkpoint_len:
+            from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint
+
+            checkpoint = PrefillCheckpoint(self.device, bucket, checkpoint_len, self.args.gdn_conv_kernel_size)
         _cap = getattr(self, "_capture_layer", None)
         for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
@@ -3048,6 +3073,7 @@ class Qwen36Model:
                     chunk_size=self.args.gdn_chunk_size,
                     # full_chunk: GDN takes the traced body's conv (KDA) so eager == traced
                     valid_len=None if full_chunk else valid_len,
+                    gdn_checkpoint=checkpoint,
                 )
             ttnn.deallocate(x)
             x = x_new
@@ -3060,6 +3086,8 @@ class Qwen36Model:
         ttnn.deallocate(chunk_pt)
         if csi_tensor is not None:
             ttnn.deallocate(csi_tensor)
+        if checkpoint is not None:
+            checkpoint.free()
         return x
 
     def prefill_masked_bucket(
@@ -3074,6 +3102,7 @@ class Qwen36Model:
         vis_row_offset=0,
         return_hidden=False,
         stage_rope=True,
+        checkpoint_len=None,
     ):
         """Masked fixed-bucket prefill for a segment of `actual_len` real tokens.
 
@@ -3085,6 +3114,8 @@ class Qwen36Model:
         is the segment's absolute start (0 for a short prompt; num_full*chunk_size for a long tail —
         carried GDN/KV must already be in place). ``vis_row_offset`` is image-placeholder tokens before this segment.
         ``stage_rope`` False keeps the RoPE table the caller staged (prefill_traced_chunked, from the whole prompt).
+        ``checkpoint_len`` (TP): every GDN layer also computes its state after the segment's first checkpoint_len
+        tokens (TPGatedDeltaNet.prefill_checkpoint).
         Returns host [1,1,vocab] logits at actual_len-1.
         """
         B_batch, _ = token_ids.shape
@@ -3116,7 +3147,14 @@ class Qwen36Model:
         self._set_vision_merge(token_buf, vision_tokens, vis_row_offset)
 
         hidden = self._forward_prefill_chunk_masked(
-            token_buf, actual_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
+            token_buf,
+            actual_len,
+            chunk_start,
+            page_table,
+            bucket,
+            flex_sdpa=flex_sdpa,
+            vision_tokens=vision_tokens,
+            checkpoint_len=checkpoint_len,
         )
         ttnn.synchronize_device(self.device)
 
@@ -3186,7 +3224,22 @@ class Qwen36Model:
                 self.prefill_masked_bucket(toks, page_table, actual_len=actual_len, bucket=bucket)
         # Fill-width-keyed programs: warm every width directly (no full forward).
         self._warmup_paged_fill_widths(page_table, buckets, block_size)
+        if self.gdn_blocks is not None:
+            self._warmup_prefill_checkpoints(page_table, buckets, block_size)
         ttnn.synchronize_device(self.device)
+
+    def _warmup_prefill_checkpoints(self, page_table, buckets, block_size):
+        """Compile the extra GDN programs of a prefill checkpoint inside a masked-bucket forward
+        (TPGatedDeltaNet.forward_prefill ``checkpoint``) with one checkpointed forward per bucket that has a KV block
+        boundary inside it: vLLM places checkpoints on block boundaries. Those programs key on the bucket, not on the
+        checkpoint position. The GDN layers keep the last forward's checkpoint for GdnBlockState.warmup, which compiles
+        its block write."""
+        for bucket in sorted(buckets):
+            if bucket > block_size:
+                toks = torch.zeros(1, bucket, dtype=torch.int32)
+                self.prefill_masked_bucket(
+                    toks, page_table, actual_len=bucket, bucket=bucket, checkpoint_len=block_size
+                )
 
     def _warmup_paged_fill_widths(self, page_table, buckets, block_size):
         """Warm the per-fill-width programs in TPAttention.forward_prefill_paged's KV-fill sub-path
@@ -3237,8 +3290,21 @@ class Qwen36Model:
                 ttnn.deallocate(pt)
             ttnn.deallocate(k_full)
 
+    @property
+    def prefill_chunk_size(self):
+        """Tokens per chunk of prefill_traced_chunked: the captured chunk trace's size, 2048 before a capture."""
+        return self._chunked_chunk_size or 2048
+
     def prefill_traced_chunked(
-        self, token_ids, page_table, actual_len, vision_tokens=None, on_chunk=None, start_pos=0, rope_token_ids=None
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        vision_tokens=None,
+        on_chunk=None,
+        start_pos=0,
+        rope_token_ids=None,
+        checkpoint_pos=0,
     ):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk, then
         processing the final partial chunk eagerly with minimal padding. Only the real prompt
@@ -3265,11 +3331,15 @@ class Qwen36Model:
         ``rope_token_ids`` (default token_ids[:, :actual_len]) are the tokens the request's RoPE table is built from:
         the M-RoPE positions of an image need all of the image's tokens, so a multimodal prefill that runs in segments
         passes the whole prompt for each segment, including one that ends inside an image.
+
+        ``checkpoint_pos > 0`` (TP): every GDN layer also computes its state after checkpoint_pos tokens
+        (TPGatedDeltaNet.prefill_checkpoint) in the eager forward of the prefill's last chunk, which must contain it.
+        When that last chunk is a full one, it runs eagerly instead of replaying the chunk trace.
         """
         # Default to the standard 2048-token chunk when no trace is captured (e.g. the TP MVP,
         # which serves <=2048 prompts entirely via the masked bucket below and so needs no chunk
         # trace). The chunk trace is only required once there is at least one full chunk to replay.
-        chunk_size = self._chunked_chunk_size or 2048
+        chunk_size = self.prefill_chunk_size
         vision_tokens = self.vision_rows_host(vision_tokens)  # before the first replay (see vision_rows_host)
         B, T = token_ids.shape
         assert 0 <= start_pos < actual_len <= T, f"need 0 <= start_pos {start_pos} < actual_len {actual_len} <= {T}"
@@ -3280,6 +3350,19 @@ class Qwen36Model:
         blocks_per_chunk = chunk_size // block_size
         num_full = (actual_len - start_pos) // chunk_size
         tail_real = actual_len - start_pos - num_full * chunk_size
+        checkpoint_len = None
+        if checkpoint_pos:
+            if self.num_devices < 2:
+                raise ValueError("a prefill checkpoint inside the forward needs a TP mesh")
+            if tail_real == 0:
+                num_full, tail_real = num_full - 1, chunk_size
+            tail_start = actual_len - tail_real
+            if not tail_start < checkpoint_pos < actual_len:
+                raise ValueError(
+                    f"prefill checkpoint after {checkpoint_pos} tokens is not inside the last chunk "
+                    f"[{tail_start}, {actual_len}) of a prefill from {start_pos}"
+                )
+            checkpoint_len = checkpoint_pos - tail_start
         assert (
             num_full == 0 or self.num_devices > 1 or self._chunked_trace_id is not None
         ), "Call capture_prefill_trace_chunked first"
@@ -3321,6 +3404,7 @@ class Qwen36Model:
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, start_pos),
                 stage_rope=False,
+                checkpoint_len=checkpoint_len,
             )
             if on_chunk is not None:
                 logits, hidden = self.prefill_masked_bucket(
@@ -3347,6 +3431,7 @@ class Qwen36Model:
                     vision_tokens=vision_tokens,
                     on_chunk=on_chunk,
                     start_pos=start_pos,
+                    checkpoint_len=checkpoint_len,
                 )
             # Eager fallback: flexible qk=64 SDPA matches traced path.
             return self._prefill_chunked_eager_tp(
@@ -3359,6 +3444,7 @@ class Qwen36Model:
                 flex_sdpa=True,
                 vision_tokens=vision_tokens,
                 start_pos=start_pos,
+                checkpoint_len=checkpoint_len,
             )
 
         # Re-zero GDN once; carries across replays + masked tail (chunk_start>0 skips reset).
@@ -3462,6 +3548,7 @@ class Qwen36Model:
         flex_sdpa=True,
         vision_tokens=None,
         start_pos=0,
+        checkpoint_len=None,
     ):
         """TP eager long-prompt prefill via warmed bucket=chunk_size programs, from start_pos (see
         prefill_traced_chunked). Returns logits [1,1,vocab] at actual_len-1."""
@@ -3495,6 +3582,7 @@ class Qwen36Model:
                 flex_sdpa=flex_sdpa,
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, cs),
+                checkpoint_len=checkpoint_len,
             )
         # Exact multiple of chunk_size: logit from last full chunk.
         logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
@@ -3512,6 +3600,7 @@ class Qwen36Model:
         vision_tokens=None,
         on_chunk=None,
         start_pos=0,
+        checkpoint_len=None,
     ):
         """TP traced chunk-outer prefill from start_pos (see prefill_traced_chunked): replay the captured per-chunk trace
         (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
@@ -3640,6 +3729,7 @@ class Qwen36Model:
                     vision_tokens=vision_tokens,
                     vis_row_offset=self._vis_row_offset_for(token_ids, cs),
                     return_hidden=True,
+                    checkpoint_len=checkpoint_len,
                 )
                 on_chunk(hidden, cs, tail_real)
                 ttnn.deallocate(hidden)
@@ -3651,6 +3741,7 @@ class Qwen36Model:
                 chunk_start=cs,
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, cs),
+                checkpoint_len=checkpoint_len,
             )
         return self._masked_bucket_logits_tp(self._chunked_trace_output, chunk_size, chunk_size)
 

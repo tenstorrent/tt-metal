@@ -640,6 +640,7 @@ def gen_eng(monkeypatch):
         mesh_device=None,
         gdn_blocks=blocks,
         prefill_traced_chunked=prefill,
+        prefill_chunk_size=2048,
     )
     gen = object.__new__(CLS)
     gen.model = [model]

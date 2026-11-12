@@ -100,3 +100,17 @@ def test_vision_rows_are_read_to_host_once(monkeypatch):
     host = m.vision_rows_host("device rows")
     assert reads == ["device rows"] and host.dtype == torch.bfloat16
     assert m.vision_rows_host(host) is host
+
+
+def test_a_checkpoint_inside_an_image_needs_no_second_segment(model):
+    """A 2000-token prompt with an image at [900, 1156) and a checkpoint after 1024, inside the image: one eager
+    forward over the whole row splices all 256 vision rows and computes the checkpoint 1024 tokens in."""
+    m, calls = model
+    m.prefill_masked_bucket = lambda ids, page_table, **kw: calls.append(
+        ("bucket", ids.shape[1], kw["chunk_start"], kw["vis_row_offset"], kw["checkpoint_len"])
+    )
+    row = _row(2000, 900, 256)
+    m.prefill_traced_chunked(
+        row, None, 2000, vision_tokens=torch.zeros(256, DIM), start_pos=0, rope_token_ids=row, checkpoint_pos=1024
+    )
+    assert calls == [("rope", 2000, True), ("bucket", 2000, 0, 0, 1024)]
