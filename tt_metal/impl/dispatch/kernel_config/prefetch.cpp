@@ -99,7 +99,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id_);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
-        bool is_mock = descriptor_.cluster().is_mock_or_emulated();
+        bool is_mock = !descriptor_.cluster().runs_dispatch_firmware();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr =

@@ -233,8 +233,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
     // Mock/emulated devices don't have actual completion queues, skip validation
-    auto target_type = this->get_target_device_type();
-    bool is_mock = target_type == tt::TargetDevice::Mock || target_type == tt::TargetDevice::Emule;
+    bool is_mock = !this->runs_dispatch_firmware();
 
     // After an L1 ECC halt the dispatcher waits forever on the halted worker, so this would never complete.
     if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire) &&
@@ -300,8 +299,7 @@ void FDMeshCommandQueue::populate_read_descriptor_queue() {
 }
 
 void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         this->dispatch_core_ = CoreCoord{0, 0};
         return;
     }
@@ -366,8 +364,7 @@ void FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>
 }
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         return;
     }
 
@@ -648,8 +645,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     // the MeshDevice api lock across this write and the sequence it is part of, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         return;
     }
 
@@ -692,8 +688,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     TTZoneScopedD(DISPATCH);
     auto lock = lock_api_function_();
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         return;
     }
 
@@ -744,8 +739,7 @@ void FDMeshCommandQueue::throw_if_reader_failed() {
 void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         return;
     }
 
@@ -804,8 +798,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
     ttsl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> pinned_memory,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         return false;
     }
     if (!mesh_device_->impl().is_local(device_coord)) {
@@ -954,8 +947,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     ttsl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         // Return a dummy event for mock devices
         return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
@@ -1045,8 +1037,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         return;
     }
 
@@ -1372,8 +1363,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
     TTZoneScopedD(DISPATCH);
     auto lock = lock_api_function_();
     TT_FATAL(!trace_id_.has_value(), "Command-list patches are not supported during trace capture.");
-    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
-        this->get_target_device_type() == tt::TargetDevice::Emule) {
+    if (!this->runs_dispatch_firmware()) {
         return;
     }
 

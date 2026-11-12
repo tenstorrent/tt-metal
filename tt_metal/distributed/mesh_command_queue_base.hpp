@@ -60,6 +60,7 @@ protected:
     virtual void invalidate_prefetcher_cache_after_pinned_write() {}
 
     tt::TargetDevice get_target_device_type() const;
+    bool runs_dispatch_firmware() const;
 
 private:
     // Helper functions for read and write entire Sharded-MeshBuffers
