@@ -26,28 +26,28 @@ using address_t = uint32_t;
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 // This chip's values: common runtime args 3, 4, 5 (per device), set at kernel start.
 uint32_t current_device_id = 0;
-constexpr uint32_t num_devices = get_compile_time_arg_val(2);
-constexpr uint32_t concat_dim_size = get_compile_time_arg_val(3);
-constexpr uint32_t inner_dims_size = get_compile_time_arg_val(4);
-constexpr uint32_t has_half_tile = get_compile_time_arg_val(5);
-constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(7);
-constexpr uint32_t semaphore_expected_value = get_compile_time_arg_val(8);
-constexpr uint32_t concat_num_tiles = get_compile_time_arg_val(9);
+constexpr uint32_t num_devices = get_compile_time_arg_val(1);
+constexpr uint32_t concat_dim_size = get_compile_time_arg_val(2);
+constexpr uint32_t inner_dims_size = get_compile_time_arg_val(3);
+constexpr uint32_t has_half_tile = get_compile_time_arg_val(4);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(6);
+constexpr uint32_t semaphore_expected_value = get_compile_time_arg_val(7);
+constexpr uint32_t concat_num_tiles = get_compile_time_arg_val(8);
 uint32_t full_block_offset = 0;
-constexpr auto topology = static_cast<tt::tt_fabric::Topology>(get_compile_time_arg_val(11));
+constexpr auto topology = static_cast<tt::tt_fabric::Topology>(get_compile_time_arg_val(9));
 constexpr auto replicate_axis =
-    static_cast<ttnn::operations::ccl::common::ReplicateGroup>(get_compile_time_arg_val(12));
+    static_cast<ttnn::operations::ccl::common::ReplicateGroup>(get_compile_time_arg_val(10));
 uint16_t source_chip_id = 0;
-constexpr uint16_t source_mesh_id = get_compile_time_arg_val(14);
-constexpr bool is_fabric_2d = get_compile_time_arg_val(15);
-constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(16);
-constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(17);
-constexpr bool use_multicast_initialization = get_compile_time_arg_val(18);
+constexpr uint16_t source_mesh_id = get_compile_time_arg_val(11);
+constexpr bool is_fabric_2d = get_compile_time_arg_val(12);
+constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(13);
+constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(14);
+constexpr bool use_multicast_initialization = get_compile_time_arg_val(15);
 // Physical fabric slots (eth_chan_directions) toward the +1 / -1 ends of the axis, resolved on the host.
-constexpr uint32_t mcast_positive_direction = get_compile_time_arg_val(19);
-constexpr uint32_t mcast_negative_direction = get_compile_time_arg_val(20);
-constexpr auto output_tensor_args = TensorAccessorArgs<21>();
+constexpr uint32_t mcast_positive_direction = get_compile_time_arg_val(16);
+constexpr uint32_t mcast_negative_direction = get_compile_time_arg_val(17);
+constexpr auto output_tensor_args = TensorAccessorArgs<18>();
 constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
 // This flag is specialized per stream by the host. Endpoint streams without a physical egress compile against the
 // routing-plane-manager ABI even when other streams in the same program use a worker mux.
