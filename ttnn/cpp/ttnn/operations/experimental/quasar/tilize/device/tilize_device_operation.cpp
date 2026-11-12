@@ -210,7 +210,17 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
+        // [Quasar bring-up] TilizeMultiCoreBlockProgramFactory binds g.stage as both PRODUCER and
+        // CONSUMER on the reader (a data-movement kernel) inside `for (const auto& g : groups)`, so
+        // every group is poisoned and program build aborts on Gen2 with
+        //   program_spec.cpp:1502 !(is_gen2_arch(hal) && self_loop_kernel->is_data_movement_kernel())
+        //   "DataflowBuffer 'stage_*' is self-looped by data-movement kernel"
+        // (the DFB name varies: stage_main, stage_cliff_col, stage_cliff_col_row -- it is not a
+        // cliff-only path). Route to the Metal2 MultiCoreDefaultProgramFactory, matching the sibling
+        // selector in experimental/quasar/tilize_with_val_padding. NOTE: Default may handle the
+        // low-L1 (!enough_space_height) case less well; revisit if it OOMs. Remove once the block
+        // factory stops self-looping the stage DFB.
+        return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
 
@@ -237,7 +247,8 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
+            // [Quasar bring-up] Block factory self-loops the stage DFB (see note above).
+            return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
         }
     }
     return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};

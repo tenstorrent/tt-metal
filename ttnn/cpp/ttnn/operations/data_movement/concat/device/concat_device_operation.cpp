@@ -31,6 +31,22 @@ bool uses_zero_copy_sharded_factory(const std::vector<Tensor>& input_tensors, co
     }
     return !(output_mem_config.is_sharded() && output_mem_config.buffer_type() == BufferType::DRAM);
 }
+
+// [Quasar bring-up: concat interleaved metal2]
+// The generic interleaved-output concat has two factories that do the same thing by different
+// means. ConcatProgramFactory emits a ProgramDescriptor whose Reader/WriterConfigDescriptor becomes
+// a legacy DataMovementKernel, which Quasar rejects outright at program build
+// (kernel.hpp:449-451). ConcatMetalV2ProgramFactory emits the Metal-2.0 ProgramSpec equivalent,
+// which lowers to a QuasarDataMovementKernel. Wormhole/Blackhole keep the legacy path untouched.
+// Same dual-factory + arch-gated-selector shape reshape_view already uses.
+ConcatDeviceOperation::program_factory_t select_generic_interleaved_factory(
+    const std::vector<Tensor>& input_tensors) {
+    if (input_tensors[0].device()->arch() == tt::ARCH::QUASAR) {
+        return ConcatMetalV2ProgramFactory{};
+    }
+    return ConcatProgramFactory{};
+}
+
 }  // namespace
 
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
@@ -50,7 +66,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
                 input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
             return ConcatTiledUnalignedProgramFactory{};
         }
-        return ConcatProgramFactory{};
+        return select_generic_interleaved_factory(input_tensors);
     }
 
     if (const bool output_is_sharded = args.output_mem_config.is_sharded(); !output_is_sharded) {
@@ -95,7 +111,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 
     // default factory
     // including ND sharded tensors
-    return ConcatProgramFactory{};
+    return select_generic_interleaved_factory(input_tensors);
 }
 
 ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(

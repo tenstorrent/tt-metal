@@ -36,15 +36,30 @@ struct ReduceDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
+    // [Quasar bring-up: reduce-W metal2]  TILE-layout W reduce, Metal 2.0.
     struct ReduceMultiCoreWProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    // [Quasar bring-up: reduce-W metal2]  Row-major dense W reduce. Still the legacy
+    // ProgramDescriptor concept: reader_unary_reduce_rm / writer_reduce_rm_scalar / reduce_rm have no
+    // Metal 2.0 twin. Selected only when operation_attributes.row_major_w_dense_path is set, which is
+    // opt-in via reduce_op.cpp's use_row_major_support (default false, no in-tree caller sets it).
+    struct ReduceMultiCoreWRmProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t =
-        std::variant<ReduceSingleCoreHwProgramFactory, ReduceMultiCoreHProgramFactory, ReduceMultiCoreWProgramFactory>;
+    using program_factory_t = std::variant<
+        ReduceSingleCoreHwProgramFactory,
+        ReduceMultiCoreHProgramFactory,
+        ReduceMultiCoreWProgramFactory,
+        ReduceMultiCoreWRmProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

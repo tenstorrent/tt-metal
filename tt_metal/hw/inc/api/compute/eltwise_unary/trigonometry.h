@@ -108,7 +108,18 @@ ALWI void acosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR. SfpuType (tt_llk_quasar/llk_lib/llk_defs.h:75) has no `tan`
+// enumerator, and SFPU_UNARY_INIT_FN names it NON-DEPENDENTLY, so this body is a hard
+// error on Quasar even though it is never instantiated. That made the WHOLE of
+// trigonometry.h uncompilable on Quasar and took sin_tile/cos_tile down with it --
+// although SfpuType::sine and SfpuType::cosine both exist and both have real Quasar
+// LLKs (ckernel_sfpu_trigonometry.h calculate_sine/sine_init, calculate_cosine/
+// cosine_init). Same failure shape as the fill.h port. Guarding only the six broken
+// inits is strictly additive on Quasar -- nothing could have compiled against them --
+// and is a no-op on every other architecture.
 ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_init, (APPROX))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -227,8 +238,19 @@ ALWI void asin_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR. SfpuType (tt_llk_quasar/llk_lib/llk_defs.h:75) has no `asin`
+// enumerator, and SFPU_UNARY_INIT_FN names it NON-DEPENDENTLY, so this body is a hard
+// error on Quasar even though it is never instantiated. That made the WHOLE of
+// trigonometry.h uncompilable on Quasar and took sin_tile/cos_tile down with it --
+// although SfpuType::sine and SfpuType::cosine both exist and both have real Quasar
+// LLKs (ckernel_sfpu_trigonometry.h calculate_sine/sine_init, calculate_cosine/
+// cosine_init). Same failure shape as the fill.h port. Guarding only the six broken
+// inits is strictly additive on Quasar -- nothing could have compiled against them --
+// and is a no-op on every other architecture.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init, (is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -258,10 +280,21 @@ ALWI void atan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR. SfpuType (tt_llk_quasar/llk_lib/llk_defs.h:75) has no `atan`
+// enumerator, and SFPU_UNARY_INIT_FN names it NON-DEPENDENTLY, so this body is a hard
+// error on Quasar even though it is never instantiated. That made the WHOLE of
+// trigonometry.h uncompilable on Quasar and took sin_tile/cos_tile down with it --
+// although SfpuType::sine and SfpuType::cosine both exist and both have real Quasar
+// LLKs (ckernel_sfpu_trigonometry.h calculate_sine/sine_init, calculate_cosine/
+// cosine_init). Same failure shape as the fill.h port. Guarding only the six broken
+// inits is strictly additive on Quasar -- nothing could have compiled against them --
+// and is a no-op on every other architecture.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en)));
 }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -291,14 +324,36 @@ ALWI void acos_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR. SfpuType (tt_llk_quasar/llk_lib/llk_defs.h:75) has no `acos`
+// enumerator, and SFPU_UNARY_INIT_FN names it NON-DEPENDENTLY, so this body is a hard
+// error on Quasar even though it is never instantiated. That made the WHOLE of
+// trigonometry.h uncompilable on Quasar and took sin_tile/cos_tile down with it --
+// although SfpuType::sine and SfpuType::cosine both exist and both have real Quasar
+// LLKs (ckernel_sfpu_trigonometry.h calculate_sine/sine_init, calculate_cosine/
+// cosine_init). Same failure shape as the fill.h port. Guarding only the six broken
+// inits is strictly additive on Quasar -- nothing could have compiled against them --
+// and is a no-op on every other architecture.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acos_tile_init() { MATH(SFPU_UNARY_INIT_FN(acos, sfpu::asin_acos_init, (is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR. SfpuType (tt_llk_quasar/llk_lib/llk_defs.h:75) has no `cosh`
+// enumerator, and SFPU_UNARY_INIT_FN names it NON-DEPENDENTLY, so this body is a hard
+// error on Quasar even though it is never instantiated. That made the WHOLE of
+// trigonometry.h uncompilable on Quasar and took sin_tile/cos_tile down with it --
+// although SfpuType::sine and SfpuType::cosine both exist and both have real Quasar
+// LLKs (ckernel_sfpu_trigonometry.h calculate_sine/sine_init, calculate_cosine/
+// cosine_init). Same failure shape as the fill.h port. Guarding only the six broken
+// inits is strictly additive on Quasar -- nothing could have compiled against them --
+// and is a no-op on every other architecture.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_init, (APPROX, is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -328,8 +383,19 @@ ALWI void cosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR. SfpuType (tt_llk_quasar/llk_lib/llk_defs.h:75) has no `sinh`
+// enumerator, and SFPU_UNARY_INIT_FN names it NON-DEPENDENTLY, so this body is a hard
+// error on Quasar even though it is never instantiated. That made the WHOLE of
+// trigonometry.h uncompilable on Quasar and took sin_tile/cos_tile down with it --
+// although SfpuType::sine and SfpuType::cosine both exist and both have real Quasar
+// LLKs (ckernel_sfpu_trigonometry.h calculate_sine/sine_init, calculate_cosine/
+// cosine_init). Same failure shape as the fill.h port. Guarding only the six broken
+// inits is strictly additive on Quasar -- nothing could have compiled against them --
+// and is a no-op on every other architecture.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_init, (APPROX, is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**

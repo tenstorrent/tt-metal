@@ -19,6 +19,11 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
             return ReduceDeviceOperation::ReduceMultiCoreHProgramFactory{};
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
+            // [Quasar bring-up: reduce-W metal2]  The TILE path is Metal 2.0; the row-major dense
+            // path has no Metal 2.0 kernels and keeps the legacy ProgramDescriptor factory.
+            if (operation_attributes.row_major_w_dense_path) {
+                return ReduceDeviceOperation::ReduceMultiCoreWRmProgramFactory{};
+            }
             return ReduceDeviceOperation::ReduceMultiCoreWProgramFactory{};
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
         case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:

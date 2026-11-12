@@ -12,12 +12,19 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <bit>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <map>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
-tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_descriptor(
+// [Quasar bring-up: reduce-W metal2]  LEGACY ProgramDescriptor factory, now reachable ONLY for the
+// row-major dense path (operation_attributes.row_major_w_dense_path). Its three kernels have no
+// Metal 2.0 twin, so it is kept verbatim rather than ported; the TILE path moved to the Metal 2.0
+// ReduceMultiCoreWProgramFactory below. On Quasar this path still aborts in CreateDataMovementKernel,
+// exactly as it did before this change.
+tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -387,6 +394,279 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     }
 
     return desc;
+}
+
+// ============================================================================
+// [Quasar bring-up: reduce-W metal2]  Metal 2.0 port of the multi-core W reduce
+// factory -- SCOPED to the TILE (non row-major-dense) path.
+//
+// Why: the legacy factory above builds a ProgramDescriptor whose reader/writer carry
+// Reader/WriterConfigDescriptor{}. On Gen2 that reaches CreateDataMovementKernel and
+// TT_FATALs with "DataMovementKernel is not supported on Quasar" (kernel.hpp:451), so
+// every ReduceMean / ReduceMax that lands on the W-parallelised strategy aborts.
+//
+// The port is host-only: all three Metal 2.0 kernels this path needs already exist in
+// this directory and are already exercised by the sibling single-core-HW factory --
+//   dataflow/reader_unary_reduce_universal_start_id_metal2.cpp
+//   dataflow/writer_unary_interleaved_start_id_metal2.cpp
+//   compute/reduce_metal2.cpp
+// so reduce_op_single_core_hw_program_factory.cpp (same three kernels, one core) and
+// reduce_op_multi_core_h_program_factory.cpp (same three resources, multi-core work
+// split) are between them a line-for-line template.
+//
+// NOT ported: the row-major dense path (rm_path). Its three kernels
+// (reader_unary_reduce_rm.cpp, writer_reduce_rm_scalar.cpp, compute/reduce_rm.cpp) have
+// no Metal 2.0 twin, and a device-kernel rewrite is out of scope here. That path keeps
+// the legacy ProgramDescriptor factory above, now reachable as
+// ReduceMultiCoreWRmProgramFactory and selected in reduce_op_device_operation.cpp when
+// operation_attributes.row_major_w_dense_path is set. Nothing about its behaviour
+// changes. (It is opt-in via reduce_op.cpp's use_row_major_support, which defaults to
+// false and which no in-tree caller sets, so in practice only the path below runs.)
+//
+// negate (MIN-via-negate) and INT32 reduce are rejected for every path in
+// validate_on_program_cache_miss() on Quasar, so no fused-negate / SFPU variant is
+// needed here.
+ttnn::device_operation::ProgramArtifacts
+ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+
+    const auto& a = tensor_args.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
+    const auto& shape = a.padded_shape();
+    uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+
+    uint32_t Wt = tt::div_up(W, tile_width);
+    uint32_t Ht = tt::div_up(H, tile_height);
+
+    // The row-major dense branch has no Metal 2.0 kernels; it is routed to the legacy
+    // factory by select_program_factory, so reaching here with it set is a wiring bug.
+    TT_FATAL(
+        !operation_attributes.row_major_w_dense_path,
+        "Reduce MultiCoreW Metal 2.0 port does not cover the row-major dense path "
+        "(it has no Metal 2.0 kernels); ReduceMultiCoreWRmProgramFactory handles it.");
+    TT_FATAL(
+        !operation_attributes.negate,
+        "Reduce MultiCoreW Metal 2.0 port does not cover negate (MIN); negative_tile is unported on Quasar.");
+    TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device().arch(), operation_attributes.compute_kernel_config);
+
+    tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
+    tt::DataFormat scaler_cb_data_format =
+        src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
+    tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+
+    IDevice* device = &a.mutable_device();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+
+    // Tile path: one unit of work is one tile-row (Wt input tiles -> 1 output tile).
+    const uint32_t num_rows = NC * Ht;
+    uint32_t num_cores;
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+    uint32_t num_rows_per_core_group_1, num_rows_per_core_group_2;
+    if (operation_attributes.sub_core_grids.has_value()) {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_rows);
+    } else {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
+    }
+    TT_FATAL(num_cores > 0, "Reduce W requires at least one worker core");
+
+    // For MAX (and, on Quasar, SUM/AVG) with a non-unity scalar the device reduces with
+    // scaler=1.0 and the user scalar is applied afterwards by the compute kernel; see reduce_op.cpp.
+    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
+    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
+    uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
+
+    // ---- Resource names ----
+    const DFBSpecName IN{"in"};          // legacy c_0
+    const DFBSpecName SCALER{"scaler"};  // legacy c_2
+    const DFBSpecName OUT{"out"};        // legacy c_3
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+
+    DataflowBufferSpec in_dfb{
+        .unique_id = IN,
+        .entry_size = src0_single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = src0_cb_data_format};
+    DataflowBufferSpec scaler_dfb{
+        .unique_id = SCALER,
+        .entry_size = scaler_single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = scaler_cb_data_format};
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT,
+        .entry_size = dst_single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = dst_cb_data_format};
+
+    TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
+
+    // ---- Reduce defines ----
+    std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils_qsr::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::W);
+    if (use_post_mul) {
+        reduce_defines["REDUCE_POST_MUL"] = "1";
+    }
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    for (const auto& [k, v] : reduce_defines) {
+        compute_defines.emplace(k, v);
+    }
+    // The reader needs REDUCE_OP / REDUCE_DIM for prepare_reduce_scaler<>.
+    KernelSpec::CompilerOptions::Defines reader_defines = compute_defines;
+
+    const std::filesystem::path kdir("ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/");
+
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = kdir / "dataflow/reader_unary_reduce_universal_start_id_metal2.cpp",
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args = {{"scaler_bits", scaler_bits}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+    };
+
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = kdir / "dataflow/writer_unary_interleaved_start_id_metal2.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+    };
+
+    // One compute kernel per work-split group. For a W reduce the per-core quantity is the
+    // number of tile-rows (Ht); Wt is the whole reduced extent and is the same on every core.
+    auto make_compute = [&](const KernelSpecName& id, uint32_t compute_Ht) {
+        return KernelSpec{
+            .unique_id = id,
+            .source = kdir / "compute/reduce_metal2.cpp",
+            .compiler_options = {.defines = compute_defines},
+            .dfb_bindings =
+                {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .compile_time_args =
+                {{"Ht", compute_Ht}, {"Wt", Wt}, {"NC", 1u}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
+            .hw_config = ttnn::to_compute_hardware_config(
+                device->arch(),
+                ttnn::ComputeKernelConfig{
+                    .math_fidelity = math_fidelity,
+                    .math_approx_mode = false,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .dst_full_sync_en = dst_full_sync_en}),
+        };
+    };
+
+    Group<KernelSpec> kernels = {reader, writer};
+    Group<WorkUnitSpec> work_units;
+    kernels.push_back(make_compute(COMPUTE_G1, num_rows_per_core_group_1));
+    work_units.push_back(
+        WorkUnitSpec{.name = "reduce_w_g1", .kernels = {READER, WRITER, COMPUTE_G1}, .target_nodes = core_group_1});
+    if (!core_group_2.ranges().empty()) {
+        kernels.push_back(make_compute(COMPUTE_G2, num_rows_per_core_group_2));
+        work_units.push_back(
+            WorkUnitSpec{.name = "reduce_w_g2", .kernels = {READER, WRITER, COMPUTE_G2}, .target_nodes = core_group_2});
+    }
+
+    // ---- Per-core runtime args (mirror the legacy interleaved work-distribution loop) ----
+    std::vector<CoreCoord> cores;
+    if (operation_attributes.sub_core_grids.has_value()) {
+        for (const auto& range : all_cores.ranges()) {
+            for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    cores.emplace_back(x, y);
+                }
+            }
+        }
+    } else {
+        cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+    }
+    TT_FATAL(
+        cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
+
+    const uint32_t out_dim_divider = Wt;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+        const CoreCoord& core = cores[i];
+        uint32_t num_rows_per_core = 0;
+        if (core_group_1.contains(core)) {
+            num_rows_per_core = num_rows_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_rows_per_core = num_rows_per_core_group_2;
+        } else {
+            TT_THROW("Core not in specified core ranges");
+        }
+        const uint32_t num_tensor_tiles_per_core = num_rows_per_core * Wt;
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"num_tiles", num_tensor_tiles_per_core},
+                {"start_id", num_tiles_read},  // tile index of the row to start reading from
+            });
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_pages", num_tensor_tiles_per_core / out_dim_divider},
+                {"start_id", num_tiles_read / out_dim_divider},
+            });
+        num_tiles_read += num_tensor_tiles_per_core;
+        if (i == num_cores - 1) {
+            TT_FATAL(
+                num_tiles_read == num_rows * Wt,
+                "Reduce W assigned {} input tiles, expected {}",
+                num_tiles_read,
+                num_rows * Wt);
+        }
+    }
+
+    ProgramSpec spec{
+        .name = "reduce_multi_core_w",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = {in_dfb, scaler_dfb, out_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = std::move(work_units),
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_node_args)},
+        KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_node_args)}};
+    run_args.tensor_args = {{INPUT, a}, {OUTPUT, output}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

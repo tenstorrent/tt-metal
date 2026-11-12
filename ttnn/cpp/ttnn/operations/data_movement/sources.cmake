@@ -18,6 +18,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     concat/concat.cpp
     concat/device/concat_device_operation.cpp
     concat/device/concat_program_factory.cpp
+    concat/device/concat_metal2_program_factory.cpp
     concat/device/concat_s2s_tiled_program_factory.cpp
     concat/device/concat_s2s_rm_program_factory.cpp
     concat/device/concat_s2s_multi_program_factory.cpp

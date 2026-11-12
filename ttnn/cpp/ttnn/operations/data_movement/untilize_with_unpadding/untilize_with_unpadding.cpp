@@ -7,6 +7,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
+// [Quasar bring-up: untilize_with_unpadding arch gate]
+#include "ttnn/operations/experimental/quasar/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 using namespace tt::tt_metal;
 
@@ -76,6 +78,24 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // [Quasar bring-up: untilize_with_unpadding arch gate]
+    // All five mainline factories here (single_core, multi_core_interleaved,
+    // multi_core_block_interleaved, multi_core_sharded, multi_core_nd_sharded) still build
+    // legacy DataMovement kernel configs, which Quasar rejects at Program construction:
+    //     TT_FATAL kernel.hpp:451  arch() != ARCH::QUASAR
+    //     "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead."
+    // That abort is reached from ttnn::concat's host front end (concat.cpp:121), which calls
+    // this op as a shape fix-up, so three of YOLOv8n's Concat segments died here without the
+    // concat device op ever being entered.
+    // ttnn::operations::experimental::quasar::untilize_with_unpadding already ships ported
+    // copies of those factories and takes an identical signature, so this is a pure redirect:
+    // same arch-gate shape as concat's select_generic_interleaved_factory and the ten other
+    // `== QUASAR` gates already in data_movement. Wormhole/Blackhole are untouched.
+    if (input_tensor.device() != nullptr && input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+        return ttnn::operations::experimental::quasar::untilize_with_unpadding(
+            input_tensor, output_tensor_end, memory_config, use_multicore, sub_core_grids);
+    }
+
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
                             input_tensor.dtype() == DataType::FLOAT32;
 

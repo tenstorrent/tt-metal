@@ -121,7 +121,13 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // ---- Resource names ----
     const DFBSpecName IN_DFB{"in"};            // interleaved pages streamed in; exists only when converting formats
     const DFBSpecName OUT_DFB{"out"};          // the output shard, in the output's data format
-    const DFBSpecName SCRATCH_DFB{"scratch"};  // DRAM->L1 alignment staging; row-major only
+    // [Quasar bring-up: i2s scratchpad] DRAM->L1 alignment staging; row-major only. Modeled as a
+    // private node-local L1 SCRATCHPAD, not a DFB: the reader is its sole user -- it both fills it
+    // (src->scratch) and drains it (scratch->dest local copy) -- which as a DFB is a data-movement
+    // PRODUCER+CONSUMER self-loop and is rejected on Gen2/Quasar by program_spec.cpp:1502. A
+    // scratchpad carries no producer/consumer edge, so it validates on every arch. Ported from the
+    // known-good sibling experimental/quasar/interleaved_to_sharded, which models it this way.
+    const ScratchpadSpecName SCRATCH_PAD{"scratch"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
@@ -167,20 +173,23 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // tile path declares no spec at all rather than an unbound one.
     const bool needs_scratch =
         (src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned;
-    const bool has_scratch_dfb = !is_tile && needs_scratch;
-    if (has_scratch_dfb) {
+    const bool has_scratch_pad = !is_tile && needs_scratch;
+    Group<ScratchpadSpec> scratchpads;
+    if (has_scratch_pad) {
+        // [Quasar bring-up: i2s scratchpad] identical bytes to the former DFB (num_trids slots of
+        // one aligned staging page), reserved as raw node-local L1. The per-slot page size is
+        // recovered kernel-side as size_in_bytes() / num_trids.
         uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = SCRATCH_DFB,
-            .entry_size = scratch_page_size,
-            .num_entries = num_trids,
-            .data_format_metadata = input_data_format,
+        scratchpads.push_back(ScratchpadSpec{
+            .unique_id = SCRATCH_PAD,
+            .size_per_node = scratch_page_size * num_trids,
         });
     }
 
     // Reader kernel. Produces into the input DFB when converting formats, otherwise straight into the
     // output DFB. The row-major reader additionally drives the alignment scratchpad, which it both fills
-    // and drains itself -- a self-loop, so it is bound on both endpoints under one accessor name.
+    // and drains itself; [Quasar bring-up: i2s scratchpad] that is bound as a private scratchpad (one
+    // binding, no endpoints), not a self-looped DFB. See SCRATCH_PAD above.
     KernelSpec reader{
         .unique_id = READER,
         .dfb_bindings =
@@ -221,17 +230,11 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             "aligned_block_width_bytes",
             "aligned_offset",
             "start_id"};
-        if (has_scratch_dfb) {
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = SCRATCH_DFB,
-                .accessor_name = "scratch",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = SCRATCH_DFB,
-                .accessor_name = "scratch",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
+        if (has_scratch_pad) {
+            // [Quasar bring-up: i2s scratchpad] one binding, no endpoint_type: a scratchpad has no
+            // producer/consumer edge. Accessor name "pad" matches the kernel's scratch::pad.
+            reader.scratchpad_bindings = {
+                ScratchpadBinding{.scratchpad_spec_name = SCRATCH_PAD, .accessor_name = "pad"}};
         }
     }
 
@@ -510,6 +513,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         .name = "interleaved_to_sharded",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),  // [Quasar bring-up: i2s scratchpad]
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},

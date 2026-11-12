@@ -8,6 +8,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "concat_program_factory.hpp"
+// [Quasar bring-up: concat interleaved metal2]
+#include "concat_metal2_program_factory.hpp"
 #include "concat_s2s_tiled_program_factory.hpp"
 #include "concat_s2s_rm_program_factory.hpp"
 #include "concat_s2s_multi_program_factory.hpp"
@@ -29,6 +31,9 @@ struct ConcatDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         ConcatProgramFactory,
+        // [Quasar bring-up: concat interleaved metal2] Metal-2.0 twin of ConcatProgramFactory,
+        // selected instead of it on Quasar. See concat_metal2_program_factory.hpp.
+        ConcatMetalV2ProgramFactory,
         ConcatS2STiledProgramFactory,
         ConcatS2SRMProgramFactory,
         ConcatS2SMultiProgramFactory,

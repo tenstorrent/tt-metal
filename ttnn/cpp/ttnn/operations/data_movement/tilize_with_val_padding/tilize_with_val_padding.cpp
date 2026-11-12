@@ -5,6 +5,8 @@
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_device_operation.hpp"
+// [Quasar bring-up: tilize_with_val_padding arch gate]
+#include "ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -72,6 +74,26 @@ ttnn::Tensor tilize_with_val_padding(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // [Quasar bring-up: tilize_with_val_padding arch gate]
+    // Measured 2026-11-12 (YOLOv8n seg224 /model.22/Concat_3, full backtrace in
+    // quasar_models/YOLOV8N_FULL.txt): ttnn::concat's host front end calls this op as a
+    // shape fix-up, and every mainline factory here still builds a legacy DataMovement
+    // kernel config, which Quasar rejects at Program construction:
+    //     TT_FATAL kernel.hpp:451  arch() != ARCH::QUASAR
+    //     "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead."
+    // ttnn::operations::experimental::quasar::tilize_with_val_padding already ships the
+    // ported factories and takes the identical signature, so this is a pure redirect, the
+    // same arch-gate shape as concat's select_generic_interleaved_factory. The three
+    // `== QUASAR` checks already inside this op's factories are partial: they fix the
+    // kernel BODY but still emit a legacy DM config, so they cannot reach the fatal.
+    // The other two overloads and tilize_with_zero_padding delegate here, so one gate
+    // covers all three entry points. Wormhole/Blackhole are untouched.
+    if (input_tensor.device() != nullptr && input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+        return ttnn::operations::experimental::quasar::tilize_with_val_padding(
+            input_tensor, output_padded_shape, pad_value, memory_config, output_dtype,
+            use_multicore, sub_core_grids);
+    }
+
     // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller doesn't
     // request a specific output dtype, default an FP8 input to FLOAT32 (the format it unpacks to in
     // DEST) so every downstream value_or() below resolves to a legal TILE dtype.
