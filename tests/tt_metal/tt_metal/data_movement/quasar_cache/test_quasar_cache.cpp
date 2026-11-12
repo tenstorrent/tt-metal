@@ -22,8 +22,7 @@ namespace unit_tests::dm::quasar_cache {
 
 // Skip test if simulator is not available (arch check is handled by fixture)
 bool should_skip_test() {
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    return env_var == nullptr;
+    return !tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated();
 }
 
 // Start of the cache tests' buffer: the first unreserved L1 address, clear of the firmware's own memory.

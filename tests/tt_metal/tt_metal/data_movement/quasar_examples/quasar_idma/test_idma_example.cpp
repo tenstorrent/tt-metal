@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -21,7 +22,7 @@ bool should_skip_test() {
     if (arch != tt::ARCH::QUASAR) {
         return true;
     }
-    return std::getenv("TT_METAL_SIMULATOR") == nullptr;
+    return !tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated();
 }
 
 constexpr auto kIdmaBasic =

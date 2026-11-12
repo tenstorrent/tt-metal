@@ -24,9 +24,9 @@ using namespace tt::tt_metal;
 // This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     // Skip if simulator is not available
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
     auto mesh_device = devices_[0];
@@ -49,7 +49,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     auto buf = distributed::MeshBuffer::create(global_cfg, local_cfg, mesh_device.get());
     const uint32_t address = buf->address();
     const uint32_t value = 0x12345678;
-    env_var = std::getenv("TT_METAL_DPRINT_CORES");
+    char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Data Movement kernels."
@@ -115,8 +115,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
 // read back L1 on every node from origin {0,0}. Proves the grid size and that every node's L1 is
 // reachable, printing which node failed if any.
 TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
-    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator.";
     }
     auto mesh_device = devices_[0];
 
@@ -174,8 +174,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
 // every node back and print a PASS/FAIL grid map. Checks that the kernel and per-node runtime
 // args fan out correctly across the whole grid.
 TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
-    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator.";
     }
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();
@@ -262,8 +262,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
 // every node must produce the same fixed 16-value output. Exercises the compute pipeline
 // (unpack/math/pack) across the whole grid.
 TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
-    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator.";
     }
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();
@@ -354,8 +354,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
 // pre-seeds a sentinel on every node and reads all 32 back, printing a PASS/FAIL grid map: a
 // dropped row or column shows up as a node that never updated.
 TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
-    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator.";
     }
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();

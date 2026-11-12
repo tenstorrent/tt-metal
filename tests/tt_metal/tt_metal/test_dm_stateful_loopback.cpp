@@ -25,9 +25,9 @@ using namespace tt::tt_metal;
 // one write state reused across chunked L1->DRAM writes (any-len flavor).
 // This test requires a simulator environment.
 TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
     const experimental::NodeCoord node{0, 0};

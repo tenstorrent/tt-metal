@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <cstdint>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -25,7 +26,7 @@ constexpr std::uint32_t BASE_ADDR = 100 * 1024;
 // zone duration by it, to amortize fixed per-run overhead (April used 100).
 constexpr std::uint32_t NUM_ITERATIONS = 100;
 
-bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
+bool should_skip_test() { return !tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated(); }
 
 // Runs one write pass of `size_bytes` via `write_path` (0=uncached,1=cached+flush)
 // on a single DM core, then reads back and verifies the byte pattern landed.

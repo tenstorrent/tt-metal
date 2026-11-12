@@ -27,8 +27,9 @@ using namespace tt::tt_metal;
 // or a wrong destination count cannot pass.
 // Needs two worker nodes in a row (the 2x3 simulator/emulator grids).
 TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
-    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
     const auto grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 2) {

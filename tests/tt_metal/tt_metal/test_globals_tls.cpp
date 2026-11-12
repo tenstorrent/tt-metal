@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/context/metal_context.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -37,9 +38,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     const uint32_t l1_result_addr = 200 * 1024;
     const uint32_t dram_address = 30000 * 1024;
 
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
     constexpr CoreCoord core = {0, 0};
@@ -270,9 +271,9 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
     constexpr CoreCoord core = {0, 0};
