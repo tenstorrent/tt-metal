@@ -67,7 +67,7 @@ def _prod(xs):
 class _Geometry:
     """Host-side constants derived once from the tensors (single source each)."""
 
-    def __init__(self, x, gamma, out):
+    def __init__(self, x, gamma, out, fp32_dest_acc_en=True):
         shape = [int(d) for d in x.shape]
         self.is_rm = x.layout == ttnn.ROW_MAJOR_LAYOUT
         self.has_gamma = gamma is not None
@@ -83,11 +83,22 @@ class _Geometry:
         self.s_x = ttnn.tile_size(x.dtype)
         self.s_o = ttnn.tile_size(out.dtype)
         self.s_g = ttnn.tile_size(gamma.dtype) if self.has_gamma else 0
-        self.s_f = ttnn.tile_size(ttnn.float32)
-        self.x_elem = x.element_size()
-        self.out_elem = out.element_size()
-        self.g_elem = gamma.element_size() if self.has_gamma else 0
+        # Compute-intermediate page format follows the DEST width (numeric-formats §4): fp32 DEST ->
+        # Float32 pages; 16-bit DEST -> bf16 pages (DEST already rounded to 16 bits, a wider page stores
+        # nothing extra). Single source for cb_sumsq / cb_rstd / cb_normed / cb_reduce_mask.
+        self.interm_fmt = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+        self.s_f = ttnn.tile_size(self.interm_fmt)
+        # cb_sumsq is the exception: it is a PACKER L1 accumulator — the Σx² adds happen in L1 at the page
+        # format, not in DEST — so Float32 pages carry real extra bits even with 16-bit DEST (bf16 pages
+        # bias rstd by ~2% at W=7168). Only r*n_sq (<= 2 per row) tiles; cb_reduce_mask must match it
+        # (the masked fold unpacks the mask as srcB under cb_sumsq's format).
+        self.sumsq_fmt = ttnn.float32
+        self.s_sq = ttnn.tile_size(self.sumsq_fmt)
         self.gamma_tiled = self.has_gamma and gamma.layout == ttnn.TILE_LAYOUT
+        # Element sizes only address ROW_MAJOR sticks; block-float (bfloat8_b, TILE-only) has none.
+        self.x_elem = x.element_size() if self.is_rm else 0
+        self.out_elem = out.element_size() if self.is_rm else 0
+        self.g_elem = gamma.element_size() if self.has_gamma and not self.gamma_tiled else 0
 
         # ---- placement (regime R1 interleaved | R6 HEIGHT_SHARDED in place) ----
         self.is_sharded = x.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -132,9 +143,9 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
         f += r * row_stride * g.s_x  # cb_x (TILE sharded: the resident input shard, not allocated)
     if g.is_rm and not g.x_resident:
         f += STREAM_DEPTH * c * g.s_x  # cb_x_rm (RM in place: the resident input shard)
-    f += p * g.s_f  # cb_reduce_mask (fp32, matches cb_sumsq's srcB format)
+    f += p * g.s_sq  # cb_reduce_mask (matches cb_sumsq's srcB format)
     f += r * g.s_f  # cb_rstd
-    f += r * _n_sq(g, core_w_tiles) * g.s_f  # cb_sumsq
+    f += r * _n_sq(g, core_w_tiles) * g.s_sq  # cb_sumsq
     if g.has_gamma or g.is_rm:
         f += r * c * g.s_f  # cb_normed
     if g.has_gamma:
@@ -171,7 +182,7 @@ def _select_resident_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budg
     """R6: x / out are the resident shards (row stride Wc, output produced in place in row-major order).
 
     Preferred: K = 1 (whole row per chunk) and the largest block_rows that fits — the whole shard when
-    it fits. When even one whole-row chunk does not fit (wide rows: cb_normed is r*c fp32 tiles), fall
+    it fits. When even one whole-row chunk does not fit (wide rows: cb_normed is r*c intermediate tiles), fall
     back to block_rows = 1 with W chunks: c must divide Wc so the chunk grid lands exactly on the shard's
     row stride, and r = 1 keeps the chunk-major pack order equal to the shard's row-major order.
     """
@@ -210,7 +221,7 @@ def _cb(index, num_pages, page_size, data_format, core_ranges):
 
 
 def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.ProgramDescriptor:
-    g = _Geometry(x, gamma, out)
+    g = _Geometry(x, gamma, out, bool(compute_config.fp32_dest_acc_en))
     device = x.device()
 
     # ---------------- work distribution ----------------
@@ -260,7 +271,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     row_stride_tiles = num_w_chunks * w_chunk_tiles
 
     # ---------------- circular buffers ----------------
-    fp32 = ttnn.float32
+    interm = g.interm_fmt  # compute-intermediate format (DEST width)
 
     def _resident(index, tensor, page_size):
         # Zero-copy CB over the tensor's local shard; tile-sized pages so CB credit counts tiles.
@@ -271,8 +282,8 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
         return desc
 
     cbs = [
-        _cb(CB_SUMSQ, block_rows * _n_sq(g, core_w_tiles), g.s_f, fp32, all_cores),
-        _cb(CB_RSTD, block_rows, g.s_f, fp32, all_cores),
+        _cb(CB_SUMSQ, block_rows * _n_sq(g, core_w_tiles), g.s_sq, g.sumsq_fmt, all_cores),
+        _cb(CB_RSTD, block_rows, g.s_f, interm, all_cores),
     ]
     if g.is_rm or not g.x_resident:
         cbs.append(_cb(CB_X, block_rows * row_stride_tiles, g.s_x, x.dtype, all_cores))
@@ -289,11 +300,11 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     else:
         cbs.append(_cb(CB_OUT, STREAM_DEPTH * w_chunk_tiles, g.s_o, out.dtype, all_cores))
     if g.w_partial_elems:
-        cbs.append(_cb(CB_REDUCE_MASK, 1, g.s_f, fp32, all_cores))
+        cbs.append(_cb(CB_REDUCE_MASK, 1, g.s_sq, g.sumsq_fmt, all_cores))
     if g.has_gamma:
         cbs.append(_cb(CB_GAMMA, STREAM_DEPTH * w_chunk_tiles, g.s_g, gamma.dtype, all_cores))
     if g.has_gamma or g.is_rm:
-        cbs.append(_cb(CB_NORMED, block_rows * w_chunk_tiles, g.s_f, fp32, all_cores))
+        cbs.append(_cb(CB_NORMED, block_rows * w_chunk_tiles, g.s_f, interm, all_cores))
 
     # ---------------- per-core runtime args ----------------
     reader_rt = ttnn.RuntimeArgs()

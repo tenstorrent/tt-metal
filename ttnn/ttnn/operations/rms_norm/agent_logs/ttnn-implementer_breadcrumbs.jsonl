@@ -9,3 +9,6 @@
 {"event":"fix_applied","what":"reduce AccumulateViaAdd re-arms sfpu_reduce_init after SFPU post_reduce_op; fixes 2nd+ output of multi-row blocks","ts":"2026-11-12T11:52:16+00:00"}
 {"event":"test_run","result":"pass","detail":"unit 129+94 pass; golden targeted 975 pass, 16 infeasible skip, 1 expected fail (1x1x32x32768)","ts":"2026-11-12T11:52:16+00:00"}
 {"event":"test_run","status":"pass","detail":"unit dir 229 pass; golden full 1297 pass, 1 fail (excepted 32768 loose case)","fix":"test teardown dealloc + lowest-allocated-address CB budget","ts":"2026-11-12T12:09:11+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-12T12:14:50+00:00"}
+{"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/rms_norm/ (all files)","detail":"62 new numeric-config + 224 prior pass after _Geometry default fix","ts":"2026-11-12T12:23:10+00:00"}
+{"event":"test_run","status":"pass","tests":"golden test_op_loose -k False and (INTERLEAVED or HEIGHT_SHARDED)","detail":"196 passed","ts":"2026-11-12T12:29:30+00:00"}
