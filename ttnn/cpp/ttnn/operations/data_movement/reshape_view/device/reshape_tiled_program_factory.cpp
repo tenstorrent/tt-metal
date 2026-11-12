@@ -398,12 +398,13 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 TensorBinding{.tensor_parameter_name = INPUT_T, .accessor_name = "input"},
                 TensorBinding{.tensor_parameter_name = MAPPING_T, .accessor_name = "map"},
             },
+        // The mapping page size depends on the shapes, so it is a runtime arg.
         .compile_time_args =
             {
-                {"Max_Map_Size_Bytes", mapping_page_size_bytes},
                 {"Tile_size_bytes", input_tile_size_bytes},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx", "Max_Map_Size_Bytes"}},
         .hw_config = create_reader_datamovement_config(),
     };
 
@@ -428,17 +429,20 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         .compile_time_args =
             {
                 {"Tile_size_bytes", input_tile_size_bytes},
-                {"Max_Map_Entries", max_map_entries},
                 {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page", "Max_Map_Entries"}},
         .hw_config = create_writer_datamovement_config(),
     };
 
     spec.kernels = {reader, writer};
     spec.tensor_parameters = {
         TensorParameter{.unique_id = INPUT_T, .spec = input_mt.tensor_spec()},
-        TensorParameter{.unique_id = MAPPING_T, .spec = mapping_owned.tensor_spec()},
+        // The mapping is an interleaved row-major tensor whose page size follows the shapes; a
+        // dynamic shape makes the accessor take that page size at runtime, so the reader binary
+        // does not depend on it. The program is still built per shape (the hash covers them).
+        TensorParameter{
+            .unique_id = MAPPING_T, .spec = mapping_owned.tensor_spec(), .relaxations = {.dynamic_tensor_shape = true}},
         TensorParameter{.unique_id = OUTPUT_T, .spec = output_mt.tensor_spec()},
     };
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
@@ -463,11 +467,15 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         AddRuntimeArgsForNode(
             reader_kra.runtime_arg_values,
             c,
-            {{"start_output_page_idx", page_idx_start}, {"end_output_page_idx", page_idx_end}});
+            {{"start_output_page_idx", page_idx_start},
+             {"end_output_page_idx", page_idx_end},
+             {"Max_Map_Size_Bytes", mapping_page_size_bytes}});
         AddRuntimeArgsForNode(
             writer_kra.runtime_arg_values,
             c,
-            {{"start_output_page", page_idx_start}, {"end_output_page", page_idx_end}});
+            {{"start_output_page", page_idx_start},
+             {"end_output_page", page_idx_end},
+             {"Max_Map_Entries", max_map_entries}});
 
         page_idx_start += increment;
     }
