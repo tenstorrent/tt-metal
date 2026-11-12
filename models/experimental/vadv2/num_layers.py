@@ -40,9 +40,10 @@ def reduce_layers(vad, num_layers: int) -> None:
         raise ValueError(f"num_layers must be at least 1, got {num_layers}")
 
     backbone = vad.img_backbone
-    for name in ("layer1", "layer2", "layer3", "layer4"):
-        stage = getattr(backbone, name)
-        setattr(backbone, name, stage[: 1 + num_layers])
+    backbone.layer1 = backbone.layer1[: 1 + num_layers]
+    backbone.layer2 = backbone.layer2[: 1 + num_layers]
+    backbone.layer3 = backbone.layer3[: 1 + num_layers]
+    backbone.layer4 = backbone.layer4[: 1 + num_layers]
 
     head = vad.pts_bbox_head
     encoder = head.transformer.encoder
@@ -62,10 +63,11 @@ def reduce_layers(vad, num_layers: int) -> None:
 
 def log_layer_counts(vad, num_layers: int | None) -> None:
     backbone = vad.img_backbone
+    stages = (backbone.layer1, backbone.layer2, backbone.layer3, backbone.layer4)
     transformer = vad.pts_bbox_head.transformer
     reduced = f" ({NUM_LAYERS_ENV}={num_layers})" if num_layers is not None else ""
     logger.info(
-        f"VAD layers: backbone blocks {[len(getattr(backbone, f'layer{i}')) for i in range(1, 5)]}, "
+        f"VAD layers: backbone blocks {[len(stage) for stage in stages]}, "
         f"{len(transformer.encoder.layers)} encoder, {len(transformer.decoder.layers)} decoder, "
         f"{len(transformer.map_decoder.layers)} map decoder{reduced}"
     )
