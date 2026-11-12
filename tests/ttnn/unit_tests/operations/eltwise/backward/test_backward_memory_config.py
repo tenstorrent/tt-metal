@@ -231,3 +231,31 @@ def test_repeat_bw_width_sharded_grad_unset_memory_config_follows_the_input(devi
     assert result.memory_config() == DRAM
     expected = grad_data.float().sum(dim=1, keepdim=True)
     assert torch.allclose(ttnn.to_torch(result).float(), expected, rtol=0.05, atol=0.1)
+
+
+@pytest.mark.parametrize("dim", [None, -1, -2])
+def test_prod_bw_sharded_grad_follows_the_input(device, dim):
+    # With dim -1 or -2, the grad has the reduced shape. Its shard spec was built for a smaller tensor than the
+    # input-shaped result. A shape this small is not tile sized. The spec is built on the tile-padded shape.
+    # With all dims, the grad is sliced to one value and the slice keeps the grad's shard config.
+    if dim is None:
+        grad_shape, grad_config = SHARDED_SHAPE, _sharded(SHARDED_SHAPE, ttnn.ShardStrategy.HEIGHT, 2)
+    elif dim == -1:
+        grad_shape, grad_config = (1, 1, 64, 1), _sharded((1, 1, 64, 32), ttnn.ShardStrategy.HEIGHT, 2)
+    else:
+        grad_shape, grad_config = (1, 1, 1, 64), _sharded((1, 1, 32, 64), ttnn.ShardStrategy.WIDTH, 2)
+    grad_data = (torch.rand(grad_shape) + 0.5).bfloat16()
+    # Values near 1 keep the product of 4096 elements from underflowing to zero.
+    input_data = (1 + (torch.rand(SHARDED_SHAPE) - 0.5) * 0.02).bfloat16()
+    inp = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=DRAM)
+
+    def prod_bw(memory_config):
+        grad = ttnn.from_torch(
+            grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        return ttnn.prod_bw(grad, inp, dim=dim)[0]
+
+    result = prod_bw(grad_config)
+    assert result.memory_config() == inp.memory_config()
+    # Moving the grad into shards changes where it lives.
+    assert torch.equal(ttnn.to_torch(result), ttnn.to_torch(prod_bw(DRAM)))

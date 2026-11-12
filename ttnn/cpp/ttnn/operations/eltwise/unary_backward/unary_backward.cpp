@@ -1993,7 +1993,10 @@ std::vector<Tensor> prod_bw(
         Tensor grad_first = ttnn::slice(grad, first_start, first_end, first_step, std::nullopt);
         Tensor scale = ttnn::multiply(prod_result, grad_first, std::nullopt, output_mem_config);
         grad_first.deallocate();
-        Tensor all_dimension_result = ttnn::multiply(per_element, scale, std::nullopt, output_mem_config);
+        // The slice keeps the grad's memory config and scale follows it. A sharded grad keeps the result in
+        // shards. If no memory config is requested, result is placed like input.
+        Tensor all_dimension_result =
+            ttnn::multiply(per_element, scale, std::nullopt, output_mem_config.value_or(input.memory_config()));
         grad_tensor.emplace_back(std::move(all_dimension_result));
         return grad_tensor;
     }
