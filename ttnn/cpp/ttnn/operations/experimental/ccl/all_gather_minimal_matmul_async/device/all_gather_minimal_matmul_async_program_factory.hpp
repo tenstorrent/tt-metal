@@ -19,6 +19,14 @@
 
 namespace ttnn::experimental::prim {
 
+// Whether every core computes at most one M block. With one N block per core that is the core's only output block,
+// so no write is deferred behind a later block and the output buffer only has to hold the row being written. The
+// program hash keys on this (the row count itself is not in the hash).
+inline bool agmm_single_m_block(uint32_t M_tiles, uint32_t M_block_tiles, uint32_t in0_parallel_axis_cores) {
+    return M_block_tiles > 0 && in0_parallel_axis_cores > 0 &&
+           (M_tiles + in0_parallel_axis_cores - 1) / in0_parallel_axis_cores <= M_block_tiles;
+}
+
 // The dedicated gather senders' cores: two per link, one per ethernet port, on the last worker column (the one right of
 // a narrower matmul grid), on that link's rows.
 std::vector<tt::tt_metal::CoreCoord> agmm_gather_sender_cores(tt::tt_metal::CoreCoord full_grid, uint32_t num_links);

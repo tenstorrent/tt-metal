@@ -473,6 +473,19 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         grid_size,
         num_links,
         barrier_semaphore);
+    // Gather-sender mode packs the last K block straight to the output over its reloaded FP32 partials (compute.cpp
+    // matmul_blocks<true>): for a plain matmul output (no fused bias, ternary, SwiGLU or activation) with
+    // one-tile-high subblocks and FP32 partials, which unpack to DEST, and whole N blocks of whole subblocks (the
+    // output goes out in subblock pieces).
+    const bool direct_out = gather_senders && !fuse_swiglu && !use_bias && !use_fused_ternary &&
+                            !fused_activation.has_value() && subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
+                            N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
+    // With direct output, a core whose only output block is this one has it packed and written a row at a time, so one
+    // row of output buffer is enough; frees M_block - 1 rows of L1 for larger K blocks.
+    if (direct_out && N_blocks_per_core == 1 &&
+        ttnn::experimental::prim::agmm_single_m_block(M_tiles, M_block_tiles, in0_parallel_axis_cores)) {
+        out_cb_num_tiles = N_block_tiles;
+    }
     uint32_t interm_cb_num_tiles = out_block_num_tiles;                                         // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;                                            // not double buffered
 
@@ -767,6 +780,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
+    if (direct_out) {
+        // The compute publishes the output a subblock at a time; the output writers take it in those pieces.
+        defines["AGMM_OUT_PUSH_W"] = std::to_string(subblock_w);
+    }
     std::map<std::string, std::string> in0_defines;
     std::map<std::string, std::string> in0_injector_defines;
     std::map<std::string, std::string> in0_fabric_defines;
@@ -856,9 +873,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     auto in1_defines = defines;
     log_debug(
         tt::LogOp,
-        "all_gather_minimal_matmul_async mode: gather_senders={} in1_chunk_w={}",
+        "all_gather_minimal_matmul_async mode: gather_senders={} in1_chunk_w={} direct_out={}",
         gather_senders,
-        in1_chunk_w);
+        in1_chunk_w,
+        direct_out);
     if (persistent_weight_buffer.has_value()) {
         in1_defines["FSDP_FUSED"] = "1";
         in1_defines["IS_IN1"] = "1";
@@ -1242,6 +1260,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         row_mop ? 1u : 0u};
 
     auto compute_defines = defines;
+
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (direct_out) {
+        compute_defines["AGMM_DIRECT_OUT"] = "1";
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[tt::CBIndex::c_3] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     if (topology == ttnn::ccl::Topology::Linear) {
         compute_defines["IS_LINEAR"] = "1";
     }
@@ -1267,6 +1292,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
         };
         desc.kernels.push_back(std::move(compute_kernel));

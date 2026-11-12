@@ -343,31 +343,46 @@ void add_bias_and_addcmul_block(
 }
 
 // One K block of an output block (adapted from compute_common.hpp): each subblock runs the block's inner dimension in
-// one matmul_block_k call and packs into its slot of out_cb (packer L1 accumulation across K blocks). With in1 column
-// chunks (AGMM_IN1_CHUNK_W) the first row waits for each chunk and the subblocks go chunk-major, so a chunk serves
-// every row before the next one is needed.
+// one matmul_block_k call. Accumulating blocks pack into the subblock's slot of partials_cb (packer L1 accumulation).
+// DIRECT_OUT (the last K block, subblock_h == 1): each subblock reloads its partials into DEST, adds the last block
+// and packs to out_cb, published a subblock at a time; pieces past a partial block are pushed empty, as the writers
+// take the full block. With in1 column chunks (AGMM_IN1_CHUNK_W) the first row waits for each chunk and accumulating
+// blocks go chunk-major, so a chunk serves every row before the next one is needed.
+template <bool DIRECT_OUT>
 void matmul_blocks(
     CircularBuffer& in0_cb,
     CircularBuffer& in1_cb,
+    CircularBuffer& partials_cb,
     CircularBuffer& out_cb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
+    const uint32_t full_M_block_tiles,
     const uint32_t full_N_block_tiles,
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
     const uint32_t subblock_w) {
-    const uint32_t num_m = (M_block_tiles + subblock_h - 1) / subblock_h;
-    const uint32_t num_n = (N_block_tiles + subblock_w - 1) / subblock_w;
+    if constexpr (DIRECT_OUT) {
+        partials_cb.wait_front(full_M_block_tiles * full_N_block_tiles);
+    }
+    const uint32_t num_m = ((DIRECT_OUT ? full_M_block_tiles : M_block_tiles) + subblock_h - 1) / subblock_h;
+    const uint32_t num_n = ((DIRECT_OUT ? full_N_block_tiles : N_block_tiles) + subblock_w - 1) / subblock_w;
     for (uint32_t step = 0; step < num_m * num_n; step++) {
 #ifdef AGMM_IN1_CHUNK_W
-        const uint32_t m_i = step % num_m;
-        const uint32_t n_i = step / num_m;
+        constexpr bool chunk_major = !DIRECT_OUT;
 #else
-        const uint32_t m_i = step / num_n;
-        const uint32_t n_i = step % num_n;
+        constexpr bool chunk_major = false;
 #endif
+        const uint32_t m_i = chunk_major ? step % num_m : step / num_n;
+        const uint32_t n_i = chunk_major ? step / num_m : step % num_n;
         const uint32_t M_start = m_i * subblock_h;
         const uint32_t N_start = n_i * subblock_w;
+        if constexpr (DIRECT_OUT) {
+            out_cb.reserve_back(subblock_w);
+            if (M_start >= M_block_tiles || N_start >= N_block_tiles) {
+                out_cb.push_back(subblock_w);
+                continue;
+            }
+        }
 #ifdef AGMM_IN1_CHUNK_W
         const uint32_t in1_chunk_tiles = AGMM_IN1_CHUNK_W * K_block_tiles;
         const uint32_t in1_chunk = N_start / AGMM_IN1_CHUNK_W;
@@ -381,6 +396,15 @@ void matmul_blocks(
         const uint32_t in1_k_stride = full_N_block_tiles;
 #endif
         tile_regs_acquire();
+        if constexpr (DIRECT_OUT) {
+            // The earlier K blocks' FP32 partials into DEST, then srcA's format and the matmul init back.
+            reconfig_data_format_srca(in1_cb.get_cb_id(), partials_cb.get_cb_id());
+            copy_init(partials_cb.get_cb_id());
+            copy_block(partials_cb.get_cb_id(), M_start * full_N_block_tiles + N_start, 0, subblock_w);
+            reconfig_data_format_srca(partials_cb.get_cb_id(), in1_cb.get_cb_id());
+            matmul_block_init<row_mop>(
+                in0_cb.get_cb_id(), in1_cb.get_cb_id(), false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+        }
         matmul_block_k<row_mop>(
             in0_cb.get_cb_id(),
             in1_cb.get_cb_id(),
@@ -395,13 +419,25 @@ void matmul_blocks(
             in1_k_stride);
         tile_regs_commit();
         tile_regs_wait();
-        uint32_t dst = 0;
-        for (uint32_t h = 0; h < subblock_h; h++) {
+        if constexpr (DIRECT_OUT) {
             for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile<true>(dst++, out_cb.get_cb_id(), (M_start + h) * full_N_block_tiles + N_start + w);
+                pack_tile<true>(w, out_cb.get_cb_id(), w);
+            }
+        } else {
+            uint32_t dst = 0;
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    pack_tile<true>(dst++, partials_cb.get_cb_id(), (M_start + h) * full_N_block_tiles + N_start + w);
+                }
             }
         }
         tile_regs_release();
+        if constexpr (DIRECT_OUT) {
+            out_cb.push_back(subblock_w);
+        }
+    }
+    if constexpr (DIRECT_OUT) {
+        partials_cb.pop_front(full_M_block_tiles * full_N_block_tiles);
     }
 }
 
@@ -499,16 +535,41 @@ void kernel_main() {
                 in1_cb.wait_front(in1_block_num_tiles);
 #endif
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+#ifdef AGMM_DIRECT_OUT
+                if (k_block == K_num_blocks - 1) {
+                    // The earlier K blocks' partials are complete: reload them under the last block (matmul_blocks).
+                    intermediate_cb.push_back(out_block_num_tiles);
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_reconfig_data_format(out_cb.get_cb_id());
+                    matmul_blocks<true>(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        out_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        M_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                    pack_reconfig_data_format(intermediate_cb.get_cb_id());
+                } else
+#endif
+                {
+                    matmul_blocks<false>(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        out_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        M_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -535,10 +596,14 @@ void kernel_main() {
                 }
             }
 
+#ifndef AGMM_DIRECT_OUT  // direct output: pushed before the last K block
             intermediate_cb.push_back(out_block_num_tiles);
+#endif
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-#ifdef FUSE_SWIGLU
+#if defined(AGMM_DIRECT_OUT)
+            // matmul_blocks<true> already wrote out_cb
+#elif defined(FUSE_SWIGLU)
             // SwiGLU collapses the interleaved gate/up block to half its N width.
             out_cb.reserve_back(out_block_num_tiles >> 1);
             intermediate_cb.wait_front(out_block_num_tiles);
