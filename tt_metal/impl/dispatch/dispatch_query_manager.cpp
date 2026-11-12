@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "dispatch_query_manager.hpp"
 
 #include <initializer_list>
@@ -156,6 +157,10 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     // engine.
     fds_signalling_enabled_ = resolved_dispatch_core_type_ == CoreType::DISPATCH && hal.supports_fds() &&
                               rtoptions.get_fast_dispatch() && cq_dispatch_layout_.num_cqs_per_core == 1;
+    // Local experiment: keep the dispatch engines but signal go/done over NOC instead of FDS.
+    if (const char* v = std::getenv("TT_METAL_QUASAR_DE_NOC_SIGNALLING"); v != nullptr && v[0] == 0x31) {
+        fds_signalling_enabled_ = false;
+    }
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
     dispatch_cores_ready_.store(false, std::memory_order_release);
