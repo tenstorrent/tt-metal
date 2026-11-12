@@ -131,6 +131,9 @@ PACK_FUNCTIONS = (
     "_llk_pack_reconfig_data_format_",
     "_llk_pack_hw_configure_",
     "_llk_pack_init_",
+    "_llk_pack_untilize_mop_config_",
+    "_llk_pack_untilize_init_",
+    "_llk_pack_untilize_",
 )
 
 # Predicate name used when seeding from a checked-in TRISC header.

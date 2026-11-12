@@ -13,6 +13,7 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
+#include "tensor_shape_coverage_pack.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -57,13 +58,15 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam narrow_row: True when faces occupy only the first column of the tile (single packer interface).
  * @tparam dense: True to pack two tiles into one 32x32 dest region using all interfaces; requires num_faces == 2 and even block_ct_dim.
- * @param face_r_dim: Number of rows per face.
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile geometry; face_r_dim is the rows per face and total_num_faces() the faces per tile.
  * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
  */
 template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false>
-inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_untilize_mop_config_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_PACK("_llk_pack_untilize_mop_config_", tensor_shape);
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -179,8 +182,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
- * @param face_r_dim: Number of rows per face.
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile geometry; face_r_dim is the rows per face and total_num_faces() the faces per tile.
  * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
  * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
  */
@@ -191,14 +193,17 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense                   = false>
 inline void _llk_pack_untilize_init_(
-    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
+    LLK_VALIDATE_TENSOR_SHAPE_PACK("_llk_pack_untilize_init_", tensor_shape);
 
     if constexpr (narrow_row)
     {
@@ -208,7 +213,7 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_configure_addrmod_();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
+    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(tensor_shape);
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
     std::uint32_t x_stride       = datum_size_in_bytes(pack_src_format);
@@ -261,7 +266,7 @@ inline void _llk_pack_untilize_init_(
  * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
  * @param address: L1 destination base address for the block.
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param tensor_shape: Tile geometry; total_num_faces() is the faces per tile, valid values = <1, 2, 4>
  * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
  * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
@@ -272,14 +277,17 @@ template <
     bool narrow_row                  = false,
     std::uint32_t tile_dst_ct_offset = 0,
     bool dense                       = false>
-inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0)
+inline void _llk_pack_untilize_(
+    const std::uint32_t address, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
+    LLK_VALIDATE_TENSOR_SHAPE_PACK("_llk_pack_untilize_", tensor_shape);
 
     /*
     full_ct_dim represents the number of input tiles.
