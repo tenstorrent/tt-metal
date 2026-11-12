@@ -68,6 +68,7 @@ def test_stub_encode_writes_a_value_prefill_reads(expect_error):
     media.encode([item], bufs[:1])
     media.encode([item], bufs[1:])
 
+    assert media_format.Header.read(bufs[0]) == media_format.Header("image")
     rows = media_format.embeddings(bufs[0], 64)
     assert rows.shape == (item.n_tokens, 64) and rows.any()
     assert bytes(bufs[0]) == bytes(bufs[1])
@@ -83,7 +84,12 @@ def test_format_rejects_bad_values(expect_error):
     with expect_error(ValueError, "whole bf16 rows"):
         media_format.embeddings(buf[:-2], 64)
     with expect_error(ValueError, "whole bf16 rows"):
-        media_format.embeddings(buf[:0], 64)
+        media_format.embeddings(buf[:16], 64)
+    with expect_error(ValueError, "header"):
+        media_format.Header.read(buf[:15])
+    buf[0] = len(media_format.KINDS)
+    with expect_error(ValueError, "unknown media kind"):
+        media_format.Header.read(buf)
 
 
 def test_image_pickles_out_of_band():

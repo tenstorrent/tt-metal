@@ -92,7 +92,9 @@ class MiniMaxM3Media:
 
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
         assert self._stub, "encode before load"
+        # TODO: replace the stub embeddings with the vision encoder.
         for item, buf in zip(items, out, strict=True):
+            media_format.Header("image").write(buf)
             digest = hashlib.sha256(np.asarray(item.pixels.shape).tobytes() + item.pixels.tobytes()).digest()
             seed = int.from_bytes(digest[:8], "little")
             rows = torch.randn(item.n_tokens, self.hidden, generator=torch.Generator().manual_seed(seed)) * 0.02
