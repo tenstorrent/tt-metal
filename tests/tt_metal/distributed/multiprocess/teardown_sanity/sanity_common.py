@@ -249,7 +249,8 @@ def run_case(
     cmd: list | None = None,
     launcher_signal: int | None = None,
     signal_after: float = 0.0,
-    rank_signal: tuple | None = None,  # (rank, signal, seconds after the rank's pid file appears)
+    rank_signal: tuple | None = None,  # (rank, signal, seconds after the rank is ready)
+    signal_on_marker: str | None = None,  # gate rank_signal on this phase marker file (e.g. "open_enter") not the pid
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
 ) -> Result:
     cmd = cmd or legacy_cmd()
@@ -280,6 +281,17 @@ def run_case(
             time.sleep(0.2)
         raise RuntimeError(f"no pid file for rank {rank}")
 
+    def wait_marker(rank: int, name: str) -> None:
+        """Block until the rank drops this phase marker (e.g. ``open_enter``), so a parent-sent signal lands at the
+        tested point. If the marker never arrives within the deadline the fault was not delivered — a harness error."""
+        f = Path(piddir) / f"rank_{rank}.{name}"
+        end = time.time() + deadline
+        while time.time() < end:
+            if f.exists():
+                return
+            time.sleep(0.05)
+        raise RuntimeError(f"rank {rank} never reached marker {name!r}")
+
     def worker():
         try:
             if launcher_signal is not None:
@@ -289,9 +301,12 @@ def run_case(
             if rank_signal is not None:
                 r, sig, after = rank_signal
                 pid = pid_of(r)
+                if signal_on_marker:
+                    wait_marker(r, signal_on_marker)  # send it at the tested phase, not just "after it started"
                 time.sleep(after)
                 os.kill(pid, sig)
-                sent.append(f"{signal.Signals(sig).name} to rank {r} (pid {pid}) {after:.0f} s after it started")
+                where = f"at {signal_on_marker}" if signal_on_marker else f"{after:.0f} s after it started"
+                sent.append(f"{signal.Signals(sig).name} to rank {r} (pid {pid}) {where}")
             if phase1_kill:
                 end = time.time() + deadline
                 while time.time() < end:
