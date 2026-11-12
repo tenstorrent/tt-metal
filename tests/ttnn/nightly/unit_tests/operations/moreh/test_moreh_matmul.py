@@ -529,3 +529,36 @@ def test_moreh_matmul_backward_1d(width, device):
 
     assert torch.allclose(ttnn.to_torch(tt_input_grad), torch_output_grad * torch_other, rtol=0.01)
     assert torch.allclose(ttnn.to_torch(tt_other_grad), torch_output_grad * torch_input, rtol=0.01)
+
+
+def _l1_bf16_operands(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 512, 512)
+    tt = lambda t: ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    return tt(torch.rand(shape)), tt(torch.rand(shape))
+
+
+@pytest.mark.parametrize("alias", ["input", "other"])
+def test_moreh_matmul_rejects_output_aliasing_input(device, alias, expect_error):
+    a, b = _l1_bf16_operands(device)
+    out = a if alias == "input" else b
+    with expect_error(RuntimeError, "must not alias"):
+        ttnn.operations.moreh.matmul(a, b, output=out)
+
+
+def test_moreh_matmul_fresh_output(device):
+    a, b = _l1_bf16_operands(device)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 512, 512),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.operations.moreh.matmul(a, b, output=out)
+    expected = torch.matmul(ttnn.to_torch(a).float(), ttnn.to_torch(b).float())
+    rtol = atol = 0.1
+    passing, _ = comp_allclose_and_pcc(expected, ttnn.to_torch(out).float(), pcc=0.99, rtol=rtol, atol=atol)
+    assert passing

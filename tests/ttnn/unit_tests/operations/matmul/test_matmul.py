@@ -5823,3 +5823,34 @@ def test_matmul_l1_sharded_b_unsupported_rejected(device, m, k, program_config, 
 )
 def test_matmul_l1_sharded_b_supported(device, m, k, b_sharded, program_config, transpose_b):
     _run_l1_sharded_b_matmul(device, m, k, b_sharded, program_config, transpose_b)
+
+
+def _l1_bf16_operands(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 512, 512)
+    tt = lambda t: ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    return tt(torch.randn(shape)), tt(torch.randn(shape))
+
+
+@pytest.mark.parametrize("alias", ["a", "b"])
+def test_matmul_rejects_optional_output_aliasing_input(device, alias, expect_error):
+    a, b = _l1_bf16_operands(device)
+    out = a if alias == "a" else b
+    with expect_error(RuntimeError, "must not alias"):
+        ttnn.matmul(a, b, optional_output_tensor=out)
+
+
+def test_matmul_fresh_optional_output_tensor(device):
+    a, b = _l1_bf16_operands(device)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 512, 512),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.matmul(a, b, optional_output_tensor=out)
+    expected = torch.matmul(ttnn.to_torch(a).float(), ttnn.to_torch(b).float())
+    assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
