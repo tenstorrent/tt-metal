@@ -101,6 +101,7 @@ void py_module(nb::module_& mod) {
 
     auto m_command_list = mod.def_submodule("command_list", "command list operations (experimental)");
     command_list::py_module_types(m_command_list);
+    command_list::py_module(m_command_list);
 
     auto m_examples = mod.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);

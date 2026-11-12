@@ -127,6 +127,10 @@ public:
     // Replays on the bound command queue.
     void enqueue(bool blocking = true, bool check_dram_overlap = false);
 
+    // Sets the values later replays use for the named TTNN command-list parameters. Unknown names, kind mismatches, and
+    // values an encoding rejects throw before anything is written. blocking waits for the write to finish.
+    void update_args(const std::unordered_map<std::string, CmdListValue>& values, bool blocking = false);
+
     // Releases device resources and invalidates the list. Repeated calls have no effect.
     void deallocate();
 

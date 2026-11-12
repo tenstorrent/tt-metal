@@ -4,20 +4,55 @@
 
 #include "command_list.hpp"
 
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/command_list.hpp"
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::operations::command_list {
 
+using ttnn::command_list::CmdListBind;
+using ttnn::command_list::CmdListScalar;
+using ttnn::command_list::CmdListValue;
 using ttnn::command_list::CommandList;
 using ttnn::command_list::CommandListBuilder;
+
+namespace {
+
+CmdListValue to_value(nb::handle value) {
+    if (nb::isinstance<ttnn::Tensor>(value)) {
+        return nb::cast<ttnn::Tensor>(value);
+    }
+    if (PyBool_Check(value.ptr())) {
+        throw nb::type_error("Command-list values must be ttnn.Tensor, float, or int, not bool");
+    }
+    if (PyFloat_Check(value.ptr())) {
+        return CmdListScalar{nb::cast<double>(value)};
+    }
+    if (PyLong_Check(value.ptr())) {
+        return CmdListScalar{nb::cast<int64_t>(value)};
+    }
+    throw nb::type_error("Command-list values must be ttnn.Tensor, float, or int");
+}
+
+// A str, or a ttnn.experimental.CmdListParam (read through its name, so the class can stay Python).
+std::string to_name(nb::handle key) {
+    return nb::isinstance<nb::str>(key) ? nb::cast<std::string>(key) : nb::cast<std::string>(key.attr("name"));
+}
+
+}  // namespace
 
 void py_module_types(nb::module_& mod) {
     nb::class_<CommandListBuilder>(mod, "CommandListBuilder", R"doc(
@@ -124,11 +159,68 @@ void py_module_types(nb::module_& mod) {
                         development; scans every live allocation. Defaults to ``False``.
             )doc")
         .def(
+            "update_args",
+            [](CommandList& self, const nb::dict& values, bool blocking) {
+                std::unordered_map<std::string, CmdListValue> converted;
+                for (auto [key, value] : values) {
+                    converted.insert_or_assign(to_name(key), to_value(value));
+                }
+                nb::gil_scoped_release release;
+                self.update_args(converted, blocking);
+            },
+            nb::arg("values"),
+            nb::kw_only(),
+            nb::arg("blocking") = false,
+            R"doc(
+                Sets the values later replays use for TTNN command-list parameters.
+
+                Raises before writing anything if a name is unknown, a value has the wrong kind (tensor or scalar),
+                or a value cannot be encoded for its kernel argument. A replacement tensor must match the recorded
+                tensor's spec.
+
+                Args:
+                    values (dict): New values keyed by ``ttnn.experimental.CmdListParam`` or its name. Each value is
+                        a ``ttnn.Tensor``, ``float``, or ``int``.
+
+                Keyword Args:
+                    blocking (bool): Whether to wait for the update to reach the device. Defaults to ``False``.
+            )doc")
+        .def(
             "deallocate",
             &CommandList::deallocate,
             nb::call_guard<nb::gil_scoped_release>(),
             "Releases device resources and invalidates the list. Repeated calls have no effect.")
         .def_prop_ro("cq_id", &CommandList::cq_id);
+}
+
+// Used by ttnn/ttnn/command_list.py.
+void py_module(nb::module_& mod) {
+    mod.def(
+        "is_recording",
+        [] { return ttnn::device_operation::detail::is_recording_command_list(); },
+        "Whether a TTNN CommandListBuilder is recording on the calling thread.");
+    mod.def(
+        "push_cmd_list_binds",
+        [](std::string op_name, const nb::list& binds) {
+            std::vector<CmdListBind> converted;
+            converted.reserve(binds.size());
+            for (nb::handle item : binds) {
+                const auto entry = nb::cast<nb::tuple>(item);  // (name, invoke_name, value)
+                converted.push_back(
+                    {.name = nb::cast<std::string>(entry[0]),
+                     .invoke_name = nb::cast<std::string>(entry[1]),
+                     .value = to_value(entry[2])});
+            }
+            ttnn::command_list::push_cmd_list_binds(std::move(op_name), std::move(converted));
+        },
+        nb::arg("op_name"),
+        nb::arg("binds"),
+        "Makes (name, invoke_name, value) binds active for the device operations an op call records.");
+    mod.def(
+        "pop_cmd_list_binds",
+        &ttnn::command_list::pop_cmd_list_binds,
+        nb::arg("validate"),
+        "Ends the innermost push_cmd_list_binds. With validate, raises if a bind reached no recorded program.");
 }
 
 }  // namespace ttnn::operations::command_list
