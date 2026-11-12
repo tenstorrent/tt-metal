@@ -71,7 +71,7 @@ class TtVADPerceptionTransformer:
             bev_w=bev_w,
             feat_hw=feat_hw,
             img_shape=img_shape,
-            num_layers=3,
+            num_layers=len(params.encoder.layers),
             pc_range=point_cloud_range,
             num_points_in_pillar=4,
             return_intermediate=False,
@@ -86,7 +86,7 @@ class TtVADPerceptionTransformer:
         )
         if decoder is not None:
             self.decoder = TtDetectionTransformerDecoder(
-                num_layers=3,
+                num_layers=len(params.decoder.layers),
                 embed_dim=_dim_,
                 num_heads=8,
                 spatial_shapes_hw=[(bev_h, bev_w)],
@@ -98,7 +98,7 @@ class TtVADPerceptionTransformer:
             self.decoder = None
         if map_decoder is not None:
             self.map_decoder = TtMapDetectionTransformerDecoder(
-                num_layers=3,
+                num_layers=len(params.map_decoder.layers),
                 embed_dim=_dim_,
                 num_heads=8,
                 spatial_shapes_hw=[(bev_h, bev_w)],
