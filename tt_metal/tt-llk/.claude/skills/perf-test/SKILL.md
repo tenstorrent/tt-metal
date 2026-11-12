@@ -17,8 +17,7 @@ This skill is the architecture-neutral contract. Read the reference for the
 target architecture before editing:
 
 - [references/wormhole-blackhole.md](references/wormhole-blackhole.md):
-  MOP stream stand-ins, handshake counts, zeroed-SrcB paths, reference
-  implementations.
+  MOP stream stand-ins, handshake counts, zeroed-SrcB paths.
 - [references/quasar.md](references/quasar.md): the Quasar harness, tile and
   dimension selection, wait masks, Quasar stand-in counts.
 - [references/perf-facts.md](references/perf-facts.md): run types, build

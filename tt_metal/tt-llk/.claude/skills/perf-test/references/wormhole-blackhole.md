@@ -51,16 +51,6 @@ unpack and math for unary unpack paths. Multiply it by `LOOP_FACTOR`.
 - Run the coverage comparer once per architecture: the same file imports
   differently under each `CHIP_ARCH`.
 
-## Reference implementations
-
-- `tests/sources/eltwise_unary_datacopy_test.cpp` with
-  `test_eltwise_unary_datacopy.py` and `perf_eltwise_unary_datacopy.py`.
-- `tests/sources/pack_untilize_test.cpp` with `test_pack_untilize.py` and
-  `perf_pack_untilize.py` (#63515).
-- `tests/sources/pack_dest_bank_test.cpp` with `test_pack_dest_bank.py` and
-  `perf_pack_dest_bank.py`, once #63744 merges. Until then main still has the
-  split `pack_dest_bank_perf.cpp`; do not copy from main's version.
-
 ## Measured relations (pack dest bank, Wormhole)
 
 These are examples of healthy numbers, not limits:
