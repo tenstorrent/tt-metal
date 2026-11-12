@@ -624,6 +624,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // A mux must sit at the far end of the in0 forwarding chains it serves
     const bool in0_mux_in_column = !single_row_muxes && !transpose_core_grid && (grid_size.x < full_grid_size.x);
     const bool mux_index_on_x = !in0_mux_in_column;
+    // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
+    // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
     TT_FATAL(
         (mux_index_on_x ? full_grid_size.x : full_grid_size.y) >= num_mux_cores,
         "There are not enough cores along the mux axis ({}) for the number of mux cores requested ({})",
@@ -784,6 +787,16 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         defines["CHUNK_TILE_WIDTHS"] = widths_csv;
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
+    }
+
+    if (fabric_2d) {
+        defines["FABRIC_2D"] = "1";
+        TT_FATAL(
+            topology == ttnn::ccl::Topology::Ring,
+            "all_gather_minimal_matmul_async on Fabric2D supports Ring only (Linear's N-1 hop wrap is a 1D route)");
+        TT_FATAL(
+            !persistent_weight_buffer.has_value(), "all_gather_minimal_matmul_async: FSDP is not ported to Fabric2D");
+        TT_FATAL(ring_size <= 4, "all_gather_minimal_matmul_async on Fabric2D supports rings of up to 4");
     }
 
     in0_defines = defines;

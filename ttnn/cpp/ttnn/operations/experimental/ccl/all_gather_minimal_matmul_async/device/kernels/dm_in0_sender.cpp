@@ -290,6 +290,30 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+#ifdef FABRIC_2D
+    // Entry barrier, announce side: tell the injector of every peer this core writes into that we entered.
+    // A peer's injector reads no block (so none of its senders writes) until every writer has entered: without
+    // this a fast peer's next call lands in a gathered buffer this device is still reading.
+    if constexpr (!is_linear && num_devices > 1) {
+        if (barrier_sem != 0) {
+            const uint64_t barrier_injector_noc_addr =
+                safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, barrier_sem, 0);
+            auto announce = [&](auto* handle, PacketHeaders& hdrs) {
+                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    handle,
+                    hdrs.sem_inc_hdr,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_injector_noc_addr, 0});
+            };
+            if (in0_core_order_index == forward_in0_core_order_index) {
+                announce(mux_connection_handle_forward, pkt_hdrs_backward);
+            }
+            if (in0_core_order_index == backward_in0_core_order_index) {
+                announce(mux_connection_handle_backward, pkt_hdrs_forward);
+            }
+            noc_obj.async_writes_flushed();
+        }
+    }
+#endif
 
     // A following gather may reuse DRAM owned by the preceding collective. Its
     // remote writes must wait until every rank has entered this program. Data
@@ -298,6 +322,7 @@ void kernel_main() {
     // Every in0 core on every rank runs it symmetrically: out_ready_sem_noc0_x/y are
     // this core's own coordinates, so each core signals its counterpart on the
     // num_devices - 1 peers and waits for exactly that many arrivals in its own L1.
+#ifndef FABRIC_2D  // hop-range multicast is a 1D route; Fabric2D uses the announce barrier above
     if constexpr (topology == Topology::Ring && num_devices > 1) {
         if (barrier_sem != 0) {
             auto* barrier_connection =
@@ -320,12 +345,27 @@ void kernel_main() {
             noc_obj.async_atomic_barrier();
         }
     }
+#endif  // !FABRIC_2D
 #endif
 
     /**
      * This is a Row-Major output block ordering.
      * It enables reuse of the last in0 block when striding the output block N dimension.
      */
+
+#ifdef FABRIC_2D
+    // Writers into this device: the two neighbours.
+    constexpr uint32_t num_push_sources = 2;
+    if constexpr (!is_linear && num_devices > 1) {
+        if (is_injector_core && barrier_sem != 0) {
+            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+            noc_semaphore_wait_min(barrier_ptr, num_push_sources);
+            // Consume rather than reset: a faster peer's next-launch announcement may already be here.
+            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - num_push_sources);
+            noc_obj.async_atomic_barrier();
+        }
+    }
+#endif
 
     bool k_forward = true;
     bool reuse_block = false;
