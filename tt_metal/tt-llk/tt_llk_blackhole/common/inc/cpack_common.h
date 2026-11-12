@@ -380,11 +380,27 @@ constexpr bool llk_pack_matmul_kernel()
     return llk_pack_matmul_api<dep * 0 + 1>::value || llk_pack_matmul_api<dep * 0 + 2>::value || llk_pack_matmul_api<dep * 0 + 3>::value;
 }
 
-// 0 other, 1 matmul, 2 matmul with a pack-thread SFPU; 0 at compile time in a kernel without a matmul API.
+// Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).
+template <int api>
+struct llk_pack_sfpu_api
+{
+    static constexpr bool value = false;
+};
+
 template <std::uint32_t dep>
+constexpr bool llk_pack_sfpu_kernel()
+{
+    return llk_pack_sfpu_api<dep * 0 + 1>::value || llk_pack_sfpu_api<dep * 0 + 2>::value || llk_pack_sfpu_api<dep * 0 + 3>::value ||
+           llk_pack_sfpu_api<dep * 0 + 4>::value || llk_pack_sfpu_api<dep * 0 + 5>::value || llk_pack_sfpu_api<dep * 0 + 6>::value ||
+           llk_pack_sfpu_api<dep * 0 + 7>::value || llk_pack_sfpu_api<dep * 0 + 8>::value;
+}
+
+// 0 other, 1 matmul, 2 matmul with a pack-thread SFPU. Without a matmul API 0 at compile time; with the K (matmul_kt) the
+// caller vouches for matmul math, so not 0; without a pack-thread SFPU header not 2.
+template <std::uint32_t matmul_kt>
 inline std::uint32_t llk_pack_context()
 {
-    if constexpr (!llk_pack_matmul_kernel<dep>())
+    if constexpr (!llk_pack_matmul_kernel<matmul_kt>())
     {
         return 0;
     }
@@ -392,7 +408,8 @@ inline std::uint32_t llk_pack_context()
     {
         std::uint16_t half;
         __builtin_memcpy(&half, pack_ctx, sizeof(half));
-        return (half & 0xff) == 0 ? 0 : 1 + ((half >> 8) != 0);
+        const std::uint32_t sfpu = llk_pack_sfpu_kernel<matmul_kt>() && (half >> 8) != 0 ? 1 : 0;
+        return matmul_kt != 0 || (half & 0xff) != 0 ? 1 + sfpu : 0;
     }
 }
 

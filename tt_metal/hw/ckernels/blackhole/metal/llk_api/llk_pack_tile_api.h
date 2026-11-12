@@ -866,6 +866,14 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
     }
 }
 
+// The contexts a block can pack in: 0 without the K, 1 and 2 only in a kernel with a matmul API, 2 only with a
+// pack-thread SFPU header too.
+template <std::uint32_t matmul_kt>
+constexpr bool llk_pack_context_reach(const std::uint32_t ctx) {
+    constexpr bool matmul = llk_pack_matmul_kernel<matmul_kt>();
+    return ctx == 0 ? !matmul || matmul_kt == 0 : (ctx == 1 ? matmul : matmul && llk_pack_sfpu_kernel<matmul_kt>());
+}
+
 // Counts at which some output of the kernel packs per tile in some state or reachable context (bit n - 1, above 16 the
 // bit of 16): a block of such a count with a variable output packs per tile, so it never reaches a per-tile pack at run
 // time.
@@ -875,8 +883,6 @@ struct llk_pack_per_tile_counts_t {
     constexpr llk_pack_per_tile_counts_t() : counts(0) {
         const auto& words = llk_pack_form_words<is_fp32_dest_acc_en, matmul_kt>.w;
         const auto& words_mm = llk_pack_form_words_mm<is_fp32_dest_acc_en, matmul_kt>.w;
-        // A kernel without a matmul API stays in context 0.
-        const bool matmul = llk_pack_matmul_kernel<matmul_kt>();
         for (std::uint32_t i = 0; i < sizeof(pack_dst_format); i++) {
             const std::uint32_t fmt = pack_dst_format[i];
             if (fmt == static_cast<std::uint32_t>(DataFormat::Invalid)) {
@@ -889,9 +895,9 @@ struct llk_pack_per_tile_counts_t {
             }
             const std::uint32_t row = llk_pack_class_tab.row[i];
             for (std::uint32_t state = 0; state < 3; state++) {
-                const std::uint32_t w[3] = {words[0][state][row], words[1][state][row], words_mm[0][state][row]};
-                for (std::uint32_t c = 0; c < (matmul ? 3u : 1u); c++) {
-                    for (std::uint32_t bit = 0; bit < 16; bit++) {
+                const std::uint32_t w[3] = {words[0][state][row], words_mm[0][state][row], words[1][state][row]};
+                for (std::uint32_t c = 0; c < 3; c++) {
+                    for (std::uint32_t bit = 0; bit < 16 && llk_pack_context_reach<matmul_kt>(c); bit++) {
                         if (((w[c] >> (2 * bit)) & 3) == 0) {
                             counts |= 1u << bit;
                         }
@@ -930,10 +936,15 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     // tile in one of them packs per tile in all: a per-tile pack never pays a run-time form choice, and keeps no state.
     std::uint32_t forms = 0;
     if (__builtin_constant_p(output_id)) {
-        std::uint32_t any = llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0);
-        if constexpr (llk_pack_matmul_kernel<matmul_kt>()) {
-            any |= llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1) |
-                   llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2);
+        std::uint32_t any = 0;
+        if constexpr (llk_pack_context_reach<matmul_kt>(0)) {
+            any |= llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0);
+        }
+        if constexpr (llk_pack_context_reach<matmul_kt>(1)) {
+            any |= llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1);
+        }
+        if constexpr (llk_pack_context_reach<matmul_kt>(2)) {
+            any |= llk_pack_block_forms<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2);
         }
         forms = (any & 1) != 0 ? 1 : any;
     } else if constexpr (
