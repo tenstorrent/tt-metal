@@ -1166,6 +1166,14 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_receiver_compile_time_args,
         in1_defines);
 
+    // Blackhole, full 32x32 tiles: one MOP run walks a whole reuse row of the subblock (row_mop of
+    // matmul_block_init / matmul_block_k, api/compute/matmul.h).
+    const auto full_tile = [](const tt::tt_metal::Tile& tile) {
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    const bool row_mop = device->arch() == tt::ARCH::BLACKHOLE && full_tile(input_tensor.tensor_spec().tile()) &&
+                         full_tile(weight_tensor.tensor_spec().tile());
+
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
         M_block_tiles,
@@ -1174,7 +1182,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         N_blocks_per_core,
         subblock_h,
         subblock_w,
-        in0_parallel_axis_cores};
+        in0_parallel_axis_cores,
+        row_mop ? 1u : 0u};
 
     auto compute_defines = defines;
     if (topology == ttnn::ccl::Topology::Linear) {

@@ -16,6 +16,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
+// Blackhole row MOP for matmul_block_init / matmul_block_k (set by the program factory)
+constexpr bool row_mop = get_compile_time_arg_val(8);
+
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
@@ -339,7 +342,8 @@ void add_bias_and_addcmul_block(
     intermediate_cb.pop_front(out_block_num_tiles);
 }
 
-// Slightly modified from compute_common.hpp
+// One K block of an output block (adapted from compute_common.hpp): each subblock runs the block's inner dimension in
+// one matmul_block_k call and packs into its slot of out_cb (packer L1 accumulation across K blocks).
 void matmul_blocks(
     CircularBuffer& in0_cb,
     CircularBuffer& in1_cb,
@@ -350,49 +354,31 @@ void matmul_blocks(
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
     const uint32_t subblock_w) {
-    uint32_t in0_index_offset = 0;
-
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
-        uint32_t in1_index_offset = 0;
         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
             tile_regs_acquire();
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
-                    in0_cb.get_cb_id(),
-                    in1_cb.get_cb_id(),
-                    in0_index,
-                    in1_index,
-                    dst_index,
-                    false /*transpose*/,
-                    subblock_w,
-                    subblock_h,
-                    K_block_tiles);
-                in0_index++;
-                in1_index += full_N_block_tiles;
-            }
+            matmul_block_k<row_mop>(
+                in0_cb.get_cb_id(),
+                in1_cb.get_cb_id(),
+                M_start * K_block_tiles /*in0_index*/,
+                N_start /*in1_index*/,
+                0 /*dst_index*/,
+                false /*transpose*/,
+                subblock_w,
+                subblock_h,
+                K_block_tiles /*kt_dim*/,
+                K_block_tiles /*k_steps*/,
+                full_N_block_tiles /*in1 K-row stride*/);
             tile_regs_commit();
             tile_regs_wait();
-            uint32_t write_dst_index = 0;
+            uint32_t dst = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {
-                uint32_t h_tile_id = M_start + h;
                 for (uint32_t w = 0; w < subblock_w; w++) {
-                    uint32_t w_tile_id = N_start + w;
-                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
-                    pack_tile<true>(write_dst_index, out_cb.get_cb_id(), out_tile_id);
-                    write_dst_index++;
-                    dst_index++;
+                    pack_tile<true>(dst++, out_cb.get_cb_id(), (M_start + h) * full_N_block_tiles + N_start + w);
                 }
             }
             tile_regs_release();
-
-            in1_index_offset += subblock_w;
         }
-        in0_index_offset += subblock_h * K_block_tiles;
     }
 }
 
@@ -473,7 +459,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            matmul_block_init(
+            matmul_block_init<row_mop>(
                 in0_cb_id,
                 in1_cb_id,
                 false /*transpose*/,
