@@ -18,6 +18,8 @@ class Gemma4ForCausalLM:
         "supports_sample_on_device": True,
         "supports_device_penalties": False,
         "supports_chunked_prefill": True,
+        "supports_spec_decode": True,
+        "spec_ids_are_sampled": True,
         "max_device_top_k": 32,
         "fabric_config": {
             "config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -26,6 +28,10 @@ class Gemma4ForCausalLM:
     }
     decode_input_update_contract = 1
     MAX_PREFILL_TOKENS = 8192
+    # Draft length the launch settled on in spec_plan; 0 without speculation.
+    spec_k = 0
+    # The decode trace holds 32 rows.
+    DECODE_ROWS = 32
 
     def __init__(self, generator, max_batch_size, max_seq_len, *, vllm_config=None):
         # vLLM inspects this keyword before the TT loader supplies a live mesh.
@@ -35,6 +41,10 @@ class Gemma4ForCausalLM:
         self.mesh = generator.mesh
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
+        # Draft columns ride in extra decode rows: column j of slot u is row j * max_batch_size + u, so column 0
+        # is the plain decode layout and a plain decode leaves the other rows inactive.
+        self.rows = max_batch_size * (1 + self.spec_k)
+        generator.update_columns = 1 + self.spec_k
         self.entry = None
         self.cache = None
         self.prefill_slot_keys = {}
@@ -95,6 +105,28 @@ class Gemma4ForCausalLM:
         return result
 
     @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
+        """Draft columns are decode rows, so slots * (1 + K) must fit the 32-row decode trace."""
+        from vllm_tt_plugin.spec_decode import DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
+
+        fits = cls.DECODE_ROWS // max_num_seqs - 1
+        if fits < 1 or requested_k < 1:
+            return SpecReject(
+                reason=f"{max_num_seqs} slots leave no decode rows for drafts: slots * (1 + K) must be <= {cls.DECODE_ROWS}",
+                supported_k=(fits,) if fits >= 1 else (),
+            )
+        cls.spec_k = min(requested_k, fits)
+        return SpecPlan(
+            effective_k=cls.spec_k,
+            lanes_per_request=1 + cls.spec_k,
+            extra_bytes_per_seq=0,
+            extra_bytes_per_token=0,
+            accept_modes=("argmax_ids",),
+            drafter_state=DRAFTER_STATE_INTERNAL,
+            supports_narrow_decode=True,
+        )
+
+    @classmethod
     def get_max_tokens_all_users(cls, *, max_num_seqs, max_model_len=262144, **kwargs):
         # The shared pool uses one full-attention group and five sliding groups.
         # Each window can straddle nine pages. Reserve both async batches of
@@ -117,17 +149,13 @@ class Gemma4ForCausalLM:
                 raise ValueError(f"Unexpected allocator geometry or accounting dtype: {shape}, {dtype}")
             key = (pool_id, tuple(shape[1:]))
             if key not in pools:
-                pools[key] = layer.allocate_cache(physical_pages=shape[0] + self.max_batch_size)
+                pools[key] = layer.allocate_cache(physical_pages=shape[0] + self.rows)
             kv.append(pools[key])
-            scratch[i] = list(range(shape[0], shape[0] + self.max_batch_size))
+            scratch[i] = list(range(shape[0], shape[0] + self.rows))
         if len(kv) != len(self.generator.model.layers):
             raise ValueError("The allocator must supply one spec per layer")
-        tables = {
-            i: torch.zeros(self.max_batch_size, self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))
-        }
-        self.cache = CacheState(
-            kv, tables, self.max_batch_size, self.max_seq_len, scratch_pages=scratch, vllm_owned=True
-        )
+        tables = {i: torch.zeros(self.rows, self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))}
+        self.cache = CacheState(kv, tables, self.rows, self.max_seq_len, scratch_pages=scratch, vllm_owned=True)
         return self.cache
 
     def _tables(self, cache, page_tables_per_layer, *, slots=None):
@@ -138,8 +166,9 @@ class Gemma4ForCausalLM:
         result, translated = {}, {}
         for i, source in enumerate(page_tables_per_layer):
             # Share immutable host rows only within this update: vLLM mutates
-            # its source tensors in place between scheduler steps.
-            key = id(source)
+            # its source tensors in place between scheduler steps. Layers of one group may be separate views of
+            # one table.
+            key = (source.data_ptr(), source.storage_offset(), tuple(source.shape), source.stride())
             if key not in translated:
                 dest = torch.zeros_like(cache.page_tables[i])
                 rows, cols = source.shape
@@ -151,15 +180,22 @@ class Gemma4ForCausalLM:
                 # Prefill rows are compact, then padded to the decode batch.
                 # Scatter only the live prefix into its assigned state slots.
                 dest[indices, :cols] = source[: len(indices)].to(torch.int32).clamp_min(0)
+                if slots is None:
+                    for column in range(1, 1 + self.spec_k):
+                        dest[column * rows : (column + 1) * rows] = dest[:rows]
                 translated[key] = dest
             result[i] = translated[key]
         return result
 
-    def _sampling(self, params, batch, positions, *, reset_seed=True):
+    def _sampling(self, params, positions, *, batch=None, reset_seed=True):
+        """Per-row sampling state for `positions`, one per row; a slot's params repeat in its draft columns."""
+        batch = self.max_batch_size if batch is None else batch
+
         def rows(name):
             value = getattr(params, name)
             value = value.tolist() if isinstance(value, torch.Tensor) else value
-            return list(value)[:batch] if isinstance(value, (list, tuple)) else [value] * batch
+            slots = list(value)[:batch] if isinstance(value, (list, tuple)) else [value] * batch
+            return slots * (len(positions) // batch)
 
         for name, default in (
             ("presence_penalty", 0),
@@ -169,7 +205,7 @@ class Gemma4ForCausalLM:
         ):
             if any(x != default for x in rows(name)):
                 raise ValueError(f"The shared host sampler must handle {name}")
-        seeds = [0] * batch
+        seeds = [0] * len(positions)
         if reset_seed:
             modulus = 2**31 - self.generator.max_seq_len
             seeds = [
@@ -219,7 +255,7 @@ class Gemma4ForCausalLM:
         )
         if sampling_params is None:
             return outputs
-        params = self._sampling(sampling_params, len(lengths), [n - 1 for n in lengths])
+        params = self._sampling(sampling_params, [n - 1 for n in lengths], batch=len(lengths))
         return self.generator.sample_prefill_outputs(outputs, kv_cache, params)
 
     def decode_forward(
@@ -238,6 +274,9 @@ class Gemma4ForCausalLM:
         reload_sampling_params=True,
         reset_sampling_state=True,
         slot_remap=None,
+        spec_mode=None,
+        num_valid_drafts=None,
+        accepted_counts=None,
         **kwargs,
     ):
         if "reset_batch" in kwargs:
@@ -248,13 +287,18 @@ class Gemma4ForCausalLM:
             raise ValueError("Resetting sampling state requires current tokens and positions")
         if kv_cache is not self.cache:
             raise ValueError("Serving must use the cache allocated by vLLM")
+        if spec_mode is not None:
+            return self._verify(tokens, start_pos, kv_cache, page_tables_per_layer, sampling_params)
         sample = sampling_params is not None
+        slot_positions = start_pos
+        tokens = self._pad_rows(tokens.reshape(-1, 1), 0)
+        start_pos = self._pad_rows(start_pos.reshape(-1), -1)
         if reload_inputs:
             tables = self._tables(kv_cache, page_tables_per_layer)
             # A row entering decode no longer needs its private prefill tail.
             # The plugin notifies slot moves after submission succeeds, so
             # histories still use source slots when a decode row is gathered.
-            for row, position in enumerate(start_pos):
+            for row, position in enumerate(slot_positions):
                 if int(position) >= 0:
                     slot = row if slot_remap is None else int(slot_remap[row])
                     self.release_request(slot)
@@ -265,13 +309,45 @@ class Gemma4ForCausalLM:
             tables = self._tables(kv_cache, page_tables_per_layer)
             self.generator._tables(kv_cache, tables)
         if sample and (reload_sampling_params or reset_sampling_state):
-            params = self._sampling(sampling_params, self.max_batch_size, start_pos, reset_seed=reset_sampling_state)
-            self.generator.configure_sampling(batch=self.max_batch_size, **params)
+            params = self._sampling(sampling_params, start_pos, reset_seed=reset_sampling_state)
+            self.generator.configure_sampling(batch=self.rows, **params)
         self.generator.replay(self.entry, sample=sample)
         if not sample:
             return self.generator._host_logits(self.entry["logits"])[0, 0, : self.max_batch_size].unsqueeze(1)
         output = self.entry["tokens"]
         return self.process_decode_output_host(output, is_tokens=True) if read_from_device else output
+
+    def _pad_rows(self, values, fill):
+        """Extend a [slots, ...] decode input to the trace's rows; the draft-column rows stay inactive."""
+        padded = torch.full((self.rows, *values.shape[1:]), fill, dtype=values.dtype)
+        padded[: values.shape[0]] = values
+        return padded
+
+    def _verify(self, tokens, start_pos, kv_cache, page_tables_per_layer, sampling_params):
+        """Verify a [slots, 1 + K] candidate block as one decode step: column j of slot u is row j * slots + u.
+
+        Every row writes its K/V at its own position before attention reads, so a draft attends to the drafts before
+        it exactly as sequential decode steps would. Each row samples with its slot's parameters and seed + position,
+        the draw a plain decode at that position makes, so accepted tokens are the plain decode's tokens.
+        """
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, VerifyOutput
+
+        slots, width = tokens.shape
+        if slots != self.max_batch_size or width != 1 + self.spec_k:
+            raise ValueError(f"Expected a [{self.max_batch_size}, {1 + self.spec_k}] candidate block")
+        positions = start_pos.t().reshape(-1)
+        flat_tokens = torch.where(positions >= 0, tokens.t().reshape(-1), 0).reshape(-1, 1)
+        self.entry = self.generator.prepare_decode(
+            flat_tokens, positions, page_table=self._tables(kv_cache, page_tables_per_layer), kv_cache=kv_cache
+        )
+        if sampling_params is None:
+            self.generator.configure_sampling(batch=self.rows, temperature=0)
+        else:
+            self.generator.configure_sampling(batch=self.rows, **self._sampling(sampling_params, positions))
+        self.generator.replay(self.entry)
+        ids = self.read_decode_output(self.entry["tokens"])
+        ids = ttnn.to_torch(ids).reshape(-1)[: self.rows].to(torch.int32)
+        return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids.reshape(width, slots).t().contiguous())
 
     def read_decode_output(self, output, async_read=False):
         if isinstance(output, torch.Tensor):
@@ -299,7 +375,7 @@ class Gemma4ForCausalLM:
 
     def warmup_model_decode(self, kv_cache, enable_trace, **kwargs):
         self.generator._tables(kv_cache, kv_cache.page_tables)
-        self.generator.configure_sampling(batch=self.max_batch_size, temperature=0)
+        self.generator.configure_sampling(batch=self.rows, temperature=0)
         self.entry = self.generator._entry(kv_cache)
 
     def note_state_slots_moved(self, moves):

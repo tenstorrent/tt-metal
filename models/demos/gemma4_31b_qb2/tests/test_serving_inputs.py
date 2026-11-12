@@ -187,7 +187,7 @@ def test_concurrent_shared_prefixes_keep_private_history_and_follow_moves():
 @pytest.mark.parametrize("remap", [None, [1, 0, 2, 3]])
 def test_decode_releases_only_its_slot_history_despite_page_id_collision(remap):
     model = adapter()
-    model.max_batch_size = 4
+    model.max_batch_size = model.rows = 4
     model.prefill_slot_keys = {0: 1, 1: 2}
     model.cache.prefill_history = {1: object(), 2: object()}
     model.generator = SimpleNamespace(
@@ -213,6 +213,70 @@ def test_decode_releases_only_its_slot_history_despite_page_id_collision(remap):
     if remap is not None:
         model.note_state_slots_moved({source: dest for dest, source in enumerate(remap)})
         assert model.prefill_slot_keys == {1: 1}
+
+
+def spec_adapter(slots, spec_k):
+    model = object.__new__(Gemma4ForCausalLM)
+    model.spec_k = spec_k
+    model.max_batch_size = slots
+    model.rows = slots * (1 + spec_k)
+    return model
+
+
+@pytest.mark.parametrize(
+    "slots,requested,effective",
+    [(1, 7, 7), (4, 7, 7), (8, 7, 3), (8, 2, 2), (16, 7, 1), (16, 1, 1)],
+)
+def test_spec_plan_fits_the_decode_trace(slots, requested, effective):
+    plan = Gemma4ForCausalLM.spec_plan(None, slots, requested)
+    assert plan.effective_k == effective and slots * (1 + plan.effective_k) <= 32
+    assert plan.accept_modes == ("argmax_ids",) and plan.supports_narrow_decode
+
+
+@pytest.mark.parametrize("slots", [17, 32])
+def test_spec_plan_refuses_slot_counts_without_room_for_drafts(slots):
+    reject = Gemma4ForCausalLM.spec_plan(None, slots, 3)
+    assert reject.supported_k == ()
+
+
+def test_draft_columns_ride_in_rows_after_the_plain_decode_rows():
+    slots, spec_k = 2, 2
+    model = spec_adapter(slots, spec_k)
+    model.cache = SimpleNamespace(
+        batch=model.rows, kv=[None], page_tables={0: torch.zeros(model.rows, 4, dtype=torch.int32)}
+    )
+    source = torch.tensor([[5, 6], [7, 8]])
+    tables = model._tables(model.cache, [source])[0]
+    assert tables.tolist() == [[5, 6, 0, 0], [7, 8, 0, 0]] * (1 + spec_k)
+    assert model._pad_rows(torch.tensor([[11], [12]]), 0).reshape(-1).tolist() == [11, 12, 0, 0, 0, 0]
+    assert model._pad_rows(torch.tensor([3, 4]), -1).tolist() == [3, 4, -1, -1, -1, -1]
+
+
+def test_verify_block_is_flattened_by_column_and_answers_per_slot():
+    slots, spec_k = 2, 2
+    model = spec_adapter(slots, spec_k)
+    model.cache = SimpleNamespace(
+        batch=model.rows, kv=[None], page_tables={0: torch.zeros(model.rows, 4, dtype=torch.int32)}
+    )
+    seen = {}
+
+    def prepare_decode(tokens, positions, **kwargs):
+        seen["tokens"], seen["positions"] = tokens.reshape(-1).tolist(), positions.tolist()
+        return {"tokens": ttnn.from_torch(torch.arange(32, dtype=torch.int32).reshape(1, 1, 1, 32), dtype=ttnn.uint32)}
+
+    model.generator = SimpleNamespace(
+        prepare_decode=prepare_decode,
+        configure_sampling=lambda **kw: seen.setdefault("batch", kw["batch"]),
+        replay=lambda entry: None,
+    )
+    model.read_decode_output = lambda output: output
+    block = torch.tensor([[10, 11, 12], [20, 999, 999]])
+    positions = torch.tensor([[7, 8, 9], [3, -1, -1]])
+    out = model._verify(block, positions, model.cache, [torch.tensor([[1, 2], [3, 4]])], None)
+    assert seen["tokens"] == [10, 20, 11, 0, 12, 0] and seen["positions"] == [7, 3, 8, -1, 9, -1]
+    assert seen["batch"] == 6
+    # device row j * slots + u answers slot u, column j
+    assert out.argmax_ids.tolist() == [[0, 2, 4], [1, 3, 5]]
 
 
 def test_kv_pool_follows_max_model_len():

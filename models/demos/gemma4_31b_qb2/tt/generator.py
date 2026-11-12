@@ -49,6 +49,8 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
+        # Draft columns of a speculative decode, each with its own cache update (see Decoder.decode_forward).
+        self.update_columns = 1
         self.counters = {
             k: 0
             for k in (
@@ -479,9 +481,12 @@ class Gemma4Generator:
             kv_cache=state.kv,
             batch=state.batch,
             rope_positions=entry["rope_positions"],
+            update_positions=entry["update_positions"],
         )
         ttnn.copy(out, entry["logits"])
         ttnn.plus_one(entry["positions"], skip_negative_entries=True)
+        if entry["update_positions"][0] is not entry["positions"]:
+            ttnn.plus_one(entry["update_positions"][0], skip_negative_entries=True)
         ttnn.plus_one(entry["rope_positions"])
 
     def sample_prefill_outputs(self, outputs, state, sampling_params):
@@ -552,6 +557,13 @@ class Gemma4Generator:
             "table_ids": {k: id(v) for k, v in state.device_tables.items()},
             "remaining_steps": 0,
         }
+        # One cache-update index tensor per draft column (see Decoder.decode_forward); a single column updates with the
+        # positions themselves.
+        entry["update_positions"] = (
+            [entry["positions"]]
+            if self.update_columns == 1
+            else [self._upload(torch.zeros(state.batch, dtype=torch.int32)) for _ in range(self.update_columns)]
+        )
         for kind, table in state.device_tables.items():
             scratch_table = (
                 torch.tensor(state.scratch_pages[kind])[:, None]
@@ -576,6 +588,7 @@ class Gemma4Generator:
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["positions"], "position_refreshes")
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["rope_positions"], "rope_refreshes")
         self._refresh(torch.zeros(1, 1, 1, 32, dtype=torch.int32), entry["tokens"], "token_refreshes")
+        self._refresh_update_positions(entry, torch.zeros(state.batch, dtype=torch.int32))
         logger.info("Capturing model trace")
         with corruptible_allocation_scope(self.mesh):
             entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
@@ -601,6 +614,14 @@ class Gemma4Generator:
         if sample:
             ttnn.execute_trace(self.mesh, entry["sampling_trace"], cq_id=0, blocking=False)
             self.counters["sampling_replays"] += 1
+
+    def _refresh_update_positions(self, entry, positions):
+        """Column c of the decode rows (row // slots) is updated by call c, which skips every other row."""
+        columns = len(entry["update_positions"])
+        if columns > 1:
+            column = torch.arange(len(positions)) // (len(positions) // columns)
+            for c, tensor in enumerate(entry["update_positions"]):
+                self._refresh(torch.where(column == c, positions, -1).int(), tensor, "position_refreshes")
 
     def prepare_decode(
         self,
@@ -637,6 +658,7 @@ class Gemma4Generator:
         self._refresh(ids, entry["tokens"], "token_refreshes")
         self._refresh(start_pos.int(), entry["positions"], "position_refreshes")
         self._refresh(start_pos.int().clamp_min(0), entry["rope_positions"], "rope_refreshes")
+        self._refresh_update_positions(entry, start_pos.int())
         active = start_pos[start_pos >= 0]
         entry["remaining_steps"] = state.capacity - int(active.max()) if active.numel() else state.capacity
         return entry
