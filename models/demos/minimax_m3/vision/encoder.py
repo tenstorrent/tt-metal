@@ -1,45 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-The MiniMax-M3 vision encoder on one Tenstorrent chip, in the form the encoder service's media module calls it:
+MiniMax-M3 vision encoder on one chip, for the encoder service's media module.
 
-    encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, hf_config)  # load(), once
-    tokens = encoder.forward(image.pixels)  # encode(), per image: image as the media module's prepare gives it
+Usage:
+
+    encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, hf_config)  # once, in load()
+    tokens = encoder.forward(image.pixels)  # per image, in encode()
     try:
-        read_embeddings(tokens, out)  # out: [n_tokens, 6144] bf16 values, for example in shared memory
+        read_embeddings(tokens, out)  # out: [n_tokens, 6144] bf16, for example in shared memory
     finally:
         ttnn.deallocate(tokens)
 
-This module imports ttnn, so import it only where the chip is used, for example inside the media module's load(), and
-never in a process that must run without ttnn; the media module's prepare, which resizes images, does not import ttnn.
-
-forward takes one resized image, uint8 (height, width, 3) with sides that are multiples of 28 pixels, as the media
-module's prepare returns it (M3Image.pixels). It turns the pixels into patch rows on the host (patch_rows, which
-checks them first), then runs the patch embedding, the vision blocks, the 2 x 2 merge and the projector to the
-text model's hidden size on the chip: M3VLVisionModel of tt/vision/model.py, so no model code is written here. It
-returns the image's vision tokens on the chip, bf16 [n_tokens, 6144] in row-major layout in DRAM, untilized on the
-chip, so they read back as contiguous rows with no tile padding to strip and no untilize on the host. n_tokens is
-grid_h * grid_w = height / 28 * width / 28.
-
-Compilation: the chip's programs depend on the image's patch count (4 patches per token), not on the shape of its
-grid, which the tower test checks for the tower and test_vision_encoder_load_and_encode for the whole encoder (both
-need a device). The first image of each patch count builds them, which took 15-42 s with an empty kernel cache and
-0.1-1.4 s with the kernels already in the kernel cache on disk, both measured on an older version of this encoder;
-later images of that count reuse them. The resize gives 534 patch counts for images of up to 8192 pixels a side, so
-a warm-up in load() can only cover chosen counts, for example 576 tokens (672 x 672 pixels, and 1920 x 1080 photos,
-resized to 896 x 504) and 540 tokens (4032 x 3024 photos, resized to 756 x 560). An image of another count compiles
-on its first call and holds that encoder meanwhile.
-
-Traces: forward is not ready for trace capture. Each call uploads its pixel values to a new device buffer and may
-stage the RoPE tables of a new grid (M3VLVisionModel keeps those of 16 grids and frees the least recently used), so
-a replay would read the buffers of the captured call. A trace per patch count needs its input and RoPE tables in
-buffers that stay allocated and are written before each replay; that is not done here. The RoPE tables are also device
-memory that forward allocates after load() and keeps after the call. tt-metal warns that a buffer allocated after a
-trace was captured on the device, and still allocated when the trace runs, may be overwritten by that run, so on a
-device where any trace was captured, its own or another model's, these tables are at risk.
-
-One encoder runs on one chip and is not thread safe: one call at a time. read_embeddings releases Python's GIL
-while it waits for the chip, so a service that shares one encoder between threads needs a lock.
+This module imports ttnn, so import it only where the chip is used, such as in load().
+The first image of each patch count compiles the chip's programs, which is slow. Later images of that count reuse them.
+forward does not support trace capture, as each call uploads its input to new buffers. The encoder also keeps the
+RoPE tables of recent grids on the chip, where a trace replay may overwrite them.
+The encoder is not thread safe: make one call at a time.
 """
 from __future__ import annotations
 
@@ -60,11 +37,16 @@ from models.demos.minimax_m3.tt.vision.preprocess import NUM_CHANNELS, PATCH_SIZ
 
 
 def vision_config(config) -> MiniMaxM3VisionConfig:
-    """The vision config of config: a MiniMaxM3VisionConfig as it is; a dict, the checkpoint's config.json or a
-    transformers config's to_dict(); or a transformers config (anything with to_dict()), such as MiniMaxM3VLConfig or
-    the config an encoder service builds from the checkpoint. Raises TypeError for anything else, and ValueError for a
-    dict or a transformers config without a field that MiniMaxM3VisionConfig.from_hf_config reads, such as the vision
-    part of the config on its own."""
+    """Read the vision config from a model config.
+
+    Args:
+        config: a MiniMaxM3VisionConfig, returned as is; a dict such as the checkpoint's config.json; or anything
+            with to_dict(), such as a transformers MiniMaxM3VLConfig.
+
+    Raises:
+        TypeError: for any other config.
+        ValueError: for a config without a field that the vision config needs, such as the vision part on its own.
+    """
     if isinstance(config, MiniMaxM3VisionConfig):
         return config
     if isinstance(config, Mapping):
@@ -87,7 +69,10 @@ def vision_config(config) -> MiniMaxM3VisionConfig:
 
 
 def _checked_config(mesh_device, config) -> MiniMaxM3VisionConfig:
-    """vision_config(config), after checking that its patches are the image code's and that mesh_device is one chip."""
+    """Return vision_config(config) after checking it and mesh_device.
+
+    Raises ValueError unless the config's patch geometry is preprocess.py's and mesh_device is one chip.
+    """
     vision = vision_config(config)
     geometry = (vision.patch_size, vision.temporal_patch_size, vision.num_channels, vision.spatial_merge_size)
     if geometry != (PATCH_SIZE, TEMPORAL_PATCH_SIZE, NUM_CHANNELS, MERGE_SIZE):
@@ -109,18 +94,19 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
     """The vision tower and projector of MiniMax-M3 on one chip: resized pixels in, vision tokens on the chip out."""
 
     def __init__(self, mesh_device, state_dict: Mapping[str, torch.Tensor], config):
-        """Put the vision weights on mesh_device, a mesh of one chip (ValueError otherwise; take a 1x1 submesh of a
-        larger mesh with mesh_device.create_submesh(ttnn.MeshShape(1, 1))).
+        """Upload the vision weights to one chip.
 
-        state_dict: the vision tower and projector weights under transformers 5.12's MiniMaxM3VLModel names
-        (vision_tower.*, multi_modal_projector.*), as load_vision_state_dict(weights_path) returns them for the
-        checkpoint, which stores them under older names, in any float dtype: the chip holds them in bf16. Other keys, a
-        language model's for example, and those of the layers past the config's num_hidden_layers are ignored and their
-        values never read, so state_dict may be a lazy mapping over a whole checkpoint. Weights under the checkpoint's
-        own names raise ValueError, and so do a missing weight, one of another shape than the config's and a vision
-        weight that the model has no place for (M3VLVisionModel.from_state_dict), before any upload.
-        config: see vision_config; the service's Hugging Face config of the checkpoint will do. Its patch geometry must
-        be the image code's (ValueError otherwise).
+        Args:
+            mesh_device: a mesh of one chip. For a larger mesh, pass mesh_device.create_submesh(ttnn.MeshShape(1, 1)).
+            state_dict: the vision weights under transformers 5.12's names (vision_tower.*, multi_modal_projector.*),
+                as load_vision_state_dict returns them, in any float dtype. Only the model's weights are read. Other
+                keys are ignored, such as a language model's or those of layers past the config's num_hidden_layers.
+                So this may be a lazy mapping over a whole checkpoint.
+            config: anything vision_config takes, such as the checkpoint's Hugging Face config.
+
+        Raises:
+            ValueError: before any upload, for a mesh of several chips, another patch geometry, weights under the
+                checkpoint's own names, or a vision weight that is missing, unknown or of the wrong shape.
         """
         super().__init__()
         self.config = _checked_config(mesh_device, config)
@@ -138,10 +124,17 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
 
     @classmethod
     def from_weights_path(cls, mesh_device, weights_path: str, config=None) -> "TtMiniMaxM3VisionEncoder":
-        """The encoder with the vision weights of the MiniMax-M3 checkpoint in weights_path: only the safetensors shards
-        that its model.safetensors.index.json lists for the vision tower and projector are read, as bf16, the dtype
-        the chip holds them in. config: as for __init__; None reads the checkpoint's config.json. The config and the
-        mesh are checked before any weight is read."""
+        """Build the encoder from the MiniMax-M3 checkpoint in weights_path.
+
+        Reads only the shards that hold vision weights, as bf16. Checks the config and the mesh before reading any
+        weight.
+
+        Args:
+            config: as for __init__. None reads the checkpoint's config.json.
+
+        Raises:
+            ValueError: for an empty weights_path, and as __init__ does.
+        """
         if not weights_path:
             raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
         if config is None:
@@ -151,16 +144,23 @@ class TtMiniMaxM3VisionEncoder(LightweightModule):
         return cls(mesh_device, load_vision_state_dict(weights_path, dtype=torch.bfloat16), config)
 
     def forward(self, pixels: np.ndarray) -> ttnn.Tensor:
-        """The vision tokens of one resized image on the chip: bf16 [n_tokens, out_dim] (out_dim 6144 for MiniMax-M3),
-        row-major, in DRAM. The caller frees it.
+        """Encode one resized image into vision tokens on the chip.
 
-        pixels: uint8 (height, width, 3), as the media module's prepare returns it (M3Image.pixels). patch_rows raises
-        TypeError or ValueError for pixels that no image resizes to (check_pixels) before any device work.
+        Args:
+            pixels: uint8 (height, width, 3), as the media module's prepare returns it (M3Image.pixels).
+
+        Returns:
+            The tokens as bf16 [n_tokens, out_dim], row-major in DRAM. The caller frees them. n_tokens is
+            (height / 28) * (width / 28), and out_dim is 6144 for MiniMax-M3.
+
+        Raises:
+            TypeError: before any device work, for pixels that are not a uint8 numpy array.
+            ValueError: before any device work, for pixels that are not a resized image (check_pixels).
         """
         pixel_values, grid_thw = patch_rows(pixels)
-        # TODO: pad the patch rows to a few patch-count buckets and mask the padded keys in SDPA, so that the first
-        # image of an uncommon patch count does not compile the chip's programs while other images wait (see
-        # Compilation in the module docstring). Pad whole tokens, for the 2 x 2 merge, and drop the padded ones.
+        # TODO: pad the patch rows to a few fixed patch counts and mask the padded keys in SDPA, so that a rare patch
+        # count does not compile new programs. Pad whole tokens (2 x 2 patches each) and drop the padded tokens from
+        # the output.
         tokens = self.model(pixel_values, grid_thw)  # (1, 1, n_tokens, out_dim) in tiles
         rows = ttnn.to_layout(tokens, ttnn.ROW_MAJOR_LAYOUT)  # untilized on the chip, without the tiles' padding
         ttnn.deallocate(tokens)
@@ -172,13 +172,19 @@ _BF16_HOLDERS = ("uint16", "int16", "bfloat16")
 
 
 def read_embeddings(tokens: ttnn.Tensor, out: np.ndarray) -> None:
-    """Copy forward's output into out, for example format's embeddings view of a value in shared memory.
+    """Copy forward's output from the chip into out.
 
-    out: a writable C-contiguous numpy array of tokens' shape [n_tokens, out_dim] that holds bf16 values: dtype uint16
-    or int16 (the raw bits) or ml_dtypes' bfloat16. Raises TypeError or ValueError for another out or for tokens that
-    are not a 2D bf16 tensor, before reading. Reads the tokens from the chip with Tensor.cpu, which releases Python's
-    GIL while it waits for the chip to finish, then copies them into out once (ttnn's to_torch makes one more host
-    copy before that).
+    It releases Python's GIL while it waits for the chip.
+
+    Args:
+        tokens: forward's output, a 2D bf16 tensor.
+        out: a writable, C-contiguous numpy array of the same shape that holds bf16 bits: uint16, int16 or ml_dtypes'
+            bfloat16. For example, format.embeddings of a stored value in shared memory.
+
+    Raises:
+        TypeError: before reading, for an out that is not a numpy array of one of those dtypes.
+        ValueError: before reading, for tokens that are not 2D bf16, or for an out of another shape, not C-contiguous
+            or read-only.
     """
     shape = tuple(tokens.shape)
     if len(shape) != 2 or tokens.dtype != ttnn.bfloat16:

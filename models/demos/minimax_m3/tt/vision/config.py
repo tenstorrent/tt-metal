@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-The MiniMax-M3 vision config: the dimensions of the vision tower and projector, read from the checkpoint's config.json
-or a transformers config (from_hf_config) without importing transformers or ttnn.
+MiniMax-M3 vision config: the sizes of the vision tower and projector.
+
+It imports neither transformers nor ttnn.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 
 @dataclass
 class MiniMaxM3VisionConfig:
-    """Vision tower and projector dimensions. The defaults are the MiniMax-M3 checkpoint's."""
+    """Sizes of the vision tower and projector, with the MiniMax-M3 checkpoint's as defaults."""
 
     hidden_size: int = 1280
     intermediate_size: int = 5120
@@ -42,11 +43,11 @@ class MiniMaxM3VisionConfig:
 
     @classmethod
     def from_hf_config(cls, config: dict, **overrides) -> "MiniMaxM3VisionConfig":
-        """Build from a config dict: the checkpoint's config.json (transformers 4.52.4 layout, with the merge and
-        temporal sizes under ``img_token_compression_config``) or ``MiniMaxM3VLConfig.to_dict()`` (transformers 5.12).
+        """Read the vision config from the checkpoint's config.json or from MiniMaxM3VLConfig.to_dict().
 
-        Raises ValueError for a vision ``hidden_act`` other than ``gelu``: Hugging Face's vision MLP reads it, and the
-        TT MLP runs the exact (erf) GELU only.
+        The checkpoint's config.json keeps the merge and temporal sizes under img_token_compression_config. overrides
+        replace fields after reading. Raises KeyError for a missing field. Raises ValueError for a vision hidden_act
+        other than "gelu", the exact (erf) GELU that the TT MLP runs.
         """
         vc = config["vision_config"]
         activation = vc.get("hidden_act", "gelu")

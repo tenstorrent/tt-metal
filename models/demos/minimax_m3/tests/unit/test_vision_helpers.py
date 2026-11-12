@@ -1,13 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-only checks of vision_helpers, on which the vision device tests rest: check_close, which gives each of them its
-verdict, and parametrize_vision_grids, which picks the grids they run. No device.
-
-The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_helpers.py
+Host tests of check_close and parametrize_vision_grids (vision_helpers.py), on which the device tests rely.
 """
 from __future__ import annotations
 
@@ -33,9 +27,8 @@ def _with_last_value(x: torch.Tensor, value: float) -> torch.Tensor:
 
 
 def test_vision_check_close():
-    """check_close passes an output within its bounds, with no failure details on its line, and fails an output
-    scaled by 1.01 or by 0.5, which have a PCC of 1 and pass on a loose relL2 bound, and outputs with one NaN or one
-    Inf value. A failure's line gives the bounds, the gain and the NaN and Inf counts."""
+    """check_close passes an output within its bounds, and fails scaled outputs (PCC 1) and outputs with one NaN or Inf.
+    A failure's line gives the bounds, the gain and the NaN and Inf counts."""
     generator = torch.Generator().manual_seed(0)
     ref = torch.randn(256, 64, generator=generator)
     good = ref + 1e-3 * torch.randn(256, 64, generator=generator)  # relative L2 error about 0.001
@@ -56,8 +49,7 @@ def test_vision_check_close():
 
 
 def test_vision_parametrize_rejects_unknown_grid(expect_error):
-    """parametrize_vision_grids takes the CI grids, which are all in VISION_GRIDS, and raises ValueError for a grid
-    id that VISION_GRIDS lacks, whose tests would otherwise drop out of the leg without a sign."""
+    """parametrize_vision_grids takes the CI grids and raises ValueError for a grid id that VISION_GRIDS lacks."""
     assert set(ATTENTION_CI_GRIDS) <= VISION_GRIDS.keys()
     for ci_grids in (CI_GRIDS, ATTENTION_CI_GRIDS):
         parametrize_vision_grids(ci_grids)
@@ -66,7 +58,7 @@ def test_vision_parametrize_rejects_unknown_grid(expect_error):
 
 
 def test_vision_max_rel_l2_at_grid():
-    """Each per-grid bound names a grid of VISION_GRIDS and a check, loosens that check's bound, and only at its grid."""
+    """Each per-grid bound names a grid of VISION_GRIDS and a check, and loosens that check's bound only at its grid."""
     for (check, grid), bound in MAX_REL_L2_AT_GRID.items():
         others = [thw for name, thw in VISION_GRIDS.items() if (check, name) not in MAX_REL_L2_AT_GRID]
         default = max_rel_l2(check, others[0])  # KeyError for a check that MAX_REL_L2 lacks

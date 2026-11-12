@@ -1,28 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-side checks of the 3D vision RoPE's layout on device (tt/vision/rope.py and the q and k packing in
-tt/vision/attention.py) vs Hugging Face's minimax_m3_vl, and of the model's RoPE tables per grid. No device.
+Host tests of the 3D vision RoPE's layout on the chip against Hugging Face's minimax_m3_vl, with no device.
 
-The device rotates q and k with ttnn.experimental.rotary_embedding_llama, which pairs lanes (2i, 2i+1) of a head, so
-the q and k rows of wqkv are packed in the head order of attention._rope_head_order, padded from 80 to 96, and
-rope.py lays out the cos and sin in that order. The tests check, for square, non-square, two-frame and two-image grids
-and one with a side of 2 patches:
-  - rope_cos_sin, from which rope.py makes the device's tables, equals Hugging Face's MiniMaxM3VL3DRotaryEmbedding bit
-    for bit, for the checkpoint's head_dim 80 and for 64 with another theta;
-  - the op's rotation, run on host, of q and k in that order with the cos and sin of rope_cos_sin_padded equals
-    Hugging Face's rotation (apply_rotary_pos_emb_vision with MiniMaxM3VL3DRotaryEmbedding's cos and sin) bit for
-    bit, keeps the 16 pad dims at zero and leaves q k^T as Hugging Face's;
-  - the attention computed on host from M3VLAttention's packed weights (q and k rows reordered) equals Hugging Face's
-    MiniMaxM3VLVisionAttention with eager attention;
-and that M3VLVisionModel keeps the cos and sin of a grid in DRAM for the next images of that grid and copies them to L1
-once per forward for its blocks.
-
-Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1) for the checks against Hugging Face. These tests have no
-mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_rope_vs_ref.py
+A lane is one of the 96 positions along a head on the chip. The RoPE op rotates lane pairs (2i, 2i + 1), so
+attention.py packs q and k in another order and rope.py's tables follow it. The tables and the rotation must equal
+Hugging Face's bit for bit, and the attention computed on the host from the packed weights must match it. The tests
+also check how the model keeps its RoPE tables. Needs transformers with minimax_m3_vl.
 """
 from __future__ import annotations
 
@@ -79,8 +63,10 @@ def hf_rope(hf_vision, grid: torch.Tensor, head_dim: int = HEAD_DIM, theta: floa
 
 
 def rotary_embedding_llama(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """ttnn.experimental.rotary_embedding_llama in prefill mode, on host: x * cos + (x @ trans_mat) * sin, with the
-    op's one-tile transformation matrix applied to each 32-lane tile of the head dim."""
+    """Run the prefill math of ttnn.experimental.rotary_embedding_llama on the host: x * cos + (x @ trans_mat) * sin.
+
+    trans_mat is the op's one-tile matrix, applied to each 32-lane tile of the head dim.
+    """
     trans_mat = get_rot_transformation_mat()[0, 0].to(x.dtype)  # (32, 32)
     rotated = (x.unflatten(-1, (-1, trans_mat.shape[0])) @ trans_mat).flatten(-2)
     return x * cos + rotated * sin
@@ -101,8 +87,10 @@ def test_vision_rope_vs_hf(head_dim, theta, grid_thw, hf_vision):
 @torch.no_grad()
 @parametrize_rope_grids
 def test_vision_rope_padded_vs_ref(grid_thw, hf_vision):
-    """The RoPE op's rotation of q and k in the device head order equals Hugging Face's rotation, bit for bit, with
-    zero pad dims and Hugging Face's q k^T."""
+    """The RoPE op's rotation of q and k in the chip's lane order equals Hugging Face's, bit for bit.
+
+    The pad lanes stay zero, and q k^T matches Hugging Face's.
+    """
     grid = torch.tensor(grid_thw)
     num_patches = int(grid.prod(dim=-1).sum())
     generator = torch.Generator().manual_seed(0)
@@ -133,12 +121,9 @@ def test_vision_rope_padded_vs_ref(grid_thw, hf_vision):
 @torch.no_grad()
 @pytest.mark.parametrize("grid_thw", [ROPE_GRIDS["h16w16"], ROPE_GRIDS["two_images"]], ids=["h16w16", "two_images"])
 def test_vision_attention_layout_vs_ref(grid_thw, hf_vision):
-    """The attention computed from M3VLAttention's packed weights equals Hugging Face's attention.
+    """The attention computed on the host from M3VLAttention's packed and padded weights equals Hugging Face's.
 
-    Runs what the device runs, on host in fp64: the QKV linear with the packed weight and bias (q and k rows in the
-    RoPE op's head order, heads padded to 96), the head split, the RoPE op on q and k, SDPA over the 96 lanes with
-    scale 1/sqrt(80), the head concat and the output projection with its padded weight. Hugging Face's layer has
-    bf16-valued weights, which packing keeps exactly; its softmax runs in fp32, hence the tolerance.
+    It runs the chip's steps in fp64. The tolerance covers Hugging Face's fp32 softmax.
     """
     num_heads = 2
     config = MiniMaxM3VisionConfig(
@@ -176,11 +161,10 @@ def test_vision_attention_layout_vs_ref(grid_thw, hf_vision):
 
 
 def test_vision_rope_tables_kept_per_grid(monkeypatch):
-    """M3VLVisionModel stages the cos and sin of a grid with its first image and gives the blocks copies of the same
-    tables for the next images of that grid. Each image gets the tables of its own grid, also right after an image of
-    the same patch count. The model keeps the ROPE_CACHE_GRIDS grids used last, frees the two tables of the grid it
-    drops and no other cached table, and stages that grid again for its next image; _stage_rope gives its caller new
-    tables. No device: ttnn.from_torch, ttnn.to_memory_config, ttnn.deallocate and the modules are stand-ins."""
+    """The model stages a grid's tables with its first image and reuses them for later images of that grid.
+
+    Each image gets its own grid's tables. Dropping the least recently used grid frees exactly its two tables.
+    """
     tables, freed = [], []  # the cached (cos, sin) whose copies each forward gives the blocks; the cached tables freed
     copies = {}  # id of each L1 copy not freed yet -> the table it copies
 
@@ -238,10 +222,10 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
 
 
 def test_vision_rope_tables_copied_to_l1(monkeypatch):
-    """One forward copies the cached cos and sin of its grid to L1 once, before the first block, gives the two copies
-    to every block and frees them after the last block. The cache keeps the two tables it uploaded to DRAM, not freed,
-    and the next image of the grid copies the same tables. No device: ttnn.from_torch, ttnn.to_memory_config,
-    ttnn.deallocate and the modules are stand-ins."""
+    """Each forward copies its grid's cached tables to L1 once for all the blocks, and frees the copies after them.
+
+    The cached tables stay in DRAM for the next image.
+    """
     uploads, calls = [], []  # (tensor, memory config) of each upload; the copies, blocks and frees in call order
 
     def from_torch(tensor, **kwargs):

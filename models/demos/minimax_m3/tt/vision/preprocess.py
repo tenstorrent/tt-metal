@@ -1,28 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-The host side of the MiniMax-M3 vision encoder's input: a resized image, as the media module's prepare gives it
-(vision/media.py, M3Image.pixels), checked and turned into the encoder's patch rows. It needs torch, torchvision and
-numpy, not ttnn.
+Host side of the MiniMax-M3 vision encoder's input: checks a resized image and turns it into patch rows.
 
-  check_size(height, width) -> (grid_h, grid_w)
-    The size must be one that prepare can give: sides that are multiples of 28 pixels (2 x 2 patches of 14), 4 to 576
-    vision tokens and an aspect ratio of at most MAX_RESIZED_ASPECT_RATIO. grid_h and grid_w count its blocks of
-    28 x 28 pixels, the vision tokens down and across it.
-  check_pixels(pixels) -> (grid_h, grid_w)
-    check_size of the image's height and width, after checking that it is uint8 (height, width, 3).
-  patch_rows(pixels) -> (pixel_values, grid_thw)
-    1. Rescale to [0, 1] and normalize with the CLIP mean and std, in fp32, with the processor's fused arithmetic.
-    2. The image as both frames of a temporal patch, cut into 14 x 14 patches with each 2 x 2 block of patches
-       consecutive (the projector merges each block into one vision token): one row of 3 channels x 2 frames x 14 x 14
-       values per patch.
-    pixel_values (h * w, 1176) float32 and grid_thw [[1, h, w]] int64, in patches (h = height / 14, w = width / 14):
-    what the checkpoint's Hugging Face image processor (MiniMaxM3VLImageProcessor, transformers 5.12.1) returns for
-    the image.
-
-This copies the processor's steps rather than calling it, which would import transformers, seconds more of start-up.
-tests/unit/test_vision_preprocess_vs_hf.py checks prepare and patch_rows against the processor, bit for bit, with
-torch 2.11.0, torchvision 0.26.0 and Pillow 12.3.0, the versions tt-metal pins.
+The image is what the media module's prepare returns (M3Image.pixels). patch_rows gives the pixel_values and
+image_grid_thw of Hugging Face's MiniMaxM3VLImageProcessor, bit for bit with the versions tt-metal pins. It copies the
+processor's steps so that transformers is not imported. Needs torch, torchvision and numpy, not ttnn.
 """
 from __future__ import annotations
 
@@ -34,9 +17,8 @@ from torchvision.transforms.v2 import functional as tvF
 
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE
 
-# The image processor's settings, which are also the vision config's patch geometry. TtMiniMaxM3VisionEncoder checks
-# them against the model's config when it is built, and the media module's resize takes them from here, so the
-# images it gives are the ones check_pixels takes.
+# The image processor's settings, which are also the vision config's patch geometry. The encoder checks its config
+# against them, and the media module's resize uses them, so the images it gives pass check_pixels.
 PATCH_SIZE = 14
 TEMPORAL_PATCH_SIZE = 2
 NUM_CHANNELS = 3
@@ -46,10 +28,8 @@ MIN_PIXELS = 56 * 56
 MAX_PIXELS = 672 * 672
 MAX_TOKENS = MAX_PIXELS // FACTOR**2  # 576
 MAX_RATIO = 200  # the most stretched image the resize takes: its long side over its short one
-# The most stretched resized image, in tokens along its long side per token along its short one. The rounding of the
-# sides can stretch an image beyond its own aspect ratio: 9600 x 48 pixels (width x height; 200:1, the most the
-# resize takes) become 9492 x 28 (339:1). With a short side of one token the long side is at most
-# floor(sqrt(MAX_PIXELS * 200) / 28) = 339 tokens, and with two it is at most 288.
+# The most stretched image the resize gives, as long side over short side in tokens. Rounding can stretch an image
+# past its own ratio: 9600 x 48 pixels (200:1, the most the resize takes) become 9492 x 28 (339:1).
 MAX_RESIZED_ASPECT_RATIO = 339
 IMAGE_MEAN = (0.48145466, 0.4578275, 0.40821073)
 IMAGE_STD = (0.26862954, 0.26130258, 0.27577711)
@@ -61,9 +41,11 @@ _STD_255 = torch.tensor(IMAGE_STD) * (1.0 / _RESCALE_FACTOR)
 
 
 def check_size(height: int, width: int) -> Tuple[int, int]:
-    """The token grid (grid_h, grid_w) of a resized image of height x width pixels, after checking that prepare can
-    give that size: height and width positive multiples of 28, an area of 4 to 576 tokens (56 x 56 to 672 x 672
-    pixels) and an aspect ratio of at most MAX_RESIZED_ASPECT_RATIO. Raises ValueError otherwise."""
+    """Token grid (grid_h, grid_w) of a resized image of height x width pixels.
+
+    Raises ValueError unless height and width are positive multiples of 28, the image has 4 to 576 tokens, and its
+    aspect ratio is at most MAX_RESIZED_ASPECT_RATIO.
+    """
     if height < FACTOR or width < FACTOR or height % FACTOR or width % FACTOR:
         raise ValueError(
             f"pixels height and width must be positive multiples of {FACTOR}, got height {height} and width {width}"
@@ -83,11 +65,10 @@ def check_size(height: int, width: int) -> Tuple[int, int]:
 
 
 def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
-    """The token grid (grid_h, grid_w) of a resized image, after checking that it is one prepare can return.
+    """Check that pixels is a resized image and return its token grid (grid_h, grid_w).
 
     Raises TypeError unless pixels is a uint8 numpy array, and ValueError unless it is (height, width, 3) of a size
-    that check_size takes: every image prepare returns passes, and nothing else the vision encoder has not been built
-    for does.
+    that check_size takes.
     """
     if not isinstance(pixels, np.ndarray):
         raise TypeError(f"pixels must be a numpy array, got {type(pixels).__name__}")
@@ -99,12 +80,14 @@ def check_pixels(pixels: np.ndarray) -> Tuple[int, int]:
 
 
 def patch_rows(pixels: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
-    """The patch rows of a resized image (steps 1 and 2 of the module docstring): (pixel_values, grid_thw), what the
-    processor returns for the image. pixel_values is (h * w, 1176) float32 and grid_thw the (1, 3) int64 grid
-    [[1, h, w]], in patches of 14 x 14 pixels: twice grid_h and grid_w.
+    """Turn a resized image into the encoder's patch rows, as the image processor does.
 
-    pixels: as prepare returns it (M3Image.pixels); raises check_pixels' errors before any other work. A read-only
-    array is copied first, which torch needs to take it without a warning.
+    It normalizes the pixels with the CLIP mean and std in fp32, and repeats the image as both frames of a temporal
+    patch. It cuts the image into 14 x 14 patches, with each 2 x 2 block of patches next to each other.
+
+    pixels: as prepare returns it (M3Image.pixels). A read-only array is copied first.
+    Returns pixel_values (h * w, 1176) float32 and grid_thw [[1, h, w]] int64, with h = height / 14 and w = width / 14.
+    Raises check_pixels' errors before any other work.
     """
     grid_h, grid_w = check_pixels(pixels)
     image = torch.from_numpy(np.require(pixels, requirements=("C_CONTIGUOUS", "WRITEABLE")))

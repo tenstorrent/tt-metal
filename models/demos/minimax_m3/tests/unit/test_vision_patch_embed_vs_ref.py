@@ -1,15 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLPatchEmbed (the Conv3d patch embed as one matmul) vs Hugging Face's MiniMaxM3VLVisionEmbeddings.
-test_vision_module_guards.py checks on the host that from_torch takes only a Conv3d that this matmul computes.
+Device test of M3VLPatchEmbed against Hugging Face's MiniMaxM3VLVisionEmbeddings.
 
-The processor already flattens each patch, so pixel_values is (L, 1176). There is no class token and no
-learned position embedding, so the reference's embeddings, the Conv3d alone, are the whole patch embed. Random
-weights and pixel values (tests/conftest.py), no checkpoint.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_patch_embed_vs_ref.py
+M3VLPatchEmbed runs the Conv3d patch embedding as one matmul. The weights and pixel values are seeded random values
+(tests/conftest.py), so no checkpoint is needed.
 """
 from __future__ import annotations
 

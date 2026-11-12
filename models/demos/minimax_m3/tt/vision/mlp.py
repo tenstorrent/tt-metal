@@ -2,21 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMax-M3-VL encoder MLP.
+MiniMax-M3 vision MLP, as Hugging Face's MiniMaxM3VLVisionMLP computes it.
 
-Linear(1280 -> 5120) -> GELU -> Linear(5120 -> 1280) in each encoder layer; the projector runs two more MLPs of the
-same form with other widths (projector.py).
-
-The HF activation is `gelu` (the accurate, erf-based GELU: config
-`hidden_act="gelu"`, not the tanh approximation). We map it to
-`ttnn.gelu(..., fast_and_approximate_mode=False)` (accurate_gelu), or, with
-M3VLMLP.fuse_gelu and where fc1 gets a program config, to the same GELU
-inside fc1's matmul (ACCURATE_GELU_FUSED).
-
-Reference: `MiniMaxM3VLVisionMLP`, with the attributes:
-    self.fc1 = nn.Linear(hidden_size, intermediate_size, bias=True)
-    self.activation_fn = gelu
-    self.fc2 = nn.Linear(intermediate_size, hidden_size, bias=True)
+It runs fc1, the exact (erf) GELU, then fc2, both linears with bias. Each encoder layer has one, 1280 -> 5120 -> 1280,
+and the projector two more of other widths. With M3VLMLP.fuse_gelu on, fc1's matmul applies the GELU where fc1 gets a
+program config.
 """
 from __future__ import annotations
 
@@ -37,7 +27,7 @@ ACCURATE_GELU_FUSED = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)
 
 
 class M3VLMLP(LightweightModule):
-    """Two-layer MLP with accurate GELU, matching MiniMaxM3VLVisionMLP from HF. The widths are the weights' own."""
+    """Two-layer MLP with the exact GELU, like Hugging Face's MiniMaxM3VLVisionMLP, sized by its weights."""
 
     def __init__(
         self,

@@ -2,20 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMax-M3-VL multimodal projector (spatial merge folds into it).
+MiniMax-M3 vision projector, as Hugging Face's MiniMaxM3VLMultiModalProjector computes it:
 
-Per `MiniMaxM3VLMultiModalProjector.forward`:
-    x = linear_2(gelu(linear_1(x)))                    # per-patch: 1280 -> 6144 -> 6144
-    x = x.reshape(L // merge**2, -1)                   # group 4 patches -> 24576
-    x = merge_linear_2(merge_act(merge_linear_1(x)))   # 24576 -> 6144 -> 6144
+    x = mlp(x)                # each patch: 1280 -> 6144 -> 6144
+    x = fold_patches(x, 4)    # each 2 x 2 block of patches into one row of 4 x 6144 = 24576
+    x = merge_mlp(x)          # each vision token: 24576 -> 6144 -> 6144
 
-so here an M3VLMLP, fold_patches and a second M3VLMLP.
-
-There is no pre-norm. The 4 grouped patches are consecutive in the
-sequence (the image processor pre-orders patches so each group of
-spatial_merge**2 is a 2x2 spatial block, the ordering the 3D RoPE coords
-use). All four linears carry bias; the activation is the accurate (erf)
-GELU (`ACT2FN["gelu"]`).
+Both MLPs are M3VLMLP: linears with bias and the exact GELU. The image processor puts the 4 patches of each 2 x 2
+block next to each other, so the fold is a reshape.
 """
 from __future__ import annotations
 
@@ -27,11 +21,9 @@ from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 
 
 def fold_patches(x: ttnn.Tensor, merge_factor: int) -> ttnn.Tensor:
-    """(1, 1, L, D) tile tensor -> (1, 1, L // merge_factor, merge_factor * D): each merge_factor consecutive patches
-    become one row. The reshape crosses tile rows, so it runs on a row-major copy.
+    """Join each merge_factor consecutive rows into one: (1, 1, L, D) -> (1, 1, L / merge_factor, merge_factor * D).
 
-    Consumes x: it is freed once its row-major copy exists, so the fold holds two copies of the activations at a time,
-    not three.
+    Frees x. The reshape runs on a row-major copy, as it crosses tile rows.
     """
     rows, width = x.shape[-2], x.shape[-1]
     folded = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -41,7 +33,7 @@ def fold_patches(x: ttnn.Tensor, merge_factor: int) -> ttnn.Tensor:
 
 
 class M3VLProjector(LightweightModule):
-    """Per-patch MLP -> spatial-merge fold (4 patches) -> merge MLP."""
+    """MLP per patch, then each block of 4 patches folded into one row, then the merge MLP."""
 
     def __init__(self, mlp: M3VLMLP, merge_mlp: M3VLMLP, spatial_merge_size: int):
         super().__init__()

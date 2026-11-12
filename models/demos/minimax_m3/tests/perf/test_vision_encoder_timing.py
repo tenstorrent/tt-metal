@@ -1,35 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Wall time of the MiniMax-M3 vision encoder on one 672x672 image (h48w48: 2304 patches, 576 vision tokens): its two
-speed numbers, so anyone can rerun them from the repository.
+Wall time of the MiniMax-M3 vision encoder on one 672x672 image (2304 patches).
 
-Opt-in, as it builds the 32-layer encoder; skipped unless M3_VISION_TIMING=1:
+Opt-in, as it builds all 32 layers:
     M3_VISION_TIMING=1 pytest -s models/demos/minimax_m3/tests/perf/test_vision_encoder_timing.py
 
-It prints two lines, each with the median of 10 calls, the fastest and the slowest of them, and the 10 in the order
-they ran. Each line's calls follow 2 warm-up calls and a pause of IDLE_S (3 s), and each call is timed up to the end of
-ttnn.synchronize_device after it. The pause matters: after about a second of back-to-back forwards the board lowers the
-chip clock, and about a second of idle brings it back. So the 10 calls, about 0.7 s of work at 672x672, run at full
-clock, and each line is the time of one image on an idle chip. Both lines come from one process. The device forward
-runs first: its first warm-up compiles the programs and pushes the grid's RoPE tables, which the end-to-end calls then
-reuse.
-  - "device forward X ms": M3VLVisionModel.forward_device on pixel values pushed to the device once, before the calls:
-    every device op of the encoder (patch embed, the input LayerNorm, the blocks and the projector), their dispatch
-    from the host included. This is the encoder's time for one image on an idle chip, the number to compare with its
-    roofline, which assumes the full clock.
-  - "end-to-end forward Y ms": model(pixel_values, image_grid_thw) on the pixel values on the host, what a caller sees
-    for one image: the input check and the upload (push_pixel_values), then forward_device. As both lines run at full
-    clock, Y - X is the time of the check and the upload.
-Neither line is the rate of images sent back to back: on the P150 where this was measured, 672x672 forwards run back to
-back for a few seconds settled about 8% slower each, about 76.5 ms against 70.9 ms.
-It asserts that the two outputs have the shape of the 576 tokens, are finite and are equal bit for bit (the same device
-ops on the same input), never a time.
-
-The model has the checkpoint's 32 layers and projector at its dimensions, built with from_state_dict from the seeded
-random weights of the vision unit tests (unit/vision_checkpoint.py's random_vision_weights): the time does not depend
-on the weights' values, so the test needs no checkpoint and no HF_MODEL. It opens one card (1x1), as the vision unit
-tests do.
+It prints the median, fastest and slowest of 10 calls, and all 10, for two kinds of call:
+  - "device forward": forward_device on pixel values already on the chip;
+  - "end-to-end forward": model(pixel_values, image_grid_thw) from the host, with the input check and the upload.
+Each set of calls follows 2 warm-ups and an IDLE_S pause, so it runs at full chip clock. Back to back, images run
+slower. The test asserts only that both outputs are equal, finite and of the right shape. It uses seeded random
+weights, so it needs no checkpoint.
 """
 from __future__ import annotations
 
@@ -57,16 +39,17 @@ if os.getenv("M3_VISION_TIMING") != "1":
 
 WARMUP_CALLS = 2
 TIMED_CALLS = 10
-# Seconds of idle between the warm-ups and the timed calls. After about a second of back-to-back forwards the board
-# lowers the chip clock, and back to back a 672x672 forward then takes about 8% longer; about a second of idle brings
-# the clock back.
+# Seconds of idle before the timed calls. The board lowers the chip clock after about a second of back-to-back
+# forwards, and about a second of idle brings it back.
 IDLE_S = 3.0
 
 
 def _time_calls(call, mesh_device):
-    """Runs call() WARMUP_CALLS times, waits IDLE_S, then runs it TIMED_CALLS times, each call followed by
-    ttnn.synchronize_device, and frees each output before the next call. Returns the timed calls' wall times in ms and
-    the last output."""
+    """Time call(): WARMUP_CALLS warm-ups, an IDLE_S pause, then TIMED_CALLS timed calls.
+
+    Each call is timed up to ttnn.synchronize_device after it, and its output is freed before the next call. Returns
+    the timed calls' wall times in ms and the last output.
+    """
     times_ms, out = [], None
     for i in range(WARMUP_CALLS + TIMED_CALLS):
         if out is not None:
@@ -83,8 +66,7 @@ def _time_calls(call, mesh_device):
 @torch.no_grad()
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_vision_encoder_timing(mesh_device, device_params):
-    """Prints the median wall time of forward_device and of model(pixel_values, image_grid_thw) on one 672x672 image,
-    and checks that both give the same finite vision tokens of the right shape."""
+    """Time forward_device and the whole forward on one 672x672 image; both must give the same finite tokens."""
     config = MiniMaxM3VisionConfig()
     model = M3VLVisionModel.from_state_dict(mesh_device, random_vision_weights(config), config, dtype=ttnn.bfloat16)
     grid = VISION_GRIDS["h48w48"]

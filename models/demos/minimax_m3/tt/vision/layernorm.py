@@ -2,15 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-LayerNorm wrapper for MiniMax-M3-VL blocks.
-
-M3-VL (CLIP-style vision tower) uses standard nn.LayerNorm (mean subtraction
-+ bias, eps=1e-5) at:
-  - vision_tower.pre_layrnorm (after patch embed, before the encoder).
-  - encoder layer .layer_norm1 and .layer_norm2 (pre-attn and pre-MLP).
-
-All operate on the 1280-dim hidden state, so this single module covers every
-LayerNorm site in the tower. Thin shim around ttnn.layer_norm (interleaved).
+LayerNorm of the MiniMax-M3 vision tower, for pre_layrnorm and each layer's layer_norm1 and layer_norm2.
 """
 from __future__ import annotations
 
@@ -22,11 +14,7 @@ from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, to_de
 
 
 class M3VLLayerNorm(LightweightModule):
-    """Interleaved LayerNorm with learned weight + bias.
-
-    Construct it from the weight and bias tensors, or with from_torch from an
-    nn.LayerNorm, such as those of Hugging Face's vision tower.
-    """
+    """LayerNorm with a learned weight and bias, built from the tensors or from an nn.LayerNorm (from_torch)."""
 
     def __init__(
         self,
@@ -61,7 +49,10 @@ class M3VLLayerNorm(LightweightModule):
         ref: torch.nn.LayerNorm,
         dtype=ttnn.bfloat16,
     ) -> "M3VLLayerNorm":
-        """Construct from a torch.nn.LayerNorm reference module: its weight, bias, eps and normalized_shape[-1]."""
+        """Build from an nn.LayerNorm: its weight, bias and eps.
+
+        Raises NotImplementedError for a LayerNorm over more than the last dim.
+        """
         assert isinstance(ref, torch.nn.LayerNorm), f"expected nn.LayerNorm, got {type(ref).__name__}"
         # normalized_shape is a tuple; LayerNorm normalizes over the last
         # `len(normalized_shape)` dims. For M3-VL it's always a 1-tuple (1280).

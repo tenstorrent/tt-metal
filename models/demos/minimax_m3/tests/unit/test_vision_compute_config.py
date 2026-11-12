@@ -1,16 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-only checks of the compute configs that the vision encoder's modules hold (tt/vision/common.py and the modules
-that build theirs with it), and of the RoPE theta and LayerNorm eps that the model takes from its config. No device:
-the encoder is built with stand-ins for the mesh device and ttnn.from_torch. The device tests check the numerics these
-settings give; this file pins the settings, so that a lower fidelity, approximate math or bf16 accumulation fails here
-even where it would stay within a device test's bound.
+Host tests that pin the vision encoder's compute configs, and the RoPE theta and LayerNorm eps from its config.
 
-The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_compute_config.py
+A lower fidelity, approximate math or bf16 accumulation fails here even where a device test's bound would still pass.
+No device: the mesh device and ttnn.from_torch are stand-ins.
 """
 from __future__ import annotations
 
@@ -52,17 +46,14 @@ def _fields(kernel_config) -> tuple:
 
 
 def _build(monkeypatch, config: MiniMaxM3VisionConfig = CONFIG) -> M3VLVisionModel:
-    """M3VLVisionModel.from_state_dict of seeded random weights of config on a stand-in 12x10 device;
-    ttnn.from_torch keeps the host tensor."""
+    """Build the model from seeded random weights of config on a stand-in 12x10 device, keeping uploads on the host."""
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
     return M3VLVisionModel.from_state_dict(grid_device(12, 10), random_vision_weights(config), config)
 
 
 def test_vision_layernorm_compute_config(monkeypatch):
-    """Every LayerNorm the encoder builds, pre_layrnorm and the two of each block (there is none after the blocks and
-    none in the projector), holds a compute config from __init__, HiFi4 with exact math, fp32 accumulation and no L1
-    accumulation, and gives that same config to ttnn.layer_norm on every call. ttnn.layer_norm is a stand-in too."""
+    """Every LayerNorm holds HiFi4, exact math, fp32 and no L1 accumulation, and passes it to each layer_norm call."""
     built, calls = [], []
     init = M3VLLayerNorm.__init__
 
@@ -87,9 +78,10 @@ def test_vision_layernorm_compute_config(monkeypatch):
 
 
 def test_vision_compute_configs(monkeypatch):
-    """Every weight matmul of the encoder, the patch embed, the attention's QKV and output projection (one config) and
-    the MLPs of the blocks and the projector, holds HiFi4 with exact math, fp32 accumulation and L1 accumulation of
-    its partial sums. The attention's RoPE and SDPA hold the same without L1 accumulation."""
+    """Every weight matmul holds HiFi4 with exact math, fp32 accumulation and L1 accumulation.
+
+    RoPE and SDPA hold the same without L1 accumulation.
+    """
     model = _build(monkeypatch)
     weight_matmuls = {
         "patch_embed": model.patch_embed.compute_kernel_config,
@@ -109,8 +101,8 @@ def test_vision_compute_configs(monkeypatch):
 
 
 def test_vision_model_takes_rope_theta_and_eps(monkeypatch):
-    """The model stages the RoPE tables with its config's rope_theta, and each of its LayerNorms takes the config's
-    layer_norm_eps: a config with theta 5000 and eps 1e-6, unlike the checkpoint's 10000 and 1e-5, gets both."""
+    """The model takes rope_theta and layer_norm_eps from its config: 5000 and 1e-6 here, not the checkpoint's 10000
+    and 1e-5."""
     config = dataclasses.replace(CONFIG, rope_theta=5000.0, layer_norm_eps=1e-6)
     model = _build(monkeypatch, config)
     norms = [model.pre_layrnorm] + [norm for block in model.blocks for norm in (block.layer_norm1, block.layer_norm2)]

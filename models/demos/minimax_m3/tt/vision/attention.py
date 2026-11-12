@@ -2,34 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMax-M3-VL vision attention.
+MiniMax-M3 vision attention, as Hugging Face's MiniMaxM3VLVisionAttention computes it.
 
-Per `MiniMaxM3VLVisionAttention` (transformers 5.12):
-  q = q_proj(x).view(L, num_heads, head_dim)   # separate q/k/v projections, WITH bias
-  k = k_proj(x).view(L, num_heads, head_dim)
-  v = v_proj(x).view(L, num_heads, head_dim)
-  q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)   # rotate_half, partial (78 of 80)
-  attn = sdpa(q, k, v, attn_mask=None, scale=1/sqrt(head_dim))   # FULL attention, no window
-  out  = out_proj(attn.flatten(-2))
+It runs the q, k and v projections with bias, 3D RoPE on q and k, full attention with no mask, and the output
+projection. The q, k and v weights are packed into one wqkv. A lane is one of the positions along a head on the chip.
+Each head is padded from 80 to 96 lanes, a whole number of tiles. The padding is zeros: it adds nothing to q k^T, and
+the scale stays 1 / sqrt(80).
 
-The separate q/k/v projections are packed host-side into a single wqkv
-here, and SDPA is plain full bidirectional attention (the tower passes
-attention_mask=None, no cu_seqlens).
-
-head_dim=80 is not tile-aligned, so q/k/v are padded to 96 across wqkv,
-the heads, and wo input. Padded slots hold zeros: they add nothing to
-QK^T, multiply zero-rows of wo, and (with cos=1/sin=0) are untouched by
-RoPE. Scale stays 1/sqrt(80): padded dims contribute 0 to the dot product.
-
-RoPE is one ttnn.experimental.rotary_embedding_llama call for q and one for
-k. That op rotates each pair of lanes (2i, 2i+1) of a head, while rotate_half
-pairs dims i and i + 39, so the q and k rows of wqkv (and of its bias) are
-reordered at load with utils/weight_conversion.meta_partial_permute, as the
-text model's are: lane 2i holds dim i, lane 2i+1 dim i + 39, and the 2
-pass-through dims follow at lanes 78-79. q and k share the order, so QK^T is
-unchanged; v and wo keep the reference order. The cos/sin of
-`rope.rope_cos_sin_padded` follow the same order, with cos=1/sin=0 on the
-pass-through and pad lanes.
+The RoPE op rotates lane pairs (2i, 2i + 1), while Hugging Face's rotate_half pairs dims i and i + 39. So the q and k
+rows of wqkv are reordered at load: lane 2i holds dim i and lane 2i + 1 holds dim i + 39. The 2 dims that do not
+rotate stay at lanes 78 and 79. q and k share the order, so q k^T does not change. The cos and sin tables (rope.py)
+follow the same order.
 """
 from __future__ import annotations
 
@@ -55,8 +38,7 @@ from models.demos.minimax_m3.utils.weight_conversion import meta_partial_permute
 
 
 def _rope_head_order(w: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
-    """q or k rows of a weight or bias in the head order that rotary_embedding_llama rotates (module docstring):
-    meta_partial_permute over the 3 * rope_axis_dim(head_dim) = 78 dims that rotate."""
+    """Reorder the q or k rows of a weight or bias into the RoPE op's lane order (see the module docstring)."""
     return meta_partial_permute(w, num_heads, head_dim, 3 * rope_axis_dim(head_dim))
 
 
@@ -68,10 +50,10 @@ def _pack_wqkv_weight(
     head_dim: int,
     padded_head_dim: int,
 ) -> torch.Tensor:
-    """Pack separate q/k/v Linear weights into one head_dim-padded wqkv.
+    """Pack the q, k and v weights ([out, in] each) into one wqkv of [in, 3 * num_heads * padded_head_dim].
 
-    The q and k rows of each head are in the order of _rope_head_order, which rotary_embedding_llama rotates; v keeps
-    the reference order. Returns ttnn-linear convention: [hidden_in, 3*num_heads*padded_head_dim].
+    q and k rows go in the RoPE op's lane order (_rope_head_order); v keeps its order. Each head is zero-padded to
+    padded_head_dim.
     """
     in_dim = q_w.shape[1]
     q_w, k_w = _rope_head_order(q_w, num_heads, head_dim), _rope_head_order(k_w, num_heads, head_dim)
@@ -90,8 +72,7 @@ def _pack_wqkv_bias(
     head_dim: int,
     padded_head_dim: int,
 ) -> torch.Tensor:
-    """Pack separate q/k/v Linear biases into one bias of the packed wqkv: _pack_wqkv_weight on one-column tensors.
-    Returns [3*num_heads*padded_head_dim]."""
+    """Pack the q, k and v biases as _pack_wqkv_weight packs the weights, into [3 * num_heads * padded_head_dim]."""
     packed = _pack_wqkv_weight(q_b[:, None], k_b[:, None], v_b[:, None], num_heads, head_dim, padded_head_dim)
     return packed.reshape(-1)
 
@@ -102,7 +83,7 @@ def _pad_wo_weight(
     head_dim: int,
     padded_head_dim: int,
 ) -> torch.Tensor:
-    """Pad wo input dim from num_heads*head_dim to num_heads*padded_head_dim. -> [in, out]."""
+    """Transpose the output projection's weight to [in, out] and zero-pad each head's input rows to padded_head_dim."""
     out_dim, in_dim = weight.shape
     assert in_dim == num_heads * head_dim, f"wo weight in dim {in_dim} != {num_heads} * {head_dim}"
     w = weight.detach().to(torch.bfloat16).transpose(0, 1).contiguous()  # (in=H*hd, out)
@@ -112,7 +93,7 @@ def _pad_wo_weight(
 
 
 class M3VLAttention(LightweightModule):
-    """Vision attention: packed QKV, rotate_half 3D RoPE, full (non-windowed) SDPA."""
+    """Vision attention on the chip: packed QKV, 3D RoPE and full attention."""
 
     def __init__(
         self,
@@ -151,7 +132,7 @@ class M3VLAttention(LightweightModule):
         padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLAttention":
-        """from_projections of ref_attn's projections, with its head_dim."""
+        """Build from Hugging Face's MiniMaxM3VLVisionAttention."""
         projections = [
             (proj.weight.data, None if proj.bias is None else proj.bias.data)
             for proj in (ref_attn.q_proj, ref_attn.k_proj, ref_attn.v_proj, ref_attn.out_proj)
@@ -167,9 +148,11 @@ class M3VLAttention(LightweightModule):
         padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLAttention":
-        """From the (weight, bias) of the q, k, v and output projections, in that order, as nn.Linear holds them
-        ([out, in] and [out]; a bias None for none). The head count follows from q's weight, and q, k and v heads are
-        padded to padded_head_dim lanes (module docstring)."""
+        """Build from the (weight, bias) of the q, k, v and output projections, in that order.
+
+        Weights are [out, in] and biases [out] or None, as nn.Linear holds them. The number of heads is q's output size
+        divided by head_dim.
+        """
         (q_weight, q_bias), (k_weight, k_bias), (v_weight, v_bias), (out_weight, out_bias) = projections
         num_heads = q_weight.shape[0] // head_dim
         wqkv = _pack_wqkv_weight(q_weight, k_weight, v_weight, num_heads, head_dim, padded_head_dim)
@@ -190,7 +173,7 @@ class M3VLAttention(LightweightModule):
 
     # ------------------------------------------------------------------
     def _apply_rope(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """x*cos + (x @ trans_mat)*sin in one op, trans_mat applied to each tile of the head dim (prefill mode)."""
+        """Rotate x with the RoPE op in prefill mode: x * cos + (x @ trans_mat) * sin, with trans_mat on each tile."""
         return ttnn.experimental.rotary_embedding_llama(
             x,
             cos,

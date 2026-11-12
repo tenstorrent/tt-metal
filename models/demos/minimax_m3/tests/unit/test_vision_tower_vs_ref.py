@@ -1,22 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-End-to-end accuracy test for M3VLVisionModel (tower, then projector) vs Hugging Face's MiniMaxM3VLVisionModel and
-MiniMaxM3VLMultiModalProjector, the model built with from_state_dict from the reference's weights.
+Device tests of M3VLVisionModel, built with from_state_dict, against Hugging Face's vision tower and projector.
 
-Two checks per grid, from the same pixel values:
-  - forward_tower (patch embed, pre_layrnorm, NUM_LAYERS blocks) vs the reference tower output;
-  - forward (tower and projector) vs the reference vision tokens.
-A second test gives one model images of several grids with the same patch count, which it runs on the programs it
-compiled for the first, each with the RoPE tables of its own grid.
-
-Random weights and pixel values (tests/conftest.py), no checkpoint. The tests run NUM_LAYERS = 2 layers. The
-checkpoint has 32; that depth is for a real-weight test, since random weights say little about error built up over 32
-layers.
-
-Run (the second line adds the other grids of VISION_GRIDS to CI_GRIDS, both in vision_helpers.py):
-    pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py
-    M3_VISION_ALL_GRIDS=1 pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py
+test_vision_tower_vs_ref compares the tower output and the vision tokens on each grid. The second test gives one model
+images of several grids with the same patch count, which must reuse the first image's programs. Both run 2 layers with
+seeded random weights (tests/conftest.py); test_vision_accuracy.py runs all 32 with real weights.
+M3_VISION_ALL_GRIDS=1 adds the other grids of VISION_GRIDS.
 """
 from __future__ import annotations
 
@@ -57,13 +47,12 @@ def test_vision_tower_vs_ref(mesh_device, device_params, grid_thw, vision_refere
 def test_vision_tower_new_grid_on_cached_programs(
     mesh_device, device_params, monkeypatch, vision_reference, vision_activations
 ):
-    """One model takes images of h16w16, h8w32, h32w8 and h16w16 again, 256 patches each: each tower output matches
-    the reference of its own grid, and no image after the first adds a program to the cache. The model keeps the RoPE
-    tables of two grids here, so h8w32's tables are staged while h16w16's are still allocated, and a program that kept
-    the first tables' addresses would rotate h8w32 by h16w16's positions; h32w8 frees h16w16's tables, and the last
-    image stages them again. Each forward copies its grid's tables to L1 for the blocks; one more small L1 tensor,
-    allocated before each image after the first and kept, puts those copies at other addresses than the image
-    before's."""
+    """One model runs h16w16, h8w32, h32w8 and h16w16 again, all of 256 patches, on the first image's programs.
+
+    Each tower output matches its own grid's reference. The RoPE cache holds two grids here, so tables are freed and
+    staged again. A small L1 tensor kept before each later image moves the tables' L1 copies, so a program that kept
+    old addresses would fail.
+    """
     monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.ROPE_CACHE_GRIDS", 2)
     reference = vision_reference(NUM_LAYERS)
     model = M3VLVisionModel.from_state_dict(

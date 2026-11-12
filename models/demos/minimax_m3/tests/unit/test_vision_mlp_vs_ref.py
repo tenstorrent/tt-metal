@@ -1,14 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLMLP (fc1, exact GELU, fc2) vs Hugging Face's MiniMaxM3VLVisionMLP. test_vision_module_guards.py
-checks its weight shapes on the host.
+Device test of M3VLMLP against Hugging Face's MiniMaxM3VLVisionMLP.
 
-Runs layer 0's MLP, with fuse_gelu off and on, on the input it gets inside the reference tower. Random weights and
-pixel values (tests/conftest.py), no checkpoint.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_mlp_vs_ref.py
+It runs layer 0's MLP on its input in the reference tower, with fuse_gelu off and on. The weights are seeded random
+values (tests/conftest.py), so no checkpoint is needed.
 """
 from __future__ import annotations
 
@@ -28,8 +24,7 @@ from .vision_helpers import MAX_REL_L2, assert_close, grid_name, parametrize_vis
 @pytest.mark.parametrize("fuse_gelu", [False, True], ids=["separate_gelu", "fused_gelu"])
 def test_vision_mlp_vs_ref(mesh_device, device_params, grid_thw, fuse_gelu, vision_reference, vision_activations):
     """Layer 0 MLP matches the reference at PCC >= 0.9999, within its relL2 bound and with no NaN or Inf, with
-    fuse_gelu off and on. On, fc1's matmul applies the GELU at every grid but h18w18, h12w12 and h4w4, where fc1 keeps
-    ttnn's own config."""
+    fuse_gelu off and on."""
     x_in = vision_activations(grid_thw)["layer0.mlp.in"].bfloat16().float()
     mlp = vision_reference().tower.layers[0].mlp
     ref_out = mlp(x_in)

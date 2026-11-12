@@ -3,51 +3,22 @@
 """
 Accuracy of the MiniMax-M3 vision encoder with the checkpoint's weights, against Hugging Face goldens.
 
-Builds TtMiniMaxM3VisionEncoder from the checkpoint as the encoder service's load() does (from_weights_path: all 32
-layers and the projector on one chip) and runs it on the images of golden_hf_vision.py as the encoder service does:
-prepare resizes each image, then, as in encode(), forward(pixels) and read_embeddings into a host buffer. The tower
-output comes from the same encoder's model (M3VLVisionModel.forward_tower). Both are compared with Hugging Face's
-MiniMaxM3VLModel vision tower and projector in fp32 on the CPU, stored with the goldens, through the vision unit
-tests' check_close:
-  - vision tokens (final, L / 4 x 6144): PCC >= 0.998 and relative L2 error <= 0.10 on every image;
-  - tower output (L x 1280): PCC >= Hugging Face's own bf16 PCC on that image minus 0.002, and relative L2 error
-    <= 0.12. A bf16 run of the Hugging Face model already loses more on some images than on others (tower PCC
-    0.99826 on house, 0.99979 on perf_report), so the PCC bar follows it instead of being one number;
-  - no NaN or Inf in either output: comp_pcc counts them as zeros, so a few would barely move the PCC.
-PCC cannot see a scale or an offset. The relative L2 bounds catch large ones and are loose on purpose, about twice
-the largest error measured on these images. On saved P150 outputs of this encoder, an extra scale passes them up to
-about 6% upward or 11% downward on the vision tokens, and about 10% upward or 11% downward on the tower output; those
-outputs already had a least-squares gain against the goldens of 1.017 to 1.023 on the vision tokens and 1.004 to
-1.008 on the tower output. So each output's log line also gives the PCC margin, Hugging Face bf16's relative L2 error,
-the gain (1.0: no scale error) and the 1st percentile of the cosine between its rows and the goldens', beside Hugging
-Face bf16's. Those are logged, not checked.
+Builds TtMiniMaxM3VisionEncoder with from_weights_path and runs each golden image through the media module's
+prepare, then forward and read_embeddings. Each image must pass check_close against the goldens:
+  - vision tokens: PCC >= 0.998 and relative L2 error <= 0.10;
+  - tower output (forward_tower): PCC no more than 0.002 below Hugging Face's own bf16 run, relative L2 error <= 0.12;
+  - no NaN or Inf in either.
+The log also gives the PCC margin, the gain and the worst rows' cosine, which are not checked.
 
-The goldens use MiniMax-M3.1-Flash, the newer release, on which the encoder's accuracy was measured. Its vision tower
-and projector are MiniMax-M3's (same architecture, tensor names and image processor) with other weights, so this code
-runs both, but each checkpoint needs its own goldens; golden_hf_vision.py makes them for the checkpoint in HF_MODEL.
+Before any device work, it checks on the CPU that:
+  - each golden file has the sha256 that manifest.json gives;
+  - prepare and patch_rows give the goldens' input bit for bit;
+  - HF_MODEL is the goldens' checkpoint;
+  - load_vision_state_dict names and reads every vision tensor as transformers does.
 
-Needs the checkpoint and the goldens, and skips without either:
-  HF_MODEL              the checkpoint the goldens were made from (manifest.json names it), or a directory with
-                        its config.json, model.safetensors.index.json and the shards that hold the vision tensors;
-  M3_VISION_GOLDEN_DIR  the output of golden_hf_vision.py: manifest.json and one <image>.safetensors per image;
-                        default $HF_MODEL/golden/vision.
-Before any device work, on the CPU:
-  - each golden file must have the sha256 that manifest.json gives, so a half-updated copy fails;
-  - the media module's prepare, given each image as the uint8 RGB array an encoder service passes, and patch_rows
-    (tt/vision/preprocess.py) must give its pixel values and grid as the goldens hold them, the image processor's,
-    bit for bit;
-  - HF_MODEL must be the goldens' checkpoint: with its weights, Hugging Face's patch embedding and pre_layrnorm
-    (golden_hf_vision.load_hf_model, as the goldens were made) must reproduce the goldens' first pre_layrnorm rows,
-    and its projector the first vision tokens from the goldens' tower output. Goldens of another checkpoint fail
-    there, not as a low PCC. These are 11 of the checkpoint's 523 vision tensors; weights that differ only in the
-    blocks fail as a low PCC;
-  - load_vision_state_dict, with which the encoder reads HF_MODEL, must give each of its vision tensors the name that
-    transformers' own rules give it (golden_hf_vision.load_hf_model) and the same value in bf16, so that a tensor that
-    the loader's _remap names wrongly, two tensors of the same shape swapped for example, fails there, not as a low
-    PCC.
-
-Run:
+Each checkpoint needs its own goldens, made by golden_hf_vision.py. Skips without them or the checkpoint:
     HF_MODEL=<checkpoint> M3_VISION_GOLDEN_DIR=<goldens> pytest models/demos/minimax_m3/tests/test_vision_accuracy.py
+M3_VISION_GOLDEN_DIR defaults to $HF_MODEL/golden/vision.
 """
 from __future__ import annotations
 
@@ -118,8 +89,7 @@ SKIP_REASON = _skip_reason()
 
 
 def _load_goldens():
-    """The manifest and, for each image of IMAGES, its tensors: pixel_values, image_grid_thw, tower_out, final and
-    pre_layrnorm_rows. Each file must have the manifest's sha256."""
+    """Return the manifest and the golden tensors of each image; each file must have the manifest's sha256."""
     manifest = _manifest()
     assert manifest.get("format") == GOLDEN_FORMAT, (
         f"{GOLDEN_DIR}/manifest.json has format {manifest.get('format')!r}, this test reads {GOLDEN_FORMAT!r}:"
@@ -138,8 +108,10 @@ def _load_goldens():
 
 
 def _resized_images(goldens, media: MiniMaxM3Media) -> dict:
-    """Each image as media's prepare gives it from the image as a uint8 RGB array, as an encoder service passes it,
-    after checking that patch_rows of it gives the goldens' pixel values and grid bit for bit."""
+    """Each image resized by media's prepare, from the uint8 RGB array an encoder service passes.
+
+    Asserts that patch_rows of each gives the goldens' pixel values and grid, bit for bit.
+    """
     images, failed = {}, []
     for case, golden in goldens.items():
         pixels = media.prepare("image", np.array(load_image(case, "RGB")[0])).pixels
@@ -159,9 +131,11 @@ def _resized_images(goldens, media: MiniMaxM3Media) -> dict:
 
 
 def _check_checkpoint(model, goldens, manifest):
-    """Check that HF_MODEL is the goldens' checkpoint, on the CPU, with Hugging Face's model holding its vision weights
-    (golden_hf_vision.load_hf_model): the patch embedding and pre_layrnorm must reproduce the goldens' first
-    pre_layrnorm rows, and the projector the vision tokens of the goldens' first PROJECTOR_ROWS tower rows."""
+    """Check on the CPU that HF_MODEL is the goldens' checkpoint.
+
+    With its weights, Hugging Face's patch embedding and pre_layrnorm must reproduce the goldens' first pre_layrnorm
+    rows, and its projector the goldens' first vision tokens.
+    """
     tower, projector = model.vision_tower, model.multi_modal_projector
     tokens = PROJECTOR_ROWS // projector.spatial_merge_size**2
     failed = []
@@ -182,9 +156,11 @@ def _check_checkpoint(model, goldens, manifest):
 
 
 def _check_loader(model):
-    """Check, on the CPU, that load_vision_state_dict, with which the encoder reads HF_MODEL, gives each vision tensor
-    of Hugging Face's model holding HF_MODEL's weights (golden_hf_vision.load_hf_model, named by transformers' own
-    rules) under its name and with its value in bf16, as the encoder reads them, and no other vision tensor."""
+    """Check on the CPU that load_vision_state_dict(HF_MODEL) gives the vision tensors of model.
+
+    model is Hugging Face's. The loader must give exactly its vision tensors, under the same names and with the same
+    values in bf16.
+    """
     expected = {name: value for name, value in model.state_dict().items() if name.startswith(VISION_PREFIXES)}
     loaded = load_vision_state_dict(HF_MODEL, dtype=torch.bfloat16)
     wrong = sorted(
@@ -199,10 +175,10 @@ def _check_loader(model):
 
 
 def _compare(case, golden, entry, tower, final):
-    """Check the tower output and the vision tokens of one image against the goldens with check_close, and log each
-    check's line with the PCC margin, Hugging Face bf16's relative L2 error and the 1st-percentile row cosine beside
-    Hugging Face bf16's; a passing line also gets the PCC bar, the relL2 bound and the gain, which check_close's line
-    of a failing check already gives. Returns the lines of the checks that fail."""
+    """Check one image's tower output and vision tokens against the goldens with check_close, and log the results.
+
+    Returns the log lines of the checks that fail.
+    """
     hf_bf16 = entry["hf_bf16"]
     checks = (
         ("final", golden["final"], final, FINAL_MIN_PCC, FINAL_MAX_REL_L2),
@@ -232,8 +208,7 @@ def _compare(case, golden, entry, tower, final):
 @pytest.mark.skipif(bool(SKIP_REASON), reason=SKIP_REASON)
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_vision_accuracy(mesh_device, device_params):
-    """On every image, vision tokens at PCC >= 0.998 and relL2 <= 0.10, and the tower output within 0.002 of Hugging
-    Face's bf16 PCC and at relL2 <= 0.12, with no NaN or Inf."""
+    """On every golden image, the vision tokens and the tower output pass the checks of the module docstring."""
     manifest, goldens = _load_goldens()
     with open(os.path.join(HF_MODEL, "config.json")) as f:
         config = json.load(f)  # the service's config, which load() passes to from_weights_path

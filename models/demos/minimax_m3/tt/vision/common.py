@@ -1,13 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-"""Shared helpers of the MiniMax-M3-VL vision modules.
-
-The upload of host tensors (to_device) and the torch->ttnn Linear weight/bias
-converters built on it, the compute-kernel configs, the weight matmul (linear)
-with its program config, and the SDPA program config, kept here so the modules
-don't each copy them.
-"""
+"""Helpers shared by the MiniMax-M3 vision modules: uploads, compute configs, the weight matmul and program configs."""
 from __future__ import annotations
 
 import functools
@@ -18,15 +12,12 @@ import torch
 
 import ttnn
 
-# Circular-buffer bytes per core, below the roughly 1.39 MiB of L1 a Blackhole core has free with no L1 tensors, less
-# the RoPE tables the blocks read from L1 (8 KiB per core at 2304 patches). The largest K block that fits is taken, so
-# this also sets K blocks: at 672x672 fc1 and QKV get 4, which ran faster than 8 in a matmul sweep on a P150.
+# Circular-buffer bytes per core for a weight matmul. It stays under a Blackhole core's free L1 (about 1.39 MiB)
+# and leaves room for the RoPE tables that the blocks read from L1. It also sets the K block: the largest that fits.
 LINEAR_L1_BYTES = 1_000_000
-# The largest K block (in0_block_w, in tiles): in that sweep fc2 and the out projection ran slower with 16.
+# The largest K block (in0_block_w), in tiles.
 LINEAR_MAX_IN0_BLOCK_W = 8
-# The fewest tiles of M per core for transpose_mcast: in a size sweep on a P150, a limit of 2 made the weight matmuls
-# slower at 768 patches and one of 5 at 1296 patches. One of 3 made them faster at 1024 patches, but a whole 448x448
-# forward (1024 patches) 0.3 ms faster at most, and it changes the output's rounding.
+# The fewest tiles of M per core with which a weight matmul may use transpose_mcast.
 LINEAR_MIN_TRANSPOSED_PER_CORE_M = 4
 # Output subblocks (h, w) in the order ttnn's own matmul configs try them.
 _SUBBLOCKS = (
@@ -36,7 +27,10 @@ _SUBBLOCKS = (
 
 
 def to_device(tensor: torch.Tensor, mesh_device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-    """Host tensor, rounded to bf16 on the host, -> ttnn tile tensor of dtype in DRAM, replicated over the mesh."""
+    """Upload a host tensor to DRAM as a tile tensor of dtype, replicated over the mesh.
+
+    The tensor is rounded to bf16 on the host first.
+    """
     return ttnn.from_torch(
         tensor.to(torch.bfloat16).contiguous(),
         device=mesh_device,
@@ -48,18 +42,17 @@ def to_device(tensor: torch.Tensor, mesh_device, dtype=ttnn.bfloat16) -> ttnn.Te
 
 
 def as_linear_weight(mesh_device, torch_w: torch.Tensor, dtype) -> ttnn.Tensor:
-    """torch nn.Linear weight [out, in] -> ttnn tile tensor [in, out] (operand-b convention)."""
+    """Upload an nn.Linear weight [out, in] as the [in, out] tile tensor that ttnn.linear takes."""
     return to_device(torch_w.transpose(-2, -1), mesh_device, dtype)
 
 
 def as_linear_bias(mesh_device, torch_b: torch.Tensor, dtype) -> ttnn.Tensor:
-    """torch bias [out] -> ttnn tile tensor [1, 1, 1, out], replicated."""
+    """Upload a bias [out] as a [1, 1, 1, out] tile tensor, replicated over the mesh."""
     return to_device(torch_b.view(1, 1, 1, -1), mesh_device, dtype)
 
 
 def hifi4_compute_config(packer_l1_acc: bool = False):
-    """HiFi4 compute-kernel config with exact math and fp32 accumulation: the config of LayerNorm, RoPE and SDPA.
-    linear_compute_config adds packer_l1_acc for the weight matmuls."""
+    """HiFi4 compute config with exact math and fp32 accumulation, as LayerNorm, RoPE and SDPA use it."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
@@ -69,8 +62,7 @@ def hifi4_compute_config(packer_l1_acc: bool = False):
 
 
 def linear_compute_config():
-    """HiFi4 config for the weight matmuls (ttnn.linear): fp32 accumulation, and packer_l1_acc so the partial sums
-    of each output block accumulate in L1 instead of being reloaded for every K block."""
+    """hifi4_compute_config for the weight matmuls, with partial sums accumulated in L1 (packer_l1_acc)."""
     return hifi4_compute_config(packer_l1_acc=True)
 
 
@@ -82,13 +74,12 @@ def linear(
     activation: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     fused_activation: Optional[ttnn.UnaryWithParam] = None,
 ) -> ttnn.Tensor:
-    """The encoder's weight matmul: x @ w + b into DRAM, then activation, if given, on the result.
+    """Run the weight matmul x @ w + b into DRAM, then activation, if given, as a separate op.
 
-    w is [in, out] and b [1, 1, 1, out] or None, as as_linear_weight and as_linear_bias put them on the device. The
-    program config is linear_program_config's for the tiles of x's and w's padded shapes. activation runs as an op of
-    its own on the matmul's output. fused_activation, given only with activation, is the same activation in the form a
-    program config's fused_activation takes: where linear_program_config gives a config, that config carries it and
-    activation does not run; where the helper leaves the choice to ttnn, activation runs as without it.
+    w is [in, out] and b is [1, 1, 1, out] or None, as as_linear_weight and as_linear_bias upload them. The program
+    config is linear_program_config's for the padded shapes. fused_activation is the same activation in a program
+    config's form, and needs activation. Where linear_program_config gives a config, the matmul applies
+    fused_activation and activation does not run.
     """
     assert fused_activation is None or activation is not None, "fused_activation needs activation"
     program_config = linear_program_config(
@@ -110,20 +101,12 @@ def linear(
 
 
 def linear_program_config(mesh_device, rows: int, in_features: int, out_features: int, compute_kernel_config):
-    """Program config for ttnn.linear of a (rows, in_features) input and an (in_features, out_features) weight, with
-    bf16 (or bfloat8_b) operands and output in DRAM, as the vision encoder runs its weight matmuls. None leaves the
-    choice to ttnn.
+    """Return the program config for a weight matmul of (rows, in_features) by (in_features, out_features).
 
-    A 2D multicast with one output block per core, after a sweep of the encoder's linears at 672x672 on a P150:
-    - M over the grid's rows and N over its columns, or, with at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M
-      per core, the other way round (transpose_mcast), whichever leaves fewer output tiles per core;
-    - K blocks of at most LINEAR_MAX_IN0_BLOCK_W tiles: the largest that divides K and keeps the circular buffers
-      within LINEAR_L1_BYTES;
-    - output subblocks: the first in ttnn's order that divides the block and fits the dest register (4 tiles with
-      fp32 accumulation, else 8).
-    None where a 1D multicast (every row on each core and the columns spread over all of them, or the other way round)
-    would give each core no more output tiles, as for small images, and where even K blocks of one tile overflow
-    LINEAR_L1_BYTES.
+    Operands and output are bf16 or bfloat8_b, in DRAM. The config is a 2D multicast with one output block per core.
+    _linear_blocking picks the split and the blocks within the LINEAR_* limits.
+    Returns None to leave the choice to ttnn in two cases. Either a 1D multicast would give each core no more output
+    tiles, as for small images, or no K block fits in LINEAR_L1_BYTES.
     """
     grid = mesh_device.compute_with_storage_grid_size()
     blocking = _linear_blocking(
@@ -164,9 +147,11 @@ def _linear_blocking(
     max_in0_block_w: int = LINEAR_MAX_IN0_BLOCK_W,
     min_transposed_per_core_m: int = LINEAR_MIN_TRANSPOSED_PER_CORE_M,
 ):
-    """linear_program_config's choice, in tiles: (per_core_M, per_core_N, in0_block_w, out_subblock_h, out_subblock_w,
-    transpose_mcast), or None. The limits default to the LINEAR_* constants' values at import and, as arguments, are
-    part of the cache key."""
+    """Return linear_program_config's choice in tiles, or None.
+
+    The choice is (per_core_M, per_core_N, in0_block_w, out_subblock_h, out_subblock_w, transpose_mcast). The limits
+    default to the LINEAR_* values at import time, and are part of the cache key.
+    """
     cores = grid_x * grid_y
     # Output tiles per core of a 1D multicast: all the rows and a slice of the columns on each core, or vice versa.
     one_d = min(m_tiles * math.ceil(n_tiles / cores), math.ceil(m_tiles / cores) * n_tiles)
@@ -179,9 +164,8 @@ def _linear_blocking(
         return None
 
     def cb_bytes(in0_block_w):
-        # The 2D multicast factory's buffers: double-buffered in0 and in1 K blocks, the output block and a bias row
-        # in bf16 tiles (2 KB), and with fp32 accumulation the output block's partial sums in fp32 tiles (4 KB). With
-        # bf16 accumulation the partial sums are bf16 like the output and share its buffer.
+        # The 2D multicast factory's circular buffers, in 2 KB bf16 tiles: double-buffered in0 and in1 K blocks, the
+        # output block and a bias row. With fp32 accumulation the partial sums get their own 4 KB fp32 tiles.
         block = per_core_m * per_core_n
         partials = block * 4096 if fp32_dest_acc else 0
         return 2048 * (2 * in0_block_w * (per_core_m + per_core_n) + block + per_core_n) + partials
@@ -204,12 +188,10 @@ SDPA_K_CHUNK_SIZE = 128
 
 
 def sdpa_program_config(mesh_device, seq_len: int, num_heads: int):
-    """SDPA program config for seq_len queries and keys in each of num_heads heads, on the device's whole compute grid:
-    k chunks of SDPA_K_CHUNK_SIZE and the q chunk of SDPA_Q_CHUNK_SIZES that leaves the slowest core the fewest query
-    rows, the larger on a tie. A new config at each call, so a caller may change its own.
+    """SDPA program config for seq_len queries and keys in each of num_heads heads, on the whole compute grid.
 
-    Without a program config the op takes chunks of 32; chunks of 128 and up run a 672x672 image (2304 patches) faster.
-    exp_approx_mode stays unset, so SDPA keeps the op's default (approximate) exp either way.
+    k chunks are SDPA_K_CHUNK_SIZE; _sdpa_q_chunk_size picks the q chunk. Each call returns a new config, so a caller
+    may change its own. exp_approx_mode is left unset, so SDPA keeps the op's default, approximate exp.
     """
     grid = mesh_device.compute_with_storage_grid_size()
     return ttnn.SDPAProgramConfig(
@@ -222,10 +204,10 @@ def sdpa_program_config(mesh_device, seq_len: int, num_heads: int):
 # Unbounded: one int per patch count and grid, and ttnn keeps a compiled SDPA program for each anyway.
 @functools.lru_cache(maxsize=None)
 def _sdpa_q_chunk_size(seq_len: int, num_heads: int, cores: int) -> int:
-    """sdpa_program_config's q chunk, of SDPA_Q_CHUNK_SIZES, on a grid of `cores` cores.
+    """sdpa_program_config's q chunk, from SDPA_Q_CHUNK_SIZES, on a grid of `cores` cores.
 
-    Each q chunk runs over all of k and v, so on a tie the larger chunk makes fewer passes: at 672x672 on a 12x10 P150
-    chunks of 64 and of 160 both left the slowest core 320 rows, and those of 160 ran 3.3 ms faster.
+    Takes the chunk that leaves the slowest core the fewest query rows. On a tie it takes the larger chunk, which makes
+    fewer passes over k and v.
     """
     # The op deals the num_heads x ceil(seq_len / q) q chunks evenly over the cores, so the slowest core runs
     # ceil(num_heads * ceil(seq_len / q) / cores) chunks of q rows.

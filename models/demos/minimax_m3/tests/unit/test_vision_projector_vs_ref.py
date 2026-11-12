@@ -1,14 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLProjector vs Hugging Face's MiniMaxM3VLMultiModalProjector.
+Device test of M3VLProjector against Hugging Face's MiniMaxM3VLMultiModalProjector, on the reference tower's output.
 
-The projector takes the tower output (L, 1280) and makes the vision tokens (L / 4, 6144): a per-patch
-MLP, then each 2x2 block of patches folded into one row and a second MLP. Random weights and pixel
-values (tests/conftest.py), no checkpoint.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_projector_vs_ref.py
+The weights are seeded random values (tests/conftest.py), so no checkpoint is needed.
 """
 from __future__ import annotations
 

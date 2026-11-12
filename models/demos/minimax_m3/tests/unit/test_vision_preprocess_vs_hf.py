@@ -1,35 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU checks of the vision encoder's input against the Hugging Face MiniMax-M3 image processor: the media module's
-prepare (vision/media.py), which resizes an image, and patch_rows (tt/vision/preprocess.py), which turns the resized
-image into the encoder's patch rows; and of check_size's and check_pixels' rules.
+"""CPU tests of the vision encoder's input against Hugging Face's MiniMax-M3 image processor, and of the size checks.
 
-Each step must give what the processor gives, bit for bit:
-  - prepare: the processor's resized image, which is uint8 (captured where the processor rescales and normalizes it),
-    and its grid;
-  - patch_rows, of that resized image and of prepare's: the processor's pixel_values and image_grid_thw;
-  - smart_resize, prepare's resize rule: the processor's for 1024 sizes and for the most stretched images, rejecting
-    the same ones.
-The images are seeded noise, the hardest input for the resize, at sizes that take each branch of the resize rule
-(under the 56 x 56 minimum area, exactly 672 x 672, over the 672 x 672 maximum, tall, wide, a 25 x 4000 strip, the
-most stretched result) and in RGB, RGBA, grayscale and palette modes, plus the cat photo of models/sample_data. The
-processor takes the PIL image, which it converts to RGB, and prepare the uint8 RGB array of it that an encoder service
-passes, converted the same way (PIL's convert).
-
-Two processors: the one in transformers (MiniMaxM3VLImageProcessor; tt-metal pins transformers 5.12.1), and, only
-when HF_MODEL is a checkpoint with a preprocessor_config.json, the checkpoint's own, loaded with trust_remote_code.
-Without HF_MODEL the "checkpoint" cases are not generated, so CI shows no skipped test.
-
-The other tests check check_size's and check_pixels' rules (every size the resize gives passes, the bounds are
-reached, and the sizes outside them fail), patch_rows on a read-only input, and that tt/vision/preprocess.py and
-image_input.py, which the media module imports, import with ttnn blocked.
-
-No device and no weights. These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes
-"test_vision_").
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_preprocess_vs_hf.py
+prepare (vision/media.py) must give the processor's resized image and grid, bit for bit. patch_rows
+(tt/vision/preprocess.py) must give its pixel_values and image_grid_thw, bit for bit. The images are seeded noise,
+the hardest input for the resize, plus a photo. Their sizes take each branch of the resize rule, in several PIL modes.
+The processor gets the PIL image, and prepare the uint8 RGB array an encoder service passes. The checkpoint's own
+processor is also tested when HF_MODEL has a preprocessor_config.json. No device and no weights.
 """
 
 from __future__ import annotations
@@ -114,8 +92,11 @@ def _photo(name: str) -> Image.Image:
 
 
 def _run_processor(processor, image, monkeypatch):
-    """The processor's pixel_values and image_grid_thw for one image, and the resized image it normalized, as
-    (height, width, 3), or None for a processor without transformers' rescale_and_normalize step."""
+    """Run the processor on one image, and catch the resized image that it normalizes.
+
+    Returns pixel_values, image_grid_thw and that image as (height, width, 3). The image is None for a processor
+    without transformers' rescale_and_normalize step.
+    """
     resized = []
     with monkeypatch.context() as patch:
         if hasattr(processor, "rescale_and_normalize"):
@@ -141,8 +122,7 @@ def _check_equal(name: str, ours: torch.Tensor, hf: torch.Tensor):
 
 
 def _check_steps(image: Image.Image, processor, monkeypatch):
-    """prepare's resized image and grid, patch_rows of the processor's resized image, and patch_rows of prepare's,
-    each equal to the processor."""
+    """Assert that prepare and patch_rows give what the processor gives for image, bit for bit."""
     pixel_values, grid_thw, hf_resized = _run_processor(processor, image, monkeypatch)
     item = MEDIA.prepare("image", np.array(image.convert("RGB")))
     assert item.pixels.dtype == np.uint8 and item.pixels.flags.c_contiguous
@@ -159,8 +139,8 @@ def _check_steps(image: Image.Image, processor, monkeypatch):
 
 @pytest.mark.parametrize("image_id", list(IMAGES) + list(PHOTOS))
 def test_vision_preprocess_vs_hf(hf_processor, image_id, monkeypatch):
-    """Each step equals the processor bit for bit: prepare its resized uint8 image, patch_rows its pixel_values and
-    image_grid_thw; smart_resize and num_tokens give its grid and token count from the image size alone."""
+    """prepare and patch_rows equal the processor bit for bit, and smart_resize and num_tokens give its grid and token
+    count from the image size alone."""
     if image_id in IMAGES:
         height, width, mode = IMAGES[image_id]
         image = _noise_image(height, width, mode)
@@ -173,9 +153,10 @@ def test_vision_preprocess_vs_hf(hf_processor, image_id, monkeypatch):
 
 
 def test_vision_smart_resize_vs_hf(hf_processor):
-    """smart_resize, prepare's resize rule, gives the processor's size for 1024 sizes and rejects the same ones (aspect
-    ratio over 200); every size it gives passes check_pixels, at most 576 tokens. The rejections are checked without
-    expect_error, which would log two lines for each of about a hundred sizes."""
+    """smart_resize matches the processor on 1024 sizes, and rejects the same ones (aspect ratio over 200).
+
+    Every size it gives passes check_pixels.
+    """
     hf_smart_resize = inspect.getmodule(type(hf_processor)).smart_resize
     factor, max_pixels = hf_processor.patch_size * hf_processor.merge_size, hf_processor.max_pixels
     for height in SIDES:
@@ -197,10 +178,10 @@ def test_vision_smart_resize_vs_hf(hf_processor):
 
 
 def test_vision_resized_aspect_ratio_bound(hf_processor):
-    """MAX_RESIZED_ASPECT_RATIO is the most the resize stretches an image: over every image with an aspect ratio of
-    190 to 200 and a short side of up to 60 pixels, where the rounding stretches most (preprocess.py has the bound),
-    smart_resize gives the processor's size, and the most stretched resized image is 339 tokens long and 1 token wide,
-    as for 9600x48 pixels."""
+    """MAX_RESIZED_ASPECT_RATIO is the most the resize stretches an image.
+
+    It is checked over aspect ratios of 190 to 200 and short sides up to 60 pixels, where rounding stretches most.
+    """
     hf_smart_resize = inspect.getmodule(type(hf_processor)).smart_resize
     ratios = []
     for short in range(1, 61):
@@ -260,8 +241,7 @@ BAD_PIXELS = {
 
 @pytest.mark.parametrize("case", BAD_SIZES)
 def test_vision_check_size_rejects(case, expect_error):
-    """check_size raises ValueError for a size that no image resizes to: sides that are not whole 28-pixel blocks,
-    fewer than 4 or more than 576 tokens, or more stretched than 339:1."""
+    """check_size raises ValueError for each size of BAD_SIZES, which no image resizes to."""
     (height, width), message = BAD_SIZES[case]
     with expect_error(ValueError, message):
         check_size(height, width)
@@ -269,9 +249,8 @@ def test_vision_check_size_rejects(case, expect_error):
 
 @pytest.mark.parametrize("case", BAD_PIXELS)
 def test_vision_check_pixels_rejects(case, expect_error):
-    """check_pixels, and patch_rows through it, raise TypeError for pixels that are not a uint8 numpy array and
-    ValueError for one that no image resizes to: not (height, width, 3), sides that are not whole 28-pixel blocks, fewer
-    than 4 or more than 576 tokens, or more stretched than 339:1."""
+    """check_pixels, and patch_rows through it, raise TypeError for pixels that are not a uint8 numpy array, and
+    ValueError for an array that no image resizes to."""
     pixels, error, message = BAD_PIXELS[case]
     for check in (check_pixels, patch_rows):
         with expect_error(error, message):
@@ -293,8 +272,8 @@ def test_vision_patch_rows_read_only():
 
 
 def test_vision_preprocess_imports_without_ttnn():
-    """The module imports in a fresh interpreter in which importing ttnn fails, so no package on its path imports ttnn
-    (as a package __init__.py could), and it does not import transformers either."""
+    """preprocess.py and image_input.py import in a fresh interpreter where importing ttnn fails, and import no
+    transformers."""
     code = "\n".join(
         [
             "import sys",

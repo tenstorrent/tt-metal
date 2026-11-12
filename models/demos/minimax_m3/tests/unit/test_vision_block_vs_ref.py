@@ -1,14 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLBlock (one full encoder layer) vs Hugging Face's MiniMaxM3VLVisionEncoderLayer.
+Device test of M3VLBlock, one encoder layer, against Hugging Face's MiniMaxM3VLVisionEncoderLayer.
 
-Runs layer 0 on the input it gets inside the reference tower (the pre_layrnorm output), with the cos and sin that the
-tower gives its layers; the device's RoPE tables are computed on host from the image grid, as the model does. Random
-weights and pixel values (tests/conftest.py), no checkpoint.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_block_vs_ref.py
+It runs layer 0 on its input in the reference tower. The weights are seeded random values (tests/conftest.py), so no
+checkpoint is needed.
 """
 from __future__ import annotations
 
@@ -27,8 +23,7 @@ from .vision_helpers import MAX_REL_L2, assert_close, grid_name, parametrize_vis
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @parametrize_vision_grids()
 def test_vision_block_vs_ref(mesh_device, device_params, grid_thw, vision_reference, vision_activations):
-    """Layer 0 (attention and MLP, both with residual) matches the reference at PCC >= 0.9999, within its relL2 bound
-    and with no NaN or Inf."""
+    """Layer 0 matches the reference at PCC >= 0.9999, within its relL2 bound and with no NaN or Inf."""
     acts = vision_activations(grid_thw)
     x_in = acts["layer0.in"].bfloat16().float()
     reference = vision_reference()

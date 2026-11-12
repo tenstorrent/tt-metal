@@ -2,12 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMax-M3-VL 3D vision RoPE: the angles of each patch and the cos and sin tables of the device's RoPE op.
+MiniMax-M3 3D vision RoPE: the cos and sin tables of each image grid, computed on the host.
 
-rope_cos_sin computes the angles on host from `image_grid_thw`, as Hugging Face's MiniMaxM3VL3DRotaryEmbedding does. On
-device, `ttnn.experimental.rotary_embedding_llama` rotates q and k, one op each. It rotates each pair of lanes (2i,
-2i+1) of a head, where Hugging Face's rotate_half rotates dims i and i + 39 of the 78 dims that rotate, so the q and k
-rows of wqkv are reordered at load (attention.py) and the tables follow the same head order.
+The angles are Hugging Face's (MiniMaxM3VL3DRotaryEmbedding). On the chip the tables follow the lane order of q and k,
+which attention.py explains.
 """
 from __future__ import annotations
 
@@ -27,10 +25,9 @@ def rope_axis_dim(head_dim: int) -> int:
 
 
 def rope_positions(grid_thw: torch.Tensor, spatial_merge_size: int) -> torch.Tensor:
-    """(num_images, 3) grid of (t, h, w) patches -> (L, 3) fp32 coordinates of every patch.
+    """The (t, h, w) coordinates of every patch, (L, 3) fp32, for a (num_images, 3) grid of patches.
 
-    The patches are in the image processor's order, where each spatial_merge_size x spatial_merge_size
-    block of patches is consecutive.
+    The patches are in the image processor's order: each spatial_merge_size x spatial_merge_size block is consecutive.
     """
     m = spatial_merge_size
     coords = []
@@ -62,10 +59,9 @@ def rope_cos_sin(
 def rope_cos_sin_padded(
     grid_thw: torch.Tensor, head_dim: int, padded_head_dim: int, theta: float, spatial_merge_size: int
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """cos and sin (L, padded_head_dim) in fp32, in the head order of q and k on device.
+    """cos and sin (L, padded_head_dim) in fp32, in the lane order of q and k on the chip.
 
-    rope_cos_sin's columns are the angles of the 39 rotated pairs, then the same 39 again; lanes 2i and 2i+1 take
-    angle i. The pass-through and pad lanes take cos 1 and sin 0, which leaves them as they are.
+    Lanes 2i and 2i + 1 get angle i. The lanes that do not rotate, and the padding, get cos 1 and sin 0.
     """
     cos, sin = rope_cos_sin(grid_thw, head_dim, theta, spatial_merge_size)  # (L, 78)
     num_patches, rot_dim = cos.shape
@@ -81,11 +77,10 @@ def rope_cos_sin_padded(
 def rope_tensors(
     mesh_device, grid_thw: torch.Tensor, config: MiniMaxM3VisionConfig, padded_head_dim: int
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """The tables of rope_cos_sin_padded on mesh_device for the head dim, RoPE theta and merge size of config, new
-    tensors that the caller owns.
+    """Upload rope_cos_sin_padded's tables for config, as new tensors that the caller owns.
 
-    Shaped (1, 1, L, padded_head_dim) so the op broadcasts them over the heads, and bfloat16, the only dtype
-    rotary_embedding_llama takes.
+    They are bf16, the only dtype the RoPE op takes, and (1, 1, L, padded_head_dim) so the op broadcasts them over the
+    heads.
     """
     cos, sin = rope_cos_sin_padded(
         grid_thw, config.head_dim, padded_head_dim, config.rope_theta, config.spatial_merge_size

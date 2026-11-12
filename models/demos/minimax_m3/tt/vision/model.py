@@ -2,27 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-Full MiniMax-M3-VL vision tower (+ optional projector).
+MiniMax-M3 vision tower and projector on the chip.
 
-Forward pipeline (matches `MiniMaxM3VLVisionModel.forward` then
-`MiniMaxM3VLMultiModalProjector`):
+It follows Hugging Face's MiniMaxM3VLVisionModel and MiniMaxM3VLMultiModalProjector:
 
-    pixel_values (L, 1176) host
-        -> patch_embed       (Conv3d-as-Linear 1176 -> 1280)          device
+    pixel_values (L, 1176), on the host
+        -> patch_embed (1176 -> 1280)
         -> pre_layrnorm
-        -> encoder blocks, one per layer of the config (32 in the checkpoint)
-              (LN1 -> attn(3D RoPE, full SDPA) -> residual; LN2 -> MLP -> residual)
-        -> [tower output (L, 1280)]
-        -> projector         (per-patch MLP -> merge 4 patches -> merge MLP)
-        -> vision tokens (L // 4, 6144)
+        -> one block per layer: LayerNorm, attention with 3D RoPE, residual; LayerNorm, MLP, residual
+        -> tower output (L, 1280)
+        -> projector: MLP per patch, merge each 2 x 2 block of patches, MLP
+        -> vision tokens (L / 4, 6144)
 
-There is NO post-encoder LayerNorm and NO attention windowing: the tower
-attends fully. The 3D-RoPE cos/sin depend only on `image_grid_thw`: they are
-computed on host and pushed to DRAM with the first image of a grid, then
-kept for the next images of that grid; each forward copies them to L1 once
-for all blocks. from_state_dict builds the model from weights under
-transformers 5.12's MiniMaxM3VLModel names, as loader.load_vision_state_dict
-reads the checkpoint's and the unit tests draw seeded random ones.
+There is no final LayerNorm and no attention window. The RoPE tables depend only on the image grid, so the model
+keeps them for the next images of that grid.
 """
 from __future__ import annotations
 
@@ -45,9 +38,7 @@ from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
 from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
-# The RoPE tables of the ROPE_CACHE_GRIDS (at least 1) image grids used last stay in DRAM. 16 is not tuned to any
-# mix of image sizes. It is cheap: cos and sin of a 672x672 image, the largest that the image processor makes (2304
-# patches), take 0.88 MB of DRAM, so 14 MB for 16 such grids.
+# How many recent image grids keep their RoPE tables in DRAM, at least 1. Not tuned, as the tables are small.
 ROPE_CACHE_GRIDS = 16
 
 # Weight names: transformers 5.12's MiniMaxM3VLModel names, as loader.load_vision_state_dict gives them.
@@ -59,9 +50,11 @@ _ATTENTION_PROJECTIONS = ("q_proj", "k_proj", "v_proj", "out_proj")
 
 
 def _weight_shapes(config: MiniMaxM3VisionConfig, with_projector: bool) -> Dict[str, Tuple[int, ...]]:
-    """{name: shape} of the weights that from_state_dict reads: the tower's patch embedding (a Conv3d without bias),
-    pre_layrnorm and each layer's LayerNorms, attention projections and MLP, and with_projector the projector's two
-    MLPs. Every other weight has a bias; the linears' weights are [out, in]."""
+    """Return {name: shape} of every weight that from_state_dict reads.
+
+    The projector's weights are included only with_projector. Linear weights are [out, in]. Every layer but the patch
+    embedding, a Conv3d, also has a bias.
+    """
     c = config
     shapes = {_PATCH_EMBED: (c.hidden_size, c.num_channels, c.temporal_patch_size, c.patch_size, c.patch_size)}
 
@@ -89,12 +82,14 @@ def _weight_shapes(config: MiniMaxM3VisionConfig, with_projector: bool) -> Dict[
 def _checked_weights(
     state_dict: Mapping[str, torch.Tensor], config: MiniMaxM3VisionConfig, with_projector: bool
 ) -> Dict[str, torch.Tensor]:
-    """The weights of _weight_shapes(config, with_projector) from state_dict, each value read once, a patch embedding
-    flattened to [hidden, patch_dim] in its Conv3d layout. No other value is read.
+    """Pick the model's weights out of state_dict and check them.
 
-    Raises ValueError, before it reads a value, for a key under vision_tower., or with_projector under
-    multi_modal_projector., that the model has no place for (the keys of the layers past num_hidden_layers are skipped)
-    and for a weight that state_dict lacks; then for a weight of another shape than config's.
+    Reads each of their values once, and no other value. A patch embedding flattened to [hidden, patch_dim] is
+    reshaped to the Conv3d's shape. The layers past num_hidden_layers are skipped.
+
+    Raises ValueError for a missing weight or an unknown vision key, before reading any value. Raises it for a weight
+    of the wrong shape after reading. A vision key is one under vision_tower., or under multi_modal_projector.
+    with_projector.
     """
     shapes = _weight_shapes(config, with_projector)
     keys = list(state_dict)  # the keys only: `in` on a Mapping reads the value
@@ -124,8 +119,10 @@ def _checked_weights(
 
 
 def _check_merge_size(config: MiniMaxM3VisionConfig) -> None:
-    """Raises ValueError for a config whose spatial_merge_size is not image_input.MERGE_SIZE: the input checks and
-    num_tokens count tokens with MERGE_SIZE, while the RoPE positions and the projector's fold use the config's."""
+    """Raise ValueError unless config.spatial_merge_size is image_input.MERGE_SIZE.
+
+    The input checks count tokens with MERGE_SIZE, while the RoPE positions and the projector use the config's.
+    """
     if config.spatial_merge_size != MERGE_SIZE:
         raise ValueError(
             f"config spatial_merge_size must be {MERGE_SIZE}, as image_input counts tokens with it,"
@@ -134,11 +131,9 @@ def _check_merge_size(config: MiniMaxM3VisionConfig) -> None:
 
 
 class M3VLVisionModel(LightweightModule):
-    """Full M3-VL vision tower + optional multimodal projector.
+    """MiniMax-M3 vision tower on the chip, with or without the projector.
 
-    from_state_dict's dtype is the dtype of the weights on the device; only bfloat16 weights have run on a device. The
-    pixel values go to the device as bf16 whatever it is, so the activations are bf16, the only dtype the RoPE op
-    (rotary_embedding_llama) takes.
+    Build it with from_state_dict. Activations are bf16 whatever the weights' dtype, as the RoPE op takes only bf16.
     """
 
     def __init__(
@@ -171,17 +166,20 @@ class M3VLVisionModel(LightweightModule):
         with_projector: bool = True,
         dtype=ttnn.bfloat16,
     ) -> "M3VLVisionModel":
-        """The model of config with the weights of state_dict, under transformers 5.12's MiniMaxM3VLModel names
-        (vision_tower.*, multi_modal_projector.*) as loader.load_vision_state_dict reads the checkpoint's, in any float
-        dtype: each goes to the device as dtype, rounded to bf16 on the host first (common.to_device). It builds no
-        torch module.
+        """Build the model and upload the weights of state_dict, without building a torch module.
 
-        state_dict may hold other weights, a language model's for example, and may be a lazy mapping: only the values of
-        the model's weights are read, once each, so neither those of the layers past config.num_hidden_layers nor,
-        without the projector, the projector's. Raises ValueError, before any upload, for a config whose
-        spatial_merge_size is not image_input.MERGE_SIZE, for a key under vision_tower., or with the projector under
-        multi_modal_projector., that the model has no place for, for a missing weight and for a weight of another shape
-        than config's; a patch embedding flattened to [hidden, patch_dim] is taken as the Conv3d's.
+        Args:
+            state_dict: weights under transformers 5.12's names (vision_tower.*, multi_modal_projector.*), as
+                loader.load_vision_state_dict returns them, in any float dtype. The patch embedding may also be
+                flattened to [hidden, patch_dim]. Only the model's weights are read, once each, so this may be a lazy
+                mapping over a whole checkpoint. Other keys are ignored, such as a language model's, those of layers
+                past config.num_hidden_layers and, without the projector, multi_modal_projector.*.
+            with_projector: also build the projector.
+            dtype: the weights' dtype on the chip. Each weight is rounded to bf16 on the host first.
+
+        Raises:
+            ValueError: before any upload, for a spatial_merge_size other than image_input.MERGE_SIZE, a vision
+                weight that the model has no place for, a missing weight or a weight of the wrong shape.
         """
         _check_merge_size(config)
         weights = _checked_weights(state_dict, config, with_projector)
@@ -232,27 +230,25 @@ class M3VLVisionModel(LightweightModule):
 
     # ------------------------------------------------------------------
     def push_pixel_values(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Check one image's input and push its pixel values to device as forward_device takes them.
+        """Check one image's input and upload its pixel values for forward_device.
 
-        Takes one image, pixel_values (L, 1176) and image_grid_thw (1, 3), and raises ValueError before any device work
-        unless they pass check_image_input. On the device, rows past the grid's patches would get zero q and k from the
-        RoPE op (rotary_embedding_llama) without an error, one NaN or Inf value would reach every patch through
-        attention, and the patches of several images would attend to each other, as in Hugging Face 5.12.1; vLLM and
-        SGLang keep attention inside each image. Returns the pixel values on device as bf16 (1, 1, L, 1176), whatever
-        the weights' dtype.
+        pixel_values: (L, 1176) float patch rows. image_grid_thw: the (1, 3) grid [[1, h, w]], with L = h * w.
+        Returns bf16 (1, 1, L, 1176) on the chip, whatever the weights' dtype.
+        Raises ValueError before any device work unless the input passes check_image_input. On the chip, such input
+        would give wrong tokens without an error.
         """
         check_image_input(pixel_values, image_grid_thw, self.config.patch_dim)
         return to_device(pixel_values.reshape(1, 1, *pixel_values.shape), self.device)
 
     def _stage_rope(self, image_grid_thw: torch.Tensor):
-        """New cos and sin tables of the grid on device (rope_tensors), which the caller owns."""
+        """Upload new cos and sin tables for the grid (rope_tensors), which the caller owns."""
         return rope_tensors(self.device, image_grid_thw, self.config, self.padded_head_dim)
 
     def _cached_rope(self, image_grid_thw: torch.Tensor):
-        """The cos and sin tables of the grid, staged with its first image and kept for the next images of that grid.
+        """Return the grid's cos and sin tables, uploaded with its first image and kept for its later images.
 
-        Holds the tables of the ROPE_CACHE_GRIDS grids used last and frees the two tables of the grid it drops. Only
-        _tower_device uses them, to copy them to L1 for the blocks, so no caller holds a table that this frees.
+        Keeps the ROPE_CACHE_GRIDS most recently used grids and frees the tables of the grid it drops. Only
+        _tower_device uses them, so no caller holds a table that this frees.
         """
         key = tuple(image_grid_thw[0].tolist())
         if key in self._rope_cache:
@@ -265,21 +261,23 @@ class M3VLVisionModel(LightweightModule):
         return self._rope_cache[key]
 
     def _rope_to_l1(self, cos: ttnn.Tensor, sin: ttnn.Tensor):
-        """L1 copies of the cached cos and sin for one forward, which the caller frees.
+        """Copy the cached cos and sin to L1 for one forward; the caller frees the copies.
 
-        The RoPE op reads the cos and sin of each sequence tile again for each head, so the blocks read them from L1.
-        The cache stays in DRAM: in L1 it would hold the tables of up to ROPE_CACHE_GRIDS grids at all times, in room
-        that circular buffers need.
+        The RoPE op rereads the tables for every head, so the blocks read them from L1. The cache stays in DRAM to
+        leave L1 to the ops' circular buffers.
         """
         return tuple(ttnn.to_memory_config(table, ttnn.L1_MEMORY_CONFIG) for table in (cos, sin))
 
     # ------------------------------------------------------------------
     def forward_tower(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Run patch_embed -> pre_layrnorm -> the blocks on one image (push_pixel_values). Returns (1, 1, L, 1280)."""
+        """Run the tower on one image: push_pixel_values, then patch_embed, pre_layrnorm and the blocks.
+
+        Returns (1, 1, L, 1280).
+        """
         return self._tower_device(self.push_pixel_values(pixel_values, image_grid_thw), image_grid_thw)
 
     def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """forward_tower's device ops, on the pixel values that push_pixel_values gave, which stay allocated."""
+        """Run forward_tower's device ops on pixel values from push_pixel_values, leaving x_tt allocated."""
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)
         cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))
@@ -292,14 +290,13 @@ class M3VLVisionModel(LightweightModule):
         return x_tt
 
     def forward_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Every device op of forward, on the pixel values that push_pixel_values gave for image_grid_thw. They stay
-        allocated, so one upload serves several calls. With projector: (1, 1, L//4, 6144); else the tower out (1, 1, L,
-        1280).
+        """Run forward's device ops on pixel values that push_pixel_values uploaded for image_grid_thw.
+
+        Leaves x_tt allocated, so one upload can serve several calls. Returns the vision tokens (1, 1, L / 4, 6144),
+        or the tower output (1, 1, L, 1280) without the projector.
 
         Raises ValueError before any device work unless image_grid_thw passes check_image_grid and x_tt has the shape
-        that push_pixel_values gives for it, (1, 1, h * w, patch_dim), which it reads from the tensor's host metadata.
-        Pixel values pushed for another grid of the same patch count, such as 32 x 72 for 48 x 48 or 46 x 34 for
-        34 x 46, pass and give wrong tokens without an error.
+        (1, 1, h * w, patch_dim). Pixel values of another grid with the same patch count pass and give wrong tokens.
         """
         expected_shape = (1, 1, check_image_grid(image_grid_thw), self.config.patch_dim)
         if tuple(x_tt.shape) != expected_shape:

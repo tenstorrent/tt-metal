@@ -1,23 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-side checks of M3VLVisionModel's input, which push_pixel_values checks with check_image_input
-(tt/vision/image_input.py) before any device work, of num_tokens, which check_image_input uses, and of how forward
-splits at the upload. No device. The tests check that:
-  - push_pixel_values, and forward_tower and forward through it, raise ValueError for input that is not one image,
-    before any ttnn call;
-  - forward_device raises ValueError, before any ttnn call, for a grid that is not one image's and for pixel values on
-    the device whose shape is not the one push_pixel_values gives for the grid;
-  - a good image's pixel values go to the device as bf16 whatever the weights' dtype;
-  - forward runs the modules in order, each on the output of the one before, and makes the calls of
-    push_pixel_values, then those of forward_device on its upload, which stays allocated;
-  - num_tokens counts the vision tokens of one image's grid in each form it takes, and rejects the grids that
-    check_image_input stops before it calls num_tokens.
+Host tests of M3VLVisionModel's input checks and of num_tokens (tt/vision/image_input.py), with no device.
 
-These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_image_input.py
+They also check how forward splits into the upload and the device ops.
 """
 from __future__ import annotations
 
@@ -97,14 +83,11 @@ MODEL_BAD_INPUTS = {
 
 @pytest.mark.parametrize("case", MODEL_BAD_INPUTS)
 def test_vision_model_rejects_bad_input(case, expect_error, monkeypatch):
-    """M3VLVisionModel.push_pixel_values, and forward_tower and forward through it, raise ValueError for input that is
-    not one image before any ttnn call. No device: ttnn.from_torch and the modules are stand-ins that fail the test if
-    they run.
+    """push_pixel_values, forward_tower and forward reject input that is not one image, before any ttnn call.
 
-    more_rows is the mismatch the device would not catch: the RoPE op gives zero q and k for the rows past the grid's
-    patches. fewer_rows_4x6 has the rows of a 4 x 4 grid, which a token count of h * h would take for a 4 x 6 one.
-    two_images would let the images attend to each other, and one NaN or Inf value would reach every patch: nan_pixel
-    and inf_pixel have it in the last value only, and the two Inf values of inf_pair add up to NaN."""
+    The chip would not catch some of them: for example, rows past the grid get zero q and k from the RoPE op, and one
+    NaN or Inf value reaches every patch.
+    """
     pixel_values, grid_thw, message = MODEL_BAD_INPUTS[case]
     monkeypatch.setattr(ttnn, "from_torch", _device_work)
     model = _model_without_device_work()
@@ -133,12 +116,10 @@ FORWARD_DEVICE_BAD_INPUTS = {
 
 @pytest.mark.parametrize("case", FORWARD_DEVICE_BAD_INPUTS)
 def test_vision_forward_device_rejects_mismatched_upload(case, expect_error, monkeypatch):
-    """M3VLVisionModel.forward_device raises ValueError before any ttnn call for a grid that is not one image's and for
-    pixel values on the device whose shape is not the one push_pixel_values gives for the grid. No device: the pixel
-    values are a stand-in with a shape, and ttnn's ops and the modules are stand-ins that fail the test if they run.
+    """forward_device rejects a bad grid or an upload of the wrong shape before any ttnn call.
 
-    more_rows is the mismatch the device would not catch: the RoPE op gives zero q and k for the rows past the grid's
-    patches. two_images would also put the RoPE tables of both images in the cache under the first image's grid."""
+    It stages no RoPE tables for them.
+    """
     shape, grid_thw, message = FORWARD_DEVICE_BAD_INPUTS[case]
     for op in ("from_torch", "to_memory_config", "deallocate"):
         monkeypatch.setattr(ttnn, op, _device_work)
@@ -150,12 +131,10 @@ def test_vision_forward_device_rejects_mismatched_upload(case, expect_error, mon
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16], ids=["fp32_rows", "fp16_rows"])
 def test_vision_model_uploads_pixels_as_bf16(dtype, expect_error, monkeypatch):
-    """A model built with bfloat8_b weights takes one good image, and its pixel values go to the device as bf16, the
-    only dtype the RoPE op takes. The image's grid of 4 x 6 patches is not square, so a token count of h * h would
-    reject it, and its 24 x 1176 values of 4.0 add up to more than fp16 holds, so the fp16 case also checks that the
-    finite check does not overflow. The model has no blocks, so it needs the weights of the patch embedding and
-    pre_layrnorm only. No device: the module builders, the mesh mapper and ttnn.from_torch are stand-ins, and
-    from_torch records what it gets and stops the forward."""
+    """With bfloat8_b weights, a good image's pixel values still go to the device as bf16.
+
+    The values add up to more than fp16 holds, so the fp16 case also checks that the finite check does not overflow.
+    """
     weight_dtypes, uploads = [], []
 
     def build(mesh_device, *weights, dtype, **kwargs):
@@ -184,14 +163,11 @@ def test_vision_model_uploads_pixels_as_bf16(dtype, expect_error, monkeypatch):
 
 
 def test_vision_model_forward_device_after_upload(monkeypatch):
-    """forward of one image runs the modules in order, each on the output of the one before, and makes the calls of
-    push_pixel_values, then those of forward_device on its upload, both for the first image of a grid, which stages
-    the grid's RoPE tables, and for the next, which takes them from the cache.
-    forward_device leaves its input allocated, so calls on one upload run what forward runs for each image, and
-    forward_tower makes forward's calls up to the last block. No device: ttnn.from_torch, ttnn.to_memory_config,
-    ttnn.deallocate and the modules are stand-ins that log each call with its inputs. Each output is named after its
-    kind of call and the number of such calls before it since the log was cleared, so the logs of two models
-    compare; an upload also has the shape of the tensor it stands for, which forward_device checks."""
+    """forward runs push_pixel_values, then forward_device, with each module on the output of the one before.
+
+    This holds for a grid's first image, which stages its RoPE tables, and for the next one. forward_device leaves its
+    input allocated, and forward_tower makes forward's calls up to the last block.
+    """
     calls = []  # (kind, inputs) of each call since the log was cleared
 
     def logged(kind):

@@ -1,14 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLAttention (packed QKV, 3D RoPE, full SDPA) vs Hugging Face's MiniMaxM3VLVisionAttention.
+Device test of M3VLAttention against Hugging Face's MiniMaxM3VLVisionAttention.
 
-Runs layer 0's self-attention on the input it gets inside the reference tower (the layer_norm1 output), with the cos
-and sin that the tower gives its layers; the device's RoPE tables are computed on host from the image grid, as the
-model does. Random weights and pixel values (tests/conftest.py), no checkpoint.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_attention_vs_ref.py
+It runs layer 0's attention on its input in the reference tower. The reference gets the tower's cos and sin; the chip
+gets rope_tensors of the image grid, as the model does. The weights are seeded random values (tests/conftest.py), so no
+checkpoint is needed.
 """
 from __future__ import annotations
 

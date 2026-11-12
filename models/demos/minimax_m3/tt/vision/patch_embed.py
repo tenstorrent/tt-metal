@@ -2,24 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMax-M3-VL patch embedding (Conv3d-as-Linear).
+MiniMax-M3 vision patch embedding as one matmul.
 
-The HF reference patch embed is `nn.Conv3d(3, 1280, kernel=(2,14,14),
-stride=(2,14,14), bias=False)`. The M3 image processor (Qwen2-VL lineage)
-pre-cuts each image into non-overlapping spatio-temporal patches and
-*flattens* them, so `pixel_values` already arrives as `(L, 1176)` where
-1176 = 3 (channels) * 2 (temporal_patch) * 14 * 14. On such a patch the
-Conv3d reduces to a single dot product per output channel, that is a
-per-patch Linear from 1176 to 1280, with no bias.
-
-We implement exactly that: flatten the Conv3d weight `[1280, 3, 2, 14, 14]`
-to `[1280, 1176]` and run one `ttnn.linear`. `from_torch` takes the Conv3d,
-such as Hugging Face's, whose shape gives the patch geometry.
-
-There is no learned position embedding (M3-VL is RoPE-only) and no class
-token, so the projection output feeds straight into `pre_layrnorm`.
-
-Reference: `MiniMaxM3VLVisionEmbeddings.proj` (Conv3d).
+Hugging Face runs a Conv3d whose stride is its kernel, with no bias. The image processor already flattens each patch
+into a row of 1176 values. So the Conv3d is a matmul of those rows with its weight flattened to [1280, 1176]. There
+is no position embedding and no class token.
 """
 from __future__ import annotations
 
@@ -31,7 +18,7 @@ from models.demos.minimax_m3.tt.vision.common import as_linear_weight, linear, l
 
 
 class M3VLPatchEmbed(LightweightModule):
-    """Conv3d-as-Linear patch projection: (L, 1176) -> (L, 1280), no bias."""
+    """Patch embedding as one matmul with no bias: (L, 1176) -> (L, 1280)."""
 
     def __init__(
         self,
@@ -57,12 +44,5 @@ class M3VLPatchEmbed(LightweightModule):
         return cls(mesh_device=mesh_device, proj_weight=ref_proj.weight.data, dtype=dtype)
 
     def forward(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """Apply the per-patch projection.
-
-        Args:
-            x_flat: device tensor of shape (..., L, 1176).
-
-        Returns:
-            device tensor of shape (..., L, out_dim).
-        """
+        """Project each patch row: (..., L, 1176) -> (..., L, out_dim)."""
         return linear(x_flat, self.weight, None, self.compute_kernel_config)

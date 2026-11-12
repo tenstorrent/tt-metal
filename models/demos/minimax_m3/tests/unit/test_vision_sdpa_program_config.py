@@ -1,21 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-only checks of the vision encoder's SDPA program config (tt/vision/common.py, sdpa_program_config) and of
-M3VLAttention's SDPA call, which runs with it. No device: the configs are built with the real ttnn classes, and the
-attention's forward runs on stand-ins for its device tensors and ops.
-
-- On the 11x10, 12x10 and 13x10 core grids that Blackhole chips have depending on harvesting, the patch counts of
-  every grid of VISION_GRIDS, and 768 and 2268, get the q chunks pinned in Q_CHUNKS, with k chunks of 128 on the whole
-  grid, and a new config at each call.
-- The attention passes SDPA the config of its image's patch count and output_concat_heads=True, and gives SDPA's
-  output, the heads side by side, to the output projection without nlp_concat_heads. Each RoPE call gets the cos and
-  sin tables, the transformation matrix and the attention's RoPE compute config.
-
-The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_sdpa_program_config.py
+Host tests of the SDPA program config (sdpa_program_config in tt/vision/common.py) and of M3VLAttention's SDPA call.
+The configs are built with the real ttnn classes, and the attention runs on stand-ins for its device tensors and ops.
 """
 from __future__ import annotations
 
@@ -34,10 +21,8 @@ from .vision_helpers import grid_device
 
 CONFIG = MiniMaxM3VisionConfig()
 NUM_HEADS, PADDED_HEAD_DIM = CONFIG.num_attention_heads, nearest_32(CONFIG.head_dim)
-# The q chunk per core grid and patch count: those of h4w4, h12w12, h16w16, h18w18, 336x448 (768), h32w32, h36w36,
-# h34w46, h40w54, 588x756 (2268) and h48w48. In the comments, the query rows of the slowest core for q chunks of 128,
-# 160, 192 and 256: ceil(16 heads x ceil(patches / q) / cores) chunks of q rows each. The fewest rows win, the larger q
-# on a tie.
+# The q chunk per core grid and patch count. Each comment gives the slowest core's query rows for q chunks of 128, 160,
+# 192 and 256: the fewest rows win, the larger chunk on a tie.
 Q_CHUNKS = {
     (11, 10): {
         16: 128,  # 128, 160, 192, 256
@@ -82,7 +67,10 @@ Q_CHUNKS = {
 
 
 def test_vision_sdpa_program_config_q_chunks():
-    """The q chunks of Q_CHUNKS with k chunks of 128 on the whole grid; changing a config leaves the next call's."""
+    """Each grid and patch count gets the q chunk of Q_CHUNKS, k chunks of 128 and the whole grid.
+
+    Changing a config leaves the next call's config as it was.
+    """
     for (x, y), q_chunks in Q_CHUNKS.items():
         for patches, q_chunk in q_chunks.items():
             config = sdpa_program_config(grid_device(x, y), patches, NUM_HEADS)
@@ -94,9 +82,8 @@ def test_vision_sdpa_program_config_q_chunks():
 
 @pytest.mark.parametrize("patches", [1564, 2304])
 def test_vision_attention_sdpa_call(monkeypatch, patches):
-    """On a 12x10 grid the attention's SDPA gets the config of its patch count (q chunks of 256 at 1564 patches, 160
-    at 2304) and output_concat_heads=True. Its output goes to the output projection as it is and is freed after it;
-    nlp_concat_heads never runs."""
+    """On a 12x10 grid the attention's SDPA gets its patch count's config and output_concat_heads=True, and its output
+    goes straight to the output projection."""
     device, events = grid_device(12, 10), []  # events: (op, inputs, keyword arguments, output)
 
     def tensor(*shape):

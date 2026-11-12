@@ -1,27 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-side checks of TtMiniMaxM3VisionEncoder and read_embeddings (vision/encoder.py), with stand-ins for the chip.
-The tests check that:
-  - forward raises for pixels that no image resizes to (check_pixels' rules) before any ttnn call;
-  - forward runs the model on patch_rows of the pixels, untilizes the model's output on the chip, frees the tiled copy
-    and returns the tokens as [n_tokens, out_dim];
-  - __init__ and from_weights_path raise for a mesh of more than one chip, a config whose patches are not the image
-    code's, and weights under the checkpoint's own names, before any weight goes to the device; the model is built
-    by M3VLVisionModel.from_state_dict from the state_dict as given, reading no other value of the state_dict than
-    the model's weights, and from_weights_path reads a checkpoint's vision weights as bf16, with no torch module, and,
-    without a config, its config.json, checking the mesh before it reads a weight;
-  - the encoder and the media module import, and from_weights_path builds the encoder, in an interpreter in which
-    importing transformers fails;
-  - vision_config takes a MiniMaxM3VisionConfig, a config.json dict and a transformers config, and raises ValueError
-    naming the fields it needs for one without them;
-  - read_embeddings raises for an out it cannot fill before it reads, and copies the tokens' bf16 bits into out with
-    Tensor.cpu, from a stand-in and, with ttnn itself, from a host tensor.
-The encoder's device tests are in test_vision_encoder_vs_ref.py. These tests have no mesh id; the 1-card CI leg selects
-them by name (its -k includes "test_vision_").
+Host tests of TtMiniMaxM3VisionEncoder and read_embeddings (vision/encoder.py), with stand-ins for the chip.
 
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_encoder_api.py
+They cover forward's input checks and ops, and how __init__ and from_weights_path build the model and what they
+reject. They also cover vision_config, imports without transformers, and read_embeddings' checks and copy. The device
+tests are in test_vision_encoder_vs_ref.py.
 """
 from __future__ import annotations
 
@@ -128,8 +112,7 @@ BAD_PIXELS = {
 
 @pytest.mark.parametrize("case", BAD_PIXELS)
 def test_vision_encoder_rejects_bad_pixels(case, expect_error, monkeypatch):
-    """forward raises TypeError or ValueError for pixels that no image resizes to, before any ttnn call: the model and
-    the ttnn calls are stand-ins that fail the test if they run."""
+    """forward rejects pixels that no image resizes to, before any ttnn call or model run."""
     pixels, error, message = BAD_PIXELS[case]
     encoder, _ = _build(monkeypatch)
     for name in ("from_torch", "to_layout", "reshape", "deallocate"):
@@ -139,9 +122,10 @@ def test_vision_encoder_rejects_bad_pixels(case, expect_error, monkeypatch):
 
 
 def test_vision_encoder_forward_ops(monkeypatch):
-    """forward runs the model on patch_rows of the pixels, then untilizes the model's output, frees the tiled copy and
-    returns the row-major tokens reshaped to [n_tokens, out_dim]. No device: the model and the ttnn calls are
-    stand-ins that log each call."""
+    """forward runs the model on patch_rows of the pixels and returns its output untilized, as [n_tokens, out_dim].
+
+    It frees the tiled output.
+    """
     calls = []
 
     def model(pixel_values, grid_thw):
@@ -169,7 +153,7 @@ def test_vision_encoder_forward_ops(monkeypatch):
 
 def test_vision_encoder_builds_from_state_dict(monkeypatch):
     """The model is built once, by M3VLVisionModel.from_state_dict with the projector and bf16 weights, from the
-    state_dict as given, a language model weight included, and the config."""
+    state_dict and the config as given."""
     state_dict = {**WEIGHTS, "language_model.model.embed_tokens.weight": torch.zeros(8, 40)}
     mesh = _Mesh()
     encoder, built = _build(monkeypatch, mesh=mesh, state_dict=state_dict)
@@ -196,9 +180,8 @@ class _LazyCheckpoint(Mapping):
 
 
 def test_vision_encoder_reads_only_vision_weights(monkeypatch):
-    """Given a mapping over a whole checkpoint, the encoder reads the values of its model's weights only, once each:
-    never a language model's, nor those of a layer past the config's num_hidden_layers. ttnn.from_torch is a stand-in,
-    so the model is built from them without a device."""
+    """Given a mapping over a whole checkpoint, the encoder reads only its model's weights, once each: no language
+    model weight and no layer past num_hidden_layers."""
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: None)
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
     weights = random_vision_weights(dataclasses.replace(CONFIG, num_hidden_layers=2))
@@ -231,8 +214,7 @@ OTHER_GEOMETRY = {
 
 @pytest.mark.parametrize("field", OTHER_GEOMETRY)
 def test_vision_encoder_checks_patch_geometry(field, monkeypatch, expect_error):
-    """A config whose patches are not those preprocess.py makes (14 x 14 pixels, 2 frames, 3 channels, merged 2 x 2)
-    raises ValueError before the model is built."""
+    """A config with another patch geometry than preprocess.py's raises ValueError before the model is built."""
     config = dataclasses.replace(CONFIG, **{field: OTHER_GEOMETRY[field]})
     with expect_error(ValueError, f"the image code makes patches of 14 x 14 pixels.*{field} {OTHER_GEOMETRY[field]}"):
         _build(monkeypatch, model=_device_work, config=config)
@@ -248,8 +230,8 @@ def test_vision_encoder_rejects_checkpoint_names(monkeypatch, expect_error):
 
 
 def test_vision_encoder_config_forms(expect_error):
-    """vision_config takes a MiniMaxM3VisionConfig as it is, the checkpoint's config.json as a dict, and a transformers
-    MiniMaxM3VLConfig, the form the encoder service has; anything else raises TypeError."""
+    """vision_config takes a MiniMaxM3VisionConfig as it is, a config.json dict and a transformers MiniMaxM3VLConfig.
+    Anything else raises TypeError."""
     from transformers import MiniMaxM3VLConfig
 
     assert vision_config(CONFIG) is CONFIG
@@ -262,9 +244,8 @@ def test_vision_encoder_config_forms(expect_error):
 
 @pytest.mark.parametrize("missing", ["vision_config", "projector_hidden_size", "text_config"])
 def test_vision_encoder_config_missing_field(missing, expect_error):
-    """A config without a field that the vision config is read from raises ValueError naming the fields it needs: the
-    checkpoint's config.json without that field, and for vision_config also the vision part of a transformers config
-    on its own, a config that is easy to pass by mistake."""
+    """A config without a needed field raises ValueError naming the fields it needs, also for the vision part of a
+    transformers config passed on its own."""
     from transformers import MiniMaxM3VLConfig
 
     configs = [{key: value for key, value in CONFIG_JSON.items() if key != missing}]
@@ -276,10 +257,8 @@ def test_vision_encoder_config_missing_field(missing, expect_error):
 
 
 def test_vision_encoder_from_weights_path(monkeypatch, expect_error, tmp_path):
-    """from_weights_path builds the model from the vision weights of a checkpoint written as MiniMax-M3's is (the
-    checkpoint's names, an index, a config.json), read as bf16 and with no torch module built: with no config, by its
-    config.json; with one, by that config. The checkpoint holds fp32 weights, which arrive rounded to bf16. An empty
-    weights_path raises ValueError instead of reading the current directory."""
+    """from_weights_path reads a checkpoint's vision weights as bf16, builds no torch module, and takes the config
+    from config.json or from its argument. An empty weights_path raises ValueError."""
     weights = {checkpoint_name(name): value for name, value in WEIGHTS.items()}
     weights["language_model.model.embed_tokens.weight"] = torch.zeros(8, 40)
     shard = "model-00001-of-00001.safetensors"
@@ -305,10 +284,11 @@ def test_vision_encoder_from_weights_path(monkeypatch, expect_error, tmp_path):
 
 
 def test_vision_encoder_runs_without_transformers(tmp_path):
-    """In a fresh interpreter in which importing transformers fails, the encoder and the media module import and
-    from_weights_path builds the encoder from a checkpoint, with ttnn.from_torch stood in for: the runtime imports no
-    transformers, also not inside a call. -B: the interpreter writes no bytecode into the tree. No -I, which drops
-    PYTHONPATH: CI's prebuilt image finds ttnn only through it."""
+    """With transformers blocked, the encoder and the media module import, and from_weights_path builds the encoder.
+
+    The interpreter runs with -B, so it writes no bytecode into the tree. It runs without -I, as CI finds ttnn through
+    PYTHONPATH.
+    """
     write_checkpoint(tmp_path, WEIGHTS, CONFIG_JSON)
     code = "\n".join(
         [
@@ -349,8 +329,7 @@ BAD_OUTS = {
 
 @pytest.mark.parametrize("case", BAD_OUTS)
 def test_vision_read_embeddings_rejects(case, expect_error, monkeypatch):
-    """read_embeddings raises TypeError for an out that does not hold bf16 values and ValueError for one of another
-    shape, not C-contiguous or read-only, and for tokens that are not forward's 2D bf16 output, before it reads."""
+    """Before reading, read_embeddings raises TypeError or ValueError for each bad out or tokens of BAD_OUTS."""
     tokens, out, error, message = BAD_OUTS[case]
     out = np.zeros((6, 40), dtype=np.uint16) if out is None else out
     if case == "out_read_only":
@@ -362,8 +341,8 @@ def test_vision_read_embeddings_rejects(case, expect_error, monkeypatch):
 
 @pytest.mark.parametrize("dtype", ["uint16", "int16", "bfloat16"])
 def test_vision_read_embeddings_copies(dtype, monkeypatch):
-    """read_embeddings reads the tokens' one chip with Tensor.cpu and copies their bf16 bits into out, a slice of a
-    larger buffer, of dtype uint16, int16 or ml_dtypes' bfloat16, leaving the rest of the buffer as it was."""
+    """read_embeddings reads the chip once with Tensor.cpu and copies the tokens' bf16 bits into out, a slice of a
+    larger uint16, int16 or ml_dtypes bfloat16 buffer. The rest of the buffer stays as it was."""
     np_dtype = np.dtype(dtype) if dtype != "bfloat16" else np.dtype(pytest.importorskip("ml_dtypes").bfloat16)
     values = torch.randn(6, 40, generator=torch.Generator().manual_seed(0)).bfloat16()
     reads = []
@@ -383,8 +362,7 @@ def test_vision_read_embeddings_copies(dtype, monkeypatch):
 
 
 def test_vision_read_embeddings_host_tensor():
-    """With ttnn itself (not a stub), read_embeddings copies a bf16 row-major host tensor bit for bit: the path of
-    forward's output after Tensor.cpu, without a chip."""
+    """With the real ttnn, read_embeddings copies a bf16 row-major host tensor bit for bit."""
     if isinstance(ttnn.from_torch, mock.Mock):
         pytest.skip("needs ttnn itself; ttnn is a stand-in here")
     values = torch.randn(6, 40, generator=torch.Generator().manual_seed(1)).bfloat16()

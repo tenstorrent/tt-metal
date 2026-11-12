@@ -1,28 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py), the vision encoder as the encoder service calls it,
-against Hugging Face's vision tower and projector, on one chip with the 2-layer reference of conftest.py (seeded random
-weights, no checkpoint):
-  - test_vision_encoder_vs_ref: forward(pixels) of a seeded noise image returns its vision tokens on the chip as bf16
-    [n_tokens, 6144], row-major, in DRAM, at PCC >= 0.9998 and within the tower test's relL2 bound against the
-    reference run on the same patch rows (patch_rows of the pixels, in the bf16 the chip gets).
-  - test_vision_encoder_load_and_encode: the encoder used the way the service's load() and encode() will use it: built
-    from a state_dict and a transformers config, one warm-up image, then two images of other grids with the warm-up's
-    patch count, each read with read_embeddings into its slot of one preallocated buffer laid out like a stored value
-    (format.py: the header that encode() writes first, then [n_tokens, 6144] bf16), with guard bytes around the slots.
-    Each slot's rows must hold the chip's output bit for bit and match the reference, nothing else in the buffer may
-    change (the headers included), and the images after the warm-up must add no program to the cache.
-The host tests of the encoder, which need no chip, are in test_vision_encoder_api.py.
+Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py) against the 2-layer reference of conftest.py.
 
-Image sizes (width x height in pixels), named by their grid of 14-pixel patches as the other vision tests name
-theirs: 224x224 (h16w16) and 756x560 (h40w54, not square) are the CI grids of the tower test, whose programs the
-1-card leg builds anyway; M3_VISION_ALL_GRIDS=1 adds 84x56 (h4w6: 24 patches, under one tile of rows, 6 tokens), a
-size small images resize to.
-
-Run (the second line adds h4w6):
-    pytest models/demos/minimax_m3/tests/unit/test_vision_encoder_vs_ref.py
-    M3_VISION_ALL_GRIDS=1 pytest models/demos/minimax_m3/tests/unit/test_vision_encoder_vs_ref.py
+test_vision_encoder_vs_ref checks forward's output on noise images of the CI grids. M3_VISION_ALL_GRIDS=1 adds 84x56
+pixels (h4w6), a size small images resize to. test_vision_encoder_load_and_encode uses the encoder as load() and
+encode() will: one warm-up image, then two images read into their slots of one shared buffer. The reference has
+seeded random weights, so no checkpoint is needed. The encoder's host tests are in test_vision_encoder_api.py.
 """
 from __future__ import annotations
 
@@ -82,8 +66,7 @@ def _read_plain(tokens: ttnn.Tensor) -> torch.Tensor:
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @_parametrize_sizes()
 def test_vision_encoder_vs_ref(mesh_device, device_params, size, vision_reference):
-    """forward(pixels) gives bf16 [n_tokens, 6144] row-major tokens in DRAM, at PCC >= 0.9998 and within the final
-    relL2 bound of the tower test against the reference, with no NaN or Inf."""
+    """forward gives bf16 [n_tokens, 6144] row-major tokens in DRAM that pass assert_close against the reference."""
     height, width = size
     reference = vision_reference(NUM_LAYERS)
     pixels = _noise_pixels(height, width)
@@ -105,10 +88,12 @@ def test_vision_encoder_vs_ref(mesh_device, device_params, size, vision_referenc
 @torch.no_grad()
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_reference):
-    """Built as load() will build it and called as encode() will call it, the encoder writes each image's tokens into
-    its slot of a shared buffer, after the slot's header: bit for bit the chip's output, at PCC >= 0.9998 against the
-    reference, with the headers and the guard bytes untouched; after one warm-up image of 224x224 (h16w16), images of
-    448x112 (h8w32) and 112x448 (h32w8), 256 patches each, add no program to the cache."""
+    """Used as load() and encode() will use it, the encoder fills each slot of a shared buffer after its header.
+
+    Each slot gets the chip's output bit for bit, which matches the reference at PCC >= 0.9998. Nothing else in the
+    buffer changes. After a 224x224 warm-up, images of 448x112 and 112x448, with the same 256 patches, add no program
+    to the cache.
+    """
     from transformers import MiniMaxM3VLConfig
 
     reference = vision_reference(NUM_LAYERS)

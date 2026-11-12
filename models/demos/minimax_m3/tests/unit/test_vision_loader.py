@@ -1,21 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-side checks of the vision weight loader (tt/vision/loader.py) and of the vision config (tt/vision/config.py). No
-device and no checkpoint. The tests check that:
-  - the loader reads the vision weights of a small checkpoint that the test writes in the layout of the MiniMax-M3
-    checkpoint (the names, shards and dtypes of vision_checkpoint.write_checkpoint) as fp32 or bf16, under
-    transformers 5.12's names, and rejects an index with no vision tensor and an empty snapshot_dir;
-  - MiniMaxM3VisionConfig.from_hf_config reads a config.json in the checkpoint's layout, with the merge and temporal
-    sizes under img_token_compression_config and vision dimensions that all differ from the defaults, and rejects an
-    activation other than the exact GELU;
-  - MiniMaxM3VisionConfig's defaults are Hugging Face's MiniMax-M3 defaults, and the checkpoint's when HF_MODEL is set.
-    This test needs transformers with minimax_m3_vl (tt-metal pins 5.12.1).
+Host tests of the vision weight loader (tt/vision/loader.py) and of the vision config (tt/vision/config.py).
 
-These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_loader.py
+The loader reads a small checkpoint that write_checkpoint writes in the MiniMax-M3 checkpoint's layout, so no device
+and no real checkpoint are needed. test_vision_config_defaults_match_hf needs transformers with minimax_m3_vl.
 """
 from __future__ import annotations
 
@@ -67,8 +56,10 @@ CONFIG = MiniMaxM3VisionConfig(
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
 def test_vision_load_state_dict_dtype(tmp_path, dtype):
-    """load_vision_state_dict returns the checkpoint's vision weights as dtype: fp32 keeps them as stored (bf16, the
-    patch embedding fp32), and bf16 rounds the patch embedding, as the chip holds it."""
+    """load_vision_state_dict returns the vision weights as dtype.
+
+    fp32 keeps the stored values. bf16 also rounds the patch embedding, which is stored in fp32.
+    """
     weights = random_vision_weights(CONFIG)
     write_checkpoint(tmp_path, weights, CONFIG_JSON)
     loaded = load_vision_state_dict(tmp_path, dtype=dtype)
@@ -79,8 +70,8 @@ def test_vision_load_state_dict_dtype(tmp_path, dtype):
 
 
 def test_vision_load_rejects_index_without_vision_tensors(tmp_path, expect_error):
-    """load_vision_state_dict raises ValueError for a checkpoint whose index lists no vision tensor, such as a text-only
-    one, instead of returning no weights, and for an empty snapshot_dir instead of reading the current directory."""
+    """load_vision_state_dict raises ValueError for an index that lists no vision tensor, such as a text-only
+    checkpoint's, and for an empty snapshot_dir."""
     weight_map = {"language_model.model.embed_tokens.weight": TEXT_SHARD}
     (tmp_path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": weight_map}))
     with expect_error(ValueError, r"lists no tensor starting with vision_tower\., multi_modal_projector\."):
@@ -90,8 +81,8 @@ def test_vision_load_rejects_index_without_vision_tensors(tmp_path, expect_error
 
 
 def test_vision_config_reads_checkpoint_json():
-    """from_hf_config reads every dimension of a config.json in the checkpoint's layout, the merge and temporal sizes
-    from img_token_compression_config; each differs from MiniMaxM3VisionConfig's default, so none is left at it."""
+    """from_hf_config reads every field of a config.json in the checkpoint's layout, with the merge and temporal sizes
+    under img_token_compression_config. Each value differs from the default, so a field left at it fails the test."""
     default = MiniMaxM3VisionConfig()
     assert all(getattr(CONFIG, f.name) != getattr(default, f.name) for f in dataclasses.fields(CONFIG))
     assert MiniMaxM3VisionConfig.from_hf_config(CONFIG_JSON) == CONFIG
@@ -99,8 +90,7 @@ def test_vision_config_reads_checkpoint_json():
 
 def test_vision_config_rejects_other_activation(expect_error):
     """from_hf_config takes a vision hidden_act of "gelu", the exact (erf) GELU that the TT MLP runs, and raises
-    ValueError for any other: Hugging Face's vision MLP reads it, so such a checkpoint would load and give other outputs
-    than Hugging Face's."""
+    ValueError for any other."""
 
     def config_json(hidden_act):
         return {**CONFIG_JSON, "vision_config": {**CONFIG_JSON["vision_config"], "hidden_act": hidden_act}}
@@ -124,8 +114,8 @@ def test_vision_config_defaults_match_hf():
 
 
 def test_vision_checkpoint_prefixes_are_the_renamed_ones():
-    """CHECKPOINT_PREFIXES, under which the encoder rejects a state_dict's weights, are the prefixes that _remap
-    renames: a key under them changes name, and a key in the v5.12 layout keeps its name."""
+    """CHECKPOINT_PREFIXES, whose keys the encoder rejects, are the prefixes that _remap renames: keys under them change
+    name, and model keys keep theirs."""
     checkpoint_keys = [
         "vision_tower.vision_model.embeddings.patch_embedding.weight",
         "vision_tower.vision_model.encoder.layers.0.mlp.fc1.weight",

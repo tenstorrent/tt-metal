@@ -2,18 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMax-M3-VL encoder layer.
+One MiniMax-M3 vision encoder layer, as Hugging Face's MiniMaxM3VLVisionEncoderLayer computes it:
 
-Pre-norm transformer block, mirroring `MiniMaxM3VLVisionEncoderLayer.forward`:
-    residual = x
-    x = layer_norm1(x); x = self_attn(x, (cos, sin)); x = x + residual
-    residual = x
-    x = layer_norm2(x); x = mlp(x); x = x + residual
-    return x
-
-Both LayerNorms and the MLP are bias-carrying; attention is our
-`M3VLAttention` (packed QKV with bias, rotate-half 3D RoPE, full SDPA).
-There is no attention mask / cu_seqlens (the tower attends fully).
+    x = x + attention(layer_norm1(x))
+    x = x + mlp(layer_norm2(x))
 """
 from __future__ import annotations
 
@@ -27,7 +19,7 @@ from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 
 
 class M3VLBlock(LightweightModule):
-    """One M3-VL transformer block (pre-norm attn + pre-norm MLP, both residual)."""
+    """One vision layer: attention, then the MLP, each after a LayerNorm and with a residual."""
 
     def __init__(
         self,

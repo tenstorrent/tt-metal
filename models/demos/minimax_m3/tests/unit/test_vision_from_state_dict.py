@@ -1,26 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-side checks of M3VLVisionModel.from_state_dict (tt/vision/model.py), which builds the vision model from weights
-under transformers 5.12's names, as loader.load_vision_state_dict reads the checkpoint's. No device: ttnn.from_torch is
-a stand-in that records what it gets. The tests check that:
-  - from_state_dict hands ttnn.from_torch the same tensors, bit for bit, in the same order and with the same arguments,
-    and builds the same model, with no torch module, as the sub-builders' from_torch (M3VLPatchEmbed, M3VLLayerNorm,
-    M3VLBlock, M3VLProjector) do from Hugging Face's MiniMaxM3VLVisionModel and MiniMaxM3VLMultiModalProjector holding
-    the same weights. The state_dict holds fp32 or bf16 weights, which the device gets in bf16 either way, a patch
-    embedding in the Conv3d layout or flattened, a layer past the config's and a language model weight. The configs
-    have head_dim 80, the checkpoint's, which the device pads to 96, and 64, which it does not pad; the model is built
-    with the projector in bf16, and without it in bfloat8_b, also from the tower's weights alone;
-  - from_state_dict uploads the same for fp32 weights as for their bf16 rounding, so reading the checkpoint as bf16
-    loses nothing;
-  - from_state_dict raises ValueError naming the weights, before any upload, for a state_dict with a vision weight that
-    the model has no place for, without a weight that it needs, or with a weight of another shape than the config's.
+Host tests of M3VLVisionModel.from_state_dict (tt/vision/model.py), with a stand-in for ttnn.from_torch.
 
-Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1) for Hugging Face's modules. These tests have no mesh id;
-the 1-card CI leg selects them by name (its -k includes "test_vision_").
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_from_state_dict.py
+from_state_dict must upload exactly what the modules' from_torch upload from Hugging Face's tower and projector with
+the same weights. It must upload the same for fp32 weights as for their bf16 rounding. It must reject a state_dict
+that it cannot use before any upload. Needs transformers with minimax_m3_vl.
 """
 from __future__ import annotations
 
@@ -42,9 +27,8 @@ from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
 from .vision_checkpoint import random_vision_weights
 from .vision_helpers import hf_vision_modules
 
-# Two layers with the checkpoint's patch geometry. head_dim 80 is the checkpoint's: the device pads it to 96 lanes and
-# rotates 78 of them. head_dim 64 is not padded and rotates 60; hd64 also has another LayerNorm eps than the default,
-# which the model must take from the config.
+# Two layers with the checkpoint's patch geometry. hd80 has the checkpoint's head_dim, padded to 96 on the chip. hd64
+# needs no padding and has another LayerNorm eps, which the model must take from the config.
 CONFIGS = {
     "hd80": MiniMaxM3VisionConfig(
         hidden_size=160,
@@ -69,7 +53,7 @@ MESH = object()  # the mesh device: only the stand-ins get it
 
 
 def _state_dict(config: MiniMaxM3VisionConfig, dtype: torch.dtype) -> dict:
-    """Seeded random weights as dtype under Hugging Face's names, of a tower with one layer more than config's and the
+    """Seeded random weights as dtype, under Hugging Face's names: a tower with one layer more than config's, the
     projector, and a language model weight."""
     longer = dataclasses.replace(config, num_hidden_layers=config.num_hidden_layers + 1)
     state_dict = {name: value.to(dtype) for name, value in random_vision_weights(longer).items()}
@@ -78,8 +62,10 @@ def _state_dict(config: MiniMaxM3VisionConfig, dtype: torch.dtype) -> dict:
 
 
 def _record_uploads(monkeypatch) -> list:
-    """Make ttnn.from_torch a stand-in that records the shape, dtype and sha256 of the bytes of each host tensor that it
-    gets, with its other arguments. Returns the list it records into."""
+    """Replace ttnn.from_torch with a stand-in that records each upload, and return the list of records.
+
+    A record holds the tensor's shape, dtype and sha256, and the other arguments of the call.
+    """
     uploads = []
 
     def from_torch(tensor, **kwargs):
@@ -97,8 +83,10 @@ def _torch_module(*args, **kwargs):
 
 
 def _from_hf_modules(config: MiniMaxM3VisionConfig, state_dict: dict, with_projector: bool, dtype) -> M3VLVisionModel:
-    """The model that the sub-builders' from_torch build from Hugging Face's tower and projector holding the weights of
-    state_dict (vision_helpers.hf_vision_modules), the projector's only with_projector."""
+    """Build the model with the modules' from_torch, from Hugging Face's modules holding state_dict's weights.
+
+    The projector is built only with_projector.
+    """
     tower, projector = hf_vision_modules(config, state_dict)
     padded_head_dim = nearest_32(config.head_dim)
     return M3VLVisionModel(
@@ -137,9 +125,10 @@ BUILDS = pytest.mark.parametrize(
 @pytest.mark.parametrize("weights_dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
 @pytest.mark.parametrize("config_id", CONFIGS)
 def test_vision_from_state_dict_uploads(config_id, weights_dtype, flat_patch_embed, with_projector, dtype, monkeypatch):
-    """from_state_dict uploads what the sub-builders' from_torch upload for Hugging Face's tower and projector holding
-    the same weights, bit for bit, in the same order and with the same arguments, and builds the same model, with no
-    torch module. Without the projector it needs none of the projector's weights."""
+    """from_state_dict makes the same uploads, bit for bit and in order, and the same model as the modules' from_torch.
+
+    It builds no torch module. Without the projector, it needs no projector weight.
+    """
     config = CONFIGS[config_id]
     state_dict = _state_dict(config, weights_dtype)
     uploads = _record_uploads(monkeypatch)
@@ -168,8 +157,8 @@ def test_vision_from_state_dict_uploads(config_id, weights_dtype, flat_patch_emb
 @BUILDS
 @pytest.mark.parametrize("config_id", CONFIGS)
 def test_vision_from_state_dict_reads_bf16(config_id, with_projector, dtype, monkeypatch):
-    """from_state_dict uploads the same for fp32 weights as for their bf16 rounding: it rounds each weight to bf16
-    before any arithmetic, so the encoder can read the checkpoint as bf16 and lose nothing."""
+    """from_state_dict uploads the same for fp32 weights as for their bf16 rounding, so reading the checkpoint as bf16
+    loses nothing."""
     config = CONFIGS[config_id]
     fp32 = _state_dict(config, torch.float32)
     bf16 = {name: value.bfloat16() for name, value in fp32.items()}
@@ -244,10 +233,8 @@ def _device_work(*args, **kwargs):
 
 @pytest.mark.parametrize("case", BAD_STATE_DICTS)
 def test_vision_from_state_dict_rejects(case, expect_error, monkeypatch):
-    """from_state_dict raises ValueError naming the weights, before any upload, for a state_dict with a vision weight
-    that the model has no place for, without a weight that it needs, or with a weight of another shape than the
-    config's. The state_dict also holds a layer past the config's and a language model weight, which it skips.
-    ttnn.from_torch is a stand-in that fails the test if it runs."""
+    """from_state_dict raises ValueError naming the weights, before any upload, for an unknown vision weight, a missing
+    weight or a weight of the wrong shape. A layer past the config's and a language model weight are skipped."""
     change, message = BAD_STATE_DICTS[case]
     state_dict = _state_dict(CONFIGS["hd80"], torch.float32)
     change(state_dict)

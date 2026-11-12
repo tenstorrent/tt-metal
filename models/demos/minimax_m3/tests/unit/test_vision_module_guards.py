@@ -1,14 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-only checks that the vision modules' builders raise for weights, modules or configs they cannot run, before any
-upload. No device. The device tests of these modules (test_vision_*_vs_ref.py) ask ttnn for the number of chips when
-they are collected, so these checks are in a file of their own and run on a host without one.
-
-The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_module_guards.py
+Host tests that the vision modules' builders reject weights, modules or configs they cannot run, before any upload.
+They are in a file of their own because the device tests ask ttnn for the number of chips when they are collected.
 """
 from __future__ import annotations
 
@@ -35,8 +29,7 @@ def test_vision_mlp_rejects_mismatched_weights(expect_error):
 
 
 def test_vision_patch_embed_rejects_other_modules(expect_error):
-    """from_torch raises for a module that is not one matmul per patch: a Linear, a Conv3d with a bias and a Conv3d
-    whose stride is not its kernel."""
+    """from_torch rejects a module that is not one matmul per patch, such as a Linear or a Conv3d with a bias."""
     kernel = (2, 14, 14)
     for module in (
         torch.nn.Linear(1176, 8, bias=False),
@@ -48,8 +41,7 @@ def test_vision_patch_embed_rejects_other_modules(expect_error):
 
 
 def test_vision_layernorm_rejects_other_modules(expect_error):
-    """M3VLLayerNorm raises for a weight or a bias that is not 1-d of the normalized size, and from_torch for a module
-    that is not an nn.LayerNorm or that normalizes over more than the last dim."""
+    """M3VLLayerNorm rejects a weight or bias of another shape, and from_torch a module that is not a 1-d LayerNorm."""
     dim = 8
     weight, bias = torch.ones(dim), torch.zeros(dim)
     for weights, message in (
@@ -72,9 +64,8 @@ def test_vision_attention_rejects_other_out_proj(expect_error):
 
 
 def test_vision_model_rejects_other_merge_size(expect_error):
-    """M3VLVisionModel raises ValueError for a config whose spatial_merge_size is not image_input.MERGE_SIZE (2), with
-    which the input checks and num_tokens count the vision tokens, and so does from_state_dict before it checks the
-    weights: here it has none."""
+    """M3VLVisionModel, and from_state_dict before it checks the weights, raise ValueError for a spatial_merge_size
+    other than image_input.MERGE_SIZE (2)."""
     config = MiniMaxM3VisionConfig(spatial_merge_size=3)
     message = "spatial_merge_size must be 2, as image_input counts tokens with it, got 3"
     with expect_error(ValueError, message):

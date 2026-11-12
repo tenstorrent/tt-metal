@@ -1,33 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-only checks of the vision encoder's weight-matmul program configs (tt/vision/common.py, linear_program_config)
-and of linear(), which runs every weight matmul with them. No device: the configs are built with the real ttnn classes
-and checked on the host.
+Host tests of the weight matmuls' program configs (linear_program_config) and of linear(), which runs those matmuls.
 
-- At 672x672 (2304 patches) on a 12x10 grid every linear gets the config pinned in CONFIGS_672.
-- At the smaller sizes of CONFIGS_MID on 12x10, a linear whose transposed split would have fewer than
-  LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core gets the untransposed split or keeps ttnn's own config, and one
-  with exactly that many gets the transposed split.
-- At 256 patches (h16w16, a CI grid), on 11x10, 12x10 and 13x10, the tower's linears get a config and the merge
-  linears keep ttnn's own, so the 1-card device tests run both paths; linear_1 and linear_2 get a config on 13x10 only.
-  At 16 patches, the smallest image, every linear keeps ttnn's own.
-- The helper takes its three limits as arguments: with other limits, linear_2 at 1024 patches gets the transposed split
-  and fc1 at 2304 patches other K blocks.
-- For every patch count the image processor gives by default (multiples of 4 from 16 to 2304), on the 11x10, 12x10
-  and 13x10 core grids that Blackhole chips have depending on harvesting, every config passes the checks the matmul
-  device op and its 2D multicast factory make, the factory's circular buffers fit in LINEAR_L1_BYTES, and no config
-  uses transpose_mcast with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
-- linear() gives ttnn.linear the helper's config for the tiles of its operands' padded shapes and runs the activation,
-  the accurate GELU in the MLPs, as an op of its own on the matmul's output.
-- M3VLMLP.fuse_gelu, off as built, runs the accurate GELU as that op; on, it puts the GELU into fc1's config where
-  fc1 gets one (256, 2160 and 2304 patches on each grid) and runs it as that op where fc1 keeps ttnn's own (324).
-  linear() takes the fused form only with the activation.
-
-The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_linear_program_config.py
+They pin the configs at 672x672 and a few smaller sizes. For every image size on the 11x10, 12x10 and 13x10 grids of
+Blackhole chips, every config must pass the matmul op's own checks and fit LINEAR_L1_BYTES. They also check how
+linear() and M3VLMLP.fuse_gelu run the GELU. The configs are built with the real ttnn classes; no device.
 """
 from __future__ import annotations
 
@@ -106,8 +84,10 @@ def _config(name, patches, grid=(12, 10), compute_kernel_config=None):
 
 
 def _assert_valid(config, rows, in_features, out_features, grid, fp32_dest_acc):
-    """The checks the matmul device op and its 2D multicast factory make on this config, for operands and output in
-    DRAM (matmul_device_operation.cpp, matmul_multicore_reuse_mcast_2d_program_factory.cpp)."""
+    """Assert what the matmul op and its 2D multicast factory check on this config, for DRAM operands and output.
+
+    The checks come from matmul_device_operation.cpp and matmul_multicore_reuse_mcast_2d_program_factory.cpp.
+    """
     m_tiles, k_tiles, n_tiles = (math.ceil(d / ttnn.TILE_SIZE) for d in (rows, in_features, out_features))
     assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == grid
     assert k_tiles % config.in0_block_w == 0
@@ -121,9 +101,8 @@ def _assert_valid(config, rows, in_features, out_features, grid, fp32_dest_acc):
     assert blocks_x <= grid[0] and blocks_y <= grid[1]
     assert blocks_x >= 2 and blocks_y >= 2  # a 2D split, as ttnn's own 2D configs for DRAM operands
     assert not config.fuse_batch and config.fused_activation is None
-    # The factory's circular buffers, bf16 tiles of 2 KB: the in0 and in1 K blocks (double-buffered when K takes
-    # more than one), the output block, a bias row, and the output block's partial sums, which with fp32
-    # accumulation are fp32 tiles in a buffer of their own.
+    # The factory's circular buffers, in 2 KB bf16 tiles: the in0 and in1 K blocks, doubled when K has more than one
+    # block, the output block and a bias row. With fp32 accumulation the partial sums get their own 4 KB fp32 tiles.
     depth = 2 if k_tiles > config.in0_block_w else 1
     block = config.out_block_h * config.out_block_w
     cb_bytes = 2048 * (depth * config.in0_block_w * (config.out_block_h + config.out_block_w) + block)
@@ -132,8 +111,10 @@ def _assert_valid(config, rows, in_features, out_features, grid, fp32_dest_acc):
 
 
 def test_vision_linear_program_config_pinned():
-    """The configs at 672x672 and at the sizes of CONFIGS_MID on 12x10; which linears keep ttnn's own config at 256
-    patches on each grid and at 16 patches; the helper's choice with other limits."""
+    """The configs match CONFIGS_672 and CONFIGS_MID, and other limits change the helper's choice.
+
+    At 256 patches only the expected linears get a config on each grid. At 16 patches none does, on 12x10.
+    """
     for name, want in CONFIGS_672.items():
         config = _config(name, 2304)
         assert config is not None, name
@@ -160,9 +141,10 @@ def test_vision_linear_program_config_pinned():
 @pytest.mark.parametrize("fp32_dest_acc", [True, False], ids=["fp32_acc", "bf16_acc"])
 @pytest.mark.parametrize("grid", list(GRIDS.values()), ids=list(GRIDS))
 def test_vision_linear_program_config_valid(grid, fp32_dest_acc):
-    """Every config for every image size, as the device op and the 2D factory check it, and transpose_mcast only with
-    at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core. The encoder accumulates in fp32; the bf16 case is
-    linear_compute_config with fp32 accumulation turned off, as a measurement may set it."""
+    """Every config for every image size passes the matmul op's checks, with fp32 or bf16 accumulation.
+
+    A config uses transpose_mcast only with at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
+    """
     compute_kernel_config = linear_compute_config()
     compute_kernel_config.fp32_dest_acc_en = fp32_dest_acc
     configs = transposed = 0
@@ -179,10 +161,10 @@ def test_vision_linear_program_config_valid(grid, fp32_dest_acc):
 
 
 def test_vision_linear(monkeypatch):
-    """linear() gives ttnn.linear the bias, the compute config, DRAM for the output and the helper's config for the
-    tiles of x's and w's padded shapes: fc1 of a 2160-patch image (2176 rows padded) gets the config of 2160 rows, and
-    of a 16-patch one ttnn's own. It runs the activation, the accurate GELU here, as an op of its own on ttnn.linear's
-    output, not as ttnn.linear's activation argument, and without one returns ttnn.linear's output."""
+    """linear() gives ttnn.linear the helper's config for the padded shapes, then runs the activation as its own op.
+
+    ttnn.linear also gets the bias, the compute config and DRAM for its output.
+    """
     calls = []
 
     def record(op):
@@ -218,11 +200,11 @@ def test_vision_linear(monkeypatch):
 
 
 def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
-    """M3VLMLP.fuse_gelu, False as built, on each grid. Off, ttnn.gelu runs once, on fc1's output, and no config
-    carries an activation. On, where fc1 gets a config (256, 2160 and 2304 patches), that config, with the same
-    blocking, carries the accurate GELU and ttnn.gelu does not run; where fc1 keeps ttnn's own (324 patches), ttnn.gelu
-    runs as off. fc2 fuses nothing, and a forward with the switch off after one with it on fuses nothing. linear()
-    refuses the fused GELU without the separate one, which would leave fc1 without a GELU where it has no config."""
+    """With M3VLMLP.fuse_gelu on, fc1's config carries the GELU where fc1 gets a config.
+
+    Elsewhere, and with fuse_gelu off as built, ttnn.gelu runs on fc1's output. fc2 never fuses. linear() refuses the
+    fused GELU without the separate one.
+    """
     calls = []
 
     # Each recorder returns its call, with the padded shape and device that linear() reads, so an op's x is the call

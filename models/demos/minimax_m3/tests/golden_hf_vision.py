@@ -1,28 +1,24 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Goldens for tests/test_vision_accuracy.py: Hugging Face's MiniMax-M3 vision tower and projector with the vision
-weights of the checkpoint in HF_MODEL, run on the CPU in fp32 (the goldens) and in bf16 (the error of a plain bf16
-run, which sets the test's tower bar and which the test logs beside its own).
+Goldens for tests/test_vision_accuracy.py, from Hugging Face's MiniMax-M3 vision tower and projector on the CPU.
 
-Each image of IMAGES goes through the checkpoint's image processor, then MiniMaxM3VLModel.get_image_features. The
-model's vision weights are the checkpoint's, named by transformers' own rules for it (vision_weights), not through
-tt/vision/loader.py, which the TT model loads with: a rename there that swapped two tensors of the same shape would
-otherwise reach the TT model and the goldens alike, and the test would pass.
+Each image of IMAGES goes through the checkpoint's image processor, then MiniMaxM3VLModel.get_image_features with the
+vision weights of the checkpoint in HF_MODEL. It runs in fp32 for the goldens and in bf16 for comparison. The weights
+are named by transformers' own rules (vision_weights), not by tt/vision/loader.py, so that a naming bug in the loader
+cannot reach the goldens too.
+
 <out>/<image>.safetensors holds
     pixel_values       (L, 1176) fp32      the processor's output, the test's input
     image_grid_thw     (1, 3) int64        the (t, h, w) patch grid
     tower_out          (L, 1280) fp32      the tower output (last_hidden_state)
     final              (L / 4, 6144) fp32  the vision tokens (pooler_output)
-    pre_layrnorm_rows  (64, 1280) bf16     the first rows of the pre_layrnorm output, which the test recomputes from
-                                           HF_MODEL's weights to check that HF_MODEL is this checkpoint
-<out>/manifest.json names the checkpoint, the library versions, the CPU and the number of torch threads, and gives, per
-image, its file and its sha256, which the test checks, and the error of the bf16 run against the fp32 one on each
-output: PCC, relative L2 error and the 1st percentile of the cosine between rows; <out>/SHA256SUMS checks a copy
-(sha256sum -c SHA256SUMS).
+    pre_layrnorm_rows  (64, 1280) bf16     the first pre_layrnorm rows, to check that HF_MODEL is this checkpoint
+<out>/manifest.json records the checkpoint, the library versions and each file's sha256. It also gives the errors of
+the bf16 run against the fp32 one: PCC, relative L2 error and the 1st percentile of the row cosine. <out>/SHA256SUMS
+checks a copy.
 
-Standalone (no test_ prefix, so pytest does not collect it). CPU only, no ttnn; needs transformers with
-minimax_m3_vl (tt-metal pins 5.12.1). From the tt-metal root:
+CPU only, no ttnn; needs transformers with minimax_m3_vl. From the tt-metal root:
     HF_MODEL=<checkpoint> python -m models.demos.minimax_m3.tests.golden_hf_vision <out dir>
 then set M3_VISION_GOLDEN_DIR=<out dir>, or copy <out dir> to $HF_MODEL/golden/vision.
 """
@@ -47,13 +43,10 @@ from safetensors.torch import save_file
 
 REPO = Path(__file__).resolve().parents[4]
 LLAMA_PROMPTS = "models/ttt_compat/demo/sample_prompts/llama_models"
-# The test's images, in the order it runs them: repo path, and the side of the top-left square kept (None: the whole
-# image), with their patch grids. The first four make 2304 patches (576 vision tokens, whole tiles): on the device,
-# pasta and perf_report (48x48) had the lowest tower and the lowest final PCC of six real images at 672x672, ocr_image
-# (48x48) is a page of text, and house (36x64) runs new RoPE tables on the programs the three before it built. cat
-# (34x46: 1564 patches, 391 tokens) takes the padded path most photos take: partial tiles of rows and of tokens and
-# masked keys in SDPA. cluster_cabling (42x54: 2268 patches, 567 tokens) is a 4:3 photo: on a 12x10 chip the per-patch
-# matmuls split their 71 tiles of rows 6 to a core, so the last core takes 5.
+# The test's images, in the order it runs them: repo path, and the side of the top-left square to keep (None: all).
+# pasta, perf_report and ocr_image (a page of text) resize to 672 x 672 pixels: 2304 patches, in whole tiles.
+# house has the same patch count on another grid, so it reuses their programs with new RoPE tables.
+# cat (1564 patches) has partial tiles and masked keys in SDPA, as most photos do. cluster_cabling is a 4:3 photo.
 IMAGES = {
     "pasta": (f"{LLAMA_PROMPTS}/pasta.jpeg", None),
     "perf_report": ("models/perf/images/example_perf_report.png", 1166),
@@ -99,8 +92,10 @@ def save_manifest(out: str, manifest: dict) -> None:
 
 
 def load_image(case: str, mode: str = "RGB") -> tuple:
-    """The image of IMAGES[case], converted from its decoded mode to mode (RGB for the processor), and where it came
-    from. The crop must fit the image: PIL would pad it with black."""
+    """Load IMAGES[case], cropped and converted to mode, and a dict of where it came from.
+
+    Raises ValueError if the crop does not fit the image, which PIL would pad with black.
+    """
     path, side = IMAGES[case]
     with Image.open(REPO / path) as image:
         source = {
@@ -118,11 +113,12 @@ def load_image(case: str, mode: str = "RGB") -> tuple:
 
 
 def vision_weights(hf_model: str, model) -> dict:
-    """The vision tower and projector weights of the checkpoint in hf_model, in fp32, under the names of model (a
-    MiniMaxM3VLModel): every key of the checkpoint's model.safetensors.index.json is renamed by transformers' rules
-    for the model, the conversion mapping and rename_source_key that from_pretrained applies, and the keys that land on
-    a vision weight of the model are read, from their shards only. Raises ValueError for a vision weight of the model
-    that no key lands on, two keys that land on one, or a key that transformers would convert rather than rename."""
+    """Read the checkpoint's vision weights in fp32, under the names transformers gives them for model.
+
+    model is a MiniMaxM3VLModel. Each key of the checkpoint's index is renamed by the rules from_pretrained applies,
+    and only the shards that hold vision weights are read. Raises ValueError if a vision weight gets no key, two keys
+    get the same name, or transformers would convert a key rather than rename it.
+    """
     from transformers.conversion_mapping import get_model_conversion_mapping
     from transformers.core_model_loading import WeightConverter, WeightRenaming, rename_source_key
 
@@ -157,8 +153,10 @@ def vision_weights(hf_model: str, model) -> dict:
 
 
 def load_hf_model(hf_model: str):
-    """MiniMaxM3VLModel with the checkpoint's vision tower and projector in fp32 (vision_weights). The language model
-    stays on the meta device: it takes no memory and never runs."""
+    """Build MiniMaxM3VLModel with the checkpoint's vision tower and projector in fp32 (vision_weights).
+
+    The language model stays on the meta device: it takes no memory and never runs.
+    """
     from transformers import MiniMaxM3VLConfig, MiniMaxM3VLModel
 
     config = MiniMaxM3VLConfig.from_pretrained(hf_model)
@@ -190,16 +188,19 @@ def rel_l2(ref: torch.Tensor, out: torch.Tensor) -> float:
 
 
 def gain(ref: torch.Tensor, out: torch.Tensor) -> float:
-    """The least-squares scale of out against ref, sum(out * ref) / sum(ref * ref), in float64, to 7 significant
-    digits: 1.0 when out has no scale error. PCC cannot see a scale. The goldens do not record it; the test logs it
-    for the encoder's outputs."""
+    """Least-squares scale of out against ref, sum(out * ref) / sum(ref * ref), in float64, to 7 significant digits.
+
+    1.0 means no scale error, which PCC cannot see.
+    """
     ref, out = ref.double(), out.double()
     return float(f"{((out * ref).sum() / (ref * ref).sum()).item():.7g}")
 
 
 def token_cosine_p01(ref: torch.Tensor, out: torch.Tensor) -> float:
-    """The 1st percentile of the cosine similarity between each row of out and the same row of ref (a vision token or a
-    patch), in float64, to 7 significant digits: the worst rows, which a PCC over all values averages away."""
+    """1st percentile of the cosine between matching rows of out and ref, in float64, to 7 significant digits.
+
+    It shows the worst rows, which a PCC over all values hides.
+    """
     ref, out = ref.double().flatten(1), out.double().flatten(1)
     cosine = (ref * out).sum(1) / (torch.linalg.vector_norm(ref, dim=1) * torch.linalg.vector_norm(out, dim=1))
     return float(f"{torch.quantile(cosine, 0.01).item():.7g}")

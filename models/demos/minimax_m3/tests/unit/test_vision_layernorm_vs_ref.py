@@ -1,13 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy test for M3VLLayerNorm vs the LayerNorm of Hugging Face's vision tower.
+Device test of M3VLLayerNorm against the LayerNorm of Hugging Face's vision tower.
 
-Runs layer 0's layer_norm1 on the input it gets inside the reference tower plus an offset per row. Random
-weights and pixel values (tests/conftest.py), no checkpoint.
-
-Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_layernorm_vs_ref.py
+It runs layer 0's layer_norm1 on its input in the reference tower, plus an offset per row. The weights are seeded
+random values (tests/conftest.py), so no checkpoint is needed.
 """
 from __future__ import annotations
 

@@ -1,15 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Weight loader for the MiniMax-M3 vision tower and projector.
+Loads the MiniMax-M3 vision weights from the checkpoint, without transformers.
 
-Reads only the vision tensors (`vision_tower.*`, `multi_modal_projector.*`, `patch_merge_mlp.*`), through the text
-reference's SafetensorsWeights: it opens only the shards that the checkpoint's model.safetensors.index.json lists for
-them and dequantizes a quantized weight as the text model's loader does; no transformers needed. The checkpoint was
-saved with transformers 4.52.4 names, which `_remap` turns into the transformers 5.12 MiniMaxM3VLModel names that
-M3VLVisionModel.from_state_dict takes. tests/test_vision_accuracy.py checks on the CPU that they are the names that
-transformers' own rules give the checkpoint's tensors (tests/golden_hf_vision.py's vision_weights), by which its
-goldens were made.
+Opens only the shards that hold vision tensors and dequantizes quantized weights as the text model's loader does.
+The checkpoint uses transformers 4.52.4 names; _remap renames them to the transformers 5.12 names that
+M3VLVisionModel.from_state_dict takes.
 """
 from __future__ import annotations
 
@@ -29,7 +25,7 @@ CHECKPOINT_PREFIXES = (_TOWER_PREFIX, _MERGE_PREFIX)
 
 
 def _remap(key: str) -> str:
-    """Checkpoint (transformers 4.52.4) key -> v5.12 model key layout."""
+    """Rename a checkpoint key (transformers 4.52.4) to the transformers 5.12 model's name."""
     if key.startswith(_MERGE_PREFIX):
         return "multi_modal_projector.merge_" + key[len(_MERGE_PREFIX) :]
     if key.startswith(_TOWER_PREFIX):
@@ -41,16 +37,18 @@ def _remap(key: str) -> str:
 
 
 def _checkpoint_dir(snapshot_dir: str) -> str:
-    """snapshot_dir, or ValueError for an empty one, which would name files in the current directory."""
+    """Return snapshot_dir, or raise ValueError for an empty one, which would read the current directory."""
     if not snapshot_dir:
         raise ValueError(f"snapshot_dir must be a MiniMax-M3 checkpoint directory, got {snapshot_dir!r}")
     return snapshot_dir
 
 
 def load_vision_state_dict(snapshot_dir: str, dtype: torch.dtype = torch.float32) -> Dict[str, torch.Tensor]:
-    """Return {v5.12 key: tensor of dtype} for the vision tower and projector, remapped from the checkpoint: fp32 keeps
-    every stored value, bf16 holds them as the chip does, in half the memory. Raises ValueError if the checkpoint's
-    index lists no vision tensor."""
+    """Read the vision tower and projector weights of the checkpoint in snapshot_dir.
+
+    Returns {transformers 5.12 name: tensor of dtype}. float32 keeps every stored value; bfloat16 is what the chip
+    holds, in half the memory. Raises ValueError for an empty snapshot_dir or an index that lists no vision tensor.
+    """
     weights = SafetensorsWeights(_checkpoint_dir(snapshot_dir), prefix="", dtype=dtype)
     keys = [plain_key(key) for key in weights.weight_map if key.startswith(_WANT) and not is_aux_key(key)]
     if not keys:
