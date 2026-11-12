@@ -36,6 +36,11 @@ def enabled():
     return APS.enabled()
 
 
+def xrow_key_groups(n_blocks, U):
+    """DSV41_XROW_BATCH: the blocks 0..n-1 of a cross-row copy written U at a time through the U lanes (users) of the receiving row -> [[(lane in row, block index)]] (every block exactly once)."""
+    return [[(j, g0 + j) for j in range(min(U, n_blocks - g0))] for g0 in range(0, n_blocks, U)]
+
+
 def extra_pool_pages(users_per_row):
     """pages the pool needs on top of the per-user capacity: the idle pages of the users (they are outside the index)"""
     return IDLE_PAGES * int(users_per_row) if enabled() else 0
@@ -205,6 +210,7 @@ class PagedApc:
         self.noc = set()  # users whose request never commits (image prompt)
         self.plen = {}  # user -> total prompt length (zone / tip rule)
         self.ks = self.hs = None
+        self.d2d = None  # DSV41_XROW_D2D=1: tt/xrow_d2d.XrowD2D (persistent buffers, allocated in ``warm_xrow`` before the captures)
         self.host_fallback = os.environ.get("DSV41_APC_PAGED_HOST", "0") == "1"
         self._auto_n = itertools.count()
         self.stats = dict(
@@ -512,6 +518,18 @@ class PagedApc:
         self.log(f"APC paged: cross-row copy ops warmed on an idle user in {dt:.1f} s")
         return dt
 
+    def init_d2d(self):
+        """DSV41_XROW_D2D=1: the persistent buffers of the device-to-device copy + its programs (p2p of every row pair, gather / scatter / slot_copy), BEFORE the first trace capture (called at the end of
+        ``DSV41Model.apc_paged_build``); idempotent, no-op when off / without cross-row hits"""
+        from models.demos.blackhole.deepseek_v41_flash.tt import xrow_d2d as XD
+
+        if self.d2d is not None or self.ks is None or not self.idx.xrow or not XD.enabled():
+            return
+        self.d2d = XD.XrowD2D(
+            self.model, self.ks if XD.keys_enabled() else None, self.hs if XD.halos_enabled() else None
+        )
+        self.log(f"APC paged: cross-row d2d buffers allocated, programs warmed in {self.d2d.warm():.1f} s")
+
     def _warm_xrow_save(self):
         """the save kernels on the STAGING tensors of the copy (their sharding / layout differ from the persistent slabs ``build`` warmed them with) with all-SKIP tables: no data is touched"""
         m = self.model
@@ -582,17 +600,27 @@ class PagedApc:
             nb = len(src)
             tok = np.ascontiguousarray(torch.as_tensor(tokens).long().reshape(-1).numpy())
             tp = [time.perf_counter()]
+            prof = (
+                {} if os.environ.get("DSV41_XROW_PROFILE", "0") == "1" else None
+            )  # (E-A: host enqueue vs device wait per phase)
             # 1. read the donor blocks (row sri)
             pt = torch.tensor([p for _, pages, *_ in src for p in pages], dtype=torch.long)
+            from models.demos.blackhole.deepseek_v41_flash.tt import xrow_d2d as XD
+
+            d2d = (
+                self.d2d
+            )  # (DSV41_XROW_D2D: latents and, unless DSV41_XROW_D2D_KEYS=0, keys travel device to device; halos stay host staged)
+            d2dk = d2d is not None and d2d.ks is not None
+            d2dh = d2d is not None and d2d.hs is not None
             lat = {}
             for s_ in PO.SOURCES:
-                if s_ in m.layer_ids:
+                if s_ in m.layer_ids and d2d is None:
                     n_ = hit // PO.SRC_RATIO[s_]
                     phys = PageLayout().phys_rows(pt, PO.SOURCES.index(s_), torch.arange(n_)).long()
                     lat[s_] = PC.gather_pool_rows(m, sri, phys)
             pend = []
             for i, (_, _, kslot, _, _, _) in enumerate(src):
-                for lid in self.ks.store:
+                for lid in self.ks.store if not d2dk else ():
                     R = self.ks.geom[lid].nrb * 32
                     part = ttnn.slice(self.ks.store[lid], [kslot, 0, 0, 0], [kslot + 1, 1, R, APS.IDIM])
                     pend.append(
@@ -608,7 +636,7 @@ class PagedApc:
                     )
             tip = src[-1]
             hpend = {}
-            for pn in self.hs.store:
+            for pn in self.hs.store if not d2dh else ():
                 slot = tip[3] if pn == "A" else tip[4]
                 if slot >= 0:
                     NL = len(self.hs.layers[pn])
@@ -616,7 +644,11 @@ class PagedApc:
                         self.hs.store[pn], [slot * NL, 0, 0, 0], [(slot + 1) * NL, 1, APS.WINDOW, APS.HEAD_DIM]
                     )
                     hpend[pn] = (ttnn.from_device(ttnn.get_device_tensors(sl)[sri * cols], blocking=False), sl)
+            _ts = time.perf_counter()
             ttnn.synchronize_device(md)
+            if prof is not None:
+                prof["read_enq_s"] = _ts - tp[0]  # gathers (they block on to_torch) + slice / from_device enqueues
+                prof["read_sync_s"] = time.perf_counter() - _ts
             keys = {}
             for lid, i, hs_, part in pend:
                 keys[(lid, i)] = [ttnn.to_torch(h).reshape(-1, APS.IDIM).clone() for h in hs_]
@@ -629,9 +661,22 @@ class PagedApc:
             # 2. this row: the page table first, then the latents into the new pages
             m.pool.allocs[dst].adopt(b, plan.page_ids)
             m.pool.sync_page_table()
+            dkeep = []
+            if d2d is not None:
+                ps, pd = XD.latent_rows(
+                    pt, hit, m.layer_ids, PageLayout().phys_rows, lambda s_, r_: m.pool.phys_rows(b, s_, r_)
+                )
+                dkeep += d2d.move_latents(sri, dst, ps, pd)
             for s_, l_ in lat.items():
                 n_ = l_.shape[0]
-                PC.scatter_rows_mesh(m, m.pool.pool, {dst: (m.pool.phys_rows(b, s_, torch.arange(n_)).long(), l_)})
+                PC.scatter_rows_mesh(
+                    m,
+                    m.pool.pool,
+                    {dst: (m.pool.phys_rows(b, s_, torch.arange(n_)).long(), l_)},
+                    sync_every=int(os.environ.get("DSV41_XROW_SYNC_EVERY", "1")),
+                    stats=prof,
+                    reuse=os.environ.get("DSV41_XROW_BATCH", "0") == "1",
+                )
             tp.append(time.perf_counter())
             # 3. one copy chunk per donor block: key store slot (+ the tip's halo slots) in this row, filled by the save kernels from staging tensors
             cps = []
@@ -645,8 +690,58 @@ class PagedApc:
             shard = ttnn.ShardTensor2dMesh(md, dims=(0, 1), mesh_shape=(rows, cols))
             rep0 = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
             keep = []
+
+            def _tm(name, fn, *a, **k):  # (E-A: split of the store phase when DSV41_XROW_PROFILE=1)
+                if prof is None:
+                    return fn(*a, **k)
+                t_ = time.perf_counter()
+                r_ = fn(*a, **k)
+                prof[name] = prof.get(name, 0.0) + time.perf_counter() - t_
+                return r_
+
+            batch = os.environ.get("DSV41_XROW_BATCH", "0") == "1"
+            if d2dk:
+                dkeep += d2d.move_keys(sri, dst, XD.key_pairs(src, cps))
+            if d2dh:
+                dkeep += d2d.move_halos(sri, dst, XD.halo_pairs(src, cps))
+            if batch and not d2dk:
+                # DSV41_XROW_BATCH=1 (default off): the key blocks go through the U lanes of the receiving row, U blocks per save call (one staging tensor per layer and group, one table upload and
+                # one save launch per group) instead of one block per call: 1/U of the host staging / launches of the store phase (the device wait was 0.001 s of 0.89 s: host-bound).
+                # (Up == U is required by XROW: the lanes of the row are its users.)
+                with_key = [(i, cp) for i, cp in cps if cp.key_slot >= 0]
+                hosts = (
+                    {}
+                )  # one host staging buffer per layer, reused for every group (only the lanes of the receiving row are written / cleared)
+                for lanes_ in xrow_key_groups(len(with_key), U):
+                    grp = [with_key[k] for _, k in lanes_]
+                    vals = [None] * (rows * U)
+                    for j, (_, cp) in enumerate(grp):
+                        vals[dst * U + j] = cp.key_slot
+                    _tm("key_table_s", self.ks.set_save, vals)
+                    stage = {}
+                    for lid in self.ks.store:
+                        R = self.ks.geom[lid].nrb * 32
+                        host = hosts.get(lid)
+                        if host is None:
+                            host = hosts[lid] = torch.zeros(rows * U, cols, R, APS.IDIM, dtype=torch.bfloat16)
+                        host[dst * U : dst * U + U] = 0  # (lanes of a short last group stay zero)
+                        for j, (i, _) in enumerate(grp):
+                            for c in range(cols):
+                                host[dst * U + j, c] = keys[(lid, i)][c]
+                        stage[lid] = _tm(
+                            "key_upload_s",
+                            ttnn.from_torch,
+                            host,
+                            device=md,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=shard,
+                        )
+                    _tm("key_launch_s", self.ks.save, stage)
+                    keep += list(stage.values())
             for i, cp in cps:
-                if cp.key_slot >= 0:
+                if cp.key_slot >= 0 and not batch and not d2dk:
                     vals = [None] * (rows * U)
                     vals[b] = cp.key_slot
                     self.ks.set_save(vals)
@@ -666,7 +761,7 @@ class PagedApc:
                         )
                     self.ks.save(stage)
                     keep += list(stage.values())
-                for pn, slot in (("A", cp.halo_a), ("B", cp.halo_b)):
+                for pn, slot in (("A", cp.halo_a), ("B", cp.halo_b)) if not d2dh else ():
                     if slot >= 0 and pn in halos:
                         vals = [None] * (rows * U)
                         vals[b] = slot
@@ -686,8 +781,13 @@ class PagedApc:
                         self.hs.save(pn, st_)
                         keep += list(st_.values())
                 # (the save kernels read their tables and staging tensors when they RUN: the table of the next block is only written after this launch is enqueued, h2d is ordered on the queue)
+            _ts = time.perf_counter()
             ttnn.synchronize_device(md)
-            for x in keep:
+            if prof is not None:
+                prof["store_enq_s"] = _ts - tp[-1]  # per-block from_torch staging + table uploads + save launches
+                prof["store_sync_s"] = time.perf_counter() - _ts
+                self.log("APC paged: xrow profile (s): " + ", ".join(f"{k} {v:.3f}" for k, v in sorted(prof.items())))
+            for x in keep + dkeep:
                 ttnn.deallocate(x)
             for _, cp in cps:
                 self.idx.finish_chunk(cp)

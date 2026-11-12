@@ -138,16 +138,31 @@ SNAP_PIECE_MIB = 16  # device-side slice size of a snapshot read (see snapshot_u
 PIECE = 2048  # rows per ``paged_scatter_rows`` call: the row count is a COMPILE-time argument (one program per distinct count, ~0.4 s at first use), so every write is split into pieces of the same size (the last one padded with SKIP ids)
 
 
-def scatter_rows_mesh(model, t, per_row, base=0):
+def scatter_rows_mesh(model, t, per_row, base=0, sync_every=1, stats=None, reuse=False):
     """In place: ``t[ids + base] = data`` on the mesh rows of ``per_row`` {mesh row: (ids [n] torch, data [n, D] torch)} only (the other mesh rows get SKIP ids), t a bf16 (or, for the pool, fp8: the
     kernel converts) row-major tensor whose rows are D wide; fixed-size pieces."""
     md, rows, cols = model.md, model.rows, model.cols
     shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
     n, D = next(iter(per_row.values()))[1].shape
+    live = (
+        []
+    )  # (d_src, d_ids) of the pieces enqueued since the last synchronisation (``sync_every`` > 1: DSV41_XROW_SYNC_EVERY, the host prepares the next piece while the device writes this one)
+    bufs = []
     for a in range(0, n, PIECE):
+        _t0 = time.perf_counter()
         m = min(PIECE, n - a)
-        ids = torch.full((rows, 1, PIECE), SKIP, dtype=torch.int64)
-        src = torch.zeros(rows, 1, PIECE, D, dtype=torch.bfloat16)
+        if (
+            reuse and bufs
+        ):  # (DSV41_XROW_BATCH: the host buffers are allocated once; only the rows of the target mesh rows are refilled, the padding of a short last piece re-initialised)
+            ids, src = bufs
+            if m < PIECE:
+                ids.fill_(SKIP)
+                src.zero_()
+        else:
+            ids = torch.full((rows, 1, PIECE), SKIP, dtype=torch.int64)
+            src = torch.zeros(rows, 1, PIECE, D, dtype=torch.bfloat16)
+            if reuse:
+                bufs.extend((ids, src))
         for r, (ids_r, data_r) in per_row.items():
             ids[r, 0, :m] = ids_r[a : a + m].long() + base
             src[r, 0, :m] = data_r[a : a + m]
@@ -167,10 +182,27 @@ def scatter_rows_mesh(model, t, per_row, base=0):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=shard,
         )
+        _t1 = time.perf_counter()
         P.paged_scatter_rows(t, d_src, d_ids)
-        ttnn.synchronize_device(md)  # (the device buffers are freed here)
-        ttnn.deallocate(d_src)
-        ttnn.deallocate(d_ids)
+        _t2 = time.perf_counter()
+        live.append((d_src, d_ids))
+        if stats is not None:
+            stats["prep_s"] = stats.get("prep_s", 0.0) + (_t1 - _t0)  # host: torch buffers + from_torch uploads
+            stats["enq_s"] = stats.get("enq_s", 0.0) + (_t2 - _t1)  # host: the scatter launch
+        if len(live) >= max(1, int(sync_every)):
+            _t3 = time.perf_counter()
+            ttnn.synchronize_device(md)  # (the device buffers are freed here)
+            if stats is not None:
+                stats["sync_s"] = stats.get("sync_s", 0.0) + (time.perf_counter() - _t3)
+            for x, y in live:
+                ttnn.deallocate(x)
+                ttnn.deallocate(y)
+            live = []
+    if live:
+        ttnn.synchronize_device(md)
+        for x, y in live:
+            ttnn.deallocate(x)
+            ttnn.deallocate(y)
 
 
 def _where(mask, new, old):
