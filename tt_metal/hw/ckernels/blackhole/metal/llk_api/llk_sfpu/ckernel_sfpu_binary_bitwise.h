@@ -52,8 +52,10 @@ inline void calculate_sfpu_binary_bitwise(
             result = a ^ b;
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = result;
-        sfpi::dst_reg++;
+        // The store advances the destination by one SFPU row through ADDR_MOD_6 (dest += 2,
+        // what dst_reg++ does), programmed by eltwise_binary_sfpu_configure_addrmod for the
+        // bitwise SfpuTypes; it replaces the separate TTINCRWC per row.
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_6) = result;
     }
 }
 
