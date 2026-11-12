@@ -14,6 +14,11 @@
 //   2 BF16     row (source row) of the bf16 TILE tensor [1, 1, T', 4096] (the main head's h = model.norm(mean X))
 //   3 STACKED  stream 0 of row (source row) of a stacked fp32 residual [T', 1, 4, 4096] (the MTP block's raw output)
 // Source row of output row t: t, or with EH_SEL the device word 0 of the [1, 32] uint32 selector page (T = 1).
+// EH_SEL_ROWS (with EH_SEL; GLM53_SPEC_MULTI, doc/perf/mtp_multi_user_design.md section 6 item 5): output row t's
+// source row = selector word t (the first chained MTP launch: row u = user u, its catch-up row u (K + 1) + n_u =
+// SpecCtl's selector word u; T <= 32).
+// EH_FLAT (EH_IN 3 only; GLM53_SPEC_MULTI): the source is a FLAT residual [1, 1, T', 16384] (an MTP launch of more than
+// 4 rows): stream 0 of row r = row r of column tiles 0..127 (one tile row), instead of the stacked [T', 1, 4, 4096].
 // EH_ROW0 (BF16 only; tt/spec_mtp.py MkEh.norm_h_proj(row0=): the MTP-cache prefill over the TP prefill's final-norm
 // tap [1, 1, C, 4096]): source row of output row t = row0 + t, all in one tile row (row0 % 32 + T <= 32); row0 = word 0
 // of a [1, 32] uint32 DRAM page (its address: the runtime arg after the readers' NoC pairs) -- device-resident, so one
@@ -50,13 +55,25 @@ void kernel_main() {
     for (uint32_t t = 0; t < T; ++t) {
         src_row[t] = t;
     }
-#if defined(EH_SEL)
+#if defined(EH_SEL) && defined(EH_SEL_ROWS)
+    {
+        const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(7), .page_size = 128};
+        noc_async_read(sg.get_noc_addr(0), trow, 128);
+        noc_async_read_barrier();
+        for (uint32_t t = 0; t < T; ++t) {
+            src_row[t] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(trow)[t];
+        }
+    }
+#elif defined(EH_SEL)
     {
         const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(7), .page_size = 128};
         noc_async_read(sg.get_noc_addr(0), trow, 64);
         noc_async_read_barrier();
         src_row[0] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(trow)[0];
     }
+#endif
+#if defined(EH_SEL_ROWS) && !defined(EH_SEL)
+#error "EH_SEL_ROWS needs EH_SEL (the selector page)"
 #endif
 #if defined(EH_ROW0)
     static_assert(EH_IN == 2, "EH_ROW0: the bf16 tile source only");
@@ -126,6 +143,17 @@ void kernel_main() {
             }
         }
     }
+#elif EH_IN == 3 && defined(EH_FLAT)
+    // the flat residual: stream 0 = column tiles 0..127 of its one tile row, row src_row of each (2 face-row reads)
+    for (uint32_t t = 0; t < T; ++t) {
+        for (uint32_t j = 0; j < COLS; ++j) {
+            const uint32_t page = c0 + j;
+            const uint32_t dst = x_l1 + j * FP32_TILE_BYTES;
+            noc_async_read(in.get_noc_addr(page, tile_off(src_row[t], 0) * 4), dst + tile_off(t, 0) * 4, 64);
+            noc_async_read(in.get_noc_addr(page, tile_off(src_row[t], 16) * 4), dst + tile_off(t, 16) * 4, 64);
+        }
+    }
+    noc_async_read_barrier();
 #elif EH_IN == 3
     // stream 0 (tile row 0) of the source row's column tiles: 2 face-row reads of 64 B per tile, as head_dm0
     for (uint32_t t = 0; t < T; ++t) {

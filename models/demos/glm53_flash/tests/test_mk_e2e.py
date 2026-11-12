@@ -32,6 +32,15 @@ effective tok/s/u and the plain step. On the 8x4 shard (B 4):
 
     GLM53_MESH_SHAPE=8,4 GLM53_MK_B=4 GLM53_MK_LIVE=1 GLM53_SPEC_K=3 GLM53_SPEC_ON_SHARD=1 GLM53_MK_ISL=128 \
         GLM53_MK_OSL=128 pytest .../test_mk_e2e.py -s
+
+Multi-user A/B (GLM53_SPEC_MULTI=1, doc/perf/mtp_multi_user_design.md section 6: the backend's step serves G =
+GLM53_SPEC_MULTI_USERS users on the group bases; GLM53_MK_LIVE = G, greedy, text): the G prompts decode through it after
+the plain run; EVERY user's ids must equal its plain ids up to its first near-tie (_spec_ab with live > 1); MK_SPEC_MULTI
+logs tau per user, the step and the effective tok/s/u. On the B 16 slot build at 1 M (G 4: the verify on all 16 rows):
+
+    GLM53_MESH_SHAPE=8,4 GLM53_MK_B=16 GLM53_MK_SEQ=1048576 GLM53_MK_WEIGHT_CACHE=1 GLM53_STACK_NARROW_WIDTHS=1,2,4 \
+        GLM53_STACK_NATIVE_WIDTHS=8 GLM53_SPEC_MULTI=1 GLM53_SPEC_MULTI_USERS=4 GLM53_MK_LIVE=4 GLM53_MK_DISTINCT=1 \
+        GLM53_SPEC_ON_SHARD=1 GLM53_SPEC_K=3 GLM53_MK_ISL=128 GLM53_MK_OSL=128 pytest .../test_mk_e2e.py -s
 """
 
 from __future__ import annotations
@@ -319,6 +328,59 @@ def _last_logits(gen, ids: list[int]):
         b.slots[0].finished = True
 
 
+def _first_mismatch(gen, tok, prompt, plain, sids):
+    """(first index where the spec ids leave the plain ids or None, the plain model's top-2 gap there or None)"""
+    n = min(len(plain), len(sids))
+    first = next((j for j in range(n) if plain[j] != sids[j]), None)
+    if first is None and len(plain) != len(sids):
+        first = n
+    gap = None
+    if first is not None:  # the plain model's top-2 gap at the first mismatch (its context: prompt + plain[:first])
+        lg = _last_logits(gen, list(prompt) + list(plain[:first]))
+        top = lg[: tok.vocab_size].topk(2)
+        gap = float(top.values[0] - top.values[1])
+        logger.info(f"MK_SPEC first mismatch at {first}: plain {plain[first: first + 4]} spec {sids[first: first + 4]} "
+                    f"plain top-2 {top.indices.tolist()} gap {gap:.3f}")  # fmt: skip
+    return first, gap
+
+
+def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing, plain_ms, K, stop) -> None:
+    """GLM53_SPEC_MULTI: the G prompts through the backend's multi-user step (generate_batch(spec_k=K) places them on
+    the group bases) after the plain run on the same build; per user the ids == its plain ids up to its first near-tie
+    (the gate), tau (its committed tokens per step), the plain top-2 gap at a mismatch; MK_SPEC_MULTI lines"""
+    G = len(prompts)
+    souts = gen.generate_batch([list(p) for p in prompts], OSL, stop_on_eos=stop, enable_trace=True, spec_k=K)
+    ttnn.synchronize_device(mesh_device)
+    st = gen.last_batch_timing
+    steps = int(st["spec_steps"])
+    spec_ms = st["decode_s"] / max(1, steps) * 1e3
+    eff = st["decode_steps"] / st["decode_s"] if st["decode_s"] > 0 else 0.0
+    res = [_first_mismatch(gen, tok, prompts[u], plains[u], souts[u]) for u in range(G)]
+    taus = [c / max(1, steps) for c in st.get("spec_committed_u", [0] * G)]
+    for u in range(G):
+        logger.info(f"MK_SPEC_MULTI user {u}: tau {taus[u]:.2f} (committed {st['spec_committed_u'][u]}, accepts "
+                    f"n=0..K {st['spec_accepts_u'][u]}), ids equal {res[u][0] is None} (first mismatch {res[u][0]}, "
+                    f"plain top-2 gap {res[u][1]}); spec ids {souts[u][:16]} plain {plains[u][:16]}")  # fmt: skip
+    logger.info(
+        f"MK_SPEC_MULTI: G {G} K {K} tau mean {sum(taus) / max(1, G):.2f} per user {[round(t, 2) for t in taus]} "
+        f"({steps} steps), spec step {spec_ms:.1f} ms, effective {eff:.1f} tok/s/u (decode {st['decode_steps']} tokens "
+        f"in {st['decode_s'] * 1e3:.0f} ms), plain {plain_ms:.1f} ms/step = {1e3 / plain_ms:.1f} tok/s/u, speedup "
+        f"{eff * plain_ms / 1e3:.2f}x; TTFT spec {st['prefill_s'] * 1e3:.0f} ms vs plain "
+        f"{plain_timing['prefill_s'] * 1e3:.0f} ms (MTP prefill rows {st.get('spec_mtp_prefill_rows')} of "
+        f"{sum(len(p) - 1 for p in prompts)}); ids equal per user {[r[0] is None for r in res]}"
+    )
+    logger.info(f"MK_SPEC_MULTI_TEXT user 0: {tok.decode([t for t in souts[0] if 0 <= t < tok.vocab_size])!r}")
+    logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
+    tie = float(os.environ.get("GLM53_MK_SPEC_TIE", "1.0"))
+    assert steps > 0, "the multi-user speculative path ran no step"
+    min_tau = float(os.environ.get("GLM53_MK_SPEC_MIN_TAU", "0") or 0)
+    if min_tau:
+        assert min(taus) >= min_tau, f"tau per user {taus} below the floor {min_tau}"
+    bad = [(u, f, g) for u, (f, g) in enumerate(res) if f is not None and g >= tie]
+    assert not bad, (f"spec ids differ from plain where the plain top-2 gap >= {tie}: (user, index, gap) {bad}; "
+                     f"{[(souts[u][: f + 4], plains[u][: f + 4]) for u, f, _ in bad]}")  # fmt: skip
+
+
 def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_ms, K, stop) -> None:
     """Stage 17 M0: the same prompt through the speculative step (generate_batch(spec_k=K)) after the plain greedy run
     on the same build; MK_SPEC line + the gate (ids == plain up to the first near-tie)"""
@@ -514,11 +576,15 @@ def test_mk_e2e(mesh_device, monkeypatch):
         assert 1e3 / step_ms >= floor, f"decode {1e3 / step_ms:.1f} tok/s/u < the floor {floor}"
     spec_k = int(os.environ.get("GLM53_SPEC_K", "0") or 0)
     if spec_k > 0 and getattr(backend, "spec", None) is not None and backend.spec.drafter == "mtp":
-        if live == 1 and sampling is None and mm_in is None:
+        G = gen.spec_groups()  # GLM53_SPEC_MULTI: the backend's step serves G users (0: one user)
+        if G and live == G and sampling is None and mm_in is None:
+            _spec_ab_multi(gen, backend, mesh_device, tok, prompts, outs, timing, step_ms, spec_k, stop)
+        elif not G and live == 1 and sampling is None and mm_in is None:
             _spec_ab(gen, backend, mesh_device, tok, prompts[0], outs[0], timing, step_ms, spec_k, stop)
         else:  # (an image prompt never speculates: the MTP-cache prefill embeds token ids, not the feature rows)
             logger.info(
-                f"MK_SPEC: skipped (one greedy text user: GLM53_MK_LIVE=1, no GLM53_MK_TEMP, no image; live {live})"
+                f"MK_SPEC: skipped (greedy text users: GLM53_MK_LIVE=1, or = GLM53_SPEC_MULTI_USERS {G} with "
+                f"GLM53_SPEC_MULTI=1; no GLM53_MK_TEMP, no image; live {live})"
             )
     if isinstance(source, TileCache) and not source.ready:
         source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run

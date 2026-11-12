@@ -565,7 +565,7 @@ class SpecPending:
     events, parses the record and applies the slot's bookkeeping once (`rec` afterwards)."""
 
     binding: Any
-    L: int
+    L: Any  # slot 0's cache length (GLM53_SPEC_MULTI: {group base slot: its cache length})
     pending: Any
     events: list
     rec: Optional[dict] = None
@@ -651,7 +651,19 @@ def _mock_dram_point(backend, label: str):
 # ------------------------------------------------------------------------------------------------ Stage 17 (pure)
 # the speculative step's row counts and the MTP-cache prefill's rows: tt/spec_mtp.py SpecMTP and tt/stack_model.py
 # StackBackend use these; here (no ttnn) so the host tests check them
-def spec_widths(K: int, chunk: int, widths=()) -> dict:
+def spec_multi_groups(env=os.environ) -> int:
+    """GLM53_SPEC_MULTI=1 (default off; doc/perf/mtp_multi_user_design.md section 6, batch 2 = fixed G): the users G of
+    the ONE speculative step per process -- GLM53_SPEC_MULTI_USERS (default 4, >= 2). User u lives in generator slot
+    u (K + 1) (its group base) and verifies on rows u (K + 1) .. u (K + 1) + K; the step speculates only while exactly
+    these G requests are live. 0 = the single-user step (the knob off: every path unchanged)."""
+    if env.get("GLM53_SPEC_MULTI", "0") != "1":
+        return 0
+    G = int(env.get("GLM53_SPEC_MULTI_USERS", "4") or 4)
+    assert G >= 2, ("GLM53_SPEC_MULTI_USERS: >= 2 users (one user is the single-user step: GLM53_SPEC_MULTI=0)", G)
+    return G
+
+
+def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
     """the speculative step's row counts on a backend with decode chunk `chunk` and extra decode widths `widths` (its
     narrow + native widths) -- pure, so StackBackend sizes the sparse_dsa layers' fabric row counts before SpecMTP exists:
       w      K + 1, the draft block (verify rows 0..K, the MTP catch-up rows 0..K)
@@ -662,7 +674,21 @@ def spec_widths(K: int, chunk: int, widths=()) -> dict:
              extra row counts; rows past the block inactive (positions -1); needs wv <= 4, the stacked residual)
       ts     the row counts the sparse_dsa layers' fabric phases must serve for the spec step ({cu, ch} + wv <= 4)
     Defaults with GLM53_SPEC_ON_SHARD=1 (the 8x4 shard, M0): "plain" and "verify" -- on a B = 4 build every spec launch
-    then runs at t = 4 (the plain chunk) and takes no L1 beyond the plain step's; elsewhere "" and "k1" (unchanged)."""
+    then runs at t = 4 (the plain chunk) and takes no L1 beyond the plain step's; elsewhere "" and "k1" (unchanged).
+    groups = G > 0 (GLM53_SPEC_MULTI, spec_multi_groups; mode "multi", GLM53_SPEC_VERIFY_W / _MTP_W not read):
+    w = G (K + 1) rows must be a decode width of the build (the KDA / MLA verify groups split the launch evenly; a
+    group is whole row pairs: K + 1 even) -- wv = cu = w (the catch-up: every group's K + 1 rows), ch = the smallest
+    width >= G (chained row u = user u); ts = those of cu / ch <= 4 (t > 4 runs on the full width's phases, as the
+    native widths)."""
+    if groups:
+        G, g = int(groups), int(K) + 1
+        ws = sorted({int(x) for x in widths} | {int(chunk)})
+        w = G * g
+        assert G >= 1 and (G == 1 or g % 2 == 0) and w <= 16, (
+            "GLM53_SPEC_MULTI: G (K + 1) <= 16 rows, K + 1 even (kda_pre's verify groups: row pairs)", G, K)  # fmt: skip
+        assert w in ws, ("GLM53_SPEC_MULTI: G (K + 1) rows must be a decode width of the build", w, ws)
+        ch = min(x for x in ws if x >= G)
+        return dict(w=w, lone=w, wv=w, cu=w, ch=ch, mode="multi", ts=tuple(sorted(t for t in {w, ch} if t <= 4)))
     w = int(K) + 1
     shard = os.environ.get("GLM53_SPEC_ON_SHARD", "0") == "1"
     lone = min((int(x) for x in widths if int(x) >= w), default=int(chunk))
@@ -2314,6 +2340,21 @@ class Glm53Generator(_ReadinessGenerator):
         sp = getattr(self.backend, "spec", None)
         return int(sp.K) if sp is not None else 0
 
+    # GLM53_SPEC_MULTI (doc/perf/mtp_multi_user_design.md section 6): the backend's step serves G users at once, user u
+    # in generator slot u (K + 1) (its group base; the group's other rows hold its candidate KDA states, no request).
+    # The entry points below take / return per-slot values then: spec_enter(slots) -> {slot: drafts}, spec_step ->
+    # {slot: record}; b.spec = {"groups": {slot: {drafts, bonus}}}. The single-user API is unchanged.
+    def spec_groups(self) -> int:
+        """the users G of the backend's multi-user speculative step (0: the single-user step / none)"""
+        return int(getattr(getattr(self.backend, "spec", None), "groups", 0) or 0)
+
+    def spec_slots(self) -> tuple:
+        """the generator slots the speculating users occupy: (0,), or the G group bases (0, K + 1, 2 (K + 1), ..)"""
+        sp = getattr(self.backend, "spec", None)
+        if sp is None:
+            return ()
+        return tuple(int(s) for s in getattr(sp, "slots", (0,))) if self.spec_groups() else (0,)
+
     def _spec_limit(self, b) -> int:
         """the positions a speculative step may touch: the context, and the drafter's own cache capacity when the step
         has one (SpecMTP.pos_cap: GLM53_DF2_CACHE_CAP)"""
@@ -2325,13 +2366,20 @@ class Glm53Generator(_ReadinessGenerator):
         """the next speculative step of slot 0 fits (its verify + the next drafts: positions up to L + 2K)"""
         b = self._binding(kv_cache)
         sp = getattr(self.backend, "spec", None)
+        if sp is not None and self.spec_groups():  # GLM53_SPEC_MULTI: every user's next step fits
+            lim = self._spec_limit(b)
+            return all(int(b.slots[s].seq_len) + 2 * int(sp.K) + 1 <= lim for s in self.spec_slots())
         return sp is not None and int(b.slots[0].seq_len) + 2 * int(sp.K) + 1 <= self._spec_limit(b)
 
-    def spec_enter(self, kv_cache, slot: int = 0) -> list:
+    def spec_enter(self, kv_cache, slot: int = 0, slots: Optional[Sequence[int]] = None):
         """start speculating for the request in `slot` (must be 0, the only live slot): its next input is made resident
-        in device row 0, the plain position row 0 = its cache length; the bootstrap replay drafts -> the K drafts"""
+        in device row 0, the plain position row 0 = its cache length; the bootstrap replay drafts -> the K drafts.
+        GLM53_SPEC_MULTI: the G requests on the group bases (`slots`, default spec_slots(); exactly the live slots) ->
+        {slot: its K drafts}"""
         b = self._binding(kv_cache)
         sp = getattr(self.backend, "spec", None)
+        if sp is not None and self.spec_groups():
+            return self._spec_enter_groups(b, sp, slots)
         if sp is None or slot != 0:
             raise ValueError(f"speculative step: needs the backend's spec step and slot 0 (slot {slot})")
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
@@ -2368,6 +2416,59 @@ class Glm53Generator(_ReadinessGenerator):
         self.counters["spec_enters"] = self.counters.get("spec_enters", 0) + 1
         return list(rec["drafts"])
 
+    def _spec_row(self, b, s: int) -> torch.Tensor:
+        """slot s's page-table row for the speculative step (the sharded pool: its PHYSICAL row, owner-aware)"""
+        return b.pt_shadow[s] if b.obm is None else b.phys[s]
+
+    def _spec_enter_groups(self, b, sp, slots) -> dict:
+        """spec_enter of GLM53_SPEC_MULTI: every group base holds a live request and nothing else is live; per user the
+        single-user checks (context, the drafter's cache, page coverage); the next inputs resident in the base rows,
+        plain positions = the cache lengths; the bootstrap drafts every group -> {slot: drafts}"""
+        bases = list(self.spec_slots())
+        slots = bases if slots is None else [int(s) for s in slots]
+        if slots != bases:
+            raise ValueError(f"speculative step (GLM53_SPEC_MULTI): the users sit on the group bases {bases} "
+                             f"(got {slots})")  # fmt: skip
+        live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
+        if live != bases:
+            raise ValueError(f"speculative step: the group bases {bases} must be exactly the live slots (live {live})")
+        K, limit = int(sp.K), self._spec_limit(b)
+        for s in bases:
+            L = int(b.slots[s].seq_len)
+            if L < 1 or L + K + 1 > limit:
+                raise ValueError(f"speculative step at length {L} (slot {s}): positions up to {L + K} outside "
+                                 f"[1, {limit})")  # fmt: skip
+            if getattr(sp, "pos_cap", None) and L + 2 * K + 1 > limit:
+                raise ValueError(f"speculative step at length {L} (slot {s}): the drafter's cache holds {limit} "
+                                 "positions")  # fmt: skip
+            if -(-(L + K + 1) // self.backend.block_size) > int(b.coverage[s]):
+                raise ValueError(f"slot {s}: page-table coverage {int(b.coverage[s])} blocks < the spec step's "
+                                 f"{L + K + 1}")  # fmt: skip
+        if b.obm is not None and os.environ.get("GLM53_SPEC_ON_SHARD", "0") != "1":
+            raise NotImplementedError("speculative decode on the sequence-sharded DSA pool (GLM53_DSA_SHARD) needs "
+                                      "GLM53_SPEC_ON_SHARD=1")  # fmt: skip
+        self._sync_tokens(b, {s: -1 for s in bases})
+        pos = torch.full((b.max_batch,), -1, dtype=torch.int64)
+        for s in bases:
+            pos[s] = int(b.slots[s].seq_len)
+        self._write_positions(b, pos)
+        rows = [self._spec_row(b, s) for s in bases]
+        sp.set_page_tables(rows)
+        sp.enter(rows)
+        recs = sp.read()
+        out, groups = {}, {}
+        for s, rec in zip(bases, recs):
+            L = int(b.slots[s].seq_len)
+            if rec["c"] != L - 1 and _MOCK_DEVICE:
+                rec = dict(rec, c=L - 1)  # mock: no kernel ran (zeros)
+            if rec["c"] != L - 1:
+                raise RuntimeError(f"speculative bootstrap of slot {s} at c {rec['c']}, expected {L - 1}")
+            groups[s] = dict(drafts=list(rec["drafts"]), bonus=int(rec["a"][0]))
+            out[s] = list(rec["drafts"])
+        b.spec = dict(groups=groups)
+        self.counters["spec_enters"] = self.counters.get("spec_enters", 0) + 1
+        return out
+
     def spec_step(self, kv_cache, page_row: Optional[torch.Tensor] = None) -> dict:
         """one speculative step (verify + accept + draft, ONE trace replay) -> the record: n accepted drafts, the
         committed tokens a[0..n], the next drafts; slot 0's cache length += n + 1. page_row: slot 0's page-table row
@@ -2384,6 +2485,20 @@ class Glm53Generator(_ReadinessGenerator):
         sp = self.backend.spec
         if getattr(b, "spec", None) is None:
             raise RuntimeError("spec_step without spec_enter")
+        if self.spec_groups():  # GLM53_SPEC_MULTI: page_row = {slot: row} (the users whose rows changed)
+            K, bases = int(sp.K), self.spec_slots()
+            L = {s: int(b.slots[s].seq_len) for s in bases}
+            if page_row is not None:
+                self._write_page_rows(b, {int(s): r for s, r in page_row.items()},
+                                      {int(s): L[int(s)] + K + 1 for s in page_row})  # fmt: skip
+            if any(L[s] + 2 * K + 1 > self._spec_limit(b) for s in bases):
+                raise ValueError(f"speculative step at lengths {L}: the next step's positions pass the context")
+            sp.step()
+            read_async = getattr(sp, "read_async", None)
+            pending, events = read_async() if callable(read_async) else (sp.read(), [])
+            b.spec_pending = h = SpecPending(binding=b, L=L, pending=pending, events=list(events))
+            self.counters["spec_readback_async"] = self.counters.get("spec_readback_async", 0) + int(bool(events))
+            return h
         L = int(b.slots[0].seq_len)
         if page_row is not None:
             self._write_page_rows(b, {0: page_row}, {0: L + sp.K + 1})
@@ -2413,6 +2528,9 @@ class Glm53Generator(_ReadinessGenerator):
         finish = getattr(sp, "finish_read", None)
         rec = finish(handle.pending) if callable(finish) else handle.pending
         b.spec_pending = None
+        if isinstance(handle.L, dict):  # GLM53_SPEC_MULTI: the G records, in group order
+            handle.rec = self._spec_apply_groups(b, handle.L, rec)
+            return handle.rec
         L = handle.L
         if rec["c"] != L and _MOCK_DEVICE:
             # mock: no kernel ran (zeros) -> no accepted draft, the bonus token only; that token must REJECT the block's
@@ -2437,8 +2555,40 @@ class Glm53Generator(_ReadinessGenerator):
         handle.rec = rec
         return rec
 
+    def _spec_apply_groups(self, b, Ls: dict, recs: list) -> dict:
+        """spec_step_collect of GLM53_SPEC_MULTI: per user (group order = the bases) the single-user bookkeeping --
+        cache length += n + 1, the bonus = the next input in its base row, its candidate rows hold no token, the plain
+        position row not advanced -> {slot: record}"""
+        bases = list(Ls)
+        if len(recs) != len(bases):
+            raise RuntimeError(f"speculative step: {len(recs)} records for the {len(bases)} users")
+        K, out, groups = self.spec_k(), {}, {}
+        for s, rec in zip(bases, recs):
+            L = Ls[s]
+            if rec["c"] != L and _MOCK_DEVICE:  # mock: no kernel ran (zeros) -> the bonus only, rejecting draft 1
+                d0 = int(b.spec["groups"][s]["drafts"][0]) if b.spec["groups"].get(s, {}).get("drafts") else -1
+                a = [int(v) for v in rec["a"]]
+                if a[0] == d0:
+                    a[0] = d0 + 1 if d0 + 1 < int(getattr(self.backend, "vocab_size", 1 << 17)) else d0 - 1
+                rec = dict(rec, c=L, n=0, a=a)
+            if rec["c"] != L:
+                raise RuntimeError(f"speculative step base {rec['c']} != slot {s}'s cache length {L}")
+            n = int(rec["n"])
+            b.slots[s].seq_len = L + n + 1
+            b.tok_val[s], b.dev_ok[s] = int(rec["a"][n]), True
+            b.dev_ok[s + 1 : s + K + 1] = False  # (the group's candidate rows hold its drafts)
+            b.pos_shadow[s] = -2
+            groups[s] = dict(drafts=list(rec["drafts"]), bonus=int(rec["a"][n]))
+            out[s] = rec
+            self.counters["spec_tokens"] = self.counters.get("spec_tokens", 0) + n + 1
+        b.step += 1
+        b.spec = dict(groups=groups)
+        self.counters["spec_steps"] = self.counters.get("spec_steps", 0) + 1
+        return out
+
     def _spec_settle(self, b) -> None:
-        """collect the binding's outstanding speculative step (spec_step_submit), if any"""
+        """collect the binding's outstanding speculative step (spec_step_submit), if any (GLM53_SPEC_MULTI: every
+        user's record: one handle per step)"""
         h = getattr(b, "spec_pending", None)
         if h is not None:
             self.spec_step_collect(h)
@@ -2462,6 +2612,21 @@ class Glm53Generator(_ReadinessGenerator):
         if getattr(b, "spec", None) is None:
             return
         self._spec_settle(b)
+        if "groups" in b.spec:  # GLM53_SPEC_MULTI: every user's committed row -> its base row, its plain position
+            recs = self.backend.spec.leave()
+            b.pos_shadow = self.backend.read(b.io.cur_pos).to(torch.int64).reshape(-1)[: b.max_batch].clone()
+            K = self.spec_k()
+            for s, rec in zip(self.spec_slots(), recs):
+                if _MOCK_DEVICE and int(b.pos_shadow[s]) != int(b.slots[s].seq_len):
+                    b.pos_shadow[s] = int(b.slots[s].seq_len)  # mock: no kernel ran (zeros)
+                    rec = dict(rec, c=int(b.slots[s].seq_len) - int(rec["n"]) - 1)
+                if int(b.pos_shadow[s]) != rec["c"] + rec["n"] + 1 or int(b.pos_shadow[s]) != int(b.slots[s].seq_len):
+                    raise RuntimeError(f"spec_leave: slot {s}'s plain position {int(b.pos_shadow[s])} != its length "
+                                       f"{b.slots[s].seq_len}")  # fmt: skip
+                b.dev_ok[s + 1 : s + K + 1] = False
+            b.spec = None
+            self.counters["spec_leaves"] = self.counters.get("spec_leaves", 0) + 1
+            return
         rec = self.backend.spec.leave()
         b.pos_shadow = self.backend.read(b.io.cur_pos).to(torch.int64).reshape(-1)[: b.max_batch].clone()
         if _MOCK_DEVICE and int(b.pos_shadow[0]) != int(b.slots[0].seq_len):
@@ -2634,7 +2799,9 @@ class Glm53Generator(_ReadinessGenerator):
         cache (backend arm_mtp_prefill), then spec_enter, spec_step until max_new_tokens / a stop token (a step commits
         n + 1 tokens: the outputs are plain greedy's), spec_leave; where the context leaves no room for a step the rest
         decodes plainly. last_batch_timing then also holds spec_steps / spec_committed (sum of n + 1) / spec_emitted /
-        spec_accepts (histogram of n) / spec_mtp_prefill_rows (_spec_decode)."""
+        spec_accepts (histogram of n) / spec_mtp_prefill_rows (_spec_decode). With the backend's GLM53_SPEC_MULTI step
+        (G users): exactly G greedy text prompts, placed on the group bases (slots None -> spec_slots()), each prefilled
+        on the per-user path with its group's MTP cache armed; _spec_decode_groups (per-user stats too)."""
         n = len(prompts)
         if n == 0:
             return []
@@ -2654,6 +2821,10 @@ class Glm53Generator(_ReadinessGenerator):
         # two prefills is ~20 ms per step)
         t_start = _time.perf_counter()
         self.last_batch_timing = None
+        # GLM53_SPEC_MULTI (spec_k with the backend's G-user step): the G prompts go to the group bases (no slot moves)
+        multi = bool(spec_k) and self.spec_groups() > 0
+        if multi and slots is None and n == len(self.spec_slots()):
+            slots = list(self.spec_slots())
         slots = list(slots) if slots is not None else list(range(n))
         if len(slots) != n or len(set(slots)) != n or any(not 0 <= s < b.max_batch for s in slots):
             raise ValueError(f"need {n} distinct slots in [0, {b.max_batch})")
@@ -2679,7 +2850,8 @@ class Glm53Generator(_ReadinessGenerator):
         user_of = {s: i for i, s in enumerate(slots)}
         feed: dict[int, int] = {}  # slot -> token fed at the next decode step (the prediction or a forced one)
         spec_rows = None  # Stage 17: the MTP-cache prefill armed for slot 0's prompt (backend arm_mtp_prefill)
-        if spec_k and callable(getattr(self.backend, "arm_mtp_prefill", None)):
+        arm = getattr(self.backend, "arm_mtp_prefill", None)
+        if spec_k and callable(arm) and not multi:
             spec_rows = 0 if self.backend.arm_mtp_prefill(slots[0], torch.as_tensor(list(prompts[0]))) else None
         spec_stats = None
         try:
@@ -2687,9 +2859,11 @@ class Glm53Generator(_ReadinessGenerator):
             # groups of fresh users admitted by one batched-prefill replay when the backend captured one)
             mk = lambda i: SlotState(active=True, params=params[i], max_new_tokens=mnt[i],  # noqa: E731
                                      stop_ids=stops if stop_on_eos else frozenset())  # fmt: skip
-            admitted = self._admit_batch(b, [(i, s, torch.as_tensor(list(p), dtype=torch.int64), mk(i))
-                                             for i, (p, s) in enumerate(zip(prompts, slots))
-                                             if mm[i] is None])  # fmt: skip
+            # (GLM53_SPEC_MULTI: every user on the per-user path, its prefill armed for its group's MTP cache -- a
+            # batched / packed admission fills no MTP rows)
+            admitted = {} if multi else self._admit_batch(b, [(i, s, torch.as_tensor(list(p), dtype=torch.int64), mk(i))
+                                                              for i, (p, s) in enumerate(zip(prompts, slots))
+                                                              if mm[i] is None])  # fmt: skip
             for i, (p, s) in enumerate(zip(prompts, slots)):
                 if i in admitted:
                     self._emit(b, s, outputs[i], admitted[i], next_input, user_of, feed)
@@ -2697,15 +2871,23 @@ class Glm53Generator(_ReadinessGenerator):
                 b.slots[s] = st = mk(i)
                 self._new_request_rng(b, s, params[i])
                 ids = torch.as_tensor(list(p), dtype=torch.int64)
-                if self.host_sampling:
-                    logits = self._prefill_user(b, s, ids, sample=None, mm=mm[i])
-                    p0 = int(self.host_sampler.sample(logits.float(), [params[i]], [s])[0])
-                    self.counters["host_sampling_steps"] += 1
-                else:
-                    p0 = self._prefill_user(b, s, ids, sample=params[i], mm=mm[i])
+                armed = multi and callable(arm) and bool(arm(s, ids))
+                try:
+                    if self.host_sampling:
+                        logits = self._prefill_user(b, s, ids, sample=None, mm=mm[i])
+                        p0 = int(self.host_sampler.sample(logits.float(), [params[i]], [s])[0])
+                        self.counters["host_sampling_steps"] += 1
+                    else:
+                        p0 = self._prefill_user(b, s, ids, sample=params[i], mm=mm[i])
+                finally:
+                    if armed:
+                        spec_rows = (spec_rows or 0) + int(self.backend.disarm_mtp_prefill())
                 self._emit(b, s, outputs[i], p0, next_input, user_of, feed)
             t_first = _time.perf_counter()
-            if spec_k:  # Stage 17 M0: the speculative steps first; the plain loop below decodes whatever they leave
+            if spec_k and multi:  # GLM53_SPEC_MULTI: the G users' speculative steps, then the plain loop
+                spec_stats = self._spec_decode_groups(b, slots, outputs, int(spec_k), user_of, feed)
+                spec_stats["spec_mtp_prefill_rows"] = spec_rows
+            elif spec_k:  # Stage 17 M0: the speculative steps first; the plain loop below decodes whatever they leave
                 if spec_rows is not None:
                     spec_rows = self.backend.disarm_mtp_prefill()
                 spec_stats = self._spec_decode(b, slots[0], outputs[0], int(spec_k), user_of, feed)
@@ -2794,7 +2976,11 @@ class Glm53Generator(_ReadinessGenerator):
             why.append("a text prompt (no image rows: the MTP-cache prefill embeds the placeholder ids)")
         if self.spec_k() != K:
             why.append(f"the backend's speculative step with K = {K} (GLM53_SPEC_K; the backend has {self.spec_k()})")
-        if list(slots) != [0]:
+        if self.spec_groups():  # GLM53_SPEC_MULTI: exactly G prompts, on the group bases
+            if list(slots) != list(self.spec_slots()):
+                why.append(f"{self.spec_groups()} prompts on the group bases {list(self.spec_slots())} "
+                           f"(GLM53_SPEC_MULTI; slots {list(slots)})")  # fmt: skip
+        elif list(slots) != [0]:
             why.append(f"one prompt in slot 0 (slots {list(slots)})")
         if not all(p.is_greedy for p in params):
             why.append("greedy sampling (the verify accepts on the top-1)")
@@ -2835,6 +3021,45 @@ class Glm53Generator(_ReadinessGenerator):
                         break
         except BaseException:
             self.spec_abort(kv)  # (the speculation's state is dead; the request ends with the exception)
+            raise
+        self.spec_leave(kv)
+        return stats
+
+    def _spec_decode_groups(self, b, slots: Sequence[int], outputs: list, K: int, user_of: dict, feed: dict) -> dict:
+        """GLM53_SPEC_MULTI: _spec_decode for the G users on the group bases -- spec_enter, then spec_step while every
+        user still runs and every next step fits (v1: speculation only while exactly the G requests are live: the first
+        user to finish ends it for all), each step emitting every user's committed a_0..a_n; then spec_leave and the
+        plain loop decodes the rest. Stats as _spec_decode's (summed over the users: spec_committed / spec_steps = the
+        mean committed tokens per user-step x G) + per user spec_committed_u / spec_emitted_u / spec_accepts_u."""
+        kv, G = b.kv_cache, len(slots)
+        stats = dict(spec_steps=0, spec_committed=0, spec_emitted=0, spec_accepts=[0] * (K + 1), spec_enters=0,
+                     spec_users=G, spec_committed_u=[0] * G, spec_emitted_u=[0] * G,
+                     spec_accepts_u=[[0] * (K + 1) for _ in range(G)])  # fmt: skip
+        sts = [b.slots[s] for s in slots]
+        if any(st.finished for st in sts) or not self.spec_room(kv):
+            return stats
+        self._sync_tokens(b, {s: feed[s] for s in slots})  # the next inputs (the prefills' samples) in the base rows
+        self.spec_enter(kv, slots=slots)
+        stats["spec_enters"] += 1
+        try:
+            while not any(st.finished for st in sts) and self.spec_room(kv):
+                recs = self.spec_step(kv)
+                stats["spec_steps"] += 1
+                for u, s in enumerate(slots):
+                    rec, st = recs[s], sts[u]
+                    n = int(rec["n"])
+                    stats["spec_committed"] += n + 1
+                    stats["spec_committed_u"][u] += n + 1
+                    stats["spec_accepts"][n] += 1
+                    stats["spec_accepts_u"][u][n] += 1
+                    for tok in rec["a"][: n + 1]:  # a_0..a_n = plain greedy's next n + 1 tokens of this user
+                        self._emit(b, s, outputs[user_of[s]], int(tok), None, user_of, feed)
+                        stats["spec_emitted"] += 1
+                        stats["spec_emitted_u"][u] += 1
+                        if st.finished:
+                            break
+        except BaseException:
+            self.spec_abort(kv)
             raise
         self.spec_leave(kv)
         return stats

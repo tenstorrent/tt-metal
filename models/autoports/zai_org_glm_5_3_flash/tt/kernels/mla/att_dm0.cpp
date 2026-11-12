@@ -20,6 +20,9 @@
 // hold a latent another row of this launch writes -> the latent-write hand-off is waited for before the first such
 // tile (not only before the tile of the token's own row p; with token lanes a lane reads row 0's tile for its token
 // without having waited otherwise).
+// MLA_ATT_GROUP_ROWS = g (with MLA_ATT_VERIFY; GLM53_SPEC_MULTI's MTP catch-up, doc/perf/mtp_multi_user_design.md
+// section 6): the T rows are T / g groups of g consecutive positions of one user each (its own page-table row, its own
+// cache blocks): row t's rule is its group's first row's position tile (row (t / g) g) instead of row 0's.
 // Token lanes (att_common.hpp LANES): this core's lane takes tokens lane, lane + LANES, ...; c / C are lane-local; the
 // row tiles of a token go in batches of <= NKMAX (plan kind KIND_BATCHED, then one plan page per batch).
 
@@ -90,7 +93,9 @@ void kernel_main() {
     // (off the W_uk weight stream's DRAM window)
     bool lat_ok = LAT_COUNT == 0;
     bool waited = WAIT_COUNT == 0;
-#if defined(MLA_ATT_VERIFY)
+#if defined(MLA_ATT_VERIFY) && defined(MLA_ATT_GROUP_ROWS)
+#define MLA_LAT_WAIT_HERE(i_, jt_) ((i_) == mi || (jt_) >= vtg)  // vtg: the row's group base tile (below)
+#elif defined(MLA_ATT_VERIFY)
     const int32_t vpos0 = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr)[0];
     const uint32_t vt0 = vpos0 < 0 ? 0xFFFFFFFFu : static_cast<uint32_t>(vpos0) / 32;  // row 0's position tile
 #define MLA_LAT_WAIT_HERE(i_, jt_) ((i_) == mi || (jt_) >= vt0)
@@ -103,6 +108,11 @@ void kernel_main() {
         const uint32_t nk = mlaatt::chunk_tiles(p, c, C);
         const uint32_t last = p / 32;
         const uint32_t mi = (last % C == c) ? (last - c) / C : 0xFFFFu;
+#if defined(MLA_ATT_VERIFY) && defined(MLA_ATT_GROUP_ROWS)
+        const int32_t vposg =
+            reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr)[(t / MLA_ATT_GROUP_ROWS) * MLA_ATT_GROUP_ROWS];
+        const uint32_t vtg = vposg < 0 ? 0xFFFFFFFFu : static_cast<uint32_t>(vposg) / 32;  // the group base's tile
+#endif
 #if defined(MLA_ATT_LANES)
         plan(nk, mi, mlaatt::KIND_BATCHED);
         if (nk == 0) {

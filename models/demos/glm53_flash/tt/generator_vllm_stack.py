@@ -113,9 +113,9 @@ PREFIX_HEAD = int(os.environ.get("GLM53_STACK_PREFIX_HEAD", "16384"))
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
 # GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a B 16
-# build (GLM53_SPEC_MULTI_W, default 16) with generator.spec_multi_plan's row groups. Until the backend's multi-user
-# step exists (``spec_multi_capable``) the plan only widens the launch: rows the lone step cannot verify keep
-# DraftOutput.num_valid = 0 (plain decode), exactly as the single-user plan's multi-row steps
+# build (GLM53_SPEC_MULTI_W, default 16) with generator.spec_multi_plan's row groups. The backend's multi-user step
+# (``spec_multi_capable``: batch 2's fixed G = GLM53_SPEC_MULTI_USERS) verifies exactly G greedy requests on the group
+# bases; any other step keeps DraftOutput.num_valid = 0 (plain decode), exactly as the single-user plan's multi-row steps
 SPEC_MULTI_ENV = "GLM53_SPEC_MULTI"
 
 
@@ -829,7 +829,13 @@ class GLM53StackForCausalLM:
         if self.spec:
             self._spec_admit(gslots, gen_starts, extra.get("prefix_attach", {}), plan["vision"] if plan else ())
         armed = False
-        if (self.spec and 0 in gslots and 0 not in self._no_spec
+        if self.spec and self.spec_multi_capable and callable(getattr(self.gen.backend, "arm_mtp_prefill", None)):
+            # GLM53_SPEC_MULTI: every group base of the call fills its user's MTP cache
+            bases = set(self.gen.spec_slots())
+            for i, g in enumerate(gslots):
+                if g in bases and g not in self._no_spec:
+                    armed = bool(self.gen.backend.arm_mtp_prefill(g, tokens[i, : ends[i]].to(torch.int64))) or armed
+        elif (self.spec and 0 in gslots and 0 not in self._no_spec
                 and callable(getattr(self.gen.backend, "arm_mtp_prefill", None))):  # fmt: skip
             i0 = gslots.index(0)
             armed = bool(self.gen.backend.arm_mtp_prefill(0, tokens[i0, : ends[i0]].to(torch.int64)))
@@ -1057,6 +1063,24 @@ class GLM53StackForCausalLM:
         return (live == [0] and bool(self._greedy.get(0, False)) and 0 not in self._no_spec
                 and self.gen.spec_room(kv))  # fmt: skip
 
+    @property
+    def spec_multi_capable(self) -> bool:
+        """GLM53_SPEC_MULTI with the backend's multi-user step (tt/spec_mtp.py groups: G = GLM53_SPEC_MULTI_USERS users
+        on the group bases, one step) -- the opt-in plan's multi-row verifies run on it"""
+        return bool(self.spec) and self.gen.spec_groups() > 0
+
+    def _spec_multi_ok(self, kv) -> bool:
+        """GLM53_SPEC_MULTI v1 gate: the live requests are exactly the G group bases, every one greedy and allowed to
+        speculate, and every user's next step fits (the context, GLM53_SPEC_MAX_CTX: Glm53Generator.spec_room)"""
+        b = self.gen._binding(kv)
+        live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
+        bases = list(self.gen.spec_slots())
+        return (bool(bases) and live == bases and all(bool(self._greedy.get(s, False)) for s in bases)
+                and not set(bases) & self._no_spec and self.gen.spec_room(kv))  # fmt: skip
+
+    def _spec_gate(self, kv) -> bool:
+        return self._spec_multi_ok(kv) if self.spec_multi_capable else self._spec_lone(kv)
+
     def _spec_admit(self, gslots, starts, attach, vision) -> None:
         """the speculation verdict of the requests one prefill call admits or continues: a request whose MTP cache
         would lack rows never speculates (its steps decline: plain decode) --
@@ -1076,7 +1100,7 @@ class GLM53StackForCausalLM:
         one bootstrap fills the MTP cache's row L - 1 (the first token after the prompt: the prefill's in-trace fill
         stops at L - 2) and is left again (GLM53_STACK_VLLM_SPEC_SEED=0: off) -- the plugin's first decode is an
         ordinary one, after which the speculation enters at L"""
-        if os.environ.get("GLM53_STACK_VLLM_SPEC_SEED", "1") != "1" or not self._spec_lone(kv):
+        if os.environ.get("GLM53_STACK_VLLM_SPEC_SEED", "1") != "1" or not self._spec_gate(kv):
             return
         try:
             self.gen.spec_enter(kv)
@@ -1114,10 +1138,14 @@ class GLM53StackForCausalLM:
             raise ValueError(f"num_valid_drafts {int(nv.numel())} rows vs the block's {B}")
         VerifyOutput = contract_types()["VerifyOutput"]
         alias = self._permuted(slot_remap)
-        r = self._fused_row(kv, alias, tok, pos, nv)
+        fused = self._fused_rows if self.spec_multi_capable else self._fused_row  # (GLM53_SPEC_MULTI: every user's row)
+        r = fused(kv, alias, tok, pos, nv)
         if r is not None:
             rows = trim_page_rows(page_table)[:B] if page_table is not None else None
-            row = None if rows is None else rows[r]
+            if isinstance(r, dict):  # GLM53_SPEC_MULTI: {plugin row: group base} -> the users' rows
+                row = None if rows is None else {g: rows[i] for i, g in r.items()}
+            else:
+                row = None if rows is None else rows[r]
             self._alias, self._chain = alias, []
             if (
                 self.spec_async and not read_from_device
@@ -1158,9 +1186,48 @@ class GLM53StackForCausalLM:
             return None
         return r
 
-    def _spec_ids(self, rec: dict, r: int, B: int, W: int) -> torch.Tensor:
+    def _fused_rows(self, kv, alias, tok, pos, nv):
+        """GLM53_SPEC_MULTI: {plugin row: group base} when the verify block is exactly the G users' next step (every
+        live row a group base's request, all G of them, each _fused_row's conditions against its own bonus / drafts /
+        cache length), else None"""
+        b = self.gen._binding(kv)
+        sp = getattr(b, "spec", None)
+        K = self.gen.spec_k()
+        B, W = (int(v) for v in tok.shape)
+        live = [i for i in range(B) if int(pos[i, 0]) >= 0]
+        bases = list(self.gen.spec_slots())
+        if sp is None or "groups" not in sp or W != K + 1 or sorted(alias[i] for i in live) != bases:
+            return None
+        out = {}
+        for i in live:
+            g, p0 = alias[i], int(pos[i, 0])
+            mine = sp["groups"][g]
+            if int(nv[i]) != K or p0 != int(b.slots[g].seq_len) or int(tok[i, 0]) != int(mine["bonus"]):
+                return None
+            if [int(v) for v in tok[i, 1:].tolist()] != [int(v) for v in mine["drafts"]]:
+                return None
+            if [int(v) for v in pos[i].tolist()] != list(range(p0, p0 + W)):
+                return None
+            out[i] = g
+        return out
+
+    def _spec_ids(self, rec: dict, r, B: int, W: int) -> torch.Tensor:
         """a fused step's record -> the verify's ``[B, W]`` argmax ids (row r: the K + 1 verify argmax, padding rows 0)
-        + the adapter's bookkeeping (the accepted count its proposal must continue, the stats)"""
+        + the adapter's bookkeeping (the accepted count its proposal must continue, the stats). GLM53_SPEC_MULTI: r =
+        {plugin row: group base}, rec = {group base: record}"""
+        if isinstance(r, dict):
+            ids = torch.zeros(B, W, dtype=torch.int32)
+            self._spec_n = {}
+            for i, g in r.items():
+                ids[i] = torch.tensor([int(v) for v in rec[g]["a"][:W]], dtype=torch.int32)
+                self._spec_n[g] = int(rec[g]["n"])
+                self.spec_stats["committed"] += int(rec[g]["n"]) + 1
+            self.spec_stats["fused"] += 1
+            if self.spec_stats["fused"] % 256 == 0:
+                st = self.spec_stats
+                logger.info(f"GLM53 stack spec (multi): {st} (tau per user "
+                            f"{st['committed'] / max(1, st['fused'] * len(r)):.2f})")  # fmt: skip
+            return ids
         ids = torch.zeros(B, W, dtype=torch.int32)
         ids[r] = torch.tensor([int(v) for v in rec["a"][:W]], dtype=torch.int32)
         self._spec_n = int(rec["n"])
@@ -1209,6 +1276,8 @@ class GLM53StackForCausalLM:
         kv = self.kv_cache
         b = self.gen._binding(kv)
         live = [i for i in range(B) if int(cp[i, 0]) >= 0]
+        if self.spec_multi_capable:
+            return self._propose_multi(K, ct, cp, ac, b, kv, live, drafts, nvalid, DraftOutput)
         r = live[0] if len(live) == 1 else None
         ok = r is not None and self._alias[r] == 0 and K == self.gen.spec_k() and self._spec_lone(kv)
         if ok:
@@ -1239,6 +1308,46 @@ class GLM53StackForCausalLM:
             return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
         drafts[r] = torch.tensor([int(v) for v in d[:K]], dtype=torch.int32)
         nvalid[r] = K
+        self.spec_stats["proposals"] += 1
+        return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
+
+    def _propose_multi(self, K, ct, cp, ac, b, kv, live, drafts, nvalid, DraftOutput):
+        """propose_draft_tokens of GLM53_SPEC_MULTI: K drafts for every live row when the live requests are exactly the
+        G greedy users on the group bases (_spec_multi_ok) and each row's committed block ends at its slot's cache
+        length -- the bootstrap's drafts (entering) or the last fused step's, which continue exactly its committed
+        block per user; else every row declines (the speculation is left: the next step decodes plainly)"""
+        rows = {i: self._alias[i] for i in live}
+        ok = K == self.gen.spec_k() and sorted(rows.values()) == list(self.gen.spec_slots()) and self._spec_multi_ok(kv)
+        last = {i: int(ac[i]) - 1 for i in live}
+        if ok:
+            ok = all(int(cp[i, last[i]]) == int(b.slots[g].seq_len) for i, g in rows.items())
+        sp = getattr(b, "spec", None)
+        d = None
+        if ok and sp is not None:  # (_spec_n None: entered, no step yet -- a repeated proposal of the same state)
+            for i, g in rows.items():
+                n = self._spec_n.get(g) if isinstance(self._spec_n, dict) else None
+                if (n is not None and last[i] != n) or int(ct[i, last[i]]) != int(sp["groups"][g]["bonus"]):
+                    raise RuntimeError(
+                        f"proposal after a fused verify (slot {g}): the plugin committed {last[i] + 1} tokens ending "
+                        f"{int(ct[i, last[i]])}, the device {None if n is None else n + 1} ending {sp['groups'][g]['bonus']}"
+                    )
+            d = {g: list(sp["groups"][g]["drafts"]) for g in rows.values()}
+        elif ok:
+            try:
+                d = self.gen.spec_enter(kv)
+            except ValueError as e:  # (a refusal of the generator's: page coverage / context -> decline this step)
+                logger.warning(f"GLM53 stack spec: no multi-user bootstrap ({e})")
+                ok = False
+            else:
+                self._spec_n = None
+                self.spec_stats["enters"] += 1
+        if not ok:
+            self._spec_stop(kv)
+            self.spec_stats["declines"] += 1
+            return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
+        for i, g in rows.items():
+            drafts[i] = torch.tensor([int(v) for v in d[g][:K]], dtype=torch.int32)
+            nvalid[i] = K
         self.spec_stats["proposals"] += 1
         return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
 
@@ -1287,6 +1396,10 @@ class GLM53StackForCausalLM:
                     f"live {sorted(live)}): the plugin's ownership map and the alias diverged"
                 )
             free = [x for x in range(n) if x not in taken]
+            if self.spec and self.spec_multi_capable:  # GLM53_SPEC_MULTI: the free group bases first (the users that
+                # can speculate sit there: no slot moves in v1)
+                bases = set(self.gen.spec_slots())
+                free.sort(key=lambda x: (x not in bases, x))
             if not free:
                 raise RuntimeError(f"no free generator slot for the prefill batch {slots} (live {sorted(live)})")
             lowest = free[0]
@@ -1344,7 +1457,12 @@ class GLM53StackForCausalLM:
             raise ValueError(f"release_request({slot}) outside the {self.max_batch} slots")
         g = self._alias[int(slot)]
         self._spec_settle()
-        if self.spec and g == 0 and getattr(self.gen._binding(self.kv_cache), "spec", None) is not None:
+        if (self.spec and self.spec_multi_capable and g in self.gen.spec_slots()
+                and getattr(self.gen._binding(self.kv_cache), "spec", None) is not None):  # fmt: skip
+            # GLM53_SPEC_MULTI: the other users' committed KDA rows sit in their candidate rows -> leave (every user's
+            # row to its base), not abort; this request's own copy is dead state
+            self._spec_stop(self.kv_cache)
+        elif self.spec and g == 0 and getattr(self.gen._binding(self.kv_cache), "spec", None) is not None:
             self.gen.spec_abort(self.kv_cache)  # the speculating request ended: its candidate rows are dead state
             self._spec_n = None
         if self.spec and g == 0:  # (the served smoke's evidence: tau = committed tokens per fused step so far)

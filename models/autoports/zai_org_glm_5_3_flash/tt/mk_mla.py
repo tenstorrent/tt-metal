@@ -2078,10 +2078,13 @@ class MkMla(_MlaBase):
                 # with DSA (rev 56) every row scores the launch's slot (att_dsa_dm0.cpp waits for the whole latent write
                 # and for every row's index writes before its first sparse row)
                 vg = int(os.environ.get("GLM53_MLA_VERIFY_GROUPS", "0") or 0)
-                assert t <= 8 or (vg > 1 and self.dsa is not None and t <= 16), ("MLA_ATT_VERIFY: t <= 8", t, vg)
+                assert t <= 8 or (vg > 1 and t <= 16), ("MLA_ATT_VERIFY: t <= 8", t, vg)
                 defs.append(("MLA_DSA_ONE_SLOT", "1") if self.dsa is not None else ("MLA_ATT_VERIFY", "1"))
                 if vg > 1 and self.dsa is not None:  # GLM53_SPEC_MULTI: each row scores its group's slot
                     defs.append(("MLA_DSA_GROUP_ROWS", str(t // vg)))
+                elif vg > 1:  # GLM53_SPEC_MULTI's MTP catch-up (dense): each row's latent rule = its group base's tile
+                    assert t % vg == 0, ("GLM53_MLA_VERIFY_GROUPS: equal groups", t, vg)
+                    defs.append(("MLA_ATT_GROUP_ROWS", str(t // vg)))
             if self.att_nkmax(t) != ATT_NKMAX:  # rev 32: every owner kernel sizes its batches by it (att_common.hpp)
                 defs.append(("MLA_ATT_NKMAX", str(self.att_nkmax(t))))
             if name == "writer" and self.ot(t):  # rev 30: the roots write o_T (att_dm1.cpp; real heads per group)

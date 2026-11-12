@@ -3317,6 +3317,8 @@ class TPPrefill:
         writes the scratch pages (an unarmed chunk never touches a request's)"""
         ins = self.mtp_inputs(c)
         req = self.mtp_req
+        if req is not None and "slots" in req:  # GLM53_SPEC_MULTI: this slot's armed request (a group base), if any
+            req = req["slots"].get(int(slot))
         armed = req is not None and int(req["slot"]) == int(slot)
         if not armed and not ins["armed"]:
             return  # (still the scratch pages and zero tokens)
@@ -3325,7 +3327,8 @@ class TPPrefill:
         scratch = self.b.spec.pf_scratch_pages(c // BLOCK)
         tok, pages = torch.zeros(c, dtype=torch.int64), scratch
         if armed:
-            row = self.b.spec.mtp_row(self.page_row(slot))  # (the MTP cache's row of the slot: private or physical)
+            # (the MTP cache's row of the slot: private or physical; GLM53_SPEC_MULTI: its user's private cache)
+            row = self.b.spec.mtp_row(self.page_row(slot), slot=slot)
             tok, pages, n = mtp_fill_inputs(chunk_start, n_valid, c, BLOCK, req["ids"], row, scratch)
             req["rows"] += n
         sp = self.mode(c) == "sp"

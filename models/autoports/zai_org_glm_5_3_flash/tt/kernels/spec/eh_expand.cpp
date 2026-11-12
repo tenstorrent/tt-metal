@@ -7,6 +7,9 @@
 // fp32: tile (t, c0 + j) rows 0..3 = row t of x0's column tile c0 + j (the 4 identical streams of the identity mHC,
 // design.md §3; MkEmbed's layout), every other row 0. bf16 -> fp32 is exact (bits << 16).
 // Compile-time args: TensorAccessorArgs of x0, res. Runtime args: x0, res addresses, c0, T (<= 4).
+// EH_FLAT (GLM53_SPEC_MULTI, doc/perf/mtp_multi_user_design.md section 6: an MTP launch of more than 4 rows): res is
+// the FLAT residual [1, 1, T, 16384] (T <= 32): stream s's column tile c0 + j = page s * 128 + c0 + j, rows 0..T-1 =
+// x0's rows (MkEmbed's flat layout), the rest 0.
 // CB 8 (kernels/head/head_common.hpp EMB_CB): 2 KB bf16 staging + one fp32 tile (+ 64-B alignment).
 #include <cstdint>
 
@@ -34,6 +37,17 @@ void kernel_main() {
             noc_async_read(zeros, tile + off, MEM_ZEROS_SIZE);
         }
         noc_async_read_barrier();
+#if defined(EH_FLAT)
+        for (uint32_t t = 0; t < T; ++t) {
+            for (uint32_t c = 0; c < TILE; ++c) {
+                d[tile_off(t, c)] = static_cast<uint32_t>(s[tile_off(t, c)]) << 16;
+            }
+        }
+        for (uint32_t st = 0; st < N_STREAMS; ++st) {  // the 4 identical streams
+            noc_async_write_page(st * COL_TILES + c0 + j, res, tile);
+        }
+        noc_async_write_barrier();  // the tile is rebuilt for the next column
+#else
         for (uint32_t t = 0; t < T; ++t) {
             for (uint32_t c = 0; c < TILE; ++c) {
                 const uint32_t v = static_cast<uint32_t>(s[tile_off(t, c)]) << 16;
@@ -44,5 +58,6 @@ void kernel_main() {
             noc_async_write_page(t * COL_TILES + c0 + j, res, tile);
             noc_async_write_barrier();  // the tile is rebuilt for the next row
         }
+#endif
     }
 }

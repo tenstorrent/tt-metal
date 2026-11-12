@@ -146,8 +146,8 @@ def test_mk_layer_verify_groups(mesh_device):
     attn = layer.w.attn
     keep = {a: getattr(attn, a) for a in SHARED_ATTN_KNOBS if hasattr(attn, a)}
     attn.kda_verify_sel = sel
-    if U > 1:
-        attn.kda_verify_groups = True
+    if U > 1:  # (the user count: kda_pre's KDA_VERIFY_GROUPS = G reads it as an int, kda_rec as a flag)
+        attn.kda_verify_groups = U
     try:
         with env(GLM53_REC_UGROUPS=str(U)):
             vlayer = TPDenseKDALayer(mesh_device, cfg, LAYER, source, ocfg, b=W, probe=False, vtp=VTP, weights=layer.w)

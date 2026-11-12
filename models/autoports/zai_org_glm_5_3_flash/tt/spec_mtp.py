@@ -31,7 +31,11 @@ import torch
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_KDA
-from models.autoports.zai_org_glm_5_3_flash.tt.generator import mtp_prefill_span, spec_widths  # noqa: F401 (ttnn-free)
+from models.autoports.zai_org_glm_5_3_flash.tt.generator import (  # noqa: F401 (ttnn-free)
+    mtp_prefill_span,
+    spec_multi_groups,
+    spec_widths,
+)
 from models.autoports.zai_org_glm_5_3_flash.tt.rt_guard import checked
 
 MTP_L = 45  # conventions.mtp_layer (weights/manifest.json)
@@ -270,7 +274,10 @@ class MkEh:
         return self.hcat[t], self.out[t]
 
     def _owner_parts(self, *, src, mode: int, w, hcat, t: int, page0: int, table=None, sel=None, readers=None,
-                     row0=None):  # fmt: skip
+                     row0=None, sel_rows: bool = False, flat: bool = False):  # fmt: skip
+        """sel_rows (GLM53_SPEC_MULTI, eh_dm0.cpp EH_SEL_ROWS): output row u's source row = selector word u (the chained
+        MTP launch: row u = user u, its catch-up row u (K + 1) + n_u); flat (EH_FLAT, mode 3): the source is a FLAT
+        residual [1, 1, T', 16384] (an MTP launch wider than 4 rows)"""
         from models.autoports.zai_org_glm_5_3_flash.tt.mk_head import f32_bits
 
         acc = lambda tt: list(ttnn.TensorAccessorArgs(tt).get_compile_time_args())  # noqa: E731
@@ -287,6 +294,12 @@ class MkEh:
         defs = [("HEAD_SEM", str(SEM_HEAD)), ("HEAD_HN_SEM", str(SEM_HN)), ("EH_IN", str(mode)),
                 ("SPEC_REV", str(SPEC_REV)), ("EH_VOCAB", str(int(table.shape[-2]) if table is not None else 1 << 30))
                 ] + ([("EH_SEL", "1")] if sel is not None else []) + ([("EH_ROW0", "1")] if row0 is not None else [])  # fmt: skip
+        if sel_rows:
+            assert sel is not None, "EH_SEL_ROWS: the selector page"
+            defs.append(("EH_SEL_ROWS", "1"))
+        if flat:
+            assert mode == 3, ("EH_FLAT: the stacked-residual source mode", mode)
+            defs.append(("EH_FLAT", "1"))
         dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)  # noqa: E731
         cc = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
                                           fp32_dest_acc_en=True)  # fmt: skip
@@ -314,24 +327,26 @@ class MkEh:
         io += [row0] if row0 is not None else []
         return kernels, cbs, sems, io
 
-    def norm_e(self, tokens, table, *, t: int, sel=None):
-        """program A: hcat[:, :4096] = enorm(E[token of row t (or of row `sel`)])"""
+    def norm_e(self, tokens, table, *, t: int, sel=None, sel_rows: bool = False):
+        """program A: hcat[:, :4096] = enorm(E[token of row t (or of row `sel`; sel_rows: of row sel[t])])"""
         hcat, _ = self.buffers(t)
         kernels, cbs, sems, io = self._owner_parts(src=tokens, mode=1, w=self.w_e, hcat=hcat, t=t, page0=0,
-                                                   table=table, sel=sel)  # fmt: skip
+                                                   table=table, sel=sel, sel_rows=sel_rows)  # fmt: skip
         ttnn.generic_op(io, checked(ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)))
 
-    def norm_h_proj(self, src, *, mode: int, t: int, sel=None, row0=None):
+    def norm_h_proj(self, src, *, mode: int, t: int, sel=None, row0=None, sel_rows: bool = False):
         """program B: hcat[:, 4096:] = hnorm(h rows), then out = hcat @ eh_proj (the DS readers wait for the 64 owners)
         -> out [1, 1, t, 4608] bf16 DRAM. row0 (mode 2, kernels/spec/eh_dm0.cpp EH_ROW0): a [1, 32] uint32 DRAM page
         whose word 0 = r0 -> rows r0 .. r0 + t - 1 of a taller bf16 source (the TP prefill's final-norm tap), within one
-        tile row (the caller's rule); device-resident, so a captured launch serves every offset"""
+        tile row (the caller's rule); device-resident, so a captured launch serves every offset. Mode 3 on a FLAT
+        residual (GLM53_SPEC_MULTI: an MTP launch wider than 4 rows) -> EH_FLAT; sel_rows -> EH_SEL_ROWS"""
         assert row0 is None or mode == 2, (mode, row0)
         hcat, out = self.buffers(t)
         rd = self.readers
+        flat = mode == 3 and int(src.shape[-1]) == 4 * HIDDEN
         kernels, cbs, sems, io = self._owner_parts(src=src, mode=mode, w=self.w_h, hcat=hcat, t=t,
                                                    page0=HIDDEN // TILE, sel=sel, readers=rd.noc_coords(),
-                                                   row0=row0)  # fmt: skip
+                                                   row0=row0, sel_rows=sel_rows, flat=flat)  # fmt: skip
         # the DS readers read GLM53_MK_W_DELAY_US per call: unset here, else this program's key follows whichever layer
         # kind's knobs the previous program left in the env (the bootstrap right after a step's MTP layer would launch
         # a key no warm-up call compiled -> "not yet in program cache" inside the capture)
@@ -344,15 +359,19 @@ class MkEh:
         return out
 
     def expand(self, x0, res, *, t: int):
-        """EhExpand: x0 [1, 1, t, 4608] bf16 -> the stacked residual [t, 1, 4, 4096] fp32 (x0 in all 4 streams)"""
+        """EhExpand: x0 [1, 1, t, 4608] bf16 -> the stacked residual [t, 1, 4, 4096] fp32 (x0 in all 4 streams); a FLAT
+        residual [1, 1, t, 16384] (GLM53_SPEC_MULTI: an MTP launch wider than 4 rows) -> eh_expand.cpp EH_FLAT"""
         acc = lambda tt: list(ttnn.TensorAccessorArgs(tt).get_compile_time_args())  # noqa: E731
         rt = ttnn.RuntimeArgs()
         for k, c in enumerate(self.owners):
             rt[c.x][c.y] = [x0.buffer_address(), res.buffer_address(), 2 * k, t]
+        defs = [("SPEC_REV", str(SPEC_REV))]
+        if int(res.shape[-1]) == 4 * HIDDEN:
+            defs.append(("EH_FLAT", "1"))
         kd = ttnn.KernelDescriptor(
             kernel_source=os.path.join(KDIR, "spec", "eh_expand.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH, core_ranges=self.ocores,
-            compile_time_args=acc(x0) + acc(res), runtime_args=rt, defines=[("SPEC_REV", str(SPEC_REV))],
+            compile_time_args=acc(x0) + acc(res), runtime_args=rt, defines=defs,
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
                                                      noc=ttnn.NOC.RISCV_0_default))  # fmt: skip
         cb = ttnn.CBDescriptor(total_size=2048 + 4096 + 64, core_ranges=self.ocores, format_descriptors=[
@@ -427,7 +446,9 @@ class SpecMTP:
     """The speculative step of ONE user (slot 0) with K drafts on a StackBackend (TP mesh, native B = 32 with a
     weight cache — the served construction). Build after allocate_kv_cache + allocate_decode_io; prepare() (eager
     compile, before the backend's first trace capture: StackBackend.prepare_decode calls it); capture(); then the host
-    API enter() / step() / read() / leave()."""
+    API enter() / step() / read() / leave(). GLM53_SPEC_MULTI=1 (groups = G > 0): G users on the group bases `slots`
+    in the same one-replay step -- enter(rows) / set_page_tables(rows) take the users' rows, read() / leave() return
+    their G records (group order)."""
 
     def __init__(self, be, kv, *, K: int, drafter: str = "mtp"):
         from models.autoports.zai_org_glm_5_3_flash.tests.common import CACHE_DIR, MANIFEST
@@ -448,7 +469,20 @@ class SpecMTP:
         assert (
             be.fl is not None and be.chunk == be.max_batch and be.max_batch >= K + 1
         ), "speculative step: the TP stack with the shared 32-row state (native_t / B <= 4 single chunk)"
-        self.be, self.kv, self.K, self.w = be, kv, K, K + 1
+        # GLM53_SPEC_MULTI (doc/perf/mtp_multi_user_design.md section 6, batch 2: fixed G): G = GLM53_SPEC_MULTI_USERS
+        # users in ONE step -- user u in generator slot u (K + 1) (its group base), its verify group rows u (K + 1)
+        # .. u (K + 1) + K (token rows, positions c_u + j, its page-table row, candidate KDA states), selector word u,
+        # record page u, chained MTP row u, its own private MTP cache; built with the batch-1 kernels' groups
+        # (REC_CHAIN_GROUPS, KDA_VERIFY_GROUPS, SPEC_GROUPS, MLA_DSA_GROUP_ROWS) + MLA_ATT_GROUP_ROWS / EH_SEL_ROWS /
+        # EH_FLAT. 0 = the single-user step (every program and page below unchanged)
+        self.groups = G = spec_multi_groups()
+        if G:
+            assert drafter == "mtp", ("GLM53_SPEC_MULTI: the MTP drafter", drafter)
+            assert (
+                os.environ.get("GLM53_SPEC_MTP_PREFILL", "1") != "launch"
+            ), "GLM53_SPEC_MULTI: the in-trace MTP-cache fill (the launch-mode prefill indexes one user's rows)"
+        self.be, self.kv, self.K, self.w = be, kv, K, (K + 1) * max(1, G)
+        self.slots = tuple(u * (K + 1) for u in range(max(1, G)))  # the speculating users' generator slots
         self.drafter = drafter
         # GLM53_SPEC_VERIFY_W: the verify's program width wv. Unset: K+1 (the narrow t = K+1 programs). "plain": the lone
         # SPECULATIVE plain width plain_w = the smallest decode width >= K+1 (n29h6: with a width-1 bucket the lone plain
@@ -461,12 +495,16 @@ class SpecMTP:
         # (s3_identity rollback / DSA-state rows), not an identity of programs. GLM53_MKX_XSL_SEED (a per-kind knob:
         # GLM53_STACK_KNOB_SET "s:" / "a:" entries) makes a row's routed-expert sum independent of the co-rows' routing.
         # (spec_widths: the widths' rules and their GLM53_SPEC_ON_SHARD defaults)
-        sw = spec_widths(K, be.chunk, tuple(be.narrow_widths) + tuple(be.native_widths))
+        sw = spec_widths(K, be.chunk, tuple(be.narrow_widths) + tuple(be.native_widths), groups=G)
         self.plain_w = sw["lone"]  # the speculative lone user's plain decode width (the lossless twin of its verify)
         self.wv = sw["wv"]
         # the MTP launches' widths: catch-up rows 0..K at cu (rows past K inactive), each chained row at ch (row 0 live)
+        # (GLM53_SPEC_MULTI: cu = wv = G (K + 1), every group's rows; ch >= G, chained row u = user u)
         self.mw_cu, self.mw_ch, self.mtp_mode = sw["cu"], sw["ch"], sw["mode"]
-        assert self.w <= self.wv <= 8 and be.max_batch >= self.wv, ("verify width", self.wv, self.w, be.max_batch)
+        if G:
+            assert self.w == self.wv <= be.max_batch, ("GLM53_SPEC_MULTI verify width", self.wv, self.w, be.max_batch)
+        else:
+            assert self.w <= self.wv <= 8 and be.max_batch >= self.wv, ("verify width", self.wv, self.w, be.max_batch)
         self.flat = self.wv > 4  # t > 4: the flat residual [1, 1, t, 16384] and the native-width programs
         self.mesh = be.mesh
         mesh, w, wv = self.mesh, self.w, self.wv
@@ -482,7 +520,7 @@ class SpecMTP:
         self.tin = be.head.topk_out
         z32 = lambda fill: torch.full((1, 32), fill, dtype=torch.int32)  # noqa: E731
         self.sel = dram_rows(mesh, z32(0))
-        self.rec = dram_rows(mesh, torch.zeros(1, 64, dtype=torch.int32))
+        self.rec = dram_rows(mesh, torch.zeros(max(1, G), 64, dtype=torch.int32))  # (one record page per user)
         self.pos_v = dram_rows(mesh, z32(-1), ttnn.int32)
         if self.vlive is not None:
             self.vlive = self.pos_v
@@ -513,6 +551,11 @@ class SpecMTP:
             self.pt_m = self.pt_v
             if self.mtp_private:
                 self.pt_m = dram_rows(mesh, torch.zeros(32, kv.blocks_per_seq, dtype=torch.int32), ttnn.int32)
+        # the chained MTP launches' page table: the catch-up's (pt_m) for one user; GLM53_SPEC_MULTI: its own (pt_mc row
+        # u = user u's MTP row, while pt_m row u (K + 1) + j = user u's: the two launches index the table by launch row)
+        self.pt_mc = self.pt_m
+        if G and drafter == "mtp":
+            self.pt_mc = dram_rows(mesh, torch.zeros(32, kv.blocks_per_seq, dtype=torch.int32), ttnn.int32)
         self._pt_rows = None
         lb = float(be._kda0().lower_bound)
         m = torch.ones(1, 1, wv, 1)
@@ -539,6 +582,10 @@ class SpecMTP:
         else:
             self.R_v = stacked(wv)
         cu, ch = self.mw_cu, self.mw_ch
+        if G:  # (GLM53_SPEC_MULTI: an MTP launch wider than 4 rows runs the flat residual, as the native widths)
+            stacked = lambda t, _s=stacked: _s(t) if t <= 4 else ttnn.from_torch(  # noqa: E731
+                torch.zeros(1, 1, t, 4 * HIDDEN), dtype=FP32, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=DRAM,
+                mesh_mapper=_repl(mesh))  # fmt: skip
         self.R_m = stacked(cu) if drafter == "mtp" else None
         self.R_c = [stacked(ch) for _ in range(K - 1)] if drafter == "mtp" else []
         # the MTP-cache prefill's token rows (prefill_mtp: row j = the prompt token after the launch's position j)
@@ -556,8 +603,12 @@ class SpecMTP:
         share = be.seq[dsa[0]]["tp"] if dsa else None
         self.mtp = self.mtp_cache = self.eh = self.w_mtp = None
         self.pf_scratch, self._pfw = (0, 0), None
+        self.mtp_cap_blocks = 0  # (GLM53_SPEC_MULTI + the private MTP cache: the blocks of each user's)
         if drafter == "mtp":
-            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=tuple(sorted({cu, ch})), share=share)
+            # (GLM53_SPEC_MULTI: a width t > 4 other than the full width has no sparse_dsa fabric phase of its own -- it
+            # runs on the full width's, TPMla.fabric -- so only the shared phases are named)
+            mts = tuple(sorted({cu, ch})) if not G else tuple(sorted(t for t in {cu, ch} if t <= 4 or t == be.chunk))
+            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=mts, share=share)
             l1_debug("after MtpLayer", self.mesh)
             # (+ scratch pages past the request blocks: the TP prefill's in-trace MTP fill writes an unarmed chunk's
             # rows there -- TPPrefill._mtp_write; one bucket's worth of the largest GLM53_PREFILL_BUCKETS bucket)
@@ -567,18 +618,27 @@ class SpecMTP:
                     int(kv.max_seq_len), int(os.environ.get("GLM53_SPEC_MAX_CTX", "0") or 0) or int(kv.max_seq_len)
                 )
                 nb = -(-cap // blk)
+                if G:  # one private cache per user: user u's blocks u nb .. u nb + nb - 1 (G x GLM53_SPEC_MAX_CTX rows)
+                    self.mtp_cap_blocks = nb
+                    nb = G * nb
             else:
                 nb = kv.num_blocks if self.shard is None else self.shard[0] * self.shard[1]
             bmax = max(int(v) for v in os.environ.get("GLM53_PREFILL_BUCKETS", "256,512,2048").split(",") if v.strip())
             self.pf_scratch = (int(nb), max(1, -(-bmax // blk)))
             self.mtp_cache = self.mtp.attn.allocate_cache(nb + self.pf_scratch[1])
-            if self.mtp_private:  # (the constant row: positions past the cache's blocks -> a scratch page, never read)
+            if (
+                self.mtp_private and not G
+            ):  # (the constant row: positions past the cache's blocks -> scratch, never read)
                 write_rows(mesh, self.pt_m, self.mtp_row(None).reshape(1, -1).repeat(32, 1), ttnn.int32)
+            elif self.mtp_private:  # (GLM53_SPEC_MULTI: catch-up row u (K + 1) + j / chained row u = user u's cache)
+                pm, pc = self._mtp_private_tables()
+                write_rows(mesh, self.pt_m, pm, ttnn.int32)
+                write_rows(mesh, self.pt_mc, pc, ttnn.int32)
             self.eh = MkEh(mesh, self.source, cfg, self.ocfg)
             for t in sorted({cu, ch}):
                 self.eh.buffers(t)
             self.w_mtp = norm_tile(mesh, self.source.host(MTP_L, "shared_head.norm.weight"))
-        self.ctl = SpecCtl(mesh, K)
+        self.ctl = SpecCtl(mesh, K, groups=G)
         l1_debug("after MkEh / ctl", self.mesh)
         self.df2 = None
         # the positions the speculative step may touch (None: the backend's max_seq_len); the dflash2 drafter's own
@@ -654,14 +714,17 @@ class SpecMTP:
                     fabs[kind] = f
             wts = wc[("dense", L)] if kind == DENSE_KDA else wc[("sparse", L)]
             wts.attn.kda_verify_sel = self.sel
+            if self.groups:  # GLM53_SPEC_MULTI: kda_pre KDA_VERIFY_GROUPS = G (an int: kda_rec reads it as a flag)
+                wts.attn.kda_verify_groups = self.groups
             # the TP layer constructors write their knobs onto the shared attention object: restored afterwards
             keep = {a: getattr(wts.attn, a) for a in SHARED_ATTN_KNOBS if hasattr(wts.attn, a)}
             try:
                 # the verify rows are ONE user's chained rows (REC_CHAIN: one user group, whatever the served
                 # width's GLM53_REC_UGROUPS, e.g. 14b's TP2 knob set "s:GLM53_REC_UGROUPS=2")
                 # (GLM53_REC_DEPTH=s would build a second, unchained kda_rec lazily at call time, after kda_verify_sel)
+                # GLM53_SPEC_MULTI: one user group per user (REC_CHAIN_GROUPS: each group chained from sel[u])
                 assert os.environ.get("GLM53_REC_DEPTH", "1") != "s", "spec verify: GLM53_REC_DEPTH=s is not chained"
-                with env(GLM53_REC_UGROUPS="1"):
+                with env(GLM53_REC_UGROUPS=str(self.groups) if self.groups else "1"):
                     if kind == DENSE_KDA:
                         tp = TPL.TPDenseKDALayer(be.mesh, be.cfg, L, self.source, self.ocfg, b=w, weights=wts,
                                                  fabric=fabs[kind])  # fmt: skip
@@ -671,9 +734,13 @@ class SpecMTP:
                                                    fabric=fabs[kind])  # fmt: skip
             finally:
                 del wts.attn.kda_verify_sel
+                if self.groups:
+                    del wts.attn.kda_verify_groups
                 for a, v in keep.items():
                     setattr(wts.attn, a, v)
             assert tp.mk.rec.verify_sel is self.sel and tp.mk.kda.verify_sel is self.sel, L
+            assert not self.groups or (tp.mk.rec.chain_groups and tp.mk.rec.ug == self.groups
+                                       and tp.mk.kda.verify_groups == self.groups), (L, "GLM53_SPEC_MULTI groups")  # fmt: skip
             seq.append(dict(L=L, mk=tp.mk, sparse=kind == SPARSE_KDA, kda=tp.attn, tp=tp))
         self.vseq = seq
         pool = kv.extra["pool"]
@@ -809,6 +876,8 @@ class SpecMTP:
         with contextlib.ExitStack() as es:
             if verify:
                 es.enter_context(env(GLM53_MLA_ATT_VERIFY="1"))
+                if self.groups:  # GLM53_SPEC_MULTI: G row groups (mk_mla MLA_DSA_GROUP_ROWS / MLA_ATT_GROUP_ROWS)
+                    es.enter_context(env(GLM53_MLA_VERIFY_GROUPS=str(self.groups)))
             if lanes:
                 es.enter_context(env(GLM53_MLA_ATT_LANES_T4="2"))
             # dsa_state: a main sparse_dsa layer's DSA state under GLM53_STACK_DSA (None = the dense MkMla / the MTP
@@ -880,9 +949,13 @@ class SpecMTP:
         self.ctl("boot" if boot else "accept", args, io + list(self.mpos_ch), rings=[] if boot else self._dsa_rings())
 
     def _dsa_rings(self) -> list:
-        """slot 0's ring base address of every main sparse_dsa layer's DSA state (empty without DSA)"""
+        """slot 0's ring base address of every main sparse_dsa layer's DSA state (empty without DSA); GLM53_SPEC_MULTI:
+        every user's (its group base slot), group-major (spec_ctl.cpp SPEC_GROUPS: R rings x G users)"""
         from models.autoports.zai_org_glm_5_3_flash.tt.mk_mla import dsa_slot_addrs
 
+        if self.groups:
+            return [dsa_slot_addrs(self.be._dsa_st(self.kv, i, s), 1)[1] for s in self.slots
+                    for i in sorted(self.kv.extra.get("dsa", {}))]  # fmt: skip
         return [dsa_slot_addrs(self.be._dsa_st(self.kv, i, 0), 1)[1] for i in sorted(self.kv.extra.get("dsa", {}))]
 
     def _draft(self):
@@ -899,8 +972,9 @@ class SpecMTP:
         eh.norm_e(hd["verify"].topk_out, be.embed.table, t=w)
         x0 = eh.norm_h_proj(be.head.h, mode=2, t=w)
         eh.expand(x0, self.R_m, t=w)
-        # (MoE live rows: pos_v -- rows 0..K live, as the catch-up's; the verify-width mode reads mpos_cu itself)
-        live = self.mpos_cu if self.mtp_mode == "verify" else "verify"
+        # (MoE live rows: pos_v -- rows 0..K live, as the catch-up's; the verify-width mode reads mpos_cu itself;
+        # GLM53_SPEC_MULTI: every group's K + 1 rows at mpos_cu; the MTP attention per group: MLA_ATT_GROUP_ROWS)
+        live = self.mpos_cu if self.mtp_mode in ("verify", "multi") else "verify"
         self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_m, self.mtp_cache, self.pt_m, self.mpos_cu, w, True,
                   dbg=0, live=live)  # fmt: skip
         l1_debug("catch-up: after the MTP layer", self.mesh)
@@ -914,12 +988,15 @@ class SpecMTP:
         else:
             tok, src, sel = hd["mtp_ch"][i - 1].topk_out, self.R_c[i - 1], None
         t = self.mw_ch  # (> 1: the verify-width mode -- row 0 is the chained row, rows 1.. inactive: positions -1)
-        eh.norm_e(tok, self.be.embed.table, t=t, sel=sel)
-        x0 = eh.norm_h_proj(src, mode=3, t=t, sel=sel)
+        # (GLM53_SPEC_MULTI: row u = user u -- the first chained launch reads catch-up row sel[u] = u (K + 1) + n_u of
+        # the catch-up head's tokens / the MTP block's output (EH_SEL_ROWS), on the chain's page table pt_mc)
+        rows = bool(self.groups) and sel is not None
+        eh.norm_e(tok, self.be.embed.table, t=t, sel=sel, sel_rows=rows)
+        x0 = eh.norm_h_proj(src, mode=3, t=t, sel=sel, sel_rows=rows)
         eh.expand(x0, self.R_c[i], t=t)
-        live = self.mpos_ch[i] if self.mtp_mode == "verify" else "verify"
-        self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_m, self.mpos_ch[i], t,
-                  False, dbg=i + 1, live=live)  # fmt: skip
+        live = self.mpos_ch[i] if self.mtp_mode in ("verify", "multi") else "verify"
+        self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_mc, self.mpos_ch[i],
+                  t, False, dbg=i + 1, live=live)  # fmt: skip
         l1_debug(f"chain {i}: after the MTP layer", self.mesh)
         hd["mtp_ch"][i]([self.R_c[i]], None)
 
@@ -959,14 +1036,37 @@ class SpecMTP:
         else:
             ttnn.execute_trace(self.mesh, trace, cq_id=0, blocking=False)
 
-    def mtp_row(self, phys_row) -> torch.Tensor:
+    def mtp_row(self, phys_row, slot: int = 0) -> torch.Tensor:
         """the MTP cache's page row of the speculating slot: the private identity row (blocks 0 .. nb - 1, a scratch
-        page past them) or, with GLM53_SPEC_MTP_CACHE=pool, the slot's PHYSICAL row"""
+        page past them) or, with GLM53_SPEC_MTP_CACHE=pool, the slot's PHYSICAL row. GLM53_SPEC_MULTI (private): user
+        u's cache = blocks u nb .. u nb + nb - 1 for the group base `slot` = u (K + 1) (another slot: scratch only)"""
         if not self.mtp_private:
             return torch.as_tensor(phys_row).reshape(-1).to(torch.int64)
         nb, scr = self.pf_scratch
         j = torch.arange(int(self.kv.blocks_per_seq), dtype=torch.int64)
-        return torch.where(j < nb, j, torch.full_like(j, nb))
+        if not self.groups:
+            return torch.where(j < nb, j, torch.full_like(j, nb))
+        cap, u = self.mtp_cap_blocks, self.group_of(slot)
+        if u is None:
+            return torch.full_like(j, nb)
+        return torch.where(j < cap, u * cap + j, torch.full_like(j, nb))
+
+    def group_of(self, slot) -> int | None:
+        """GLM53_SPEC_MULTI: the user (group) whose base is generator slot `slot` (None: not a group base)"""
+        if slot is None:
+            return None
+        s, g = int(slot), self.K + 1
+        return s // g if self.groups and s % g == 0 and s // g < self.groups else None
+
+    def _mtp_private_tables(self) -> tuple:
+        """GLM53_SPEC_MULTI with the private MTP caches: the constant [32, blocks] page tables of the catch-up (row
+        u (K + 1) + j = user u's row) and of the chained launches (row u = user u's); rows past the users: scratch"""
+        g = self.K + 1
+        rows = [self.mtp_row(None, u * g) for u in range(self.groups)]
+        scratch = self.mtp_row(None, -1)
+        pm = torch.stack([rows[r // g] if r < self.w else scratch for r in range(32)])
+        pc = torch.stack([rows[r] if r < self.groups else scratch for r in range(32)])
+        return pm, pc
 
     def pf_scratch_pages(self, n: int) -> torch.Tensor:
         """n MTP cache pages no request holds (the in-trace MTP fill of an unarmed chunk)"""
@@ -1006,6 +1106,7 @@ class SpecMTP:
         GLM53_SPEC_PF_TRACE=0 or no trace: eager); nothing allocated, the programs compiled in prepare(). The page table
         must cover the positions (the generator's rows)."""
         assert self.drafter == "mtp" and self.mtp is not None, "MTP-cache prefill: the MTP drafter"
+        assert not self.groups, "GLM53_SPEC_MULTI: the in-trace MTP fill (TPPrefill._mtp_write), not these launches"
         assert TILE % self.mw_cu == 0, ("MTP-cache prefill: a launch width dividing the tap's 32-row tiles", self.mw_cu)
         toks = [int(v) for v in torch.as_tensor(tokens_next).reshape(-1)[: int(n)].tolist()]
         assert len(toks) == int(n), (len(toks), n)
@@ -1072,7 +1173,7 @@ class SpecMTP:
         ttnn.synchronize_device(self.mesh)
         write_rows(self.mesh, self.be.pos, keep.reshape(1, 32), ttnn.int32)
         write_rows(self.mesh, self.sel, torch.zeros(1, 32, dtype=torch.int32))
-        write_rows(self.mesh, self.rec, torch.zeros(1, 64, dtype=torch.int32))
+        write_rows(self.mesh, self.rec, torch.zeros(max(1, self.groups), 64, dtype=torch.int32))
         for t_ in [self.pos_v, self.mpos_cu] + self.mpos_ch:
             write_rows(self.mesh, t_, z, ttnn.int32)
 
@@ -1140,10 +1241,49 @@ class SpecMTP:
                 write_rows(self.mesh, self.pt_m, host, ttnn.int32)
         self._pt_rows = row.clone()
 
-    def enter(self, page_row: torch.Tensor):
+    def set_page_tables(self, rows) -> None:
+        """GLM53_SPEC_MULTI: the users' page-table rows (group order = self.slots) -> pt_v rows u (K + 1) + j = user u's
+        (the shard: each chip's LOCAL rows of the PHYSICAL ones); GLM53_SPEC_MTP_CACHE=pool: the MTP tables likewise
+        (catch-up rows by group, chained row u = user u); the private MTP tables are constant (_mtp_private_tables)"""
+        assert self.groups and len(rows) == self.groups, (self.groups, len(rows))
+        key = torch.stack([torch.as_tensor(r).reshape(-1).to(torch.int32) for r in rows])
+        old = self._pt_rows
+        if old is not None and tuple(old.shape) == tuple(key.shape) and torch.equal(old, key):
+            return
+        g, G = self.K + 1, self.groups
+        by_row = [min(r // g, G - 1) for r in range(32)]  # launch row -> user (rows past the groups: inactive)
+        host = key[by_row]
+        if self.shard is None:
+            write_rows(self.mesh, self.pt_v, host, ttnn.int32)
+        else:
+            local = self.be.shard_local_rows(key, G)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(
+                torch.cat([torch.as_tensor(lt).reshape(G, -1)[by_row] for lt in local]).to(torch.int32).contiguous(),
+                dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
+                self.pt_v)  # fmt: skip
+        if not self.mtp_private and self.drafter == "mtp":
+            if self.pt_m is not self.pt_v:
+                write_rows(self.mesh, self.pt_m, host, ttnn.int32)
+            write_rows(self.mesh, self.pt_mc, key[[min(r, G - 1) for r in range(32)]], ttnn.int32)
+        self._pt_rows = key.clone()
+
+    def set_table(self, value: torch.Tensor) -> None:
+        """StackBackend's page-table write (every slot's row): the speculating rows -- slot 0's (set_page_table), or
+        with GLM53_SPEC_MULTI the group bases' (set_page_tables)"""
+        if not self.groups:
+            self.set_page_table(value[0])
+            return
+        if int(value.shape[0]) > max(self.slots):
+            self.set_page_tables([value[s] for s in self.slots])
+
+    def enter(self, page_row):
         """start speculating for the user in slot 0 after a plain step / prefill (its committed state in row 0, the next
-        input token in token row 0, be.pos[0] = its position): the bootstrap replay drafts d'1..d'K on device"""
-        self.set_page_table(page_row)
+        input token in token row 0, be.pos[0] = its position): the bootstrap replay drafts d'1..d'K on device.
+        GLM53_SPEC_MULTI: page_row = the users' rows (group order); every user on its group base the same way"""
+        if self.groups:
+            self.set_page_tables(page_row)
+        else:
+            self.set_page_table(page_row)
         self._replay("boot")
         self.counters["enters"] += 1
         self.counters["boots"] += 1
@@ -1152,10 +1292,16 @@ class SpecMTP:
         self._replay("step", blocking=blocking)
         self.counters["steps"] += 1
 
-    def read(self) -> dict:
+    def read(self):
         """the step record: n (accepted drafts), c (the step's base position), a (the K+1 verify argmax = the committed
-        tokens a[0..n]), drafts (the next step's), steps"""
-        return self._parse(read_rows(self.mesh, self.rec))
+        tokens a[0..n]), drafts (the next step's), steps. GLM53_SPEC_MULTI: the G users' records (group order)"""
+        return self._parse_pages(read_rows(self.mesh, self.rec))
+
+    def _parse_pages(self, r: torch.Tensor):
+        if not self.groups:
+            return self._parse(r)
+        r = r.reshape(-1)[: self.groups * 64].reshape(self.groups, 64)
+        return [self._parse(r[u]) for u in range(self.groups)]
 
     def read_async(self):
         """the record's device -> host copy enqueued behind the replays submitted so far (non-blocking) + an event
@@ -1171,7 +1317,7 @@ class SpecMTP:
         if isinstance(pending, dict):  # (a blocking read's record)
             return pending
         d = ttnn.get_device_tensors(pending)[0] if int(self.mesh.get_num_devices()) > 1 else pending
-        return self._parse(ttnn.to_torch(d).to(torch.int64))
+        return self._parse_pages(ttnn.to_torch(d).to(torch.int64))
 
     def _parse(self, r: torch.Tensor) -> dict:
         r = r.reshape(-1) & 0xFFFFFFFF
@@ -1191,8 +1337,19 @@ class SpecMTP:
         between-step mechanism), the plain position row 0 = the next input's position; token row 0 already holds the
         bonus. Plain decode then continues from exactly the committed state."""
         rec = self.read()
-        n, c = rec["n"], rec["c"]
         be, kv = self.be, self.kv
+        if self.groups:  # GLM53_SPEC_MULTI: per user, candidate row u (K + 1) + n_u -> its base row, its plain position
+            pos = read_rows(self.mesh, be.pos).reshape(-1)[:32].clone()
+            for s, r in zip(self.slots, rec):
+                if r["n"] != 0:
+                    be.slot_ops.run(be._state_ops(kv, s, s + r["n"], dsa=False))
+                    self.counters["slot_copies"] += 1
+                pos[s] = r["c"] + r["n"] + 1
+            write_rows(self.mesh, self.sel, torch.zeros(1, 32, dtype=torch.int32))
+            be.write(kv.extra["io"].cur_pos, pos[: kv.max_batch])
+            self.counters["leaves"] += 1
+            return rec
+        n, c = rec["n"], rec["c"]
         if n != 0:
             # KDA S / conv rows only: the user's DSA pooled keys / ring already live in slot 0 (the one-slot verify
             # writes slot 0 and ACCEPT moves its ring rows); copying slot n's DSA state would overwrite them

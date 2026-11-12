@@ -120,3 +120,18 @@ live on the group bases; variable live counts (a G = 4 build with inactive group
 First device rows after batch 2 (frozen b3): e2e knob-on B 16 at SEQ 1 M (GLM53_STACK_NARROW_WIDTHS=1,2,4
 GLM53_STACK_NATIVE_WIDTHS=8), GLM53_SPEC_MULTI=1 GLM53_SPEC_MULTI_USERS=4 / 2 with GLM53_MK_LIVE=4 / 2, ISL 128 and
 4 K: per-user ids == plain; a knob-off e2e regression (single-user K 3 at ISL 128 on B 4) on the same snapshot.
+
+Batch 2 as implemented (host-tested only; device rows above pending on the frozen b3), deviations from the list:
+- item 2: `kda_verify_groups` carries G (an int): kda_pre reads it as the group count (`True` would build ONE group;
+  test_mk_layer_verify_groups set `True` up to b2 -- its U = 2 / 4 rows on b2 cannot pass, fixed for b3).
+- item 5 also needed the MTP catch-up at cu = 16 > 4 on the FLAT residual: eh_expand.cpp / eh_dm0.cpp EH_FLAT (the
+  expand writes, the first chained launch reads [1, 1, t, 16384]), and the MTP layer's dense attention per group:
+  att_dm0.cpp MLA_ATT_GROUP_ROWS (a row's latent hand-off rule = its group base's position tile, not row 0's; mk_mla
+  emits it for the dense MkMla under GLM53_MLA_VERIFY_GROUPS).
+- item 3: the chained launches get their own MTP page table (pt_mc, row u = user u) -- the catch-up's pt_m rows
+  u g + j index the same table by launch row; the MTP-cache prefill arms every group base (StackBackend
+  arm_mtp_prefill / TPPrefill._mtp_write per slot, SpecMTP.mtp_row(slot=)); generate_batch prefills the G users on
+  the per-user path (no batched / packed admission: those fill no MTP rows). The launch-mode prefill (M0) is refused.
+- items 7 / 8: the step speculates while exactly the G requests are live; the first user to finish ends it for all
+  (spec_leave, then plain decode); the adapter admits new requests on free group bases first, and a group base
+  released mid-speculation LEAVES (the others' committed rows move to their bases) instead of aborting.

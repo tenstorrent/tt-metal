@@ -662,10 +662,10 @@ class StackBackend(ModelBackend):
                     # launch runs at it -- GLM53_SPEC_MTP_W=verify, the 8x4 shard's default)
                     spec_ts = set()
                     if k_spec > 0:
-                        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_widths
+                        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_groups, spec_widths
 
-                        spec_ts = set(spec_widths(k_spec, self.chunk,
-                                                  tuple(self.narrow_widths) + tuple(self.native_widths))["ts"])  # fmt: skip
+                        spec_ts = set(spec_widths(k_spec, self.chunk, tuple(self.narrow_widths) + tuple(self.native_widths),
+                                                  groups=spec_multi_groups())["ts"])  # fmt: skip
                     ts = tuple(sorted({self.chunk} | set(self.narrow_widths) | spec_ts))
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
@@ -1176,8 +1176,8 @@ class StackBackend(ModelBackend):
             self._write_local_tables(buf, value)
             if (
                 getattr(self, "spec", None) is not None
-            ):  # Stage 17 on the shard: slot 0's PHYSICAL row (spec_mtp localizes)
-                self.spec.set_page_table(value[0])
+            ):  # Stage 17 on the shard: slot 0's PHYSICAL row (spec_mtp localizes; GLM53_SPEC_MULTI: the group bases')
+                self.spec.set_table(value)
         elif buf.name == "page_table":
             self._pt_last = (buf.t, value.to(torch.int32).clone())  # set_page_table_host's same-value check
             self._pt_host = value.to(torch.int64).clone()  # host shadow of the device page table
@@ -1193,7 +1193,7 @@ class StackBackend(ModelBackend):
                                                                 .contiguous(), dtype=ttnn.int32,
                                                                 layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=repl), ptc)  # fmt: skip
             if getattr(self, "spec", None) is not None:  # Stage 17: the speculating user's row (slot 0) -> pt_v rows
-                self.spec.set_page_table(value[0])
+                self.spec.set_table(value)  # (GLM53_SPEC_MULTI: every group base's row)
         elif buf.name in ("k", "p", "temp"):
             self.params[buf.name][: value.numel()] = value.reshape(-1).to(self.params[buf.name].dtype)
             if buf.name == "temp":  # the generator writes k, p, temp in this order: the row set is complete
@@ -2538,6 +2538,14 @@ class StackBackend(ModelBackend):
         if sp is None or getattr(sp, "mtp", None) is None or not mode:
             return False
         ids = torch.as_tensor(prompt, dtype=torch.int64).reshape(-1).clone()
+        if mode == "trace" and getattr(sp, "groups", 0):
+            # GLM53_SPEC_MULTI: one armed request per group base (each fills its user's private MTP cache; arming
+            # again adds a slot until disarm_mtp_prefill); another slot never speculates: not armed
+            if sp.group_of(slot) is None:
+                return False
+            prev = tpp.mtp_req.get("slots", {}) if isinstance(tpp.mtp_req, dict) else {}
+            tpp.mtp_req = dict(slots={**prev, int(slot): dict(slot=int(slot), ids=ids, rows=0)})
+            return True
         if mode == "trace":
             tpp.mtp_req = dict(slot=int(slot), ids=ids, rows=0)
             return True
@@ -2552,7 +2560,10 @@ class StackBackend(ModelBackend):
         rows = int(a["rows"]) if a else 0
         tpp = getattr(self, "tpp", None)
         if tpp is not None and getattr(tpp, "mtp_req", None) is not None:
-            rows += int(tpp.mtp_req["rows"])
+            if "slots" in tpp.mtp_req:  # GLM53_SPEC_MULTI: every armed group base's rows
+                rows += sum(int(r["rows"]) for r in tpp.mtp_req["slots"].values())
+            else:
+                rows += int(tpp.mtp_req["rows"])
             tpp.mtp_req = None
         return rows
 
