@@ -24,7 +24,7 @@ than the tensor that produced/consumes them.
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_x_rm` (RM only) | `2·c` | `c` (one row-chunk of 32 sticks) | `{rows: streams → 1 tile-row, w: streams → chunk, w_chunk: spans → c}` | input dtype | reader | compute | load phase of each block | capacity 2× live = double buffering (reader fetches the next row-chunk while compute tilizes). Cannot share with `cb_out_rm`: both live concurrently across blocks (reader prefetch vs writer drain), different producers |
-| `cb_x` | `r·Wp` | `rows_this_block·Wp` (whole block resident from load to release) | `{rows: spans → r, w: spans → Wp, w_chunk: spans (contained in w)}` | input dtype | reader (TILE) / compute tilize (RM) | compute | load → release, per block | the residency buffer; no other buffer has a disjoint lifetime with it (live through every compute phase of the block). `Wp − Wc < K` pad pages per row are the nominal-chunk mechanism reason (uniform CT chunk width, ring quantum `c`) |
+| `cb_x` | `x_block_depth·r·Wp` (`x_block_depth` = 1 shipped; R3 measured 2 slower on prefill, see data-movement note) | `rows_this_block·Wp` (whole block resident from load to release) | `{rows: spans → r, w: spans → Wp, w_chunk: spans (contained in w)}` | input dtype | reader (TILE) / compute tilize (RM) | compute | load → release, per block | the residency buffer; no other buffer has a disjoint lifetime with it (live through every compute phase of the block). `Wp − Wc < K` pad pages per row are the nominal-chunk mechanism reason (uniform CT chunk width, ring quantum `c`) |
 | `cb_reduce_mask` (`w_partial_elems ≠ 0` only) | `1` | `1` | `{rows: streams (constant), w: streams (constant), w_chunk: streams (constant)}` | **Float32** (0/1 exact; implementer deviation — the reduce helper's masked fold `fold_partial_last` unpacks the mask as srcB without reconfiguring srcB away from `cb_sumsq`'s Float32, so the mask must carry `cb_sumsq`'s format) | reader | compute | whole kernel | constant tile; aliasing a constant into a ring with live data would destroy it |
 | `cb_sumsq` | `r·n_sq` (own allocation) | `rows_this_block·n_sq` (`n_sq ≤ 2`) | `{rows: spans → r, w: streams (collapsed to ≤ 2 tiles by L1 accumulation), w_chunk: streams}` | Float32 | compute | compute | sumsq → rstd, per block | **not aliased with `cb_normed`** (implementer deviation): the rstd reduce reads its `r·n_sq` window by index from the read pointer, and indexed windows must not straddle the ring's `fifo_limit`; with the alias capacity `round_up(r·max(c,n_sq), lcm(c,n_sq))` the sumsq window drifts across blocks and eventually straddles it. As its own ring of exactly `r·n_sq` pages every full block returns both pointers to base. Cost: `r·n_sq·4 KiB` (≤ 8 KiB at r = 1) |
 | `cb_rstd` | `r` | `rows_this_block` | `{rows: spans → r, w: streams (one col-0 tile per row), w_chunk: streams}` | Float32 | compute | compute | rstd → release, per block | live through every normalize chunk, concurrent with `cb_normed` and `cb_x` → no alias |
@@ -86,7 +86,7 @@ give `cb_normed` two consumers, compute and writer).
 ## Total per-core footprint
 
 ```
-F(r, K) =   r·Wp·s_x                                   # cb_x            — scales with r and W
+F(r, K) =   x_block_depth·r·Wp·s_x                     # cb_x            — scales with r and W (depth parked at 1)
           + [rm]·2c·s_x                                # cb_x_rm         — scales with c
           + [p]·s_f                                    # cb_reduce_mask  — constant (Float32)
           + r·s_f                                      # cb_rstd         — scales with r
@@ -122,9 +122,9 @@ R1 at any block size → `NotImplementedError` naming R3.
 | gamma | `Σ_cores num_blocks_this_core` (= active cores when each core has one block) | streamed per chunk, re-read once per block per core (reuse-shared operand, not held) | none |
 | reduce mask | 0 | generated in L1 by the reader | none |
 | x / output, HEIGHT_SHARDED (R6) | 0 | resident shards consumed / produced in place (RM LOCAL_STICKS: one L1→L1 restride per stick, no DRAM) | none |
-| gamma, TILE layout | same as RM gamma | `c` tile pages per chunk, one barrier per chunk | none |
+| gamma, TILE layout | same as RM gamma | per gamma tile only the broadcast row is read: the 64 B (DRAM-alignment) head of face 0 and face 1 (`g_row0_bytes` / `g_face1_offset` CT args; bf16 / fp32). Block-float (bf8b) gamma still reads whole pages. Refinement 3: the whole-page read re-fetched 2 KiB per tile per block, as many bytes as one x tile-row per block (+33–50% DRAM reads on 2–3-block prefill cores) | none |
 
-Totals per tier: DRAM = `|x| + |out| + Σ_blocks·|gamma|` (with `|gamma| ≤ |x_block| / (32·r)`);
+Totals per tier: DRAM = `|x| + |out| + Σ_blocks·|gamma_read|` (with `|gamma_read| ≤ |x_block| / (16·r)` — RM gamma: W elements; TILE bf16/fp32 gamma: 2×64 B per tile; TILE bf8b gamma: whole pages = `|x_block| / r`);
 cross-core = 0; core-local L1 = x read twice from L1 (sumsq, normalize), intermediates once each.
 
 > Cheapest-traffic split considered: rows across cores (R1) **is** the cheapest for x and output

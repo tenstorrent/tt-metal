@@ -43,3 +43,45 @@
 - Golden test progress (targeted slices): `test_op_loose` with fp32_dest_acc_en=False, INTERLEAVED + HEIGHT_SHARDED: 196/196 passed, including all 12 interleaved `_PERF_BASE` cases. Cartesian `test_op` slice (shapes 1x1x32x64, 128x8192, 4x8x32x256, 2x1x100x47 × {bf8b or fp32-DEST-off} × {INTERLEAVED, HEIGHT_SHARDED}): 179 passed, 84 xfailed (all `{float32, False}`), 1465 skipped (INVALID), 0 failed, 0 hangs.
 - Issues encountered: `test_rms_norm_debug.py` constructs `_Geometry` directly, so the new `fp32_dest_acc_en` parameter defaults to True (the prior behavior).
 - Tests added: `test_rms_norm_numeric_config.py` (62 cases): bf16 with 16-bit DEST × TILE/RM × aligned/non-aligned × gamma; bf8b input × {fp32, bf16} DEST × gamma {bf8b, bf16, fp32, none}; bf8b gamma with bf16/fp32 input; HiFi2 8192-row perf corner at PCC 0.9995.
+
+## Refinement 3 — Speed up the interleaved prefill perf profile
+- Date: 2026-11-12
+- What was done:
+  - **Diagnosis**: profiled the six interleaved `_PERF_BASE` prefill cases at their exact config (new `test_rms_norm_prefill_perf.py`). For an empirical DRAM roofline, profiled `ttnn.clone` on the same tensors (new `test_rms_norm_dram_roofline.py`), since `noc_estimate` is not built in this tree. The op was 15–24% above clone. Root cause: the TILE-layout gamma `(1,1,1,W)` is padded to 32 rows per tile, and the reader fetched whole 2 KiB pages once per block. Only row 0 is used (row-broadcast multiply), so each block paid one extra x tile-row of DRAM reads (+33–50% reads at 2–3 rows per core).
+  - **Lever 1 (shipped, reader + host)**: TILE bf16/fp32 gamma now reads only the 64 B head of face 0 and face 1 per tile. These are the broadcast row, rounded up to the DRAM read alignment. Two new CT args, `g_row0_bytes` and `g_face1_offset`, are derived once in `_Geometry`. bf8b gamma (shared exponents ahead of the data) keeps whole-page reads (`g_row0_bytes = 0`).
+  - **Lever 2 (measured, parked as a live knob)**: `x_block_depth` (op_design perf lamp). When `X_BLOCK_DEPTH > 1`, cb_x holds that many blocks and `block_rows` is capped at `ceil(rows_cap / BLOCKS_PER_CORE)`, so the reader prefetches block b+1 while block b is normalized and written. Footprint and selection carry the depth. No kernel change was needed: compute addresses cb_x relative to the front and pops per block. Measured depth 2 with r = 1: **10–12% slower** (8192×1024: 89.3 → 98.2 µs; NCRISC 75 → 90 µs). At 2–3 tile-rows per core, the serial read-all / write-all phases use DRAM better than interleaved read+write. Parked at `X_BLOCK_DEPTH = BLOCKS_PER_CORE = 1`, which gives the same selection as before.
+  - Reused: reader gamma chunk loop, `_select_blocks`, `_footprint`. Added: 2 reader CT args, a `x_depth` footprint term, and 2 host knobs.
+- Device kernel ns (Blackhole p150b @ 1350 MHz = reference clock), before → after (achievable_ns / clone roofline):
+  - 8192×1024: 103 094 → 90 227 (96 744 / 83 233)
+  - 8192×2304: 217 930 → 188 401 (211 345 / 182 801)
+  - 8192×5120: 476 980 → 418 990 (738 307 / 413 404)
+  - 8192×7168: 681 422 → 569 744 (1 032 281 / 556 699)
+  - 7168×1024: 86 767 → 74 669 (89 392 / 71 836)
+  - 7168×2048: 172 677 → 145 999 (172 892 / 146 827)
+
+  Every case now meets its `achievable_ns`. Ablation: without gamma the op equals the clone roofline (8192×1024: 83.0 µs; 8192×7168: 557.4 µs), so the op is DRAM-bound. The remaining gap is the gamma multiply pass plus the 3-row tail cores on 256-tile-row shapes.
+- Accuracy achieved: soft PCC gate 0.9995 holds on all six prefill cases (HiFi2, bf16 DEST). The unit precision tests are unchanged.
+- Golden test progress: slice of `test_op_loose` (INTERLEAVED + HEIGHT_SHARDED) plus the cartesian `test_op` for 2x1x100x47 / 4x8x32x256 (non-W/B-sharded): 349 passed, 42 xfailed, 1 failed. The failure is the excepted `(1,1,32,32768)` case, which needs R3 (Refinement 4). Unit dir: 303 passed, 19 skipped, 0 failed.
+- Issues encountered: none. The NoC-estimator CLI is not built in this tree, so `ttnn.clone` served as the measured DRAM roofline.
+- Tests added: `test_rms_norm_prefill_perf.py` (exact-config prefill cases, PCC 0.9995) and `test_rms_norm_dram_roofline.py` (clone roofline, for `--profile`).
+
+## Refinement 3 — Speed up the interleaved prefill perf profile
+- Date: 2026-11-12
+- What was done:
+  - **Diagnosis**: profiled the six interleaved `_PERF_BASE` prefill cases at their exact config (new `test_rms_norm_prefill_perf.py`). For an empirical DRAM roofline, profiled `ttnn.clone` on the same tensors (new `test_rms_norm_dram_roofline.py`), since `noc_estimate` is not built in this tree. The op was 15–24% above clone. Root cause: the TILE-layout gamma `(1,1,1,W)` is padded to 32 rows per tile, and the reader fetched whole 2 KiB pages once per block. Only row 0 is used (row-broadcast multiply), so each block paid one extra x tile-row of DRAM reads (+33–50% reads at 2–3 rows per core).
+  - **Lever 1 (shipped, reader + host)**: TILE bf16/fp32 gamma now reads only the 64 B head of face 0 and face 1 per tile. These are the broadcast row, rounded up to the DRAM read alignment. Two new CT args, `g_row0_bytes` and `g_face1_offset`, are derived once in `_Geometry`. bf8b gamma (shared exponents ahead of the data) keeps whole-page reads (`g_row0_bytes = 0`).
+  - **Lever 2 (measured, parked as a live knob)**: `x_block_depth` (op_design perf lamp). When `X_BLOCK_DEPTH > 1`, cb_x holds that many blocks and `block_rows` is capped at `ceil(rows_cap / BLOCKS_PER_CORE)`, so the reader prefetches block b+1 while block b is normalized and written. Footprint and selection carry the depth. No kernel change was needed: compute addresses cb_x relative to the front and pops per block. Measured depth 2 with r = 1: 10–12% slower (8192×1024: 89.3 → 98.2 µs; NCRISC 75 → 90 µs). At 2–3 tile-rows per core, the serial read-all / write-all phases use DRAM better than interleaved read+write. Parked at `X_BLOCK_DEPTH = BLOCKS_PER_CORE = 1`, which gives the same selection as before.
+  - Reused: reader gamma chunk loop, `_select_blocks`, `_footprint`. Added: 2 reader CT args, a `x_depth` footprint term, and 2 host knobs.
+- Device kernel ns (Blackhole p150b @ 1350 MHz = reference clock), before → after (achievable_ns / clone roofline):
+  - 8192×1024: 103 094 → 90 227 (96 744 / 83 233)
+  - 8192×2304: 217 930 → 188 401 (211 345 / 182 801)
+  - 8192×5120: 476 980 → 418 990 (738 307 / 413 404)
+  - 8192×7168: 681 422 → 569 744 (1 032 281 / 556 699)
+  - 7168×1024: 86 767 → 74 669 (89 392 / 71 836)
+  - 7168×2048: 172 677 → 145 999 (172 892 / 146 827)
+
+  Every case now meets its `achievable_ns`. Ablation: without gamma the op equals the clone roofline (8192×1024: 83.0 µs; 8192×7168: 557.4 µs), so the op is DRAM-bound. The remaining gap is the gamma multiply pass plus the 3-row tail cores on 256-tile-row shapes.
+- Accuracy achieved: soft PCC gate 0.9995 holds on all six prefill cases (HiFi2, bf16 DEST). The unit precision tests are unchanged.
+- Golden test progress: slice of `test_op_loose` (INTERLEAVED + HEIGHT_SHARDED) plus the cartesian `test_op` for 2x1x100x47 / 4x8x32x256 (non-W/B-sharded): 349 passed, 42 xfailed, 1 failed. The failure is the excepted `(1,1,32,32768)` case, which needs R3 (Refinement 4). Unit dir: 303 passed, 19 skipped, 0 failed.
+- Issues encountered: none. The NoC-estimator CLI is not built in this tree, so `ttnn.clone` served as the measured DRAM roofline.
+- Tests added: `test_rms_norm_prefill_perf.py` (exact-config prefill cases, PCC 0.9995) and `test_rms_norm_dram_roofline.py` (clone roofline, for `--profile`).

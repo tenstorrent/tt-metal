@@ -48,10 +48,14 @@ void kernel_main() {
     constexpr uint32_t placement = get_compile_time_arg_val(21);
     constexpr bool gamma_tiled = get_compile_time_arg_val(22) != 0;
     constexpr uint32_t stick_page_bytes = get_compile_time_arg_val(23);
+    // TILE gamma broadcast-row read: bytes read at the head of face 0 / face 1 of each gamma tile
+    // (0 = read the whole tile page; block-float gamma has no plain row 0).
+    constexpr uint32_t g_row0_bytes = get_compile_time_arg_val(24);
+    constexpr uint32_t g_face1_offset = get_compile_time_arg_val(25);
     constexpr bool x_resident = placement == 1;
     constexpr bool x_local_sticks = placement == 2;
 
-    constexpr auto x_args = TensorAccessorArgs<24>();
+    constexpr auto x_args = TensorAccessorArgs<26>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
@@ -157,11 +161,22 @@ void kernel_main() {
                 cb_reserve_back(cb_gamma, w_chunk_tiles);
                 const uint32_t base = get_write_ptr(cb_gamma);
                 if constexpr (gamma_tiled) {
-                    // (1,1,1,W) tiled gamma: tile page = gamma column tile; row 0 is the broadcast row.
+                    // (1,1,1,W) tiled gamma: tile page = gamma column tile; row 0 is the broadcast row and
+                    // the only row the row-broadcast multiply reads. So read just the head of face 0 and
+                    // face 1 (row 0, DRAM-alignment rounded) instead of the 31 padding rows: the tiled
+                    // gamma is re-read once per block, and a whole-tile read costs one x tile-row of
+                    // DRAM traffic per block.
                     const uint32_t first_col = w_tile_start + k * w_chunk_tiles;
                     const uint32_t valid_tiles = (valid_elems + 31) / 32;
                     for (uint32_t j = 0; j < valid_tiles; ++j) {
-                        noc_async_read_page(first_col + j, g_acc, base + j * g_tile_bytes);
+                        const uint32_t dst = base + j * g_tile_bytes;
+                        if constexpr (g_row0_bytes != 0) {
+                            noc_async_read(g_acc.get_noc_addr(first_col + j), dst, g_row0_bytes);
+                            noc_async_read(
+                                g_acc.get_noc_addr(first_col + j, g_face1_offset), dst + g_face1_offset, g_row0_bytes);
+                        } else {
+                            noc_async_read_page(first_col + j, g_acc, dst);
+                        }
                     }
                     noc_async_read_barrier();
                     cb_push_back(cb_gamma, w_chunk_tiles);

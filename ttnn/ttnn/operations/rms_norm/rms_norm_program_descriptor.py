@@ -47,8 +47,19 @@ PLACEMENT_LOCAL_STICKS = 2  # HEIGHT_SHARDED RM whose shard is not tilize-consum
 
 # Depth (in chunks) of every streaming window: cb_x_rm, cb_gamma, cb_out, cb_out_rm.
 STREAM_DEPTH = 2
+# Depth (in blocks) of cb_x when a core owns > 1 tile-row (op_design "x_block_depth" perf lamp): 2 lets
+# the reader prefetch block b+1 while block b is normalized + written. Live knob, parked at 1 (the
+# byte-identical pre-R3 selection): measured on the interleaved prefill shapes (2-3 tile-rows/core),
+# depth 2 with block_rows = 1 is 10-12% SLOWER (8192x1024: 89.3 -> 98.2 us) — the serial read-all /
+# write-all phases use DRAM better than mixed read+write traffic at this geometry.
+X_BLOCK_DEPTH = 1
+# Target blocks per core when pipelining (caps block_rows at ceil(rows_cap / this)); more blocks = more
+# read/write overlap, fewer = fewer per-block compute passes. 1 = whole per-core assignment per block.
+BLOCKS_PER_CORE = 1
 # Granularity floor of a W chunk (whole tiles, >= 8 per NoC batch; catalog `double_buffer`).
 W_CHUNK_FLOOR_TILES = 8
+# Minimum gamma row-0 read (bytes): the DRAM read alignment (Blackhole 64 B; WH 32 B).
+GAMMA_ROW_READ_ALIGN = 64
 # Slack kept free of CBs in the per-core L1 budget.
 L1_SAFETY_MARGIN = 32 * 1024
 
@@ -95,6 +106,14 @@ class _Geometry:
         self.sumsq_fmt = ttnn.float32
         self.s_sq = ttnn.tile_size(self.sumsq_fmt)
         self.gamma_tiled = self.has_gamma and gamma.layout == ttnn.TILE_LAYOUT
+        # TILE gamma: only row 0 (the broadcast row) is consumed — the reader fetches the head of face 0
+        # and face 1 (16 elements each, rounded up to the DRAM read alignment) instead of the whole page.
+        # Block-float gamma (shared exponents ahead of the data) keeps whole-page reads (0).
+        self.g_row0_bytes, self.g_face1_offset = 0, 0
+        if self.gamma_tiled and gamma.dtype in (ttnn.bfloat16, ttnn.float32):
+            g_el = 2 if gamma.dtype == ttnn.bfloat16 else 4
+            self.g_row0_bytes = max(16 * g_el, GAMMA_ROW_READ_ALIGN)
+            self.g_face1_offset = 16 * 16 * g_el
         # Element sizes only address ROW_MAJOR sticks; block-float (bfloat8_b, TILE-only) has none.
         self.x_elem = x.element_size() if self.is_rm else 0
         self.out_elem = out.element_size() if self.is_rm else 0
@@ -133,14 +152,14 @@ def _n_sq(g: _Geometry, core_w_tiles: int) -> int:
     return (1 if core_w_tiles - p > 0 else 0) + p
 
 
-def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
+def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int, x_depth: int = 1) -> int:
     """F(r, K) of l1_ledger.md (sum over the CBs this layout/gamma variant allocates)."""
     c = math.ceil(core_w_tiles / K)
     row_stride = K * c
     p = 1 if g.w_partial_elems else 0
     f = 0
     if g.is_rm or not g.x_resident:
-        f += r * row_stride * g.s_x  # cb_x (TILE sharded: the resident input shard, not allocated)
+        f += x_depth * r * row_stride * g.s_x  # cb_x (TILE sharded: the resident input shard, not allocated)
     if g.is_rm and not g.x_resident:
         f += STREAM_DEPTH * c * g.s_x  # cb_x_rm (RM in place: the resident input shard)
     f += p * g.s_sq  # cb_reduce_mask (matches cb_sumsq's srcB format)
@@ -156,26 +175,37 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
 
 
 def _select_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budget: int):
-    """Block-selection function of op_design.md: maximize block_rows, then minimize num_w_chunks."""
+    """Block-selection function of op_design.md -> (block_rows, w_chunk_tiles, num_w_chunks, x_block_depth).
+
+    Streaming x (interleaved / LOCAL_STICKS): pipeline first. With > 1 tile-row per core, cb_x holds
+    X_BLOCK_DEPTH blocks and block_rows is capped at ceil(rows_cap / BLOCKS_PER_CORE) so the reader
+    fetches block b+1 while block b is normalized and written (read/write overlap on the DRAM NoCs).
+    Then maximize block_rows within that cap, then minimize num_w_chunks. Falls back to depth 1 / the
+    full rows_cap (the pre-pipelining selection) when the deeper cb_x does not fit.
+    """
     if g.x_resident:
-        return _select_resident_blocks(g, core_w_tiles, rows_cap, budget)
+        r, c, K = _select_resident_blocks(g, core_w_tiles, rows_cap, budget)
+        return r, c, K, 1
     c_floor = min(core_w_tiles, W_CHUNK_FLOOR_TILES)
     k_floor = math.ceil(core_w_tiles / c_floor)
     if _footprint(g, core_w_tiles, 1, k_floor) > budget:
         raise NotImplementedError("rms_norm: row too wide for single-core residency; needs W-split regime R3")
+    depth, r_cap = 1, rows_cap
+    if rows_cap > 1 and X_BLOCK_DEPTH > 1 and _footprint(g, core_w_tiles, 1, k_floor, X_BLOCK_DEPTH) <= budget:
+        depth, r_cap = X_BLOCK_DEPTH, max(1, math.ceil(rows_cap / BLOCKS_PER_CORE))
     r = 1
-    for cand in range(rows_cap, 0, -1):
-        if _footprint(g, core_w_tiles, cand, k_floor) <= budget:
+    for cand in range(r_cap, 0, -1):
+        if _footprint(g, core_w_tiles, cand, k_floor, depth) <= budget:
             r = cand
             break
     K = k_floor
     for cand in range(1, k_floor + 1):
-        if _footprint(g, core_w_tiles, r, cand) <= budget:
+        if _footprint(g, core_w_tiles, r, cand, depth) <= budget:
             K = cand
             break
     c = math.ceil(core_w_tiles / K)
     K = math.ceil(core_w_tiles / c)  # drop chunks that would be all padding
-    return r, c, K
+    return r, c, K, depth
 
 
 def _select_resident_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budget: int):
@@ -267,7 +297,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     if g.rm_in_place and _footprint(g, core_w_tiles, 1, 1) > budget:
         # Whole-row in-place tilize does not fit: restride the resident sticks instead (W chunks allowed).
         g.rm_in_place = g.x_resident = False
-    block_rows, w_chunk_tiles, num_w_chunks = _select_blocks(g, core_w_tiles, rows_cap, budget)
+    block_rows, w_chunk_tiles, num_w_chunks, x_block_depth = _select_blocks(g, core_w_tiles, rows_cap, budget)
     row_stride_tiles = num_w_chunks * w_chunk_tiles
 
     # ---------------- circular buffers ----------------
@@ -286,7 +316,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
         _cb(CB_RSTD, block_rows, g.s_f, interm, all_cores),
     ]
     if g.is_rm or not g.x_resident:
-        cbs.append(_cb(CB_X, block_rows * row_stride_tiles, g.s_x, x.dtype, all_cores))
+        cbs.append(_cb(CB_X, x_block_depth * block_rows * row_stride_tiles, g.s_x, x.dtype, all_cores))
     if g.is_rm:
         if g.x_resident:
             cbs.append(_resident(CB_X_RM, x, g.s_x))
@@ -344,6 +374,8 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             placement,
             int(g.gamma_tiled),
             g.stick_page_bytes,
+            g.g_row0_bytes,
+            g.g_face1_offset,
         ]
     )
     reader_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())

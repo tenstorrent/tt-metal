@@ -39,7 +39,7 @@ def test_rm_width_sweep(device, W):
     x = torch.randn(1, 1, 32, W, dtype=torch.bfloat16)
     tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     out = rms_norm(tx)
-    print(f"W={W} knobs(r,c,K)={_knobs(tx, None, out)}")
+    print(f"W={W} knobs(r,c,K,x_depth)={_knobs(tx, None, out)}")
     got = ttnn.to_torch(out).float()
     exp = _ref(x)
     err = (got - exp).abs()

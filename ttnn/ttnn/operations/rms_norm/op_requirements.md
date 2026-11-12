@@ -120,7 +120,7 @@ in `EXCLUSIONS`, not in their own refinement.
 **Done when**: every golden cell with `fp32_dest_acc_en=False` (bf16 / bf8b input), `dtype=bfloat8_b` or `gamma_dtype=bfloat8_b` whose other axes are in SUPPORTED passes or is in a justified EXCLUSION; the interleaved `_PERF_BASE` loose cases pass at their soft PCC gate; loud categories at 0.
 **Outcome**: landed with no kernel change. Packer L1 accumulation measured legal and accurate with 16-bit DEST, so the Σx² mechanism swap was not needed. `cb_rstd`/`cb_normed` follow the DEST width; `cb_sumsq` + mask stay Float32 (they are the L1 accumulator). Golden slices: 196/196 fp32-DEST-off loose cells (all 12 interleaved perf cases at PCC ≥ 0.9999), 179 cartesian bf8b / DEST-off cells pass, 0 fail.
 
-### [ ] Refinement 3 — Speed up the interleaved prefill perf profile
+### [x] Refinement 3 — Speed up the interleaved prefill perf profile
 
 **Type**: perf
 
@@ -141,6 +141,7 @@ each targeted case meets its clock-scaled `achievable_ns` (or the gap is explain
 roofline via `/perf-ceiling-dm`), the soft PCC gate (0.9995) holds, the golden suite is green, and no
 regression across the config-spanning guard set (one representative per kernel path × layout
 {TILE, RM} × placement {DRAM, L1, HEIGHT_SHARDED} × gamma {none, RM, TILE}).
+**Outcome**: device-ns at the exact config (Blackhole p150b, 1350 MHz = reference clock, so no scaling), before → after vs `achievable_ns`: 8192×1024 103.1 → 90.2 µs (96.7), 8192×2304 217.9 → 188.4 (211.3), 8192×5120 477.0 → 419.0 (738.3), 8192×7168 681.4 → 569.7 (1032.3), 7168×1024 86.8 → 74.7 (89.4), 7168×2048 172.7 → 146.0 (172.9). Every case now meets its target. The lever: the TILE gamma reader fetched whole 2 KiB pages (31 of 32 rows are padding) once per block, which is as many DRAM bytes as one x tile-row per block. It now reads only row 0 (the 64 B head of face 0 and face 1). DRAM roofline, measured with `ttnn.clone` on the same tensors (same read+write bytes, no compute): 83.2 / 182.8 / 413.4 / 556.7 / 71.8 / 146.8 µs. The no-gamma op runs at the clone time (8192×1024: 83.0, 8192×7168: 557.4), so the op is DRAM-bound. The remaining 0–8% over clone is the gamma multiply pass plus the 16 cores that own 3 tile-rows on 256-row shapes (256 rows over 120 cores). Lever tried and parked: `x_block_depth = 2` with `block_rows = 1` (read/write overlap) is 10–12% slower (8192×1024: 89.3 → 98.2), because serial read-all/write-all phases use DRAM better than mixed traffic at 2–3 rows per core. It stays a live knob (`X_BLOCK_DEPTH`, `BLOCKS_PER_CORE`) at its byte-identical default of 1. Next things to try: keep TILE gamma resident when K = 1 (drops the per-block re-read entirely), and a sub-row W-split of the leftover 16 tile-rows to remove the 3-row tail. Neither was tried here: every target is already met and the remaining gap to the copy roofline is ≤ 8%.
 
 ### [ ] Refinement 4 — Cross-core W-split (regime R3): logical W-split on interleaved + WIDTH_SHARDED + BLOCK_SHARDED
 
