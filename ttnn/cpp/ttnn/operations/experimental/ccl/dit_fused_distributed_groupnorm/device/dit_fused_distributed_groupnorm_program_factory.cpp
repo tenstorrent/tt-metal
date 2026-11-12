@@ -442,9 +442,10 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const uint32_t go_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
 
     // Kernels are the stock welford GroupNorm kernels plus the shared fused-norm CCL forwarder. The
-    // only fused-specific behaviour lives behind GN_DISTRIBUTED_AG in the two reader kernels; the
-    // compute/writer kernels are used verbatim. At ring_size == 1 the define is not set, so the
-    // fused op compiles the exact stock kernel text.
+    // fused-specific behaviour lives behind two defines: GN_DISTRIBUTED_AG (the cross-device stats
+    // exchange in the two reader kernels, set when ring_size > 1) and GN_RUNTIME_SIZE_ARGS (the
+    // input-size-dependent values as common runtime args, set on all four kernels). The arithmetic
+    // is the stock one.
     const std::string gn_kernel_base = "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/";
     const std::string ccl_kernel_base = "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/";
 
@@ -460,7 +461,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // src0 (the stock reader only declares src0, so the extra block is inert unless
     // GN_DISTRIBUTED_AG is set).
     // ------------------------------------------------------------------------
-    const std::unordered_map<std::string, uint32_t> reader_named_ct = {
+    std::unordered_map<std::string, uint32_t> reader_named_ct = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
         {"reduce_sender_semaphore_id", reduce_sender_semaphore_id},
         {"num_cores_per_mcast_group", num_cores_per_mcast_group},
@@ -500,10 +501,46 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         reader_defines["FUSE_BETA"] = "1";
     }
     // Only the cross-device path enables the fabric AG + batched handshake. ring_size == 1 leaves
-    // the stock per-group lock-step untouched, so the local path is bit-exact with ttnn.group_norm.
+    // the stock per-group lock-step untouched.
     if (use_mux) {
         reader_defines["GN_DISTRIBUTED_AG"] = "1";
     }
+
+    // Values that depend on the input's spatial size go to the kernels as common runtime args
+    // (gn_runtime_size_args.h) instead of compile-time args, so a new input size reuses the compiled
+    // kernels. The kernels support this with bf16 stats only, which cb_data_format pins.
+    TT_FATAL(!stats_is_fp32, "dit_fused_distributed_groupnorm requires bf16 stats");
+    const uint32_t two_pass_reciprocal = std::bit_cast<uint32_t>(
+        1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)));
+    const std::vector<uint32_t> size_args = {
+        per_core_Mt,                              // PER_CORE_M
+        block_ht,                                 // BLOCK_H
+        num_out_blocks,                           // NUM_OUT_BLOCKS
+        per_core_Mt * Wt / num_batches_per_core,  // NUM_TILES_PER_BATCH
+        num_cores_per_mcast_group,                // NUM_MCAST_CORES
+        two_pass_reciprocal,                      // TWO_PASS_RECIPROCAL
+        per_core_Mt * per_core_Nt,                // PER_CORE_MN
+        num_rows_per_group,                       // NUM_ROWS_PER_GROUP
+    };
+    // The kernels read these from size_args instead; zero them so they don't enter the kernel hash.
+    const auto zero_size_args = [](std::unordered_map<std::string, uint32_t>& named_ct) {
+        for (const char* name :
+             {"per_core_M",
+              "block_h",
+              "block_hw",
+              "num_out_blocks",
+              "num_tiles_per_batch",
+              "num_cores_per_mcast_group",
+              "num_rows_per_group",
+              "per_core_MN",
+              "sfpu_two_pass_reciprocal"}) {
+            if (auto it = named_ct.find(name); it != named_ct.end()) {
+                it->second = 0;
+            }
+        }
+    };
+    reader_defines["GN_RUNTIME_SIZE_ARGS"] = "1";
+    zero_size_args(reader_named_ct);
 
     // Master / sender reader (fabric AG when distributed).
     std::unordered_map<std::string, uint32_t> sender_reader_named_ct = reader_named_ct;
@@ -541,9 +578,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     // ------------------------------------------------------------------------
     // Writer (stock welford GN gamma/beta + output) — identical on every reduction core.
-    // Runtime args and CB indices already match stock, so this kernel is used unmodified.
+    // Runtime args and CB indices match stock; only GN_RUNTIME_SIZE_ARGS is added.
     // ------------------------------------------------------------------------
-    const std::unordered_map<std::string, uint32_t> writer_named_ct = {
+    std::unordered_map<std::string, uint32_t> writer_named_ct = {
         {"is_mcast_sender", 1u},  // stock hardcodes 1 on all cores
         {"fuse_gamma", static_cast<uint32_t>(has_gamma)},
         {"fuse_beta", static_cast<uint32_t>(has_beta)},
@@ -574,11 +611,13 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     TensorAccessorArgs(has_beta ? beta->buffer() : nullptr).append_to(writer_ct);
     TensorAccessorArgs(input_mask->buffer()).append_to(writer_ct);
 
+    const std::map<std::string, std::string> writer_defines = {{"GN_RUNTIME_SIZE_ARGS", "1"}};
+    zero_size_args(writer_named_ct);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         gn_kernel_base + "dataflow/welford_writer_unary_gn_rm_gb.cpp",
         all_reduction_cores,
-        WriterDataMovementConfig(writer_ct, {}, writer_named_ct));
+        WriterDataMovementConfig(writer_ct, writer_defines, writer_named_ct));
 
     // ------------------------------------------------------------------------
     // Forwarder (single fabric ring all-gather, coalescing all masters' sub-sticks).
@@ -623,7 +662,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // Compute (stock welford GroupNorm PRE/POST) — identical on every reduction core.
     // ------------------------------------------------------------------------
-    const std::unordered_map<std::string, uint32_t> compute_named_ct = {
+    std::unordered_map<std::string, uint32_t> compute_named_ct = {
         {"do_gamma", static_cast<uint32_t>(has_gamma)},
         {"do_beta", static_cast<uint32_t>(has_beta)},
         {"num_cores_per_mcast_group", num_cores_per_mcast_group},
@@ -648,9 +687,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         {"cb_ex_global_fp32", cb_ex_global_index},
         {"cb_ex2pe_fp32", cb_ex2pe_index},
         {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
-        {"sfpu_two_pass_reciprocal",
-         std::bit_cast<uint32_t>(
-             1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)))},
+        {"sfpu_two_pass_reciprocal", two_pass_reciprocal},
     };
     // Optional fused unary activation. "dst0" is the DEST index the final output tile lives in
     // when the compute kernel applies the activation (see welford_groupnorm.cpp).
@@ -662,6 +699,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             compute_defines[key] = val;
         }
     }
+    compute_defines["GN_RUNTIME_SIZE_ARGS"] = "1";
+    zero_size_args(compute_named_ct);
 
     ComputeConfig compute_config{
         .math_fidelity = math_fidelity,
@@ -680,6 +719,13 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     }
     KernelHandle compute_kernel_id =
         CreateKernel(program, gn_kernel_base + "compute/welford_groupnorm.cpp", all_reduction_cores, compute_config);
+
+    SetCommonRuntimeArgs(program, sender_reader_kernel_id, size_args);
+    if (has_receivers) {
+        SetCommonRuntimeArgs(program, receiver_reader_kernel_id, size_args);
+    }
+    SetCommonRuntimeArgs(program, writer_kernel_id, size_args);
+    SetCommonRuntimeArgs(program, compute_kernel_id, size_args);
 
     // ------------------------------------------------------------------------
     // Runtime args
@@ -795,7 +841,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                         kernel_fabric_base);
                     TT_FATAL(
                         group.size() == num_cores_per_mcast_group,
-                        "mcast group {} has {} cores but the kernel is compiled with num_cores_per_mcast_group={}",
+                        "mcast group {} has {} cores but the kernels are given num_cores_per_mcast_group={}",
                         i,
                         group.size(),
                         num_cores_per_mcast_group);
