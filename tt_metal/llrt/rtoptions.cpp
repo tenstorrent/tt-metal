@@ -575,8 +575,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Dispatch follows TT_METAL_SLOW_DISPATCH_MODE as on silicon: set, slow dispatch; unset, fast dispatch,
         // where emulated devices get tt-emule's mesh command queue.
         // Default: Disabled
+        // Note: If both EMULE_MODE and SIMULATOR are set, SIMULATOR takes precedence
         // Usage: export TT_METAL_EMULE_MODE=1
-        case EnvVarID::TT_METAL_EMULE_MODE: this->runtime_target_device_ = tt::TargetDevice::Emule; break;
+        case EnvVarID::TT_METAL_EMULE_MODE:
+            if (this->simulator_path.empty()) {
+                this->runtime_target_device_ = tt::TargetDevice::Emule;
+            }
+            break;
 
         // TT_METAL_EMULE_SOC_DESC_PATH
         // SoC descriptor of the emulated chip, the counterpart of the soc_descriptor.yaml a simulator directory
