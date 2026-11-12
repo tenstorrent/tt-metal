@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# The two-row scheme (reuse_dir 4, Blackhole) forced on every block shape up to the DEST capacity, odd row counts included (an odd last
-# row of in0 is held alone), at both DEST syncs and k steps of 1 and 3. Run with --speed-of-light for the compile-time counts.
+# The two-row schemes (Blackhole; reuse_dir 4 two rows of in0 in SrcB, 6 two columns of in1 in SrcA) forced on every block shape up to the
+# DEST capacity, odd held dimensions included (an odd last held tile is held alone), at both DEST syncs and k steps of 1 and 3. Run with
+# --speed-of-light for the compile-time counts.
 
 import pytest
 import torch
@@ -58,8 +59,9 @@ TWO_ROW_BLOCKS = [
         InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
     ],
     block=TWO_ROW_BLOCKS,
+    reuse_dir=[4, 6],
 )
-def test_matmul_two_row(formats, block):
+def test_matmul_two_row(formats, block, reuse_dir):
     dest_sync, rt, ct, kt = block
     dest_acc = DestAccumulation.Yes
     math_fidelity = MathFidelity.LoFi
@@ -102,7 +104,7 @@ def test_matmul_two_row(formats, block):
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
-            MATMUL_REUSE_DIR(4),
+            MATMUL_REUSE_DIR(reuse_dir),
             # a forced direction runs main's tile form (the unknown-k key)
             MATMUL_FORM_KEYS(0, formats.output_format, True),
             MATMUL_PACK_BLOCK(

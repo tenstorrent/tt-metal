@@ -33,12 +33,12 @@ inline constexpr const char* matmul_forms_table[48] = {
 
 // Reuse direction of a block: reuse_dir 0 holds in0 in SrcB and streams in1 through SrcA when ct_dim >= rt_dim (main's rule), 1 forces that
 // direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). 4 is the two-row scheme: two rows of in0 sit in the two banks
-// of SrcB and every streamed in1 tile is multiplied with both (in0 held whatever the block). A kernel fixes it at compile time with
-// matmul_reuse_dir.
+// of SrcB and every streamed in1 tile is multiplied with both (in0 held whatever the block); 6 the same with two columns of in1 in the two
+// banks of SrcA. An odd held dimension ends on one held tile. A kernel fixes it at compile time with matmul_reuse_dir.
 template <std::uint32_t reuse_dir>
 constexpr bool matmul_two_row()
 {
-    return reuse_dir == 4;
+    return reuse_dir == 4 || reuse_dir == 6;
 }
 
 template <std::uint32_t reuse_dir>
@@ -83,10 +83,17 @@ constexpr std::uint32_t matmul_reuse_dir(
     const bool two_row_off = true,
     const bool throttled   = false)
 {
-    if (fidelity == MathFidelity::LoFi && !two_row_off && in0 == DataFormat::Float32 && in1 == DataFormat::Float32 && rt_dim >= 2 && (rt_dim % 2) == 0 &&
-        ct_dim >= 2)
+    if (fidelity == MathFidelity::LoFi && !two_row_off && in0 == DataFormat::Float32 && in1 == DataFormat::Float32 && ct_dim >= 2 && rt_dim >= 2)
     {
-        return 4;
+        // two columns of in1 held where the block is narrower than tall, else two rows of in0 (even held dimension: the measured blocks)
+        if (ct_dim < rt_dim && (ct_dim % 2) == 0)
+        {
+            return 6;
+        }
+        if ((rt_dim % 2) == 0)
+        {
+            return 4;
+        }
     }
     if (fidelity != MathFidelity::LoFi || pack_bound || ct_dim * rt_dim < 4)
     {

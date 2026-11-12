@@ -1556,32 +1556,46 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     if constexpr (matmul_two_row<reuse_dir>())
     {
         static_assert(!matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>(), "the two-row scheme is LoFi");
-        // With the clear of SrcB disabled, a clear of it only flips the bank, so the two in0 rows stay in its two banks. Set and cleared
-        // inside the call: no other op sees it.
-        TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK);
-        for (std::uint32_t t = 0; t + 1 < rt_dim; t += 2)
+        // reuse_dir 4 holds two rows of in0 in the two SrcB banks and streams in1 through SrcA; 6 two columns of in1 in the two SrcA banks
+        // and streams in0 through SrcB. With the clear of the held source disabled, a clear of it only flips the bank, so the two held
+        // tiles stay in its two banks. Set and cleared inside the call: no other op sees it.
+        constexpr bool held_b         = reuse_dir == 4;
+        constexpr std::uint32_t clr_h = held_b ? p_setrwc::CLR_B : p_setrwc::CLR_A; // the held source
+        constexpr std::uint32_t clr_s = held_b ? p_setrwc::CLR_A : p_setrwc::CLR_B; // the streamed one
+        if constexpr (held_b)
         {
-            for (std::uint32_t c = 0; c < ct_dim; c++)
+            TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK);
+        }
+        else
+        {
+            TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, CLR_DVALID_SrcA_Disable_MASK);
+        }
+        // the DEST tile of held tile h and streamed tile s
+        const auto dst_of          = [&](const std::uint32_t h, const std::uint32_t st) { return dst_index + (held_b ? ct_dim * h + st : h + ct_dim * st); };
+        const std::uint32_t t_even = t_dim & ~1u;
+        for (std::uint32_t t = 0; t < t_even; t += 2)
+        {
+            for (std::uint32_t r = 0; r < rut_dim; r++)
             {
-                const bool last = c == (ct_dim - 1);
-                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * t + c);
+                const bool last = r == (rut_dim - 1);
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_of(t, r));
                 ckernel_template::run();
-                // first row done: flip to the second, or give the first back after the last in1 tile
+                // first held tile done: flip to the second, or give the first back after the last streamed tile
                 if (last)
                 {
-                    TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+                    TTI_CLEARDVALID(clr_h, 0);
                 }
                 else
                 {
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    TTI_SETRWC(clr_h, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 }
-                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (t + 1) + c);
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_of(t + 1, r));
                 ckernel_template::run();
-                // second row done: free the in1 tile and flip back, or also give the second row back after the last one
+                // second held tile done: free the streamed tile and flip back, or also give the second held tile back after the last one
                 if (last)
                 {
-                    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
-                    TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+                    TTI_SETRWC(clr_s, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    TTI_CLEARDVALID(clr_h, 0);
                 }
                 else
                 {
@@ -1589,18 +1603,18 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                 }
             }
         }
-        // an odd rt_dim ends on one in0 row, held in one SrcB bank as main holds it
-        if (rt_dim & 1)
+        // an odd held dimension ends on one held tile, held in one bank as main holds it
+        if (t_even != t_dim)
         {
-            for (std::uint32_t c = 0; c < ct_dim; c++)
+            for (std::uint32_t r = 0; r < rut_dim; r++)
             {
-                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (rt_dim - 1) + c);
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_of(t_dim - 1, r));
                 ckernel_template::run();
-                TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                TTI_SETRWC(clr_s, 0, 0, 0, 0, p_setrwc::SET_ABD);
             }
-            TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+            TTI_CLEARDVALID(clr_h, 0);
         }
-        TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
+        TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
         math::reset_counters(p_setrwc::SET_ABD_F);
         return;
     }

@@ -128,9 +128,10 @@ def matmul_reuse_dir_for(
     two_row_off=True,
     throttle: int = 0,
 ) -> int:
-    """The reuse direction llk_matmul_forms.h matmul_reuse_dir picks (0 default, 1 hold in0, 2 hold in1, 4 two rows of in0): at LoFi a block of 4 or more
+    """The reuse direction llk_matmul_forms.h matmul_reuse_dir picks (0 default, 1 hold in0, 2 hold in1, 4 two rows of in0, 6 two columns of in1): at LoFi a block of 4 or more
     tiles with one 32-bit and one 16-bit, Bfp8_b or Bfp4_b operand holds the 32-bit one when it is reused (input_format feeds SrcA = in1, input_format_B SrcB = in0);
-    a Float32 x Float32 block with an even rt_dim and ct_dim of 2 or more holds two rows of in0 (see matmul_two_row_off).
+    a Float32 x Float32 block of 2 or more rows and columns holds two columns of in1 when it is narrower than tall with an even ct_dim, else
+    two rows of in0 with an even rt_dim (see matmul_two_row_off).
     """
     if (
         get_chip_architecture() != ChipArchitecture.BLACKHOLE
@@ -141,10 +142,13 @@ def matmul_reuse_dir_for(
     if (
         not two_row_off
         and formats.input_format == formats.input_format_B == DataFormat.Float32
-        and rt_dim % 2 == 0
         and ct_dim >= 2
+        and rt_dim >= 2
     ):
-        return 4
+        if ct_dim < rt_dim and ct_dim % 2 == 0:
+            return 6
+        if rt_dim % 2 == 0:
+            return 4
     # half sync with a Float32 output is pack bound and measured up to 1.7 percent slower
     if dest_sync == DestSync.Half and formats.output_format == DataFormat.Float32:
         return 0
