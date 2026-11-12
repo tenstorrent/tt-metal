@@ -2,17 +2,30 @@
   "_comment": "Operator inputs, goal 12 v4 rehearsal of agentic mode on qb2-49-14. Skills: local mvasiljevic/stage12-v4 (tt-model-bringup 0.1.24). Stages 11-12 from the v3 stage-10 state of Gemma 4 31B.",
   "entry": "autoport",
   "mode": "agentic",
-  "batch_sizes": [1, 8, 32],
+  "batch_sizes": [
+    1,
+    8,
+    32
+  ],
   "_batch_sizes_note": "Stage 10 validated 1, 8, 16 and 32. The rehearsal measures three to keep stage 11 short; 32 stays so the pool-first sizing can choose a large batch.",
   "benchmark_budget_hours": 2,
-  "phase2": {"suite": "swe_bench_verified", "tasks": 4},
+  "phase2": {
+    "suite": "swe_bench_verified",
+    "tasks": 4
+  },
   "_phase2_note": "Rehearsal: 4 of the fixed diverse 10 (the first 4 of the list the skill defines). A full agentic run uses 10.",
   "stage_budget_hours": 10,
   "_stage_budget_note": "Rehearsal cap: agentic mode allows 24 h; this run is capped at 10 h to check the plan.",
   "run_timeout_hours": 12,
   "references": {
-    "r1_gpqa_diamond": {"score": 0.843, "source": "Gemma 4 31B model card, GPQA Diamond"},
-    "swe_bench_verified": {"score": 0.648, "source": "GPU reference: H100 run of the release harness (tt-inference-server issue thread, 0.95 bar in the release spec)"}
+    "r1_gpqa_diamond": {
+      "score": 0.843,
+      "source": "Gemma 4 31B model card 84.3 (tt-inference-server eval_config published_score; its GPU reference is 83.33)"
+    },
+    "swe_bench_verified": {
+      "score": 0.648,
+      "source": "Operator floor from an H100 GPU run (64.8%) recorded on the Gemma 4 31B Experiment Reference page (claude.ai/artifact/WGzzRmT5KPRMpNjNEDtNp4); tt-inference-server eval_config has no SWE-bench Verified reference for this model"
+    }
   },
   "usage_budget": 25,
   "_usage_budget_note": "Codex points of the weekly allowance for this rehearsal. Gemma v3 used about 81 points in 37.7 h.",
