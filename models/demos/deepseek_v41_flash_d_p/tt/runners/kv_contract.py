@@ -276,13 +276,18 @@ def read_rows(
 def golden_window(golden, layer: int, lo: int, hi: int) -> tuple[torch.Tensor, torch.Tensor]:
     """(positions, rows) of layer's golden window KV in [lo, hi) the golden holds: every position of a layer with
     per-chunk dumps, else the positions its ring snapshots hold (kv_cache/layer_i[_at_p], position q at ring row
-    q % 128; a position two snapshots hold: the later one). Test-side only."""
+    q % 128; a position two snapshots hold: the later one; F264 handoff snapshots included). Test-side only."""
     if all(golden.has_layer(ch, layer) for ch in range(golden.n_chunks)):
         kv = torch.cat([golden.layer(ch, layer)["kv"] for ch in range(golden.n_chunks)])
         pos = torch.arange(max(0, lo), min(hi, kv.shape[0]))
         return pos, kv[pos].float()
+    from models.demos.common.bringup.reference.handoff import index as handoff_index
+
     rows = {}
-    for at in sorted(set(golden.meta.get("state_snapshots", [])) | {golden.seq}, reverse=True):
+    # (FIX.26, F264: the golden's serving handoff snapshots too, e.g. at decode's cap: the rows below the cap that
+    # neither the request-end nor the final ring holds)
+    handoffs = set((handoff_index(golden.dir) or {}).get("points", []))
+    for at in sorted(set(golden.meta.get("state_snapshots", [])) | {golden.seq} | handoffs, reverse=True):
         try:
             ring = golden.state(layer, at=None if at == golden.seq else at)["window_kv"]
         except FileNotFoundError:

@@ -1288,6 +1288,23 @@ def contract_state_pcc(spec, runtime, kv, slot, length, golden):
     return _impl(spec, runtime, kv, slot, length, golden)
 
 
+def contract_handoffs(spec, length):
+    """F264 (FIX.26): the positions other than ``length`` a request of ``length`` tokens (the engine's actual_end) may
+    stop at: decode's cap (tt/attention.snapshot_cap, P.49 PREFILL_END=cap). The golden holds the state there
+    (reference/handoff.py)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import snapshot_cap
+
+    return [snapshot_cap(length)]
+
+
+def contract_end(spec, length):
+    """F264 (FIX.26): where the serving runtime stops a request of ``length`` tokens under the configured PREFILL_END
+    (cap: decode's cap, the default; end: ``length``); test_contract judges the state and the served caches there."""
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import prefill_end
+
+    return prefill_end(length)
+
+
 def device_model(mesh, spec, layers, lm_head=True):
     """The all-device model (tt/model.py:TtDS41Model, M.1): hidden state on the device from the embedding to the final
     norm, every block through run_block with the validated modules. Setting DEVICE_MODEL=hybrid (DS41_DEVICE_MODEL)
