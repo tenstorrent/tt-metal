@@ -561,6 +561,16 @@ def test_softmax_bfloat8_b_intermediates(shape, dim, strategy, device):
     assert passing, out
 
 
+def test_moreh_softmax_backward_rejects_mismatched_input_grad(device, expect_error):
+    # Every buffer format comes from input_grad, so a different dtype would misread the bf16 gradients.
+    tt = lambda t, d=ttnn.bfloat16: ttnn.from_torch(t, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+    y = tt(torch.softmax(torch.randn(1, 1, 64, 64), -1))
+    dy = tt(torch.randn(1, 1, 64, 64))
+    dx = tt(torch.zeros(1, 1, 64, 64), ttnn.float32)
+    with expect_error(RuntimeError, "must match the output_grad dtype"):
+        ttnn.operations.moreh.softmax_backward(y, dy, 3, input_grad_tensor=dx)
+
+
 @pytest.mark.parametrize(
     "shape, dim, strategy",
     [
@@ -575,7 +585,7 @@ def test_softmax_bfloat8_b_intermediates(shape, dim, strategy, device):
     [
         ("output", "Output_tensor dtype should be bfloat16"),
         ("output_grad", "Output_tensor_grad dtype should be bfloat16"),
-        ("input_grad", "Input_grad_tensor dtype should be bfloat16"),
+        ("input_grad", "input_grad dtype DataType::BFLOAT8_B must match the output_grad dtype DataType::BFLOAT16"),
     ],
 )
 def test_softmax_backward_rejects_bfloat8_b(shape, dim, strategy, bfloat8_b_operand, message, device, expect_error):
@@ -608,7 +618,7 @@ def test_softmax_backward_rejects_bfloat8_b(shape, dim, strategy, bfloat8_b_oper
         ),
         (
             "input_grad",
-            "Input_grad_tensor dtype DataType::BFLOAT8_B should match output_tensor dtype DataType::BFLOAT16",
+            "input_grad dtype DataType::BFLOAT8_B must match the output_grad dtype DataType::BFLOAT16",
         ),
     ],
 )

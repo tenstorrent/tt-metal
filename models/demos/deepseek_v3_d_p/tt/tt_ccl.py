@@ -72,6 +72,8 @@ def clear_tt_ccl_cache():
     """Release registered sparse-MLA managers, then clear the cache (for testing)."""
     for tt_ccl in _tt_ccl_cache.values():
         tt_ccl.release_sparse_mla_overlap_manager()
+        if tt_ccl.sparse_kv_push_planner is not None:
+            tt_ccl.sparse_kv_push_planner.release()
     _tt_ccl_cache.clear()
 
 
@@ -183,6 +185,8 @@ class TT_CCL:
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
 
+        self.sparse_kv_push_planner = None  # SparseKvPushPlanner, created on first use
+
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = None
@@ -194,6 +198,20 @@ class TT_CCL:
         self.mla_high_bw_gather_semaphores = None
 
     def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+        resources = self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+        index = resources["next"]
+        resources["next"] = 1 - index
+        return resources["pairs"][index]
+
+    def preallocate_fused_rmsnorm_resources(self, shape, dtype, weight, cluster_axis, num_links):
+        """Create get_fused_rmsnorm_resources' entry for a TILE input of this shape, at model construction."""
+        x = ttnn.empty(
+            shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+        ttnn.deallocate(x)
+
+    def _fused_rmsnorm_entry(self, x, weight, cluster_axis, num_links):
         key = (
             tuple(x.shape),
             tuple(x.padded_shape),
@@ -213,13 +231,10 @@ class TT_CCL:
                 )
                 pairs.append((semaphores, stats))
             # All chips must initialize their semaphores before any peer sends.
-            # This allocation happens during the first warmup, once per geometry.
             ttnn.synchronize_device(self.mesh_device)
             resources = {"pairs": pairs, "next": 0}
             self.fused_rmsnorm_resources[key] = resources
-        index = resources["next"]
-        resources["next"] = 1 - index
-        return resources["pairs"][index]
+        return resources
 
     def get_combine_overlap_semaphores(self):
         """fwd_arrived, final_arrived and expert_go, then combine's channel counters, for
@@ -244,7 +259,7 @@ class TT_CCL:
         return self.combine_overlap_semaphores
 
     def get_combine_forwarding_buffer(
-        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages
     ):
         """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
 
@@ -252,7 +267,7 @@ class TT_CCL:
         forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
         pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
         """
-        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links)
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages)
         buffer = self.combine_forwarding_buffers.get(key)
         if buffer is None:
             buffer = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_forwarding_buffer(
@@ -263,17 +278,17 @@ class TT_CCL:
                 seq_len_per_chip=seq_len_per_chip,
                 combine_axis=0,
                 combine_num_links=num_links,
+                combine_fwd_vc_pages=fwd_vc_pages,
             )
             self.combine_forwarding_buffers[key] = buffer
         return buffer
 
-    def get_dispatch_fabric2d_buffers(self, emb_dim, seq_len_per_chip, num_links, cluster_axis=0, fwd_vc_pages=None):
+    def get_dispatch_fabric2d_buffers(self, emb_dim, seq_len_per_chip, num_links, fwd_vc_pages, cluster_axis=0):
         """dispatch_fabric2d's DRAM forwarding and staging buffers, as (forwarding, staging).
 
         One pair per shape, shared by every MoE layer, which run one after another. Get it at model init: left to
         the op, the pair is allocated at the first dispatch's cache miss in the middle of a forward and every cached
-        program keeps its own copy, which is how a model that fits runs out of DRAM. fwd_vc_pages None takes the
-        op's default, as TtDispatch2dModule does.
+        program keeps its own copy, which is how a model that fits runs out of DRAM.
         """
         key = (emb_dim, seq_len_per_chip, num_links, cluster_axis, fwd_vc_pages)
         buffers = self.dispatch_fabric2d_buffers.get(key)
@@ -285,7 +300,7 @@ class TT_CCL:
                     seq_len_per_chip=seq_len_per_chip,
                     cluster_axis=cluster_axis,
                     num_links=num_links,
-                    **({} if fwd_vc_pages is None else {"fwd_vc_pages": fwd_vc_pages}),
+                    fwd_vc_pages=fwd_vc_pages,
                 )
             )
             self.dispatch_fabric2d_buffers[key] = buffers
@@ -481,6 +496,19 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_sparse_kv_push_planner(self, links: int):
+        """The sparse KVPE push planner; layers run serially and share it."""
+        if self.sparse_kv_push_planner is None:
+            # Imported here: the tt.mla package imports this module.
+            from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
+
+            self.sparse_kv_push_planner = SparseKvPushPlanner(self.mesh_device, links)
+        if self.sparse_kv_push_planner.links != links:
+            raise ValueError(
+                f"every MLA layer must use one push link count: {self.sparse_kv_push_planner.links}, then {links}"
+            )
+        return self.sparse_kv_push_planner
 
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
         """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.
@@ -729,6 +757,8 @@ def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            # Only a Galaxy carved into 4x4 stages has 16 Blackhole chips in one mesh.
+            16: "BHGLX_4x4",
             32: "BHGLX",
         }
     elif "wormhole_b0" in arch_name:
@@ -772,6 +802,7 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
         "P150x8": (2, 2),
         "P300": (2, 2),
         "BHGLX": (2, 2),  # NOTE: Possible increase to 4 when it's enabled
+        "BHGLX_4x4": (2, 2),  # a stage keeps the Galaxy's links on both axes
         "TG": (4, 4),
         "N150x4": (1, 1),
     }
@@ -779,5 +810,32 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
     if cluster_axis is None:
         return min(device_links)
     if cluster_axis in (0, 1):
-        return device_links[cluster_axis]
+        # The table is what the box is cabled for; a carved stage or a degraded cable can leave
+        # an axis fewer live links, and asking a collective for one more than a hop has fails it.
+        live = _live_links_on_axis(mesh_device, cluster_axis)
+        return device_links[cluster_axis] if live is None else min(device_links[cluster_axis], live)
     return min(device_links)
+
+
+def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int | None:
+    """The fewest fabric links any hop along `cluster_axis` forwards on, or None where the
+    fabric is not up to ask."""
+    shape = tuple(mesh_device.shape)
+    if len(shape) != 2 or shape[cluster_axis] < 2:
+        return None
+    try:
+        fewest = None
+        for row in range(shape[0]):
+            for col in range(shape[1]):
+                src = [row, col]
+                if src[cluster_axis] + 1 == shape[cluster_axis]:
+                    continue
+                dst = list(src)
+                dst[cluster_axis] += 1
+                src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(src))
+                dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(dst))
+                count = len(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
+                fewest = count if fewest is None else min(fewest, count)
+        return fewest or None
+    except RuntimeError:
+        return None

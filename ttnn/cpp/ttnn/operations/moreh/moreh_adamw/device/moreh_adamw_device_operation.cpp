@@ -51,6 +51,21 @@ void MorehAdamWDeviceOperation::validate_inputs(
             {DataType::BFLOAT16, DataType::BFLOAT8_B});
     }
 
+    // The program sizes and formats every buffer from param_in, so each preallocated output must match it.
+    for (const auto* out :
+         {&tensor_args.param_out,
+          &tensor_args.exp_avg_out,
+          &tensor_args.exp_avg_sq_out,
+          &tensor_args.max_exp_avg_sq_out}) {
+        if (out->has_value()) {
+            TT_FATAL(
+                (*out)->dtype() == tensor_args.param_in.dtype(),
+                "moreh_adamw: output dtype {} must match the param_in dtype {}",
+                (*out)->dtype(),
+                tensor_args.param_in.dtype());
+        }
+    }
+
     // The reader fills the scalar/intermediate CBs (which take param_in's format unless fp32_dest_acc_en)
     // with raw 16/32-bit tiles, which a block-float page can neither hold nor represent.
     if (tensor_args.param_in.dtype() == DataType::BFLOAT8_B) {
