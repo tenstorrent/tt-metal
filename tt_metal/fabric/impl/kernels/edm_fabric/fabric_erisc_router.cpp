@@ -41,7 +41,6 @@
 // fabric_set_2d_intermesh_landing_route(). Include its declaration directly and only for the 2D call site.
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #endif
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -3305,6 +3304,17 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+#ifdef KERAUNOS_CCE
+        if constexpr (wait_for_host_signal && is_local_handshake_master) {
+            // A subordinate adds to the counter only once armed: an add that landed before this reset would be lost.
+            internal_::cce_tile_counter::reset(local_handshake_tile_counter, num_local_edms - 1);
+            notify_subordinate_routers(
+                edm_channels_mask,
+                local_handshake_master_eth_chan,
+                router_l1_offset(edm_local_sync_ptr_addr),
+                local_handshake_counter_armed);
+        }
+#endif
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
@@ -3338,7 +3348,7 @@ void kernel_main() {
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
-                    edm_local_sync_ptr_addr, num_local_edms - 1, termination_signal_ptr);
+                    local_handshake_count_addr, num_local_edms - 1, termination_signal_ptr);
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
@@ -3348,7 +3358,13 @@ void kernel_main() {
                 notify_subordinate_routers(
                     edm_channels_mask, exclude_eth_chan, edm_local_sync_ptr_addr, num_local_edms);
             } else {
+#ifdef KERAUNOS_CCE
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+                    edm_local_sync_ptr_addr, local_handshake_counter_armed, termination_signal_ptr);
+                internal_::cce_tile_counter::add(local_handshake_master_counter_addr, 1);
+#else
                 notify_master_router(local_handshake_master_eth_chan, router_l1_offset(edm_local_sync_ptr_addr));
+#endif
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
                     edm_local_sync_ptr_addr, num_local_edms, termination_signal_ptr);
             }
