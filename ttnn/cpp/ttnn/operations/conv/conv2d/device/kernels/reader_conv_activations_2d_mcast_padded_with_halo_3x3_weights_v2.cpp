@@ -144,9 +144,14 @@ void kernel_main() {
     constexpr uint32_t act_block_num_tiles_read = get_compile_time_arg_val(6);
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    const uint32_t padded_conv_act_size_w = get_common_arg_val<uint32_t>(conv_size_args::PADDED_ACT_SIZE_W);
+    const uint32_t act_num_blocks_h = get_common_arg_val<uint32_t>(conv_size_args::NUM_BLOCKS_ACT_H);
+#else
     constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
+#endif
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(12);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(13);
     constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(14);
@@ -199,7 +204,17 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    load_config_tensor_if_in_dram_rt<31, cb_reader_indices>(
+        noc,
+        dfb_reader_indices_obj,
+        dram_config_reader_index,
+        get_common_arg_val<uint32_t>(conv_size_args::CONFIG_ADDR),
+        get_common_arg_val<uint32_t>(conv_size_args::CONFIG_ALIGNED_PAGE),
+        get_common_arg_val<uint32_t>(conv_size_args::CONFIG_PAGE));
+#else
     load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(noc, dfb_reader_indices_obj, dram_config_reader_index);
+#endif
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr());
@@ -222,8 +237,8 @@ void kernel_main() {
         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
     }
 
-    constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
-    constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+    const uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+    const uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr bool sliced_inner_dim = window_outer > 1;
 
@@ -250,15 +265,15 @@ void kernel_main() {
                     stride_w_bytes,
                     weight_size_w,
                     stride_w,
-                    weight_size_h,
-                    window_outer_offset>(
+                    weight_size_h>(
                     noc,
                     packed_reader_indices_ptr,
                     reader_offset,
                     l1_write_addr_act,
                     reader_idx,
                     act_l1_read_addr,
-                    stride_h_bytes);
+                    stride_h_bytes,
+                    window_outer_offset);
                 if constexpr (split_reader_cb_shared) {
                     write_done_sem.wait(VALID);
                     write_done_sem.set(INVALID);

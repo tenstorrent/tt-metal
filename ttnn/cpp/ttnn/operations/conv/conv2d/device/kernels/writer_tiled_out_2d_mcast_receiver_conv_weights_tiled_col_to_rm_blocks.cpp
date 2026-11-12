@@ -24,7 +24,11 @@ void kernel_main() {
 
     // Bias arg. Unused if bias fusion is not enabled.
     constexpr uint32_t bias_ntiles = get_compile_time_arg_val(14);
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    const uint32_t out_num_blocks_h = get_common_arg_val<uint32_t>(conv_size_args::NUM_BLOCKS_ACT_H);
+#else
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
+#endif
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
 
     constexpr bool fuse_bias = get_compile_time_arg_val(18);
@@ -40,7 +44,11 @@ void kernel_main() {
     constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(21);
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(22);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(23);
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    const uint32_t padded_conv_act_size_w = get_common_arg_val<uint32_t>(conv_size_args::PADDED_ACT_SIZE_W);
+#else
     constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(24);
+#endif
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(25);
     constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t dilation_h = get_compile_time_arg_val(27);
@@ -104,8 +112,8 @@ void kernel_main() {
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr uint32_t coalesced_read_bytes =
         ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
-    constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
-    constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+    const uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+    const uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
     const uint32_t act_l1_read_addr = split_reader_enabled ? dfb_sharded_act_obj.get_read_ptr() : 0;
     // read in bias if enabled (done only once for all batches)
@@ -147,15 +155,15 @@ void kernel_main() {
                             stride_w_bytes,
                             weight_size_w,
                             stride_w,
-                            weight_size_h,
-                            window_outer_offset>(
+                            weight_size_h>(
                             noc,
                             packed_reader_indices_ptr,
                             reader_offset,
                             l1_write_addr_act,
                             reader_idx,
                             act_l1_read_addr,
-                            stride_h_bytes);
+                            stride_h_bytes,
+                            window_outer_offset);
                         if constexpr (split_reader_cb_shared) {
                             // in case of shared cb we update the write address (it will remain the same if double
                             // buffering is not enabled)

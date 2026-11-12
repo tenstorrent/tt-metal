@@ -338,6 +338,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const bool is_conv_1d_depthwise_conv =
         is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
+    // The values that depend on the input size (row blocks per core, padded input width, the reader
+    // indices buffer) go into common runtime args instead of compile-time args, so one kernel binary
+    // serves every input size (CONV_RUNTIME_SIZE_ARGS in the kernels). Activation reuse and the
+    // depthwise kernels still need them at compile time.
+    const bool runtime_size_args = !enable_activation_reuse && !is_conv_1d_depthwise_conv;
     const uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         is_conv_1d_depthwise_conv,
@@ -858,9 +863,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         (uint32_t)(enable_split_reader && !split_reader_cb_shared ? act_block_num_tiles_split : act_block_num_tiles),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
-        (uint32_t)conv_act_size_w + (pad_w),
+        runtime_size_args ? 0u : (uint32_t)conv_act_size_w + (pad_w),
         (uint32_t)act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
-        (uint32_t)num_blocks_act_h_per_core,                              // act_num_blocks_h
+        runtime_size_args ? 0u : (uint32_t)num_blocks_act_h_per_core,     // act_num_blocks_h
         (uint32_t)act_block_num_tiles,                                    // act_block_num_tiles
         (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
         (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_dests
@@ -888,10 +893,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(
-            conv_reader_indices_buffer->address());  // smuggled-rta-ok: compile-time workload-owned buffer
-        reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
+        if (runtime_size_args) {
+            // Address and page sizes are common runtime args; keep the slots so the offsets stay the same.
+            reader_compile_time_args.push_back(0);
+            reader_compile_time_args.push_back(0);
+            ttnn::operations::sliding_window::append_size_independent_accessor_args(
+                *conv_reader_indices_buffer, reader_compile_time_args);
+        } else {
+            reader_compile_time_args.push_back(
+                conv_reader_indices_buffer->address());  // smuggled-rta-ok: compile-time workload-owned buffer
+            reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
+            tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
+        }
     } else {
         // Put enough 0s so that the offsets of activation reuse args are the same.
         // TensorAccessorArgs appends 2 CT args (is_dram + aligned_page_size), so we need 4 zeros total
@@ -946,6 +959,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_defines["SPLIT_READER"] = "1";
     }
 
+    if (runtime_size_args) {
+        reader_defines["CONV_RUNTIME_SIZE_ARGS"] = "1";
+        writer_mcast_sender_defines["CONV_RUNTIME_SIZE_ARGS"] = "1";
+        writer_defines["CONV_RUNTIME_SIZE_ARGS"] = "1";
+        compute_defines["CONV_RUNTIME_SIZE_ARGS"] = "1";
+    }
+
     if (enable_activation_reuse) {
         reader_defines["ACTIVATION_REUSE"] = "1";
         writer_mcast_sender_defines["ACTIVATION_REUSE"] = "1";
@@ -978,7 +998,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         // bias
         bias_ntiles_per_core,
 
-        num_blocks_act_h_per_core,
+        runtime_size_args ? 0u : num_blocks_act_h_per_core,
         num_blocks_weight_w_per_core,
         out_conv_c_blocks,
         (uint32_t)has_bias,
@@ -988,9 +1008,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     std::vector<uint32_t> split_reader_args = {
         (uint32_t)act_block_num_tiles_split_last,
         (uint32_t)conv_act_c_read_bytes,
-        (uint32_t)filter_w,                       // weight_size_w
-        (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
-        (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
+        (uint32_t)filter_w,                                            // weight_size_w
+        runtime_size_args ? 0u : (uint32_t)(conv_act_size_w + pad_w),  // conv_act_size_w_padded
+        (uint32_t)act_block_w_extra_align_bytes,                       // only used for 1d systolic variant
         (uint32_t)needs_act_block_zero_out,
         (uint32_t)dilation_h,
         (uint32_t)dilation_w,
@@ -1120,7 +1140,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             weight_block_num_tiles,
             weight_block_w_ntiles,
 
-            num_blocks_act_h_per_core,
+            runtime_size_args ? 0u : num_blocks_act_h_per_core,
             in0_num_blocks_w,
             num_blocks_weight_w_per_core,
 
@@ -1223,6 +1243,30 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = depthwise_unpack_to_dest,
     };
+
+    // Common runtime args with the values that depend on the input size (conv_size_args in
+    // conv_reader_common.hpp). The reader indices buffer is owned by the cached workload, so its
+    // address never changes; it is passed as a Buffer* binding like every other buffer address.
+    if (runtime_size_args) {
+        KernelDescriptor::RTArgList size_args;
+        size_args.push_back(static_cast<uint32_t>(num_blocks_act_h_per_core));
+        size_args.push_back(static_cast<uint32_t>(conv_act_size_w + pad_w));
+        if (config_tensors_in_dram) {
+            size_args.push_back(conv_reader_indices_buffer);
+            size_args.push_back(static_cast<uint32_t>(conv_reader_indices_buffer->aligned_page_size()));
+            size_args.push_back(static_cast<uint32_t>(conv_reader_indices_buffer->page_size()));
+        } else {
+            size_args.push_back(uint32_t{0});
+            size_args.push_back(uint32_t{0});
+            size_args.push_back(uint32_t{0});
+        }
+        writer_mcast_sender_desc.emplace_common_runtime_args(size_args);
+        if (create_writer_mcast_receiver) {
+            writer_mcast_receiver_desc.emplace_common_runtime_args(size_args);
+        }
+        reader_desc.emplace_common_runtime_args(size_args);
+        compute_kernel_desc.emplace_common_runtime_args(size_args);
+    }
 
     // Helper lambda to setup mcast arguments
     auto setup_mcast_args = [&](bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {

@@ -369,6 +369,37 @@ void load_config_tensor_if_in_dram(Noc noc, DFB reader_dfb, uint32_t core_index)
 #endif
 }
 
+// Like load_config_tensor_if_in_dram, but the config tensor's address and page sizes come as runtime
+// values: the config tensor is allocated per input size, and compile-time values would make every
+// input size compile its own kernel. The accessor args at tensor_args_index carry only the layout.
+template <uint32_t tensor_args_index, uint32_t cb_reader_index, typename DFB>
+void load_config_tensor_if_in_dram_rt(
+    Noc noc,
+    DFB reader_dfb,
+    uint32_t core_index,
+    uint32_t config_dram_addr,
+    uint32_t config_aligned_page_size,
+    uint32_t config_page_size) {
+#ifdef CONFIG_TENSOR_IN_DRAM
+    const auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
+    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr, config_aligned_page_size);
+
+    noc.async_read(config_accessor, reader_dfb, config_page_size, {.page_id = core_index}, {});
+    noc.async_read_barrier();
+    reader_dfb.push_back(1);
+#endif
+}
+
+// Common runtime args of the sharded conv kernels when CONV_RUNTIME_SIZE_ARGS is defined: the values
+// that depend on the input size, so that one kernel binary serves every input size.
+namespace conv_size_args {
+constexpr uint32_t NUM_BLOCKS_ACT_H = 0;     // row blocks per core
+constexpr uint32_t PADDED_ACT_SIZE_W = 1;    // padded input width in sticks
+constexpr uint32_t CONFIG_ADDR = 2;          // reader indices DRAM address
+constexpr uint32_t CONFIG_ALIGNED_PAGE = 3;  // reader indices aligned page size
+constexpr uint32_t CONFIG_PAGE = 4;          // reader indices page size
+}  // namespace conv_size_args
+
 template <int window_height, int window_width>
 FORCE_INLINE void read_dilated_channels(
     Noc noc,
@@ -419,8 +450,7 @@ template <
     uint32_t stride_w_bytes,
     uint32_t weight_size_w,
     uint32_t stride_w,
-    uint32_t weight_size_h,
-    uint32_t window_outer_offset>
+    uint32_t weight_size_h>
 FORCE_INLINE void read_activation_data(
     Noc noc,
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
@@ -428,7 +458,8 @@ FORCE_INLINE void read_activation_data(
     uint32_t& l1_write_addr_act,
     uint32_t& reader_idx,
     uint32_t act_l1_read_addr,
-    uint32_t stride_h_bytes) {
+    uint32_t stride_h_bytes,
+    uint32_t window_outer_offset) {
     if constexpr (sliced_inner_dim) {
         read_sticks<
             dilation_w,

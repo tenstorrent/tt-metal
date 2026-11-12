@@ -25,7 +25,11 @@ void kernel_main() {
     // Bias arg. Unused if bias fusion is not enabled.
     constexpr uint32_t bias_ntiles = get_compile_time_arg_val(14);
 
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    const uint32_t out_num_blocks_h = get_common_arg_val<uint32_t>(conv_size_args::NUM_BLOCKS_ACT_H);
+#else
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
+#endif
 
     constexpr bool fuse_bias = get_compile_time_arg_val(18);
 
@@ -91,6 +95,12 @@ void kernel_main() {
     }
 
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    const uint32_t window_outer_offset_rt =
+        get_common_arg_val<uint32_t>(conv_size_args::PADDED_ACT_SIZE_W) * conv_act_c_read_bytes * dilation_h;
+#else
+    constexpr uint32_t window_outer_offset_rt = window_outer_offset;
+#endif
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         split_reader_enabled ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr())
                              : nullptr;
@@ -158,7 +168,7 @@ void kernel_main() {
                     noc.async_read_barrier();
                     dfb_act_second_obj.push_back(act_block_num_tiles);
 
-                    reader_offset += window_outer_offset;
+                    reader_offset += window_outer_offset_rt;
                 } else {
                     read_sticks_activation_reuse<
                         coalesced_read_bytes,

@@ -11,6 +11,7 @@
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "tt-metalium/hal.hpp"
+#include "tt-metalium/buffer.hpp"
 
 namespace ttnn::operations::sliding_window {
 
@@ -207,6 +208,12 @@ Tensor move_config_tensor_to_device(
     bool store_in_dram = false);
 
 uint32_t align_buffer(uint32_t size);
+
+// Appends the compile-time TensorAccessorArgs of an interleaved config tensor buffer without its
+// aligned page size, which depends on the input size. The kernel gets the address and the aligned
+// page size as runtime args, so one kernel binary serves every input size.
+void append_size_independent_accessor_args(
+    const tt::tt_metal::Buffer& buffer, std::vector<uint32_t>& compile_time_args);
 
 }  // namespace ttnn::operations::sliding_window
 

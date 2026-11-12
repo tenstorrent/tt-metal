@@ -282,7 +282,7 @@ ProgramDescriptor build_halo_program(
         cb_indices.out_cb_id,
         0,  // padding value cb
         pad_val,
-        input_npages,
+        0,  // unused: the input page count is runtime arg 1, so the kernel does not depend on the input size
         aligned_stick_nbytes,
         is_block_sharded,
         remote_read,
@@ -300,28 +300,17 @@ ProgramDescriptor build_halo_program(
 
     if (config_tensors_in_dram) {
         reader_defines.emplace_back("CONFIG_TENSOR_IN_DRAM", "1");
-        // NOTE: the config-buffer addresses are baked into compile-time args
-        // here.  The buffers themselves are parked on the WorkloadDescriptor,
-        // so their device allocations stay valid for the cached workload's
-        // lifetime — the address embedded below remains correct on cache hit
-        // because the buffers are not re-allocated.
-        core_0_reader_ct_args.push_back(padding_config_buffer0->address());  // smuggled-rta-ok: see NOTE above
-        core_0_reader_ct_args.push_back(padding_config_buffer0->page_size());
-
-        core_0_reader_ct_args.push_back(gather_config_buffer0->address());  // smuggled-rta-ok: see NOTE above
-        core_0_reader_ct_args.push_back(gather_config_buffer0->page_size());
-
-        core_1_reader_ct_args.push_back(padding_config_buffer1->address());  // smuggled-rta-ok: see NOTE above
-        core_1_reader_ct_args.push_back(padding_config_buffer1->page_size());
-
-        core_1_reader_ct_args.push_back(gather_config_buffer1->address());  // smuggled-rta-ok: see NOTE above
-        core_1_reader_ct_args.push_back(gather_config_buffer1->page_size());
-
-        tt::tt_metal::TensorAccessorArgs(padding_config_buffer0).append_to(core_0_reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(gather_config_buffer0).append_to(core_0_reader_ct_args);
-
-        tt::tt_metal::TensorAccessorArgs(padding_config_buffer1).append_to(core_1_reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(gather_config_buffer1).append_to(core_1_reader_ct_args);
+        // The config buffers are allocated per input size. Their addresses and page sizes go into
+        // runtime args (see the per-core args below), so one kernel binary serves every input size.
+        // The accessor args keep only the layout; the aligned page size is passed at run time.
+        ttnn::operations::sliding_window::append_size_independent_accessor_args(
+            *padding_config_buffer0, core_0_reader_ct_args);
+        ttnn::operations::sliding_window::append_size_independent_accessor_args(
+            *gather_config_buffer0, core_0_reader_ct_args);
+        ttnn::operations::sliding_window::append_size_independent_accessor_args(
+            *padding_config_buffer1, core_1_reader_ct_args);
+        ttnn::operations::sliding_window::append_size_independent_accessor_args(
+            *gather_config_buffer1, core_1_reader_ct_args);
     }
     const uint32_t EMPTY_PADDING_CONFIG_BUFFER_SIZE = 4;
     const bool enable_padding = config_tensors_in_dram ||
@@ -360,22 +349,34 @@ ProgramDescriptor build_halo_program(
         .noc = NOC::RISCV_1_default,
     };
 
-    if (config_tensors_in_dram) {
-        uint32_t core_index = 0;
-        for (const auto& core : cores) {
-            if (is_height_sharded) {
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{core_index});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{core_index});
-            } else if (is_width_sharded) {
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0});
-            } else if (is_block_sharded) {
-                const auto nhw_index = is_rm_orientation ? core.y : core.x;
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{nhw_index});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{nhw_index});
+    // Runtime args: [0] config read index, [1] input sticks (or pages), and with config tensors in DRAM
+    // [2..4] padding config address, aligned page size, page size, [5..7] the same for the gather config.
+    auto config_args = [&](uint32_t config_index, const Buffer* padding, const Buffer* gather) {
+        std::vector<uint32_t> args{config_index, input_npages};
+        if (config_tensors_in_dram) {
+            for (const Buffer* buffer : {padding, gather}) {
+                args.push_back(buffer->address());
+                args.push_back(static_cast<uint32_t>(buffer->aligned_page_size()));
+                args.push_back(static_cast<uint32_t>(buffer->page_size()));
             }
-            core_index++;
         }
+        return args;
+    };
+    uint32_t core_index = 0;
+    for (const auto& core : cores) {
+        uint32_t config_index = 0;
+        if (config_tensors_in_dram) {
+            if (is_height_sharded) {
+                config_index = core_index;
+            } else if (is_block_sharded) {
+                config_index = is_rm_orientation ? core.y : core.x;
+            }
+        }
+        reader_0_desc.runtime_args.emplace_back(
+            core, config_args(config_index, padding_config_buffer0, gather_config_buffer0));
+        reader_1_desc.runtime_args.emplace_back(
+            core, config_args(config_index, padding_config_buffer1, gather_config_buffer1));
+        core_index++;
     }
 
     desc.kernels.push_back(std::move(reader_0_desc));

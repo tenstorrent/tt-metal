@@ -262,7 +262,9 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(4);
     constexpr uint32_t pad_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(6);
-    constexpr uint32_t in_nsticks = get_compile_time_arg_val(7);
+    // Runtime args: [0] config read index, [1] input sticks, [2..7] DRAM config buffers (see below).
+    // The input size is a runtime arg so one kernel binary serves every input size.
+    const uint32_t in_nsticks = get_arg_val<uint32_t>(1);
     constexpr uint32_t aligned_stick_nbytes = get_compile_time_arg_val(8);
     constexpr bool is_block_sharded = get_compile_time_arg_val(9) == 1;
     constexpr bool remote_read = get_compile_time_arg_val(10) == 1;
@@ -288,17 +290,23 @@ void kernel_main() {
     experimental::CB pad_cb(pad_cb_id);
 
 #ifdef CONFIG_TENSOR_IN_DRAM
-    constexpr uint32_t padding_config_dram_addr = get_compile_time_arg_val(18);
-    constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(19);
-    constexpr uint32_t gather_config_dram_addr = get_compile_time_arg_val(20);
-    constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(21);
+    // The config buffers are allocated per input size, so their addresses and page sizes are runtime
+    // args; the accessor args carry only the layout, with the aligned page size passed at run time.
+    const uint32_t padding_config_dram_addr = get_arg_val<uint32_t>(2);
+    const uint32_t padding_config_aligned_page_size = get_arg_val<uint32_t>(3);
+    const uint32_t padding_config_page_size = get_arg_val<uint32_t>(4);
+    const uint32_t gather_config_dram_addr = get_arg_val<uint32_t>(5);
+    const uint32_t gather_config_aligned_page_size = get_arg_val<uint32_t>(6);
+    const uint32_t gather_config_page_size = get_arg_val<uint32_t>(7);
 
-    constexpr auto padding_config_tensor_args = TensorAccessorArgs<22>();
+    constexpr auto padding_config_tensor_args = TensorAccessorArgs<18>();
     constexpr auto gather_config_tensor_args =
         TensorAccessorArgs<padding_config_tensor_args.next_compile_time_args_offset()>();
 
-    const auto padding_config_accessor = TensorAccessor(padding_config_tensor_args, padding_config_dram_addr);
-    const auto gather_config_accessor = TensorAccessor(gather_config_tensor_args, gather_config_dram_addr);
+    const auto padding_config_accessor =
+        TensorAccessor(padding_config_tensor_args, padding_config_dram_addr, padding_config_aligned_page_size);
+    const auto gather_config_accessor =
+        TensorAccessor(gather_config_tensor_args, gather_config_dram_addr, gather_config_aligned_page_size);
 
     uint32_t config_read_index = get_arg_val<uint32_t>(0);
 

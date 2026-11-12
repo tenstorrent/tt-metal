@@ -215,8 +215,14 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles =
         get_compile_time_arg_val(6);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);  // out_subblock_w*in1_num_subblocks
-    // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
+#ifdef CONV_RUNTIME_SIZE_ARGS
+    // The number of row blocks per core depends on the input size, so it is a common runtime arg and
+    // one kernel binary serves every input size. Index 0 is conv_size_args::NUM_BLOCKS_ACT_H in
+    // conv_reader_common.hpp, which compute kernels do not include.
+    const uint32_t in0_num_blocks_h = get_common_arg_val<uint32_t>(0);
+#else
     constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
+#endif
     constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(9);
     constexpr uint32_t in1_num_blocks_w = get_compile_time_arg_val(10);
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(11);          // inner row block size in tiles
@@ -597,7 +603,7 @@ void kernel_main() {
                         in0_num_subblocks * out_subblock_h);
                 }
             }
-            if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
+            if (in1_num_blocks_w > 1 || in0_num_blocks_h > 1) {
                 if constexpr (fuse_bias) {
                     reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
                 } else {
