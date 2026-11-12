@@ -44,5 +44,6 @@ class TTNNLayerNorm(TTNNModule):
             input_tensor,
             weight=self.tt_weight,
             bias=self.tt_bias,
+            epsilon=self.torch_layer.eps,
         )
         return tt_output
