@@ -22,7 +22,7 @@ import torch
 
 import ttnn
 
-U = 2
+U = int(os.environ.get("DSV41_D2D_U", "2"))  # users per mesh row (B = 4 * U; production B=16 is U=4)
 CHUNK = 512
 LAYERS = os.environ.get("DSV41_PH_LAYERS", "0-23")
 DECODE = int(os.environ.get("DSV41_PH_DECODE", "8"))
@@ -150,15 +150,15 @@ def test_xrow_d2d(mesh_device):
         pa.d2d = d2d_obj if use_d2d else None
         run(0, D, 0, f"donor_{tag}")
         m.release_user(0)
-        pa.idx.bind(f"occ0_{tag}", 0, user=0)
-        pa.idx.bind(f"occ1_{tag}", 0, user=1)
+        for i_ in range(U):
+            pa.idx.bind(f"occ{i_}_{tag}", 0, user=i_)
         plan = pa.idx.plan_hit(f"x_{tag}", P.numpy(), L)
         assert plan.xrow_src == 0 and plan.row != 0 and plan.hit_tokens > 0, plan
         s0, f0 = pa.stats["xrow_s"], pa.stats["xrow_failed"]
         t_x, l_x, dt_x = run(plan.user, P, plan.hit_tokens, f"x_{tag}")
         log(pa.line())
-        pa.idx.release(f"occ0_{tag}")
-        pa.idx.release(f"occ1_{tag}")
+        for i_ in range(U):
+            pa.idx.release(f"occ{i_}_{tag}")
         return l_x, pa.stats["xrow_s"] - s0, pa.stats["xrow_failed"] - f0, dt_x, plan
 
     def mem():
@@ -203,7 +203,7 @@ def test_xrow_d2d(mesh_device):
     res["arms"] = arms
     # repeated d2d copies interleaved with decode replays of a decoder on row 2
     clean()
-    d_user = 4
+    d_user = 2 * U  # a decoder on row 2
     t0_, _, _ = run(d_user, rnd(2048), 0, "dec")
     cur, pos0 = t0_, 2048
     for k in range(5):
@@ -213,8 +213,9 @@ def test_xrow_d2d(mesh_device):
     res["mem_before_reps"] = mem()
     log("MEM before reps " + json.dumps(res["mem_before_reps"]))
     for rep in range(REPS):
-        for x in (0, 1, 2, 3, 6, 7):
-            m.release_user(x)
+        for x in range(B):
+            if x // U != 2:
+                m.release_user(x)
         pa.reset()
         for _ in range(4):
             cur = dec_step(d_user, cur, pos0)
