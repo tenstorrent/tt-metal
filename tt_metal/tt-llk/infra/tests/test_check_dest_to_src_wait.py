@@ -697,9 +697,10 @@ def test_non_utf8_untracked_header_is_listed(tmp_path, monkeypatch):
     header_dir = repo / "tt_metal" / "tt-llk" / "tt_llk_blackhole"
     header_dir.mkdir(parents=True)
     (header_dir / "ok.h").write_text("// ok\n")
-    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(
-        ["git", "-C", str(repo), "add", "--", "tt_metal/tt-llk/tt_llk_blackhole/ok.h"],
+        ["git", "add", "--", "tt_metal/tt-llk/tt_llk_blackhole/ok.h"],
+        cwd=repo,
         check=True,
     )
     with open(os.path.join(os.fsencode(header_dir), b"\xff.h"), "w") as f:
