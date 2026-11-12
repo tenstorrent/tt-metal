@@ -14,6 +14,9 @@
 // slot 3 + i of slot `sel` (word 0 of a [1, 32] uint32 DRAM page; that slot's 3 rows are read ONCE, before any
 // write-back), src(i >= 0) = this launch's pre-conv row i. The usual write-back (H1_j, H2_j, Q_j) -> row j is then
 // exactly the candidate history of row j. Compute / writer unchanged.
+// KDA_VERIFY_GROUPS = G (GLM53_SPEC_MULTI, doc/perf/mtp_multi_user_design.md): the row pairs split into G equal groups,
+// each ONE user's consecutive tokens; group u's window rows i < 0 come from slot sel[u] (selector word u, absolute),
+// staged per group in the dedicated scratch page `units` of CB_H0..2 (the CBs hold units + 1 pages).
 
 #include <cstdint>
 
@@ -226,7 +229,88 @@ void kernel_main() {
         // mixed-pair history rows (3 targets x 2 face halves x 64 B) are assembled in L1 (CB_SCR, 64-B aligned: the
         // NoC cannot read the RISC's local memory)
         const uint32_t s0 = get_write_ptr(CB_SCR);
-#if defined(KDA_VERIFY)
+#if defined(KDA_VERIFY) && defined(KDA_VERIFY_GROUPS)
+        {
+            constexpr uint32_t G = KDA_VERIFY_GROUPS;
+            static_assert(G >= 1 && G <= 16, "KDA_VERIFY_GROUPS: 1..16 groups");
+            const uint32_t units = pairs;
+            const uint32_t gp = units / G;  // row pairs per group (the host asserts units % G == 0)
+            const InterleavedAddrGen<true> sg = {.bank_base_address = sel_addr, .page_size = 128};
+            noc_async_read(sg.get_noc_addr(0), s0, 64);
+            noc_async_read_barrier();
+            uint32_t selw[G];
+            for (uint32_t gi = 0; gi < G; ++gi) {
+                selw[gi] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s0)[gi];
+            }
+            cb_reserve_back(CB_H0, units + 1);
+            cb_reserve_back(CB_H1, units + 1);
+            cb_reserve_back(CB_H2, units + 1);
+            cb_reserve_back(CB_Q, units);
+            const uint32_t hb[3] = {get_write_ptr(CB_H0), get_write_ptr(CB_H1), get_write_ptr(CB_H2)};
+            const uint32_t qb = get_write_ptr(CB_Q);
+            const uint32_t sp = units * BF16_TILE;  // the scratch page (slot sel[u]'s history pair, per group)
+            for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                for (uint32_t u = 0; u < units; ++u) {
+                    read_pair_bf16(qkv, c0 + r, u, qb + u * BF16_TILE, r);
+                }
+            }
+            noc_async_read_barrier();
+            auto copy_row = [](uint32_t dst, uint32_t dr, uint32_t src, uint32_t sr) {
+                for (uint32_t hh = 0; hh < 2; ++hh) {
+                    volatile tt_l1_ptr uint32_t* d =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + tile_off(dr, 16 * hh) * 2);
+                    volatile tt_l1_ptr uint32_t* q =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + tile_off(sr, 16 * hh) * 2);
+                    for (uint32_t w = 0; w < 8; ++w) {
+                        d[w] = q[w];
+                    }
+                }
+            };
+            for (uint32_t gi = 0; gi < G; ++gi) {
+                const uint32_t sel = selw[gi];
+                for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                    for (uint32_t sl = 0; sl < HIST; ++sl) {
+                        read_pair_bf16(hist, sl * QKV_TILES + c0 + r, sel / 2, hb[sl] + sp, r);
+                    }
+                }
+                noc_async_read_barrier();
+                for (uint32_t lu = 0; lu < gp; ++lu) {
+                    const uint32_t u = gi * gp + lu;          // the global pair
+                    for (uint32_t sl = 0; sl < HIST; ++sl) {  // H_sl[j] = src(j - 3 + sl), j the group-local row
+                        for (uint32_t p = 0; p < 2; ++p) {
+                            const int32_t i = static_cast<int32_t>(2 * lu + p) - 3 + static_cast<int32_t>(sl);
+                            for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                                if (i < 0) {
+                                    copy_row(hb[sl] + u * BF16_TILE, 2 * r + p, hb[3 + i] + sp, 2 * r + (sel & 1u));
+                                } else {
+                                    copy_row(
+                                        hb[sl] + u * BF16_TILE,
+                                        2 * r + p,
+                                        qb + (gi * gp + static_cast<uint32_t>(i) / 2) * BF16_TILE,
+                                        2 * r + (static_cast<uint32_t>(i) & 1u));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (update_hist) {
+                for (uint32_t u = 0; u < units; ++u) {
+                    for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
+                        const uint32_t c = c0 + r;
+                        write_pair_bf16(hist, c, u, hb[1] + u * BF16_TILE, r);
+                        write_pair_bf16(hist, QKV_TILES + c, u, hb[2] + u * BF16_TILE, r);
+                        write_pair_bf16(hist, 2 * QKV_TILES + c, u, qb + u * BF16_TILE, r);
+                    }
+                }
+            }
+            cb_push_back(CB_H0, units);
+            cb_push_back(CB_H1, units);
+            cb_push_back(CB_H2, units);
+            cb_push_back(CB_Q, units);
+            noc_async_write_barrier();
+        }
+#elif defined(KDA_VERIFY)
         {
             // pages: H0 / H1 / H2 page u = the windows of rows 2u, 2u + 1; page 1 first holds slot `sel`'s history pair
             // (read before any write-back), consumed before page 1 is assembled (H0, then H1, then H2: page 1's H0 rows

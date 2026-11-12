@@ -691,7 +691,8 @@ def spec_multi_plan(K: int, live: int, widths=(), full: int = 16) -> dict:
     """GLM53_SPEC_MULTI (design: models/demos/glm53_flash/doc/perf/mtp_multi_user_design.md; pure): the multi-user
     speculative step's row layout for ``live`` speculating users on a build with decode programs at ``widths`` (its
     narrow <= 4 and native widths) and the full width ``full`` (the B 16 1 M build: narrow (1, 2, 4), native (8,), 16):
-      g      rows per user = min(K + 1, full // live): user u's verify group is rows [u g, u g + g) -- its token rows, its
+      g      rows per user = min(K + 1, full // live), even with more than one user (kda_pre's verify works on row
+             pairs): user u's verify group is rows [u g, u g + g) -- its token rows, its
              candidate KDA states / conv histories, per-row positions c_u + j, page-table rows = user u's row
       k      drafts per user = g - 1 (0: no speculation at this many live users -- live > full // 2)
       slots  the generator slots the users occupy: the group bases u g (rows u g + 1 .. u g + g - 1 are the group's
@@ -704,6 +705,8 @@ def spec_multi_plan(K: int, live: int, widths=(), full: int = 16) -> dict:
     assert K >= 1 and live >= 1 and full >= 1, (K, live, full)
     ws = sorted({int(w) for w in widths} | {full})
     g = min(K + 1, full // live) if live <= full else 1
+    if live > 1 and g % 2:  # a group is whole row pairs (kda_pre KDA_VERIFY_GROUPS: the pair layout)
+        g -= 1
     if g < 2:
         return dict(g=1, k=0, slots=tuple(range(live)), rows=live, wv=None, cu=None, ch=None)
     rows = live * g

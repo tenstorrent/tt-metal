@@ -135,6 +135,8 @@ class KdaPre:
         # Stage 17 speculative verify (kda.kda_verify_sel = the [1, 32] uint32 selector page, set only while a verify
         # width's layers are built): the rows are consecutive tokens of ONE user (kernels/kda_pre/reader.cpp KDA_VERIFY)
         self.verify_sel = getattr(kda, "kda_verify_sel", None)
+        # GLM53_SPEC_MULTI (kda.kda_verify_groups = G users, set with kda_verify_sel): KDA_VERIFY_GROUPS
+        self.verify_groups = int(getattr(kda, "kda_verify_groups", 0) or 0) if self.verify_sel is not None else 0
         assert self.verify_sel is None or self.rsplit == 1, "KDA_VERIFY: one row group"
         self.pack = kda_pack(self.spread)  # 7a: ROWS-mode user rows per packed tile (kernels: KDA_PACK)
         assert self.verify_sel is None or self.pack == 2, "KDA_VERIFY: the pair layout (KDA_PACK 2)"
@@ -255,15 +257,19 @@ class KdaPre:
         vsel = self.verify_sel
         if vsel is not None:
             # Stage 17: <= 8 rows (the t = 8 verify of DFlash2 / K = 7 on the native w8 programs: 4 row pairs)
-            assert roww and b <= 8 and not batch and not hist_tiles, (
-                "KDA_VERIFY: ROWS mode, <= 8 rows, no batch",
+            G = self.verify_groups
+            assert roww and (b <= 8 or (G > 1 and b <= 16)) and not batch and not hist_tiles, (
+                "KDA_VERIFY: ROWS mode, <= 8 rows (GLM53_SPEC_MULTI: <= 16), no batch",
                 b,
                 batch,
             )
+            assert G <= 1 or (b % 2 == 0 and (b // 2) % G == 0), ("KDA_VERIFY_GROUPS: equal groups of row pairs", b, G)
         reader = (reader_ct, self._rtd(lambda kk: addrs + [kk, b, int(roww or hist_tiles)]
                                        + ([vsel.buffer_address()] if vsel is not None else [])),
                   self.defines + ([("KDA_BATCH", "1")] if batch else []) + ([("KDA_TILES_HIST", "1")] if hist_tiles else [])
-                  + ([("KDA_VERIFY", "1")] if vsel is not None else []),
+                  + ([("KDA_VERIFY", "1")] if vsel is not None else [])
+                  + ([("KDA_VERIFY_GROUPS", str(self.verify_groups))] if vsel is not None and self.verify_groups > 1
+                     else []),
                   ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
                                                     noc=ttnn.NOC.RISCV_0_default))  # fmt: skip
         writer_ct = [int(roww)]
@@ -289,6 +295,8 @@ class KdaPre:
         t16, t32 = 2048, 4096
         # the verify reader's history / qkv pages hold every row pair (kernels/kda_pre/reader.cpp KDA_VERIFY)
         unit_pages = max(2, units) if (batch or vsel is not None) else 2
+        if vsel is not None and self.verify_groups > 1:  # (+ the per-group scratch page: reader.cpp KDA_VERIFY_GROUPS)
+            unit_pages = units + 1
         cbs = [
             self._cb(CB["H0"], BF16, t16, unit_pages), self._cb(CB["H1"], BF16, t16, unit_pages),
             self._cb(CB["H2"], BF16, t16, unit_pages), self._cb(CB["Q"], BF16, t16, unit_pages),

@@ -15,6 +15,9 @@
 // REC_CHAIN (Stage 17 speculative verify, doc/ttnn/17-mtp-spec-decode/design.md §2.1): the rows are consecutive tokens
 // of ONE user — row 0 starts from state row `sel` (word 0 of a [1, 32] uint32 DRAM page, read once before any state
 // read), row b >= 1 from row b - 1 = the state this core's writer wrote one row earlier (it raises REC_CHAIN_SEM after
+// REC_CHAIN_GROUPS (GLM53_SPEC_MULTI, doc/perf/mtp_multi_user_design.md): REC_UG equal user groups, ONE user's
+// consecutive tokens each (this core's rows b0 .. b0 + items - 1 are one group): the core's first row starts from
+// selector word b0 / items (that user's accepted candidate row, absolute), the chain inside the group as above.
 // that write landed; one increment outstanding at most). Writes are unchanged: row b's state -> row b (candidate b).
 
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/opt_size.hpp"
@@ -161,13 +164,19 @@ void kernel_main() {
         cw.push_back(1);
     }
 #if defined(REC_CHAIN)
+#if !defined(REC_CHAIN_GROUPS)
     static_assert(REC_UG_ROWS_OK, "REC_CHAIN: one user group");
+#endif
     uint32_t src0 = b0;  // row 0's source state row
     {
         const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 11), .page_size = 128};
         noc_async_read(sg.get_noc_addr(0), scratch + 7 * ROW, 64);
         noc_async_read_barrier();
+#if defined(REC_CHAIN_GROUPS)
+        src0 = items ? sc[7 * ROW / 4 + b0 / items] : b0;  // this core's group = b0 / items (equal groups)
+#else
         src0 = sc[7 * ROW / 4];
+#endif
     }
 #else
     const uint32_t src0 = b0;
@@ -319,14 +328,20 @@ void kernel_main() {
         }
     }
 #if defined(REC_CHAIN)
+#if !defined(REC_CHAIN_GROUPS)
     static_assert(REC_UG_ROWS_OK, "REC_CHAIN: one user group");
+#endif
     uint32_t src0 = b0;  // row 0's source state row
     {
         const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 11), .page_size = 128};
         constexpr uint32_t SEL_OFF = 7 * 128 * 4;  // past the 7 fp32 scratch rows (as the v2 path's 7 * ROW)
         noc_async_read(sg.get_noc_addr(0), scratch + SEL_OFF, 64);
         noc_async_read_barrier();
+#if defined(REC_CHAIN_GROUPS)
+        src0 = items ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SEL_OFF)[b0 / items] : b0;
+#else
         src0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SEL_OFF)[0];
+#endif
     }
 #else
     const uint32_t src0 = b0;

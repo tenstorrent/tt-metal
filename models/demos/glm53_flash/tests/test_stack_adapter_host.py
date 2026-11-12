@@ -1882,19 +1882,20 @@ def test_spec_widths_rules(monkeypatch):
     with expect_error(AssertionError, "verify width <= 4"):
         spec_widths(1, 8, (8,))
     # GLM53_SPEC_MULTI's planner on the B 16 1 M build (narrow 1 / 2 / 4, native 8, full 16), K 3: one user = today's
-    # lone narrow step (4 rows); 2 users -> the native 8; 4 users -> all 16 rows; 5 users -> K 2 (15 rows); 6..8 users
-    # -> K 1 (2 rows each); 9+ users -> plain decode
+    # lone narrow step (4 rows); 2 users -> the native 8; 4 users -> all 16 rows; 5..8 users -> K 1 (2 rows each: a
+    # group is whole row pairs); 9+ users -> plain decode
     ws = (1, 2, 4, 8)
     assert spec_multi_plan(3, 1, ws) == dict(g=4, k=3, slots=(0,), rows=4, wv=4, cu=4, ch=1)
     assert spec_multi_plan(3, 2, ws) == dict(g=4, k=3, slots=(0, 4), rows=8, wv=8, cu=8, ch=2)
     assert spec_multi_plan(3, 4, ws) == dict(g=4, k=3, slots=(0, 4, 8, 12), rows=16, wv=16, cu=16, ch=4)
-    assert spec_multi_plan(3, 5, ws) == dict(g=3, k=2, slots=(0, 3, 6, 9, 12), rows=15, wv=16, cu=16, ch=8)
+    assert spec_multi_plan(3, 5, ws) == dict(g=2, k=1, slots=(0, 2, 4, 6, 8), rows=10, wv=16, cu=16, ch=8)
+    assert spec_multi_plan(2, 1, ws)["g"] == 3 and spec_multi_plan(2, 2, ws)["g"] == 2  # (one user: any K + 1)
     assert spec_multi_plan(3, 8, ws)["k"] == 1 and spec_multi_plan(3, 8, ws)["slots"] == (0, 2, 4, 6, 8, 10, 12, 14)
     assert spec_multi_plan(3, 9, ws)["k"] == 0 and spec_multi_plan(3, 16, ws)["wv"] is None
     for live in range(1, 17):  # every group fits the full width, the users sit on distinct group bases
         p = spec_multi_plan(3, live, ws)
         assert p["rows"] <= 16 and len(set(p["slots"])) == live and all(s + p["g"] <= 16 for s in p["slots"])
-    assert spec_multi_k_by_rows(3, 16) == ((4, 3), (5, 2), (8, 1), (16, 1))
+    assert spec_multi_k_by_rows(3, 16) == ((4, 3), (8, 1), (16, 1))
     assert spec_multi_k_by_rows(1, 16) == ((8, 1), (16, 1)) and spec_multi_k_by_rows(3, 4) == ((4, 3),)
 
 
@@ -2032,7 +2033,7 @@ def test_spec_plan_for_the_lone_user():
     # the single-user plan is unchanged with the knob off
     menv = dict(env, GLM53_SPEC_MULTI="1")
     p = spec_plan_for(16, 3, T, menv)
-    assert isinstance(p, T["SpecPlan"]) and p.effective_k == 3 and p.k_by_rows == ((4, 3), (5, 2), (8, 1), (16, 1))
+    assert isinstance(p, T["SpecPlan"]) and p.effective_k == 3 and p.k_by_rows == ((4, 3), (8, 1), (16, 1))
     assert spec_plan_for(4, 3, T, menv).k_by_rows == ((4, 3),)
     assert isinstance(spec_plan_for(32, 3, T, menv), T["SpecReject"])
     assert spec_plan_for(4, 3, T, env).k_by_rows == ((1, 3), (4, 1))

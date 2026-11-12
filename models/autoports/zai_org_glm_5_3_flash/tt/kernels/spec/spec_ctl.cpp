@@ -32,6 +32,11 @@
 //                  (bf16 TILE DRAM interleaved, 2 KB pages: 8 tiles per slot)
 //   GATHER:        tin, mout, rec, cout[0..2] (0 = absent)
 // CB 0: 1 KB scratch (64-B aligned slots).
+// SPEC_GROUPS = G (GLM53_SPEC_MULTI, doc/perf/mtp_multi_user_design.md; CB 0 then 2 KB): G users, group u = verify rows
+//   ro = u (K + 1) .. ro + K; per group the rules above with row offset ro: c_u = pos row ro, a / d rows ro + j, the
+//   bonus -> tin row ro, record page u, selector word u = ro + n_u (absolute candidate row), pos_v / mpos_cu rows
+//   ro + j, chain row u of every mpos_ch page; GATHER: d'1 = mout row ro + n_u, d'_{i+1} = cout_i row u -> tin rows
+//   ro + 1 .. ro + K. ACCEPT's rings: runtime arg 10 = R rings per group, then R x G bases (group-major, R x G <= 64).
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -61,6 +66,154 @@ void kernel_main() {
     // words read back, [768, 1024) the token rows' word 0 assembly
     const uint32_t s_tok = scr, s_rec = scr + 256, s_pos = scr + 512, s_aux = scr + 640;
 
+#if defined(SPEC_GROUPS)
+    constexpr uint32_t G = SPEC_GROUPS;
+    constexpr uint32_t W = K + 1;
+    static_assert(G >= 1 && G * W <= 32, "SPEC_GROUPS: G (K + 1) <= 32 rows");
+    // past the 1 KB of the single-user slots: the pages assembled over every group, written once
+    [[maybe_unused]] const uint32_t s_pv = scr + 1024, s_mc = scr + 1152, s_ch = scr + 1280, s_sel = scr + 1664;
+#if SPEC_MODE == 1 || SPEC_MODE == 2
+    const uint32_t tin = get_arg_val<uint32_t>(0);
+    const uint32_t vout = get_arg_val<uint32_t>(1);
+    const uint32_t pos_src = get_arg_val<uint32_t>(2);
+    const uint32_t pos_v = get_arg_val<uint32_t>(3);
+    const uint32_t mpos_cu = get_arg_val<uint32_t>(4);
+    const uint32_t sel = get_arg_val<uint32_t>(5);
+    const uint32_t rec = get_arg_val<uint32_t>(6);
+    noc_async_read(dram(pos_src, POS_PAGE, 0), s_pos, POS_PAGE);
+    noc_async_read_barrier();
+    for (uint32_t j = 0; j < 32; ++j) {
+        i32(s_pv)[j] = -1;
+        i32(s_mc)[j] = -1;
+        u32(s_sel)[j] = 0;
+        for (uint32_t i = 0; i < 3; ++i) {
+            i32(s_ch + 128 * i)[j] = -1;
+        }
+    }
+    for (uint32_t u = 0; u < G; ++u) {
+        const uint32_t ro = u * W;
+        noc_async_read(dram(rec, REC_PAGE, u), s_rec, REC_PAGE);
+        noc_async_read_barrier();
+        const uint32_t steps = u32(s_rec)[W_STEPS] + 1;
+        for (uint32_t w = 0; w < REC_PAGE / 4; ++w) {
+            u32(s_rec)[w] = 0;
+        }
+        u32(s_rec)[W_STEPS] = steps;
+        uint32_t a[K + 1];
+        uint32_t n = 0;
+        int32_t c;
+#if SPEC_MODE == 1
+        c = i32(s_pos)[ro];  // pos_v row ro = this group's base position
+        for (uint32_t j = 0; j <= K; ++j) {
+            noc_async_read(dram(vout, TOK_PAGE, ro + j), s_tok, 64);
+            noc_async_read_barrier();
+            a[j] = u32(s_tok)[0];
+        }
+        bool run = true;
+        for (uint32_t j = 1; j <= K; ++j) {
+            noc_async_read(dram(tin, TOK_PAGE, ro + j), s_tok, 64);
+            noc_async_read_barrier();
+            const uint32_t d = u32(s_tok)[0];
+            if (run && a[j - 1] == d) {
+                n = j;
+            } else {
+                run = false;
+            }
+        }
+#else
+        c = i32(s_pos)[ro] - 1;  // the user's slot (the group base ro) after the plain head's advance
+        noc_async_read(dram(tin, TOK_PAGE, ro), s_tok, 64);
+        noc_async_read_barrier();
+        a[0] = u32(s_tok)[0];
+        for (uint32_t j = 1; j <= K; ++j) {
+            a[j] = a[0];
+        }
+        u32(s_tok)[0] = a[0];
+        noc_async_write(s_tok, dram(vout, TOK_PAGE, ro), 64);
+#endif
+        u32(s_rec)[W_N] = n;
+        u32(s_rec)[W_C] = static_cast<uint32_t>(c);
+        for (uint32_t j = 0; j <= K; ++j) {
+            u32(s_rec)[W_A + j] = a[j];
+        }
+        noc_async_write(s_rec, dram(rec, REC_PAGE, u), REC_PAGE);
+        u32(s_aux)[0] = a[n];
+        noc_async_write(s_aux, dram(tin, TOK_PAGE, ro), 64);
+        noc_async_write_barrier();
+        u32(s_sel)[u] = ro + n;
+        for (uint32_t j = 0; j <= K; ++j) {
+            i32(s_pv)[ro + j] = c + static_cast<int32_t>(n + 1 + j);
+            i32(s_mc)[ro + j] = c + static_cast<int32_t>(j);
+        }
+        for (uint32_t i = 0; i + 1 < K && i < 3; ++i) {
+            i32(s_ch + 128 * i)[u] = c + static_cast<int32_t>(n + 1 + i);
+        }
+#if SPEC_MODE == 1
+        const uint32_t n_ring = get_arg_val<uint32_t>(10);
+        const uint32_t grp =
+            c < 0 ? 0u : static_cast<uint32_t>(c + static_cast<int32_t>(n) + 1) / 4 - static_cast<uint32_t>(c) / 4;
+        if (grp > 0 && n_ring > 0) {
+            const uint32_t r0 = 4 * grp;
+            const uint32_t off = (r0 >> 4) * 1024 + (r0 & 15) * 32;  // kernels/mla/mla_common.hpp row_off
+            for (uint32_t l = 0; l < n_ring && u * n_ring + l < 64; ++l) {
+                const uint32_t base = get_arg_val<uint32_t>(11 + u * n_ring + l);
+                for (uint32_t i = 0; i < RING_TILES; ++i) {
+                    const uint64_t ra = dram(base, RING_PAGE, i);
+                    noc_async_read(ra + off, s_tok, 128);
+                    noc_async_read(ra + off + 512, s_tok + 128, 128);
+                    noc_async_read_barrier();
+                    noc_async_write(s_tok, ra, 128);
+                    noc_async_write(s_tok + 128, ra + 512, 128);
+                    noc_async_write_barrier();
+                }
+            }
+        }
+#endif
+    }
+    noc_async_write(s_sel, dram(sel, POS_PAGE, 0), 64);
+    noc_async_write(s_pv, dram(pos_v, POS_PAGE, 0), POS_PAGE);
+    noc_async_write(s_mc, dram(mpos_cu, POS_PAGE, 0), POS_PAGE);
+    for (uint32_t i = 0; i + 1 < K && i < 3; ++i) {
+        const uint32_t mp = get_arg_val<uint32_t>(7 + i);
+        if (mp != 0) {
+            noc_async_write(s_ch + 128 * i, dram(mp, POS_PAGE, 0), POS_PAGE);
+        }
+    }
+    noc_async_write_barrier();
+#elif SPEC_MODE == 3
+    const uint32_t tin = get_arg_val<uint32_t>(0);
+    const uint32_t mout = get_arg_val<uint32_t>(1);
+    const uint32_t rec = get_arg_val<uint32_t>(2);
+    for (uint32_t u = 0; u < G; ++u) {
+        const uint32_t ro = u * W;
+        noc_async_read(dram(rec, REC_PAGE, u), s_rec, REC_PAGE);
+        noc_async_read_barrier();
+        const uint32_t n = u32(s_rec)[W_N];
+        uint32_t d[K];
+        noc_async_read(dram(mout, TOK_PAGE, ro + n), s_tok, 64);
+        noc_async_read_barrier();
+        d[0] = u32(s_tok)[0];
+        for (uint32_t i = 1; i < K; ++i) {
+            const uint32_t co = get_arg_val<uint32_t>(3 + (i - 1));
+            noc_async_read(dram(co, TOK_PAGE, u), s_tok, 64);
+            noc_async_read_barrier();
+            d[i] = u32(s_tok)[0];
+        }
+        for (uint32_t i = 0; i < K; ++i) {
+            u32(s_rec)[W_D + i] = d[i];
+            u32(s_aux + 64 * (i % 4))[0] = d[i];
+            noc_async_write(s_aux + 64 * (i % 4), dram(tin, TOK_PAGE, ro + 1 + i), 64);
+            if (i % 4 == 3) {
+                noc_async_write_barrier();
+            }
+        }
+        noc_async_write(s_rec, dram(rec, REC_PAGE, u), REC_PAGE);
+        noc_async_write_barrier();
+    }
+#else
+#error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER"
+#endif
+#else  // the single user (knob off: unchanged)
 #if SPEC_MODE == 1 || SPEC_MODE == 2
     const uint32_t tin = get_arg_val<uint32_t>(0);
     const uint32_t vout = get_arg_val<uint32_t>(1);
@@ -203,4 +356,5 @@ void kernel_main() {
 #else
 #error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER"
 #endif
+#endif  // SPEC_GROUPS
 }

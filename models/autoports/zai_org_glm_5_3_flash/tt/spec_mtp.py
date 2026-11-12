@@ -365,26 +365,38 @@ class SpecCtl:
 
     MODES = dict(accept=1, boot=2, gather=3)
 
-    def __init__(self, mesh, K: int):
+    def __init__(self, mesh, K: int, groups: int = 0):
         self.mesh, self.K = mesh, K
+        # GLM53_SPEC_MULTI: groups = G users (spec_ctl.cpp SPEC_GROUPS; 0 = the single-user kernel, unchanged)
+        self.groups = int(groups)
+        assert self.groups == 0 or 1 <= self.groups * (K + 1) <= 32, (self.groups, K)
         self.core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
 
     NARGS = 27  # 10 + the DSA ring count + 16 ring bases (ACCEPT; kernels/spec/spec_ctl.cpp)
+    NARGS_MULTI = 75  # 10 + the per-group ring count + 64 ring bases (R x G <= 64, group-major)
 
     def __call__(self, mode: str, args: list, io: list, rings: list = ()):
-        assert len(args) <= 10 and len(rings) <= 16, (len(args), len(rings))
+        """rings: the single-user kernel's slot-0 bases; with groups, R bases per group, group-major (len = R G)"""
+        nmax = 64 if self.groups else 16
+        assert len(args) <= 10 and len(rings) <= nmax, (len(args), len(rings))
+        per = len(rings) // self.groups if self.groups and rings else len(rings)
+        assert not self.groups or per * self.groups == len(rings), (len(rings), self.groups)
         rt = ttnn.RuntimeArgs()
-        rt[0][0] = ([int(a) for a in args] + [0] * (10 - len(args)) + [len(rings)] + [int(a) for a in rings]
-                    + [0] * (16 - len(rings)))  # fmt: skip
+        rt[0][0] = ([int(a) for a in args] + [0] * (10 - len(args)) + [per] + [int(a) for a in rings]
+                    + [0] * (nmax - len(rings)))  # fmt: skip
+        defs = [("SPEC_MODE", str(self.MODES[mode])), ("SPEC_REV", str(SPEC_REV))]
+        if self.groups:
+            defs.append(("SPEC_GROUPS", str(self.groups)))
+        scr = 2048 if self.groups else 1024  # (SPEC_GROUPS: the assembled pages past the single-user slots)
         kd = ttnn.KernelDescriptor(
             kernel_source=os.path.join(KDIR, "spec", "spec_ctl.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH, core_ranges=self.core,
             compile_time_args=[self.K], runtime_args=rt,
-            defines=[("SPEC_MODE", str(self.MODES[mode])), ("SPEC_REV", str(SPEC_REV))],
+            defines=defs,
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
                                                      noc=ttnn.NOC.RISCV_0_default))  # fmt: skip
-        cb = ttnn.CBDescriptor(total_size=1024 + 64, core_ranges=self.core, format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=1024 + 64)])  # fmt: skip
+        cb = ttnn.CBDescriptor(total_size=scr + 64, core_ranges=self.core, format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scr + 64)])  # fmt: skip
         ttnn.generic_op(io, checked(ttnn.ProgramDescriptor(kernels=[kd], semaphores=[], cbs=[cb])))
 
 

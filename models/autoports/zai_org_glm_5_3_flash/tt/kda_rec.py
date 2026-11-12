@@ -109,9 +109,12 @@ class KdaRec:
         # Stage 17 speculative verify (kda.kda_verify_sel = the [1, 32] uint32 selector page, set only while a verify
         # width's layers are built): rows chained through the state (kernels/kda_rec/reader.cpp REC_CHAIN)
         self.verify_sel = getattr(kda, "kda_verify_sel", None)
+        # GLM53_SPEC_MULTI (kda.kda_verify_groups, set with kda_verify_sel while a multi-user verify width is built): the
+        # REC_UG user groups are the users' verify groups (REC_CHAIN_GROUPS: each group chained, its start from sel[u])
+        self.chain_groups = self.verify_sel is not None and bool(getattr(kda, "kda_verify_groups", False))
         if self.verify_sel is not None:
-            assert self.ug == 1 and self.s_depth == self.depth and not debug, (
-                "REC_CHAIN: one user group, no early state read, no debug tap",
+            assert (self.ug == 1 or self.chain_groups) and self.s_depth == self.depth and not debug, (
+                "REC_CHAIN: one user group (GLM53_SPEC_MULTI: the verify groups), no early state read, no debug tap",
                 self.ug,
                 self.s_depth,
                 self.depth,
@@ -137,6 +140,7 @@ class KdaRec:
             # GLM53_REC_ITEM_MARKS=1 (probe runs): per-item writer marks (norm partials exchanged, state written)
             + ([("REC_ITEM_MARKS", "1")] if os.environ.get("GLM53_REC_ITEM_MARKS") == "1" else [])
             + ([("REC_CHAIN", "1"), ("REC_CHAIN_SEM", str(CHAIN_SEM))] if self.verify_sel is not None else [])
+            + ([("REC_CHAIN_GROUPS", "1")] if self.chain_groups and self.ug > 1 else [])
         )
         w = torch.zeros(TILE, self.dv)
         w[0] = ttnn.to_torch(ttnn.get_device_tensors(kda.o_norm)[0]).float().reshape(-1)  # replicated weight
@@ -211,7 +215,13 @@ class KdaRec:
         if wait is not None:
             wdefs.append(("MK_REC_WAIT_SEM", str(wait[0])))
         vsel = self.verify_sel
-        assert vsel is None or rows <= 8, ("REC_CHAIN: verify rows <= 8", rows)  # (Stage 17: the t = 8 verify)
+        assert vsel is None or rows <= 8 or self.chain_groups, ("REC_CHAIN: verify rows <= 8", rows)  # (t = 8 verify)
+        if vsel is not None and self.chain_groups and self.ug > 1:
+            assert rows % self.ug == 0 and rows // self.ug <= 8, (
+                "REC_CHAIN_GROUPS: equal groups <= 8 rows",
+                rows,
+                self.ug,
+            )
         reader = (reader_ct, self._rtd(lambda h: [self._hc(h), self._items(h, rows)] + addrs
                                        + [wait[1][self._xy(h)] if wait else 0]
                                        + ([vsel.buffer_address()] if vsel is not None else [])), wdefs,
