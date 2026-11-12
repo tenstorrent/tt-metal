@@ -81,10 +81,10 @@ from helpers.matmul_sweep import (
 
 @dataclass
 class TINY_F32(TemplateParameter):
-    f32: bool
+    tiny_f32: bool
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool sweep_float32_out = {str(self.f32).lower()};"
+        return f"constexpr bool sweep_float32_out = {str(self.tiny_f32).lower()};"
 
 
 FMTS = [

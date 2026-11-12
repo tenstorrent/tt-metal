@@ -75,10 +75,10 @@ def page_bytes(fmt, r, faces):
 class PACK_BLOCK_SWEEP2(TemplateParameter):
     """sweep_closed: the block form of the cell is the closed block (block float or a tile that is not one contiguous 32x32 page)"""
 
-    pack_block_sweep: str
+    block_sweep_closed: str
 
     def convert_to_cpp(self) -> str:
-        a, b = self.pack_block_sweep.split("/")
+        a, b = self.block_sweep_closed.split("/")
         return f"constexpr bool sweep_closed = {str(a == 'closed').lower()};\nconstexpr bool sweep_b_closed = {str(b == 'closed').lower()};"
 
 

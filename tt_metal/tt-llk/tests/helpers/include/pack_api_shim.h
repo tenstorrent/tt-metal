@@ -29,6 +29,10 @@
 #ifndef PACK_API_SHIM_FACE_R_DIM
 #define PACK_API_SHIM_FACE_R_DIM 16
 #endif
+// 1 for an output of partial faces, as the JIT sets pack_partial_face from the CB's tile.
+#ifndef PACK_API_SHIM_PARTIAL_FACE
+#define PACK_API_SHIM_PARTIAL_FACE 0
+#endif
 
 #ifndef DST_SYNC_MODE
 #define DST_SYNC_MODE dest_sync
@@ -53,6 +57,7 @@
 #define PACK_API_SHIM_FACES(i)              PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_NUM_FACES, 4)
 #define PACK_API_SHIM_FACE_R(i)             PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_FACE_R_DIM, 16)
 #define PACK_API_SHIM_ZERO(i)               0
+#define PACK_API_SHIM_PARTIAL(i)            PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_PARTIAL_FACE, 0)
 #define PACK_API_SHIM_TILE_R(i)             PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_FACE_R_DIM*(PACK_API_SHIM_NUM_FACES > 2 ? 2 : 1), 32)
 #define PACK_API_SHIM_TILE_C(i)             PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_NUM_FACES == 1 ? 16 : 32, 32)
 #define PACK_API_SHIM_FACES_R(i)            PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_NUM_FACES > 2 ? 2 : 1, 2)
@@ -61,7 +66,7 @@
 constexpr unsigned char pack_src_format[64]     = {PACK_API_SHIM_ROW(PACK_API_SHIM_SRC)};
 constexpr unsigned char pack_dst_format[64]     = {PACK_API_SHIM_ROW(PACK_API_SHIM_DST)};
 constexpr std::uint8_t pack_tile_num_faces[64]  = {PACK_API_SHIM_ROW(PACK_API_SHIM_FACES)};
-constexpr std::uint8_t pack_partial_face[64]    = {PACK_API_SHIM_ROW(PACK_API_SHIM_ZERO)};
+constexpr std::uint8_t pack_partial_face[64]    = {PACK_API_SHIM_ROW(PACK_API_SHIM_PARTIAL)};
 constexpr std::uint8_t pack_tile_face_r_dim[64] = {PACK_API_SHIM_ROW(PACK_API_SHIM_FACE_R)};
 constexpr std::uint8_t pack_narrow_tile[64]     = {PACK_API_SHIM_ROW(PACK_API_SHIM_ZERO)};
 constexpr std::uint8_t pack_tile_r_dim[64]      = {PACK_API_SHIM_ROW(PACK_API_SHIM_TILE_R)};

@@ -42,10 +42,10 @@ BLOCKS = 6
 class PACK_BLOCK_SWEEP(TemplateParameter):
     """<mode: alt|single>/<form: h|m>: h the closed block of the block float output, m its per-tile packs"""
 
-    pack_block_sweep: str
+    block_sweep_mode: str
 
     def convert_to_cpp(self) -> str:
-        mode, form = self.pack_block_sweep.split("/")
+        mode, form = self.block_sweep_mode.split("/")
         return (
             "constexpr DataFormat alt_pack_dst = DataFormat::Float16_b;\n"
             "constexpr bool alt_l1_acc = false;\n"
