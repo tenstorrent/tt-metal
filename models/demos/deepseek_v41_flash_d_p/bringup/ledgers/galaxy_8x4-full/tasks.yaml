@@ -3320,6 +3320,47 @@ tasks:
       short_turn_device_ms: '> 0'
       acks_early: == 0
       contract_checks_failed: == 0
+- id: P.50
+  title: 'Deterministic MoE combine (COMBINE_SPLIT, DS41-235) ported onto the pre-replication base; A/B off vs on: determinism, accuracy and perf before / after'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.44
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12. THE FIX EXISTS; PORT IT AND MEASURE IT, NOTHING ELSE. On another branch (dnijemcevic/moe_replication, which carries MoE expert-replica work this base must NOT get) an agent found why identical prefills give different outputs: the MoE combine (ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine) adds each token's weighted expert terms in fp32 in packet-arrival order; the snap (COMBINE_SNAP = 2^-19) makes that order-free only while a sum stays below 2^24 x 2^-19 = 32, and real prompts reach 21,376 (layers 15-39 on the code prompt, the novel prompt's first tokens): DS41-233 / DS41-234 / DS41-235. The fix: MoEBlockConfig.combine_snap_split / model setting COMBINE_SPLIT - each snapped term split into a coarse part (a multiple of 2^-1) and a fine part (the rest), two exact fp32 sums, added once at the end: order-free up to 2^23, bit-identical to the old sum wherever the old sum was exact; the final version fuses the split into one kernel pass. Its complete work is commit 4e90f611e86 (branch exp/fix23_snapshot), whose parent 4c79ce65ece is the replica branch: take `git diff 4c79ce65ece 4e90f611e86` and port ONLY the fix and what verifies it onto this tree: the combine fork's kernel / config / nanobind / tests / docs, the model setting COMBINE_SPLIT and its plumbing in the MoE adapters, the determinism test (tests/test_determinism.py) and the parts of the back-to-back harness it needs (testing/b2b.py etc.), the known-issues entries DS41-233 / 234 / 235. Do NOT port anything of the replica work (MOE_REPLICAS, MOE_COUNTS, MOE_POLICY, expert_slot_copy, slot maps, tile_gather) and nothing of the bisect probes. Files that carry both (moe_block_main_adapter.py, settings.py, CHANGELOGs) need the fix's hunks only. Do not redesign the fix and do not investigate further: no bisect, no history search.
+      SWITCH: COMBINE_SPLIT on (the fix) | off (today's single sum). Keep the SHIPPED DEFAULT off in tt/settings.py: the owner decides after reading this task's A/B whether it becomes the default.
+      WHAT THE OWNER WANTS FROM THIS TASK, as one short table each, both sides measured by the same runs: (1) DETERMINISM before / after: the determinism test (the same prompt run several times in one process, cold first run and warm runs, both the spec's novel prompt and the code prompt, several chunks; max abs diff per chunk) with COMBINE_SPLIT=off and with on; off is expected to differ on the code prompt, on must be max abs diff 0 everywhere; record the metrics determinism_max_abs_diff_off and determinism_max_abs_diff_on. (2) ACCURACY before / after: every recorded metric against its limit (the orchestrator's A/B table) and the largest differences between the two sides. (3) PERF before / after: chunk wall and device time per section at the quick rung and at 51,200 (the orchestrator's A/B), and the combine op's own device time on both sides. Never loosen a check. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the determinism runs: the orchestrator measures the A/B. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  ab:
+    env:
+      COMBINE_SPLIT: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      COMBINE_SPLIT: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_COMBINE_SPLIT=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      determinism_max_abs_diff: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
