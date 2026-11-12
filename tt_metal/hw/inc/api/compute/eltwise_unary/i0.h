@@ -31,7 +31,7 @@ ALWI void i0_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  *
- * On Wormhole, i0_tile reads series coefficients from the programmable constant registers and its
+ * On Wormhole and Blackhole, i0_tile reads series coefficients from the programmable constant registers and its
  * dest stride from ADDR_MOD_6, both loaded here; other SFPU inits may overwrite them, so call
  * i0_tile_init again before i0_tile after them.
  */
