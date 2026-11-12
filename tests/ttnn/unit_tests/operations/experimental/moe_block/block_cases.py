@@ -258,10 +258,10 @@ class H3840E640K12Config:
     SHARED_EXPERT_INTERMEDIATE_SIZE = 2944
     ROUTE_SCALE = 1.0
 
-    @staticmethod
-    def moe_block_dims():
+    @classmethod
+    def moe_block_dims(cls):
         mb = ttnn.experimental.moe_block
-        K = H3840E640K12Config
+        K = cls
         act = mb.ExpertActivation(kind=mb.ExpertActivationKind.Silu)
         dims = mb.MoEModelDims(
             num_experts=K.NUM_ROUTED_EXPERTS,
@@ -276,10 +276,20 @@ class H3840E640K12Config:
         return dims, "silu"
 
 
-def _h3840_weights(chips):
+# The flat routed experts split each expert's 2 x I / 32 gate/up weight tiles a K row evenly over at most 64 cores in
+# multiples of 16 (flat_routed_expert_plan.cpp): I 640 (40 tiles) has no such split. The two nearest intermediates that
+# do, 512 and 768, bracket it; only the routed experts' matmuls depend on I.
+class H3840E640K12I512Config(H3840E640K12Config):
+    MOE_INTERMEDIATE_SIZE = 512
+
+
+class H3840E640K12I768Config(H3840E640K12Config):
+    MOE_INTERMEDIATE_SIZE = 768
+
+
+def _h3840_weights(chips, K=H3840E640K12Config):
     """One chip's worth of distinct experts (E / chips) repeated over all 640 (as _k3_weights): the weights' values do
     not change the device time, and 640 distinct bf16 experts would take the host ~9 GB more."""
-    K = H3840E640K12Config
     g = torch.Generator().manual_seed(17)
     gate = _bf16_gate(K.NUM_ROUTED_EXPERTS, K.EMB_SIZE, g)
     epc = max(1, K.NUM_ROUTED_EXPERTS // chips)
@@ -292,10 +302,9 @@ def _h3840_weights(chips):
     }
 
 
-def _h3840_reference(x, sd):
+def _h3840_reference(x, sd, K=H3840E640K12Config):
     """The shape's MoE in fp32: sigmoid scores, top-12 of scores + bias, renormalized x 1.0; experts
     down(silu(gate) * up); plus the shared expert the same."""
-    K = H3840E640K12Config
     glu = lambda g, u: torch.nn.functional.silu(g) * u  # noqa: E731
     gate, routed, shared = sd["gate_weights"], sd["routed_expert_weights"], sd["shared_expert_weights"]
     x = x.float()
@@ -346,6 +355,16 @@ MODELS = {
     "dsv41_flash": BlockModel("dsv41_flash", DeepSeekV41FlashConfig, _dsv41_weights, _dsv41_reference, pcc=0.98),
     "minimax_m3": BlockModel("minimax_m3", MiniMaxM3BlockConfig, _m3_weights, _m3_reference, pcc=0.98, layer=3),
     "h3840_e640_k12": BlockModel("h3840_e640_k12", H3840E640K12Config, _h3840_weights, _h3840_reference, pcc=0.98),
+    **{
+        f"h3840_e640_k12_i{K.MOE_INTERMEDIATE_SIZE}": BlockModel(
+            f"h3840_e640_k12_i{K.MOE_INTERMEDIATE_SIZE}",
+            K,
+            lambda chips, K=K: _h3840_weights(chips, K),
+            lambda x, sd, K=K: _h3840_reference(x, sd, K),
+            pcc=0.98,
+        )
+        for K in (H3840E640K12I512Config, H3840E640K12I768Config)
+    },
 }
 
 

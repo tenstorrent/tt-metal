@@ -129,8 +129,13 @@ CASES = [
     BlockCase("kimi_k3", "4x4-y", 2560),
     BlockCase("kimi_k3", "8x4", 5120, weights="weka", layer=1),
     BlockCase("dsv41_flash", "8x4", 5120),
-    # hidden 3840, 640 experts (I 640) top-12, shared I 2944: the chunk sweep a long prefill is made of
-    *(BlockCase("h3840_e640_k12", "8x4", c) for c in (2560, 5120, 10240, 20480, 40960)),
+    # hidden 3840, 640 experts top-12, shared I 2944: the chunk sweep a long prefill is made of. The routed experts'
+    # I 640 has no flat gate/up split (block_cases.H3840E640K12I512Config), so I 512 and 768 bracket it.
+    *(
+        BlockCase(f"h3840_e640_k12_i{i}", "8x4", c)
+        for i in (512, 768)
+        for c in (2560, 5120, 10240, 20480, 40960)
+    ),
     *M3_PRODUCTION,
     # padding / packed forwards through the model adapter (TtK3MoEBlockFfn: main's metadata, or the forward's words)
     BlockCase("glm53", "8x4", 5120, pad=(1000, 4100)),

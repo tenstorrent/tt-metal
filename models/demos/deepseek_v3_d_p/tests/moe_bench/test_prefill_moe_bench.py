@@ -89,6 +89,9 @@ def test_prefill_moe_bench(model, variant, config_only, mesh_device, device_para
         moe_transport=moe_transport_arg(cfg),
         rms_norm_eps=getattr(cfg, "RMS_NORM_EPS", 1e-5),
         skip_upstream_reference=True,
+        # (the fabric forwarding VC depth the model's tests use: GLM-5.3 its own, every other 64)
+        dispatch_fwd_vc_pages=getattr(cfg, "MOE_FWD_VC_PAGES", 64),
+        combine_fwd_vc_pages=getattr(cfg, "MOE_FWD_VC_PAGES", 64),
     )
     if model.routed_hidden is not None:
         kwargs.update(
