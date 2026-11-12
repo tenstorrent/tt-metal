@@ -55,26 +55,18 @@ ttnn::Tensor pad_lse_to_intermediates_layout(const ttnn::Tensor& lse) {
 
 namespace detail {
 
-// Online-softmax merge in four device ops. At short sequence lengths ring attention is
-// host-dispatch bound, so every op issued per ring step counts. With
-//   L = running_lse, l_i = this step's lse, O = output_accum, O_i = step_output:
+// Merges one ring step's attention result into the running result (online softmax).
+// O_i, l_i: this step's normalized output and logsumexp; O, L: the running ones.
 //   L' = logaddexp(L, l_i)
-//   w  = exp(l_i - L')                    the share of the combined normalizer this step holds
-//   O' = O * exp(L - L') + O_i * w        = O + w * (O_i - O),   since exp(L - L') = 1 - w
-// i.e. the update is a lerp from the accumulator towards the step output.
+//   w  = exp(l_i - L')            this step's share of the softmax mass, in [0, 1]
+//   O' = O + w * (O_i - O)        a lerp, since the usual weight on O, exp(L - L'), is 1 - w
 //
-// "No contribution" is an lse of -inf (the running lse starts there, and steps the causal
-// schedule skips keep the -inf the caller pre-filled):
-//   L = -inf, l_i finite:  L' = l_i, w = exp(0) = 1, O' = O_i (O is the zero-initialized accumulator)
-//   l_i = -inf, L finite:  L' = L,   w = exp(-inf) = 0, O' = O exactly
-// Both -inf gives L' = -inf and a NaN O'; the ring schedule never produces it, since step 0
-// always computes the diagonal block.
-// O_i must be finite even where l_i = -inf: w = 0 only removes it if 0 * O_i = 0 (0 * inf is
-// NaN). The ring caller passes its reused output buffer there, which is zero-initialized, so a
-// skipped step merges zeros or an earlier step's finite output with weight 0. A row the SDPA
-// kernel masks out completely inside a step it does run would break this (O_i = 0/0); no mask
-// the ring supports produces one.
-void merge_partial_into(
+// A logsumexp of -inf means no contribution: the first merge (L = -inf) gives O' = O_i, and a
+// step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both can't be -inf,
+// since every device computes its diagonal block at step 0.
+// O_i must be finite even on skipped steps (0 * inf = NaN); the caller's zero-filled, reused
+// output buffer guarantees this.
+void online_softmax_merge(
     ttnn::Tensor& output_accum,
     ttnn::Tensor& running_lse,
     const ttnn::Tensor& step_output,
@@ -82,17 +74,17 @@ void merge_partial_into(
     TT_FATAL(
         output_accum.dtype() == ttnn::DataType::FLOAT32 && running_lse.dtype() == ttnn::DataType::FLOAT32 &&
             step_intermediates.dtype() == ttnn::DataType::FLOAT32,
-        "merge_partial_into: output_accum, running_lse and step_intermediates must be FLOAT32, got {}, {}, {}",
+        "online_softmax_merge: output_accum, running_lse and step_intermediates must be FLOAT32, got {}, {}, {}",
         output_accum.dtype(),
         running_lse.dtype(),
         step_intermediates.dtype());
     TT_FATAL(
         step_output.dtype() == ttnn::DataType::BFLOAT16 || step_output.dtype() == ttnn::DataType::FLOAT32,
-        "merge_partial_into: step_output must be BFLOAT16 or FLOAT32, got {}",
+        "online_softmax_merge: step_output must be BFLOAT16 or FLOAT32, got {}",
         step_output.dtype());
     TT_FATAL(
         step_intermediates.logical_shape()[-1] == 32U,
-        "merge_partial_into: step_intermediates must be (B, H, S, 32), got {}",
+        "online_softmax_merge: step_intermediates must be (B, H, S, 32), got {}",
         step_intermediates.logical_shape());
 
     // 1. lse of this step: column 0 of the (B, H, S, 32) FP32 intermediates.
@@ -184,11 +176,6 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
-    // Allocate output and intermediate tensors (mesh tensors)
-    // These will be reused each step
-    // output_tensor is zero-initialized rather than left empty: a device the schedule skips
-    // merges the buffer's contents with weight 0, which needs them finite (see
-    // merge_partial_into), whichever steps the schedule runs. One fill per forward call.
     ttnn::Tensor output_tensor = ttnn::zeros_like(query_tensor);
     ttnn::Tensor intermediate_tensor = ttnn::empty(
         ttnn::Shape{batch_num, heads, seq_len_local, 32U},
@@ -227,7 +214,7 @@ autograd::TensorPtr ring_attention_sdpa(
             intermediate_tensor);
 
         // Fold this step's partial result into the FP32 accumulator and the running lse.
-        detail::merge_partial_into(output_accum, global_lse, output_tensor, intermediate_tensor);
+        detail::online_softmax_merge(output_accum, global_lse, output_tensor, intermediate_tensor);
 
         if (step < ring_size - 1) {
             k_current = ttnn_fixed::distributed::ring_shift(

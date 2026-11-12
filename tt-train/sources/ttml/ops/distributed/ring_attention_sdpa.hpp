@@ -64,7 +64,7 @@ namespace detail {
  * @param step_intermediates (B, H, S, 32) FP32 SDPA intermediates, logsumexp in column 0
  *             (-inf = the step contributes nothing)
  */
-void merge_partial_into(
+void online_softmax_merge(
     ttnn::Tensor& output_accum,
     ttnn::Tensor& running_lse,
     const ttnn::Tensor& step_output,
