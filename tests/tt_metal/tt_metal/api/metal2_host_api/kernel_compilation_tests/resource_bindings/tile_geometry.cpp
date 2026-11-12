@@ -46,7 +46,7 @@ ProgramSpec MakeNonPublicGeometryProgramSpec(const GeometryCase& geometry, const
             .size_per_node = 4096,
             .data_format_metadata = tt::DataFormat::Float16_b,
             .tile_format_metadata = tile});
-        kernel.scratchpad_bindings.push_back({.scratchpad_spec_name = pad_name, .accessor_name = "pad"});
+        kernel.scratchpad_bindings.emplace_back(pad_name, "pad");
         test_helpers::BindTensorParameterToKernel(kernel, "local", "local");
         kernel.source = KernelSpec::SourceCode{kernel_source};
     }

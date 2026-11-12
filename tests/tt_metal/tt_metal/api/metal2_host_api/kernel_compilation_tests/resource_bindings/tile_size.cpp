@@ -56,7 +56,7 @@ ProgramSpec MakeNonPublicTileSizeProgramSpec(const TileSizeCase& size, const std
             .size_per_node = 8192,
             .data_format_metadata = size.format,
             .tile_format_metadata = size.tile});
-        kernel.scratchpad_bindings.push_back({.scratchpad_spec_name = pad_name, .accessor_name = "pad"});
+        kernel.scratchpad_bindings.emplace_back(pad_name, "pad");
         test_helpers::BindTensorParameterToKernel(kernel, "local", "local");
         kernel.source = KernelSpec::SourceCode{source};
     }
