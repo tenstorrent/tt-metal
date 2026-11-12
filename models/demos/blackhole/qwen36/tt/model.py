@@ -3206,7 +3206,7 @@ class Qwen36Model:
                 ttnn.deallocate(pt)
             ttnn.deallocate(k_full)
 
-    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None, on_chunk=None):
+    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None, on_chunk=None, start_pos=0):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk, then
         processing the final partial chunk eagerly with minimal padding. Only the real prompt
         (token_ids[:, :actual_len]) is processed. Full chunks replay from the trace; the tail
@@ -3222,17 +3222,26 @@ class Qwen36Model:
         called per full chunk right after its replay is enqueued, then for the tail / short prompt.
         hidden is the pre-final-norm [1,1,2048,dim/tp]; on_chunk must NOT free it (it is the trace's
         persistent output), and must enqueue its reads before returning (the next replay overwrites it).
+
+        ``start_pos > 0`` (TP, text only) continues a prefill: it computes tokens [start_pos, actual_len) from the GDN
+        state that the batch-1 workspace (rec_state, conv_carry) already holds, attending over the KV cache that the
+        page table holds for [0, start_pos). token_ids still starts at position 0. start_pos must be a multiple of the
+        KV block size: paged_fill_cache writes a chunk from the first row of its first block.
         """
         # Default to the standard 2048-token chunk when no trace is captured (e.g. the TP MVP,
         # which serves <=2048 prompts entirely via the masked bucket below and so needs no chunk
         # trace). The chunk trace is only required once there is at least one full chunk to replay.
         chunk_size = self._chunked_chunk_size or 2048
         B, T = token_ids.shape
-        assert 1 <= actual_len <= T, f"actual_len {actual_len} not in [1, {T}]"
+        assert 0 <= start_pos < actual_len <= T, f"need 0 <= start_pos {start_pos} < actual_len {actual_len} <= {T}"
         block_size = get_block_size(self._paged_kv_caches)
+        if start_pos:
+            assert self.num_devices > 1, "a prefill continues at start_pos > 0 only on the TP path"
+            assert vision_tokens is None and on_chunk is None, "a prefill continues at start_pos > 0 for text only"
+            assert start_pos % block_size == 0, f"start_pos {start_pos} is not on a {block_size}-token KV block"
         blocks_per_chunk = chunk_size // block_size
-        num_full = actual_len // chunk_size
-        tail_real = actual_len - num_full * chunk_size
+        num_full = (actual_len - start_pos) // chunk_size
+        tail_real = actual_len - start_pos - num_full * chunk_size
         assert (
             num_full == 0 or self.num_devices > 1 or self._chunked_trace_id is not None
         ), "Call capture_prefill_trace_chunked first"
@@ -3282,7 +3291,11 @@ class Qwen36Model:
                 ttnn.deallocate(hidden)
                 return logits
             return self.prefill_masked_bucket(
-                token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0, vision_tokens=vision_tokens
+                token_ids[:, start_pos:actual_len],
+                page_table,
+                actual_len=tail_real,
+                chunk_start=start_pos,
+                vision_tokens=vision_tokens,
             )
 
         assert on_chunk is None or (
@@ -3300,6 +3313,7 @@ class Qwen36Model:
                     tail_real,
                     vision_tokens=vision_tokens,
                     on_chunk=on_chunk,
+                    start_pos=start_pos,
                 )
             # Eager fallback: flexible qk=64 SDPA matches traced path.
             return self._prefill_chunked_eager_tp(
@@ -3311,6 +3325,7 @@ class Qwen36Model:
                 tail_real,
                 flex_sdpa=True,
                 vision_tokens=vision_tokens,
+                start_pos=start_pos,
             )
 
         # Re-zero GDN once; carries across replays + masked tail (chunk_start>0 skips reset).
@@ -3404,15 +3419,25 @@ class Qwen36Model:
         return logits.cpu()
 
     def _prefill_chunked_eager_tp(
-        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True, vision_tokens=None
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        num_full,
+        chunk_size,
+        tail_real,
+        flex_sdpa=True,
+        vision_tokens=None,
+        start_pos=0,
     ):
-        """TP eager long-prompt prefill via warmed bucket=chunk_size programs.
-        Returns logits [1,1,vocab] at actual_len-1."""
+        """TP eager long-prompt prefill via warmed bucket=chunk_size programs, from start_pos (see
+        prefill_traced_chunked). Returns logits [1,1,vocab] at actual_len-1."""
         # Re-zero GDN at sequence start; tail (chunk_start>0) keeps carried state.
-        self._reset_gdn_state_for_new_sequence()
+        if start_pos == 0:
+            self._reset_gdn_state_for_new_sequence()
         last_hidden = None
         for c in range(num_full):
-            cs = c * chunk_size
+            cs = start_pos + c * chunk_size
             if last_hidden is not None:
                 ttnn.deallocate(last_hidden)
             # Stage the vision buffers: each chunk splices its own slice of the packed vision rows
@@ -3428,7 +3453,7 @@ class Qwen36Model:
             ttnn.synchronize_device(self.device)
         if tail_real > 0:
             ttnn.deallocate(last_hidden)
-            cs = num_full * chunk_size
+            cs = start_pos + num_full * chunk_size
             return self.prefill_masked_bucket(
                 token_ids[:, cs:actual_len],
                 page_table,
@@ -3444,9 +3469,18 @@ class Qwen36Model:
         return logits
 
     def _prefill_traced_chunked_tp(
-        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=None, on_chunk=None
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        num_full,
+        chunk_size,
+        tail_real,
+        vision_tokens=None,
+        on_chunk=None,
+        start_pos=0,
     ):
-        """TP traced chunk-outer prefill: replay the captured per-chunk trace
+        """TP traced chunk-outer prefill from start_pos (see prefill_traced_chunked): replay the captured per-chunk trace
         (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
         masked bucket. The TP analog of the single-device loop in prefill_traced_chunked: each
         chunk's inputs are DMA'd into the REPLICATED persistent buffers via
@@ -3459,7 +3493,8 @@ class Qwen36Model:
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         # Re-zero GDN once; carries across replays + tail (chunk_start>0 skips reset).
-        self._reset_gdn_state_for_new_sequence()
+        if start_pos == 0:
+            self._reset_gdn_state_for_new_sequence()
 
         # Pad/clip page_table to captured width; write once (constant across chunks).
         buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
@@ -3492,7 +3527,7 @@ class Qwen36Model:
         _SYNC_EVERY = 8 if _overlap else 1
         _host_refs = []  # keep host tensors alive until the next sync frees their DMAs
         for c in range(num_full):
-            cs = c * chunk_size
+            cs = start_pos + c * chunk_size
             tok_host = ttnn.from_torch(
                 token_ids[:, cs : cs + chunk_size].to(torch.int32),
                 dtype=ttnn.uint32,
@@ -3562,7 +3597,7 @@ class Qwen36Model:
 
         # Tail via masked bucket, or _masked_bucket_logits_tp if no tail (TP 4D hidden).
         if tail_real > 0:
-            cs = num_full * chunk_size
+            cs = start_pos + num_full * chunk_size
             if on_chunk is not None:
                 logits, hidden = self.prefill_masked_bucket(
                     token_ids[:, cs:actual_len],
