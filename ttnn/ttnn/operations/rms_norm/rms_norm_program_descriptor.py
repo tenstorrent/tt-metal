@@ -87,12 +87,6 @@ class _Geometry:
         self.g_elem = gamma.element_size() if self.has_gamma else 0
 
 
-def _l1_tensor_bytes_per_bank(t, num_banks):
-    if t is None or t.memory_config().buffer_type != ttnn.BufferType.L1:
-        return 0
-    return math.ceil(t.buffer_num_pages() / num_banks) * t.buffer_aligned_page_size()
-
-
 def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
     """F(r, K) of l1_ledger.md (sum over the CBs this layout/gamma variant allocates)."""
     c = math.ceil(core_w_tiles / K)
@@ -155,14 +149,10 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     # ---------------- block selection ----------------
     core_w_tiles = g.tensor_w_tiles  # R1: each core owns the whole row
     w_tile_start = 0
-    num_banks = grid.x * grid.y
-    budget = (
-        ttnn.device.get_max_worker_l1_unreserved_size()
-        - L1_SAFETY_MARGIN
-        - _l1_tensor_bytes_per_bank(x, num_banks)
-        - _l1_tensor_bytes_per_bank(gamma, num_banks)
-        - _l1_tensor_bytes_per_bank(out, num_banks)
-    )
+    # Per-core L1 left for CBs: the allocator's largest free contiguous L1 region (already net of
+    # every L1-resident tensor, including the freshly allocated output), minus a safety margin.
+    l1_view = ttnn.device.get_memory_view(device, ttnn.BufferType.L1)
+    budget = l1_view.largest_contiguous_bytes_free_per_bank - L1_SAFETY_MARGIN
     block_rows, w_chunk_tiles, num_w_chunks = _select_blocks(g, core_w_tiles, rows_cap, budget)
     row_stride_tiles = num_w_chunks * w_chunk_tiles
 

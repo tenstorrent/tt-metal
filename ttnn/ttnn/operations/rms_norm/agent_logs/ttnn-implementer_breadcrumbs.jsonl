@@ -1,0 +1,2 @@
+{"event":"hypothesis","detail":"RM fails only when K>1 (W=4096 c=64 K=2); K=1 at c=64 passes. Suspect amortized tilize InitOnly/UninitOnly across back-to-back calls, or chunked stick offset","ts":"2026-11-12T10:29:00+00:00"}
+{"event":"fix_applied","detail":"tilize: reconfig only on the first (InitOnly) call of a block run; NoReconfigure on Neither/UninitOnly. L1 budget from allocator largest_contiguous_bytes_free_per_bank","ts":"2026-11-12T10:29:50+00:00"}

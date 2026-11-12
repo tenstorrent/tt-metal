@@ -15,17 +15,17 @@ than the tensor that produced/consumes them.
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_x_rm` (RM only) | `2·c` | `c` (one row-chunk of 32 sticks) | `{rows: streams → 1 tile-row, w: streams → chunk, w_chunk: spans → c}` | input dtype | reader | compute | load phase of each block | capacity 2× live = double buffering (reader fetches the next row-chunk while compute tilizes). Cannot share with `cb_out_rm`: both live concurrently across blocks (reader prefetch vs writer drain), different producers |
 | `cb_x` | `r·Wp` | `rows_this_block·Wp` (whole block resident from load to release) | `{rows: spans → r, w: spans → Wp, w_chunk: spans (contained in w)}` | input dtype | reader (TILE) / compute tilize (RM) | compute | load → release, per block | the residency buffer; no other buffer has a disjoint lifetime with it (live through every compute phase of the block). `Wp − Wc < K` pad pages per row are the nominal-chunk mechanism reason (uniform CT chunk width, ring quantum `c`) |
-| `cb_reduce_mask` (`w_partial_elems ≠ 0` only) | `1` | `1` | `{rows: streams (constant), w: streams (constant), w_chunk: streams (constant)}` | Float16_b (0/1 exact) | reader | compute | whole kernel | constant tile; aliasing a constant into a ring with live data would destroy it |
-| `cb_sumsq` | shares `cap_alias` with `cb_normed` | `rows_this_block·n_sq` (`n_sq ≤ 2`) | `{rows: spans → r, w: streams (collapsed to ≤ 2 tiles by L1 accumulation), w_chunk: streams}` | Float32 | compute | compute | sumsq → rstd, per block | **shares the allocation with `cb_normed`** (alias): lifetimes disjoint on the single compute thread (rstd reduce's unpack finishes reading `cb_sumsq` before normalize packs `cb_normed`; next block's sumsq starts after this block's last untilize/scale) |
+| `cb_reduce_mask` (`w_partial_elems ≠ 0` only) | `1` | `1` | `{rows: streams (constant), w: streams (constant), w_chunk: streams (constant)}` | **Float32** (0/1 exact; implementer deviation — the reduce helper's masked fold `fold_partial_last` unpacks the mask as srcB without reconfiguring srcB away from `cb_sumsq`'s Float32, so the mask must carry `cb_sumsq`'s format) | reader | compute | whole kernel | constant tile; aliasing a constant into a ring with live data would destroy it |
+| `cb_sumsq` | `r·n_sq` (own allocation) | `rows_this_block·n_sq` (`n_sq ≤ 2`) | `{rows: spans → r, w: streams (collapsed to ≤ 2 tiles by L1 accumulation), w_chunk: streams}` | Float32 | compute | compute | sumsq → rstd, per block | **not aliased with `cb_normed`** (implementer deviation): the rstd reduce reads its `r·n_sq` window by index from the read pointer, and indexed windows must not straddle the ring's `fifo_limit`; with the alias capacity `round_up(r·max(c,n_sq), lcm(c,n_sq))` the sumsq window drifts across blocks and eventually straddles it. As its own ring of exactly `r·n_sq` pages every full block returns both pointers to base. Cost: `r·n_sq·4 KiB` (≤ 8 KiB at r = 1) |
 | `cb_rstd` | `r` | `rows_this_block` | `{rows: spans → r, w: streams (one col-0 tile per row), w_chunk: streams}` | Float32 | compute | compute | rstd → release, per block | live through every normalize chunk, concurrent with `cb_normed` and `cb_x` → no alias |
 | `cb_gamma` (gamma only) | `2·c` | `c` | `{rows: streams (broadcast), w: streams → chunk, w_chunk: spans → c}` | gamma dtype | reader | compute | per chunk of the normalize phase | 2× live = double buffering (prefetch during the previous chunk / during sumsq). Concurrent with `cb_x_rm` across blocks (reader prefetches next x while current block scales) → no alias |
-| `cb_normed` (gamma or RM) | `cap_alias = round_up(r·max(c, n_sq), lcm(c, n_sq))` | `rows_this_block·c` | `{rows: spans → r, w: streams → chunk, w_chunk: spans → c}` | Float32 | compute | compute | normalize → scale/untilize, per chunk | alias with `cb_sumsq` (above). Full chunk-block, not a window: normalize and scale/untilize are sequential helpers on one thread. `cap_alias − r·c` (≤ r·c) slack exists only so both aliased rings close on their quanta (`c` and `n_sq`) |
+| `cb_normed` (gamma or RM) | `r·c` | `rows_this_block·c` | `{rows: spans → r, w: streams → chunk, w_chunk: spans → c}` | Float32 | compute | compute | normalize → scale/untilize, per chunk | not aliased (see `cb_sumsq`). Full chunk-block, not a window: normalize and scale/untilize are sequential helpers on one thread; each full chunk returns the ring to base |
 | `cb_out` (TILE only) | `2·c` | `c` (one row-chunk) | `{rows: streams → 1 tile-row, w: streams → chunk, w_chunk: spans → c}` | output dtype | compute | writer | per row-chunk | 2× live = double buffering compute vs writer. Pack-into-destination: with no gamma, normalize packs straight here (no `cb_normed` at all) |
 | `cb_out_rm` (RM only) | `2·c` | `c` | `{rows: streams → 1 tile-row, w: streams → chunk, w_chunk: spans → c}` | output dtype | compute | writer | per row-chunk | 2× live = double buffering. Cannot share with `cb_x_rm` (concurrent, different producers/consumers) |
 
 Reuse patterns applied (Rule 3): **pack into destination** — TILE no-gamma normalize → `cb_out`;
 **transform in place** — RM+gamma scale runs in place on `cb_normed` with real per-tile credit;
-**alias** — `cb_sumsq` ↔ `cb_normed`; **fold into an accumulator** — Σx² accumulated by the
+~~alias `cb_sumsq` ↔ `cb_normed`~~ (dropped by the implementer — ring-wrap of indexed windows, see the `cb_sumsq` row); **fold into an accumulator** — Σx² accumulated by the
 packer into one L1 tile per row instead of materializing `r·Wc` squared tiles (the DEST variant is
 ruled out: ELWMUL ignores `acc_to_dest`). Rejected: `cb_out` in-place on `cb_normed` for TILE (would
 give `cb_normed` two consumers, compute and writer).
@@ -44,7 +44,7 @@ give `cb_normed` two consumers, compute and writer).
 | `s_x`, `s_g`, `s_o` | input / gamma / output tile bytes | 2048 (bf16) or 4096 (fp32) | dtype |
 | `s_f` | fp32 tile bytes | 4096 | — |
 | `s_m` | mask tile bytes | 2048 | bf16 |
-| `B` | per-core L1 bytes available to CBs | device query | interleaved Phase 0: no L1 tensors compete |
+| `B` | per-core L1 bytes available to CBs | `get_memory_view(device, L1).largest_contiguous_bytes_free_per_bank − 32 KiB` (net of any L1-resident tensor, incl. the output) | `rms_norm_program_descriptor.py` |
 | `[g]`, `[rm]`, `[tile]`, `[p]` | 1 if has_gamma / ROW_MAJOR / TILE / partial W, else 0 | — | — |
 
 ## Total per-core footprint
@@ -52,9 +52,10 @@ give `cb_normed` two consumers, compute and writer).
 ```
 F(r, K) =   r·Wp·s_x                                   # cb_x            — scales with r and W
           + [rm]·2c·s_x                                # cb_x_rm         — scales with c
-          + [p]·s_m                                    # cb_reduce_mask  — constant
+          + [p]·s_f                                    # cb_reduce_mask  — constant (Float32)
           + r·s_f                                      # cb_rstd         — scales with r
-          + ([g] or [rm]) ? cap_alias·s_f : r·n_sq·s_f # cb_sumsq (+ aliased cb_normed) — scales with r·c
+          + r·n_sq·s_f                                 # cb_sumsq        — scales with r
+          + ([g] or [rm])·r·c·s_f                      # cb_normed       — scales with r·c
           + [g]·2c·s_g                                 # cb_gamma        — scales with c
           + 2c·s_o                                     # cb_out | cb_out_rm — scales with c
 ```

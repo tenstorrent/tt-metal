@@ -117,9 +117,19 @@ using PackScaled = std::conditional_t<
     PackTile<output(cb_normed)>,
     PackTile<output(cb_out, ReservePolicy::PerOuter, PushPolicy::PerOuter)>>;
 
+// One row-chunk (32 sticks x c tiles) per call. Across a block's back-to-back calls the LLK init and the
+// register reconfig are paid once: only the InitOnly / InitAndUninit call reconfigures — re-running
+// pack_reconfig_data_format after fast_tilize_init on a later call corrupts the fast-tilize pack setup
+// (measured: W=4096, c=64, K=2 gave pcc ~0.5 until the follow-on calls stopped reconfiguring).
 template <tilize_config::InitUninitMode Mode, class InDFB, class OutDFB>
 ALWI void tilize_row_chunk(InDFB& in, OutDFB& out) {
-    compute_kernel_lib::tilize<w_chunk_tiles, cb_x_rm, cb_x, Mode>(in, out, 1);
+    using tilize_config::InitUninitMode;
+    using tilize_config::ReconfigureRegisterDatatypeMode;
+    constexpr bool first_of_run = Mode == InitUninitMode::InitAndUninit || Mode == InitUninitMode::InitOnly;
+    constexpr auto reconfig = first_of_run ? ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
+                                           : ReconfigureRegisterDatatypeMode::NoReconfigure;
+    compute_kernel_lib::tilize<w_chunk_tiles, cb_x_rm, cb_x, Mode, tilize_config::WaitMode::WaitBlock, reconfig>(
+        in, out, 1);
 }
 
 }  // namespace
