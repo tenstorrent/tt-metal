@@ -998,7 +998,13 @@ constexpr DataFormat matmul_fe_phase_format() {
     return DataFormat::Invalid;
 }
 
-template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+// the block keys of the init (key_ct, key_rt: the end fold at full sync, no bias write) where ct and rt are constant
+template <std::uint32_t ct, std::uint32_t rt>
+constexpr std::uint32_t matmul_fe_key(const std::uint32_t dim) {
+    return (ct != 0xFFu && rt != 0xFFu) ? dim : 0;
+}
+
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
 ALWI void matmul_block_init_fe(
     const std::uint32_t call_line,
     std::uint32_t in0_cb_id,
@@ -1008,11 +1014,23 @@ ALWI void matmul_block_init_fe(
     std::uint32_t rt_dim = 1,
     std::uint32_t kt_dim = 1) {
     constexpr DataFormat f = matmul_fe_phase_format<in0_cb, in1_cb>();
-    matmul_block_init<false, 0, 0, DataFormat::Invalid, 0, f, f>(
-        in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
+    constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
+    matmul_block_init<
+        false,
+        0,
+        0,
+        DataFormat::Invalid,
+        0,
+        f,
+        f,
+        AUTO,
+        false,
+        0,
+        matmul_fe_key<ct, rt>(rt),
+        matmul_fe_key<ct, rt>(ct)>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 
-template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
 ALWI void matmul_block_fe(
     const std::uint32_t call_line,
     std::uint32_t in0_cb_id,
@@ -1025,7 +1043,20 @@ ALWI void matmul_block_fe(
     std::uint32_t rt_dim,
     std::uint32_t kt_dim) {
     constexpr DataFormat f = matmul_fe_phase_format<in0_cb, in1_cb>();
-    matmul_block<false, 0, 0, DataFormat::Invalid, 0, f, f>(
+    constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
+    matmul_block<
+        false,
+        0,
+        0,
+        DataFormat::Invalid,
+        0,
+        f,
+        f,
+        AUTO,
+        false,
+        0,
+        matmul_fe_key<ct, rt>(rt),
+        matmul_fe_key<ct, rt>(ct)>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 #endif
@@ -1033,13 +1064,45 @@ ALWI void matmul_block_fe(
 }  // namespace ckernel
 
 #ifdef ARCH_BLACKHOLE
-// the cb ids of a plain call where they are constant expressions (pk-state's front-end dispatch); a call with template
-// arguments is not a macro call
-#define MATMUL_FE_CB(cb) (__builtin_constant_p(cb) ? ::ckernel::matmul_fe_cb(cb) : 0xFFu)
-#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                        \
-    matmul_block_init_fe<MATMUL_FE_CB(in0_cb_id), MATMUL_FE_CB(in1_cb_id)>( \
+// the cb ids, ct and rt of a plain call where they are constant expressions (pk-state's front-end dispatch); a call
+// with template arguments is not a macro call
+#define MATMUL_FE_C(x) (__builtin_constant_p(x) ? ::ckernel::matmul_fe_cb(x) : 0xFFu)
+#define MATMUL_FE_NARG(...) MATMUL_FE_NARG_(__VA_ARGS__, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+#define MATMUL_FE_NARG_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, N, ...) N
+#define MATMUL_FE_CAT(a, b) MATMUL_FE_CAT_(a, b)
+#define MATMUL_FE_CAT_(a, b) a##b
+// ct and rt key only the math init; elsewhere naming them in the dispatch moved the register allocation of run-time
+// dims
+#if defined(UCK_CHLKC_MATH)
+#define matmul_block_init(...) MATMUL_FE_CAT(MATMUL_FE_INIT_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define MATMUL_FE_INIT_2(a, b) matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1>(__builtin_LINE(), a, b)
+#define MATMUL_FE_INIT_3(a, b, tr) \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1>(__builtin_LINE(), a, b, tr)
+#define MATMUL_FE_INIT_4(a, b, tr, ct) \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), 1>(__builtin_LINE(), a, b, tr, ct)
+#define MATMUL_FE_INIT_5(a, b, tr, ct, rt)                                                  \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+        __builtin_LINE(), a, b, tr, ct, rt)
+#define MATMUL_FE_INIT_6(a, b, tr, ct, rt, kt)                                              \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+        __builtin_LINE(), a, b, tr, ct, rt, kt)
+#define MATMUL_FE_INIT_7(a, b, tr, ct, rt, kt, line) \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(line, a, b, tr, ct, rt, kt)
+#define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_BLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
+// the experimental 2_0 call (no transpose argument)
+#define MATMUL_FE_BLOCK_8(...) matmul_block_fe<0xFFu, 0xFFu, 0xFFu, 0xFFu>(__builtin_LINE(), __VA_ARGS__)
+#define MATMUL_FE_BLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt)                             \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+        __builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
+#define MATMUL_FE_BLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line)                      \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+        line, a, b, i0, i1, d, tr, ct, rt, kt)
+#else
+#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                                    \
+    matmul_block_init_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu>( \
         __builtin_LINE(), in0_cb_id, in1_cb_id, ##__VA_ARGS__)
-#define matmul_block(in0_cb_id, in1_cb_id, ...)                        \
-    matmul_block_fe<MATMUL_FE_CB(in0_cb_id), MATMUL_FE_CB(in1_cb_id)>( \
+#define matmul_block(in0_cb_id, in1_cb_id, ...)                                    \
+    matmul_block_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu>( \
         __builtin_LINE(), in0_cb_id, in1_cb_id, __VA_ARGS__)
+#endif
 #endif

@@ -429,13 +429,24 @@ constexpr ckernel::MathFidelity matmul_prod_fidelity = ckernel::matmul_phase_fid
 #else
 constexpr ckernel::MathFidelity matmul_prod_fidelity = MATH_FIDELITY;
 #endif
-// llk_math_matmul_init_impl without block keys: tiny 16-row tiles unless half sync with a 32-bit DEST, no keys, the bias word written
+// llk_math_matmul_init_impl: the block keys of a call whose ct and rt are constant (the test's pack keys; none at run-time dims), with
+// them the end fold at full sync and no bias write; tiny 16-row tiles unless half sync with a 32-bit DEST
+#ifdef MATMUL_PACK_KEYS
+constexpr std::uint32_t matmul_prod_key_ct = MATMUL_PK_CT, matmul_prod_key_rt = MATMUL_PK_RT;
+#else
+constexpr std::uint32_t matmul_prod_key_ct = 0, matmul_prod_key_rt = 0;
+#endif
+constexpr bool matmul_prod_keyed    = matmul_prod_key_ct != 0 && matmul_prod_key_rt != 0;
+constexpr bool matmul_prod_end_fold = (dest_sync == ckernel::DstSync::SyncFull && matmul_prod_keyed) || matmul_half_end_fold_k;
 #define MATMUL_PROD_TINY_16_ROWS !(dest_sync == ckernel::DstSync::SyncHalf && is_fp32_dest_acc_en)
+#define MATMUL_PROD_KEYS         matmul_prod_key_ct, matmul_prod_key_rt, !matmul_prod_keyed
 #define MATMUL_MATH_DEFAULT_ARGS matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, false
 #define MATMUL_MATH_DEFAULT_INIT_ARGS \
-    matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, 0, MATMUL_PROD_TINY_16_ROWS, matmul_half_end_fold_k, matmul_reuse_dir_k, false, 0, 0, true
-#define MATMUL_MATH_THROTTLE_ARGS      matmul_prod_fidelity, 5, false, true, matmul_reuse_dir_k, false
-#define MATMUL_MATH_THROTTLE_INIT_ARGS matmul_prod_fidelity, 5, false, true, 0, MATMUL_PROD_TINY_16_ROWS, false, matmul_reuse_dir_k, false, 0, 0, true
+    matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, 0, MATMUL_PROD_TINY_16_ROWS, matmul_prod_end_fold, matmul_reuse_dir_k, false, MATMUL_PROD_KEYS
+#define MATMUL_MATH_THROTTLE_ARGS matmul_prod_fidelity, 5, false, true, matmul_reuse_dir_k, false
+#define MATMUL_MATH_THROTTLE_INIT_ARGS                                                                                                                         \
+    matmul_prod_fidelity, 5, false, true, 0, MATMUL_PROD_TINY_16_ROWS, dest_sync == ckernel::DstSync::SyncFull &&matmul_prod_keyed, matmul_reuse_dir_k, false, \
+        MATMUL_PROD_KEYS
 #else
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
 #define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, MATMUL_INIT_KEYS
