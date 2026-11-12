@@ -69,7 +69,7 @@ constexpr std::uint32_t LLK_PACK_W_MAX_TILES_W = LLK_PACK_W_MAX_TILES < LLK_PACK
 
 // out_tile: the block's tile offset. A CB pointer back at pack_w_next after a full CB turn of other packs does not
 // continue: the state then lacks LLK_PACK_STATE_W.
-inline void llk_pack_w_take(
+__attribute__((always_inline)) inline void llk_pack_w_take(
     const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile)
 {
     const std::uint32_t max_tiles = llk_pack_dst_is_wide(output_id) ? LLK_PACK_W_MAX_TILES_W : LLK_PACK_W_MAX_TILES;
@@ -781,7 +781,8 @@ __attribute__((always_inline)) inline std::uint32_t llk_pack_block_forms(const s
 
 // The per-tile packs of a block that takes none of the block forms: main's loop, which reads no pack flag.
 template <bool is_fp32_dest_acc_en>
-inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles)
+__attribute__((always_inline)) inline void llk_pack_block_per_tile(
+    const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles)
 {
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++)
     {
