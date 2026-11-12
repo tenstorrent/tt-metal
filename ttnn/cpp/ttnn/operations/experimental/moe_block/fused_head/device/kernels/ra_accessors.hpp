@@ -16,7 +16,6 @@ constexpr auto regions = TensorAccessorArgs<counts.next_compile_time_args_offset
 constexpr auto token_index = TensorAccessorArgs<regions.next_compile_time_args_offset()>();
 constexpr auto table = TensorAccessorArgs<token_index.next_compile_time_args_offset()>();
 constexpr auto slots = TensorAccessorArgs<table.next_compile_time_args_offset()>();   // the exchange's DRAM slots
-constexpr auto fslots = TensorAccessorArgs<slots.next_compile_time_args_offset()>();  // its forwarding slots
-constexpr auto start = TensorAccessorArgs<fslots.next_compile_time_args_offset()>();  // a padded chunk's actual_start
+constexpr auto start = TensorAccessorArgs<slots.next_compile_time_args_offset()>();   // a padded chunk's actual_start
 constexpr auto end = TensorAccessorArgs<start.next_compile_time_args_offset()>();     // its actual_end
 }  // namespace ra_acc

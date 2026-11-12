@@ -68,7 +68,7 @@ enum XgCt : uint32_t {
 //   sender:  XG_HS, LS_FIRST (int(router.prio_first)), LA_CHL, RS_NPASS, and with the routing exchange the routing
 //            defines (RoutingStream.defines: RA_NC_ len(router.cores), RA_NP_ router.RB, RA_N_ N, RA_M_ M, RA_EPC_ EPC,
 //            RA_ME_ r C + c, RA_HBP_ header_bytes(EPC, M), RA_BB_ _al16(2 EPC), RA_BBP_ _al16(2 (EPC + 1)),
-//            RA_MAXP_ fabric max payload // 64 * 64, RA_NF_ 16)
+//            RA_MAXP_ fabric max payload // 64 * 64)
 //   watcher: XG_HS; with a second Y direction (RoutingStream.watcher_tail): the routing defines + W_RA0 (the index
 //            of the RASend block in its args = len of the watcher's own list)
 // Runtime args (per port core; XGather3.pieces):
@@ -78,7 +78,7 @@ enum XgCt : uint32_t {
 //   sender:  [xown, v, arrival, expect_in, ready, fence] + (with a peer on this direction / link:) [peer has opposite
 //            ring, rc.x, rc.y, pc.x, pc.y, peer mesh id, peer chip id, peer watcher x, y, watch counter, n]
 //            + entries (q, part, npk) x n + tables(peer) + rs_block + router.port_block + la_block + lg_block
-//            + routing.send_block + routing.fwd_block + fabric connection args (setup_fabric_connection);
+//            + routing.send_block + fabric connection args (setup_fabric_connection);
 //            (no peer:) [0] x 10 + [0] + tables(coord) + the same blocks (all empty)
 //   watcher: [NCH, XREADY sem id, G - 1, nc engine cores, ncnt] + (counter addr, final) x ncnt
 //            + (x, y) x nc + per rank (nreq, (counter addr, entry index, entries a chunk) x nreq)
@@ -89,7 +89,7 @@ enum XgCt : uint32_t {
 // ---------------------------------------------------------------------------------------------------------------------
 // routing_stream Y sender (ra_y_send): no compile-time args. Defines: the routing defines (above). Runtime args
 // (RoutingStream._y_args): send_block(coord, key) (RASend: [nd, nr, self, buffer, PCAP, slots addr, c0, c1, planner
-// core 0 x, y, calls sem, ready sem, mesh id, fslots addr, flags] + per destination next_hop (5 words)) + [remote]
+// core 0 x, y, calls sem, ready sem, mesh id] + per destination its fabric chip id: one fabric send, no relay) + [remote]
 // + (remote:) [yhello addr, peer chip id, peer mesh id] + fabric connection args + [hellos: how many Y hellos land on
 // this chip a call - HeadModel::y_hellos_in: 1 on a ring / R 2; a Y line: 0 at the near end, 2 at the row before the
 // far end]. No common runtime args.
@@ -220,7 +220,7 @@ enum RouterCommonArg : uint32_t {
 //     bases in its args, the earlier loops' after the go words);
 //   NCRISC and BRISC, an earlier token loop of its split (MoEBlockConfig.token_loops): RAP_SV0 - the planner plans no
 //     token (RAP_S 32, its regions past the router's bytes), the exchange runs empty (the chips' barrier between
-//     loops); a forwarding port's scratch then a ring of RA_FWD_RING slots (every loop's program);
+//     loops);
 //   NCRISC and BRISC with the routing exchange (router_stream._ra_src): RA_PLAN, the routing defines (above) and
 //     ra::plan's RAP_* (RoutingStream.kernel_subs: RAP_S, RAP_K, RAP_EPC, RAP_R, RAP_C, RAP_ME, RAP_A, RAP_L,
 //     RAP_P (nps[coord]), RAP_TPP 32, RAP_M, RAP_HBP, RAP_BB, RAP_BBP, RAP_PCAP, RAP_NPORT, RAP_ROWS_CAP,

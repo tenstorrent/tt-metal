@@ -253,23 +253,18 @@ public:
     Regions roff;
     int64_t rbytes = 0, pbuf_sub = 0;
     // the mailbox words
-    uint32_t HS = 16, fslots = 16, lw_off = 0, port_words = 16, zw_off = 0, mbox_words = 0;
+    uint32_t HS = 16, lw_off = 0, port_words = 16, zw_off = 0, mbox_words = 0;
     // routing
-    uint32_t S = 0, SA = 0, loops = 1, splits = 1, EPC = 0, A = 0, Lr = 2, M = 0, NF = 16, rows_cap = 0, inst_cap = 0;
+    uint32_t S = 0, SA = 0, loops = 1, splits = 1, EPC = 0, A = 0, Lr = 2, M = 0, rows_cap = 0, inst_cap = 0;
     int64_t HBP = 0, BB = 0, BBP = 0, PCAP = 0, MAXP = 0;
     std::vector<int64_t> pbases_off;  // the planner instances' regions, arena offsets
     // token loops: an earlier loop's planner (no token): its instances' regions past the router's bytes, its caps
     std::vector<int64_t> pbases_idle;
     uint32_t rows_cap_idle = 0, inst_cap_idle = 0;
-    // token loops: a forwarding port's L1 scratch slots, reused in turn (0: one a forwarded packet)
-    uint32_t fwd_ring = 0;
-    int64_t xbase_off = 0, fbase_off = 0;
+    int64_t xbase_off = 0;
     int64_t xg_off = 0, xg_bytes = 0;  // the x-gather packet staging on the port cores (kXgCb), arena offset / bytes
     uint32_t nx = 0, ny = 0;
     PortLuts luts;
-    std::vector<SendKey> fkeys;
-    std::map<std::pair<uint32_t, SendKey>, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> fwd;  // forwards
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, uint32_t> fwd_at;
     std::map<uint32_t, std::map<SendKey, std::vector<uint32_t>>> serves;  // per chip index
     int64_t arena_bytes = 0;  // the arena's bytes a core (the engine's, grown to the router cores')
     int64_t args_off = 0;     // the kernels' args region in the arena, past its regions (head_args_to_dram)
@@ -397,9 +392,8 @@ public:
     std::vector<uint32_t> dests(uint32_t p, XDir d) const;
     std::vector<uint32_t> arrival_order(uint32_t p) const;
     // ---- routing_stream ----
-    uint32_t first_hop(uint32_t s, uint32_t d) const;
     std::map<uint32_t, XDir> xdir(const Coord& c) const;
-    std::vector<std::pair<uint32_t, SendKey>> path(uint32_t s, uint32_t d) const;
+    SendKey sender(uint32_t s, uint32_t d) const;
     std::map<SendKey, std::vector<uint32_t>> serve(const Coord& c) const;
     CoreCoord core_of(const Coord& c, const SendKey& k) const { return k.y ? watcher : chips.at(c).port(k.dir(), k.l); }
     int64_t buf_off(const Coord& c, const SendKey& k) const;
@@ -547,23 +541,6 @@ std::vector<uint32_t> HeadModel::arrival_order(uint32_t p) const {
     return out;
 }
 
-// The fabric's first hop (HeadShape.first_hops, asked of the fabric): the Y leg's toward the destination's row in my
-// column (one fabric send), an X relay's toward the destination (head_sizing.cpp routing_paths: the same).
-uint32_t HeadModel::first_hop(uint32_t s, uint32_t d) const {
-    const uint32_t sr = s / C, sc = s % C, dr = d / C;
-    const uint32_t t = sr != dr ? dr * C + sc : d;
-    const auto& fh = cfg.shape.first_hops;
-    TT_FATAL(fh.size() == size_t(N) * N, "fused_head: the fabric's first hops: {} entries for {} chips", fh.size(), N);
-    const uint32_t h = fh[size_t(s) * N + t];
-    TT_FATAL(
-        (sr != dr) == (h >= 2),
-        "fused_head: the fabric's first hop from chip {} toward chip {} is not along the {} axis",
-        s,
-        t,
-        sr != dr ? "Y" : "X");
-    return h;
-}
-
 std::map<uint32_t, XDir> HeadModel::xdir(const Coord& c) const {
     std::map<uint32_t, XDir> out;
     const auto& rg = chips.at(c).rg;
@@ -577,24 +554,20 @@ std::map<uint32_t, XDir> HeadModel::xdir(const Coord& c) const {
     return out;
 }
 
-std::vector<std::pair<uint32_t, SendKey>> HeadModel::path(uint32_t s, uint32_t d) const {
-    std::vector<std::pair<uint32_t, SendKey>> steps;
-    const uint32_t sr = s / C, sc = s % C, dr = d / C, dc = d % C;
-    Coord cur{sr, sc};
-    if (sr != dr) {
-        steps.emplace_back(s, SendKey{true, first_hop(s, d), 0});
-        cur = {dr, sc};
+// The sender of chip s's packet to chip d: the one whose fabric connection the fabric's first hop from s toward d
+// leaves by (HeadShape.first_hops, asked of the fabric) - a Y sender, or the gather's X port that way (link d % L).
+// The packet goes in one fabric send, the fabric routing every hop to d (head_sizing.cpp routing_paths: the same).
+SendKey HeadModel::sender(uint32_t s, uint32_t d) const {
+    const auto& fh = cfg.shape.first_hops;
+    TT_FATAL(fh.size() == size_t(N) * N, "fused_head: the fabric's first hops: {} entries for {} chips", fh.size(), N);
+    const uint32_t h = fh[size_t(s) * N + d];
+    if (h >= 2) {
+        return SendKey{true, h, 0};
     }
-    while (cur.second != dc) {
-        const uint32_t ci = cur.first * C + cur.second;
-        const uint32_t h = first_hop(ci, d);
-        const auto xd = xdir(cur);
-        TT_FATAL(xd.count(h), "fused_head: chip ({}, {}): no X port toward {}", cur.first, cur.second, d);
-        const uint32_t l = (d % Lr) < L ? d % Lr : 0;
-        steps.emplace_back(ci, SendKey::x(xd.at(h), l));
-        cur = {cur.first, u32(pmod(int64_t(cur.second) + (h == 0 ? 1 : -1), C))};
-    }
-    return steps;
+    const Coord c{s / C, s % C};
+    const auto xd = xdir(c);
+    TT_FATAL(xd.count(h), "fused_head: chip ({}, {}): no X port toward {}", c.first, c.second, d);
+    return SendKey::x(xd.at(h), (d % Lr) < L ? d % Lr : 0);
 }
 
 std::map<SendKey, std::vector<uint32_t>> HeadModel::serve(const Coord& c) const {
@@ -602,7 +575,7 @@ std::map<SendKey, std::vector<uint32_t>> HeadModel::serve(const Coord& c) const 
     std::map<SendKey, std::vector<uint32_t>> out;
     for (uint32_t dd = 0; dd < N; ++dd) {
         if (dd != me) {
-            out[path(me, dd)[0].second].push_back(dd);
+            out[sender(me, dd)].push_back(dd);
         }
     }
     std::vector<SendKey> ykeys;
@@ -827,11 +800,7 @@ std::shared_ptr<const HeadModel> make_head_model(
 
     // the mailbox words (HeadSE3)
     h.HS = config.handoff_bytes;
-    const auto rt = routing_paths(h.R, G, h.ring, h.L, h.cfg.shape.first_hops);
-    h.fslots = std::max<uint32_t>(16, std::holds_alternative<RoutingPaths>(rt) ? std::get<RoutingPaths>(rt).nf : 16);
-    // (the forwarders' flags: a word a slot, then the landed count; token loops: both a call parity, + the call count)
-    const uint32_t fwd_words = sh.loops > 1 ? 4 * (2 * h.fslots + 3) : 4 * h.fslots + 4;
-    h.lw_off = (2 * GX * GY * h.HS / 4 + 4 * 8 + fwd_words + 3) / 4 * 4;
+    h.lw_off = (2 * GX * GY * h.HS / 4 + 4 * 8 + 3) / 4 * 4;
     const uint32_t nrc = nrt;
     h.port_words = std::max<uint32_t>(16, (G - 1) * u32(cdiv(nrc, h.L)));
     h.zw_off = h.lw_off + 4 * h.port_words;
@@ -899,7 +868,6 @@ std::shared_ptr<const HeadModel> make_head_model(
     h.BBP = al16(2 * (int64_t(h.EPC) + 1));
     h.PCAP = routing_slot_bytes(h.SA, h.K, h.EPC, h.M);
     h.MAXP = int64_t(h.payload) / 64 * 64;
-    h.NF = h.fslots;
     for (const auto& [coord, _] : h.chips) {
         h.serves[coord.first * h.C + coord.second] = h.serve(coord);
     }
@@ -916,48 +884,19 @@ std::shared_ptr<const HeadModel> make_head_model(
         }
     }
     h.xbase_off = al64(h.pbuf_sub);
-    h.fbase_off = h.xbase_off + int64_t(h.nx) * h.PCAP;
-    for (uint32_t s_ = 0; s_ < h.N; ++s_) {
-        for (uint32_t d = 0; d < h.N; ++d) {
-            if (d == s_) {
-                continue;
-            }
-            const auto steps = h.path(s_, d);
-            for (uint32_t i = 1; i < steps.size(); ++i) {
-                auto& lst = h.fwd[steps[i]];
-                h.fwd_at[{s_, d, i}] = u32(lst.size());
-                lst.emplace_back(s_, d, i);
-            }
-        }
-    }
-    {
-        std::set<SendKey> ks;
-        for (const auto& [k, _] : h.fwd) {
-            ks.insert(k.second);
-        }
-        h.fkeys.assign(ks.begin(), ks.end());
-    }
-    uint32_t nf = 0;
-    for (const auto& [_, v] : h.fwd) {
-        nf = std::max(nf, u32(v.size()));
-    }
-    if (h.loops > 1 && nf > kFwdRing) {  // (token loops: the whole chunk's packets - the forwarder reuses kFwdRing)
-        h.fwd_ring = kFwdRing;
-        nf = kFwdRing;
-    }
     // (the arena grows to the ports' logits partials + routing buffers, and to the watcher's Y buffers, up to its cap -
     // head_plan's cores_check)
-    for (const int64_t need_ : {h.xbase_off + int64_t(h.nx + nf) * h.PCAP, 2 * int64_t(h.ny) * h.PCAP}) {
+    for (const int64_t need_ : {h.xbase_off + int64_t(h.nx) * h.PCAP, 2 * int64_t(h.ny) * h.PCAP}) {
         if (h.arena_bytes < need_ && need_ <= e.args.arena_max) {
             h.arena_bytes = al64(need_);
         }
     }
     TT_FATAL(
-        h.xbase_off + int64_t(h.nx + nf) * h.PCAP <= h.arena_bytes, "fused_head: ports: no L1 for the routing buffers");
+        h.xbase_off + int64_t(h.nx) * h.PCAP <= h.arena_bytes, "fused_head: ports: no L1 for the routing buffers");
     // the x-gather's packet staging (kXgCb): an arena region on the port cores, after their routing buffers (the
-    // ports hold nothing else in the arena: logits partials [0, pbuf_sub), routing [xbase_off, + (nx + nf) PCAP))
+    // ports hold nothing else in the arena: logits partials [0, pbuf_sub), routing [xbase_off, + nx PCAP))
     h.xg_bytes = 2 * int64_t(h.group) * h.rp * 2048;
-    h.xg_off = al64(h.xbase_off + int64_t(h.nx + nf) * h.PCAP);
+    h.xg_off = al64(h.xbase_off + int64_t(h.nx) * h.PCAP);
     if (h.arena_bytes < h.xg_off + h.xg_bytes && h.xg_off + h.xg_bytes <= e.args.arena_max) {
         h.arena_bytes = al64(h.xg_off + h.xg_bytes);
     }
@@ -1225,8 +1164,6 @@ private:
     Args lg_block(XDir d, uint32_t v) const;
     Args port_block(XDir d, uint32_t v) const;
     Args send_block(const SendKey& k) const;
-    Args fwd_block(const SendKey& k) const;
-    std::vector<uint32_t> next_hop(uint32_t s, uint32_t d, uint32_t i) const;
     Args y_args(const SendKey& k, const CoreCoord& core);
     void routing_defines(KernelDescriptor& k) const;
     // The routing kernels' DRAM tensors (ra_accessors.hpp): their accessor args after the kernel's own compile-time
@@ -1241,7 +1178,6 @@ private:
               SRC_TOKEN_INDEX,
               SRC_TABLE,
               SRC_SLOTS,
-              SRC_FSLOTS,
               SRC_START,
               SRC_END}) {
             (bufs[s] ? tt::tt_metal::TensorAccessorArgs(*bufs[s])
@@ -1292,7 +1228,7 @@ private:
     // token loops in one program with every planner instance on the planner-only cores: the router kernels compile no
     // planner (ra_plan_dual.hpp RA_PLAN_NONE)
     void router_planner_none(KernelDescriptor& k) const {
-        if (bufs.merged && bufs.loops > 1 && h.M <= 2 * h.npo) {
+        if (bufs.merged && bufs.loops > 1 && h.M <= h.npo) {
             define(k, "RA_PLAN_NONE");
         }
     }
@@ -2128,7 +2064,6 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         add(blocks, la_block(d, v));
         add(blocks, lg_block(d, v));
         add(blocks, send_block(SendKey::x(d, v)));
-        add(blocks, fwd_block(SendKey::x(d, v)));
         Args args = {xown, v, arrival, pl.expect_in, ready, u32(fence)};
         const auto& peer = rg.peer(d);
         if (peer && !rg.links[static_cast<int>(d)].empty()) {
@@ -2246,16 +2181,8 @@ void ChipProgram::routing_defines(KernelDescriptor& k) const {
              {"RA_HBP_", h.HBP},
              {"RA_BB_", h.BB},
              {"RA_BBP_", h.BBP},
-             {"RA_MAXP_", h.MAXP},
-             {"RA_NF_", h.NF}}) {
+             {"RA_MAXP_", h.MAXP}}) {
         define(k, n, iv(v));
-    }
-    if (h.fwd_ring) {
-        define(k, "RA_FWD_RING", iv(h.fwd_ring));
-    }
-    if (h.loops > 1) {  // (token loops: the forward pages and flags a call parity - ra_send.hpp)
-        define(k, "RA_FWD_PAR");
-        define(k, "RA_FPAGES", iv(std::max<uint32_t>(1, u32(h.fkeys.size())) * h.NF));
     }
 }
 
@@ -2300,40 +2227,6 @@ void ChipProgram::planner_defines(KernelDescriptor& k, uint32_t ct0) const {
     }
 }
 
-std::vector<uint32_t> ChipProgram::next_hop(uint32_t s, uint32_t d, uint32_t i) const {
-    const auto steps = h.path(s, d);
-    if (i + 1 < steps.size()) {
-        const auto [ci, key] = steps[i + 1];
-        const Coord cc{ci / h.C, ci % h.C};
-        const auto core = h.virt(h.core_of(cc, key));
-        const uint32_t slot = h.fwd_at.at({s, d, i + 1});
-        const uint32_t ki = u32(std::find(h.fkeys.begin(), h.fkeys.end(), key) - h.fkeys.begin());
-        return {u32(h.node(cc).chip_id), 1, u32(core.x), u32(core.y), slot | (ki * h.NF + slot) << 8};
-    }
-    return {u32(h.node_idx(d).chip_id), 0, 0, 0, 0};
-}
-
-Args ChipProgram::fwd_block(const SendKey& k) const {
-    auto it = h.fwd.find({me, k});
-    if (it == h.fwd.end() || it->second.empty()) {
-        return {0u};
-    }
-    const auto& lst = it->second;
-    const auto p0 = h.virt(h.p0core());
-    const auto nd = h.node(coord);
-    TT_FATAL(lst.size() <= h.NF, "fused_head: routing: a port forwards {} packets > its {} slots", lst.size(), h.NF);
-    const uint32_t ki = u32(std::find(h.fkeys.begin(), h.fkeys.end(), k) - h.fkeys.begin());
-    Args out = {u32(lst.size()), base + u32(h.fbase_off), mbox + h.HS * 2 * e.GX * e.GY + 128, u32(h.PCAP)};
-    add(out, S(SRC_SLOTS));
-    add(out, Args{ra.at("c0"), ra.at("c1"), u32(p0.x), u32(p0.y), u32(*nd.mesh_id)});
-    add(out, S(SRC_FSLOTS));
-    add(out, ki * h.NF);
-    for (const auto& [s_, d, i] : lst) {
-        add(out, next_hop(s_, d, i));
-    }
-    return out;
-}
-
 Args ChipProgram::send_block(const SendKey& k) const {
     auto it = sv.find(k);
     if (it == sv.end()) {
@@ -2361,10 +2254,8 @@ Args ChipProgram::send_block(const SendKey& k) const {
             ra.at(second_y ? "calls_s2" : "calls_s"),
             ra.at(second_y ? "ready2" : "ready"),
             u32(*h.node(coord).mesh_id)});
-    add(out, S(SRC_FSLOTS));
-    add(out, mbox + h.HS * 2 * e.GX * e.GY + 128);
-    for (uint32_t d : dests) {
-        add(out, d != me ? next_hop(me, d, 0) : std::vector<uint32_t>(5, 0));
+    for (uint32_t d : dests) {  // (a word a destination: its fabric chip id - the fabric routes the packet there)
+        add(out, d != me ? u32(h.node_idx(d).chip_id) : 0u);
     }
     return out;
 }
@@ -2852,7 +2743,6 @@ HeadTensorShapes head_tensor_shapes(const HeadModel& h) {
     s.route_words = route_words(h.N) * h.SA;
     s.slot_words = u32(h.PCAP / 4);
     s.slots_rows = 2 * h.N;
-    s.fslots_rows = std::max<uint32_t>(1, u32(h.fkeys.size())) * h.NF * (h.loops > 1 ? 2 : 1);
     const uint32_t NG = h.N * h.EPC;
     s.plan_outs = {{{1, NG}, {1, NG}, {1, h.rows_cap}, {h.rows_cap / 32, 64}, {1, kPlanWords}}};
     s.arena_bytes = u32(h.args_off + kHeadArgsBytes);  // (the regions, then the kernels' args blocks)

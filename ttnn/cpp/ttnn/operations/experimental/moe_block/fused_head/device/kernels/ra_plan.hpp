@@ -387,8 +387,17 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
     // (6) the headers (every expert's total -> regions; my experts: a contiguous range balanced by rows), then every
     // packet's entries
     const auto sl = TensorAccessor(sl_args, sl_addr, PCAP);
+    // (a packet's source: other chips' land in my DRAM slot par N + o through the fabric router's NOC1 endpoint - I run
+    // on NOC1, the same port. My own chip's packet is written into its slot by its port core's sender on that core's
+    // NoC - possibly NOC0, the other port - so I read it from the sender's packet buffer in L1 instead: final once its
+    // arrival is counted, and not rewritten before every instance is past this call (the step-2 exchange of the next))
+    auto slot = [&](uint32_t o) -> uint64_t {
+        return o == ME ? get_noc_addr(mb_args::arg(dst_arg + 3 * ME), mb_args::arg(dst_arg + 3 * ME + 1),
+                                      mb_args::arg(dst_arg + 3 * ME + 2))
+                       : sl.get_noc_addr(par * N + o);
+    };
     for (uint32_t o = 0; o < N; ++o) {
-        noc_async_read(sl.get_noc_addr(par * N + o), B + O_HDR + o * HBP, HBP);
+        noc_async_read(slot(o), B + O_HDR + o * HBP, HBP);
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
@@ -455,7 +464,7 @@ FORCE_INLINE void plan(uint32_t a0, uint32_t B) {
                     continue;  // (past the worst case: dropped - off > ROWS_CAP or P_OVER)
                 }
                 const uint32_t src = HBP + 4 * x0, a0 = src & ~63u, len = (src - a0 + 4 * n + 63) & ~63u;
-                noc_async_read(sl.get_noc_addr(par * N + o) + a0, pos, len);
+                noc_async_read(slot(o) + a0, pos, len);
                 run[o * M + r] = pos + (src - a0) - 4 * x0;
                 ent[o] = 1;
                 pos += len;

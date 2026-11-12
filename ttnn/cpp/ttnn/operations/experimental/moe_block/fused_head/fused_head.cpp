@@ -174,7 +174,6 @@ FusedHeadInputs persistent_inputs(MoEBlockResources& res, const HeadModel& model
         .xbuf = t("xbuf", dram_spec(s.xbuf_rows, s.xbuf_cols, DataType::BFLOAT16, Layout::ROW_MAJOR)),
         .route = t("route", dram_spec(1, s.route_words, DataType::UINT32, Layout::ROW_MAJOR)),
         .slots = t("slots", dram_spec(s.slots_rows, s.slot_words, DataType::UINT32, Layout::ROW_MAJOR)),
-        .fslots = t("fslots", dram_spec(s.fslots_rows, s.slot_words, DataType::UINT32, Layout::ROW_MAJOR)),
         .counts =
             t("counts", dram_spec(s.plan_outs[0].first, s.plan_outs[0].second, DataType::UINT32, Layout::ROW_MAJOR)),
         .regions =

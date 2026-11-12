@@ -89,7 +89,6 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
           &args.xbuf,
           &args.route,
           &args.slots,
-          &args.fslots,
           &args.counts,
           &args.regions,
           &args.token_index,
@@ -176,7 +175,6 @@ HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a)
     set(SRC_RB, &a.router_bias);
     set(SRC_RIX, &a.router_index);
     set(SRC_SLOTS, &a.slots);
-    set(SRC_FSLOTS, &a.fslots);
     set(SRC_COUNTS, &a.counts);
     set(SRC_REGIONS, &a.regions);
     set(SRC_TOKEN_INDEX, &a.token_index);

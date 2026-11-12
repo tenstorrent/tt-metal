@@ -71,8 +71,7 @@ words and dispatch rows land at its tokens' offset (`i S`) in the split's tensor
 tensor (the tail's loop i). An earlier loop's routing planner plans no token (`RAP_SV0`): the exchange still runs
 empty, the chips' barrier before the next loop writes into a peer's L1. The last loop's planner is sized for the
 split's `k S` tokens and overlays the router's dead buffers up to the bias (`router_layout(arr_first)`: the peers'
-logits arrivals included - dead once every router core's rows are written). A forwarding port's L1 scratch is then a
-ring of `kFwdRing` slots. A padded chunk's planner counts every loop's real tokens (`rt_valid_owned`: a prefix of the
+logits arrivals included - dead once every router core's rows are written). A padded chunk's planner counts every loop's real tokens (`rt_valid_owned`: a prefix of the
 owned order `i S + t`). Looping heads also take planner-only cores (`dataflow/planner_only.cpp`, up to `kPlannerCores`
 planner cores in the cells no head piece takes): the instances fill them first (`planner_slot`), then the router
 cores, so a split's planner does not share a router core's L1 with its 1 MB of router buffers. `MoEBlock` picks one

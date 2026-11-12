@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The dispatch's port reader (RISCV_1, NoC0): merge the input rings (entries whose rows have landed) and the own rows
+// The dispatch's port reader (RISCV_1, NoC1 - the fabric router's DRAM endpoint): merge the input rings (entries whose rows have landed) and the own rows
 // this port starts, hand them to the sender `group` at a time with a 16-byte metadata page each (word 0 as the
 // manifest entry, word 1 the mask).
 //

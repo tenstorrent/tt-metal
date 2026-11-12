@@ -143,19 +143,14 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
     if (std::holds_alternative<std::string>(rt)) {
         return "routing exchange: " + std::get<std::string>(rt);
     }
-    const auto [nx, ny, nf_all, nsend] = std::get<RoutingPaths>(rt);
-    if (nf_all > 64) {
-        return "routing exchange: a port forwards " + s(nf_all) + " packets > 64";
-    }
-    // (token loops: the forwarder's L1 scratch a ring of kFwdRing slots)
-    const uint32_t nf = shape.loops > 1 ? std::min(nf_all, kFwdRing) : nf_all;
+    const auto [nx, ny, nsend] = std::get<RoutingPaths>(rt);
     const int64_t pcap = routing_slot_bytes(S, K, EPC, M);
     const int64_t xg = port_cb_bytes(lay.KB, shape.payload, kPortGroup);  // (the x-gather's staging, after them)
-    const int64_t port = al64(al64(pbuf) + int64_t(nx + nf) * pcap) + xg;
+    const int64_t port = al64(al64(pbuf) + int64_t(nx) * pcap) + xg;
     if (port > cap) {
-        return "routing exchange: a port's buffers " + kb0(port) + " KB (logits " + kb0(pbuf) + " + " + s(nx) + " + " +
-               s(nf) + " packets of " + fmt_fixed(pcap / 1024.0, 1) + " KB + x-gather staging " + kb0(xg) +
-               " KB) > the arena's " + kb0(cap) + " KB";
+        return "routing exchange: a port's buffers " + kb0(port) + " KB (logits " + kb0(pbuf) + " + " + s(nx) +
+               " packets of " + fmt_fixed(pcap / 1024.0, 1) + " KB + x-gather staging " + kb0(xg) + " KB) > the arena's " +
+               kb0(cap) + " KB";
     }
     if (2 * int64_t(ny) * pcap > cap) {
         return "routing exchange: the watcher's Y buffers " + kb0(2 * int64_t(ny) * pcap) + " KB > the arena's " +

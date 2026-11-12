@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TailA2A worker reader (RISCV_1, NoC0): my column slice of the owners' rows (row-major, 32 rows a row tile) and se's
+// TailA2A worker reader (RISCV_1, NoC1): my column slice of the owners' rows (row-major, 32 rows a row tile) and se's
 // tiles, row tile by row tile - for each token loop in turn (LOOPS: loop l's rows are y's / se's l x stride further).
 
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/mb_args.hpp"

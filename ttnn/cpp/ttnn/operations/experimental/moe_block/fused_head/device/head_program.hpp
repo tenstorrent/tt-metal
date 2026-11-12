@@ -96,7 +96,6 @@ enum HeadSrc : uint16_t {
     SRC_RB,      // the router bias tiles
     SRC_RIX,     // the expert index tiles
     SRC_SLOTS,   // the routing exchange's DRAM slots
-    SRC_FSLOTS,  // its forwarding slots
     SRC_COUNTS,  // the combine plan: counts, regions, token_index, table, plan
     SRC_REGIONS,
     SRC_TOKEN_INDEX,
@@ -189,7 +188,7 @@ struct HeadTensorShapes {
     uint32_t rows_rows, rows_cols;                           // uint16 ROW_MAJOR
     uint32_t xbuf_rows, xbuf_cols;                           // bf16 ROW_MAJOR
     uint32_t route_words;                                    // uint32 ROW_MAJOR [1, route_words]
-    uint32_t slots_rows, fslots_rows, slot_words;            // uint32 ROW_MAJOR [rows, slot_words]
+    uint32_t slots_rows, slot_words;                         // uint32 ROW_MAJOR [rows, slot_words]
     std::array<std::pair<uint32_t, uint32_t>, 5> plan_outs;  // uint32 ROW_MAJOR
     uint32_t arena_bytes;
 };

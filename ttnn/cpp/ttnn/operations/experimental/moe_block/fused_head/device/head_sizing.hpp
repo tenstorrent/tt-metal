@@ -8,7 +8,7 @@
 //  * SeEngineSizing: the matmul cores' arena plan (se_engine3.SeEngine3.__init__ with mesh_device=None).
 //  * router_layout / router_min_bytes (router_stream.RouterStream.layout_of / min_bytes).
 //  * routing_a2a_sizes / worst_rows / slot_bytes (combine_rf/routing_a2a.py).
-//  * routing_paths (head_plan.routing_paths: the routing exchange's senders and forwarding slots).
+//  * routing_paths (head_plan.routing_paths: the routing exchange's senders).
 // A requirement a layout does not meet is a SizingError saying which one, with its numbers.
 
 #pragma once
@@ -242,24 +242,28 @@ struct RoutingSizes {
 RoutingSizes routing_a2a_sizes(
     uint32_t N, uint32_t S, uint32_t K, uint32_t EPC, uint32_t A, int64_t rows_cap, uint32_t M = 0, uint32_t TPP = 32);
 
-// The routing planner's instances on the router cores (nc of them, two RISCs each): the most instances M (<= 2 nc,
-// EPC, A, 14) whose regions (ceil(M / nc) a core, step bytes each) fit - over the router's dead buffers [0, overlay)
+// The routing planner's instances on the router cores (nc of them, one each - its BRISC, NOC1): the most instances M
+// (<= nc + nx, EPC, A, 14) whose regions (one a core, step bytes) fit - over the router's dead buffers [0, overlay)
 // when they fit there, else past the router's bytes - in the arena. fixed_M: that many (an earlier token loop's
 // planner: the last's instances over the router's local buffers [0, arr) - never the peers' logits arrivals).
 // nx (token loops): planner-only cores - their whole arena the planner's. The instances fill the planner-only cores
-// first (q < 2 nx: core q % nx, its BRISC then its NCRISC), then the router cores (q - 2 nx: core % nc, BRISC then
-// NCRISC); without planner-only cores instance q is router core q % nc's. pbase(q): its region's offset.
+// first (q < nx: core q), then the router cores (q - nx); without planner-only cores instance q is router core q's.
+// Every instance runs on its core's BRISC, on NOC1 - the fabric routers' NoC: the routing packets land in DRAM through
+// the NOC1 endpoint and the router's rows are written on NOC1, so every planner reads them through the port they were
+// written through (a read through the other NoC's endpoint can return the page's previous contents after the write's
+// ack: the BH DRAM cross-port stale read). One NOC1 RISC a core (two RISCs on one NoC share its counters).
+// pbase(q): its region's offset.
 struct PlannerSlot {
     bool router;    // a router core's (else a planner-only core's)
     uint32_t core;  // its index among the router / the planner-only cores
     uint32_t risc;  // 0 BRISC, 1 NCRISC (its region: the core's risc-th)
 };
 inline PlannerSlot planner_slot(uint32_t q, uint32_t nc, uint32_t nx) {
-    if (q < 2 * nx) {
-        return {false, q % nx, q / nx};
+    if (q < nx) {
+        return {false, q, 0};
     }
-    q -= 2 * nx;
-    return {true, q % nc, q / nc};
+    q -= nx;
+    return {true, q % nc, 0};  // (place_planner: M <= nc + nx - one instance a core)
 }
 struct PlannerPlace {
     bool ok = false;
@@ -285,7 +289,7 @@ PlannerPlace place_planner(
     uint32_t fixed_M = 0,
     uint32_t nx = 0);
 // token loops: the planner cores a head wants (router cores and planner-only ones, two instances each)
-inline constexpr uint32_t kPlannerCores = 7;
+inline constexpr uint32_t kPlannerCores = 14;
 // The cells no head piece takes, (x, y): left of the mover column (the grid's last), past the matmul cores (GX x GY),
 // less the router cores placed under the matmul cores (the first `under` of rows GY .. by row, columns 0 .. GX); the
 // planner-only cores (token loops) are the first of them.
@@ -310,7 +314,7 @@ inline std::vector<std::pair<uint32_t, uint32_t>> head_free_cells(
     return out;
 }
 // token loops: how many planner-only cores a head with nc router cores takes, of `free` free cells - up to every
-// instance's (14 at most, two a core): with them all past the router cores, the router kernels carry no planner (one
+// instance's (14 at most, one a core): with them all past the router cores, the router kernels carry no planner (one
 // program running every loop holds both planners - an earlier loop's and the last's - and the router cores' would not
 // fit the kernel config buffer)
 inline uint32_t planner_only_cores(uint32_t loops, uint32_t /*nc*/, size_t free) {
@@ -321,13 +325,10 @@ inline uint32_t planner_only_cores(uint32_t loops, uint32_t /*nc*/, size_t free)
 }
 // an earlier token loop's planner plans no token: sized for one row tile
 inline constexpr uint32_t kPlannerIdleS = 32;
-// token loops: a forwarding port's L1 scratch slots (the whole chunk's packets), reused in turn
-inline constexpr uint32_t kFwdRing = 2;
 // ---- head_plan.routing_paths ----
 struct RoutingPaths {
     uint32_t nx;     // the most packets an X sender sends
     uint32_t ny;     // ... a Y sender
-    uint32_t nf;     // ... a port forwards
     uint32_t nsend;  // the most senders a chip
 };
 // The routing exchange's paths on an R x C mesh, or why they do not build.

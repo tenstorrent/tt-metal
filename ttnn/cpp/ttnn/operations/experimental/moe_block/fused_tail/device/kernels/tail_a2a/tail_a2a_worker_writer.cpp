@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TailA2A worker writer (RISCV_0, NoC1): my tiles - my own block's into the output, another chip's into z; then +1 on
+// TailA2A worker writer (RISCV_0, NoC0): my tiles - my own block's into the output, another chip's into z; then +1 on
 // every carrying port's z-ready word of the row tile (this loop's words: once every carrying port zeroed them) - for
 // each token loop in turn (LOOPS: loop l's output rows are the output's l x SO further; z is reused, the carrying
 // ports' zero gate orders it: they zero and release only once done reading the previous loop's z).

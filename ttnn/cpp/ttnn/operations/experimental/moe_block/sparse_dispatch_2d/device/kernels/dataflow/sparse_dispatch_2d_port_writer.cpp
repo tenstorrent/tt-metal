@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The dispatch's port sender (RISCV_0, NoC1), one fabric connection (its link): the fence with the neighbour, then
+// The dispatch's port sender (RISCV_0, NoC0), one fabric connection (its link): the fence with the neighbour, then
 // every row one hop into the same slot of the neighbour's output, and for each the entries the neighbour's ports need
 // (continue / turn + / turn -), batched per stream. A flushed fused write + increment vouches for the rows sent before
 // it on the link.

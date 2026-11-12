@@ -754,7 +754,7 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
         }
 
         auto wreader =
-            kernel("tail_a2a/tail_a2a_worker_reader.cpp", work, dm(DataMovementProcessor::RISCV_1, NOC::NOC_0));
+            kernel("tail_a2a/tail_a2a_worker_reader.cpp", work, dm(DataMovementProcessor::RISCV_1, NOC::NOC_1));
         wreader.compile_time_args = {W, has_se};
         append_accessor(wreader, y);
         append_accessor(wreader, se != nullptr ? se : y);
@@ -768,7 +768,10 @@ tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
                 .math_approx_mode = false});
         wcompute.compile_time_args = {W, has_se, loops};
         auto wwriter =
-            kernel("tail_a2a/tail_a2a_worker_writer.cpp", work, dm(DataMovementProcessor::RISCV_0, NOC::NOC_1));
+            kernel(  // (NOC0: z lands in DRAM through the NOC0 endpoint the port reader reads it through - a read through the
+                    // other NoC endpoint can return a page's previous contents after the write's ack, the BH DRAM
+                    // cross-port stale read; the worker reader, NOC1, reads only an earlier program's y and s)
+                "tail_a2a/tail_a2a_worker_writer.cpp", work, dm(DataMovementProcessor::RISCV_0, NOC::NOC_0));
         wwriter.compile_time_args = {W};
         append_accessor(wwriter, out);
         append_accessor(wwriter, z);

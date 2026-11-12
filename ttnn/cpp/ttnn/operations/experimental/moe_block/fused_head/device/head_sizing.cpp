@@ -1416,13 +1416,13 @@ PlannerPlace place_planner(
     p.nc = nc;
     p.nx = nx;
     const int64_t rows_cap = routing_worst_rows(N, S, K, EPC);
-    uint32_t M = fixed_M ? fixed_M : std::min({2 * (nc + nx), EPC, A, 14u});
+    uint32_t M = fixed_M ? fixed_M : std::min({nc + nx, EPC, A, 14u});  // (one instance a core: planner_slot)
     for (; M > 0; --M) {
         p.sz = routing_a2a_sizes(N, S, K, EPC, A, rows_cap, M);
         p.step = al64(p.sz.plan_l1);
         // (the regions a planner-only core and a router core hold at most)
-        const int64_t per_x = nx ? std::min<int64_t>(2, ceil_div(int64_t(M), int64_t(nx))) : 0;
-        const int64_t mr = std::max<int64_t>(0, int64_t(M) - 2 * int64_t(nx));
+        const int64_t per_x = nx && M ? 1 : 0;
+        const int64_t mr = std::max<int64_t>(0, int64_t(M) - int64_t(nx));
         const int64_t per_r = ceil_div(mr, int64_t(nc));
         p.pl0 = per_r * p.step <= overlay ? 0 : al64(rbytes);
         if (p.sz.fits && p.pl0 + per_r * p.step <= arena && per_x * p.step <= arena) {
@@ -1439,7 +1439,7 @@ PlannerPlace place_planner(
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// routing_paths: head_plan.host_chips / routing_shell + RoutingStream.serve / path / fwd_plan
+// routing_paths: head_plan.host_chips / routing_shell + RoutingStream.serve
 
 namespace head_sizing_detail {
 
@@ -1500,20 +1500,6 @@ std::variant<RoutingPaths, std::string> routing_paths(
         return "the fabric's first hops: " + std::to_string(first_hops.size()) + " entries for " + std::to_string(N) +
                " chips";
     }
-    // A packet's first hop as the fabric routes it (HeadShape.first_hops: asked of the fabric, never derived). The
-    // exchange goes along Y in one fabric send to the destination's row in the source's column, then along X a hop a
-    // relay: the Y leg's way is the fabric's toward that chip, an X relay's the fabric's toward the destination.
-    auto first_hop = [&](int s, int d) {
-        const int sr = s / int(C), sc = s % int(C), dr = d / int(C);
-        const int t = sr != dr ? dr * int(C) + sc : d;
-        const int h = first_hops[size_t(s) * size_t(N) + size_t(t)];
-        if ((sr != dr) != (h >= 2)) {
-            throw SizingError(
-                "the fabric's first hop from chip " + coord_str(sr, sc) + " toward chip " + std::to_string(t) +
-                " is not along the " + (sr != dr ? "Y" : "X") + " axis");
-        }
-        return h;
-    };
     auto xdir = [&](int r, int c) {
         std::map<int, int> out;  // 0 (X+) | 1 (X-) -> the gather's direction toward it
         const auto& rg = chips.at({r, c});
@@ -1526,28 +1512,21 @@ std::variant<RoutingPaths, std::string> routing_paths(
         }
         return out;
     };
-    // [(chip, key)] of the packet s -> d
-    auto path = [&](int s, int d) {
-        std::vector<std::pair<int, SenderKey>> steps;
-        int sr = s / int(C), sc = s % int(C), dr = d / int(C), dc = d % int(C);
-        std::pair<int, int> cur{sr, sc};
-        if (sr != dr) {
-            steps.emplace_back(s, SenderKey{1, first_hop(s, d), 0});
-            cur = {dr, sc};
+    // the sender of chip s's packet to chip d: the one the fabric's first hop from s toward d leaves by
+    // (HeadShape.first_hops: asked of the fabric, never derived) - a Y sender, or the gather's X port that way (link
+    // d % L); one fabric send, the fabric routing every hop to d (head_program.cpp HeadModel::sender: the same)
+    auto sender = [&](int s, int d) {
+        const int h = first_hops[size_t(s) * size_t(N) + size_t(d)];
+        if (h >= 2) {
+            return SenderKey{1, h, 0};
         }
-        while (cur.second != dc) {
-            int ci = cur.first * int(C) + cur.second;
-            int h = first_hop(ci, d);
-            auto xd = xdir(cur.first, cur.second);
-            if (!xd.count(h)) {
-                throw SizingError(
-                    "chip " + coord_str(cur.first, cur.second) + ": no X port toward " + std::to_string(d));
-            }
-            int l = (d % L) < int(links) ? d % L : 0;
-            steps.emplace_back(ci, SenderKey{0, xd[h], l});
-            cur = {cur.first, int(pymod(cur.second + (h == 0 ? 1 : -1), C))};
+        const int r = s / int(C), c = s % int(C);
+        auto xd = xdir(r, c);
+        if (!xd.count(h)) {
+            throw SizingError("chip " + coord_str(r, c) + ": no X port toward " + std::to_string(d));
         }
-        return steps;
+        const int l = (d % L) < int(links) ? d % L : 0;
+        return SenderKey{0, xd[h], l};
     };
     try {
         uint32_t nx = 0, ny = 0, nsend = 0;
@@ -1556,7 +1535,7 @@ std::variant<RoutingPaths, std::string> routing_paths(
             std::map<SenderKey, uint32_t> out;
             for (int dd = 0; dd < N; ++dd) {
                 if (dd != me) {
-                    ++out[path(me, dd)[0].second];
+                    ++out[sender(me, dd)];
                 }
             }
             std::vector<SenderKey> ykeys;
@@ -1576,23 +1555,7 @@ std::variant<RoutingPaths, std::string> routing_paths(
             }
             nsend = std::max<uint32_t>(nsend, out.size());
         }
-        std::map<std::pair<int, SenderKey>, uint32_t> fw;
-        for (int s_ = 0; s_ < N; ++s_) {
-            for (int d = 0; d < N; ++d) {
-                if (d == s_) {
-                    continue;
-                }
-                auto steps = path(s_, d);
-                for (size_t i = 1; i < steps.size(); ++i) {
-                    ++fw[steps[i]];
-                }
-            }
-        }
-        uint32_t nf = 0;
-        for (const auto& [_, n] : fw) {
-            nf = std::max(nf, n);
-        }
-        return RoutingPaths{nx, ny, nf, nsend};
+        return RoutingPaths{nx, ny, nsend};
     } catch (const SizingError& e) {
         return std::string(e.what());
     }

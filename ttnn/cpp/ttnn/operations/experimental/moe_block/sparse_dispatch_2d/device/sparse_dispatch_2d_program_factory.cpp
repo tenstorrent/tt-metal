@@ -184,8 +184,12 @@ tt::tt_metal::WorkloadDescriptor build_workload(
         reader.core_ranges = port_set;
         reader.compile_time_args = reader_ct;
         reader.defines = defines;
+        // (the reader on NOC1, the sender on NOC0: the rows land in `out` through the fabric router's NOC1 DRAM
+        // endpoint, and the reader must read them through the same one - a read through the other NoC's endpoint can
+        // return a slot's previous row after the write's ack, the BH DRAM cross-port stale read. The sender reads no
+        // DRAM; one NOC1 RISC a core)
         reader.config = tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_0};
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
 
         KernelDescriptor sender;
         sender.kernel_source = std::string(KERNEL_DIR) + "sparse_dispatch_2d_port_writer.cpp";
@@ -194,7 +198,7 @@ tt::tt_metal::WorkloadDescriptor build_workload(
         sender.compile_time_args = sender_ct;
         sender.defines = defines;
         sender.config = tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1};
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0};
 
         const auto src_node = node(chip);
         for (const auto& [d, li, core] : mine) {

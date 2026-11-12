@@ -74,11 +74,8 @@ HL_BODY {
     const uint32_t ra0 = lg0 + 3 + 2 * lgns;
     RASend ra;
     ra.init(ra0);
-    const uint32_t rf0 = ra0 + RASend::len(ra0);
-    RAFwd rf;
-    rf.init(rf0);
-    a = rf0 + RAFwd::len(rf0);
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || lgns > 0 || !ra.done || rf.left || NZF ||
+    a = ra0 + RASend::len(ra0);
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || lgns > 0 || !ra.done || NZF ||
         (rzone && zneed)) {
         // (the fabric connection's three values - eth channel, teardown and buffer-index semaphores - from the block)
         auto conn = WorkerToFabricEdmSender::build_from_eth_channel<ProgrammableCoreType::TENSIX>(
@@ -232,7 +229,6 @@ HL_BODY {
             }
 #endif
             ra.poll(conn, rahdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
-            rf.poll(conn, rahdr, false, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);
         };
         for (uint32_t m = 0; m < xg_ne && n > 0; ++m) {
             for (uint32_t k = 0; k < n; ++k) {
@@ -314,7 +310,6 @@ HL_BODY {
         ls.poll(conn, lshdr, true);  // (whatever is left of the logits)
 #endif
         ra.poll(conn, rahdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);  // (the routing)
-        rf.poll(conn, rahdr, true, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);  // (and what passes through)
         noc_async_writes_flushed();
         if (NZF) {
             noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(zfree)), 0u - NZF * zneed);  // (re-arm)
