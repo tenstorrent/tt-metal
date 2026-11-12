@@ -24,8 +24,8 @@ DriscL1Arena::DriscL1Arena(ContextId context_id) {
     unreserved_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     drisc_unreserved_size_ = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const bool has_receiver_zone = hal.has_cce_dram_cores();
-    sender_state_zone_size_ = has_receiver_zone ? kQuasarSenderStateZoneSize : kSenderStateZoneSize;
-    receiver_zone_size_ = has_receiver_zone ? kQuasarReceiverZoneSize : 0;
+    sender_state_zone_size_ = has_receiver_zone ? kCceSenderStateZoneSize : kSenderStateZoneSize;
+    receiver_zone_size_ = has_receiver_zone ? kCceReceiverZoneSize : 0;
     TT_FATAL(
         sender_state_zone_size_ + receiver_zone_size_ < drisc_unreserved_size_,
         "DRISC L1 sender-state zone ({} B) and receiver zone ({} B) must leave room for the above-zone kernel "

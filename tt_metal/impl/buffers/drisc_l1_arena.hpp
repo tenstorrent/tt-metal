@@ -67,7 +67,7 @@ private:
 // The zones are *fixed* so that allocating a sender after such a kernel has
 // started doesn't move the kernel's L1 layout: the kernel sits above them at
 // a stable address. Blackhole has a kSenderStateZoneSize sender-state zone and no
-// receiver zone; Quasar has kQuasarSenderStateZoneSize and kQuasarReceiverZoneSize.
+// receiver zone; CCE DRAM cores have kCceSenderStateZoneSize and kCceReceiverZoneSize.
 //
 // A range is reserved either on every bank (`allocate`, for senders that must
 // sit at one uniform offset) or on a single named DRAM sender core
@@ -89,12 +89,12 @@ public:
     // ~92 KB above the zone is reported by kernel_working_region_size() so
     // callers placing a co-resident DRISC kernel know how much L1 they have.
     //
-    // Quasar: kQuasarSenderStateZoneSize and kQuasarReceiverZoneSize. A GCB with DRAM receivers
+    // CCE DRAM cores: kCceSenderStateZoneSize and kCceReceiverZoneSize. A GCB with DRAM receivers
     // gives each pages_sent and pages_acked counter its own line (dram_receiver_config_page.hpp),
     // and the receiver zone holds those GCBs' receiver config pages and FIFOs.
     static constexpr uint32_t kSenderStateZoneSize = 1 * 1024;
-    static constexpr uint32_t kQuasarSenderStateZoneSize = 16 * 1024;
-    static constexpr uint32_t kQuasarReceiverZoneSize = 1024 * 1024;
+    static constexpr uint32_t kCceSenderStateZoneSize = 16 * 1024;
+    static constexpr uint32_t kCceReceiverZoneSize = 1024 * 1024;
 
     explicit DriscL1Arena(ContextId context_id);
     ~DriscL1Arena() = default;

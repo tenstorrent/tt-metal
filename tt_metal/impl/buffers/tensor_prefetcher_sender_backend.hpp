@@ -85,9 +85,9 @@ enum class LayoutTieBreak : uint8_t {
 TensorPrefetcherLayoutMode detect_layout_mode(
     const MeshTensor& t, const Buffer& buf, uint32_t total_receivers, LayoutTieBreak tie_break);
 
-// What differs between the Blackhole DRISC prefetcher and the Quasar CCE prefetcher: config resolution, the carve,
-// the sender Programs and the transport that feeds them, and the checks on targets and requests. start(), worker_loop()
-// and stop() reach the architecture only through this and that transport.
+// What differs between the Blackhole DRISC prefetcher and the CCE prefetcher: config resolution, the carve, the
+// sender Programs and the transport that feeds them, and the checks on targets and requests. start(), worker_loop()
+// and stop() reach the sender kind only through this and that transport.
 class PrefetcherSenderBackend {
 public:
     // The Programs, one per device and not yet compiled or launched, and the transport that delivers their request

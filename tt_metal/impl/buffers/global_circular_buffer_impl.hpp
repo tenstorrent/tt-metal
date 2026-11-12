@@ -97,8 +97,8 @@ private:
     // Tag for the private experimental DRAM-sender constructor; only the experimental
     // factory (a friend) can name this type. Takes MeshDevice because the DRAM-sender
     // path relies on the per-mesh DriscL1Arena for pages_sent placement.
-    // `receiver_logical_cores_per_sender` lists each sender's receivers in credit-slot order. Worker
-    // receivers are on Blackhole; DRAM receivers (CCEs) on Quasar.
+    // `receiver_logical_cores_per_sender` lists each sender's receivers in credit-slot order;
+    // `receiver_core_type` says whether they are worker cores or DRAM cores (CCEs).
     struct DramSenderTag {};
     GlobalCircularBufferImpl(
         distributed::MeshDevice& mesh_device,

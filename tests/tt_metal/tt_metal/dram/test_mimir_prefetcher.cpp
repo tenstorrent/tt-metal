@@ -228,12 +228,12 @@ experimental::GlobalCircularBuffer expect_dram_receiver_gcb_layout(
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const DriscL1Arena& arena = mesh.impl().drisc_l1_arena();
     const uint64_t unreserved_base = tl1_test_base();
-    EXPECT_EQ(arena.sender_state_zone_size(), DriscL1Arena::kQuasarSenderStateZoneSize);
-    EXPECT_EQ(arena.receiver_zone_base(), unreserved_base + DriscL1Arena::kQuasarSenderStateZoneSize);
-    EXPECT_EQ(arena.receiver_zone_size(), DriscL1Arena::kQuasarReceiverZoneSize);
+    EXPECT_EQ(arena.sender_state_zone_size(), DriscL1Arena::kCceSenderStateZoneSize);
+    EXPECT_EQ(arena.receiver_zone_base(), unreserved_base + DriscL1Arena::kCceSenderStateZoneSize);
+    EXPECT_EQ(arena.receiver_zone_size(), DriscL1Arena::kCceReceiverZoneSize);
     EXPECT_EQ(
         arena.kernel_working_region_base(),
-        unreserved_base + DriscL1Arena::kQuasarSenderStateZoneSize + DriscL1Arena::kQuasarReceiverZoneSize);
+        unreserved_base + DriscL1Arena::kCceSenderStateZoneSize + DriscL1Arena::kCceReceiverZoneSize);
 
     // The mesh is fresh, so this GCB takes the first range of each zone.
     const uint32_t max_receivers = gcb_layout_max_receivers(senders);

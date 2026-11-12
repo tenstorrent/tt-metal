@@ -291,8 +291,8 @@ private:
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
     // primary/secondary role) pair. Every sender core of each provisioned bank is provisioned at
-    // start (two on Blackhole, one on Quasar); each queued GCB may map the primary only or both,
-    // and PREFETCH requests target that subset.
+    // start (two per bank on Blackhole, one where each DRAM view is a CCE); each queued GCB may map
+    // the primary only or both, and PREFETCH requests target that subset.
     // One list covers the whole mesh (see metal_SocDescriptor::dram_bank_endpoint_coords);
     // enumerate_dram_senders TT_FATALs if a device disagrees.
     std::vector<CoreCoord> sender_logical_cores_;

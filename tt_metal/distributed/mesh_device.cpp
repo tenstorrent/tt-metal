@@ -1967,7 +1967,7 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
     if (metal_env().get_hal().has_cce_dram_cores()) {
         TT_THROW(
-            "Quasar DRAM views have no unused subchannel: each view's CCE is its sender, (bank_id, 0). Use "
+            "CCE DRAM views have no unused subchannel: each view's CCE is its sender, (bank_id, 0). Use "
             "dram_sender_logical_cores instead.");
     }
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
