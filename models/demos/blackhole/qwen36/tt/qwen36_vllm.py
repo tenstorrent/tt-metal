@@ -40,12 +40,6 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
         return {"image": 1, "video": 1}
 
 
-class TT_Qwen3_5SpecProcessingInfo(TT_Qwen3_5ProcessingInfo):
-    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        # the spec engine's prefill is text-only: vLLM rejects visual items at admission (HTTP 400)
-        return {"image": 0, "video": 0}
-
-
 class _Qwen36Generator(Generator, SupportsMultiModal):
     """Construction, KV budget, sampling checks and multimodal helpers shared by the Qwen3.6 vLLM classes."""
 
@@ -472,9 +466,6 @@ def _mesh_tp(default=4):
         return default
 
 
-@MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
-)
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Qwen36ForCausalLM with speculative decoding over the MTP drafter head (tt/spec_engine.py MTPBlockEngine), for the
     plugin's spec-decode contract (B * (K+1) <= 32), synchronous scheduling and host acceptance.
@@ -484,10 +475,13 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     row's full state from mamba_state.start_blocks and writes the full state after query token t, recurrent state and
     convolution history, into windows[:, t] (gdn_spec_step on the blocks), and the runner points the next step's
     start_blocks at the block of the count its accept walk committed. An ordinary [B, 1] decode runs as a verify
-    without drafts. Prefill, prefix caching and chunked prefill are Qwen36ForCausalLM's; the drafter's KV cache is
-    model-owned and indexed by the attention block ids (Qwen36Model._allocate_mtp_kv_cache)."""
+    without drafts. Prefill, prefix caching, chunked prefill and the multimodal processor are Qwen36ForCausalLM's; the
+    drafter's KV cache is model-owned and indexed by the attention block ids (Qwen36Model._allocate_mtp_kv_cache).
+    Image and video requests run at any max_num_seqs: the engine keeps the M-RoPE delta of each state slot's request
+    and offsets the RoPE positions of the slot's verify and drafter rows by it."""
 
     _ENABLE_MTP = True
+    _PER_ROW_ROPE_DELTA = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
     # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
@@ -660,8 +654,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         return eng
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
-        if any(self._row_has_visual(kwargs, u) for u in range(tokens.shape[0])):
-            raise ValueError("Qwen36MTPContractForCausalLM is text-only; image/video requests are not supported")
         eng = self._ensure_ready(kv_cache)
         N = tokens.shape[0]
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
@@ -769,7 +761,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         self._engine().release(int(slot))
 
     def note_state_slots_moved(self, moves):
-        """The drafter's per-slot state moved with slot_remap in decode_forward; nothing to do."""
+        """The drafter's per-slot state and the slots' M-RoPE deltas moved with slot_remap in decode_forward (the same
+        move); nothing to do."""
 
     def release_persistent_capture(self):
         logger.info("[spec] release_persistent_capture: start")

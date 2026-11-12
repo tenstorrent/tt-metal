@@ -1221,6 +1221,7 @@ class Qwen36Model:
         page_table,
         sharded_lm_head=False,
         need_logits=True,
+        rope_deltas=None,
     ):
         """One MTP draft step over B rows at absolute ``position``. Builds the partial-RoPE cos/sin
         for the MTP positions (base + rope_delta), then runs the drafter head.
@@ -1232,18 +1233,22 @@ class Qwen36Model:
                         device [B,1] uint32 tensor (on-device draft chaining).
         position      : int (all rows at the same slot) or list[int] of length B (one per user).
         page_table    : device int32 page table [B, nb] for the MTP layer's own KV cache.
+        rope_deltas   : one M-RoPE delta per row (its request's), or None: every row takes rope.rope_delta.
         Returns (logits, next_hidden).
         """
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
         assert self.mtp is not None, "MTP head not built (has_mtp/config?)"
         pos_list = [int(p) for p in position] if isinstance(position, (list, tuple, torch.Tensor)) else [int(position)]
+        deltas = [self.rope.rope_delta] * len(pos_list) if rope_deltas is None else [int(d) for d in rope_deltas]
+        if len(deltas) != len(pos_list):
+            raise ValueError(f"{len(deltas)} M-RoPE deltas for {len(pos_list)} positions")
         cos, sin = rot_mats_decode(
             self.device,
             self.args.rope_head_dim,
             self.args.max_seq_len,
             self.args.rope_theta,
-            torch.tensor([p + self.rope.rope_delta for p in pos_list], dtype=torch.int32),
+            torch.tensor([p + d for p, d in zip(pos_list, deltas)], dtype=torch.int32),
         )
         rep = ttnn.ReplicateTensorToMesh(self.device)
         # A device [B,1] uint32 token_id (on-device draft chaining) is used as is, skipping a host round trip.
@@ -1303,17 +1308,24 @@ class Qwen36Model:
     # _vfy_conv_sel) before the next replay. The recurrent kernel then starts user u from ring
     # block mi_u and the conv1d from window row mi_u, so nothing is copied between iterations.
     # ------------------------------------------------------------------------------------------
-    def _rope_tp_cos_sin_decode_torch(self, positions):
+    def _rope_tp_cos_sin_decode_torch(self, positions, deltas=None):
         """Torch cos/sin [1, B, 1, rope_head_dim] in the DECODE rope layout — one rotation per ROW.
 
         Byte-identical to what prepare_decode_inputs_host builds for a decode step at those positions
         (same inv_freq / outer / cat / bf16 cast). The hybrid verify pushes its candidates through the
         DECODE attention kernel as B pseudo-users, so it needs this per-row table, not the
-        prefill [1,1,S,rd] one."""
+        prefill [1,1,S,rd] one. ``deltas``: one M-RoPE delta per row (its request's), or None: every row takes
+        rope.rope_delta."""
         rd = self.args.rope_head_dim
         pos_vec = positions.to(torch.int32).reshape(-1)
         # RoPE position is the KV position offset by rope_delta (0 for text); same as decode.
-        rope_pos_vec = pos_vec + self.rope.rope_delta
+        if deltas is None:
+            rope_pos_vec = pos_vec + self.rope.rope_delta
+        else:
+            deltas = torch.as_tensor(deltas, dtype=torch.int32).reshape(-1)
+            if deltas.shape != pos_vec.shape:
+                raise ValueError(f"{deltas.numel()} M-RoPE deltas for {pos_vec.numel()} positions")
+            rope_pos_vec = pos_vec + deltas
         B = rope_pos_vec.shape[0]
         inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
         freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2], per-row rotation
@@ -1679,7 +1691,9 @@ class Qwen36Model:
             f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
         )
 
-    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None):
+    def verify_traced(
+        self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None, rope_deltas=None
+    ):
         """Replay the captured verify trace for B users x T candidates.
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
@@ -1701,7 +1715,8 @@ class Qwen36Model:
         (block, 32-row tile) in the same call (block 0 excepted) raises AssertionError before anything is staged.
         The MTP drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
         not touch. ``inactive``: length-B bools; those users are skipped by the KV-write collision check only
-        (their rows write the null block).
+        (their rows write the null block). ``rope_deltas``: B ints, user u's M-RoPE delta for all of its T rows;
+        None: every row takes rope.rope_delta.
 
         ``feed_rows`` is the trace's own output buffer: do not deallocate it, and finish with it
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
@@ -1752,7 +1767,8 @@ class Qwen36Model:
         pos = self._vfy_row_positions(positions)
         _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        row_deltas = None if rope_deltas is None else [int(d) for d in rope_deltas for _ in range(T)]
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos, row_deltas)
         _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
         _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)

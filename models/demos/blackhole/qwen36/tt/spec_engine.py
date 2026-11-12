@@ -455,6 +455,7 @@ class MTPSpecEngine:
         self._feed_dtype = ttnn.bfloat16
         self._scratch_block = None
         self._last_hidden = []  # [B] persistent [1,1,1,dim/tp]: base feed row of slot Tp-1
+        self._rope_deltas = [0] * self.B  # per slot: the M-RoPE delta of its request (0 for text)
         self._last_sel = {}  # bucket -> persistent one-hot selector [1,1,1,bucket]
         self._mtp_pt = None  # persistent [B, nb] MTP page table (draft + batched reseed)
         self._mtp_pt_rows = []  # persistent [1, nb] per user (eager prompt warm / slot Tp-1 write / eager reseed)
@@ -503,6 +504,10 @@ class MTPSpecEngine:
             t.numel() == shape[0] * shape[1] if len(shape) == 2 else t.numel() == shape[0]
         ), f"expected {shape}, got {tuple(t.shape)}"
         return t.reshape(*shape)
+
+    def _row_rope_deltas(self, per_user):
+        """The users' M-RoPE deltas (_rope_deltas) for a user-major block of B * ``per_user`` rows."""
+        return [d for d in self._rope_deltas for _ in range(per_user)]
 
     def _stage(self, host, dev, dtype, layout):
         """Copy a torch tensor into a persistent device tensor (address preserved)."""
@@ -847,6 +852,7 @@ class MTPSpecEngine:
         self._parked.pop(slot, None)
         self._prompts.pop(slot, None)
         self._fresh_dirty.discard(slot)
+        self._rope_deltas[slot] = 0
         reset_draft_skip(self, slot)
         # the leaving request may be why other rows' drafts were withheld: offer them again
         self._no_draft.clear()
@@ -863,6 +869,7 @@ class MTPSpecEngine:
         self._remap_gdn(idx)
         new_of = {old: new for new, old in enumerate(idx)}
         self._last_hidden = [self._last_hidden[j] for j in idx]
+        self._rope_deltas = [self._rope_deltas[j] for j in idx]
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
         self._parked = {new_of[u]: v for u, v in self._parked.items()}
@@ -1338,7 +1345,9 @@ class MTPSpecEngine:
         owned_tok = [tok_tt]
         h = anchor_hidden
         for k in range(self.K):
-            logits, h_next = self.model.ttnn_mtp_decode_forward(h, tok_tt, [pu + k for pu in p], self._mtp_pt)
+            logits, h_next = self.model.ttnn_mtp_decode_forward(
+                h, tok_tt, [pu + k for pu in p], self._mtp_pt, rope_deltas=self._rope_deltas
+            )
             idx = draft_argmax(self.mtp, logits)  # [1,1,B,1] uint32 ROW_MAJOR
             ttnn.deallocate(logits)
             tok_tt = ttnn.reshape(idx, (B, 1))
@@ -1423,7 +1432,7 @@ class MTPSpecEngine:
         stage(anchor_selector(m, B, T), self._anchor_sel, bf, tile)
         plan = reseed_row_plan(ctok, cpos, m if m_kv is None else m_kv, B, T)
         rtok, rpos, rpt = reseed_rows_host(plan, pt, T, self.nb, self._scratch_block)
-        rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos)
+        rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos, self._row_rope_deltas(T))
         stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)
         stage(rpos, self._dr_rs_pos, ttnn.int32, rm)
         stage(rpt, self._dr_rs_pt, ttnn.int32, rm)
@@ -1432,7 +1441,7 @@ class MTPSpecEngine:
         tok0, poss = draft_step_plan(pending, p, K)
         stage(tok0, self._dr_tok0, ttnn.uint32, rm)
         for k, pv in enumerate(poss):
-            c, s = model._rope_tp_cos_sin_decode_torch(pv)
+            c, s = model._rope_tp_cos_sin_decode_torch(pv, self._rope_deltas)
             stage(pv, self._dr_pos[k], ttnn.int32, rm)
             stage(c, self._dr_cos[k], bf, tile)
             stage(s, self._dr_sin[k], bf, tile)
@@ -1471,11 +1480,16 @@ class MTPSpecEngine:
         toks[0, :n] = torch.tensor(prompt_ids[chunk_start + 1 : chunk_start + 1 + n], dtype=torch.int32)
         self.model.ttnn_mtp_prefill_forward(hidden, toks, chunk_start, page_table_torch, valid_len=n)
 
-    def _warm_mtp_last(self, last_hidden, first_tok, slot, page_table_tt):
+    def _warm_mtp_last(self, last_hidden, first_tok, slot, page_table_tt, rope_delta=None):
         """Write the MTP KV of a user's slot Tp-1 from (its feed row, the first generated token); the
-        first draft attends to it."""
+        first draft attends to it. ``rope_delta``: the user's M-RoPE delta (None: rope.rope_delta)."""
         _, h_next = self.model.ttnn_mtp_decode_forward(
-            last_hidden, int(first_tok), slot, page_table_tt, need_logits=False
+            last_hidden,
+            int(first_tok),
+            slot,
+            page_table_tt,
+            need_logits=False,
+            rope_deltas=None if rope_delta is None else [rope_delta],
         )
         ttnn.deallocate(h_next)
 
@@ -1487,7 +1501,12 @@ class MTPSpecEngine:
                 r = u * T + i
                 row = self._eager_row(self._vfeed, r)
                 _, h_next = self.model.ttnn_mtp_decode_forward(
-                    row, tok_row[i], pos_row[i] - 1, self._mtp_pt_rows[u], need_logits=False
+                    row,
+                    tok_row[i],
+                    pos_row[i] - 1,
+                    self._mtp_pt_rows[u],
+                    need_logits=False,
+                    rope_deltas=[self._rope_deltas[u]],
                 )
                 ttnn.deallocate(row)
                 ttnn.deallocate(h_next)
@@ -1533,7 +1552,7 @@ class MTPSpecEngine:
         mesh, rep = self.mesh, ttnn.ReplicateTensorToMesh(self.mesh)
         plan = reseed_row_plan(committed_tokens, committed_positions, m, B, T)
         tok, pos, pt_rows = reseed_rows_host(plan, pt, T, self.nb, self._scratch_block)
-        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos)
+        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos, self._row_rope_deltas(T))
         tok_tt = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
         pos_tt = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
         pt_tt = ttnn.from_torch(pt_rows, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
@@ -1609,7 +1628,8 @@ class MTPBlockEngine(MTPSpecEngine):
     accepted count selects nothing: the runner points the next step's start_blocks at the accepted position's block.
     What remains per state slot is the drafter's: the feed row of a prompt's last token (``_last_hidden``), kept from
     the final prefill chunk to the row's first verify, which writes that position's drafter KV with the first
-    generated token."""
+    generated token, and the M-RoPE delta of the slot's request (``_rope_deltas``, 0 for text), which offsets the
+    RoPE positions of the slot's verify rows and drafter rows."""
 
     def __init__(self, model, batch_size, draft_len):
         super().__init__(model, batch_size, draft_len)
@@ -1674,7 +1694,7 @@ class MTPBlockEngine(MTPSpecEngine):
         (``final``), for the first generated token at the row's first verify, from the feed row kept here. A next chunk
         does not rewrite position end - 1 (its hidden is not kept), nor does a prefix-cache hit at end; the drafter
         then attends to whatever that position's drafter KV holds, which lowers acceptance and never changes the
-        verified tokens."""
+        verified tokens. The prompt's last chunk also keeps the request's M-RoPE delta for the slot."""
         model = self.model
         pt_row = model._fit_spec_page_table(page_table_row, self.nb)
         self._check_scratch(pt_row)
@@ -1687,6 +1707,8 @@ class MTPBlockEngine(MTPSpecEngine):
             self._warm_mtp_chunk(feed, chunk_start, valid_len, prompt, pt_row)
             if final and chunk_start + valid_len >= end:
                 self._capture_last_row(feed, end - 1 - chunk_start, slot)
+                # The prefill staged this row's RoPE table before its first chunk (Qwen36Model._build_request_rope).
+                self._rope_deltas[slot] = int(model.rope.rope_delta)
             if feed is not hidden:
                 ttnn.deallocate(feed)
 
@@ -1746,11 +1768,18 @@ class MTPBlockEngine(MTPSpecEngine):
             for u, n in sorted(fresh.items()):
                 if int(start_pos[u]) != n:
                     raise ValueError(f"slot {u}: first verify at {int(start_pos[u])}, its prompt has {n} tokens")
-                self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), n - 1, self._mtp_pt_rows[u])
+                self._warm_mtp_last(
+                    self._last_hidden[u], int(tokens[u, 0]), n - 1, self._mtp_pt_rows[u], self._rope_deltas[u]
+                )
                 del self._fresh[u]
         self.model.gdn_blocks.set_verify_blocks(mamba_state)
         args = (tokens.tolist(), start_pos.tolist(), [0] * B)
-        kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~active).tolist())
+        kw = dict(
+            read_logits=read_logits,
+            page_tables=vpt,
+            inactive=(~active).tolist(),
+            rope_deltas=list(self._rope_deltas),
+        )
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
