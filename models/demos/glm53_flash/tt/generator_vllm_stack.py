@@ -3,7 +3,8 @@
 """GLM-5.3-Flash on the persistent-stack port (models/autoports/zai_org_glm_5_3_flash/tt: ``StackBackend`` under
 ``Glm53Generator``) for the TT vLLM plugin -- the FIRST adapter: text only, greedy on device (the head's top-1 inside
 the one full-width decode trace), host-sampled rows through full logits, no prefix cache, no multimodal, no speculative
-decode, synchronous scheduling (every decode reloads its inputs).
+decode, synchronous scheduling (every decode reloads its inputs). GLM53_STACK_PREFIX=1 (opt-in) adds vLLM's automatic
+prefix caching from the stack's device snapshot pool (``StackPrefixCache``).
 
 Selected with ``TT_MODEL_CLASS_OVERRIDES="Glm5NextForCausalLM=<ADAPTER_TARGET>,Glm5NextForConditionalGeneration=
 <ADAPTER_TARGET>"``. The plugin opens the mesh BEFORE ``initialize_vllm_model`` (worker.py:274-281) with
@@ -30,7 +31,9 @@ from __future__ import annotations
 import dataclasses
 import os
 import sys
+import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 import torch
@@ -82,6 +85,11 @@ DEVICE_TOP_K = _device_top_k()
 # input work (~3-5 ms per step at ISL 128, py-spy 2026-11-10) overlaps the device step instead of adding to it.
 # GLM53_STACK_ASYNC_DECODE=0: every decode reloads its inputs (no async scheduling)
 ASYNC_DECODE = DEVICE_TOP_K > 1 and os.environ.get("GLM53_STACK_ASYNC_DECODE", "1") == "1"
+# GLM53_STACK_PREFIX=1 (default off): vLLM's automatic prefix caching served from the stack's device snapshot pool
+# (StackPrefixCache) -- the adapter declares supports_prefix_caching and confirms_prefix_cache_hits (the plugin's
+# scheduler trims vLLM's block-hash hit to a position the device holds a snapshot of). Read at import: the plugin
+# reads the capabilities from the class.
+PREFIX_CACHE = os.environ.get("GLM53_STACK_PREFIX", "0") == "1"
 
 
 def _fabric_capability() -> dict | None:
@@ -175,6 +183,194 @@ def _is_host_output(out) -> bool:
     )
 
 
+def resident_blocks(obm, blocks) -> bool:
+    """Whether the logical blocks ``blocks`` (a page-table row's first columns, in column order) hold device content.
+    The sequence-sharded pool (``Glm53Generator.dsa_shard_map``: tt/owner_blocks.py's OwnerBlockMap) keeps a cached
+    block mapped to a physical block of its column's owner chip and evicts the least recently released ones when a chip
+    runs dry: an evicted block has no mapping. On the replicated pool (None) vLLM's cached blocks are always resident.
+    A null / missing entry (<= 0) never is."""
+    for j, b in enumerate(int(v) for v in blocks):
+        if b <= 0:
+            return False
+        if obm is not None:
+            g = obm.physical(b)
+            if g is None or g % obm.C != obm.owner(j):
+                return False
+    return True
+
+
+class StackPrefixCache:
+    """GLM53_STACK_PREFIX=1: the adapter's prefix cache -- tt/prefix_cache.py's ``PrefixStore`` bookkeeping over the
+    backend's device snapshot pool (``GLM53_PREFIX_DEVICE_ENTRIES`` entries, the virtual slots max_batch + k). vLLM
+    shares a cached prefix's latent pages (its block pool; ``Glm53Generator.shared_pages``); the KDA state and the DSA
+    pooled keys / ring are per slot, so a hit needs a snapshot taken exactly at its position:
+      snapshot  a prefill chunk that ends on the grid (the backend's prefill chunk, 8,192 tokens with the TP prefill:
+                vLLM cuts long prompts there, ``prefill_chunk_alignment``) also writes the slot's state into a reserved
+                pool entry inside its prefill trace (``snapshot_after``), registered under the chained hash of tokens
+                [0, end) once the call returned; a prefix registered already is not snapshotted again; the store
+                reuses its least recently used unpinned entry when the pool is full;
+      confirm   (the plugin's scheduler, before it commits vLLM's hit) the longest registered position <= vLLM's
+                proposal whose pages are still resident, else 0; that entry is pinned (never reused) until the
+                request's prefill attaches it;
+      attach    a NEW request admitted at start > 0 (vLLM's num_computed_tokens = the confirmed position) starts from
+                the entry (``prefix_attach``) on vLLM's cached blocks; without an entry at exactly that position or with
+                a block of [0, start) evicted meanwhile it is prefilled from position 0 instead (the plugin passes the
+                whole history; vLLM's accounting is unaffected);
+      release   the request's slot detaches from its entry.
+    ``confirm`` runs on vLLM's scheduler thread, the rest on the worker's: one lock around the store."""
+
+    def __init__(self, gen, kv, max_batch: int):
+        from models.autoports.zai_org_glm_5_3_flash.tt.prefix_cache import BOUNDARY, PrefixStore, signature
+
+        entries = int(getattr(gen.backend, "snapshot_entries", 0) or 0)
+        if entries <= 0:
+            raise ValueError("GLM53_STACK_PREFIX=1 needs the device snapshot pool (GLM53_PREFIX_DEVICE_ENTRIES > 0)")
+        self.gen, self.kv = gen, kv
+        self.store = PrefixStore(
+            max_batch=max_batch,
+            device_entries=entries,
+            boundary=BOUNDARY,
+            sig=signature(model="GLM-5.3-Flash", adapter="stack", max_batch=max_batch),
+        )
+        self.lock = threading.Lock()
+        self.pins: OrderedDict = OrderedDict()  # prompt fingerprint -> the key of the entry its confirmed hit reads
+        self.pin_cap = 4 * int(max_batch)  # hits confirmed but never scheduled (aborted while waiting) expire
+        self._pending: list = []  # the current prefill call's reserved snapshots: (key, n_tokens, pages, entry)
+        self.stats = {
+            k: 0
+            for k in ("confirmed", "confirmed_tokens", "not_resident", "attaches", "fallbacks", "snapshots",
+                      "snapshots_skipped")  # fmt: skip
+        }
+
+    @property
+    def grid(self) -> int:
+        """the snapshot grid: the backend's prefill chunk (the TP prefill's largest bucket: known after the warm-up)"""
+        return int(self.gen.backend.prefill_chunk_tokens)
+
+    # ---- pins: a confirmed hit's entry is never reused before its request's prefill attaches it
+    def _pin(self, fp: int, e) -> None:
+        e.readers += 1
+        self.pins[fp] = e.key
+        while len(self.pins) > self.pin_cap:
+            _, k = self.pins.popitem(last=False)
+            self._unpin(k)
+
+    def _unpin(self, key: str) -> None:
+        e = self.store.entries.get(key)
+        if e is not None and e.readers > 0:
+            e.readers -= 1
+
+    def _take_pin(self, key: str) -> None:
+        fp = next((f for f, k in self.pins.items() if k == key), None)
+        if fp is not None:
+            del self.pins[fp]
+            self._unpin(key)
+
+    # ---- the plugin's hit confirmation (scheduler thread)
+    def confirm(self, prompt_token_ids, mm_items, num_computed_tokens: int) -> int:
+        """the cached tokens the device serves for vLLM's proposed hit of ``num_computed_tokens`` (0: none)"""
+        if int(num_computed_tokens) <= 0 or mm_items:
+            return 0
+        ids = [int(t) for t in prompt_token_ids]
+        fp = hash(tuple(ids))
+        obm = self.gen.dsa_shard_map(self.kv)
+        with self.lock:
+            old = self.pins.pop(fp, None)
+            if old is not None:  # the same prompt confirmed again (the scheduler retries a waiting request)
+                self._unpin(old)
+            cap = int(num_computed_tokens)
+            while cap >= self.store.boundary:
+                pos, e = self.store.longest_cached(ids, max_tokens=cap)
+                if e is None:
+                    break
+                if e.tier == "device" and resident_blocks(obm, e.pages[: -(-pos // BLOCK_SIZE)]):
+                    self._pin(fp, e)
+                    self.stats["confirmed"] += 1
+                    self.stats["confirmed_tokens"] += pos
+                    return pos
+                self.stats["not_resident"] += 1
+                cap = pos - 1  # a shorter registered prefix may still be resident
+        return 0
+
+    # ---- one prefill call (worker thread)
+    def plan(self, tokens: torch.Tensor, rows: torch.Tensor, gslots: list, starts: list, ends: list):
+        """-> (the rows' starts: 0 for a hit that cannot attach; the generator keywords ``prefix_attach`` /
+        ``snapshot_after``). A row at start > 0 in a generator slot that holds no live request is a NEW request vLLM
+        admitted with its first ``start`` tokens cached (a continuation's slot is live). ``tokens`` = every row's
+        history from position 0, ``rows`` = the trimmed page-table rows."""
+        starts = [int(v) for v in starts]
+        attach, snap = {}, {}
+        obm = self.gen.dsa_shard_map(self.kv)
+        live = set(self.gen.live_slots(self.kv))
+        with self.lock:
+            self._pending = []
+            for i, (g, s0) in enumerate(zip(gslots, starts)):
+                if s0 <= 0 or g in live:
+                    continue
+                key = self.store.key(tokens[i, :s0].tolist(), s0) if s0 % self.store.boundary == 0 else None
+                e = self.store.entries.get(key) if key is not None else None
+                if key is not None:
+                    self._take_pin(key)
+                blocks = rows[i, : -(-s0 // BLOCK_SIZE)].tolist()
+                if e is not None and e.tier == "device" and e.n_tokens == s0 and resident_blocks(obm, blocks):
+                    self.store.attach(key, g)
+                    attach[i] = int(e.device_entry)
+                    self.stats["attaches"] += 1
+                    logger.info(
+                        f"GLM53 stack prefix: generator slot {g} attaches snapshot entry {e.device_entry} at {s0}"
+                    )
+                else:
+                    starts[i] = 0
+                    self.stats["fallbacks"] += 1
+                    why = "no snapshot at that position" if e is None else "a cached block was evicted"
+                    logger.warning(f"GLM53 stack prefix: generator slot {g}'s hit at {s0}: {why}, prefilled from 0")
+            planned = set()
+            for i, (s0, end) in enumerate(zip(starts, ends)):
+                end = int(end)
+                if end % self.grid or end % self.store.boundary or end <= s0:
+                    continue
+                key = self.store.key(tokens[i, :end].tolist(), end)
+                if key in self.store.entries or key in planned:
+                    self.stats["snapshots_skipped"] += 1
+                    continue
+                ent = self.store.reserve_device()  # the least recently used unpinned entry when the pool is full
+                if ent is None:
+                    self.stats["snapshots_skipped"] += 1
+                    continue
+                planned.add(key)
+                snap[i] = int(ent)
+                self._pending.append((key, end, rows[i, : -(-end // BLOCK_SIZE)].tolist(), int(ent)))
+        extra = {}
+        if attach:
+            extra["prefix_attach"] = attach
+        if snap:
+            extra["snapshot_after"] = snap
+        return starts, extra
+
+    def commit(self) -> None:
+        """the prefill call returned: its snapshots exist on the device"""
+        with self.lock:
+            for key, n, pages, ent in self._pending:
+                self.store.register(key, n_tokens=n, pages=pages, kind="P", device_entry=ent)
+                self.stats["snapshots"] += 1
+            self._pending = []
+
+    def abort(self) -> None:
+        """the prefill call raised: its reserved entries were never written"""
+        with self.lock:
+            for *_, ent in self._pending:
+                self.store.unreserve(ent)
+            self._pending = []
+
+    def release(self, gslot: int) -> None:
+        with self.lock:
+            self.store.release_slot(int(gslot))
+
+    def report(self) -> dict:
+        with self.lock:
+            return {**self.store.report(), "pins": len(self.pins), **self.stats}
+
+
 class GLM53StackForCausalLM:
     """GLM-5.3-Flash text generation on the persistent stack (one Blackhole Galaxy mesh) for the TT vLLM plugin."""
 
@@ -185,8 +381,9 @@ class GLM53StackForCausalLM:
         # MODEL_CAPABILITIES.md:56-59 scheduling flags: a prompt split across engine steps resumes through the
         # generator's continuation chunks (64-aligned, 128 with the TP prefill's SDPA: ``continuation_align``)
         "supports_chunked_prefill": True,
-        "supports_prefix_caching": False,
-        "confirms_prefix_cache_hits": False,
+        # GLM53_STACK_PREFIX=1: vLLM's prefix cache, its hits confirmed against the device snapshots (StackPrefixCache)
+        "supports_prefix_caching": PREFIX_CACHE,
+        "confirms_prefix_cache_hits": PREFIX_CACHE,
         # MODEL_CAPABILITIES.md:85-91 sampling / async flags: the head's argmax is the only device sampler
         # (``StackBackend(topk=1, sample=False)``), so greedy rows (and top_k == 1) decode on device and every other
         # sampled row goes to the host sampler over full logits; no resident-input chain (every decode reloads)
@@ -222,6 +419,7 @@ class GLM53StackForCausalLM:
         self.kv_cache = None
         self._alias = list(range(self.max_batch))  # plugin slot -> generator slot (identity until the first gather)
         self._chain = []  # generator slots of the last reload step's decode rows: the resident chain's batch
+        self.prefix = None  # GLM53_STACK_PREFIX: the StackPrefixCache of the allocated cache
 
     # ================================================================================= construction
     @classmethod
@@ -333,6 +531,10 @@ class GLM53StackForCausalLM:
         )
         self._alias = list(range(self.max_batch))  # a fresh cache: every generator slot is free
         self._chain = []
+        self.prefix = None
+        if PREFIX_CACHE:  # live requests may share the fully computed pages of a cached prefix (read-only)
+            self.prefix = StackPrefixCache(self.gen, self.kv_cache, self.max_batch)
+            self.gen.shared_pages = True
         return self.kv_cache
 
     def _kv(self, kv_cache):
@@ -430,15 +632,31 @@ class GLM53StackForCausalLM:
                     f"prefill rows {bad} are sampled (temperature > 0 without top_k 1): the stack samples greedily on "
                     "device only; the plugin routes such rows to host sampling under max_device_top_k=1"
                 )
-        out = self.gen.prefill_forward(
-            chunk,
-            page_table=rows,
-            kv_cache=kv,
-            prompt_lens=lens,
-            empty_slots=self._admit(kv, slots, starts),
-            start_pos=starts,
-            sampling_params=params,
-        )
+        gslots = self._admit(kv, slots, starts)
+        extra = {}
+        if self.prefix is not None:  # GLM53_STACK_PREFIX: attach confirmed hits, snapshot the on-grid chunk ends
+            starts, extra = self.prefix.plan(tokens, rows, gslots, starts, ends)
+            lens = [e - s for s, e in zip(starts, ends)]
+            chunk = torch.zeros(B, max(lens), dtype=torch.int64)
+            for i in range(B):
+                chunk[i, : lens[i]] = tokens[i, starts[i] : ends[i]].to(torch.int64)
+        try:
+            out = self.gen.prefill_forward(
+                chunk,
+                page_table=rows,
+                kv_cache=kv,
+                prompt_lens=lens,
+                empty_slots=gslots,
+                start_pos=starts,
+                sampling_params=params,
+                **extra,
+            )
+        except Exception:
+            if self.prefix is not None:
+                self.prefix.abort()
+            raise
+        if self.prefix is not None:
+            self.prefix.commit()
         if params is not None:
             return out.reshape(B, 1).to(torch.int32), None
         return out.reshape(B, 1, -1).float()
@@ -614,9 +832,10 @@ class GLM53StackForCausalLM:
         alias, taken = list(self._alias), set(live)
         for s, start in zip(slots, starts):
             g = alias[s]
-            if (
-                start > 0
-            ):  # a continuation: its request already holds this generator slot (its first chunk made it live)
+            # a continuation: its request already holds this generator slot (its first chunk made it live); with the
+            # prefix cache a start > 0 in a slot without a live request is a NEW request vLLM admitted with its first
+            # `start` tokens cached (StackPrefixCache.plan attaches it), admitted like a first chunk below
+            if start > 0 and (self.prefix is None or g in live):
                 if g not in live:
                     raise RuntimeError(
                         f"prefill continuation at {start} in plugin slot {s}: generator slot {g} holds no live request "
@@ -681,7 +900,19 @@ class GLM53StackForCausalLM:
             raise RuntimeError("release_request before allocate_kv_cache")
         if not 0 <= int(slot) < self.max_batch:
             raise ValueError(f"release_request({slot}) outside the {self.max_batch} slots")
-        self.gen.release_slot(self.kv_cache, self._alias[int(slot)])
+        g = self._alias[int(slot)]
+        self.gen.release_slot(self.kv_cache, g)
+        if self.prefix is not None:  # its prefix-cache entry loses a reader
+            self.prefix.release(g)
+
+    def confirm_prefix_cache_hit(self, prompt_token_ids, mm_items=(), num_computed_tokens: int = 0) -> int:
+        """vllm-tt-plugin's hit confirmation (``confirms_prefix_cache_hits``; scheduler.py ``_confirmed_computed_blocks``,
+        called on vLLM's scheduler thread before the hit is committed): the cached tokens the device serves for vLLM's
+        proposed hit of ``num_computed_tokens`` -- the longest snapshot position at or below it whose pages are still
+        resident (``StackPrefixCache.confirm``) -- or 0 (no prefix cache, a multimodal prompt, nothing resident)."""
+        if self.prefix is None:
+            return 0
+        return self.prefix.confirm(prompt_token_ids, mm_items, num_computed_tokens)
 
     def note_state_slots_moved(self, moves) -> None:
         """model_runner.py:282 / MODEL_CAPABILITIES.md:73-75: the plugin's ``old -> new`` notification of the gather

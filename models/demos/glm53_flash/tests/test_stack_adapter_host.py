@@ -10,7 +10,10 @@ block), chunked prefill (intermediate chunk host-routed, the continuation sliced
 between two chunks, releases, the condensing slot remaps the plugin builds after a finish -- absorbed into the
 adapter's plugin-slot -> generator-slot alias, so no state moves: a 2-cycle through the freed slot, a 3-chain and a
 4-cycle over a full batch (every slot live: what the generator's ``remap_slots`` refuses) -- the lowest-free admission,
-the host-sampled logits route, the async read, the teardown hooks and the refusals.
+the host-sampled logits route, the async read, the teardown hooks and the refusals. GLM53_STACK_PREFIX (the prefix
+cache, ``StackPrefixCache``) on a mock with the device side of the snapshot pool and the sequence-sharded pool's owner
+blocks: snapshots at the on-grid chunk ends, the hit confirmation, the attach of a new request admitted at start > 0
+on shared pages, the release, the LRU reuse of unpinned entries, and the fallbacks to a prefill from 0.
 
     PYTHONPATH=<worktree> <tt-metal>/python_env/bin/pytest --noconftest -p no:cacheprovider -q \\
         models/demos/glm53_flash/tests/test_stack_adapter_host.py
@@ -37,6 +40,7 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     ModelBackend,
     PendingTokens,
 )
+from models.autoports.zai_org_glm_5_3_flash.tt.owner_blocks import OwnerBlockMap
 from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
 from models.demos.glm53_flash.tt import generator_vllm_stack as gvs
 from models.demos.glm53_flash.tt.generator_vllm_stack import (
@@ -874,3 +878,204 @@ def test_resident_chain_decode_follows_the_reload_steps():
             slot_remap=torch.tensor(remap),
             reload_inputs=False,
         )
+
+
+# ------------------------------------------------------------------------------------------ the prefix cache
+class _MockPrefixBackend(_MockStackBackend):
+    """+ the prefix cache's device side: a snapshot pool of ``snapshot_entries`` virtual slots (max_batch + k) read /
+    written inside the prefill "trace" (``prefill_state_io``: state_src before the chunk, state_snap after it), the
+    sequence-sharded pool's owner-aware blocks (``dsa_shard_owners`` -> the generator's OwnerBlockMap) and page
+    contents: every chunk / decode step writes its tokens into the physical pages of its row and first asserts that the
+    pages of its context hold exactly the tokens its state consumed (a wrong shared page, an attach from the wrong
+    entry or a block evicted under a hit shows)."""
+
+    snapshot_entries = 3
+    prefill_state_io = True
+    C = 4
+
+    def __init__(self, max_batch: int):
+        super().__init__(max_batch)
+        self.state_io: list = []  # (slot, chunk_start, state_src, state_snap) of every chunk
+
+    def dsa_shard_owners(self, kv):
+        return (self.C, OwnerBlockMap.local_blocks_for(self.C, kv.num_blocks, self.max_batch, 2), 2)
+
+    @staticmethod
+    def _page_check(kv, slot: int, n: int):
+        row, pages = kv.page_table_host[slot], kv.__dict__.setdefault("pages", {})
+        got = [pages.get((int(row[p // BLOCK_SIZE]), p % BLOCK_SIZE)) for p in range(n)]
+        assert got == kv.state[slot][:n], f"slot {slot}: its pages do not hold the {n} tokens of its state"
+
+    @staticmethod
+    def _page_write(kv, slot: int, start: int, toks):
+        row, pages = kv.page_table_host[slot], kv.__dict__.setdefault("pages", {})
+        for k, t in enumerate(toks):
+            pages[(int(row[(start + k) // BLOCK_SIZE]), (start + k) % BLOCK_SIZE)] = int(t)
+
+    def prefill_chunk(self, tokens, *, kv_cache, slot, chunk_start, n_valid, logits_rows, sample=None, io=None,
+                      state_src=None, state_snap=None, **kw):  # fmt: skip
+        self.state_io.append((slot, chunk_start, state_src, state_snap))
+        if state_src is not None:  # a fresh request attaching at chunk_start: the entry's state starts the chunk
+            assert chunk_start > 0
+            kv_cache.state[slot] = list(kv_cache.state[self.max_batch + state_src])
+        if chunk_start:
+            self._page_check(kv_cache, slot, chunk_start)
+        out = super().prefill_chunk(tokens, kv_cache=kv_cache, slot=slot, chunk_start=chunk_start, n_valid=n_valid,
+                                    logits_rows=logits_rows, sample=sample, io=io)  # fmt: skip
+        self._page_write(kv_cache, slot, chunk_start, tokens[:n_valid].tolist())
+        if state_snap is not None:
+            kv_cache.state[self.max_batch + state_snap] = list(kv_cache.state[slot])
+        return out
+
+    def decode(self, io, kv, width):
+        for s in range(self.max_batch):
+            p = int(io.cur_pos.t[s])
+            if p >= 0:
+                self._page_check(kv, s, p)
+                self._page_write(kv, s, p, [int(io.tokens.t[s])])
+        super().decode(io, kv, width)
+
+
+def _prefix_adapter(monkeypatch):
+    """the adapter under GLM53_STACK_PREFIX=1 (read at import: the module flag) on the prefix-capable mock"""
+    monkeypatch.setattr(gvs, "PREFIX_CACHE", True)
+    backend = _MockPrefixBackend(B)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    assert ad.prefix is not None and gen.shared_pages and gen.dsa_shard_map(kv) is not None
+    assert ad.prefix.grid == 128 and ad.prefix.store.device_entries == 3
+    return ad, backend, gen, kv
+
+
+def _prefill_steps(ad, kv, prompt: list, row: list, slot: int, ends: list):
+    """one prompt through the engine steps that end at ``ends`` (the plugin's chunked prefill: intermediate chunks
+    host-routed, the last sampled on device) -> the first token"""
+    start = 0
+    for end in ends:
+        last = end == len(prompt)
+        out = ad.prefill_forward(_history([prompt[:end]]), page_table=_table([row[: -(-end // BLOCK_SIZE)]], 1),
+                                 kv_cache=kv, prompt_lens=[end], start_pos=[start], empty_slots=[slot],
+                                 sampling_params=_greedy(1) if last else None)  # fmt: skip
+        start = end
+    return int(out[0][0, 0])
+
+
+def test_prefix_cache_snapshot_confirm_attach_release(monkeypatch):
+    """GLM53_STACK_PREFIX: prompt A (a 256-token document + its question) in three engine steps snapshots its state at
+    the on-grid chunk ends 128 / 256 (inside the prefill: snapshot_after); after A finished, the scheduler's
+    confirmation answers B's proposed hits (B = the document + another question) with the longest resident snapshot
+    and pins it; B's prefill at start 256 in a free plugin slot is admitted as a NEW request (the lowest free generator
+    slot), attaches the entry (prefix_attach) on A's cached blocks and prefills only its suffix; B and the cold B
+    decode alike; B's release detaches; an identical resend of A attaches too."""
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch)
+    pc = ad.prefix
+    doc = _prompt(256, 5)
+    a, b = doc + _prompt(40, 50), doc + _prompt(30, 20)
+    row_a = _blocks(0, len(a))
+    first_a = _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])
+    assert backend.state_io == [(0, 0, None, 0), (0, 128, None, 1), (0, 256, None, None)]
+    assert pc.stats["snapshots"] == 2 and sorted(e.n_tokens for e in pc.store.entries.values()) == [128, 256]
+    key256 = pc.store.key(a, 256)
+    e256 = pc.store.entries[key256]
+    assert e256.device_entry == 1 and list(e256.pages) == row_a[:4] and kv.state[B + 1] == doc
+    ad.release_request(0)  # A finished: its blocks stay mapped (cached), its snapshots stay registered
+    assert gen.live_slots(kv) == [] and pc.store.attached == {}
+    # ---- the scheduler's confirmation of vLLM's proposed hits for B
+    assert ad.confirm_prefix_cache_hit(b, [], 255) == 128  # below 256: the 128 snapshot
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256  # the same prompt confirmed again: one pin, moved
+    assert e256.readers == 1 and pc.store.entries[pc.store.key(a, 128)].readers == 0 and len(pc.pins) == 1
+    assert ad.confirm_prefix_cache_hit(b, [], 0) == 0 and ad.confirm_prefix_cache_hit(b, [], 64) == 0
+    assert ad.confirm_prefix_cache_hit(b, [("img", 3, 4, "image")], 256) == 0  # text only
+    assert ad.confirm_prefix_cache_hit(_prompt(300, 33), [], 256) == 0  # another prefix
+    # ---- B: admitted at 256 in plugin slot 2 (vLLM's cached blocks first in its row) -> generator slot 0
+    row_b = row_a[:4] + _blocks(1, len(b))[4:]
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[2], sampling_params=_greedy(1))  # fmt: skip
+    gb = ad._alias[2]
+    assert gb == 0 and ad._alias == [2, 1, 0, 3]  # the lowest free generator slot, as a first chunk takes
+    assert backend.state_io[-1] == (gb, 256, 1, None)  # the suffix only, from entry 1
+    assert kv.state[gb] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
+    assert pc.store.attached == {gb: key256} and e256.readers == 1 and not pc.pins and pc.stats["attaches"] == 1
+    assert gen.counters["prefix_attaches"] == 1
+    # ---- B cold (plugin slot 1, its own blocks), then both decode: the same tokens, each on its own pages
+    row_c = _blocks(2, len(b))
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_c], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[0], empty_slots=[1], sampling_params=_greedy(1))  # fmt: skip
+    gc = ad._alias[1]
+    assert int(out[0][0, 0]) == (b[-1] + 1) % VOCAB and kv.state[gc] == b
+    cur, pos = [int(out[0][0, 0])] * 2, len(b)
+    for _ in range(3):
+        got = ad.process_decode_output_host(_decode(ad, kv, [0, cur[0], cur[1], 0], [-1, pos, pos, -1],
+                                                    [[], row_c, row_b]), is_tokens=True).reshape(-1).tolist()  # fmt: skip
+        assert got[1] == got[2] == (cur[0] + 1) % VOCAB
+        cur, pos = [got[1], got[2]], pos + 1
+    assert kv.state[gb] == kv.state[gc]
+    # ---- B finishes: its slot detaches from the entry
+    ad.release_request(2)
+    assert pc.store.attached == {} and e256.readers == 0
+    # ---- an identical resend of A: vLLM proposes its 4 full cached blocks, the snapshot at 256 serves them
+    assert ad.confirm_prefix_cache_hit(a, [], 256) == 256
+    free = [p for p in range(B) if ad._alias[p] not in gen.live_slots(kv)][0]
+    out = ad.prefill_forward(_history([a]), page_table=_table([row_a[:4] + _blocks(3, len(a))[4:]], 1), kv_cache=kv,
+                             prompt_lens=[len(a)], start_pos=[256], empty_slots=[free], sampling_params=_greedy(1))  # fmt: skip
+    assert int(out[0][0, 0]) == first_a and backend.state_io[-1][1:3] == (256, 1)
+    assert pc.stats["attaches"] == 2 and pc.stats["fallbacks"] == 0
+    assert pc.report()["hits"] == 2
+
+
+def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
+    """A confirmed (pinned) entry survives the LRU reuse of the pool by another prompt's snapshots and is attached
+    after it; a snapshot whose pages lost a block (the owner pool evicted it) is not confirmed -- a shorter resident
+    one is, else none; a block evicted between the confirmation and the prefill, or a hit at a position without a
+    snapshot, prefills the request from position 0 instead (the plugin passes the whole history)."""
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch)
+    pc, obm = ad.prefix, gen.dsa_shard_map(kv)
+    doc = _prompt(256, 5)
+    a, b = doc + _prompt(40, 50), doc + _prompt(30, 20)
+    row_a = _blocks(0, len(a))
+    _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])
+    ad.release_request(0)
+    key128, key256 = pc.store.key(a, 128), pc.store.key(a, 256)
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256  # pinned until B's prefill
+    # ---- prompt C (384 tokens of another document) snapshots at 128 / 256 / 384 with one free entry of three: the
+    #      least recently used UNPINNED entries are reused (A's 128, then C's own 128); A's pinned 256 survives
+    c = _prompt(384, 9) + _prompt(10, 33)
+    row_c = _blocks(1, len(c))
+    _prefill_steps(ad, kv, c, row_c, slot=1, ends=[128, 256, 384, len(c)])
+    assert [r[3] for r in backend.state_io[-4:]] == [2, 0, 2, None]
+    assert key128 not in pc.store.entries and key256 in pc.store.entries and pc.stats["snapshots"] == 5
+    row_b = row_a[:4] + _blocks(2, len(b))[4:]
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[0]
+    assert backend.state_io[-1] == (g, 256, 1, None) and kv.state[g] == b  # entry 1 was never overwritten
+    assert int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
+    ad.release_request(0)
+    ad.release_request(1)
+    # ---- residency: C's 384 snapshot loses a block of [256, 384) -> the 256 one is confirmed; then nothing
+    c2 = c[:384] + _prompt(20, 40)
+    assert ad.confirm_prefix_cache_hit(c2, [], 384) == 384
+    obm.forget(row_c[5])  # the owner pool evicts a released block (OwnerBlockMap: least recently released first)
+    assert ad.confirm_prefix_cache_hit(c2, [], 384) == 256 and pc.stats["not_resident"] == 1
+    obm.forget(row_c[0])
+    assert ad.confirm_prefix_cache_hit(c2, [], 384) == 0 and not pc.pins  # (the 256 answer's pin dropped)
+    # ---- the race: B confirmed while A's blocks are resident, one evicted before its prefill -> from 0, correct
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256
+    obm.forget(row_a[1])
+    n = len(backend.state_io)
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[2], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[2]
+    assert [r[1:3] for r in backend.state_io[n:]] == [(0, None), (128, None), (256, None)]  # no attach
+    assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB and obm.physical(row_a[1]) is not None
+    assert pc.stats["fallbacks"] == 1 and not pc.pins and pc.store.entries[key256].readers == 0
+    assert pc.store.attached == {}  # nothing to detach at its release
+    ad.release_request(2)
+    # ---- a hit at a position without a snapshot (192: vLLM's proposal not trimmed by this cache) -> from 0
+    n = len(backend.state_io)
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[192], empty_slots=[3], sampling_params=_greedy(1))  # fmt: skip
+    assert backend.state_io[n][1:3] == (0, None) and kv.state[ad._alias[3]] == b and pc.stats["fallbacks"] == 2
