@@ -235,11 +235,17 @@ class Qwen36DecoderLayer:
         gdn_capture_state=True,
         gdn_carry_state=True,
         sp=None,
+        gdn_checkpoint=None,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
+        # gdn_checkpoint: a gdn.tp.PrefillCheckpoint for the TP single-sequence GDN prefill (forward_prefill).
+        if gdn_checkpoint is not None and (
+            self.is_full_attention or self.num_devices < 2 or mode != "prefill" or gdn_recurrent or gdn_collect
+        ):
+            raise ValueError("gdn_checkpoint needs a GDN layer in a TP single-sequence prefill")
         # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
         # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
         # until capture_verify_trace allocates them.
@@ -356,6 +362,7 @@ class Qwen36DecoderLayer:
                             capture_state=gdn_capture_state,
                             carry_state=gdn_carry_state,
                             sp=sp,
+                            checkpoint=gdn_checkpoint,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)

@@ -385,6 +385,39 @@ def _decode_step_weights(mesh, sd, P, taps, dims, tp):
     }
 
 
+class PrefillCheckpoint:
+    """Device constants with which every GDN layer of one prefill forward over T token rows also computes its state
+    after the first ``length`` tokens (TPGatedDeltaNet.forward_prefill ``checkpoint``). One instance serves all layers
+    of the forward; the caller frees it.
+
+    gate_mask [1, T, 1] float32 is 1 for the first ``length`` rows and 0 after them. beta and g times this mask make
+    every later token an identity state update, so chunk_gated_delta_rule's final state is the state after ``length``
+    tokens: the masking that chunk_gated_delta_rule_fused_adapter applies past valid_len.
+    conv_select [1, K - 1, T] bfloat16 is one-hot on input rows length - K + 1 .. length - 1, the convolution history
+    after ``length`` tokens."""
+
+    def __init__(self, mesh, T, length, kconv):
+        if not kconv - 1 <= length < T:
+            raise ValueError(f"a prefill checkpoint after {length} of {T} token rows needs {kconv - 1} <= length < {T}")
+        self.length = int(length)
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+        mask = torch.zeros(1, T, 1, dtype=torch.float32)
+        mask[:, :length] = 1.0
+        self.gate_mask = ttnn.from_torch(
+            mask, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        taps = torch.arange(kconv - 1)
+        sel = torch.zeros(1, kconv - 1, T, dtype=torch.bfloat16)
+        sel[0, taps, length - (kconv - 1) + taps] = 1.0
+        self.conv_select = ttnn.from_torch(
+            sel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+
+    def free(self):
+        ttnn.deallocate(self.gate_mask)
+        ttnn.deallocate(self.conv_select)
+
+
 class TPGatedDeltaNet:
     """Standalone TP GDN decode (per-device value-head recurrence + all-reduce)."""
 
@@ -493,6 +526,26 @@ class TPGatedDeltaNet:
         self._zero_rec = None
         self._zero_rec_f32 = None  # batch-1 zero initial state for carry_state=False prefill (_ensure_zero_rec_f32)
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
+        # (recurrent state, conv history) after PrefillCheckpoint.length tokens of the last forward_prefill that had a
+        # checkpoint, until take_prefill_checkpoint hands them over.
+        self.prefill_checkpoint = None
+
+    def take_prefill_checkpoint(self):
+        """(recurrent state [1, Nv, Dk, Dv] float32, conv history [1, K - 1, qkv_dim_tp] bfloat16) that the last
+        forward_prefill with a ``checkpoint`` computed. The caller owns and frees them."""
+        ck = self.prefill_checkpoint
+        if ck is None:
+            raise ValueError(
+                "this GDN layer holds no prefill checkpoint: no prefill forward computed one since the last take"
+            )
+        self.prefill_checkpoint = None
+        return ck
+
+    def _keep_prefill_checkpoint(self, rec, conv):
+        if self.prefill_checkpoint is not None:
+            for t in self.prefill_checkpoint:
+                ttnn.deallocate(t)
+        self.prefill_checkpoint = (rec, conv)
 
     def _release_spec_bufs(self):
         """Free the batched spec-verify buffers and forget their shape (prepare_spec_verify reallocs)."""
@@ -816,7 +869,15 @@ class TPGatedDeltaNet:
         return qkv, z, a, b
 
     def forward_prefill(
-        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, carry_state=True, sp=None
+        self,
+        x,
+        chunk_size=128,
+        valid_len=None,
+        capture_state=False,
+        return_state=False,
+        carry_state=True,
+        sp=None,
+        checkpoint=None,
     ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
@@ -832,11 +893,21 @@ class TPGatedDeltaNet:
         sp: tt/sp.py SeqParallel: x holds this mesh row's T tokens of a sequence split over the rows. The conv takes its
         history from the previous row and the recurrence entry state is chained over the rows (from zero state, single
         pass: needs carry_state=False, valid_len=None and the kda-conv / head-major-out / flat-qkv paths).
+        checkpoint: a PrefillCheckpoint; the forward also computes the state after its first checkpoint.length tokens
+        into ``prefill_checkpoint`` (carried single-sequence prefill only), with one more chunk_gated_delta_rule call.
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         T = x.shape[1]
+        if checkpoint is not None:
+            real = T if valid_len is None else valid_len
+            if sp is not None or return_state or not carry_state or not 0 < checkpoint.length < real:
+                raise ValueError(
+                    f"a prefill checkpoint after {checkpoint.length} tokens needs a carried single-sequence prefill "
+                    f"of more tokens (got {real} real tokens, sp={sp is not None}, return_state={return_state}, "
+                    f"carry_state={carry_state})"
+                )
         if sp is not None:
             assert not carry_state and valid_len is None, "sequence parallelism is a from-zero-state single pass"
             assert self._gdn_kda_conv and self._gdn_fuse_out and self._gdn_flat_qkv, "sp needs kda conv + flat-qkv"
@@ -867,6 +938,15 @@ class TPGatedDeltaNet:
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
+        if checkpoint is not None:
+            # Every checkpoint is at least K - 1 tokens into this forward, so its history rows are all in qkv.
+            ck_conv = ttnn.matmul(
+                checkpoint.conv_select,
+                qkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self._cfg_onehot,
+            )
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
@@ -953,6 +1033,29 @@ class TPGatedDeltaNet:
             if _use_fused
             else {}
         )
+        if checkpoint is not None:
+            # The main call's q, k, v and initial state, with every token from checkpoint.length on an identity update.
+            _dram = ttnn.DRAM_MEMORY_CONFIG
+            ck_beta = ttnn.multiply(beta, checkpoint.gate_mask, memory_config=_dram)
+            ck_g = ttnn.multiply(g, checkpoint.gate_mask, memory_config=_dram)
+            ck_o, ck_rec = _delta_fn(
+                q,
+                k,
+                v,
+                ck_beta,
+                ck_g,
+                chunk_size=chunk_size,
+                scale=self.scale,
+                initial_state=_init_state,
+                device=self.mesh,
+                cached_masks=self.chunk_seq_masks,
+                qkv_head_dims=_delta_head_dims,
+                return_o_bh=self._gdn_fuse_out,
+                **_extra,
+            )
+            for t in (ck_o, ck_beta, ck_g):
+                ttnn.deallocate(t)
+            self._keep_prefill_checkpoint(ck_rec, ck_conv)
         o, final_state = _delta_fn(
             q,
             k,

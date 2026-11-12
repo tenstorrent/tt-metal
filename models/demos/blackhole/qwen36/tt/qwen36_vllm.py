@@ -296,8 +296,10 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         At start_pos 0 the row starts from zero state. Otherwise it continues from the full state of its start blocks
         (mamba_state.start_blocks: a later chunk of the prompt, or a prefix-cache hit in mamba_cache_mode "align"),
         attending over the KV cache that its page table holds for the earlier tokens; the start blocks are only read.
-        When the row has a prefill checkpoint after p tokens, the prefill stops after token p, writes the workspace
-        into the checkpoint blocks and continues. Returns host logits [N, 1, vocab] at each row's last token."""
+        When the row has a prefill checkpoint after p tokens, the forward of the prefill's last chunk also computes
+        the state after p tokens when p is inside that chunk; otherwise the prefill stops after token p and continues
+        (gdn_block_state.prefill_segments). Either way the checkpoint blocks get that state. Returns host logits
+        [N, 1, vocab] at each row's last token."""
         from models.demos.blackhole.qwen36.tt.gdn_block_state import row_blocks
 
         model = self.model[0]
@@ -332,7 +334,7 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                 # An image's M-RoPE positions need all of its tokens, and a checkpoint can split an image.
                 extra["rope_token_ids"] = tokens[u : u + 1, :T]
             logits = None
-            for a, b in segments:
+            for a, b, checkpoint_pos in segments:
                 if logits is not None:
                     ttnn.deallocate(logits)
                     blocks.write_state(mamba_state, rb.checkpoint)
@@ -344,7 +346,10 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                     vision_tokens=vision_tokens,
                     start_pos=a,
                     **extra,
+                    **({"checkpoint_pos": checkpoint_pos} if checkpoint_pos else {}),
                 )
+                if checkpoint_pos:
+                    blocks.write_checkpoint(mamba_state, rb.checkpoint)
             rows.append(ttnn.to_torch(logits, mesh_composer=comp).reshape(-1, model.args.vocab_size)[:1].float())
             ttnn.deallocate(logits)
             blocks.write_state(mamba_state, rb.dest)
@@ -370,7 +375,7 @@ class Qwen36ForCausalLM(_Qwen36Generator):
             raise ValueError(f"a prefill row at start_pos {start} has the start blocks {rb.start}")
         if rb.checkpoint_pos and rb.checkpoint_pos <= start:
             raise ValueError(f"this prefill row cannot write the prefill checkpoint after {rb.checkpoint_pos} tokens")
-        return prefill_segments(start, end, rb.checkpoint_pos, block_size)
+        return prefill_segments(start, end, rb.checkpoint_pos, block_size, self.model[0].prefill_chunk_size)
 
     def decode_forward(self, *args, **kwargs):
         args = list(args)
