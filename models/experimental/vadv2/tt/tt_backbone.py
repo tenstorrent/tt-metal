@@ -21,56 +21,32 @@ class TtResnet50:
         )
 
         # Layer 1, at the highest resolution: its circular buffers with float32 accumulation do not fit L1.
-        self.layer1_0 = TtBottleneck(
-            conv_args.layer1[0],
-            conv_pth.layer1_0,
-            device=self.device,
-            is_downsample=True,
-            fp32_dest_acc=False,
-        )
-        self.layer1_1 = TtBottleneck(conv_args.layer1[1], conv_pth.layer1_1, device=self.device, fp32_dest_acc=False)
-        self.layer1_2 = TtBottleneck(conv_args.layer1[2], conv_pth.layer1_2, device=self.device, fp32_dest_acc=False)
-
-        # Layer 2
-        self.layer2_0 = TtBottleneck(
-            conv_args.layer2[0],
-            conv_pth.layer2_0,
-            device=self.device,
-            is_downsample=True,
-            blk_sharded=True,
-            activation_dtype=ttnn.bfloat8_b,
-        )
-        self.layer2_1 = TtBottleneck(conv_args.layer2[1], conv_pth.layer2_1, device=self.device)
-        self.layer2_2 = TtBottleneck(conv_args.layer2[2], conv_pth.layer2_2, device=self.device)
-        self.layer2_3 = TtBottleneck(conv_args.layer2[3], conv_pth.layer2_3, device=self.device)
-
-        # Layer 3
-        self.layer3_0 = TtBottleneck(
-            conv_args.layer3[0],
-            conv_pth.layer3_0,
-            device=self.device,
-            is_downsample=True,
-            blk_sharded=True,
-            activation_dtype=ttnn.bfloat8_b,
-        )
-        self.layer3_1 = TtBottleneck(conv_args.layer3[1], conv_pth.layer3_1, device=self.device)
-        self.layer3_2 = TtBottleneck(conv_args.layer3[2], conv_pth.layer3_2, device=self.device)
-        self.layer3_3 = TtBottleneck(conv_args.layer3[3], conv_pth.layer3_3, device=self.device)
-        self.layer3_4 = TtBottleneck(conv_args.layer3[4], conv_pth.layer3_4, device=self.device)
-        self.layer3_5 = TtBottleneck(conv_args.layer3[5], conv_pth.layer3_5, device=self.device)
-
-        # Layer 4
-        self.layer4_0 = TtBottleneck(
-            conv_args.layer4[0],
-            conv_pth.layer4_0,
-            device=self.device,
-            is_downsample=True,
-            blk_sharded=True,
-            activation_dtype=ttnn.bfloat8_b,
-            conv3_blk_sharded=True,
-        )
-        self.layer4_1 = TtBottleneck(conv_args.layer4[1], conv_pth.layer4_1, device=self.device, conv3_blk_sharded=True)
-        self.layer4_2 = TtBottleneck(conv_args.layer4[2], conv_pth.layer4_2, device=self.device, conv3_blk_sharded=True)
+        # Each stage's first block strides and projects the shortcut; the remaining blocks repeat, and
+        # their count follows the reference model's.
+        stage_options = {
+            1: ({"fp32_dest_acc": False}, {"fp32_dest_acc": False}),
+            2: ({"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b}, {}),
+            3: ({"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b}, {}),
+            4: (
+                {"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b, "conv3_blk_sharded": True},
+                {"conv3_blk_sharded": True},
+            ),
+        }
+        self.stages = []
+        for stage, (first_options, repeat_options) in stage_options.items():
+            blocks_args = getattr(conv_args, f"layer{stage}")
+            num_blocks = sum(1 for name in conv_pth if name.startswith(f"layer{stage}_"))
+            self.stages.append(
+                [
+                    TtBottleneck(
+                        blocks_args[block],
+                        getattr(conv_pth, f"layer{stage}_{block}"),
+                        device=self.device,
+                        **({"is_downsample": True, **first_options} if block == 0 else repeat_options),
+                    )
+                    for block in range(num_blocks)
+                ]
+            )
 
     def __call__(self, x, batch_size=1):
         x, out_ht, out_wdth = self.conv1(x)
@@ -135,29 +111,11 @@ class TtResnet50:
                 ceil_mode=False,
             )
         outputs = []
-        # Layer 1
-        x = self.layer1_0(x)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        x = self.layer1_1(x)
-        x = self.layer1_2(x)
-
-        # Layer 2
-        x = self.layer2_0(x)
-        x = self.layer2_1(x)
-        x = self.layer2_2(x)
-        x = self.layer2_3(x)
-        # Layer 3
-        x = self.layer3_0(x)
-        x = self.layer3_1(x)
-        x = self.layer3_2(x)
-        x = self.layer3_3(x)
-        x = self.layer3_4(x)
-        x = self.layer3_5(x)
-
-        # Layer 4
-        x = self.layer4_0(x)
-        x = self.layer4_1(x)
-        x = self.layer4_2(x)
+        for stage, blocks in enumerate(self.stages, start=1):
+            for block, bottleneck in enumerate(blocks):
+                x = bottleneck(x)
+                if stage == 1 and block == 0:
+                    x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         outputs.append(x)
 
         return outputs

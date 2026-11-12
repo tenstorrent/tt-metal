@@ -19,6 +19,7 @@ from models.experimental.vadv2.tt.model_preprocessing import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.num_layers import log_layer_counts, num_layers_from_env, reduce_layers
 
 
 @pytest.mark.timeout(1200)
@@ -50,6 +51,10 @@ def test_vadv2(
     )
 
     torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
+    num_layers = num_layers_from_env()
+    if num_layers is not None:
+        reduce_layers(torch_model, num_layers)
+    log_layer_counts(torch_model, num_layers)
 
     input_dict = {
         "img_metas": [

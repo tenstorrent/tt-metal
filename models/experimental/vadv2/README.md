@@ -104,12 +104,25 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest --disable-warnings models/exp
 
 The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2x1 grid.
 
+### Reduced layer count
+
+`VAD_NUM_LAYERS=N` keeps the first `N` BEV encoder, detection decoder and map decoder layers, with
+their class and box branches, and, in each ResNet stage, the first block, which alone strides and
+projects the shortcut, and `N` repeats of the block after it. The end-to-end test and the demo read
+it. The reference is reduced the same way after the checkpoint loads, so the PCC floors still apply,
+but the reduced model is not the trained planner and its outputs have no meaning:
+
+```sh
+VAD_NUM_LAYERS=1 pytest --disable-warnings models/experimental/vadv2/tests/pcc/test_tt_vad.py
+```
+
 ## Project Structure
 
 ```
 models/experimental/vadv2/
 ├── common.py           # Loads the reference weights for the tests
 ├── demo/               # Sequence CLI, manifest adapter and visualizer
+├── num_layers.py       # VAD_NUM_LAYERS: reduces every stack of repeated layers
 ├── reference/          # PyTorch reference implementation
 ├── tests/
 │   └── pcc/            # Unit tests for individual components and the model end to end

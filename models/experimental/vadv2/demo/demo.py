@@ -245,6 +245,7 @@ def run_demo(args):
 
     from models.common.device_utils import get_device_name
     from models.experimental.vadv2.tt.model_preprocessing import create_vadv2_model_parameters_vad
+    from models.experimental.vadv2.num_layers import log_layer_counts, num_layers_from_env, reduce_layers
     from models.experimental.vadv2.tt.tt_vad import TtVAD
 
     if args.dataset_format == "synthetic":
@@ -268,6 +269,10 @@ def run_demo(args):
         frame_count = len(selected)
 
     parameter_model = build_reference_vad(args.checkpoint, args.seed)
+    num_layers = num_layers_from_env()
+    if num_layers is not None:
+        reduce_layers(parameter_model, num_layers)
+    log_layer_counts(parameter_model, num_layers)
     first_images, first_metas, _, first_token = load_frame(0)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
