@@ -97,12 +97,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces);
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-            tensor_shape, formats.math);
-        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(tensor_shape, formats.math);
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
     }
@@ -118,20 +122,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < num_blocks; block++)
                 {
-                    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                    _llk_math_wait_for_dest_available_<dest_sync>();
 
                     for (int tile = 0; tile < num_tiles_in_block; tile++)
                     {
                         // Standard datacopy: each tile at Tile32x32 DEST slot (sparse).
-                        _llk_math_eltwise_unary_datacopy_wrapper_<
-                            DataCopyType::A2D,
-                            DstSync::SyncHalf,
-                            is_fp32_dest_acc_en,
-                            BroadcastType::NONE,
-                            unpack_to_dest>(params.DST_INDEX + tile, formats.math, formats.math, tensor_shape);
+                        _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            params.DST_INDEX + tile, formats.math, formats.math, tensor_shape);
                     }
 
-                    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -159,8 +159,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const int num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const int num_blocks         = params.NUM_BLOCKS;
+    const int num_tiles_in_block    = params.NUM_TILES_IN_BLOCK;
+    const int num_blocks            = params.NUM_BLOCKS;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 
     {
@@ -179,7 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             false /* narrow_tile */,
             1 /* num_tiles */);
 
-        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en>();
 
 #ifdef ARCH_BLACKHOLE
         reconfigure_packer_l1_acc(params.L1_ACC);
@@ -220,18 +220,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
                     if constexpr (tiny_pack_mode == 0)
                     {
-                        _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                        _llk_pack_block_contiguous_<dest_sync, is_fp32_dest_acc_en>(
                             0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
                     }
                     else if constexpr (tiny_pack_mode == 1)
                     {
                         const std::uint32_t tile_stride = (L1_ADDRESS(params.buffer_Res[1]) - L1_ADDRESS(params.buffer_Res[0])) << 4;
-                        _llk_pack_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en, dest_sync == DstSync::SyncFull>(
                             params.DST_INDEX, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, tile_stride, params.num_faces);
                     }
                     else if constexpr (tiny_pack_mode == 4)
                     {
-                        _llk_pack_block_closed_w_mop_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                        _llk_pack_block_closed_w_mop_<dest_sync, is_fp32_dest_acc_en>(
                             params.DST_INDEX, block * num_tiles_in_block, num_tiles_in_block, params.num_faces);
                     }
                     else
@@ -240,13 +240,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (int tile = 0; tile < num_tiles_in_block; ++tile)
                         {
                             int res_idx = block * num_tiles_in_block + tile;
-                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[res_idx]));
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                                params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[res_idx]));
                         }
                     }
 
                     if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                     {
-                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }
