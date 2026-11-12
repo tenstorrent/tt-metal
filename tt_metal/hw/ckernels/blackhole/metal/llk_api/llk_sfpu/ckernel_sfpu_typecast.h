@@ -89,8 +89,9 @@ inline void calculate_typecast_fp32_to_uint16() {
         TTI_SFPNOP;
     } else {
         // 32-bit Dest: the swap-hi-lo16 store cannot be expressed by the init-time macro store
-        // mode, so this case uses the plain loop instead of SFPLOADMACRO.
-#pragma GCC unroll 0
+        // mode, so this case uses the plain loop instead of SFPLOADMACRO. Unrolled: a rolled
+        // loop pays the RISC loop overhead per row and idles the SFPU between rows.
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
             TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
@@ -274,8 +275,9 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // Kept as a plain loop (no SFPLOADMACRO): #46231 rewrote this to round, mask off the
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
-    // so it is not equivalent and is not restored here. See #46751.
-#pragma GCC unroll 0
+    // so it is not equivalent and is not restored here. See #46751. Unrolled: a rolled loop pays
+    // the RISC loop overhead per row and idles the SFPU between rows.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG0, 5);                // lreg[0] = lreg[1] >> 16
@@ -321,8 +323,9 @@ inline void calculate_typecast_uint16_to_fp32() {
         TTI_SFPNOP;
     } else {
         // 32-bit Dest: the macro's LO16 load cannot reproduce the INT32 + 0xFFFF mask path, so
-        // this case uses the plain loop instead of SFPLOADMACRO.
-#pragma GCC unroll 0
+        // this case uses the plain loop instead of SFPLOADMACRO. Unrolled: a rolled loop pays
+        // the RISC loop overhead per row and idles the SFPU between rows.
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
             TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
