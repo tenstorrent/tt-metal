@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.experimental.vadv2.tt.common import activation_memory_config
 from models.experimental.vadv2.tt.tt_base_transformer_layer import TtBaseTransformerLayer
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid
 
@@ -66,7 +67,8 @@ class TtDetectionTransformerDecoder:
         intermediate = []
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
-            reference_points_input = reference_points[..., :2]
+            # Row major: tiled, the unsqueezed (1, 2) slices would each pad to a whole tile.
+            reference_points_input = ttnn.to_layout(reference_points[..., :2], ttnn.ROW_MAJOR_LAYOUT)
             reference_points_input = ttnn.unsqueeze(reference_points_input, 2)
             output = layer(
                 output,
@@ -84,7 +86,10 @@ class TtDetectionTransformerDecoder:
                 tmp = output
                 for i in range(3):
                     tmp = ttnn.linear(
-                        tmp, layers[str(i)].weight, bias=layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                        tmp,
+                        layers[str(i)].weight,
+                        bias=layers[str(i)].bias,
+                        memory_config=activation_memory_config(self.device, tmp, layers[str(i)].weight.shape[-1]),
                     )
                     if i < 2:
                         tmp = ttnn.relu(tmp)
@@ -93,9 +98,13 @@ class TtDetectionTransformerDecoder:
                 updated_xy = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])  # shape (..., 2)
                 updated_z = tmp[..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])  # shape (..., 1)
 
-                new_reference_points = ttnn.concat([updated_xy, updated_z], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                new_reference_points = ttnn.concat(
+                    [updated_xy, updated_z], dim=-1, memory_config=activation_memory_config(self.device, updated_xy, 3)
+                )
                 ttnn.deallocate(tmp)
-                new_reference_points = ttnn.sigmoid(new_reference_points, memory_config=ttnn.L1_MEMORY_CONFIG)
+                new_reference_points = ttnn.sigmoid(
+                    new_reference_points, memory_config=activation_memory_config(self.device, new_reference_points)
+                )
 
                 reference_points = new_reference_points
 
@@ -170,7 +179,8 @@ class TtMapDetectionTransformerDecoder:
         intermediate = []
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
-            reference_points_input = reference_points[..., :2]
+            # Row major: tiled, the unsqueezed (1, 2) slices would each pad to a whole tile.
+            reference_points_input = ttnn.to_layout(reference_points[..., :2], ttnn.ROW_MAJOR_LAYOUT)
             reference_points_input = ttnn.unsqueeze(reference_points_input, 2)
             output = layer(
                 output,
@@ -187,7 +197,10 @@ class TtMapDetectionTransformerDecoder:
                 tmp = output
                 for i in range(3):
                     tmp = ttnn.linear(
-                        tmp, layers[str(i)].weight, bias=layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                        tmp,
+                        layers[str(i)].weight,
+                        bias=layers[str(i)].bias,
+                        memory_config=activation_memory_config(self.device, tmp, layers[str(i)].weight.shape[-1]),
                     )
                     if i < 2:  # Apply ReLU after the first two layers
                         tmp = ttnn.relu(tmp)
@@ -196,7 +209,9 @@ class TtMapDetectionTransformerDecoder:
 
                 updated_xy = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
 
-                new_reference_points = ttnn.concat([updated_xy], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                new_reference_points = ttnn.concat(
+                    [updated_xy], dim=-1, memory_config=activation_memory_config(self.device, updated_xy)
+                )
 
                 ttnn.deallocate(tmp)
                 new_reference_points = ttnn.sigmoid(new_reference_points)

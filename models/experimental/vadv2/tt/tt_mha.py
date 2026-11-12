@@ -156,7 +156,9 @@ class TtMultiheadAttention:
         if key_padding_mask is not None:
             # (bsz, src_len), nonzero where the key is padding: those keys get no weight. The
             # scores are laid out (bsz * num_heads, tgt_len, src_len), batch-major.
-            masked = ttnn.gt(ttnn.to_layout(key_padding_mask, ttnn.TILE_LAYOUT), 0.0)
+            # Tilized as one row: a (bsz, src_len) mask with few keys has no tilize split on small grids.
+            flat = ttnn.reshape(key_padding_mask, (1, bsz * src_len))
+            masked = ttnn.gt(ttnn.to_layout(flat, ttnn.TILE_LAYOUT), 0.0)
             masked = ttnn.reshape(ttnn.multiply(masked, -1e9), (bsz, 1, 1, src_len))
             masked = ttnn.reshape(ttnn.repeat(masked, (1, self.num_heads, 1, 1)), (bsz * self.num_heads, 1, src_len))
             attn_output_weights = attn_output_weights + masked

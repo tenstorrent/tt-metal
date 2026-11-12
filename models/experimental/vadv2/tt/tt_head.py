@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import ttnn
+from models.experimental.vadv2.tt.common import interleaved_memory_config, kept_memory_config
 from models.experimental.vadv2.tt.tt_lanenet import TtLaneNet
 from models.experimental.vadv2.tt.tt_decoder import TtCustomTransformerDecoder
 from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransformer
@@ -45,12 +48,17 @@ class TtLearnedPositionalEncoding:
             layout=ttnn.TILE_LAYOUT,
         )
         y_embed = self.row_embed(y, weight=self.params.row_embed.weight, layout=ttnn.TILE_LAYOUT)
+        repeated = interleaved_memory_config(self.device, h * w * x_embed.shape[-1])
         x_embed = ttnn.unsqueeze(x_embed, 0)
-        x_embed = ttnn.repeat(x_embed, (h, 1, 1))
+        x_embed = ttnn.repeat(x_embed, (h, 1, 1), memory_config=repeated)
         y_embed = ttnn.unsqueeze(y_embed, 1)
-        y_embed = ttnn.repeat(y_embed, (1, w, 1))
+        y_embed = ttnn.repeat(y_embed, (1, w, 1), memory_config=repeated)
 
-        out = ttnn.concat((x_embed, y_embed), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.concat(
+            (x_embed, y_embed),
+            dim=-1,
+            memory_config=interleaved_memory_config(self.device, h * w * (x_embed.shape[-1] + y_embed.shape[-1])),
+        )
         ttnn.deallocate(y_embed)
         ttnn.deallocate(x_embed)
         out = ttnn.permute(out, (2, 0, 1))
@@ -372,7 +380,7 @@ class TtVADHead:
                     cls_tmp,
                     cls_layers[str(i)].weight,
                     bias=cls_layers[str(i)].bias,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=kept_memory_config(self.device, cls_tmp, cls_layers[str(i)].weight.shape[-1]),
                 )
 
                 norm_key = f"{i+1}_norm"
@@ -390,7 +398,10 @@ class TtVADHead:
 
             for i in range(3):
                 tmp = ttnn.linear(
-                    tmp, reg_layers[str(i)].weight, bias=reg_layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                    tmp,
+                    reg_layers[str(i)].weight,
+                    bias=reg_layers[str(i)].bias,
+                    memory_config=kept_memory_config(self.device, tmp, reg_layers[str(i)].weight.shape[-1]),
                 )
                 if i < 2:
                     tmp = ttnn.relu(tmp)
@@ -400,7 +411,7 @@ class TtVADHead:
             updated_z = tmp[..., 4:5] + reference[..., 2:3]
             updated_z = ttnn.sigmoid(updated_z)
 
-            outputs_coords_bev.append(ttnn.clone(updated_xy, memory_config=ttnn.L1_MEMORY_CONFIG))
+            outputs_coords_bev.append(ttnn.clone(updated_xy, memory_config=kept_memory_config(self.device, updated_xy)))
 
             x = updated_xy[..., 0:1] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
             y = updated_xy[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]
@@ -437,7 +448,7 @@ class TtVADHead:
                     cls_tmp,
                     cls_params[str(i)].weight,
                     bias=cls_params[str(i)].bias,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=kept_memory_config(self.device, cls_tmp, cls_params[str(i)].weight.shape[-1]),
                 )
                 norm_key = f"{i+1}_norm"
                 if norm_key in cls_params:
@@ -456,7 +467,7 @@ class TtVADHead:
                     reg_tmp,
                     reg_params[str(i)].weight,
                     bias=reg_params[str(i)].bias,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=kept_memory_config(self.device, reg_tmp, reg_params[str(i)].weight.shape[-1]),
                 )
                 if i < 2:
                     reg_tmp = ttnn.relu(reg_tmp)
@@ -469,7 +480,12 @@ class TtVADHead:
 
             tmp_full = ttnn.concat([tmp_coord], dim=-1)
             map_outputs_coord, map_outputs_pts_coord = self.map_transform_box(tmp_full)
-            map_outputs_coords_bev.append(ttnn.clone(map_outputs_pts_coord, memory_config=ttnn.L1_MEMORY_CONFIG))
+            map_outputs_coords_bev.append(
+                ttnn.clone(
+                    map_outputs_pts_coord,
+                    memory_config=kept_memory_config(self.device, map_outputs_pts_coord),
+                )
+            )
             map_outputs_classes.append(map_outputs_class)
             map_outputs_coords.append(map_outputs_coord)
             map_outputs_pts_coords.append(map_outputs_pts_coord)
@@ -564,7 +580,7 @@ class TtVADHead:
                 ca_motion_query = ttnn.unsqueeze(ca_motion_query, 0)
 
                 if self.use_pe:
-                    (num_query, batch) = ca_motion_query.shape[0], ca_motion_query.shape[1]
+                    num_query, batch = ca_motion_query.shape[0], ca_motion_query.shape[1]
                     motion_pos = self._const_zeros((num_query, batch, 2), layout=ttnn.TILE_LAYOUT)
                     motion_pos = self.pos_mlp(
                         motion_pos, self.params.head.pos_mlp.weight, bias=self.params.head.pos_mlp.bias
@@ -607,7 +623,7 @@ class TtVADHead:
                 motion_h,
                 traj_branch_params[str(i)].weight,
                 bias=traj_branch_params[str(i)].bias,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=kept_memory_config(self.device, motion_h, traj_branch_params[str(i)].weight.shape[-1]),
             )
             if i < 2:
                 motion_h = ttnn.relu(motion_h)
@@ -620,7 +636,7 @@ class TtVADHead:
                 cls_tmp,
                 traj_cls_params[str(i)].weight,
                 bias=traj_cls_params[str(i)].bias,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=kept_memory_config(self.device, cls_tmp, traj_cls_params[str(i)].weight.shape[-1]),
             )
             norm_key = f"{i+1}_norm"
             if norm_key in traj_cls_params:
@@ -631,7 +647,7 @@ class TtVADHead:
                 cls_tmp = ttnn.relu(cls_tmp)
         outputs_traj_class = cls_tmp
         outputs_trajs_classes.append(ttnn.squeeze(outputs_traj_class, -1))
-        (batch, num_agent) = motion_hs.shape[0], motion_hs.shape[1]
+        batch, num_agent = motion_hs.shape[0], motion_hs.shape[1]
 
         map_outputs_classes = ttnn.stack(map_outputs_classes, dim=0)
         map_outputs_coords = ttnn.stack(map_outputs_coords, dim=0)
@@ -643,7 +659,7 @@ class TtVADHead:
         outputs_trajs_classes = ttnn.stack(outputs_trajs_classes, dim=0)
 
         # planning
-        (batch, num_agent) = motion_hs.shape[0], motion_hs.shape[1]
+        batch, num_agent = motion_hs.shape[0], motion_hs.shape[1]
         if self.ego_his_encoder is not None:
             ego_his_feats = self.ego_his_encoder(ego_his_trajs)  # [B, 1, dim]
         else:
@@ -666,7 +682,7 @@ class TtVADHead:
                     cls_tmp,
                     layer_params["weight"],
                     bias=layer_params["bias"],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=kept_memory_config(self.device, cls_tmp, layer_params["weight"].shape[-1]),
                 )
             elif i == 1:  # LayerNorm
                 norm_params = agent_fus_mlp_params[str(i)]["0_norm"]
@@ -704,7 +720,7 @@ class TtVADHead:
             ego_pos,
             self.params.head.ego_map_pos_mlp.weight,
             bias=self.params.head.ego_map_pos_mlp.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=kept_memory_config(self.device, ego_pos, self.params.head.ego_map_pos_mlp.weight.shape[-1]),
         )
         map_query = map_hs[-1]
         ttnn.deallocate(map_hs)
@@ -746,7 +762,7 @@ class TtVADHead:
             map_pos,
             self.params.head.ego_map_pos_mlp.weight,
             bias=self.params.head.ego_map_pos_mlp.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=kept_memory_config(self.device, map_pos, self.params.head.ego_map_pos_mlp.weight.shape[-1]),
         )
         ego_map_query = self.ego_map_decoder(
             query=ego_agent_query,
@@ -795,7 +811,7 @@ class TtVADHead:
                     cls_tmp,
                     layer_params["weight"],
                     bias=layer_params["bias"],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=kept_memory_config(self.device, cls_tmp, layer_params["weight"].shape[-1]),
                 )
             elif i in [1, 3]:  # ReLU layers
                 cls_tmp = ttnn.relu(cls_tmp)
@@ -833,7 +849,7 @@ class TtVADHead:
             xmax = ttnn.max(pts_x, dim=2, keepdim=True)[0]
             ymin = ttnn.min(pts_y, dim=2, keepdim=True)[0]
             ymax = ttnn.max(pts_y, dim=2, keepdim=True)[0]
-            bbox = ttnn.concat([xmin, ymin, xmax, ymax], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            bbox = ttnn.concat([xmin, ymin, xmax, ymax], dim=-1, memory_config=kept_memory_config(self.device, xmin, 4))
             bbox = bbox_xyxy_to_cxcywh(bbox)
         else:
             raise NotImplementedError
@@ -927,20 +943,43 @@ class TtVADHead:
 
         # generate different pe for map vectors for each agent
         num_agent = motion_pos.shape[1]
+
+        def per_agent(tensor):
+            # One copy per agent: on a small grid these outgrow L1.
+            return interleaved_memory_config(self.device, num_agent * math.prod(list(tensor.padded_shape)))
+
         selected_map_query = ttnn.unsqueeze(selected_map_query, 1)
-        selected_map_query = ttnn.repeat(selected_map_query, [1, num_agent, 1, 1])
+        selected_map_query = ttnn.repeat(
+            selected_map_query, [1, num_agent, 1, 1], memory_config=per_agent(selected_map_query)
+        )
 
         selected_map_pos = ttnn.unsqueeze(selected_map_pos, 1)
-        selected_map_pos = ttnn.repeat(selected_map_pos, [1, num_agent, 1, 1])
+        selected_map_pos = ttnn.repeat(
+            selected_map_pos, [1, num_agent, 1, 1], memory_config=per_agent(selected_map_pos)
+        )
 
         selected_padding_mask = ttnn.unsqueeze(selected_padding_mask, 1)
-        selected_padding_mask = ttnn.repeat(selected_padding_mask, [1, num_agent, 1])
+        selected_padding_mask = ttnn.repeat(
+            selected_padding_mask, [1, num_agent, 1], memory_config=per_agent(selected_padding_mask)
+        )
 
         # move lane to per-car coords system
         B, A, D = motion_pos.shape  # Get the original shape
-        motion_pos = ttnn.reshape(motion_pos, (B, A, 1, D))
-        selected_map_pos = ttnn.to_layout(selected_map_pos, layout=ttnn.TILE_LAYOUT)
-        motion_pos = ttnn.to_layout(motion_pos, layout=ttnn.TILE_LAYOUT)
+        motion_pos = ttnn.reshape(ttnn.to_layout(motion_pos, ttnn.ROW_MAJOR_LAYOUT), (B, A, 1, D))
+        # Tiled, each agent's map points and its own position pad to whole tiles, which a small grid's
+        # L1 cannot hold.
+        tiled = interleaved_memory_config(
+            self.device,
+            math.prod(list(selected_map_pos.shape)[:-2])
+            * ttnn.core.roundup(selected_map_pos.shape[-2], ttnn.TILE_SIZE)
+            * ttnn.TILE_SIZE,
+        )
+        selected_map_pos = ttnn.to_layout(selected_map_pos, layout=ttnn.TILE_LAYOUT, memory_config=tiled)
+        motion_pos = ttnn.to_layout(
+            motion_pos,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=interleaved_memory_config(self.device, B * A * ttnn.TILE_SIZE * ttnn.TILE_SIZE),
+        )
         selected_map_dist = selected_map_pos - motion_pos  # [B, A, max_P, 2]
         if pe_normalization:
             selected_map_pos = selected_map_pos - motion_pos  # [B, A, max_P, 2]
@@ -969,7 +1008,15 @@ class TtVADHead:
 
             selected_map_query = ttnn.concat([selected_map_query, pad_map_query], dim=1)
             selected_map_pos = ttnn.concat([selected_map_pos, pad_map_pos], dim=1)
-            selected_padding_mask = ttnn.concat([selected_padding_mask, pad_lane_mask], dim=1)
+            # A tiled concat along an unaligned width retilizes, which a small grid cannot split; the
+            # attention takes the mask row major.
+            selected_padding_mask = ttnn.concat(
+                [
+                    ttnn.to_layout(selected_padding_mask, ttnn.ROW_MAJOR_LAYOUT),
+                    ttnn.to_layout(pad_lane_mask, ttnn.ROW_MAJOR_LAYOUT),
+                ],
+                dim=1,
+            )
 
         return selected_map_query, selected_map_pos, selected_padding_mask
 

@@ -87,6 +87,23 @@ pytest --disable-warnings models/experimental/vadv2/tests/pcc/
 pytest --disable-warnings models/experimental/vadv2/tests/pcc/test_tt_vad.py
 ```
 
+### Reduced grid
+
+The model sizes its memory from the device's grid. On the full grid every activation stays where it
+is today; on a grid with fewer cores, an activation whose L1 share would crowd out the tensors live
+beside it goes to DRAM instead (`tt/common.py`). A backbone conv whose input and output do not fit L1
+runs over bands of output rows, each through the same L1 conv with only the input rows it reads,
+and a conv whose weights alone leave a band no room runs from DRAM. A banded block-sharded conv is
+width sharded with the full grid's channel blocks, since the block width decides how often its
+partial sums are rounded. The fused multi-scale deformable attention takes the per-query counts from
+a device tensor rather than its runtime arguments. The end-to-end test passes on two worker cores:
+
+```sh
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest --disable-warnings models/experimental/vadv2/tests/pcc/test_tt_vad.py
+```
+
+The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2x1 grid.
+
 ## Project Structure
 
 ```
