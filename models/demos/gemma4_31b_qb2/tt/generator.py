@@ -49,7 +49,6 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
-        self.prefill_shapes = set()
         self.counters = {
             k: 0
             for k in (
@@ -384,11 +383,7 @@ class Gemma4Generator:
         starts = [0] * len(prompt_lens) if start_positions is None else list(start_positions)
         if len(starts) != len(prompt_lens) or any(s < 0 or s >= n for s, n in zip(starts, prompt_lens)):
             raise ValueError("Prefill must advance each request from its current position")
-        shape_key = (state.batch, state.capacity, tuple(prompt_lens), tuple(starts), bool(return_all_logits))
-        if shape_key not in self.prefill_shapes:
-            # A new prefill signature may create cached protocol semaphores or
-            # norm buffers. Retire old traces before those persistent allocations.
-            self._retire_traces()
+        programs = self.mesh.num_program_cache_entries()
         self._tables(state, page_table)
         outputs = []
         for row, (slot, length) in enumerate(zip(slots, prompt_lens)):
@@ -462,7 +457,12 @@ class Gemma4Generator:
             # Device-return outputs retain their own owners in outputs. Host
             # mode has consumed out; do not carry it into the next prefill.
             del out, tt_ids, tables, uploaded_rows
-        self.prefill_shapes.add(shape_key)
+        if self.mesh.num_program_cache_entries() != programs:
+            # A prefill that compiled new programs created persistent device state (programs, semaphores, buffers)
+            # that a captured decode trace may overlap, so the traces are rebuilt. A signature the program cache
+            # already holds creates none: warm_prefill_shapes compiles every length class before serving, and
+            # the decode trace then survives the prefills of an agent loop.
+            self._retire_traces()
         if return_device:
             return outputs
         width = max(prompt_lens) if return_all_logits else 1
@@ -506,6 +506,20 @@ class Gemma4Generator:
         self.sampler(entry["logits"], tt_out_tok=entry["tokens"])
         # Seed state advances on device, including when an explicit seed was set.
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
+
+    def warm_prefill_shapes(self, state, page_table, max_tokens):
+        """Prefill every 32-token length (the tile-padded prompt shapes) from position 0 once.
+
+        Programs are keyed by the padded chunk length, so a warmed length compiles nothing when a request first
+        arrives with it. Continuations (a chunk starting at a later position) are separate signatures and are
+        not covered. Uses blocks 1.. of the (still empty) pool; nothing there is read afterwards.
+        """
+        pages = max_tokens // 32
+        for length in range(32, max_tokens + 1, 32):
+            tokens = torch.ones(1, length, dtype=torch.int32)
+            self.prefill_forward(tokens, page_table=page_table, kv_cache=state, prompt_lens=[length], slots=[0])
+        self._retire_traces()
+        logger.info("Warmed {} prefill lengths up to {} tokens", pages, max_tokens)
 
     def _entry(self, state):
         key = id(state)
