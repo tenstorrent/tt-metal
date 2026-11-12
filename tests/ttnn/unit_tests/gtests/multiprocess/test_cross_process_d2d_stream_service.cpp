@@ -58,6 +58,7 @@
 //   tt-run --rank-binding <rank_binding.yaml> --mpi-args "--allow-run-as-root --tag-output"
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -1554,6 +1555,68 @@ TEST(CrossProcessD2DExport, BadCallFailsOnEveryRank) {
     auto file = D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{0}, ctx);
     EXPECT_EQ(file != nullptr, rank == 0);
     ctx->barrier();
+}
+
+// Host-hop channel and pumps alone (no device): rank 0 sends fake transfers to rank 1 through the same pump and MPI
+// channel that host mode uses. Separates the network and the channel from the device-side work. Run with 2 ranks.
+TEST(CrossProcessD2DHostChannel, Bandwidth) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int rank = *ctx->rank();
+    if (*ctx->size() != 2) {
+        GTEST_SKIP() << "Needs exactly 2 ranks";
+    }
+    constexpr uint32_t kParts = 32;
+    constexpr uint32_t kTransfers = 8;
+    for (const uint32_t total_mb : {37u, 63u}) {
+        const size_t part_bytes = static_cast<size_t>(total_mb) * 1000 * 1000 / kParts;
+        std::vector<std::vector<std::byte>> buffers(kParts, std::vector<std::byte>(part_bytes, std::byte{1}));
+        std::vector<ttnn::d2d_host::Part> parts;
+        for (auto& b : buffers) {
+            parts.push_back(ttnn::d2d_host::Part{b.data(), b.size()});
+        }
+        auto channel = std::shared_ptr<ttnn::d2d_host::Channel>(
+            ttnn::d2d_host::make_mpi_channel(ctx, Rank{1 - rank}, /*tag=*/0x7D00 + static_cast<int>(total_mb)));
+        ctx->barrier();
+        std::atomic<uint32_t> done{0};
+        const auto start = std::chrono::steady_clock::now();
+        if (rank == 0) {
+            std::atomic<uint32_t> produced{0};
+            ttnn::d2d_host::SenderOps ops;
+            ops.parts = parts;
+            ops.ready = [&produced, &done]() { return produced.load() > done.load(); };
+            ops.read = [&done]() { done.fetch_add(1); };
+            ttnn::d2d_host::SenderPump pump(std::move(ops), channel);
+            produced = kTransfers;
+            while (done.load() < kTransfers) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            while (pump.stats().transfers < kTransfers) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            const auto stats = pump.stats();
+            log_info(
+                tt::LogTest,
+                "channel-only {} MB: send {:.1f} ms/transfer ({:.2f} GB/s)",
+                total_mb,
+                static_cast<double>(stats.channel_ns) / 1e6 / kTransfers,
+                static_cast<double>(stats.bytes) / static_cast<double>(stats.channel_ns));
+        } else {
+            ttnn::d2d_host::ReceiverOps ops;
+            ops.parts = parts;
+            ops.write = [&done]() { done.fetch_add(1); };
+            ttnn::d2d_host::ReceiverPump pump(std::move(ops), channel);
+            while (done.load() < kTransfers) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            log_info(
+                tt::LogTest,
+                "channel-only {} MB: {:.1f} ms/transfer end to end at the receiver",
+                total_mb,
+                ms / kTransfers);
+        }
+        ctx->barrier();
+    }
 }
 
 }  // namespace
