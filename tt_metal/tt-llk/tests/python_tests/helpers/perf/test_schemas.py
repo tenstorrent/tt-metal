@@ -422,7 +422,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_fused": "perf_fused"},
     },
     "perf_math_matmul": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -457,6 +457,7 @@ PERF_TEST_SCHEMAS = {
             "partial_face_math",
             "partial_face_pack",
             "r_dimm",
+            "row_mop",
             "throttle_level",
             "tile_cnt",
             "unpack_to_dest",

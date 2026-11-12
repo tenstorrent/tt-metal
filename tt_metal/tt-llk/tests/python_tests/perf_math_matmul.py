@@ -4,7 +4,7 @@
 from itertools import chain, product
 
 import pytest
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
@@ -181,16 +181,10 @@ ALL_TEST_PARAMS = list(
         ),
         # Blackhole row MOP (one MOP per reuse row instead of per tile), throttle 0: pairs with
         # the first slice's throttle-0 rows for a per-tile vs per-row A/B.
+        # Wormhole has only the per-tile MOP: skipped there.
         (
-            (fidelity, cfg, 0, 1, True)
-            for fidelity, cfg in product(
-                ALL_MATH_FIDELITIES,
-                (
-                    MATMUL_COMBINATIONS
-                    if get_chip_architecture() == ChipArchitecture.BLACKHOLE
-                    else []
-                ),
-            )
+            pytest.param(fidelity, cfg, 0, 1, True, marks=skip_for_wormhole)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
         ),
     )
 )

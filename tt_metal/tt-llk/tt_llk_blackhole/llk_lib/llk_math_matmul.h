@@ -48,7 +48,7 @@ extern std::uint32_t llk_assert_matmul_row_mop_rt_dim;
  * @param ct_dim: Number of column tiles in the output block; sets the row MOP's DEST step.
  * @param rt_dim: Number of row tiles in the output block; sets the row MOP's DEST step.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool ROW_MOP = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool ROW_MOP>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -370,7 +370,7 @@ inline void matmul_configure_addrmod(
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, bool ROW_MOP = false>
+template <MathFidelity math_fidelity, bool ROW_MOP>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -885,7 +885,8 @@ inline void _llk_math_matmul_init_(
 
         if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
-            matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, false /*ROW_MOP*/>(
+                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {

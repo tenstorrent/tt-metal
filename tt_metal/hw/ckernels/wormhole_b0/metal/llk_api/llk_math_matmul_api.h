@@ -11,7 +11,8 @@
  * LLK MATMUL
  *************************************************************************/
 
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+// ROW_MOP: must be false on Wormhole (see _llk_math_matmul_init_).
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -42,12 +43,20 @@ inline void llk_math_matmul_init(
         StateDiscard<std::uint32_t>(in1_tile_c_dim),
         StateDiscard<bool>(partial_face)));
 
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
-inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+template <
+    MathFidelity math_fidelity,
+    int THROTTLE_LEVEL = 0,
+    bool ROW_MOP = false,
+    std::uint32_t num_faces = 4 /*not used*/>
+inline void llk_math_matmul(
+    const uint dst_index,
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t rt_dim = 1,
+    const std::uint32_t k_steps = 1) {
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
     LLK_ASSERT(
         (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
@@ -71,5 +80,5 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateDiscard<uint>(dst_index)));
 
-    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
+    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(dst_index, ct_dim, rt_dim, k_steps);
 }
