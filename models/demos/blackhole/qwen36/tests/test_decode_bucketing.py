@@ -20,7 +20,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.common.utility_functions import comp_pcc
-from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
+from models.demos.blackhole.qwen36.tests.test_factory import model_path, parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 N_LAYERS = 8
@@ -1228,7 +1228,7 @@ def test_vllm_warmup_leaves_no_late_allocations(
 
     bmax = 8
     model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model="Qwen/Qwen3.6-27B"
+        mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model=model_path()
     )
     if sampling and model.sampling is None:
         pytest.skip("on-device sampling unsupported on this mesh")
