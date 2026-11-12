@@ -43,48 +43,15 @@ INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRTE_TIMEOUT_EXIT_CODE = 241
 
 
-def _procs_in(sid: int, pgid: int) -> List[int]:
-    """Live pids on this host that belong to session ``sid`` or process group ``pgid`` (the launcher's). PRRTE gives
-    each rank its own process group but keeps the session, so the session id catches the ranks; the process group
-    catches a launcher that re-sessioned. Best effort: /proc is racy and this is a last-resort sweep."""
-    out = []
-    for d in os.listdir("/proc"):
-        if not d.isdigit():
-            continue
-        try:
-            with open(f"/proc/{d}/stat") as f:
-                fields = f.read().rsplit(")", 1)[1].split()
-            pgrp, session = int(fields[2]), int(fields[3])  # after comm: state ppid pgrp session ...
-            if session == sid or pgrp == pgid:
-                out.append(int(d))
-        except (OSError, IndexError, ValueError):
-            continue
-    return out
-
-
-def _end_processes(pids: List[int], grace_s: float = 2.0) -> None:
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        for pid in pids:
-            try:
-                os.kill(pid, sig)
-            except ProcessLookupError:
-                pass
-        end = time.time() + grace_s
-        while time.time() < end and any(os.path.exists(f"/proc/{pid}") for pid in pids):
-            time.sleep(0.1)
-        pids = [pid for pid in pids if os.path.exists(f"/proc/{pid}")]
-        if not pids:
-            return
-
-
 class LaunchedJob:
     """Owns one MPI launcher for the life of a job (teardown plan P6, P7, P19).
 
     A context manager: on entry it starts the launcher in its own session and forwards SIGINT and SIGTERM to it
     (PRRTE's own handler then ends every rank on every host); on exit it restores the previous handlers, always.
-    The launcher is never SIGKILLed — that would orphan the ranks, which sit in their own process groups. The exit
-    code policy and the last-resort sweep of the ranks it leaves behind live in ``run_launcher`` / ``_resolve_exit_code``,
-    not here; this class only owns the process and the signal forwarding. ``leftovers`` reports the ranks still alive.
+    The launcher is never SIGKILLed — that would orphan the ranks, which sit in their own process groups. The
+    exit-code contract (one rank fails, the whole job fails) lives in ``run_launcher``, which ends any ranks the
+    launcher leaves behind via ``leftovers`` and ``_end_processes``. The /proc and /dev/shm helpers are the job's
+    own static methods.
     """
 
     def __init__(self, cmd: List[str], cwd: Path):
@@ -97,7 +64,7 @@ class LaunchedJob:
         self._previous: dict = {}
 
     def __enter__(self) -> "LaunchedJob":
-        remove_stale_mpi_shm_segments()  # clear a previous killed job's /dev/shm leak before this one starts (P11)
+        self.remove_stale_mpi_shm_segments()  # clear a previous killed job's /dev/shm leak before this one starts (P11)
         self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
         # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks even if
         # the launcher re-sessioned or was reaped before we look.
@@ -129,7 +96,75 @@ class LaunchedJob:
 
     def leftovers(self) -> List[int]:
         """Processes of this job still alive on this host after the launcher returned — ranks it failed to reap."""
-        return [pid for pid in _procs_in(self.sid, self.pgid) if pid != os.getpid() and pid != self.proc.pid]
+        return [pid for pid in self._procs_in(self.sid, self.pgid) if pid != os.getpid() and pid != self.proc.pid]
+
+    @staticmethod
+    def _procs_in(sid: int, pgid: int) -> List[int]:
+        """Live pids on this host that belong to session ``sid`` or process group ``pgid`` (the launcher's). PRRTE
+        gives each rank its own process group but keeps the session, so the session id catches the ranks; the process
+        group catches a launcher that re-sessioned. Best effort: /proc is racy and this is a last-resort sweep."""
+        out = []
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open(f"/proc/{d}/stat") as f:
+                    fields = f.read().rsplit(")", 1)[1].split()
+                pgrp, session = int(fields[2]), int(fields[3])  # after comm: state ppid pgrp session ...
+                if session == sid or pgrp == pgid:
+                    out.append(int(d))
+            except (OSError, IndexError, ValueError):
+                continue
+        return out
+
+    @staticmethod
+    def _end_processes(pids: List[int], grace_s: float = 2.0) -> None:
+        """SIGTERM a set of pids, wait up to ``grace_s`` for them to go, then SIGKILL whatever is left."""
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in pids:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+            end = time.time() + grace_s
+            while time.time() < end and any(os.path.exists(f"/proc/{pid}") for pid in pids):
+                time.sleep(0.1)
+            pids = [pid for pid in pids if os.path.exists(f"/proc/{pid}")]
+            if not pids:
+                return
+
+    @staticmethod
+    def remove_stale_mpi_shm_segments() -> int:
+        """Remove this user's Open MPI shared-memory segments that no live process maps (teardown plan P11): what a
+        killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept. Run as
+        the first step of launching a job (``__enter__``), so a previous job's leak never piles up."""
+        host = socket.gethostname()
+        mine = glob.glob(f"/dev/shm/sm_segment.{host}.{os.getuid()}.*")
+        if not mine:
+            return 0
+        mapped = set()
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open(f"/proc/{d}/maps") as f:
+                    for line in f:
+                        if "sm_segment." in line:
+                            mapped.add(line.rsplit(" ", 1)[1].strip())
+            except OSError:
+                continue
+        removed = 0
+        for seg in mine:
+            if seg in mapped:
+                continue
+            try:
+                os.unlink(seg)
+                removed += 1
+            except OSError:
+                pass
+        if removed:
+            logger.info(f"{TT_RUN_PREFIX} removed {removed} stale shared-memory segment(s) of this user from /dev/shm")
+        return removed
 
 
 def run_launcher(cmd: List[str], cwd: Path) -> int:
@@ -153,45 +188,12 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
             f"{TT_RUN_PREFIX} the launcher returned {rc} but left {len(left)} process(es) of its job running on this "
             f"host: {left}; ending them (last resort; the launcher should have torn the job down itself)"
         )
-        _end_processes(left)
+        LaunchedJob._end_processes(left)
         if rc == 0:  # reported success yet left a rank alive -> a failure
             rc = 1
     if job.forwarded and rc == 0:  # signalled and forwarded, but the launcher still reported success
         rc = 128 + job.forwarded[0]
     return rc
-
-
-def remove_stale_mpi_shm_segments() -> int:
-    """Remove this user's Open MPI shared-memory segments that no live process maps (teardown plan P11): what a
-    killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept. Run as
-    the first step of launching a job (``LaunchedJob.__enter__``), so a previous job's leak never piles up."""
-    host = socket.gethostname()
-    mine = glob.glob(f"/dev/shm/sm_segment.{host}.{os.getuid()}.*")
-    if not mine:
-        return 0
-    mapped = set()
-    for d in os.listdir("/proc"):
-        if not d.isdigit():
-            continue
-        try:
-            with open(f"/proc/{d}/maps") as f:
-                for line in f:
-                    if "sm_segment." in line:
-                        mapped.add(line.rsplit(" ", 1)[1].strip())
-        except OSError:
-            continue
-    removed = 0
-    for seg in mine:
-        if seg in mapped:
-            continue
-        try:
-            os.unlink(seg)
-            removed += 1
-        except OSError:
-            pass
-    if removed:
-        logger.info(f"{TT_RUN_PREFIX} removed {removed} stale shared-memory segment(s) of this user from /dev/shm")
-    return removed
 
 
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
