@@ -607,9 +607,7 @@ FP32_DEST_ACC_EN = True
 #   MM_SWEEP_DST_FULL_SYNC  0 | 1        dst_full_sync_en    (default 0)
 # Bias, addcmul operands and the output stay bfloat16 (a model that feeds a block-float activation pins its
 # output back to bfloat16). dst_full_sync_en doubles the DEST tiles a subblock may use (8 with fp32 dest) at
-# the cost of math / pack overlap. Only the all-gather matmul's program factory forwards it to its compute
-# kernel; minimal_matmul's (plain, split and MM+RS) does not, while its validation already sizes the
-# subblock limit from it, so the sweep refuses it there instead of timing a misconfigured kernel.
+# the cost of math / pack overlap.
 _FIDELITIES = {
     "lofi": ttnn.MathFidelity.LoFi,
     "hifi2": ttnn.MathFidelity.HiFi2,
@@ -1044,11 +1042,6 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
     based on use_case.
     """
-    if DST_FULL_SYNC and (not is_agmm or op_kind == "sagmm" or uc_cfg.get("is_mmrs", False)):
-        raise ValueError(
-            "MM_SWEEP_DST_FULL_SYNC=1 is only meaningful for the all-gather matmul: minimal_matmul's program "
-            "factories do not pass dst_full_sync_en to the compute kernel"
-        )
     # Operand dtypes of the sweep mode (MM_SWEEP_IN0_DTYPE / MM_SWEEP_IN1_DTYPE); `dtype` keeps bias / addcmul.
     in0_dtype, in1_dtype = IN0_DTYPE, IN1_DTYPE
     if op_kind == "sagmm" and _OUT_DTYPE_KW:

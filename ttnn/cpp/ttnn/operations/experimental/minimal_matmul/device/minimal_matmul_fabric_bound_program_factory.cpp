@@ -897,6 +897,8 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        // Same DEST sync mode as validate() assumed when it bounded the subblock (get_dest_reg_count).
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
