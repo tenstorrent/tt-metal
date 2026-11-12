@@ -642,7 +642,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     // issue_fifo_wr_ptr write below tells the device to fetch them. wr_ptr_bytes was captured before
     // the advance above, so it marks the start of those bytes; issue_queue_reserve wraps the pointer
     // before handing it out, so this is correct across a ring wrap too. No-op where the platform is
-    // DMA-coherent, and compiles away entirely off riscv64.
+    // DMA-coherent, and compiled out entirely on architectures other than riscv64.
     tt::umd::host_cache::clean_range(
         this->cq_sysmem_start + (wr_ptr_bytes - this->channel_offset), push_size_16B << 4);
 
