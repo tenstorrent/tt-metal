@@ -739,10 +739,8 @@ class VaeDownBlock(Module):
 class _VaeSpatialGroupNorm(Module):
     """GroupNorm for spatially sharded VAE activations.
 
-    ``DistributedGroupNorm`` all-gathers Welford stats on one mesh axis (H if H is
-    sharded, otherwise W). Activations stay sharded on that axis. If both H and W
-    are sharded, activations are all-gathered on the *other* spatial dim only so the
-    fused stats reduction still sees the full spatial extent, then re-partitioned.
+    ``DistributedGroupNorm`` exchanges Welford stats over the sharded spatial mesh
+    axes (H and W if both are sharded), so activations stay sharded throughout.
 
     Channel TP is preserved via ``mesh_axis=ctx.tp_axis``. HiFi4 matches Wan/Mochi norms.
     """
@@ -759,10 +757,7 @@ class _VaeSpatialGroupNorm(Module):
         super().__init__()
         h_sp = ctx.h_factor > 1
         w_sp = ctx.w_factor > 1
-        # Stats AG prefers H when both are sharded (matches Flux2 H+TP).
         cluster_axis = ctx.h_mesh_axis if h_sp else ctx.w_mesh_axis
-        # 2-D SP: gather the non-cluster spatial dim of the activations, not both.
-        self._gather_w = h_sp and w_sp
         self.inner = DistributedGroupNorm(
             num_groups=num_groups,
             num_channels=num_channels,
@@ -770,10 +765,10 @@ class _VaeSpatialGroupNorm(Module):
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
             cluster_axis=cluster_axis,
+            second_cluster_axis=ctx.w_mesh_axis if h_sp and w_sp else None,
             ccl_manager=ctx.ccl_manager,
             activation_fn=activation_fn,
         )
-        self._ctx = ctx
         self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
             ctx.device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -789,21 +784,7 @@ class _VaeSpatialGroupNorm(Module):
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        if self._gather_w:
-            assert self._ctx.ccl_manager is not None
-            x = self._ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=self._ctx.w_mesh_axis, use_hyperparams=True)
-
-        x = self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
-
-        if self._gather_w:
-            original_layout = x.layout
-            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.mesh_partition(x, dim=2, cluster_axis=self._ctx.w_mesh_axis, memory_config=x.memory_config())
-            if original_layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, original_layout)
-
-        return x
+        return self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
 
 
 def _norm(
@@ -819,7 +800,7 @@ def _norm(
     when that path is used and runs it separately otherwise. Callers just call ``forward``.
     """
     if isinstance(norm, VaeNormDescGroup):
-        # SP-active: fused DistributedGroupNorm (stats AG on one spatial axis).
+        # SP-active: fused DistributedGroupNorm (stats exchanged over the sharded spatial axes).
         if ctx.h_factor > 1 or ctx.w_factor > 1:
             return _VaeSpatialGroupNorm(
                 num_groups=norm.num_groups,
