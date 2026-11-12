@@ -62,21 +62,37 @@ static const float PI_4 = 0.7853981852531433f;
 static const float FRAC_1_PI = 0.31830987334251404f;
 static const float FRAC_2_PI = 0.6366197466850281f;
 
-template <bool is_fp32_dest_acc_en>
-static sfpi::vFloat sfpu_tan(sfpi::vFloat x, sfpi::vInt i);
+// Minimax coefficients of tan(a) = a + a * s * P(s), s = a*a, for a in [-pi/4, pi/4], highest order first.
+// None is fp16/bf16-representable, so as a literal each costs an SFPLOADI pair per row (sfpi hoists no
+// fp32 literal out of a row loop); calculate_tangent holds as many as the row's free LRegs allow and passes
+// the rest as float, which materialises at its use exactly like the literal did.
+struct TanPoly {
+    // fp32 dest, degree 7 in s
+    static constexpr float FP32_C6 = 0x1.fa9f82p-9f;
+    static constexpr float FP32_C5 = 0x1.2b404p-10f;
+    static constexpr float FP32_C4 = 0x1.4787dp-7f;
+    static constexpr float FP32_C3 = 0x1.620abcp-6f;
+    static constexpr float FP32_C2 = 0x1.ba5716p-5f;
+    static constexpr float FP32_C1 = 0x1.111072p-3f;
+    static constexpr float FP32_C0 = 0x1.555556p-2f;
+    // 16-bit dest, degree 3 in s
+    static constexpr float BF16_C2 = 0x1.4f1f4ep-4f;
+    static constexpr float BF16_C1 = 0x1.02b98p-3f;
+    static constexpr float BF16_C0 = 0x1.55953p-2f;
+};
 
-template <>
-sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
+template <typename C6, typename C5, typename C4, typename C3, typename C2, typename C1, typename C0>
+sfpi_inline sfpi::vFloat sfpu_tan_fp32(sfpi::vFloat a, sfpi::vInt i, C6 c6, C5 c5, C4 c4, C3 c3, C2 c2, C1 c1, C0 c0) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
-    sfpi::vFloat t = 0x1.fa9f82p-9f;
-    t = t * s + 0x1.2b404p-10f;
-    t = t * s + 0x1.4787dp-7f;
-    t = t * s + 0x1.620abcp-6f;
-    t = t * s + 0x1.ba5716p-5f;
-    t = t * s + 0x1.111072p-3f;
-    t = t * s + 0x1.555556p-2f;
+    sfpi::vFloat t = c6;
+    t = t * s + c5;
+    t = t * s + c4;
+    t = t * s + c3;
+    t = t * s + c2;
+    t = t * s + c1;
+    t = t * s + c0;
     t = t * s;
 
     sfpi::vFloat r = t * a + a;
@@ -105,14 +121,14 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
     return r;
 }
 
-template <>
-sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
+template <typename C2, typename C1, typename C0>
+sfpi_inline sfpi::vFloat sfpu_tan_bf16(sfpi::vFloat a, sfpi::vInt i, C2 c2, C1 c1, C0 c0) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
-    sfpi::vFloat t = 0x1.4f1f4ep-4f;
-    t = t * s + 0x1.02b98p-3f;
-    t = t * s + 0x1.55953p-2f;
+    sfpi::vFloat t = c2;
+    t = t * s + c1;
+    t = t * s + c0;
     t = t * s;
 
     sfpi::vFloat r = t * a + a;
@@ -129,8 +145,11 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     return r;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_tangent() {
+// Row loop of calculate_tangent. rb is the 1.5*2^23 rounding bias and c... the polynomial coefficients of
+// sfpu_tan_fp32 / sfpu_tan_bf16; each is an sfpi::vFloat the caller bound before the loop (LReg-resident)
+// or a literal, which materialises at its use.
+template <bool is_fp32_dest_acc_en, int ITERATIONS, typename RB, typename... C>
+inline void _calculate_tangent_rows_(RB rb, C... c) {
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
@@ -144,7 +163,7 @@ inline void calculate_tangent() {
         // j = round(v / (PI/2))
         // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest.
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        sfpi::vFloat rounding_bias = sfpi::sFloat16b(0x1.8p23f);
+        sfpi::vFloat rounding_bias = rb;
         sfpi::vFloat j =
             __builtin_rvtt_sfpmad(v.get(), inv_pio2.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
@@ -157,20 +176,42 @@ inline void calculate_tangent() {
         i <<= 31;
 
         // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
-        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+        // P0 representable as bf16, P1 as fp16: a single SFPLOADI each.
         sfpi::vFloat a = v + j * P0;
-        // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         a = a + j * P1;
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
 
-        a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
-
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
+            a = sfpu_tan_fp32(a, i, c...);
+        } else {
+            a = sfpu_tan_bf16(a, i, c...);
             a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = a;
         sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_tangent() {
+    // Loop-invariant constants loaded once per call instead of per row (see TanPoly): the row leaves
+    // three LRegs free on an fp32 dest (three fp32 coefficients, an SFPLOADI pair each) and four on a
+    // 16-bit dest (all three coefficients and the rounding bias). One more hoisted value fails to compile
+    // ("too few lregs"); sfpi never spills.
+    const auto rounding_bias = sfpi::sFloat16b(0x1.8p23f);
+    if constexpr (is_fp32_dest_acc_en) {
+        const sfpi::vFloat c6 = TanPoly::FP32_C6;
+        const sfpi::vFloat c5 = TanPoly::FP32_C5;
+        const sfpi::vFloat c4 = TanPoly::FP32_C4;
+        _calculate_tangent_rows_<true, ITERATIONS>(
+            rounding_bias, c6, c5, c4, TanPoly::FP32_C3, TanPoly::FP32_C2, TanPoly::FP32_C1, TanPoly::FP32_C0);
+    } else {
+        const sfpi::vFloat rb = rounding_bias;
+        const sfpi::vFloat c2 = TanPoly::BF16_C2;
+        const sfpi::vFloat c1 = TanPoly::BF16_C1;
+        const sfpi::vFloat c0 = TanPoly::BF16_C0;
+        _calculate_tangent_rows_<false, ITERATIONS>(rb, c2, c1, c0);
     }
 }
 
