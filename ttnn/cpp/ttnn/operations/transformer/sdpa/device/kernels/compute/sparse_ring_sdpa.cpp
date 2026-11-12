@@ -56,8 +56,9 @@ void kernel_main() {
     constexpr uint32_t local_n_padded_tiles = local_n_has_padding ? Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t) : 0;
 
     uint32_t argidx = 0;
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // The static split's units; with load balancing, the range the reader passes on in cb_balance.
+    uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t ring_size_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
@@ -125,6 +126,14 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
+    constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
+    [[maybe_unused]] constexpr uint32_t cb_balance = get_named_compile_time_arg_val("cb_balance");
+    if constexpr (balance) {
+        CircularBuffer(cb_balance).wait_front(1);
+        invalidate_l1_cache();
+        global_q_start = ckernel::read_tile_value(cb_balance, 0, 0);
+        global_q_end = ckernel::read_tile_value(cb_balance, 0, 1);
+    }
     const uint32_t q_per_core = global_q_end - global_q_start;
     // The K/V CBs' read position in entries, carried across ring iterations and passes (the CBs are never reset).
     uint32_t kv_pos = 0;
@@ -301,5 +310,8 @@ void kernel_main() {
     }
     if constexpr (has_block_counts) {
         CircularBuffer(cb_block_counts).pop_front(1);
+    }
+    if constexpr (balance) {
+        CircularBuffer(cb_balance).pop_front(1);
     }
 }

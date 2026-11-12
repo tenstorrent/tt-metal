@@ -19,6 +19,7 @@
 #include "sparse_dense_units.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -92,6 +93,37 @@ SPARSE_RING_HOT void piece_bits(const uint32_t (&words)[kWords], uint32_t nb, ui
     hi = h;
 }
 
+// A unit's kept blocks that hold a real token, over its whole block-form mask row (n_blocks_pad words at row_addr,
+// read by the NoC with the L1 cache invalidated since): its cost for load balancing, before the per-unit constant.
+template <bool has_counts>
+SPARSE_RING_HOT uint32_t row_cost(
+    uint32_t row_addr,
+    const pooled_bias_gen::Geometry& geo,
+    const volatile tt_l1_ptr uint8_t* counts,
+    uint32_t shards) {
+    const uint32_t* row = reinterpret_cast<const uint32_t*>(row_addr);
+    uint32_t n = 0;
+    for (uint32_t s = 0; s < shards; ++s, row += geo.nb_pad) {
+        if constexpr (has_counts) {
+            const volatile tt_l1_ptr uint8_t* c = counts + s * geo.nb_pad;
+            for (uint32_t b = 0; b < geo.nb; ++b) {
+                n += (row[b] != 0 && c[b] != 0) ? 1u : 0u;
+            }
+        } else {
+            // Geometric lengths: the blocks holding a real token are a prefix of the shard.
+            const uint32_t s0 = s * geo.shard_tokens;
+            const uint32_t real = geo.logical_n > s0 ? geo.logical_n - s0 : 0u;
+            const uint32_t tokens = real < geo.shard_tokens ? real : geo.shard_tokens;
+            const uint32_t live = (tokens + pooled_bias_gen::kBlockTokens - 1) / pooled_bias_gen::kBlockTokens;
+            const uint32_t end = live < geo.nb ? live : geo.nb;
+            for (uint32_t b = 0; b < end; ++b) {
+                n += row[b] != 0 ? 1u : 0u;
+            }
+        }
+    }
+    return n;
+}
+
 }  // namespace sparse_ring_bits
 
 // Reader of the block-sparse ring SDPA: every core holds its Q blocks ("resident" chunks of
@@ -156,7 +188,9 @@ void kernel_main() {
     // dense_blocks split across devices: the gathered dense-Q buffer and the partials arriving from the neighbours.
     constexpr auto dense_q_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
     constexpr auto dense_recv_args = TensorAccessorArgs<dense_q_args.next_compile_time_args_offset()>();
-    constexpr uint32_t chains_base_offset = dense_recv_args.next_compile_time_args_offset();
+    // Load balancing: this device's cost table.
+    constexpr auto balance_table_args = TensorAccessorArgs<dense_recv_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = balance_table_args.next_compile_time_args_offset();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -165,10 +199,12 @@ void kernel_main() {
     const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
     argidx++;  // attention sink address (none)
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // The static split's units; with load balancing the core works on the range the balance kernel releases.
+    const uint32_t static_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t static_q_end = get_arg_val<uint32_t>(argidx++);
     argidx++;  // KV cache batch index (no KV cache)
-    const uint32_t q_per_core = global_q_end - global_q_start;
+    uint32_t global_q_start = static_q_start;
+    uint32_t global_q_end = static_q_end;
 
     ChainConfig head_cfg;
     if constexpr (use_head_chain) {
@@ -218,16 +254,23 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
     [[maybe_unused]] const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
     // +3: block counts address (none: geometric counts). +4: head chain member count, +5: this core's first Q
-    // chunk in the chain. Then the packed bf16 bias-per-token-count table (pooled_bias_gen::kTableWords words), the
-    // dense_blocks ranges (start, end), the members (start, count) and the head group's delivery arguments.
+    // chunk in the chain. Then (load balancing) the balance words, the packed bf16 bias-per-token-count table
+    // (pooled_bias_gen::kTableWords words), the dense_blocks ranges (start, end), the members (start, count) and the
+    // head group's delivery arguments.
     [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
     const uint32_t group_n_members = get_arg_val<uint32_t>(sparse_args_base + 4);
-    const uint32_t pooled_bias_table_base = sparse_args_base + 6;
+    // Load balancing: +0 this core's index, +1 the cost table, +2 / +3 the balance core's NoC x / y, +4 / +5 the
+    // swapped-in Q and mask rows (cross-device; laid out as Q and the mask, by local slot).
+    constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
+    constexpr bool balance_remote = get_named_compile_time_arg_val("balance_remote") == 1;
+    [[maybe_unused]] const uint32_t balance_base = sparse_args_base + 6;
+    constexpr uint32_t kBalanceArgs = balance ? 6 : 0;
+    const uint32_t pooled_bias_table_base = balance_base + kBalanceArgs;
     // dense_blocks: [start, end) ranges of global blocks. A Q block in one keeps every block (its mask row is
     // ignored); with dense_keys every Q block also keeps the blocks in them. Applied to the plan and the pooled bias.
     constexpr uint32_t dense_n_ranges = get_named_compile_time_arg_val("dense_n_ranges");
     constexpr bool dense_keys = get_named_compile_time_arg_val("dense_keys") == 1;
-    const uint32_t dense_ranges_base = sparse_args_base + 6 + pooled_bias_gen::kTableWords;
+    const uint32_t dense_ranges_base = pooled_bias_table_base + pooled_bias_gen::kTableWords;
     // Dense units (dense_owners > 0): [first unit, end unit, arrivals from the - side, dense-Q buffer, receive buffer,
     // arrivals from the + side], then one sparse_dense::Owner record per owner shard.
     constexpr uint32_t dense_owners = get_named_compile_time_arg_val("dense_owners");
@@ -408,6 +451,69 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     const auto in_dense_rt = [&](uint32_t g) { return in_dense(g); };
+
+    // Load balancing (sparse_ring_balance.cpp): the costs of this core's static units into its slice of this device's
+    // cost page, then the range the balance kernel releases and, with cross-device balancing, which of its units are
+    // swapped in from another device (their Q and mask rows are read from the import buffers once the balance kernel
+    // says they have arrived). Compute gets the range in cb_balance; the writer reads the same semaphores.
+    [[maybe_unused]] uint32_t import_bits = 0;
+    [[maybe_unused]] bool imports_ready = false;
+    if constexpr (balance) {
+        constexpr uint32_t cost_words = get_named_compile_time_arg_val("balance_cost_words");
+        // Both plan pages are free before the first iteration: a mask row in page 0's scratch, the costs in page 1
+        // (64-byte aligned: one DRAM write; the factory checks the room).
+        CircularBuffer cb_plan(cb_sparse_plan);
+        cb_plan.reserve_back(2);
+        const uint32_t row_addr = cb_plan.get_write_ptr() + 64;
+        const uint32_t costs_addr = (cb_plan.get_write_ptr() + 64 + mask_row_bytes + 63) & ~63u;
+        volatile tt_l1_ptr uint32_t* costs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(costs_addr);
+        for (uint32_t f = static_q_start; f < static_q_end; ++f) {
+            noc.async_read(
+                mask_reader,
+                CoreLocalMem<uint32_t>(row_addr),
+                mask_row_bytes,
+                {.page_id = (f / num_q_chunks) * mask_nqb_pad + f % num_q_chunks},
+                {});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            const uint32_t c = sparse_ring_bits::row_cost<has_block_counts>(row_addr, geo, counts_table, ring_size) +
+                               sparse_balance::kUnitCost;
+            costs[f - static_q_start] = c < sparse_balance::kMaxUnitCost ? c : sparse_balance::kMaxUnitCost;
+        }
+        if (static_q_end > static_q_start) {
+            (void)costs[static_q_end - static_q_start - 1];  // the RISC stores land before the NoC reads them
+            noc.async_write(
+                CoreLocalMem<uint32_t>(costs_addr),
+                TensorAccessor(balance_table_args, get_arg_val<uint32_t>(balance_base + 1)),
+                cost_words * sizeof(uint32_t),
+                {},
+                {.page_id = ring_index,
+                 .offset_bytes = get_arg_val<uint32_t>(balance_base) * cost_words * sizeof(uint32_t)});
+            noc.async_write_barrier();
+            Semaphore<>(get_named_compile_time_arg_val("balance_sem_costs"))
+                .up(noc, get_arg_val<uint32_t>(balance_base + 2), get_arg_val<uint32_t>(balance_base + 3), 1);
+            noc.async_atomic_barrier();
+        }
+        Semaphore<> range_sem(get_named_compile_time_arg_val("balance_sem_range"));
+        range_sem.wait_min(sparse_balance::kRangeValid);
+        const uint32_t range = range_sem.value();
+        global_q_start = sparse_balance::range_start(range);
+        global_q_end = sparse_balance::range_end(range);
+        if constexpr (balance_remote) {
+            import_bits = Semaphore<>(get_named_compile_time_arg_val("balance_sem_bits")).value();
+        }
+        CircularBuffer cb_range(get_named_compile_time_arg_val("cb_balance"));
+        cb_range.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_range.get_write_ptr());
+        page[0] = global_q_start;
+        page[1] = global_q_end;
+        cb_range.push_back(1);
+    }
+    const uint32_t q_per_core = global_q_end - global_q_start;
+    // Unit i of a pass starting at pass_q_start is swapped in from another device.
+    [[maybe_unused]] const auto swapped_in = [&](uint32_t pass_q_start, uint32_t i) -> bool {
+        return balance_remote && ((import_bits >> (pass_q_start - global_q_start + i)) & 1u) != 0;
+    };
     // Group delivery args: the resident group's [role, producer x, y, receivers, rectangles, (5 words each, producer
     // only)], then (dense units) the dense group's in the same form.
     [[maybe_unused]] const uint32_t res_g_base = group_members_base + 2 * group_n_members;
@@ -448,6 +554,8 @@ void kernel_main() {
             uint32_t res_nb[kResMax];
             uint32_t res_nq[kResMax];
             uint32_t res_qc[kResMax];
+            // Resident chunks swapped in from another device (bit i): Q and mask rows from the import buffers.
+            [[maybe_unused]] uint32_t res_imported = 0;
             for (uint32_t i = 0; i < n_res; ++i) {
                 if (dense != nullptr) {
                     res_nb[i] = 0;
@@ -462,7 +570,11 @@ void kernel_main() {
                 res_qc[i] = res_remap
                                 ? sparse_dense::resident_block(ring_index, d.q_chunk, mask_nb, mask_nb_pad, in_dense_rt)
                                 : d.q_chunk;
+                if constexpr (balance_remote) {
+                    res_imported |= swapped_in(pass_q_start, i) ? 1u << i : 0u;
+                }
             }
+            [[maybe_unused]] const auto imported = [&](uint32_t i) { return ((res_imported >> i) & 1u) != 0; };
             // 1. Q, once per pass (every dense batch). The reserve waits until compute has popped the previous Q.
             if (dense != nullptr || !q_pushed) {
                 for (uint32_t i = 0; i < n_res; ++i) {
@@ -483,6 +595,25 @@ void kernel_main() {
                         continue;
                     }
                     const Slice q_slice(res_nb[i], res_nq[i], row0, row0 + Sq_chunk_t, 0, DHt);
+                    if constexpr (balance_remote) {
+                        if (imported(i)) {
+                            if (!imports_ready) {
+                                Semaphore<>(get_named_compile_time_arg_val("balance_sem_import")).wait_min(1);
+                                imports_ready = true;
+                            }
+                            read_block(
+                                PaddedAddrGenerator(
+                                    TensorAccessor(q_args, get_arg_val<uint32_t>(balance_base + 4)),
+                                    input_q_tile_logical),
+                                q_slice,
+                                q_local_padded_Nt,
+                                cb_q_in,
+                                q_tile_bytes,
+                                false,
+                                q_barrier_threshold);
+                            continue;
+                        }
+                    }
                     read_block(
                         q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
                 }
@@ -505,22 +636,32 @@ void kernel_main() {
             CircularBuffer cb_plan(cb_sparse_plan);
             cb_plan.reserve_back(1);
             uint32_t scratch = cb_plan.get_write_ptr() + 64;
-            const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
+            // Resident chunk i's mask row: block_mask's, or the import buffer's (same layout) for a swapped-in chunk.
+            const auto mask_of = [&](uint32_t i) {
+                if constexpr (balance_remote) {
+                    if (imported(i)) {
+                        return TensorAccessor(mask_args, get_arg_val<uint32_t>(balance_base + 5));
+                    }
+                }
+                return mask_reader;
+            };
+            const auto read_chunk_row = [&](uint32_t i) {
                 noc.async_read(
-                    mask_reader,
+                    mask_of(i),
                     CoreLocalMem<uint32_t>(scratch),
                     mask_row_bytes,
-                    {.page_id = nq * mask_nqb_pad + qc},
+                    {.page_id = res_nq[i] * mask_nqb_pad + res_qc[i]},
                     {});
                 noc.async_read_barrier();
             };
-            // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch.
-            const auto read_shard_slice = [&](uint32_t nq, uint32_t qc) {
+            // This shard's slice of chunk i's row (nb_pad words from block ring_id * nb_pad) into the scratch.
+            const auto read_shard_slice = [&](uint32_t i) {
                 noc.async_read(
-                    mask_reader,
+                    mask_of(i),
                     CoreLocalMem<uint32_t>(scratch),
                     mask_nb_pad * sizeof(uint32_t),
-                    {.page_id = nq * mask_nqb_pad + qc, .offset_bytes = ring_id * mask_nb_pad * sizeof(uint32_t)},
+                    {.page_id = res_nq[i] * mask_nqb_pad + res_qc[i],
+                     .offset_bytes = ring_id * mask_nb_pad * sizeof(uint32_t)},
                     {});
                 noc.async_read_barrier();
             };
@@ -568,7 +709,7 @@ void kernel_main() {
             };
             for (uint32_t i = 0; i < n_res; ++i) {
                 if (dense == nullptr) {
-                    read_shard_slice(res_nq[i], res_qc[i]);
+                    read_shard_slice(i);
                 }
                 uint32_t words[kBlockWords];
                 row_block_bits(words, res_qc[i]);
@@ -623,7 +764,7 @@ void kernel_main() {
                     }
                     // The chunk's own block bits, from its slice again (the scratch holds the last chunk's).
                     if (dense == nullptr) {
-                        read_shard_slice(res_nq[i], res_qc[i]);
+                        read_shard_slice(i);
                     }
                     uint32_t words[kBlockWords];
                     row_block_bits(words, res_qc[i]);
@@ -986,7 +1127,7 @@ void kernel_main() {
                             for (uint32_t i = i0; i < i1; ++i) {
                                 // The chunk's own row back into the plan scratch: compute reads only the header
                                 // words of a plan page, and every page has been popped by now.
-                                read_chunk_row(nq, res_qc[i]);
+                                read_chunk_row(i);
                                 // The plan's kept set: a dense row's blocks and the dense ranges (dense_keys) are
                                 // exact as set mask bits are.
                                 if constexpr (dense_n_ranges > 0) {
