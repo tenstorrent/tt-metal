@@ -11,6 +11,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 #include <cstdint>
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 
@@ -66,6 +67,11 @@ struct SoftmaxDeviceOperation {
     struct SoftmaxProgramFactoryAttentionOptimized {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+            const operation_attributes_t&,
+            const tensor_args_t&,
+            const tt::tt_metal::experimental::ProgramSpec&,
+            const tt::tt_metal::experimental::ProgramRunArgs&);
     };
 
     using program_factory_t = std::variant<

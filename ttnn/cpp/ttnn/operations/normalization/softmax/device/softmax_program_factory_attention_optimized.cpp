@@ -659,4 +659,22 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
+// The output is not bound: the softmax ops take no output keyword, so DST stays at its recorded address.
+ttnn::command_list::CmdListBindings
+SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::map_cmd_list_parameters(
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& tensor_args,
+    const ProgramSpec& spec,
+    const ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"src"});
+    // pre_scale exists only on the fused scale-mask path. Without a mask, a scale CmdListParam goes unclaimed.
+    if (tensor_args.mask.has_value()) {
+        binder.tensor(/*invoke_name=*/"mask", /*program_spec_param_name=*/TensorParamName{"mask"});
+        binder.param(/*invoke_name=*/"scale", /*encode=*/ttnn::command_list::encode_float32_bits)
+            .runtime(/*kernel_name=*/KernelSpecName{"reader"}, /*arg_name=*/"pre_scale");
+    }
+    return std::move(binder).finish();
+}
+
 }  // namespace ttnn::prim
