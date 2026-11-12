@@ -2,14 +2,87 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal
+from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class StepSave(BaseModel):
+    """Save every ``frequency`` optimizer steps."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["step"] = "step"
+    frequency: int = Field(default=100, ge=1)
+
+
+class EpochSave(BaseModel):
+    """Save at the end of every ``frequency``-th epoch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["epoch"] = "epoch"
+    frequency: int = Field(default=1, ge=1)
+
+
+class NoSave(BaseModel):
+    """Save no checkpoint, not even the final one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["none"] = "none"
+
+
+class LastRotation(BaseModel):
+    """Keep the ``keep_n`` most recent checkpoints."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["last"] = "last"
+    keep_n: int = Field(default=3, ge=1)
+
+
+class BestRotation(BaseModel):
+    """Keep the ``keep_n`` checkpoints with the best ``metric``, and the latest one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["best"] = "best"
+    keep_n: int = Field(default=3, ge=1)
+    # Checkpoints carry the "val/loss" of the latest validation.
+    metric: str = "val/loss"
+    # "min" keeps the lowest values, "max" the highest.
+    mode: Literal["min", "max"] = "min"
+
+
+class NoRotation(BaseModel):
+    """Keep every checkpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["none"] = "none"
+
+
+class InitStrategy(BaseModel):
+    """The checkpoint a run starts from."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # "init" loads the trained weights only: training starts at step 0 with a fresh optimizer. "resume" also loads
+    # the optimizer state, which a checkpoint holds only if saved with `save_optim`, and continues the run after the
+    # checkpoint's step, on the batches it would have trained on next.
+    type: Literal["init", "resume"]
+    # A checkpoint directory.
+    path: str = Field(min_length=1)
+
+
+# `type` picks one, and with it the other fields it takes.
+SaveStrategy = Annotated[Union[StepSave, EpochSave, NoSave], Field(discriminator="type")]
+RotationStrategy = Annotated[Union[LastRotation, BestRotation, NoRotation], Field(discriminator="type")]
+
+
 class CheckpointConfig(BaseModel):
-    """When ``CheckpointCallback`` saves, how many checkpoints ``CheckpointManager`` keeps, and what a run
-    starts from.
+    """When ``CheckpointCallback`` saves, which checkpoints ``CheckpointManager`` keeps, and what a run starts from.
 
     A checkpoint is a directory holding what the model trains: a PEFT adapter for a LoRA run, an HF model
     directory for a full fine-tune.
@@ -17,26 +90,15 @@ class CheckpointConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    save_strategy: Literal["epoch", "step", "none"] = "none"
-    steps_freq: int = Field(default=100, ge=1)
-    epoch_freq: int = Field(default=1, ge=1)
+    save_strategy: SaveStrategy = Field(default_factory=NoSave)
+    # Never deletes the checkpoint just saved, such as the final one.
+    rotation_strategy: RotationStrategy = Field(default_factory=LastRotation)
+    # Unset starts from the pretrained weights.
+    init_strategy: Optional[InitStrategy] = None
 
     # Checkpoints go to <project_dir>/checkpoints/.
     project_dir: str = "runs/unified_trainer"
     # Saved at the end of the run unless save_strategy is "none".
     final_checkpoint_name: str = "final"
-    # Optimizer state is not saved (there is no resume); True is rejected rather than ignored.
+    # Also save the optimizer state, which a run resuming from the checkpoint needs.
     save_optim: bool = False
-    # At least 1, so the checkpoint just saved (e.g. the final one) is never rotated away.
-    keep_last_n: int = Field(default=3, ge=1)
-    keep_best_n: int = Field(default=0, ge=0)
-    # Disables rotation: no checkpoint is ever deleted.
-    keep_all_checkpoints: bool = False
-    checkpoint_metric: str = "val/loss"
-    checkpoint_metric_mode: Literal["min", "max"] = "min"
-
-    # Initialize the trained weights from a checkpoint. Not a resume: training still starts at step 0.
-    init_from_checkpoint: bool = False
-    init_option: Literal["last", "best", "path"] = "last"
-    # Used when init_option is "path".
-    checkpoint_path: str = ""

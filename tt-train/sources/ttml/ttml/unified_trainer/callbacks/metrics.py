@@ -14,12 +14,15 @@ class MetricsCallback(Callback):
     """Logs the model size, and the metrics ``config.metrics`` asks for, through ``trainer.logger``."""
 
     def __init__(self) -> None:
-        # Sum of the step losses since the last log; exactly `steps_freq` steps complete between logs.
+        # Sum of the step losses since the last log, and their number: `steps_freq`, or fewer before the first
+        # log of a resumed run.
         self._running_loss: Any = None
+        self._running_steps = 0
 
     def on_train_start(self, trainer: Any) -> None:
         # A callback outlives the run; drop what a failed run left behind.
         self._running_loss = None
+        self._running_steps = 0
         total, trainable = trainer.parameter_counts()
         trainer.logger.log_model_info(
             {
@@ -33,18 +36,19 @@ class MetricsCallback(Callback):
 
     def on_optimizer_step_end(self, trainer: Any, window_loss: Any) -> None:
         self._running_loss = window_loss if self._running_loss is None else self._running_loss + window_loss
+        self._running_steps += 1
 
     def on_step_end(self, trainer: Any, global_step: int) -> None:
-        steps_freq = trainer.config.metrics.steps_freq
-        if global_step % steps_freq == 0:
+        if global_step % trainer.config.metrics.steps_freq == 0:
             available = {
-                "loss": trainer.loss_to_float(self._running_loss) / steps_freq,
+                "loss": trainer.loss_to_float(self._running_loss) / self._running_steps,
                 "learning_rate": trainer.current_learning_rate(),
             }
             metrics = _select(available, trainer.config.metrics.train_metrics, "train")
             if metrics:
                 trainer.logger.log_metrics(metrics, step=global_step, commit=False)
             self._running_loss = None
+            self._running_steps = 0
         # Commit once per step, so validation metrics logged during the step land on it too.
         trainer.logger.log_metrics({}, step=global_step, commit=True)
 

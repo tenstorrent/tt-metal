@@ -35,6 +35,7 @@ metrics:
   steps_freq: 10
 
 checkpoint:
-  save_strategy: step
-  steps_freq: 200
+  save_strategy:
+    type: step
+    frequency: 200
   project_dir: runs/llama_3_1_8b_custom_lora

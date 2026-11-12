@@ -4,15 +4,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import ttnn
 
 import ttml
+from ttml import checkpointing
 from ttml.common.utils import no_grad, validate_clip_grad_norm
 
 from .checkpoint_io import (
+    OPTIMIZER_STATE,
     is_adapter_dir,
     is_model_dir,
     read_adapter,
@@ -98,6 +101,13 @@ class SFTTrainer(Trainer):
 
     # ------------------------------------------------------------------ steps
 
+    def _train_batches(self, epoch: int, start: int) -> Any:
+        # The shuffled order is a function of the seed and the epoch, so a resumed run trains on the batches the
+        # run it continues would have, without collating the ones before `start`.
+        state = self.train_dataloader.get_state_dict()
+        self.train_dataloader.set_state_dict({**state, "epoch": epoch, "position": start})
+        return self.train_dataloader
+
     def _prepare_batch(self, batch: dict[str, np.ndarray]) -> dict[str, Any]:
         return {
             key: ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(value), *BATCH_SPEC[key])
@@ -160,16 +170,26 @@ class SFTTrainer(Trainer):
     def current_learning_rate(self) -> list[float]:
         return [float(lr) for lr in self.optimizer.get_group_lrs()]
 
-    def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
-        """A PEFT adapter directory for a LoRA run, else an HF model directory; with ``trainer_state.json``."""
+    def save_checkpoint(self, path: str, metadata: Optional[dict] = None, optimizer: bool = False) -> None:
+        """A PEFT adapter directory for a LoRA run, else an HF model directory; with ``trainer_state.json``, and
+        with ``optimizer`` ``optimizer_state.pkl``."""
         with staged_directory(path) as directory:
             if self.config.lora is not None:
                 write_adapter(directory, self.provider.export_adapter(self.model, self.config))
             else:
                 self.provider.export_weights(self.model, self.config, str(directory))
             write_trainer_state(directory, metadata or {})
+            if optimizer:
+                # Also the trained weights at the precision they train in, which the HF files may round to bf16,
+                # and the RNG of dropout: what a resumed run needs to continue as this one would.
+                checkpointing.save_checkpoint(
+                    str(directory / OPTIMIZER_STATE),
+                    header={"rng": ttml.autograd.AutoContext.get_instance().get_generator_state()},
+                    model_params=self._trainable_parameters(),
+                    optimizer=self.optimizer,
+                )
 
-    def load_checkpoint(self, path: str) -> dict:
+    def load_checkpoint(self, path: str, optimizer: bool = False) -> dict:
         """Loads what ``save_checkpoint`` wrote for this kind of run; the other kind of checkpoint is an error."""
         if self.config.lora is not None:
             if is_model_dir(path):
@@ -186,7 +206,22 @@ class SFTTrainer(Trainer):
             if not is_model_dir(path):
                 raise FileNotFoundError(f"{path} is not an HF model directory (config.json and *.safetensors)")
             self.provider.import_weights(self.model, path, self.config)
+        if optimizer:
+            state_path = Path(path) / OPTIMIZER_STATE
+            if not state_path.is_file():
+                raise FileNotFoundError(f"{path} has no optimizer state: it was saved without checkpoint.save_optim")
+            header = checkpointing.load_checkpoint(
+                str(state_path), model_params=self._trainable_parameters(), optimizer=self.optimizer
+            )
+            ttml.autograd.AutoContext.get_instance().set_generator_state(header["rng"])
         return read_trainer_state(path)
+
+    def _trainable_parameters(self) -> Any:
+        trainable = ttml.NamedParameters()
+        for name, tensor in self.model.parameters().items():
+            if tensor.get_requires_grad():
+                trainable[name] = tensor
+        return trainable
 
     def cleanup(self) -> None:
         # The tokenized-dataset cache is process-wide; the next run may use another model or length.

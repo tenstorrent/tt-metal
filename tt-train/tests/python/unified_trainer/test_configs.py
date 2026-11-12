@@ -9,7 +9,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ttml.unified_trainer import AdamWConfig, OptimizerConfig, SFTTrainerConfig, load_config
+from ttml.unified_trainer import (
+    AdamWConfig,
+    BestRotation,
+    EpochSave,
+    OptimizerConfig,
+    SFTTrainerConfig,
+    StepSave,
+    load_config,
+)
 from ttml.unified_trainer.configs import apply_override
 
 RECIPES = Path(__file__).resolve().parents[3] / "configs" / "training_configs" / "unified_trainer"
@@ -24,7 +32,9 @@ def sft(**overrides):
 def test_defaults_train_every_weight_without_checkpoints():
     config = sft()
     assert config.lora is None
-    assert config.checkpoint.save_strategy == "none"
+    assert config.checkpoint.save_strategy.type == "none"
+    assert config.checkpoint.init_strategy is None
+    assert not config.checkpoint.save_optim
     assert (config.num_epochs, config.gradient_accumulation_steps, config.max_steps, config.val_steps_freq) == (
         1,
         1,
@@ -44,10 +54,12 @@ def test_defaults_train_every_weight_without_checkpoints():
         {"lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "rank": 4}},
         {"optimizer": {"lr": 1e-4, "momentum": 0.9}},
         {"checkpoint": {"save_every": 10}},
+        {"checkpoint": {"save_strategy": {"type": "none", "frequency": 10}}},
+        {"checkpoint": {"rotation_strategy": {"type": "last", "metric": "val/loss"}}},
         {"metrics": {"log_freq": 10}},
         {"logging": {"wandb_watch_mode": "all"}},
     ],
-    ids=["top level", "lora", "optimizer", "checkpoint", "metrics", "logging"],
+    ids=["top level", "lora", "optimizer", "checkpoint", "save strategy", "rotation strategy", "metrics", "logging"],
 )
 def test_unknown_fields_are_rejected(overrides, expect_error):
     with expect_error(ValidationError, "Extra inputs are not permitted"):
@@ -71,8 +83,22 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
         ({"lora": {"r": 0, "alpha": 8, "target_modules": ["q_proj"]}}, "lora.r"),
         ({"lora": {"r": 4, "alpha": 8, "target_modules": []}}, "lora.target_modules"),
         ({"lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "dropout": 1.0}}, "lora.dropout"),
-        ({"checkpoint": {"save_strategy": "always"}}, "checkpoint.save_strategy"),
-        ({"checkpoint": {"keep_last_n": 0}}, "checkpoint.keep_last_n"),
+        ({"checkpoint": {"save_strategy": "step"}}, "checkpoint.save_strategy"),
+        ({"checkpoint": {"save_strategy": {"type": "always"}}}, "checkpoint.save_strategy"),
+        (
+            {"checkpoint": {"save_strategy": {"type": "step", "frequency": 0}}},
+            "checkpoint.save_strategy.step.frequency",
+        ),
+        (
+            {"checkpoint": {"rotation_strategy": {"type": "last", "keep_n": 0}}},
+            "checkpoint.rotation_strategy.last.keep_n",
+        ),
+        (
+            {"checkpoint": {"rotation_strategy": {"type": "best", "mode": "lowest"}}},
+            "checkpoint.rotation_strategy.best.mode",
+        ),
+        ({"checkpoint": {"init_strategy": {"type": "last", "path": "runs"}}}, "checkpoint.init_strategy.type"),
+        ({"checkpoint": {"init_strategy": {"type": "resume"}}}, "checkpoint.init_strategy.path"),
         ({"master_dtype": "float16"}, "master_dtype"),
     ],
 )
@@ -84,6 +110,26 @@ def test_invalid_values_are_rejected(overrides, field, expect_error):
 def test_the_optimizer_type_picks_its_config():
     assert sft(optimizer={"type": "adamw", "lr": 1e-4, "beta1": 0.8}).optimizer[0].beta1 == 0.8
     assert sft(optimizer=AdamWConfig(lr=1e-4)).optimizer[0].lr == 1e-4
+
+
+def test_each_checkpoint_strategy_type_takes_its_own_options():
+    checkpoint = sft(
+        val_steps_freq=10,
+        checkpoint={
+            "save_strategy": {"type": "epoch"},
+            "rotation_strategy": {"type": "best", "keep_n": 2},
+            "init_strategy": {"type": "resume", "path": "runs/checkpoints/final"},
+        },
+    ).checkpoint
+    assert isinstance(checkpoint.save_strategy, EpochSave) and checkpoint.save_strategy.frequency == 1
+    assert isinstance(checkpoint.rotation_strategy, BestRotation)
+    assert (checkpoint.rotation_strategy.metric, checkpoint.rotation_strategy.mode) == ("val/loss", "min")
+    assert sft(checkpoint={"save_strategy": StepSave(frequency=5)}).checkpoint.save_strategy.frequency == 5
+
+
+def test_best_rotation_needs_validation(expect_error):
+    with expect_error(ValidationError, "best ranks checkpoints by validation, so set val_steps_freq"):
+        sft(checkpoint={"rotation_strategy": {"type": "best"}})
 
 
 def test_unset_optimizer_fields_keep_ttmls_defaults_and_modules_stay_out():
@@ -146,7 +192,7 @@ def test_model_name_is_a_field():
         ("lora.r=16", {"lora": {"r": 16}}),
         ("optimizer.lr=1.0e-5", {"optimizer": {"lr": 1e-5}}),
         ("lora.target_modules=[q_proj, k_proj]", {"lora": {"target_modules": ["q_proj", "k_proj"]}}),
-        ("checkpoint.save_strategy=step", {"checkpoint": {"save_strategy": "step"}}),
+        ("checkpoint.save_strategy={type: none}", {"checkpoint": {"save_strategy": {"type": "none"}}}),
         (
             "custom_dataset.column_mapping={output: answer}",
             {"custom_dataset": {"column_mapping": {"output": "answer"}}},

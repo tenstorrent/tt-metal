@@ -6,7 +6,8 @@
 
 A LoRA run's checkpoint is a PEFT adapter directory (``PeftModel.from_pretrained`` loads it); a full
 fine-tune's is an HF model directory (``AutoModelForCausalLM.from_pretrained`` loads it). Both hold a
-``trainer_state.json`` with the step, epoch and metrics.
+``trainer_state.json`` with the step, epoch and metrics, and may hold ``optimizer_state.pkl``, which the trainer
+writes with ``ttml.checkpointing`` for a run to resume from.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from .providers.base import AdapterState
 ADAPTER_CONFIG = "adapter_config.json"
 ADAPTER_WEIGHTS = "adapter_model.safetensors"
 MODEL_CONFIG = "config.json"
+OPTIMIZER_STATE = "optimizer_state.pkl"
 TRAINER_STATE = "trainer_state.json"
 
 PathLike = Union[str, os.PathLike]

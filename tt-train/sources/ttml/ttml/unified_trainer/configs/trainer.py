@@ -52,6 +52,15 @@ class TrainerConfig(BaseModel):
             raise ValueError("custom_dataset is required when dataset_id is 'custom'")
         return self
 
+    @model_validator(mode="after")
+    def _check_best_rotation(self) -> "TrainerConfig":
+        # The metrics a checkpoint carries come from validation.
+        if self.checkpoint.rotation_strategy.type == "best" and self.val_steps_freq == 0:
+            raise ValueError(
+                "checkpoint.rotation_strategy: best ranks checkpoints by validation, so set val_steps_freq"
+            )
+        return self
+
 
 class SFTTrainerConfig(TrainerConfig):
     """``SFTTrainer``: supervised fine-tuning of a causal LM on prompt/response pairs."""

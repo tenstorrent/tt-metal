@@ -7,7 +7,7 @@
 import json
 import os
 
-from unified_trainer_fakes import FakeTrainer, make_config
+from unified_trainer_fakes import FakeTrainer, Recorder, make_config
 
 from ttml.unified_trainer import CheckpointCallback, MetricsCallback
 
@@ -71,9 +71,17 @@ def checkpoint_config(tmp_path, **overrides):
     return {"project_dir": str(tmp_path), **overrides}
 
 
-def test_checkpoints_every_steps_freq_and_at_the_end(tmp_path):
+EVERY_2_STEPS = {"type": "step", "frequency": 2}
+KEEP_ALL = {"type": "none"}
+
+
+def final_checkpoint(tmp_path):
+    return os.path.join(str(tmp_path), "checkpoints", "final")
+
+
+def test_checkpoints_every_frequency_steps_and_at_the_end(tmp_path):
     trainer = FakeTrainer([CheckpointCallback()])
-    run(trainer, checkpoint=checkpoint_config(tmp_path, save_strategy="step", steps_freq=2, keep_all_checkpoints=True))
+    run(trainer, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, rotation_strategy=KEEP_ALL))
     names = [os.path.basename(path) for path in trainer.saved]
     assert names[0].startswith("checkpoint_step2_epoch0_") and names[1].startswith("checkpoint_step4_epoch0_")
     assert names[2] == "final"
@@ -84,7 +92,7 @@ def test_checkpoints_every_steps_freq_and_at_the_end(tmp_path):
 
 def test_checkpoints_carry_the_latest_validation_loss(tmp_path):
     trainer = FakeTrainer([CheckpointCallback()])
-    run(trainer, val_steps_freq=2, checkpoint=checkpoint_config(tmp_path, save_strategy="step", steps_freq=2))
+    run(trainer, val_steps_freq=2, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS))
     assert [metadata["metrics"] for metadata in trainer.saved.values()] == [{"val/loss": 4.0}] * 3
 
 
@@ -96,15 +104,65 @@ def test_no_checkpoints_with_save_strategy_none(tmp_path):
 
 def test_epoch_checkpoints(tmp_path):
     trainer = FakeTrainer([CheckpointCallback()])
-    run(trainer, num_epochs=2, checkpoint=checkpoint_config(tmp_path, save_strategy="epoch", keep_all_checkpoints=True))
+    run(
+        trainer,
+        num_epochs=2,
+        checkpoint=checkpoint_config(tmp_path, save_strategy={"type": "epoch"}, rotation_strategy=KEEP_ALL),
+    )
     assert [(m["step"], m["epoch"]) for m in trainer.saved.values()] == [(4, 0), (8, 1), (8, 1)]
 
 
-def test_init_from_the_last_checkpoint_of_the_previous_run(tmp_path):
+def test_init_loads_the_weights_and_trains_from_step_0(tmp_path):
     first = FakeTrainer([CheckpointCallback()])
-    run(first, checkpoint=checkpoint_config(tmp_path, save_strategy="step", steps_freq=4))
-    final = os.path.join(str(tmp_path), "checkpoints", "final")
+    run(first, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, save_optim=True))
+
+    recorder = Recorder()
+    second = FakeTrainer([CheckpointCallback(), recorder])
+    init = {"type": "init", "path": final_checkpoint(tmp_path)}
+    run(second, checkpoint=checkpoint_config(tmp_path / "second", init_strategy=init))
+    assert second.loaded == [final_checkpoint(tmp_path)]
+    assert recorder.args("on_step_end") == [(1,), (2,), (3,), (4,)]
+
+
+def test_resume_continues_after_the_checkpoint_s_step(tmp_path):
+    first = FakeTrainer([CheckpointCallback()])
+    run(first, max_steps=2, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, save_optim=True))
+
+    recorder = Recorder()
+    second = FakeTrainer([CheckpointCallback(), recorder])
+    resume = {"type": "resume", "path": final_checkpoint(tmp_path)}
+    second.setup(make_config(checkpoint=checkpoint_config(tmp_path / "second", init_strategy=resume)))
+    try:
+        second.train()
+        # The two steps of the first run, then its last two batches.
+        assert second.optimizer.steps == 4
+    finally:
+        second.cleanup()
+    assert recorder.args("on_step_end") == [(3,), (4,)]
+    assert recorder.args("on_optimizer_step_end") == [(2.0,), (1.0,)]
+
+
+def test_resume_needs_the_optimizer_state(tmp_path, expect_error):
+    first = FakeTrainer([CheckpointCallback()])
+    run(first, max_steps=2, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS))
 
     second = FakeTrainer([CheckpointCallback()])
-    run(second, checkpoint=checkpoint_config(tmp_path, init_from_checkpoint=True))
-    assert second.loaded == [final]
+    resume = {"type": "resume", "path": final_checkpoint(tmp_path)}
+    with expect_error(FileNotFoundError, "has no optimizer state"):
+        run(second, checkpoint=checkpoint_config(tmp_path / "second", init_strategy=resume))
+
+
+def test_after_a_resume_the_train_loss_averages_the_steps_it_trained(tmp_path):
+    first = FakeTrainer([CheckpointCallback()])
+    run(first, max_steps=1, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, save_optim=True))
+
+    logged = LoggedMetrics()
+    second = FakeTrainer([CheckpointCallback(), logged, MetricsCallback()])
+    resume = {"type": "resume", "path": final_checkpoint(tmp_path)}
+    run(
+        second,
+        metrics={"steps_freq": 2, "val_metrics": []},
+        checkpoint=checkpoint_config(tmp_path / "second", init_strategy=resume),
+    )
+    # Step 2 is the only step of its window this run trained; steps 3 and 4 make the next one.
+    assert logged.logged() == [({"train/loss": 3.0}, 2), ({"train/loss": 1.5}, 4)]

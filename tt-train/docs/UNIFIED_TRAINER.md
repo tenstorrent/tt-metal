@@ -132,30 +132,67 @@ A checkpoint holds what the run trains, in the format HuggingFace tools load:
 | LoRA | `adapter_config.json`, `adapter_model.safetensors` | `PeftModel.from_pretrained(base_model, path)` |
 | Every weight | `config.json`, `model.safetensors` (bf16), tokenizer files | `AutoModelForCausalLM.from_pretrained(path)` |
 
-Both also hold `trainer_state.json`: the step, epoch and metrics at the save. The adapter of a fused layer is written
-per HF projection, with the projections sharing one `lora_A` and splitting `lora_B` by rows. A full checkpoint writes
-a tied embedding once, as HF does.
+Both also hold `trainer_state.json`: the step, epoch and metrics at the save. With `save_optim`, they hold
+`optimizer_state.pkl` too: the optimizer state, the trained weights at the precision they train in (a full
+checkpoint's `model.safetensors` is bf16) and the RNG state, which a resumed run needs. The adapter of a fused layer
+is written per HF projection, with the projections sharing one `lora_A` and splitting `lora_B` by rows. A full
+checkpoint writes a tied embedding once, as HF does.
 
 The `checkpoint` section:
 
 | Field | Default | Description |
 |---|---|---|
-| `save_strategy` | `none` | `step`, `epoch` or `none`. Unless `none`, the final checkpoint is also saved at the end. |
-| `steps_freq`, `epoch_freq` | `100`, `1` | How often `step` and `epoch` save. |
+| `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved at the end. |
+| `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
+| `init_strategy` | unset | A checkpoint to start from; see below. Unset starts from the pretrained weights. |
 | `project_dir` | `runs/unified_trainer` | Checkpoints go in `<project_dir>/checkpoints/`. |
 | `final_checkpoint_name` | `final` | |
-| `keep_last_n` | `3` | Older checkpoints are deleted. |
-| `keep_best_n` | `0` | Also keep this many best by `checkpoint_metric` (`val/loss`) and `checkpoint_metric_mode` (`min`). |
-| `keep_all_checkpoints` | `false` | Never delete a checkpoint. |
-| `init_from_checkpoint` | `false` | Start from a checkpoint's weights: `init_option` `last`, `best` or `path` (with `checkpoint_path`). |
+| `save_optim` | `false` | Also save the optimizer state, so a run can resume from the checkpoint. |
 
-`<project_dir>/checkpoints/checkpoint_history.json` lists the run's checkpoints, and `last` and `best` read it. Each
-run starts a new history. A checkpoint is written to a staging directory and moved into place when complete, so a
-failed save leaves the previous one intact.
+Each strategy is a section whose `type` picks it, and with it the other fields it takes:
 
-`init_from_checkpoint` loads weights only. Training starts at step 0 with a fresh optimizer; optimizer state is not
-saved, so a run can't be resumed exactly. A checkpoint of the other kind is an error: a LoRA run can't load a full
-model (make it the `model_name` instead), and a full run can't load an adapter.
+```yaml
+val_steps_freq: 50
+checkpoint:
+  save_strategy:
+    type: step
+    frequency: 100
+  rotation_strategy:
+    type: best
+    keep_n: 2
+  save_optim: true
+  project_dir: runs/my_run
+```
+
+A field another `type` doesn't take is an error, so to change the type with `--set`, replace the whole section:
+`--set "checkpoint.save_strategy={type: epoch}"`.
+
+| `save_strategy` | Saves |
+|---|---|
+| `step` | Every `frequency` (100) optimizer steps. |
+| `epoch` | At the end of every `frequency`-th (1) epoch. |
+| `none` | Nothing, not even the final checkpoint. |
+
+| `rotation_strategy` | Keeps |
+|---|---|
+| `last` | The `keep_n` (3) most recent checkpoints. |
+| `best` | The `keep_n` (3) with the best `metric` (`val/loss`, from the latest validation, so it needs `val_steps_freq`): the lowest with `mode: min` (the default), the highest with `mode: max`. And the latest checkpoint. |
+| `none` | Every checkpoint. |
+
+Rotation never deletes the checkpoint just saved, and only deletes checkpoints of the same run: an earlier run's in the
+same `project_dir`, such as the one a run resumed from, are kept. `<project_dir>/checkpoints/checkpoint_history.json`
+lists the run's checkpoints that are kept, with their step, epoch and metrics. A checkpoint is written to a staging
+directory and moved into place when complete, so a failed save leaves the previous one intact.
+
+`init_strategy` loads the checkpoint directory at `path` before training. Its `type` is one of:
+
+- `init`: the trained weights only. Training starts at step 0 with a fresh optimizer.
+- `resume`: also the optimizer state, which the checkpoint holds if it was saved with `save_optim`. Training continues
+  after the checkpoint's step, on the batches the run would have trained on next, so keep `batch_size`,
+  `gradient_accumulation_steps`, `optimizer`, the data and the `seed` as they were.
+
+A checkpoint of the other kind is an error: a LoRA run can't load a full model (make it the `model_name` instead), and
+a full run can't load an adapter.
 
 ---
 
@@ -191,7 +228,8 @@ finally:
   optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and
   `trainer.epoch`.
 - **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint, and
-  `trainer.load_checkpoint(path)` loads one.
+  `trainer.load_checkpoint(path)` loads one. With `optimizer=True` both also cover the optimizer state, and
+  `trainer.resume_from_checkpoint(path)`, before `train`, continues the run of a checkpoint saved that way.
 
 ---
 

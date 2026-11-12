@@ -37,7 +37,7 @@ class JobCallback:
             self.metrics.append((global_step, trainer.epoch, loss, trainer.current_learning_rate()))
             self._running = None
         checkpoint = trainer.config.checkpoint
-        if checkpoint.save_strategy == "step" and global_step % checkpoint.steps_freq == 0:
+        if checkpoint.save_strategy.type == "step" and global_step % checkpoint.save_strategy.frequency == 0:
             path = f"{checkpoint.project_dir}/ckpt-step-{global_step}"
             trainer.save_checkpoint(path)
             self.saved.append(path)
@@ -56,7 +56,7 @@ class JobCallback:
 def job_config(tmp_path, **overrides):
     return make_config(
         metrics={"steps_freq": 2},
-        checkpoint={"save_strategy": "step", "steps_freq": 2, "project_dir": str(tmp_path)},
+        checkpoint={"save_strategy": {"type": "step", "frequency": 2}, "project_dir": str(tmp_path)},
         **overrides,
     )
 

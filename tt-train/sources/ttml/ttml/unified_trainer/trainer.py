@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gc
+import itertools
 import random
 import sys
 import traceback
@@ -99,12 +100,15 @@ class Trainer(ABC):
 
         accumulation_steps = self.config.gradient_accumulation_steps
         with self._train_lifecycle():
+            # After `on_train_start`, which may have resumed the run from a checkpoint.
+            first_epoch, first_batch = self._start_position()
+            self.epoch = first_epoch
             self.step_loss = None
             if self._validation_enabled():
                 self.validate()
 
             self._train_mode()
-            for epoch in range(self.config.num_epochs):
+            for epoch in range(first_epoch, self.config.num_epochs):
                 if self._reached_max_steps():
                     break
                 self.epoch = epoch
@@ -115,7 +119,8 @@ class Trainer(ABC):
                 self.step_loss = None
                 self._zero_grad()
 
-                for batch in tqdm(self.train_dataloader, desc=f"Training (epoch {epoch})"):
+                start = first_batch if epoch == first_epoch else 0
+                for batch in tqdm(self._train_batches(epoch, start), desc=f"Training (epoch {epoch})", initial=start):
                     self.callback_handler("on_train_batch_start", batch)
                     batch = self._prepare_batch(batch)
 
@@ -175,6 +180,26 @@ class Trainer(ABC):
 
     def _reached_max_steps(self) -> bool:
         return 0 < self.config.max_steps <= self.global_step
+
+    def _start_position(self) -> tuple[int, int]:
+        """The epoch the loop starts in, and the batch of it: after the ``global_step`` steps a resumed run made.
+
+        Every epoch makes ``len(train_dataloader) // gradient_accumulation_steps`` steps, as a partial window at
+        its end is dropped.
+        """
+        if self.global_step == 0:
+            return 0, 0
+        accumulation_steps = self.config.gradient_accumulation_steps
+        epoch, step = divmod(self.global_step, len(self.train_dataloader) // accumulation_steps)
+        return epoch, step * accumulation_steps
+
+    def _train_batches(self, epoch: int, start: int) -> Iterable:
+        """The batches of epoch ``epoch`` from batch ``start`` on, which is 0 except where a resumed run continues.
+
+        Takes every pass over ``train_dataloader`` to yield the same batches; a subclass whose dataloader orders
+        each epoch differently overrides it.
+        """
+        return itertools.islice(self.train_dataloader, start, None) if start else self.train_dataloader
 
     # ------------------------------------------------------------------ run setup
 
@@ -264,20 +289,31 @@ class Trainer(ABC):
         """The LR of each optimizer, in ``config.optimizer`` order."""
 
     @abstractmethod
-    def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
+    def save_checkpoint(self, path: str, metadata: Optional[dict] = None, optimizer: bool = False) -> None:
         """Save what the model trains as a directory at ``path``, replacing one that is there.
 
-        ``metadata`` (step, epoch, metrics) is stored alongside, and returned by ``load_checkpoint``.
+        ``metadata`` (step, epoch, metrics) is stored alongside, and returned by ``load_checkpoint``. With
+        ``optimizer``, so is the optimizer state, which ``resume_from_checkpoint`` needs.
         """
 
     @abstractmethod
-    def load_checkpoint(self, path: str) -> dict:
-        """Load a directory written by ``save_checkpoint`` into the model; return its metadata (``{}`` if none)."""
+    def load_checkpoint(self, path: str, optimizer: bool = False) -> dict:
+        """Load a directory written by ``save_checkpoint`` into the model, and with ``optimizer`` its optimizer
+        state into the optimizer; return its metadata (``{}`` if none)."""
+
+    def resume_from_checkpoint(self, path: str) -> dict:
+        """Load a checkpoint saved with its optimizer state, and continue its run: ``train`` starts with the step
+        after the checkpoint's, on the batches that step would have trained on. Returns the checkpoint's metadata."""
+        metadata = self.load_checkpoint(path, optimizer=True)
+        if "step" not in metadata:
+            raise ValueError(f"{path} records no step to resume after")
+        self.global_step = metadata["step"]
+        return metadata
 
     def create_checkpoint_manager(
         self, config: CheckpointConfig, logger: Optional[TrainingLogger] = None
     ) -> CheckpointManager:
-        return CheckpointManager(config, save=self.save_checkpoint, load=self.load_checkpoint, logger=logger)
+        return CheckpointManager(config, save=self.save_checkpoint, logger=logger)
 
     # ------------------------------------------------------------------ teardown
 

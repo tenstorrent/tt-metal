@@ -11,6 +11,7 @@ are recorders.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from types import SimpleNamespace
 from typing import Any, Optional, Sequence
@@ -115,13 +116,25 @@ class FakeTrainer(Trainer):
     def current_learning_rate(self) -> list[float]:
         return [self.optimizer.lr]
 
-    def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
+    def save_checkpoint(self, path: str, metadata: Optional[dict] = None, optimizer: bool = False) -> None:
+        """Writes the metadata and, with ``optimizer``, the optimizer's step count, for another trainer to load."""
         os.makedirs(path, exist_ok=True)
+        state = {"metadata": metadata or {}}
+        if optimizer:
+            state["optimizer_steps"] = self.optimizer.steps
+        with open(os.path.join(path, "state.json"), "w") as f:
+            json.dump(state, f)
         self.saved[path] = metadata
 
-    def load_checkpoint(self, path: str) -> dict:
+    def load_checkpoint(self, path: str, optimizer: bool = False) -> dict:
+        with open(os.path.join(path, "state.json")) as f:
+            state = json.load(f)
+        if optimizer:
+            if "optimizer_steps" not in state:
+                raise FileNotFoundError(f"{path} has no optimizer state")
+            self.optimizer.steps = state["optimizer_steps"]
         self.loaded.append(path)
-        return {}
+        return state["metadata"]
 
 
 class Recorder:

@@ -7,6 +7,7 @@
 - the HF export of a loaded model reproduces its checkpoint bit for bit;
 - an exported LoRA adapter makes the same logits in HF PEFT as in ttml;
 - LoRA and full fine-tuning runs learn, save checkpoints HF loads, rotate them, and load them back;
+- a run resumed from a checkpoint trains as the run it continues would have;
 - one trainer runs a LoRA job and then a full one.
 """
 
@@ -120,8 +121,8 @@ def write_jsonl(path, rows):
     return str(path)
 
 
-def sft_config(model_dir, tmp_path, checkpoint=None, **overrides):
-    rows = [{"instruction": "Say the word.", "output": "tenstorrent"}] * 16
+def sft_config(model_dir, tmp_path, checkpoint=None, rows=None, **overrides):
+    rows = rows or [{"instruction": "Say the word.", "output": "tenstorrent"}] * 16
     fields = {
         "dataset_id": "custom",
         "model_name": str(model_dir),
@@ -137,8 +138,7 @@ def sft_config(model_dir, tmp_path, checkpoint=None, **overrides):
         "val_steps_freq": 4,
         "metrics": {"steps_freq": 1},
         "checkpoint": {
-            "save_strategy": "step",
-            "steps_freq": 4,
+            "save_strategy": {"type": "step", "frequency": 4},
             "project_dir": str(tmp_path / "run"),
             **(checkpoint or {}),
         },
@@ -270,7 +270,9 @@ def test_an_exported_adapter_makes_the_same_logits_in_peft(tiny_llama, tmp_path,
 
 
 def test_a_lora_run_learns_and_saves_rotated_peft_adapters(tiny_llama, tmp_path, no_open_device, char_tokenizer):
-    config = sft_config(tiny_llama, tmp_path, checkpoint={"keep_last_n": 2}, lora=lora())
+    config = sft_config(
+        tiny_llama, tmp_path, checkpoint={"rotation_strategy": {"type": "last", "keep_n": 2}}, lora=lora()
+    )
     losses = Losses()
     trainer = SFTTrainer(callbacks=[losses, MetricsCallback(), CheckpointCallback()])
     try:
@@ -308,7 +310,7 @@ def test_a_lora_run_learns_and_saves_rotated_peft_adapters(tiny_llama, tmp_path,
     assert len(kept) == 2 and kept[0].startswith("checkpoint_step8_") and kept[1] == "final"
 
 
-def test_init_from_checkpoint_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_tokenizer):
+def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_tokenizer):
     ids = sample_ids()
     first = SFTTrainer(callbacks=[CheckpointCallback()])
     try:
@@ -318,15 +320,18 @@ def test_init_from_checkpoint_restores_the_adapters(tiny_llama, tmp_path, no_ope
     finally:
         first.cleanup()
 
-    # The next run starts from the last checkpoint of the first; one step at a learning rate of 0 keeps it.
-    resume = {"save_strategy": "none", "init_from_checkpoint": True, "init_option": "last"}
+    # The next run starts from the final checkpoint of the first; one step at a learning rate of 0 keeps it.
+    init = {
+        "save_strategy": {"type": "none"},
+        "init_strategy": {"type": "init", "path": str(final_checkpoint(tmp_path))},
+    }
     second = SFTTrainer(callbacks=[CheckpointCallback()])
     try:
         second.setup(
             sft_config(
                 tiny_llama,
                 tmp_path,
-                checkpoint=resume,
+                checkpoint=init,
                 lora=lora(ATTENTION),
                 optimizer={"lr": 0.0},
                 max_steps=1,
@@ -379,6 +384,52 @@ def test_a_full_fine_tune_saves_an_hf_model_directory(tiny_llama, tmp_path, no_o
         second.cleanup()
     assert_same_bits(final / "model.safetensors", tmp_path / "reloaded" / "model.safetensors")
     assert_close(reloaded, trained, "reloaded logits", min_pcc=0.9999, max_rel=0.01)
+
+
+@pytest.mark.parametrize(
+    "overrides, weights",
+    [
+        ({"lora": {**lora(ATTENTION), "dropout": 0.2}}, "adapter_model.safetensors"),
+        ({"optimizer": {"lr": 1e-3}, "master_dtype": "float32"}, "model.safetensors"),
+    ],
+    ids=["lora with dropout", "full in float32"],
+)
+def test_a_resumed_run_trains_as_the_run_it_continues(
+    overrides, weights, tiny_llama, tmp_path, no_open_device, char_tokenizer
+):
+    # Distinct rows, so training on other batches than the uninterrupted run would show in the losses.
+    rows = [{"instruction": f"Say word {i}.", "output": "tenstorrent"[: 3 + i % 9]} for i in range(16)]
+
+    def train(project, checkpoint):
+        losses = Losses()
+        trainer = SFTTrainer(callbacks=[losses, CheckpointCallback()])
+        checkpoint = {"project_dir": str(tmp_path / project), "save_optim": True, **checkpoint}
+        try:
+            trainer.setup(
+                sft_config(
+                    tiny_llama,
+                    tmp_path,
+                    checkpoint=checkpoint,
+                    rows=rows,
+                    num_epochs=2,
+                    gradient_accumulation_steps=2,
+                    val_steps_freq=0,
+                    **overrides,
+                )
+            )
+            trainer.train()
+        finally:
+            trainer.cleanup()
+        return losses.train
+
+    # 8 batches of 2 rows, 2 batches a step: 4 steps an epoch, 8 in all.
+    uninterrupted = train("run", {"save_strategy": {"type": "step", "frequency": 3}})
+    (step_3,) = (tmp_path / "run" / "checkpoints").glob("checkpoint_step3_*")
+    # From the middle of the first epoch, through the second.
+    resumed = train("resumed", {"init_strategy": {"type": "resume", "path": str(step_3)}})
+
+    assert len(uninterrupted) == 8 and resumed == uninterrupted[3:]
+    assert_same_bits(final_checkpoint(tmp_path) / weights, final_checkpoint(tmp_path, "resumed") / weights)
 
 
 def test_one_trainer_runs_a_lora_job_and_then_a_full_one(tiny_llama, tmp_path, no_open_device, char_tokenizer):

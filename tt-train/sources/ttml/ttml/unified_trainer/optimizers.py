@@ -55,7 +55,8 @@ def assign_parameters(names: Iterable[str], optimizers: Sequence[OptimizerConfig
 class CombinedOptimizer:
     """The optimizers of a run, each over its own weights, stepped and zeroed together.
 
-    ``get_group_lrs`` lists every optimizer's groups in order, so its first is the first optimizer's.
+    ``get_group_lrs`` lists every optimizer's groups in order, so its first is the first optimizer's. The state dict
+    nests each optimizer's under its index, as ``ttml.checkpointing`` saves and loads composite optimizers.
     """
 
     def __init__(self, optimizers: Sequence[Any]) -> None:
@@ -71,3 +72,10 @@ class CombinedOptimizer:
 
     def get_group_lrs(self) -> list[float]:
         return [lr for optimizer in self.optimizers for lr in optimizer.get_group_lrs()]
+
+    def get_state_dict(self) -> dict:
+        return {str(index): optimizer.get_state_dict() for index, optimizer in enumerate(self.optimizers)}
+
+    def set_state_dict(self, state: dict) -> None:
+        for index, optimizer in enumerate(self.optimizers):
+            optimizer.set_state_dict(state[str(index)])

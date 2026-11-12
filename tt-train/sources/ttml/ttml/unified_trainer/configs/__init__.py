@@ -4,7 +4,16 @@
 
 """Pydantic configs of the unified trainer. Importing them needs no device."""
 
-from .checkpoint import CheckpointConfig
+from .checkpoint import (
+    BestRotation,
+    CheckpointConfig,
+    EpochSave,
+    InitStrategy,
+    LastRotation,
+    NoRotation,
+    NoSave,
+    StepSave,
+)
 from .dataset import CustomDatasetConfig
 from .loader import apply_override, load_config
 from .logging import LoggingConfig
@@ -16,13 +25,20 @@ from .trainer import SFTTrainerConfig, TrainerConfig
 __all__ = [
     "OPTIMIZERS",
     "AdamWConfig",
+    "BestRotation",
     "CheckpointConfig",
     "CustomDatasetConfig",
+    "EpochSave",
+    "InitStrategy",
+    "LastRotation",
     "LoggingConfig",
     "LoraConfig",
     "MetricsConfig",
+    "NoRotation",
+    "NoSave",
     "OptimizerConfig",
     "SFTTrainerConfig",
+    "StepSave",
     "TrainerConfig",
     "apply_override",
     "load_config",

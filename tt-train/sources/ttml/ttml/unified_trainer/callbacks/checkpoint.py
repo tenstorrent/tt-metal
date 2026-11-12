@@ -10,7 +10,7 @@ from .callback import Callback
 
 
 class CheckpointCallback(Callback):
-    """Initializes the model from a checkpoint and saves checkpoints, as ``config.checkpoint`` says.
+    """Starts the run from a checkpoint and saves checkpoints, as ``config.checkpoint`` says.
 
     Checkpoints hold what the model trains (``Trainer.save_checkpoint``): the LoRA adapter, or all weights.
     """
@@ -22,13 +22,21 @@ class CheckpointCallback(Callback):
     def on_train_start(self, trainer: Any) -> None:
         # A callback outlives the run; never carry the previous run's metrics into this one's checkpoints.
         self._last_metrics = {}
-        self.manager = trainer.create_checkpoint_manager(trainer.config.checkpoint, trainer.logger)
-        if trainer.config.checkpoint.init_from_checkpoint:
+        config = trainer.config.checkpoint
+        self.manager = trainer.create_checkpoint_manager(config, trainer.logger)
+        init = config.init_strategy
+        if init is None:
+            return
+        if init.type == "resume":
+            trainer.resume_from_checkpoint(init.path)
+            trainer.logger.info(f"Resuming after step {trainer.global_step} from {init.path}")
+        else:
             # Weights only: training still starts at step 0, so the stored step, epoch and metrics are unused.
-            self.manager.load_checkpoint()
+            trainer.load_checkpoint(init.path)
+            trainer.logger.info(f"Initialized the trained weights from {init.path}")
 
     def on_validation_end(self, trainer: Any, val_loss: Any) -> None:
-        # Runs before that step's `on_step_end`, so the step's checkpoint carries it (for best-N).
+        # Runs before that step's `on_step_end`, so the step's checkpoint carries it (for best rotation).
         self._last_metrics["val/loss"] = trainer.loss_to_float(val_loss)
 
     def on_step_end(self, trainer: Any, global_step: int) -> None:
@@ -40,7 +48,7 @@ class CheckpointCallback(Callback):
             self._save(trainer)
 
     def on_train_end(self, trainer: Any) -> None:
-        if trainer.config.checkpoint.save_strategy == "none":
+        if trainer.config.checkpoint.save_strategy.type == "none":
             return
         name = trainer.config.checkpoint.final_checkpoint_name
         path = self._save(trainer, name)

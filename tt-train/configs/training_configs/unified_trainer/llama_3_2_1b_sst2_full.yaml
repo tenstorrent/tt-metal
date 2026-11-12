@@ -25,6 +25,9 @@ metrics:
   steps_freq: 10
 
 checkpoint:
-  save_strategy: epoch
-  keep_last_n: 1
+  save_strategy:
+    type: epoch
+  rotation_strategy:
+    type: last
+    keep_n: 1
   project_dir: runs/llama_3_2_1b_sst2_full

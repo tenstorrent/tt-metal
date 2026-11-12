@@ -107,6 +107,43 @@ def test_gradients_are_zeroed_at_each_epoch_start():
     trainer.cleanup()
 
 
+class Steps:
+    """Records ``(step, epoch, window loss)`` per optimizer step."""
+
+    def __init__(self) -> None:
+        self.steps = []
+
+    def on_optimizer_step_end(self, trainer, window_loss):
+        self.loss = window_loss
+
+    def on_step_end(self, trainer, global_step):
+        self.steps.append((global_step, trainer.epoch, self.loss))
+
+
+@pytest.mark.parametrize(
+    "train_losses, step, expected",
+    [
+        # Two steps per epoch.
+        ((4.0, 3.0, 2.0, 1.0), 1, [(2, 0, 1.5), (3, 1, 3.5), (4, 1, 1.5)]),
+        ((4.0, 3.0, 2.0, 1.0), 2, [(3, 1, 3.5), (4, 1, 1.5)]),
+        ((4.0, 3.0, 2.0, 1.0), 3, [(4, 1, 1.5)]),
+        # One step per epoch: the third batch is a partial window.
+        ((1.0, 2.0, 3.0), 1, [(2, 1, 1.5)]),
+    ],
+)
+def test_a_resumed_run_trains_on_the_batches_after_its_step(tmp_path, train_losses, step, expected):
+    steps = Steps()
+    trainer = FakeTrainer([steps], train_losses=train_losses)
+    trainer.setup(make_config(gradient_accumulation_steps=2, num_epochs=2))
+    try:
+        trainer.save_checkpoint(str(tmp_path), {"step": step}, optimizer=True)
+        trainer.resume_from_checkpoint(str(tmp_path))
+        trainer.train()
+    finally:
+        trainer.cleanup()
+    assert steps.steps == expected
+
+
 def test_an_exception_goes_to_on_train_error_and_out_of_train(expect_error):
     recorder = Recorder()
     error = ValueError("boom")
