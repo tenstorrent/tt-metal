@@ -244,7 +244,9 @@ def test_block_state_matches_model_owned(mesh_device, n_requests, monkeypatch, r
             read_from_device=True,
             mamba_state=layout.step_state(rows, BMAX),
             **_decode_flags(),
-        )
+        )[
+            0
+        ]  # (host logits, model logprobs)
         lg = out[:n_requests, -1, :vocab].float()
         pcc = compute_pcc(lg, ref_decode[step])
         agree = (lg.argmax(-1) == ref_decode[step].argmax(-1)).float().mean().item()
@@ -374,7 +376,7 @@ def test_row_moves_and_traced_decode(mesh_device, monkeypatch, reset_seeds, ensu
                 slot_remap=remap,
                 mamba_state=layout.step_state([blocks.state(r) if r is not None else None for r in rows], BMAX),
                 **_decode_flags(),
-            )
+            )[0]
             lg = torch.zeros(n, vocab)
             for i, r in enumerate(rows):
                 if r is not None:
