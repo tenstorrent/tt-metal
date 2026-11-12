@@ -4,7 +4,7 @@
 # Launch with grpo/run_remote_rollout.sh --example gsm8k --config <this file>.
 
 training_config:
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b_memory_efficient.yaml"
 
   # HuggingFace Hub id of the SFT'd think-tagged Qwen3 checkpoint (the GRPO starting point).
   model_source: "ichovpanTT/qwen3-0.6b-base-think-sft"
@@ -27,7 +27,7 @@ training_config:
     weight_sync_every: 1
     # Drop a batch generated with weights more than this many optimizer steps older than the policy.
     max_staleness: 1
-    epsilon: 0.2
+    epsilon: 0.4
     per_device_train_batch_size: 16   # one prompt's group of 16 completions
     num_iterations: 1
     gradient_accumulation_steps: 2    # 2 prompts x 16 completions = 32 per generate call
