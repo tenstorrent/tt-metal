@@ -237,6 +237,20 @@ The packed prefill (`GLM53_PF_PACKED`) needs it but stays opt-in: a packed segme
 per-user path's, whose reduce-scatter sums in another order, so identical prompts in different pack slots move at a
 near-tie (16 identical prompts, 2048:8: slot 6 differs in both replays).
 
+### Prefill: the routed-MoE kernel options (2026-11-12, default on the 8x4)
+
+`tt/galaxy_defaults.py` turns on the seven TP-prefill MoE options of the pf_g2 group at full precision:
+`GLM53_PF_MOE_KB=808`, `XGATHER`, `V2`, `RM_SKIP`, `PADMASK`, `XFFN_VALID`, `XFFN_SNAKE` (prefill_tp.py). LoFi
+(`GLM53_PF_MOE_FID=LoFi`) stays off: alone it bought 0.8 % at 32 K x 4.
+
+| geometry | TTFT before | TTFT after | ids |
+|---|---|---|---|
+| 1 M x 1 | 332.1 s | 281.4 s (-15.3 %) | identical (128 / 128) |
+| 32 K x 4 | 34.1 s | 27.4 s (-19.6 %) | near-tie after 7 tokens (the ops-post sequence of before the fused post) |
+| ISL 128 x 16 distinct (128 K geometry) | 7.01 s | 5.06 s (-27.8 %) | user 0 near-tie at token 6 ("the text" -> "a text") |
+
+Decode is unchanged (18.6 / 21.0 / 31.8 ms per step). The tier-1 32 K x 4 gate moves to the new first ten ids.
+
 ### RSB: the reduce-scatters in block chunks (2026-11-11, default on the 8x4)
 
 Today both scatters signal per token. RS1 (FabricStreamScatter axis 0, one lane) ships per destination t chunks of

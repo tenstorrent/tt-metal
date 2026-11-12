@@ -52,6 +52,19 @@ KNOBS = {
     # 35.7 -> 34.1 s, ISL 128 x 16 7.56 -> 7.01 s, decode unchanged, 16 identical prompts still agree; the ids move at a
     # near-tie after 7 (32 K x 4) / 35 (1 M x 1) tokens. The packed and batched prefill (GLM53_PF_PACKED / _BATCH) need it
     "GLM53_PF_MHC_POST": "fused",
+    # the TP prefill's routed-MoE kernel options at full precision (prefill_tp: 808 KB expert CBs, the fused SwiGLU reads
+    # the dispatch rows itself, the dispatch bounded by the plan's rows, no DRAM read for skipped rm-combine rows, the
+    # bucket's padding rows out of the routed MoE, only valid rows into the shared-expert FFN, its units dealt by cost):
+    # TTFT 1 M x 1 332.1 -> 281.4 s (ids identical), 32 K x 4 34.1 -> 27.4 s, ISL 128 x 16 7.01 -> 5.06 s, decode
+    # unchanged; the ids move at near-ties (32 K x 4 after 7 tokens: back on the ops-post sequence; 128 x 16 user 0 at
+    # token 6, "the text" -> "a text"). LoFi (GLM53_PF_MOE_FID) stays off: -0.8 % for a precision cut
+    "GLM53_PF_MOE_KB": "808",
+    "GLM53_PF_MOE_XGATHER": "1",
+    "GLM53_PF_MOE_V2": "1",
+    "GLM53_PF_MOE_RM_SKIP": "1",
+    "GLM53_PF_MOE_PADMASK": "1",
+    "GLM53_PF_MOE_XFFN_VALID": "1",
+    "GLM53_PF_MOE_XFFN_SNAKE": "1",
     # opt-in, not a default: GLM53_DSA_SHARD_COMB (the fold combine on the lane roots: correct, but its fp32 order moves
     # the ids at a near-tie -- fails the strict ids gate)
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE

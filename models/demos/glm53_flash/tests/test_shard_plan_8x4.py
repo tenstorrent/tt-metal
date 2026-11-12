@@ -1137,6 +1137,18 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_RSB"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_R8"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_RSNP"] == "1"
     assert GD.KNOBS["GLM53_PF_MHC_POST"] == "fused"
+    assert GD.KNOBS["GLM53_PF_MOE_KB"] == "808" and "GLM53_PF_MOE_FID" not in GD.KNOBS
+    assert all(
+        GD.KNOBS[k] == "1"
+        for k in (
+            "GLM53_PF_MOE_XGATHER",
+            "GLM53_PF_MOE_V2",
+            "GLM53_PF_MOE_RM_SKIP",
+            "GLM53_PF_MOE_PADMASK",
+            "GLM53_PF_MOE_XFFN_VALID",
+            "GLM53_PF_MOE_XFFN_SNAKE",
+        )
+    )
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
     keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB"]
     _protect_env(monkeypatch, keys)
@@ -1148,6 +1160,18 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_R8"] == "1" and SP.shard_r8(8)
     assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)
     assert got["GLM53_PF_MHC_POST"] == "fused"
+    assert got["GLM53_PF_MOE_KB"] == "808" and "GLM53_PF_MOE_FID" not in got
+    assert all(
+        got[k] == "1"
+        for k in (
+            "GLM53_PF_MOE_XGATHER",
+            "GLM53_PF_MOE_V2",
+            "GLM53_PF_MOE_RM_SKIP",
+            "GLM53_PF_MOE_PADMASK",
+            "GLM53_PF_MOE_XFFN_VALID",
+            "GLM53_PF_MOE_XFFN_SNAKE",
+        )
+    )
     _protect_env(monkeypatch, keys)
     monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "0")  # an explicit value wins
     got = GD.apply((8, 4), 4096, 4096)

@@ -2202,7 +2202,7 @@
     # 32 K x 4 users with one prompt and 1 M x 1 user (the resident capstone): the TP prefill, the traced decode step,
     # TTFT and tok/s per user logged; the rows FAIL when the users disagree, the first ids leave the validated prefix
     # or the decode drops under the floor (GLM53_MK_EXPECT_IDS / GLM53_MK_MIN_TOKS)
-    GLM53_MK_B=4 GLM53_MK_ISL=32768 GLM53_MK_EXPECT_IDS=785,1196,702,3267,291,264,1293,57681,1467,320 GLM53_MK_MIN_TOKS=30 pytest --timeout 6000 models/demos/glm53_flash/tests/test_mk_e2e.py
+    GLM53_MK_B=4 GLM53_MK_ISL=32768 GLM53_MK_EXPECT_IDS=785,1196,702,3267,291,264,1293,1467,429,43344 GLM53_MK_MIN_TOKS=30 pytest --timeout 6000 models/demos/glm53_flash/tests/test_mk_e2e.py
     GLM53_MK_B=1 GLM53_MK_ISL=1048448 GLM53_MK_SEQ=1048576 GLM53_MK_EXPECT_IDS=10056,752,23578,419,1467,13,576,1196 GLM53_MK_MIN_TOKS=40 pytest --timeout 3600 models/demos/glm53_flash/tests/test_mk_e2e.py
   model: glm53-flash
   model_family: GLM
