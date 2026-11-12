@@ -207,7 +207,7 @@ void kernel_main() {
     receiver::init_channel_streams();
     sender::init_channel_streams();
     init_context_switch_state();
-    finish_phase<Phase::STREAMS_SET>();
+    finish_phase<EriscSyncPhase::STREAMS_SET>();
 
     // Phase: local setup.
     RuntimeArgs args;
@@ -220,21 +220,21 @@ void kernel_main() {
     if constexpr (is_sender_role) {
         sender::set_up_channels(args.connection_semaphores);
     }
-    finish_phase<Phase::SETUP_DONE>();
+    finish_phase<EriscSyncPhase::SETUP_DONE>();
 
     // Phase: handshakes.
     run_handshakes();
-    finish_phase<Phase::HANDSHAKE_DONE>();
+    finish_phase<EriscSyncPhase::HANDSHAKE_DONE>();
 
     // Phase: downstream connections, then the forwards' command buffers.
     if constexpr (is_receiver_role) {
         receiver::open_connections(args);
     }
-    finish_phase<Phase::DOWNSTREAMS_OPEN>();
+    finish_phase<EriscSyncPhase::DOWNSTREAMS_OPEN>();
     if constexpr (is_receiver_role) {
         receiver::preset_forward_commands(args);
     }
-    finish_phase<Phase::CMD_BUFS_SET>();
+    finish_phase<EriscSyncPhase::CMD_BUFS_SET>();
 
     // Phase: upstream connections.
     WAYPOINT("FSCW");
@@ -242,7 +242,7 @@ void kernel_main() {
         sender::wait_for_upstream_routers();
     }
     WAYPOINT("FSCD");
-    finish_phase<Phase::CONNECTED>();
+    finish_phase<EriscSyncPhase::CONNECTED>();
     if constexpr (is_teardown_master) {
         // Again: the router state reads INITIALIZING until the first round starts running.
         router_state()->state = RouterState::INITIALIZING;

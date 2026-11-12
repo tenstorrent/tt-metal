@@ -33,7 +33,8 @@ static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
 
 // Whether an ERISC writes `statistic` in its router's FabricTelemetry: its telemetry is on, and the statistic's bit is
 // in its stats mask.
-constexpr bool is_telemetry_statistic_written(bool telemetry_enabled, std::uint8_t stats_mask, DynamicStatistics statistic) {
+constexpr bool is_telemetry_statistic_written(
+    bool telemetry_enabled, std::uint8_t stats_mask, DynamicStatistics statistic) {
     return telemetry_enabled && (stats_mask & static_cast<std::uint8_t>(statistic)) != 0;
 }
 
@@ -56,23 +57,6 @@ constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
 static constexpr std::size_t MAX_CHANNEL_BUFFER_SLOTS = UINT8_MAX / 2;
 
-// Read and write stream scratch register store values as uint32_t.
-enum class CoordinatedEriscContextSwitchState : std::uint32_t {
-    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
-    // state at the end of the handshake
-    NORMAL_EXECUTION = 0,
-    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
-    RETRAIN_INTENT = 1,
-    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
-    // erisc1's cooperation
-    INTENT_ACK = 2,
-    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
-    RETRAIN_COMPLETE = 3,
-    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
-    // NORMAL_EXECUTION
-    COMPLETE_ACK = 4,
-};
-
 // Magic values for ethernet channel directions
 enum eth_chan_magic_values : std::uint8_t {
     INVALID_DIRECTION = 0xDD,
@@ -93,6 +77,55 @@ enum eth_chan_directions : std::uint8_t {
 // and the kernel skips initialising any entry reading it. Out of the 0..31 register range, so it can
 // never collide with a real register.
 static constexpr uint32_t k_unused_stream_id = 32;
+
+// The count in a stream credit register (packets received, free slots). A count never exceeds its channel's slot
+// count, and every channel static_asserts its slot count against this mask, so the low 11 bits hold it.
+inline constexpr std::uint32_t stream_count_mask = 0x7FF;
+static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
+
+// ERISC sync. The phases a router's ERISCs pass together, in order. At each, the teardown master writes
+// k_erisc_sync_start | phase into the ERISC sync stream register (MULTI_RISC_TEARDOWN_SYNC_STREAM_ID), the other ERISC
+// answers k_erisc_sync_answer | phase, and the master clears the register to 0. A single-ERISC router never writes it.
+enum class EriscSyncPhase : std::uint32_t {
+    STREAMS_SET = 1,       // stream registers initialized
+    SETUP_DONE = 2,        // channels and connections set up locally
+    HANDSHAKE_DONE = 3,    // Ethernet and local-router handshakes done
+    DOWNSTREAMS_OPEN = 4,  // downstream connections opened
+    CMD_BUFS_SET = 5,      // forwarding command buffers programmed
+    CONNECTED = 6,         // static upstream connections in
+    TEARDOWN_START = 7,
+    TRANSACTIONS_DONE = 8,
+    TEARDOWN_DONE = 9,
+};
+inline constexpr std::uint32_t k_erisc_sync_start = 0x0A00;
+inline constexpr std::uint32_t k_erisc_sync_answer = 0x0B00;
+// The bits of the ERISC sync register the ERISCs compare.
+inline constexpr std::uint32_t k_erisc_sync_mask = 0x1FFF;
+
+// The value the teardown master writes to start `phase`.
+constexpr std::uint32_t make_erisc_sync_start(EriscSyncPhase phase) {
+    return k_erisc_sync_start | static_cast<std::uint32_t>(phase);
+}
+// The value the other ERISC answers `phase` with.
+constexpr std::uint32_t make_erisc_sync_answer(EriscSyncPhase phase) {
+    return k_erisc_sync_answer | static_cast<std::uint32_t>(phase);
+}
+
+// Context switch. The state in the retrain sync stream register (ETH_RETRAIN_LINK_SYNC_STREAM_ID), through which the
+// context-switch master (the ERISC with enable_context_switch) parks the router's other ERISC while it hands the core
+// to the base firmware. Read and written as a whole word.
+enum class CoordinatedEriscContextSwitchState : std::uint32_t {
+    // Set by the master at init; the default.
+    NORMAL_EXECUTION = 0,
+    // Set by the master: about to switch. The other ERISC checks for it each round.
+    RETRAIN_INTENT = 1,
+    // Set by the other ERISC: parked. The master waits for it before switching.
+    INTENT_ACK = 2,
+    // Set by the master: switch done. The other ERISC waits for it.
+    RETRAIN_COMPLETE = 3,
+    // Set by the other ERISC: resuming. The master waits for it, then sets NORMAL_EXECUTION.
+    COMPLETE_ACK = 4,
+};
 
 // Three-bit encodings for the packed first-hop direction tables. These are independent of the
 // destination-major 2D action maps below.

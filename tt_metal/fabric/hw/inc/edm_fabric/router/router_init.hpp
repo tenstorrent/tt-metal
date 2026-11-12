@@ -33,33 +33,21 @@ constexpr bool is_teardown_master = MY_ERISC_ID == 0 || NUM_ACTIVE_ERISCS == 1; 
 // ERISC sync
 // ---------------------------------------------------------------------------------------------------------------------
 
-enum class Phase : uint32_t {
-    STREAMS_SET = 1,       // stream registers initialized
-    SETUP_DONE = 2,        // channels and connections set up locally
-    HANDSHAKE_DONE = 3,    // Ethernet and local-router handshakes done
-    DOWNSTREAMS_OPEN = 4,  // downstream connections opened
-    CMD_BUFS_SET = 5,      // forwarding command buffers programmed
-    CONNECTED = 6,         // static upstream connections in
-    TEARDOWN_START = 7,
-    TRANSACTIONS_DONE = 8,
-    TEARDOWN_DONE = 9,
-};
-
 // Both ERISCs of a router pass every phase together: the teardown master writes the phase, the other answers. No
 // termination check here: both see the same termination signal, and one leaving a sync early would leave the other
 // waiting for a value that never comes.
-__attribute__((noinline)) void sync_erisc(Phase phase) {
+__attribute__((noinline)) void sync_erisc(EriscSyncPhase phase) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
-        const uint32_t start = 0x0A00 | static_cast<uint32_t>(phase);
-        const uint32_t answer = 0x0B00 | static_cast<uint32_t>(phase);
+        const uint32_t start = make_erisc_sync_start(phase);
+        const uint32_t answer = make_erisc_sync_answer(phase);
         if constexpr (is_teardown_master) {
             write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(start);
-            while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) != answer) {
+            while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & k_erisc_sync_mask) != answer) {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             }
             write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
         } else {
-            while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) != start) {
+            while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & k_erisc_sync_mask) != start) {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             }
             write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(answer);
@@ -79,20 +67,20 @@ FORCE_INLINE volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status() {
 
 // The init postcodes (EDMStatus), with the phase whose end posts each, in the order host tools and hang capture expect.
 // Two name steps this router orders differently; they are kept for that tooling (marked).
-constexpr std::pair<Phase, tt::tt_fabric::EDMStatus> phase_postcodes[] = {
-    {Phase::STREAMS_SET, tt::tt_fabric::EDMStatus::TXQ_INITIALIZED},
-    {Phase::STREAMS_SET, tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED},
-    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::STARTED},
-    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED},
-    {Phase::SETUP_DONE, tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE},  // kept for tooling
-    {Phase::HANDSHAKE_DONE, tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE},
-    {Phase::DOWNSTREAMS_OPEN, tt::tt_fabric::EDMStatus::VCS_OPENED},
-    {Phase::CMD_BUFS_SET, tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED},  // kept for tooling
-    {Phase::CONNECTED, tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE},
+constexpr std::pair<EriscSyncPhase, tt::tt_fabric::EDMStatus> phase_postcodes[] = {
+    {EriscSyncPhase::STREAMS_SET, tt::tt_fabric::EDMStatus::TXQ_INITIALIZED},
+    {EriscSyncPhase::STREAMS_SET, tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED},
+    {EriscSyncPhase::SETUP_DONE, tt::tt_fabric::EDMStatus::STARTED},
+    {EriscSyncPhase::SETUP_DONE, tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED},
+    {EriscSyncPhase::SETUP_DONE, tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE},  // kept for tooling
+    {EriscSyncPhase::HANDSHAKE_DONE, tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE},
+    {EriscSyncPhase::DOWNSTREAMS_OPEN, tt::tt_fabric::EDMStatus::VCS_OPENED},
+    {EriscSyncPhase::CMD_BUFS_SET, tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED},  // kept for tooling
+    {EriscSyncPhase::CONNECTED, tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE},
 };
 
 // The end of an init phase: the ERISCs meet, then the phase's postcodes.
-template <Phase PHASE>
+template <EriscSyncPhase PHASE>
 FORCE_INLINE void finish_phase() {
     sync_erisc(PHASE);
     for_each_index<std::size(phase_postcodes)>([](auto i) {
@@ -393,11 +381,11 @@ FORCE_INLINE void wait_for_channel_transactions() {
 
 // Cold (optimized for size): it runs once, at termination.
 __attribute__((noinline, cold)) void teardown() {
-    sync_erisc(Phase::TEARDOWN_START);
+    sync_erisc(EriscSyncPhase::TEARDOWN_START);
     for_each_index<NUM_RECEIVER_CHANNELS>([](auto ch) { wait_for_channel_transactions<decltype(ch)::value>(); });
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Dynamic noc mode not supported");
     ncrisc_noc_counters_init();  // the router's writes do not all update the software counters
-    sync_erisc(Phase::TRANSACTIONS_DONE);
+    sync_erisc(EriscSyncPhase::TRANSACTIONS_DONE);
     if constexpr (wait_for_host_signal && is_local_handshake_master) {
         auto* termination = termination_signal();
         notify_subordinate_routers(
@@ -408,7 +396,7 @@ __attribute__((noinline, cold)) void teardown() {
 #if defined(ARCH_BLACKHOLE)
     noc_clear_packet_tags(noc_index);  // tagged writes do not reset the command buffers' transaction IDs
 #endif
-    sync_erisc(Phase::TEARDOWN_DONE);
+    sync_erisc(EriscSyncPhase::TEARDOWN_DONE);
     restore_keepalive();
     if constexpr (is_teardown_master) {
         *edm_status() = tt::tt_fabric::EDMStatus::TERMINATED;
