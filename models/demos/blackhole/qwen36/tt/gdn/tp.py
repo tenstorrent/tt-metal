@@ -111,6 +111,30 @@ def _softplus_add(a, bias):
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
 
 
+def _gdn_gate(tw, a, memory_config=None):
+    """Prefill decay gate g [.., Nv] = -exp(A_log) * softplus(a + dt_bias), in fp32.
+
+    The bf16 path (``_softplus_add`` on bf16 a) runs the SFPU softplus's bf16 variant, which drops the residual
+    ln(1 + exp(-|x|)) for |x| > 5 -- harmless for x > 5 but it makes softplus(x) = 0 for every x < -5, i.e. NO decay
+    (g = 0) on every (token, value head) whose a + dt_bias < -5 (30-45% of them in Qwen3.5-9B). The
+    GDN states then hold on to old tokens they should forget: S pcc 0.95-0.97 vs HF after a 512-token prefix, and the
+    decode from such a state loses ~8% of the greedy ids on image requests. The fp32 variant
+    (INP_FLOAT32: degree-8 polynomial + exp tail, as the fused decode already uses) is accurate everywhere."""
+    mc = {} if memory_config is None else {"memory_config": memory_config}
+    a32 = a if a.dtype == ttnn.float32 else ttnn.typecast(a, ttnn.float32, **mc)
+    x = ttnn.add(a32, tw["dt_bias_g32"], **mc)
+    if a32 is not a:
+        ttnn.deallocate(a32)
+    g = ttnn.multiply(
+        tw["neg_exp_A_g32"],
+        x,
+        input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+        **mc,
+    )
+    ttnn.deallocate(x)
+    return g
+
+
 def _silu_mul(x, z, memory_config, dtype=None):
     """out-gate: x * silu(z). NOT fused into one op: fusing silu via input_tensor_b_activations
     overflows to NaN in the real layer for large-magnitude z (op-level PCC hid it — small inputs).
@@ -476,6 +500,21 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+    # fp32 prefill decay-gate constants (_gdn_gate), sharded over the TP axis like tw["dt_bias"] (on a 2D mesh
+    # replicated over the rows; the fused decode's dt_bias_fp32 shards over every device, 1xN only).
+    for key, val in (
+        ("dt_bias_g32", sd[P + "dt_bias"].float()),
+        ("neg_exp_A_g32", -torch.exp(sd[P + "A_log"].float())),
+    ):
+        tw[key] = ttnn.as_tensor(
+            val.reshape(1, 1, -1),
+            dtype=ttnn.float32,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=c(key),
+        )
     return tw
 
 
@@ -2040,7 +2079,7 @@ class TPGatedDeltaNet:
         # GQA late-expand: adapter L2-norms at Nk, expands to Nv after
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (1, T, Nv))
+        g = ttnn.reshape(_gdn_gate(tw, a), (1, T, Nv))
         ttnn.deallocate(a)
 
         _init_state = self.rec_state if carry else (None if return_state else self._zero_rec_f32)
@@ -2349,7 +2388,7 @@ class TPGatedDeltaNet:
             _qkv_head_dims = None
         beta = ttnn.reshape(ttnn.sigmoid(b), (Bg, Tb, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(self.tw["neg_exp_A"], _softplus_add(a, self.tw["dt_bias"])), (Bg, Tb, Nv))
+        g = ttnn.reshape(_gdn_gate(self.tw, a), (Bg, Tb, Nv))
         ttnn.deallocate(a)
 
         o, final_state = chunk_gated_delta_rule_fused_adapter(
@@ -2867,7 +2906,7 @@ class TPGatedDeltaNet:
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (B, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (B, T, Nv))
+        g = ttnn.reshape(_gdn_gate(tw, a), (B, T, Nv))
         ttnn.deallocate(a)
 
         # Chunk-parallel recurrence over the BH = B*Nv batch (each row an independent scan). Fused
