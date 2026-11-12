@@ -21,6 +21,8 @@ namespace ckernel::packer
 {
 template <>
 inline constexpr bool pack_reconfig_u2d<DstSync::SyncHalf> = llk_pack_u2d;
+template <>
+inline constexpr bool pack_strides_u2d<PackMode::Default> = llk_pack_u2d;
 } // namespace ckernel::packer
 
 // The block forms write the destination by bytes under full DEST sync only: under half sync the earlier pack start costs
