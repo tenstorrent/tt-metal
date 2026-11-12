@@ -126,7 +126,8 @@ def test_vision_tower_l1_vs_dram(mesh_device, device_params, grid_thw, vision_re
 
     Three blocks cover both L1 addresses that the later blocks' inputs alternate between. Each forward must take
     block_placement's placement, and at the CI grids that placement must use L1. So a smaller L1 bank fails here instead
-    of slowing the encoder. Each forward must also leave L1 as it found it.
+    of slowing the encoder. Each forward must also leave L1 as it found it, and must not fall back to DRAM: a fallback
+    means an op's buffers no longer fit beside the activations, for example after a tt-metal kernel change.
     """
     reference = vision_reference()
     model = M3VLVisionModel.from_state_dict(
@@ -159,10 +160,12 @@ def test_vision_tower_l1_vs_dram(mesh_device, device_params, grid_thw, vision_re
         model.activations = activations
         taken = model.placement(x_tt)
         assert taken is placements[activations], f"{name}: activations {activations} took placement {taken.name}"
-        before = _l1_state(mesh_device)
+        before, fallbacks = _l1_state(mesh_device), model._dram_fallbacks
         out = model.forward_device(x_tt, grid)
         after = _l1_state(mesh_device)
         assert after == before, f"{name}: activations {activations} left L1 at {after}, from {before}"
+        fell_back = model._dram_fallbacks != fallbacks
+        assert not fell_back, f"{name}: activations {activations} fell back to DRAM: {model._warned_fallback}"
         outputs[activations] = to_host(out, mesh_device, (rows, hidden))
         ttnn.deallocate(out)
     for activations in modes[1:]:
