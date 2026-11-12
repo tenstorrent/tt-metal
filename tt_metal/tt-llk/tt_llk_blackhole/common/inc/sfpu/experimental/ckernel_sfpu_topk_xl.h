@@ -42,10 +42,9 @@
 // sorted sequence of length 2*N from two sorted halves by a single bitonic
 // merge — that's exactly the loop structure here.
 //
-// The functions `bitonic_sort_len_{2,4,8,16,32,k}` each perform a single
-// pass of "step N" compare-exchanges, where step N means a stride of 2^(N-1).
-// They build (or merge) a bitonic sequence of length 2^N. The numeric step
-// labels in the source map directly to those stride exponents.
+// `window_sort<WINDOW, FROM, TO, ORDER>` runs the steps of one window held in
+// LREG0-7, strides FROM down to TO; a full sort of 32 runs the windows 2, 4, 8,
+// 16 and 32 in turn (see the "Window sort" section).
 //
 // SFPU execution model
 // --------------------
@@ -203,7 +202,7 @@ enum class WindowSize : std::uint32_t
  * @brief Sort direction of the first window; following windows alternate from it.
  *
  * ASCENDING puts the max in the lower position, matching the `ascending` flag
- * of the bitonic_sort_len_* functions.
+ * of @ref window_sort.
  */
 enum class Order : std::uint32_t
 {
@@ -223,6 +222,30 @@ enum class Fused : std::uint32_t
 {
     No,
     Yes,
+};
+
+/**
+ * @brief Which of the two optional SFPTRANSPs around the stride-2 / stride-1 steps a @ref window_sort emits.
+ *
+ * Strides 2 and 1 only run transposed, so a window sort that reaches them wraps them in SFPTRANSPs (T):
+ *
+ *     BOTH         T · 2 1 · T
+ *     NO_LEADING       2 1 · T     the data is already transposed (the previous call used NO_TRAILING)
+ *     NO_TRAILING  T · 2 1         the next call continues transposed (it uses NO_LEADING)
+ *     NONE             2 1         the caller issues both, for example from a MOP template
+ *
+ * The leading T is the first instruction of the call, so it exists only when the call starts at stride 2 or 1.
+ * A call that starts at stride 4 or above has its T between steps instead (16 8 4 · T · 2 1 · T), and that one is
+ * always emitted: NO_LEADING and NONE do not compile there. The trailing T exists only when the call ends at stride 2
+ * or 1, so NO_TRAILING and NONE do not compile for a call that stops at stride 4 or above. BOTH is always valid and
+ * emits every T the steps have, which is none for a call that stays at stride 4 or above (16 8 4).
+ */
+enum class Transposes : std::uint32_t
+{
+    BOTH,
+    NO_LEADING,
+    NO_TRAILING,
+    NONE,
 };
 
 // Strides 1 and 2 run after SFPTRANSP, so neighbouring positions sit in neighbouring LREGs.
@@ -540,277 +563,167 @@ inline void store8_rows_x2_unfused()
 }
 
 // =============================================================================
-//  Bitonic sort primitives
+//  Window sort
 // =============================================================================
 //
-// Each `bitonic_sort_len_X` performs the compare-exchange passes that turn a
-// pair of sorted length-X/2 sub-sequences into a sorted length-X sequence
-// (or, when called as part of a build, the bitonic-merge step at distance
-// X/2, X/4, ..., 1). The `Step N` comments inside each function refer to
-// the bitonic step exponent: Step N means "compare-exchange at stride
-// 2^(N-1)". Steps are run from largest to smallest.
+// One bitonic window inside LREG0-7: the compare-exchange steps at strides FROM, FROM/2, ..., TO, each one
+// `detail::element_swap` layer (4 SFPSWAPs fused, 2 unfused). WindowSize sets the direction pattern (which pairs
+// give the max to the lower position), Stride sets which LREGs pair up. Strides 16, 8 and 4 compare LREGs in the
+// layout SFPLOAD leaves; strides 2 and 1 need the SFPTRANSP layout, so they run between two SFPTRANSPs (T):
 //
-// All swap directions are encoded by the choice of operand order to
-// `SFPSWAP` — `(a, b, MAX)` puts max(a, b) into `b` and min(a, b) into `a`.
-// Flipping the operand order flips the sort direction.
+//     WINDOW      FROM -> TO    emits
+//     THIRTY_TWO  16 -> 1       16 8 4 · T · 2 1 · T
+//     THIRTY_TWO   8 -> 1          8 4 · T · 2 1 · T
+//     SIXTEEN      8 -> 1          8 4 · T · 2 1 · T
+//     EIGHT        4 -> 1            4 · T · 2 1 · T
+//     FOUR         2 -> 1                T · 2 1 · T
+//     TWO          1 -> 1                T · 1   · T
+//     THIRTY_TWO  16 -> 16      16
+//     THIRTY_TWO   8 -> 4          8 4
 //
-// Special variants:
-//   * `bitonic_sort_len_16_alt`        — the "alt" variant used by the
-//     stride-2048 build inside rebuild. Splits the work in half so each
-//     half fits in a 32-slot replay buffer (see
-//     `topk_rebuild_build2048_mop_config`).
-//   * `bitonic_sort_len_k(<fused>)`    — the smallest-step merge body. In
-//     fused mode all 8 LREGs participate; in unfused mode only the first 4
-//     (values) participate, indices ride along through their parallel DST
-//     region.
+// A full sort of 32 runs the windows TWO, FOUR, EIGHT, SIXTEEN, THIRTY_TWO in that order. A call can start below
+// WINDOW/2 when the larger strides already ran elsewhere (SFPLOADMACRO-hosted first layer, Dest strips), and stop
+// above 1 for a single cross-strip layer or a MOP-split body. See @ref detail::Transposes for leaving out the
+// leading or trailing T.
 
-// Sort length-2: pairwise compare-exchange of 4 lane pairs.
-//
-// Direction is fixed (`MAX` into the second operand) — direction handling
-// is folded into the `bitonic_sort_len_4` call that always follows.
-//
-// Skips the trailing `SFPTRANSP` because it fuses with `bitonic_sort_len_4`,
-// which expects the same SrcA layout.
-inline void bitonic_sort_len_2()
+namespace detail
 {
-    TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // Step 1 — stride 1.
-    detail::element_swap<detail::Stride::ONE, detail::WindowSize::TWO, detail::Order::DESCENDING>();
-
-    // No trailing SFPTRANSP — `bitonic_sort_len_4` will reuse the layout.
+constexpr std::uint32_t log2_u32(std::uint32_t x)
+{
+    return x <= 1 ? 0 : 1 + log2_u32(x >> 1);
 }
 
-// Sort length-4: Step 2 (stride 2) + Step 1 (stride 1), in that order. The
-// leading SFPTRANSP is omitted because this routine is only called right
-// after `bitonic_sort_len_2`, which left the data in the right layout.
-inline void bitonic_sort_len_4(bool ascending)
+constexpr bool skips_leading(Transposes transposes)
+{
+    return transposes == Transposes::NO_LEADING || transposes == Transposes::NONE;
+}
+
+constexpr bool skips_trailing(Transposes transposes)
+{
+    return transposes == Transposes::NO_TRAILING || transposes == Transposes::NONE;
+}
+
+// Compile-time shape of one window_sort call: validates the arguments and counts what it emits.
+template <WindowSize WINDOW, Stride FROM, Stride TO, Transposes TRANSPOSES, Fused FUSED>
+struct WindowSortShape
+{
+    static constexpr std::uint32_t window = static_cast<std::uint32_t>(WINDOW);
+    static constexpr std::uint32_t from   = static_cast<std::uint32_t>(FROM);
+    static constexpr std::uint32_t to     = static_cast<std::uint32_t>(TO);
+
+    static_assert(2 * from <= window, "FROM must be at most half of WINDOW: both elements of a pair have to sit in one window");
+    static_assert(to <= from, "TO must not exceed FROM: the steps run from the larger stride down");
+
+    // T · 2 1 · T: the leading T is the call's first instruction only when it starts at stride 2 or 1.
+    static constexpr bool has_leading  = from <= 2;
+    static constexpr bool has_trailing = to <= 2;
+    static_assert(
+        has_leading || !skips_leading(TRANSPOSES),
+        "NO_LEADING / NONE need a leading SFPTRANSP, so the call must start at stride 2 or 1 (T · 2 1 · T); from stride 4 or above "
+        "the T before stride 2 sits between steps (16 8 4 · T · 2 1 · T) and is always emitted");
+    static_assert(
+        has_trailing || !skips_trailing(TRANSPOSES), "NO_TRAILING / NONE need a trailing SFPTRANSP, so the call must end at stride 2 or 1 (... 2 1 · T)");
+
+    static constexpr std::uint32_t steps = log2_u32(from) - log2_u32(to) + 1;
+    // The T into the transposed layout exists whenever stride 2 or 1 runs; it is the leading one when FROM <= 2.
+    static constexpr std::uint32_t transposes =
+        (to <= 2 ? 1u : 0u) - (has_leading && skips_leading(TRANSPOSES) ? 1u : 0u) + (has_trailing && !skips_trailing(TRANSPOSES) ? 1u : 0u);
+    static constexpr std::uint32_t length = steps * (FUSED == Fused::Yes ? 4u : 2u) + transposes;
+};
+
+// One step at stride S; the SFPTRANSP into the transposed layout goes before the first of stride 2 or 1 the call runs.
+template <WindowSize WINDOW, Order ORDER, Transposes TRANSPOSES, Fused FUSED, std::uint32_t FROM, std::uint32_t S>
+inline void window_sort_step()
+{
+    if constexpr (S == 2 || (S == 1 && FROM == 1))
+    {
+        if constexpr (!(S == FROM && skips_leading(TRANSPOSES)))
+        {
+            TTI_SFPTRANSP(0, 0, 0, 0);
+        }
+    }
+    element_swap<static_cast<Stride>(S), WINDOW, ORDER, FUSED>();
+}
+
+template <WindowSize WINDOW, Order ORDER, Transposes TRANSPOSES, Fused FUSED, std::uint32_t FROM, std::uint32_t... K>
+inline void window_sort_steps(std::integer_sequence<std::uint32_t, K...>)
+{
+    (window_sort_step<WINDOW, ORDER, TRANSPOSES, FUSED, FROM, (FROM >> K)>(), ...);
+}
+
+} // namespace detail
+
+/**
+ * @brief Run the bitonic steps of one window inside LREG0-7, strides FROM down to TO, with the SFPTRANSPs they need.
+ *
+ * Strides 16, 8 and 4 run in the loaded layout; strides 2 and 1 run transposed, wrapped as T · 2 1 · T. Examples:
+ * <THIRTY_TWO, SIXTEEN, ONE> emits 16 8 4 · T · 2 1 · T, <EIGHT, TWO, ONE> emits T · 2 1 · T, <THIRTY_TWO, SIXTEEN,
+ * SIXTEEN> emits 16.
+ *
+ * @tparam WINDOW: Length of one sorted window, sets the direction pattern, values = <TWO/FOUR/EIGHT/SIXTEEN/THIRTY_TWO>
+ * @tparam FROM: First stride, at most WINDOW / 2, values = <ONE/TWO/FOUR/EIGHT/SIXTEEN>
+ * @tparam TO: Last stride, at most FROM, values = <ONE/TWO/FOUR/EIGHT/SIXTEEN>
+ * @tparam ORDER: Direction of the first window, values = <ASCENDING/DESCENDING>
+ * @tparam TRANSPOSES: Which of the leading / trailing SFPTRANSP to emit, values = <BOTH/NO_LEADING/NO_TRAILING/NONE>
+ * @tparam FUSED: Swap LREG0-7 (4 swaps per step) or only LREG0-3 (2 swaps per step), values = <Yes/No>
+ * @note Combinations without the SFPTRANSP that TRANSPOSES leaves out do not compile; see @ref detail::Transposes.
+ *       Emits @ref window_sort_len instructions.
+ */
+template <
+    detail::WindowSize WINDOW,
+    detail::Stride FROM,
+    detail::Stride TO,
+    detail::Order ORDER,
+    detail::Transposes TRANSPOSES = detail::Transposes::BOTH,
+    detail::Fused FUSED           = detail::Fused::Yes>
+inline void window_sort()
+{
+    using shape = detail::WindowSortShape<WINDOW, FROM, TO, TRANSPOSES, FUSED>;
+    detail::window_sort_steps<WINDOW, ORDER, TRANSPOSES, FUSED, shape::from>(std::make_integer_sequence<std::uint32_t, shape::steps> {});
+    if constexpr (shape::has_trailing && !detail::skips_trailing(TRANSPOSES))
+    {
+        TTI_SFPTRANSP(0, 0, 0, 0);
+    }
+}
+
+/**
+ * @brief @ref window_sort with ORDER chosen at runtime.
+ *
+ * @param ascending: ORDER as a runtime value, true = ASCENDING
+ */
+template <
+    detail::WindowSize WINDOW,
+    detail::Stride FROM,
+    detail::Stride TO,
+    detail::Transposes TRANSPOSES = detail::Transposes::BOTH,
+    detail::Fused FUSED           = detail::Fused::Yes>
+inline void window_sort(const bool ascending)
 {
     if (ascending)
     {
-        // Step 2 — stride 2.
-        detail::element_swap<detail::Stride::TWO, detail::WindowSize::FOUR, detail::Order::ASCENDING>();
-
-        // Step 1 — stride 1.
-        detail::element_swap<detail::Stride::ONE, detail::WindowSize::FOUR, detail::Order::ASCENDING>();
+        window_sort<WINDOW, FROM, TO, detail::Order::ASCENDING, TRANSPOSES, FUSED>();
     }
     else
     {
-        // Step 2 — stride 2.
-        detail::element_swap<detail::Stride::TWO, detail::WindowSize::FOUR, detail::Order::DESCENDING>();
-
-        // Step 1 — stride 1.
-        detail::element_swap<detail::Stride::ONE, detail::WindowSize::FOUR, detail::Order::DESCENDING>();
-    }
-
-    TTI_SFPTRANSP(0, 0, 0, 0);
-}
-
-// Sort length-8: Step 3 (stride 4) + transpose + Steps 2 & 1.
-// The transpose between Step 3 and Step 2 is needed because Step 2 / Step 1
-// operate on a different axis of the lane block than Step 3.
-inline void bitonic_sort_len_8(bool ascending)
-{
-    if (ascending)
-    {
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::EIGHT, detail::Order::ASCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Step 2 — stride 2.
-        detail::element_swap<detail::Stride::TWO, detail::WindowSize::EIGHT, detail::Order::ASCENDING>();
-
-        // Step 1 — stride 1.
-        detail::element_swap<detail::Stride::ONE, detail::WindowSize::EIGHT, detail::Order::ASCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-    }
-    else
-    {
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::EIGHT, detail::Order::DESCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Step 2 — stride 2.
-        detail::element_swap<detail::Stride::TWO, detail::WindowSize::EIGHT, detail::Order::DESCENDING>();
-
-        // Step 1 — stride 1.
-        detail::element_swap<detail::Stride::ONE, detail::WindowSize::EIGHT, detail::Order::DESCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
+        window_sort<WINDOW, FROM, TO, detail::Order::DESCENDING, TRANSPOSES, FUSED>();
     }
 }
 
-// Sort length-16: two passes of (Step 4 + Step 3) separated by a transpose.
-// Direction is fixed (used only by the local sort's build phase where
-// direction comes from the surrounding loop's ascending/descending toggle).
-inline void bitonic_sort_len_16()
+/**
+ * @brief Number of Tensix instructions the matching @ref window_sort emits, for replay planning.
+ *
+ * steps × (4 fused / 2 unfused) + the SFPTRANSPs emitted, e.g. 22 for <THIRTY_TWO, SIXTEEN, ONE>.
+ */
+template <
+    detail::WindowSize WINDOW,
+    detail::Stride FROM,
+    detail::Stride TO,
+    detail::Transposes TRANSPOSES = detail::Transposes::BOTH,
+    detail::Fused FUSED           = detail::Fused::Yes>
+constexpr std::uint32_t window_sort_len()
 {
-    // Step 4 — stride 8.
-    detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::SIXTEEN, detail::Order::DESCENDING>();
-
-    // Step 3 — stride 4.
-    detail::element_swap<detail::Stride::FOUR, detail::WindowSize::SIXTEEN, detail::Order::DESCENDING>();
-
-    TTI_SFPTRANSP(0, 0, 0, 0);
-
-    // Step 4 — stride 8 (second half, after the layout flip).
-    detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::SIXTEEN, detail::Order::DESCENDING>();
-
-    // Step 3 — stride 4 (second half).
-    detail::element_swap<detail::Stride::FOUR, detail::WindowSize::SIXTEEN, detail::Order::DESCENDING>();
-
-    TTI_SFPTRANSP(0, 0, 0, 0);
-}
-
-// Half of `bitonic_sort_len_16_alt` — performs Step 4 + Step 3 with the
-// operand order flipped relative to `bitonic_sort_len_16` (the "alt"
-// variant). Emits 8 SFPSWAPs when fused (all 8 LREGs participate) or 4
-// when unfused (only the value LREGs participate; indices ride through
-// the parallel DST region).
-//
-// Extracted so the rebuild's stride-2 build can record just the swap
-// halves into the replay buffer and emit the two SFPTRANSPs from the MOP
-// body itself (see `topk_rebuild_build2048_mop_config`).
-template <bool fused = true>
-inline void bitonic_sort_len_16_alt_swaps(bool ascending)
-{
-    constexpr detail::Fused is_fused = static_cast<detail::Fused>(fused);
-    if (ascending)
-    {
-        // Step 4 — stride 8.
-        detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING, is_fused>();
-
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING, is_fused>();
-    }
-    else
-    {
-        // Step 4 — stride 8.
-        detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, is_fused>();
-
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, is_fused>();
-    }
-}
-
-// `bitonic_sort_len_8` with step 3 removed, for callers whose loads host that layer through macros
-// (see `stride2_len8_loads`). The leading SFPTRANSP is step 3's trailing one.
-inline void bitonic_sort_len_8_tail(bool ascending)
-{
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    if (ascending)
-    {
-        // Step 2 — stride 2.
-        detail::element_swap<detail::Stride::TWO, detail::WindowSize::EIGHT, detail::Order::ASCENDING>();
-
-        // Step 1 — stride 1.
-        detail::element_swap<detail::Stride::ONE, detail::WindowSize::EIGHT, detail::Order::ASCENDING>();
-    }
-    else
-    {
-        // Step 2 — stride 2.
-        detail::element_swap<detail::Stride::TWO, detail::WindowSize::EIGHT, detail::Order::DESCENDING>();
-
-        // Step 1 — stride 1.
-        detail::element_swap<detail::Stride::ONE, detail::WindowSize::EIGHT, detail::Order::DESCENDING>();
-    }
-    TTI_SFPTRANSP(0, 0, 0, 0);
-}
-
-// Sort length-16 (alt variant): two halves of (Step 4 + Step 3) separated
-// by a transpose, ending with another transpose. See
-// `bitonic_sort_len_16_alt_swaps` for why this is split.
-template <bool fused = true>
-inline void bitonic_sort_len_16_alt(bool ascending)
-{
-    bitonic_sort_len_16_alt_swaps<fused>(ascending);
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    bitonic_sort_len_16_alt_swaps<fused>(ascending);
-    TTI_SFPTRANSP(0, 0, 0, 0);
-}
-
-// `bitonic_sort_len_16_alt` with the first swaps call's step 4 removed, for callers whose loads host
-// that layer (see `stride2_len16_loads`).
-template <bool fused = true>
-inline void bitonic_sort_len_16_alt_tail(bool ascending)
-{
-    // Unfused step 4 is only two swaps, but `stride2_len16_loads` unconditionally hosts four, so the
-    // unfused form of this tail would strip a layer that was never hosted.
-    static_assert(fused, "the macro-hosted tail exists only for the fused path");
-    constexpr detail::Fused is_fused = static_cast<detail::Fused>(fused);
-    if (ascending)
-    {
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING, is_fused>();
-    }
-    else
-    {
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, is_fused>();
-    }
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    bitonic_sort_len_16_alt_swaps<fused>(ascending);
-    TTI_SFPTRANSP(0, 0, 0, 0);
-}
-
-// Sort length-32 after its step 5: steps 4 and 3, transpose, steps 4 and 3 again.
-inline void bitonic_sort_len_32_steps_4_3(bool ascending)
-{
-    if (ascending)
-    {
-        // Step 4 — stride 8.
-        detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING>();
-
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Step 4 — stride 8 (second pass).
-        detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING>();
-
-        // Step 3 — stride 4 (second pass).
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-    }
-    else
-    {
-        // Step 4 — stride 8.
-        detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING>();
-
-        // Step 3 — stride 4.
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Step 4 — stride 8 (second pass).
-        detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING>();
-
-        // Step 3 — stride 4 (second pass).
-        detail::element_swap<detail::Stride::FOUR, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING>();
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
-    }
-}
-
-// Step 5 at stride 16, then steps 4 and 3, transpose, steps 4 and 3 again.
-inline void bitonic_sort_len_32(bool ascending)
-{
-    if (ascending)
-    {
-        // Step 5, stride 16.
-        detail::element_swap<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING>();
-    }
-    else
-    {
-        // Step 5, stride 16.
-        detail::element_swap<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING>();
-    }
-    bitonic_sort_len_32_steps_4_3(ascending);
+    return detail::WindowSortShape<WINDOW, FROM, TO, TRANSPOSES, FUSED>::length;
 }
 
 // =============================================================================
@@ -1284,7 +1197,7 @@ constexpr int pipelined_group_len = 12;
 //     unused" (`SFPLOAD.md:83`). So `VDHi` rides a bit that does not affect addressing: dropping the
 //     `| 1` gives `VDHi = 0`, which lets a macro load LREG0..3 without changing the address.
 //
-// Step 3 of `bitonic_sort_len_8` is `(VC,VD)` = (L1,L0) (L2,L3) (L5,L4) (L6,L7) ascending, and
+// Step 3 of `window_sort<EIGHT, FOUR, ONE>` is `(VC,VD)` = (L1,L0) (L2,L3) (L5,L4) (L6,L7) ascending, and
 // (L0,L1) (L3,L2) (L4,L5) (L7,L6) descending, so all four pairs are hostable once both facts hold.
 constexpr int stride2_len8_loads_len = 13;
 
@@ -1338,10 +1251,10 @@ inline NOINLINE void record_stride2_len8_loads(const bool ascending)
     }
 }
 
-// The same trick for `sort_len == 16`, whose first layer is step 4 of `bitonic_sort_len_16_alt_swaps`:
+// The same trick for `sort_len == 16`, whose first layer is step 4 of `window_sort<THIRTY_TWO, EIGHT, FOUR>`:
 // (VC,VD) = (L2,L0) (L3,L1) (L6,L4) (L7,L5) ascending and (L0,L2) (L1,L3) (L4,L6) (L5,L7) descending.
 // `sort_len == 4` is absent: `_topk_xl_split_stride2_sort_<4>` issues an SFPTRANSP before
-// `bitonic_sort_len_4`, so the first thing after the load is a transpose. Scheduling that transpose
+// `window_sort<FOUR, TWO, ONE>`, so the first thing after the load is a transpose. Scheduling that transpose
 // on a macro costs all four Sequence words (three suppressed, one re-delayed) to save one
 // instruction.
 constexpr int stride2_len16_loads_len = 13;
@@ -1497,7 +1410,7 @@ constexpr int len32_stores_len = 8;
 // Out of line: the K = 2048 math image has little room.
 inline NOINLINE void bitonic_sort_len_32_tail(bool ascending)
 {
-    bitonic_sort_len_32_steps_4_3(ascending);
+    window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(ascending);
 }
 
 inline NOINLINE void record_len32_group(const bool dir)
@@ -1545,16 +1458,7 @@ inline void bitonic_sort_len_k(bool ascending)
     // LREG2-3 when unfused, so the register-model stride differs.
     constexpr detail::Stride stride  = fused ? detail::Stride::SIXTEEN : detail::Stride::EIGHT;
     constexpr detail::Fused is_fused = static_cast<detail::Fused>(fused);
-    if (ascending)
-    {
-        // Step 6 — stride 32.
-        detail::element_swap<stride, detail::WindowSize::THIRTY_TWO, detail::Order::ASCENDING, is_fused>();
-    }
-    else
-    {
-        // Step 6 — stride 32.
-        detail::element_swap<stride, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, is_fused>();
-    }
+    window_sort<detail::WindowSize::THIRTY_TWO, stride, stride, detail::Transposes::BOTH, is_fused>(ascending);
 }
 
 template <int group_2_offset, int inc_dst_addr>
@@ -1772,7 +1676,7 @@ inline void transpose_N_faces()
 // Program the MOP Expander for the stride-2 length-2048 build phase of
 // `_topk_xl_rebuild_<fused=true>`. The loop body is
 //
-//     load16_rows_x2<2> + bitonic_sort_len_16_alt(dir) + store16_rows_x2<2, 16>
+//     load16_rows_x2<2> + window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir) + store16_rows_x2<2, 16>
 //     = 8 + 18 + 8 = 34 instructions
 //
 // which is too large to fit in the 32-slot replay buffer as one contiguous
@@ -1909,7 +1813,7 @@ inline void canonical_big_block_with_replay_body(bool dir)
 #endif
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-        // ── Sub-block C: `row_scale_factor` × (load<16> + sort_32 + store<16, 32>) ──
+        // ── Sub-block C: `row_scale_factor` × (load<16> + W32 sort + store<16, 32>) ──
 #if TOPK_XL_FUSED_MACRO
         // At K = 1024 each recording serves two groups only, too few for the macro loads to pay off.
         if constexpr (row_scale_factor >= 4)
@@ -1924,12 +1828,12 @@ inline void canonical_big_block_with_replay_body(bool dir)
 #endif
         {
             load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-            bitonic_sort_len_32(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
             load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
             for (int i = 1; i < row_scale_factor; i++)
             {
                 lltt::replay(0, 8);
-                bitonic_sort_len_32(dir);
+                window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
                 lltt::replay(8, 8);
             }
         }
@@ -1937,11 +1841,11 @@ inline void canonical_big_block_with_replay_body(bool dir)
     }
     else
     {
-        // K=512 (row_scale_factor=1): single stride-16 sort_32 inline.
+        // K=512 (row_scale_factor=1): single stride-16 W32 sort inline.
         // No replay buffer here because there's nothing to amortise the
         // recording across.
         load16_rows_x2<consecutive_32_offset>();
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         store16_rows_x2<consecutive_32_offset, 32>();
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
@@ -2084,7 +1988,7 @@ inline void _topk_xl_init_()
 //
 // The sort proceeds bottom-up, doubling the run length at each phase:
 //
-//   len  =  32 : build inside each face        (sort_8 + sort_16 + sort_32)
+//   len  =  32 : build inside each face        (W8 sort + W16 sort + W32 sort)
 //   len  =  64 : merge two len-32 runs         (sort_k at stride 64)
 //   len = 128 : merge two len-64 runs          (canonical A+B+C big block)
 //   len = 256 : merge two len-128 runs         (uses SFPCONFIG dir alternation)
@@ -2125,19 +2029,19 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     {
         // ── Phase 1 — build bitonic sequences of length 32 ─────────────────
         //
-        // Inner iter i=0 records `sort_8 + sort_16` (14 + 18 = 32 instr)
+        // Inner iter i=0 records `W8 sort + W16 sort` (14 + 18 = 32 instr)
         // into replay slots [0..31] — an exact fit for the 32-slot replay
         // buffer. Iters 1..3 fire that body from the replay buffer.
         //
-        // `sort_4` is left inline because adding it to the recording would
-        // overflow the 32-slot buffer. `sort_32` is left inline because
+        // `W4 sort` is left inline because adding it to the recording would
+        // overflow the 32-slot buffer. `W32 sort` is left inline because
         // `dir` alternates per iter (replaying it would freeze the
         // direction).
         for (int i = 0; i < 4; i++)
         {
             load16_rows_x2<consecutive_32_offset>();
-            bitonic_sort_len_2();
-            bitonic_sort_len_4(ascending);
+            window_sort<detail::WindowSize::TWO, detail::Stride::ONE, detail::Stride::ONE, detail::Order::DESCENDING, detail::Transposes::NO_TRAILING>();
+            window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NO_LEADING>(ascending);
             if (i == 0)
             {
                 load_replay_buf<Exec>(
@@ -2145,15 +2049,15 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
                     32,
                     [ascending]
                     {
-                        bitonic_sort_len_8(ascending);
-                        bitonic_sort_len_16();
+                        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(ascending);
+                        window_sort<detail::WindowSize::SIXTEEN, detail::Stride::EIGHT, detail::Stride::ONE, detail::Order::DESCENDING>();
                     });
             }
             else
             {
                 lltt::replay(0, 32);
             }
-            bitonic_sort_len_32(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
             store16_rows_x2<consecutive_32_offset, 32>();
             if constexpr (row_scale_factor > 1)
             {
@@ -2184,7 +2088,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-        // ── Phase 3 — stride-16 sort_32 (4 effective iters) ────────────────
+        // ── Phase 3 — stride-16 W32 sort (4 effective iters) ────────────────
         // `dir` flips once per outer pass below.
 #if TOPK_XL_FUSED_MACRO
         topk_xl_fused_macro::record_len32_group(dir);
@@ -2195,17 +2099,17 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         dir = !dir;
 #else
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
         dir = !dir;
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
         dir = !dir;
 #endif
@@ -2274,16 +2178,14 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
-    // Stride-2 (load + TRANSP + sort_4 + store<2, 16>), N = 8.
+    // Stride-2 (load + TRANSP + W4 sort + store<2, 16>), N = 8.
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    bitonic_sort_len_4(dir);
+    window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
-        TTI_SFPTRANSP(0, 0, 0, 0);
-        bitonic_sort_len_4(dir);
+        window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2302,14 +2204,14 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // ── Phase 7 — length 1024 ──────────────────────────────────────────────
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
-    // Stride-2 (load + sort_8 + store<2, 16>), N = 8.
+    // Stride-2 (load + W8 sort + store<2, 16>), N = 8.
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_8(dir);
+    window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_8(dir);
+        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2328,14 +2230,14 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // ── Phase 8 — length 2048 ──────────────────────────────────────────────
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
-    // Stride-2 (load + sort_16_alt + store<2, 16>), N = 8.
+    // Stride-2 (load + W32 sort from stride 8 + store<2, 16>), N = 8.
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_16_alt(dir);
+    window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
     for (int i = 1; i < 8; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_16_alt(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2407,11 +2309,11 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     {
         // ── build bitonic sequences of len=32 ──────────────────────────────
         //
-        // Inner iter i=0 records `sort_8 + sort_16` (14 + 18 = 32 instr)
+        // Inner iter i=0 records `W8 sort + W16 sort` (14 + 18 = 32 instr)
         // into replay slots [0..31] — an exact fit for the 32-slot
         // replay buffer. Iters 1..rsf-1 fire the recorded body via
-        // `lltt::replay`. `sort_4` is left inline because adding it to
-        // the recording would overflow the buffer; `sort_32` is left
+        // `lltt::replay`. `W4 sort` is left inline because adding it to
+        // the recording would overflow the buffer; `W32 sort` is left
         // inline because `dir` alternates per iter (replaying it would
         // freeze the direction).
         //
@@ -2422,8 +2324,8 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
         for (int i = 0; i < row_scale_factor; i++)
         {
             load16_rows_x2<consecutive_32_offset>();
-            bitonic_sort_len_2();
-            bitonic_sort_len_4(ascending);
+            window_sort<detail::WindowSize::TWO, detail::Stride::ONE, detail::Stride::ONE, detail::Order::DESCENDING, detail::Transposes::NO_TRAILING>();
+            window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NO_LEADING>(ascending);
             if (i == 0)
             {
                 load_replay_buf<Exec>(
@@ -2431,15 +2333,15 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
                     32,
                     [ascending]
                     {
-                        bitonic_sort_len_8(ascending);
-                        bitonic_sort_len_16();
+                        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(ascending);
+                        window_sort<detail::WindowSize::SIXTEEN, detail::Stride::EIGHT, detail::Stride::ONE, detail::Order::DESCENDING>();
                     });
             }
             else
             {
                 lltt::replay(0, 32);
             }
-            bitonic_sort_len_32(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
             store16_rows_x2<consecutive_32_offset, 32>();
             if constexpr (row_scale_factor > 1)
             {
@@ -2476,19 +2378,19 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-            // ── stride-16 sort_32 × rsf, dir alternates per pair ───────────
+            // ── stride-16 W32 sort × rsf, dir alternates per pair ───────────
             //
             // Same recording pattern as the K=2048 fast path's Phase 3:
             // iter 0 is recorded into slots [0..7] / [8..15] in Exec mode;
             // remaining iters replay. `dir` flips after iters 1, 3, ...
             // so pairs of iters share a direction.
             load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-            bitonic_sort_len_32(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
             load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
             for (int i = 1; i < row_scale_factor; i++)
             {
                 lltt::replay(0, 8);
-                bitonic_sort_len_32(dir);
+                window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
                 lltt::replay(8, 8);
                 if constexpr ((!topk_xl_blaze_compat && !early_exit_K64) || row_scale_factor > 2)
                 {
@@ -2549,7 +2451,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     for (int col = 0; col < 2; col++)
     {
         // Per-col post-stride-2 work = sub-B (stride-32 pair, K>=1024)
-        // + sub-C (stride-16 sort_32 × rsf). `canonical_big_block_with_replay`
+        // + sub-C (stride-16 W32 sort × rsf). `canonical_big_block_with_replay`
         // emits exactly that for rsf=1 and rsf=2, with the ADDR_MOD_1
         // fold on sub-B's last store and a replay buffer on sub-C.
         // Sub-A (stride-64) is `if constexpr`'d away for rsf<4.
@@ -2576,14 +2478,12 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     // ── build bitonic sequences of len=(K/4) ──────────────────────────────
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    bitonic_sort_len_4(dir);
+    window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
     for (int i = 1; i < n_iters_stride2; i++)
     {
         lltt::replay(0, 8);
-        TTI_SFPTRANSP(0, 0, 0, 0);
-        bitonic_sort_len_4(dir);
+        window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2600,12 +2500,12 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     // ── build bitonic sequences of len=(K/2) ──────────────────────────────
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_8(dir);
+    window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
     for (int i = 1; i < n_iters_stride2; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_8(dir);
+        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2622,12 +2522,12 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     // ── build bitonic sequences of len=K ──────────────────────────────────
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_16_alt(dir);
+    window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
     load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
     for (int i = 1; i < n_iters_stride2; i++)
     {
         lltt::replay(0, 8);
-        bitonic_sort_len_16_alt(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2828,7 +2728,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 
         // Length-2048 build phase via the 5-slot MOP template.
         //
-        // The body would be 8 (load) + 18 (sort_16_alt) + 8 (store) = 34
+        // The body would be 8 (load) + 18 (W32 sort from stride 8) + 8 (store) = 34
         // instructions, which is too large for a contiguous 32-slot replay
         // window. We split on the two SFPTRANSPs inside the sort: record
         // the 32 "data" instructions across three replay ranges and let
@@ -2844,10 +2744,11 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
             [dir]
             {
                 load16_rows_x2<2>();
-                bitonic_sort_len_16_alt_swaps<true>(dir);
+                window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::FOUR>(dir);
             });
         TTI_SFPTRANSP(0, 0, 0, 0);
-        load_replay_buf<Exec>(16, 8, [dir] { bitonic_sort_len_16_alt_swaps<true>(dir); });
+        load_replay_buf<Exec>(
+            16, 8, [dir] { window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NONE>(dir); });
         TTI_SFPTRANSP(0, 0, 0, 0);
         load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
         ckernel_unpack_template::run(7);
@@ -2883,17 +2784,23 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         transpose_8_faces<fused, indices_offset, false /* manage_outer_cfg */>();
 
-        // Stride-8 (load + sort_16_alt<false> + store<8, 16>), N = 8 per
+        // Stride-8 (load + W32 sort from stride 8 (unfused) + store<8, 16>), N = 8 per
         // col × 2 cols. Recording IS col=0 iter=0; the rest are replays.
         load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
-        bitonic_sort_len_16_alt<fused>(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE, detail::Transposes::BOTH, static_cast<detail::Fused>(fused)>(
+            dir);
         load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
         for (int pass = 0; pass < 2; pass++)
         {
             for (int i = 1 - pass; i < 8; i++)
             {
                 lltt::replay(0, 8);
-                bitonic_sort_len_16_alt<fused>(dir);
+                window_sort<
+                    detail::WindowSize::THIRTY_TWO,
+                    detail::Stride::EIGHT,
+                    detail::Stride::ONE,
+                    detail::Transposes::BOTH,
+                    static_cast<detail::Fused>(fused)>(dir);
                 lltt::replay(8, 8);
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -3049,12 +2956,22 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 
             // ── Stride-8 — clean N = 8 replay, recording IS iter 0 ────────
             load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
-            bitonic_sort_len_16_alt<fused>(dir);
+            window_sort<
+                detail::WindowSize::THIRTY_TWO,
+                detail::Stride::EIGHT,
+                detail::Stride::ONE,
+                detail::Transposes::BOTH,
+                static_cast<detail::Fused>(fused)>(dir);
             load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
             for (int i = 1; i < 8; i++)
             {
                 lltt::replay(0, 8);
-                bitonic_sort_len_16_alt<fused>(dir);
+                window_sort<
+                    detail::WindowSize::THIRTY_TWO,
+                    detail::Stride::EIGHT,
+                    detail::Stride::ONE,
+                    detail::Transposes::BOTH,
+                    static_cast<detail::Fused>(fused)>(dir);
                 lltt::replay(8, 8);
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -3076,10 +2993,10 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 // optimisations where the generic structure allows them:
 //
 //   Fused path:
-//     * 5-slot MOP template for the stride-2 + sort_16_alt build (the
+//     * 5-slot MOP template for the stride-2 + W32 sort from stride 8 build (the
 //       same `topk_rebuild_build2048_mop_config` the K=2048 fast path
 //       uses — the body is 34 instructions, too large for one 32-slot
-//       replay window, so the two `SFPTRANSP`s inside `sort_16_alt`
+//       replay window, so the two `SFPTRANSP`s inside `W32 sort from stride 8`
 //       are emitted from the MOP template's A1 / A3 slots).
 //     * One `enter_transpose_cfg_block` / `leave_transpose_cfg_block`
 //       pair wrapping both `transpose_N_faces` calls.
@@ -3126,11 +3043,11 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
 
-        // ── stride-2 + sort_16_alt build phase ─────────────────────────
+        // ── stride-2 + W32 sort from stride 8 build phase ─────────────────────────
         //
-        // Body is `load(8) + sort_16_alt(18) + store(8)` = 34 instr.
+        // Body is `load(8) + W32 sort from stride 8(18) + store(8)` = 34 instr.
         // Doesn't fit in one 32-slot replay window; we split on the two
-        // SFPTRANSPs inside sort_16_alt and let the 5-slot MOP template
+        // SFPTRANSPs inside W32 sort from stride 8 and let the 5-slot MOP template
         // emit them from A1 / A3. Iter 0 is the recording itself (Exec
         // mode); iters 1..n_iters-1 collapse to a single TTI_MOP issue.
         topk_rebuild_build2048_mop_config();
@@ -3140,10 +3057,11 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
             [dir]
             {
                 load16_rows_x2<2>();
-                bitonic_sort_len_16_alt_swaps<true>(dir);
+                window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::FOUR>(dir);
             });
         TTI_SFPTRANSP(0, 0, 0, 0);
-        load_replay_buf<Exec>(16, 8, [dir] { bitonic_sort_len_16_alt_swaps<true>(dir); });
+        load_replay_buf<Exec>(
+            16, 8, [dir] { window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NONE>(dir); });
         TTI_SFPTRANSP(0, 0, 0, 0);
         load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
         ckernel_unpack_template::run(n_iters_stride2 - 1);
@@ -3153,7 +3071,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         leave_transpose_cfg_block();
 
         // Per-col post-transpose work = sub-B (stride-32 pair, K>=1024) +
-        // sub-C (stride-16 sort_32 × rsf), folded into `canonical_big_block_with_replay`
+        // sub-C (stride-16 W32 sort × rsf), folded into `canonical_big_block_with_replay`
         // exactly as the K=2048 fast path does it (with sub-A disabled
         // for rsf<4 via `if constexpr`).
         for (int col = 0; col < 2; col++)
@@ -3176,24 +3094,30 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
         transpose_N_faces</* N */ row_scale_factor * 2, fused, indices_offset, false /* manage_outer_cfg */>();
 
-        // ── stride-8 + sort_16_alt build phase (both columns) ──────────
+        // ── stride-8 + W32 sort from stride 8 build phase (both columns) ──────────
         //
-        // Body is `load8_unfused(8) + sort_16_alt<false>(10) + store8_unfused(8)`
-        // = 26 instructions. `sort_16_alt<false>` emits only 8 SFPSWAPs
+        // Body is `load8_unfused(8) + W32 sort from stride 8 (unfused)(10) + store8_unfused(8)`
+        // = 26 instructions. `W32 sort from stride 8 (unfused)` emits only 8 SFPSWAPs
         // (values only — indices ride along via the parallel DST region
         // at `indices_offset`) plus its two SFPTRANSPs, so the body fits
         // in the 32-slot replay window. We still keep the K=2048 fast
         // path's load / store split into [0..7] / [8..15] with the
-        // direction-dependent sort_16_alt inline, so the per-col stride
+        // direction-dependent W32 sort from stride 8 inline, so the per-col stride
         // phases below can re-record [0..15] for their own load / store
         // bodies. Both cols fire from the same recording.
         load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
-        bitonic_sort_len_16_alt<fused>(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE, detail::Transposes::BOTH, static_cast<detail::Fused>(fused)>(
+            dir);
         load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
         for (int i = 1; i < n_iters_stride2; i++)
         {
             lltt::replay(0, 8);
-            bitonic_sort_len_16_alt<fused>(dir);
+            window_sort<
+                detail::WindowSize::THIRTY_TWO,
+                detail::Stride::EIGHT,
+                detail::Stride::ONE,
+                detail::Transposes::BOTH,
+                static_cast<detail::Fused>(fused)>(dir);
             lltt::replay(8, 8);
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -3201,7 +3125,12 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         for (int i = 0; i < n_iters_stride2; i++)
         {
             lltt::replay(0, 8);
-            bitonic_sort_len_16_alt<fused>(dir);
+            window_sort<
+                detail::WindowSize::THIRTY_TWO,
+                detail::Stride::EIGHT,
+                detail::Stride::ONE,
+                detail::Transposes::BOTH,
+                static_cast<detail::Fused>(fused)>(dir);
             lltt::replay(8, 8);
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -3316,16 +3245,26 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 #endif // TOPK_XL_UNFUSED_MACRO
 
-            // ── stride-8 + sort_16_alt ────────────────────────────────
+            // ── stride-8 + W32 sort from stride 8 ────────────────────────────────
             // Clean N-iter replay (no LREG7 fold needed; the store's
             // ADDR_MOD_5 (+16) already lands on the right boundary).
             load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
-            bitonic_sort_len_16_alt<fused>(dir);
+            window_sort<
+                detail::WindowSize::THIRTY_TWO,
+                detail::Stride::EIGHT,
+                detail::Stride::ONE,
+                detail::Transposes::BOTH,
+                static_cast<detail::Fused>(fused)>(dir);
             load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
             for (int i = 1; i < n_iters_stride2; i++)
             {
                 lltt::replay(0, 8);
-                bitonic_sort_len_16_alt<fused>(dir);
+                window_sort<
+                    detail::WindowSize::THIRTY_TWO,
+                    detail::Stride::EIGHT,
+                    detail::Stride::ONE,
+                    detail::Transposes::BOTH,
+                    static_cast<detail::Fused>(fused)>(dir);
                 lltt::replay(8, 8);
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -4070,17 +4009,17 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
     for (int col = 0; col < 2; col++)
     {
         load16_rows_x2<consecutive_32_offset>();
-        bitonic_sort_len_2();
-        bitonic_sort_len_4(ascending);
+        window_sort<detail::WindowSize::TWO, detail::Stride::ONE, detail::Stride::ONE, detail::Order::DESCENDING, detail::Transposes::NO_TRAILING>();
+        window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NO_LEADING>(ascending);
         load_replay_buf<Exec>(
             0,
             32,
             [ascending]
             {
-                bitonic_sort_len_8(ascending);
-                bitonic_sort_len_16();
+                window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(ascending);
+                window_sort<detail::WindowSize::SIXTEEN, detail::Stride::EIGHT, detail::Stride::ONE, detail::Order::DESCENDING>();
             });
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         store16_rows_x2<consecutive_32_offset, 32>();
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
@@ -4129,8 +4068,8 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
         for (int i = 0; i < 2; i++)
         {
             load16_rows_x2<consecutive_32_offset>();
-            bitonic_sort_len_2();
-            bitonic_sort_len_4(ascending);
+            window_sort<detail::WindowSize::TWO, detail::Stride::ONE, detail::Stride::ONE, detail::Order::DESCENDING, detail::Transposes::NO_TRAILING>();
+            window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NO_LEADING>(ascending);
             if (i == 0)
             {
                 load_replay_buf<Exec>(
@@ -4138,15 +4077,15 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
                     32,
                     [ascending]
                     {
-                        bitonic_sort_len_8(ascending);
-                        bitonic_sort_len_16();
+                        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(ascending);
+                        window_sort<detail::WindowSize::SIXTEEN, detail::Stride::EIGHT, detail::Stride::ONE, detail::Order::DESCENDING>();
                     });
             }
             else
             {
                 lltt::replay(0, 32);
             }
-            bitonic_sort_len_32(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
             store16_rows_x2<consecutive_32_offset, 32>();
             dir = !dir;
         }
@@ -4169,10 +4108,10 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
         if constexpr (!topk_xl_blaze_compat)
         {
@@ -4226,8 +4165,8 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         for (int i = 0; i < 4; i++)
         {
             load16_rows_x2<consecutive_32_offset>();
-            bitonic_sort_len_2();
-            bitonic_sort_len_4(ascending);
+            window_sort<detail::WindowSize::TWO, detail::Stride::ONE, detail::Stride::ONE, detail::Order::DESCENDING, detail::Transposes::NO_TRAILING>();
+            window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NO_LEADING>(ascending);
             if (i == 0)
             {
                 load_replay_buf<Exec>(
@@ -4235,15 +4174,15 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
                     32,
                     [ascending]
                     {
-                        bitonic_sort_len_8(ascending);
-                        bitonic_sort_len_16();
+                        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(ascending);
+                        window_sort<detail::WindowSize::SIXTEEN, detail::Stride::EIGHT, detail::Stride::ONE, detail::Order::DESCENDING>();
                     });
             }
             else
             {
                 lltt::replay(0, 32);
             }
-            bitonic_sort_len_32(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
             store16_rows_x2<consecutive_32_offset, 32>();
             dir = !dir;
         }
@@ -4274,17 +4213,17 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         dir = !dir;
 #else
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
         dir = !dir;
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
         lltt::replay(0, 8);
-        bitonic_sort_len_32(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
         lltt::replay(8, 8);
         dir = !dir;
 #endif
@@ -4331,16 +4270,15 @@ inline void _topk_xl_split_stride2_sort_(const bool dir)
     static_assert(sort_len == 4 || sort_len == 8 || sort_len == 16, "sort_len must be 4, 8 or 16");
     if constexpr (sort_len == 4)
     {
-        TTI_SFPTRANSP(0, 0, 0, 0);
-        bitonic_sort_len_4(dir);
+        window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
     }
     else if constexpr (sort_len == 8)
     {
-        bitonic_sort_len_8(dir);
+        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
     }
     else
     {
-        bitonic_sort_len_16_alt(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
     }
 }
 
@@ -4358,18 +4296,18 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
 #if TOPK_XL_FUSED_MACRO
     if constexpr (macros && sort_len == 16)
     {
-        // Step 4 of `bitonic_sort_len_16_alt_swaps` rides the loads, same as the sort_len == 8 case.
+        // Step 4 of `window_sort<THIRTY_TWO, EIGHT, FOUR>` rides the loads, same as the sort_len == 8 case.
         // sort_len == 4 is deliberately absent: its dispatch issues an SFPTRANSP before the sort, so
         // the first thing after the load is a transpose and there is no swap for a macro to host.
         constexpr int stores_at = topk_xl_fused_macro::stride2_len16_loads_len;
         loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_stride2_len16_loads(dir);
-        bitonic_sort_len_16_alt_tail(dir);
+        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::FOUR, detail::Stride::ONE>(dir);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len16_loads_len);
-            bitonic_sort_len_16_alt_tail(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::FOUR, detail::Stride::ONE>(dir);
             lltt::replay(stores_at, 8);
         }
         // Put the step-group configuration back for the later step groups.
@@ -4384,12 +4322,12 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         constexpr int stores_at = topk_xl_fused_macro::stride2_len8_loads_len;
         loadmacro_configure<detail::Stride::FOUR, detail::WindowSize::EIGHT, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_stride2_len8_loads(dir);
-        bitonic_sort_len_8_tail(dir);
+        window_sort<detail::WindowSize::EIGHT, detail::Stride::TWO, detail::Stride::ONE>(dir);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len8_loads_len);
-            bitonic_sort_len_8_tail(dir);
+            window_sort<detail::WindowSize::EIGHT, detail::Stride::TWO, detail::Stride::ONE>(dir);
             lltt::replay(stores_at, 8);
         }
         // Put the step-group configuration back for the later step groups.
@@ -4475,7 +4413,7 @@ inline void _topk_xl_split_merge_(const std::uint32_t tile_offset)
     set_dst_write_addr_offset(tile_offset);
 }
 
-// The rebuild's stride-2 sort_16_alt build between its two transposes.
+// The rebuild's stride-2 W32 sort from stride 8 build between its two transposes.
 template <std::uint32_t K>
 inline void _topk_xl_split_rebuild_build_(const std::uint32_t tile_offset, const bool dir)
 {
@@ -4487,10 +4425,11 @@ inline void _topk_xl_split_rebuild_build_(const std::uint32_t tile_offset, const
         [dir]
         {
             load16_rows_x2<2>();
-            bitonic_sort_len_16_alt_swaps<true>(dir);
+            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::FOUR>(dir);
         });
     TTI_SFPTRANSP(0, 0, 0, 0);
-    load_replay_buf<Exec>(16, 8, [dir] { bitonic_sort_len_16_alt_swaps<true>(dir); });
+    load_replay_buf<Exec>(
+        16, 8, [dir] { window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NONE>(dir); });
     TTI_SFPTRANSP(0, 0, 0, 0);
     load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
     ckernel_unpack_template::run(split_n_iters<K> - 1);
