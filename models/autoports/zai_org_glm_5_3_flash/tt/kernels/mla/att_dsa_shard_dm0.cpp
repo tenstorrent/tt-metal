@@ -248,7 +248,10 @@ void kernel_main() {
                     noc_async_read(pools.get_noc_addr(lb1 * 4 + d, 0), dst + tb / 2, tb / 2);  // rows 16..31
                 }
 #else
-#if defined(MLA_DSA_ONE_SLOT)  // rev 61: a speculative verify's rows all score the launch's slot (its local pools)
+#if defined(MLA_DSA_ONE_SLOT) && defined(MLA_DSA_GROUP_ROWS)  // GLM53_SPEC_MULTI: the row group's user slot
+                const uint32_t tile0 =
+                    ((t / MLA_DSA_GROUP_ROWS) * MLA_DSA_GROUP_ROWS * TP_TILES + c + (i0 + j) * C) * 4;
+#elif defined(MLA_DSA_ONE_SLOT)
                 const uint32_t tile0 = (c + (i0 + j) * C) * 4;
 #else
                 const uint32_t tile0 = (t * TP_TILES + c + (i0 + j) * C) * 4;

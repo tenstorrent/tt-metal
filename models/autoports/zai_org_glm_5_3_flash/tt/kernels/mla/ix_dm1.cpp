@@ -17,6 +17,11 @@
 //   4 (q - q0) .. + 3, q0 = the first active row's pool: the open pool's rows are the canonical rows 0..3, a later
 //   pool's rows stay off them (a rejected draft in pool q0 + 1 must not overwrite a committed row of pool q0) until
 //   Stage 17's SpecCtl ACCEPT moves the next verify's pool to rows 0..3 (kernels/spec/spec_ctl.cpp).
+// MLA_DSA_GROUP_ROWS = g (with MLA_DSA_ONE_SLOT; GLM53_SPEC_MULTI, doc/perf/mtp_multi_user_design.md item 3): the rows
+//   are G = T / g groups, each ONE user's consecutive positions, the user in slot (t / g) g of the launch (its group
+//   base); per group the one-slot rules (ring / pooled-key base = that slot, q0 = the group's first active row's pool,
+//   ring tile rows 4 (q - q0) ..); rows stay in row order on the one index core (or the lane baton), so a group's rows
+//   are written in order and groups never share a slot.
 // MLA_DSA_SHARD_LINE (rev 59, the TP8 sequence-sharded split-K: kernels/mla/dsa_shard.hpp): afterwards, once the
 //   all-gather landed (AGC_SEM, >= 1), the q tiles of both passes: head tile g of token t = the 8-row q pieces of chips
 //   4 g .. 4 g + 3 in y_ag -> q_asm (4 tiles per round trip through the pool-tile scratch), then QASM_SEM += 1 on this
@@ -121,6 +126,19 @@ void kernel_main() {
         const int32_t p = reinterpret_cast<volatile tt_l1_ptr int32_t*>(cur_l1)[t];
         q0 = p < 0 ? -1 : p / 4;
     }
+#if defined(MLA_DSA_GROUP_ROWS)
+    constexpr uint32_t GR = MLA_DSA_GROUP_ROWS;
+    static_assert(GR >= 1 && GR <= 32, "MLA_DSA_GROUP_ROWS: 1..32 rows per group");
+    (void)q0;
+    int32_t q0g[32 / GR];  // per group: its first active row's pool
+    for (uint32_t gi = 0; gi < 32 / GR; ++gi) {
+        q0g[gi] = -1;
+        for (uint32_t t = gi * GR; t < (gi + 1) * GR && t < t_rows && q0g[gi] < 0; ++t) {
+            const int32_t p = reinterpret_cast<volatile tt_l1_ptr int32_t*>(cur_l1)[t];
+            q0g[gi] = p < 0 ? -1 : p / 4;
+        }
+    }
+#endif
 #endif
 #if defined(MLA_DSA_ONE_SLOT_BATON)
 #if !defined(MLA_DSA_ONE_SLOT) || !defined(MLA_DSA_SHARD) || !defined(MLA_ATT_LANES)
@@ -163,7 +181,12 @@ void kernel_main() {
             return;
         }
         const uint32_t r = static_cast<uint32_t>(p) % 4;
-#if defined(MLA_DSA_ONE_SLOT)
+#if defined(MLA_DSA_ONE_SLOT) && defined(MLA_DSA_GROUP_ROWS)
+        const uint32_t slot = (t / GR) * GR;                              // the group's user slot (its base row)
+        const uint32_t grp = static_cast<uint32_t>(p / 4 - q0g[t / GR]);  // >= 0: positions rise inside the group
+        ASSERT(p / 4 >= q0g[t / GR] && 4 * grp + 3 < 32);
+        const uint32_t roff = mla::row_off(4 * grp);
+#elif defined(MLA_DSA_ONE_SLOT)
         const uint32_t slot = 0;
         const uint32_t grp = static_cast<uint32_t>(p / 4 - q0);  // >= 0: positions rise with the row
         ASSERT(p / 4 >= q0 && 4 * grp + 3 < 32);

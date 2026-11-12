@@ -263,8 +263,8 @@ def dsa_slot_addrs(st: dict, t: int) -> tuple:
     slot s0 + t is page t of the same tensor at base + s0 pps / banks aligned pages."""
     s0 = int(st.get("s0", 0))
     slots = int(st.get("slots", int(st["ring"].shape[0])))
-    if st.get("one_slot"):  # rev 56: a speculative verify's rows are one user's consecutive positions -> slot s0 only
-        t = 1
+    if st.get("one_slot") and not st.get("group_rows"):  # rev 56: one user's consecutive positions -> slot s0 only
+        t = 1  # (GLM53_SPEC_MULTI groups: the users' slots are the launch's group bases s0 .. s0 + t - 1)
     if s0 < 0 or s0 + t > slots:
         raise ValueError(f"DSA state: rows {s0}..{s0 + t - 1} outside its {slots} slots")
     ps = int(st.get("pool_slots", slots))  # GLM53_DSA_STORE_SEATS: rows s0 + t >= ps must be idle (stack_state)
@@ -1377,9 +1377,16 @@ class MkMla(_MlaBase):
             # rev 56 (Stage 17's speculative verify, tt/spec_mtp.py): the t rows are consecutive positions of the user in
             # slot s0 -> one slot (MLA_DSA_ONE_SLOT); one index core in row order (t > 4: token lanes only on the select
             # coordinators, MLA_DSA_COORD_EXT)
-            if t > 8:
-                raise ValueError(f"MkMla(dsa=...) verify: t <= 8 (got {t})")
+            # GLM53_SPEC_MULTI: GLM53_MLA_VERIFY_GROUPS = G users, each a group of t / G consecutive positions in its
+            # own slot (the group base row; ix_dm1.cpp / att_dsa*_dm0.cpp MLA_DSA_GROUP_ROWS)
+            vg = int(os.environ.get("GLM53_MLA_VERIFY_GROUPS", "0") or 0)
+            if t > (16 if vg > 1 else 8):
+                raise ValueError(f"MkMla(dsa=...) verify: t <= {16 if vg > 1 else 8} (got {t})")
             dsa_state = dict(dsa_state, one_slot=True)
+            if vg > 1:
+                if t % vg:
+                    raise ValueError(f"GLM53_MLA_VERIFY_GROUPS {vg}: t {t} is not equal groups")
+                dsa_state["group_rows"] = t // vg
         # (ix_lanes: a one-slot verify keeps ONE index core -- its rows' ring / pooled-key writes in row order)
         self._one_slot = bool(dsa_state is not None and dsa_state.get("one_slot"))
         self._paged_now = bool(dsa_state is not None and dsa_state.get("paged"))
@@ -1886,6 +1893,8 @@ class MkMla(_MlaBase):
                     "MkMla(dsa=...) verify: GLM53_MLA_DSA_IX_ROWS=1 and one index core (or the lane baton)"
                 )
             rev.append(("MLA_DSA_ONE_SLOT", "1"))
+            if st.get("group_rows"):  # GLM53_SPEC_MULTI: per-group slot / q0 (ix_dm1.cpp MLA_DSA_GROUP_ROWS)
+                rev.append(("MLA_DSA_GROUP_ROWS", str(int(st["group_rows"]))))
             if baton:  # rev 62: the lanes' ring / pooled-key writes in row order (ix_dm1.cpp)
                 assert nx == self.att_lanes(t) > 1, (nx, self.att_lanes(t))
                 rev += [("MLA_DSA_ONE_SLOT_BATON", "1"), ("MLA_DSA_BATON_SEM", str(SEM_BATON)),
@@ -2068,8 +2077,11 @@ class MkMla(_MlaBase):
                 # are consecutive positions of one user -> the latent hand-off before any tile >= row 0's (att_dm0.cpp);
                 # with DSA (rev 56) every row scores the launch's slot (att_dsa_dm0.cpp waits for the whole latent write
                 # and for every row's index writes before its first sparse row)
-                assert t <= 8, ("MLA_ATT_VERIFY: t <= 8", t)  # (t > 4: the lanes path, causal per lane core)
+                vg = int(os.environ.get("GLM53_MLA_VERIFY_GROUPS", "0") or 0)
+                assert t <= 8 or (vg > 1 and self.dsa is not None and t <= 16), ("MLA_ATT_VERIFY: t <= 8", t, vg)
                 defs.append(("MLA_DSA_ONE_SLOT", "1") if self.dsa is not None else ("MLA_ATT_VERIFY", "1"))
+                if vg > 1 and self.dsa is not None:  # GLM53_SPEC_MULTI: each row scores its group's slot
+                    defs.append(("MLA_DSA_GROUP_ROWS", str(t // vg)))
             if self.att_nkmax(t) != ATT_NKMAX:  # rev 32: every owner kernel sizes its batches by it (att_common.hpp)
                 defs.append(("MLA_ATT_NKMAX", str(self.att_nkmax(t))))
             if name == "writer" and self.ot(t):  # rev 30: the roots write o_T (att_dm1.cpp; real heads per group)

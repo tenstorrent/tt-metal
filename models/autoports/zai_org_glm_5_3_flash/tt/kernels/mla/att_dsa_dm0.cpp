@@ -227,7 +227,10 @@ void kernel_main() {
                 CB_APK, 4 * mladsa::SB);  // rev 41: a full batch slot (the last one padded), att_c.cpp score
             const uint32_t l1 = get_write_ptr(CB_APK);
             for (uint32_t j = 0; j < nb; ++j) {
-#if defined(MLA_DSA_ONE_SLOT)
+#if defined(MLA_DSA_ONE_SLOT) && defined(MLA_DSA_GROUP_ROWS)  // GLM53_SPEC_MULTI: the row group's user slot
+                const uint32_t tile0 =
+                    ((t / MLA_DSA_GROUP_ROWS) * MLA_DSA_GROUP_ROWS * TP_TILES + c + (i0 + j) * C) * 4;
+#elif defined(MLA_DSA_ONE_SLOT)
                 const uint32_t tile0 = (c + (i0 + j) * C) * 4;
 #else
                 const uint32_t tile0 = (t * TP_TILES + c + (i0 + j) * C) * 4;
