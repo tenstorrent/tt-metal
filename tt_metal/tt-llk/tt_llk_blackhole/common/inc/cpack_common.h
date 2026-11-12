@@ -582,6 +582,16 @@ inline constexpr bool pack_strides_writer = false;
 // Fast tilize writes the strides too: llk_pack_fast_tilize.h sets this.
 template <DstSync>
 inline constexpr bool pack_fast_tilize_linked = false;
+// Some CB of the kernel unpacks to DEST (LLK_UNPACK_TO_DEST_ANY, the JIT's pack-thread define); without it, assume one does.
+// The test shim defines it after this header, so llk_pack_block_tile.h sets it again; the use reads it through its template
+// argument, which takes that later value.
+#if defined(LLK_UNPACK_TO_DEST_ANY)
+template <DstSync>
+inline constexpr bool pack_reconfig_u2d = LLK_UNPACK_TO_DEST_ANY != 0;
+#else
+template <DstSync>
+inline constexpr bool pack_reconfig_u2d = true;
+#endif
 
 // The reconfigure's global writes that a kernel's pack formats keep constant (LLK_PACK_RECONFIG_SKIP_*), from the descriptor
 // arrays (constant in the JIT): a field with the same value for every pack CB was written by hw_configure, and no reconfigure
@@ -630,7 +640,8 @@ constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_fo
             skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
         }
     }
-    if (!any)
+    // Half sync, fp32 DEST and an unpack to DEST: the pack restarts sooner after a skipping reconfigure and loses L1 to the unpacker.
+    if (!any || (is_fp32_dest_acc_en && sync == DstSync::SyncHalf && pack_reconfig_u2d<sync>))
     {
         return 0;
     }

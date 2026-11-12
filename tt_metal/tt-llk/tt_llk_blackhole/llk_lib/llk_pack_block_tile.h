@@ -10,6 +10,19 @@
 
 #include "llk_pack.h"
 
+// Some CB of the kernel unpacks to DEST (LLK_UNPACK_TO_DEST_ANY of the JIT or the test shim); without it, assume one does.
+#if defined(LLK_UNPACK_TO_DEST_ANY)
+inline constexpr bool llk_pack_u2d = LLK_UNPACK_TO_DEST_ANY != 0;
+#else
+inline constexpr bool llk_pack_u2d = true;
+#endif
+
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_reconfig_u2d<DstSync::SyncHalf> = llk_pack_u2d;
+} // namespace ckernel::packer
+
 // Under full DEST sync the packer is the bound, so the default pack writes the destination by bytes; under half sync
 // the earlier pack start costs the unpackers L1 bank grants in latency-bound kernels.
 template <PackMode pack_mode>
