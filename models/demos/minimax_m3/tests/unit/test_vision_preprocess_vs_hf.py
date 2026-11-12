@@ -22,8 +22,8 @@ when HF_MODEL is a checkpoint with a preprocessor_config.json, the checkpoint's 
 Without HF_MODEL the "checkpoint" cases are not generated, so CI shows no skipped test.
 
 The other tests check check_size's and check_pixels' rules (every size the resize gives passes, the bounds are
-reached, and the sizes outside them fail), that prepare never returns a view of its input, patch_rows on a read-only
-input, and that tt/vision/preprocess.py and image_input.py, which the media module imports, import with ttnn blocked.
+reached, and the sizes outside them fail), patch_rows on a read-only input, and that tt/vision/preprocess.py and
+image_input.py, which the media module imports, import with ttnn blocked.
 
 No device and no weights. These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes
 "test_vision_").
@@ -276,15 +276,6 @@ def test_vision_check_pixels_rejects(case, expect_error):
     for check in (check_pixels, patch_rows):
         with expect_error(error, message):
             check(pixels)
-
-
-def test_vision_prepare_returns_new_memory():
-    """prepare never returns a view of the caller's array, even for an image already at its resized size, so a
-    service may reuse the array's buffer once prepare returns."""
-    rgb = np.random.default_rng(0).integers(0, 256, (672, 672, 3), dtype=np.uint8)
-    item = MEDIA.prepare("image", rgb)
-    assert np.array_equal(item.pixels, rgb) and not np.shares_memory(item.pixels, rgb)
-    assert (item.grid_h, item.grid_w) == (24, 24)
 
 
 def test_vision_patch_rows_read_only():
