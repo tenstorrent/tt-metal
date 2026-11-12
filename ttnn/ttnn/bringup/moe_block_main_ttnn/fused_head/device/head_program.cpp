@@ -795,7 +795,7 @@ std::shared_ptr<const HeadModel> make_head_model(
 
     // the arena: the engine's, grown to what the router cores need
     h.arena_bytes = e.arena_bytes;
-    const int64_t need = al64(router_min_bytes(G, sh.E, sh.K));
+    const int64_t need = al64(router_min_bytes(G, sh.E, sh.K, sh.smap()));
     if (h.arena_bytes < need && need <= e.args.arena_max) {
         h.arena_bytes = need;
     }
@@ -822,7 +822,7 @@ std::shared_ptr<const HeadModel> make_head_model(
     TT_FATAL(h.rcores.size() >= h.RBi, "fused_head: {} router cores < {}", h.rcores.size(), h.RBi);
     h.rcores.resize(h.RBi);
     {
-        std::tie(h.roff, h.rbytes) = router_layout(G, h.ET, h.K, h.ET, sh.loops > 1);
+        std::tie(h.roff, h.rbytes) = router_layout(G, h.ET, h.K, h.ET, sh.loops > 1, sh.smap());
         TT_FATAL(
             h.rbytes <= h.arena_bytes, "fused_head: router cores need {} B of the arena's {}", h.rbytes, h.arena_bytes);
         h.NS = u32(cdiv(h.rcores.size(), h.L));
@@ -2469,7 +2469,8 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
     };
     cb(RT_HOLD, "hold", G * ET * 4096, fp32, 4096);
     cb(ARRF, "arr", (G - 1) * ET * 4096, fp32, 4096);
-    cb(BIAS, "bias", h.ET * 4096, fp32, 4096);
+    const bool smap = h.cfg.shape.smap();  // (replica slots: the slot map's tile after the bias's)
+    cb(BIAS, "bias", (h.ET + (smap ? 1 : 0)) * 4096, fp32, 4096);
     cb(SC, "sc", ET * 4096, fp32, 4096);
     cb(IDX, "idx", ET * 2048, tt::DataFormat::UInt16, 2048);
     cb(BEST, "best", 4096, fp32, 4096);
@@ -2519,6 +2520,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         add(n, order);
         add(n, tail);
         add(n, sv_);
+        add(n, 32 * (j % RB));  // (my row tile's first owned row: router_rows.hpp make's tok0)
         add(n, ra_args2(j));
         n_rt.emplace_back(core, n);
         Args c = {1u, 2 | p << 8};  // (one op: the fin of my owner block)
@@ -2602,8 +2604,15 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
             define(k, "RT_RGO", iv(160));  // (the matmul cores' go word in their ewords: the engine's RGO_ID)
         }
     };
+    auto smap_defs = [&](KernelDescriptor& k) {  // (replica slots: router_addr.hpp RT_SMAP)
+        if (smap) {
+            define(k, "RT_SMAP_OFF", uv(region_of_router("bias") + h.ET * 4096));
+            define(k, "RT_SMAP_ME", uv(me));
+        }
+    };
     auto eng_defs = [&](KernelDescriptor& k) {
         iter_defs(k);
+        smap_defs(k);
         define(k, "RT_MSYNC_OFF", uv(region_of_router("msync")));
         define(k, "RT_FOLD", uv(h.cfg.shape.fold));
     };
@@ -2645,13 +2654,15 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         define(ck, "RW_ME", iv(me));
         define(ck, "RW_K", iv(K));
         define(ck, "RW_RW", iv(route_words(h.N)));
-        define(ck, "RW_E", iv(h.ET * 32 / h.cfg.shape.fold));
+        // (the rows' ids: experts, or with replica slots the slots - every chip's EPC)
+        const uint32_t n_ids = smap ? h.N * h.EPC : h.ET * 32 / h.cfg.shape.fold;
+        define(ck, "RW_E", iv(n_ids));
         define(ck, "RW_WRAPX", spans.wrap_x ? "true" : "false");
         define(ck, "RW_WRAPY", spans.wrap_y ? "true" : "false");
         define(ck, "RW_XRING_INIT", join(spans.xring));
         define(ck, "RW_YRING_INIT", join(spans.yring));
         std::vector<uint32_t> chips_of;
-        for (uint32_t ee = 0; ee < h.ET * 32 / h.cfg.shape.fold; ++ee) {
+        for (uint32_t ee = 0; ee < n_ids; ++ee) {
             chips_of.push_back(ee / h.EPC);
         }
         define(ck, "RW_CHIPS_INIT", join(chips_of));
@@ -2660,6 +2671,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         set_common(ck, common);
         auto bk = kernel("dataflow/router_brisc.cpp", hcrs, dm(DataMovementProcessor::RISCV_0, NOC::NOC_1));
         define(bk, "RT_FOLD", uv(h.cfg.shape.fold));
+        smap_defs(bk);
         bk.compile_time_args = b_ct;
         define(bk, "RT_ROUTE");
         define(bk, "RT_CT0", iv(rt_ct0));
@@ -2888,7 +2900,8 @@ HeadDeviceWeights prepare_head_weights(
     const std::vector<float>& down,
     const std::vector<float>& latent_down,
     const std::vector<float>& router_w,
-    const std::vector<float>& router_b) {
+    const std::vector<float>& router_b,
+    const std::vector<float>& slot_map) {
     using tt::tt_metal::BufferType;
     using tt::tt_metal::DataType;
     using tt::tt_metal::Layout;
@@ -3012,7 +3025,40 @@ HeadDeviceWeights prepare_head_weights(
         rshards.push_back(Tensor::from_vector(std::move(v), rws));
     }
     out.rw = ttnn::distributed::from_host_shards(rshards, mesh.shape()).to_device(&mesh, ttnn::DRAM_MEMORY_CONFIG);
-    std::vector<float> bias(size_t(E) * 32);
+    const bool smap = sh.smap();
+    TT_FATAL(
+        smap == !slot_map.empty() && (!smap || slot_map.size() == 1024),
+        "fused_head: a slot map (1024 words) {} replica slots (RouterSpec.candidates), got {} words",
+        smap ? "with" : "only with",
+        slot_map.size());
+    if (smap) {  // (router_rows.hpp slot_of's words: every slot of the chips at most once)
+        auto word = [&](uint32_t i) {
+            const float v = slot_map.at(i);
+            TT_FATAL(
+                v >= 0.0f && v < 16777216.0f && v == float(uint32_t(v)), "fused_head: slot map word {} = {}", i, v);
+            return uint32_t(v);
+        };
+        std::vector<uint8_t> used(sh.NE, 0);
+        auto take = [&](uint32_t sl, uint32_t ee) {
+            TT_FATAL(
+                sl < sh.NE && !used[sl],
+                "fused_head: slot map: candidate {} slot {} (of {}) taken twice",
+                ee,
+                sl,
+                sh.NE);
+            used[sl] = 1;
+        };
+        for (uint32_t ee = 0; ee < E; ++ee) {
+            take(word(ee), ee);
+            const uint32_t cw = word(E + ee), n = cw & 63, first = cw >> 6;
+            TT_FATAL(2 * E + first + n <= 1024, "fused_head: slot map: candidate {} copies past the tile", ee);
+            for (uint32_t i = 0; i < n; ++i) {
+                take(word(2 * E + first + i), ee);
+            }
+        }
+    }
+    const uint32_t EB = E + (smap ? 32 : 0);
+    std::vector<float> bias(size_t(EB) * 32);
     std::vector<uint16_t> idx(size_t(E) * 32);
     for (uint32_t ee = 0; ee < E; ++ee) {
         for (uint32_t b = 0; b < 32; ++b) {
@@ -3020,8 +3066,11 @@ HeadDeviceWeights prepare_head_weights(
             idx[size_t(ee) * 32 + b] = static_cast<uint16_t>(ee);
         }
     }
+    if (smap) {  // (the slot map's tile: word i at (i / 32, i % 32))
+        std::copy(slot_map.begin(), slot_map.end(), bias.begin() + size_t(E) * 32);
+    }
     const tt::tt_metal::TensorSpec bs(
-        ttnn::Shape({E, 32}),
+        ttnn::Shape({EB, 32}),
         tt::tt_metal::TensorLayout(
             DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::TILE), ttnn::DRAM_MEMORY_CONFIG));
     const tt::tt_metal::TensorSpec is(

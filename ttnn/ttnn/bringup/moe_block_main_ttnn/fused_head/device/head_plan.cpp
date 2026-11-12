@@ -107,7 +107,7 @@ std::string cores_check(const HeadShape& shape, const HeadLayout& lay, const RsP
     const uint32_t npo = planner_only_cores(
         shape.loops, nc, head_free_cells(shape.grid[0], gy, lay.GX, lay.GY, nrt + 2 * L + 1 > gy ? nrt : 0).size());
     const uint32_t ET = shape.E / 32;
-    const auto [roff, rbytes] = router_layout(G, ET, shape.K, ET, shape.loops > 1);
+    const auto [roff, rbytes] = router_layout(G, ET, shape.K, ET, shape.loops > 1, shape.smap());
     if (rbytes > arena) {
         return "router cores: " + kb0(rbytes) + " KB > the arena's " + kb0(arena) + " KB";
     }
@@ -385,7 +385,7 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& lay, int64_t cap) 
         const std::string why = err.what();
         return {std::nullopt, 0, {}, why.empty() ? "sizing failed" : why};
     }
-    const int64_t need = al64(router_min_bytes(shape.G, shape.E, shape.K));
+    const int64_t need = al64(router_min_bytes(shape.G, shape.E, shape.K, shape.smap()));
     if (need > cap) {
         return {std::nullopt, need, eng->sizes, "router cores' arena " + kb0(need) + " KB > " + kb0(cap) + " KB"};
     }
@@ -570,6 +570,12 @@ std::string shape_checks(const HeadShape& shape) {
     }
     if (shape.E % 32) {
         return s(shape.E) + " router candidates: whole tiles (a multiple of 32)";
+    }
+    if (shape.NE && (shape.fold != 1 || shape.NE % shape.N() || shape.NE < shape.E || shape.E + shape.NE > 1024)) {
+        return "replica slots: " + s(shape.NE) + " slots over " + s(shape.N()) +
+               " chips (whole slots a chip, >= " + s(shape.E) +
+               " candidates, fold 1; the slot map's one tile holds 2 words a candidate and a word a "
+               "spare slot: candidates + slots <= 1024)";
     }
     if (shape.rows % (32 * G)) {
         const int64_t nxt = ceil_div(shape.rows, 32 * G) * 32 * G;

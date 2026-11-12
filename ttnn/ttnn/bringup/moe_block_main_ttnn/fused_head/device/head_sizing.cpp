@@ -1313,14 +1313,15 @@ bool SeEngineSizing::fin_rows() const {
 // ---------------------------------------------------------------------------------------------------------------------
 // RouterStream / routing_a2a
 
-std::pair<Regions, int64_t> router_layout(uint32_t G, uint32_t ET, uint32_t K, uint32_t ETF, bool arr_first) {
+std::pair<Regions, int64_t> router_layout(
+    uint32_t G, uint32_t ET, uint32_t K, uint32_t ETF, bool arr_first, bool smap) {
     ETF = ETF ? ETF : ET;
     Regions spec = {
         {"hold", int64_t(G) * ET * 4096},
         {"sc", int64_t(ET) * 4096},
         {"idx", int64_t(ET) * 2048},
         {"best", 4096},
-        {"bias", int64_t(ETF) * 4096},
+        {"bias", int64_t(ETF + (smap ? 1 : 0)) * 4096},
         {"arr", int64_t(G - 1) * ET * 4096},
         {"finc", 16 * 8},
         {"psync", 16 * 2},
@@ -1346,9 +1347,9 @@ std::pair<Regions, int64_t> router_layout(uint32_t G, uint32_t ET, uint32_t K, u
     return {off, o};
 }
 
-int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K) {
+int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K, bool smap) {
     const uint32_t ET = E / 32;
-    return router_layout(G, ET, K, ET).second;
+    return router_layout(G, ET, K, ET, false, smap).second;
 }
 
 int64_t routing_header_bytes(uint32_t EPC, uint32_t M) {

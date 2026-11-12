@@ -59,8 +59,30 @@ constexpr uint32_t em_of(uint32_t et) { return et * 32 <= 256 ? 0xFF : et * 32 <
 FORCE_INLINE uint32_t score_of(uint32_t sv, uint32_t eid, uint32_t c) {
     return reinterpret_cast<const uint32_t*>(sv + (eid >> 5) * 4096)[fo(eid & 31, c)];
 }
+#ifdef RT_SMAP_OFF
+// Replica slots: the layer's slot map (RT_SMAP: one fp32 tile, word i at (i / 32, i % 32), each an integer-valued fp32
+// below 2^24): words [0, E) candidate e's own slot, [E, 2 E) its copies n | first << 6, [2 E, ..) the copies' slots
+// (e's are first .. first + n - 1). A (token, candidate) goes to holder h = hash(token) x (n + 1) / 2^16 of
+// [own slot, copies...]: an even split, deterministic (the token's key: this chip and its owned row).
+FORCE_INLINE uint32_t smap_word(uint32_t i) {
+    const uint32_t v = reinterpret_cast<const uint32_t*>(RT_SMAP)[fo(i >> 5, i & 31)];
+    const uint32_t e = (v >> 23) & 0xFF;
+    return e < 127 ? 0 : (((v & 0x7FFFFF) | 0x800000) >> (150 - e));
+}
+template <uint32_t E>
+FORCE_INLINE uint32_t slot_of(uint32_t cand, uint32_t key) {
+    const uint32_t cw = smap_word(E + cand), n = cw & 63;
+    if (n == 0) {
+        return smap_word(cand);
+    }
+    const uint32_t h = ((((key * 2654435761u) >> 16) & 0xFFFF) * (n + 1)) >> 16;
+    return h == 0 ? smap_word(cand) : smap_word(2 * E + (cw >> 6) + h - 1);
+}
+#endif
+// tok0: the first of the 32 token columns' owned rows on this chip (replica slots: the tokens' keys)
 template <uint32_t K, uint32_t ET>
-inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1) {
+inline void make(
+    uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1, uint32_t tok0 = 0) {
     // weights = score / their sum x scale in integers (the RISCs have no FPU, no 64-bit divide): the K scores in one
     // block exponent (the largest's top bit at 25: a sum of up to 32 below 2^31), the sum normalized to bit 30, its
     // reciprocal by one 32-bit divide (16 bits: a bf16 weight needs 8 + rounding), x the scale's mantissa, then one
@@ -120,7 +142,11 @@ inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, u
         const uint32_t r1 = sn ? 0xFFFFFFFFu / (sn >> 14) : 0;     // (2^32 / (sn / 2^14): 2^62 / sn = r1 x 2^16)
         const uint32_t rs = (uint32_t)(((uint64_t)r1 * sc) >> 8);  // (weight = wn x rs / 2^32 x 2^(se - 6))
         for (uint32_t q = 0; q < K; ++q) {
+#ifdef RT_SMAP_OFF
+            o[q] = static_cast<uint16_t>(slot_of<ET * 32>(ids[q], (RT_SMAP_ME << 16) + tok0 + c));  // (-> its slot)
+#else
             o[q] = static_cast<uint16_t>(ids[q] / RT_FOLD);  // (candidate -> expert: RouterSpec.fold)
+#endif
             const uint32_t wn = sh >= 0 ? (uint32_t)w[q] << sh : (uint32_t)w[q] >> -sh;
             o[K + q] = static_cast<uint16_t>(
                 (bad >> q) & 1 ? 0x7FC0u : bf16_of((uint32_t)(((uint64_t)wn * rs) >> 32), 6 - se));

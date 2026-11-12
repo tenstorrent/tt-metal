@@ -507,6 +507,42 @@ TABLE = {
         "Its routed weights are laid out from the checkpoint (cached beside the carried block's: "
         "<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin)",
     ),
+    "MOE_REPLICAS": Setting(
+        "off",
+        ("off", "runtime"),
+        "P.46 / P.47 (owner 2026-11-12, expert replicas; MOE_BLOCK_SRC=main only; default off: owner 2026-11-12, "
+        "accepted as a switch). off = 12 "
+        "expert slots a chip (8x4), "
+        "slot b = checkpoint expert perm[b]. runtime = one more slot a chip on every MoE layer (13 at 8x4, uniform; "
+        "+1 / 12 of the routed weights' DRAM), slots 0 .. 11 as off - loaded from the off path's weight cache and "
+        "re-laid on the device (expert_slot_copy, local) - and the spare slot empty and unmapped until the layer's "
+        "set_replicas([(expert, chip)]) fills it at runtime: a chip-to-chip copy from the expert's home slot "
+        "(expert_slot_copy over the 2D fabric, table-driven, one cached program), then the layer's slot map written "
+        "into the router bias, in program order on CQ0. The fused head maps each (token, chosen expert) to one of the "
+        "expert's slots (own + copies) by a hash of the token (router_rows.hpp slot_of; the gate weight from the "
+        "expert before the map): an even split. No copies: the off path's outputs bit for bit",
+    ),
+    "MOE_COUNTS": Setting(
+        "off",
+        ("off", "on"),
+        "P.45 (owner 2026-11-11, expert replication study; MOE_BLOCK_SRC=main only). on = every MoE layer copies its "
+        "fused head's per-chip expert counts (head.counts, uint32 [1, 1, 1, slots] a chip: the chip's own slots non-zero) "
+        "into its own device buffer allocated at load (one ttnn.copy a layer, one core: no allocation, sync or "
+        "readback in the layer loop); the model's sync() then reads every layer that ran in one readback (a device "
+        "concat, ~1.2 MB at 8x4) and, with MOE_COUNTS_DIR set, writes <MOE_COUNTS_DIR>/<MOE_COUNTS_TAG>_chunk<NN>.json "
+        "(NN = start // chunk; {chunk, start, layers: {L: {chips: [chips][slots], perm: [slots]}}}). Routing, "
+        "placement and outputs unchanged (bit-identical). off = no copy, no readback",
+    ),
+    "MOE_COUNTS_DIR": Setting(
+        "",
+        None,
+        "MOE_COUNTS=on: the directory of the per-chunk count files; empty = read back only, no file (the A/B's cost)",
+    ),
+    "MOE_COUNTS_TAG": Setting(
+        "counts",
+        None,
+        "MOE_COUNTS=on: the count files' name prefix (<tag>_chunk<NN>.json)",
+    ),
     "TAIL_A2A_PREPARED": Setting(
         "on",
         ("on", "off"),

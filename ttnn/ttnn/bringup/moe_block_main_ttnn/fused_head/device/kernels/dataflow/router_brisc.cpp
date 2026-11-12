@@ -89,7 +89,12 @@ void kernel_main() {
                 DeviceZoneScopedN("SE-RROWS");
                 set_l1_data_cache<true>();  // (write-through; the packed tiles read after an invalidate)
                 invalidate_l1_cache();
-                rows_::make<K, ET>(bv, get_arg_val<uint32_t>(t0 + 9), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
+#ifdef RT_NIT
+                const uint32_t mt0 = get_arg_val<uint32_t>(t0 + 8) + it * 32 * RT_RBI;  // (my row tile of iteration it)
+#else
+                const uint32_t mt0 = get_arg_val<uint32_t>(t0 + 8);
+#endif
+                rows_::make<K, ET>(bv, get_arg_val<uint32_t>(t0 + 9), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8, mt0);
                 set_l1_data_cache<false>();
             }
             for (uint32_t i = 1; i < 4; ++i) {

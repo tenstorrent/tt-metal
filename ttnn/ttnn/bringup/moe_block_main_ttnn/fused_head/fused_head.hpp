@@ -79,13 +79,16 @@ struct FusedHeadOutputs {
 struct FusedHeadWeights {
     Tensor w;             // the engine's per-core W regions, bank-sharded (DRAM)
     Tensor w_router;      // W_r^T [E, H / TP] a chip, bf16 TILE
-    Tensor router_bias;   // [E, 32] fp32 TILE
+    Tensor router_bias;   // [E, 32] fp32 TILE (replica slots: [E + 32, 32], the slot map's tile last)
     Tensor router_index;  // [E, 32] uint16 TILE
 };
 
 // The weights in the head's layouts, from host tensors (float32 or bf16, row-major, any rank with these trailing
 // dims): gate / up [Is, H] (the shared expert's), down [H, Is], latent_down [Hr, H] (a latent model), router_weight
 // [E, H] (E the router's candidates), router_bias [E]. Every chip gets its TP slice (the plan's positions).
+// slot_map (replica slots, RouterSpec.candidates; required there, refused otherwise): the layer's slot map, a float32
+// host tensor of 1024 integer-valued words (router_rows.hpp slot_of: [0, E) each candidate's own slot, [E, 2 E) its
+// copies n | first << 6, then the copies' slots); it rides as one more tile of router_bias ([E + 32, 32]).
 FusedHeadWeights prepare_fused_head_weights(
     const Tensor& gate,
     const Tensor& up,
@@ -96,7 +99,8 @@ FusedHeadWeights prepare_fused_head_weights(
     MoEBlockResources& resources,
     const MoEDtypes& dtypes,
     uint32_t accumulators,
-    std::optional<int64_t> l1_free = std::nullopt);
+    std::optional<int64_t> l1_free = std::nullopt,
+    const std::optional<Tensor>& slot_map = std::nullopt);
 
 // The head's planned layout, programs' host model and persistent words on the block's resources (made once; a call
 // only reads them). l1_free: the free L1 a core the head plans on (default: measured on the mesh now, as

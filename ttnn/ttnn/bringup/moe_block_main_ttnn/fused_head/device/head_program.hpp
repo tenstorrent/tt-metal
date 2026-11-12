@@ -186,7 +186,8 @@ HeadDeviceWeights prepare_head_weights(
     const std::vector<float>& down,
     const std::vector<float>& latent_down,
     const std::vector<float>& router_w,
-    const std::vector<float>& router_b);
+    const std::vector<float>& router_b,
+    const std::vector<float>& slot_map = {});
 
 // The cores the arena spans (the matmul cores, the router cores, the ports, the watcher) and its bytes a core.
 CoreRangeSet head_arena_cores(const HeadModel& model);

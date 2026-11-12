@@ -73,6 +73,19 @@ each default off (= the source's program):
   on the packets' arrival order (FIX.23). Costs a second fp32 sum a token in the accumulators' L1 and the split's SFPU
   work (README Measured). Bit-identical to the single sum wherever that one was exact and its terms below 2^22 q.
 
+- `RouterSpec.candidates = n` (default 0 = the source): replica slots - `num_experts` counts slots (chips x slots a
+  chip), the router ranks n candidates, and `prepare_fused_head_weights(slot_map=)` (required then: 1024 integer-valued
+  fp32 words, the layer's runtime map, one extra router-bias tile) maps each (token, candidate) to one of the
+  candidate's slots by a hash of the token (fused_head/device/kernels/router_rows.hpp `slot_of`); every later op works
+  on slots as before. Needs fold 1 and candidates + slots <= 1024.
+- `expert_slot_copy(src_gu, src_d, dst_gu, dst_d, runs, resources, jobs, links=None, depth=8, batch=4)`: run-table
+  copies of weight bytes between chips (2D fabric unicast, any chip to any chip; jobs [(src, dst, table)], a destination
+  once a call; the destination's program brackets the write: ready at its start, done before its end) or within a chip
+  (src == dst, split over the port cores). One cached program for every job set (jobs are runtime args). Limits: at
+  most 32 jobs a port core, 4 links, 255 chips, 256 tables; tensors DRAM sharded over the banks (offsets are bank-local
+  byte offsets of the shard); the run tables are the caller's (DeepSeek-V4.1: models/demos/deepseek_v41_flash_d_p/tt/
+  expert_slots.py from the flat plan's facts).
+
 ## Measured
 
 combine_snap_split (FIX.23 on the replica branch, Galaxy 8x4, DeepSeek-V4.1, 40 layers, chunk 5120, q = 2^-19, 17
@@ -82,6 +95,14 @@ accumulators, D 6 - the plan unchanged, the accumulators' L1 + 10 tokens x 5 til
 max |diff| up to 0.219 -> 0 (tests/test_determinism.py, 4 chunks x 3 runs, novel and code). Ladder (rung last): every
 metric identical. Fork test `test_experts_combine_split_determinism` (x 256, |y| to 362): 10 calls bit-identical, PCC
 0.98428 = the single sum's on the same inputs. On this base (P.50): the orchestrator's A/B.
+
+expert_slot_copy (P.47, Galaxy 8x4, FABRIC_2D_TORUS_XY, DeepSeek-V4.1 layer 20's bfp4 weights: one slot 18.98 MiB in
+272 runs, chunk 10880 B, 2 links, 8 port cores a chip; op + synchronize, median of 20 after 2 warm-up,
+models/demos/deepseek_v41_flash_d_p/tests/test_expert_slot_copy.py): one copy 0.717 ms (27.8 GB/s) at 1 hop, 0.75-0.79
+ms (25-27 GB/s) at 2 and 4 hops (row, column, diagonal; odd and even source slots); 32 copies at once (random sources,
+up to 3 a source) 2.79 ms (228 GB/s total); a layer's 32-copy oracle table (one source sending 6) 4.47 ms; the
+load-time 12 -> 13 slot re-layout (local, 272 merged runs) hides behind the next layer's cache load (enqueue < 10 ms).
+Bit-exact every time; every other tile unchanged.
 
 bf8 shared-expert activations (P.37, Galaxy 8x4, DeepSeek-V4.1-Flash dims, random weights, LoFi, 1024 tokens):
 the head's output vs torch with x / h on the bf8 grid rel 0.0471 (bf16 activations 0.0585), vs full precision 0.0465
@@ -109,6 +130,9 @@ runner smoke (tt-d-gen engine): pass.
 
 `models/demos/moe_block_main/tt/moe_block.py` (`MoEBlock(mesh, resources, dtypes=, activation=)(x, weights)`);
 smoke test: `models/demos/moe_block_main/tests/test_moe_block_smoke.py`; op tests: `tests/` here.
+
+Replica slots (P.46, 8x4, DeepSeek-V4.1 layer 20, 5120 tokens): 13 slots a chip with an empty map and with 10 copies
+both bit-identical to the 12-slot block (tests in models/demos/deepseek_v41_flash_d_p/tests/test_moe_replicas.py).
 
 ## Used by
 

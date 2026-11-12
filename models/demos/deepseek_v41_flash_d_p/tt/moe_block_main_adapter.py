@@ -32,6 +32,17 @@ What is this model's (re-applied from the carried adapter, each still meaningful
 Not ported (owner, P.37 out of scope): the carried block's TAIL_A2A_PREPARED / PREPARED_ALL / HOST_ALLOC hooks (the C++
 ops patch addresses on their own cache hits), mixed expert formats (EXPERTS_IMPL=bfp8_down4).
 
+MOE_REPLICAS=runtime (P.46 / P.47, owner 2026-11-12): every layer gets one more slot a chip (spc = epc + 1; the
+block's num_experts = chips x spc, its router ranks the checkpoint's experts: RouterSpec.candidates). Slots 0 .. epc - 1
+of a chip are the off path's placement (router candidate b = block slot (b // epc) spc + b % epc). Load: the off path's
+weight cache (the same files, a cache hit) into a transient epc-slot tensor, re-laid into the spc-slot tensor on the
+device (expert_slot_copy, local jobs; tt/expert_slots.py run tables); the spare slot (slot epc) starts empty and
+unmapped. set_replicas(copies) fills spare slots at runtime: one expert_slot_copy (a chip-to-chip fabric copy from the
+expert's home slot, at most one a destination) for the destinations that changed, then the layer's slot map written
+into the router bias (prepare_fused_head_weights slot_map: one extra tile; router_rows.hpp slot_of), in program order
+on CQ0 - a slot is mapped only after its copy completed, and an unfilled slot is never mapped (holder 0 = the own
+slot), so the empty map is the off path bit for bit.
+
 Weights: per layer, the head's (router + shared expert: prepare_fused_head_weights) from the checkpoint at the
 layer's first call; the routed experts laid out at load (host pack, ~1 min a layer) and kept in the weight cache
 (<cache_dir>/<rows>x<cols>/L<layer>.<impl>.<fingerprint>.moe_main.<plan>.{w_gu,w_d}.tensorbin) when one is given.
@@ -41,6 +52,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import time
 import types
@@ -67,19 +79,25 @@ def _mb():
     return ttnn.bringup.moe_block_main
 
 
-def block_dims(cfg):
+def block_dims(cfg, slots: int | None = None):
     """(MoEModelDims, flat activation name) of DeepSeek-V4.1-Flash at this checkpoint: sqrt(softplus) scores, top-k over
-    all experts x route_scale, clamped SwiGLU (limit swiglu_limit) for the routed and the shared expert."""
+    all experts x route_scale, clamped SwiGLU (limit swiglu_limit) for the routed and the shared expert. slots
+    (MOE_REPLICAS=runtime): the block's expert slots (chips x slots a chip, > n_experts) - the router still ranks the
+    checkpoint's n_experts (RouterSpec.candidates), the head maps them to slots."""
     mb = _mb()
     assert float(cfg.swiglu_limit) == 10.0, f"the flat op's clamped_silu bakes limit 10, got {cfg.swiglu_limit}"
     act = mb.ExpertActivation(kind=mb.ExpertActivationKind.ClampedSilu, limit=float(cfg.swiglu_limit))
+    replicas = slots is not None and int(slots) != int(cfg.n_experts)
+    router = mb.RouterSpec(score_func=mb.RouterScoreFunc.SqrtSoftplus, route_scale=float(cfg.route_scale))
+    if replicas:
+        router.candidates = int(cfg.n_experts)
     dims = mb.MoEModelDims(
-        num_experts=int(cfg.n_experts),
+        num_experts=int(slots) if replicas else int(cfg.n_experts),
         top_k=int(cfg.topk_experts),
         emb_dim=int(cfg.dim),
         routed_expert_hidden_dim=int(cfg.inter),
         routed_expert_activation=act,
-        router=mb.RouterSpec(score_func=mb.RouterScoreFunc.SqrtSoftplus, route_scale=float(cfg.route_scale)),
+        router=router,
         shared_expert_hidden_dim=int(cfg.inter),
         shared_expert_activation=act,
     )
@@ -142,6 +160,107 @@ def _host_routed(ck, layer: int, mesh, cfg):
     return flat_w, me.bfp4_stats
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# MOE_COUNTS (P.45, owner 2026-11-11: the expert replication study's per-chunk expert loads)
+_COUNTS: dict = {}  # id(mesh) -> (mesh, {layer: layer object}): the layers that ran since the last flush_counts
+
+
+def counts_on() -> bool:
+    return settings.get("MOE_COUNTS") == "on"
+
+
+def _record_counts(layer_obj, counts: ttnn.Tensor) -> None:
+    """MOE_COUNTS=on: the head's counts copied into the layer's own buffer (allocated at load; one single-page copy on
+    the device: no allocation, no sync, no readback). A layer without a buffer (the decoder tail's copies, at_chunk)
+    records nothing."""
+    buf = layer_obj.counts_buf
+    if buf is None:
+        return
+    ttnn.copy(counts, buf)
+    _COUNTS.setdefault(id(layer_obj.mesh), (layer_obj.mesh, {}))[1][layer_obj.layer] = layer_obj
+
+
+def flush_counts(mesh, start: int, chunk: int) -> dict | None:
+    """MOE_COUNTS=on, after a model sync: every layer that ran since the last flush, read back at once (the buffers
+    concatenated on the device, one readback: [chips x layers, slots]) -> {"chunk", "start", "slots_per_chip",
+    "layers": {"<L>": {"chips": [chips][slots], "perm": [n_experts]}}}; with MOE_COUNTS_DIR set also written to
+    <dir>/<MOE_COUNTS_TAG>_chunk<NN>.json (NN = start // chunk). None when no layer ran."""
+    hit = _COUNTS.pop(id(mesh), None)
+    if hit is None or hit[0] is not mesh or not hit[1]:
+        return None
+    lays = [hit[1][k] for k in sorted(hit[1])]
+    bufs = [lay.counts_buf for lay in lays]
+    cat = ttnn.concat(bufs, dim=0, memory_config=DRAM) if len(bufs) > 1 else bufs[0]
+    a = ttnn.to_torch(cat, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    if cat is not bufs[0]:
+        ttnn.deallocate(cat)
+    n = mesh.get_num_devices()
+    a = a.reshape(n, len(lays), -1).to(torch.int64)  # (chip r C + c, layer, slot)
+    rec = {
+        "chunk": int(start) // int(chunk),
+        "start": int(start),
+        "slots_per_chip": int(lays[0].spc),
+        "layers": {
+            str(lay.layer): {"chips": a[:, j].tolist(), "perm": [int(v) for v in lay.perm.tolist()]}
+            for j, lay in enumerate(lays)
+        },
+    }
+    out_dir = settings.get("MOE_COUNTS_DIR")
+    if out_dir:
+        path = Path(out_dir) / f"{settings.get('MOE_COUNTS_TAG')}_chunk{rec['chunk']:02d}.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rec))
+        os.replace(tmp, path)
+        logger.info(f"MOE_COUNTS chunk {rec['chunk']} (start {start}): {len(lays)} layers -> {path}")
+    return rec
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# MOE_REPLICAS (P.46 / P.47)
+_SLOT_TABLES: dict = {}  # (id(mesh), plan layouts, epc, tile bytes) -> (mesh, expert_slots.SlotTables)
+
+
+def replicas_on() -> bool:
+    return settings.get("MOE_REPLICAS") == "runtime"
+
+
+def slot_map_words(perm, epc: int, spc: int, copies) -> torch.Tensor:
+    """The fused head's slot map (router_rows.hpp slot_of; prepare_fused_head_weights slot_map): 1024 integer-valued
+    float32 words - [0, E) router candidate b's own slot (b // epc) spc + b % epc, [E, 2 E) its copies n | first << 6,
+    then the copies' slots (chip k's spare slot k spc + epc), each candidate's by chip. perm[b]: the checkpoint expert of
+    candidate b; copies: [(checkpoint expert, chip)]."""
+    E = len(perm)
+    where = torch.empty(E, dtype=torch.long)
+    where[perm] = torch.arange(E)
+    by_cand: dict = {}
+    chips = set()
+    for x, k in copies:
+        b = int(where[x])
+        assert k != b // epc, f"replica table: expert {x}'s copy on its own chip {k}"
+        assert k not in chips, f"replica table: chip {k} holds two copies"
+        assert 0 <= k < E // epc, f"replica table: chip {k} out of range"
+        chips.add(k)
+        by_cand.setdefault(b, []).append(k)
+    w = torch.zeros(1024, dtype=torch.float32)
+    b_ = torch.arange(E)
+    w[:E] = ((b_ // epc) * spc + b_ % epc).float()
+    first = 0
+    for b in sorted(by_cand):
+        ks = sorted(by_cand[b])
+        w[E + b] = float(len(ks) | (first << 6))
+        for i, k in enumerate(ks):
+            w[2 * E + first + i] = float(k * spc + epc)
+        first += len(ks)
+    assert 2 * E + first <= 1024, f"slot map: {first} copies past the tile"
+    assert all(len(v) < 64 for v in by_cand.values()), "slot map: an expert with 64 copies or more"
+    return w
+
+
+def holder_of(key: int, n: int) -> int:
+    """router_rows.hpp slot_of's holder of a token (key: chip << 16 | its owned row) among n + 1 slots."""
+    return ((((key * 2654435761) & 0xFFFFFFFF) >> 16) & 0xFFFF) * (n + 1) >> 16
+
+
 class TtMoEBlockMainLayer:
     """One layer's MoE on the shared reworked MoE block: __call__(ffn_norm x) -> the MoE output."""
 
@@ -159,18 +278,35 @@ class TtMoEBlockMainLayer:
         self.own_rows = bool(own_rows)
         self.fold = ccl.glue_fold()
         self.cache_dir = cache_dir
-        self.dims, self.act = block_dims(cfg)
-        self.dtypes = block_dtypes()
         rows, cols = tuple(mesh.shape)
         self.epc = int(cfg.n_experts) // (rows * cols)
+        # MOE_REPLICAS=runtime (P.47): spc = epc + 1 slots a chip, the last one empty until set_replicas fills it
+        self.replicas = replicas_on()
+        self.spc = self.epc + (1 if self.replicas else 0)
+        self.copies = []  # (checkpoint expert, chip r C + c): the spare slots filled and mapped
+        self._views = []  # (at_chunk's copies of this layer: they share the copies, set_replicas updates them too)
+        self._bias = None  # (the router bias in candidate order, for the slot map's writes)
+        self.dims, self.act = block_dims(cfg, slots=rows * cols * self.spc)
+        self.dtypes = block_dtypes()
         self.perm = expert_permutation(rows, cols, self.epc)
+        self._last_head = None  # (the last fused_head call's outputs, OWN_ROWS path: tests read its counts / rows)
+        # MOE_COUNTS=on (P.45): the head's counts [1, 1, 1, slots] uint32 a chip, copied here every call (load-time)
+        self.counts_buf = (
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, 1, rows * cols * self.spc]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, DRAM
+            )
+            if counts_on()
+            else None
+        )
         _apply_core_cap(mesh)
         t0 = time.time()
         blk = self.block()
         self.gidx, self.w_gu, self.w_d = self._routed(blk)
         self.head_w = None  # (the head's weights: at the layer's first call, planned by the block's head)
         logger.info(
-            f"MOE_BLOCK_MAIN layer={layer} experts={cfg.n_experts} ({self.epc} a chip) chunk={chunk} "
+            f"MOE_BLOCK_MAIN layer={layer} experts={cfg.n_experts} ({self.epc} a chip"
+            + (f", {self.spc} slots: {len(self.copies)} copies" if self.replicas else "")
+            + f") chunk={chunk} "
             f"experts_impl={settings.get('EXPERTS_IMPL')} own_rows={self.own_rows} cap={_mb().max_grid()} "
             f"routed weights {time.time() - t0:.1f} s"
         )
@@ -180,7 +316,7 @@ class TtMoEBlockMainLayer:
         from models.demos.moe_block_main.tt.moe_block import MoEBlock
 
         split = settings.get("COMBINE_SPLIT") == "on"
-        key = (id(self.mesh), self.chunk, split)
+        key = (id(self.mesh), self.chunk, split, self.spc)
         hit = _BLOCKS.get(key)
         if hit is None or hit[0] is not self.mesh:
             mb = _mb()
@@ -212,21 +348,24 @@ class TtMoEBlockMainLayer:
         return hit[2]
 
     # ------------------------------------------------------------------ weights
-    def _plan(self, blk) -> dict:
-        """The block's flat routed-expert plan's layout facts (as_dict)."""
+    def _plan(self, blk, slots: int | None = None) -> dict:
+        """The block's flat routed-expert plan's layout facts (as_dict); slots: a chip's (default the block's, spc; the
+        index-order cache's: epc)."""
         kw = blk.expert_kw
+        slots = self.spc if slots is None else int(slots)
+        layout = kw["layout"]
         return (
             _mb()
             .flat_routed_expert_plan(
                 self.mesh,
                 int(self.cfg.dim),
                 int(self.cfg.inter),
-                self.epc,
-                int(self.cfg.n_experts),
+                slots,
+                slots * self.mesh.get_num_devices(),
                 kw["max_tokens_per_expert"],
                 weights_bf8=self.dtypes.routed_weights == ttnn.bfloat8_b,
                 pin=1,
-                layout=kw["layout"],
+                layout=layout,
             )
             .as_dict()
         )
@@ -246,12 +385,12 @@ class TtMoEBlockMainLayer:
 
     def _routed(self, blk):
         """(gidx, w_gu, w_d): the routed experts in the flat plan's bank layout ([N, K] tiles), from the weight cache or
-        the checkpoint."""
-        mb, fw = _mb(), _flat_weights_module()
+        the checkpoint (MOE_REPLICAS=runtime: the spc-slot layout re-laid on the device from the epc-slot one,
+        _spare_slot)."""
         rows, cols = tuple(self.mesh.shape)
         n = rows * cols
         lay = self.lay = self._plan(blk)
-        gids = torch.arange(int(self.cfg.n_experts), dtype=torch.int32).reshape(n, 1, self.epc)
+        gids = torch.arange(n * self.spc, dtype=torch.int32).reshape(n, 1, self.spc)
         gidx = ttnn.from_torch(
             gids,
             dtype=ttnn.uint32,
@@ -260,12 +399,22 @@ class TtMoEBlockMainLayer:
             memory_config=DRAM,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
         )
+        if self.replicas:
+            w_gu, w_d = self._spare_slot(blk, lay)
+        else:
+            w_gu, w_d = self._routed_index(blk, lay)
+        return gidx, w_gu, w_d
+
+    def _routed_index(self, blk, lay):
+        """(w_gu, w_d) of the index placement (epc slots a chip) in lay's bank layout: the weight cache, else the
+        checkpoint (and then cached)."""
+        fw = _flat_weights_module()
         paths = self._cache_paths(blk, lay)
         if paths is not None and all(p.exists() for p in paths.values()):
             t0 = time.time()
             w = {k: ttnn.load_tensor(str(p), device=self.mesh) for k, p in paths.items()}
             logger.info(f"MOE_BLOCK_MAIN layer={self.layer} routed weights cache hit {time.time() - t0:.1f} s")
-            return gidx, w["w_gu"], w["w_d"]
+            return w["w_gu"], w["w_d"]
         t0 = time.time()
         flat_w, stats = _host_routed(self.ck, self.layer, self.mesh, self.cfg)
         t1 = time.time()
@@ -295,7 +444,131 @@ class TtMoEBlockMainLayer:
             f"MOE_BLOCK_MAIN layer={self.layer} routed weights: checkpoint {t1 - t0:.1f} s, pack {t2 - t1:.1f} s, "
             f"upload {t3 - t2:.1f} s, cache write {time.time() - t3:.1f} s ({'cached' if paths else 'no cache'})"
         )
-        return gidx, w_gu, w_d
+        return w_gu, w_d
+
+    def slot_tables(self, blk=None):
+        """The block's copy run tables (tt/expert_slots.SlotTables: fills of the spare slot from each home slot, the
+        load-time regroup), one a (mesh, weight layouts); built and checked by a debug readback at first use."""
+        from .expert_slots import SlotTables, tile_bytes
+
+        blk = blk or self.block()
+        lay_i = self.lay_index = getattr(self, "lay_index", None) or self._plan(blk, slots=self.epc)
+        key = (
+            id(self.mesh),
+            _weight_layout(self.lay),
+            _weight_layout(lay_i),
+            self.epc,
+            str(self.dtypes.routed_weights),
+        )
+        hit = _SLOT_TABLES.get(key)
+        if hit is None or hit[0] is not self.mesh:
+            t0 = time.time()
+            tb = tile_bytes(self.dtypes.routed_weights)
+            tabs = SlotTables(self.lay, lay_i, self.epc, int(self.cfg.dim), int(self.cfg.inter), tb, self.mesh)
+            tabs.verify()
+            hit = _SLOT_TABLES[key] = (self.mesh, tabs)
+            logger.info(
+                f"MOE_BLOCK_MAIN MOE_REPLICAS=runtime: slot copy tables in {time.time() - t0:.2f} s - a slot "
+                f"{tabs.lay_spc.slot_bytes() / 2**20:.2f} MiB in {len(tabs.host[0])} runs, regroup {len(tabs.regroup)} runs"
+            )
+        return hit[1]
+
+    def _spare_slot(self, blk, lay):
+        """MOE_REPLICAS=runtime: (w_gu, w_d) in the spc-slot layout lay - every chip's epc home slots as the index
+        placement (the off path's weight cache, a cache hit, loaded into a transient epc-slot tensor and re-laid on the
+        device by expert_slot_copy's local jobs), the spare slot (slot epc) left empty: nothing maps to it until
+        set_replicas fills it (the flat expert skips a slot with no rows, weights included)."""
+        mb = _mb()
+        fw = _flat_weights_module()
+        n = self.mesh.get_num_devices()
+        lay_i = self.lay_index = self._plan(blk, slots=self.epc)
+        w_i = self._routed_index(blk, lay_i)
+        t0 = time.time()
+        tabs = self.slot_tables(blk)
+        out = []
+        g = tabs.lay_spc  # (the spc-slot geometry: rows of each bank shard)
+        banks = int(lay["banks"])
+        rows_of = {"w_gu": -(-g.n_rd // banks) * g.E * g.gu * 32, "w_d": g.nd * g.sub * 32}
+        for name, w in zip(("w_gu", "w_d"), w_i):
+            rows = rows_of[name]
+            shape = list(w.shape)
+            shape[-2] = rows
+            out.append(
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(shape),
+                    self.dtypes.routed_weights,
+                    ttnn.TILE_LAYOUT,
+                    self.mesh,
+                    fw._bank_memory_config(rows, lay["banks"]),
+                )
+            )
+        mb.expert_slot_copy(
+            w_i[0], w_i[1], out[0], out[1], tabs.runs, blk.resources, [(c, c, tabs.regroup_table) for c in range(n)]
+        )
+        for w in w_i:
+            ttnn.deallocate(w)
+        logger.info(
+            f"MOE_BLOCK_MAIN layer={self.layer} MOE_REPLICAS=runtime: {self.spc} slots a chip, the spare one empty; "
+            f"re-laid on the device in {time.time() - t0:.2f} s (enqueue)"
+        )
+        return out[0], out[1]
+
+    # ------------------------------------------------------------------ MOE_REPLICAS=runtime: the public API
+    def set_replicas(self, copies) -> int:
+        """The layer's spare slots from now on: copies [(checkpoint expert, chip r C + c)], at most one a chip, never on
+        the expert's own chip. Enqueued on CQ0 in program order, between this layer's MoE before and after the call:
+        one expert_slot_copy for every destination whose expert changed (source: the expert's home slot on its home
+        chip; the destination's program waits until it is done reading its slot), then the slot map written into the
+        router bias (after the copy: a slot is mapped only once filled). A chip left out is unmapped (its slot keeps
+        its bytes, unused). Returns the copies made (0: the table did not change, nothing enqueued)."""
+        assert self.replicas, "set_replicas needs MOE_REPLICAS=runtime"
+        new = {}
+        E = len(self.perm)
+        where = torch.empty(E, dtype=torch.long)
+        where[self.perm] = torch.arange(E)
+        n = self.mesh.get_num_devices()
+        for x, k in copies:
+            x, k = int(x), int(k)
+            assert 0 <= x < E and 0 <= k < n, f"replica ({x}, {k}) out of range"
+            assert k not in new, f"chip {k} gets two copies in one layer"
+            assert int(where[x]) // self.epc != k, f"expert {x}'s copy on its own chip {k}"
+            new[k] = x
+        old = {k: x for x, k in self.copies}
+        if new == old:
+            return 0
+        jobs = []
+        tabs = self.slot_tables()
+        for k in sorted(new):
+            if old.get(k) != new[k]:
+                home, slot = divmod(int(where[new[k]]), self.epc)
+                jobs.append((home, k, tabs.fill_table(slot)))
+        members = [self] + list(self._views)
+        if jobs:
+            done = set()
+            for m in members:  # (a view with its own weights: the same copies into them)
+                if id(m.w_gu) in done:
+                    continue
+                done.add(id(m.w_gu))
+                mb = _mb()
+                mt = m.slot_tables()
+                mb.expert_slot_copy(m.w_gu, m.w_d, m.w_gu, m.w_d, mt.runs, m.block().resources, jobs)
+        self.copies = sorted((x, k) for k, x in new.items())
+        for m in members:
+            m.copies = self.copies
+            if m.head_w is not None:
+                m._write_slot_map()
+        return len(jobs)
+
+    def _write_slot_map(self) -> None:
+        """The router bias rewritten with the current slot map (a host write on CQ0: after every program before it)."""
+        E = len(self.perm)
+        host = torch.zeros(E + 32, 32, dtype=torch.float32)
+        host[:E] = self._bias.reshape(E, 1)
+        host[E:] = slot_map_words(self.perm, self.epc, self.spc, self.copies).reshape(32, 32)
+        t = ttnn.from_torch(
+            host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
+        )
+        ttnn.copy_host_to_device_tensor(t, self.head_w.router_bias)
 
     def _head_weights(self, blk):
         if self.head_w is None:
@@ -304,6 +577,7 @@ class TtMoEBlockMainLayer:
             w = self.ck.get(p + "gate.weight")
             assert w.dtype == torch.bfloat16, f"router weight stored as {w.dtype}, expected bf16"
             b = self.ck.weight(p + "gate.bias", torch.float32)
+            self._bias = b[self.perm].float().contiguous()
             s = {k: self.ck.weight(f"{p}shared_experts.{k}.weight", torch.float32) for k in ("w1", "w3", "w2")}
             host = lambda t: ttnn.from_torch(t.float().contiguous(), dtype=ttnn.float32)  # noqa: E731
             self.head_w = mb.prepare_fused_head_weights(
@@ -317,6 +591,11 @@ class TtMoEBlockMainLayer:
                 dtypes=blk.dtypes,
                 accumulators=blk.accumulators,
                 l1_free=blk.l1_free,
+                **(
+                    {"slot_map": host(slot_map_words(self.perm, self.epc, self.spc, self.copies))}
+                    if self.replicas
+                    else {}
+                ),
             )
         from models.demos.moe_block_main.tt.moe_block import MoEBlockWeights
 
@@ -381,6 +660,10 @@ class TtMoEBlockMainLayer:
         out.chunk = int(chunk)
         out.head_w = None
         out._can_feed = None  # (FFN_FEED: that block's own answer)
+        out.counts_buf = None  # (MOE_COUNTS: the decoder tail's rows are not the chunk's; only the main layer records)
+        out._views = []
+        if self.replicas:  # (set_replicas on this layer updates the view's map, and its weights when it has its own)
+            self._views.append(out)
         blk = out.block()
         if _weight_layout(self.lay) == _weight_layout(out._plan(blk)):
             logger.info(
@@ -388,7 +671,16 @@ class TtMoEBlockMainLayer:
             )
         else:
             logger.info(f"MOE_BLOCK_MAIN layer={self.layer} chunk={chunk}: another flat plan - its own routed weights")
+            out.lay_index = None
             out.gidx, out.w_gu, out.w_d = out._routed(blk)
+            if self.replicas and self.copies:  # (its own spare slots: filled with the layer's current copies)
+                E = len(self.perm)
+                where = torch.empty(E, dtype=torch.long)
+                where[self.perm] = torch.arange(E)
+                jobs = [(int(where[x]) // self.epc, k, int(where[x]) % self.epc) for x, k in self.copies]
+                _mb().expert_slot_copy(
+                    out.w_gu, out.w_d, out.w_gu, out.w_d, out.slot_tables().runs, blk.resources, jobs
+                )
         return out
 
     def __call__(self, x: ttnn.Tensor, xq_ready: bool = False, fed: bool = False) -> ttnn.Tensor:
@@ -409,6 +701,9 @@ class TtMoEBlockMainLayer:
         if not self.own_rows:
             assert not fed, "FFN_FEED: the feed is the OWN_ROWS path's"
             y = blk(xb, weights, xq=xq)
+            if self.counts_buf is not None:
+                assert blk.loops * blk.splits == 1, "MOE_COUNTS: a block with token loops / splits has a head a loop"
+                _record_counts(self, blk.last_head.counts)
         else:
             y = self._own_rows(blk, xb, weights, fed=fed)
         if xb is not x:
@@ -430,6 +725,9 @@ class TtMoEBlockMainLayer:
                 x_own, in_dim=2, out_dim=3, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
             )
             y = blk(xc, weights)
+            if self.counts_buf is not None:
+                assert blk.loops * blk.splits == 1, "MOE_COUNTS: a block with token loops / splits has a head a loop"
+                _record_counts(self, blk.last_head.counts)
             dealloc(xc)
             out = ttnn.experimental.all_to_all_async_generic(
                 y, in_dim=3, out_dim=2, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
@@ -462,6 +760,8 @@ class TtMoEBlockMainLayer:
             arena=arena,
             **({"xq": xq} if xq is not None else {}),
         )
+        self._last_head = head
+        _record_counts(self, head.counts)
         if not fed:  # (the feed buffer is persistent)
             dealloc(x)
         if x_full is not None:

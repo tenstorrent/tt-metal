@@ -995,6 +995,8 @@ class TtDS41Model:
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
         self.fused = settings.get("MHC_FUSED") == "on"  # P.14
+        self._counts = settings.get("MOE_COUNTS") == "on"  # P.45: sync() reads the MoE layers' expert counts
+        self._counts_start = 0
         self.own = own_rows()  # OWN_ROWS (P.23): the streams on each chip's own S/(SP TP) rows, whole hidden
         self.rows = self.chunk // (self.sp * self.tp if self.own else self.sp)  # the streams' rows a chip
         if bf16_activations():  # P.20: the bf16 paths exist on the fused / folded / stock-rope / fork-norm path only
@@ -1317,6 +1319,7 @@ class TtDS41Model:
             assert g % 32 == 0, f"global_write_start {g} must be 32-aligned (a kv block)"
             replay = True  # (DeepSeek's Encoder SWA Bounded Replay: every window truncated at the replay start)
         self._write_from = g if g > start else None
+        self._counts_start = int(start)  # (MOE_COUNTS: the chunk sync() files the counts under)
         self._skip = bool(self.decoder) and last is False and self.skip_mode != "off"
         # WINDOW_KV_KEEP=snapshot128 (P.42): every chunk not marked not-last rewrites the served window snapshots;
         # DECODER_SKIP=decode (P.51): every chunk (the encoder's windows are decode's handoff; the decoder's never run)
@@ -1730,3 +1733,7 @@ class TtDS41Model:
 
     def sync(self) -> None:
         ttnn.synchronize_device(self.mesh)
+        if self._counts:  # (MOE_COUNTS=on, P.45: every MoE layer's counts since the last sync, one readback)
+            from .moe_block_main_adapter import flush_counts
+
+            flush_counts(self.mesh, self._counts_start, self.chunk)

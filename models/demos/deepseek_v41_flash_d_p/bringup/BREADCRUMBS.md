@@ -733,3 +733,31 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   unset (identical on both sides); adding it would put the skipped chunk (p51200_nonlast) in the table. Open:
   tt-d-gen's prefix-hit request must carry the slot's id history below actual_start for the engram tail (the same
   slot has it; a migrated prefix needs load_tokens), as for every follow-up today.
+
+## P.52 (perf, attempt 2): the MoE expert-replica work (P.45 / P.46 / P.47) ported onto model_bringup
+- Expected per chunk (written before any device run; perf_guide sections 1-2): MOE_REPLICAS=runtime with no copies
+  vs off = 0 ms device (one more, empty expert slot a chip: the flat experts skip a slot with no tokens; P.47 measured
+  185.77 vs 185.64 ms, +0.13 = noise), 0 ms host (no extra launch: the slot map rides on the router bias tile;
+  set_replicas is never called by the harness). Accuracy and every output byte identical (no copy = the same routing).
+- Ported (code only; no ledger, result or R.* / P.48 / FIX.23-probe file): `git diff 12ac1ca9d6c 1e4b42b2d98` (merge
+  base .. P.47) on tt/, tests/ and ttnn/ttnn/bringup, applied with `git apply -3`. In that range only four commits touch
+  those paths: ffe570b0b4f (P.46), 1884f5ec92d (P.45), 18daae54d6e (removes P.46's tile_gather), 1e4b42b2d98 (P.47).
+  New: tt/expert_slots.py, tests/test_{moe_counts,moe_replicas,expert_slot_copy}.py,
+  moe_block_main_ttnn/expert_slot_copy/ (op). Changed: tt/{model,moe_block_main_adapter,settings}.py, the fused head
+  (router slot map; RouterSpec.candidates), common/moe_block_config.*, CMakeLists, nanobind, INDEX / README / CHANGELOG.
+  Known issues DS41-227..230 copied under their old ids (still free here); the repo_map row for expert_slots.py.
+- Conflicts (5; this branch's behaviour kept): adapter block() cache key -> (mesh, chunk, COMBINE_SPLIT, spc), and
+  MoEBlockConfig keeps combine_snap_split; model.begin_chunk: P.51's write_start / replay code kept, P.45's
+  `_counts_start` line after it; INDEX / README / CHANGELOG: both entries kept (COMBINE_SPLIT first). The fused head,
+  the combine fork and settings.py merged without conflict. Switches MOE_REPLICAS / MOE_COUNTS stay default off.
+- test_moe_counts asserted DS41_MOE_COUNTS=on (P.45's gate set it); P.52's unit runs it bare, so the test now switches
+  MOE_COUNTS on itself (monkeypatch) and writes the files to pytest's tmp_path when the env does not say otherwise.
+- Results (8x4, COMBINE_SPLIT=on): test_expert_slot_copy PASS (32 copies 2.79 ms, 228 GB/s); test_moe_replicas PASS
+  (replicas_checks_failed 0; 32 copies on layer 20 vs off max |diff| 0.0, every (a)-(e) bit-identity check ok);
+  test_moe_counts PASS (11 files, 40 layers each). `measure --task P.52` (MOE_REPLICAS=runtime, nothing filled):
+  determinism 0 (novel, code, state); quick L00 0.0195 .. L38 0.1167, L39 0.9115 (= P.51's), host transfers 0, wall
+  184.7; p51200 device_ms_total 185.7 (P.51 off 185.11; P.47 185.64 / 185.77), experts 103.9, wall 203.0 (spread 6.5).
+  As expected: 0 within noise. The off side and the ladder / profile units: the orchestrator's A/B.
+- Gotcha: `measure --part` names are the A/B runs (determinism, quick, p51200), not the test file stems.
+- Re-run: `gate P.52 --spec <spec> --check --unit 'P.52#test_moe_replicas'` (likewise test_expert_slot_copy,
+  test_moe_counts); `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.52`.

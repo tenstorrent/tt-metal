@@ -70,7 +70,8 @@ HeadShape head_shape_of(
     s.H = dims.emb_dim;
     s.I = dims.shared_expert_hidden_dim.value_or(0) / topology.C;
     s.G = topology.C;
-    s.E = dims.num_experts * dims.router.fold;
+    s.E = dims.router.candidates ? dims.router.candidates : dims.num_experts * dims.router.fold;
+    s.NE = dims.router.candidates ? dims.num_experts : 0;  // (replica slots)
     s.K = dims.top_k;
     s.latent = dims.latent_dim;
     s.fold = dims.router.fold;
@@ -323,7 +324,8 @@ FusedHeadWeights prepare_fused_head_weights(
     MoEBlockResources& resources,
     const MoEDtypes& dtypes,
     uint32_t accumulators,
-    std::optional<int64_t> l1_free) {
+    std::optional<int64_t> l1_free,
+    const std::optional<Tensor>& slot_map) {
     using namespace fused_head_entry_detail;
     const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
     auto w = prepare_head_weights(
@@ -333,7 +335,8 @@ FusedHeadWeights prepare_fused_head_weights(
         to_floats(down),
         latent_down ? to_floats(*latent_down) : std::vector<float>{},
         to_floats(router_weight),
-        to_floats(router_bias));
+        to_floats(router_bias),
+        slot_map ? to_floats(*slot_map) : std::vector<float>{});
     return FusedHeadWeights{.w = w.w, .w_router = w.rw, .router_bias = w.rb, .router_index = w.rix};
 }
 

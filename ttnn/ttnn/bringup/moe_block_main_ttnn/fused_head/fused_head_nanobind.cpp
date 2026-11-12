@@ -120,6 +120,10 @@ void bind_fused_head(nb::module_& mod) {
 
         Keyword args:
             resources, dtypes, accumulators, l1_free: as fused_head.
+            slot_map: replica slots (RouterSpec.candidates) only, and required there: the layer's slot map, a float32
+                host tensor of 1024 integer-valued words - [0, E) each candidate's own slot, [E, 2 E) its copies
+                n | first << 6, then the copies' slots; a (token, candidate) goes to one of its 1 + n slots by a hash of
+                the token (router_rows.hpp slot_of). Every slot at most once.
 
         Returns:
             FusedHeadWeights (device tensors).
@@ -135,7 +139,8 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("resources"),
         nb::arg("dtypes"),
         nb::arg("accumulators"),
-        nb::arg("l1_free") = nb::none());
+        nb::arg("l1_free") = nb::none(),
+        nb::arg("slot_map") = nb::none());
 
     ttnn::bind_function<"fused_head", "ttnn.bringup.moe_block_main.">(
         mod,
