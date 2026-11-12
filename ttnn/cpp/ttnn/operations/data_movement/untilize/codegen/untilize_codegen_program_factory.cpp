@@ -29,7 +29,9 @@ namespace ttnn::prim {
 
 namespace {
 
-// Verbatim copies of the codegen builder's kernel templates.
+// Copies of the codegen builder's kernel templates, except compute_untilize.cpp: it takes the
+// tile-row count as runtime arg 0 instead of compile-time arg 0, so its compile-time args are one
+// index lower than the template's. Keep that when resyncing from the builder.
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/untilize/codegen/kernels";
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
@@ -86,13 +88,14 @@ KernelDescriptor make_reader(const CoreRangeSet& cores, Buffer* in_buf, uint32_t
     return reader;
 }
 
-KernelDescriptor make_compute(
-    const CoreRangeSet& cores, uint32_t per_core_block_cnt, uint32_t wt, uint32_t max_bct, bool fp32) {
+// The tile-row count per core is runtime arg 0 (set per core by the caller), so the binary depends
+// only on Wt and a new height reuses it.
+KernelDescriptor make_compute(const CoreRangeSet& cores, uint32_t wt, uint32_t max_bct, bool fp32) {
     KernelDescriptor compute;
     compute.kernel_source = kernel_path("compute_untilize.cpp");
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
-    compute.compile_time_args = {per_core_block_cnt, wt, kCbIn, kCbOut, max_bct};
+    compute.compile_time_args = {wt, kCbIn, kCbOut, max_bct};
     compute.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32};
     return compute;
 }
@@ -115,7 +118,7 @@ struct CommonArgs {
 
 // Per-tile-row split (build_untilize_tile's default path / _build_untilize_tile_cliff).
 // Splits total_tile_rows across up to the device's core grid; an uneven split produces a
-// second ("cliff") compute-kernel core group with its own per-core tile-row count.
+// second ("cliff") core group whose per-core tile-row count differs only in its runtime args.
 std::optional<ProgramDescriptor> build_main_split(const CommonArgs& a, uint32_t wt, uint32_t total_tile_rows) {
     auto grid = a.device->compute_with_storage_grid_size();
     auto [_num_cores, core_range, cg1, cg2, tpc1, tpc2] =
@@ -151,6 +154,9 @@ std::optional<ProgramDescriptor> build_main_split(const CommonArgs& a, uint32_t 
     writer.compile_time_args.push_back(wt);
     writer.config = WriterConfigDescriptor{};
 
+    // One compute kernel on all cores: the cliff cores differ only in their tile-row count.
+    KernelDescriptor compute = make_compute(core_range, wt, a.max_bct, a.fp32);
+
     uint32_t assigned = 0;
     auto emit_group = [&](const CoreRangeSet& group, uint32_t wpc) {
         if (group.empty()) {
@@ -160,23 +166,18 @@ std::optional<ProgramDescriptor> build_main_split(const CommonArgs& a, uint32_t 
             uint32_t n = std::min(wpc, total_tile_rows - assigned);
             reader.emplace_runtime_args(core, {a.in_buf, n * wt, assigned * wt});
             writer.emplace_runtime_args(core, {a.out_buf, n, assigned * TILE_HEIGHT, row_size_bytes, 0u, 0u, 0u});
+            compute.emplace_runtime_args(core, {n});
             assigned += n;
         }
     };
     emit_group(cg1, tpc1);
     emit_group(cg2, tpc2);
 
-    // Kernel order [reader, writer, compute...] mirrors spec.py's build_untilize_tile: the
-    // single-compute case reorders assemble()'s [reader, compute, writer] back to legacy order,
-    // and the cliff case builds its kernel list in legacy order directly.
+    // Kernel order [reader, writer, compute] mirrors spec.py's build_untilize_tile. Its cliff
+    // variant emits a second compute kernel; here one kernel covers both core groups.
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
-    if (cg2.empty()) {
-        desc.kernels.push_back(make_compute(core_range, tpc1, wt, a.max_bct, a.fp32));
-    } else {
-        desc.kernels.push_back(make_compute(cg1, tpc1, wt, a.max_bct, a.fp32));
-        desc.kernels.push_back(make_compute(cg2, tpc2, wt, a.max_bct, a.fp32));
-    }
+    desc.kernels.push_back(std::move(compute));
     return desc;
 }
 
@@ -235,13 +236,21 @@ std::optional<ProgramDescriptor> build_column_parallel(const CommonArgs& a, uint
 
     // Kernel order [reader, writer, compute...] mirrors _build_untilize_column_parallel's
     // kernels list, built directly in that order for assemble_custom.
+    // Each core untilizes one tile-row of its column block; Wt is that block's width.
+    auto make_column_compute = [&](const CoreRangeSet& group, uint32_t block_wt) {
+        KernelDescriptor compute = make_compute(group, block_wt, a.max_bct, a.fp32);
+        for (const auto& core : corerange_to_cores(group, std::nullopt, true)) {
+            compute.emplace_runtime_args(core, {1u});
+        }
+        return compute;
+    };
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
     if (cg2.empty()) {
-        desc.kernels.push_back(make_compute(core_range, 1, tpc1, a.max_bct, a.fp32));
+        desc.kernels.push_back(make_column_compute(core_range, tpc1));
     } else {
-        desc.kernels.push_back(make_compute(cg1, 1, tpc1, a.max_bct, a.fp32));
-        desc.kernels.push_back(make_compute(cg2, 1, tpc2, a.max_bct, a.fp32));
+        desc.kernels.push_back(make_column_compute(cg1, tpc1));
+        desc.kernels.push_back(make_column_compute(cg2, tpc2));
     }
     return desc;
 }
@@ -282,7 +291,7 @@ std::optional<ProgramDescriptor> build_2d_column(
     TensorAccessorArgs(*a.out_buf).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
 
-    KernelDescriptor compute = make_compute(core_range, 1, tpc, a.max_bct, a.fp32);
+    KernelDescriptor compute = make_compute(core_range, tpc, a.max_bct, a.fp32);
 
     auto cores = corerange_to_cores(core_range, std::nullopt, true);
     for (uint32_t i = 0; i < cores.size(); ++i) {
@@ -290,6 +299,7 @@ std::optional<ProgramDescriptor> build_2d_column(
         uint32_t tile_row = i / ncol;
         uint32_t col_block = i % ncol;
         uint32_t start_tile = tile_row * wt + col_block * tpc;
+        compute.emplace_runtime_args(core, {1u});
         reader.emplace_runtime_args(core, {a.in_buf, tpc, start_tile});
         writer.emplace_runtime_args(
             core, {a.out_buf, TILE_HEIGHT, col_block * col_chunk_bytes, col_chunk_bytes, tpc, tile_row * TILE_HEIGHT});
@@ -325,8 +335,8 @@ uint32_t count_valid_sticks(uint32_t start, uint32_t count, uint32_t batch_h, ui
 // Interleaved TILE -> RM + unpadding (build_untilize_with_unpadding): the reference's path for any
 // non-tile-aligned logical shape of an RM-representable dtype. Same reader/compute as the aligned per-tile-row split;
 // the writer additionally skips physical pad sticks and writes only the unpadded row width, producing the compact
-// output UntilizeCodegenDeviceOperation::compute_output_specs's non-aligned branch declares. Cliff-capable (two compute
-// kernels), same as build_main_split.
+// output UntilizeCodegenDeviceOperation::compute_output_specs's non-aligned branch declares. Cliff-capable (one compute
+// kernel, per-core tile-row counts), same as build_main_split.
 std::optional<ProgramDescriptor> build_with_unpadding(
     const CommonArgs& a,
     uint32_t wt,
@@ -367,6 +377,9 @@ std::optional<ProgramDescriptor> build_with_unpadding(
     writer.compile_time_args.push_back(wt);
     writer.config = WriterConfigDescriptor{};
 
+    // One compute kernel on all cores: the cliff cores differ only in their tile-row count.
+    KernelDescriptor compute = make_compute(core_range, wt, a.max_bct, a.fp32);
+
     // out_page_offset is a running accumulator carried across cores in ascending order (mirrors
     // spec.py's stateful `_state["off"]` closure, invoked once per core by emit_per_core_rt).
     uint32_t assigned = 0;
@@ -378,6 +391,7 @@ std::optional<ProgramDescriptor> build_with_unpadding(
         for (const auto& core : corerange_to_cores(group, std::nullopt, true)) {
             uint32_t n = std::min(wpc, total_tile_rows - assigned);
             uint32_t start_stick = assigned * TILE_HEIGHT;
+            compute.emplace_runtime_args(core, {n});
             reader.emplace_runtime_args(core, {a.in_buf, n * wt, assigned * wt});
             writer.emplace_runtime_args(
                 core,
@@ -391,12 +405,7 @@ std::optional<ProgramDescriptor> build_with_unpadding(
 
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
-    if (cg2.empty()) {
-        desc.kernels.push_back(make_compute(core_range, tpc1, wt, a.max_bct, a.fp32));
-    } else {
-        desc.kernels.push_back(make_compute(cg1, tpc1, wt, a.max_bct, a.fp32));
-        desc.kernels.push_back(make_compute(cg2, tpc2, wt, a.max_bct, a.fp32));
-    }
+    desc.kernels.push_back(std::move(compute));
     return desc;
 }
 
