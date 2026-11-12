@@ -3410,6 +3410,63 @@ tasks:
       contract_checks_failed: == 0
       served_bytes_differ: == 0
       determinism_max_abs_diff: == 0
+- id: FIX.25
+  title: 'Determinism in every gate: a model-level run-twice-bit-for-bit check that every task gate, quick and full, runs and enforces'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.49
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12: DETERMINISM IS THE HIGHEST OF ALL PRIORITIES. Today no task gate checks it: the gates (test_ladder, test_profile, test_positions, test_contract, the final task's full-target gate and the quick-accepted picks' full gates run before it) check accuracy against limits and times; a run-to-run difference smaller than the limits passes, which is how the MoE combine's non-determinism (DS41-233 / 234 / 235, up to 0.26 on the code prompt; fixed by P.50, COMBINE_SPLIT=on) went unnoticed for weeks. The framework has testing/determinism.py (A, then a different input B, then A again, byte for byte), but only component tests and fork unit tests use it; the last such run in this ledger was 2026-10-26/27.
+      Make determinism a framework property of every gate: (1) a model-level check that runs the same input at least twice in one process (cold first run after load included, plus a warm run after a different input, as determinism.py does) over several chunks, on both the spec's prompt and a second, different prompt (the code prompt of DS41-234), and requires every chunk's final hidden and the served states bit for bit (max abs diff 0); reuse testing/determinism.py and the model's determinism test (tests/test_determinism.py, from P.50), do not write a second mechanism. (2) The orchestrator runs it as part of EVERY gate (per-task gates, quick A/B accept gates, the full gates, the final task) without each tasks.yaml entry having to name it; a gate whose model is not deterministic FAILS, with the first differing chunk / layer in the message. A per-step exemption only through the existing tests.nondeterministic switch with a written reason, and none for the model. (3) Report its cost per gate (seconds) and keep it as low as coverage allows; say what coverage you chose and why. (4) A selftest of the framework part (a deliberately non-deterministic fake model must fail the gate). Never loosen any other check.
+      SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+- id: FIX.26
+  title: 'Golden state at the serving handoff point (cap): test_contract judges the default PREFILL_END=cap path at cap instead of the old path at the request''s end'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - FIX.25
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12. P.49 made prefill stop at decode's cap (PREFILL_END=cap, the default; cap = actual_end // KV_BLOCK_SIZE x KV_BLOCK_SIZE, equal to decode's cap). test_contract (models/demos/common/bringup/tests/test_contract.py) sends a request ending at 10208 (cap 10176) and compares the model's INTERNAL state (window state, engram tail) at 10208 with the golden - a state the cap path never computes and that is never served (DS41-236). The golden has state snapshots at 0, 5120 and 10208 only. As a stopgap the owner chose to run that gate unit on the old path (DS41_PREFILL_END=end, P.49's gate; the cap path is covered byte for byte by tests/test_prefill_end.py).
+      Target: test_contract judges the DEFAULT path at the handoff point. (1) Add a golden state snapshot at the request's cap (10176 for the test's request; derive it from the request, do not hard-code), produced by the SAME golden pipeline, reference and precision as the existing snapshots (find how they are made; reuse it; if producing it needs a resource this node does not have, stop and say exactly what). (2) Make test_contract compare the state at cap and the served caches over [0, cap) under PREFILL_END=cap, and keep its old comparison at the request's end for PREFILL_END=end. (3) Limits for any new metric follow the framework's existing rule for recording limits; never loosen or edit an existing limit. (4) Do not edit tasks.yaml: report the gate command the owner should put back into P.49's gate (test_contract without DS41_PREFILL_END=end). (5) The determinism check (FIX.25) passes.
+      Report: how the golden snapshots are produced, what was added, the new metrics and their limits, the test_contract results on both paths. SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && DS41_PREFILL_END=end scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      contract_checks_failed: == 0
+      determinism_max_abs_diff: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
