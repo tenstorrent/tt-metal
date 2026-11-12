@@ -90,8 +90,8 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
 
     const uint32_t MAX_PACKET_SIZE_BYTES =
         std::bit_floor(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device()));
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
+    const uint32_t input_page_size = input_tensor.mesh_buffer().aligned_page_size();
+    const uint32_t output_page_size = output_tensor.mesh_buffer().aligned_page_size();
     uint32_t cb_page_size = std::lcm(std::lcm(input_page_size, output_page_size), MAX_PACKET_SIZE_BYTES);
 
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
@@ -101,7 +101,7 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
 
     // Per-device page counts are defined by the local shard buffer, not by raw logical dims.
     // Converting pages via logical_shape() breaks tiled tensors and can zero out num_input_pages.
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    const uint32_t num_input_pages = input_tensor.mesh_buffer().num_pages();
     TT_FATAL(num_input_pages > 0, "Broadcast all-gather requires at least one input page");
     TT_FATAL(
         (num_input_pages * input_page_size) % output_page_size == 0,
@@ -229,9 +229,9 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
         // (semaphores live on workload_descriptor.semaphores), so they may
         // remain embedded plain uint32 values.
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),  // tensor_address0  (replaced with Buffer* below)
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
-            barrier_semaphore.address(),        // barrier_sem
+            output_tensor.mesh_buffer().address(),  // tensor_address0  (replaced with Buffer* below)
+            semaphore.address(),                    // out_ready_sem_bank_addr (absolute address)
+            barrier_semaphore.address(),            // barrier_sem
             output_tile_id_start,
             output_tile_id_end,
             wait_output_semaphore,     // wait_output_semaphore

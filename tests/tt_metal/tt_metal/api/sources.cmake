@@ -33,6 +33,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dfb_write_barrier_bench.cpp
     dataflow_buffer/test_dataflow_buffer_kernel_exit.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    sram_arena/test_sram_arena.cpp
     test_kernel_thread_sync.cpp
     test_banked.cpp
     test_bit_utils.cpp
