@@ -213,10 +213,29 @@ extern "C" std::uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 #if defined(UCK_CHLKC_UNPACK)
     // Reset every tile counter on this Neo, in case they are in some invalid sticky state left from previous
-    // program runs.
+    // program runs. An unrouted reset of Tensix-only counter 16+c also hits overlay counter c, so link them in
+    // remapper pairs during the reset. Writes are posted, so each step reads back the last register written
+    // before moving on.
+    constexpr uint32_t num_pairs = dfb::NUM_TENSIX_ONLY_TILE_COUNTERS / 2;
+    static_assert(dfb::REMAPPER_ONE_TO_ONE_PAIR_START + dfb::NUM_TENSIX * num_pairs <= dfb::NUM_REMAPPER_PAIRINGS);
+    const uint32_t first_pair = dfb::REMAPPER_ONE_TO_ONE_PAIR_START + neo_id * num_pairs;
+    const uint32_t client_id = static_cast<uint32_t>(overlay::NEO_0) + neo_id;
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_pairs; i++) {
+        const uint32_t tc = dfb::TC_TENSIX_POOL_START + 2 * i;
+        WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(first_pair + i), client_id | ((tc + 1) << 3));
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), client_id | (tc << 3) | (1u << 8));
+    }
+    (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs live before the resets
     for (uint32_t tc = 0; tc < dfb::NUM_TILE_COUNTERS_PER_TENSIX; tc++) {
         ckernel::trisc::tile_counters[tc].f.reset = 1;
     }
+    (void)ckernel::trisc::tile_counters[dfb::NUM_TILE_COUNTERS_PER_TENSIX - 1].f.posted;  // resets applied before clear
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_pairs; i++) {
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), 0u);
+    }
+    (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs cleared before signaling
     asm volatile("fence" ::: "memory");
 #endif
     *trisc_run = RUN_SYNC_MSG_DONE;

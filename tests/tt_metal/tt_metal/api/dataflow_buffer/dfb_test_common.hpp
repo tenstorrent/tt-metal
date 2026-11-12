@@ -713,4 +713,85 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     }
 }
 
+// Metal 2.0 intra-Tensix self-loop harness
+inline void run_intra_tensix_dfb_program_2_0(
+    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_threads) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 INTRA test is Quasar-only";
+    }
+
+    constexpr uint32_t num_entries = 16;  // matches legacy
+    TT_FATAL(num_entries % num_threads == 0, "num_entries must be divisible by num_threads");
+    const uint32_t entries_per_neo = num_entries / num_threads;
+    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    const uint32_t total_bytes = num_entries * entry_size;
+
+    const m2::DFBSpecName DFB{"intra_dfb"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+
+    m2::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    // Compute kernel binds the same DFB as both PRODUCER ("out") and CONSUMER
+    // ("in"). M2 infers INTRA scope. Names MUST differ: using the same name for
+    // both endpoints causes M2 to only wire one Neo's slice, leaving the others'
+    // L1 untouched. No tensor_bindings (TRISC compute kernels can't include
+    // tensor_accessor.h transitively). Matches the working
+    // run_intra_tensix_dfb_program pattern in main's test_dataflow_buffer.cpp.
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_2_0.cpp", num_threads);
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+    };
+    compute.compile_time_args = {{"entries_per_neo", entries_per_neo}, {"words_per_entry", words_per_entry}};
+
+    // target_nodes MUST be a NodeRangeSet (not a bare NodeCoord) to match the
+    // working legacy M2 helper on main (run_intra_tensix_dfb_program). With a
+    // bare NodeCoord the framework takes a different scheduling path that
+    // exposes a PACK/UNPACK write race for some Neos' L1 slices.
+    const m2::NodeRangeSet node_set{m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{0, 0}}};
+    m2::ProgramSpec spec{
+        .name = "intra_tensix_2_0",
+        .kernels = {compute},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters = {},
+        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+    };
+
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
+    // pattern in main's run_intra_tensix_dfb_program).
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {{.kernel = COMPUTE}};
+    m2::SetProgramRunArgs(program, params);
+
+    // DFB is the first L1 allocation in the program → lands at the base L1
+    // allocator address. Same trick the legacy intra test uses.
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, input);
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> expected(input.size());
+    std::transform(input.begin(), input.end(), expected.begin(), [](uint32_t v) { return v + 2; });
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, total_bytes, output);
+    EXPECT_EQ(expected, output) << "M2 intra-tensix DFB +2 per word mismatch (num_threads=" << num_threads << ")";
+}
+
 }  // namespace tt::tt_metal

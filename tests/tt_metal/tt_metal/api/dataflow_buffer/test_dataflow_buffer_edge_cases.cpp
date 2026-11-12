@@ -8,6 +8,9 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 
+#include <array>
+#include <set>
+
 namespace tt::tt_metal {
 
 
@@ -1210,25 +1213,39 @@ namespace {
 constexpr uint32_t kRemapperProbeRead = 0;
 constexpr uint32_t kRemapperProbePlant = 1;
 constexpr uint32_t kRemapperProbeClear = 2;
-constexpr uint32_t kNumRemapperPairs = 64;
-// Pair 0 is cleared by every program's remapper teardown (its pair high watermark starts at 0), so the
-// stale pairs must be above it.
-constexpr uint32_t kStaleRemapperPairA = 1;
-constexpr uint32_t kStaleRemapperPairB = kNumRemapperPairs - 1;
-// ClientL id NEO_3, counter 31, valid bit 0 set.
-constexpr uint32_t kStaleClientL = 7u | (31u << 3) | (1u << 8);
-constexpr uint32_t kClientLValidMask = 0xFu << 8;
 constexpr uint32_t kRemapperProbeSentinel = 0xDEADBEEF;
+constexpr uint32_t kClientLValidMask = 0xFu << 8;
+constexpr uint32_t kClientLIsProducer = 1u << 12;
+constexpr uint32_t kRemapperNeo0Client = 4;  // overlay::NEO_0
 
+// Pairs a program killed before its remapper teardown would leave armed, each linking Tensix-only counter 30 of one
+// Neo to counter 31 of the next. Every program's teardown clears pair 0, and the TRISC boot reset arms and clears
+// [16, 48), so pair 1 and pairs 48 and 63 are left for DM0's boot clear alone.
+struct StalePair {
+    uint32_t pair;
+    uint32_t neo;
+};
+constexpr std::array<StalePair, 3> kStalePairs = {{{1, 0}, {48, 1}, {63, 2}}};
+
+uint32_t stale_client_r(const StalePair& p) { return (kRemapperNeo0Client + p.neo + 1) | (31u << 3); }
+
+uint32_t stale_client_l(const StalePair& p) {
+    // The one-to-many pairs need ClientL marked as the producer; the one-to-one pairs ignore it.
+    const uint32_t is_producer = p.pair < ::dfb::NUM_REMAPPER_ONE_TO_MANY_PAIRINGS ? kClientLIsProducer : 0u;
+    return (kRemapperNeo0Client + p.neo) | (30u << 3) | (1u << 8) | is_producer;
+}
+
+// Runs remapper_client_l_probe.cpp in `mode`; in read mode, returns every pair's ClientL config.
 std::vector<uint32_t> run_remapper_probe(distributed::MeshDevice& mesh_device, uint32_t mode) {
     const m2::NodeCoord node{0, 0};
     const m2::KernelSpecName PROBE{"remapper_probe"};
     auto probe = make_dm_kernel(PROBE, "tests/tt_metal/tt_metal/test_kernels/dataflow/remapper_client_l_probe.cpp");
-    probe.compile_time_args = {
-        {"mode", mode},
-        {"stale_pair_a", kStaleRemapperPairA},
-        {"stale_pair_b", kStaleRemapperPairB},
-        {"stale_value", kStaleClientL}};
+    probe.compile_time_args = {{"mode", mode}};
+    for (uint32_t i = 0; i < kStalePairs.size(); i++) {
+        probe.compile_time_args.emplace(fmt::format("pair{}", i), kStalePairs[i].pair);
+        probe.compile_time_args.emplace(fmt::format("client_r{}", i), stale_client_r(kStalePairs[i]));
+        probe.compile_time_args.emplace(fmt::format("client_l{}", i), stale_client_l(kStalePairs[i]));
+    }
     probe.runtime_arg_schema = {.runtime_arg_names = {"result_addr"}};
     m2::ProgramSpec spec{
         .name = "remapper_client_l_probe",
@@ -1237,8 +1254,8 @@ std::vector<uint32_t> run_remapper_probe(distributed::MeshDevice& mesh_device, u
     };
     Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t result_addr = top_of_l1_scratch_addr(mesh_device, kNumRemapperPairs * sizeof(uint32_t));
-    std::vector<uint32_t> sentinel(kNumRemapperPairs, kRemapperProbeSentinel);
+    const uint32_t result_addr = top_of_l1_scratch_addr(mesh_device, ::dfb::NUM_REMAPPER_PAIRINGS * sizeof(uint32_t));
+    std::vector<uint32_t> sentinel(::dfb::NUM_REMAPPER_PAIRINGS, kRemapperProbeSentinel);
     slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), result_addr, sentinel);
 
     m2::ProgramRunArgs params;
@@ -1251,67 +1268,142 @@ std::vector<uint32_t> run_remapper_probe(distributed::MeshDevice& mesh_device, u
     std::vector<uint32_t> client_l;
     if (mode == kRemapperProbeRead) {
         slow_dispatch::ReadFromL1(
-            mesh_device, CoreCoord(0, 0), result_addr, kNumRemapperPairs * sizeof(uint32_t), client_l);
+            mesh_device, CoreCoord(0, 0), result_addr, ::dfb::NUM_REMAPPER_PAIRINGS * sizeof(uint32_t), client_l);
     }
     return client_l;
 }
 
+// A counter holding nothing: no tiles available and all of its capacity free.
+bool tc_idle(const LiveTcSnapshot& snap, uint32_t tc) {
+    return snap.tiles_available[tc] == 0 && snap.space_available[tc] == snap.capacity[tc];
+}
+
 }  // namespace
 
-// Tile counters and remapper pairs must come up idle after a firmware boot, even if the previous firmware
-// session left them busy.
+// Tile counters and remapper pairs must come up idle after a firmware boot, whatever the previous firmware session
+// left in them. Leaves every Tensix-only counter of every Neo and a few DM-visible ones holding entries and three
+// pairs armed, then reboots the firmware and checks them before any program with a DFB runs, since launching such a
+// program resets its own counters.
 TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Tile counters and the remapper are Quasar-only";
     }
 
+    constexpr uint32_t num_neos = ::dfb::NUM_TENSIX;
+    constexpr uint32_t num_intra_dfbs =
+        ::dfb::NUM_TENSIX_ONLY_TILE_COUNTERS / ::dfb::TILE_COUNTERS_PER_INTRA_TENSIX_DFB;  // fills the pool
+    static_assert(num_intra_dfbs == 8, "dfb_t6_intra_push_only.cpp posts to dfb::out0 .. dfb::out7");
     constexpr uint32_t entry_size = 1024;
-    constexpr uint32_t num_entries = 8;
-    constexpr uint32_t num_stale_entries = 5;
+    constexpr uint32_t entries_per_neo = 2;
+    constexpr uint32_t num_stale_entries = 1;
     const m2::NodeCoord node{0, 0};
-    const m2::DFBSpecName DFB{"dfb"};
-    const m2::KernelSpecName PRODUCER{"producer"};
-    const m2::KernelSpecName CONSUMER{"consumer"};
+    const CoreCoord core(node.x, node.y);
 
-    // DM producer posts entries the compute side never consumes, leaving the shared counter non-idle.
+    // Eight intra-tensix DFBs take the whole Tensix-only pool of every Neo, and pack posts to each one's ClientL; the
+    // DM producer posts to one DM-visible counter on each Neo. Nothing is ever consumed: the kernels deliberately leave
+    // the device in a bad state (posted != acked on those counters), as a program killed mid-flight would.
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::DFBSpecName DM_DFB{"dm_dfb"};
+    auto compute = make_compute_kernel(
+        COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_push_only.cpp", num_neos);
+    compute.compile_time_args = {{"num_entries", num_stale_entries}};
+    std::vector<m2::DataflowBufferSpec> dfbs;
+    std::vector<m2::DFBSpecName> intra_dfb_names;
+    for (uint32_t i = 0; i < num_intra_dfbs; i++) {
+        const m2::DFBSpecName name{fmt::format("intra_dfb{}", i)};
+        intra_dfb_names.push_back(name);
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = entry_size,
+            .num_entries = entries_per_neo * num_neos,
+            .data_format_metadata = tt::DataFormat::Float16_b});
+        compute.dfb_bindings.push_back(
+            {.dfb_spec_name = name,
+             .accessor_name = fmt::format("out{}", i),
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
+             .access_pattern = m2::DFBAccessPattern::STRIDED});
+        compute.dfb_bindings.push_back(
+            {.dfb_spec_name = name,
+             .accessor_name = fmt::format("in{}", i),
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
+             .access_pattern = m2::DFBAccessPattern::STRIDED});
+    }
+    dfbs.push_back(m2::DataflowBufferSpec{
+        .unique_id = DM_DFB,
+        .entry_size = entry_size,
+        .num_entries = entries_per_neo * num_neos,
+        .data_format_metadata = tt::DataFormat::Float16_b});
+    compute.dfb_bindings.push_back(
+        {.dfb_spec_name = DM_DFB,
+         .accessor_name = "from_dm",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED});
     auto producer =
-        make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_push_only.cpp", 1, {DFB});
+        make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_push_only_dm.cpp", 1, {DM_DFB});
     producer.dfb_bindings = {
-        {.dfb_spec_name = DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER}};
+        {.dfb_spec_name = DM_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER}};
     producer.compile_time_args = {{"num_entries", num_stale_entries}};
-    auto consumer = make_compute_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp");
-    consumer.dfb_bindings = {
-        {.dfb_spec_name = DFB, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::CONSUMER}};
 
     m2::ProgramSpec spec{
-        .name = "leave_tile_counter_non_idle",
-        .kernels = {producer, consumer},
-        .dataflow_buffers = {m2::DataflowBufferSpec{
-            .unique_id = DFB,
-            .entry_size = entry_size,
-            .num_entries = num_entries,
-            .data_format_metadata = tt::DataFormat::Float16_b,
-        }},
-        .work_units = {m2::WorkUnitSpec{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node}},
+        .name = "leave_tile_counters_busy",
+        .kernels = {producer, compute},
+        .dataflow_buffers = dfbs,
+        .work_units = {m2::WorkUnitSpec{.name = "wu", .kernels = {PRODUCER, COMPUTE}, .target_nodes = node}},
     };
     Program program = m2::MakeProgramFromSpec(this->device(), spec);
-    m2::SetProgramRunArgs(program, m2::ProgramRunArgs{.kernel_run_args = {{.kernel = PRODUCER}, {.kernel = CONSUMER}}});
+    m2::SetProgramRunArgs(program, m2::ProgramRunArgs{.kernel_run_args = {{.kernel = PRODUCER}, {.kernel = COMPUTE}}});
+    program.impl().finalize_dataflow_buffer_configs();
+
+    // The counters the program leaves holding entries, per Neo: every intra-tensix ClientL, and the DM->Tensix
+    // consumers. The shadows are left out because they are never given a capacity, so they never show entries.
+    std::array<std::set<uint8_t>, num_neos> busy_tcs;
+    for (const auto& name : intra_dfb_names) {
+        const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*name));
+        ASSERT_NE(dfb, nullptr);
+        for (const auto& rc : dfb->groups[0].hw_risc_configs) {
+            const uint8_t neo = ::dfb::get_tensix_id(rc.config.packed_tile_counter[0]);
+            const uint8_t tc = ::dfb::get_counter_id(rc.config.packed_tile_counter[0]);
+            ASSERT_LT(neo, num_neos);
+            ASSERT_GE(tc, ::dfb::TC_TENSIX_POOL_START) << "intra-tensix ClientL must be a Tensix-only counter";
+            busy_tcs[neo].insert(tc);
+        }
+    }
+    for (uint32_t neo = 0; neo < num_neos; neo++) {
+        ASSERT_EQ(busy_tcs[neo].size(), num_intra_dfbs) << "neo " << neo << " did not get a ClientL per intra DFB";
+    }
+    {
+        const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DM_DFB));
+        ASSERT_NE(dfb, nullptr);
+        for (const auto& rc : dfb->groups[0].hw_risc_configs) {
+            if (rc.is_producer) {
+                continue;
+            }
+            const uint8_t neo = ::dfb::get_tensix_id(rc.config.packed_tile_counter[0]);
+            const uint8_t tc = ::dfb::get_counter_id(rc.config.packed_tile_counter[0]);
+            ASSERT_LT(neo, num_neos);
+            ASSERT_LT(tc, ::dfb::TC_TENSIX_POOL_START) << "DM->Tensix consumer must use a DM-visible counter";
+            busy_tcs[neo].insert(tc);
+        }
+    }
+
     LaunchProgram(this->device(), std::move(program));
 
-    // The first DFB of a program gets counter 0 on the consumer's Neo (Neo 0 for a single compute thread).
-    const CoreCoord core(node.x, node.y);
-    ASSERT_EQ(read_live_tcs(this->device(), core, 0).tiles_available[0], num_stale_entries)
-        << "setup did not leave the tile counter holding entries";
+    for (uint32_t neo = 0; neo < num_neos; neo++) {
+        const LiveTcSnapshot snap = read_live_tcs(this->device(), core, neo);
+        for (uint8_t tc : busy_tcs[neo]) {
+            ASSERT_FALSE(tc_idle(snap, tc))
+                << "setup did not leave neo " << neo << " tc " << (int)tc << " busy (avail " << snap.tiles_available[tc]
+                << ", space " << snap.space_available[tc] << ", capacity " << snap.capacity[tc] << ")";
+        }
+    }
 
-    // Leave two remapper pairs valid, as a program killed before its remapper teardown would. Done after the
-    // program above, whose own remapper teardown could otherwise clear them.
+    // Armed after the program above, whose own remapper teardown could otherwise clear them.
     run_remapper_probe(this->device(), kRemapperProbePlant);
     const std::vector<uint32_t> before = run_remapper_probe(this->device(), kRemapperProbeRead);
-    ASSERT_EQ(before.size(), kNumRemapperPairs);
-    for (uint32_t pair : {kStaleRemapperPairA, kStaleRemapperPairB}) {
-        ASSERT_NE(before[pair], kRemapperProbeSentinel) << "probe kernel did not report pair " << pair;
-        ASSERT_EQ(before[pair] & kClientLValidMask, kStaleClientL & kClientLValidMask)
-            << "setup did not leave pair " << pair << " valid";
+    ASSERT_EQ(before.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (const StalePair& p : kStalePairs) {
+        ASSERT_EQ(before[p.pair], stale_client_l(p)) << "setup did not leave pair " << p.pair << " armed";
     }
 
     // Reopen with a different command-queue count: the changed context parameters force a full
@@ -1330,24 +1422,34 @@ TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
         devices_.push_back(device);
     }
 
-    for (uint32_t neo = 0; neo < 4; neo++) {
+    for (uint32_t neo = 0; neo < num_neos; neo++) {
         const LiveTcSnapshot snap = read_live_tcs(this->device(), core, neo);
         for (uint32_t tc = 0; tc < snap.tiles_available.size(); tc++) {
-            EXPECT_EQ(snap.tiles_available[tc], 0u) << "neo " << neo << " tc " << tc << " not idle after reboot";
+            EXPECT_TRUE(tc_idle(snap, tc))
+                << "neo " << neo << " tc " << tc << " not idle after reboot (avail " << snap.tiles_available[tc]
+                << ", space " << snap.space_available[tc] << ", capacity " << snap.capacity[tc] << ")";
         }
     }
 
     const std::vector<uint32_t> after = run_remapper_probe(this->device(), kRemapperProbeRead);
-    ASSERT_EQ(after.size(), kNumRemapperPairs);
-    for (uint32_t pair = 0; pair < kNumRemapperPairs; pair++) {
+    ASSERT_EQ(after.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (uint32_t pair = 0; pair < ::dfb::NUM_REMAPPER_PAIRINGS; pair++) {
         ASSERT_NE(after[pair], kRemapperProbeSentinel) << "probe kernel did not report pair " << pair;
-        EXPECT_EQ(after[pair] & kClientLValidMask, 0u) << "pair " << pair << " still valid after reboot";
+        EXPECT_EQ(after[pair] & kClientLValidMask, 0u) << "pair " << pair << " still armed after reboot";
+    }
+    if (HasFailure()) {
+        // Do not leave the stale pairs armed for later tests.
+        run_remapper_probe(this->device(), kRemapperProbeClear);
+        return;
     }
 
-    if (HasFailure()) {
-        // Do not leave the stale mappings behind for later tests.
-        run_remapper_probe(this->device(), kRemapperProbeClear);
-    }
+    // The counters and the remapper are usable again: an intra-tensix DFB on every Neo, and a DM->Tensix one
+    // through the remapper.
+    run_intra_tensix_dfb_program_2_0(this->device(), entry_size, num_neos);
+    run_single_dfb_program_2_0(
+        this->device(),
+        M2SingleDFBParams{
+            M2PorCType::DM, M2PorCType::TENSIX, 1, num_neos, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::ALL});
 }
 
 }  // namespace tt::tt_metal

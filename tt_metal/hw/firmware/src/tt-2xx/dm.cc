@@ -312,6 +312,8 @@ extern "C" uint32_t _start1() {
         // program runs.
         g_remapper_configurator.clear_all_pairs();
         g_remapper_configurator.write_all_pairs();
+        // The writes are posted, read back the last pair so every clear has fully completed
+        (void)overlay::RemapperAPI::get_clientL_valid_hw(REMAP_NUM_PAIRS - 1);
 
         // Initialize wait for trisc FW
         for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
