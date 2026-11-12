@@ -148,6 +148,13 @@ class TtLfm2ShortConv(LightweightModule):
 
         # Host-resident per-slot decode state: last (L_cache - 1) pre-conv Bx rows per batch slot.
         self._conv_state_host = torch.zeros(self.max_batch_size, max(self.L_cache - 1, 0), self.hidden_size)
+        # Real (unpadded) prompt length per batch slot for the next prefill. Prefill inputs are padded to
+        # the prefill bucket, and the decode state must hold the last real prompt rows, not padding rows.
+        self._prefill_valid_len = {}
+
+    def set_prefill_valid_len(self, valid_lens):
+        """``valid_lens``: {batch slot: real prompt length}; applies to the next prefill of each slot."""
+        self._prefill_valid_len = dict(valid_lens)
 
     def reset_conv_state(self, batch_indices=None):
         if batch_indices is None:
@@ -222,6 +229,9 @@ class TtLfm2ShortConv(LightweightModule):
         # prefill call as belonging to a single logical sequence (batch=1 prefill, the common case
         # for this bring-up demo/tests).
         Bx_host = Bx_host.reshape(-1, Bx_host.shape[-2], Bx_host.shape[-1])[-1]  # [S, H]
+        valid_len = self._prefill_valid_len.get(user_id % self.max_batch_size)
+        if valid_len is not None and valid_len < Bx_host.shape[0]:
+            Bx_host = Bx_host[:valid_len]  # drop the padding rows after the real prompt
         seq_len = Bx_host.shape[0]
         if seq_len >= K - 1:
             tail = Bx_host[seq_len - (K - 1) :, :]
