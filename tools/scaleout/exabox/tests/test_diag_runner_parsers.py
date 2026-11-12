@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for diag_runner.py's pure parsing helpers: the ipmitool FRU
+"""Unit tests for the diag suite's pure parsing helpers: the ipmitool FRU
 output parser and the pytest output markers (summary counts, failing-node
 lines). These lock in the text-parsing edge cases without needing hardware."""
 
@@ -17,11 +17,8 @@ TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
-from diag_runner import (  # noqa: E402
-    PYTEST_FAILED_LINE_RE,
-    parse_fru_print,
-    parse_pytest_summary_counts,
-)
+from diag.device_tests import PYTEST_FAILED_LINE_RE, parse_pytest_summary_counts  # noqa: E402
+from diag.snapshot import parse_fru_print  # noqa: E402
 
 # Abridged real `ipmitool fru print` output from a BH Galaxy 6U (Quanta S7T).
 FRU_SAMPLE = """\

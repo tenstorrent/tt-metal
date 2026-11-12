@@ -7,7 +7,8 @@
 # Blackhole Galaxy system diagnostic tool entrypoint.
 # Thin wrapper: validate tier, set tt-metal env, hand off to diag_runner.py.
 #
-# Tiers:
+# Tiers (what each one runs is defined in tiers.py; keep the case below and the
+# --help text in step with it):
 #   light   ~5 min  snapshot validate + 1 PCI reset + GDDR train/BIST + eth link_up
 #   medium          light + eth bandwidth + GDDR fast-pattern stress
 #                   + post-test -glx_reset + triage (host_side + device_side)
