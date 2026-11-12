@@ -32,10 +32,10 @@
 // leases and renames the directory away under the same mutex, so a request either sees the old
 // directory intact or starts from an empty one.
 //
-// A Lease also stamps the directory's mtime, and the pruner ranks directories by that mtime alone:
-// one lstat per directory, not a walk of every file beneath it. A directory no request has stamped,
-// such as one an older server wrote, keeps the mtime it got when it was compiled, so it counts as
-// last used then.
+// acquire() also stamps the directory's mtime, on every request whether or not pruning is enabled,
+// and the pruner ranks directories by that mtime alone: one lstat per directory, not a walk of every
+// file beneath it. A directory no request has stamped, such as one an older server wrote, keeps the
+// mtime it got when it was compiled, so it counts as last used then.
 //
 // Firmware (<build_key>/firmware/) and the shared PCH directory are never deleted: firmware is
 // uploaded once per client process, and a running client whose firmware vanished would fail every
@@ -168,7 +168,8 @@ public:
 
     const CachePruneConfig& config() const { return config_; }
 
-    // Call before touching kernel_dir. Returns an empty lease when pruning is disabled.
+    // Call before touching kernel_dir. Stamps its mtime as used even when pruning is disabled, so
+    // last-use times are already right when pruning is turned on, and returns an empty lease then.
     Lease acquire(const std::filesystem::path& kernel_dir);
 
     // Starts the background thread. It checks free space immediately and then as next_prune_delay

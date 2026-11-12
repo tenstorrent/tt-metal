@@ -252,7 +252,8 @@ all build keys, until free space reaches `..._TARGET_FREE_PCT`.
   duration, so a prune cannot race a compile.
 - **Recently used kernels are kept.** Nothing used within the last
   `TT_METAL_JIT_SERVER_CACHE_MIN_IDLE_S` seconds is deleted. Every request stamps its kernel
-  directory's mtime, and that alone decides when a kernel was last used. A directory no
+  directory's mtime, even while pruning is off, and that alone decides when a kernel was
+  last used. A directory no
   request has stamped counts as last used when it was compiled.
 - **Firmware and the shared `pch/` directory are never deleted.** Running clients upload
   firmware only once (§5c). If they are what fills the disk, the log says the target could

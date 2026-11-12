@@ -269,19 +269,21 @@ ServerCachePruner::ServerCachePruner(
 ServerCachePruner::~ServerCachePruner() { stop(); }
 
 ServerCachePruner::Lease ServerCachePruner::acquire(const fs::path& kernel_dir) {
-    if (!config_.enabled()) {
-        return Lease();
-    }
     std::string key = normalize(kernel_dir).string();
-    {
-        std::lock_guard lock(mutex_);
-        ++in_use_[key];
+    Lease lease;
+    if (config_.enabled()) {
+        {
+            std::lock_guard lock(mutex_);
+            ++in_use_[key];
+        }
+        lease = Lease(this, key);
     }
-    // Record the use. Passing no times sets both to now, which needs only write permission on the
+    // Record the use, with pruning on or off, so the stamps already show real use whenever pruning
+    // is turned on. Passing no times sets both to now, which needs only write permission on the
     // directory; an explicit time would need ownership, and the cache may hold directories another
     // user's server created. A directory that does not exist yet gets a fresh mtime when it is created.
     (void)::utimensat(AT_FDCWD, key.c_str(), nullptr, 0);
-    return Lease(this, std::move(key));
+    return lease;
 }
 
 void ServerCachePruner::release(const std::string& key) {

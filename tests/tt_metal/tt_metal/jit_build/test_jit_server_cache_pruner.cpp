@@ -242,6 +242,20 @@ TEST_F(ServerCachePrunerTest, LeasedKernelIsSkippedAndStampedAsUsed) {
     EXPECT_TRUE(fs::exists(leased));
 }
 
+TEST_F(ServerCachePrunerTest, StampsKernelDirectoryEvenWithPruningDisabled) {
+    const fs::path kernel = make_kernel("1", "reader", "11", 100);
+    config_.start_below_free_pct = 0.0;
+    auto pruner = make_pruner(1.0);
+    ASSERT_FALSE(pruner.config().enabled());
+    const std::time_t before = std::time(nullptr);
+    {
+        const auto lease = pruner.acquire(kernel);
+    }
+    struct stat info{};
+    ASSERT_EQ(::lstat(kernel.c_str(), &info), 0);
+    EXPECT_GE(info.st_mtime, before);
+}
+
 TEST_F(ServerCachePrunerTest, LeaseBlocksDeletionEvenWithNoIdleWindow) {
     // With no idle window the stamp alone does not protect a kernel; the lease check must.
     const fs::path kernel = make_kernel("1", "reader", "11", 100);
