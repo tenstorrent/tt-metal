@@ -147,6 +147,7 @@ def scatter_rows_mesh(model, t, per_row, base=0, sync_every=1, stats=None, reuse
     live = (
         []
     )  # (d_src, d_ids) of the pieces enqueued since the last synchronisation (``sync_every`` > 1: DSV41_XROW_SYNC_EVERY, the host prepares the next piece while the device writes this one)
+    bufs = []
     for a in range(0, n, PIECE):
         _t0 = time.perf_counter()
         m = min(PIECE, n - a)

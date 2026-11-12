@@ -8,7 +8,7 @@ import torch
 from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as PC
 
 
-def run(monkeypatch, n_rows, sync_every):
+def run(monkeypatch, n_rows, sync_every, reuse=False):
     ev = []
     monkeypatch.setattr(PC.ttnn, "ShardTensor2dMesh", lambda *a, **k: None)
     monkeypatch.setattr(PC.ttnn, "from_torch", lambda t, **k: SimpleNamespace(shape=tuple(t.shape)))
@@ -45,3 +45,21 @@ def test_sync_every_n_batches_the_syncs_and_frees_everything(monkeypatch):
                 pending = 0
             elif e == "free":
                 assert pending == 0
+
+
+def test_reuse_buffers_same_events_and_padding(monkeypatch):
+    """reuse=True (DSV41_XROW_BATCH): same scatter / sync / free sequence; the short last piece is padded with SKIP ids and zero data even though the buffers are reused"""
+    seen = []
+    orig = PC.ttnn.from_torch
+    monkeypatch.setattr(
+        PC.ttnn, "from_torch", lambda t, **k: (seen.append(t.clone()), SimpleNamespace(shape=tuple(t.shape)))[1]
+    )
+    for n in (3 * PC.PIECE + 7, 2 * PC.PIECE):
+        seen.clear()
+        ev_a = run(monkeypatch, n, 4, reuse=False)
+        seen.clear()
+        monkeypatch.setattr(
+            PC.ttnn, "from_torch", lambda t, **k: (seen.append(t.clone()), SimpleNamespace(shape=tuple(t.shape)))[1]
+        )
+        ev_b = run(monkeypatch, n, 4, reuse=True)
+        assert ev_a == ev_b
