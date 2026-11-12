@@ -78,7 +78,7 @@ struct SfpuDestBinaryOp {
 /**
  * @brief Generic unary Dest op: ITERATIONS SFPI passes of MATH over one face, in place.
  *
- * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format.
  */
 template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS>
 struct DestUnary : SfpuDestUnaryOp<DestUnary<MATH, LAYOUT, ITERATIONS>> {
@@ -95,7 +95,7 @@ struct DestUnary : SfpuDestUnaryOp<DestUnary<MATH, LAYOUT, ITERATIONS>> {
 /**
  * @brief Generic binary Dest op: out = MATH(in0, in1) over one face of each tile.
  *
- * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format.
  * @tparam OUT: Store policy of the output (rounding lives here, see DestBf16RneFormat).
  * @tparam TILE_SHAPE: Dest tile shape the indices are measured in; pass the same shape to run<>().
  */

@@ -16,8 +16,8 @@ import torch
 from typing import Optional, List, Dict, Any, NamedTuple
 
 from .tt_spatial_cross_attention import SCARebatchPlan, SCARebatchPlanner, SCAVisibility, TTSpatialCrossAttention
-from .tt_common import layer_norm, signpost
-from .tt_temporal_self_attention import TTTemporalSelfAttention
+from .tt_common import grid_linear_kwargs, l1_if_fits, layer_norm, signpost
+from .tt_temporal_self_attention import TTTemporalSelfAttention, shifted_reference_points
 from .tt_point_sampling_3d_2d import camera_rows, image_size, point_sampling_3d_to_2d_ttnn, world_points_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
 
@@ -72,6 +72,16 @@ class TTBEVFormerLayer:
         spatial_shapes: Multi-scale feature shapes [num_levels, 2]
         bev_shape: BEV grid shape [1, 2] containing [bev_h, bev_w]
         **kwargs: Additional arguments
+
+    L1 placement. Both attentions' fused ops stage their value and output in L1 only when the
+    op's circular buffers still fit below the lowest live L1 buffer (L1 is allocated top-down;
+    ``ttnn.experimental.can_use_fused_msda_from_offsets_l1_value``), and fall back to DRAM, much
+    slower, with only a warning otherwise. So each attention stages its value first, into an
+    empty L1, keeps its other intermediates in L1 only until the fused op runs, and frees them;
+    after its fused op, the cross-attention allocates L1 only once the op's output is freed. The
+    layer's input and norm1's output, which live across a fused op, stay in DRAM; norm2's output
+    and the FFN, between the cross-attention and norm3, run in L1. Every group of intermediates
+    goes to DRAM instead when it does not fit L1 (``tt_common.l1_if_fits``).
     """
 
     def __init__(
@@ -99,6 +109,7 @@ class TTBEVFormerLayer:
         self.use_spatial_cross_attention = use_spatial_cross_attention
         self.batch_first = batch_first
         self.feedforward_channels = feedforward_channels
+        self.linear_kwargs = grid_linear_kwargs(device)
 
         # Temporal Self-Attention
         if use_temporal_self_attention and hasattr(params, "temporal_self_attention"):
@@ -111,6 +122,7 @@ class TTBEVFormerLayer:
                 num_points=num_points,
                 batch_first=batch_first,
                 spatial_shapes=bev_shape,
+                residual=False,
                 **kwargs,
             )
 
@@ -130,6 +142,7 @@ class TTBEVFormerLayer:
                 batch_first=batch_first,
                 deformable_attention=deform_config,
                 spatial_shapes=spatial_shapes,
+                residual=False,
                 **kwargs,
             )
 
@@ -163,9 +176,10 @@ class TTBEVFormerLayer:
             bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
             rebatch_plan: Shared SCA rebatch plan for this frame
             bev_reference_points: 2D BEV reference points on device, float32 ROW_MAJOR
-                [B, num_queries, 1, 2].
-                The encoder owns the grid and widens its leading dimension to the
-                runtime batch before the layer loop.
+                [B, num_queries, 1, 2], or with a previous BEV every BEV map's
+                [B, num_queries, 2, 2] from ``shifted_reference_points``, with ``shift`` None.
+                The encoder owns the grid, widens its leading dimension to the runtime batch
+                and applies the shift once before the layer loop.
 
         Returns:
             Updated BEV features [B, num_queries, embed_dims]
@@ -185,9 +199,11 @@ class TTBEVFormerLayer:
 
         signpost(header="BEVLayer TSA End")
 
-        # Layer normalization (norm1)
-        temp_query = layer_norm(temp_query, self.params.norm1)
-        bev_query = temp_query
+        # Each attention's and the FFN's residual is added inside the LayerNorm that follows it.
+        # norm1 writes DRAM and frees the self-attention's L1 output: the cross-attention's fused
+        # op needs that L1.
+        bev_query = layer_norm(temp_query, self.params.norm1, residual=bev_query, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(temp_query)
 
         signpost(header="BEVLayer SCA Start")
 
@@ -195,7 +211,6 @@ class TTBEVFormerLayer:
         spatial_query = self.spatial_cross_attention(
             query=bev_query,
             value=value,
-            residual=bev_query,
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
             rebatch_plan=rebatch_plan,
@@ -204,31 +219,35 @@ class TTBEVFormerLayer:
 
         signpost(header="BEVLayer SCA End")
 
-        # Layer normalization (norm2)
-        spatial_query = layer_norm(spatial_query, self.params.norm2)
-        bev_query = spatial_query
+        # The FFN's input, intermediate and output live in L1 when they fit: no fused op holds L1
+        # between norm2 and norm3, which writes the layer's output back to DRAM.
+        bs, num_queries, embed_dims = bev_query.shape
+        ffn_memory = l1_if_fits(
+            self.device, bs * num_queries * (2 * embed_dims + self.feedforward_channels) * bev_query.element_size()
+        )
+        bev_query = layer_norm(spatial_query, self.params.norm2, residual=bev_query, memory_config=ffn_memory)
+        ttnn.deallocate(spatial_query)
 
         signpost(header="BEVLayer FFN Start")
 
         # Feed-Forward Network
-        ffn_output = self._forward_ffn(bev_query)
+        ffn_output = self._forward_ffn(bev_query, ffn_memory)
 
         signpost(header="BEVLayer FFN End")
 
-        # Layer normalization and residual connection (norm3)
-        ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
-        bev_query = layer_norm(ffn_output_with_residual, self.params.norm3)
+        bev_query = layer_norm(ffn_output, self.params.norm3, residual=bev_query, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         signpost(header="TTNN BEVFormerLayer Forward End")
 
         return bev_query
 
-    def _forward_ffn(self, x):
+    def _forward_ffn(self, x, memory_config):
         """
         Forward pass through the feed-forward network using TTNN operations.
 
         Args:
             x: Input tensor [B, num_queries, embed_dims]
+            memory_config: Where the intermediate and the output go.
 
         Returns:
             Output tensor [B, num_queries, embed_dims]
@@ -241,15 +260,25 @@ class TTBEVFormerLayer:
                 logger.warning("FFN parameters not found, skipping FFN forward pass")
             return ttnn.zeros_like(x)
 
-        # First linear layer: [embed_dims] -> [feedforward_channels]
+        # First linear layer and its ReLU: [embed_dims] -> [feedforward_channels]
         # FFN has mixed structure: params.ffn.linear1 is a dict, not an object
-        x = ttnn.linear(x, self.params.ffn.linear1["weight"], bias=self.params.ffn.linear1["bias"])
-
-        # ReLU activation
-        x = ttnn.relu(x)
+        x = ttnn.linear(
+            x,
+            self.params.ffn.linear1["weight"],
+            bias=self.params.ffn.linear1["bias"],
+            activation="relu",
+            memory_config=memory_config,
+            **self.linear_kwargs,
+        )
 
         # Second linear layer: [feedforward_channels] -> [embed_dims]
-        x = ttnn.linear(x, self.params.ffn.linear2["weight"], bias=self.params.ffn.linear2["bias"])
+        x = ttnn.linear(
+            x,
+            self.params.ffn.linear2["weight"],
+            bias=self.params.ffn.linear2["bias"],
+            memory_config=memory_config,
+            **self.linear_kwargs,
+        )
 
         return x
 
@@ -515,6 +544,10 @@ class TTBEVFormerEncoder:
             if bs == 1
             else ttnn.repeat(self._bev_reference_points, ttnn.Shape((bs, 1, 1, 1)))
         )
+        # The previous BEV's shifted reference points are the same for every layer.
+        layer_reference_points, layer_shift = bev_reference_points, shift
+        if prev_bev is not None and shift is not None:
+            layer_reference_points, layer_shift = shifted_reference_points(bev_reference_points, shift), None
 
         shapes = self.spatial_shapes
         camera_features = value if value is not None else key
@@ -549,11 +582,11 @@ class TTBEVFormerEncoder:
                 value=camera_features,
                 bev_pos=bev_pos,
                 prev_bev=prev_bev,
-                shift=shift,
+                shift=layer_shift,
                 reference_points_cam=reference_points_cam,
                 bev_mask=bev_mask,
                 rebatch_plan=rebatch_plan,
-                bev_reference_points=bev_reference_points,
+                bev_reference_points=layer_reference_points,
                 **kwargs,
             )
             signpost(header=f"BEVEncoder Layer {lid} End")
@@ -561,6 +594,8 @@ class TTBEVFormerEncoder:
             if self.return_intermediate:
                 intermediate.append(output)
 
+        if layer_reference_points is not bev_reference_points:
+            ttnn.deallocate(layer_reference_points)
         if bev_reference_points is not self._bev_reference_points:
             ttnn.deallocate(bev_reference_points)
 

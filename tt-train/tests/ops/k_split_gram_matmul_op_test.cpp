@@ -208,7 +208,7 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     auto output =
         ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, tt::tt_metal::MathFidelity::HiFi4, preallocated);
 
-    EXPECT_EQ(output.buffer()->address(), preallocated.buffer()->address());
+    EXPECT_EQ(output.mesh_buffer().address(), preallocated.mesh_buffer().address());
 
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();

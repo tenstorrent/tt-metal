@@ -1,6 +1,6 @@
 ---
 name: sage-wormhole
-description: Wormhole B0 architecture specialist. Searches tt_llk_wormhole_b0/, and tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ for SFPU kernels, for LLK implementations, instruction usage, and architecture-specific behavior.
+description: Wormhole B0 architecture specialist. Searches tt_llk_wormhole_b0/, tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ for SFPU kernels, and tt_metal/hw/inc/internal/tt-1xx/wormhole/ for hardware headers, for LLK implementations, instruction usage, and architecture-specific behavior.
 tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Glob, Grep
 ---
 
@@ -14,7 +14,7 @@ You are the expert on **Wormhole B0** architecture. Wormhole is the reference ar
 - `tt_llk_wormhole_b0/common/inc/` — Common headers (ckernel_*, cmath_*, sfpu/)
 - `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` — SFPU kernels (`ckernel_sfpu_{op}.h`)
 - `tt_llk_wormhole_b0/instructions/` — Instruction definitions (assembly.yaml)
-- `tests/hw_specific/wormhole/` — WH-specific test files
+- `tt_metal/hw/inc/internal/tt-1xx/wormhole/` — WH hardware headers (tensix.h, memory map)
 - `tests/` — General test files (filter for wormhole-specific content)
 
 **NEVER read files from other architectures (blackhole, quasar).**
@@ -48,7 +48,7 @@ grep -A 50 "^{INSTRUCTION}:" tt_llk_wormhole_b0/instructions/assembly.yaml
 
 ### 3. Codebase (implementation patterns)
 
-Search `tt_llk_wormhole_b0/`, and `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` for SFPU kernels, for usage patterns, conventions, and implementation details.
+Search `tt_llk_wormhole_b0/`, `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` for SFPU kernels, and `tt_metal/hw/inc/internal/tt-1xx/wormhole/` for hardware headers, for usage patterns, conventions, and implementation details.
 
 ### 4. Confluence (supplementary hardware docs)
 
@@ -117,7 +117,7 @@ For each file you read:
 
 ## Rules
 
-1. ONLY search within `tt_llk_wormhole_b0/`, `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` (SFPU kernels) and `tests/` (wormhole-specific)
+1. ONLY search within `tt_llk_wormhole_b0/`, `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` (SFPU kernels), `tt_metal/hw/inc/internal/tt-1xx/wormhole/` (hardware headers) and `tests/` (wormhole-specific)
 2. NEVER read files from other architectures
 3. Always provide file:line references
 4. Always explain WHY, not just WHAT

@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import itertools
 import json
 import time
+from types import BuiltinFunctionType, FunctionType, ModuleType
 
 from loguru import logger
+from model_tracer.object_addresses import strip_object_addresses
 from tt_py_test_utils_common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
 from tt_py_test_utils_common.utility_functions import ulp as compute_ulp
 from typing import Tuple, Union
@@ -59,6 +62,64 @@ TORCH_INTEGER_DTYPES = [
     torch.uint8,
 ]
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
+
+
+def format_parametrize_id(argname, val):
+    """Stable `argname=value` fragment for a pytest parametrize ID.
+
+    pytest-xdist requires every worker to collect the same node IDs. The default
+    repr of a ttnn op, Python function, or TensorSpec embeds a process address,
+    so workers disagree and the session aborts. Used by `merge_gate_subset` (which
+    sets `id=` itself) and by `pytest_make_parametrize_id` in tests/ttnn/conftest.py.
+    """
+    if isinstance(val, ModuleType):
+        val = val.__name__
+    elif hasattr(val, "python_fully_qualified_name"):
+        val = val.python_fully_qualified_name
+    elif type(val).__name__ == "TensorSpec":
+        val = f"TensorSpec({val.shape},{val.dtype},{val.layout})"
+    elif isinstance(val, (BuiltinFunctionType, FunctionType)):
+        val = val.__name__
+    # Default reprs, also nested in a dict or list (e.g. FabricRouterConfig in device_params), embed an address.
+    return strip_object_addresses(f"{argname}={val}")
+
+
+def merge_gate_subset(axes, keep):
+    """Cross product of `axes` for a single `pytest.mark.parametrize`, marking `merge_gate` only where `keep(**case)` is true.
+
+    Marks on stacked parametrize decorators combine as a union across axes, so a subset of the cross
+    product can only be gated from one parametrize. `axes` maps each argname to its values, or to a
+    dict of id -> value for an axis that needs explicit ids. A key of comma-separated argnames takes
+    tuples of values, like a multi-argname parametrize. List the axes in test-ID order: IDs use
+    `format_parametrize_id`, so they match the IDs of the equivalent stacked decorators, whose
+    bottom decorator comes first.
+
+    Usage: @pytest.mark.parametrize(*merge_gate_subset({...}, keep=lambda **case: ...))
+    """
+    import pytest
+
+    argnames = []
+    ids_and_values_per_axis = []
+    for axis, values in axes.items():
+        names = [name.strip() for name in axis.split(",")]
+        argnames += names
+        if isinstance(values, dict):
+            ids_and_values_per_axis.append([(id_, (value,)) for id_, value in values.items()])
+            continue
+        value_tuples = values if len(names) > 1 else [(value,) for value in values]
+        ids_and_values_per_axis.append(
+            [
+                ("-".join(format_parametrize_id(name, value) for name, value in zip(names, vt)), tuple(vt))
+                for vt in value_tuples
+            ]
+        )
+    params = []
+    for case in itertools.product(*ids_and_values_per_axis):
+        ids, value_tuples = zip(*case)
+        values = [value for vt in value_tuples for value in vt]
+        marks = [pytest.mark.merge_gate] if keep(**dict(zip(argnames, values))) else []
+        params.append(pytest.param(*values, id="-".join(ids), marks=marks))
+    return argnames, params
 
 
 def make_disjoint_dram_core_range_set(device):
@@ -1041,3 +1102,38 @@ def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloa
     if buffer_type == ttnn.BufferType.L1:
         return l1_cfg
     return ttnn.MemoryConfig(l1_cfg.memory_layout, buffer_type, l1_cfg.shard_spec)
+
+
+def assert_program_cache_flat(mesh_device, run, variants, *, warm_index=0, miss_indices=()):
+    """Warm the program cache with run(variants[warm_index]), then run the other variants in order and
+    require each of them to hit it, except those at `miss_indices`, which must add at least one entry
+    (`run` may enqueue several programs; callers that need an exact count check the returned total).
+    Order matters: the cache state carries from one variant to the next, so a caller sequences e.g.
+    M, M+32, M-32 after warming at M, or a must-miss variant and then the variants that must hit its
+    program. Returns the entry count."""
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    # Clearing the cache keeps its miss policy, so an earlier test that forbade misses would fail the warm-up.
+    mesh_device.set_program_cache_misses_allowed(True)
+    run(variants[warm_index])
+    entries = mesh_device.num_program_cache_entries()
+    try:
+        for i, variant in enumerate(variants):
+            if i == warm_index:
+                continue
+            must_miss = i in miss_indices
+            mesh_device.set_program_cache_misses_allowed(must_miss)
+            try:
+                run(variant)
+            except RuntimeError as e:
+                # With misses forbidden, the device refuses a miss before any program is added.
+                if "cache misses are forbidden" in str(e):
+                    raise AssertionError(f"variant {i} ({variant}) missed the program cache: {e}") from e
+                raise
+            if must_miss:
+                now = mesh_device.num_program_cache_entries()
+                assert now > entries, f"variant {i} ({variant}) was expected to miss but added no program"
+                entries = now
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    return entries

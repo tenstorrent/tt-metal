@@ -32,8 +32,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     create_kv_chunk_address_table_block_cyclic,
     is_tp_deduped_kv_cache,
     kda_chunk_n_tokens,
-    kda_max_sequence_length,
     kda_segment_bytes,
+    kda_window,
     merged_num_layers,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
@@ -160,7 +160,7 @@ def build_and_serialize_kv_chunk_table(
 
     ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "01"
     (recurrent) and "02" (convolution) after the kvpe config, on the contract's synthetic position axis
-    (strides 96 / 64 over ``KDA_VERSIONS`` aliased windows, see ``kda_position``) and published on the
+    (strides 96 / 64 over one window, see ``kda_position``), tagged Snapshot, and published on the
     model's layer axis via its own ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged
     path as well.
 
@@ -483,10 +483,11 @@ def _build_and_serialize_merged_kv_chunk_table(
         # One layer axis for every config: the KDA rows sit at their model layers, so the extent is the
         # kvpe config's (already widened to the model's layer count) or the KDA rows', whichever is larger.
         cfg.num_layers = max(configs[kvpe_config_name].num_layers, max(spec.layer_rows) + 1)
-        cfg.max_sequence_length = kda_max_sequence_length(spec.geometry)
+        cfg.max_sequence_length = kda_window(spec.geometry)
         cfg.num_slots = num_users
         cfg.chunk_n_tokens = kda_chunk_n_tokens(spec.geometry, kind)
         cfg.chunk_size_bytes = kda_segment_bytes(spec.geometry, kind)
+        cfg.tensor_type = disagg.KvChunkTensorType.Snapshot
         tensor = spec.tensor(kind)
         if tensor is not None:
             page = tensor.buffer_aligned_page_size()

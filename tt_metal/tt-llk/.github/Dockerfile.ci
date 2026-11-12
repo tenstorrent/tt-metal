@@ -22,4 +22,4 @@ RUN set -e \
     && rm -rf /usr/share/doc/* \
     && rm -rf /usr/share/man/* \
     && find /usr/local -name "*.pyc" -delete \
-    && find /usr/local -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+    && { find /usr/local -depth -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true; }

@@ -1609,19 +1609,19 @@ Sinh:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 Softplus:
-- {input: Float16, output: Float16, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 6875}, {low: -4.0, high: .inf, ulp: 3}]}
-- {input: Float16, output: Float16_b, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 15196}, {low: -4.0, high: .inf, ulp: 1}]}
-- {input: Float16, output: Float32, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 995832203}, {low: -4.0, high: .inf, ulp: 18332}]}
-- {input: Float16_b, output: Float16, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 6827}, {low: -4.0, high: 65536.0, ulp: 3}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 15190}, {low: -4.0, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 15190}, {low: -4.0, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 995426305}, {low: -4.0, high: .inf, ulp: 65536}]}
-- {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 995445988}, {low: -4.0, high: .inf, ulp: 18333}]}
-- {input: Float32, output: Float16, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 6835}, {low: -4.0, high: 65536.0, ulp: 3}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 15190}, {low: -4.0, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 15191}, {low: -4.0, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 995426305}, {low: -4.0, high: .inf, ulp: 65536}]}
-- {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -4.0, ulp: 995507200}, {low: -4.0, high: .inf, ulp: 18333}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2287}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2069}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2126}]}
 Softshrink:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}

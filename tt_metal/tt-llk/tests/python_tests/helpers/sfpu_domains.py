@@ -217,7 +217,9 @@ _OP_DOMAIN_REGISTRY: dict[
     MathOperation.Polygamma: _u(0.5, 10.0),  # poles at x <= 0
     MathOperation.Xielu: _u(-5.0, 5.0),
     MathOperation.Hardshrink: _u(-4.0, 4.0),
-    MathOperation.Softplus: _u(-5.0, 30.0),  # past the linear threshold at 20
+    MathOperation.Softplus: _u(
+        -80.0, 30.0
+    ),  # span the bf16 negative tail and linear threshold
     MathOperation.SigmoidAppx: _u(-5.0, 5.0),
     MathOperation.SqrtCustom: _u(0.0, 100.0),
     MathOperation.Add1: _u(-10.0, 10.0),

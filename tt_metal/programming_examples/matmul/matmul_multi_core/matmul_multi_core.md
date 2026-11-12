@@ -9,7 +9,7 @@ In terms of API usage, there isn\'t much change. We will discuss the specific ch
 
 All important ways we use the API different are in the new `matmul_multi_core` function.
 
-The full example program is in [matmul_multi_core.cpp](../../../tt_metal/programming_examples/matmul_multi_core/matmul_multi_core.cpp)
+The full example program is in [matmul_multi_core.cpp](matmul_multi_core.cpp)
 
 To build and execute, you may use the following commands:
 Then run the following:
@@ -27,7 +27,7 @@ auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program = CreateProgram();
+Program program = CreateProgram(*mesh_device);
 
 auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
 uint32_t num_cores_x = compute_with_storage_grid_size.x;

@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt_stl/assert.hpp>
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
@@ -40,7 +41,44 @@ struct SemBindingEntry {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
+    std::vector<experimental::NodeRange> watcher_node_ranges;
 };
+
+// Watcher: each binding's node ranges as a constexpr array named after its accessor in `watcher_node_ranges::<kind>`.
+// Emitted outside the binding namespaces, since an accessor may take any name that would be declared next to it.
+template <typename Entries>
+inline void emit_watcher_node_ranges(std::ostream& os, std::string_view kind, const Entries& entries) {
+    bool any = false;
+    for (const auto& entry : entries) {
+        if (entry.watcher_node_ranges.empty()) {
+            continue;
+        }
+        if (!any) {
+            os << "namespace watcher_node_ranges::" << kind << " {\n";
+            any = true;
+        }
+        os << "constexpr DebugNodeRange " << entry.name << "[] = {";
+        for (size_t i = 0; i < entry.watcher_node_ranges.size(); ++i) {
+            const experimental::NodeRange& range = entry.watcher_node_ranges[i];
+            os << (i == 0 ? "" : ", ") << "{{" << range.start_coord.x << ", " << range.start_coord.y << "}, {"
+               << range.end_coord.x << ", " << range.end_coord.y << "}}";
+        }
+        os << "};\n";
+    }
+    if (any) {
+        os << "}  // namespace watcher_node_ranges::" << kind << "\n";
+    }
+}
+
+// A binding token's trailing constructor arguments for its node ranges, or "" without any.
+inline std::string watcher_node_ranges_args(
+    std::string_view kind, const std::string& name, const std::vector<experimental::NodeRange>& watcher_node_ranges) {
+    if (watcher_node_ranges.empty()) {
+        return "";
+    }
+    return ", ::watcher_node_ranges::" + std::string(kind) + "::" + name + ", " +
+           std::to_string(watcher_node_ranges.size()) + "u";
+}
 
 // The enumerator name, as the kernel spells it.
 inline std::string_view sem_scope_enumerator(SemScope scope) {
@@ -56,10 +94,12 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
 // The generated semaphore section: one constexpr binding token per bound semaphore, in
 // `namespace sem`. The token carries the id and the mechanism the host picked.
 inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
+    emit_watcher_node_ranges(os, "sem", entries);
     os << "namespace sem {\n";
     for (const auto& entry : entries) {
         os << "constexpr ::SemaphoreBindingToken " << entry.name << "{" << entry.id
-           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << "};\n";
+           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope)
+           << watcher_node_ranges_args("sem", entry.name, entry.watcher_node_ranges) << "};\n";
     }
     os << "}  // namespace sem\n";
 }
@@ -208,6 +248,13 @@ public:
             // NOLINTNEXTLINE(performance-unnecessary-value-param)
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const {}
+    // Watcher: the nodes each DFB and semaphore binding exists on, as rectangles in NoC coordinates. Empty without
+    // Watcher NoC sanitizing.
+    virtual void process_watcher_node_ranges(
+        const std::function<
+            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&,
+        const std::function<
+            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace

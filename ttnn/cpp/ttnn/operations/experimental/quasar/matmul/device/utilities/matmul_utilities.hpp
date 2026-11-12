@@ -48,6 +48,23 @@ uint32_t estimate_interm_tile_size(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     tt::tt_metal::DataType output_dtype);
 
+// Format of the partial-sum (interm0) ring. Float32 with fp32 accumulation, Float16_b with packer L1
+// accumulation, else the output format -- except an MX output, which is kept in Float16_b: an MX partials ring
+// would re-quantize the running sum on every K block, and the reload path (copy_block of the partials into Dest)
+// has only been run with bf16 / fp32 partials.
+tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_en, tt::DataFormat output_data_format);
+
+/**
+ * L1 stride of an interleaved operand's tiles in the reader buffers: the tile size rounded up to the NOC's DRAM
+ * read alignment, so every tile's L1 offset matches its DRAM page offset modulo that alignment. 64 B on Blackhole
+ * (a bfp8 32x16 tile is 544 B and is laid out at 576 B), 32 B on Wormhole (544 B stays 544 B) and 1 B on Quasar,
+ * whose NOC shifts unaligned data: an 8-bit MX tile keeps its 1056 B stride, which is what the Quasar unpacker
+ * walks the ring at (an entry padded to the 64 B DRAM page of 1088 B would put every tile after the first where
+ * it does not look). Tensor-backed sharded operands keep their natural stride. The readers compute the same value
+ * from NOC_DRAM_READ_ALIGNMENT_BYTES.
+ */
+uint32_t get_interleaved_tile_stride(uint32_t tile_size);
+
 uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a);
 
 bool is_input_batched(const ttnn::Shape& shape);
@@ -364,7 +381,10 @@ void get_max_page_size_and_num_pages(
     uint32_t& page_size,
     uint32_t& num_pages);
 
-void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons);
+void move_common_entries(
+    std::vector<tt::tt_metal::CoreCoord>& v1,
+    std::vector<tt::tt_metal::CoreCoord>& v2,
+    std::vector<tt::tt_metal::CoreCoord>& commons);
 
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,

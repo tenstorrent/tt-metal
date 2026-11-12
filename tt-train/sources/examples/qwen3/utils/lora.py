@@ -155,7 +155,9 @@ class LoRAColumnParallelLinear(AbstractModuleBase):
         x_b = ttml.ops.distributed.broadcast(x, self.shard_dim)
         bias_t = self.base_layer.col_bias.tensor if self.base_layer.col_bias is not None else None
         base_out = ttml.ops.linear.linear(x_b, self.base_layer.weight.tensor, bias_t)
-        h = ttml.ops.linear.linear(x_b, self.lora_A.tensor, None)
+        # The replicated lora_A's per-device grad only covers the local lora_B shard; broadcast sums it across TP.
+        lora_A = ttml.ops.distributed.broadcast(self.lora_A.tensor, self.shard_dim)
+        h = ttml.ops.linear.linear(x_b, lora_A, None)
         lora_out = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.scaling != 1.0:
             lora_out = lora_out * self.scaling

@@ -81,23 +81,32 @@ inline void hybrid_pass_barrier() {
     if (d::arg(d::IS_MASTER) != 0) {
         barrier_sem.wait_min(d::arg(d::TOTAL_ARRIVALS));
 
-        // Hand the second pass a zeroed block. Done per id through the public set/multicast pair rather
-        // than as one write over the semaphore region, so the barrier's own id -- which must
-        // survive -- cannot be caught by a range that grows later.
+        // Hand the second pass a zeroed block: clear this core's copy, then send it to every receiver
+        // as ONE multicast -- a multicast per id costs ~0.28 us each, back to back. Semaphores are
+        // laid out contiguously by id, and the merge gives the barrier the id right after the shared
+        // block, so [0, shared) stops just short of it.
         const uint32_t shared = d::arg(d::SHARED_SEM_COUNT);
         const uint32_t receivers = d::arg(d::NUM_RECEIVERS);
+        ASSERT(d::arg(d::BARRIER_SEM_ID) >= shared);
         for (uint32_t id = 0; id < shared; ++id) {
             Semaphore<> shared_sem(id);
             shared_sem.set(0);
-            if (receivers > 0) {
-                shared_sem.set_multicast<NocOptions::DEFAULT>(
-                    noc,
+        }
+        if (receivers > 0 && shared > 0) {
+            const uint32_t block = static_cast<uint32_t>(get_semaphore(0));
+            noc_async_write_multicast(
+                block,
+                get_noc_multicast_addr(
                     d::arg(d::RECT_X_START),
                     d::arg(d::RECT_Y_START),
                     d::arg(d::RECT_X_END),
                     d::arg(d::RECT_Y_END),
-                    receivers);
-            }
+                    block,
+                    noc.get_noc_id()),
+                shared * L1_ALIGNMENT,
+                receivers,
+                false,
+                noc.get_noc_id());
         }
         // The zeroing must have LANDED before anyone is let go -- a barrier, not a flush.
         // async_writes_flushed only waits for departure, and the release below is a local store

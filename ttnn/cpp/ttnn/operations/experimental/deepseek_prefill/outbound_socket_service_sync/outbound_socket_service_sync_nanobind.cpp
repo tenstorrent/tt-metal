@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "outbound_socket_service_sync.hpp"
@@ -27,7 +28,9 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
         NON-BLOCKING: returns once the data is staged and the counter is inc'd.
           * D2DStreamServiceSender (``input`` required): copies ``input`` into the sender
             backing; forwards over fabric once it has ``num_workers`` acks AND the host
-            lease (``release_fabric_links()`` / ``wait_for_fabric_links()``).
+            lease (``release_fabric_links()`` / ``wait_for_fabric_links()``). For a sender
+            built with ``extra_tensors``, pass a list: ``input[i]`` fills
+            ``service.get_backing_tensors()[i]`` and the list of backings is returned.
           * D2HStreamService (``input``/``metadata`` optional, >=1 set): streams to host;
             metadata-only (``input=None``) sends just the record, no payload/lease.
 
@@ -36,12 +39,13 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
                 outbound service (built with worker cores set).
 
         Keyword Args:
-            input (ttnn.Tensor): payload; must match the backing per-shard spec. Default: None.
+            input (ttnn.Tensor | list[ttnn.Tensor]): payload(s); each must match its backing
+                per-shard spec. Default: None.
             metadata (ttnn.Tensor): ``[1, 1, 1, N]`` uint32 blob; size must match the
                 service's ``metadata_size_bytes``. Default: None.
 
         Returns:
-            ttnn.Tensor: the (now-filled) service backing tensor.
+            ttnn.Tensor | list[ttnn.Tensor]: the (now-filled) service backing tensor(s).
         )doc";
 
     ttnn::bind_function<"outbound_socket_service_sync", "ttnn.experimental.deepseek_prefill.">(
@@ -51,6 +55,15 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
             static_cast<ttnn::Tensor (*)(
                 const ttnn::D2DStreamServiceSender&, const ttnn::Tensor&, const std::optional<ttnn::Tensor>&)>(
                 &ttnn::experimental::outbound_socket_service_sync),
+            nb::arg("service"),
+            nb::arg("input"),
+            nb::kw_only(),
+            nb::arg("metadata") = std::nullopt),
+        ttnn::overload_t(
+            static_cast<std::vector<ttnn::Tensor> (*)(
+                const ttnn::D2DStreamServiceSender&,
+                const std::vector<ttnn::Tensor>&,
+                const std::optional<ttnn::Tensor>&)>(&ttnn::experimental::outbound_socket_service_sync),
             nb::arg("service"),
             nb::arg("input"),
             nb::kw_only(),

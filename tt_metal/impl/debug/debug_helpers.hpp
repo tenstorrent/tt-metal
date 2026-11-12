@@ -17,12 +17,12 @@
 
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "llrt/core_descriptor.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
-#include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"

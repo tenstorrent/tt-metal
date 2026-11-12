@@ -722,22 +722,12 @@ class Mailboxes(Enum):
     Unpacker = 0x1FFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
-    BriscCommand0 = Unpacker + 12
-    BriscCommand1 = Unpacker + 16
-    BriscCounter = Unpacker + 20
-    BriscBread0 = Unpacker + 24
-    BriscBread1 = Unpacker + 28
 
 
 class MailboxesCoverage(Enum):
     Unpacker = 0x6DFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
-    BriscCommand0 = Unpacker + 12
-    BriscCommand1 = Unpacker + 16
-    BriscCounter = Unpacker + 20
-    BriscBread0 = Unpacker + 24
-    BriscBread1 = Unpacker + 28
 
 
 class MailboxesQuasar(Enum):
@@ -752,13 +742,6 @@ class MailboxesCoverageQuasar(Enum):
     Math = Unpacker + 4
     Packer = Unpacker + 8
     Sfpu = Unpacker + 12
-
-
-class BriscCmd(Enum):
-    IDLE_STATE = 0
-    START_TRISCS = 1
-    RESET_TRISCS = 2
-    UPDATE_START_ADDR_CACHE_AND_START = 3
 
 
 format_tile_sizes = {
@@ -859,8 +842,7 @@ class PerfRunType(Enum):
     UNPACK_ISOLATE = 2
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
-    L1_CONGESTION = 5
-    SFPU_ISOLATE = 6
+    SFPU_ISOLATE = 5
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one
@@ -872,7 +854,6 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.UNPACK_ISOLATE,
         PerfRunType.MATH_ISOLATE,
         PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
     ],
 ]
 

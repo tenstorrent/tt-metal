@@ -343,3 +343,86 @@ def test_interleaved_to_sharded_rejects_pure_nd_with_preallocated_output(
 
     with expect_error(RuntimeError, r"interleaved_to_sharded does not support ND sharding"):
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, preallocated_output=preallocated_output)
+
+
+def _single_core_l1(layout, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    return ttnn.MemoryConfig(
+        layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+def _zero_width_tile(device):
+    return ttnn.from_torch(torch.zeros(1, 1, 32, 0).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+
+
+# Each of these used to reach an integer division by the input width (or a truncated num_slices) on the host.
+@pytest.mark.parametrize(
+    "run, message",
+    [
+        (
+            lambda device: ttnn.interleaved_to_sharded(
+                _zero_width_tile(device),
+                ttnn.CoreCoord(1, 1),
+                [32, 32],
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            "Input tensor width must be greater than 0",
+        ),
+        (
+            lambda device: ttnn.interleaved_to_sharded(
+                _zero_width_tile(device), _single_core_l1(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 32))
+            ),
+            "Input tensor width must be greater than 0",
+        ),
+        (
+            lambda device: ttnn.interleaved_to_sharded_partial(
+                _zero_width_tile(device),
+                ttnn.CoreCoord(1, 1),
+                [32, 32],
+                1,
+                0,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            "Input tensor width must be greater than 0",
+        ),
+        (
+            lambda device: ttnn.interleaved_to_sharded_partial(
+                ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device),
+                ttnn.CoreCoord(1, 1),
+                [32, 64],
+                2**32,
+                0,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+            "num_slices must be at most UINT32_MAX",
+        ),
+        (
+            lambda device: ttnn.sharded_to_interleaved_partial(
+                ttnn.from_torch(
+                    torch.randn(1, 1, 32, 32).bfloat16(),
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=_single_core_l1(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 32)),
+                ),
+                _zero_width_tile(device),
+                1,
+                0,
+            ),
+            "Cache tensor width must be greater than 0",
+        ),
+    ],
+    ids=[
+        "i2s_zero_width",
+        "i2s_memory_config_zero_width",
+        "i2s_partial_zero_width",
+        "i2s_partial_num_slices_wraps",
+        "s2i_partial_zero_width_cache",
+    ],
+)
+def test_sharding_rejects_zero_width_and_wrapping_slices(device, expect_error, run, message):
+    with expect_error(RuntimeError, message):
+        run(device)

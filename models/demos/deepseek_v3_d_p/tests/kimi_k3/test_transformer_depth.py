@@ -55,7 +55,6 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
@@ -99,13 +98,6 @@ KV_CACHE_PCC = 0.96
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        # 4096, between the AttnRes suite's 1152 and the 24576 the rest of the package uses. Both ends
-        # are wrong here. At depth 24 the sealed set has two blocks for the first time and
-        # `inter_block`'s statistics collective needs 16 B per bank more than 1152 provides, so 1152
-        # fails outright. But L1_SMALL comes out of the same L1 the circular buffers use, and at
-        # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
-        # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
-        # clears AttnRes with margin while leaving MLA its working space.
         {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
@@ -165,9 +157,6 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
         tp_axis=TP_AXIS,
-        # Same pools the KDA layers cycle. AttnRes's private fallback set is only safe while nothing
-        # else has a collective in flight on this axis, which is not true inside a K3 layer stack.
-        tt_ccl=get_tt_ccl(mesh_device),
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),

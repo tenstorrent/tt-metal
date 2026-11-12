@@ -179,10 +179,10 @@ AllGatherDeviceOperation::create_op_performance_model(
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
     // Roofline assumes all device compute cores drive DRAM concurrently
     // (hardware max parallelism). DRAM terms compete (overlap) with Fabric.
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
 
     // Hardware ceiling: total compute cores available to drive DRAM
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
@@ -234,8 +234,9 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint32_t axis = args.get_1d_axis();
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
+                const uint64_t num_pages = input_tensor.mesh_buffer().num_pages();  // per-device shard
+                const bool large_page =
+                    input_tensor.mesh_buffer().page_size() >= 4096;  // fp32 / int32 / wide row-major
                 if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
                     use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
                 }

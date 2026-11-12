@@ -26,6 +26,7 @@
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
+    constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
     constexpr uint32_t NH = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
@@ -241,6 +242,22 @@ void kernel_main() {
         }
         active_ring_iter_mask =
             ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedActiveRingIterMask);
+        // Lanes: per-lane logical_nt and Q mapping for sdpa_ring_v2.
+        if constexpr (num_lanes > 1) {
+            static_assert(num_lanes <= ring_joint::kMaxLanes);
+            for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+                const uint32_t base = ring_joint::kDerivedLaneBase + lane * ring_joint::kDerivedLaneStride;
+                auto read_lane = [&](uint32_t slot) {
+                    return ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, base + slot);
+                };
+                gemma4_sliding::lanes::table.logical_nt[lane] = read_lane(ring_joint::kDerivedLogicalNt);
+                gemma4_sliding::lanes::table.q_mapping[lane] = gemma4_sliding::lanes::LaneQMapping{
+                    read_lane(ring_joint::kDerivedQPreWrapStartTile),
+                    read_lane(ring_joint::kDerivedQPreWrapTileCount),
+                    read_lane(ring_joint::kDerivedQPostWrapStartTile),
+                    read_lane(ring_joint::kDerivedQValidTileCount)};
+            }
+        }
         cb_derived.pop_front(1);
     }
 
@@ -494,7 +511,9 @@ void kernel_main() {
             use_attention_sink,
             cb_attention_sink,
             kv_region_Nt,
-            (GROUPED_KV_SOURCE_COUNT > 1)>(
+            (GROUPED_KV_SOURCE_COUNT > 1),
+            num_lanes,
+            NH * num_q_chunks>(
             global_q_start,
             global_q_end,
             num_q_chunks,

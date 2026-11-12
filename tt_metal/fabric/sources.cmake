@@ -37,6 +37,8 @@ set(FABRIC_SOURCES
     builder/fabric_core_placement.cpp
     builder/fabric_channel_allocator.cpp
     builder/fabric_static_sized_channels_allocator.cpp
+    builder/fabric_slot_allocator.cpp
+    builder/fabric_trid_allocator.cpp
     builder/fabric_remote_channels_allocator.cpp
     builder/static_sized_channel_connection_writer_adapter.cpp
     builder/connection_registry.cpp

@@ -9,6 +9,7 @@
 #include <tt-metalium/tile.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -91,7 +92,7 @@ TensorSpec SoftmaxDeviceOperation::compute_output_specs(
     const auto& in_layout = input.tensor_spec().tensor_layout();
     return TensorSpec(
         input.logical_shape(),
-        TensorLayout(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             input.dtype(),
             in_layout.get_page_config(),
             operation_attributes.output_mem_config,

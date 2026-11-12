@@ -26,7 +26,6 @@
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "tt_target_device.hpp"
-#include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
@@ -299,6 +298,8 @@ class RunTimeOptions {
     bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
+
+    bool enable_host_transfer_stats = false;
 
     // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
@@ -823,6 +824,9 @@ public:
 
     bool get_dispatch_data_collection_enabled() const { return enable_dispatch_data_collection; }
     void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
+
+    bool get_host_transfer_stats_enabled() const { return enable_host_transfer_stats; }
+    void set_host_transfer_stats_enabled(bool enable) { enable_host_transfer_stats = enable; }
 
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 

@@ -32,6 +32,7 @@ file(
     moreh_group_norm_backward/device/gamma_beta_grad/kernels/*.cpp
     moreh_group_norm_backward/device/input_grad/kernels/*.cpp
     moreh_layer_norm/device/kernels/*.cpp
+    moreh_layer_norm/device/kernels/*.hpp
     moreh_layer_norm_backward/device/kernels/*.cpp
     moreh_linear_backward/device/kernels/*.cpp
     moreh_matmul/device/kernels/*.cpp
