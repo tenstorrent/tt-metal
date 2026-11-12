@@ -2,16 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Math-thread cost per tile of the GGUF decoders (sfpu/experimental/ckernel_sfpu_gguf_decode.h), the DEST-fed matmul
-// and the unpack-to-DEST page copy (experimental/llk_{math,unpack}_dest_srca_mm.h), Blackhole, 32-bit DEST, MATH_ISOLATE.
-// The math thread's TILE_LOOP runs LOOP_FACTOR * TILE_CNT steps of GGUF_STEP:
-//   0 decode, 1 params, 2 body: sfpu_gguf_decode_tile<GGUF_FMT> with both phases, phase 1 or phase 2, over the tile
-//     indices 0..TILE_CNT-1 of a group (the timing does not depend on the page's bits); decode and params include
-//     sfpu_gguf_decode_group once per group;
-//   3 matmul: _llk_math_dest_srca_mm_ with GGUF_IN0_ROWS rows at MATH_FIDELITY; the unpack thread sets SrcA and SrcB
-//     valid without data;
-//   4 copy: the unpack-to-DEST copy of a GGUF_PAGE_FACES-face 32-bit page, from the post to the end of the wait, while
-//     the unpack thread copies the pages.
+// Math-thread cycles per tile of the GGUF decoders, the DEST-fed matmul and the unpack-to-DEST page copy (Blackhole,
+// 32-bit DEST, MATH_ISOLATE).
 
 #include <cstdint>
 
@@ -33,6 +25,12 @@ std::uint32_t math_sync_tile_dst_index = 0;
 static_assert(PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE, "gguf_decode_mm_perf: MATH_ISOLATE only");
 static_assert(is_fp32_dest_acc_en, "gguf_decode_mm_perf: 32-bit DEST");
 
+// The math thread's TILE_LOOP runs LOOP_FACTOR * TILE_CNT steps of GGUF_STEP:
+//   0 decode, 1 params, 2 body: sfpu_gguf_decode_tile<GGUF_FMT> with both phases, phase 1 or phase 2, over the tile
+//     indices 0..TILE_CNT-1 of a group (the timing does not depend on the page's bits); decode and params include
+//     sfpu_gguf_decode_group once per group;
+//   3 matmul: _llk_math_dest_srca_mm_ with GGUF_IN0_ROWS rows at MATH_FIDELITY, SrcA and SrcB set valid without data;
+//   4 copy: the unpack-to-DEST copy of a GGUF_PAGE_FACES-face 32-bit page, from the post to the end of the wait.
 constexpr bool STEP_DECODE = GGUF_STEP <= 2;
 constexpr bool STEP_MATMUL = GGUF_STEP == 3;
 constexpr bool STEP_COPY   = GGUF_STEP == 4;

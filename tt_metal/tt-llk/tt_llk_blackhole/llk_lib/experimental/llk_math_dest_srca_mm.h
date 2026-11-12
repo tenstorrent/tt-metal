@@ -16,18 +16,8 @@
 using namespace ckernel;
 using namespace ckernel::math;
 
-// DEST_SRCA_MM
-// Matmul whose in1 comes from a DEST tile instead of the unpacker: D[dst] += SrcB * SrcA, with SrcA a 32x32 Float32
-// tile in DEST moved over by MOVD2A, which truncates it to TF32 (SrcA's format, with implied formats off), and SrcB
-// in0 from L1 (_llk_unpack_dest_srca_mm_). For an in1 produced in DEST, e.g. a weight tile the SFPU decoded
-// (sfpu/experimental/ckernel_sfpu_gguf_decode.h), with no round trip through L1.
-//   in0 (SrcB): [in0_rows, 32], in0_rows 8 or 16 (the top two faces) or 32
-//   in1 (SrcA): one [32, 32] Float32 DEST tile
-//   output: one [in0_rows, 32] block of a Float32 DEST tile
-//   needs a 32-bit DEST; any fidelity
-// The unpack-to-DEST copy that brings a 32-bit tile into DEST is split in two (_unpack_post_, _unpack_wait_), so that
-// math work can run while the unpacker copies the next tile; not an SFPLOADMACRO body whose stores are not arbitrated
-// against the unpacker's DEST writes (sfpu_gguf_decode_body_unarbitrated).
+// DEST_SRCA_MM: matmul whose in1 is a Float32 DEST tile (e.g. an SFPU-decoded weight) moved to SrcA by MOVD2A, with no
+// round trip through L1; in0 comes from L1 into SrcB (_llk_unpack_dest_srca_mm_).
 
 /**
  * @brief Configure the math thread for dest_srca_mm: the matmul's address mods and MOP, SrcA format TF32.
@@ -70,6 +60,9 @@ inline void _llk_math_dest_srca_mm_uninit_()
  *
  * @param dst_index: DEST tile the unpacker writes.
  * @note On the unpack thread, @ref _llk_unpack_A_ with unpack_to_dest copies the tile.
+ * @note The copy is split into this post and @ref _llk_math_dest_srca_mm_unpack_wait_ so that math work can run while
+ *       the unpacker copies the next tile. That work must not be an SFPLOADMACRO body with DEST stores that are not
+ *       arbitrated against the unpacker's DEST writes (see sfpu_gguf_decode_body_unarbitrated).
  */
 inline void _llk_math_dest_srca_mm_unpack_post_(const std::uint32_t dst_index)
 {
@@ -110,7 +103,10 @@ inline void _llk_math_dest_srca_mm_unpack_wait_(const std::uint32_t dst_index, c
 /**
  * @brief D[dst_index] += in0 * DEST tile src_index.
  *
- * Moves DEST tile src_index into SrcA (TF32), then runs the matmul MOP into DEST tile dst_index and releases SrcB.
+ * Moves DEST tile src_index into SrcA, truncated to TF32 (SrcA's format with implied formats off), then runs the matmul
+ * MOP into DEST tile dst_index and releases SrcB. in0 (SrcB) is [in0_rows, 32] (8 or 16 rows: its top two faces), in1
+ * one [32, 32] Float32 DEST tile, the output one [in0_rows, 32] block of a Float32 DEST tile. Needs a 32-bit DEST; any
+ * fidelity.
  *
  * @tparam math_fidelity: Must match the init.
  * @tparam in0_rows: Must match the init.

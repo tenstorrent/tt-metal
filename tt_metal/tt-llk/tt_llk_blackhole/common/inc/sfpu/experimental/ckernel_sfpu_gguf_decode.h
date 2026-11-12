@@ -4,17 +4,6 @@
 
 // SFPU decoders of GGUF weight formats: one page (experimental/ckernel_gguf_page.h) to one Float32 [K][N] tile in DEST,
 // scales applied, equal to ggml's dequantization. Needs a 32-bit DEST (fp32_dest_acc_en).
-//
-// DEST tiles from the call's tile: 0 output, 1 page (unpacked as UInt32), 2 scratch for the per-lane scales S and
-// offsets M. Output o of SFPU lane (r, c) is element k = 16h + 4((o / 2) % 4) + r, n = 16a + 2c + b, with h = o / 16,
-// a = (o / 8) % 2, b = o % 2. Word-vector v of the page (rows 4 (v / 2) .. + 3, columns of parity v % 2) holds the
-// codes of lane (r, c)'s outputs; in the scale rows (from scale_offset / 64), word 2c + p holds the fields of columns
-// 16p + 2c and 16p + 2c + 1 (low, high half).
-// Phase 1 (params) writes S[a][b][h] and M[a][b][h] to the scratch tile. Phase 2 (body) writes q * S + M (linear
-// formats) or v(q) * S (codebook formats).
-// MXFP4, NVFP4, IQ4_NL and IQ4_XS differ (ckernel_sfpu_gguf_decode_fp4.h, ckernel_sfpu_gguf_decode_iq4.h): their
-// codes are block-float datums in the 16-bit rows that tile 0's rows address, their scratch is in tile 1 past the
-// page's rows.
 
 #pragma once
 
@@ -45,6 +34,15 @@ struct traits
     static constexpr bool has_h  = FMT == NVFP4 || FMT == Q6_K || FMT == Q3_K || FMT == Q2_K;
     static constexpr bool linear = !(FMT == IQ4_NL || FMT == IQ4_XS || FMT == MXFP4 || FMT == NVFP4);
 };
+
+// Output o of SFPU lane (r, c) is element k = 16h + 4((o / 2) % 4) + r, n = 16a + 2c + b of the output tile, with
+// h = o / 16, a = (o / 8) % 2, b = o % 2. Word-vector v of the page (rows 4 (v / 2) .. + 3, columns of parity v % 2)
+// holds the codes of lane (r, c)'s outputs; in the scale rows (from scale_offset / 64), word 2c + p holds the fields of
+// columns 16p + 2c and 16p + 2c + 1 (low, high half).
+// Phase 1 (params) writes the per-lane scales S[a][b][h] and offsets M[a][b][h] to the scratch tile; phase 2 (body)
+// writes q * S + M (linear formats) or v(q) * S (codebook formats). MXFP4, NVFP4, IQ4_NL and IQ4_XS differ: their codes
+// are block-float datums in the 16-bit rows that the output tile's rows address, their scratch is in the page tile past
+// the page's rows.
 
 // Phase 1 of one tile. TI = the tile's index in its group of K tiles; BESIDE_UNPACK as phase 2's.
 template <int FMT, int TI, bool BESIDE_UNPACK = true>
@@ -362,7 +360,7 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
  *                        @ref sfpu_gguf_decode_body_unarbitrated is false); false selects shorter phase 1 and
  *                        phase 2 streams for decodes with no DEST writer beside them.
  * @param dst_index: DEST tile of the output. The page must be in tile dst_index + 1 (unpacked to DEST as UInt32);
- *                   tile dst_index + 2 is scratch.
+ *                   tile dst_index + 2 is scratch (the per-lane scales and offsets).
  * @param ti: The tile's index in its group of K tiles (page_layout<FMT>().group_tiles).
  * @param rows: DEST row offset of the page inside tile dst_index + 1 (several pages unpacked as one tile); the output
  *              tile and the scratch tile move with it.
