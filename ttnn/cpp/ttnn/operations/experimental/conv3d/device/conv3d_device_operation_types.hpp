@@ -119,6 +119,8 @@ struct Conv3dInputs {
     std::optional<const Tensor> halo_buffer;
     std::optional<const Tensor> pad_offset_tensor;
     std::optional<const Tensor> weight_lo_tensor;
+    // Added to the conv output in the epilogue (output = conv(input) + residual).
+    std::optional<const Tensor> residual_tensor;
 };
 
 namespace detail {

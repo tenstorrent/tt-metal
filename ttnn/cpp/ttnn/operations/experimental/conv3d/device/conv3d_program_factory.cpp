@@ -66,6 +66,7 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
     g.partial_tile_size = tt::tile_size(g.use_fp32_partials ? tt::DataFormat::Float32 : data_format);
     g.use_bias = tensor_args.bias_tensor.has_value();
     g.operand_split = config.enable_fp32_operand_split;
+    g.use_residual = tensor_args.residual_tensor.has_value();
 
     g.padded_patch_size_bytes = tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;
     g.C_in_block_bytes = C_in_block * dtype_bytes;
@@ -155,6 +156,10 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
         if (g.operand_split) {
             bytes += 2 * sub_h * g.matmul_K_t * g.tile_size +
                      g.matmul_K_t * g.matmul_N_t * g.tile_size;  // x_hi, x_lo, weight_lo
+        }
+        if (g.use_residual) {
+            // residual_rm, and untilized_rm at its full-block (non-streaming) size
+            bytes += 2 * g.matmul_M_t * g.matmul_N_t * g.tile_size;
         }
         return bytes;
     };
@@ -304,6 +309,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     auto tile_size = tt::tile_size(data_format);
 
     bool use_bias = bias_tensor.has_value();
+    const bool use_residual = tensor_args.residual_tensor.has_value();
 
     // Extract compute kernel config early (needed for CB format decisions)
     [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -506,6 +512,36 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             .core_ranges = CoreRangeSet(core_grid),
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(cb_bias_tiled_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
+    }
+
+    // Residual epilogue: the writer stages a whole output block of residual rows; compute untilizes
+    // into cb_untilized_rm and adds the two into cb_matmul_result_rm. Streaming untilizes one
+    // subblock at a time and adds it right away, so cb_untilized_rm only needs that subblock.
+    uint32_t cb_residual_rm_id = 32;
+    uint32_t cb_untilized_rm_id = 32;
+    if (use_residual) {
+        const uint32_t untilized_rm_tiles =
+            enable_streaming_output ? out_subblock_h * matmul_N_t : matmul_M_t * matmul_N_t;
+        cb_residual_rm_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = matmul_M_t * matmul_N_t * tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_residual_rm_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
+        cb_untilized_rm_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = untilized_rm_tiles * tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_untilized_rm_id),
                 .data_format = data_format,
                 .page_size = tile_size,
             }}},
@@ -1003,7 +1039,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         cb_x_hi_tiled_id,
         cb_x_lo_tiled_id,
         cb_weight_lo_tiled_id,
-        (uint32_t)operand_split};
+        (uint32_t)operand_split,
+        (uint32_t)use_residual,
+        cb_residual_rm_id,
+        cb_untilized_rm_id};
 
     // Deliver every CB the fp32 tail reads UnpackToDestFp32 -- interm (untilize/bias read-back),
     // bias, and, with multiple C_in blocks, reduction + acc. Without the flag the unpacker rounds
@@ -1071,12 +1110,16 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.output_depth_to_space[0],
         operation_attributes.output_depth_to_space[1],
         operation_attributes.output_depth_to_space[2],
-        operation_attributes.output_trim_t_front};
+        operation_attributes.output_trim_t_front,
+        (uint32_t)use_residual,
+        cb_residual_rm_id};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(use_residual ? tensor_args.residual_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
@@ -1093,6 +1136,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* weight_lo_buffer = operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr;
+    tt::tt_metal::Buffer* residual_buffer = use_residual ? tensor_args.residual_tensor.value().buffer() : nullptr;
 
     // Per-core work assignments. Unassigned cores retain empty work ranges.
     struct CoreWork {
@@ -1409,10 +1453,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 (uint32_t)cw.is_reducer,
                 num_workers});
 
-        // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
+        // Writer pos[0..4] are the output, weight, bias, weight_lo and residual buffer addresses. nullptr becomes
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(27 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.reserve(28 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
         writer_args.push_back(out_buffer);
         writer_args.push_back(weight_buffer);
         if (bias_buffer != nullptr) {
@@ -1422,6 +1466,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         }
         if (weight_lo_buffer != nullptr) {
             writer_args.push_back(weight_lo_buffer);
+        } else {
+            writer_args.push_back(uint32_t{0});
+        }
+        if (residual_buffer != nullptr) {
+            writer_args.push_back(residual_buffer);
         } else {
             writer_args.push_back(uint32_t{0});
         }

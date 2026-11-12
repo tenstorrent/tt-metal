@@ -38,6 +38,7 @@ ttnn::Tensor conv3d(
     uint32_t output_pad_w = 0,
     const std::optional<ttnn::Tensor>& weight_lo_tensor = std::nullopt,
     const std::array<uint32_t, 3>& output_depth_to_space = std::array<uint32_t, 3>{1, 1, 1},
-    uint32_t output_trim_t_front = 0);
+    uint32_t output_trim_t_front = 0,
+    const std::optional<ttnn::Tensor>& residual_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental
