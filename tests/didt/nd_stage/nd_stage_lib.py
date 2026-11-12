@@ -33,7 +33,6 @@ CB_IN0, CB_IN1, CB_OUT, CB_LOOP = 0, 1, 16, 24
 NUM_CBS = 64  # host descriptors carry the maximum CB count (Blackhole)
 RT, CT, KT = 2, 2, 8  # matmul block: 2x2 output tiles fill half-sync fp32 DEST, 8 k-tiles per sweep
 DST_TILES = 4
-MAX_GRID = (11, 10)  # 110 co-active cores, the validated worker budget of the determinism gates
 
 # Result words; mirrors kernels/nd_stage_result.h.
 MAGIC_CHECKER, MAGIC_L1, MAGIC_NOC, MAGIC_DEST = 0x4E445354, 0x4E444C31, 0x4E444E43, 0x4E444453

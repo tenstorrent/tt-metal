@@ -38,8 +38,9 @@ Not separable with kernels alone: DEST storage from its read ports, the multipli
 unpacker and packer internal stages, the TRISC front ends, and clock or power delivery. L1 ECC counters
 are not usable either: the scrubber also walks unpopulated rows and the firmware clears the counts.
 
-The target is a Blackhole Galaxy: every probe runs on all 32 chips at once, on the 11x10 worker grid of each
-(nd.MAX_GRID; the device reports 12x10, and column x=11 stays idle to hold 110 co-active cores).
+The target is a Blackhole Galaxy: every probe runs on all 32 chips at once, on the full worker grid of each
+(12x10 = 120 cores). The run-to-run determinism gates cap co-active cores at 110 (11x10); this test does not,
+so column x=11 is covered and the matmul aggressors load the whole chip.
 
 Wall time is ~ (number of arms) x ND_PROBE_SECONDS plus compile and calibration: 33 arms x 20 s ~ 11 min,
 ~ 14 min in all. ND_PROBE_SECONDS=15 trims it to ~ 11 min.
@@ -104,7 +105,7 @@ def _fmt_core(v):
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="galaxy")], indirect=["mesh_device"])
 def test_nd_stage(mesh_device):
     grid = mesh_device.compute_with_storage_grid_size()
-    gx, gy = min(grid.x, nd.MAX_GRID[0]), min(grid.y, nd.MAX_GRID[1])
+    gx, gy = grid.x, grid.y
     seconds = nd.env_seconds()
     mode = os.environ.get("ND_DATA", "random")
     inject = nd.parse_inject(os.environ.get("ND_INJECT"))
