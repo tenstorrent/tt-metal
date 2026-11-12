@@ -13,6 +13,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
