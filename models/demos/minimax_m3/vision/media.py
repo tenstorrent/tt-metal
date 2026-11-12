@@ -184,20 +184,24 @@ class MiniMaxM3Media:
         """Write each item's stored value into its slot in out: format.Header("image"), then the item's vision tokens,
         bf16 [n_tokens, hidden].
 
-        Raises ValueError for a slot that is not stored_nbytes(item) bytes before it writes into any slot. The slots of
-        a call that raises hold no defined value: the caller must not use them. If the chip work fails, encode frees
-        that call's device tensors before it raises. The error's frames then hold none of the encoder's tensors, so
-        close frees them even while the caller still holds the error. Raises RuntimeError before load or after close;
-        waits for a load or another encode in progress.
+        Raises ValueError for a slot that is not stored_nbytes(item) bytes before it writes into any slot. A slot may
+        be a memoryview of any format, uint16 for example: its size is counted in bytes. The slots of a call that
+        raises hold no defined value: the caller must not use them. If the chip work fails, encode frees that call's
+        device tensors before it raises. The error's frames then hold none of the encoder's tensors, so close frees
+        them even while the caller still holds the error. Raises RuntimeError before load or after close; waits for a
+        load or another encode in progress.
         """
         for item, buf in zip(items, out, strict=True):
             size = self.stored_nbytes(item)
-            if len(buf) != size:
-                raise ValueError(f"a slot of {len(buf)} B for an image of {item.n_tokens} tokens, which needs {size} B")
+            if buf.nbytes != size:
+                raise ValueError(
+                    f"a slot of {buf.nbytes} B for an image of {item.n_tokens} tokens, which needs {size} B"
+                )
         with self._lock:
             if not (self._stub or self._encoder is not None):
                 raise RuntimeError("encode before load, or after close")
             for item, buf in zip(items, out):
+                buf = buf.cast("B")  # the header and the rows are at byte offsets, whatever the slot's format
                 media_format.Header("image").write(buf)
                 rows = media_format.embeddings(buf, self.hidden)
                 if self._stub:

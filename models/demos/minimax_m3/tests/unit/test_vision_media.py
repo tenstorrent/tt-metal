@@ -175,6 +175,22 @@ def test_encode_checks_its_slots_and_state_first(expect_error):
         media.encode([item], [good])
 
 
+def test_encode_counts_slot_sizes_in_bytes(expect_error):
+    """encode takes a slot of another format, a uint16 memoryview for example, by its size in bytes, and writes it as
+    it writes a slot of bytes. A slot one byte short raises ValueError."""
+    media = MiniMaxM3Media(CONFIG)
+    media.load(None, "", "image", {"stub_embeddings": True})
+    item = media.prepare("image", rgb(100, 60))
+    size = media.stored_nbytes(item)
+    want = memoryview(bytearray(size))
+    media.encode([item], [want])
+    for slot in (memoryview(np.full(size // 2, 0xFFFF, np.uint16)), memoryview(bytearray(b"\xff" * size)).cast("H")):
+        media.encode([item], [slot])
+        assert slot.format == "H" and slot.tobytes() == want.tobytes()
+    with expect_error(ValueError, "needs"):
+        media.encode([item], [memoryview(bytearray(size - 1))])
+
+
 @pytest.mark.parametrize("chained", [False, True], ids=["raised", "chained"])
 def test_failed_load_frees_what_it_put_on_the_chip(tmp_path, monkeypatch, expect_error, chained):
     """If building the encoder fails, load frees the device tensors that the failed call's frames hold (the exception's
