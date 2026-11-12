@@ -3,7 +3,8 @@
 """ttnn.experimental.kda.gdn_spec_step: a speculative-verify step over T = K + 1 candidate tokens per user writes the
 recurrent state after every token into pages the caller names (ring_page_idx), so the caller can keep the state of
 whichever continuation it accepts. The convolution history after token t is rows t+1 .. t+3 of the window the op
-writes into win[1 - par].
+writes into win[1 - par], or, with conv_hist, slots 1..3 of gdn_decode_step's packed history pages of the block that
+takes the state after token t.
 
 The states live in 1024-token bfloat8_b K / V cache blocks of a TP=8 layer slot through alias_view (KvBlocks of
 test_gdn_decode_step_paged.py: heads 0..3 in K, heads 4..5 in V). Every per-position output, state and history is
@@ -21,6 +22,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.gdn_decode_step_t
     AZ,
     DK,
     DV,
+    HP,
     KV,
     MODE_IDS,
     MODES,
@@ -46,7 +48,10 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.gdn_decode_step_t
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_gdn_decode_step_paged import (
     MODEL_MODE,
     TRACE_PARAMS,
+    _bf16_tile_raw,
+    _fp32_tile_raw,
     _kv_blocks_or_skip,
+    _raw_fp32_tile,
 )
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
 
@@ -157,11 +162,13 @@ class Verify:
             ttnn.from_torch(self.rows.reshape(1, self.R, W), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self.qkv
         )
 
+    def windows(self):
+        return self.win_dev[0], self.win_dev[1]
+
     def run(self, consts, taps, **kw):
         return ttnn.experimental.kda.gdn_spec_step(
             self.qkv,
-            self.win_dev[0],
-            self.win_dev[1],
+            *self.windows(),
             self.kv.rec_k,
             self.ctrl,
             taps,
@@ -636,6 +643,285 @@ def test_spec_step_traced_latency(device, B):
     }
     res = {k: [] for k in calls}
     for _ in range(2):  # alternate so that drift hits all of them
+        for k, call in calls.items():
+            res[k].append(per_call_us(call))
+    logger.info(f"LATENCY B={B} T={T}: " + ", ".join(f"{k} {min(x):.2f} us" for k, x in res.items()))
+
+
+# ---- conv_hist: the convolution history in gdn_decode_step's packed pages of the blocks, no window pair
+
+
+class HistVerify(Verify):
+    """Verify with conv_hist = kv.hist and no window pair: the start history is slots 1..3 of the start block's packed
+    history pages, and the history after token t goes to slots 1..3 of dests[u][t]."""
+
+    def ctrl_host(self):
+        words = (1 + self.B + 2 * self.B * NV + 15) // 16 * 16
+        page = torch.zeros(1, words, dtype=torch.int32)
+        for u in range(self.B):
+            for h in range(NV):
+                held = u in self.hold
+                page[0, 1 + self.B + u * NV + h] = HOLD if held else ring_page(self.kv, self.starts[u], h)
+                page[0, 1 + self.B + self.B * NV + u * NV + h] = HOLD if held else self.kv.hist_page(self.starts[u], h)
+        return page
+
+    def idx_host(self):
+        hist = [
+            [self.kv.hist_page(self.dests[u][t], h) for t in range(self.T) for h in range(NV)] for u in range(self.B)
+        ]
+        return torch.cat([super().idx_host(), torch.tensor(hist, dtype=torch.int32)], dim=1)
+
+    def windows(self):
+        return None, None
+
+    def run(self, consts, taps, **kw):
+        return super().run(consts, taps, conv_hist=self.kv.hist, **kw)
+
+
+def expected_pages_hist(kv, writes):
+    """expected_pages with the history: writes = [(block, state [NV, DK, DV], paged history [NV, 4, 32, 32])]. Slots
+    1..3 of the block's history pages take the history; slot 0 keeps its bytes."""
+    k, v = expected_pages(kv, [(block, state) for block, state, _ in writes])
+    raw16 = _fp32_tile_raw(v).view(torch.int16)
+    for block, _, hist in writes:
+        for h in range(NV):
+            for s in range(1, HP):
+                q, off = kv._v_slot(kv.hist_page(block, h) + s)
+                raw16[q, off : off + 1024] = _bf16_tile_raw(hist[h, s])[0]
+    return k, _raw_fp32_tile(raw16.view(torch.int32))
+
+
+@pytest.mark.parametrize("K_draft", [1, 3])
+@pytest.mark.parametrize("B", [1, 8, 16])
+def test_spec_step_history_pages_match_sequential_decode(device, B, K_draft):
+    """conv_hist: each position's output, state and history pages equal gdn_decode_step run token by token from the
+    start block's state and history, bit for bit; no other K / V byte changes. gdn_decode_step then
+    continues from the last position's block, which holds a complete state."""
+    T = K_draft + 1
+    gen = torch.Generator().manual_seed(2000 + 10 * B + T)
+    inp = inputs(B, seed=B + T + 7)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
+    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
+    kv.write()
+    v = HistVerify(device, kv, B, T, gen, starts, dests, par=(B + T) & 1)
+    out = ttnn.to_torch(v.run(consts, taps)).reshape(v.R, VD)
+    ref = decode_per_user(device, consts, inp["h"], inp["hist2"], v.token_rows(), MODEL_MODE)
+    assert not out[B * T :].any(), "output rows past B*T are not 0"
+    writes = []
+    for t in range(T):
+        for u in range(B):
+            assert torch.equal(bits(out[u * T + t]), bits(ref[t][0][u])), f"position {t} user {u}: output"
+            writes.append((dests[u][t], ref[t][1][u], ref[t][2][u]))
+    want = expected_pages_hist(kv, writes)
+    check_pages(kv, want)
+
+    rows = token_rows(B, gen)
+    x = tile_dev(device, rows.reshape(1, B, W), ttnn.bfloat16)
+    idx = ttnn.from_torch(
+        kv.index_host([dests[u][T - 1] for u in range(B)]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    nxt = run(
+        x, consts, kv.rec_k, kv.hist, *MODEL_MODE, output_dtype=ttnn.float32, state_page_idx=idx, state_pool2=kv.rec_v
+    )
+    nxt = ttnn.to_torch(nxt).reshape(B, VD)
+    ref_next = decode_per_user(device, consts, ref[T - 1][1], ref[T - 1][2], rows.reshape(1, B, W), MODEL_MODE)
+    for u in range(B):
+        assert torch.equal(bits(nxt[u]), bits(ref_next[0][0][u])), f"user {u}: decode after the verify"
+
+
+@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
+@pytest.mark.parametrize("K_draft", [1, 3])
+def test_spec_step_history_pages_chain_through_blocks(device, K_draft):
+    """conv_hist, one captured trace replayed for three verify steps: each step starts from the block of the position
+    the previous step accepted (its history written there by that step), and one position per step writes into the
+    step's own start block. Between replays only the token rows, the ctrl page and the index change. Every step is
+    bit-identical to the sequential decode."""
+    B, T, steps = 8, K_draft + 1, 3
+    gen = torch.Generator().manual_seed(700 + T)
+    inp = inputs(B, seed=700 + T)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    n, starts, sets = chain_blocks(B, T, steps, gen)
+    for s in range(steps):
+        alias = s % T  # position whose destination is the step's start block
+        sets[s] = [[None if t == alias else d for t, d in enumerate(row)] for row in sets[s]]
+    kv = _kv_blocks_or_skip(device, n, gen)
+    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
+    kv.write()
+
+    def with_alias(dest_set, start_blocks):
+        return [[start_blocks[u] if d is None else d for d in row] for u, row in enumerate(dest_set)]
+
+    v = HistVerify(device, kv, B, T, gen, starts, with_alias(sets[0], starts))
+    h0, hist0 = inp["h"].clone(), inp["hist2"].clone()
+    snapshot = (kv.k_pages.clone(), kv.v_pages.clone())
+    ttnn.deallocate(v.run(consts, taps))  # compile outside the trace, then put the blocks back
+    kv.write()
+    assert torch.equal(bits(kv.read()[0]), bits(snapshot[0]))
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    out_dev = v.run(consts, taps)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    try:
+        for s in range(steps):
+            if s > 0:
+                v.write_rows(token_rows(B * T, gen))
+                v.write_index()
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+            out = ttnn.to_torch(out_dev).reshape(v.R, VD)
+            ref = decode_per_user(device, consts, h0, hist0, v.token_rows(), MODEL_MODE)
+            writes = []
+            for t in range(T):
+                for u in range(B):
+                    assert torch.equal(bits(out[u * T + t]), bits(ref[t][0][u])), f"step {s} pos {t} user {u}: output"
+                    writes.append((v.dests[u][t], ref[t][1][u], ref[t][2][u]))
+            want = expected_pages_hist(kv, writes)
+            check_pages(kv, want)
+            kv.k_pages, kv.v_pages = want
+            acc = [int(x) for x in torch.randint(1, T + 1, (B,), generator=gen)]
+            h0 = torch.stack([ref[acc[u] - 1][1][u] for u in range(B)])
+            hist0 = torch.stack([ref[acc[u] - 1][2][u] for u in range(B)])
+            v.starts = [v.dests[u][acc[u] - 1] for u in range(B)]
+            if s + 1 < steps:
+                v.dests = with_alias(sets[s + 1], v.starts)
+            logger.info(f"step {s}: bit-identical to the sequential decode; accepted {acc}")
+    finally:
+        ttnn.release_trace(device, tid)
+
+
+def test_spec_step_history_pages_padding_rows(device):
+    """conv_hist with rows 1 and 5 held (no state or history writes) and rows 3 and 6 on the NaN-filled null block 0:
+    live rows stay bit-identical to the sequential decode, and no page outside the null block and the live
+    destinations changes."""
+    B, T = 8, 4
+    held, nulls = (1, 5), (3, 6)
+    live = [u for u in range(B) if u not in held + nulls]
+    gen = torch.Generator().manual_seed(15)
+    inp = inputs(B, seed=15)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
+    for u in nulls:
+        starts[u], dests[u] = 0, [0] * T
+    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in live + list(held)])
+    for h in range(NV):
+        pool, page = kv.state_page(0, h)
+        (kv.k_pages, kv.v_pages)[pool][page : page + KV] = float("nan")
+    kv.write()
+    v = HistVerify(device, kv, B, T, gen, starts, dests, hold=held)
+    out = ttnn.to_torch(v.run(consts, taps)).reshape(v.R, VD)
+    ref = decode_per_user(device, consts, inp["h"][live], inp["hist2"][live], v.token_rows()[:, live], MODEL_MODE)
+    writes = []
+    for t in range(T):
+        for i, u in enumerate(live):
+            assert torch.equal(bits(out[u * T + t]), bits(ref[t][0][i])), f"position {t} user {u}: output"
+            writes.append((dests[u][t], ref[t][1][i], ref[t][2][i]))
+    want = expected_pages_hist(kv, writes)
+    k, vv, _ = kv.read()
+    k_null, v_null, _ = kv.owned([0])
+    assert torch.equal(bits(k[~k_null]), bits(want[0][~k_null])), "K pages outside the null block differ"
+    assert torch.equal(bits(vv[~v_null]), bits(want[1][~v_null])), "V pages outside the null block differ"
+
+
+def test_spec_step_history_pages_refuse_bad_layouts(device, expect_error):
+    """conv_hist replaces the window pair (both together, or neither, are refused) and needs ring_page_idx with
+    2*T*Nv words per row."""
+    B, T = 2, 4
+    gen = torch.Generator().manual_seed(1)
+    inp = inputs(B, seed=1)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
+    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    v = Verify(device, kv, B, T, gen, starts, dests)
+    with expect_error(RuntimeError, "pass either win_a and win_b"):
+        v.run(consts, taps, conv_hist=kv.hist)
+    h = HistVerify(device, kv, B, T, gen, starts, dests)
+    with expect_error(RuntimeError, "pass either win_a and win_b"):
+        Verify.run(h, consts, taps)  # no windows and no conv_hist
+    h.idx = v.idx  # T*Nv words per row: no history pages
+    with expect_error(RuntimeError, "ring_page_idx must be"):
+        h.run(consts, taps)
+
+
+@pytest.mark.parametrize("hist", [False, True], ids=["window", "conv_hist"])
+@pytest.mark.parametrize("K_draft, B", [(7, 1), (7, 4), (11, 1), (11, 2)])
+def test_spec_step_long_verifies(device, K_draft, B, hist):
+    """T = 8 and 12 (the model's K = 7 and 11) in both history modes: the program fits the kernel config buffer, and
+    outputs and states are bit-identical to the sequential decode."""
+    T = K_draft + 1
+    gen = torch.Generator().manual_seed(3000 + 10 * B + T)
+    inp = inputs(B, seed=B + T + 3)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
+    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
+    kv.write()
+    v = (HistVerify if hist else Verify)(device, kv, B, T, gen, starts, dests)
+    if not hist:
+        v.set_history(inp["rows"])
+    out = ttnn.to_torch(v.run(consts, taps)).reshape(v.R, VD)
+    ref = decode_per_user(device, consts, inp["h"], inp["hist2"], v.token_rows(), MODEL_MODE)
+    writes = []
+    for t in range(T):
+        for u in range(B):
+            assert torch.equal(bits(out[u * T + t]), bits(ref[t][0][u])), f"position {t} user {u}: output"
+            writes.append((dests[u][t], ref[t][1][u], ref[t][2][u]))
+    if hist:
+        check_pages(kv, expected_pages_hist(kv, writes))
+    else:
+        check_pages(kv, expected_pages(kv, [(b, s) for b, s, _ in writes]))
+
+
+@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
+@pytest.mark.parametrize("B", [1, 8])
+def test_spec_step_history_pages_traced_latency(device, B):
+    """Traced time per T = 4 verify in the model's mode with the history in the window pair and in the blocks
+    (conv_hist), against four gdn_decode_step calls on the blocks. Not a pass / fail gate."""
+    T, n_calls, reps = 4, 32, 11
+    gen = torch.Generator().manual_seed(33)
+    inp = inputs(B, seed=B + 33)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
+    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
+    kv.write()
+    win = Verify(device, kv, B, T, gen, starts, dests)
+    win.set_history(inp["rows"])
+    pages = HistVerify(device, kv, B, T, gen, starts, dests)
+    xs = [tile_dev(device, token_rows(B, gen).reshape(1, B, W), ttnn.bfloat16) for _ in range(T)]
+    idx = ttnn.from_torch(kv.index_host(starts), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    def decode_x4():
+        outs = [kv.run(xs[t], consts, idx) for t in range(T)]
+        for o in outs[:-1]:
+            ttnn.deallocate(o)
+        return outs[-1]
+
+    def per_call_us(call):
+        ttnn.deallocate(call())
+        tid = ttnn.begin_trace_capture(device, cq_id=0)
+        for _ in range(n_calls):
+            ttnn.deallocate(call())
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        times = []
+        for _ in range(reps):
+            t0 = time.perf_counter()
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+            times.append((time.perf_counter() - t0) / n_calls * 1e6)
+        ttnn.release_trace(device, tid)
+        return sorted(times)[reps // 2]
+
+    calls = {
+        "window pair": lambda: win.run(consts, taps),
+        "conv_hist": lambda: pages.run(consts, taps),
+        "4x gdn_decode_step": decode_x4,
+    }
+    res = {k: [] for k in calls}
+    for _ in range(2):
         for k, call in calls.items():
             res[k].append(per_call_us(call))
     logger.info(f"LATENCY B={B} T={T}: " + ", ".join(f"{k} {min(x):.2f} us" for k, x in res.items()))
