@@ -244,7 +244,12 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     // reserved (same effective worker pool as slow dispatch).
     // A worker-grid override (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE) is honoured on the dispatch-engine
     // path too, falling through to the descriptor-derived grid below.
-    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) ||
+    // The simulator gets the full grid in slow dispatch, like silicon; the emulator and the Quasar simulator
+    // keep the descriptor grid.
+    const bool slow_dispatch_full_grid =
+        !fast_dispatch && get_rtoptions().get_target_device() != tt::TargetDevice::Emule &&
+        !(get_rtoptions().get_simulator_enabled() && arch == tt::ARCH::QUASAR);
+    if (slow_dispatch_full_grid ||
         (quasar_dispatch_engine_fd && !get_rtoptions().is_core_grid_override_todeprecate())) {
         compute_grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
         if (quasar_dispatch_engine_fd) {

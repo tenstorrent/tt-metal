@@ -638,8 +638,8 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
     }
 
     const auto& cluster = MetalContext::instance().get_cluster();
-    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_simulator_enabled()) {
-        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware.";
+    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_target_device() == tt::TargetDevice::Emule) {
+        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware and the simulator.";
     }
 
     for (const auto& mesh_device : devices_) {
