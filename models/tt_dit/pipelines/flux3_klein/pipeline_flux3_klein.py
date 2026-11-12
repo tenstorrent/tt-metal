@@ -239,12 +239,14 @@ class Flux3KleinPipeline:
 
     def warmup(self, sizes: tuple[int, ...] = SIZES) -> None:
         """Compile every program of the served shapes: each size without a reference and with one per reference token
-        bucket (a square reference that fills the bucket), at every text bucket (a long prompt reaches the larger ones).
+        bucket (a square reference that fills the bucket), at every text bucket (a long prompt reaches the larger ones),
+        and the text encoder at every row count of each text bucket (`Flux3KleinPromptEncoder.warmup`).
         A reference of another shape reuses its bucket's DiT programs; only the VAE encoder compiles for a new shape."""
         saved = self._text_buckets
         try:
             for text in self._text_buckets or (None,):
                 self._text_buckets = (text,) if text else None
+                self._prompt_encoder.warmup(text or self._text_length)
                 for model in self._transformers:
                     for size in sizes:
                         for bucket in (None, *REFERENCE_TOKEN_BUCKETS):
