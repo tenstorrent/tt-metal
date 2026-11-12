@@ -125,6 +125,7 @@ class _Block:
         "halo_pins",
         "state",
         "infl",
+        "tipb",
     )
 
     def __init__(self, bid, row, idx, key, parent, pages, key_slot):
@@ -135,6 +136,7 @@ class _Block:
             1 << 60
         )  # zone start (p0) of the prompt whose replay wrote halo B: B is only valid for a new prompt with p0_new >= b_zone
         self.refs = self.children = self.halo_pins = 0
+        self.tipb = False  # the last full block of a prompt (the boundary its next turn resumes at)
         self.infl = False  # created by a prompt whose prefill is still running (DSV41_PROTECT_PARTIAL): its halo records are the last to be evicted
         self.state = "pending"  # pending -> live -> gone
 
@@ -223,6 +225,7 @@ class BlockIndex:
         halo_spacing_min=100000,
         halo_spacing_max=64,
         protect_fn=None,
+        halo_tip=False,
     ):
         if chunk % page:
             raise ValueError(f"chunk {chunk} is not a multiple of the page {page}")
@@ -242,6 +245,10 @@ class BlockIndex:
             max(1, int(halo_spacing_max)),
         )
         self.protect_fn = protect_fn
+        # DSV41_APC_PAGED_HALO_TIP=1 (default off): the halo records of a prompt's TIP block (the boundary the next turn of the conversation resumes at) are evicted last as long as no deeper block extends
+        # the chain (a leaf): a short session's records can no longer push out the tip record of a finished giant (T24, .40 B=16 log: 30 halo losses = 5.6 M tokens at 80 / 32 slots)
+        self.halo_tip = bool(halo_tip)
+        self.counters_tip = 0
         self.strict_zone_equal = bool(
             strict_zone_equal
         )  # halo B valid only if b_zone == p0_new (exact), instead of b_zone <= p0_new
@@ -396,15 +403,22 @@ class BlockIndex:
 
     def _halo_victim(self, lru):
         """oldest block with a droppable halo record: not pinned by a pending hit; with the protection on, the records of prompts that are still prefilling are skipped unless nothing else is left"""
-        first = None
+        first = second = None
         prot = self._protect()
         for blk in lru.values():
             if blk.halo_pins == 0:
-                if not (prot and blk.infl):
-                    return blk
-                if first is None:
-                    first = blk
-        return first
+                if prot and blk.infl:
+                    if second is None:
+                        second = blk
+                    continue
+                if self.halo_tip and blk.tipb and blk.children == 0:  # (a leaf tip: the resume point of the next turn)
+                    if (
+                        first is None or blk.idx < first.idx
+                    ):  # (only tips left: the shallowest one is the cheapest to recompute)
+                        first = blk
+                    continue
+                return blk
+        return first if first is not None else second
 
     def _alloc_halo_a(self, ri):
         row = self._rows[ri]
@@ -1003,6 +1017,8 @@ class BlockIndex:
                     blk.b_zone = cp.zone
                     row.b_lru[blk.id] = blk
             self._touch(row, blk)
+            if cp.tip:
+                blk.tipb = True
             self.counters["upgrades"] += 1
             return True
         ok = (
@@ -1035,6 +1051,8 @@ class BlockIndex:
             req.priv.discard(p)
         req.held.append(blk)  # (its ref was taken at begin_chunk)
         self.counters["commits"] += 1
+        if cp.tip:
+            blk.tipb = True
         if cp.tip:  # the prompt's prefill is over: its records are not "in flight" any more
             for b_ in req.held:
                 b_.infl = False

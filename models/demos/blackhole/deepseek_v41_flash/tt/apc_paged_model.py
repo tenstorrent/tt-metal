@@ -193,6 +193,7 @@ class PagedApc:
             halo_spacing_min=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING_MIN", "100000")),
             halo_spacing_max=int(os.environ.get("DSV41_APC_PAGED_HALO_SPACING_MAX", "64")),
             protect_fn=protect_partial_on,
+            halo_tip=os.environ.get("DSV41_APC_PAGED_HALO_TIP", "0") == "1",
             xrow=os.environ.get("DSV41_APC_PAGED_XROW", "0")
             == "1",  # M3: cross-row copy of the blocks of a busy row (default off)
             xrow_min=int(os.environ.get("DSV41_APC_PAGED_XROW_MIN", "2048")),
