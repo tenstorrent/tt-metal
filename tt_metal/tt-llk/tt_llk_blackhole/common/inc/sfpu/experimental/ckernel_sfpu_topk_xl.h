@@ -225,6 +225,25 @@ enum class Fused : std::uint32_t
     Yes,
 };
 
+/** @brief Whether a local sort stops once each 64-row Dest column is sorted on its own, before anything crosses a column. */
+enum class EarlyExit : std::uint32_t
+{
+    No,
+    Yes,
+};
+
+/**
+ * @brief SFPCONFIG lane mask that flips the swap direction of alternating groups of SFPU lanes, so one sort runs
+ * neighbouring groups in opposite directions. Lane c is bit 2c of the mask.
+ */
+enum class LaneFlip : std::uint32_t
+{
+    NONE          = 0x0000,
+    EVERY_LANE    = 0x4444, // lanes 1, 3, 5, 7
+    EVERY_2_LANES = 0x5050, // lanes 2-3, 6-7
+    EVERY_4_LANES = 0x5500, // lanes 4-7
+};
+
 /**
  * @brief Which of the two optional SFPTRANSPs around the stride-2 / stride-1 steps a @ref window_sort emits.
  *
@@ -2102,6 +2121,198 @@ inline void canonical_big_block_with_replay(bool dir)
     }
 }
 
+/**
+ * @brief Flip the swap direction of the lanes FLIP selects, until @ref clear_lane_flip.
+ *
+ * @tparam FLIP: Lanes to flip, values = <EVERY_LANE/EVERY_2_LANES/EVERY_4_LANES>
+ */
+template <detail::LaneFlip FLIP>
+inline void set_lane_flip()
+{
+    static_assert(FLIP != detail::LaneFlip::NONE, "nothing to flip");
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
+    TTI_SFPCONFIG(static_cast<std::uint32_t>(FLIP), 0xF, 8);
+}
+
+/** @brief Restore the default SFPU config after @ref set_lane_flip. */
+inline void clear_lane_flip()
+{
+    TTI_SFPCONFIG(0x0000, 0xF, 1);
+}
+
+/**
+ * @brief Run canonical_big_block_with_replay on the even, then the odd Dest columns of the tiles at `tile_offset`, and
+ * leave the Dst write offset on the even columns.
+ *
+ * @tparam ROW_SCALE_FACTOR: K / 512, values = <1/2/4>
+ * @param tile_offset: Dst offset of the first tile
+ * @param dir: Direction of the sort
+ */
+template <int ROW_SCALE_FACTOR>
+inline void canonical_big_block_columns(const std::uint32_t tile_offset, const bool dir)
+{
+    for (int col = 0; col < 2; col++)
+    {
+        canonical_big_block_with_replay<ROW_SCALE_FACTOR>(dir);
+        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+    }
+}
+
+/**
+ * @brief Transpose the faces, sort each lane's even and odd column together with window_sort<WINDOW, FROM, ONE>, and
+ * transpose back.
+ *
+ * @tparam ROW_SCALE_FACTOR: K / 512, values = <1/2/4>; 2 · ROW_SCALE_FACTOR faces and column-pair groups
+ * @param dir: Direction of every sort
+ * @note Call inside an open transpose CFG block (see @ref enter_transpose_cfg_block_after_src_drain).
+ */
+template <int ROW_SCALE_FACTOR, detail::WindowSize WINDOW, detail::Stride FROM>
+inline void sort_transposed_column_pairs(const bool dir)
+{
+    constexpr int faces = 2 * ROW_SCALE_FACTOR;
+    transpose_faces<faces, true /* fused */, 256 /* indices_offset */>();
+    window_sort_rows<WINDOW, FROM, detail::Stride::ONE, detail::GroupOffset::ODD_COLUMNS, detail::DstAdvance::ONE_FACE, detail::Fused::Yes>(faces, dir);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    transpose_faces<faces, true /* fused */, 256 /* indices_offset */>();
+}
+
+namespace detail
+{
+
+/**
+ * @brief Local sort of one chunk up to its first face transpose: runs of 32, 64 and 128 down each Dest column, then
+ * runs of 256 across each lane's even and odd column.
+ *
+ * Per column: row_scale_factor = K / 512 sort_32_rows blocks; for K >= 1024, row_scale_factor / 2 rounds of the
+ * stride-32 step groups and of the stride-16 W32 sort; for K = 2048 the canonical big block. Then, unless EARLY_EXIT,
+ * 2 · row_scale_factor column-pair groups under LaneFlip::EVERY_LANE and the canonical big block on both columns.
+ *
+ * @tparam K: Elements per chunk, values = <512/1024/2048>
+ * @tparam USE_LOADMACRO: Run the length-256 column pairs as fused SFPLOADMACRO bodies, values = <No/Yes>
+ * @tparam EARLY_EXIT: Stop once each 64-row column is sorted on its own, values = <No/Yes>
+ * @param tile_offset: Dst offset of the chunk's first tile
+ * @param ascending: Direction of the first run
+ * @return The direction the build phases after the head continue with
+ * @note With TOPK_XL_FUSED_MACRO the step groups always run as macros: program the fused step-group macros first for
+ *       K >= 1024, and for USE_LOADMACRO.
+ */
+template <std::uint32_t K, UseLoadMacro USE_LOADMACRO, EarlyExit EARLY_EXIT>
+inline bool local_sort_head(const std::uint32_t tile_offset, const bool ascending)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024 or 2048");
+    static_assert(TOPK_XL_FUSED_MACRO || USE_LOADMACRO == UseLoadMacro::No, "SFPLOADMACRO is disabled in this build");
+    constexpr int row_scale_factor = K / 512;
+    constexpr bool early_exit      = EARLY_EXIT == EarlyExit::Yes;
+    // Blaze, and an early exit, keep `dir` across the stride-32 and stride-16 rounds when there is only one of each
+    // (K = 1024).
+    constexpr bool flip_per_round = (!topk_xl_blaze_compat && !early_exit) || (row_scale_factor >> 1) > 1;
+    bool dir                      = ascending;
+
+    for (int col = 0; col < 2; col++)
+    {
+        // The first block records the replay bodies, the others replay them (see `sort_32_rows`).
+        sort_32_rows<ReplayMode::RECORD>(ascending, dir);
+        if constexpr (row_scale_factor > 1)
+        {
+            dir = !dir;
+        }
+        for (int i = 1; i < row_scale_factor; i++)
+        {
+            sort_32_rows<ReplayMode::REPLAY>(ascending, dir);
+            dir = !dir;
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+        if constexpr (row_scale_factor >= 2)
+        {
+            // Length 64: stride-32 step groups in pairs; the second store of a pair folds the trailing +16 into
+            // ADDR_MOD_1 (+48).
+            for (int i = 0; i < (row_scale_factor >> 1); i++)
+            {
+#if TOPK_XL_FUSED_MACRO
+                // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction,
+                // so each pair re-prologues (see `step_group_pipelined`).
+                topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+                topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+                topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+#else
+                fused_step_group<32, 16>(dir);
+                fused_step_group<32, 48>(dir);
+#endif
+                if constexpr (flip_per_round)
+                {
+                    dir = !dir;
+                }
+            }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+            // Stride-16 W32 sort, 2 groups per round.
+            for (int i = 0; i < (row_scale_factor >> 1); i++)
+            {
+#if TOPK_XL_FUSED_MACRO
+                if constexpr (row_scale_factor >= 4 && !early_exit)
+                {
+                    topk_xl_fused_macro::len32_groups(2 /*iterations*/, dir);
+                }
+                else
+#endif
+                {
+                    window_sort_rows<WindowSize::THIRTY_TWO, Stride::SIXTEEN, Stride::ONE, GroupOffset::ONE_FACE, DstAdvance::TWO_FACES, Fused::Yes>(
+                        2 /*iterations*/, dir);
+                }
+                if constexpr (flip_per_round)
+                {
+                    dir = !dir;
+                }
+            }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        }
+
+        // Length 128.
+        if constexpr (row_scale_factor >= 4 && !early_exit)
+        {
+            canonical_big_block_with_replay<row_scale_factor>(dir);
+        }
+        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+        if constexpr (!early_exit)
+        {
+            // The next column runs the other way, so the two columns form a bitonic input for length 256.
+            dir = !dir;
+        }
+    }
+
+    if constexpr (!early_exit)
+    {
+        // Length 256: the runs span a lane's even and odd column; flipping every other lane lets one body cover both
+        // halves of the merge.
+        set_lane_flip<LaneFlip::EVERY_LANE>();
+#if TOPK_XL_FUSED_MACRO
+        if constexpr (USE_LOADMACRO == UseLoadMacro::Yes)
+        {
+            // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only
+            // writes LREGs that are dead by then.
+            topk_xl_fused_macro::prologue_loads_rt<2>(dir);
+            topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
+            for (int i = 1; i < 2 * row_scale_factor; i++)
+            {
+                lltt::replay(0 /*start*/, topk_xl_fused_macro::pipelined_group_len);
+            }
+        }
+        else
+#endif
+        {
+            window_sort_rows<WindowSize::THIRTY_TWO, Stride::SIXTEEN, Stride::SIXTEEN, GroupOffset::ODD_COLUMNS, DstAdvance::ONE_FACE, Fused::Yes>(
+                2 * row_scale_factor, dir);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        canonical_big_block_columns<row_scale_factor>(tile_offset, dir);
+        clear_lane_flip();
+    }
+    return dir;
+}
+
+} // namespace detail
+
 // #############################################################################
 //  Public API
 //
@@ -2213,493 +2424,76 @@ inline void _topk_xl_init_()
 //  Public entry: local sort
 // =============================================================================
 //
-// Sort K elements in place. K = 512 and 1024 go to `_topk_xl_local_sort_generic_`;
-// the phases below are the K = 2048 path (two consecutive 1024-element DST tiles
-// starting at `dst_index`). Each element is the packed u32
-// `[ bf16 value | u16 index ]`.
+// Sort K elements in place (two consecutive 1024-element DST tiles starting at `dst_index` for K = 2048). Each
+// element is the packed u32 `[ bf16 value | u16 index ]`. The sort proceeds bottom-up, doubling the run length at
+// each phase:
 //
-// The sort proceeds bottom-up, doubling the run length at each phase:
+//   len =  32 /  64 / 128 : down each Dest column              (detail::local_sort_head)
+//   len = 256             : across each lane's even/odd column (detail::local_sort_head)
+//   len = K/4, K/2, K     : need transposes                    (sort_transposed_column_pairs)
 //
-//   len  =  32 : build inside each face        (W8 sort + W16 sort + W32 sort)
-//   len  =  64 : merge two len-32 runs         (sort_k at stride 64)
-//   len = 128 : merge two len-64 runs          (canonical A+B+C big block)
-//   len = 256 : merge two len-128 runs         (uses SFPCONFIG dir alternation)
-//   len = 512 / 1024 / 2048 : need transposes  (data straddles whole faces)
+// Each transposed phase sorts the column pairs between two face transposes, then runs the canonical big block on both
+// columns with alternating groups of lanes flipped. One transpose CFG block wraps all six transposes; the bitonic
+// work between them doesn't touch the affected CFG bits.
 //
-// The "two columns" loop variable `col` (= 0, 1) reflects the fact that
-// each DST tile has two 16-wide column groups that have to be sorted
-// independently before being merged across columns.
-//
-// `set_dst_write_addr_offset(tile_offset + (col ? 0 : 2))` flips the Dst
-// pointer between the even and odd columns of the current pair of DST tiles.
-// Forward declaration — defined below the K=2048 optimized body.
+// early_exit_K64 sorts each 64-row column in isolation and returns before the cross-column merge phases (sparse-K
+// reader: sink all-zero packed mask words to the bottom of each column).
 template <std::uint32_t K, bool early_exit_K64 = false>
-inline void _topk_xl_local_sort_generic_(std::uint32_t dst_index, bool ascending);
-
-template <std::uint32_t K>
-inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascending)
-{
-    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
-    if constexpr (K != 2048)
-    {
-        _topk_xl_local_sort_generic_<K>(dst_index, ascending);
-        return;
-    }
-#if TOPK_XL_FUSED_MACRO
-    loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
-#endif
-
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    bool dir                            = ascending;
-    const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
-    // Kept as a local so the inner `if constexpr (row_scale_factor > 1)`
-    // checks below match the historical K=2048 codegen byte-for-byte.
-    constexpr int row_scale_factor = 4;
-
-    for (int col = 0; col < 2; col++)
-    {
-        // ── Phase 1 — build bitonic sequences of length 32 ─────────────────
-        //
-        // The first block records the replay bodies, the other three replay them (see `sort_32_rows`).
-        sort_32_rows<detail::ReplayMode::RECORD>(ascending, dir);
-        if constexpr (row_scale_factor > 1)
-        {
-            dir = !dir;
-        }
-        for (int i = 1; i < 4; i++)
-        {
-            sort_32_rows<detail::ReplayMode::REPLAY>(ascending, dir);
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        // ── Phase 2 — build bitonic sequences of length 64 ─────────────────
-        //
-        // Inline — recording the body doesn't pay back at this size. The
-        // second store in each pair uses `store16_rows_x2<32, 48>` so
-        // ADDR_MOD_1 (+48) folds the trailing +16 advance into the last
-        // SFPSTORE, saving one math-thread issue per inner iter.
-        for (int i = 0; i < 2; i++)
-        {
-#if TOPK_XL_FUSED_MACRO
-            // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
-            // `step_group_pipelined`).
-            topk_xl_fused_macro::prologue_loads_rt<32>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
-#else
-            fused_step_group<32, 16>(dir);
-            fused_step_group<32, 48>(dir);
-#endif
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        // ── Phase 3 — stride-16 W32 sort (4 effective iters) ────────────────
-        // `dir` flips once per outer pass below.
-#if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::len32_groups(2, dir);
-        dir = !dir;
-        topk_xl_fused_macro::len32_groups(2, dir);
-        dir = !dir;
-#else
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::SIXTEEN,
-            detail::Stride::ONE,
-            detail::GroupOffset::ONE_FACE,
-            detail::DstAdvance::TWO_FACES,
-            detail::Fused::Yes>(2 /*iterations*/, dir);
-        dir = !dir;
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::SIXTEEN,
-            detail::Stride::ONE,
-            detail::GroupOffset::ONE_FACE,
-            detail::DstAdvance::TWO_FACES,
-            detail::Fused::Yes>(2 /*iterations*/, dir);
-        dir = !dir;
-#endif
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        // ── Phase 4 — build bitonic sequences of length 128 ────────────────
-        // Canonical A + B + C big block (see above).
-        canonical_big_block_with_replay<4>(dir);
-
-        // Switch from the even column group to the odd one (and back on
-        // iter 2). Flipping `dir` here gives the next len-128 build pass an
-        // already-bitonic input across the two columns.
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        dir = !dir;
-    }
-
-    // ── Phase 5 — build bitonic sequences of length 256 ───────────────────
-    //
-    // Now the runs span across LREGs. We use SFPCONFIG to flip every SFPU
-    // instance's swap direction, so a single load+sort_k+store body covers
-    // both halves of the merge.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 8);
-
-    // Column pairs (load + sort_k + store<2, 16>), N = 8. Recording IS iter 0.
-#if TOPK_XL_FUSED_MACRO
-    // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
-    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
-    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
-    for (int i = 1; i < 8; i++)
-    {
-        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
-    }
-#else
-    window_sort_rows<
-        detail::WindowSize::THIRTY_TWO,
-        detail::Stride::SIXTEEN,
-        detail::Stride::SIXTEEN,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE,
-        detail::Fused::Yes>(8 /*iterations*/, dir);
-#endif
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<4>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
-
-    // ── Phases 6–8 — build bitonic sequences of length 512 / 1024 / 2048 ──
-    //
-    // Lengths beyond 256 require transposing whole faces of Dst so that
-    // adjacent rows in a face represent adjacent elements in the sequence.
-    // We open one big transpose CFG block here that covers all 6 transpose
-    // calls below — the bitonic work between them doesn't touch the
-    // affected CFG bits, so this saves 20 redundant CFG ops vs setting
-    // them per call.
-    enter_transpose_cfg_block_after_src_drain();
-
-    // ── Phase 6 — length 512 ───────────────────────────────────────────────
-    transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-
-    // Column pairs (load + TRANSP + W4 sort + store<2, 16>), N = 8.
-    window_sort_rows<
-        detail::WindowSize::FOUR,
-        detail::Stride::TWO,
-        detail::Stride::ONE,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE,
-        detail::Fused::Yes>(8, dir);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-
-    // Flip SFPU swap direction for every 2 lanes.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5050, 0xF, 8);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<4>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
-
-    // ── Phase 7 — length 1024 ──────────────────────────────────────────────
-    transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-
-    // Column pairs (load + W8 sort + store<2, 16>), N = 8.
-    window_sort_rows<
-        detail::WindowSize::EIGHT,
-        detail::Stride::FOUR,
-        detail::Stride::ONE,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE,
-        detail::Fused::Yes>(8, dir);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-
-    // Flip SFPU swap direction for every 4 lanes.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5500, 0xF, 8);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<4>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
-
-    // ── Phase 8 — length 2048 ──────────────────────────────────────────────
-    transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-
-    // Column pairs (load + W32 sort from stride 8 + store<2, 16>), N = 8.
-    window_sort_rows<
-        detail::WindowSize::THIRTY_TWO,
-        detail::Stride::EIGHT,
-        detail::Stride::ONE,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE,
-        detail::Fused::Yes>(8 /*iterations*/, dir);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-
-    leave_transpose_cfg_block();
-
-    // Final A + B + C pass per column to finish the sort at the new length.
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<4>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-
-    // Clear SrcA and SrcB valids — the next caller might issue a DST
-    // transpose, which requires invalid SrcA/SrcB to be safe.
-    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
-}
-
-// =============================================================================
-//  Generic local_sort for K=512 / K=1024 (optimised in place)
-// =============================================================================
-//
-// Bitonic build phases at lengths 32, 64, K/8, K/4, K/2 and K, with
-// `row_scale_factor`-driven loop counts and the K=2048 path's replay-buffer,
-// ADDR_MOD-fold and CFG-block optimisations:
-//
-//   * `<Exec>` replay-record on iter 0 of each post-per-col column-pair loop;
-//     iters 1..n_iters-1 reduce to a 3-issue body (replay + sort + replay).
-//   * sub-B-style ADDR_MOD_1 fold (`store<32, 48>` in place of
-//     `store<32, 32>` + two `INCRWC(+8)`) wherever the K=2048 path uses
-//     it. Saves 2 math-thread issues per outer iter.
-//   * `canonical_big_block_with_replay<row_scale_factor>(dir)` for the
-//     per-col post-transpose stride-32 / stride-16 work (sub-A is
-//     `if constexpr`'d away unless rsf>=4).
-//   * One `enter_transpose_cfg_block` / `leave_transpose_cfg_block` pair
-//     wrapping the three transposed phases at the end (K/4, K/2, K).
-//
-// Only K=512 and K=1024 reach this body; `_topk_xl_local_sort_` routes K=2048
-// to its own path.
-template <std::uint32_t K, bool early_exit_K64>
 inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bool ascending)
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
-    // early_exit_K64 sorts each 64-row column in isolation and returns before the
-    // cross-column merge phases (sparse-K reader: sink all-zero packed mask words
-    // to the bottom of each column). The length-64 build lives in the K >= 1024
-    // block, so a K=512 instantiation would return before it runs.
+    // The length-64 build lives in the K >= 1024 block, so a K=512 instantiation would return before it runs.
     static_assert(!early_exit_K64 || K >= 1024, "early_exit_K64 requires K >= 1024: the length-64 build phase lives in the K >= 1024 block");
-    // The cross-column phases do not converge at row_scale_factor = 4: they leave the
-    // length-64 runs unmerged, so a K=2048 full sort here comes back with each column
-    // sorted but the columns out of order with respect to each other.
-    static_assert(early_exit_K64 || K != 2048, "K = 2048 has no generic full sort: call _topk_xl_local_sort_, which routes it to the K=2048 fast path");
 #if TOPK_XL_FUSED_MACRO
     // K = 512 runs two step groups only, too few to repay the macro programming.
     if constexpr (K >= 1024)
     {
         loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
-#endif
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    bool dir                            = ascending;
-    const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
-    constexpr int consecutive_32_offset = 16;
-    constexpr int row_scale_factor      = K == 512 ? 1 : K == 1024 ? 2 : 4;
-    constexpr int n_iters_column_pairs  = row_scale_factor * 2;
-
-    for (int col = 0; col < 2; col++)
-    {
-        // ── build bitonic sequences of len=32 ──────────────────────────────
-        //
-        // The first block records the replay bodies, the other rsf - 1 replay them (see `sort_32_rows`).
-        sort_32_rows<detail::ReplayMode::RECORD>(ascending, dir);
-        if constexpr (row_scale_factor > 1)
-        {
-            dir = !dir;
-        }
-        for (int i = 1; i < row_scale_factor; i++)
-        {
-            sort_32_rows<detail::ReplayMode::REPLAY>(ascending, dir);
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        if constexpr (K >= 1024)
-        {
-            // ── build bitonic sequences of len=64 ──────────────────────────
-            //
-            // Pair stores using ADDR_MOD_1 (+48) fold to drop the two
-            // trailing `TTI_INCRWC(+8)` issues PR #567's version had.
-            for (int i = 0; i < (row_scale_factor >> 1); i++)
-            {
-#if TOPK_XL_FUSED_MACRO
-                // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
-                // `step_group_pipelined`).
-                topk_xl_fused_macro::prologue_loads_rt<32>(dir);
-                topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
-                topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+    constexpr detail::UseLoadMacro use_loadmacro = K >= 1024 ? detail::UseLoadMacro::Yes : detail::UseLoadMacro::No;
 #else
-                fused_step_group<32, 16>(dir);
-                fused_step_group<32, 48>(dir);
+    constexpr detail::UseLoadMacro use_loadmacro = detail::UseLoadMacro::No;
 #endif
-                // Early-exit sorts each column in isolation, so it suppresses the
-                // inter-pair flip when there is only one pair; the full sort keeps
-                // its historical unconditional flip.
-                if constexpr ((!topk_xl_blaze_compat && !early_exit_K64) || (row_scale_factor >> 1) > 1)
-                {
-                    dir = !dir;
-                }
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    constexpr detail::EarlyExit early_exit = early_exit_K64 ? detail::EarlyExit::Yes : detail::EarlyExit::No;
+    constexpr int row_scale_factor         = K / 512;
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
 
-            // ── stride-16 W32 sort × rsf, dir alternates per pair ───────────
-            //
-            // Same recording pattern as the K=2048 fast path's Phase 3:
-            // iter 0 records the load and store into slots [0..7] / [8..15] in Exec mode; the remaining iters replay
-            // them. The sort stays inline because `dir` flips after iters 1, 3, ..., so pairs of iters share a direction.
-            load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-            load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, detail::DstAdvance::TWO_FACES>(); });
-            for (int i = 1; i < row_scale_factor; i++)
-            {
-                lltt::replay(0, 8);
-                window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-                lltt::replay(8, 8);
-                if constexpr ((!topk_xl_blaze_compat && !early_exit_K64) || row_scale_factor > 2)
-                {
-                    if ((i & 1) == 1)
-                    {
-                        dir = !dir;
-                    }
-                }
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        }
-
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        if constexpr (!early_exit_K64)
-        {
-            dir = !dir;
-        }
-    }
-
+    [[maybe_unused]] const bool dir = detail::local_sort_head<K, use_loadmacro, early_exit>(tile_offset, ascending);
     if constexpr (early_exit_K64)
     {
-        // Each column is fully sorted in isolation; skip the cross-column merge.
         return;
     }
-
-    // ── build bitonic sequences of len=(K/8) ──────────────────────────────
-    //
-    // Column-pair sort_k via SFPCONFIG flip. Recording is
-    // `<Exec>` and IS iter 0; iters 1..n_iters-1 fire from the replay
-    // buffer with the bare-minimum 3-issue body shape.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 8);
-#if TOPK_XL_FUSED_MACRO
-    if constexpr (K >= 1024)
-    {
-        // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
-        topk_xl_fused_macro::prologue_loads_rt<2>(dir);
-        topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
-        for (int i = 1; i < n_iters_column_pairs; i++)
-        {
-            lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
-        }
-    }
     else
-#endif
     {
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::SIXTEEN,
-            detail::Stride::SIXTEEN,
-            detail::GroupOffset::ODD_COLUMNS,
-            detail::DstAdvance::ONE_FACE,
-            detail::Fused::Yes>(n_iters_column_pairs, dir);
+        enter_transpose_cfg_block_after_src_drain();
+
+        // len = K/4
+        sort_transposed_column_pairs<row_scale_factor, detail::WindowSize::FOUR, detail::Stride::TWO>(dir);
+        set_lane_flip<detail::LaneFlip::EVERY_2_LANES>();
+        canonical_big_block_columns<row_scale_factor>(tile_offset, dir);
+        clear_lane_flip();
+
+        // len = K/2
+        sort_transposed_column_pairs<row_scale_factor, detail::WindowSize::EIGHT, detail::Stride::FOUR>(dir);
+        set_lane_flip<detail::LaneFlip::EVERY_4_LANES>();
+        canonical_big_block_columns<row_scale_factor>(tile_offset, dir);
+        clear_lane_flip();
+
+        // len = K
+        sort_transposed_column_pairs<row_scale_factor, detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT>(dir);
+        leave_transpose_cfg_block();
+        canonical_big_block_columns<row_scale_factor>(tile_offset, dir);
+
+        // Clear SrcA and SrcB valids — the next caller might issue a DST transpose, which requires them invalid.
+        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
     }
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (int col = 0; col < 2; col++)
-    {
-        // Per-col work after the column pairs = sub-B (stride-32 pair, K>=1024)
-        // + sub-C (stride-16 W32 sort × rsf). `canonical_big_block_with_replay`
-        // emits exactly that for rsf=1 and rsf=2, with the ADDR_MOD_1
-        // fold on sub-B's last store and a replay buffer on sub-C.
-        // Sub-A (stride-64) is `if constexpr`'d away for rsf<4.
-        canonical_big_block_with_replay<row_scale_factor>(dir);
+}
 
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
-
-    // ── Transpose-phase block ─────────────────────────────────────────────
-    //
-    // The three transposed phases (K/4, K/2, K) all need the same two
-    // transpose CFG bits (`DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32` and
-    // `ALU_ACC_CTRL_Zero_Flag_disabled_src`). The bitonic / canonical
-    // work in between doesn't touch either bit, so we open ONE
-    // transpose CFG block and pass `manage_outer_cfg=false` to each
-    // `transpose_N_faces` call. Saves a handful of CFG writes per
-    // transposed phase.
-    enter_transpose_cfg_block_after_src_drain();
-
-    // ── build bitonic sequences of len=(K/4) ──────────────────────────────
-    transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    window_sort_rows<
-        detail::WindowSize::FOUR,
-        detail::Stride::TWO,
-        detail::Stride::ONE,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE,
-        detail::Fused::Yes>(n_iters_column_pairs, dir);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5050, 0xF, 8);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<row_scale_factor>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
-
-    // ── build bitonic sequences of len=(K/2) ──────────────────────────────
-    transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    window_sort_rows<
-        detail::WindowSize::EIGHT,
-        detail::Stride::FOUR,
-        detail::Stride::ONE,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE,
-        detail::Fused::Yes>(n_iters_column_pairs, dir);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5500, 0xF, 8);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<row_scale_factor>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1); // restore default SFPU config
-
-    // ── build bitonic sequences of len=K ──────────────────────────────────
-    transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    window_sort_rows<
-        detail::WindowSize::THIRTY_TWO,
-        detail::Stride::EIGHT,
-        detail::Stride::ONE,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE,
-        detail::Fused::Yes>(n_iters_column_pairs, dir);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-
-    leave_transpose_cfg_block();
-
-    // Final per-column canonical pass to finish the sort at len=K.
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<row_scale_factor>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-
-    // Clear srcA and srcB valids — needed for DST transpose.
-    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+template <std::uint32_t K>
+inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascending)
+{
+    _topk_xl_local_sort_generic_<K>(dst_index, ascending);
 }
 
 // =============================================================================
@@ -2880,11 +2674,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         transpose_faces<n_iters_column_pairs, true /* fused */, 256 /* indices_offset */>();
         leave_transpose_cfg_block();
 
-        for (int col = 0; col < 2; col++)
-        {
-            canonical_big_block_with_replay<row_scale_factor>(dir);
-            set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        }
+        canonical_big_block_columns<row_scale_factor>(tile_offset, dir);
 
         topk_mop_config<true>();
     }
@@ -3655,10 +3445,7 @@ inline void _topk_xl_split_stamp_(const std::uint32_t tile_offset, const std::ui
  * @brief Local sort of one chunk up to its first face transpose: runs of 32, 64 and 128 down each column, then runs of
  * 256 across each lane's even and odd column.
  *
- * row_scale_factor = K / 512 is the number of 32-row blocks in each Dest column (1, 2 or 4). Per column the function
- * sorts those blocks, then for K >= 1024 runs row_scale_factor / 2 rounds of the stride-32 step groups and of the
- * stride-16 W32 sort, and for K = 2048 the canonical big block. The length-256 pass then runs 2 · row_scale_factor
- * column-pair groups.
+ * See @ref detail::local_sort_head.
  *
  * @tparam K: Elements per chunk, values = <512/1024/2048>
  * @tparam macros: Use the fused SFPLOADMACRO bodies, which @ref _topk_xl_split_sfpu_init_ must have programmed; only
@@ -3672,123 +3459,13 @@ inline void _topk_xl_split_sort_head_(const std::uint32_t tile_offset, const boo
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024 or 2048");
     static_assert(K == 512 || macros, "K = 1024 and 2048 always use the fused macros");
-    constexpr int row_scale_factor = split_row_scale<K>;
-    // Blaze keeps `dir` across the stride-32 and stride-16 rounds when there is only one of each (K = 1024).
-    constexpr bool flip_per_round = !topk_xl_blaze_compat || (row_scale_factor >> 1) > 1;
-
-    _topk_xl_split_begin_(tile_offset);
-    bool dir = ascending;
-
-    for (int col = 0; col < 2; col++)
-    {
-        sort_32_rows<detail::ReplayMode::RECORD>(ascending, dir);
-        if constexpr (row_scale_factor > 1)
-        {
-            dir = !dir;
-        }
-        for (int i = 1; i < row_scale_factor; i++)
-        {
-            sort_32_rows<detail::ReplayMode::REPLAY>(ascending, dir);
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        if constexpr (row_scale_factor >= 2)
-        {
-            for (int i = 0; i < (row_scale_factor >> 1); i++)
-            {
 #if TOPK_XL_FUSED_MACRO
-                // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction,
-                // so each pair re-prologues (see `step_group_pipelined`).
-                topk_xl_fused_macro::prologue_loads_rt<32>(dir);
-                topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
-                topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+    constexpr detail::UseLoadMacro use_loadmacro = macros ? detail::UseLoadMacro::Yes : detail::UseLoadMacro::No;
 #else
-                fused_step_group<32, 16>(dir);
-                fused_step_group<32, 48>(dir);
+    constexpr detail::UseLoadMacro use_loadmacro = detail::UseLoadMacro::No;
 #endif
-                if constexpr (flip_per_round)
-                {
-                    dir = !dir;
-                }
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-            for (int i = 0; i < (row_scale_factor >> 1); i++)
-            {
-#if TOPK_XL_FUSED_MACRO
-                if constexpr (row_scale_factor >= 4)
-                {
-                    topk_xl_fused_macro::len32_groups(2, dir);
-                }
-                else
-#endif
-                {
-                    window_sort_rows<
-                        detail::WindowSize::THIRTY_TWO,
-                        detail::Stride::SIXTEEN,
-                        detail::Stride::ONE,
-                        detail::GroupOffset::ONE_FACE,
-                        detail::DstAdvance::TWO_FACES,
-                        detail::Fused::Yes>(2 /*iterations*/, dir);
-                }
-                if constexpr (flip_per_round)
-                {
-                    dir = !dir;
-                }
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        }
-
-        if constexpr (row_scale_factor >= 4)
-        {
-            canonical_big_block_with_replay<row_scale_factor>(dir);
-        }
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        dir = !dir;
-    }
-
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 8);
-#if TOPK_XL_FUSED_MACRO
-    if constexpr (macros)
-    {
-        // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only
-        // writes LREGs that are dead by then.
-        topk_xl_fused_macro::prologue_loads_rt<2>(dir);
-        topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
-        for (int i = 1; i < 2 * row_scale_factor; i++)
-        {
-            lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
-        }
-    }
-    else
-#endif
-    {
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::SIXTEEN,
-            detail::Stride::SIXTEEN,
-            detail::GroupOffset::ODD_COLUMNS,
-            detail::DstAdvance::ONE_FACE,
-            detail::Fused::Yes>(2 * row_scale_factor, dir);
-    }
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<row_scale_factor>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1);
-}
-
-template <int sort_len>
-inline void _topk_xl_split_column_pair_sort_(const bool dir)
-{
-    static_assert(sort_len == 4 || sort_len == 8 || sort_len == 16, "sort_len must be 4, 8 or 16");
-    // The even and odd column's 16-runs sort the same way, so 16 uses window 32 rather than 16.
-    constexpr auto window = sort_len == 16 ? detail::WindowSize::THIRTY_TWO : static_cast<detail::WindowSize>(sort_len);
-    window_sort<window, static_cast<detail::Stride>(sort_len / 2), detail::Stride::ONE>(dir);
+    _topk_xl_split_begin_(tile_offset);
+    detail::local_sort_head<K, use_loadmacro, detail::EarlyExit::No>(tile_offset, ascending);
 }
 
 // The column-pair pass between two transposes.
@@ -3800,6 +3477,7 @@ inline void _topk_xl_split_column_pair_sort_(const bool dir)
 template <std::uint32_t K, int sort_len, bool macros = false>
 inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const bool dir)
 {
+    static_assert(sort_len == 4 || sort_len == 8 || sort_len == 16, "sort_len must be 4, 8 or 16");
     constexpr int n_iters = split_n_iters<K>;
     _topk_xl_split_begin_(tile_offset);
 #if TOPK_XL_FUSED_MACRO
@@ -3845,37 +3523,32 @@ inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const 
     else
 #endif
     {
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-        _topk_xl_split_column_pair_sort_<sort_len>(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
-        for (int i = 1; i < n_iters; i++)
-        {
-            lltt::replay(0, 8);
-            _topk_xl_split_column_pair_sort_<sort_len>(dir);
-            lltt::replay(8, 8);
-        }
+        // The even and odd column's 16-runs sort the same way, so 16 uses window 32 rather than 16.
+        constexpr auto window = sort_len == 16 ? detail::WindowSize::THIRTY_TWO : static_cast<detail::WindowSize>(sort_len);
+        window_sort_rows<
+            window,
+            static_cast<detail::Stride>(sort_len / 2),
+            detail::Stride::ONE,
+            detail::GroupOffset::ODD_COLUMNS,
+            detail::DstAdvance::ONE_FACE,
+            detail::Fused::Yes>(n_iters, dir);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// The per-column passes between two transposes; a non-zero lane_mask flips the swap direction of those lanes.
-template <std::uint32_t K, std::uint32_t lane_mask>
+// The per-column passes between two transposes, with the lanes FLIP selects running the other way.
+template <std::uint32_t K, detail::LaneFlip FLIP>
 inline void _topk_xl_split_columns_(const std::uint32_t tile_offset, const bool dir)
 {
     _topk_xl_split_begin_(tile_offset);
-    if constexpr (lane_mask != 0)
+    if constexpr (FLIP != detail::LaneFlip::NONE)
     {
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-        TTI_SFPCONFIG(lane_mask, 0xF, 8);
+        set_lane_flip<FLIP>();
     }
-    for (int col = 0; col < 2; col++)
+    canonical_big_block_columns<split_row_scale<K>>(tile_offset, dir);
+    if constexpr (FLIP != detail::LaneFlip::NONE)
     {
-        canonical_big_block_with_replay<split_row_scale<K>>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    if constexpr (lane_mask != 0)
-    {
-        TTI_SFPCONFIG(0x0000, 0xF, 1);
+        clear_lane_flip();
     }
 }
 

@@ -382,19 +382,19 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             sfpu::_topk_xl_split_column_pairs_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 2:
-            sfpu::_topk_xl_split_columns_<K, 0x5050 /*lane_mask*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::EVERY_2_LANES>(tile_offset, ascending);
             break;
         case 3:
             sfpu::_topk_xl_split_column_pairs_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 4:
-            sfpu::_topk_xl_split_columns_<K, 0x5500 /*lane_mask*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::EVERY_4_LANES>(tile_offset, ascending);
             break;
         case 5:
             sfpu::_topk_xl_split_column_pairs_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 6:
-            sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::NONE>(tile_offset, ascending);
             if (chunk > 0)
             {
                 // The merge also stores into the previous survivor, whose Dst bank MATH's next step works in, so that step
@@ -429,7 +429,7 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             sfpu::_topk_xl_split_rebuild_build_<K>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
         default:
-            sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
+            sfpu::_topk_xl_split_columns_<K, sfpu::detail::LaneFlip::NONE>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
     }
 }
