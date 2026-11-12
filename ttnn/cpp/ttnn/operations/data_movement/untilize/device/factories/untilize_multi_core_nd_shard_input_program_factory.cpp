@@ -61,6 +61,17 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
     // per plane than the padded input (e.g. a 2D-sharded output is not padded to the tile height).
     uint32_t input_rows_per_plane = a.padded_shape()[-2];
     uint32_t output_rows_per_plane = output.padded_shape()[-2];
+    // The writer maps padded input rows to output rows plane by plane, which needs the same plane count and an
+    // output plane no taller than the input plane (otherwise the extra output rows would never be written).
+    TT_FATAL(
+        output.physical_volume() / output_tensor_width / output_rows_per_plane ==
+            a.physical_volume() / tensor_width / input_rows_per_plane,
+        "Untilize ND-sharded input requires the output to have the same number of 2D planes as the input");
+    TT_FATAL(
+        output_rows_per_plane <= input_rows_per_plane,
+        "Untilize ND-sharded input requires output rows per plane ({}) <= padded input rows per plane ({})",
+        output_rows_per_plane,
+        input_rows_per_plane);
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -214,6 +225,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
     const uint32_t pages_per_shard = num_tiles_per_input_block * num_blocks_per_shard;
     const bool contiguous_placement =
         distribution_spec.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D;
+    // NOTE: the shard -> (core, slot) placement below mirrors iterate_over_shards() in
+    // tt_metal/impl/buffers/buffer_distribution_spec.cpp. Keep the two in sync: if they diverge, the compute kernel
+    // is given the wrong block count and the writer hangs waiting for blocks that are never produced.
     auto count_blocks_in_shard = [&](uint32_t shard_id) {
         uint32_t core_idx = 0;
         uint32_t slot = 0;

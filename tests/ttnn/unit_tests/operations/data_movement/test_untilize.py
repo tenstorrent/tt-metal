@@ -3623,13 +3623,16 @@ def test_untilize_multi_core_width_or_dtype_change_misses(device):
 # The per-core block count must follow the shards each worker processes, otherwise the device never finishes.
 @pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [2, 1, 96, 128]])
 @pytest.mark.parametrize("output_kind", ["interleaved_dram", "nd_dram", "interleaved_l1"])
-def test_untilize_multicore_nd_shard_dram_input(device, tensor_shape, output_kind):
+@pytest.mark.parametrize(
+    "distribution_strategy",
+    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
+    ids=["round_robin_1d", "contiguous_1d"],
+)
+def test_untilize_multicore_nd_shard_dram_input(device, tensor_shape, output_kind, distribution_strategy):
     torch.manual_seed(0)
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
-    shard_shape = ttnn.Shape([1, 1, 32, 32][-len(tensor_shape) :])
-    nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape, grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
-    )
+    shard_shape = ttnn.Shape([1, 1, 32, 32])
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, ttnn.ShardOrientation.ROW_MAJOR, distribution_strategy)
     nd_dram_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec)
 
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -3673,6 +3676,7 @@ def test_subtract_scalar_row_major_nd_sharded_dram(device):
         ("interleaved", None),
         ("height", "exact"),
         ("height", 160),
+        ("width", None),
         ("block", "exact"),
     ],
 )
@@ -3704,6 +3708,12 @@ def test_untilize_multicore_nd_shard_unaligned_height_to_legacy_shard(device, he
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(column, (shard_height, 128), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+    elif output_kind == "width":
+        output_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(column, (4 * height, 32), ttnn.ShardOrientation.ROW_MAJOR),
         )
     else:
         output_memory_config = ttnn.MemoryConfig(
