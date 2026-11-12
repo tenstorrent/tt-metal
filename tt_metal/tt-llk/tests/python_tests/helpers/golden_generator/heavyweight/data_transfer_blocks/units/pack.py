@@ -36,10 +36,9 @@ from .warn import caller_stacklevel
 class UnmodelledHardwareWarning(RuntimeWarning):
     """A hardware behaviour this golden knowingly does not reproduce.
 
-    A ``RuntimeWarning`` on purpose: ``pytest.ini`` sets ``ignore::UserWarning``
-    for the whole suite, so a plain ``UserWarning`` would reach nobody running
-    the tests, while ``pytest.warns`` bypasses the filter and the unit test
-    would keep passing.
+    A ``RuntimeWarning`` on purpose: ``pytest.ini`` ignores ``UserWarning``
+    suite-wide, so one would reach nobody while ``pytest.warns`` bypassed the
+    filter and the unit test kept passing.
     """
 
 
@@ -75,9 +74,9 @@ class Pack:
         self.truncating_outputs = truncating_outputs
 
         # What the early conversion keeps, by output format: the explicit
-        # mantissa bits, and whether getting there rounds. The packer converts
-        # in two stages and runs ReLU and the edge mask between them, so a
-        # datum meets the threshold already narrowed.
+        # mantissa bits, and whether getting there rounds. ReLU and the edge
+        # mask run between the two stages, so a datum meets the threshold
+        # already narrowed.
         self.early_conversion = early_conversion or {}
 
         self.l1 = l1
@@ -85,9 +84,8 @@ class Pack:
     def check_pack_pair(self, dest_format: DataFormat, l1_format: DataFormat) -> None:
         """Refuse a ``Dest -> L1`` pair this architecture's packer cannot do.
 
-        Without it a Float16 Dest packed to Float32, or an Int32 Dest packed to a
-        float, returns bytes that decode to believable numbers for a conversion the
-        hardware refuses. The rows are worth reading rather than inferring. See
+        Without it a Float16 Dest packed to Float32 returns bytes that decode
+        to believable numbers for a conversion the hardware refuses. See
         `README.md`, "What the packer will and will not convert".
         """
         if not self.to_l1_formats:
@@ -106,8 +104,8 @@ class Pack:
         """The format the packer reads out of Dest.
 
         Usually Dest's own. With a 32-bit Dest on an architecture whose gasket
-        converts first, the packer instead reads the output format, which is
-        what the ReLU threshold is then encoded in. Mirrors ``infer_pack_in``.
+        converts first, it reads the output format instead, which is what the
+        ReLU threshold is then encoded in.
         """
         if self.gasket_converts_wide_dest and dest_format in DEST_32_BIT_FORMATS:
             return l1_format
@@ -118,10 +116,9 @@ class Pack:
     ) -> None:
         """Refuse the 16-bit Dest the harness would have promoted away.
 
-        ``TestConfig`` turns ``dest_acc`` on for an exponent-B input with a Float16
-        output, so the device runs a 32-bit Dest. A Float16_b Dest is the tell.
-        Without this the golden models bf16 while the device ran fp32, and the
-        precision gap shows up as an arithmetic disagreement.
+        ``TestConfig`` turns ``dest_acc`` on for an exponent-B input with a
+        Float16 output, so the device runs a 32-bit Dest and a Float16_b Dest
+        is the tell. Unchecked, the gap looks like an arithmetic bug.
         """
         if (
             self.promotes_outlier_to_32_bit_dest
@@ -153,11 +150,7 @@ class Pack:
         ReLU, then rounding, then the edge mask, then the format conversion.
 
         `dest_format` cannot be inferred from `l1_format`: Dest follows the
-        *unpacker's* output, never the pack format. Use ``Unpack.dest_format_for``
-        to derive it from the input side.
-
-        `stoch_rnd` is accepted so a caller can describe the hardware it is
-        comparing against, but any mode other than ``No`` **warns**, including
+        *unpacker's* output. Any `stoch_rnd` other than ``No`` warns, including
         ``Fpu``, which randomises the Dest write rather than this block's.
         """
         self.l1.check_dest_format(dest_format)

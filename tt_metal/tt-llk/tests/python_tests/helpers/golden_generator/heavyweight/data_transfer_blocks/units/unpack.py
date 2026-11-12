@@ -4,10 +4,8 @@
 """The unpacker: L1 -> SrcA/SrcB/SrcS/Dest.
 
 Owns the two legality tables that vary by architecture, the L1 -> src format
-mapping, and the transfers themselves.
-
-It also derives the **Dest format**, which belongs here because Dest takes the
-format the unpacker landed in the src register, never the pack format.
+mapping, and the transfers themselves. It also derives the **Dest format**,
+which belongs here because Dest takes the format the unpacker landed in.
 
 See `README.md`, "units/unpack.py".
 """
@@ -75,9 +73,9 @@ class Unpack:
     def src_format(self, l1_format: DataFormat) -> DataFormat:
         """The src-register storage format the unpacker lands `l1_format` in.
 
-        Raises if this architecture has no such L1 format: the mapping is derived
-        from exponent-family predicates that answer for every ``DataFormat``, so
-        without the check it would answer for a format the hardware cannot read.
+        Raises if this architecture has no such L1 format. The mapping answers
+        for every ``DataFormat``, so without the check it would answer for one
+        the hardware cannot read.
         """
         self.l1.check(l1_format)
         return self._src_format(l1_format)
@@ -85,9 +83,8 @@ class Unpack:
     def _src_format(self, l1_format: DataFormat) -> DataFormat:
         """The mapping itself, unchecked.
 
-        A format reaching the final pass-through stays as itself, which is only
-        right for integers. A float landing there needs a case adding. See
-        ``Fp8_e4m3``.
+        A format reaching the final pass-through stays as itself, which is
+        right only for integers. A float landing there needs a case adding.
         """
         if l1_format in (DataFormat.Float32, DataFormat.Tf32):
             return DataFormat.Tf32
@@ -111,10 +108,9 @@ class Unpack:
     ) -> DataFormat:
         """The storage format the unpacker lands `l1_format` in for SrcS.
 
-        SrcS does not narrow Float32 to Tf32 the way SrcA/SrcB must, and with
-        accumulation on it widens instead. Integers pass through unchanged, which
-        is a deliberate divergence from ``infer_unpack_out``. See `README.md`,
-        "SrcS and the integer divergence".
+        SrcS does not narrow Float32 the way SrcA/SrcB must, and widens with
+        accumulation on. Integers pass through, a deliberate divergence from
+        ``infer_unpack_out``. See `README.md`, "SrcS and the integer divergence".
         """
         self.check_has_srcs()
         self.l1.check(l1_format)
@@ -149,10 +145,9 @@ class Unpack:
     ) -> bool:
         """Whether this unpacker can land `l1_format` as `src_format`.
 
-        The pair matters, not just the target: a real src format and a readable L1
-        format do not make the conversion between them something the unpacker can
-        do. An architecture with an empty table gets the older, weaker check. SrcS
-        has its own rules in :meth:`is_valid_srcs_format`.
+        The pair matters, not just the target. An architecture with an empty
+        table gets the older, weaker check, and SrcS has its own rules in
+        :meth:`is_valid_srcs_format`.
         """
         # No 32-bit datum reaches SrcA/SrcB on any architecture here, table
         # or no table. Without this the fallback's `src_format == l1_format`
@@ -256,12 +251,9 @@ class Unpack:
     ) -> torch.Tensor:
         """Values visible in SrcS.
 
-        SrcS uses a per-slice L1 layout, so the buffer must have been packed with
-        ``use_srcs=True``. `dest_acc` selects the storage format, while the slice layout
-        follows the resolved src format's width instead.
-
-        Not a delegate of :meth:`l1_to_src`: under SrcA's rules a Float32 input
-        would lose the 13 mantissa bits SrcS keeps.
+        SrcS uses a per-slice L1 layout, so the buffer must have been packed
+        with ``use_srcs=True``. Not a delegate of :meth:`l1_to_src`: under
+        SrcA's rules a Float32 input would lose the 13 bits SrcS keeps.
         """
         self.check_has_srcs()
         self.l1.check(l1_format)
@@ -296,9 +288,8 @@ class Unpack:
     ) -> torch.Tensor:
         """Load an L1 buffer straight into Dest, bypassing the src registers.
 
-        The path an op takes to seed Dest before a feedback loop. The value lands
-        at Dest precision, so it keeps more mantissa than the same buffer read
-        through :meth:`l1_to_src` would.
+        How an op seeds Dest before a feedback loop. The value lands at Dest
+        precision, so it keeps more mantissa than :meth:`l1_to_src` would.
         """
         self.l1.check(l1_format)
         dest_format = self.resolve_dest_format(dest_format, l1_format, dest_acc)
@@ -331,12 +322,10 @@ class Unpack:
     ) -> DataFormat:
         """The Dest format for an op whose *input* was `l1_input_format`.
 
-        Dest takes the src register's format, so the input decides the family and
-        `dest_acc` picks the 32- or 16-bit member.
-
-        **Float32 and Tf32 input raise**, because the input format alone does not
-        decide the family and guessing would model a different kernel. See
-        `README.md`, "The two families a wide float could land in".
+        Dest takes the src register's format, so the input decides the family
+        and `dest_acc` picks the width. **Float32 and Tf32 input raise**: the
+        input alone does not decide the family. See `README.md`, "The two
+        families a wide float could land in".
         """
         self.l1.check(l1_input_format)
         dest_acc = as_dest_acc(dest_acc)
@@ -392,10 +381,9 @@ class Unpack:
     ) -> DataFormat:
         """The Dest format to run with: derived from the input, or validated.
 
-        An explicit `dest_format` is checked against `dest_acc` rather than taken
-        on trust. Dest is 32-bit exactly when accumulation is on, so ``Float32``
-        with ``dest_acc=False`` describes a state that cannot exist, and left
-        unchecked it runs at the wrong precision and looks like a maths bug.
+        Checked against `dest_acc` rather than taken on trust. Dest is 32-bit
+        exactly when accumulation is on, so ``Float32`` with ``dest_acc=False``
+        cannot exist, and unchecked it looks like a maths bug.
         """
         dest_acc = as_dest_acc(dest_acc)
         if dest_format is None:

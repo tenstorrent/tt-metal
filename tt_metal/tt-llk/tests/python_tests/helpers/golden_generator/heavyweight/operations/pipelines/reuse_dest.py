@@ -24,17 +24,16 @@ from .eltwise import EltwiseBinaryGolden
 class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
     """Fold several input tiles into one output tile through Dest.
 
-    Unlike an accumulating op, nothing sums: each pass *replaces* Dest with
-    ``srcA op srcB``, and the feedback happens through the operand — one src
-    register is loaded from Dest rather than from L1.
+    Nothing sums. Each pass *replaces* Dest with ``srcA op srcB``, and the
+    feedback happens through the operand, one src register being loaded from
+    Dest rather than from L1::
 
-        l1_to_srcA(seed), datacopy(A2D)             seeds Dest through SrcA
+        l1_to_srcA(seed), datacopy(A2D)
         repeat: dest_to_srcA, l1_to_srcB, math      (or the srcB mirror)
         dest_to_l1
 
     The round trip is lossy on purpose: Dest is wider than a src register, so
-    feeding it back re-quantizes, and the chain models that where the hardware
-    does it rather than carrying full precision through the loop.
+    feeding it back re-quantizes where the hardware does.
     """
 
     op_name = "eltwise_reuse_dest"
@@ -125,16 +124,13 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
     ) -> torch.Tensor:
         """Run the fold over pre-tilized stimuli, returning one tile per output tile.
 
-        `inner_dim` input tiles collapse into each output tile. The inputs a
-        given output tile consumes are strided by `output_tiles_in_block`, not
-        contiguous, because the kernel walks a block at a time.
+        `inner_dim` input tiles collapse into each output tile, strided by
+        `output_tiles_in_block` rather than contiguous, because the kernel
+        walks a block at a time.
 
-        Pass a list as `dest_out` to also collect each output tile's Dest
-        contents as they stood *before* the pack: the intermediate value the
-        golden expects, to show beside a packed-output mismatch. It narrows
-        whether the math or the packer disagreed, but deciding that needs the
-        device's own Dest too, most simply a Float16-output run, where the
-        device's packed result is its Dest.
+        Pass a list as `dest_out` to collect each output tile's pre-pack Dest,
+        to show beside a packed-output mismatch. Deciding whether the math or
+        the packer disagreed needs the device's own Dest too.
         """
         src_a, src_b = stimuli
         geometry = dict(num_faces=num_faces, face_r_dim=face_r_dim)

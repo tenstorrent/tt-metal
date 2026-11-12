@@ -42,11 +42,8 @@ class EltwiseBinaryGolden(Golden):
         """Whether this op runs the multiply as accumulated partial products.
 
         Two questions, each answered where it belongs. Whether the operation is
-        a multiply at all is this op's: add and subtract are exact, because the
-        FPU splits only multiplies into phases. Whether a multiply on *these*
-        datums decomposes is the FPU's, and it needs the input format to say
-        so, since the decomposition slices a mantissa, which an integer datum does
-        not have.
+        a multiply at all is this op's. Whether a multiply on *these* datums
+        decomposes is the FPU's.
         """
         return (
             self.operation is MathOperation.Elwmul
@@ -101,10 +98,8 @@ class EltwiseBinaryGolden(Golden):
         """One fidelity phase, which the FPU computes whole.
 
         All this op contributes is `dest_format`: each product here *is* a lane
-        result written to Dest, which is why the pre-carry flush applies at
-        all. A matmul, whose products never become lane results, passes
-        ``None``, and in fact needs the halves unmultiplied, so it arranges
-        them itself rather than calling this.
+        result, which is why the pre-carry flush applies. A matmul passes
+        ``None`` and needs the halves unmultiplied anyway.
         """
         return self.blocks.fpu_partial_product(
             regs["srcA"], regs["srcB"], phase, dest_format
@@ -113,10 +108,8 @@ class EltwiseBinaryGolden(Golden):
     def apply(self, regs: Registers) -> torch.Tensor:
         """The whole operation in one FPU step, where it does not split.
 
-        Add and subtract always come here, and a multiply only where the
-        architecture's split is not modelled, in which case the FPU returns the
-        exact product at every fidelity, LoFi included, since LoFi is one
-        phase and not zero. Where the split *is* modelled, as on Quasar, a
-        multiply goes through :meth:`partial_product` and never arrives here.
+        Add and subtract always come here. A multiply only arrives where the
+        architecture's split is unmodelled, and the FPU then returns the exact
+        product at every fidelity.
         """
         return self.blocks.fpu_elementwise(self.operation, regs["srcA"], regs["srcB"])

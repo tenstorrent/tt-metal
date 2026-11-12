@@ -3,19 +3,12 @@
 
 """Running blocks in series.
 
-A :class:`Chain` is an ordered list of :class:`Step`, run one after another over
-a shared :class:`Registers` namespace. That is the whole model. It knows nothing
-about the hardware. The data-transfer blocks are turned into steps by
-:class:`~.golden.Golden` so a chain is free to be any shape:
+A :class:`Chain` is an ordered list of :class:`Step` over a shared
+:class:`Registers` namespace. That is the whole model, and it knows nothing
+about the hardware.
 
-    unpack, unpack, math, pack                  a binary op
-    unpack, math, pack, unpack, math, pack      two passes
-    Chain().repeat(8, [unpack, math, pack])     a loop
-    unpack, math, pack, pack                    one result to two buffers
-
-Steps declare what they read and write, so a chain can be traced stage by stage
-and a mistyped register name fails where it is used rather than silently reading
-something stale.
+Steps declare what they read and write, so a chain can be traced and checked.
+See `README.md`, "chain.py".
 """
 
 from dataclasses import dataclass
