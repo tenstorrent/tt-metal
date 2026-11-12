@@ -90,3 +90,28 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   `fused_head/device/fused_head_device_operation{.cpp,_types.hpp}`, `fused_head/device/kernels/{se_defs.hpp,xg_walk.hpp}`,
   `fused_head/device/kernels/dataflow/{se_brisc,xg_reader,xg_sender}.cpp`, `fused_head/device/kernels/compute/se_compute.cpp`,
   `tests/test_fused_head_bf8.py`; models/demos/moe_block_main/tt/moe_block.py
+
+### combine_snap_split: an order-free combine past 2^24 q (DeepSeek-V4.1 FIX.23, 2026-11-12; ported by P.50)
+- Source: exp/fix23_snapshot 4e90f611e86 (parent 4c79ce65ece, the replica branch); only the fix's hunks ported onto
+  this base (P.50, owner 2026-11-12), no replica work.
+- What: `MoEBlockConfig.combine_snap_split` (default false = the single snapped fp32 sum, the program as before). On
+  (needs `combine_snap` q): the accumulator splits each weighted term v into hi = v rounded to a multiple of
+  q_hi = 2^18 q ((v + C_hi) - C_hi, C_hi = 1.5 x 2^23 q_hi) and lo = v - hi (exact) rounded to a multiple of q, packs
+  both onto two fp32 sums a token with packer L1 accumulation (CB_ACC twice as large: the tokens' lo sums, then their
+  hi sums), and writes out = lo + hi (one fp32 rounding on the SFPU, then the bf16 pack). Every add of each sum is
+  exact while |hi sums| < 2^24 q_hi (2^23 at q = 2^-19) and top_k <= 64 (lo: top_k x 2^17 q < 2^24 q; checked), so
+  the output is the same in any landing order. Planner: `acc_cb_bytes` / `combine_l1_layout` / `combine_auto` take
+  `acc_sums` (1 or 2) for the accumulators' L1; compile arg 8 of accumulator_compute.cpp is C_hi's bits (0: off).
+  The split is one SFPU pass a tile (`combine_split_face`: the same fp32 adds in the same order as add_unary /
+  sub_unary / sub_binary).
+- Why: the single sum is exact - order-free - only while it stays below 2^24 q (32 at DeepSeek-V4.1's q = 2^-19); the
+  model's routed sums reach 21376 (layers 15-39 on a code prompt, the first tokens of any prompt), so its outputs
+  depended on the packets' arrival order (code prompt up to 0.258 on the final hidden; DS41-233 / 234 / 235).
+- Measured: README "Measured" (combine_snap_split); this base: P.50's A/B.
+- Cores: unchanged (the accumulators' cells; their DEST halves hold 2 tiles a pass instead of 4 with the split).
+- Needed by: deepseek_v41_flash_d_p FIX.23 / P.50 (setting COMBINE_SPLIT, default off until the owner decides).
+- Files: common/{moe_block_config.hpp,moe_block_config.cpp,common_nanobind.cpp},
+  routed_experts_combine/device/{combine_host.hpp,combine_host.cpp,combine_program.hpp,combine_program.cpp},
+  routed_experts_combine/device/kernels/compute/accumulator_compute.cpp; tests:
+  tests/routed_experts_combine/test_experts_combine_checks.py::test_experts_combine_split_determinism,
+  models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py.

@@ -125,6 +125,13 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->mesh = mesh;
     plan->L = mesh.num_links;
     plan->snap_bits = cfg.snap_bits();
+    plan->snap_hi_bits = cfg.snap_hi_bits();
+    plan->acc_sums = plan->snap_hi_bits ? 2u : 1u;
+    // (the split's lo sums: top_k terms of |lo| <= 2^17 q stay below 2^24 q)
+    TT_FATAL(
+        !plan->snap_hi_bits || resources.dims().top_k <= 64,
+        "routed_experts_combine: combine_snap_split needs top_k <= 64, got {}",
+        resources.dims().top_k);
     plan->S = in.S;
     plan->W = in.W;
     const uint32_t N = mesh.topo.num_chips();
@@ -213,7 +220,8 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
             in.n_acc.value_or(kAccMax),
             in.mode,
             l,
-            pool_slots);
+            pool_slots,
+            plan->acc_sums);
     };
     // no landing given: the rings in the accumulators' L1 or on the flat cells, whichever ranks higher
     // (combine_choice_key). 2x4 GLM-5.3-Flash experts + combine: chunk 5120 D 1 QP 8 -> D 8 QP 16 on the flat cells
@@ -329,7 +337,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->st = state_layout(N, A, plan->shared ? kGrants : 0);
     const uint32_t SLOT = plan->pc.slot, ISLOT = SLOT;
     plan->row_depth = flat_pool ? kPoolRows : 2u;
-    uint32_t acc_cbs = acc_cb_bytes(in.S, A, plan->pc.NT, plan->row_depth);
+    uint32_t acc_cbs = acc_cb_bytes(in.S, A, plan->pc.NT, plan->row_depth, kTabCbBytes, plan->acc_sums);
     const uint32_t QP0 = au.best->inj_slots, keep_slots = au.best->local_keep;
     const int64_t keep = plan->fused ? static_cast<int64_t>(keep_slots + std::min(32u, QP0)) * ISLOT
                                      : static_cast<int64_t>(keep_slots) * ISLOT;
@@ -344,7 +352,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     TT_FATAL(PSL < 4096, "routed_experts_combine: a ring's base / depth are 12-bit fields");
     plan->PSL = static_cast<uint32_t>(PSL);
     plan->tab_acc = acc_tab_bytes(plan->shared, plan->PSL);
-    acc_cbs = acc_cb_bytes(in.S, A, plan->pc.NT, plan->row_depth, plan->tab_acc);
+    acc_cbs = acc_cb_bytes(in.S, A, plan->pc.NT, plan->row_depth, plan->tab_acc, plan->acc_sums);
     plan->D = N > 1 ? plan->PSL / (N - 1) : 0;
     plan->cred = credit_policy(N, plan->D, plan->shared, in.credit_batch);
     const uint32_t acc_area = plan->st.RINGS + (flat_pool ? 0u : plan->PSL * SLOT);
@@ -384,7 +392,7 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->tab_off_acc = take(plan->tab_acc);
     plan->row_off = take(plan->row_depth * NT * kTile);
     plan->meta_off = take(plan->row_depth * 32);
-    plan->acc_off = take(plan->MAXT * NT * 4096);
+    plan->acc_off = take(plan->acc_sums * plan->MAXT * NT * 4096);
     plan->out_off = take(2 * NT * kTile);
     plan->w_off = take(plan->row_depth * kTile);
     plan->loc_off = e;
@@ -506,7 +514,7 @@ CombineHandles add_combine_program(
     arena_cb(kCbTab, aset, plan.tab_off_acc, plan.tab_acc, tt::DataFormat::UInt32, plan.tab_acc);
     arena_cb(kCbRow, aset, plan.row_off, plan.row_depth * NT * kTile, tt::DataFormat::Float16_b, kTile);
     arena_cb(kCbMeta, aset, plan.meta_off, plan.row_depth * 32, tt::DataFormat::UInt32, 32);
-    arena_cb(kCbAcc, aset, plan.acc_off, plan.MAXT * NT * 4096, tt::DataFormat::Float32, 4096);
+    arena_cb(kCbAcc, aset, plan.acc_off, plan.acc_sums * plan.MAXT * NT * 4096, tt::DataFormat::Float32, 4096);
     arena_cb(kCbOut, aset, plan.out_off, 2 * NT * kTile, tt::DataFormat::Float16_b, kTile);
     arena_cb(kCbW, aset, plan.w_off, plan.row_depth * kTile, tt::DataFormat::Float16_b, kTile);
 
@@ -745,7 +753,8 @@ CombineHandles add_combine_program(
                 .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = u2d,
-                .compile_args = {kCbRow, kCbMeta, kCbAcc, kCbOut, NT, plan.MAXT, kCbW, plan.snap_bits}});
+                .compile_args = {
+                    kCbRow, kCbMeta, kCbAcc, kCbOut, NT, plan.MAXT, kCbW, plan.snap_bits, plan.snap_hi_bits}});
         std::vector<CoreCoord> aw_cells;
         for (const auto& c : accs) {
             if (!plan.fused || !is_port(c)) {

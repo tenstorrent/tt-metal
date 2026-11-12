@@ -45,9 +45,9 @@ StateLayout state_layout(uint32_t N, uint32_t A, uint32_t G) {
     return s;
 }
 
-uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows, uint32_t tab) {
+uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows, uint32_t tab, uint32_t acc_sums) {
     const uint32_t MAXT = (S + A - 1) / A;
-    return align64(tab) + align64(rows * NT * kTile) + align64(rows * 32) + align64(MAXT * NT * 4096) +
+    return align64(tab) + align64(rows * NT * kTile) + align64(rows * 32) + align64(acc_sums * MAXT * NT * 4096) +
            align64(2 * NT * kTile) + align64(rows * kTile);
 }
 
@@ -62,15 +62,16 @@ CombineLayout combine_l1_layout(
     uint32_t depth,
     uint32_t local_keep,
     bool shared,
-    uint32_t pool_slots) {
+    uint32_t pool_slots,
+    uint32_t acc_sums) {
     const auto pc = row_slot(W);
     const int64_t ISLOT = pc.slot, SLOT = pc.slot;
     const int64_t RINGS = state_layout(N, A, shared ? kGrants : 0).RINGS;
     const uint32_t MAXT = (S + A - 1) / A;
     CombineLayout out;
     out.slot = pc.slot;
-    out.acc_fp32 = MAXT * pc.NT * 4096;
-    out.acc_cbs = acc_cb_bytes(S, A, pc.NT, pool_slots > 0 ? kPoolRows : 2);
+    out.acc_fp32 = acc_sums * MAXT * pc.NT * 4096;
+    out.acc_cbs = acc_cb_bytes(S, A, pc.NT, pool_slots > 0 ? kPoolRows : 2, kTabCbBytes, acc_sums);
     out.rings = static_cast<uint32_t>(RINGS);
     const int64_t arena = arena_bytes;
     int64_t acc_cbs = out.acc_cbs;
@@ -90,7 +91,7 @@ CombineLayout combine_l1_layout(
         !shared ? std::numeric_limits<int64_t>::max() : int64_t(flat_pool ? kSharedFlatPslMax : kSharedPslMax);
     const int64_t PSL = std::min<int64_t>({static_cast<int64_t>(depth) * (N - 1), fit, psl_cap});
     if (shared && flat_pool) {  // (CB_TAB holds the pool's owners / free list: sized by it)
-        out.acc_cbs = acc_cb_bytes(S, A, pc.NT, kPoolRows, acc_tab_bytes(true, static_cast<uint32_t>(PSL)));
+        out.acc_cbs = acc_cb_bytes(S, A, pc.NT, kPoolRows, acc_tab_bytes(true, static_cast<uint32_t>(PSL)), acc_sums);
         acc_cbs = out.acc_cbs;
     }
     out.PSL = static_cast<int32_t>(PSL);
@@ -143,7 +144,8 @@ CombineAuto combine_auto(
     uint32_t a_max,
     std::optional<CombineMode> mode,
     CombineLanding landing,
-    uint32_t pool_slots) {
+    uint32_t pool_slots,
+    uint32_t acc_sums) {
     const bool shared = landing_shared(landing);
     if (!landing_on_flat(landing)) {
         pool_slots = 0;
@@ -176,7 +178,18 @@ CombineAuto combine_auto(
         for (const uint32_t keep : {8u, 2u}) {
             for (const uint32_t qp : {64u, 32u, 16u, 8u}) {
                 auto lay = combine_l1_layout(
-                    N, S, W, static_cast<uint32_t>(A), arena_bytes, fused, qp, depth, keep, shared, pool_slots);
+                    N,
+                    S,
+                    W,
+                    static_cast<uint32_t>(A),
+                    arena_bytes,
+                    fused,
+                    qp,
+                    depth,
+                    keep,
+                    shared,
+                    pool_slots,
+                    acc_sums);
                 if (!lay.fits) {
                     last = lay;
                     continue;

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """ttnn.bringup.moe_block_main.routed_experts_combine (the flat routed experts + the sparse combine, one op) on a
 Galaxy: accuracy, determinism and device time, each its own test, plus a re-routing test. Every run has the combine's
-snap on (q 2^-14).
+snap on (q 2^-14; the split test: 2^-19).
 
 A case is a model (the block tests' MODELS: GLM-5.3, Kimi-K3, DeepSeek V4.1-Flash) on a mesh at a chunk, with the
 expected device times. A routing is how the tokens spread over the experts:
@@ -16,6 +16,10 @@ once ahead of the op and kept: the tests run and time the op alone.
 * test_experts_combine_determinism: CALLS calls on the same inputs, bit-identical on the device.
 * test_experts_combine_reroute: routing A, then B, then A again on the same op and buffers - each right, and the second
   A bit-identical to the first (nothing of a call's routing left in the next).
+* test_experts_combine_split_determinism (MoEBlockConfig.combine_snap_split, DeepSeek-V4.1 FIX.23): snap 2^-19 (the
+  model's) and x scaled by X_SCALE so the routed sums pass the single sum's exact range (2^24 x 2^-19 = 32); with the
+  split, CALLS calls
+  bit-identical and accurate; without it, how many calls differ (logged: the single sum is exact only below the range).
 * test_experts_combine_perf: CALLS traced replays (a barrier ahead of the op in the trace: every chip starts it
   together), the op's slowest chip, median; a case without a number logs what it measured and skips.
 
@@ -55,6 +59,8 @@ mb = ttnn.bringup.moe_block_main
 fw = flat_weights_module()
 
 SNAP = 2.0**-14
+X_SCALE = 2.0**8  # (the split test: x scaled, routed sums peak ~360)
+SPLIT_SNAP = 2.0**-19  # (the split test: DeepSeek-V4.1's snap, the single sum exact below 2^24 x 2^-19 = 32)
 CALLS = 10
 SAMPLE = 64  # tokens a chip checked against torch
 PCC = 0.99
@@ -161,7 +167,7 @@ class ExpertsCombine:
     """The block's resources and plan for a case (combine snap on), the routed experts, a head weight set a routing,
     and x. route(r): the fused head + dispatch for routing r, their outputs kept; __call__(): the op on them."""
 
-    def __init__(self, mesh, case, cache):
+    def __init__(self, mesh, case, cache, split=False, x_scale=1.0, snap=SNAP):
         self.mesh, self.case = mesh, case
         model = MODELS[case.model]
         self.dims, self.act = block_dims(model.cfg)
@@ -170,7 +176,9 @@ class ExpertsCombine:
         self.N = R * C
         self.E, self.K, self.H, self.Hr = d.num_experts, d.top_k, d.emb_dim, d.routed_width
         self.I, self.EPC, self.S = d.routed_expert_hidden_dim, d.num_experts // self.N, case.chunk // self.N
-        cfg = mb.MoEBlockConfig(chunk_tokens=case.chunk, num_links=2, combine_snap=SNAP, persist_l1_small=True)
+        cfg = mb.MoEBlockConfig(
+            chunk_tokens=case.chunk, num_links=2, combine_snap=snap, combine_snap_split=split, persist_l1_small=True
+        )
         cfg.words_slab_bytes = moe_block_words_slab(model.cfg)
         self.dtypes = mb.MoEDtypes()
         self.res = mb.MoEBlockResources(mesh, d, cfg, self.dtypes)
@@ -193,7 +201,7 @@ class ExpertsCombine:
 
         self.head_w = {}  # routing -> the head's weights (shared expert + router, not checked here; a bias a routing)
         self.x = ttnn.from_torch(
-            hw.x,
+            hw.x if x_scale == 1.0 else hw.x * x_scale,  # (a power of two: exact in bf16)
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
@@ -294,6 +302,13 @@ class ExpertsCombine:
 
     def check(self, y, label):
         """y_own against torch on SAMPLE tokens a chip (all finite); returns y_own on the host."""
+        got, pcc, worst = self.pcc(y, label)
+        assert pcc >= PCC, f"{label}: pcc {pcc} < {PCC}"
+        assert worst[0] >= PCC, f"{label}: chip {worst[1]} pcc {worst[0]:.5f} < {PCC}"
+        return got
+
+    def pcc(self, y, label):
+        """(y_own on the host, its PCC against torch on SAMPLE tokens a chip, (the worst chip's PCC, chip))."""
         ids, ws, xin = self.routing_on_host()
         self.log_load(ids)
         got = self.y_on_host(y)
@@ -308,9 +323,7 @@ class ExpertsCombine:
             for i in range(self.N)
         )
         logger.info(f"ACCURACY {label}: pcc {pcc} over {len(pick)} tokens, worst chip {worst[1]} pcc {worst[0]:.5f}")
-        assert ok, f"{label}: pcc {pcc} < {PCC}"
-        assert worst[0] >= PCC, f"{label}: chip {worst[1]} pcc {worst[0]:.5f} < {PCC}"
-        return got
+        return got, float(pcc), worst
 
     def close(self):
         self.res.release()
@@ -347,6 +360,51 @@ def test_experts_combine_determinism(case, routing, mesh_device, device_params, 
         det.assert_identical(f"experts + combine {case.id} {routing}")
     finally:
         op.close()
+
+
+SPLIT_PARAMS = pytest.mark.parametrize(
+    ARGS, [p for p in _params(("zipf",)) if p.values[0].model == "dsv41_flash"], indirect=INDIRECT
+)
+
+
+@SPLIT_PARAMS
+@pytest.mark.timeout(1800)
+def test_experts_combine_split_determinism(case, routing, mesh_device, device_params, host_weights):
+    """Routed sums past the single sum's exact range (2^24 x 2^-19): the split sum bit-identical over CALLS calls and
+    as accurate against torch as the single sum on the same inputs (the reference's own error at scaled x is the
+    same for both); the single sum's differing calls logged (arrival order: not asserted, it may happen to match)."""
+    _skip_unless_galaxy()
+    acc, ys = {}, {}
+    for split in (False, True):
+        op = ExpertsCombine(mesh_device, case, host_weights, split=split, x_scale=X_SCALE, snap=SPLIT_SNAP)
+        try:
+            op.route(routing)
+            outs = []
+            for _ in range(CALLS):
+                y = op()
+                outs.append(op.y_on_host(y))
+            peak = float(outs[0].abs().max())
+            assert (
+                peak > 2**24 * SPLIT_SNAP
+            ), f"x {X_SCALE}: routed sums peak at {peak}, not past {2**24 * SPLIT_SNAP}"
+            differ = [i for i in range(1, CALLS) if not torch.equal(outs[i], outs[0])]
+            worst = max((float((outs[i] - outs[0]).abs().max()) for i in differ), default=0.0)
+            logger.info(
+                f"SPLIT {split} {case.id} {routing}: |y| peak {peak:.0f} (single-sum range {2**24 * SPLIT_SNAP:.0f}); "
+                f"{len(differ)} of {CALLS - 1} calls differ from the first (max |diff| {worst})"
+            )
+            if split:
+                assert not differ, f"combine_snap_split: calls {differ} differ from the first (max |diff| {worst})"
+            _, acc[split], _ = op.pcc(y, f"{case.id} {routing} split {split} x{X_SCALE:g}")
+            ys[split] = outs[0]
+        finally:
+            op.close()
+    # (the split: each sum exact, one rounding at the end; the single sum: an fp32 rounding an add past 32)
+    rel = ((ys[True] - ys[False]).abs() / ys[False].abs().clamp(min=2**-14)).max()
+    logger.info(
+        f"SPLIT vs single sum: pcc {acc[True]:.6f} vs {acc[False]:.6f}, max relative difference {float(rel):.3g}"
+    )
+    assert acc[True] >= acc[False] - 1e-4, f"split pcc {acc[True]} below the single sum's {acc[False]}"
 
 
 @CASE_PARAMS
