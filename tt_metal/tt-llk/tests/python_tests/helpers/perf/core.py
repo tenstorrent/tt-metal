@@ -815,6 +815,7 @@ class PerfConfig(TestConfig):
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_vector_ext: bool = False,
+        kernel_flags: list = None,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -850,6 +851,7 @@ class PerfConfig(TestConfig):
             skip_build_header,
             compile_time_formats,
             requires_vector_ext=requires_vector_ext,
+            kernel_flags=kernel_flags,
         )
 
     @staticmethod
