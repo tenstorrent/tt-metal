@@ -61,7 +61,11 @@ ttnn::Tensor reshape_on_device(
          padded_output_shape[3] == input_tensor.padded_shape()[3])) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        return ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
+        auto viewed = ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
+        if (input_tensor.memory_config() != output_mem_config) {
+            return ttnn::clone(viewed, std::nullopt, output_mem_config, std::nullopt);
+        }
+        return viewed;
     }
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     if (input_tensor.padded_shape() == padded_output_shape) {
